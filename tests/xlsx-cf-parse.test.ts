@@ -16,7 +16,7 @@ import { xlsxBytes } from './helpers/xlsx-package'
 const NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 const X14 = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main'
 const XM = 'http://schemas.microsoft.com/office/excel/2006/main'
-const CF_EXT = '{78C0D931-6437-407d-A8EE-F0AA7539E650}'
+const CF_EXT = '{78C0D931-6437-407d-A8EE-F0AAD7539E65}'
 const DB_EXT = '{B025F937-C7B1-47D3-B67F-A62EFF666E3E}'
 
 const DXF_FILL = `<dxf><fill><patternFill patternType="solid"><fgColor rgb="FFFFC7CE"/></patternFill></fill></dxf>`
@@ -167,7 +167,7 @@ describe('CF rule parsing: all 18 types', () => {
     expect(ruleByPriority(value.rules, 5).definition).toMatchObject({ type: 'expression' })
   })
 
-  it('evaluates text, blank and error predicates only for canonical formulas (refuses absent and standalone x14)', () => {
+  it('evaluates text, blank and error predicates only for canonical formulas (refuses absent)', () => {
     // One element per rule, mirroring the measured fixtures: each canonical
     // formula references its own sqref anchor (top-left cell).
     const el = (sqref: string, inner: string) => `<conditionalFormatting sqref="${sqref}">${inner}</conditionalFormatting>`
@@ -202,18 +202,30 @@ describe('CF rule parsing: all 18 types', () => {
     expect(ruleByPriority(value.rules, 2).definition).toMatchObject({ kind: 'text', type: 'containsText', needle: 'a"b' })
   })
 
-  it('refuses standalone x14 blank/error rules and refuses activePresent on top10', () => {
+  it('evaluates standalone x14 text/blank/error rules with canonical <xm:f> like their legacy twins (Task 18c) and refuses activePresent on top10', () => {
+    // Spec §3 (activation vs operand formulas): these rule types "whose <formula> or <xm:f> is absent or matches the
+    // canonical pattern measured by oracle cases stage1-text-predicates, stage1-blanks-errors ... evaluate via their
+    // Stage 1 type/attribute predicates". The Task 18c recapture (Excel reading the x14 block under the corrected URI)
+    // shows Excel matching x14 K2/N2/O6 exactly as the legacy twins B2/B2/K6; divergent x14 formulas still refuse.
+    const dxf = '<x14:dxf><fill><patternFill patternType="solid"><bgColor rgb="FFFFC7CE"/></patternFill></fill></x14:dxf>'
     const { value } = parse(
       `<extLst><ext uri="${CF_EXT}"><x14:conditionalFormattings>` +
         `<x14:conditionalFormatting><xm:sqref>B2:B3</xm:sqref>` +
-        `<x14:cfRule type="containsBlanks" priority="1"><xm:f>LEN(TRIM(B2))=0</xm:f></x14:cfRule>` +
+        `<x14:cfRule type="containsBlanks" priority="1"><xm:f>LEN(TRIM(B2))=0</xm:f>${dxf}</x14:cfRule>` +
         `<x14:cfRule type="top10" priority="2" rank="3" activePresent="1"/>` +
-        `</x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>`,
+        `</x14:conditionalFormatting>` +
+        `<x14:conditionalFormatting><xm:sqref>C2:C9</xm:sqref><x14:cfRule type="containsText" priority="3" operator="containsText" text="ab"><xm:f>NOT(ISERROR(SEARCH("ab",C2)))</xm:f>${dxf}</x14:cfRule></x14:conditionalFormatting>` +
+        `<x14:conditionalFormatting><xm:sqref>D2:D9</xm:sqref><x14:cfRule type="containsText" priority="4" operator="containsText" text="ab"><xm:f>NOT(ISERROR(SEARCH("zz",D2)))</xm:f>${dxf}</x14:cfRule></x14:conditionalFormatting>` +
+        `<x14:conditionalFormatting><xm:sqref>E2:E9</xm:sqref><x14:cfRule type="notContainsErrors" priority="5"><xm:f>NOT(ISERROR(E2))</xm:f>${dxf}</x14:cfRule></x14:conditionalFormatting>` +
+        `</x14:conditionalFormattings></ext></extLst>`,
     )
     expect(value.unresolvedSheet).toBeUndefined()
-    // Ruling C3: Standalone x14 blank/error rule is unsupported
-    expect(ruleByPriority(value.rules, 1).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+    expect(ruleByPriority(value.rules, 1).definition).toMatchObject({ kind: 'predicate', type: 'containsBlanks' })
     expect(ruleByPriority(value.rules, 2).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-invalid-rule' })
+    expect(ruleByPriority(value.rules, 3).definition).toMatchObject({ kind: 'text', type: 'containsText', needle: 'ab' })
+    // Divergent x14 formula: unresolved, as the legacy divergent twin.
+    expect(ruleByPriority(value.rules, 4).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+    expect(ruleByPriority(value.rules, 5).definition).toMatchObject({ kind: 'predicate', type: 'notContainsErrors' })
   })
 
   it('matches the ten canonical timePeriod patterns and refuses divergent or unknown periods', () => {
@@ -280,6 +292,20 @@ describe('CF x14 pairing by GUID', () => {
     expect(value.rules[0]).toMatchObject({ priority: 2, documentOrder: 0 })
     expect(value.rules[0]!.definition).toMatchObject({ kind: 'unresolved', type: 'dataBar' })
     expect(value.rules[0]!.writes.has('dataBar')).toBe(true)
+  })
+
+  it('a paired bar withholds under production evidence with exactly the dataBar slot, on both paths', async () => {
+    // No Stage 3 capability is published (Task 23), so every bar withholds; the mask never widens to ALL or fill.
+    const { value } = parse(pairedBase + pairedExt, DXF_FILL, undefined, undefined, { sheetRightToLeft: false })
+    expect(value.rules[0]!.definition).toMatchObject({ kind: 'unresolved', type: 'dataBar', reason: 'cf-unsupported-rule' })
+    expect([...value.rules[0]!.writes]).toEqual(['dataBar'])
+    const memory = createCfMemory()
+    const handle = createCfStreamEvents(stylesFor(DXF_FILL), memory, { sheetRightToLeft: false })
+    const bytes = new TextEncoder().encode(`<worksheet xmlns="${NS}" xmlns:x14="${X14}" xmlns:xm="${XM}">${pairedBase + pairedExt}</worksheet>`)
+    await tokenizeBytes((async function* () { yield bytes })(), handle.events)
+    const streamed = handle.finish()
+    expect(streamed.value).toEqual(value)
+    streamed.release()
   })
 
   it('keeps standalone priority bars with fillColor without a partner', () => {

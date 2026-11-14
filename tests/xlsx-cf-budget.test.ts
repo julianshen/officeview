@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { buildCfCandidate, createCfMemory, createCfCaps, createCfDiagnostics, createCfWorkBudget, measureCfPayload } from '../src/xlsx/cf/limits'
+import { CF_LIMITS, buildCfCandidate, createCfMemory, createCfCaps, createCfDiagnostics, createCfWorkBudget, measureCfPayload } from '../src/xlsx/cf/limits'
 import { hasEvidence, withCfEvidence } from '../src/xlsx/cf/evidence'
 
 function ready<T>(r: import('../src/xlsx/cf/model').CfOutcome<T>): T {
@@ -98,15 +98,19 @@ describe('CF bounded work and metadata', () => {
     expect(createCfCaps(book).reserveMetadata(1).kind).toBe('unresolved')
     sheets.forEach(s => s.dispose()); expect(book.currentBytes).toBe(0)
   })
-  it('budgets work and active time, excluding the time spent yielded', () => {
+  it('budgets work units and yields per slice; wall time paces the yield but never refuses (S3-I1-UNITS)', () => {
     let now = 0
     const budget = createCfWorkBudget({ now: () => now })
     expect(budget.spend(127)).toBe('continue'); expect(budget.spend(1)).toBe('yield')
     budget.resume(); now = 4; expect(budget.spend(1)).toBe('yield')
     now = 10000; budget.resume(); expect(budget.spend(1)).toBe('continue')
-    now += 46; expect(budget.spend(128)).toBe('refused')
+    // Was 'refused' at 46 ms of active time under activeMs; time now only ends the slice.
+    now += 46; expect(budget.spend(128)).toBe('yield')
+    budget.resume(); expect(budget.units).toBe(258)
+    expect(budget.spend(CF_LIMITS.activeUnits - 258 + 1)).toBe('refused')
     expect(budget.spend(0)).toBe('refused')
-    const units = createCfWorkBudget({ now: () => 0 })
+    // The 1,000,000-unit cap belongs to whole-scan budgets, separate from the per-call cap.
+    const units = createCfWorkBudget({ now: () => 0, scan: true })
     for (let n = 0; n < 7812; n++) { expect(units.spend(128)).toBe('yield'); units.resume() }
     expect(units.spend(64)).toBe('continue'); expect(units.spend(1)).toBe('refused')
   })

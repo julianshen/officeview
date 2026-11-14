@@ -70,3 +70,24 @@ it('PNG encoder retains the prepared CF scale fill', async () => {
     }
   })
 })
+it('PNG encoder retains the prepared CF bar (injected evidence)', async () => {
+  const { barSheet, withBars } = await import('./helpers/cf-bars')
+  const { computeMetrics } = await import('../src/xlsx/render')
+  await withBars(async () => {
+    const sheet = barSheet([0, 50, 100])
+    const m = computeMetrics(sheet)
+    const rowMid = (r: number) => Math.round(m.rowHeightsPx.slice(0, r).reduce((a, b) => a + b, 0) + m.rowHeightsPx[r]! / 2)
+    const pages = await getPaintables({ sheets: [sheet] })
+    try {
+      const c = createCanvas(pages[0].spec.widthPx, pages[0].spec.heightPx)
+      pages[0].paint(c.getContext('2d') as unknown as CanvasRenderingContext2D)
+      const png = c.toBuffer('image/png'), decoded = await loadImage(png), copy = createCanvas(decoded.width, decoded.height)
+      copy.getContext('2d').drawImage(decoded, 0, 0)
+      const at = (x: number, y: number) => [...copy.getContext('2d').getImageData(x, y, 1, 1).data]
+      expect(at(30, rowMid(2))).toEqual([0, 0, 255, 255])
+      expect(at(30, rowMid(1))).toEqual([0, 0, 255, 255])
+      expect(at(160, rowMid(1))).not.toEqual([0, 0, 255, 255])
+      expect(at(30, rowMid(0))).not.toEqual([0, 0, 255, 255])
+    } finally { pages.dispose() }
+  })
+})

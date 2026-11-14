@@ -17,7 +17,7 @@ import { collectDeclaredTable, createDeclaredBudget, declaredSheetBuilder, hasDe
 import { parseWorksheetDrawings, collectXlsxImages, settleChartFallbacks } from './drawing'
 import { hasXlsxCharts, loadChartModule } from './chartLoader'
 import { ensureCfParser, hasConditionalFormatting } from './cfLoader'
-import { frozenPaneFrom } from './frozenPane'
+import { frozenPaneFrom, sheetViewRightToLeft } from './frozenPane'
 import { cellDisplayText, computeMetrics } from './render'
 import { drawingPartContext, resolvePartTarget } from '../drawing/parts'
 import { parseThemeContext, type ThemeContext } from '../drawing/style'
@@ -619,7 +619,10 @@ async function parseSheet(
   }
   // Conditional formatting: the lexical presence check costs no import, account
   // or cache on CF-free sheets. The lazy chunk parses, admits and attaches.
+  // The first sheet view carries the frozen panes and the reading order that `context` data bars follow.
+  const firstView = getChildren(getChildren(data, 'sheetViews')[0], 'sheetView')[0]
   if (hasConditionalFormatting(data)) {
+    const rtl = sheetViewRightToLeft(firstView ? attrs(firstView).rightToLeft as string | undefined : undefined)
     try {
       const cf = await ensureCfParser(true)
       if (cf) {
@@ -628,7 +631,7 @@ async function parseSheet(
           data,
           { colors: styles.colorContext, dxfNodes: dxfsNode ? getChildren(dxfsNode, 'dxf') : [] },
           cf.cfMemoryFor(styles),
-          { sheetId, partPath: path },
+          { sheetId, partPath: path, ...(rtl !== undefined ? { sheetRightToLeft: rtl } : {}) },
         )
         cf.attachCfSheetRules(sheet, lease)
         for (const diagnostic of lease.value.diagnostics) {
@@ -668,7 +671,7 @@ async function parseSheet(
     }
     sheet.mergeRanges = sheet.merges.map(parseMergeRange)
   }
-  const pane = getChildren(getChildren(getChildren(data, 'sheetViews')[0], 'sheetView')[0], 'pane')[0]
+  const pane = getChildren(firstView, 'pane')[0]
   const frozen = pane ? frozenPaneFrom(attrs(pane) as Record<string, string | undefined>) : undefined
   if (frozen) sheet.frozen = frozen
   const setupPr = getChildren(getChildren(data, 'sheetPr')[0], 'pageSetUpPr')[0]

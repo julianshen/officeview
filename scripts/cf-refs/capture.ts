@@ -7,7 +7,7 @@
  * Requires an awake, unlocked macOS display (`CGSSessionScreenIsLocked=false`).
  */
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { capture } from '../xlsx-refs/capture'
@@ -16,12 +16,22 @@ import { closeOwnedWorkbook, isDisplayLocked } from './build'
 import { CF_CASES, type CfManifest, type CfOracleCase } from './cases'
 import { CF_MANIFEST_PATH, CF_REFS_DIR } from './generate'
 import {
+  type BarSettingsRow,
+  type CfObservedBar,
+  type DecodedPng,
+  type WorksheetRangeGeometry,
   computeWorksheetRangeGeometry,
   decodePngSync,
+  type BarCapabilityEvaluation,
+  evaluateBarCapabilities,
+  isCellInSqref,
+  measureCaseBars,
   observeCellsFromCapture,
   readZipPartsSync,
   verifyCfCase,
 } from './verify'
+import { barCapabilityKind } from './cases'
+import { parseXml } from '../../src/core/xml'
 
 export { capture }
 
@@ -137,6 +147,19 @@ function integerToArgb(val: number): string {
   return `FF${r}${g}${b}`
 }
 
+/**
+ * The per-cell probes are unrolled AppleScript, and osacompile overflows its tables ("Internal table overflow", -2707)
+ * near 500 cells (stage3-bar-lengths-default has 510). Each probe therefore runs over chunks of at most this many cells,
+ * the results concatenated in order. Every case up to 100 cells (all of them before Task 22b) runs as one chunk,
+ * exactly as before.
+ */
+export const PROBE_CHUNK_CELLS = 100
+export function probeRefChunks(refs: readonly string[], size = PROBE_CHUNK_CELLS): string[][] {
+  const out: string[][] = []
+  for (let i = 0; i < refs.length; i += size) out.push(refs.slice(i, i + size))
+  return out.length > 0 ? out : [[]]
+}
+
 export function buildTextProbeScript(workbookName: string, sheetName: string, cellRefs: readonly string[]): string[] {
   return [
     `set wb to workbook "${q(workbookName)}"`,
@@ -227,6 +250,216 @@ export function buildColorScaleCriteriaProbeScript(workbookName: string, sheetNa
   ]
 }
 
+/**
+ * Data bar object-model readback (Ruling S3-A, Excel.sdef `databar format condition` :3185-3204, `databar border`
+ * :3181-3184, `negative bar format` :3488-3493). One `|||` row per bar format condition on the sheet, `:::` fields in
+ * the order priority, axis, fill type, border type, min point percent, max point percent, direction, show value,
+ * negative colour type. Every read is its own `try`, so one unreadable property never aborts the probe. Preparation
+ * only: this script has not been run against Excel.
+ */
+export function buildDataBarSettingsProbeScript(workbookName: string, sheetName: string): string[] {
+  const guarded = (variable: string, expr: string): string[] => [
+    `    set ${variable} to "missing value"`,
+    `    try`,
+    `      set ${variable} to (${expr} as string)`,
+    `    end try`,
+  ]
+  return [
+    `set wb to workbook "${q(workbookName)}"`,
+    `set ws to worksheet "${q(sheetName)}" of wb`,
+    `set outList to {}`,
+    `try`,
+    `  repeat with fc in (get format conditions of ws)`,
+    ...guarded('axisVal', 'databar axis position of fc'),
+    ...guarded('fillVal', 'databar fill type of fc'),
+    ...guarded('borderVal', 'databar border type of databar border of fc'),
+    ...guarded('minVal', 'min point percent of fc'),
+    ...guarded('maxVal', 'max point percent of fc'),
+    ...guarded('dirVal', 'databar direction of fc'),
+    ...guarded('showVal', 'format condition show value of fc'),
+    ...guarded('negVal', 'negative bar color type of negative bar format of fc'),
+    ...guarded('prioVal', 'format condition priority of fc'),
+    `    if axisVal is not "missing value" then`,
+    `      set end of outList to (prioVal & ":::" & axisVal & ":::" & fillVal & ":::" & borderVal & ":::" & minVal & ":::" & maxVal & ":::" & dirVal & ":::" & showVal & ":::" & negVal)`,
+    `    end if`,
+    `  end repeat`,
+    `end try`,
+    `set AppleScript's text item delimiters to "|||"`,
+    `return outList as string`,
+  ]
+}
+
+/** Parses the `buildDataBarSettingsProbeScript` output into rows (an empty or unparseable answer yields no rows). */
+export function parseDataBarSettingsReadback(out: string): BarSettingsRow[] {
+  const rows: BarSettingsRow[] = []
+  for (const line of out.split('|||')) {
+    const f = line.split(':::').map(x => x.trim())
+    if (f.length !== 9) continue
+    const priority = Number(f[0])
+    if (!Number.isFinite(priority)) continue
+    rows.push({
+      priority,
+      axis: f[1]!,
+      fillType: f[2]!,
+      borderType: f[3]!,
+      minPointPercent: f[4]!,
+      maxPointPercent: f[5]!,
+      direction: f[6]!,
+      showValue: f[7]!,
+      negativeColorType: f[8]!,
+    })
+  }
+  return rows
+}
+
+/**
+ * `--verify-only` precondition per case: `skip` when no capture exists yet (nothing claimed, nothing on disk), `verify`
+ * when every capture has its PNG and sidecar, and a loud error when a capture claims a `pngSha256` whose files are gone.
+ */
+export function verifyOnlyCaptureState(c: CfOracleCase, rootDir: string): 'skip' | 'verify' {
+  let onDisk = 0
+  for (const cap of c.captures) {
+    const have = existsSync(resolve(rootDir, cap.pngPath)) && existsSync(resolve(rootDir, cap.sidecarPath))
+    if (have) onDisk++
+    else if (cap.pngSha256 !== undefined) throw new Error(`${c.id}: capture ${cap.pngPath} claims pngSha256 ${cap.pngSha256} but its PNG or sidecar is missing`)
+  }
+  return onDisk === 0 ? 'skip' : 'verify'
+}
+
+/**
+ * Runs one `copy picture` capture of `savedAbs` and then closes the workbook the capture opened (the shared `capture()`
+ * opens it by its file name and leaves it open). A workbook that was already open before the harness started is
+ * never closed (`assertCanCloseWorkbook`); the close runs even when the capture throws.
+ */
+export function captureAndCloseOwned(
+  savedAbs: string,
+  preExisting: ReadonlySet<string>,
+  run: () => void,
+  close: (name: string, preExisting: ReadonlySet<string>) => void = closeOwnedWorkbook,
+): void {
+  const name = savedAbs.split('/').pop()!
+  try {
+    run()
+  } finally {
+    if (!preExisting.has(name)) close(name, preExisting)
+  }
+}
+
+/** `--verify-only`: whether the case's kept sidecar records a different saved workbook than the one on disk. */
+export function staleCaptureSidecar(c: CfOracleCase, rootDir: string, savedSha256: string): boolean {
+  const cap = c.captures[0]
+  if (!cap || !existsSync(resolve(rootDir, cap.sidecarPath))) return false
+  try {
+    const sc = JSON.parse(readFileSync(resolve(rootDir, cap.sidecarPath), 'utf8')) as Record<string, unknown>
+    return typeof sc.savedSha256 === 'string' && sc.savedSha256 !== savedSha256
+  } catch {
+    return false
+  }
+}
+
+export type LockGuardResult =
+  | { kind: 'captured' }
+  | { kind: 'refused'; code: 'display-locked'; phase: 'before' | 'after'; reason: string }
+
+/**
+ * Ruling S3-A step 1: the display lock is checked immediately before and after every capture, not only at process
+ * start. A locked (or unknown) display refuses before capturing; a lock observed after capturing discards what the
+ * capture wrote, and so does a capture that throws.
+ */
+export function captureUnderLockGuard(o: { isLocked: () => boolean; run: () => void; discard: () => void }): LockGuardResult {
+  if (o.isLocked()) {
+    return { kind: 'refused', code: 'display-locked', phase: 'before', reason: 'display locked (or unknown) before capture' }
+  }
+  try {
+    o.run()
+  } catch (error) {
+    o.discard()
+    throw error
+  }
+  if (o.isLocked()) {
+    o.discard()
+    return { kind: 'refused', code: 'display-locked', phase: 'after', reason: 'display locked (or unknown) after capture; the capture was discarded' }
+  }
+  return { kind: 'captured' }
+}
+
+/** Numeric cell values of `xl/worksheets/sheet1.xml` (cached numbers only; no text, boolean or error cells). */
+export function readNumericCellValues(parts: Map<string, Uint8Array>): Map<string, number> {
+  const out = new Map<string, number>()
+  const raw = parts.get('xl/worksheets/sheet1.xml')
+  if (!raw) return out
+  const root = parseXml(new TextDecoder().decode(raw)) as Record<string, any>
+  const ws = root.worksheet ?? root
+  const rows = ([] as any[]).concat(ws?.sheetData?.row ?? [])
+  for (const row of rows) {
+    for (const cell of ([] as any[]).concat(row?.c ?? [])) {
+      const attrs = cell?.['@attrs'] ?? {}
+      const t = attrs.t
+      if (t !== undefined && t !== 'n') continue
+      const v = typeof cell?.v === 'object' ? cell.v?.['#text'] : cell?.v
+      const n = Number(v)
+      if (attrs.r && v !== undefined && v !== '' && Number.isFinite(n)) out.set(String(attrs.r).toUpperCase(), n)
+    }
+  }
+  return out
+}
+
+/**
+ * Which evidence the capture established for each designated bar cell: exactly the verifier's own recomputation
+ * (`evaluateBarCapabilities`), written into `barEvidence.settings` for a settings capability and `barEvidence.geometry`
+ * for a geometry one. A cell under several capabilities keeps a label only where they agree.
+ */
+export function classifyBarCapture(
+  c: CfOracleCase,
+  evaluation: Readonly<Record<string, BarCapabilityEvaluation>>,
+): Map<string, NonNullable<CfOracleCase['expected']['cells'][number]['barEvidence']>> {
+  type Ev = NonNullable<CfOracleCase['expected']['cells'][number]['barEvidence']>
+  const votes = new Map<string, { settings: Set<string>; geometry: Set<string> }>()
+  for (const cap of new Set(c.markers.map(m => m.capabilityId))) {
+    const kind = barCapabilityKind(cap)
+    if (kind !== 'settings' && kind !== 'geometry') continue
+    const rec = evaluation[cap]
+    const label = rec?.status === 'discriminating' ? 'pixel-measured' : rec?.status === 'non-discriminating' ? 'non-discriminating' : 'unverified'
+    for (const cell of c.expected.cells.filter(x => x.matched && c.markers.some(m => m.capabilityId === cap && isCellInSqref(x.ref, m.sqref)))) {
+      const v = votes.get(cell.ref) ?? { settings: new Set<string>(), geometry: new Set<string>() }
+      v[kind].add(label)
+      votes.set(cell.ref, v)
+    }
+  }
+  const labels = new Map<string, Ev>()
+  for (const [ref, v] of votes) {
+    const pick = (set: Set<string>): string => (set.size === 1 ? [...set][0]! : 'unverified')
+    labels.set(ref, { settings: pick(v.settings) as Ev['settings'], geometry: pick(v.geometry) as Ev['geometry'] })
+  }
+  return labels
+}
+
+/** Everything a Stage 3 bar capture adds to its sidecar (lock states, raw px, the recomputed hypotheses). */
+export function buildBarSidecarExtras(
+  c: CfOracleCase,
+  parts: Map<string, Uint8Array>,
+  decoded: DecodedPng,
+  geom: WorksheetRangeGeometry,
+  opts: { lockBefore: 'locked' | 'unlocked'; lockAfter: 'locked' | 'unlocked'; readback?: BarSettingsRow[] },
+): { extras: Record<string, unknown>; observed: ReadonlyMap<string, CfObservedBar> | undefined; evaluation?: Record<string, BarCapabilityEvaluation>; refusal?: string } {
+  const measured = measureCaseBars(c, decoded, geom, parts)
+  const base = {
+    zoom: 100,
+    dpr: 1,
+    lockBefore: opts.lockBefore,
+    lockAfter: opts.lockAfter,
+    ...(opts.readback ? { barSettingsReadback: opts.readback } : {}),
+  }
+  if ('kind' in measured) return { extras: base, observed: undefined, refusal: `${measured.code}: ${measured.reason}` }
+  const evaluation = evaluateBarCapabilities(c, parts, decoded, geom, measured)
+  const hypotheses = Object.fromEntries(Object.entries(evaluation).filter(([, e]) => e.hypotheses).map(([cap, e]) => [cap, e.hypotheses]))
+  return {
+    extras: { ...base, observedBars: [...measured.values()], barHypotheses: hypotheses },
+    observed: measured,
+    evaluation,
+  }
+}
+
 export function probeLiveExcelCellObservations(
   c: CfOracleCase,
   savedAbs: string,
@@ -237,22 +470,25 @@ export function probeLiveExcelCellObservations(
   cellColors: Record<string, { displayFormatFill?: string; baseFill?: string }>
   geometry: { widthPt: number; heightPt: number; colWidthsPt: number[]; rowHeightsPt: number[] } | null
   colorScaleCriteria?: Record<string, { type: string; value?: string }[]>
+  barSettingsReadback?: BarSettingsRow[]
 } | null {
   try {
     const name = openWorkbook(savedAbs)
     try {
       const refs = c.expected.cells.map(x => x.ref)
-      const textScriptLines = buildTextProbeScript(name, c.sheet, refs)
-      const textOut = runScript(textScriptLines, 30_000)
-      const texts = textOut.split('|||')
+      // Chunked (PROBE_CHUNK_CELLS): each chunk's results, split, then joined in cell order.
+      const chunked = (build: (refs: readonly string[]) => string[]): Array<string | undefined> =>
+        probeRefChunks(refs).flatMap(chunk => {
+          const parts = runScript(build(chunk), 30_000).split('|||')
+          return chunk.map((_, i) => parts[i])
+        })
+      const texts = chunked(chunk => buildTextProbeScript(name, c.sheet, chunk))
       const cellTexts: Record<string, string> = {}
       refs.forEach((ref, idx) => {
         if (texts[idx] !== undefined) cellTexts[ref] = texts[idx]
       })
 
-      const decScriptLines = buildDecorationProbeScript(name, c.sheet, refs)
-      const decOut = runScript(decScriptLines, 30_000)
-      const decs = decOut.split('|||')
+      const decs = chunked(chunk => buildDecorationProbeScript(name, c.sheet, chunk))
       const cellDecorations: Record<string, { underline: 'none' | 'single' | 'double'; strikethrough: boolean }> = {}
       refs.forEach((ref, idx) => {
         const parts = decs[idx]?.split(':::')
@@ -267,7 +503,6 @@ export function probeLiveExcelCellObservations(
         }
       })
 
-      const colorScriptLines = buildColorProbeScript(name, c.sheet, refs)
       const cellColors: Record<
         string,
         {
@@ -278,8 +513,7 @@ export function probeLiveExcelCellObservations(
         }
       > = {}
       try {
-        const colorOut = runScript(colorScriptLines, 30_000)
-        const colorParts = colorOut.split('|||')
+        const colorParts = chunked(chunk => buildColorProbeScript(name, c.sheet, chunk))
         refs.forEach((ref, idx) => {
           const parts = colorParts[idx]?.split(':::')
           if (parts && parts.length === 2) {
@@ -312,6 +546,15 @@ export function probeLiveExcelCellObservations(
         }
       } catch {
         // criteria query errors leave colorScaleCriteria undefined
+      }
+
+      let barSettingsReadback: BarSettingsRow[] | undefined
+      if (c.stage === 3 && c.markers.some(m => m.ruleType === 'dataBar')) {
+        try {
+          barSettingsReadback = parseDataBarSettingsReadback(runScript(buildDataBarSettingsProbeScript(name, c.sheet), 30_000))
+        } catch {
+          // an unreadable object model leaves the readback undefined: settings stay unverified
+        }
       }
 
       let geometry: { widthPt: number; heightPt: number; colWidthsPt: number[]; rowHeightsPt: number[] } | null = null
@@ -359,7 +602,7 @@ export function probeLiveExcelCellObservations(
         // geometry query errors leave geometry null
       }
 
-      return { cellTexts, cellDecorations, cellColors, geometry, colorScaleCriteria }
+      return { cellTexts, cellDecorations, cellColors, geometry, colorScaleCriteria, ...(barSettingsReadback ? { barSettingsReadback } : {}) }
     } finally {
       closeOwnedWorkbook(name, preExisting)
     }
@@ -390,9 +633,19 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   for (let i = 0; i < manifest.cases.length; i++) {
     const c = manifest.cases[i]
     if (c.stage !== stage || (only && c.id !== only) || c.status === 'unsupported') continue
+    if (verifyOnly && verifyOnlyCaptureState(c, REPO_ROOT) === 'skip') {
+      console.log(`[cf-refs/capture] ${c.id}: no capture yet, skipped (stays ${c.status})`)
+      continue
+    }
     const savedAbs = resolve(REPO_ROOT, c.saved)
     const savedBytes = new Uint8Array(readFileSync(savedAbs))
     const savedSha256 = sha256Hex(savedBytes)
+    if (verifyOnly && staleCaptureSidecar(c, REPO_ROOT, savedSha256)) {
+      // The kept PNG shows an older saved workbook (the case was regenerated since): re-verifying would bind that
+      // picture to the new workbook. Leave sidecar and manifest entry alone; the case needs build + capture.
+      console.warn(`[cf-refs/capture] ${c.id}: the kept capture predates the current saved workbook; skipped (rebuild and recapture it)`)
+      continue
+    }
     const parts = readZipPartsSync(savedBytes)
     const geom = parts ? computeWorksheetRangeGeometry(parts, c.range) : null
 
@@ -412,6 +665,14 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         >
       | undefined
     let colorScaleCriteria: Record<string, { type: string; value?: string }[]> | undefined
+    let barReadback: BarSettingsRow[] | undefined
+    const isBarCase = c.stage === 3 && c.markers.some(m => m.ruleType === 'dataBar')
+    let sidecarLockBefore: 'locked' | 'unlocked' | undefined
+    let sidecarLockAfter: 'locked' | 'unlocked' | undefined
+    let barObserved: ReadonlyMap<string, CfObservedBar> | undefined
+    let barEvaluation: Record<string, BarCapabilityEvaluation> | undefined
+    let lockRefusal: string | undefined
+    let barRefusal: string | undefined
     let sidecarExcelVersion = excelVersion
     let sidecarCapturedAt = new Date().toISOString()
     let sidecarHostTimeZone = 'Asia/Taipei'
@@ -435,6 +696,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
                 rowHeightsPt: sc.rowHeightsPt as number[],
               }) ?? geom
           }
+          if (Array.isArray(sc.barSettingsReadback)) barReadback = sc.barSettingsReadback as BarSettingsRow[]
+          if (sc.lockBefore === 'unlocked' || sc.lockBefore === 'locked') sidecarLockBefore = sc.lockBefore
+          if (sc.lockAfter === 'unlocked' || sc.lockAfter === 'locked') sidecarLockAfter = sc.lockAfter
           if (typeof sc.excelTodaySerial === 'number') {
             clockState = {
               excelTodaySerial: sc.excelTodaySerial,
@@ -482,6 +746,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       cellDecorations = liveObs?.cellDecorations
       cellColors = liveObs?.cellColors
       colorScaleCriteria = liveObs?.colorScaleCriteria
+      barReadback = liveObs?.barSettingsReadback
     }
 
     const updatedTemplate = CF_CASES.find(tc => tc.id === c.id)
@@ -505,8 +770,24 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       const pngAbs = resolve(REPO_ROOT, cap.pngPath)
       const sidecarAbs = resolve(REPO_ROOT, cap.sidecarPath)
       if (!verifyOnly) {
-        capture(savedAbs, c.sheet, c.range, pngAbs, { appearance: cap.appearance })
+        // Ruling S3-A step 1: the lock is re-checked immediately before and after every capture; a capture taken
+        // across a lock is discarded and the case stays recipe-pending.
+        const guard = captureUnderLockGuard({
+          isLocked: () => isDisplayLocked(),
+          run: () => captureAndCloseOwned(savedAbs, preExisting, () => capture(savedAbs, c.sheet, c.range, pngAbs, { appearance: cap.appearance })),
+          discard: () => {
+            rmSync(pngAbs, { force: true })
+            rmSync(sidecarAbs, { force: true })
+          },
+        })
+        if (guard.kind === 'refused') {
+          lockRefusal = `display-locked (${guard.phase}): ${guard.reason}`
+          return cap
+        }
+        sidecarLockBefore = 'unlocked'
+        sidecarLockAfter = 'unlocked'
       }
+      if (lockRefusal) return cap
       const pngBytes = new Uint8Array(readFileSync(pngAbs))
       const pngSha256 = sha256Hex(pngBytes)
       const decoded = decodePngSync(pngBytes)
@@ -521,8 +802,20 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
           }) ?? capGeom
       }
 
+      const barExtra =
+        isBarCase && decoded && capGeom && sidecarLockBefore && sidecarLockAfter
+          ? buildBarSidecarExtras(cWithUpdatedExpected, parts!, decoded, capGeom, { lockBefore: sidecarLockBefore, lockAfter: sidecarLockAfter, ...(barReadback ? { readback: barReadback } : {}) })
+          : undefined
+      if (barExtra) {
+        barObserved = barExtra.observed
+        barEvaluation = barExtra.evaluation
+        if (barExtra.refusal) barRefusal = barExtra.refusal
+      }
+
       const observedCells =
-        decoded && capGeom
+        isBarCase
+          ? null
+          : decoded && capGeom
           ? observeCellsFromCapture(decoded, capGeom, cWithUpdatedExpected, {
               observedCellTexts: cellTexts,
               observedCellDecorations: cellDecorations,
@@ -583,6 +876,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
                 : {}),
               ...(finalObservedCells ? { observedCells: finalObservedCells } : {}),
               ...(colorScaleCriteria ? { colorScaleCriteria } : {}),
+              ...(barExtra ? barExtra.extras : {}),
             },
             null,
             2,
@@ -592,13 +886,26 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       return { ...cap, pngSha256 }
     })
 
+    if (lockRefusal || barRefusal) {
+      const why = lockRefusal ?? `bar measurement refused (${barRefusal})`
+      manifest.cases[i] = { ...c, status: 'recipe-pending', ...(lockRefusal ? {} : { captures: updatedCaptures }), reason: lockRefusal ? `Capture discarded: ${why}` : `Capture kept but not promoted: ${why}` }
+      console.warn(`[cf-refs/capture] ${c.id} remained recipe-pending: ${why}`)
+      continue
+    }
+
     const hasResave =
       c.resavedByExcel === true &&
       c.resaveReceipt !== undefined &&
       c.resaveReceipt.savedSha256 === savedSha256 &&
       c.resaveReceipt.openedRepairFree === true
 
+    const barLabels = isBarCase && barObserved ? classifyBarCapture(cWithUpdatedExpected, barEvaluation ?? {}) : undefined
     const populatedExpectedCells = currentExpected.cells.map(exp => {
+      if (barLabels && exp.matched) {
+        // Observed truth, never a guess: barApplied follows the PNG and barEvidence the verifier's own rules.
+        const measured = barObserved?.get(exp.ref)
+        return { ...exp, ...(measured ? { barApplied: measured.bar !== null } : {}), barEvidence: barLabels.get(exp.ref) ?? { settings: 'unverified' as const, geometry: 'unverified' as const } }
+      }
       const col = cellColors?.[exp.ref]
       if (col?.displayFormatFill && exp.matched && exp.scaleApplied) {
         return {

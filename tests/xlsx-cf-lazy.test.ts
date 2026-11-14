@@ -12,7 +12,7 @@ it('no CF workbook imports no CF implementation or allocates a CF cache', async 
   expect(load).toHaveBeenCalledTimes(1)
 })
 it('excludes every CF implementation from both ordinary static closures', () => {
-  for (const rules of [EAGER_FORBIDDEN, PAGED_WORKER_FORBIDDEN]) for (const file of ['model', 'limits', 'evidence', 'parse', 'capture', 'dxf', 'predicates']) {
+  for (const rules of [EAGER_FORBIDDEN, PAGED_WORKER_FORBIDDEN]) for (const file of ['model', 'limits', 'evidence', 'parse', 'capture', 'dxf', 'predicates', 'dataBar', 'dataBarPaint']) {
     expect(rules.some(rule => rule.test(`/repo/src/xlsx/cf/${file}.ts`))).toBe(true)
   }
 })

@@ -1,0 +1,580 @@
+{
+  "excelVersion": "16.114",
+  "route": "copy-picture",
+  "appearance": "screen",
+  "scale": 1,
+  "pxPerPt": 1,
+  "width": 985,
+  "height": 361,
+  "colWidthsPt": [
+    84,
+    180,
+    180,
+    180,
+    180,
+    180
+  ],
+  "rowHeightsPt": [
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30
+  ],
+  "geometrySource": "excel-measured",
+  "resavedByExcel": true,
+  "resaveSavedSha256": "7f5c69ffe2c476e09982119f01dad23048d3b75c4c1b3e1c1dfa0ede71c0340c",
+  "sheet": "Sheet1",
+  "range": "A1:F12",
+  "hostTimeZone": "Asia/Taipei",
+  "savedSha256": "7f5c69ffe2c476e09982119f01dad23048d3b75c4c1b3e1c1dfa0ede71c0340c",
+  "pngSha256": "fa6077f9130b7ed979ffa396da5ffedb64aec58a89dfec557ffb01c6e79e0a5a",
+  "capturedAt": "2026-11-11T17:46:05.026Z",
+  "zoom": 100,
+  "dpr": 1,
+  "lockBefore": "unlocked",
+  "lockAfter": "unlocked",
+  "barSettingsReadback": [],
+  "observedBars": [
+    {
+      "ref": "B2",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": null
+    },
+    {
+      "ref": "B3",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 86,
+        "rightPx": 129,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "B4",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 86,
+        "rightPx": 174,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "B5",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 86,
+        "rightPx": 218,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "B6",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 86,
+        "rightPx": 262,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "C2",
+      "cellLeftPx": 264,
+      "cellWidthPx": 180,
+      "bar": null
+    },
+    {
+      "ref": "C3",
+      "cellLeftPx": 264,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 266,
+        "rightPx": 309,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "C4",
+      "cellLeftPx": 264,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 266,
+        "rightPx": 354,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "C5",
+      "cellLeftPx": 264,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 266,
+        "rightPx": 398,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "C6",
+      "cellLeftPx": 264,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 266,
+        "rightPx": 442,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "D2",
+      "cellLeftPx": 444,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 446,
+        "rightPx": 461,
+        "topPx": 32,
+        "bottomPx": 57
+      }
+    },
+    {
+      "ref": "D3",
+      "cellLeftPx": 444,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 446,
+        "rightPx": 492,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "D4",
+      "cellLeftPx": 444,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 446,
+        "rightPx": 524,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "D5",
+      "cellLeftPx": 444,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 446,
+        "rightPx": 555,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "D6",
+      "cellLeftPx": 444,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 446,
+        "rightPx": 586,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "E2",
+      "cellLeftPx": 624,
+      "cellWidthPx": 180,
+      "bar": null
+    },
+    {
+      "ref": "E3",
+      "cellLeftPx": 624,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 626,
+        "rightPx": 714,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "E4",
+      "cellLeftPx": 624,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 626,
+        "rightPx": 802,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    }
+  ],
+  "barHypotheses": {
+    "bar:pairing-paired": {
+      "B2": [
+        {
+          "id": "x14",
+          "question": "x14",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "base",
+          "question": "base",
+          "leftPx": 86,
+          "rightPx": 103,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ],
+      "B3": [
+        {
+          "id": "x14",
+          "question": "x14",
+          "leftPx": 86,
+          "rightPx": 129
+        },
+        {
+          "id": "base",
+          "question": "base",
+          "leftPx": 86,
+          "rightPx": 138,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ],
+      "B4": [
+        {
+          "id": "x14",
+          "question": "x14",
+          "leftPx": 86,
+          "rightPx": 174
+        },
+        {
+          "id": "base",
+          "question": "base",
+          "leftPx": 86,
+          "rightPx": 174,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ],
+      "B5": [
+        {
+          "id": "x14",
+          "question": "x14",
+          "leftPx": 86,
+          "rightPx": 218
+        },
+        {
+          "id": "base",
+          "question": "base",
+          "leftPx": 86,
+          "rightPx": 209,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ],
+      "B6": [
+        {
+          "id": "x14",
+          "question": "x14",
+          "leftPx": 86,
+          "rightPx": 262
+        },
+        {
+          "id": "base",
+          "question": "base",
+          "leftPx": 86,
+          "rightPx": 244,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ]
+    },
+    "bar:settings-paired-precedence": {
+      "B2": [
+        {
+          "id": "x14",
+          "question": "x14",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "base",
+          "question": "base",
+          "leftPx": 86,
+          "rightPx": 103,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ],
+      "B3": [
+        {
+          "id": "x14",
+          "question": "x14",
+          "leftPx": 86,
+          "rightPx": 129
+        },
+        {
+          "id": "base",
+          "question": "base",
+          "leftPx": 86,
+          "rightPx": 138,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ],
+      "B4": [
+        {
+          "id": "x14",
+          "question": "x14",
+          "leftPx": 86,
+          "rightPx": 174
+        },
+        {
+          "id": "base",
+          "question": "base",
+          "leftPx": 86,
+          "rightPx": 174,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ],
+      "B5": [
+        {
+          "id": "x14",
+          "question": "x14",
+          "leftPx": 86,
+          "rightPx": 218
+        },
+        {
+          "id": "base",
+          "question": "base",
+          "leftPx": 86,
+          "rightPx": 209,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ],
+      "B6": [
+        {
+          "id": "x14",
+          "question": "x14",
+          "leftPx": 86,
+          "rightPx": 262
+        },
+        {
+          "id": "base",
+          "question": "base",
+          "leftPx": 86,
+          "rightPx": 244,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ]
+    },
+    "bar:pairing-base-only": {
+      "D2": [
+        {
+          "id": "authored",
+          "question": "authored",
+          "leftPx": 446,
+          "rightPx": 463,
+          "traits": {
+            "fill": "gradient",
+            "border": "absent"
+          },
+          "anyExtent": true
+        },
+        {
+          "id": "solid",
+          "question": "solid",
+          "leftPx": 446,
+          "rightPx": 463,
+          "traits": {
+            "fill": "solid",
+            "border": "absent"
+          }
+        }
+      ],
+      "D3": [
+        {
+          "id": "authored",
+          "question": "authored",
+          "leftPx": 446,
+          "rightPx": 498,
+          "traits": {
+            "fill": "gradient",
+            "border": "absent"
+          },
+          "anyExtent": true
+        },
+        {
+          "id": "solid",
+          "question": "solid",
+          "leftPx": 446,
+          "rightPx": 498,
+          "traits": {
+            "fill": "solid",
+            "border": "absent"
+          }
+        }
+      ],
+      "D4": [
+        {
+          "id": "authored",
+          "question": "authored",
+          "leftPx": 446,
+          "rightPx": 534,
+          "traits": {
+            "fill": "gradient",
+            "border": "absent"
+          },
+          "anyExtent": true
+        },
+        {
+          "id": "solid",
+          "question": "solid",
+          "leftPx": 446,
+          "rightPx": 534,
+          "traits": {
+            "fill": "solid",
+            "border": "absent"
+          }
+        }
+      ],
+      "D5": [
+        {
+          "id": "authored",
+          "question": "authored",
+          "leftPx": 446,
+          "rightPx": 569,
+          "traits": {
+            "fill": "gradient",
+            "border": "absent"
+          },
+          "anyExtent": true
+        },
+        {
+          "id": "solid",
+          "question": "solid",
+          "leftPx": 446,
+          "rightPx": 569,
+          "traits": {
+            "fill": "solid",
+            "border": "absent"
+          }
+        }
+      ],
+      "D6": [
+        {
+          "id": "authored",
+          "question": "authored",
+          "leftPx": 446,
+          "rightPx": 604,
+          "traits": {
+            "fill": "gradient",
+            "border": "absent"
+          },
+          "anyExtent": true
+        },
+        {
+          "id": "solid",
+          "question": "solid",
+          "leftPx": 446,
+          "rightPx": 604,
+          "traits": {
+            "fill": "solid",
+            "border": "absent"
+          }
+        }
+      ]
+    },
+    "bar:scope-whole-column": {
+      "E2": [
+        {
+          "id": "skip",
+          "question": "skip",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "zero",
+          "question": "zero",
+          "leftPx": 626,
+          "rightPx": 645
+        }
+      ],
+      "E3": [
+        {
+          "id": "skip",
+          "question": "skip",
+          "leftPx": 626,
+          "rightPx": 714
+        },
+        {
+          "id": "zero",
+          "question": "zero",
+          "leftPx": 626,
+          "rightPx": 723
+        }
+      ],
+      "E4": [
+        {
+          "id": "skip",
+          "question": "skip",
+          "leftPx": 626,
+          "rightPx": 802
+        },
+        {
+          "id": "zero",
+          "question": "zero",
+          "leftPx": 626,
+          "rightPx": 802
+        }
+      ]
+    }
+  }
+}

@@ -24,13 +24,42 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { verifyCfCase } from './verify'
+import {
+  BAR_AUTO_COLOUR_CAPABILITIES,
+  BAR_CAPABILITY_HYPOTHESES,
+  BAR_GRADIENT_BORDER_CAPABILITY,
+  BAR_GRADIENT_CAPABILITY,
+  BAR_LENGTH_RULES,
+  isCellInSqref,
+  fitBarGradientBlend,
+  judgeBarGradientBorder,
+  drawsBarAutoColour,
+  drawsBarGradient,
+  isBarAutoColourCapability,
+  isCapabilityVerified,
+  judgeBarAutoColour,
+  loadBarScreenCapture,
+  measureCaseBars,
+  measuredBarForms,
+  readZipPartsSync,
+  primeVerifiedCases,
+  judgeBarGradient,
+  sampleBarAutoColours,
+  sampleBarGradients,
+  verifyCfCase,
+  type BarAutoColourObservation,
+  type BarGradientObservation,
+} from './verify'
 import {
   CF_STAGE1_CAPABILITIES,
   CF_STAGE1_CASES,
   CF_STAGE2_CAPABILITIES,
   CF_STAGE2_NONDISCRIMINATING,
   CF_STAGE2_CASES,
+  CF_STAGE3_CAPABILITIES,
+  CF_STAGE3_CASES,
+  CF_STAGE3_NONDISCRIMINATING,
+  CF_STAGE3_UNSUPPORTED,
   type CfManifest,
   type CfOracleCase,
   type CfOracleStatus,
@@ -45,6 +74,7 @@ import { createCfStatistics } from '../../src/xlsx/cf/statistics'
 import { computeMetrics } from '../../src/xlsx/render'
 import type { FormatBudget } from '../../src/xlsx/view/formatWorkspace'
 import type { XlsxCell, XlsxSheet } from '../../src/xlsx/types'
+import type { CfLease, CfStamp, CfValuePage, CfValueSource } from '../../src/xlsx/cf/model'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -109,7 +139,7 @@ function failCase(id: string, status: CfOracleStatus, code: string, reason: stri
  * Audit one manifest case without trusting its status label. Returns the
  * per-case audit; `ok` is decided by the caller from status consistency.
  */
-function auditCase(c: CfOracleCase, rootDir: string): Stage1CaseAudit {
+function auditCase(c: CfOracleCase, rootDir: string, verified?: ReturnType<typeof verifyCfCase>): Stage1CaseAudit {
   const checks: Record<string, 'pass' | 'fail'> = {}
   const check = (name: string, pass: boolean): boolean => {
     checks[name] = pass ? 'pass' : 'fail'
@@ -131,7 +161,7 @@ function auditCase(c: CfOracleCase, rootDir: string): Stage1CaseAudit {
   if (!check('has-markers', Array.isArray(c.markers) && c.markers.length > 0)) {
     return failCase(c.id, c.status, 'missing-case-field', `No markers declared for ${c.id}`, checks)
   }
-  const res = verifyCfCase(c, { rootDir })
+  const res = verified ?? verifyCfCase(c, { rootDir })
   if (res.kind === 'verified') {
     check('structural-evidence', true)
     check('hashes-match', true)
@@ -258,6 +288,440 @@ export function auditStage2Manifest(manifest: CfManifest, options: { rootDir?: s
       unverifiedCapabilities: perCapability.filter(p => p.disposition === 'unverified-nondiscriminating').length,
     },
   }
+}
+
+export type Stage3CaseAudit = Stage1CaseAudit
+export type Stage3CapabilityAudit = Stage1CapabilityAudit
+export interface Stage3AuditReport extends Stage1AuditReport {
+  /** Ruling S3-F as amended: the measured ARGB of each VERIFIED automatic-colour capability (empty until one verifies). */
+  autoBarColours: Readonly<Record<string, string>>
+  /** Ruling S3-B: the one layout variant per scope sign that the verified captures select, with why any scope has none. */
+  barLayout: BarLayoutDerivation
+  /** Ruling S3-M (Task 22b): the verified gradient model's parameters, pooled across every capture (empty until verified). */
+  barGradient: BarGradientExport
+  /** The pooled gradient judgement, verified or not (for the report and the docs). */
+  barGradientJudgement: string
+  /** Task 22b: the verified rule for Excel's default 10/90 lengths (empty until bar:lengths-default-10-90 verifies). */
+  barLengths: BarLengthsExport
+  /** Ruling S3-GRAD-BORDER: the verified bordered-gradient shape and its blend (empty until it verifies). */
+  barGradientBorder: BarGradientBorderExport
+  /** Ruling S3-AUTO-BOUNDS (Task 22c): the verified rule of each automatic bound (empty until it verifies). */
+  barAutoBounds: BarAutoBoundsExport
+}
+
+/** What an automatic bound resolves to: `zero-anchored` (min(0, v_min) / max(0, v_max)) or `min-max` (v_min / v_max). */
+export type BarAutoBoundsExport = Partial<Record<'autoMin' | 'autoMax', { rule: string; settledBy: string[] }>>
+
+/** The generated export of the verified automatic-bound rules (fixed key order, so `--write` stays idempotent). */
+export function renderBarAutoBoundsBlock(auto: BarAutoBoundsExport): string {
+  const rows = (['autoMin', 'autoMax'] as const).filter(k => auto[k]).map(k => `  ${k}: { rule: '${auto[k]!.rule}', settledBy: [${auto[k]!.settledBy.map(c => `'${c}'`).join(', ')}] },\n`).join('')
+  return `export const VERIFIED_STAGE3_BAR_AUTO_BOUNDS: Readonly<Record<string, { rule: string; settledBy: readonly string[] }>> = {\n${rows}}\n`
+}
+
+/** The bordered-gradient shape production may draw (a `BAR_GRADIENT_BORDER_HYPOTHESES` id), with its fitted blend. */
+export type BarGradientBorderExport = Record<string, { endBlend?: number; settledBy: string[] }>
+
+/** The generated export of the verified bordered-gradient shape (one key at most, so `--write` stays idempotent). */
+export function renderBarGradientBorderBlock(border: BarGradientBorderExport): string {
+  const rows = Object.keys(border).sort().map(shape => {
+    const v = border[shape]!
+    return `  '${shape}': { ${v.endBlend !== undefined ? `endBlend: ${v.endBlend}, ` : ''}settledBy: [${v.settledBy.map(c => `'${c}'`).join(', ')}] },\n`
+  }).join('')
+  return `export const VERIFIED_STAGE3_BAR_GRADIENT_BORDER: Readonly<Record<string, { endBlend?: number; settledBy: readonly string[] }>> = {\n${rows}}\n`
+}
+
+/** The length rule production may apply to 10/90 bars: a `BAR_LENGTH_RULES` id matched by the owning capture. */
+export type BarLengthsExport = Partial<Record<'default-10-90', { rule: string; measured: string[]; settledBy: string[] }>>
+
+/** The generated export of the verified 10/90 length rule (fixed key order, so `--write` stays idempotent). */
+export function renderBarLengthsBlock(lengths: BarLengthsExport): string {
+  const r = lengths['default-10-90']
+  const list = (xs: readonly string[]): string => `[${xs.map(c => `'${c}'`).join(', ')}]`
+  const rows = r ? `  'default-10-90': { rule: '${r.rule}', measured: ${list(r.measured)}, settledBy: ${list(r.settledBy)} },\n` : ''
+  return `export const VERIFIED_STAGE3_BAR_LENGTHS: Readonly<Record<string, { rule: string; measured: readonly string[]; settledBy: readonly string[] }>> = {\n${rows}}\n`
+}
+
+/** The gradient model production may draw: `bar-length`, from the fill toward white by `endBlend` over the bar length. */
+export type BarGradientExport = Partial<Record<'bar-length', { endBlend: number; settledBy: string[] }>>
+
+/** A `CfBarLayoutVariant` (src/xlsx/cf/dataBar.ts) and the verified capabilities that select it. */
+export interface BarLayoutSelection { origin: 'span' | 'axis'; lengthBasis: 'cell' | 'side'; settledBy: string[] }
+export type BarLayoutScope = 'allPositive' | 'mixedSign'
+export interface BarLayoutDerivation {
+  layout: Partial<Record<BarLayoutScope, BarLayoutSelection>>
+  findings: string[]
+}
+
+/**
+ * Ruling S3-B: the layout each length/axis hypothesis of the bar predictor (`predictBarCell`, verify.ts) embodies.
+ * - With no axis the predictor starts every bar at the cell's leading edge and applies minLength/maxLength to the whole
+ *   cell: `{ span, cell }` (the `effective` lengths hypothesis).
+ * - With an axis it predicts each side separately (`v / v_max` of the positive side, `v / v_min` of the negative side,
+ *   `max(|v_min|, |v_max|)` for `middle`): `{ axis, side }`. It predicts axes only at 0/100 lengths, where the side and
+ *   cell bases coincide; production therefore draws an axis only at 0/100 lengths.
+ * A matched hypothesis absent from a capability's map (for example `base` or `full` lengths) selects no variant.
+ */
+export const BAR_LAYOUT_SETTLING: Readonly<Record<string, { scope: BarLayoutScope; variants: Readonly<Record<string, { origin: 'span' | 'axis'; lengthBasis: 'cell' | 'side' }>> }>> = {
+  'bar:lengths-explicit-0-100': { scope: 'allPositive', variants: { effective: { origin: 'span', lengthBasis: 'cell' } } },
+  // Every 10/90 length rule (Task 22b) starts at the leading edge and is a share of the whole cell: span/cell.
+  'bar:lengths-default-10-90': { scope: 'allPositive', variants: Object.fromEntries(BAR_LENGTH_RULES.map(r => [r, { origin: 'span', lengthBasis: 'cell' }])) },
+  'bar:axis-automatic': { scope: 'mixedSign', variants: { automatic: { origin: 'axis', lengthBasis: 'side' } } },
+  'bar:axis-middle': { scope: 'mixedSign', variants: { middle: { origin: 'axis', lengthBasis: 'side' } } },
+}
+
+/**
+ * Selects one variant per scope sign: every VERIFIED settling capability of the scope, pooled across every case's matched
+ * hypotheses, must map to the same variant. Any match that maps to no variant or to a different one leaves the scope
+ * without a variant (bars of that sign stay withheld) and records a finding; capability dispositions are untouched.
+ */
+export function deriveBarLayout(
+  perCapability: readonly Pick<Stage3CapabilityAudit, 'capabilityId' | 'disposition'>[],
+  matchedByCase: readonly Readonly<Record<string, string>>[],
+): BarLayoutDerivation {
+  const layout: BarLayoutDerivation['layout'] = {}
+  const findings: string[] = []
+  for (const scope of ['allPositive', 'mixedSign'] as const) {
+    const settling = Object.keys(BAR_LAYOUT_SETTLING).filter(cap => BAR_LAYOUT_SETTLING[cap]!.scope === scope &&
+      perCapability.some(p => p.capabilityId === cap && p.disposition === 'verified')).sort()
+    if (settling.length === 0) continue
+    const seen = new Map<string, string[]>()
+    for (const matched of matchedByCase) {
+      for (const cap of settling) {
+        const hyp = matched[cap]
+        if (hyp === undefined) continue
+        const v = BAR_LAYOUT_SETTLING[cap]!.variants[hyp]
+        const key = v ? `${v.origin}/${v.lengthBasis}` : `unmapped:${cap}=${hyp}`
+        seen.set(key, [...(seen.get(key) ?? []), `${cap}=${hyp}`])
+      }
+    }
+    const keys = [...seen.keys()]
+    if (keys.length === 1 && !keys[0]!.startsWith('unmapped:')) {
+      const [origin, lengthBasis] = keys[0]!.split('/') as ['span' | 'axis', 'cell' | 'side']
+      layout[scope] = { origin, lengthBasis, settledBy: settling }
+    } else {
+      findings.push(`${scope}: no single layout variant (${keys.length === 0 ? 'no matched hypothesis' : [...seen].map(([k, v]) => `${k} <- ${v.join(', ')}`).join('; ')})`)
+    }
+  }
+  return { layout, findings }
+}
+
+/** The generated export of the selected layout (fixed key order, so `--write` stays idempotent). */
+export function renderBarLayoutBlock(layout: BarLayoutDerivation['layout']): string {
+  const rows = (['allPositive', 'mixedSign'] as const).filter(scope => layout[scope]).map(scope => {
+    const v = layout[scope]!
+    return `  ${scope}: { origin: '${v.origin}', lengthBasis: '${v.lengthBasis}', settledBy: [${v.settledBy.map(c => `'${c}'`).join(', ')}] },\n`
+  }).join('')
+  return `export const VERIFIED_STAGE3_BAR_LAYOUT: Readonly<Record<string, { origin: string; lengthBasis: string; settledBy: readonly string[] }>> = {\n${rows}}\n`
+}
+
+/**
+ * Every automatic bar colour that any measured Stage 3 capture draws, pooled across cases (refs are `<case>:<ref>`):
+ * the cross-case half of Ruling S3-F as amended. Recomputed from each hash-bound PNG and Excel-resaved workbook.
+ */
+export function barAutoColoursAcrossCases(manifest: CfManifest, rootDir: string = REPO_ROOT): Record<string, BarAutoColourObservation> {
+  const pooled: Record<string, BarAutoColourObservation> = {}
+  for (const c of manifest.cases.filter(x => (x.stage === 3 || x.id.startsWith('stage3')) && x.status === 'measured')) {
+    const capture = loadBarScreenCapture(c, rootDir, parts => drawsBarAutoColour(c, parts))
+    if (!capture) continue
+    const measured = measureCaseBars(c, capture.png, capture.geom, capture.parts)
+    const observed = sampleBarAutoColours(c, capture.parts, capture.png, capture.geom, measured instanceof Map ? measured : undefined)
+    for (const [cap, o] of Object.entries(observed)) {
+      const into = (pooled[cap] ??= { samples: [], unsampled: [], others: [] })
+      into.samples.push(...o.samples.map(s => ({ ref: `${c.id}:${s.ref}`, argb: s.argb })))
+      into.unsampled.push(...o.unsampled.map(u => `${c.id}: ${u}`))
+      if (o.others === undefined || into.others === undefined) into.others = undefined
+      else for (const x of o.others) if (!into.others.includes(x)) into.others.push(x)
+    }
+  }
+  return pooled
+}
+
+/** The colours production may consume: only a capability the audit reports verified AND whose pooled captures agree. */
+export function verifiedAutoBarColours(
+  perCapability: readonly Stage3CapabilityAudit[],
+  pooled: Readonly<Record<string, BarAutoColourObservation>>,
+): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const cap of Object.keys(BAR_AUTO_COLOUR_CAPABILITIES).sort()) {
+    if (perCapability.find(p => p.capabilityId === cap)?.disposition !== 'verified') continue
+    const judged = judgeBarAutoColour(pooled[cap])
+    if (judged.status === 'discriminating' && judged.matched) out[cap] = judged.matched
+  }
+  return out
+}
+
+/** The generated export of the measured automatic colours (sorted, so `--write` stays idempotent). */
+export function renderAutoBarColoursBlock(colours: Readonly<Record<string, string>>): string {
+  const rows = Object.keys(colours).sort().map(cap => `  '${cap}': '${colours[cap]}',\n`).join('')
+  return `export const VERIFIED_STAGE3_AUTO_BAR_COLORS: Readonly<Record<string, string>> = {\n${rows}}\n`
+}
+
+/**
+ * Every gradient bar of the measured shape that any measured Stage 3 capture draws, pooled across cases (refs are
+ * `<case>:<ref>`): the cross-case half of the gradient model (one blend fraction must hold for every fill and length).
+ */
+export function barGradientsAcrossCases(manifest: CfManifest, rootDir: string = REPO_ROOT): BarGradientObservation {
+  const pooled: BarGradientObservation = { samples: [], unsampled: [] }
+  for (const c of manifest.cases.filter(x => (x.stage === 3 || x.id.startsWith('stage3')) && x.status === 'measured')) {
+    const capture = loadBarScreenCapture(c, rootDir, drawsBarGradient)
+    if (!capture) continue
+    const o = sampleBarGradients(c, capture.parts, capture.png, capture.geom)
+    pooled.samples.push(...o.samples.map(s => ({ ...s, ref: `${c.id}:${s.ref}` })))
+    pooled.unsampled.push(...o.unsampled.map(u => `${c.id}: ${u}`))
+  }
+  return pooled
+}
+
+/** The generated export of the verified gradient model (fixed key order, so `--write` stays idempotent). */
+export function renderBarGradientBlock(gradient: BarGradientExport): string {
+  const g = gradient['bar-length']
+  const rows = g ? `  'bar-length': { endBlend: ${g.endBlend}, settledBy: [${g.settledBy.map(c => `'${c}'`).join(', ')}] },\n` : ''
+  return `export const VERIFIED_STAGE3_BAR_GRADIENT: Readonly<Record<string, { endBlend: number; settledBy: readonly string[] }>> = {\n${rows}}\n`
+}
+
+/**
+ * Registry entries the audit cannot honour: an unsupported (Ruling S3-CLOSE) id that is not a Stage 3 capability, has
+ * no reason, or is also registered non-discriminating (one capability has one disposition). Any of them fails `ok`.
+ */
+export function unknownStage3Registrations(
+  unsupported: Readonly<Record<string, string>> = CF_STAGE3_UNSUPPORTED,
+  nonDiscriminating: Readonly<Record<string, string>> = CF_STAGE3_NONDISCRIMINATING,
+): string[] {
+  const ids = new Set(CF_STAGE3_CAPABILITIES.map(entry => entry.capabilityId))
+  return Object.keys(unsupported).filter(id => !ids.has(id) || !unsupported[id]!.trim() || nonDiscriminating[id] !== undefined).sort()
+}
+
+/**
+ * Stage 3 (data bars). Unlike Stages 1/2 a measured case can verify only some of its capabilities, so each capability's
+ * disposition comes from `verifyCfCase`'s per-capability result and the cross-case gates (pixel calibration, precondition
+ * probe), never from the case-level status: a case that verifies still reports every capability it did not
+ * discriminate as `supported-structural` (blocks the stage) or `unverified-nondiscriminating` (Lesson 3).
+ */
+export function auditStage3Manifest(manifest: CfManifest, options: { rootDir?: string } = {}): Stage3AuditReport {
+  const rootDir = options.rootDir ?? process.cwd()
+  const stage3ManifestCases = manifest.cases.filter(c => c.stage === 3 || c.id.startsWith('stage3'))
+  const catalogIds = CF_STAGE3_CASES.map(c => c.id)
+  const manifestIds = new Set(stage3ManifestCases.map(c => c.id))
+  const missingCases = catalogIds.filter(id => !manifestIds.has(id))
+  const catalogSet = new Set(catalogIds)
+  const extraCases = stage3ManifestCases.map(c => c.id).filter(id => !catalogSet.has(id))
+  // Each case is verified once per audit: the case audit, the per-capability evidence and the cross-case gates share it.
+  const evidence = new Map(stage3ManifestCases.map(c => [c.id, verifyCfCase(c, { rootDir })] as const))
+  primeVerifiedCases(manifest, { rootDir }, evidence)
+  const perCase = stage3ManifestCases.map(c => auditCase(c, rootDir, evidence.get(c.id)))
+  const perCapability: Stage3CapabilityAudit[] = CF_STAGE3_CAPABILITIES.map(entry => {
+    const owning = perCase.find(p => p.id === entry.caseId)
+    let disposition: Stage3CapabilityAudit['disposition'] = 'unaccounted'
+    if (owning?.structuralValid) {
+      // Ruling S3-CLOSE: a registered capability of a measured case is unsupported in Stage 3, whatever its capture shows.
+      if (owning.status === 'unsupported' || CF_STAGE3_UNSUPPORTED[entry.capabilityId] !== undefined) disposition = 'refused-unsupported'
+      else {
+        disposition = 'supported-structural'
+        const res = evidence.get(entry.caseId)
+        if (res?.kind === 'verified') {
+          if (CF_STAGE3_NONDISCRIMINATING[entry.capabilityId] !== undefined || res.nonDiscriminatingCapabilities?.includes(entry.capabilityId)) {
+            disposition = 'unverified-nondiscriminating'
+          } else if (res.verifiedCapabilities.includes(entry.capabilityId) && isCapabilityVerified(entry.capabilityId, manifest, { rootDir })) {
+            disposition = 'verified'
+          }
+        }
+      }
+    }
+    return { capabilityId: entry.capabilityId, caseId: entry.caseId, disposition }
+  })
+  // An automatic colour verifies only when every capture that draws it agrees with the owning case's measurement.
+  const pooled = perCapability.some(p => isBarAutoColourCapability(p.capabilityId) && p.disposition === 'verified')
+    ? barAutoColoursAcrossCases(manifest, rootDir)
+    : {}
+  for (const p of perCapability) {
+    if (!isBarAutoColourCapability(p.capabilityId) || p.disposition !== 'verified') continue
+    const own = evidence.get(p.caseId)
+    const owned = own?.kind === 'verified' ? own.matchedHypotheses?.[p.capabilityId] : undefined
+    const judged = judgeBarAutoColour(pooled[p.capabilityId])
+    if (judged.status !== 'discriminating' || judged.matched === undefined || owned === undefined || !sameArgbWithin(owned, judged.matched)) {
+      p.disposition = 'supported-structural'
+    }
+  }
+  const autoBarColours = verifiedAutoBarColours(perCapability, pooled)
+  // The gradient model verifies only when every capture's gradient bars agree with the owning case's (one blend fraction
+  // over every fill and length, the fixed-end alternative refuted by a second fill).
+  const gradientEntry = perCapability.find(p => p.capabilityId === BAR_GRADIENT_CAPABILITY)
+  const pooledGradient = judgeBarGradient(gradientEntry?.disposition === 'verified' ? barGradientsAcrossCases(manifest, rootDir) : undefined)
+  const barGradient: BarGradientExport = {}
+  if (gradientEntry?.disposition === 'verified') {
+    const own = evidence.get(gradientEntry.caseId)
+    const owned = own?.kind === 'verified' ? own.matchedHypotheses?.[BAR_GRADIENT_CAPABILITY] : undefined
+    if (pooledGradient.status === 'discriminating' && pooledGradient.matched === 'bar-length' && owned === 'bar-length' && pooledGradient.endBlend !== undefined) {
+      barGradient['bar-length'] = { endBlend: pooledGradient.endBlend, settledBy: [BAR_GRADIENT_CAPABILITY] }
+    } else gradientEntry.disposition = 'supported-structural'
+  }
+  // Ruling S3-GRAD-BORDER: the owning capture's matched shape, recomputed with its fitted blend, only once verified.
+  const barGradientBorder: BarGradientBorderExport = {}
+  const borderEntry = perCapability.find(p => p.capabilityId === BAR_GRADIENT_BORDER_CAPABILITY)
+  if (borderEntry?.disposition === 'verified') {
+    const own = evidence.get(borderEntry.caseId)
+    const owned = own?.kind === 'verified' ? own.matchedHypotheses?.[BAR_GRADIENT_BORDER_CAPABILITY] : undefined
+    const owningCase = manifest.cases.find(c => c.id === borderEntry.caseId)
+    const capture = owningCase ? loadBarScreenCapture(owningCase, rootDir) : undefined
+    const refs = owningCase ? new Set(owningCase.expected.cells.filter(cell => cell.matched && owningCase.markers.some(m => m.capabilityId === BAR_GRADIENT_BORDER_CAPABILITY && isCellInSqref(cell.ref, m.sqref))).map(cell => cell.ref.toUpperCase())) : undefined
+    const blend = owningCase && capture ? fitBarGradientBlend(sampleBarGradients(owningCase, capture.parts, capture.png, capture.geom).samples) : undefined
+    const judged = owningCase && capture ? judgeBarGradientBorder(sampleBarGradients(owningCase, capture.parts, capture.png, capture.geom, refs, 'bordered'), blend) : undefined
+    if (judged?.status === 'discriminating' && judged.matched !== undefined && judged.matched === owned) {
+      barGradientBorder[judged.matched] = { ...(judged.endBlend !== undefined ? { endBlend: judged.endBlend } : {}), settledBy: [BAR_GRADIENT_BORDER_CAPABILITY] }
+    } else borderEntry.disposition = 'supported-structural'
+  }
+  // Task 22b: the 10/90 rule is the owning capture's matched candidate, and only once the capability is verified.
+  const barLengths: BarLengthsExport = {}
+  const lengthsEntry = perCapability.find(p => p.capabilityId === 'bar:lengths-default-10-90')
+  if (lengthsEntry?.disposition === 'verified') {
+    const own = evidence.get(lengthsEntry.caseId)
+    const rule = own?.kind === 'verified' ? own.matchedHypotheses?.['bar:lengths-default-10-90'] : undefined
+    // Task 22c (review I2): the rule travels with the pairing form x fill type combinations its capture measured.
+    const owningCase = manifest.cases.find(c => c.id === lengthsEntry.caseId)
+    const savedParts = owningCase && existsSync(resolve(rootDir, owningCase.saved)) ? readZipPartsSync(new Uint8Array(readFileSync(resolve(rootDir, owningCase.saved)))) : null
+    const measured = owningCase && savedParts ? measuredBarForms(owningCase, savedParts, 'bar:lengths-default-10-90') : []
+    if (rule !== undefined && (BAR_LENGTH_RULES as readonly string[]).includes(rule) && measured.length > 0) barLengths['default-10-90'] = { rule, measured, settledBy: ['bar:lengths-default-10-90'] }
+    else lengthsEntry.disposition = 'supported-structural'
+  }
+  // Ruling S3-AUTO-BOUNDS (Task 22c): each automatic bound's matched rule, only once verified and only while the 10/90
+  // rule its hypotheses were predicted under is the one exported (else the bound falls back to supported-structural).
+  const barAutoBounds: BarAutoBoundsExport = {}
+  for (const [cap, key] of [['bar:bounds-automin', 'autoMin'], ['bar:bounds-automax', 'autoMax']] as const) {
+    const entry = perCapability.find(p => p.capabilityId === cap)
+    if (entry?.disposition !== 'verified') continue
+    const own = evidence.get(entry.caseId)
+    const rule = own?.kind === 'verified' ? own.matchedHypotheses?.[cap] : undefined
+    const assumed = BAR_CAPABILITY_HYPOTHESES[cap]?.knobs?.lengthRule
+    const lengthsOk = assumed === undefined || barLengths['default-10-90']?.rule === assumed
+    if (rule !== undefined && (rule === 'zero-anchored' || rule === 'min-max') && lengthsOk) barAutoBounds[key] = { rule, settledBy: [cap] }
+    else entry.disposition = 'supported-structural'
+  }
+  const matchedByCase = [...evidence.values()].flatMap(r => r.kind === 'verified' && r.matchedHypotheses ? [r.matchedHypotheses] : [])
+  const barLayout = deriveBarLayout(perCapability, matchedByCase)
+  const stage3Ids = new Set(CF_STAGE3_CAPABILITIES.map(entry => entry.capabilityId))
+  const unknownNonDiscriminating = [
+    ...Object.keys(CF_STAGE3_NONDISCRIMINATING).filter(id => !stage3Ids.has(id) || !CF_STAGE3_NONDISCRIMINATING[id]!.trim()),
+    ...unknownStage3Registrations(),
+  ]
+  const caseOk = (p: Stage3CaseAudit): boolean => {
+    if (p.status === 'measured') return p.structuralValid && p.code === undefined
+    return p.structuralValid
+  }
+  const structuralValid = perCase.filter(p => p.structuralValid).length
+  const ok = missingCases.length === 0 && perCase.length > 0 && perCase.every(caseOk) && perCapability.every(p => p.disposition !== 'unaccounted') && unknownNonDiscriminating.length === 0
+  const gate = stageGateStatus(perCapability)
+  return {
+    autoBarColours,
+    barLayout,
+    barGradient,
+    barGradientJudgement: `${pooledGradient.status}: ${pooledGradient.reason}`,
+    barLengths,
+    barGradientBorder,
+    barAutoBounds,
+    ok,
+    perCase,
+    perCapability,
+    missingCases,
+    extraCases,
+    stageComplete: ok && gate.complete,
+    blockedCapabilities: gate.blocked,
+    summary: {
+      cases: perCase.length,
+      structuralValid,
+      verified: perCase.filter(p => p.status === 'measured' && p.code === undefined).length,
+      unsupported: perCase.filter(p => p.status === 'unsupported').length,
+      pending: perCase.filter(p => p.status === 'recipe-pending' || p.status === 'geometry-unverified').length,
+      capabilities: perCapability.length,
+      covered: perCapability.filter(p => p.disposition !== 'unaccounted').length,
+      verifiedCapabilities: perCapability.filter(p => p.disposition === 'verified').length,
+      unverifiedCapabilities: perCapability.filter(p => p.disposition === 'unverified-nondiscriminating').length,
+    },
+  }
+}
+
+/**
+ * The exact text `--stage N --write` puts in `src/xlsx/cf/verifiedCapabilities.ts`, as a pure function of the manifest
+ * so the write is testable and idempotent (Lesson 4): the same manifest always renders the same bytes, and the Stage 1/2
+ * sets never change when Stage 3 is rendered.
+ */
+export interface RenderVerifiedOptions {
+  /** Ruling S3-WRITE: publish the audited Stage 3 set (Task 23 only). Without it the committed Stage 3 export stays as is. */
+  publishStage3?: boolean
+  /** The current `verifiedCapabilities.ts`, whose Stage 3 export is carried over verbatim unless `publishStage3`. */
+  committedSource?: string
+}
+
+/** Per-channel ARGB agreement within the bar colour tolerance (8, the calibration cell's). */
+const sameArgbWithin = (a: string, b: string, tol = 8): boolean => [2, 4, 6].every(k => Math.abs(parseInt(a.slice(k, k + 2), 16) - parseInt(b.slice(k, k + 2), 16)) <= tol)
+
+const exportedColours = (text: string | undefined): string | undefined => {
+  const m = text === undefined ? null : /export const VERIFIED_STAGE3_AUTO_BAR_COLORS: Readonly<Record<string, string>> = \{\n[\s\S]*?\n?\}\n/.exec(text)
+  return m ? m[0] : undefined
+}
+
+const exportedLayout = (text: string | undefined): string | undefined => {
+  const m = text === undefined ? null : /export const VERIFIED_STAGE3_BAR_LAYOUT: [^\n]* = \{\n[\s\S]*?\n?\}\n/.exec(text)
+  return m ? m[0] : undefined
+}
+
+const exportedGradient = (text: string | undefined): string | undefined => {
+  const m = text === undefined ? null : /export const VERIFIED_STAGE3_BAR_GRADIENT: [^\n]* = \{\n[\s\S]*?\n?\}\n/.exec(text)
+  return m ? m[0] : undefined
+}
+
+const exportedLengths = (text: string | undefined): string | undefined => {
+  const m = text === undefined ? null : /export const VERIFIED_STAGE3_BAR_LENGTHS: [^\n]* = \{\n[\s\S]*?\n?\}\n/.exec(text)
+  return m ? m[0] : undefined
+}
+
+const exportedGradientBorder = (text: string | undefined): string | undefined => {
+  const m = text === undefined ? null : /export const VERIFIED_STAGE3_BAR_GRADIENT_BORDER: [^\n]* = \{\n[\s\S]*?\n?\}\n/.exec(text)
+  return m ? m[0] : undefined
+}
+
+const exportedAutoBounds = (text: string | undefined): string | undefined => {
+  const m = text === undefined ? null : /export const VERIFIED_STAGE3_BAR_AUTO_BOUNDS: [^\n]* = \{\n[\s\S]*?\n?\}\n/.exec(text)
+  return m ? m[0] : undefined
+}
+
+const exportedSet = (text: string | undefined, name: string): string[] | undefined => {
+  const m = text === undefined ? null : new RegExp(`export const ${name}: ReadonlySet<string> = new Set\\(\\[([\\s\\S]*?)\\]\\)`).exec(text)
+  return m ? [...m[1]!.matchAll(/'([^']+)'/g)].map(x => x[1]!) : undefined
+}
+
+/**
+ * Every `--write`, whatever `--stage`, renders ALL stages' exports, each from its own audit (Task 18c fix 1: a
+ * Stage-1-only rendering once dropped `VERIFIED_STAGE2_CAPABILITIES` and broke `evidence.ts`). Stage 3 is published only
+ * with `publishStage3` (Ruling S3-WRITE, Task 23); otherwise its committed export, or its absence, is kept verbatim.
+ */
+export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: string = REPO_ROOT, options: RenderVerifiedOptions = {}): string {
+  const verifiedOf = (report: Stage1AuditReport): string[] => report.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
+  const stage1Verified = verifiedOf(auditStage1Manifest(manifest, { rootDir }))
+  const stage2Verified = verifiedOf(auditStage2Manifest(manifest, { rootDir }))
+  const stage3Report = options.publishStage3 ? auditStage3Manifest(manifest, { rootDir }) : undefined
+  const stage3Verified = stage3Report
+    ? verifiedOf(stage3Report)
+    : exportedSet(options.committedSource, 'VERIFIED_STAGE3_CAPABILITIES')
+  // Ruling S3-F as amended: the measured automatic colours travel only beside a published Stage 3 set.
+  const autoColoursBlock = stage3Report ? renderAutoBarColoursBlock(stage3Report.autoBarColours) : exportedColours(options.committedSource)
+  // Ruling S3-B: the selected layout travels the same way, only beside a published Stage 3 set.
+  const layoutBlock = stage3Report ? renderBarLayoutBlock(stage3Report.barLayout.layout) : exportedLayout(options.committedSource)
+  // Ruling S3-M (Task 22b): the verified gradient model travels the same way.
+  const gradientBlock = stage3Report ? renderBarGradientBlock(stage3Report.barGradient) : exportedGradient(options.committedSource)
+  const lengthsBlock = stage3Report ? renderBarLengthsBlock(stage3Report.barLengths) : exportedLengths(options.committedSource)
+  const borderBlock = stage3Report ? renderBarGradientBorderBlock(stage3Report.barGradientBorder) : exportedGradientBorder(options.committedSource)
+  const autoBoundsBlock = stage3Report ? renderBarAutoBoundsBlock(stage3Report.barAutoBounds) : exportedAutoBounds(options.committedSource)
+  const list = (ids: readonly string[]): string => ids.map(id => `  '${id}',`).join('\n')
+  const allVerified = [...new Set([...stage1Verified, ...stage2Verified, ...(stage3Verified ?? [])])].sort()
+  const block = (name: string, ids: readonly string[]): string => `export const ${name}: ReadonlySet<string> = new Set([\n${list(ids)}\n])\n`
+  return `/**
+ * Verified conditional formatting capabilities, every stage from its own audit (Stage 3 only once published, Ruling S3-WRITE).
+ * Generated via bun scripts/cf-refs/audit.ts --write (any --stage; --publish-stage3 publishes Stage 3).
+ * Checked by tests/xlsx-cf-stage1.test.ts, tests/xlsx-cf-stage2.test.ts and tests/xlsx-cf-oracle.test.ts.
+ */
+${block('VERIFIED_STAGE1_CAPABILITIES', stage1Verified)}
+${block('VERIFIED_STAGE2_CAPABILITIES', stage2Verified)}
+${stage3Verified !== undefined ? `${block('VERIFIED_STAGE3_CAPABILITIES', stage3Verified)}\n` : ''}${stage3Verified !== undefined && autoColoursBlock !== undefined ? `${autoColoursBlock}\n` : ''}${stage3Verified !== undefined && layoutBlock !== undefined ? `${layoutBlock}\n` : ''}${stage3Verified !== undefined && gradientBlock !== undefined ? `${gradientBlock}\n` : ''}${stage3Verified !== undefined && lengthsBlock !== undefined ? `${lengthsBlock}\n` : ''}${stage3Verified !== undefined && borderBlock !== undefined ? `${borderBlock}\n` : ''}${stage3Verified !== undefined && autoBoundsBlock !== undefined ? `${autoBoundsBlock}\n` : ''}${block('VERIFIED_CAPABILITIES', allVerified)}`
 }
 
 /* ---------------- pressure + lifecycle scenarios ---------------- */
@@ -602,7 +1066,7 @@ export async function pressureScale1MRowSharedStatistics(): Promise<PressureSamp
   const stamp = { owner: 'audit', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: 1, viewGen: 0, structureGen: 0, clockGen: 0 }
   const source = residentSource(sheet, stamp, memory, 'engine')
   const session = createCfStatistics(memory, { retainEntries: true })
-  const work = createCfWorkBudget({ noTimeLimit: true, maxUnits: 10_000_000 })
+  const work = createCfWorkBudget({ scan: true, maxUnits: 10_000_000 })
   const wholeCol = [{ firstRow: 0, lastRow: 1048575, firstCol: 0, lastCol: 0 }]
   const scopes = Array.from({ length: 100 }, () => wholeCol)
   const outs = await session.prepareStatistics(
@@ -761,12 +1225,291 @@ export async function pressureScaleWholeColumnExtents(): Promise<PressureSample>
   }
 }
 
+/* ---------------- Stage 3 bar pressure (Task 23) ---------------- */
+
+/** A paired (x14) solid min/max data bar at 0/100 lengths, left to right, no border or axis colour: the shape the Stage 3
+ * evidence verifies for all-positive data, so the scenarios below exercise painted bars, not withheld ones. */
+export const barRule = (priority: number, range: { firstRow: number; lastRow: number; firstCol: number; lastCol: number }, bounds?: unknown[]) => ({
+  id: priority,
+  priority,
+  documentOrder: priority,
+  stopIfTrue: false,
+  ranges: [range],
+  writes: new Set(['dataBar']),
+  definition: {
+    kind: 'dataBar',
+    bounds: bounds ?? [{ type: 'min' }, { type: 'max' }],
+    fillArgb: 0xff638ec6,
+    minLength: 0,
+    maxLength: 100,
+    gradient: false,
+    border: false,
+    negativeBarColorSameAsPositive: false,
+    negativeBarBorderColorSameAsPositive: true,
+    axisPosition: 'automatic',
+    direction: 'leftToRight',
+    showValue: true,
+    sheetRightToLeft: false,
+    pairing: 'x14',
+    dialect: 'x14',
+    formulas: [],
+  },
+})
+
+/** Whether a resident scope announces a painted data bar at the cell (Ruling S3-P label). */
+const announcesBar = (scope: { describe(row: number, col: number): { text: string } | undefined }, row: number, col: number): boolean =>
+  scope.describe(row, col)?.text.startsWith('Data bar') === true
+
+/** Wrap sheet cells to count EVERY read of a cell's value (not distinct cells): a scan repeated per rule multiplies it. */
+export function countingValueReads(sheet: XlsxSheet): { sheet: XlsxSheet; reads: () => number } {
+  let reads = 0
+  const rows = sheet.rows.map(band => ({
+    ...band,
+    cells: band.cells.map(cell => new Proxy(cell, {
+      get: (t, p, r) => {
+        if (p === 'value') reads++
+        return Reflect.get(t, p, r)
+      },
+    })),
+  }))
+  return { sheet: { ...sheet, rows } as unknown as XlsxSheet, reads: () => reads }
+}
+
+/**
+ * A 1M-row DECLARED `A:A` scope (100 stored cells) under 100 data bars and 100 colour scales. Two proofs:
+ * - statistics: the 200 rule scopes are one scope, so one sparse scan serves them all (`sourceReads` = 100 stored cells);
+ * - production: the resident text scope paints the first bar on every stored cell (S3-I-OVERLAP; whole-column and
+ *   duplicate-block bars are verified), and every value read during preparation is counted. A per-rule scan would read
+ *   each value 200 times; the shared scan keeps the total within a small multiple of the 100 cells.
+ * It is NOT a populated 1M-row scope (as Stage 2's M5 note).
+ */
+export async function pressureBar1MRowSharedScan(): Promise<PressureSample & { statisticsReads: number; valueReads: number; estimatorRefusedAll: boolean }> {
+  const started = Date.now()
+  const wholeCol = { firstRow: 0, lastRow: 1048575, firstCol: 0, lastCol: 0 }
+  const rules = [
+    ...Array.from({ length: 100 }, (_, i) => barRule(i, wholeCol)),
+    ...Array.from({ length: 100 }, (_, i) => scaleRule(100 + i, wholeCol)),
+  ]
+  // Values 5 and 15 alternate: every bar is either the zero-length minimum or the full span, so none rounds away (the
+  // unmeasured minimum-visible-width branch would withhold it).
+  const cells: XlsxCell[] = Array.from({ length: 100 }, (_, row) => ({ ref: `A${row + 1}`, row, col: 0, styleIndex: 0, value: (row % 2) * 10 + 5, hasCachedValue: true }))
+  const inner = { name: 'P', sheetId: 'p', rows: [{ index: 0, cells }], cols: [], mergeRefs: [], mergeRanges: [], conditionalFormatting: { diagnostics: [], rules } } as unknown as XlsxSheet
+  // Statistics: one scan for 200 identical scopes.
+  const memory = createCfMemory()
+  const stamp = { owner: 'audit', sheetId: inner.sheetId ?? inner.name, workbookValueGen: 0, cfGen: 1, viewGen: 0, structureGen: 0, clockGen: 0 }
+  const session = createCfStatistics(memory, { retainEntries: true })
+  const outs = await session.prepareStatistics(rules.map(r => r.ranges), stamp, residentSource(inner, stamp, memory, 'engine'),
+    createCfWorkBudget({ scan: true, maxUnits: 10_000_000 }), { signal: new AbortController().signal })
+  const ready = outs.find(o => o.kind === 'ready')
+  if (!ready || ready.kind !== 'ready') throw new Error('bar statistics scan must admit')
+  const statisticsReads = ready.value.value.storedCells
+  const statsPeak = memory.peakBytes
+  for (const o of outs) if (o.kind === 'ready') o.value.release()
+  session.dispose()
+  if (memory.currentBytes !== 0) throw new Error(`bar statistics leaked ${memory.currentBytes} B`)
+  // Production: the resident text scope. Its byte estimate is O(rules x cells) (every rule's property bytes per cell),
+  // so 200 rules over all 100 cells exceed the 8 MiB scratch bound and refuse before any read; 40 cells admit.
+  const { sheet, reads } = countingValueReads(inner)
+  const { budget, net, peak } = createTrackingBudget()
+  let estimatorRefusedAll = false
+  try {
+    await prepareCfTextScope(sheet, { rects: [{ r0: 0, r1: 99, c0: 0, c1: 0 }], signal: new AbortController().signal, locale: 'en-US', budget })
+  } catch (error) {
+    if (!(error instanceof PackageError) || error.code !== 'resource-limit') throw error
+    estimatorRefusedAll = true
+  }
+  if (reads() !== 0 || net() !== 0) throw new Error(`the refused 100-cell request read ${reads()} values and left ${net()} B`)
+  const rows = 40
+  const scope = await prepareCfTextScope(sheet, {
+    rects: [{ r0: 0, r1: rows - 1, c0: 0, c1: 0 }],
+    signal: new AbortController().signal,
+    locale: 'en-US',
+    budget,
+  })
+  const valueReads = reads()
+  let painted = 0
+  // The bar paints (`barAt`); the cell announces unavailable formatting because its whole-column scales withhold
+  // (scale:scope-whole-column is unverified).
+  if (scope) for (let row = 0; row < rows; row++) if (scope.barAt?.(row, 0) !== undefined) painted++
+  const peakBytes = Math.max(peak(), statsPeak)
+  scope?.dispose()
+  return {
+    name: 'bar-sparse-1M-declared-shared-scan',
+    outcome: scope === undefined ? 'refused' : 'admitted',
+    peakBytes,
+    netBytes: net(),
+    sourceReads: statisticsReads,
+    cellsWithResults: painted,
+    statisticsReads,
+    valueReads,
+    estimatorRefusedAll,
+    wallMs: Date.now() - started,
+  }
+}
+
+/** An invalid (out-of-range) percentile bar withholds as unavailable while a min/max bar over another column still
+ * paints (it is not a sorted-copy refusal: that path is covered in tests/xlsx-cf-statistics.test.ts). */
+export async function pressureRefusedPercentileBarWithMinMax(): Promise<PressureSample> {
+  const started = Date.now()
+  const cells: XlsxCell[] = []
+  for (let col = 0; col < 2; col++) for (let row = 0; row < 10; row++) {
+    cells.push({ ref: `${'AB'[col]}${row + 1}`, row, col, styleIndex: 0, value: (row + 1) * 10, hasCachedValue: true })
+  }
+  const minMax = barRule(1, { firstRow: 0, lastRow: 9, firstCol: 0, lastCol: 0 })
+  const percentile = { ...barRule(2, { firstRow: 0, lastRow: 9, firstCol: 1, lastCol: 1 }, [{ type: 'percentile', value: -10 }, { type: 'max' }]), documentOrder: 1 }
+  const inner = {
+    name: 'P', sheetId: 'p', rows: [{ index: 0, cells }], cols: [], mergeRefs: [], mergeRanges: [],
+    conditionalFormatting: { diagnostics: [], rules: [minMax, percentile] },
+  } as unknown as XlsxSheet
+  const { sheet, visits } = countingSheetCells(inner)
+  const { budget, net, peak } = createTrackingBudget()
+  const scope = await prepareCfTextScope(sheet, {
+    rects: [{ r0: 0, r1: 9, c0: 0, c1: 0 }, { r0: 0, r1: 9, c0: 1, c1: 1 }],
+    signal: new AbortController().signal,
+    locale: 'en-US',
+    budget,
+  })
+  if (scope === undefined) throw new Error('scope must admit')
+  const visited = visits()
+  let painted = 0
+  for (let row = 0; row < 10; row++) {
+    if (announcesBar(scope, row, 0)) painted++
+    const b = scope.describe(row, 1)?.text
+    if (b !== 'Conditional formatting unavailable') throw new Error(`percentile bar B${row + 1} must withhold as unavailable, got ${b}`)
+    if (scope.barAt?.(row, 1) !== undefined) throw new Error(`percentile bar B${row + 1} must not report a bar`)
+  }
+  const peakBytes = peak()
+  scope.dispose()
+  return { name: 'invalid-percentile-bar-withheld-with-min-max-bar-painted', outcome: 'admitted', peakBytes, netBytes: net(), sourceReads: visited, cellsWithResults: painted, wallMs: Date.now() - started }
+}
+
+/** A whole-column bar does not extend the sheet's extents, and its scope paints the stored cells only. */
+export async function pressureBarWholeColumnExtents(): Promise<PressureSample> {
+  const started = Date.now()
+  const dataRows = 10
+  const inner = {
+    name: 'WCBar', sheetId: 'wcbar',
+    rows: Array.from({ length: dataRows }, (_, r) => ({ index: r, cells: [{ ref: `A${r + 1}`, row: r, col: 0, styleIndex: 0, value: (r + 1) * 10, hasCachedValue: true }] })),
+    cols: [], mergeRefs: [], mergeRanges: [],
+    conditionalFormatting: { diagnostics: [], rules: [barRule(1, { firstRow: 0, lastRow: 1048575, firstCol: 0, lastCol: 0 })] },
+  } as unknown as XlsxSheet
+  const m = computeMetrics(inner)
+  if (m.rowHeightsPx.length !== dataRows || m.heightPx > 1000) {
+    throw new Error(`CF bar extended metrics extent: ${m.rowHeightsPx.length} rows, height ${m.heightPx}px`)
+  }
+  const { sheet, visits } = countingSheetCells(inner)
+  const { budget, net, peak } = createTrackingBudget()
+  const scope = await prepareCfTextScope(sheet, {
+    rects: [{ r0: 0, r1: dataRows - 1, c0: 0, c1: 0 }],
+    signal: new AbortController().signal,
+    locale: 'en-US',
+    budget,
+  })
+  if (scope === undefined) throw new Error('scope must admit')
+  const visited = visits()
+  let painted = 0
+  for (let r = 0; r < dataRows; r++) if (announcesBar(scope, r, 0)) painted++
+  const peakBytes = peak()
+  scope.dispose()
+  return { name: 'bar-whole-column-extents', outcome: 'admitted', peakBytes, netBytes: net(), sourceReads: visited, cellsWithResults: painted, wallMs: Date.now() - started }
+}
+
+/** Distinct-range bar pressure: 150 bars over distinct two-cell ranges; a 10-rect batch admits, paints and balances;
+ * 300 distinct rects exceed the per-call rect cap and refuse before enumeration with net zero. */
+export async function pressureBarDistinctRanges(): Promise<PressureSample> {
+  const started = Date.now()
+  const N = 300
+  // Two cells per rule: a single-cell scope is degenerate (S3-E keeps it unresolved), a pair is an ordinary min/max bar.
+  const rules = Array.from({ length: N / 2 }, (_, i) => barRule(i, { firstRow: 2 * i, lastRow: 2 * i + 1, firstCol: 0, lastCol: 0 }))
+  const cells: XlsxCell[] = []
+  for (let row = 0; row < N; row++) cells.push({ ref: `A${row + 1}`, row, col: 0, styleIndex: 0, value: (row % 2) * 10 + 5, hasCachedValue: true })
+  const inner = { name: 'DB', sheetId: 'db', rows: [{ index: 0, cells }], cols: [], mergeRefs: [], mergeRanges: [], conditionalFormatting: { diagnostics: [], rules } } as unknown as XlsxSheet
+  const { sheet, visits } = countingSheetCells(inner)
+  {
+    const { budget, net, peak } = createTrackingBudget()
+    const scope = await prepareCfTextScope(sheet, { rects: Array.from({ length: 10 }, (_, i) => ({ r0: i, r1: i, c0: 0, c1: 0 })), signal: new AbortController().signal, locale: 'en-US', budget })
+    if (scope === undefined) throw new Error('small distinct bar batch must admit')
+    let painted = 0
+    for (let row = 0; row < 10; row++) if (announcesBar(scope, row, 0)) painted++
+    if (painted !== 10) throw new Error(`small distinct bar batch painted ${painted}/10`)
+    const peakBytes = peak()
+    scope.dispose()
+    checkPressureSample({ name: 'bar-distinct-range-10', outcome: 'admitted', peakBytes, netBytes: net(), sourceReads: visits(), cellsWithResults: painted, wallMs: 0 }, { expectOutcome: 'admitted' })
+  }
+  const visitedBefore = visits()
+  const { budget, net, peak } = createTrackingBudget()
+  let scope: Awaited<ReturnType<typeof prepareCfTextScope>> | undefined
+  try {
+    scope = await prepareCfTextScope(sheet, { rects: Array.from({ length: N }, (_, i) => ({ r0: i, r1: i, c0: 0, c1: 0 })), signal: new AbortController().signal, locale: 'en-US', budget })
+  } catch (error) {
+    if (!(error instanceof PackageError) || error.code !== 'resource-limit') throw error
+  }
+  scope?.dispose()
+  return { name: 'bar-distinct-range-300', outcome: scope === undefined ? 'refused' : 'admitted', peakBytes: peak(), netBytes: net(), sourceReads: visits() - visitedBefore, cellsWithResults: 0, wallMs: Date.now() - started }
+}
+
+/** A synthetic column of `cells` numbers that charges one work unit per examined cell, as `residentSource` does. */
+function syntheticColumnSource(cells: number, stamp: CfStamp): CfValueSource & { reads: () => number } {
+  let reads = 0
+  return {
+    numberFormats: 'resolved',
+    stamp: () => stamp,
+    async bounds() { return { firstRow: 0, lastRow: Math.max(0, cells - 1), firstCol: 0, lastCol: 0 } },
+    async *pages(_id, _rects, budget, signal) {
+      const rows = new Uint32Array(1), cols = new Uint16Array(1)
+      for (let r = 0; r < cells; r++) {
+        if (signal.aborted) throw new Error('CF cancelled')
+        const work = budget.spend(1)
+        if (work === 'refused') throw new Error('CF work limit')
+        if (work === 'yield') budget.resume()
+        reads++
+        rows[0] = r; cols[0] = 0
+        yield { value: { rows, cols, values: [{ kind: 'number', value: (r % 100) + 1 }] }, bytes: 256, release() {}, transfer() { return { kind: 'unresolved', reason: 'borrowed-page' } } } as CfLease<CfValuePage>
+      }
+    },
+    reads: () => reads,
+  }
+}
+
+/**
+ * The 1,000,000-unit work cap (CF_LIMITS.workUnits) on a bar's statistics scan, under the default statistics budget a
+ * service builds (no time limit, default units). A scanned cell costs far more than the one unit the page charges (the
+ * statistics accounting, its checkpoints and its buffer growth: about 66 units per cell at 10,000 cells, measured), so
+ * 10,000 cells admit and 100,000 refuse `cf-resource-limit` part-way, with nothing left charged. Synthetic one-cell pages
+ * keep the column cheap to build.
+ */
+export async function pressureBarUnitCap(): Promise<{ name: string; admittedCells: number; admittedReads: number; admittedUnits: number; refusedCells: number; refusedReads: number; refusedUnits: number; refusedReason: string; netBytes: number; wallMs: number }> {
+  const started = Date.now()
+  const stamp = { owner: 'audit', sheetId: 'cap', workbookValueGen: 0, cfGen: 1, viewGen: 0, structureGen: 0, clockGen: 0 }
+  const run = async (cells: number) => {
+    const memory = createCfMemory()
+    const session = createCfStatistics(memory)
+    const source = syntheticColumnSource(cells, stamp)
+    const budget = createCfWorkBudget({ scan: true })
+    const [out] = await session.prepareStatistics([[{ firstRow: 0, lastRow: 1048575, firstCol: 0, lastCol: 0 }]], stamp, source,
+      budget, { signal: new AbortController().signal })
+    const result = { kind: out!.kind, reason: out!.kind === 'unresolved' ? out!.reason : '', reads: source.reads(), units: budget.units }
+    if (out!.kind === 'ready') out!.value.release()
+    session.dispose()
+    return { ...result, net: memory.currentBytes }
+  }
+  const admittedCells = 10_000, refusedCells = 100_000
+  const admitted = await run(admittedCells)
+  if (admitted.kind !== 'ready') throw new Error(`bar scan of ${admittedCells} cells must admit, got ${admitted.kind} ${admitted.reason}`)
+  const refused = await run(refusedCells)
+  if (refused.kind !== 'unresolved') throw new Error(`bar scan of ${refusedCells} cells must refuse at the unit cap`)
+  return { name: 'bar-statistics-unit-cap', admittedCells, admittedReads: admitted.reads, admittedUnits: admitted.units, refusedCells, refusedReads: refused.reads,
+    refusedUnits: refused.units, refusedReason: refused.reason, netBytes: admitted.net + refused.net, wallMs: Date.now() - started }
+}
+
 export interface CycleSample {
   cycles: number
   reads: number
   maxPeakBytes: number
   maxNetBytes: number
   finalNetBytes: number
+  /** Bar states the ready reads carried (Stage 3 cycles read a bar range). */
+  barStates: number
   wallMs: number
 }
 
@@ -776,11 +1519,13 @@ export interface CycleSample {
  * to a zero baseline — stability alone is not cleanup. Pre-aborted reads must
  * throw cancellation; a mid-flight abort must settle without charge and leave
  * the session usable. */
-export async function pressureCycles(rounds = 20): Promise<CycleSample> {
+export async function pressureCycles(rounds = 20, options: { fixture?: string; rect?: { r0: number; r1: number; c0: number; c1: number }; requireBars?: boolean } = {}): Promise<CycleSample> {
   const started = Date.now()
   const { openImportSession } = await import('../../src/xlsx/storage/pagedImport')
   const { createPagedWorkbookSource } = await import('../../src/xlsx/view/pagedSource')
-  const saved = readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/stage1-cellis-literals.xlsx'))
+  const saved = readFileSync(join(REPO_ROOT, options.fixture ?? 'tests/fixtures/xlsx-cf/stage1-cellis-literals.xlsx'))
+  const first = options.rect ?? { r0: 0, r1: 0, c0: 0, c1: 0 }
+  let barStates = 0
   let maxPeak = 0
   let maxNet = 0
   let finalNet = 0
@@ -802,11 +1547,14 @@ export async function pressureCycles(rounds = 20): Promise<CycleSample> {
       // Complete read through the audited memory: peak proves real work.
       reads++
       const ready = await store.readConditionalFormatting?.({
-        rects: [{ r0: 0, r1: 0, c0: 0, c1: 0 }],
+        rects: [first],
         stamp: stamp('audit'),
         grantBytes: 2 * 1024 * 1024,
       }, memory, { signal: new AbortController().signal })
       if (!ready || ready.kind !== 'ready') throw new Error(`cycle ${i}: expected ready read`)
+      const bars = ready.states.filter(s => s.bar !== undefined).length
+      if (options.requireBars && bars === 0) throw new Error(`cycle ${i}: the ready read carried no bar state`)
+      barStates += bars
       if (memory.peakBytes <= 0) throw new Error(`cycle ${i}: ready read observed no allocation`)
       maxPeak = Math.max(maxPeak, memory.peakBytes)
       maxNet = Math.max(maxNet, memory.currentBytes)
@@ -869,7 +1617,7 @@ export async function pressureCycles(rounds = 20): Promise<CycleSample> {
     finalNet = memory.currentBytes
     if (finalNet !== 0) throw new Error(`cycle ${i}: net bytes ${finalNet} after release`)
   }
-  return { cycles: rounds, reads, maxPeakBytes: maxPeak, maxNetBytes: maxNet, finalNetBytes: finalNet, wallMs: Date.now() - started }
+  return { cycles: rounds, reads, maxPeakBytes: maxPeak, maxNetBytes: maxNet, finalNetBytes: finalNet, barStates, wallMs: Date.now() - started }
 }
 
 export interface NoCfBaseline {
@@ -879,14 +1627,14 @@ export interface NoCfBaseline {
 }
 
 /** No-CF baseline: same shapes without conditional formatting do zero CF work. */
-export async function baselineNoCf(): Promise<NoCfBaseline> {
+export async function baselineNoCf(rule: Record<string, unknown> = cellIsRule(0, { firstRow: 0, lastRow: 99, firstCol: 0, lastCol: 0 }) as unknown as Record<string, unknown>): Promise<NoCfBaseline> {
   const { prepareCfPaint } = await import('../../src/xlsx/cf/render')
   const memory = createCfMemory()
   let reserves = 0
   let reads = 0
   const rawReserve = memory.reserve.bind(memory)
   ;(memory as { reserve: typeof rawReserve }).reserve = (...args: Parameters<typeof rawReserve>) => { reserves++; return rawReserve(...args) }
-  const sheet = numericSheet(100, cellIsRule(0, { firstRow: 0, lastRow: 99, firstCol: 0, lastCol: 0 }))
+  const sheet = numericSheet(100, rule)
   delete (sheet as { conditionalFormatting?: unknown }).conditionalFormatting
   const store = { get stamp(): never { throw new Error('no-CF stamp read') }, readRows: (...args: unknown[]) => { reads++; throw new Error(`no-CF read ${String(args)}`) } }
   let scopeBuilt = false
@@ -925,9 +1673,9 @@ function printCase(entry: { id: string; status: string; structuralValid: boolean
 async function main(): Promise<void> {
   const args = process.argv.slice(2)
   const stage = Number(args.includes('--stage') ? args[args.indexOf('--stage') + 1] : 1)
-  if (stage !== 1 && stage !== 2) {
+  if (stage !== 1 && stage !== 2 && stage !== 3) {
     // eslint-disable-next-line no-console
-    console.error('Only --stage 1 and --stage 2 are implemented')
+    console.error('Only --stage 1, --stage 2 and --stage 3 are implemented')
     process.exit(2)
   }
   const only = args.includes('--case') ? args[args.indexOf('--case') + 1] : undefined
@@ -935,58 +1683,51 @@ async function main(): Promise<void> {
   const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
   const report = stage === 1
     ? auditStage1Manifest(manifest, { rootDir: REPO_ROOT })
-    : auditStage2Manifest(manifest, { rootDir: REPO_ROOT })
+    : stage === 2
+      ? auditStage2Manifest(manifest, { rootDir: REPO_ROOT })
+      : auditStage3Manifest(manifest, { rootDir: REPO_ROOT })
   if (args.includes('--write')) {
-    if (stage === 1) {
-      const verified = report.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
-      const content = `/**
- * Verified conditional formatting capabilities for Stage 1.
- * Generated via bun scripts/cf-refs/audit.ts --stage 1 --write.
- * Checked by tests/xlsx-cf-stage1.test.ts.
- */
-export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set([
-${verified.map(id => `  '${id}',`).join('\n')}
-])
-`
-      writeFileSync(resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts'), content, 'utf8')
-      // eslint-disable-next-line no-console
-      console.log(`wrote ${verified.length} verified capabilities to src/xlsx/cf/verifiedCapabilities.ts`)
-    } else {
-      const stage1Report = auditStage1Manifest(manifest, { rootDir: REPO_ROOT })
-      const stage1Verified = stage1Report.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
-      const stage2Verified = report.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
-      const allVerified = [...new Set([...stage1Verified, ...stage2Verified])].sort()
-      const content = `/**
- * Verified conditional formatting capabilities for Stage 1 and Stage 2.
- * Generated via bun scripts/cf-refs/audit.ts --stage 2 --write.
- * Checked by tests/xlsx-cf-stage1.test.ts and tests/xlsx-cf-stage2.test.ts.
- */
-export const VERIFIED_STAGE1_CAPABILITIES: ReadonlySet<string> = new Set([
-${stage1Verified.map(id => `  '${id}',`).join('\n')}
-])
-
-export const VERIFIED_STAGE2_CAPABILITIES: ReadonlySet<string> = new Set([
-${stage2Verified.map(id => `  '${id}',`).join('\n')}
-])
-
-export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set([
-${allVerified.map(id => `  '${id}',`).join('\n')}
-])
-`
-      writeFileSync(resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts'), content, 'utf8')
-      // eslint-disable-next-line no-console
-      console.log(`wrote ${allVerified.length} verified capabilities (${stage1Verified.length} S1, ${stage2Verified.length} S2) to src/xlsx/cf/verifiedCapabilities.ts`)
-    }
+    const target = resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts')
+    const content = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, {
+      committedSource: existsSync(target) ? readFileSync(target, 'utf8') : undefined,
+      publishStage3: args.includes('--publish-stage3'),
+    })
+    writeFileSync(target, content, 'utf8')
+    const count = (name: string): number => (new RegExp(`export const ${name}: ReadonlySet<string> = new Set\\(\\[([\\s\\S]*?)\\]\\)`).exec(content)?.[1]?.match(/'[^']+'/g) ?? []).length
+    const s3 = content.includes('VERIFIED_STAGE3_CAPABILITIES') ? `, ${count('VERIFIED_STAGE3_CAPABILITIES')} S3${args.includes('--publish-stage3') ? ' published' : ' as committed'}` : ', S3 unpublished'
+    const detail = ` (${count('VERIFIED_STAGE1_CAPABILITIES')} S1, ${count('VERIFIED_STAGE2_CAPABILITIES')} S2${s3})`
+    // eslint-disable-next-line no-console
+    console.log(`wrote ${count('VERIFIED_CAPABILITIES')} verified capabilities${detail} to src/xlsx/cf/verifiedCapabilities.ts`)
   }
   const cases = only ? report.perCase.filter(c => c.id === only) : report.perCase
   for (const entry of cases) printCase(entry)
   // eslint-disable-next-line no-console
   console.log(`manifest: ${report.summary.structuralValid}/${report.summary.cases} structural, capabilities ${report.summary.covered}/${report.summary.capabilities}, missing=[${report.missingCases.join(',')}] extra=[${report.extraCases.join(',')}]`)
+  if ('barLayout' in report) {
+    const l = (report as Stage3AuditReport).barLayout
+    const show = (scope: BarLayoutScope): string => { const v = l.layout[scope]; return v ? `${v.origin}/${v.lengthBasis} (${v.settledBy.join(', ')})` : 'none' }
+    // eslint-disable-next-line no-console
+    console.log(`bar layout (S3-B): allPositive=${show('allPositive')} mixedSign=${show('mixedSign')}${l.findings.length ? ` findings=[${l.findings.join('; ')}]` : ''}`)
+    const r3 = report as Stage3AuditReport
+    const g = r3.barGradient['bar-length']
+    // eslint-disable-next-line no-console
+    console.log(`bar gradient (S3-M): ${g ? `bar-length endBlend=${g.endBlend}` : 'none'} (${r3.barGradientJudgement})`)
+    const d = r3.barLengths['default-10-90']
+    // eslint-disable-next-line no-console
+    console.log(`bar 10/90 lengths (Task 22b): ${d ? `${d.rule} (${d.settledBy.join(', ')})` : 'none selected'}`)
+    const ab = r3.barAutoBounds
+    // eslint-disable-next-line no-console
+    console.log(`bar automatic bounds (S3-AUTO-BOUNDS): autoMin=${ab.autoMin?.rule ?? 'none'} autoMax=${ab.autoMax?.rule ?? 'none'}`)
+    const bb = Object.entries(r3.barGradientBorder)
+    // eslint-disable-next-line no-console
+    console.log(`bar bordered gradient (S3-GRAD-BORDER): ${bb.length ? bb.map(([k, v]) => `${k}${v?.endBlend !== undefined ? ` endBlend=${v.endBlend}` : ''}`).join(', ') : 'none selected'}`)
+  }
   // eslint-disable-next-line no-console
   console.log('--- pressure ---')
 
   let stage1Pressure: { whole: PressureSample; shared: PressureSample; bounds: ReturnType<typeof pressureRangeBoundaries>; refusedSheet: PressureSample; stats: PressureSample } | undefined
   let stage2Pressure: { scaleShared: PressureSample; percentile: PressureSample; extents: PressureSample } | undefined
+  let stage3Pressure: { barShared: Awaited<ReturnType<typeof pressureBar1MRowSharedScan>>; barPercentile: PressureSample; barExtents: PressureSample; barDistinct: PressureSample; barUnitCap: Awaited<ReturnType<typeof pressureBarUnitCap>> } | undefined
 
   if (stage === 1) {
     const whole = await pressureWholeColumn()
@@ -1010,6 +1751,34 @@ ${allVerified.map(id => `  '${id}',`).join('\n')}
     console.log(`${stats.outcome} ${stats.name}: peak=${stats.peakBytes} net=${stats.netBytes} visits=${stats.sourceReads} span=${stats.cellsWithResults} (${stats.wallMs}ms context only)`)
     checkPressureSample(stats, { expectOutcome: 'admitted' })
     stage1Pressure = { whole, shared, bounds, refusedSheet, stats }
+  } else if (stage === 3) {
+    const barShared = await pressureBar1MRowSharedScan()
+    // eslint-disable-next-line no-console
+    console.log(`${barShared.outcome} ${barShared.name}: peak=${barShared.peakBytes} net=${barShared.netBytes} statisticsReads=${barShared.statisticsReads} valueReads=${barShared.valueReads} barsPainted=${barShared.cellsWithResults}/40 estimatorRefused100=${barShared.estimatorRefusedAll} (${barShared.wallMs}ms context only)`)
+    checkPressureSample(barShared, { expectOutcome: 'admitted' })
+    if (barShared.statisticsReads !== 100) throw new Error(`200 identical scopes must share one 100-cell scan, read ${barShared.statisticsReads}`)
+    if (barShared.cellsWithResults !== 40) throw new Error(`the first bar must paint all 40 requested cells, painted ${barShared.cellsWithResults}`)
+    if (!barShared.estimatorRefusedAll) throw new Error('the 100-cell text request of 200 rules must refuse at the byte estimate')
+    if (barShared.valueReads > 1000) throw new Error(`preparation read ${barShared.valueReads} values: the scan is not shared`)
+    const barPercentile = await pressureRefusedPercentileBarWithMinMax()
+    // eslint-disable-next-line no-console
+    console.log(`${barPercentile.outcome} ${barPercentile.name}: peak=${barPercentile.peakBytes} net=${barPercentile.netBytes} reads=${barPercentile.sourceReads} barsPainted=${barPercentile.cellsWithResults} (${barPercentile.wallMs}ms context only)`)
+    checkPressureSample(barPercentile, { expectOutcome: 'admitted' })
+    if (barPercentile.cellsWithResults !== 10) throw new Error(`the min/max bar must paint 10 cells, painted ${barPercentile.cellsWithResults}`)
+    const barExtents = await pressureBarWholeColumnExtents()
+    // eslint-disable-next-line no-console
+    console.log(`${barExtents.outcome} ${barExtents.name}: peak=${barExtents.peakBytes} net=${barExtents.netBytes} reads=${barExtents.sourceReads} barsPainted=${barExtents.cellsWithResults} (${barExtents.wallMs}ms context only)`)
+    checkPressureSample(barExtents, { expectOutcome: 'admitted' })
+    if (barExtents.cellsWithResults !== 10) throw new Error(`the whole-column bar must paint its 10 stored cells, painted ${barExtents.cellsWithResults}`)
+    const barDistinct = await pressureBarDistinctRanges()
+    // eslint-disable-next-line no-console
+    console.log(`${barDistinct.outcome} ${barDistinct.name}: peak=${barDistinct.peakBytes} net=${barDistinct.netBytes} reads=${barDistinct.sourceReads} (${barDistinct.wallMs}ms context only; the 10-rect batch admitted and painted 10)`)
+    checkPressureSample(barDistinct, { expectOutcome: 'refused' })
+    const barUnitCap = await pressureBarUnitCap()
+    // eslint-disable-next-line no-console
+    console.log(`${barUnitCap.name}: ${barUnitCap.admittedCells} cells admitted (reads=${barUnitCap.admittedReads}, units=${barUnitCap.admittedUnits}), ${barUnitCap.refusedCells} cells refused ${barUnitCap.refusedReason} (reads=${barUnitCap.refusedReads}, units=${barUnitCap.refusedUnits}) net=${barUnitCap.netBytes} (${barUnitCap.wallMs}ms context only)`)
+    if (barUnitCap.netBytes !== 0) throw new Error(`unit-cap scans leaked ${barUnitCap.netBytes} B`)
+    stage3Pressure = { barShared, barPercentile, barExtents, barDistinct, barUnitCap }
   } else {
     const scaleShared = await pressureScale1MRowSharedStatistics()
     // eslint-disable-next-line no-console
@@ -1031,13 +1800,17 @@ ${allVerified.map(id => `  '${id}',`).join('\n')}
   console.log(`${distinct.outcome} ${distinct.name}: peak=${distinct.peakBytes} net=${distinct.netBytes} reads=${distinct.sourceReads} cells=${distinct.cellsWithResults} (${distinct.wallMs}ms context only)`)
   checkPressureSample(distinct, { expectOutcome: 'refused' })
 
-  const cycles = await pressureCycles(20)
+  // Stage 3 cycles read a bar range of a Stage 3 workbook (B2:B12 of the default-lengths case), so every ready read
+  // carries bar states.
+  const cycles = stage === 3
+    ? await pressureCycles(20, { fixture: 'tests/fixtures/xlsx-cf/stage3-bar-lengths-default.xlsx', rect: { r0: 1, r1: 11, c0: 1, c1: 1 }, requireBars: true })
+    : await pressureCycles(20)
   // eslint-disable-next-line no-console
-  console.log(`cycles: ${cycles.cycles} open/read/cancel/close, reads=${cycles.reads} maxPeak=${cycles.maxPeakBytes} maxNet=${cycles.maxNetBytes} finalNet=${cycles.finalNetBytes} (released baseline, ${cycles.wallMs}ms context only)`)
+  console.log(`cycles: ${cycles.cycles} open/read/cancel/close, reads=${cycles.reads} barStates=${cycles.barStates} maxPeak=${cycles.maxPeakBytes} maxNet=${cycles.maxNetBytes} finalNet=${cycles.finalNetBytes} (released baseline, ${cycles.wallMs}ms context only)`)
   if (cycles.maxPeakBytes <= 0) throw new Error('cycles observed no allocation')
   if (cycles.reads < cycles.cycles * 4) throw new Error(`cycles issued ${cycles.reads} reads, expected at least ${cycles.cycles * 4} (ready + cancelled + mid-flight + retry per cycle)`)
 
-  const baseline = await baselineNoCf()
+  const baseline = await baselineNoCf(stage === 3 ? barRule(0, { firstRow: 0, lastRow: 99, firstCol: 0, lastCol: 0 }) as unknown as Record<string, unknown> : undefined)
   // eslint-disable-next-line no-console
   console.log(`no-cf baseline: reserves=${baseline.paintReserves} reads=${baseline.sourceReads} scopeBuilt=${baseline.scopeBuilt}`)
   if (baseline.paintReserves !== 0 || baseline.sourceReads !== 0 || baseline.scopeBuilt) throw new Error('no-CF path did CF work')
@@ -1056,7 +1829,9 @@ ${allVerified.map(id => `  '${id}',`).join('\n')}
     mkdirSync(outDir, { recursive: true })
     const outData = stage === 1
       ? { report, ...stage1Pressure, distinct, cycles, baseline, eager }
-      : { report, ...stage2Pressure, distinct, cycles, baseline, eager }
+      : stage === 3
+        ? { report, ...stage3Pressure, distinct, cycles, baseline, eager }
+        : { report, ...stage2Pressure, distinct, cycles, baseline, eager }
     writeFileSync(join(outDir, `stage${stage}-audit.json`), JSON.stringify(outData, null, 2))
   }
 

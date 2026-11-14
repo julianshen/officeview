@@ -32,6 +32,7 @@ import type {
 import type { XlsxCell } from '../types'
 import type { CfMemory, CfWorkBudget } from './limits'
 import { CF_LIMITS } from './limits'
+import { isDateNumberStyle } from '../dateNumberFormat'
 
 /** Stable, type-tagged frequency key. Blanks and errors are never counted in numeric stats. */
 export function cfValueKey(value: CfLiteral): string | undefined {
@@ -77,6 +78,8 @@ export interface CfRangeStatistics {
   readonly hasHiddenRows?: boolean
   /** Whether the scanned scope holds at least one error value (never counted in numeric stats). */
   readonly hasErrors?: boolean
+  /** Whether the scanned scope holds a number displayed as a date (`CfLiteral.dateSerial`, data-bar S3-G). */
+  readonly hasDateSerials?: boolean
 }
 
 export interface CfStatisticsOptions {
@@ -528,6 +531,7 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
       let min = Infinity
       let max = -Infinity
       let hasErrors = false
+      let hasDateSerials = false
       let stored = 0
       let storedBlanks = 0
       const spend: SpendState = { pending: 0, signal, budget }
@@ -565,6 +569,7 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
               }
               if (hidden === 'exclude' && inRects(row, col, hiddenRows)) continue
               const value = items[i]!
+              if (value.kind === 'number' && value.dateSerial) hasDateSerials = true
               // In Excel, duplicateValues/uniqueValues counts frequency across all
               // rectangles in the sqref list (e.g. H2:H4 H3:H5 counts H3 in both ranges).
               // Scales with sorted: false use O(1) streaming workspace and skip frequencies.
@@ -752,6 +757,7 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
         storedCells: stored,
         hasHiddenRows,
         hasErrors,
+        ...(hasDateSerials ? { hasDateSerials } : {}),
       }
       // Atomically transfer the workspace peak into the adopted candidate:
       // no refund-then-rereserve window where the result sits uncharged.
@@ -1143,11 +1149,13 @@ export function createResidentCfSource(
   const toLiteral = (cell: XlsxCell): CfLiteral => {
     if (cell.value === null) return { kind: 'blank' }
     if (cell.valueIsError) return { kind: 'error', value: String(cell.value) }
-    if (typeof cell.value === 'number') return { kind: 'number', value: cell.value }
+    if (typeof cell.value === 'number') return isDateNumberStyle(cell.style) ? { kind: 'number', value: cell.value, dateSerial: true } : { kind: 'number', value: cell.value }
     if (typeof cell.value === 'boolean') return { kind: 'boolean', value: cell.value }
     return { kind: 'string', value: cell.value }
   }
   return {
+    // Resident cells carry their resolved style, so every number is classified (data-bar S3-G).
+    numberFormats: 'resolved',
     bounds: async (_id: string, budget?: CfWorkBudget, signal?: AbortSignal): Promise<SourceRect | undefined> => {
       if (cells.length === 0) return undefined
       // Cooperative bounds scan: every examined cell spends shared work so

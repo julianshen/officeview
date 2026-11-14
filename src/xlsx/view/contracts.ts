@@ -400,6 +400,11 @@ export interface CfCellStateWire {
   readonly unresolvedWrites?: readonly string[]
   readonly unresolvedReason?: string
   readonly scale?: Readonly<{ ruleId: number; argb: number; fraction?: number }>
+  /** Ruling S3-S: the per-cell resolved bar descriptor, numbers and booleans only; `rtl` encodes the direction. */
+  readonly bar?: Readonly<{ ruleId: number; axisFraction: number; startFraction: number; endFraction: number; fillColor: number
+    /** The value's position between min and max, 0..1 (Ruling S3-P); the announced percentage, never the geometry. */
+    valueFraction: number
+    borderColor?: number; axisColor?: number; isGradient: boolean; isNegative: boolean; showValue: boolean; rtl: boolean }>
 }
 export interface CfSharedDefinition {
   readonly id: string
@@ -473,7 +478,7 @@ export function cfRulePropertyBytes(rules: readonly { dxf?: Record<string, unkno
  * walker exactly (24 per object; 16 per property slot plus the walked value;
  * arrays 16 + 8 per item plus walked elements; strings 16 + 2 per char;
  * numbers, booleans and null 8; no cross-cell dedup). */
-export function measureCfCellBytes(cell: Pick<CfCellStateWire, 'properties'> & Partial<Pick<CfCellStateWire, 'unresolvedWrites' | 'unresolvedReason' | 'scale'>>): number {
+export function measureCfCellBytes(cell: Pick<CfCellStateWire, 'properties'> & Partial<Pick<CfCellStateWire, 'unresolvedWrites' | 'unresolvedReason' | 'scale' | 'bar'>>): number {
   // {row, col, properties} plus optional unresolvedWrites/unresolvedReason.
   let bytes = 24 + (16 + 8) + (16 + 8) + (16 + measureCfPropertiesBytes(cell.properties))
   if (cell.unresolvedWrites !== undefined) {
@@ -485,6 +490,12 @@ export function measureCfCellBytes(cell: Pick<CfCellStateWire, 'properties'> & P
     // 16 prop slot + 24 scale object + 24 ruleId + 24 argb = 88 bytes
     bytes += 16 + 24 + (16 + 8) + (16 + 8)
     if (cell.scale.fraction !== undefined) bytes += 16 + 8
+  }
+  if (cell.bar !== undefined) {
+    // 16 prop slot + 24 bar object + ten required number/boolean fields at (16 + 8) each, plus each optional colour.
+    bytes += 16 + 24 + 10 * (16 + 8)
+    if (cell.bar.borderColor !== undefined) bytes += 16 + 8
+    if (cell.bar.axisColor !== undefined) bytes += 16 + 8
   }
   return bytes
 }

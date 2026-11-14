@@ -8,11 +8,29 @@ import type { CfDiagnostic, CfLease, CfOutcome } from './model'
  * estimate cannot drift from `measureCfCellBytes` (it includes the optional `fraction`). */
 export const CF_SCALE_CELL_BYTES: number = measureCfCellBytes({ properties: {}, scale: { ruleId: 0, argb: 0, fraction: 0 } }) - measureCfCellBytes({ properties: {} })
 
+/** Upper bound of the wire bytes one bar descriptor adds to a cell state (Ruling S3-S), DERIVED from the wire measurer
+ * with every optional field present, so the grant estimate cannot drift from `measureCfCellBytes` (Lesson 6). */
+export const CF_BAR_CELL_BYTES: number = measureCfCellBytes({ properties: {}, bar: {
+  ruleId: 0, axisFraction: 0, startFraction: 0, endFraction: 0, fillColor: 0, valueFraction: 0, borderColor: 0, axisColor: 0,
+  isGradient: false, isNegative: false, showValue: false, rtl: false,
+} }) - measureCfCellBytes({ properties: {} })
+
+/** Upper bound of one normalized data-bar definition's own fields (the rule origin is priced by the rule bound),
+ * DERIVED from the payload measurer with every optional field present and the longest enum spellings. */
+export const CF_BAR_DEFINITION_BYTES: number = measurePayloadBytes({
+  kind: 'dataBar', bounds: [{ type: 'percentile', value: 0 }, { type: 'percentile', value: 0 }],
+  fillArgb: 0, negativeFillArgb: 0, borderArgb: 0, negativeBorderArgb: 0, axisArgb: 0, minLength: 0, maxLength: 0,
+  gradient: false, border: false, negativeBarColorSameAsPositive: false, negativeBarBorderColorSameAsPositive: false,
+  axisPosition: 'automatic', direction: 'rightToLeft', showValue: false, sheetRightToLeft: false, pairing: 'base-only', autoColors: ['negativeFill', 'axis'],
+})!
+
 export const CF_LIMITS = Object.freeze({ rules: 4096, rangesPerRule: 256, rangesPerSheet: 16384,
   sheetMetadataBytes: 4 * 1024 ** 2, workbookMetadataBytes: 16 * 1024 ** 2,
   textUnits: 8192, formulaTokens: 4096, formulaChildren: 3, cfvo: 5, customIcons: 5,
   statisticsBytes: 8 * 1024 ** 2, scratchBytes: 8 * 1024 ** 2, workUnits: 1_000_000,
-  activeMs: 50, checkpointUnits: 128, sliceMs: 4, preparedCells: CF_PAINT_BATCH_CELLS,
+  // Ruling S3-I1-UNITS: one preparation call's own work, in deterministic units (never wall time). Calibrated in
+  // docs/validation/xlsx-cf.md section 11 (scripts/cf-refs/active-units.ts): >= 5x the largest production call.
+  activeUnits: 250_000, checkpointUnits: 128, sliceMs: 4, preparedCells: CF_PAINT_BATCH_CELLS,
   matchingRules: 4096, descriptorUnits: 128, diagnostics: 64 })
 export interface CfRefusal { readonly kind: 'unresolved'; readonly reason: string }
 const refuse = (reason = 'cf-budget-exceeded'): CfRefusal => ({ kind: 'unresolved', reason })
@@ -232,20 +250,25 @@ export function createCfCaps(workbook: CfMemory = createCfMemory()) {
   }
 }
 export interface CfWorkBudget { spend(units: number): 'continue' | 'yield' | 'refused'; resume(): void; readonly units: number }
-/** Caller must stop on yield and call resume after its awaited host yield. Idle time is excluded. */
-export function createCfWorkBudget(options: { now?: () => number; signal?: AbortSignal; noTimeLimit?: boolean; maxUnits?: number } = {}): CfWorkBudget {
+/** A per-call budget (the default) caps one preparation call's own work at `CF_LIMITS.activeUnits`; a `scan` budget
+ * caps one whole-scan pass (statistics, bounds) at `maxUnits`, default `CF_LIMITS.workUnits`. Ruling S3-I1-UNITS:
+ * refusal depends on the units spent alone, never on the clock; `now` only paces the cooperative yield (every
+ * `checkpointUnits` units or `sliceMs` of active time), which changes scheduling, never the result. */
+export type CfWorkBudgetOptions = { now?: () => number; signal?: AbortSignal } & ({ scan?: false } | { scan: true; maxUnits?: number })
+/** Caller must stop on yield and call resume after its awaited host yield. A spend made while paused still counts
+ * (and still refuses past the cap), so the unit count does not depend on when the clock yields. */
+export function createCfWorkBudget(options: CfWorkBudgetOptions = {}): CfWorkBudget {
   const now = options.now ?? (() => performance.now())
-  const maxUnits = options.maxUnits ?? CF_LIMITS.workUnits
-  let start = now(), active = 0, units = 0, sliceUnits = 0, paused = false, refused = false
+  const maxUnits = options.scan ? options.maxUnits ?? CF_LIMITS.workUnits : CF_LIMITS.activeUnits
+  let start = now(), units = 0, sliceUnits = 0, paused = false, refused = false
   return {
     get units() { return units },
     spend(n) {
       if (refused || options.signal?.aborted || !validBytes(n) || n > maxUnits - units) { refused = true; return 'refused' }
+      units += n
       if (paused) return 'yield'
-      units += n; sliceUnits += n
-      const elapsed = Math.max(0, now() - start)
-      if (!options.noTimeLimit && active + elapsed >= CF_LIMITS.activeMs) { refused = true; return 'refused' }
-      if (sliceUnits >= CF_LIMITS.checkpointUnits || elapsed >= CF_LIMITS.sliceMs) { active += elapsed; paused = true; return 'yield' }
+      sliceUnits += n
+      if (sliceUnits >= CF_LIMITS.checkpointUnits || now() - start >= CF_LIMITS.sliceMs) { paused = true; return 'yield' }
       return 'continue'
     },
     resume() { start = now(); sliceUnits = 0; paused = false },

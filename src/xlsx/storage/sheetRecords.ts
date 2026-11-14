@@ -7,7 +7,7 @@
  * part is retained. The paged record builders (S1.2) will live next to it.
  */
 import { sheetFormat } from '../columnWidth'
-import { frozenPaneFrom, type XlsxFrozenPane } from '../frozenPane'
+import { frozenPaneFrom, sheetViewRightToLeft, type XlsxFrozenPane } from '../frozenPane'
 import { PackageError } from '../../core/package-error'
 import { localName, XstringDecoder, type XmlEvents } from '../../core/xml-stream'
 import { isLoadEvaluated, MAX_LOAD_FORMULA_CHARS } from '../view/values'
@@ -334,6 +334,9 @@ export interface SheetMetadata {
   skippedCells: number
   /** Authored frozen panes of the first sheet view. */
   frozen?: XlsxFrozenPane
+  /** The first sheet view's reading order, as the resident parser reads it: absent until a right-to-left sheet view is
+   * seen (no sheet view is left-to-right, Ruling S3-K as amended), `null` for a malformed `rightToLeft` (unknown). */
+  sheetRightToLeft?: boolean | null
   /** Metadata-only rows arrived out of order: rowHeights/hiddenRows need normalizeRowMetadata. */
   unorderedRows?: boolean
   /** Bounded sparkline records parsed from worksheet extension parts. */
@@ -554,7 +557,7 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
       // The bounded lazy second pass applies the complete namespace policy.
       if ((nsDepth === 1 && nsStack[0]?.local === 'worksheet' && local === 'conditionalFormatting') ||
           (nsDepth === 3 && nsStack[0]?.local === 'worksheet' && nsStack[1]?.local === 'extLst' &&
-           nsParent?.local === 'ext' && nsParent.extensionUri === '{78C0D931-6437-407d-A8EE-F0AA7539E650}' &&
+           nsParent?.local === 'ext' && nsParent.extensionUri === '{78C0D931-6437-407d-A8EE-F0AAD7539E65}' &&
            local === 'conditionalFormattings')) meta.hasConditionalFormatting = true
       const isSparklineExtension = local === 'sparklineGroups' && uri === X14_SPARKLINE_NS
         && nsParent?.local === 'ext' && nsParent.uri === SPREADSHEETML_NS && nsParent.extensionUri === SPARKLINE_EXTENSION_URI
@@ -745,7 +748,10 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
         meta.tablePartIds.push(typeof id === 'string' && id !== '' ? id : undefined)
       } else if (depth === 2 && local === 'sheetView' && stack[1] === 'sheetViews') {
         // Only the first sheet view counts (as the resident parser reads it), even when it has no pane.
-        sheetViews++
+        if (++sheetViews === 1) {
+          const rtl = sheetViewRightToLeft(attrMap(names, values, count).rightToLeft)
+          if (rtl !== false) meta.sheetRightToLeft = rtl ?? null
+        }
       } else if (depth === 3 && local === 'pane' && stack[1] === 'sheetViews' && stack[2] === 'sheetView' && sheetViews === 1 && !paneSeen) {
         paneSeen = true
         const frozen = frozenPaneFrom(attrMap(names, values, count))

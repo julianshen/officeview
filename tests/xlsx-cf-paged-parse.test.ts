@@ -3,7 +3,8 @@ import { parseXml } from '../src/core/xml'
 import { tokenizeBytes } from '../src/core/xml-stream'
 import { createCfMemory } from '../src/xlsx/cf/limits'
 import { createCfStreamEvents } from '../src/xlsx/cf/capture'
-import { parseCfSheet } from '../src/xlsx/cf/parse'
+import { parseCfSheet, type CfParseMeta } from '../src/xlsx/cf/parse'
+import { withInjectedCfEvidence } from '../src/xlsx/cf/evidence'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
 import { xlsxBytes, xlsxEntries, SS_NS } from './helpers/xlsx-package'
 import { buildZip } from './helpers/zip-builder'
@@ -20,8 +21,8 @@ const styles = {
 }
 const base = '<conditionalFormatting sqref="B2:B4"><cfRule type="cellIs" priority="1" operator="greaterThan"><formula>2</formula></cfRule></conditionalFormatting>'
 const wrap = (s: string) => `<worksheet xmlns="${SS_NS}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">${s}</worksheet>`
-async function stream(xml: string, split = 1e9) {
-  const memory = createCfMemory(), handle = createCfStreamEvents(styles, memory, {})
+async function stream(xml: string, split = 1e9, meta: CfParseMeta = {}) {
+  const memory = createCfMemory(), handle = createCfStreamEvents(styles, memory, meta)
   const bytes = new TextEncoder().encode(xml)
   await tokenizeBytes((async function* () { yield bytes.subarray(0, split); yield bytes.subarray(split) })(), handle.events)
   const lease = handle.finish()
@@ -33,21 +34,48 @@ describe('paged CF capture', () => {
     const threeColorScale = '<conditionalFormatting sqref="E2:E10"><cfRule type="colorScale" priority="4"><colorScale><cfvo type="min"/><cfvo type="percentile" val="50"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FFFFEB84"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>'
     const themeScale = '<conditionalFormatting sqref="F2:F10"><cfRule type="colorScale" priority="5"><colorScale><cfvo type="min"/><cfvo type="max"/><color theme="4" tint="-0.4"/><color theme="5" tint="0.4"/></colorScale></cfRule></conditionalFormatting>'
     const x14Scale = '<x14:conditionalFormatting><x14:cfRule type="colorScale" priority="6" id="{01234567-89AB-CDEF-0123-456789ABCDE0}"><x14:colorScale><x14:cfvo type="min"/><x14:cfvo type="max"/><x14:color rgb="FFFF0000"/><x14:color rgb="FF00FF00"/></x14:colorScale></x14:cfRule><xm:sqref>G1:G10</xm:sqref></x14:conditionalFormatting>'
+    // Data bars: a paired bar whose companion arrives after every base rule (with x14 attributes, colours and an
+    // xm:f bound that must survive capture), a base-only bar, an autoMin-on-base refusal and a standalone x14 bar.
+    const pairId = '{3B3B0019-0000-4000-8000-000000000001}'
+    const pairedBase = `<conditionalFormatting sqref="H2:H6"><cfRule type="dataBar" priority="7"><dataBar showValue="0"><cfvo type="min"/><cfvo type="max"/><color rgb="FF638EC6"/></dataBar><extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}"><x14:id>${pairId}</x14:id></ext></extLst></cfRule></conditionalFormatting>`
+    const baseOnlyBar = '<conditionalFormatting sqref="I2:I6"><cfRule type="dataBar" priority="8"><dataBar><cfvo type="percentile" val="10"/><cfvo type="num" val="90"/><color rgb="FF0000FF"/></dataBar></cfRule></conditionalFormatting>'
+    const autoMinBase = '<conditionalFormatting sqref="J2:J6"><cfRule type="dataBar" priority="9"><dataBar><cfvo type="autoMin"/><cfvo type="max"/><color rgb="FF0000FF"/></dataBar></cfRule></conditionalFormatting>'
+    const companion = `<x14:conditionalFormatting><x14:cfRule type="dataBar" id="${pairId}"><x14:dataBar minLength="0" maxLength="100" gradient="0" border="1" direction="leftToRight" axisPosition="middle" negativeBarBorderColorSameAsPositive="0"><x14:cfvo type="num"><xm:f>20</xm:f></x14:cfvo><x14:cfvo type="autoMax"/><x14:borderColor rgb="FF00B050"/><x14:negativeFillColor rgb="FFFF0000"/><x14:negativeBorderColor rgb="FFFFA500"/><x14:axisColor rgb="FF000000"/></x14:dataBar></x14:cfRule><xm:sqref>H2:H6</xm:sqref></x14:conditionalFormatting>`
+    const standaloneBar = '<x14:conditionalFormatting><x14:cfRule type="dataBar" priority="10" id="{3B3B0019-0000-4000-8000-000000000002}"><x14:dataBar minLength="0" maxLength="100" gradient="0" negativeBarColorSameAsPositive="1" axisPosition="none"><x14:cfvo type="autoMin"/><x14:cfvo type="autoMax"/><x14:fillColor rgb="FF00B050"/></x14:dataBar></x14:cfRule><xm:sqref>K2:K6</xm:sqref></x14:conditionalFormatting>'
     const xml = wrap(
       base +
         twoColorScale +
         threeColorScale +
         themeScale +
-        '<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AA7539E650}"><x14:conditionalFormattings><x14:conditionalFormatting><x14:cfRule type="expression" priority="2" id="{01234567-89AB-CDEF-0123-456789ABCDEF}"><xm:f>A1=&quot;茶&quot;</xm:f></x14:cfRule><xm:sqref>C1</xm:sqref></x14:conditionalFormatting>' +
+        pairedBase +
+        baseOnlyBar +
+        autoMinBase +
+        '<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}"><x14:conditionalFormattings><x14:conditionalFormatting><x14:cfRule type="expression" priority="2" id="{01234567-89AB-CDEF-0123-456789ABCDEF}"><xm:f>A1=&quot;茶&quot;</xm:f></x14:cfRule><xm:sqref>C1</xm:sqref></x14:conditionalFormatting>' +
         x14Scale +
+        companion +
+        standaloneBar +
         '</x14:conditionalFormattings></ext></extLst>',
     )
-    const expected = parseCfSheet(parseXml(xml), styles, createCfMemory()).value
-    for (let i = 0; i <= new TextEncoder().encode(xml).length; i++) {
-      const result = await stream(xml, i)
-      expect(result.lease.value).toEqual(expected)
-      result.lease.release(); expect(result.memory.currentBytes).toBe(0)
-    }
+    // Additive evidence: the scales keep production evidence, and the bars resolve, so a streamed bar that lost an
+    // x14 attribute, colour or bound would differ from the resident one instead of both withholding alike.
+    const meta: CfParseMeta = { sheetRightToLeft: false }
+    await withInjectedCfEvidence(['bar:settings-schema-defaults', 'bar:settings-paired-precedence', 'bar:pairing-paired', 'bar:pairing-standalone',
+      'bar:pairing-base-only', 'bar:direction-ltr', 'bar:direction-context-ltr-sheet'], async () => {
+      const expected = parseCfSheet(parseXml(xml), styles, createCfMemory(), meta).value
+      const barOf = (priority: number) => expected.rules.find(r => r.priority === priority)!.definition
+      expect(barOf(7)).toMatchObject({ kind: 'dataBar', bounds: [{ type: 'num', value: 20 }, { type: 'autoMax' }], showValue: false,
+        direction: 'leftToRight', borderArgb: 0xff00b050, negativeBorderArgb: 0xffffa500, axisArgb: 0xff000000 })
+      expect(barOf(8)).toMatchObject({ kind: 'dataBar', bounds: [{ type: 'percentile', value: 10 }, { type: 'num', value: 90 }] })
+      expect(barOf(9)).toMatchObject({ kind: 'unresolved', type: 'dataBar', reason: 'cf-unsupported-rule' })
+      expect(barOf(10)).toMatchObject({ kind: 'dataBar', dialect: 'x14', bounds: [{ type: 'autoMin' }, { type: 'autoMax' }] })
+      const bytes = new TextEncoder().encode(xml)
+      // Every split point is exercised, so chunk boundaries fall inside each <x14:dataBar> too.
+      for (let i = 0; i <= bytes.length; i++) {
+        const result = await stream(xml, i, meta)
+        expect(result.lease.value).toEqual(expected)
+        result.lease.release(); expect(result.memory.currentBytes).toBe(0)
+      }
+    })
   })
   it.each(['formula', 'color', 'dxf'])('ten thousand singleton duplicates do not build ten thousand nodes: %s', async tag => {
     const xml = wrap(`<conditionalFormatting sqref="A1"><cfRule type="expression" priority="1">${(`<${tag}>1</${tag}>`).repeat(10_000)}</cfRule></conditionalFormatting>`)
@@ -125,7 +153,7 @@ it('cancel during the paged CF pass drains the partial collector and publishes n
 it('keeps excluded AlternateContent and wrong-namespace paths out of effective CF', async () => {
   for (const inner of [
     `<AlternateContent><Choice>${base}</Choice></AlternateContent>`,
-    '<extLst><ext xmlns="urn:wrong" uri="{78C0D931-6437-407d-A8EE-F0AA7539E650}"><x14:conditionalFormattings><x14:conditionalFormatting><xm:sqref>A1</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>',
+    '<extLst><ext xmlns="urn:wrong" uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}"><x14:conditionalFormattings><x14:conditionalFormatting><xm:sqref>A1</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>',
   ]) {
     const result = await stream(wrap(inner))
     expect(result.lease.value.rules).toEqual([])
@@ -152,7 +180,7 @@ it('refuses CF before constructing unadmitted raw DXFs, preserving the base impo
   } finally { await session.release(); allocator.mockRestore(); loader.mockRestore() }
 })
 it('publishes late x14 definitions with the same normalized model as resident parsing', async () => {
-  const extension = '<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AA7539E650}"><x14:conditionalFormattings xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><x14:conditionalFormatting><x14:cfRule type="expression" priority="1" id="{01234567-89AB-CDEF-0123-456789ABCDEF}"><xm:f>A1&gt;2</xm:f><x14:dxf><x14:font><x14:b/></x14:font></x14:dxf></x14:cfRule><xm:sqref>A1:A4</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>'
+  const extension = '<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}"><x14:conditionalFormattings xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><x14:conditionalFormatting><x14:cfRule type="expression" priority="1" id="{01234567-89AB-CDEF-0123-456789ABCDEF}"><xm:f>A1&gt;2</xm:f><x14:dxf><x14:font><x14:b/></x14:font></x14:dxf></x14:cfRule><xm:sqref>A1:A4</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>'
   const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(xlsxBytes({ afterSheetData: extension })).buffer]) }, { docId: 'x14-cf', profile: 'D' })
   try {
     await session.done

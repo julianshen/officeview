@@ -1,0 +1,83 @@
+/**
+ * Data-bar fixtures for the Task 22 painting tests. They paint bars under INJECTED evidence and an injected layout only:
+ * since Task 23 publishes the Stage 3 set, the injection is EXACT (production's Stage 1/2 sets plus the listed bar
+ * stubs, never the published Stage 3 set or its exports' capabilities), so `omit` still removes a gate and an export
+ * whose capability is not listed still reads as absent. The numbers they produce are the measured model run under
+ * stubs, never new Excel facts; production's own bars are checked against Excel in the conformance tests.
+ */
+import { VERIFIED_STAGE1_CAPABILITIES, VERIFIED_STAGE2_CAPABILITIES, injectCfBarLayout, withExactCfEvidence } from '../../src/xlsx/cf/evidence'
+import type { CfDefinition, CfRule } from '../../src/xlsx/cf/model'
+import type { XlsxCell, XlsxSheet } from '../../src/xlsx/types'
+
+/** Every evaluation gate a solid min/max bar can need, plus the Task 22 paint gates (stubs only). */
+export const BAR_EVAL_EVIDENCE = [
+  'bar:bounds-min-max', 'bar:bounds-num', 'bar:lengths-explicit-0-100', 'bar:render-solid', 'bar:render-border',
+  'bar:axis-automatic', 'bar:axis-middle', 'bar:axis-none', 'bar:direction-ltr', 'bar:direction-rtl', 'bar:direction-context-ltr-sheet',
+  'bar:negative-fill-color', 'bar:negative-fill-same-as-positive', 'bar:negative-border-color', 'bar:negative-border-same-as-positive',
+  'bar:participation-types', 'bar:scope-whole-column',
+]
+/** Parse gates of a workbook bar in Excel's paired x14 form (stubs only). */
+export const BAR_PARSE_EVIDENCE = ['bar:settings-precondition-probe', 'bar:settings-schema-defaults', 'bar:settings-paired-precedence', 'bar:pairing-paired']
+export const BAR_PAINT_EVIDENCE = ['bar:geometry-insets', 'bar:geometry-snapping', 'bar:geometry-narrow-clip']
+export const BAR_SHOWVALUE_EVIDENCE = 'bar:showvalue-canvas-suppression'
+
+/** The layout Task 23's export would publish (S3-B), as the harness currently selects it. */
+export const BAR_LAYOUT = {
+  allPositive: { origin: 'span', lengthBasis: 'cell', settledBy: ['bar:lengths-explicit-0-100'] },
+  mixedSign: { origin: 'axis', lengthBasis: 'side', settledBy: ['bar:axis-automatic', 'bar:axis-middle'] },
+}
+
+/** Runs `fn` with exactly the Stage 1/2 production evidence plus the injected bar stubs, and the injected layout; both
+ * are cleared after. */
+export async function withBars<T>(fn: () => Promise<T> | T, options: { paint?: boolean; extra?: readonly string[]; omit?: readonly string[] } = {}): Promise<T> {
+  injectCfBarLayout(BAR_LAYOUT)
+  const caps = [...BAR_EVAL_EVIDENCE, ...BAR_PARSE_EVIDENCE, ...(options.paint === false ? [] : BAR_PAINT_EVIDENCE), ...(options.extra ?? [])].filter(c => !options.omit?.includes(c))
+  try { return await withExactCfEvidence([...VERIFIED_STAGE1_CAPABILITIES, ...VERIFIED_STAGE2_CAPABILITIES, ...caps], async () => fn()) } finally { injectCfBarLayout(null) }
+}
+
+export const BLUE = 0xff0000ff, RED = 0xffff0000, BLACK = 0xff000000, GREEN = 0xff00b050
+
+type BarDef = Extract<CfDefinition, { kind: 'dataBar' }>
+export function barDef(overrides: Partial<BarDef> = {}): BarDef {
+  return {
+    kind: 'dataBar', dialect: 'base', formulas: [],
+    bounds: [{ type: 'min' }, { type: 'max' }],
+    fillArgb: BLUE, negativeFillArgb: RED, axisArgb: BLACK,
+    minLength: 0, maxLength: 100, gradient: false, border: false,
+    negativeBarColorSameAsPositive: false, negativeBarBorderColorSameAsPositive: true,
+    axisPosition: 'automatic', direction: 'leftToRight', showValue: true, sheetRightToLeft: false,
+    ...overrides,
+  }
+}
+
+export function barRule(range: { firstRow: number; lastRow: number; firstCol: number; lastCol: number }, overrides: Partial<BarDef> = {}, id = 1): CfRule {
+  return { id, priority: id, documentOrder: id - 1, ranges: [range], stopIfTrue: false, writes: new Set(['dataBar']), definition: barDef(overrides) }
+}
+
+/**
+ * A one-column bar sheet: `values` down column `col` from row 0, the column `widthChars` wide (200/7 characters is a
+ * 200 px column), one bar rule over exactly those cells.
+ */
+export function barSheet(values: readonly number[], options: { col?: number; widthChars?: number; def?: Partial<BarDef>; name?: string; firstRow?: number; rows?: number } = {}): XlsxSheet {
+  const col = options.col ?? 0, first = options.firstRow ?? 0
+  const cells = values.map((value, i): XlsxCell => ({ ref: `${String.fromCharCode(65 + col)}${first + i + 1}`, row: first + i, col, value, styleIndex: 0, hasCachedValue: true }))
+  const rows = Math.max(options.rows ?? 0, first + values.length)
+  return {
+    name: options.name ?? 'Bars', sheetId: options.name ?? 'bars',
+    rows: Array.from({ length: rows }, (_, r) => ({ index: r, cells: cells.filter(c => c.row === r) })),
+    cols: [{ min: col, max: col, widthChars: options.widthChars ?? 200 / 7 }],
+    merges: [], mergeRanges: [],
+    conditionalFormatting: { diagnostics: [], rules: [barRule({ firstRow: first, lastRow: first + values.length - 1, firstCol: col, lastCol: col }, options.def)] },
+  } as XlsxSheet
+}
+
+/**
+ * Paints a paged (wire) scope's bars once on a throwaway canvas, every cell of `rows` × `cols` a 200 × 20 px unfilled
+ * host. A paged scope learns which bars painting withholds only by painting them (fix round 2), so its `barAt` reports
+ * a bar after this, as it does in the viewer once a tile has painted.
+ */
+export async function paintScopeBars(scope: { paintBars?: (ctx: CanvasRenderingContext2D, cellRect: (row: number, col: number) => { x: number; y: number; width: number; height: number } | undefined, visible: { r0: number; c0: number; r1: number; c1: number }, scale: { zoom: number; dpr: number }) => boolean }, rows: number, cols: number): Promise<void> {
+  const { createCanvas } = await import('canvas')
+  const ctx = createCanvas(cols * 200, rows * 20).getContext('2d') as unknown as CanvasRenderingContext2D
+  scope.paintBars?.(ctx, (row, col) => ({ x: col * 200, y: row * 20, width: 200, height: 20 }), { r0: 0, c0: 0, r1: rows - 1, c1: cols - 1 }, { zoom: 1, dpr: 1 })
+}

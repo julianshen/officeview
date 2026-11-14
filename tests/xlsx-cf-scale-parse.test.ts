@@ -250,6 +250,18 @@ describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
       reason: 'cf-unsupported-rule',
     })
 
+    // activePresent is a boolean: the "true" spelling is refused like "1", even with the scale's evidence (S2-C).
+    withExactCfEvidence(['scale:thresholds-min-max'], () => {
+      const xml = (flag: string) =>
+        `<conditionalFormatting sqref="A1"><cfRule type="colorScale" priority="1" activePresent="${flag}"><colorScale>` +
+        `<cfvo type="min"/><cfvo type="max"/><color rgb="FFFF0000"/><color rgb="FF00FF00"/></colorScale></cfRule></conditionalFormatting>`
+      for (const flag of ['1', 'true']) {
+        const def = parse(xml(flag)).value.rules[0]!.definition
+        expect(def, flag).toMatchObject({ kind: 'unresolved', type: 'colorScale', reason: 'cf-unsupported-rule', origin: { activePresent: true } })
+      }
+      expect(parse(xml('0')).value.rules[0]!.definition.kind).toBe('colorScale')
+    })
+
     // 4. min val="0" and mid-list min -> unresolved without evidence
     const legacyMin = parse(
       `<conditionalFormatting sqref="A1"><cfRule type="colorScale" priority="1"><colorScale>` +
@@ -316,7 +328,7 @@ describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
 
     // 6. Standalone x14 scale, literal or reference xm:f -> cf-unsupported-rule (OD-3, S2-K)
     const x14Xml =
-      `<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AA7539E650}"><x14:conditionalFormattings><x14:conditionalFormatting>` +
+      `<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}"><x14:conditionalFormattings><x14:conditionalFormatting>` +
       `<x14:cfRule type="colorScale" priority="1" id="{01234567-89AB-CDEF-0123-456789ABCDEF}">` +
       `<x14:colorScale><x14:cfvo type="min"/><x14:cfvo type="max"/><x14:color rgb="FFFF0000"/><x14:color rgb="FF00FF00"/></x14:colorScale>` +
       `</x14:cfRule><xm:sqref>A1:A5</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>`

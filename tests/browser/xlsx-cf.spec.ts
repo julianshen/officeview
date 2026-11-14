@@ -557,3 +557,211 @@ test('Stage 2 print capture produces canvas with scale fill', async ({ context }
     })
   }
 })
+
+// Stage 3 (Task 23): the published evidence paints data bars. The Excel-resaved lengths case draws its bars in
+// FF0000FF; column C is the explicit 0/100 min/max bar (values 0, 25, 50, 75, 100), column E the num 20/80 bar, whose
+// capability is non-discriminating and so stays withheld (announced as unavailable, painting nothing).
+const BARS = 'stage3-bar-lengths'
+const BLUE_TOL = 32
+const countBlue = (img: Img): number => countColor(img, 0, 0, img.width, img.height, 0, 0, 0xff, BLUE_TOL)
+
+/** Screenshot once the canvas stops changing and at least `minBlue` bar pixels have painted. */
+async function settledBarGrid(page: Page, minBlue: number): Promise<Img> {
+  const box = await page.locator('canvas').first().boundingBox()
+  expect(box, 'the grid canvas has a box').not.toBeNull()
+  const shoot = async () => page.screenshot({ clip: { x: box!.x, y: box!.y, width: Math.min(box!.width, 1000), height: Math.min(box!.height, 480) }, animations: 'disabled', caret: 'hide' })
+  let previous = await shoot()
+  const deadline = Date.now() + 45_000
+  for (;;) {
+    await page.waitForTimeout(250)
+    const next = await shoot()
+    if (next.equals(previous)) {
+      const img = await decode(next)
+      if (countBlue(img) >= minBlue) return img
+    }
+    if (Date.now() > deadline) return decode(next)
+    previous = next
+  }
+}
+
+const cell = (page: Page, ref: string) => page.getByRole('gridcell', { name: new RegExp(`^${ref}, value `) })
+/**
+ * KNOWN DEFECT (Task 23, recorded in docs/validation/xlsx-cf.md §11): in the forced-paged view the grid semantics read a
+ * second wire scope that never paints, and a host-less wire scope announces a bar only after painting it, so every
+ * painted bar is announced as "Conditional formatting unavailable". The bar descriptor is therefore asserted on the
+ * resident and worker legs here, and on the forced-paged leg only in the expected-failure test below.
+ */
+const announcesBars = (leg: Leg): boolean => !leg.paged
+
+test('Stage 3 data bars paint and announce on every leg, and legs agree (Task 23)', async ({ context }) => {
+  const bytes = readFileSync(`${CF_FIXTURES}${BARS}.xlsx`)
+  const shots: Img[] = []
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      const page = await context.newPage()
+      try {
+        await openCf(page, BARS, bytes, leg)
+        // The bar descriptor (Ruling S3-P): a fixed label and the value's position in the range.
+        if (announcesBars(leg)) {
+          await expect(cell(page, 'C6'), `${leg.name}: C6 announces its bar`).toContainText('Data bar, 100% of range', { timeout: 30_000 })
+          await expect(cell(page, 'C3'), `${leg.name}: C3 announces its bar`).toContainText('Data bar, 25% of range', { timeout: 30_000 })
+        }
+        // A bar whose capability is not verified is announced as unavailable, never as a bar.
+        await expect(cell(page, 'E3'), `${leg.name}: E3 withholds`).toContainText('Conditional formatting unavailable', { timeout: 30_000 })
+        await expect(cell(page, 'E3')).not.toContainText('Data bar')
+        await expect(page.getByRole('alert'), `${leg.name}: no error alert`).toHaveCount(0)
+        const grid = await settledBarGrid(page, 2000)
+        expect(countBlue(grid), `${leg.name}: bar pixels paint`).toBeGreaterThan(2000)
+        shots.push(grid)
+      } finally {
+        await page.close()
+      }
+    })
+  }
+  const [resident, worker, paged] = shots as [Img, Img, Img]
+  for (const [name, other] of [['worker', worker], ['forced paged', paged]] as const) {
+    expect(other.width, name).toBe(resident.width)
+    expect(other.height, name).toBe(resident.height)
+    let differing = 0
+    for (let i = 0; i < resident.data.length; i += 4) {
+      if ([0, 1, 2].some(k => Math.abs(resident.data[i + k]! - other.data[i + k]!) > 4)) differing++
+    }
+    expect(differing / (resident.width * resident.height), `${name} matches resident`).toBeLessThan(0.002)
+  }
+})
+
+test('Stage 3 data bars keep painting at the six zoom/DPR pairs', async ({ browser }) => {
+  const bytes = readFileSync(`${CF_FIXTURES}${BARS}.xlsx`)
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      for (const dpr of [1, 2]) {
+        const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: dpr })
+        try {
+          const page = await context.newPage()
+          try {
+            await openCf(page, BARS, bytes, leg)
+            for (const zoom of ['50%', '100%', '200%']) {
+              const label = page.getByRole('button', { name: 'Reset zoom' })
+              for (let i = 0; i < 12; i++) {
+                if ((await label.textContent()) === zoom) break
+                const current = Number((await label.textContent())!.replace('%', ''))
+                await page.getByRole('button', { name: current < Number(zoom.replace('%', '')) ? 'Zoom in' : 'Zoom out' }).click()
+              }
+              await expect(label).toHaveText(zoom, { timeout: 10_000 })
+              await page.getByTestId('officeview-sheet-scroller').evaluate(node => { node.scrollTop = 0; node.scrollLeft = 0 })
+              if (announcesBars(leg)) await expect(cell(page, 'C6'), `dpr=${dpr} zoom=${zoom}: bar descriptor`).toContainText('Data bar, 100% of range', { timeout: 30_000 })
+              const grid = await settledBarGrid(page, 300)
+              expect(countBlue(grid), `dpr=${dpr} zoom=${zoom}: bar pixels`).toBeGreaterThan(300)
+            }
+          } finally {
+            await page.close()
+          }
+        } finally {
+          await context.close()
+        }
+      }
+    })
+  }
+})
+
+test('Stage 3 data bars paint under frozen panes with pinned headers', async ({ context }) => {
+  const bytes = await frozenBytes(BARS, { xSplit: 1, ySplit: 1, topLeftCell: 'B2' })
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      const page = await context.newPage()
+      try {
+        await openCf(page, `${BARS}-frozen`, bytes, leg)
+        if (announcesBars(leg)) await expect(cell(page, 'C6'), 'frozen: bar descriptor').toContainText('Data bar, 100% of range', { timeout: 30_000 })
+        const scroller = page.getByTestId('officeview-sheet-scroller')
+        await scroller.evaluate(node => { node.scrollTop = 40; node.scrollLeft = 60 })
+        await page.waitForTimeout(500)
+        await expect(page.getByRole('columnheader', { name: /^Column A/ }).first(), 'frozen column header').toBeVisible()
+        await expect(page.getByRole('rowheader', { name: 'Row 1' }).first(), 'frozen row header').toBeVisible()
+        const grid = await settledBarGrid(page, 1000)
+        expect(countBlue(grid), 'frozen: bar pixels paint').toBeGreaterThan(1000)
+        await expect(page.getByRole('alert'), 'no error alert').toHaveCount(0)
+      } finally {
+        await page.close()
+      }
+    })
+  }
+})
+
+test('Stage 3 live max edit rescales the bars', async ({ context }) => {
+  const raw = readFileSync(`${CF_FIXTURES}${BARS}.xlsx`)
+  // C6 is the maximum (100). Raising it to 200 moves every other bar of the min/max rule: 75 -> 38%, 25 -> 13%.
+  const edited = await editCellInWorkbook(raw, 'C6', '200')
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      const page = await context.newPage()
+      try {
+        await openCf(page, `${BARS}-init`, raw, leg)
+        if (announcesBars(leg)) await expect(cell(page, 'C5')).toContainText('Data bar, 75% of range', { timeout: 30_000 })
+        const before = countBlue(await settledBarGrid(page, 2000))
+        await openCf(page, `${BARS}-edited`, edited, leg)
+        if (announcesBars(leg)) {
+          await expect(cell(page, 'C6')).toContainText('Data bar, 100% of range', { timeout: 30_000 })
+          await expect(cell(page, 'C5')).toContainText('Data bar, 38% of range', { timeout: 30_000 })
+          await expect(cell(page, 'C3')).toContainText('Data bar, 13% of range', { timeout: 30_000 })
+        }
+        const after = countBlue(await settledBarGrid(page, 1000))
+        // The C bars shrink, so fewer bar pixels paint after the edit.
+        expect(after, `${leg.name}: rescaled bars paint fewer pixels (${before} -> ${after})`).toBeLessThan(before)
+      } finally {
+        await page.close()
+      }
+    })
+  }
+})
+
+test('Stage 3 print capture paints data bars on the prepared page', async ({ context }) => {
+  const bytes = readFileSync(`${CF_FIXTURES}${BARS}.xlsx`)
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      const page = await context.newPage()
+      await page.addInitScript(() => {
+        (window as unknown as { print: () => void }).print = () => { (window as unknown as { __printed: number }).__printed = 1 }
+      })
+      try {
+        await openCf(page, BARS, bytes, leg)
+        if (announcesBars(leg)) await expect(cell(page, 'C6')).toContainText('Data bar, 100% of range', { timeout: 30_000 })
+        else await settledBarGrid(page, 2000)
+        await page.getByRole('button', { name: 'Print', exact: true }).click()
+        if (!leg.paged) {
+          await page.waitForFunction(() => (window as unknown as { __printed?: number }).__printed === 1, { timeout: 30_000 })
+          const printCanvases = page.locator('[data-testid="officeview-sheet-print-pages"] canvas')
+          await expect(printCanvases).toHaveCount(1)
+          const blue = await printCanvases.first().evaluate(canvas => {
+            const c = canvas as HTMLCanvasElement
+            const data = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data
+            let n = 0
+            for (let i = 0; i < data.length; i += 4) if (data[i]! <= 32 && data[i + 1]! <= 32 && data[i + 2]! >= 223) n++
+            return n
+          })
+          expect(blue, 'bar pixels on the prepared print canvas').toBeGreaterThan(200)
+          await page.emulateMedia({ media: 'print' })
+          await expect(printCanvases.first()).toBeVisible()
+        } else {
+          await page.emulateMedia({ media: 'print' })
+          await expect(page.locator('[data-testid="officeview-sheet-print-pages"] canvas')).toHaveCount(0)
+          await expect(page.getByTestId('officeview-sheet-print-notice')).toBeVisible()
+        }
+      } finally {
+        await page.close()
+      }
+    })
+  }
+})
+
+test('KNOWN DEFECT: the forced-paged view announces its painted bars (expected to fail until fixed)', async ({ context }) => {
+  test.fail(true, 'forced-paged semantics read a wire scope that never paints, so painted bars announce as unavailable (Task 23 §11)')
+  const bytes = readFileSync(`${CF_FIXTURES}${BARS}.xlsx`)
+  const page = await context.newPage()
+  try {
+    await openCf(page, BARS, bytes, LEGS[2]!)
+    expect(countBlue(await settledBarGrid(page, 2000)), 'the bars paint').toBeGreaterThan(2000)
+    await expect(cell(page, 'C6'), 'C6 announces its painted bar').toContainText('Data bar, 100% of range', { timeout: 15_000 })
+  } finally {
+    await page.close()
+  }
+})

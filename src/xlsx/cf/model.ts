@@ -5,7 +5,9 @@ export type SourceRect = Readonly<{ firstRow: number; lastRow: number; firstCol:
 export type CfStamp = Readonly<{ owner: string; sheetId: string; workbookValueGen: number; cfGen: number; viewGen: number; structureGen: number; clockGen: number }>
 export type CfOutcome<T> = { kind: 'ready'; value: T } | { kind: 'no-match' } | { kind: 'unresolved'; reason: string; pendingSheetIds?: readonly string[] }
 export type CfWriteMask = ReadonlySet<string> // Property paths; singleton ALL for unknown writes.
-export type CfLiteral = { kind: 'number'; value: number } | { kind: 'string'; value: string } | { kind: 'boolean'; value: boolean } | { kind: 'error'; value: string } | { kind: 'blank' }
+/** `dateSerial` marks a number whose cell is displayed with a date or time format (S3-G); absent means a plain number,
+ * or a format the source did not resolve (see `CfValueSource.numberFormats`). */
+export type CfLiteral = { kind: 'number'; value: number; dateSerial?: true } | { kind: 'string'; value: string } | { kind: 'boolean'; value: boolean } | { kind: 'error'; value: string } | { kind: 'blank' }
 export type CfRuleType = 'cellIs' | 'containsText' | 'notContainsText' | 'beginsWith' | 'endsWith' | 'containsBlanks' | 'notContainsBlanks' | 'containsErrors' | 'notContainsErrors' | 'timePeriod' | 'top10' | 'aboveAverage' | 'duplicateValues' | 'uniqueValues' | 'colorScale' | 'dataBar' | 'iconSet' | 'expression'
 export type CfOperator = 'equal' | 'notEqual' | 'greaterThan' | 'lessThan' | 'greaterThanOrEqual' | 'lessThanOrEqual' | 'between' | 'notBetween'
 export type CfTimePeriod = 'today' | 'yesterday' | 'tomorrow' | 'last7Days' | 'thisWeek' | 'lastWeek' | 'nextWeek' | 'thisMonth' | 'lastMonth' | 'nextMonth'
@@ -17,6 +19,19 @@ export type CfScaleBound =
 export type CfScalePoint = Readonly<{ bound: CfScaleBound; argb: number }>
 export const COLOR_SCALE_WRITES: ReadonlySet<string> = Object.freeze(new Set(['colorScale', 'fill']))
 export const COLOR_SCALE_WRITE_MASK = COLOR_SCALE_WRITES
+/** `autoMin`/`autoMax` resolve only from `<x14:cfvo>` (Ruling S3-C). */
+export type CfBarBound = CfScaleBound | { type: 'autoMin' } | { type: 'autoMax' }
+/** The one canonical data-bar write mask, for resolved and unresolved bars alike (a bar never writes the fill slot). */
+export const DATA_BAR_WRITES: ReadonlySet<string> = Object.freeze(new Set(['dataBar']))
+/** Spec §5.9 evaluated bar descriptor (Task 20 evaluates it; Task 19 only defines it). */
+export type CfBarDescriptor = Readonly<{
+  ruleId: number; axisFraction: number; startFraction: number; endFraction: number; fillColor: number
+  /** The value's own position between the resolved min and max thresholds, 0..1: what the bar announces (Ruling S3-P).
+   * Separate from the painted geometry, which default lengths and an axis shift away from the value. */
+  valueFraction: number
+  borderColor?: number; isGradient: boolean; isNegative: boolean; axisColor?: number; showValue: boolean
+  direction: 'leftToRight' | 'rightToLeft'
+}>
 export type CfDefinition = (CfRuleOrigin & (
   | { kind: 'cellIs'; operator: CfOperator; operands: readonly CfLiteral[] }
   | { kind: 'text'; type: 'containsText' | 'notContainsText' | 'beginsWith' | 'endsWith'; needle: string }
@@ -25,6 +40,18 @@ export type CfDefinition = (CfRuleOrigin & (
   | { kind: 'top10'; rank?: number; bottom: boolean; percent: boolean }
   | { kind: 'aboveAverage'; above: boolean; equal: boolean; stdDev?: number }
   | { kind: 'colorScale'; points: readonly [CfScalePoint, CfScalePoint] | readonly [CfScalePoint, CfScalePoint, CfScalePoint] }
+  // Colours are resolved ARGB, normalised once. An optional colour is absent when its element is missing or the
+  // rule's settings never draw it; an evaluator that needs an absent colour must withhold (Ruling S3-F).
+  | { kind: 'dataBar'; bounds: readonly [CfBarBound, CfBarBound]; fillArgb: number; negativeFillArgb?: number
+      borderArgb?: number; negativeBorderArgb?: number; axisArgb?: number; minLength: number; maxLength: number; gradient: boolean
+      border: boolean; negativeBarColorSameAsPositive: boolean; negativeBarBorderColorSameAsPositive: boolean
+      axisPosition: 'automatic' | 'middle' | 'none'; direction: 'context' | 'leftToRight' | 'rightToLeft'; showValue: boolean
+      sheetRightToLeft?: boolean
+      /** Ruling S3-LEN-X14: the pairing form, `x14` for a bar with an x14 companion (or standalone x14), `base-only` for a
+       * bare base `<dataBar>`. Excel's default 10/90 lengths differ between them; absent means unknown (fail closed). */
+      pairing?: 'x14' | 'base-only'
+      /** Colours Excel draws as automatic (`auto="1"`), resolved to the measured ARGB of their capability (S3-F amended). */
+      autoColors?: readonly ('negativeFill' | 'axis')[] }
 )) | { kind: 'unresolved'; type: CfRuleType | 'unknown'; reason: string; origin?: CfRuleOrigin }
 /** Presence means a winning override; null explicitly clears a property. */
 export interface CfCellState {
@@ -33,7 +60,7 @@ export interface CfCellState {
   readonly unresolvedWrites?: CfWriteMask
   readonly visual?: Readonly<{
     colorScale?: Readonly<{ ruleId: number; argb: number; fraction?: number }>
-    dataBar?: Readonly<{ fraction: number; color: string }>
+    dataBar?: CfBarDescriptor
     iconSet?: Readonly<{ name: string; index: number }>
   }>
 }
@@ -53,6 +80,9 @@ export interface CfValueSource {
    * Never rescanned for warm hits (session memoizes per source identity).
    */
   bounds(sheetId: string, budget?: CfWorkBudget, signal?: AbortSignal): Promise<SourceRect | undefined>
+  /** `'resolved'` when every number literal carries `dateSerial` from its cell's format; absent, formats are unknown and
+   * consumers that depend on them (data-bar date participation, S3-G) fail closed. */
+  readonly numberFormats?: 'resolved'
   stamp(sheetId: string): CfStamp
   pages(sheetId: string, rects: readonly SourceRect[], budget: CfWorkBudget, signal: AbortSignal): AsyncIterable<CfLease<CfValuePage>>
 }

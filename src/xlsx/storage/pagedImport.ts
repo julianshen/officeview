@@ -514,7 +514,9 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
           const owner = finalizeCfSubtrees({ base: [], x14: [], sheetNs: undefined, truncated: true }, { colors: {}, dxfNodes: [] }, cfMemory, { sheetId: sheet.sheetId, partPath: sheet.partPath })
           sheet.cfOwner = owner; sheet.conditionalFormatting = owner.value
         } else {
-          const capture = createCfStreamEvents(cfStyles!, cfMemory, { sheetId: sheet.sheetId, partPath: sheet.partPath })
+          // No sheet view is left-to-right; a malformed flag stays unknown (Ruling S3-K as amended).
+          const rtl = sheet.metadata.sheetRightToLeft
+          const capture = createCfStreamEvents(cfStyles!, cfMemory, { sheetId: sheet.sheetId, partPath: sheet.partPath, ...(rtl !== null ? { sheetRightToLeft: rtl ?? false } : {}) })
           try {
             await tokenizeBytes(openPart(src, entry, partOpts(sheet.partPath, limits.paged.expandedBytes)), capture.events, {
               signal, limits: { maxTokenChars: limits.maxTokenChars }, afterChunk: () => ledger.drainQueue(),

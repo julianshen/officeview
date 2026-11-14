@@ -1,20 +1,23 @@
 import type { XlsxSheet } from '../types'
-import type { CfLease, CfPrepared, CfStamp, SourceRect as ModelRect } from './model'
+import type { CfBarDescriptor, CfLease, CfPrepared, CfStamp, SourceRect as ModelRect } from './model'
 import { CF_LIMITS, createCfMemory } from './limits'
 import { createCfService, estimateCfPrepareBytes, type CfPaintStatistics } from './service'
 import { createCfStatistics } from './statistics'
 import { resolveCfCellStyle } from './dxf'
-import { residentSource, storeCfSource } from './render'
+import { residentBarHosts, residentSource, storeCfSource } from './render'
+import { regionStylesFor } from '../tableStyleLoader'
+import type { XlsxCellStyle } from '../types'
 import { cfRuntimeEvidence } from './predicates'
 import { cfRulesVersion } from '../view/pagedSource'
 import type { EffectiveFormatScope, FormatBudget } from '../view/formatWorkspace'
 import type { AllocationContext, AllocationReservation } from '../view/allocationAccount'
 import type { SheetColorContext } from '../sheetColors'
 import type { ValuePolicy } from '../view/values'
-import type { SourceStore, CfReadResult } from '../view/contracts'
+import type { CfCellStateWire, SourceStore, CfReadResult } from '../view/contracts'
 import { measureCfCellBytes, versionCfRules } from '../view/contracts'
 import type { SourceRect } from '../view/coordinates'
 import { describeCfUnavailable, describeCfWin, type CfDescriptor } from './describe'
+import { barHidesText, barPaintable, barWithheld, paintDataBars, type CfBarHost } from './dataBarPaint'
 import { PackageError } from '../../core/package-error'
 
 const refused = (message: string): PackageError => new PackageError('resource-limit', message)
@@ -104,19 +107,41 @@ interface CopiedState {
   readonly writes: readonly string[] | undefined
   readonly reason: string | undefined
   readonly scale?: Readonly<{ fraction?: number; ruleId?: number; argb?: number }>
+  /** The resolved bar descriptor, identical on the resident and paged paths (Ruling S3-S). */
+  readonly bar?: CfBarDescriptor
 }
 
-/** Structural key for one cell's descriptor inputs: shared aspects share one charge. */
+type CfWireBar = NonNullable<CfCellStateWire['bar']>
+/** Wire form of a descriptor (`direction` as `rtl`), the shape every copy is priced in. */
+const wireBar = (d: CfBarDescriptor): CfWireBar => ({
+  ruleId: d.ruleId, axisFraction: d.axisFraction, startFraction: d.startFraction, endFraction: d.endFraction, fillColor: d.fillColor, valueFraction: d.valueFraction,
+  ...(d.borderColor !== undefined ? { borderColor: d.borderColor } : {}),
+  ...(d.axisColor !== undefined ? { axisColor: d.axisColor } : {}),
+  isGradient: d.isGradient, isNegative: d.isNegative, showValue: d.showValue, rtl: d.direction === 'rightToLeft',
+})
+/** The descriptor a wire bar encodes: the copy owns plain fields only, never the received object. */
+const descriptorOf = (w: CfWireBar): CfBarDescriptor => ({
+  ruleId: w.ruleId, axisFraction: w.axisFraction, startFraction: w.startFraction, endFraction: w.endFraction, fillColor: w.fillColor, valueFraction: w.valueFraction,
+  ...(w.borderColor !== undefined ? { borderColor: w.borderColor } : {}),
+  isGradient: w.isGradient, isNegative: w.isNegative,
+  ...(w.axisColor !== undefined ? { axisColor: w.axisColor } : {}),
+  showValue: w.showValue, direction: w.rtl ? 'rightToLeft' : 'leftToRight',
+})
+
+/** Structural key for one cell's descriptor inputs: shared aspects share one charge. A painted bar keys by its
+ * announced value position (never its geometry), so the descriptor cache never hands one cell's bar text to another. */
 const winKey = (
   properties: Readonly<Record<string, string | number | boolean | null>>,
   unresolvedWrites: readonly string[] | undefined,
   scale?: Readonly<{ fraction?: number; ruleId?: number; argb?: number }> | number,
+  bar?: CfBarDescriptor,
 ): string => {
   const paths = Object.keys(properties).sort().join(',')
   const writes = unresolvedWrites ? [...unresolvedWrites].sort().join(',') : ''
   const fraction = typeof scale === 'number' ? scale : scale?.fraction
   const scaleKey = fraction !== undefined ? `|scale:${Math.round(fraction * 100)}` : ''
-  return `${paths}|${writes}${scaleKey}`
+  const barKey = bar ? `|bar:${Math.round(bar.valueFraction * 100)}` : ''
+  return `${paths}|${writes}${scaleKey}${barKey}`
 }
 
 const winDescriptor = (
@@ -126,13 +151,14 @@ const winDescriptor = (
   locale: string,
   cache: Map<string, CfDescriptor>,
   scale?: Readonly<{ fraction?: number; ruleId?: number; argb?: number }> | number,
+  bar?: CfBarDescriptor,
 ): CfDescriptor | undefined => {
-  const key = winKey(properties, unresolvedWrites, scale)
+  const key = winKey(properties, unresolvedWrites, scale, bar)
   const cached = cache.get(key)
   if (cached) return cached
   const descriptor = unresolvedReason !== undefined
     ? describeCfUnavailable(locale)
-    : describeCfWin(properties, unresolvedWrites, undefined, locale, scale)
+    : describeCfWin(properties, unresolvedWrites, undefined, locale, scale, bar ? { fraction: bar.valueFraction } : undefined)
   if (descriptor && cache.size < DESCRIPTOR_CACHE_KEYS) cache.set(key, descriptor)
   return descriptor ?? undefined
 }
@@ -179,10 +205,31 @@ function assembleScope(
   release: () => void,
   current: () => boolean = () => true,
   regions?: EffectiveFormatScope['regions'],
+  /** Resident scopes: each bar's host from the sheet (given the scope's own effective style). Absent (paged), the
+   * scope learns withholding from its own paints and announces no bar it has not seen laid out. */
+  barHosts?: (styleAt: (row: number, col: number, base: XlsxCellStyle | undefined) => XlsxCellStyle | undefined) => (row: number, col: number) => CfBarHost | undefined,
 ): EffectiveFormatScope {
   const cache = new Map<string, CfDescriptor>()
   let disposed = false
-  return {
+  // The bar cells of the copied states (descriptors are shared, not copied again): the painter walks only these.
+  const bars = new Map<number, CfBarDescriptor>()
+  for (const [key, state] of states) if (state.bar) bars.set(key, state.bar)
+  const paintableAt = (row: number, col: number): CfBarDescriptor | undefined => {
+    if (disposed || !current()) return undefined
+    const bar = bars.get(row * 16384 + col)
+    return barPaintable(bar) ? bar : undefined
+  }
+  // Fix round 2: `barAt` (and so `describe`) reports a bar only where painting does not withhold it, by the painter's
+  // own predicate. Without hosts (paged) the outcome is learned at paint time; until then the bar counts as withheld.
+  let hostAt: ((row: number, col: number) => CfBarHost | undefined) | undefined
+  const laidOut = new Map<number, boolean>()
+  const barAt = (row: number, col: number): CfBarDescriptor | undefined => {
+    const bar = paintableAt(row, col)
+    if (!bar) return undefined
+    if (barHosts) return barWithheld(bar, (hostAt ??= barHosts(scope.effectiveStyle))(row, col)) ? undefined : bar
+    return laidOut.get(row * 16384 + col) === false ? bar : undefined
+  }
+  const scope: EffectiveFormatScope = {
     gen,
     bytes,
     regions,
@@ -200,21 +247,32 @@ function assembleScope(
         ...(paintsScale ? { visual: { colorScale: { ruleId: scale!.ruleId ?? 0, argb: scale!.argb!, ...(scale!.fraction !== undefined ? { fraction: scale!.fraction } : {}) } } } : {}),
       }, colors)
     },
+    barAt,
+    paintBars: (ctx, cellRect, visible, scale) => paintDataBars(ctx, bars, paintableAt, cellRect, visible, scale, undefined,
+      (row, col, withheld) => { if (bars.has(row * 16384 + col)) laidOut.set(row * 16384 + col, withheld) }),
+    hidesTextAt: (row, col, host, scale) => barHidesText(paintableAt(row, col), host, scale),
     describe: (row, col) => {
       if (disposed || !current()) return undefined
       const state = states.get(row * 16384 + col)
       if (!state) return undefined
-      if (Object.keys(state.properties).length === 0 && (state.writes?.length ?? 0) === 0 && state.reason === undefined && !state.scale) return undefined
-      return winDescriptor(state.properties, state.writes, state.reason, locale, cache, state.scale)
+      // A bar announces itself only where it paints; one the painter withholds is unavailable formatting, like a bar
+      // the evaluator left unresolved (that one reaches here through its writes or reason).
+      const bar = barAt(row, col)
+      if (state.bar && !bar) return describeCfUnavailable(locale)
+      if (Object.keys(state.properties).length === 0 && (state.writes?.length ?? 0) === 0 && state.reason === undefined && !state.scale && !bar) return undefined
+      return winDescriptor(state.properties, state.writes, state.reason, locale, cache, state.scale, bar)
     },
     dispose: () => {
       if (disposed) return
       disposed = true
       states.clear()
+      bars.clear()
+      laidOut.clear()
       cache.clear()
       release()
     },
   }
+  return scope
 }
 
 /**
@@ -336,13 +394,14 @@ export async function prepareCfTextScope(
                 // ever exists uncharged (the spread below is transient scratch
                 // for measurement; the stored copy is built after admission).
                 const writes = outcome.value.unresolvedWrites ? [...outcome.value.unresolvedWrites] : undefined
-                const occupied = measureCfCellBytes({ properties: outcome.value.properties, unresolvedWrites: writes, scale: outcome.value.visual?.colorScale })
+                const dataBar = outcome.value.visual?.dataBar
+                const occupied = measureCfCellBytes({ properties: outcome.value.properties, unresolvedWrites: writes, scale: outcome.value.visual?.colorScale, ...(dataBar ? { bar: wireBar(dataBar) } : {}) })
                 if (!Number.isSafeInteger(bytes + occupied)) { service.dispose(); closeAccount(); throw refused('CF text preparation exceeds its admitted batch') }
                 admit(occupied)
                 bytes += occupied
                 const properties: Record<string, string | number | boolean | null> = {}
                 for (const key of Object.keys(outcome.value.properties)) properties[key] = outcome.value.properties[key]!
-                states.set(row * 16384 + col, { properties, writes, reason: undefined, scale: outcome.value.visual?.colorScale })
+                states.set(row * 16384 + col, { properties, writes, reason: undefined, scale: outcome.value.visual?.colorScale, ...(dataBar ? { bar: descriptorOf(wireBar(dataBar)) } : {}) })
               }
             }
           }
@@ -352,12 +411,17 @@ export async function prepareCfTextScope(
       }
     closeAccount()
     let disposed = false
+    // Bar hosts (fix round 2): their geometry is admitted in the same budget when first built, released with the scope.
+    let hostBytes = 0
+    const admitHosts = (n: number): boolean => { try { request.budget.reserve(n) } catch { return false } hostBytes += n; return true }
+    const base = regionStylesFor(sheet)
     const scope = assembleScope(gen, states, colors, locale, bytes, () => {
       if (!disposed) {
         disposed = true
-        request.budget.release(bytes)
+        request.budget.release(bytes + hostBytes)
       }
-    }, () => source.stamp(stamp.sheetId).workbookValueGen === stamp.workbookValueGen && source.stamp(stamp.sheetId).structureGen === stamp.structureGen)
+    }, () => source.stamp(stamp.sheetId).workbookValueGen === stamp.workbookValueGen && source.stamp(stamp.sheetId).structureGen === stamp.structureGen,
+    undefined, styleAt => residentBarHosts(sheet, (row, col, own) => styleAt(row, col, base?.styleAt(row, col, own) ?? own), admitHosts))
     if (request.signal.aborted) {
       scope.dispose()
       return undefined
@@ -513,18 +577,23 @@ export async function prepareCfWireScope(
           bytes = next
           const properties: Record<string, string | number | boolean | null> = {}
           for (const key of Object.keys(state.properties)) properties[key] = state.properties[key]!
-          if (Object.keys(properties).length || state.scale?.argb !== undefined) regions.push({minRow:state.row,maxRow:state.row,minCol:state.col,maxCol:state.col})
+          if (Object.keys(properties).length || state.scale?.argb !== undefined || state.bar) regions.push({minRow:state.row,maxRow:state.row,minCol:state.col,maxCol:state.col})
           states.set(state.row * 16384 + state.col, {
             properties,
             writes: state.unresolvedWrites ? [...state.unresolvedWrites] : undefined,
             reason: state.unresolvedReason,
             scale: state.scale,
+            ...(state.bar ? { bar: descriptorOf(state.bar) } : {}),
           })
         }
       } finally {
         release()
       }
     }
+    // The paint-time withholding record (fix round 2) holds at most one entry per bar cell: admitted up front.
+    let barCells = 0
+    for (const state of states.values()) if (state.bar) barCells++
+    if (barCells) { admitWire(barCells * 48); bytes += barCells * 48 }
     const colors = options.colors ?? {}
     const locale = options.locale ?? 'en-US'
     let disposed = false

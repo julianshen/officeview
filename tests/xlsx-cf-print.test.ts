@@ -166,3 +166,29 @@ it('print uses verified measured printer-appearance variant (stage2-scale-interp
     batch?.dispose()
   })
 })
+it('print output at screen and PRINT_SCALE = 2 carries the prepared bar (injected evidence)', async () => {
+  const { barSheet, withBars } = await import('./helpers/cf-bars')
+  const { prepareCfPaint } = await import('../src/xlsx/cf/render')
+  const { cfRuntimeEvidence } = await import('../src/xlsx/cf/predicates')
+  const { computeMetrics, computePrintMetrics, renderPrintPage } = await import('../src/xlsx/render')
+  await withBars(async () => {
+    // A 200 px column: 0 (no bar), 50 (half), 100 (full).
+    const sheet = barSheet([0, 50, 100])
+    const batch = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence }))!
+    const m = computeMetrics(sheet), print = computePrintMetrics(sheet, m)
+    const rowMid = (r: number) => m.rowHeightsPx.slice(0, r).reduce((a, b) => a + b, 0) + m.rowHeightsPx[r]! / 2
+    try {
+      for (const scale of [1, 2]) {
+        const canvas = createCanvas(print.paperPx.width * scale, print.paperPx.height * scale), ctx = canvas.getContext('2d')
+        ctx.scale(scale, scale)
+        renderPrintPage(sheet, ctx as unknown as CanvasRenderingContext2D, m, print, 0, 0, undefined, { conditionalFormatting: batch })
+        const at = (x: number, y: number) => [...ctx.getImageData(Math.round((print.printable.x + x * print.scale) * scale), Math.round((print.printable.y + y * print.scale) * scale), 1, 1).data]
+        // Sampled away from the value text (right-aligned): the left half of the cell.
+        expect(at(30, rowMid(2)), `full bar at scale ${scale}`).toEqual([0, 0, 255, 255])
+        expect(at(30, rowMid(1)), `half bar at scale ${scale}`).toEqual([0, 0, 255, 255])
+        expect(at(160, rowMid(1)), `past the half bar at scale ${scale}`).not.toEqual([0, 0, 255, 255])
+        expect(at(30, rowMid(0)), `no bar for the minimum at scale ${scale}`).not.toEqual([0, 0, 255, 255])
+      }
+    } finally { batch.dispose() }
+  })
+})

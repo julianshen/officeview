@@ -14,6 +14,7 @@
 import type {
   CfLiteral,
   CfOutcome,
+  CfScaleBound,
   CfScalePoint,
   CfDefinition,
 } from './model'
@@ -263,10 +264,13 @@ export function scaleEvaluationRequiredCapabilities(
   return req
 }
 
-function extractPoints(pointsOrRule: readonly CfScalePoint[] | { points: readonly CfScalePoint[] } | CfDefinition): readonly CfScalePoint[] | undefined {
+/** The threshold-bearing part of a scale point; bars reuse threshold resolution with bounds alone (Task 20). */
+export type CfThresholdPoint = Readonly<{ bound: CfScaleBound }>
+
+function extractPoints<P extends CfThresholdPoint>(pointsOrRule: readonly P[] | { points: readonly P[] } | CfDefinition): readonly P[] | undefined {
   if (Array.isArray(pointsOrRule)) return pointsOrRule
   if (typeof pointsOrRule === 'object' && pointsOrRule !== null && 'points' in pointsOrRule) {
-    return (pointsOrRule as { points: readonly CfScalePoint[] }).points
+    return (pointsOrRule as { points: readonly P[] }).points
   }
   return undefined
 }
@@ -276,7 +280,7 @@ function extractPoints(pointsOrRule: readonly CfScalePoint[] | { points: readonl
  * Pure function: fails closed when evidence is absent or boundaries are degenerate/unsupported.
  */
 export function resolveScaleThresholds(
-  pointsOrRule: readonly CfScalePoint[] | { points: readonly CfScalePoint[] } | CfDefinition,
+  pointsOrRule: readonly CfThresholdPoint[] | { points: readonly CfThresholdPoint[] } | CfDefinition,
   stats: CfRangeStatistics,
   options: { hasEvidence?: (cap: string) => boolean } = {},
 ): CfOutcome<readonly number[]> {

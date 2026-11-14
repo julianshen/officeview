@@ -100,6 +100,19 @@ export interface CfPartMarker {
   }
   /** Expected `<dxf>` resolved from `xl/styles.xml` via `@dxfId` (legacy) or inline `<x14:dxf>` (x14). */
   dxf?: CfDxfExpectation
+  /**
+   * Stage 3 data bar pin, compared by semantics (schema defaults applied, hex case and alpha canonicalised).
+   * Unprefixed `attrs` pin the element the marker sits on: the base `<dataBar>` for a `legacy` marker and the
+   * `<x14:dataBar>` for an `x14` marker. A `paired` legacy marker also pins the `<x14:id>` link to a companion that
+   * carries no `<x14:fillColor>`; a `standalone` x14 marker requires `<x14:fillColor>`. Colour values are an ARGB
+   * hex, `theme:<n>[:<tint>]` or `indexed:<n>`. `cfvo.f` pins the `<xm:f>` text of an x14 `<x14:cfvo>`.
+   */
+  bar?: {
+    pairing: 'paired' | 'standalone' | 'base-only'
+    cfvo: readonly { type: string; val?: string; f?: string }[]
+    attrs: Readonly<Record<string, string>>
+    colors: Readonly<Partial<Record<'fill' | 'negativeFill' | 'border' | 'negativeBorder' | 'axis', string>>>
+  }
 }
 
 export interface CfCellExpectation {
@@ -115,6 +128,21 @@ export interface CfCellExpectation {
   fillSource?: 'excel-display-format' | 'pixel-matched' | 'unverified'
   /** Whether a colour-scale rule applied formatting to this cell. */
   scaleApplied?: boolean
+  /**
+   * Stage 3: which evidence kind backs each claim about this cell's data bar (OD-7, Ruling S3-A).
+   * `excel-object-model` is a settings readback; `pixel-measured` is a column-scan measurement that discriminates;
+   * `non-discriminating` was measured but cannot tell its hypotheses apart; `unverified` is anything else.
+   */
+  barEvidence?: {
+    /**
+     * `pixel-measured` / `non-discriminating`: recomputed from the PNG (OD-7 as amended). `excel-object-model` is retired
+     * (the data bar object model is unreachable on Excel 16.114) and every claim of it refuses.
+     */
+    settings: 'pixel-measured' | 'non-discriminating' | 'excel-object-model' | 'unverified'
+    geometry: 'pixel-measured' | 'non-discriminating' | 'unverified'
+  }
+  /** Whether a data bar is drawn on this cell in Excel. */
+  barApplied?: boolean
   /** Expected winning font color ARGB hex (`FF9C0006`) when matched. */
   fontRgb?: string
   /** Expected winning bold state when overridden by DXF. */
@@ -214,6 +242,12 @@ export interface CfOracleCase {
   clockRequirement?: CfClockRequirement
   markers: readonly CfPartMarker[]
   expected: CfExpectedOutcome
+  /**
+   * Stage 3 pixel calibration (`bar:pixel-calibration`, Ruling S3-A step 3): the named blank columns' gridline-to-gridline
+   * widths, scanned along `scanRow` (1-based), must equal the computed geometry within +-1 px, and `solidRef` (a solid DXF
+   * fill) must sample `solidArgb` within +-8 per channel.
+   */
+  barCalibration?: { columns: readonly string[]; scanRow: number; solidRef: string; solidArgb: string }
   captures: readonly CfCaptureSpec[]
   status: CfOracleStatus
   reason?: string
@@ -247,6 +281,13 @@ export type CfRefusalCode =
   | 'fill-unobserved'
   | 'fill-pixel-mismatch'
   | 'no-cells-checked'
+  | 'display-locked'
+  | 'bar-calibration-failed'
+  | 'bar-edge-unstable'
+  | 'bar-edge-under-text'
+  | 'bar-background-unresolved'
+  | 'bar-hypothesis-none'
+  | 'bar-settings-unobserved'
 
 export interface VerifiedEvidence {
   kind: 'verified'
@@ -259,6 +300,14 @@ export interface VerifiedEvidence {
   minPositiveContrastDelta: number
   matchedRules: number
   verifiedCapabilities: readonly string[]
+  /** Stage 3: capabilities measured by a capture that cannot discriminate their hypotheses (withheld, Lesson 3). */
+  nonDiscriminatingCapabilities?: readonly string[]
+  /** Stage 3: capabilities whose recomputation refuses (findings such as `bar-hypothesis-none`). */
+  refusedCapabilities?: ReadonlyArray<{ capabilityId: string; code: CfRefusalCode; reason: string }>
+  /** Stage 3: why each other capability is not verified (no hypotheses, unclaimed). */
+  capabilityNotes?: Readonly<Record<string, string>>
+  /** Stage 3: the hypothesis each verified capability matched. */
+  matchedHypotheses?: Readonly<Record<string, string>>
 }
 
 export interface Refusal {
@@ -681,8 +730,8 @@ export const CF_STAGE1_CASES: readonly CfOracleCase[] = [
       inputSha256: '',
       savedSha256: '',
       provenance: 'seed-hypothesis',
-      positiveRefs: ['B2', 'B3', 'C4', 'D2', 'E2', 'F5', 'G7'],
-      negativeRefs: ['B4', 'C2', 'D5', 'E7', 'F2', 'G2', 'H2', 'H6', 'I2', 'I7', 'J2', 'J7', 'K2', 'K7', 'L2', 'L7'],
+      positiveRefs: ['B2', 'B3', 'C4', 'D2', 'E2', 'F5', 'G7', 'K2'],
+      negativeRefs: ['B4', 'C2', 'D5', 'E7', 'F2', 'G2', 'H2', 'H6', 'I2', 'I7', 'J2', 'J7', 'K7', 'L2', 'L7'],
       cells: [
         { ref: 'B2', controlRef: 'B11', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '"abc" contains "ab"' },
         { ref: 'B3', controlRef: 'B12', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '"AbC" contains "ab" case-insensitively' },
@@ -703,9 +752,9 @@ export const CF_STAGE1_CASES: readonly CfOracleCase[] = [
         { ref: 'I7', controlRef: 'I16', matched: false, note: 'absent-formula containsText does not match a"b' },
         { ref: 'J2', controlRef: 'J11', matched: false, note: 'divergent formula SEARCH("zz",J2) overrides @text="ab" in Excel' },
         { ref: 'J7', controlRef: 'J16', matched: false, note: 'divergent formula does not match a"b' },
-        { ref: 'K2', controlRef: 'K11', matched: false, note: 'x14 canonical containsText does not match in Excel' },
+        { ref: 'K2', controlRef: 'K11', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: 'x14 canonical containsText "ab" matches "abc" (Task 18c recapture with Excel\'s x14 URI; the legacy twin B2 matches too)' },
         { ref: 'K7', controlRef: 'K16', matched: false, note: 'x14 canonical containsText does not match a"b' },
-        { ref: 'L2', controlRef: 'L11', matched: false, note: 'x14 divergent formula SEARCH("zz",L2) does not match "abc"' },
+        { ref: 'L2', controlRef: 'L11', matched: false, note: 'x14 divergent formula SEARCH("zz",L2) overrides @text="ab" and does not match "abc" (as the legacy twin J2)' },
         { ref: 'L7', controlRef: 'L16', matched: false, note: 'x14 divergent formula does not match a"b' },
       ],
     },
@@ -880,8 +929,8 @@ export const CF_STAGE1_CASES: readonly CfOracleCase[] = [
       inputSha256: '',
       savedSha256: '',
       provenance: 'seed-hypothesis',
-      positiveRefs: ['B2', 'B3', 'D2', 'E6', 'G6', 'H8', 'H9', 'J8', 'K6', 'M6'],
-      negativeRefs: ['B6', 'C2', 'C6', 'D3', 'E2', 'F2', 'F6', 'G2', 'H6', 'I6', 'I8', 'J9', 'K8', 'L6', 'L8', 'M8', 'N2', 'N6', 'O6', 'O8'],
+      positiveRefs: ['B2', 'B3', 'D2', 'E6', 'G6', 'H8', 'H9', 'J8', 'K6', 'M6', 'N2', 'O6'],
+      negativeRefs: ['B6', 'C2', 'C6', 'D3', 'E2', 'F2', 'F6', 'G2', 'H6', 'I6', 'I8', 'J9', 'K8', 'L6', 'L8', 'M8', 'N6', 'O8'],
       cells: [
         { ref: 'B2', controlRef: 'B11', matched: true, fillRgb: 'FFFFC7CE', note: 'unstored blank matches containsBlanks' },
         { ref: 'B3', controlRef: 'B12', matched: true, fillRgb: 'FFFFC7CE', note: '"" matches containsBlanks' },
@@ -909,9 +958,9 @@ export const CF_STAGE1_CASES: readonly CfOracleCase[] = [
         { ref: 'L8', controlRef: 'L17', matched: false, note: 'absent-formula notContainsErrors does not match #N/A' },
         { ref: 'M6', controlRef: 'M15', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: 'divergent NOT(ISNA(M2)) matches 0' },
         { ref: 'M8', controlRef: 'M17', matched: false, note: 'divergent NOT(ISNA(M2)) does not match #N/A' },
-        { ref: 'N2', controlRef: 'N11', matched: false, note: 'x14 containsBlanks does not match in Excel' },
+        { ref: 'N2', controlRef: 'N11', matched: true, fillRgb: 'FFFFC7CE', note: 'x14 containsBlanks matches the unstored blank (Task 18c recapture; the legacy twin B2 matches too)' },
         { ref: 'N6', controlRef: 'N15', matched: false, note: 'x14 containsBlanks does not match 0' },
-        { ref: 'O6', controlRef: 'O15', matched: false, note: 'x14 notContainsErrors does not match in Excel' },
+        { ref: 'O6', controlRef: 'O15', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: 'x14 notContainsErrors matches 0 (Task 18c recapture; the legacy twin K6 matches too)' },
         { ref: 'O8', controlRef: 'O17', matched: false, note: 'x14 notContainsErrors does not match #N/A' },
       ],
     },
@@ -3702,9 +3751,950 @@ export const CF_STAGE2_CAPABILITIES: readonly CfCapabilityEntry[] = CF_STAGE2_CA
   })),
 )
 
-export const CF_CASES: readonly CfOracleCase[] = [...CF_STAGE1_CASES, ...CF_STAGE2_CASES]
+// ---------------------------------------------------------------------------------------------------------------------
+// Stage 3: data bars (Task 18). Every case below is a `[measure]` question for the Excel oracle. Nothing here is an
+// Excel fact: expectations are seeds, every `barEvidence` is `unverified`, and each case stays `recipe-pending` (or
+// `unsupported`) until the orchestrator captures it under host Excel. Production withholds every bar until the named
+// `bar:*` capability appears in `verifiedCapabilities.ts` (Ruling S3-A / OD-7).
+// ---------------------------------------------------------------------------------------------------------------------
+
+export type S3Value = number | string | boolean | null | { err: string } | { f: string; v: number } | { date: number }
+
+export interface CfBarCfvo {
+  type: string
+  val?: string
+  f?: string
+}
+
+export type CfBarColors = Partial<Record<'fill' | 'negativeFill' | 'border' | 'negativeBorder' | 'axis', string>>
+
+export interface S3Column {
+  col: string
+  header: string
+  /** Column width in characters. Defaults to 30 (measured bar columns are at least 30 characters wide). */
+  width?: number
+  /** Values for data rows 2.. (`null` leaves the cell unstored). */
+  values: readonly S3Value[]
+}
+
+export interface S3BarRule {
+  kind: 'bar'
+  /** Capability settled by the base rule (the standalone x14 rule for `standalone`). */
+  cap: string
+  /** Capability settled by a paired companion; defaults to `cap`. */
+  companionCap?: string
+  sqref: string
+  priority: number
+  stopIfTrue?: boolean
+  pairing: 'paired' | 'standalone' | 'base-only'
+  /** Base `<cfvo>` pair (paired and base-only). Defaults to min/max. */
+  baseCfvo?: readonly CfBarCfvo[]
+  /** x14 `<x14:cfvo>` pair (paired and standalone). Derived from `baseCfvo` when omitted. */
+  x14Cfvo?: readonly CfBarCfvo[]
+  /** Attributes written on the base `<dataBar>` (`showValue`, `minLength`, `maxLength`). */
+  baseAttrs?: Readonly<Record<string, string>>
+  /** Attributes written on `<x14:dataBar>`. */
+  x14Attrs?: Readonly<Record<string, string>>
+  colors?: CfBarColors
+  /** Designated cells; defaults to every stored, visible cell of the scope. */
+  cells?: readonly string[]
+  /** Keep this rule in its own `<conditionalFormatting>` block even when it shares a sqref. */
+  separateBlock?: boolean
+}
+
+export interface S3RawRule {
+  kind: 'raw'
+  where: 'legacy' | 'x14'
+  sqref: string
+  xml: string
+  separateBlock?: boolean
+  marker: Pick<CfPartMarker, 'capabilityId' | 'ruleType' | 'formulas'> & Partial<Pick<CfPartMarker, 'operator' | 'priority' | 'stopIfTrue' | 'dxf' | 'scale' | 'bar'>>
+  /** Cells designated for this raw rule's marker coverage (defaults to the stored cells of the scope). */
+  cells?: readonly string[]
+}
+
+export type S3Rule = S3BarRule | S3RawRule
+
+export interface S3Fixture {
+  id: string
+  question: string
+  /** Number of data rows (rows 2..n+1). The same-content control block sits `lastRow` rows lower (see `s3ControlOffset`). */
+  n: number
+  cols: readonly S3Column[]
+  rules: readonly S3Rule[]
+  rowHeights?: Readonly<Record<number, number>>
+  gridlines?: boolean
+  hiddenRows?: readonly number[]
+  merges?: readonly string[]
+  autoFilterXml?: string
+  /** Extra stored cells (merged blocks); their controls sit one control offset lower as well. */
+  extraCells?: readonly { ref: string; v: S3Value }[]
+  dxfsXml?: string
+  dateStyle?: boolean
+  /** A static solid cell fill (ARGB) under every stored bar and control cell (Ruling S3-AUTO-GREY), never a CF DXF. */
+  cellFill?: string
+  /** Positive ref -> control ref when the control cannot sit one control offset lower (a whole-column rule formats that cell too). */
+  controlCells?: Readonly<Record<string, string>>
+  calibration?: CfOracleCase['barCalibration']
+  status: 'recipe-pending' | 'unsupported'
+  reason: string
+}
+
+const BLUE = 'FF0000FF'
+const BLUE_DEFAULT = 'FF638EC6'
+const RED = 'FFFF0000'
+const BLACK = 'FF000000'
+const GREEN = 'FF00B050'
+const ORANGE = 'FFFFA500'
+const MIN_MAX: readonly CfBarCfvo[] = [{ type: 'min' }, { type: 'max' }]
+const SOLID_0_100: Readonly<Record<string, string>> = { minLength: '0', maxLength: '100', gradient: '0' }
+const VALUES_5: readonly S3Value[] = [0, 25, 50, 75, 100]
+/** Task 22c (S3-AUTO-BOUNDS): data where autoMin can differ from min, autoMax from max, and mixed-sign data. */
+const AUTO_POS: readonly S3Value[] = [20, 40, 60, 80, 100]
+const AUTO_NEG: readonly S3Value[] = [-100, -80, -60, -40, -20]
+const AUTO_MIXED: readonly S3Value[] = [-50, -25, 0, 50, 100]
+const AUTO_CFVO: readonly CfBarCfvo[] = [{ type: 'autoMin' }, { type: 'autoMax' }]
+const VALUES_11: readonly S3Value[] = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+/** Ruling S3-GRAD-BORDER: 0..100 by 10, plus two short bars that separate an outer-length ramp from an inner one. */
+const VALUES_BORDERED: readonly S3Value[] = [...VALUES_11, 3, 5]
+/**
+ * Ruling S3-AUTO-GREY: the static cell fill of stage3-bar-auto-colors. Excel's "White, Background 1, Darker 35%". White
+ * must be bar ink against it, so it sits at least BAR_STRONG_DELTA (64) below white (89 here); it is at least the colour
+ * separation (17) from FF0000FF (89 on blue) and FF000000 (166), and the value text stays legible.
+ */
+const AUTO_GREY = 'FFA6A6A6'
+
+/** x14 companion cfvo derived from the base cfvo: bounds with a value carry it as `<xm:f>`. */
+function deriveX14Cfvo(base: readonly CfBarCfvo[]): CfBarCfvo[] {
+  return base.map(c => (c.val !== undefined ? { type: c.type, f: c.val } : { type: c.type }))
+}
+
+function bar(cap: string, sqref: string, priority: number, o: Partial<Omit<S3BarRule, 'kind' | 'cap' | 'sqref' | 'priority'>> = {}): S3BarRule {
+  return { kind: 'bar', cap, sqref, priority, pairing: 'paired', ...o }
+}
+
+const DXF_RED_FILL = '<dxf><fill><patternFill patternType="solid"><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf>'
+const DXF_GREEN_FILL = '<dxf><fill><patternFill patternType="solid"><bgColor rgb="FFC6EFCE"/></patternFill></fill></dxf>'
+const DXF_FILLS_XML = `<dxfs count="2">${DXF_RED_FILL}${DXF_GREEN_FILL}</dxfs>`
+const S3_DXF_RED: CfDxfExpectation = { fillRgb: 'FFFFC7CE' }
+const S3_DXF_GREEN: CfDxfExpectation = { fillRgb: 'FFC6EFCE' }
+
+const cellIsRaw = (cap: string, sqref: string, priority: number, formula: string, o: { dxfId?: number; stop?: boolean } = {}): S3RawRule => ({
+  kind: 'raw',
+  where: 'legacy',
+  sqref,
+  xml: `<cfRule type="cellIs"${o.dxfId !== undefined ? ` dxfId="${o.dxfId}"` : ''} priority="${priority}"${o.stop ? ' stopIfTrue="1"' : ''} operator="greaterThan"><formula>${formula}</formula></cfRule>`,
+  marker: {
+    capabilityId: cap,
+    ruleType: 'cellIs',
+    operator: 'greaterThan',
+    priority,
+    ...(o.stop ? { stopIfTrue: true } : {}),
+    formulas: [formula],
+    ...(o.dxfId === 0 ? { dxf: S3_DXF_RED } : o.dxfId === 1 ? { dxf: S3_DXF_GREEN } : {}),
+  },
+})
+
+const scaleRaw = (cap: string, sqref: string, priority: number): S3RawRule => ({
+  kind: 'raw',
+  where: 'legacy',
+  sqref,
+  xml: `<cfRule type="colorScale" priority="${priority}"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule>`,
+  marker: {
+    capabilityId: cap,
+    ruleType: 'colorScale',
+    priority,
+    formulas: [],
+    scale: { cfvo: [{ type: 'min' }, { type: 'max' }], colors: ['FFF8696B', 'FF63BE7B'] },
+  },
+})
+
+/** Raw dataBar shapes (unresolved-shapes case): the marker pins type, priority and sqref only. */
+const shapeRaw = (cap: string, sqref: string, priority: number | undefined, xml: string, where: 'legacy' | 'x14' = 'legacy'): S3RawRule => ({
+  kind: 'raw',
+  where,
+  sqref,
+  xml,
+  separateBlock: true,
+  marker: { capabilityId: cap, ruleType: 'dataBar', formulas: [], ...(priority !== undefined ? { priority } : {}) },
+})
+
+const NS_X14_DECL = 'xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"'
+const DB_EXT_URI = '{B025F937-C7B1-47D3-B67F-A62EFF666E3E}'
+const idExt = (guid: string): string => `<extLst><ext uri="${DB_EXT_URI}" ${NS_X14_DECL}><x14:id>${guid}</x14:id></ext></extLst>`
+
+const labelCol = (n: number, from = 0): string[] => Array.from({ length: n }, (_, i) => `r${i + 2 + from}`)
+void labelCol
+
+const col = (c: string, header: string, values: readonly S3Value[], width?: number): S3Column => ({ col: c, header, values, ...(width !== undefined ? { width } : {}) })
+
+const rect = (id: string, question: string, rest: Omit<S3Fixture, 'id' | 'question' | 'status' | 'reason'> & Partial<Pick<S3Fixture, 'status' | 'reason'>>): S3Fixture => ({
+  id,
+  question,
+  status: 'recipe-pending',
+  reason: 'Preparation only: no Excel capture has been run for this Stage 3 case; every bar:* capability it settles stays unverified and production withholds the bar (Ruling S3-A / OD-7)',
+  ...rest,
+})
+
+// Widths that put a predicted edge at a quarter-point fraction (computed with columnWidthPx at MDW 7):
+// 31.36 characters is 220 px (165 pt: 25/50/75 percent give .25/.5/.75 pt), 32.51 is 228 px (171 pt: .75/.5/.25 pt).
+const SNAP_WIDTH_A = 31.36
+const SNAP_WIDTH_B = 32.51
+
+export const CF_STAGE3_FIXTURES: readonly S3Fixture[] = [
+  // 1. stage3-bar-settings-probe
+  rect(
+    'stage3-bar-settings-probe',
+    'S3-A precondition probe. One bar is authored against every default (axis middle, solid, border 1, x14 minLength 0 / maxLength 100, direction rightToLeft, showValue 0, negative colour distinct from positive); a default-valued control rule sits beside it. Calibration columns of 10, 30 and 60 characters, and one solid DXF-filled cell, give pixel calibration. Gridlines stay on here so gridline-to-gridline widths can be measured.',
+    {
+      n: 5,
+      gridlines: true,
+      dxfsXml: DXF_FILLS_XML,
+      calibration: { columns: ['D', 'E', 'F'], scanRow: 3, solidRef: 'G2', solidArgb: 'FFC6EFCE' },
+      cols: [
+        col('B', 'Probe', [10, 20, 30, 40, 50]),
+        col('C', 'Control', [10, 20, 30, 40, 50]),
+        col('D', 'Calib10', [], 10),
+        col('E', 'Calib30', [], 30),
+        col('F', 'Calib60', [], 60),
+        col('G', 'SolidDxf', [100]),
+      ],
+      rules: [
+        bar('bar:settings-precondition-probe', 'B2:B6', 1, {
+          baseAttrs: { showValue: '0' },
+          x14Attrs: { axisPosition: 'middle', gradient: '0', border: '1', minLength: '0', maxLength: '100', direction: 'rightToLeft', negativeBarColorSameAsPositive: '0' },
+          colors: { fill: BLUE, border: GREEN, negativeFill: RED },
+        }),
+        bar('bar:settings-schema-defaults', 'C2:C6', 2, { pairing: 'base-only', colors: { fill: BLUE_DEFAULT }, x14Attrs: {} }),
+        cellIsRaw('bar:pixel-calibration', 'G2', 3, '0', { dxfId: 1 }),
+      ],
+    },
+  ),
+  // 2a. stage3-bar-lengths-default (Task 22b): the owning case of bar:lengths-default-10-90. It sits before
+  // stage3-bar-lengths so that it owns the capability (the first case carrying a marker owns it); lengths B stays a
+  // cross-check at one width.
+  rect(
+    'stage3-bar-lengths-default',
+    'Excel\'s default 10/90 lengths. The captures show two curves at one width: the paired solid bar of stage3-bar-lengths B measures 9/44/80/115/150 px for 0/25/50/75/100 percent of a 177 px span (10/90 linear on the span minus 9 px, or 5/85), while every base-only gradient bar measures 10/90 linear (18/53/89/124/159). Fill type and pairing form are confounded, and every 10/90 bar sits on one 180 pt column. This case crosses paired solid, paired gradient and base-only (gradient) bars over three widths (180, 270, 360 pt: at least 30 characters, S3-A step 4, so the value text stays clear of every bar edge) with eleven values each, min/max bounds, on white cells, left to right, no border. Ruling S3-GRAD-BORDER adds paired gradient bars with border="1" (columns K:V), the shape of Excel\'s UI gradient preset (x14 minLength 0 / maxLength 100, border="1" with an <x14:borderColor>, as excel-authored-databar.xlsx writes a bordered bar; min/max bounds instead of the preset\'s autoMin/autoMax, which bar:bounds-automax cannot settle): a border equal to the fill and a contrasting green one, each at 0/100 and at the default 10/90, at the same three widths. Their values are 0..100 by 10 plus 3 and 5, whose short bars (5 to 18 px) tell a ramp over the bar\'s outer length from one over its inner length.',
+    {
+      n: 13,
+      cols: [
+        col('B', 'Solid180', VALUES_11, 30),
+        col('C', 'Solid270', VALUES_11, 45),
+        col('D', 'Solid360', VALUES_11, 60),
+        col('E', 'Grad180', VALUES_11, 30),
+        col('F', 'Grad270', VALUES_11, 45),
+        col('G', 'Grad360', VALUES_11, 60),
+        col('H', 'Base180', VALUES_11, 30),
+        col('I', 'Base270', VALUES_11, 45),
+        col('J', 'Base360', VALUES_11, 60),
+        ...(['K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V'] as const).map((c, i) =>
+          col(c, `GradBorder${['Fill', 'Green'][Math.floor(i / 3) % 2]}${['0100', '1090'][Math.floor(i / 6)]}${[180, 270, 360][i % 3]}`, VALUES_BORDERED, [30, 45, 60][i % 3])),
+      ],
+      rules: [
+        bar('bar:lengths-default-10-90', 'B2:B12', 1, { x14Attrs: { minLength: '10', maxLength: '90', gradient: '0' }, colors: { fill: BLUE } }),
+        bar('bar:lengths-default-10-90', 'C2:C12', 2, { x14Attrs: { minLength: '10', maxLength: '90', gradient: '0' }, colors: { fill: BLUE } }),
+        bar('bar:lengths-default-10-90', 'D2:D12', 3, { x14Attrs: { minLength: '10', maxLength: '90', gradient: '0' }, colors: { fill: BLUE } }),
+        bar('bar:lengths-default-10-90', 'E2:E12', 4, { x14Attrs: { minLength: '10', maxLength: '90', gradient: '1' }, colors: { fill: BLUE } }),
+        bar('bar:lengths-default-10-90', 'F2:F12', 5, { x14Attrs: { minLength: '10', maxLength: '90', gradient: '1' }, colors: { fill: BLUE } }),
+        bar('bar:lengths-default-10-90', 'G2:G12', 6, { x14Attrs: { minLength: '10', maxLength: '90', gradient: '1' }, colors: { fill: BLUE } }),
+        bar('bar:lengths-default-10-90', 'H2:H12', 7, { pairing: 'base-only', colors: { fill: BLUE } }),
+        bar('bar:lengths-default-10-90', 'I2:I12', 8, { pairing: 'base-only', colors: { fill: BLUE } }),
+        bar('bar:lengths-default-10-90', 'J2:J12', 9, { pairing: 'base-only', colors: { fill: BLUE } }),
+        // Ruling S3-GRAD-BORDER: bordered gradients (K:M border = fill, N:P green; 0/100), then the same at 10/90 (Q:V).
+        ...(['K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V'] as const).map((c, i) =>
+          bar('bar:render-gradient-border', `${c}2:${c}14`, 10 + i, {
+            x14Attrs: { ...(i < 6 ? { minLength: '0', maxLength: '100' } : { minLength: '10', maxLength: '90' }), gradient: '1', border: '1' },
+            colors: { fill: BLUE, border: Math.floor(i / 3) % 2 === 0 ? BLUE : GREEN },
+          })),
+      ],
+    },
+  ),
+  // 2b. stage3-bar-auto-bounds (Task 22c, owner ruling S3-AUTO-BOUNDS): the owning case of bar:bounds-automin and
+  // bar:bounds-automax (it sits before stage3-bar-lengths, whose H and I columns stay a cross-check).
+  rect(
+    'stage3-bar-auto-bounds',
+    'Excel\'s automatic bounds, as its own data bar presets write them (x14 cfvo autoMin/autoMax, x14 minLength 0 / maxLength 100, border="1" with a border colour, explicit negative fill and axis colours: the attribute set of excel-authored-databar.xlsx, written by Excel\'s dialog). Paired x14 bars only: the base <cfvo> has no autoMin/autoMax type. autoMin is tested where it can differ from min (all-positive data without 0: {20..100}), autoMax where it can differ from max (all-negative data: {-100..-20}), and both on mixed-sign data, where every candidate agrees (a cross-check of the axis under automatic bounds). Solid and gradient, with and without the border; 0/100 and the default 10/90 (measured by run 7 as half-min on x14 bars). Gradient bars are positive and left to right only, the shape the gradient model measured.',
+    {
+      n: 5,
+      cols: [
+        col('B', 'PosSolid', AUTO_POS),
+        col('C', 'PosSolidBorder', AUTO_POS),
+        col('D', 'PosGradBorder', AUTO_POS),
+        col('E', 'PosGrad', AUTO_POS),
+        col('F', 'PosSolid1090', AUTO_POS),
+        col('G', 'PosGradBorder1090', AUTO_POS),
+        col('H', 'NegSolid', AUTO_NEG),
+        col('I', 'NegSolidBorder', AUTO_NEG),
+        col('J', 'MixedSolid', AUTO_MIXED),
+        col('K', 'MixedSolidBorder', AUTO_MIXED),
+      ],
+      rules: [
+        bar('bar:bounds-automin', 'B2:B6', 1, { x14Cfvo: AUTO_CFVO, x14Attrs: { ...SOLID_0_100 }, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } }),
+        bar('bar:bounds-automin', 'C2:C6', 2, { x14Cfvo: AUTO_CFVO, x14Attrs: { ...SOLID_0_100, border: '1' }, colors: { fill: BLUE, border: BLUE, negativeFill: RED, axis: BLACK } }),
+        bar('bar:bounds-automin', 'D2:D6', 3, { x14Cfvo: AUTO_CFVO, x14Attrs: { minLength: '0', maxLength: '100', gradient: '1', border: '1' }, colors: { fill: BLUE, border: BLUE, negativeFill: RED, axis: BLACK } }),
+        bar('bar:bounds-automin', 'E2:E6', 4, { x14Cfvo: AUTO_CFVO, x14Attrs: { minLength: '0', maxLength: '100', gradient: '1' }, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } }),
+        bar('bar:bounds-automin', 'F2:F6', 5, { x14Cfvo: AUTO_CFVO, x14Attrs: { minLength: '10', maxLength: '90', gradient: '0' }, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } }),
+        bar('bar:bounds-automin', 'G2:G6', 6, { x14Cfvo: AUTO_CFVO, x14Attrs: { minLength: '10', maxLength: '90', gradient: '1', border: '1' }, colors: { fill: BLUE, border: BLUE, negativeFill: RED, axis: BLACK } }),
+        bar('bar:bounds-automax', 'H2:H6', 7, { x14Cfvo: AUTO_CFVO, x14Attrs: { ...SOLID_0_100, negativeBarColorSameAsPositive: '0' }, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } }),
+        bar('bar:bounds-automax', 'I2:I6', 8, { x14Cfvo: AUTO_CFVO, x14Attrs: { ...SOLID_0_100, border: '1', negativeBarColorSameAsPositive: '0', negativeBarBorderColorSameAsPositive: '0' }, colors: { fill: BLUE, border: BLUE, negativeFill: RED, negativeBorder: RED, axis: BLACK } }),
+        bar('bar:bounds-automax', 'J2:J6', 9, { x14Cfvo: AUTO_CFVO, x14Attrs: { ...SOLID_0_100, negativeBarColorSameAsPositive: '0' }, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } }),
+        bar('bar:bounds-automax', 'K2:K6', 10, { x14Cfvo: AUTO_CFVO, x14Attrs: { ...SOLID_0_100, border: '1', negativeBarColorSameAsPositive: '0', negativeBarBorderColorSameAsPositive: '0' }, colors: { fill: BLUE, border: BLUE, negativeFill: RED, negativeBorder: RED, axis: BLACK } }),
+      ],
+    },
+  ),
+  // 2. stage3-bar-lengths
+  rect(
+    'stage3-bar-lengths',
+    'Solid bar lengths. All-positive data {0,25,50,75,100} under x14 minLength/maxLength 10/90 and 0/100 (the cell at 50 does not discriminate); num 20/80; percent 25/75; percentile 10/90 over {1,2,3,4,10}; autoMin and autoMax over {20,40,60} where autoMin differs from min (0 vs 20); all-negative data {-100..-20}.',
+    {
+      n: 5,
+      cols: [
+        col('B', 'Len1090', VALUES_5),
+        col('C', 'Len0100', VALUES_5),
+        col('D', 'MinMax', [20, 40, 60, 80, 100]),
+        col('E', 'Num2080', [20, 35, 50, 65, 80]),
+        col('F', 'Percent2575', VALUES_5),
+        col('G', 'Pctile1090', [1, 2, 3, 4, 10]),
+        col('H', 'AutoMin', [20, 40, 60]),
+        col('I', 'AutoMax', [20, 40, 60]),
+        col('J', 'AllNegative', [-100, -80, -60, -40, -20]),
+      ],
+      rules: [
+        // The cell at 50 cannot tell 10/90 from 0/100 (every hypothesis puts the edge at the midpoint), so it is not designated.
+        bar('bar:lengths-default-10-90', 'B2:B6', 1, { x14Attrs: { minLength: '10', maxLength: '90', gradient: '0' }, colors: { fill: BLUE }, cells: ['B2', 'B3', 'B5', 'B6'] }),
+        bar('bar:lengths-explicit-0-100', 'C2:C6', 2, { x14Attrs: SOLID_0_100, colors: { fill: BLUE }, cells: ['C2', 'C3', 'C5', 'C6'] }),
+        bar('bar:bounds-min-max', 'D2:D6', 3, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:bounds-num', 'E2:E6', 4, { baseCfvo: [{ type: 'num', val: '20' }, { type: 'num', val: '80' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:bounds-percent', 'F2:F6', 5, { baseCfvo: [{ type: 'percent', val: '25' }, { type: 'percent', val: '75' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:bounds-percentile', 'G2:G6', 6, { baseCfvo: [{ type: 'percentile', val: '10' }, { type: 'percentile', val: '90' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:bounds-automin', 'H2:H4', 7, { x14Cfvo: [{ type: 'autoMin' }, { type: 'max' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:bounds-automax', 'I2:I4', 8, { x14Cfvo: [{ type: 'min' }, { type: 'autoMax' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:lengths-all-negative', 'J2:J6', 9, { x14Attrs: { ...SOLID_0_100, negativeBarColorSameAsPositive: '0' }, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } }),
+      ],
+    },
+  ),
+  // 3. stage3-bar-degenerate
+  rect(
+    'stage3-bar-degenerate',
+    'Degenerate and out-of-domain bounds. All values equal; a single numeric cell; inverted num 80 -> 20; values beyond num 20/80; percent -10 / 150; Excel 2007 min val="0"; min placed second.',
+    {
+      n: 5,
+      cols: [
+        col('B', 'AllEqual', [42, 42, 42, 42, 42]),
+        col('C', 'SingleCell', [50]),
+        col('D', 'Inverted', [10, 30, 50, 70, 90]),
+        col('E', 'Beyond', [0, 10, 50, 90, 100]),
+        col('F', 'OutOfDomain', [10, 30, 50, 70, 90]),
+        col('G', 'LegacyMinVal0', [10, 30, 50, 70, 90]),
+        col('H', 'MinSecond', [10, 30, 50, 70, 90]),
+      ],
+      rules: [
+        bar('bar:degenerate-equal-values', 'B2:B6', 1, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:degenerate-single-cell', 'C2', 2, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:degenerate-inverted', 'D2:D6', 3, { baseCfvo: [{ type: 'num', val: '80' }, { type: 'num', val: '20' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:degenerate-beyond-bounds', 'E2:E6', 4, { baseCfvo: [{ type: 'num', val: '20' }, { type: 'num', val: '80' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:bounds-out-of-domain', 'F2:F6', 5, { baseCfvo: [{ type: 'percent', val: '-10' }, { type: 'percent', val: '150' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:bounds-positional', 'G2:G6', 6, { pairing: 'base-only', baseCfvo: [{ type: 'min', val: '0' }, { type: 'max' }], colors: { fill: BLUE } }),
+        bar('bar:bounds-positional', 'H2:H6', 7, { pairing: 'base-only', baseCfvo: [{ type: 'max' }, { type: 'min' }], colors: { fill: BLUE } }),
+      ],
+    },
+  ),
+  // 4. stage3-bar-axis-negative
+  rect(
+    'stage3-bar-axis-negative',
+    'Mixed {-50,-25,0,50,100} under automatic / middle / none axis (axis colour FF000000); negative fill colour vs same-as-positive; negative border colour vs same-as-positive with border="1". All-positive data under automatic is the non-discriminating control.',
+    {
+      n: 5,
+      cols: [
+        col('B', 'Automatic', [-50, -25, 0, 50, 100]),
+        col('C', 'Middle', [-50, -25, 0, 50, 100]),
+        col('D', 'None', [-50, -25, 0, 50, 100]),
+        col('E', 'NegFill', [-50, -25, 0, 50, 100]),
+        col('F', 'NegFillSame', [-50, -25, 0, 50, 100]),
+        col('G', 'NegBorder', [-50, -25, 0, 50, 100]),
+        col('H', 'NegBorderSame', [-50, -25, 0, 50, 100]),
+        col('I', 'AllPositive', VALUES_5),
+      ],
+      rules: [
+        bar('bar:axis-automatic', 'B2:B6', 1, { x14Attrs: { ...SOLID_0_100, axisPosition: 'automatic', negativeBarColorSameAsPositive: '0' }, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } }),
+        bar('bar:axis-middle', 'C2:C6', 2, { x14Attrs: { ...SOLID_0_100, axisPosition: 'middle', negativeBarColorSameAsPositive: '0' }, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } }),
+        // Excel's canonical form drops the axis colour when no axis is drawn (stage3-bar-axis-negative.rejected.xlsx).
+        bar('bar:axis-none', 'D2:D6', 3, { x14Attrs: { ...SOLID_0_100, axisPosition: 'none', negativeBarColorSameAsPositive: '0' }, colors: { fill: BLUE, negativeFill: RED } }),
+        bar('bar:negative-fill-color', 'E2:E6', 4, { x14Attrs: { ...SOLID_0_100, negativeBarColorSameAsPositive: '0' }, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } }),
+        // No <x14:negativeFillColor> when the negative fill is the positive one: Excel reads the x14 colours by position
+        // for the flags set, so an extra colour shifts into the axis slot (run 4: the resave and the capture show a red axis).
+        bar('bar:negative-fill-same-as-positive', 'F2:F6', 5, { x14Attrs: { ...SOLID_0_100, negativeBarColorSameAsPositive: '1' }, colors: { fill: BLUE, axis: BLACK } }),
+        bar('bar:negative-border-color', 'G2:G6', 6, { x14Attrs: { ...SOLID_0_100, border: '1', negativeBarColorSameAsPositive: '0', negativeBarBorderColorSameAsPositive: '0' }, colors: { fill: BLUE, negativeFill: RED, border: GREEN, negativeBorder: ORANGE, axis: BLACK } }),
+        // No <x14:negativeBorderColor> when the negative border is the positive one (same positional read: run 4 showed an orange axis).
+        bar('bar:negative-border-same-as-positive', 'H2:H6', 7, { x14Attrs: { ...SOLID_0_100, border: '1', negativeBarColorSameAsPositive: '0', negativeBarBorderColorSameAsPositive: '1' }, colors: { fill: BLUE, negativeFill: RED, border: GREEN, axis: BLACK } }),
+        bar('bar:axis-automatic', 'I2:I6', 8, { x14Attrs: { ...SOLID_0_100, axisPosition: 'automatic' }, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } }),
+      ],
+    },
+  ),
+  // 5. stage3-bar-rendering
+  rect(
+    'stage3-bar-rendering',
+    'Solid vs gradient (gradient samples at 10/50/90 percent of the bar length); border on/off; leftToRight / rightToLeft / context on an LTR sheet; theme 4 tint -0.25 and indexed fills under the Office theme. context on a rightToLeft sheet is recorded only (S3-K) and is not authored here because it needs a second workbook.',
+    {
+      n: 5,
+      cols: [
+        col('B', 'Solid', [0, 10, 50, 90, 100]),
+        col('C', 'Gradient', [0, 10, 50, 90, 100]),
+        col('D', 'Border', [0, 10, 50, 90, 100]),
+        col('E', 'DirLtr', [0, 10, 50, 90, 100]),
+        col('F', 'DirRtl', [0, 10, 50, 90, 100]),
+        col('G', 'DirContext', [0, 10, 50, 90, 100]),
+        col('H', 'ThemeTint', [0, 10, 50, 90, 100]),
+        col('I', 'Indexed', [0, 10, 50, 90, 100]),
+      ],
+      rules: [
+        bar('bar:render-solid', 'B2:B6', 1, { baseCfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '100' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:render-gradient-stops', 'C2:C6', 2, { baseCfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '100' }], x14Attrs: { minLength: '0', maxLength: '100', gradient: '1' }, colors: { fill: BLUE } }),
+        bar('bar:render-border', 'D2:D6', 3, { baseCfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '100' }], x14Attrs: { ...SOLID_0_100, border: '1' }, colors: { fill: BLUE, border: GREEN } }),
+        bar('bar:direction-ltr', 'E2:E6', 4, { baseCfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '100' }], x14Attrs: { ...SOLID_0_100, direction: 'leftToRight' }, colors: { fill: BLUE } }),
+        bar('bar:direction-rtl', 'F2:F6', 5, { baseCfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '100' }], x14Attrs: { ...SOLID_0_100, direction: 'rightToLeft' }, colors: { fill: BLUE } }),
+        bar('bar:direction-context-ltr-sheet', 'G2:G6', 6, { baseCfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '100' }], x14Attrs: { ...SOLID_0_100, direction: 'context' }, colors: { fill: BLUE } }),
+        bar('bar:colors-theme-tint', 'H2:H6', 7, { baseCfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '100' }], x14Attrs: SOLID_0_100, colors: { fill: 'theme:4:-0.25' } }),
+        bar('bar:colors-indexed', 'I2:I6', 8, { baseCfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '100' }], x14Attrs: SOLID_0_100, colors: { fill: 'indexed:12' } }),
+      ],
+    },
+  ),
+  // 6. stage3-bar-geometry
+  rect(
+    'stage3-bar-geometry',
+    'Insets on three cells of different widths (30/45/60 characters); column widths that put predicted edges at .25/.5/.75 pt (31.36 and 32.51 characters); a value at the minimum under 0/100 (minimum visible width); a 2-character column holding a full-length bar (clipping); a 12 pt and a 40 pt row.',
+    {
+      n: 5,
+      rowHeights: { 2: 12, 3: 40 },
+      cols: [
+        col('B', 'Inset30', [0, 100, 25, 50, 75], 30),
+        col('C', 'Inset45', [0, 100, 25, 50, 75], 45),
+        col('D', 'Inset60', [0, 100, 25, 50, 75], 60),
+        col('E', 'SnapA', [0, 100, 25, 50, 75], SNAP_WIDTH_A),
+        col('F', 'SnapB', [0, 100, 25, 50, 75], SNAP_WIDTH_B),
+        col('G', 'MinWidth', [0, 1, 100, 50, 0.5]),
+        col('H', 'NarrowClip', [100, 100, 100, 100, 100], 2),
+        col('I', 'RowHeights', [100, 100, 100, 100, 100]),
+      ],
+      rules: [
+        bar('bar:geometry-insets', 'B2:B6', 1, { baseCfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '100' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE }, cells: ['B4', 'B5', 'B6'] }),
+        bar('bar:geometry-insets', 'C2:C6', 2, { baseCfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '100' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE }, cells: ['C4', 'C5', 'C6'] }),
+        bar('bar:geometry-insets', 'D2:D6', 3, { baseCfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '100' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE }, cells: ['D4', 'D5', 'D6'] }),
+        bar('bar:geometry-snapping', 'E2:E6', 4, { baseCfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '100' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE }, cells: ['E4', 'E5', 'E6'] }),
+        bar('bar:geometry-snapping', 'F2:F6', 5, { baseCfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '100' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE }, cells: ['F4', 'F5', 'F6'] }),
+        bar('bar:geometry-min-visible-width', 'G2:G6', 6, { baseCfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '100' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE }, cells: ['G2', 'G3', 'G6'] }),
+        bar('bar:geometry-narrow-clip', 'H2:H6', 7, { baseCfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '100' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE }, cells: ['H4', 'H5'] }),
+        bar('bar:geometry-insets', 'I2:I6', 8, { baseCfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '100' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE }, cells: ['I2', 'I3', 'I4'] }),
+      ],
+    },
+  ),
+  // 7. stage3-bar-showvalue
+  rect(
+    'stage3-bar-showvalue',
+    'showValue 0 and 1 on canvas. Copy text is read with copy range then the clipboard as text. The accessibility tree is not observable from the sdef, so it is recorded as unobservable.',
+    {
+      n: 5,
+      cols: [
+        col('B', 'ShowValue0', [20, 40, 60, 80, 100]),
+        col('C', 'ShowValue0Copy', [20, 40, 60, 80, 100]),
+        col('D', 'ShowValue1', [20, 40, 60, 80, 100]),
+      ],
+      rules: [
+        bar('bar:showvalue-canvas-suppression', 'B2:B6', 1, { baseCfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '100' }], baseAttrs: { showValue: '0' }, x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:showvalue-copy-text', 'C2:C6', 2, { baseCfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '100' }], baseAttrs: { showValue: '0' }, x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:showvalue-canvas-suppression', 'D2:D6', 3, { baseCfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '100' }], baseAttrs: { showValue: '1' }, x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+      ],
+    },
+  ),
+  // 8. stage3-bar-participation
+  rect(
+    'stage3-bar-participation',
+    'Which cells take part: a number, a date serial, TRUE, text "5", #N/A, "", an unstored blank and a formula with a cached number; and a variant with one error present while the other cells are numbers.',
+    {
+      n: 9,
+      dateStyle: true,
+      cols: [
+        col('B', 'Types', [10, 90, true, '5', '', null, { f: '20+30', v: 50 }, { err: '#N/A' }, 70]),
+        col('C', 'ErrorPresence', [10, 20, { err: '#N/A' }, 30, 40, 50, 60, 70, 80]),
+        // The date serial sits at 30 (a short bar) so its edge stays clear of the control's long date text: at 70 the edge fell
+        // under the text and refused bar-edge-under-text (run 4, D5).
+        col('D', 'DateSerial', [10, 50, 90, { date: 30 }]),
+      ],
+      rules: [
+        bar('bar:participation-types', 'B2:B10', 1, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:participation-error-presence', 'C2:C10', 2, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:participation-dateserial', 'D2:D5', 3, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+      ],
+    },
+  ),
+  // 9. stage3-bar-scope
+  rect(
+    'stage3-bar-scope',
+    'Disjoint B2:B4 D2:D4 over different values; duplicate blocks with different fills; a manually hidden row holding the extreme value; an autofilter-hidden extreme; a merged B8:C9 with non-equal values. The whole-column rule lives in stage3-bar-pairing: this sheet hides rows 5 and 6, and the hidden-row gate is rect-based, so a whole-column rule here could not be told from hidden-row gating (the Stage 2 F-2 lesson).',
+    {
+      n: 5,
+      hiddenRows: [5, 6],
+      merges: ['B8:C9'],
+      autoFilterXml: '<autoFilter ref="G1:G6"><filterColumn colId="0"><filters><filter val="10"/><filter val="20"/><filter val="30"/></filters></filterColumn></autoFilter>',
+      cols: [
+        col('B', 'Disjoint', [10, 20, 30]),
+        col('C', 'MergeHost', []),
+        col('D', 'DisjointB', [80, 90, 100]),
+        col('E', 'DupeBlocks', [10, 20, 30]),
+        col('F', 'HiddenRow', [10, 20, 30, 40, 100]),
+        col('G', 'FilterHidden', [10, 20, 30, 100, 30]),
+      ],
+      extraCells: [
+        { ref: 'B8', v: 100 },
+        { ref: 'C8', v: 50 },
+        { ref: 'B9', v: 20 },
+        { ref: 'C9', v: 70 },
+      ],
+      rules: [
+        bar('bar:scope-disjoint', 'B2:B4 D2:D4', 1, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:scope-duplicate-blocks', 'E2:E4', 2, { x14Attrs: SOLID_0_100, colors: { fill: BLUE }, separateBlock: true }),
+        bar('bar:scope-duplicate-blocks', 'E2:E4', 3, { x14Attrs: SOLID_0_100, colors: { fill: ORANGE }, separateBlock: true }),
+        bar('bar:scope-hidden-row', 'F2:F6', 4, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:scope-autofilter-hidden-row', 'G2:G6', 5, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:scope-merged-cell', 'B8:C9', 6, { x14Attrs: SOLID_0_100, colors: { fill: BLUE }, cells: ['B8'] }),
+      ],
+    },
+  ),
+  // 10. stage3-bar-composition
+  rect(
+    'stage3-bar-composition',
+    'A bar over a DXF fill in both priority orders; a bar with a colour scale; two overlapping bars; a matching and a non-matching DXF stopIfTrue ahead of a bar; a bar carrying stopIfTrue="1" ahead of a DXF fill; an unresolved expression stub at priority 1.',
+    {
+      n: 4,
+      dxfsXml: DXF_FILLS_XML,
+      cols: [
+        col('B', 'DxfThenBar', [25, 15, 5, 0]),
+        col('C', 'BarThenDxf', [25, 15, 5, 0]),
+        col('D', 'WithScale', [25, 15, 5, 0]),
+        col('E', 'Overlapping', [25, 15, 5, 0]),
+        col('F', 'MatchStop', [25, 15, 5, 0]),
+        col('G', 'NonMatchStop', [25, 15, 5, 0]),
+        col('H', 'BarStop', [25, 15, 5, 0]),
+        col('I', 'Stub', [25, 15, 5, 0]),
+      ],
+      rules: [
+        cellIsRaw('bar:composition-dxf-fill', 'B2:B5', 1, '10', { dxfId: 0 }),
+        bar('bar:composition-dxf-fill', 'B2:B5', 2, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:composition-dxf-fill', 'C2:C5', 3, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        cellIsRaw('bar:composition-dxf-fill', 'C2:C5', 4, '0', { dxfId: 1 }),
+        bar('bar:composition-with-scale', 'D2:D5', 5, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        scaleRaw('bar:composition-with-scale', 'D2:D5', 6),
+        bar('bar:composition-overlapping-bars', 'E2:E5', 7, { x14Attrs: SOLID_0_100, colors: { fill: BLUE }, separateBlock: true }),
+        bar('bar:composition-overlapping-bars', 'E2:E5', 8, { x14Attrs: SOLID_0_100, colors: { fill: ORANGE }, separateBlock: true }),
+        cellIsRaw('bar:composition-matching-stopIfTrue-ahead', 'F2:F5', 9, '10', { stop: true }),
+        bar('bar:composition-matching-stopIfTrue-ahead', 'F2:F5', 10, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        cellIsRaw('bar:composition-matching-stopIfTrue-ahead', 'G2:G5', 11, '100', { stop: true }),
+        bar('bar:composition-matching-stopIfTrue-ahead', 'G2:G5', 12, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:composition-bar-stopIfTrue', 'H2:H5', 13, { stopIfTrue: true, x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        cellIsRaw('bar:composition-bar-stopIfTrue', 'H2:H5', 14, '0', { dxfId: 0 }),
+        {
+          kind: 'raw',
+          where: 'legacy',
+          sqref: 'I2:I5',
+          xml: '<cfRule type="expression" dxfId="0" priority="15" stopIfTrue="1"><formula>MOD(I2,2)=1</formula></cfRule>',
+          marker: { capabilityId: 'bar:composition-unresolved-stub', ruleType: 'expression', priority: 15, stopIfTrue: true, formulas: ['MOD(I2,2)=1'], dxf: S3_DXF_RED },
+        },
+        bar('bar:composition-unresolved-stub', 'I2:I5', 16, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+      ],
+    },
+  ),
+  // 11. stage3-bar-pairing
+  rect(
+    'stage3-bar-pairing',
+    'The three x14 shapes: Excel 2010 paired form (base minLength 10 / maxLength 90 with x14 autoMin/autoMax at 0/100); standalone x14 with <x14:fillColor> and @priority; base-only. Settings readback must agree across the three shapes. Also carries the whole-column scope rule (E:E, no hidden rows on this sheet).',
+    {
+      n: 5,
+      // The whole-column rule sits here because this sheet hides no rows (see stage3-bar-scope). A whole-column rule also
+      // formats its own control-block cells, so the unformatted control is the same-content neighbour column F.
+      controlCells: { E2: 'F2', E3: 'F3', E4: 'F4' },
+      cols: [
+        col('B', 'Paired', VALUES_5),
+        col('C', 'Standalone', VALUES_5),
+        col('D', 'BaseOnly', VALUES_5),
+        col('E', 'WholeCol', [10, 50, 90]),
+        col('F', 'WholeColCtrl', [10, 50, 90]),
+      ],
+      rules: [
+        bar('bar:pairing-paired', 'B2:B6', 1, {
+          companionCap: 'bar:settings-paired-precedence',
+          baseAttrs: { minLength: '10', maxLength: '90' },
+          x14Cfvo: [{ type: 'autoMin' }, { type: 'autoMax' }],
+          x14Attrs: SOLID_0_100,
+          colors: { fill: BLUE },
+        }),
+        bar('bar:pairing-standalone', 'C2:C6', 2, { pairing: 'standalone', x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:pairing-base-only', 'D2:D6', 3, { pairing: 'base-only', colors: { fill: BLUE } }),
+        bar('bar:scope-whole-column', 'E1:E1048576', 4, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+      ],
+    },
+  ),
+  // 12. stage3-bar-unresolved-shapes
+  rect(
+    'stage3-bar-unresolved-shapes',
+    'Excel open/repair/strip outcome for shapes the viewer refuses either way: an orphan x14; a duplicate GUID; a companion carrying <x14:fillColor>; type="formula"; xm:f $A$1; activePresent="1"; 1 and 3 cfvo; a cfvo without type; autoMin on a base cfvo; auto and alpha-00 colours. Lifts no capability.',
+    {
+      n: 5,
+      status: 'unsupported',
+      reason: 'Unresolved bar shapes fail closed per Rulings S3-C, S3-F, S3-Q and S3-R; recorded for Excel\'s open/repair/strip outcome and lift no capability',
+      cols: ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N'].map((c, i) =>
+        col(c, ['Orphan', 'DupGuid1', 'DupGuid2', 'CompFill', 'FormulaCfvo', 'XmfRef', 'ActivePresent', 'OneCfvo', 'ThreeCfvo', 'NoType', 'AutoMinBase', 'AutoColor', 'Alpha00'][i]!, [10, 30, 50, 70, 90]),
+      ),
+      rules: [
+        shapeRaw('bar:unresolved-orphan-x14', 'B2:B6', undefined, '<x14:cfRule type="dataBar" id="{3B3B0012-0000-4000-8000-000000000001}"><x14:dataBar minLength="0" maxLength="100"><x14:cfvo type="autoMin"/><x14:cfvo type="autoMax"/></x14:dataBar></x14:cfRule>', 'x14'),
+        shapeRaw('bar:unresolved-duplicate-guid', 'C2:C6', 2, `<cfRule type="dataBar" priority="2"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="${BLUE}"/></dataBar>${idExt('{3B3B0012-0000-4000-8000-000000000002}')}</cfRule>`),
+        shapeRaw('bar:unresolved-duplicate-guid', 'D2:D6', 3, `<cfRule type="dataBar" priority="3"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="${BLUE}"/></dataBar>${idExt('{3B3B0012-0000-4000-8000-000000000002}')}</cfRule>`),
+        shapeRaw('bar:unresolved-companion-fillcolor', 'E2:E6', 4, `<cfRule type="dataBar" priority="4"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="${BLUE}"/></dataBar>${idExt('{3B3B0012-0000-4000-8000-000000000003}')}</cfRule>`),
+        shapeRaw('bar:unresolved-formula-cfvo', 'F2:F6', 5, `<cfRule type="dataBar" priority="5"><dataBar><cfvo type="formula" val="SUM(A1:A5)"/><cfvo type="max"/><color rgb="${BLUE}"/></dataBar></cfRule>`),
+        shapeRaw('bar:unresolved-xmf-reference', 'G2:G6', 6, `<cfRule type="dataBar" priority="6"><dataBar><cfvo type="num" val="0"/><cfvo type="max"/><color rgb="${BLUE}"/></dataBar>${idExt('{3B3B0012-0000-4000-8000-000000000004}')}</cfRule>`),
+        shapeRaw('bar:unresolved-active-present', 'H2:H6', 7, `<cfRule type="dataBar" priority="7" activePresent="1"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="${BLUE}"/></dataBar></cfRule>`),
+        shapeRaw('bar:unresolved-one-cfvo', 'I2:I6', 8, `<cfRule type="dataBar" priority="8"><dataBar><cfvo type="min"/><color rgb="${BLUE}"/></dataBar></cfRule>`),
+        shapeRaw('bar:unresolved-three-cfvo', 'J2:J6', 9, `<cfRule type="dataBar" priority="9"><dataBar><cfvo type="min"/><cfvo type="percentile" val="50"/><cfvo type="max"/><color rgb="${BLUE}"/></dataBar></cfRule>`),
+        shapeRaw('bar:unresolved-cfvo-no-type', 'K2:K6', 10, `<cfRule type="dataBar" priority="10"><dataBar><cfvo/><cfvo type="max"/><color rgb="${BLUE}"/></dataBar></cfRule>`),
+        shapeRaw('bar:unresolved-automin-base', 'L2:L6', 11, `<cfRule type="dataBar" priority="11"><dataBar><cfvo type="autoMin"/><cfvo type="max"/><color rgb="${BLUE}"/></dataBar></cfRule>`),
+        shapeRaw('bar:unresolved-auto-color', 'M2:M6', 12, '<cfRule type="dataBar" priority="12"><dataBar><cfvo type="min"/><cfvo type="max"/><color auto="1"/></dataBar></cfRule>'),
+        shapeRaw('bar:unresolved-alpha-00-color', 'N2:N6', 13, '<cfRule type="dataBar" priority="13"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="000000FF"/></dataBar></cfRule>'),
+        // The companion pair for the duplicate-GUID and companion-fillColor shapes, and the xm:f $A$1 shape.
+        shapeRaw('bar:unresolved-duplicate-guid', 'C2:C6', undefined, '<x14:cfRule type="dataBar" id="{3B3B0012-0000-4000-8000-000000000002}"><x14:dataBar minLength="0" maxLength="100"><x14:cfvo type="autoMin"/><x14:cfvo type="autoMax"/></x14:dataBar></x14:cfRule>', 'x14'),
+        shapeRaw('bar:unresolved-companion-fillcolor', 'E2:E6', undefined, `<x14:cfRule type="dataBar" id="{3B3B0012-0000-4000-8000-000000000003}"><x14:dataBar minLength="0" maxLength="100"><x14:cfvo type="autoMin"/><x14:cfvo type="autoMax"/><x14:fillColor rgb="${BLUE}"/></x14:dataBar></x14:cfRule>`, 'x14'),
+        shapeRaw('bar:unresolved-xmf-reference', 'G2:G6', undefined, '<x14:cfRule type="dataBar" id="{3B3B0012-0000-4000-8000-000000000004}"><x14:dataBar minLength="0" maxLength="100"><x14:cfvo type="num"><xm:f>$A$1</xm:f></x14:cfvo><x14:cfvo type="autoMax"/></x14:dataBar></x14:cfRule>', 'x14'),
+      ],
+    },
+  ),
+  // 13. stage3-bar-auto-colors
+  rect(
+    'stage3-bar-auto-colors',
+    'Ruling S3-F as amended (owner, 2026-11-12): what Excel draws for the automatic colours it writes on resave. Each bar is authored with its positive fill only, the shape Excel resaves with <x14:negativeFillColor auto="1"/><x14:axisColor auto="1"/>, on mixed-sign data {-50,-25,0,50,100} so the negative fill and the axis are drawn: B automatic axis, C middle axis, D no axis (negative fill only). The zero cells show the axis alone; the negative cells show the negative fill. The verifier samples only colour elements the resaved workbook carries as auto="1". Ruling S3-AUTO-GREY (owner, 2026-11-12): Excel paints both automatic colours opaque white (capture run 5), so every bar and control cell carries a static grey fill FFA6A6A6, against which white is ink.',
+    {
+      n: 5,
+      cellFill: AUTO_GREY,
+      cols: [
+        col('B', 'AutoAxis', [-50, -25, 0, 50, 100]),
+        col('C', 'AutoMiddle', [-50, -25, 0, 50, 100]),
+        col('D', 'AutoNegative', [-50, -25, 0, 50, 100]),
+      ],
+      rules: [
+        bar('bar:color-auto-axis', 'B2:B6', 1, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:color-auto-axis', 'C2:C6', 2, { x14Attrs: { ...SOLID_0_100, axisPosition: 'middle' }, colors: { fill: BLUE } }),
+        bar('bar:color-auto-negative-fill', 'D2:D6', 3, { x14Attrs: { ...SOLID_0_100, axisPosition: 'none' }, colors: { fill: BLUE } }),
+      ],
+    },
+  ),
+]
+
+// ---- fixture -> oracle case ----
+
+const colIndex = (letters: string): number => {
+  let n = 0
+  for (const ch of letters) n = n * 26 + (ch.charCodeAt(0) - 64)
+  return n
+}
+const colLetter = (n: number): string => {
+  let s = ''
+  for (let c = n; c > 0; c = Math.floor((c - 1) / 26)) s = String.fromCharCode(65 + ((c - 1) % 26)) + s
+  return s
+}
+
+/** Expands an `sqref` into cell refs limited to rows 1..`maxRow` (whole-column spans stop at the fixture's last row). */
+function expandSqref(sqref: string, maxRow: number): string[] {
+  const out: string[] = []
+  for (const tok of sqref.trim().split(/\s+/)) {
+    const [a, b] = tok.split(':')
+    const ma = /^([A-Z]+)(\d+)$/.exec(a ?? '')
+    const mb = /^([A-Z]+)(\d+)$/.exec(b ?? a ?? '')
+    if (!ma || !mb) continue
+    const c0 = Math.min(colIndex(ma[1]!), colIndex(mb[1]!))
+    const c1 = Math.max(colIndex(ma[1]!), colIndex(mb[1]!))
+    const r0 = Math.min(Number(ma[2]), Number(mb[2]))
+    const r1 = Math.min(Math.max(Number(ma[2]), Number(mb[2])), maxRow)
+    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) out.push(`${colLetter(c)}${r}`)
+  }
+  return out
+}
+
+/** The stored (non-null) cell refs of the fixture's data columns and extra cells. */
+export function s3StoredRefs(fx: S3Fixture): Set<string> {
+  const refs = new Set<string>()
+  for (const c of fx.cols) c.values.forEach((v, i) => { if (v !== null) refs.add(`${c.col}${i + 2}`) })
+  for (const e of fx.extraCells ?? []) refs.add(e.ref)
+  return refs
+}
+
+export const s3LastRow = (fx: S3Fixture): number => Math.max(fx.n + 1, ...((fx.extraCells ?? []).map(e => Number(/\d+/.exec(e.ref)![0]))))
+export const s3ControlOffset = (fx: S3Fixture): number => s3LastRow(fx)
+export const s3Range = (fx: S3Fixture): string => {
+  const lastCol = Math.max(...fx.cols.map(c => colIndex(c.col)), 2)
+  return `A1:${colLetter(lastCol)}${s3LastRow(fx) + s3ControlOffset(fx)}`
+}
+export const s3ControlRef = (fx: S3Fixture, ref: string): string => {
+  const m = /^([A-Z]+)(\d+)$/.exec(ref)!
+  return `${m[1]}${Number(m[2]) + s3ControlOffset(fx)}`
+}
+
+function barMarkers(fx: S3Fixture, r: S3BarRule): CfPartMarker[] {
+  const part = 'xl/worksheets/sheet1.xml'
+  const base = r.baseCfvo ?? MIN_MAX
+  const x14 = r.x14Cfvo ?? deriveX14Cfvo(base)
+  const colors = r.colors ?? {}
+  void fx
+  if (r.pairing === 'paired') {
+    const { fill, ...companionColors } = colors
+    return [
+      {
+        part, extension: 'legacy', capabilityId: r.cap, sqref: r.sqref, ruleType: 'dataBar', priority: r.priority, ...(r.stopIfTrue ? { stopIfTrue: true } : {}), formulas: [],
+        bar: { pairing: 'paired', cfvo: base, attrs: r.baseAttrs ?? {}, colors: fill ? { fill } : {} },
+      },
+      {
+        part, extension: 'x14', capabilityId: r.companionCap ?? r.cap, sqref: r.sqref, ruleType: 'dataBar', formulas: [],
+        bar: { pairing: 'paired', cfvo: x14, attrs: r.x14Attrs ?? {}, colors: companionColors },
+      },
+    ]
+  }
+  if (r.pairing === 'standalone') {
+    return [{
+      part, extension: 'x14', capabilityId: r.cap, sqref: r.sqref, ruleType: 'dataBar', priority: r.priority, ...(r.stopIfTrue ? { stopIfTrue: true } : {}), formulas: [],
+      bar: { pairing: 'standalone', cfvo: x14, attrs: r.x14Attrs ?? {}, colors },
+    }]
+  }
+  return [{
+    part, extension: 'legacy', capabilityId: r.cap, sqref: r.sqref, ruleType: 'dataBar', priority: r.priority, ...(r.stopIfTrue ? { stopIfTrue: true } : {}), formulas: [],
+    bar: { pairing: 'base-only', cfvo: base, attrs: r.baseAttrs ?? {}, colors },
+  }]
+}
+
+/** Markers authored by a fixture, in rule order (a paired bar yields its base marker then its companion). */
+export function s3Markers(fx: S3Fixture): CfPartMarker[] {
+  const part = 'xl/worksheets/sheet1.xml'
+  return fx.rules.flatMap((r): CfPartMarker[] =>
+    r.kind === 'bar'
+      ? barMarkers(fx, r)
+      : [{ part, extension: r.where, sqref: r.sqref, ...r.marker }],
+  )
+}
+
+function s3Case(fx: S3Fixture): CfOracleCase {
+  const maxRow = s3LastRow(fx)
+  const stored = s3StoredRefs(fx)
+  const hidden = new Set(fx.hiddenRows ?? [])
+  const rowOf = (ref: string): number => Number(/\d+/.exec(ref)![0])
+  const designated = new Map<string, true>()
+  // Only cells under a bar rule are seeded `barApplied: true`; a DXF/scale-only cell (the calibration cell) never is.
+  const underBar = new Set<string>()
+  for (const r of fx.rules) {
+    const refs = r.cells ?? expandSqref(r.sqref, maxRow).filter(ref => stored.has(ref) && !hidden.has(rowOf(ref)))
+    for (const ref of refs) {
+      designated.set(ref, true)
+      if (r.kind === 'bar') underBar.add(ref)
+    }
+  }
+  const positive = [...designated.keys()]
+  const controlOf = (ref: string): string => fx.controlCells?.[ref] ?? s3ControlRef(fx, ref)
+  const cells: CfCellExpectation[] = []
+  for (const ref of positive) {
+    cells.push({
+      ref,
+      controlRef: controlOf(ref),
+      matched: true,
+      barApplied: underBar.has(ref),
+      fillSource: 'unverified',
+      barEvidence: { settings: 'unverified', geometry: 'unverified' },
+    })
+  }
+  for (const ref of positive) {
+    cells.push({ ref: controlOf(ref), controlRef: ref, matched: false, barApplied: false, fillSource: 'unverified', note: 'same-content unformatted control' })
+  }
+  const unsupported = fx.status === 'unsupported'
+  return {
+    id: fx.id,
+    stage: 3,
+    question: fx.question,
+    input: `tests/fixtures/xlsx-cf/inputs/${fx.id}.xlsx`,
+    saved: `tests/fixtures/xlsx-cf/${fx.id}.xlsx`,
+    sheet: 'Sheet1',
+    range: s3Range(fx),
+    requiredAppearances: ['screen'],
+    markers: s3Markers(fx),
+    ...(fx.calibration ? { barCalibration: fx.calibration } : {}),
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: unsupported ? [] : positive,
+      negativeRefs: unsupported ? [] : positive.map(controlOf),
+      cells: unsupported
+        ? positive.map(ref => ({ ref, controlRef: controlOf(ref), matched: false, barApplied: false, fillSource: 'unverified' as const, note: 'unresolved shape fails closed (no bar)' }))
+        : cells,
+    },
+    captures: unsupported
+      ? []
+      : [{ appearance: 'screen', pngPath: `tests/fixtures/xlsx-cf/refs/${fx.id}.png`, sidecarPath: `tests/fixtures/xlsx-cf/refs/${fx.id}.json` }],
+    status: fx.status,
+    reason: fx.reason,
+    tolerance: DEFAULT_TOLERANCE,
+  }
+}
+
+export const CF_STAGE3_CASES: readonly CfOracleCase[] = CF_STAGE3_FIXTURES.map(s3Case)
+
+/** Capability evidence kind (Ruling S3-A / OD-7): settings are proven by the object model, geometry by pixels. */
+export function barCapabilityKind(capabilityId: string): 'settings' | 'geometry' | 'calibration' | 'none' {
+  if (!capabilityId.startsWith('bar:')) return 'none'
+  if (capabilityId === 'bar:pixel-calibration') return 'calibration'
+  if (capabilityId.startsWith('bar:settings-') || capabilityId.startsWith('bar:pairing-') || capabilityId === 'bar:showvalue-copy-text') return 'settings'
+  return 'geometry'
+}
+
+const S3_RULINGS: Record<string, string> = {
+  'bar:settings-precondition-probe': 'S3-A (precondition probe: every bar:settings-* capability stays unverified until the readback differs from the default and from the control)',
+  'bar:pixel-calibration': 'S3-A (calibration: every geometry capability stays unverified until gridline-to-gridline widths and one solid DXF cell calibrate within tolerance)',
+  'bar:settings-schema-defaults': 'S3-Q (base-only bars use schema defaults for every x14 attribute)',
+  'bar:lengths-default-10-90': 'S3-B (bar layout has no default; with no variant evidenced every bar is unresolved)',
+  'bar:lengths-explicit-0-100': 'S3-B',
+  'bar:lengths-all-negative': 'S3-B and S3-L (all-negative range layout)',
+  'bar:bounds-min-max': 'S3-C and S3-B (cfvo bounds map to lengths only once measured)',
+  'bar:bounds-num': 'S3-C and S3-B',
+  'bar:bounds-percent': 'S3-C and S3-B',
+  'bar:bounds-percentile': 'S3-C and S3-B (exact percentile, PERCENTILE.INC)',
+  'bar:bounds-automin': 'S3-C and S3-AUTO-BOUNDS (autoMin resolves only on x14 cfvo, only with this capability, and only to the rule it verified: zero-anchored or min-max)',
+  'bar:bounds-automax': 'S3-C and S3-AUTO-BOUNDS (autoMax resolves only on x14 cfvo, only with this capability, and only to the rule it verified: zero-anchored or min-max)',
+  'bar:bounds-positional': 'S3-D (positional and legacy cfvo shapes are unresolved)',
+  'bar:bounds-out-of-domain': 'S3-E (percent/percentile outside 0..100 is unresolved, never clamped)',
+  'bar:degenerate-equal-values': 'S3-E (v_min = v_max is unresolved)',
+  'bar:degenerate-single-cell': 'S3-E (a single numeric cell is unresolved)',
+  'bar:degenerate-inverted': 'S3-E (inverted num bounds are unresolved)',
+  'bar:degenerate-beyond-bounds': 'S3-E (cells beyond num bounds are unresolved, never clamped)',
+  'bar:axis-automatic': 'S3-K (axis position automatic needs its own capability)',
+  'bar:axis-middle': 'S3-K (axis position middle needs its own capability)',
+  'bar:axis-none': 'S3-K (axis position none needs its own capability)',
+  'bar:negative-fill-color': 'S3-L (negative fill colour honoured only with settings and geometry evidence)',
+  'bar:negative-fill-same-as-positive': 'S3-L',
+  'bar:negative-border-color': 'S3-L',
+  'bar:negative-border-same-as-positive': 'S3-L',
+  'bar:render-solid': 'S3-M (a solid bar needs bar:render-solid; never drawn instead of a gradient)',
+  'bar:render-gradient-stops': 'S3-M (a gradient bar needs its measured stops; never drawn solid instead)',
+  'bar:render-gradient-border': 'S3-M and S3-GRAD-BORDER (a bordered gradient bar, Excel\'s UI gradient preset, paints only the verified frame-and-ramp shape; withheld until then)',
+  'bar:render-border': 'S3-M (a bordered bar needs its measured stroke; never drawn borderless)',
+  'bar:direction-ltr': 'S3-K (direction leftToRight)',
+  'bar:direction-rtl': 'S3-K (direction rightToLeft)',
+  'bar:direction-context-ltr-sheet': 'S3-K (context on an LTR sheet; context on an RTL or unknown sheet stays unresolved)',
+  'bar:colors-theme-tint': 'S3-F and OD-4 (theme colours resolve only under the measured Office theme)',
+  'bar:colors-indexed': 'S3-F (indexed colours)',
+  'bar:geometry-insets': 'S3-N (insets measured at 1 px/pt; the bar is withheld until verified)',
+  'bar:geometry-snapping': 'S3-N (fractional-point rounding)',
+  'bar:geometry-min-visible-width': 'S3-N (minimum visible width)',
+  'bar:geometry-narrow-clip': 'S3-N (narrow cells withhold their bar until clipping is measured)',
+  'bar:showvalue-canvas-suppression': 'S3-O (text is suppressed on canvas only under evidence)',
+  'bar:showvalue-copy-text': 'S3-P (copy text; the accessibility tree is not observable from the sdef)',
+  'bar:participation-types': 'S3-G (text, boolean, error, empty-string and blank cells draw no bar only with this capability)',
+  'bar:participation-dateserial': 'S3-G (date serials evaluate as numbers only with this capability)',
+  'bar:participation-error-presence': 'S3-G (an error in scope makes the whole rule unresolved without this capability)',
+  'bar:scope-disjoint': 'S3-H (disjoint sqref statistics)',
+  'bar:scope-duplicate-blocks': 'S3-H (duplicated conditionalFormatting blocks)',
+  'bar:scope-hidden-row': 'S3-H (a hidden row in scope)',
+  'bar:scope-autofilter-hidden-row': 'S3-H (an autofilter-hidden row in scope)',
+  'bar:scope-merged-cell': 'S3-H (a merged host in scope)',
+  'bar:scope-whole-column': 'S3-H (whole-column scope)',
+  'bar:composition-dxf-fill': 'S3-I (a bar paints over a DXF fill only with this capability)',
+  'bar:composition-with-scale': 'S3-I (a bar paints over a colour scale only with this capability)',
+  'bar:composition-overlapping-bars': 'S3-I (two matching bars on one cell withhold both and taint dataBar)',
+  'bar:composition-matching-stopIfTrue-ahead': 'S3-I (a matching DXF stopIfTrue ahead halts the bar)',
+  'bar:composition-bar-stopIfTrue': 'S3-J (a bar carrying stopIfTrue="1" is unresolved and taints later rules); unsupported in Stage 3 per S3-CLOSE (CF_STAGE3_UNSUPPORTED)',
+  'bar:composition-unresolved-stub': 'S3-I (an unresolved expression stub at priority 1); unsupported in Stage 3 per S3-CLOSE (CF_STAGE3_UNSUPPORTED): needs Stage 5 expressions',
+  'bar:pairing-paired': 'S3-Q (paired x14 form)',
+  'bar:pairing-standalone': 'S3-Q (standalone x14 form); unsupported in Stage 3 per S3-CLOSE (CF_STAGE3_UNSUPPORTED): Excel resaves it paired',
+  'bar:pairing-base-only': 'S3-Q (base-only form)',
+  'bar:settings-paired-precedence': 'S3-Q (a paired companion takes precedence over the base rule)',
+  'bar:unresolved-orphan-x14': 'Always unsupported per S3-Q (an orphan x14 keeps cf-invalid-x14-link)',
+  'bar:unresolved-duplicate-guid': 'Always unsupported per S3-Q (a duplicate GUID keeps cf-invalid-x14-link)',
+  'bar:unresolved-companion-fillcolor': 'Always unsupported per S3-Q (a companion carrying x14 fillColor is not a paired companion)',
+  'bar:unresolved-formula-cfvo': 'Always unsupported per S3-C (formula cfvo deferred to Stage 5)',
+  'bar:unresolved-xmf-reference': 'Always unsupported per S3-C (reference xm:f deferred to Stage 5)',
+  'bar:unresolved-active-present': 'Always unsupported per S3-R (activePresent deferred to Stage 5)',
+  'bar:unresolved-one-cfvo': 'Always unsupported per S3-C (a bar needs exactly two cfvo)',
+  'bar:unresolved-three-cfvo': 'Always unsupported per S3-C (a bar needs exactly two cfvo)',
+  'bar:unresolved-cfvo-no-type': 'Always unsupported per S3-C (cfvo without type gives cf-invalid-cfvo)',
+  'bar:unresolved-automin-base': 'Always unsupported per S3-C (autoMin resolves only on x14 cfvo)',
+  'bar:unresolved-auto-color': 'Always unsupported per S3-F as amended (2026-11-12): an automatic POSITIVE fill (base <color auto="1"/>) has no measured colour and no capability, so it stays unresolved; the automatic axis and negative fill Excel writes on resave are settled by bar:color-auto-axis and bar:color-auto-negative-fill instead',
+  'bar:color-auto-axis': 'S3-F as amended (2026-11-12): an automatic axis colour resolves only to the ARGB measured from the zero cells of mixed-sign bars, consistent across every capture that draws it; until published the bar is withheld',
+  'bar:color-auto-negative-fill': 'S3-F as amended (2026-11-12): an automatic negative fill resolves only to the ARGB measured from the negative cells of solid bars, consistent across every capture that draws it; until published the bar is withheld',
+  'bar:unresolved-alpha-00-color': 'Always unsupported per S3-F (alpha other than FF is unresolved)',
+}
+
+/**
+ * Measured Stage 3 capabilities whose committed fixture CANNOT discriminate the question they ask (Ruling S3-A step 7,
+ * Lesson 3). The audit reports them `unverified-nondiscriminating`, `verifiedCapabilities.ts` never lists them and
+ * production keeps withholding the shape. The other expected candidates (the midpoint cell of 10/90 vs 0/100,
+ * `bar:axis-automatic` on all-positive data, `bar:negative-border-same-as-positive` when `border="0"` and
+ * `bar:geometry-snapping` if no edge lands at a fractional point) are decided per capture by `discriminateBar`.
+ */
+export const CF_STAGE3_NONDISCRIMINATING: Readonly<Record<string, string>> = {
+  'bar:bounds-num':
+    'The fixture\'s num 20/80 bounds equal its data\'s min/max (20..80), so num and min/max predict identical px (largest separation 0 px; Task 18b recomputation). Re-measure with data spanning beyond the num bounds, for example 0..100 under num 20/80.',
+  'bar:bounds-percent':
+    'On 0..100 data percent 25/75 and num 25/75 give the same bounds, so a pixel measurement cannot tell percent from a literal reading (largest separation 0 px; Task 18b recomputation). Re-measure with data whose range is not 0..100.',
+  'bar:geometry-min-visible-width':
+    'The smallest positive value (0.5 of 0..100 on a 177 px span) already rounds to a 1 px bar, so "no minimum" and "1 px minimum" predict the same px (largest separation 0 px; Task 18b recomputation). Re-measure with a value under 0.28 percent of the span.',
+  'bar:scope-merged-cell':
+    'The merged host B8 is the only designated cell, and "statistics over the host alone across the merged width" and "all four values on the host column only" put the bar end 2 px apart, under the 3 px separation the +-1 px tolerance needs (Task 18b recomputation). Re-measure with a merge whose hypotheses differ by 3 px or more.',
+  'bar:bounds-positional':
+    'Both positional shapes are base-only bars, which are gradient (the schema default): their visible extent is the fade, not the bar geometry, so no length hypothesis can be checked (S3-M, Task 18b). Re-author them with an x14 companion at gradient="0" carrying the same positional cfvo.',
+  'bar:negative-border-same-as-positive':
+    'With negativeBarBorderColorSameAsPositive="1" Excel\'s canonical form carries no <x14:negativeBorderColor> (an extra one shifts into the axis colour, finding S3-18B-A), so the alternative "a distinct negative border" has no colour to predict and both answers predict the same pixels (largest separation 0 px; fix round 1 recomputation). Re-measure only once Excel\'s default negative border colour is known.',
+  'bar:showvalue-copy-text':
+    'Copy text is a clipboard observation, not a pixel one, and the object-model readback is retired (OD-7 as amended): no capture can discriminate it. It needs a recorded clipboard observation as its own evidence kind.',
+}
+
+/**
+ * Stage 3 capabilities of MEASURED cases recorded as unsupported in Stage 3 (owner ruling S3-CLOSE, 2026-11-13). The
+ * audit reports them `refused-unsupported` whatever their capture shows, `isCapabilityVerified` never lifts them, and
+ * production keeps withholding (or tainting) exactly as before: no gate in `src/` changes. Like the `bar:unresolved-*`
+ * shapes of `stage3-bar-unresolved-shapes`, they lift nothing; unlike them, their owning case stays measured because
+ * its other capabilities are evidenced by the same capture.
+ */
+export const CF_STAGE3_UNSUPPORTED: Readonly<Record<string, string>> = {
+  'bar:composition-bar-stopIfTrue':
+    'Unsupported in Stage 3 per S3-CLOSE: Excel\'s resave drops stopIfTrue from a data bar rule, so no capture of the saved workbook can show what the flag does; Ruling S3-J keeps such a rule unresolved (it taints every later rule on its cells).',
+  'bar:composition-unresolved-stub':
+    'Unsupported in Stage 3 per S3-CLOSE: the stub ahead of the bar is an expression rule, which needs Stage 5 expressions to evaluate; until then it stays unresolved and withholds the bar after it.',
+  'bar:pairing-standalone':
+    'Unsupported in Stage 3 per S3-CLOSE: Excel 16.114 always resaves a standalone x14 bar in its canonical paired form (stage3-bar-pairing.rejected.xlsx), so no capture of a saved workbook can show the standalone shape; it stays withheld (cf-unsupported-rule).',
+}
+
+/** Complete capability-to-evidence registry for all Stage 3 markers (one entry per distinct capability id). */
+export const CF_STAGE3_CAPABILITIES: readonly CfCapabilityEntry[] = (() => {
+  const seen = new Set<string>()
+  const out: CfCapabilityEntry[] = []
+  for (const c of CF_STAGE3_CASES) {
+    for (const m of c.markers) {
+      if (seen.has(m.capabilityId)) continue
+      seen.add(m.capabilityId)
+      const cfvo = m.bar?.cfvo ?? m.scale?.cfvo
+      out.push({
+        capabilityId: m.capabilityId,
+        caseId: c.id,
+        category: m.ruleType,
+        description: `${c.id} :: ${m.extension} ${m.ruleType} on ${m.sqref}`,
+        absentOrDivergentFormulaPolicy: cfvo
+          ? `Requires exact ordered cfvo [${cfvo.map(v => v.type + (v.val !== undefined ? `=${v.val}` : '') + (('f' in v && v.f !== undefined) ? `(xm:f ${v.f})` : '')).join(', ')}] and pinned attributes and colours; divergent or non-literal bounds refuse`
+          : 'Requires the exact pinned rule shape',
+        failClosedDisposition:
+          S3_RULINGS[m.capabilityId] ??
+          'While unmeasured or refused, the bar is withheld: the rule is unresolved and its write mask taints overlapping properties so lower-priority rules cannot paint a potentially wrong winner.',
+      })
+    }
+  }
+  return out
+})()
+
+export const CF_CASES: readonly CfOracleCase[] = [...CF_STAGE1_CASES, ...CF_STAGE2_CASES, ...CF_STAGE3_CASES]
 
 export const CF_CAPABILITIES: readonly CfCapabilityEntry[] = [
   ...CF_STAGE1_CAPABILITIES,
   ...CF_STAGE2_CAPABILITIES,
+  ...CF_STAGE3_CAPABILITIES,
 ]

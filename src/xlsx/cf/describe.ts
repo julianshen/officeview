@@ -68,6 +68,7 @@ export function describeCfWin(
   unresolvedReason: string | undefined,
   locale: string | undefined,
   scale?: Readonly<{ fraction?: number; ruleId?: number; argb?: number }> | number,
+  bar?: Readonly<{ fraction: number }>,
 ): CfDescriptor | undefined {
   if (unresolvedReason !== undefined) return describeCfUnavailable(locale)
   if (unresolvedWrites !== undefined) {
@@ -75,6 +76,14 @@ export function describeCfWin(
       ? (unresolvedWrites as ReadonlySet<string>).size
       : (unresolvedWrites as readonly string[]).length
     if (count > 0) return describeCfUnavailable(locale)
+  }
+  // Ruling S3-P: a painted bar announces a fixed label and the value's integer position in the range (the value text
+  // itself stays in the accessible name). It precedes a scale and the DXF aspects: one bounded label per cell.
+  if (bar !== undefined && Number.isFinite(bar.fraction)) {
+    const pct = Math.max(0, Math.min(100, Math.round(bar.fraction * 100)))
+    const isZh = locale === 'zh-TW' || (locale !== undefined && locale.startsWith('zh'))
+    const text = isZh ? `資料橫條 ${pct}%` : `Data bar, ${pct}% of range`
+    if (text.length <= CF_LIMITS.descriptorUnits) return { key: 'cf:dataBar', text }
   }
   const fraction = typeof scale === 'number' ? scale : scale?.fraction
   if (fraction !== undefined && Number.isFinite(fraction)) {

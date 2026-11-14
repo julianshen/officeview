@@ -7,6 +7,7 @@ import type {
   CfDiagnostic,
   CfLease,
   CfLiteral,
+  CfOutcome,
   CfRule,
   CfStamp,
   CfValuePage,
@@ -25,6 +26,7 @@ import {
   type CfRangeStatistics,
 } from '../src/xlsx/cf/statistics'
 import { evaluatePredicate, type CfEvidenceGate } from '../src/xlsx/cf/predicates'
+import { createCfService } from '../src/xlsx/cf/service'
 
 const SHEET = 'sheet1'
 const stamp = (gen: number, sheetId = SHEET): CfStamp => ({
@@ -46,7 +48,9 @@ function rule<D extends object>(definition: D, ranges: readonly SourceRect[] = [
 const cell = (row: number, col: number, value: XlsxCell['value'], extra?: Partial<XlsxCell>): XlsxCell => ({
   ref: `${colName(col)}${row + 1}`, row, col, value, styleIndex: 0, ...extra,
 })
-const frozenBudget = (extra?: { signal?: AbortSignal }): CfWorkBudget => createCfWorkBudget({ now: () => 0, ...extra })
+// The statistics session and its sources run on a whole-scan budget in production (service.ts, render.ts), capped at
+// CF_LIMITS.workUnits, not on the per-call CF_LIMITS.activeUnits budget (Ruling S3-I1-UNITS).
+const frozenBudget = (extra?: { signal?: AbortSignal }): CfWorkBudget => createCfWorkBudget({ now: () => 0, scan: true, ...extra })
 
 function makeCounter() {
   return { cells: 0, pages: 0, bounds: 0 }
@@ -1517,7 +1521,7 @@ describe('CF statistics preparation', () => {
 
     const memory = createCfMemory({})
     const stats = createCfStatistics(memory)
-    const uncappedBudget = createCfWorkBudget({ noTimeLimit: true, maxUnits: 10_000_000 })
+    const uncappedBudget = createCfWorkBudget({ scan: true, maxUnits: 10_000_000 })
 
     // Whole-column A:A (0..1048575, col 0)
     const wholeColRect = rect(0, 1048575, 0, 0)
@@ -1663,7 +1667,7 @@ describe('CF statistics preparation', () => {
       [[rect(0, count - 1)]],
       stamp(1),
       src.source,
-      createCfWorkBudget({ noTimeLimit: true, maxUnits: 10_000_000 }),
+      createCfWorkBudget({ scan: true, maxUnits: 10_000_000 }),
       { sorted: false },
     )
     expect(outMinMax[0]!.kind).toBe('ready')
@@ -1744,4 +1748,238 @@ describe('CF statistics preparation', () => {
     )).rejects.toThrow()
     expect(memory.currentBytes).toBe(0)
   })
+})
+
+// Stage 3 Task 20: data bars share the statistics session with scales and top10, through the service's rule arms
+// (`statistical`, `needsSorted`), so these run through `createCfService` rather than the session alone.
+describe('CF statistics reuse by data bars (Task 20)', () => {
+  type BarDef = Extract<CfDefinition, { kind: 'dataBar' }>
+  const barDef = (bounds: BarDef['bounds']): CfDefinition => ({
+    kind: 'dataBar', dialect: 'base', formulas: [], bounds, fillArgb: 0xff0000ff, minLength: 0, maxLength: 100, gradient: false,
+    border: false, negativeBarColorSameAsPositive: false, negativeBarBorderColorSameAsPositive: true, axisPosition: 'automatic',
+    direction: 'leftToRight', showValue: true, sheetRightToLeft: false,
+  })
+  const ruleOf = (id: number, definition: CfDefinition, ranges: readonly SourceRect[], writes: string[], dxf?: CfRule['dxf']): CfRule => ({
+    id, priority: id + 1, documentOrder: id, ranges, stopIfTrue: false, writes: new Set(writes), definition, ...(dxf ? { dxf } : {}),
+  })
+  const percentileBar = (id: number, ranges: readonly SourceRect[]) => ruleOf(id, barDef([{ type: 'percentile', value: 10 }, { type: 'percentile', value: 90 }]), ranges, ['dataBar'])
+  const minMaxBar = (id: number, ranges: readonly SourceRect[]) => ruleOf(id, barDef([{ type: 'min' }, { type: 'max' }]), ranges, ['dataBar'])
+  const none = { allows: () => false }
+
+  /** Counts the cells the statistics scans read: every page request other than the one-cell evaluation rect A1. */
+  function scanCounting(source: CfValueSource) {
+    const scanned = { cells: 0 }
+    const wrapped: CfValueSource = {
+      bounds: (id, b, s) => source.bounds(id, b, s),
+      stamp: id => source.stamp(id),
+      pages: async function* (id, rects, budget, signal) {
+        const evaluation = rects.length === 1 && rects[0]!.firstRow === 0 && rects[0]!.lastRow === 0
+        for await (const page of source.pages(id, rects, budget, signal)) {
+          if (!evaluation) scanned.cells += page.value.values.length
+          yield page
+        }
+      },
+    }
+    return { scanned, source: wrapped }
+  }
+
+  async function prepareWith(rules: CfRule[], source: CfValueSource, session: ReturnType<typeof createCfStatistics>, diagnostics?: CfDiagnostic[], statisticsBudget?: () => CfWorkBudget) {
+    const memory = createCfMemory({})
+    const results = new Map()
+    const service = createCfService({ rules, diagnostics: [] }, memory, {
+      evidence: none,
+      ...(statisticsBudget ? { statisticsBudget } : {}),
+      statistics: { session, stamp: stamp(1), results },
+      ...(diagnostics ? { statisticsOptions: { diagnostics } } : {}),
+    })
+    const lease = await service.prepareCf({ stamp: stamp(1), sourceRects: [rect(0, 0)], signal: new AbortController().signal, grantBytes: 8 * 1024 * 1024 }, source)
+    lease.release()
+    service.dispose()
+    const outcomes = new Map(rules.map(r => [r, results.get(r) as CfOutcome<CfLease<CfRangeStatistics>> | undefined]))
+    return {
+      outcome: (r: CfRule) => outcomes.get(r),
+      release: () => { for (const o of outcomes.values()) if (o?.kind === 'ready') o.value.release(); expect(memory.currentBytes).toBe(0) },
+    }
+  }
+
+  it('bars reuse the shared statistics: a percentile bar, a min/max scale and top10 on one 50-row A:A scope, in any priority order', async () => {
+    const cells: XlsxCell[] = []
+    for (let r = 0; r < 50; r++) cells.push(cell(r, 0, r + 1))
+    const scope = [rect(0, 1048575, 0, 0)] // A:A
+    const scale = { kind: 'colorScale', dialect: 'base', formulas: [], points: [{ bound: { type: 'min' }, argb: 0xfff8696b }, { bound: { type: 'max' }, argb: 0xff63be7b }] } as CfDefinition
+    const top10 = { kind: 'top10', dialect: 'base', formulas: [], rank: 10, bottom: false, percent: false } as CfDefinition
+    const orders: Array<(i: number) => CfRule>[] = [
+      [i => percentileBar(i, scope), i => ruleOf(i, scale, scope, ['colorScale', 'fill']), i => ruleOf(i, top10, scope, ['fill'], { 'fill.pattern': 'solid' })],
+      // The unsorted (min/max scale, min/max bar) rules prepare first: the scope is still scanned once.
+      [i => ruleOf(i, scale, scope, ['colorScale', 'fill']), i => minMaxBar(i, scope), i => percentileBar(i, scope), i => ruleOf(i, top10, scope, ['fill'], { 'fill.pattern': 'solid' })],
+    ]
+    for (const order of orders) {
+      const probed = arraySource(cells)
+      const { scanned, source } = scanCounting(probed.source as unknown as CfValueSource)
+      const rules = order.map((make, i) => make(i))
+      const session = createCfStatistics(probed.memory)
+      const first = await prepareWith(rules, source, session)
+      for (const r of rules) expect(first.outcome(r)?.kind, `rule ${r.id}`).toBe('ready')
+      const bar = rules.find(r => r.definition.kind === 'dataBar' && r.definition.bounds[0].type === 'percentile')!
+      const barStats = first.outcome(bar)
+      if (barStats?.kind === 'ready') expect(barStats.value.value.sortedAsc.length).toBe(50)
+      expect(scanned.cells).toBeLessThanOrEqual(50)
+      expect(scanned.cells).toBe(50)
+      // A warm session hit does zero loops.
+      const warm = await prepareWith(rules, source, session)
+      expect(warm.outcome(bar)?.kind).toBe('ready')
+      expect(scanned.cells).toBe(50)
+      first.release(); warm.release()
+      session.dispose()
+    }
+  })
+
+  it('bar percentile copy reserves before allocation', async () => {
+    const count = 100_000
+    const counter = makeCounter()
+    const src = generatorSource(count, i => ({ kind: 'number', value: i + 1 }), counter)
+    const { scanned, source } = scanCounting(src.source as unknown as CfValueSource)
+    const scope = [rect(0, count - 1)]
+    // requiredBytes: the Stage 1 byte model's initial statistics workspace for this span, reserved before any array.
+    const requiredBytes = estimateStatisticsInitialBytes(count)
+    const tight = createCfMemory({ limitBytes: requiredBytes - 1 })
+    const session = createCfStatistics(tight)
+    const diagnostics: CfDiagnostic[] = []
+    const p = percentileBar(0, scope)
+    const refused = await prepareWith([p], source, session, diagnostics)
+    const out = refused.outcome(p)
+    expect(out?.kind).toBe('unresolved')
+    if (out?.kind === 'unresolved') expect(out.reason).toBe('cf-resource-limit')
+    expect(diagnostics.filter(d => d.feature === 'cf-resource-limit')).toHaveLength(1)
+    expect(tight.currentBytes).toBe(0)
+    // Reservation precedes allocation: the refusal lands before the source is read.
+    expect(scanned.cells).toBe(0)
+    // Cached per (scope, generation): a second preparation does not rescan.
+    const scannedAfterRefusal = scanned.cells
+    const again = await prepareWith([p], source, session, diagnostics)
+    expect(again.outcome(p)?.kind).toBe('unresolved')
+    expect(scanned.cells).toBe(scannedAfterRefusal)
+    refused.release(); again.release(); session.dispose()
+
+    // In one preparation, a min/max bar on the same scope stays ready: the shared sorted scan it would join is refused,
+    // so it falls back to streaming, and the refusal still reports exactly one diagnostic.
+    const shared = createCfStatistics(createCfMemory({ limitBytes: requiredBytes - 1 }))
+    const sharedDiagnostics: CfDiagnostic[] = []
+    for (const rules of [[minMaxBar(0, scope), percentileBar(1, scope)], [percentileBar(0, scope), minMaxBar(1, scope)]]) {
+      const both = await prepareWith(rules, source, shared, sharedDiagnostics)
+      const [mm, pc] = rules[0]!.definition.kind === 'dataBar' && rules[0]!.definition.bounds[0].type === 'min' ? rules : [rules[1]!, rules[0]!]
+      expect(both.outcome(mm!)?.kind).toBe('ready')
+      expect(both.outcome(pc!)).toMatchObject({ kind: 'unresolved', reason: 'cf-resource-limit' })
+      both.release()
+    }
+    expect(sharedDiagnostics.filter(d => d.feature === 'cf-resource-limit')).toHaveLength(2) // one per preparation
+    shared.dispose()
+
+    // A min/max bar on the same scope streams without the sorted copy and stays ready at the same cap.
+    const minMaxSession = createCfStatistics(createCfMemory({ limitBytes: 1024 * 1024 }))
+    const m = minMaxBar(0, scope)
+    const ok = await prepareWith([m], source, minMaxSession)
+    const mo = ok.outcome(m)
+    expect(mo?.kind).toBe('ready')
+    if (mo?.kind === 'ready') {
+      expect(mo.value.value.min).toBe(1)
+      expect(mo.value.value.max).toBe(count)
+      expect(mo.value.value.sortedAsc.length).toBe(0)
+    }
+    ok.release(); minMaxSession.dispose()
+  }, 30_000)
+
+  it('a refused shared sorted scan leaves the streaming fallback its own statistics budget (PR #74 P2)', async () => {
+    const count = 2_000
+    // Descending values make the sorted copy's insertion sort quadratic in work units while a streaming scan stays linear.
+    const cells: XlsxCell[] = []
+    for (let r = 0; r < count; r++) cells.push(cell(r, 0, count - r))
+    const scope = [rect(0, count - 1)]
+    const scale = { kind: 'colorScale', dialect: 'base', formulas: [], points: [{ bound: { type: 'min' }, argb: 0xfff8696b }, { bound: { type: 'max' }, argb: 0xff63be7b }] } as CfDefinition
+    const isPercentile = (r: CfRule) => r.definition.kind === 'dataBar' && r.definition.bounds[0].type === 'percentile'
+    const units = async (rules: CfRule[]) => {
+      const budgets: CfWorkBudget[] = []
+      const session = createCfStatistics(createCfMemory({}))
+      const run = await prepareWith(rules, arraySource(cells).source as unknown as CfValueSource, session, undefined, () => { const b = createCfWorkBudget({ scan: true }); budgets.push(b); return b })
+      run.release(); session.dispose()
+      return budgets.map(b => b.units)
+    }
+    const streamingUnits = (await units([minMaxBar(0, scope)]))[0]!
+    const sortedUnits = (await units([percentileBar(0, scope)]))[0]!
+    // A cap strictly between the two: the sorted scan is refused part-way, a streaming scan still fits whole.
+    const cap = Math.floor((streamingUnits + sortedUnits) / 2)
+    expect(streamingUnits).toBeLessThan(cap)
+    expect(sortedUnits).toBeGreaterThan(cap)
+    expect(cap).toBeLessThan(CF_LIMITS.workUnits)
+    const budgets: CfWorkBudget[] = []
+    const capped = () => { const b = createCfWorkBudget({ scan: true, maxUnits: cap }); budgets.push(b); return b }
+
+    const readsMinMax = (rule: CfRule) => rule.definition.kind === 'colorScale' || (rule.definition.kind === 'dataBar' && rule.definition.bounds[0].type === 'min')
+    // Both priority orders; the colour-scale twin shares the statistics loop, so it gets the same fallback.
+    const cases: Array<Array<(i: number) => CfRule>> = [
+      [i => minMaxBar(i, scope), i => percentileBar(i, scope)],
+      [i => percentileBar(i, scope), i => minMaxBar(i, scope)],
+      [i => ruleOf(i, scale, scope, ['colorScale', 'fill']), i => percentileBar(i, scope)],
+      [i => percentileBar(i, scope), i => ruleOf(i, scale, scope, ['colorScale', 'fill'])],
+    ]
+    for (const [n, make] of cases.entries()) {
+      const rules = make.map((f, i) => f(i))
+      const session = createCfStatistics(createCfMemory({}))
+      const diagnostics: CfDiagnostic[] = []
+      budgets.length = 0
+      const run = await prepareWith(rules, arraySource(cells).source as unknown as CfValueSource, session, diagnostics, capped)
+      for (const rule of rules) {
+        const out = run.outcome(rule)
+        if (isPercentile(rule)) expect(out, `case ${n} percentile`).toMatchObject({ kind: 'unresolved', reason: 'cf-resource-limit' })
+        else {
+          expect(readsMinMax(rule)).toBe(true)
+          expect(out?.kind, `case ${n} streaming rule`).toBe('ready')
+          if (out?.kind === 'ready') {
+            expect(out.value.value.min).toBe(1)
+            expect(out.value.value.max).toBe(count)
+            expect(out.value.value.sortedAsc.length).toBe(0)
+          }
+        }
+      }
+      expect(diagnostics.filter(d => d.feature === 'cf-resource-limit'), `case ${n} diagnostics`).toHaveLength(1) // one per preparation
+      run.release() // asserts the memory ledger is back to 0
+      session.dispose()
+    }
+  })
+
+  it('bar statistics over a 20k+ scope run once under the uncapped count budget', async () => {
+    const rowCount = 25_000
+    const cells: XlsxCell[] = []
+    for (let r = 0; r < rowCount; r++) cells.push(cell(r, 0, (r % 100) + 1))
+    const probed = arraySource(cells)
+    const { scanned, source } = scanCounting(probed.source as unknown as CfValueSource)
+    const scope = [rect(0, rowCount - 1)]
+    const bar = minMaxBar(0, scope)
+    const session = createCfStatistics(createCfMemory({}))
+    const first = await prepareWith([bar], source, session)
+    const out = first.outcome(bar)
+    expect(out?.kind).toBe('ready')
+    if (out?.kind === 'ready') { expect(out.value.value.numericCount).toBe(rowCount); expect(out.value.value.max).toBe(100) }
+    // One source scan per generation, never time-sliced away.
+    expect(scanned.cells).toBe(rowCount)
+    const warm = await prepareWith([bar], source, session)
+    expect(warm.outcome(bar)?.kind).toBe('ready')
+    expect(scanned.cells).toBe(rowCount)
+    first.release(); warm.release(); session.dispose()
+
+    // Over-cap: refused with a diagnostic, cached per (scope, generation).
+    // A min/max bar streams (no sorted copy); its 512 B initial workspace (statistics.ts) is the requiredBytes here.
+    const tightSession = createCfStatistics(createCfMemory({ limitBytes: 511 }))
+    const diagnostics: CfDiagnostic[] = []
+    const refused = await prepareWith([bar], source, tightSession, diagnostics)
+    const r = refused.outcome(bar)
+    expect(r?.kind).toBe('unresolved')
+    if (r?.kind === 'unresolved') expect(r.reason).toBe('cf-resource-limit')
+    expect(diagnostics).toHaveLength(1)
+    const afterRefusal = scanned.cells
+    const again = await prepareWith([bar], source, tightSession, diagnostics)
+    expect(again.outcome(bar)?.kind).toBe('unresolved')
+    expect(scanned.cells).toBe(afterRefusal)
+    refused.release(); again.release(); tightSession.dispose()
+  }, 30_000)
 })

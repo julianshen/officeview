@@ -1,7 +1,12 @@
 /**
  * XLSX Conditional Formatting reference comparator (plan Task 1 & Task 8).
  *
- *   bun scripts/cf-compare.ts [--stage 1] [--mode static|interactive|paged|print|export] [--case <id>] [--out <dir>]
+ *   bun scripts/cf-compare.ts [--stage 1] [--mode static|interactive|paged|print|export] [--case <id>] [--out <dir>] [--evidence production|audit]
+ *
+ * `--evidence audit` (Task 22) runs the viewer under the Stage 3 audit's OWN result instead of the published set: the
+ * verified capabilities, the selected bar layout and the measured automatic colours, injected exactly on top of
+ * production's Stage 1/2 set before any workbook is parsed. Until Task 23 publishes, that is the only way to compare
+ * bars against Excel; the default stays `production`.
  *
  * Reuses the sparkline comparator primitives (`diffFrames`, `withinTolerance`, `COMPARE_SCALE`, `STRONG_DELTA`,
  * `loadFrame`, `crop`) from `scripts/sparkline-compare.ts`, validates manifest hashes and strict capture
@@ -19,7 +24,7 @@ import { parseXlsx } from '../src/xlsx/parse'
 import { getPaintables } from '../src/render/paint'
 import { computeMetrics } from '../src/xlsx/render'
 import type { XlsxDocument } from '../src/xlsx/types'
-import { parseRangeA1, parseA1 } from './cf-refs/verify'
+import { parseRangeA1, parseA1, type CfObservedBar } from './cf-refs/verify'
 import type { CfManifest, CfOracleCase } from './cf-refs/cases'
 import { CF_MANIFEST_PATH } from './cf-refs/generate'
 import { verifyCfCase } from './cf-refs/verify'
@@ -179,6 +184,36 @@ export function stage2ObservedFills(c: CfOracleCase, rootDir: string): Map<strin
   // Same trust boundary as tests/xlsx-cf-oracle-conformance.test.ts: Excel display-format fills of visible cells only.
   for (const cell of sidecar.observedCells ?? []) {
     if (cell.fillRgb && cell.fillSource === 'excel-display-format' && !cell.hidden) out.set(cell.ref, cell.fillRgb.toUpperCase())
+  }
+  return out
+}
+
+/**
+ * Stage 3 observed bars: the raw px (`observedBars`) the Excel capture recorded per designated cell, never fractions
+ * (Ruling S3-A step 5), so conformance compares production layout px at the same scale and no expected value is ever
+ * computed by the code under test. Only a Stage 3 case with a readable screen sidecar yields a map; entries with a
+ * malformed edge record are dropped rather than guessed.
+ */
+export function stage3ObservedBars(c: CfOracleCase, rootDir: string): Map<string, CfObservedBar> | undefined {
+  if (c.stage !== 3) return undefined
+  const cap = c.captures.find(x => x.appearance === 'screen') ?? c.captures[0]
+  if (!cap?.sidecarPath) return undefined
+  const path = resolve(rootDir, cap.sidecarPath)
+  if (!existsSync(path)) return undefined
+  let sidecar: { observedBars?: unknown }
+  try {
+    sidecar = JSON.parse(readFileSync(path, 'utf8')) as { observedBars?: unknown }
+  } catch {
+    return undefined
+  }
+  const out = new Map<string, CfObservedBar>()
+  const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n)
+  for (const raw of Array.isArray(sidecar.observedBars) ? sidecar.observedBars : []) {
+    const b = raw as Partial<CfObservedBar> | null
+    if (!b || typeof b.ref !== 'string' || !finite(b.cellLeftPx) || !finite(b.cellWidthPx)) continue
+    const edges = b.bar
+    if (edges !== null && !(edges && finite(edges.leftPx) && finite(edges.rightPx) && finite(edges.topPx) && finite(edges.bottomPx))) continue
+    out.set(b.ref.toUpperCase(), b as CfObservedBar)
   }
   return out
 }
@@ -407,7 +442,8 @@ export async function comparePagedViewport(c: CfOracleCase, rootDir: string): Pr
         const props = s.properties ?? {}
         const values = Object.keys(props).sort().map(k => `${k}=${JSON.stringify((props as Record<string, unknown>)[k])}`).join('+')
         const scale = s.scale ? `|scale:${s.scale.ruleId}:${(s.scale.argb >>> 0).toString(16)}:${s.scale.fraction ?? ''}` : ''
-        return `${s.row},${s.col}:${values}|${[...(s.unresolvedWrites ?? [])].sort().join('+')}|${s.unresolvedReason ?? ''}${scale}`
+        const bar = s.bar ? `|bar:${JSON.stringify(s.bar)}` : ''
+        return `${s.row},${s.col}:${values}|${[...(s.unresolvedWrites ?? [])].sort().join('+')}|${s.unresolvedReason ?? ''}${scale}${bar}`
       })
     const { resolveCfCellStyle } = await import('../src/xlsx/cf/dxf')
     const pkg = await OfficePackage.load(saved)
@@ -423,7 +459,9 @@ export async function comparePagedViewport(c: CfOracleCase, rootDir: string): Pr
       const unresolved = s.unresolvedReason !== undefined || (s.unresolvedWrites !== undefined && s.unresolvedWrites.length > 0)
       const hasProps = s.properties !== undefined && Object.keys(s.properties).length > 0
       const hasScale = s.scale?.argb !== undefined
-      if (!hasProps && !hasScale) return { applied: false, unresolved }
+      // A wire bar descriptor is an applied outcome (Task 23): the bar paints, though it writes no style property.
+      const hasBar = s.bar !== undefined
+      if (!hasProps && !hasScale) return { applied: hasBar, unresolved }
       const style = resolveCfCellStyle(base as never, {
         properties: s.properties,
         ...(hasScale ? { visual: { colorScale: { ruleId: s.scale!.ruleId, argb: s.scale!.argb, ...(s.scale!.fraction !== undefined ? { fraction: s.scale!.fraction } : {}) } } } : {}),
@@ -545,9 +583,14 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const modeArg = (args.includes('--mode') ? args[args.indexOf('--mode') + 1] : 'static') as CfCompareMode
   const only = args.includes('--case') ? args[args.indexOf('--case') + 1] : undefined
   const outDir = args.includes('--out') ? resolve(args[args.indexOf('--out') + 1]) : undefined
+  const evidenceArg = args.includes('--evidence') ? args[args.indexOf('--evidence') + 1] : 'production'
+  if (evidenceArg !== 'production' && evidenceArg !== 'audit') {
+    console.error('Usage: --evidence production|audit')
+    process.exit(2)
+  }
 
   if (!['static', 'interactive', 'paged', 'print', 'export'].includes(modeArg)) {
-    console.error(`Usage: bun scripts/cf-compare.ts [--stage N] [--mode static|interactive|paged|print|export] [--case id] [--out dir]`)
+    console.error(`Usage: bun scripts/cf-compare.ts [--stage N] [--mode static|interactive|paged|print|export] [--case id] [--out dir] [--evidence production|audit]`)
     process.exit(2)
   }
 
@@ -557,6 +600,20 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   }
 
   const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
+  if (evidenceArg === 'audit') {
+    const { auditStage3Manifest } = await import('./cf-refs/audit')
+    const evidence = await import('../src/xlsx/cf/evidence')
+    const audit = auditStage3Manifest(manifest, { rootDir: REPO_ROOT })
+    const verified = audit.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId)
+    evidence.injectExactCfEvidence([...evidence.VERIFIED_CAPABILITIES, ...verified])
+    evidence.injectCfBarLayout(audit.barLayout.layout)
+    evidence.injectCfAutoBarColours(audit.autoBarColours)
+    evidence.injectCfBarGradient(audit.barGradient)
+    evidence.injectCfBarLengths(audit.barLengths)
+    evidence.injectCfBarGradientBorder(audit.barGradientBorder)
+    evidence.injectCfBarAutoBounds(audit.barAutoBounds)
+    console.log(`Evidence: audit (${verified.length} Stage 3 capabilities verified by the harness, unpublished)`)
+  }
   let passCount = 0
   let pendingCount = 0
   let unsupportedCount = 0
