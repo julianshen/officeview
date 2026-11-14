@@ -1185,12 +1185,34 @@ clock-dependent timePeriod cases. Bar geometry fidelity is proven by the Lesson 
   (RED before the fix: 4 of 6 failed, the painted bar announcing unavailable; after: 6 passed, including a test that
   each hosted descriptor equals a host-less scope's after painting the same hosts), and the browser tests now assert
   the descriptor on all three legs, which announce the same names for C3, C6 and E3.
+  Fix round 1 (review):
+  - *Invariant.* The paged semantic scope announces what a **detail** frame paints for the cell. A coarse frame is a
+    transient summary that paints only the retained active cell; the cells it summarises still announce their bar
+    (or "unavailable") as the detail frame that replaces it paints them. The resident and worker legs behave the
+    same way, deciding from geometry rather than from a particular frame, so the three legs still agree. Gating on
+    a coarse frame's paint records instead would announce "unavailable" for bars that paint once the frame settles
+    (design (b)'s drawback).
+  - *Host fill.* The frame styles every placement through the CF paint layer (`paintLayer.styleAt`, the scope's
+    `effectiveStyle` over the region and own base), so the painter's host fill (`record.body.fill`) already includes
+    a CF fill. The semantic host resolves its fill the same way. `tests/xlsx-cf-paged-a11y.test.ts` "a CF fill under
+    an automatic-axis bar" renders a frame with `renderSheetViewport`, captures the hosts it hands the painter, and
+    checks that the semantic hosts are equal to them and that both withhold the bar under the CF yellow fill. A
+    base-only fill would differ there, and would announce a bar the frame withholds.
+  - *Legs.* Hosts are passed only on the `remote` (paged workbook) branch. The `?worker=1` leg without `paged=1`
+    routes to the paged worker only when admission says `paged`. Admission keeps the Stage 3 fixture on the object
+    route under both profiles (unit test), so that leg stays on the resident text scope, unchanged. A workbook that
+    admission does route paged is the paged view itself, which gets the fix.
+  - *Cache lifetime.* `assembleScope` builds the host function once per scope (`hostAt ??=`). The source reads the
+    committed entry at call time, so it never holds stale metrics.
 - **Merged hosts.** `assembleScope` (text.ts) would announce a bar inside a merge where `render.ts` refuses to paint
   it; unreachable while `bar:scope-merged-cell` is unverified (the service withholds any bar scope that intersects a
   merge on every production path, as the paged agreement test confirms).
 - **Resident host vs frame host.** `barAt`/`describe` decide withholding on a host computed from the sheet's own
   metrics, the painter on the frame's host; in sorted or filtered views they may differ by up to 1 px, which can only
-  matter for a share that rounds to zero at the capture scale.
+  matter for a share that rounds to zero at the capture scale. This applies to the resident leg only. The paged semantic host comes
+  from the entry's projection metrics (`ProjectedSheetMetrics.sourceCellToLogical`, which follows the view's row
+  order and visibility), the same metrics the viewport placements use (`cols.start`, `rows.start` of the display
+  slot), so in sorted and filtered paged views it is the frame's host.
 - **`residentBarHosts` budget** charges 8 B per axis entry and 64 B per cell, not the JS per-entry overhead.
 - **Worker cache split charge.** A large reply is charged whole and definitions are not shared between entries
   (bounded memory, recorded from Task 21).
