@@ -149,3 +149,25 @@ export async function withFilter(bytes: Uint8Array, from: string, to: string): P
   zip.file(path, xml.split(`filter="${from}"`).join(`filter="${to}"`))
   return new Uint8Array(await zip.generateAsync({ type: 'uint8array' }))
 }
+
+/** `triggerFadeDeck` with its fade replaced by a motion path 240 px right (same `cBhvr`): a triggered motion entrance. */
+export async function withTriggeredMove(bytes: Uint8Array): Promise<Uint8Array> {
+  const zip = await JSZip.loadAsync(bytes)
+  const path = 'ppt/slides/slide1.xml'
+  const xml = await zip.file(path)!.async('string')
+  const out = xml.replace(/<p:animEffect transition="in" filter="fade">(<p:cBhvr>[\s\S]*?<\/p:cBhvr>)<\/p:animEffect>/, '<p:animMotion path="M 0 0 L 0.25 0 E">$1</p:animMotion>')
+  if (out === xml) throw new Error('withTriggeredMove: no fade')
+  zip.file(path, out)
+  return new Uint8Array(await zip.generateAsync({ type: 'uint8array' }))
+}
+
+/** `bytes` with its `style.visibility` sets removed: the triggered target is shown from the start. */
+export async function withoutEntrance(bytes: Uint8Array): Promise<Uint8Array> {
+  const zip = await JSZip.loadAsync(bytes)
+  const path = 'ppt/slides/slide1.xml'
+  const xml = await zip.file(path)!.async('string')
+  const out = xml.replace(/<p:set>[\s\S]*?<\/p:set>/g, '').replace(/presetClass="entr"/g, 'presetClass="path"')
+  if (out === xml) throw new Error('withoutEntrance: no set')
+  zip.file(path, out)
+  return new Uint8Array(await zip.generateAsync({ type: 'uint8array' }))
+}
