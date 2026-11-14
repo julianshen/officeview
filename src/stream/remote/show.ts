@@ -43,6 +43,7 @@ import { createCursorHider, type CursorHider, type CursorTimer } from '../../sli
 import { createShowDriver, type DriverHooks, type DriverStage, type ShowDriver, type SlideSource } from '../../slideshow/player/driver'
 import { createGestureState, gestureToInput, keyToInput, MODIFIER_KEYS } from '../../slideshow/player/keys'
 import { runLink } from '../../slideshow/player/links'
+import type { SlideCursor } from '../../slideshow/engine/steps'
 import { nextVisible } from '../../slideshow/player/order'
 import type { SessionClock, SessionController, SessionState, ShowInput } from '../../slideshow/player/session'
 import { createAudienceSurface, END_OF_SHOW, type AudienceSurface } from '../../slideshow/player/surface'
@@ -801,7 +802,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
   function syncPresenter(force = false): void {
     if (exited || !viewSubs.size) return
     const t = clock.now()
-    const key = [slide, screen, paused, presenter, swapped ? 1 : 0, sink.list().length, content,
+    // The build and the cursor's history move Next (the next checkpoint), so they are part of the key.
+    const key = [slide, build, driver?.visit?.cursor?.events.length ?? 0, screen, paused, presenter, swapped ? 1 : 0, sink.list().length, content,
       timer ? Math.floor(timer.elapsed(t) / 1000) : 0, timer?.paused, Math.floor(remoteShowDeps.wall() / 60000)].join('|')
     if (!force && key === viewKey) return
     viewKey = key
@@ -865,6 +867,7 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     stopTick = undefined
     stopFrames?.()
     stopFrames = undefined
+    askingAgain?.(); askingAgain = undefined
     dropNotes()
     // The driver lets go of the slide on screen (its pinned bundle), the stage of everything it uploaded.
     driver?.dispose()
@@ -995,6 +998,60 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     get presenterSource() { return source },
   }
 
+  /**
+   * The checkpoint the next click settles on, `undefined` when it leaves the slide (the local `nextCheckpoint`'s
+   * rule, on the visit's own timeline and the stage's slide time).
+   */
+  function nextStep(): { step: number; cursor: SlideCursor; bundle: ShowBundle } | undefined {
+    const v = driver?.visit
+    const b = slide === 'end' ? undefined : held.get(slide)
+    if (!planStage || !b || !v || v.index !== slide || !v.cursor || !v.timeline) return undefined
+    const tl = v.timeline, c = v.cursor
+    try {
+      const t = Math.max(0, planStage.slideTime(showClock.now()))
+      if (c.step >= tl.steps && c.mode === 'live' && tl.busyUntil(c) <= t) return undefined
+      const last = c.events[c.events.length - 1]
+      const after = tl.next(c, Math.max(last ? last.t : 0, t))
+      return after === c ? undefined : { step: after.step, cursor: tl.checkpoint(after.step), bundle: b }
+    } catch {
+      // A history the timeline cannot replay (a text build's fanned history): the slide advance.
+      return undefined
+    }
+  }
+
+  /** A frame asked of a track window lands later: Presenter View is told, once, to paint Next again. */
+  let askingAgain: (() => void) | undefined
+  function askAgain(): void {
+    if (askingAgain) return
+    askingAgain = clock.wake(50, () => { askingAgain = undefined; if (exited) return; content++; syncPresenter() })
+  }
+
+  /** Presenter View's Next for an animated deck (§5.2); `false` when nothing can be shown yet. */
+  function nextPreview(canvas: HTMLCanvasElement): boolean {
+    if (exited || slide === 'end' || !planStage) return false
+    const after = nextVisible(order, slide) ?? (loop ? order[0] : undefined)
+    const entry = () => after !== undefined && !!source.slideImage?.(after, canvas)
+    const n = nextStep()
+    if (!n) return entry()
+    // A composited step's track not here yet is the budget's business (`step-deferred`), not a refused lease: the
+    // entry frame stands in, and the next change of the view asks again.
+    if (n.bundle.plan.steps[n.step - 1]?.eligibility === 'composited') {
+      const track = planData(slide)?.track(n.step - 1)
+      if (track === undefined || track === 'pending') return entry()
+      if (!track.frame(track.count - 1)) {
+        // The step's end frame is not in the track's decode window. Another step's track is not playing, so its
+        // window can move there; the one the audience plays (the settle point) is left alone.
+        if (n.step !== driver?.visit?.cursor?.step) { track.want(track.count - 1); askAgain() }
+        return entry()
+      }
+    }
+    let ok = false
+    try { ok = planStage.composeAt(slide, n.cursor, canvas) } catch { ok = false }
+    if (ok) return true
+    sink.add({ code: 'preview-reduced', slideIndex: slide, effect: `step:${n.step}`, message: `Next could not be composed for slide ${slide + 1} (no room in the show workspace); it shows the entry frame` })
+    return entry()
+  }
+
   const source: PresenterSource = {
     subscribe(f) {
       viewSubs.add(f)
@@ -1032,6 +1089,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
       const bmp = b ? b.assets.bitmap(b.plan.entry) : unit === undefined ? undefined : fetcher.cached(unit)
       return !!bmp && fitInto(canvas, bmp)
     },
+    // Piece 4 §5.2: only an animated deck composes Next; an unanimated one keeps the piece-3 still path.
+    ...(planned ? { nextImage: (canvas: HTMLCanvasElement) => nextPreview(canvas) } : {}),
     hidden: () => false,
     key: (e) => presenterKey(e),
     input: (i) => run(i, true),

@@ -89,6 +89,13 @@ export interface PresenterSource {
    * and calls again on the next `version` change, so it must be cheap and must not fetch per call.
    */
   slideImage?(index: number, canvas: HTMLCanvasElement): boolean
+  /**
+   * Image-backed (additive, optional): paints what the next click will show into the Next canvas, in place of
+   * `slideImage(after)` for Next only (never the grid): a streamed animated show composes the next build checkpoint
+   * from its layers, and answers the next slide's entry frame at the slide's end. Same contract as `slideImage`:
+   * `false` when nothing is there yet, cheap, no fetch.
+   */
+  nextImage?(canvas: HTMLCanvasElement): boolean
   /** Image-backed (additive): whether slide `index` is hidden (no grid cell), in place of the model's flag. */
   hidden?(index: number): boolean
   /** Paint inputs for slide `index` (the stage's, or a static stand-in). */
@@ -208,12 +215,12 @@ export function PresenterView({ session, host, doc }: PresenterViewProps): React
   }, [surfaces])
 
   /** Image-backed: the slide's bitmap, or the black a local preview's letterbox shows while it waits. */
-  const paintImage = (canvas: HTMLCanvasElement, index: number): boolean => {
+  const paintImage = (canvas: HTMLCanvasElement, index: number, next = false): boolean => {
     const ctx = canvas.width > 0 ? canvas.getContext('2d') : null
     if (!ctx) return false
     let ok = false
     try {
-      ok = src.slideImage!(index, canvas)
+      ok = next && src.nextImage ? src.nextImage(canvas) : src.slideImage!(index, canvas)
     } catch (e) {
       src.sink.add({ code: 'presenter-paint', slideIndex: index, message: `Presenter View could not paint slide ${index + 1} (${e instanceof Error ? e.message : String(e)})` })
     }
@@ -297,7 +304,7 @@ export function PresenterView({ session, host, doc }: PresenterViewProps): React
   const painted = useRef<{ images: ReadonlyArray<unknown>; ready: number } | undefined>(undefined)
   const paintNext = () => {
     if (!surfaces || pos === 'end') return
-    if (imageBacked) { paintImage(surfaces.preview, pos.slide); return }
+    if (imageBacked) { paintImage(surfaces.preview, pos.slide, true); return }
     if (!model) return
     painted.current = paintSlide(surfaces.preview, pos.slide, pos.cursor, previewTimeline(model, pos.slide))
   }
