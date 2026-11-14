@@ -366,11 +366,20 @@ export function createShowDriver(o: { source: SlideSource; stage: DriverStage; c
     for (const e of v.timeline.stateAt(v.cursor, st).active) if (ids.has(e.node.ctn.id)) active.add(e.node.ctn.id)
     // Once per activation: a node no longer active has ended (or never began) — a restart is a new activation.
     for (const id of [...fired]) if (!active.has(id)) fired.delete(id)
+    let ended = false
     for (const id of active) {
       if (fired.has(id)) continue
       fired.add(id)
       mediaEnded(v, id, true, st)
+      ended = true
     }
+    if (!ended || !v.cursor || visit !== v) return
+    // The end just recorded closes the activation now: its mark goes at once, so a restart before the next frame
+    // (a trigger between ticks) is a new activation. A mark stays only while the history still shows the node
+    // active (an end the timeline did not take), so one activation never gets two ends.
+    const after = new Set<number>()
+    for (const e of v.timeline.stateAt(v.cursor, st).active) if (ids.has(e.node.ctn.id)) after.add(e.node.ctn.id)
+    for (const id of [...fired]) if (!after.has(id)) fired.delete(id)
   }
 
   return {

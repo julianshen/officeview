@@ -387,6 +387,38 @@ describe('show driver', () => {
     }
   })
 
+  it('a restart between ticks is a new activation: it ends synthetically again without an inactive frame between', async () => {
+    // The re-review's timing: the second trigger lands before any tick samples the node inactive.
+    const quick: BehaviourNode = { ...successor(64, 63), ctn: ctn(64, { durMs: 10, fill: 'hold', start: [{ delayMs: 0, evt: 'onEnd', tn: 63 }] }) }
+    const seq: ContainerNode = {
+      kind: 'seq',
+      ctn: ctn(60, { nodeType: 'interactiveSeq', restart: 'whenNotActive', start: [{ delayMs: 0, evt: 'onClick', target: { spid: '7' } }] }),
+      children: [par(61, [par(62, [media('video', 63, '4'), quick], { nodeType: 'clickEffect', start: [at(0)] })], { start: [at(0)] })],
+      seq: { concurrent: true, nextAc: 'seek', prevAc: 'none' },
+    }
+    const r = rig({ slides: [slideOf(0, { timing: tree(seq) })] })
+    await r.driver.start(0)
+    const ends = () => r.driver.visit!.cursor!.events.filter((e) => e.kind === 'mediaEnd')
+    const snap = (t: number) => r.driver.visit!.timeline!.stateAt(r.driver.visit!.cursor!, t)
+    r.clock.advance(100)
+    r.driver.trigger('7')
+    r.driver.tick()
+    expect(ends()).toEqual([{ kind: 'mediaEnd', nodeId: 63, t: 100, synthetic: true }])
+    expect(snap(105).active.some((e) => e.node.ctn.id === 64)).toBe(true)
+    r.clock.advance(12)
+    expect(snap(112).ended.has(64)).toBe(true)
+    r.driver.trigger('7')
+    r.clock.advance(4)
+    r.driver.tick()
+    expect(ends()).toEqual([{ kind: 'mediaEnd', nodeId: 63, t: 100, synthetic: true }, { kind: 'mediaEnd', nodeId: 63, t: 116, synthetic: true }])
+    expect(snap(120).active.some((e) => e.node.ctn.id === 64)).toBe(true)
+    // Later ticks of the same activation add nothing.
+    r.clock.advance(100)
+    r.driver.tick()
+    r.driver.tick()
+    expect(ends()).toHaveLength(2)
+  })
+
   it('a supplied media player owns media ends: none is synthesised', async () => {
     const synced: number[] = []
     let onEnd: ((id: number, synthetic: boolean, t: number) => void) | undefined
