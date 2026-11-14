@@ -362,6 +362,31 @@ describe('show driver', () => {
     expect(r.driver.visit!.cursor!.events.filter((e) => e.kind === 'mediaEnd')).toHaveLength(1)
   })
 
+  it('a media node restarted within the slide ends synthetically again, and its successor runs each time', async () => {
+    // An interactive sequence on trigger 5 plays audio 53; shape 99 shows (for 500 ms) once it ends.
+    const seq: ContainerNode = {
+      kind: 'seq',
+      ctn: ctn(50, { nodeType: 'interactiveSeq', restart: 'whenNotActive', start: [{ delayMs: 0, evt: 'onClick', target: { spid: '5' } }] }),
+      children: [par(51, [par(52, [media('audio', 53, '4'), successor(54, 53)], { nodeType: 'clickEffect', start: [at(0)] })], { start: [at(0)] })],
+      seq: { concurrent: true, nextAc: 'seek', prevAc: 'none' },
+    }
+    const r = rig({ slides: [slideOf(0, { timing: tree(seq) })] })
+    await r.driver.start(0)
+    const successorRuns = () => r.driver.visit!.timeline!.stateAt(r.driver.visit!.cursor!, Math.max(0, r.clock.now())).active.some((e) => e.node.ctn.id === 54)
+    for (const round of [1, 2]) {
+      r.driver.trigger('5')
+      r.clock.advance(10)
+      r.driver.tick()
+      r.driver.tick()
+      expect(r.driver.visit!.cursor!.events.filter((e) => e.kind === 'mediaEnd' && e.synthetic)).toHaveLength(round)
+      r.clock.advance(10)
+      expect(successorRuns()).toBe(true)
+      // Let the successor finish, so the sequence is no longer active and can restart.
+      r.clock.advance(1000)
+      r.driver.tick()
+    }
+  })
+
   it('a supplied media player owns media ends: none is synthesised', async () => {
     const synced: number[] = []
     let onEnd: ((id: number, synthetic: boolean, t: number) => void) | undefined

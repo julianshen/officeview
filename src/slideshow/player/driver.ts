@@ -117,7 +117,7 @@ interface Visit {
   cursor: SlideCursor | undefined
   advance?: AutoAdvance
   media?: DriverMedia
-  /** Without a media player: the slide's audio and video node ids, and those already ended synthetically. */
+  /** Without a media player: the slide's audio and video node ids, and those ended synthetically in their current activation. */
   synthetic?: { ids: ReadonlySet<number>; fired: Set<number> }
   /** Step inputs typed while the slide's model loads. */
   queue: Array<'next' | 'previous'>
@@ -362,9 +362,12 @@ export function createShowDriver(o: { source: SlideSource; stage: DriverStage; c
     const st = slideTime()
     if (!(st >= 0) || !v.cursor || !v.timeline || !v.synthetic) return
     const { ids, fired } = v.synthetic
-    for (const e of v.timeline.stateAt(v.cursor, st).active) {
-      const id = e.node.ctn.id
-      if (!ids.has(id) || fired.has(id)) continue
+    const active = new Set<number>()
+    for (const e of v.timeline.stateAt(v.cursor, st).active) if (ids.has(e.node.ctn.id)) active.add(e.node.ctn.id)
+    // Once per activation: a node no longer active has ended (or never began) — a restart is a new activation.
+    for (const id of [...fired]) if (!active.has(id)) fired.delete(id)
+    for (const id of active) {
+      if (fired.has(id)) continue
       fired.add(id)
       mediaEnded(v, id, true, st)
     }
