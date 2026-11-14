@@ -23,6 +23,11 @@
  * Piece 4 Task 11 adds the other two replies: `decodeTrack` (a `show-track` reply, D4, D23) and
  * `decodeMorph` (a `show-morph` reply, D11), with the same fail-closed checks.
  *
+ * Final review finding 2: `decodeBundle` and `decodeMorph` take the request's `AbortSignal` as the cancellation owner
+ * of their awaited image decodes. An abort (revocation, the show's end, navigation away) releases the reply, the record
+ * and every bitmap lease at once and rejects; no further asset is decoded, and a bitmap that resolves late is closed,
+ * never drawn or charged. Once the bundle or pair is handed back, its owner releases it; the signal no longer does.
+ *
  * Package-free (D25): its only value imports are the codec, the error type and the D23 track window.
  */
 import { decodeShowMessage, isRasterLayer, SHOW_PLAN_LIMITS, type MorphPlanRecord, type ShowMessage, type ShowPlanRecord } from '../show-plan'
@@ -39,9 +44,38 @@ interface Held { lease: Lease; bytes: number; bmp?: ImageBitmapLike }
 
 const closeBitmap = (b: ImageBitmapLike | undefined) => { try { b?.close?.() } catch { /* already released */ } }
 
-export async function decodeBundle(unit: number, reply: readonly Uint8Array[] | ShowReply, workspace: SlideShowWorkspace, decode: (png: Uint8Array) => Promise<ImageBitmapLike>): Promise<ShowBundle> {
+/**
+ * Final review finding 2: the cancellation owner of an in-progress decode. `signal`'s abort runs `cancel` at once
+ * (the decode's leases go back then, not when an awaited image decode finishes), and `decode` then rejects at once;
+ * an image that decodes after the abort is closed, never handed out. `off()` detaches it once the result has an owner.
+ */
+function cancellation(signal: AbortSignal | undefined, cancel: () => void) {
+  let aborted = false, fail: ((e: unknown) => void) | undefined
+  const reason = () => signal?.reason ?? new StreamSessionError('closed', 'the show decode was abandoned')
+  const onAbort = () => { if (aborted) return; aborted = true; cancel(); fail?.(reason()) }
+  if (signal?.aborted) onAbort()
+  else signal?.addEventListener('abort', onAbort, { once: true })
+  return {
+    check() { if (aborted) throw reason() },
+    off() { signal?.removeEventListener('abort', onAbort) },
+    decode(decode: (png: Uint8Array) => Promise<ImageBitmapLike>, png: Uint8Array): Promise<ImageBitmapLike> {
+      if (aborted) return Promise.reject(reason())
+      return new Promise<ImageBitmapLike>((resolve, reject) => {
+        fail = reject
+        decode(png).then((bmp) => {
+          fail = undefined
+          if (aborted) { closeBitmap(bmp); return }
+          resolve(bmp)
+        }, (e: unknown) => { fail = undefined; reject(e) })
+      })
+    },
+  }
+}
+
+export async function decodeBundle(unit: number, reply: readonly Uint8Array[] | ShowReply, workspace: SlideShowWorkspace, decode: (png: Uint8Array) => Promise<ImageBitmapLike>, signal?: AbortSignal): Promise<ShowBundle> {
   const messages: readonly Uint8Array[] = Array.isArray(reply) ? reply : (reply as ShowReply).messages
-  const done = () => { if (!Array.isArray(reply)) (reply as ShowReply).release() }
+  let replied = false
+  const done = () => { if (replied) return; replied = true; if (!Array.isArray(reply)) (reply as ShowReply).release() }
   const held = new Map<number, Held>()
   let released = false
   const release = () => {
@@ -50,12 +84,15 @@ export async function decodeBundle(unit: number, reply: readonly Uint8Array[] | 
     for (const h of held.values()) { closeBitmap(h.bmp); h.lease.release() }
     held.clear()
   }
+  // An abort mid-decode gives back the reply and everything held at once (finding 2).
+  const owner = cancellation(signal, () => { release(); done() })
   const reject = (why: string): never => { throw new StreamSessionError('policy-refused', `show bundle rejected: ${why}`) }
   const expect = { unit, maxDecoded: SHOW_PLAN_LIMITS.showDecoded }
   const message = (i: number): ShowMessage => {
     try { return decodeShowMessage(messages[i]!, expect) } catch (e) { return reject(`message ${i}: ${(e as Error).message}`) }
   }
   try {
+    owner.check()
     if (!messages.length) reject('no messages')
     const head = message(0)
     if (head.tag !== 1) return reject('message 0 is not the plan record')
@@ -86,7 +123,7 @@ export async function decodeBundle(unit: number, reply: readonly Uint8Array[] | 
       const h: Held = { lease, bytes }
       held.set(a.assetId, h)
       let bmp: ImageBitmapLike
-      try { bmp = await decode(a.png) } catch { return reject(`asset ${a.assetId} does not decode`) }
+      try { bmp = await owner.decode(decode, a.png) } catch { owner.check(); return reject(`asset ${a.assetId} does not decode`) }
       h.bmp = bmp
       if (bmp.width !== a.w || bmp.height !== a.h) reject(`asset ${a.assetId} decoded to another size`)
     }
@@ -99,6 +136,8 @@ export async function decodeBundle(unit: number, reply: readonly Uint8Array[] | 
     release()
     throw e
   } finally {
+    // The bundle (or the failure) now owns everything: a later abort of the fetch is not this decode's.
+    owner.off()
     done()
   }
 }
@@ -177,7 +216,7 @@ export interface ShowMorph { record: MorphPlanRecord; assets: PlanAssets; track?
  * tag-4 frames, decoded through the D23 window; its encoded leases are held until `release()`. Σ within the show
  * budget. Anything else rejects `policy-refused` with every lease released.
  */
-export async function decodeMorph(pair: { from: number; to: number; fromStep: number }, reply: readonly Uint8Array[] | ShowReply, workspace: SlideShowWorkspace, decode: (png: Uint8Array) => Promise<ImageBitmapLike>): Promise<ShowMorph> {
+export async function decodeMorph(pair: { from: number; to: number; fromStep: number }, reply: readonly Uint8Array[] | ShowReply, workspace: SlideShowWorkspace, decode: (png: Uint8Array) => Promise<ImageBitmapLike>, signal?: AbortSignal): Promise<ShowMorph> {
   const what = 'Morph pair'
   const messages = messagesOf(reply)
   const held = new Map<number, Held>()
@@ -192,7 +231,10 @@ export async function decodeMorph(pair: { from: number; to: number; fromStep: nu
     window?.dispose()
     if (keepReply) releaseReply(reply)
   }
+  // An abort mid-decode gives back the reply and everything held at once (finding 2).
+  const owner = cancellation(signal, () => { keepReply = true; release() })
   try {
+    owner.check()
     if (!messages.length) refuse(what, 'no messages')
     let head: ShowMessage
     try { head = decodeShowMessage(messages[0]!, { unit: pair.to, maxDecoded: SHOW_PLAN_LIMITS.showDecoded }) } catch (e) { return refuse(what, `message 0: ${(e as Error).message}`) }
@@ -231,7 +273,7 @@ export async function decodeMorph(pair: { from: number; to: number; fromStep: nu
       const h: Held = { lease, bytes }
       held.set(a.assetId, h)
       let bmp: ImageBitmapLike
-      try { bmp = await decode(a.png) } catch { return refuse(what, `asset ${a.assetId} does not decode`) }
+      try { bmp = await owner.decode(decode, a.png) } catch { owner.check(); return refuse(what, `asset ${a.assetId} does not decode`) }
       h.bmp = bmp
       if (bmp.width !== a.w || bmp.height !== a.h) refuse(what, `asset ${a.assetId} decoded to another size`)
     }
@@ -245,5 +287,8 @@ export async function decodeMorph(pair: { from: number; to: number; fromStep: nu
     keepReply = true
     release()
     throw e
+  } finally {
+    // The pair (or the failure) now owns everything: a later abort of the request is its owner's to act on.
+    owner.off()
   }
 }

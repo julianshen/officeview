@@ -315,7 +315,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     try {
       const scale = showScale(bucket)
       const reply = await show!.showPlan!(unit, scale, m, sig, { workspace, onSend: charge })
-      const b = await decodeBundle(unit, reply, workspace, remoteShowDeps.decode)
+      // The fetch's signal owns the decode too (finding 2): an abort mid-decode gives everything back at once.
+      const b = await decodeBundle(unit, reply, workspace, remoteShowDeps.decode, sig)
       if (sig.aborted || exited) { b.release(); throw new StreamSessionError('closed', 'the bundle is no longer wanted') }
       const p = pinnable(b)
       scaleOf.set(p, scale)
@@ -485,7 +486,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
       try {
         const reply = await show.showMorph!(uf, ut, fromStep, scale, motion, slot.ctl.signal, { workspace })
         if (!live()) { reply.release(); return undefined }
-        const m = await decodeMorph({ from: uf, to: ut, fromStep }, reply, frameOwner, remoteShowDeps.decode)
+        // The pair's controller owns the decode too (finding 2): `dropPair` and the end give everything back at once.
+        const m = await decodeMorph({ from: uf, to: ut, fromStep }, reply, frameOwner, remoteShowDeps.decode, slot.ctl.signal)
         if (!live()) { m.release(); return undefined }
         slot.result = m
         if (overBudget()) {

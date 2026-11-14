@@ -54,7 +54,7 @@ import { StreamSessionError, type StreamErrorCode } from '../../src/stream/remot
 import type { Manifest } from '../../src/stream/manifest'
 import type { RemoteOfficeDoc } from '../../src/stream/remote/remote-doc'
 import type { ShowReply, ShowRequestOptions } from '../../src/stream/remote/session'
-import { decodeMorph, decodeTrack } from '../../src/stream/remote/show-bundle'
+import { decodeBundle, decodeMorph, decodeTrack } from '../../src/stream/remote/show-bundle'
 import { decodeShowMessage, encodeShowMessage, SHOW_PLAN_LIMITS, type ShowMessage, type ShowPlanRecord } from '../../src/stream/show-plan'
 import { createSlideShowWorkspace } from '../../src/slideshow/workspace'
 import type { TimeNode } from '../../src/slideshow/types'
@@ -892,5 +892,123 @@ describe('fix round 1: decoded track frames are admitted against the show budget
     // The neighbour's decoded bundle went to make room.
     expect(assets()).toBeLessThan(withBoth)
     s.exit()
+  })
+})
+
+describe('final review finding 2: an in-progress decode has a cancellation owner', () => {
+  /** A decode that holds every call until `go()`; each bitmap it yields records whether it was closed. */
+  function heldDecode() {
+    const queue: Array<() => void> = []
+    const made: Array<{ png: Uint8Array; closed: boolean }> = []
+    const decode = (bytes: Uint8Array) => new Promise<HTMLCanvasElement>((res, rej) => {
+      queue.push(() => { bitmapOf(bytes).then((cv) => { const tag = { png: bytes, closed: false }; made.push(tag); res(Object.assign(cv, { close: () => { tag.closed = true } })) }, rej) })
+    })
+    return {
+      decode, made,
+      pending: () => queue.length,
+      async go() { for (const f of queue.splice(0)) f(); await flush() },
+    }
+  }
+  const ws = () => createSlideShowWorkspace('desktop', { limit: 512 * 1024 * 1024, scratch: 0 })
+  /** The recorded pair's asset PNGs: the bitmaps a Morph decode makes. */
+  const pairPngs = PAIR.filter((m): m is Extract<ShowMessage, { tag: 2 | 3 | 4 }> => m.tag !== 5).map((m) => Buffer.from(m.png).toString('hex'))
+  const isPair = (b: { png: Uint8Array }) => pairPngs.includes(Buffer.from(b.png).toString('hex'))
+
+  it('revocation while a Morph bitmap decode is pending: every lease released at ended; the late bitmap is closed', async () => {
+    const w = ws()
+    vi.spyOn(remoteShowDeps, 'workspace').mockImplementation(() => w)
+    const fd = animDoc(['fly', 'morphTo'])
+    const { s } = await show(fd)
+    await run(1_500)
+    const d = heldDecode()
+    vi.mocked(remoteShowDeps.decode).mockImplementation(d.decode)
+    s.goTo(1); await flush()
+    expect(sent(fd, 'morph:')).toContain('morph:0>1@0')
+    expect(d.pending()).toBeGreaterThan(0)
+    await fd.end(new StreamSessionError('revoked'))
+    await s.ended
+    expect(w.used()).toBe(0)
+    await d.go()
+    expect(d.made.length).toBeGreaterThan(0)
+    expect(d.made.every((b) => b.closed)).toBe(true)
+    expect(w.used()).toBe(0)
+  })
+
+  it('navigating away while a Morph bitmap decode is pending releases the pair at once; the late bitmap is closed, never charged', async () => {
+    const w = ws()
+    vi.spyOn(remoteShowDeps, 'workspace').mockImplementation(() => w)
+    const fd = animDoc(['fly', 'morphTo', 'fly'])
+    const { s } = await show(fd)
+    await run(1_500)
+    const d = heldDecode()
+    vi.mocked(remoteShowDeps.decode).mockImplementation(d.decode)
+    s.goTo(1); await flush()
+    expect(sent(fd, 'morph:')).toContain('morph:0>1@0')
+    expect(d.pending()).toBeGreaterThan(0)
+    // Back on slide 0 (its successor's pair is asked again, at its last step, and decodes at once).
+    vi.mocked(remoteShowDeps.decode).mockImplementation(bitmapOf)
+    s.goTo(0); await flush()
+    expect(sent(fd, 'morph:').at(-1)).toBe('morph:0>1@1')
+    const after = w.used()
+    await d.go()
+    // The abandoned pair's one pending decode lands late: closed, and nothing else of it was decoded or charged.
+    expect(d.made.map((b) => [isPair(b), b.closed])).toEqual([[true, true]])
+    expect(d.pending()).toBe(0)
+    expect(w.used()).toBe(after)
+    s.exit()
+    await s.ended
+    expect(w.used()).toBe(0)
+  })
+
+  it('revocation while a bundle bitmap decode is pending: every lease released at ended; the late bitmap is closed', async () => {
+    const w = ws()
+    vi.spyOn(remoteShowDeps, 'workspace').mockImplementation(() => w)
+    const fd = animDoc(['fly', 'fly', 'fly', 'fly', 'fly'])
+    const { s } = await show(fd)
+    await run(1_500)
+    const d = heldDecode()
+    vi.mocked(remoteShowDeps.decode).mockImplementation(d.decode)
+    s.goTo(4); await flush()
+    expect(sent(fd, 'plan:')).toContain('plan:4')
+    expect(d.pending()).toBeGreaterThan(0)
+    await fd.end(new StreamSessionError('revoked'))
+    await s.ended
+    expect(w.used()).toBe(0)
+    await d.go()
+    expect(d.made.every((b) => b.closed)).toBe(true)
+    expect(w.used()).toBe(0)
+  })
+
+  it('decodeBundle and decodeMorph: an abort mid-decode rejects at once, releases the reply and every lease, closes the late bitmap', async () => {
+    for (const which of ['bundle', 'layered', 'composited'] as const) {
+      const w = ws(), d = heldDecode(), ac = new AbortController()
+      const rec = (PAIR[0] as Extract<ShowMessage, { tag: 5 }>).morph
+      const messages = which === 'bundle' ? bundleOf(FLY, 0)
+        : which === 'layered' ? pairOf(0, 1, 0)
+          : [encodeShowMessage({ tag: 5, morph: { ...rec, items: [], over: [], pairs: [], composited: { fps: 15, count: 3 } } }), ...trackOf(1, 0)]
+      const release = vi.fn()
+      const p = which === 'bundle'
+        ? decodeBundle(0, { messages, release }, w, d.decode, ac.signal)
+        : decodeMorph({ from: 0, to: 1, fromStep: 0 }, { messages, release }, w, d.decode, ac.signal)
+      const settled = p.then(() => 'resolved', (e: unknown) => (e as StreamSessionError).code ?? String(e))
+      await flush()
+      if (which === 'composited') {
+        // A composited pair awaits nothing: it is handed back, and its owner releases it.
+        expect(await settled).toBe('resolved')
+        ;(await p).release()
+        expect(w.used()).toBe(0)
+        continue
+      }
+      expect(d.pending()).toBe(1)
+      expect(w.used()).toBeGreaterThan(0)
+      ac.abort(new StreamSessionError('closed'))
+      expect({ which, used: w.used() }).toEqual({ which, used: 0 })
+      expect(release).toHaveBeenCalled()
+      expect(await settled).toBe('closed')
+      await d.go()
+      expect({ which, closed: d.made.map((b) => b.closed) }).toEqual({ which, closed: [true] })
+      expect(d.pending()).toBe(0)
+      expect(w.used()).toBe(0)
+    }
   })
 })
