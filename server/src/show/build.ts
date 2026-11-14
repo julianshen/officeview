@@ -460,7 +460,8 @@ function classificationOf(e: L1Entry, job: ShowPlanJob): Classification {
 }
 
 const markSettingsOf = (m: MarkSpec) => ({ visible: m.kind, text: m.kind === 'viewer' ? m.text : m.kind === 'fixed' ? 'fixed' : '', forensic: false as const })
-const VALIDATION_MESSAGE_KEY = createHash('sha256').update('officeview show-plan validation message@1').digest()
+/** The §7 validation code's message key (shared with the Morph pair build, `morph.ts`). */
+export const VALIDATION_MESSAGE_KEY = createHash('sha256').update('officeview show-plan validation message@1').digest()
 
 export function buildShowPlan(doc: ShowHost, job: ShowPlanJob, opts: ShowBuildOptions = {}): BuiltShowPlan | ShowRefusal {
   const show = doc.show

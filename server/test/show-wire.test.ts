@@ -7,9 +7,17 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { decodeShowMessage, SHOW_PLAN_LIMITS, isRasterLayer, type MorphPlanRecord, type ShowMessage, type ShowPlanRecord } from '../../src/stream/show-plan'
 import { morphDeck } from '../../src/testdata/show-decks'
 import { AuditTable } from '../src/audit'
+import { decodePng } from '../src/mark/png'
 import { AuditStore } from '../src/audit-store'
 import type { AuthDecision } from '../src/hooks'
-import { appearMoveDeck, hiddenLinkDeck, manyObjectsMorphDeck, morphLateDeck, morphSweepDeck, tinyBoxDeck } from './show-fixtures'
+import { appearMoveDeck, hiddenLinkDeck, manyObjectsMorphDeck, morphLateDeck, morphSweepDeck, revealThenMoveDeck, tinyBoxDeck } from './show-fixtures'
+import { tauFor } from '../src/detect/tau'
+import { deriveKeys } from '../src/keys'
+import { basis, deriveBasisKey } from '../src/mark/basis'
+import { extendedCodeword } from '../src/mark/bch'
+import { detect } from '../src/mark/detect'
+import { messageFor } from '../src/mark/message'
+import { DEFAULT_PARAMS } from '../src/mark/params'
 import { Client, disposePool, start } from './harness'
 
 afterAll(() => disposePool())
@@ -196,6 +204,41 @@ describe('show wire', () => {
     expect(track.start).toMatchObject({ type: 'show-track-start', unit: 0, step: 0, messages: planOf(ms).steps[0]!.track!.count })
     expect(tags(decodeAll(0, track.messages)).every((t) => t === 4)).toBe(true)
     loose.stop(); strict.stop()
+  }, 60_000)
+
+  test('a slide the classifier cannot prove → error still, no row (the client plays the piece-3 still)', async () => {
+    const s = await session(await revealThenMoveDeck())
+    expect(s.m.units.list[0]!.anim).toBe(true)
+    const r = await s.c.showPlan(0, 1, 'full')
+    expect(r.end).toEqual(error(r.reqId, 'still'))
+    expect(r.messages).toEqual([])
+    expect(s.store.showDeliveries(s.sid)).toEqual([])
+    s.stop()
+  }, 60_000)
+
+  test("show-plan Layer-1 attributes to the session's code on the page basis `unit@scale`", async () => {
+    const deck = await appearMoveDeck()
+    const s = await session(deck)
+    const entry = decodeAll(0, (await s.c.showPlan(0, 1, 'full')).messages)[1] as Extract<ShowMessage, { png: Uint8Array }>
+    const off = await session(deck, { testOnly: { forensicOff: true } })
+    const plain = decodeAll(0, (await off.c.showPlan(0, 1, 'full')).messages)[1] as Extract<ShowMessage, { png: Uint8Array }>
+    const keys = await deriveKeys(new Uint8Array(32).fill(9))
+    const own = s.h.stream.forensicOf(s.sid)!.code
+    const codes = [own, ...Array.from({ length: 31 }, (_, i) => extendedCodeword(messageFor(keys.kMsg, 1, 2000 + i, 0)))]
+    const chips = basis(deriveBasisKey(keys.kBasisRoot, s.m.docRef, '0@1'), entry.w, entry.h, DEFAULT_PARAMS)
+    const bmp = (png: Uint8Array) => { const d = decodePng(png); return { width: d.w, height: d.h, data: new Uint8ClampedArray(d.rgba) } }
+    expect(detect(bmp(entry.png), bmp(plain.png), chips, codes, DEFAULT_PARAMS, tauFor(codes.length))).toMatchObject({ kind: 'attributed', index: 0 })
+    expect(detect(bmp(plain.png), bmp(plain.png), chips, codes, DEFAULT_PARAMS, tauFor(codes.length)).kind).not.toBe('attributed')
+    s.stop(); off.stop()
+  }, 60_000)
+
+  test('show-morph under reduced motion → invalid-unit (the Morph plays as a fade, D13)', async () => {
+    const s = await session(await morphDeck())
+    const r = await s.c.showMorph(0, 1, 0, 1, 'reduced')
+    expect(r.end).toEqual(error(r.reqId, 'invalid-unit'))
+    const bad = await s.c.showMorph(0, 1, 0, 1, 'slow')
+    expect(bad.end).toEqual(error(bad.reqId, 'policy-refused'))
+    s.stop()
   }, 60_000)
 
   test('revoked session mid-bundle stops sending', async () => {

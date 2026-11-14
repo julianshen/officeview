@@ -15,6 +15,8 @@
  *    from the masked rasters must equal the original at every sample (reconstruction); the compositions must fit
  *    `CLASSIFY_BUDGET` (rule 5). `strictMarks` with any mover, a rest that is not an axis-aligned box (D8), an asset
  *    over its cap or a record the codec refuses also fail. Any failure plays the whole Morph composited.
+ *    The marks are then validated at progress 0 and 1 (§7, D7, D9: `validateMorph`), as the bundle's are at its
+ *    step boundaries; a failure plays composited (`marks`).
  * 5. **Assets** are the masked rasters with the visible mark burned at their rest (`source-atop`, D7): a from side at
  *    progress 0, a to side at progress 1. Layer-1 is applied per session at send time with each asset's `rest`.
  * 6. **Composited** (D11, `morph-composited`): `min(90, ceil(durMs · 15 / 1000))` full frames of the Morph,
@@ -36,12 +38,20 @@ import { createRng } from '../../../src/slideshow/rng'
 import type { Affine, CanvasFactory, Compositor, LayerBitmap, LayerDraw, LayerHandle, Lease, SlideShowWorkspace, TargetState } from '../../../src/slideshow/types'
 import { LAYER_LIMIT } from '../../../src/slideshow/workspace'
 import { encodeShowMessage, PlanRejected, SHOW_PLAN_LIMITS, type MorphPlanRecord, type MorphSideRecord, type Rect } from '../../../src/stream/show-plan'
-import { encodePng } from '../mark/png'
+import { createHash } from 'node:crypto'
+import { tauFor } from '../detect/tau'
+import { basis } from '../mark/basis'
+import { extendedCodeword } from '../mark/bch'
+import { detect } from '../mark/detect'
+import { markLayerRaster } from '../mark/mark-raster'
+import { messageFor } from '../mark/message'
+import { DEFAULT_PARAMS } from '../mark/params'
+import { decodePng, encodePng } from '../mark/png'
 import type { MarkSpec } from '../mark/visible'
-import { markFrame, prepareShowSlide, SHOW_BUNDLE_BUDGET, type ShowHost } from './build'
+import { markFrame, prepareShowSlide, SHOW_BUNDLE_BUDGET, VALIDATION_MESSAGE_KEY, type ShowHost } from './build'
 import { slideStateAt } from './compose'
 import { CLASSIFY_BUDGET, proveItems, SAMPLES_PER_INTERVAL, TRACK_FPS, TRACK_MAX_FRAMES, type ProofItem } from './eligibility'
-import { burnVisibleMark } from './marks'
+import { burnVisibleMark, validateMarks } from './marks'
 import { trackTimes } from './tracks'
 
 export interface MorphJob { from: number; to: number; fromStep: number; scale: 1 | 2; motion: 'full' | 'reduced'; mark: MarkSpec; strictMarks?: boolean }
@@ -70,8 +80,8 @@ const OPEN_WORKSPACE: SlideShowWorkspace = { limit: Number.POSITIVE_INFINITY, us
 const factory: CanvasFactory = (w, h) => canvasBackend().createCanvas(Math.max(1, Math.ceil(w)), Math.max(1, Math.ceil(h))) as never
 const resolveFont = (f: string) => f
 
-/** Why a Morph plays composited: rule 4 (`colour`, `mask`, `swept`), rule 5 (`budget`), the reconstruction, `strictMarks`, a rest that is not a box (D8), a cap. */
-export type MorphUnproven = 'colour' | 'mask' | 'swept' | 'budget' | 'reconstruction' | 'strict-marks' | 'mark-rest' | 'limits'
+/** Why a Morph plays composited: rule 4 (`colour`, `mask`, `swept`), rule 5 (`budget`), the reconstruction, `strictMarks`, a rest that is not a box (D8), a cap, the §7 mark validation (`marks`). */
+export type MorphUnproven = 'colour' | 'mask' | 'swept' | 'budget' | 'reconstruction' | 'strict-marks' | 'mark-rest' | 'limits' | 'marks'
 type Unproven = MorphUnproven
 
 export function buildMorphPlan(doc: ShowHost, job: MorphJob): BuiltMorph {
@@ -110,13 +120,13 @@ export function buildMorphPlan(doc: ShowHost, job: MorphJob): BuiltMorph {
   })
   if (typeof plan === 'string') return { refused: 'morph-fallback' }
   try {
-    return assemble(plan, bitmaps, job, slideSize(to.ps.slide), spec.durationMs)
+    return assemble(plan, bitmaps, job, slideSize(to.ps.slide), spec.durationMs, show.docKey)
   } finally {
     for (const l of plan.leases) l.release()
   }
 }
 
-function assemble(plan: MorphPlan, bitmaps: ReadonlyMap<MorphLayerRef, LayerBitmap>, job: MorphJob, page: { w: number; h: number }, durationMs: number): BuiltMorph {
+function assemble(plan: MorphPlan, bitmaps: ReadonlyMap<MorphLayerRef, LayerBitmap>, job: MorphJob, page: { w: number; h: number }, durationMs: number, docKey: string): BuiltMorph {
   const scale = job.scale
   const W = Math.max(1, Math.ceil(page.w * scale)), H = Math.max(1, Math.ceil(page.h * scale))
   const dur = Number.isFinite(durationMs) && durationMs > 0 ? durationMs : 0
@@ -138,7 +148,11 @@ function assemble(plan: MorphPlan, bitmaps: ReadonlyMap<MorphLayerRef, LayerBitm
   const lists = samples.map(p => drawsAtProgress(spec, p))
 
   const composited = (why: Unproven): BuiltMorph => compositeMorph(plan, bitmaps, used, spec, job, page, W, H, dur, why)
-  const proved = prove(plan, bmpOf, used, lists, scale, W, H)
+  // z order (bottom-first) as `morphFrame` paints: each item's from side, then its to side; then `over`.
+  const order: number[] = []
+  for (const it of plan.items) { if (it.from) order.push(it.from.ref); if (it.to) order.push(it.to.ref) }
+  for (const r of plan.over) order.push(r)
+  const proved = prove(order, bmpOf, used, lists, scale, W, H)
   if (typeof proved === 'string') return composited(proved)
   if (job.strictMarks && proved.movers > 0) return composited('strict-marks')
 
@@ -149,7 +163,8 @@ function assemble(plan: MorphPlan, bitmaps: ReadonlyMap<MorphLayerRef, LayerBitm
     const list = sideOf.get(ref) === 'to' ? lists[lists.length - 1]! : lists[0]!
     const d = flatten(list).find(x => x.handle.id === ref)
     const bmp = bmpOf(ref)!
-    if (!d) return { ...bmp.bounds }
+    // No draw at its rest (a side not shown there): its mark has no page anchor (fail closed).
+    if (!d) return undefined
     const m = stateMatrix(d.state)
     if (Math.abs(m[1]) > 1e-6 || Math.abs(m[2]) > 1e-6 || !(m[0] > 1e-6) || !(m[3] > 1e-6)) return undefined
     return { x: m[0] * bmp.bounds.x + m[4], y: m[3] * bmp.bounds.y + m[5], w: m[0] * bmp.bounds.w, h: m[3] * bmp.bounds.h }
@@ -184,6 +199,8 @@ function assemble(plan: MorphPlan, bitmaps: ReadonlyMap<MorphLayerRef, LayerBitm
     pairs: plan.pairs.map(p => ({ fromKey: p.fromKey, toKey: p.toKey, rule: p.rule })),
   }
   try { encodeShowMessage({ tag: 5, morph: record }) } catch (e) { if (e instanceof PlanRejected) return composited('limits'); throw e }
+  // §7 (D7, D9) at the Morph's two boundaries: the shipped assets composed against the masked slide marked once.
+  if (!validateMorph(ids.map((ref, i) => ({ ref, asset: assets[i]! })), proved.rasters, [lists[0]!, lists[lists.length - 1]!], { scale, W, H, page, job, docKey })) return composited('marks')
   return { record, assets, diagnostics: [], page: { w: W, h: H } }
 }
 
@@ -257,7 +274,7 @@ function composerOf(rasters: ReadonlyMap<number, LayerBitmap>, scale: number, W:
 
 interface Proved { rasters: Map<number, LayerBitmap>; movers: number }
 
-function prove(plan: MorphPlan, bmpOf: (ref: number) => LayerBitmap | undefined, used: ReadonlySet<number>, lists: readonly LayerDraw[][], scale: number, W: number, H: number): Proved | Unproven {
+function prove(order: readonly number[], bmpOf: (ref: number) => LayerBitmap | undefined, used: ReadonlySet<number>, lists: readonly LayerDraw[][], scale: number, W: number, H: number): Proved | Unproven {
   const rasters = new Map<number, LayerBitmap>()
   for (const r of used) { const b = bmpOf(r); if (!b) return 'limits'; rasters.set(r, b) }
   // Rule 5: one full composite per sample, plus one without each drawn ref, plus the reconstruction.
@@ -309,10 +326,7 @@ function prove(plan: MorphPlan, bmpOf: (ref: number) => LayerBitmap | undefined,
       if (m) masks.set(ref, m)
     }
     // Rule 4 over the items in z order (a summed pair's sides in order), with the final masks.
-    const order: number[] = []
-    for (const d of flatten(lists[0]!)) order.push(d.handle.id)
-    for (const r of used) if (!order.includes(r)) order.push(r)
-    // z order is the same at every sample (morphFrame draws items in list order); absent draws are undefined states.
+    // `order` is the paint order at every sample; a side absent at a sample (weight 0) has an undefined state there.
     const states = (ref: number) => lists.map(l => flatten(l).find(d => d.handle.id === ref)?.state)
     const items: ProofItem[] = order.map(ref => {
       const bmp = rasters.get(ref)!
@@ -335,10 +349,78 @@ function prove(plan: MorphPlan, bmpOf: (ref: number) => LayerBitmap | undefined,
       } finally { again.dispose() }
       return { rasters: masked, movers: proof.movers.length }
     }
-    void plan
     return { rasters, movers: proof.movers.length }
   } finally {
     composer.dispose()
+  }
+}
+
+const bitmapOf = (w: number, h: number, rgba: Uint8ClampedArray, like: LayerBitmap): LayerBitmap => {
+  const canvas = canvasBackend().createCanvas(w, h) as unknown as HTMLCanvasElement
+  const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
+  const img = ctx.createImageData(w, h)
+  img.data.set(rgba)
+  ctx.putImageData(img, 0, 0)
+  return { canvas, bounds: { ...like.bounds }, scale: like.scale, bytes: w * h * 4 }
+}
+
+/**
+ * §7 at progress 0 and 1 (as `validate` in `build.ts` does at step boundaries): the shipped PNGs (visible mark at
+ * rest, the validation code's Layer-1 at each `rest` crop) composed, against the masked rasters composed once,
+ * marked visibly once and with Layer-1 once; the visible mark's own contribution over its ink; and the validation
+ * code attributed on the composite (`detect`).
+ */
+function validateMorph(shipped: ReadonlyArray<{ ref: number; asset: MorphAsset }>, rasters: ReadonlyMap<number, LayerBitmap>, ends: readonly LayerDraw[][], env: { scale: number; W: number; H: number; page: { w: number; h: number }; job: MorphJob; docKey: string }): boolean {
+  const { scale, W, H, page, job } = env
+  const kBasis = createHash('sha256').update(`officeview show-morph validation basis@1\n${env.docKey}\n${job.to}\n${scale}`).digest()
+  const codes = [1, 2, 3, 4].map(t => extendedCodeword(messageFor(VALIDATION_MESSAGE_KEY, 0, t, 0)))
+  const code = codes[0]!
+  let chips: ReturnType<typeof basis> | undefined
+  try { chips = basis(kBasis, W, H, DEFAULT_PARAMS) } catch { chips = undefined }
+  const sent = new Map<number, LayerBitmap>(), visible = new Map<number, LayerBitmap>()
+  for (const { ref, asset } of shipped) {
+    const like = rasters.get(ref)!
+    const v = decodePng(asset.png)
+    visible.set(ref, bitmapOf(v.w, v.h, v.rgba, like))
+    const r = markLayerRaster({ png: asset.png, w: asset.w, h: asset.h, kBasis, code, crop: { x: asset.rest.x, y: asset.rest.y, pageW: W, pageH: H, scale: asset.rest.scale } })
+    const d = decodePng(r.png)
+    sent.set(ref, bitmapOf(d.w, d.h, d.rgba, like))
+  }
+  const layered = composerOf(sent, scale, W, H), visibleOnly = composerOf(visible, scale, W, H), reference = composerOf(rasters, scale, W, H)
+  try {
+    if (layered.refused || visibleOnly.refused || reference.refused) return false
+    const image = (data: Uint8ClampedArray) => ({ width: W, height: H, data, colorSpace: 'srgb' }) as unknown as ImageData
+    const visibleRefs = new Map<number, Uint8ClampedArray>()
+    const visibleRef = (k: number) => {
+      let v = visibleRefs.get(k)
+      if (!v) { v = markFrame(new Uint8ClampedArray(reference.compose(ends[k]!)), W, H, scale, page, job.mark); visibleRefs.set(k, v) }
+      return v
+    }
+    const tau = tauFor(codes.length)
+    const verdict = validateMarks({ plan: { steps: [0] } },
+      (k) => {
+        const r = markLayerRaster({ png: encodePng(W, H, visibleRef(k)), w: W, h: H, kBasis, code, crop: { x: 0, y: 0, pageW: W, pageH: H } })
+        return image(decodePng(r.png).rgba)
+      },
+      (k) => image(new Uint8ClampedArray(layered.compose(ends[k]!))),
+      {
+        ...(chips ? {
+          attributes: (k: number, composite: ImageData) => {
+            const bmp = (d: Uint8ClampedArray) => ({ width: W, height: H, data: d })
+            const decision = detect(bmp(new Uint8ClampedArray(composite.data)), bmp(visibleRef(k)), chips!, codes, DEFAULT_PARAMS, tau)
+            return decision.kind === 'attributed' && decision.index === 0
+          },
+        } : {}),
+        contribution: {
+          composeMarked: (k) => image(new Uint8ClampedArray(visibleOnly.compose(ends[k]!))),
+          composeUnmarked: (k) => image(new Uint8ClampedArray(reference.compose(ends[k]!))),
+          referenceMarked: (k) => image(visibleRef(k)),
+          referenceUnmarked: (k) => image(new Uint8ClampedArray(reference.compose(ends[k]!))),
+        },
+      })
+    return verdict.ok
+  } finally {
+    layered.dispose(); visibleOnly.dispose(); reference.dispose()
   }
 }
 

@@ -724,7 +724,8 @@ export function createStreamServer(o: StreamServerOptions) {
    * 2. the unit: in range, not hidden, animated (D5); a track's step and a Morph's pair (`to` entered by Morph,
    *    `from ≠ to`, both shown, `fromStep` an integer in 0..64; its exact range against the from-slide's steps is
    *    checked on the worker, after the charge);
-   * 3. `scale` in `SCALE_BUCKETS` (1 or 2) and `motion` valid;
+   * 3. `scale` in `SCALE_BUCKETS` (1 or 2) and `motion` valid (a Morph under `reduced` motion plays as a fade, D13:
+ *    `invalid-unit`);
    * 4. the `'unit'` rate: one charge per op (owner decision 2), `close` → 4008, `refuse` → `rate-limited`;
    * 5. the fingerprint and the document ledger (as `onUnit`);
    * 6. the build on the docRef's worker (L1/L2 caches, D6);
@@ -753,6 +754,8 @@ export function createStreamServer(o: StreamServerOptions) {
     }
     const scale = msg.scale, motion = msg.motion
     if (!(SCALE_BUCKETS as readonly unknown[]).includes(scale) || (scale !== 1 && scale !== 2) || (motion !== 'full' && motion !== 'reduced')) return deny(reqId, 'policy-refused')
+    // D13: under reduced motion a Morph plays as a short fade (`reducedTransition`, as local mode): no pair plays.
+    if (kind === 'morph' && motion === 'reduced') return deny(reqId, 'invalid-unit')
     const rate = ws.data.rates.check('unit', now())
     if (rate === 'close') return close(ws, 'rate-limited')
     if (rate === 'refuse') return deny(reqId, 'rate-limited')
