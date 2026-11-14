@@ -289,6 +289,24 @@ describe('remote show: Presenter View in streamed indices', () => {
   })
 })
 
+describe('remote show: blank screens reach Presenter View (PR #75)', () => {
+  it('entering and leaving black/white notifies frame subscribers, so the Current preview matches the audience', async () => {
+    const fd = fakeDoc({ count: 3 })
+    const { s } = await show(fd)
+    await fd.paints[0]!.ok()
+    const seen: string[] = []
+    s.presenterSource.onFrame(() => seen.push(s.state.screen))
+    s.presenterSource.input({ kind: 'black' })
+    expect(seen).toEqual(['black'])
+    s.presenterSource.input({ kind: 'next' }) // any key restores the slide first
+    expect(seen).toEqual(['black', 'slide'])
+    expect(s.state.slide).toBe(0)
+    s.presenterSource.input({ kind: 'white' })
+    expect(seen).toEqual(['black', 'slide', 'white'])
+    s.exit()
+  })
+})
+
 describe('remote show: end and revocation', () => {
   it('doc.ended exits the show; a later ready paints nothing', async () => {
     const fd = fakeDoc({ count: 3 })

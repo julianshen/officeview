@@ -297,6 +297,15 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     }
   }
 
+  /** A blank screen (or its end) is a new audience frame: Presenter View's Current
+   * preview repaints from frame notifications, as after the local session's render(). */
+  function setScreen(next: 'slide' | 'black' | 'white'): void {
+    screen = next
+    surface?.show({ slide, count, screen })
+    afterFrame()
+    syncPresenter()
+  }
+
   function afterFrame(): void {
     if (exited) return
     notify(frameSubs, (f, e) => {
@@ -587,19 +596,14 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
       return
     }
     buffer = ''
-    if (screen !== 'slide') {
-      screen = 'slide'
-      surface?.show({ slide, count, screen })
-      syncPresenter()
-      return
-    }
+    if (screen !== 'slide') { setScreen('slide'); return }
     switch (target.kind) {
       // A finished bitmap has no triggers or links: a click advances.
       case 'click': case 'next': case 'enter': next(); break
       case 'previous': previous(); break
       case 'first': firstSlide(); break
       case 'last': lastSlide(); break
-      case 'black': case 'white': screen = target.kind; surface?.show({ slide, count, screen }); syncPresenter(); break
+      case 'black': case 'white': setScreen(target.kind); break
       case 'pause': paused = !paused; syncPresenter(); break
     }
   }
