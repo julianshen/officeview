@@ -276,6 +276,15 @@ type Shown =
   | { kind: 'transition'; progress: number; params: Readonly<Record<string, unknown>> }
   | { kind: 'morph'; progress: number }
 
+/** `r`'s noise rng (one memoised draw from its rng). */
+function noiseOf(r: { rng: Rng; noise?: Rng }): Rng {
+  if (!r.noise) {
+    let v: number | undefined
+    r.noise = () => (v ??= r.rng())
+  }
+  return r.noise
+}
+
 /** The displayed track frame, copied out of the decode window (which may close it) and workspace-charged. */
 interface HeldFrame { key: string; canvas: HTMLCanvasElement; lease: Lease }
 
@@ -288,6 +297,11 @@ interface Running {
   start: number
   duration: number
   rng: Rng
+  /**
+   * The rng the compositor seeds its transition noise from (a dissolve's pattern): one value drawn from `rng`,
+   * memoised, so a capture on another compositor (`noiseOf` behind a fresh identity) reproduces the shown mask.
+   */
+  noise?: Rng
   morph?: MorphRun
   fromKind: 'flat' | 'black' | 'none'
   toKind: 'entry' | 'flat'
@@ -639,6 +653,13 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
       drawn.push({ ...pic, src })
     }
     if (fresh) { heldFrame?.lease.release(); heldFrame = fresh }
+    else if (heldFrame && !drawn.some(d => d.src.key === heldFrame!.key)) {
+      // The picture no longer shows the copied track frame: its copy (and texture) go.
+      releaseUp(p, heldFrame.key)
+      if (trackKey === heldFrame.key) trackKey = undefined
+      heldFrame.lease.release()
+      heldFrame = undefined
+    }
     compositor().frame(list)
     kinds = pics.map(x => x.kind)
     p.held = drawn
@@ -724,7 +745,9 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
         const to = r.to === 'entry' ? entry && up(entry) : up(flatSrc(r.to, m))
         const from = r.from ? up(flatSrc(r.from, m)) : to
         if (!to || !from) return false
-        c2.frame([], { from, to, effect: r.spec.element, progress, params, rng: r.rng })
+        // A fresh identity over the same memoised draw: the capture's compositor seeds the mask the screen showed.
+        const noise = noiseOf(r)
+        c2.frame([], { from, to, effect: r.spec.element, progress, params, rng: () => noise() })
         return true
       })
     }
@@ -1039,7 +1062,7 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
           if (!m && to && from) {
             const aspect = p.W / p.H
             const params = running.three ? transition3DDraw(running.spec, progress, running.rng, aspect) : transitionDraw(running.spec, progress, running.rng, aspect)
-            c.frame([], { from, to, effect: running.spec.element, progress, params, rng: running.rng })
+            c.frame([], { from, to, effect: running.spec.element, progress, params, rng: noiseOf(running) })
             kinds = ['transition']
             shown = { kind: 'transition', progress, params }
             return EMPTY_STATE

@@ -879,3 +879,43 @@ describe('review fix round 1', () => {
     expect(r.stage.hitTest(48, 36, c1, 250, { triggers, links: [] })).toBeUndefined()
   })
 })
+
+describe('review fix round 2', () => {
+  it('leaving during a dissolve: the next from-frame is the dissolve exactly as shown (its noise seed kept)', async () => {
+    const dissolve: TransitionSpec = { element: 'dissolve', ns: 'p', attrs: {}, durationMs: 1000, advClick: true }
+    const r = rig({ slides: [flyIn(), plainSlide(1, dissolve), plainSlide(2, fade(1000))] })
+    await r.enter(0)
+    r.stage.frame(r.model(0).timeline.checkpoint(1), 0)
+    r.leave()
+    await r.enter(1)
+    r.now.t = 500
+    r.stage.frame(r.model(1).cursor, 500)
+    expect(r.stage.inspect().lastDraws).toEqual(['transition'])
+    const before = pixels(r.output)
+    r.leave()
+    await r.enter(2)
+    r.stage.frame(r.model(2).cursor, 500)
+    expect(diffPx(before, pixels(r.output))).toBe(0)
+  })
+
+  it('the held track frame copy is released once layers replace it', async () => {
+    const ws = workspaceOf()
+    const tags: string[] = []
+    const live = new Set<Lease>()
+    const spy: SlideShowWorkspace = { ...ws, lease: (b, t) => { const l = ws.lease(b, t); if (l && t === 'plan:held-frame') { tags.push(t); live.add(l); const rel = l.release.bind(l); l.release = () => { live.delete(l); rel() } } return l } }
+    const r = rig({ slides: [flyIn({ steps: [{ trigger: 'click', eligibility: 'composited', track: { fps: 15, count: 8 } }] })], ws: spy })
+    r.tracks.set('0:0', fakeTrack(8, (i) => [i * 20, 50, 50]))
+    await r.enter(0)
+    const tl = r.model(0).timeline
+    const c1 = tl.next(tl.initial(), 0)
+    r.stage.frame(c1, 200)
+    r.stage.frame(c1, 270)
+    expect(r.stage.inspect().lastDraws).toEqual(['track:0:4'])
+    expect(live.size).toBe(1)
+    // Back to the initial layer state (Previous): the copy is not needed any more.
+    r.stage.frame(tl.checkpoint(0), 300)
+    expect(r.stage.inspect().lastDraws).toEqual(['layer:0', 'layer:2'])
+    expect(live.size).toBe(0)
+    expect(tags.length).toBe(2)
+  })
+})
