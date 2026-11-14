@@ -24,7 +24,9 @@ in git history.
   standalone x14 bars and every unresolved shape stay withheld
   with their base formatting and announce "Conditional formatting unavailable". A painted bar announces
   "Data bar, N% of range" (「資料橫條 N%」 in zh-TW); known issue: the forced-paged view still announces its painted
-  bars as unavailable. Details are in `docs/validation/xlsx-cf.md` §11.
+  bars as unavailable. Conditional formatting preparation is bounded by a deterministic work-unit cap instead of a
+  50 ms wall clock, so whether a rule paints no longer depends on machine load. Details are in
+  `docs/validation/xlsx-cf.md` §11.
 
 - **Excel colour scales (view-only).** Two- and three-colour conditional formatting scales now paint in
   resident, worker-backed and paged views, in print and export, with min/max/num/percent/percentile thresholds,

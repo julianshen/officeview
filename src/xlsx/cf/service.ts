@@ -137,7 +137,7 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
             return result
           }
           if (sheet.unresolvedSheet) return snapshot(sheet.unresolvedSheet.reason)
-          const boundsBudget = createCfWorkBudget({ signal, noTimeLimit: true })
+          const boundsBudget = createCfWorkBudget({ signal, scan: true })
           if (await source.bounds(stamp.sheetId, boundsBudget, signal) === undefined) return snapshot('cf-pending-data')
           // Scope shapes whose committed Excel fixture cannot discriminate them (Ruling F-2, final review I5): each is
           // gated on its capability, which is unverified in production, so these scales are withheld.
@@ -178,7 +178,7 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
           const sortedScopes = new Set<string>()
           for (const rule of ordered) { await work(); if (statistical(rule) && ownSorted(rule)) sortedScopes.add(scopeOf(rule)) }
           for (const rule of ordered) if (statistical(rule) && !stats.has(rule)) {
-            const statsBudget = options.statisticsBudget?.() ?? createCfWorkBudget({ signal, noTimeLimit: true })
+            const statsBudget = options.statisticsBudget?.() ?? createCfWorkBudget({ signal, scan: true })
             const own = ownSorted(rule)
             const upgraded = !own && sortedScopes.has(scopeOf(rule))
             const prepare = async (sorted: boolean, report: boolean) => (await statistics.prepareStatistics([rule.ranges], stamp, source, statsBudget, {

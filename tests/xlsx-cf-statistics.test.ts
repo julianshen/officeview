@@ -48,7 +48,9 @@ function rule<D extends object>(definition: D, ranges: readonly SourceRect[] = [
 const cell = (row: number, col: number, value: XlsxCell['value'], extra?: Partial<XlsxCell>): XlsxCell => ({
   ref: `${colName(col)}${row + 1}`, row, col, value, styleIndex: 0, ...extra,
 })
-const frozenBudget = (extra?: { signal?: AbortSignal }): CfWorkBudget => createCfWorkBudget({ now: () => 0, ...extra })
+// The statistics session and its sources run on a whole-scan budget in production (service.ts, render.ts), capped at
+// CF_LIMITS.workUnits, not on the per-call CF_LIMITS.activeUnits budget (Ruling S3-I1-UNITS).
+const frozenBudget = (extra?: { signal?: AbortSignal }): CfWorkBudget => createCfWorkBudget({ now: () => 0, scan: true, ...extra })
 
 function makeCounter() {
   return { cells: 0, pages: 0, bounds: 0 }
@@ -1519,7 +1521,7 @@ describe('CF statistics preparation', () => {
 
     const memory = createCfMemory({})
     const stats = createCfStatistics(memory)
-    const uncappedBudget = createCfWorkBudget({ noTimeLimit: true, maxUnits: 10_000_000 })
+    const uncappedBudget = createCfWorkBudget({ scan: true, maxUnits: 10_000_000 })
 
     // Whole-column A:A (0..1048575, col 0)
     const wholeColRect = rect(0, 1048575, 0, 0)
@@ -1665,7 +1667,7 @@ describe('CF statistics preparation', () => {
       [[rect(0, count - 1)]],
       stamp(1),
       src.source,
-      createCfWorkBudget({ noTimeLimit: true, maxUnits: 10_000_000 }),
+      createCfWorkBudget({ scan: true, maxUnits: 10_000_000 }),
       { sorted: false },
     )
     expect(outMinMax[0]!.kind).toBe('ready')

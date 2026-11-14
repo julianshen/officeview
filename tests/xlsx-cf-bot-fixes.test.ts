@@ -48,8 +48,8 @@ describe('3fc8ba38 / 380dc376: sorted statistics reuse and refusals', () => {
     const memory = createCfMemory({})
     const source = createResidentCfSource(numCells(50), 's', stamp, memory)
     const session = createCfStatistics(memory)
-    const sorted = await session.prepareStatistics([[rect(0, 49)]], stamp, source, createCfWorkBudget({ noTimeLimit: true }), { sorted: true })
-    const streaming = await session.prepareStatistics([[rect(0, 49)]], stamp, source, createCfWorkBudget({ noTimeLimit: true }), { sorted: false })
+    const sorted = await session.prepareStatistics([[rect(0, 49)]], stamp, source, createCfWorkBudget({ scan: true }), { sorted: true })
+    const streaming = await session.prepareStatistics([[rect(0, 49)]], stamp, source, createCfWorkBudget({ scan: true }), { sorted: false })
     expect(sorted[0]!.kind).toBe('ready')
     expect(streaming[0]!.kind).toBe('ready')
     expect(session.size, 'one entry under its owning (sorted) key').toBe(1)
@@ -63,7 +63,7 @@ describe('3fc8ba38 / 380dc376: sorted statistics reuse and refusals', () => {
       const memory = createCfMemory({})
       const source = createResidentCfSource(numCells(50), 's', stamp, memory)
       const session = createCfStatistics(memory, retain ? { retainEntries: true } : {})
-      const run = (sorted: boolean) => session.prepareStatistics([[rect(0, 49)]], stamp, source, createCfWorkBudget({ noTimeLimit: true }), { sorted })
+      const run = (sorted: boolean) => session.prepareStatistics([[rect(0, 49)]], stamp, source, createCfWorkBudget({ scan: true }), { sorted })
       const [sortedOut] = await run(true)
       const [reused] = await run(false)
       expect(sortedOut!.kind).toBe('ready')
@@ -100,13 +100,13 @@ describe('3fc8ba38 / 380dc376: sorted statistics reuse and refusals', () => {
     // Find a work cap that refuses the sorted scan but admits the streaming one.
     let sortedOut
     for (; cap < 20000; cap += 200) {
-      sortedOut = await session.prepareStatistics([[rect(0, 999)]], stamp, source, createCfWorkBudget({ noTimeLimit: true, maxUnits: cap }), { sorted: true })
+      sortedOut = await session.prepareStatistics([[rect(0, 999)]], stamp, source, createCfWorkBudget({ scan: true, maxUnits: cap }), { sorted: true })
       if (sortedOut[0]!.kind === 'unresolved') break
       for (const o of sortedOut) if (o.kind === 'ready') o.value.release()
       session.dispose()
     }
     expect(sortedOut![0]).toMatchObject({ kind: 'unresolved', reason: 'cf-resource-limit' })
-    const streaming = await session.prepareStatistics([[rect(0, 999)]], stamp, source, createCfWorkBudget({ noTimeLimit: true }), { sorted: false })
+    const streaming = await session.prepareStatistics([[rect(0, 999)]], stamp, source, createCfWorkBudget({ scan: true }), { sorted: false })
     expect(streaming[0]!.kind).toBe('ready')
     for (const o of streaming) if (o.kind === 'ready') o.value.release()
     session.dispose()
@@ -117,7 +117,9 @@ describe('7acd514e: the paint budget resumes before the scale-scope checks', () 
   it('a long statistics scan does not exhaust the preparation budget before the merged-scope check', async () => {
     let t = 0, bumped = false
     const cells = numCells(10).map(c => Object.defineProperty({ ...c } as Record<string, unknown>, 'value', {
-      get() { if (!bumped) { bumped = true; t += CF_LIMITS.activeMs + 1 } return c.value }, enumerable: true,
+      // The statistics scan reads this value on its own budget: a minute of wall time passes inside it. The per-call
+      // budget counts units only (Ruling S3-I1-UNITS), so neither that time nor the scan's units reach it.
+      get() { if (!bumped) { bumped = true; t += 60_000 } return c.value }, enumerable: true,
     })) as unknown as XlsxCell[]
     const sheet = { name: 'S', sheetId: 's', cols: [], merges: [], mergeRanges: [], rows: cells.map((cell, r) => ({ index: r, cells: [cell] })) } as unknown as XlsxSheet
     const memory = createCfMemory()

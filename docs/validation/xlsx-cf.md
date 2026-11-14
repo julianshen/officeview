@@ -1113,31 +1113,46 @@ the capability lifts):
 | no-CF baseline | 0 reserves, 0 reads, no scope |
 | module graph | eager graph clean (fresh build) |
 
-**`CF_LIMITS.activeMs` (50 ms wall clock, owner risk; behaviour unchanged).** Measured through the production
-service with the published evidence and an instrumented budget that counts active time exactly as
-`createCfWorkBudget` does (`.superpowers/t23/activems.ts`, not committed). Each row is ONE `prepareCf` call; production
-issues at most 1,000 cells per call on the text path (`CHUNK_CELLS`) and at most 256 cells of one row per call on
-the paint path, each call with its own 50 ms budget. This 14-core machine ran at a load average of about 3 to 5 in
-the "idle" runs; "loaded" adds 14 busy processes.
+**Ruling S3-I1-UNITS (owner, 2026-11-14): a per-call work-unit cap replaces the `activeMs` wall clock.** The 50 ms
+`CF_LIMITS.activeMs` refusal made the outcome (paint or "unavailable") depend on machine load, against the spec's
+Determinism rule, and twice failed PR #74's CI on `tests/xlsx-cf-text-stats.test.ts` with `CF preparation exceeds its
+admitted batch`. `createCfWorkBudget` no longer refuses on time: a per-call budget (the default, used by every
+`prepareCf` call in `service.ts` and by each paint batch in `render.ts`) refuses once its spent units would pass
+`CF_LIMITS.activeUnits = 250,000`, with the existing `resource-limit` code; a whole-scan budget (`scan: true`, which
+replaces `noTimeLimit`, used for the bounds scan and the statistics scans) keeps its own `maxUnits`, default
+`CF_LIMITS.workUnits = 1,000,000`. The clock now paces only the cooperative yield (`checkpointUnits` = 128 units or
+`sliceMs` = 4 ms), and a spend made while the budget is paused still counts, so the unit count cannot depend on when a
+yield happens. `tests/xlsx-cf-active-units.test.ts` proves it: the per-call, bounds and statistics budgets of the
+service (over both resident sources), the multi-chunk text path, the paint path and the paged wire path give the same
+result, and the service the same unit count, under a frozen clock and one that advances 1,000 ms per read; a call at
+exactly 250,000 units admits and one unit more refuses, under either clock.
 
-| Scope (one call) | Cells | Idle median / max ms | Loaded median / max ms |
-|---|---|---|---|
-| `stage3-bar-lengths-default` A1:V28 (largest fixture) | 616 | 5.9 / 13.8 | 6.9 / 24.4 |
-| `stage3-bar-auto-bounds` | 132 | 1.0 / 1.4 | 1.2 / 2.8 |
-| sparse 1M-row declared A:A, 200 rules, 40-cell request | 40 | 8.8 / 11.5 | 6.8 / 23.3 |
-| populated 100,000-row column, 1 bar | 1,000 (text-path maximum) | 11.2 / 18.8 | 14.2 / 33.2 |
-| populated 100,000-row column, 1 bar | 256 (paint-path maximum) | 9.0 / 11.5 | 18.5 / 22.1 |
-| populated 100,000-row column, 1 bar (not a production call size) | 5,000 | 21.2 to 24.0 / 27.2 | 37.2 to 43.8 / 76.1 |
-| populated 1,048,576-row column | any | refused before activeMs matters: the 1,000,000-unit bounds scan (`CF work limit`) | same |
+Calibration (`npx tsx scripts/cf-refs/active-units.ts 7`; units are deterministic, so one count per shape). "Cold" is
+one call on a fresh source; "warm" reuses a source whose bounds are cached. Wall time is the per-call budget's active
+time on this 14-core machine at a load average of about 3.5:
 
-At production call sizes the margin is about 2.7x to 4.5x idle and 1.5x to 2.3x under this load (worst 33 ms of 50);
-slower devices or heavier contention would shrink it further, and the one-call 5,000-cell shape already exceeds
-50 ms under load. Two new checks run through this budget and are load-sensitive in the same way: the shared-scan
-pressure scenario (9 ms idle, 23 ms loaded) in `tests/xlsx-cf-stage3.test.ts` and `audit.ts --stage 3`. Options for
-the owner: (1) raise `activeMs` (simple; weakens the main-thread guard proportionally); (2) split the budget per
-checkpoint slice (keeps the guard per unit of work; more plumbing, and total time is no longer bounded); (3) count
-work units instead of wall time (deterministic and load-independent; needs a calibrated unit cap per device class and
-loses the wall-clock guarantee on slow devices).
+| Scope (one `prepareCf` call) | Cells | Units | Margin to 250,000 | Cold / warm median active ms | Units per ms (warm) |
+|---|---|---|---|---|---|
+| `stage3-bar-lengths-default` A1:V28 (largest fixture) | 616 | 28,490 | 8.8x | 5.3 / 4.1 | 6,894 |
+| `stage3-bar-auto-bounds` | 132 | 3,205 | 78x | 1.0 / 0.8 | 3,840 |
+| sparse 1M-row declared A:A, 100 bars + 100 scales, 40-cell request | 40 | 48,579 | 5.1x | 9.0 / 8.7 | 5,578 |
+| populated 100,000-row column, 1 bar (text-path maximum) | 1,000 | 8,001 | 31x | 35.6 / 3.4 | 2,334 |
+| populated 100,000-row column, 1 bar (paint-path maximum) | 256 | 2,049 | 122x | 33.0 / 0.9 | 2,242 |
+| populated 100,000-row column, 1 bar (not a production call size) | 5,000 | 40,001 | 6.2x | 48.2 / 16.5 | 2,427 |
+
+Every production call shape admits with at least 5.1x margin (the worst is the 200-rule sparse scope; the 4x floor
+would be 194,316 units). The warm rate, 2,242 to 6,894 units per ms, is the one to read: the cold populated rows spend
+about 32 ms in the whole-sheet bounds scan, which runs on its own whole-scan budget between two per-call spends, so
+the old wall clock charged it to the call while its units are not the call's. At that rate 250,000 units is about
+36 to 112 ms of per-call work on this machine, between 0.7x and 2.2x the old 50 ms (well under the 10x ceiling).
+`activeUnits` bounds a call's own work only: the bounds scan and each statistics scan sit under their own caps
+(`workUnits`, and 10,000,000 for the paint path's statistics). Units are not equally costly: a call spends one unit
+per requested cell and per examined source cell, per rule-order comparison (up to rules squared over 2), and
+`ranges x merges` (capped at 2^20) per colour-scale or data-bar rule when the sheet has merges, so a scale or bar
+on a sheet with about 250,000 merges, or very many rules over one chunk, now refuses where its wall time might have
+passed; it then announces "Conditional formatting unavailable", deterministically. The cap trades the wall-clock guarantee on a
+slow device for a load-independent outcome: a device four times slower than this one spends up to about 450 ms on a
+call at the cap, in 128-unit slices separated by host yields.
 
 **Browser** (`.superpowers/t22/pw.config.ts`: the stock config's second webServer needs `@napi-rs/canvas`):
 chromium and Playwright WebKit (`webkit-2370`) each 17 passed plus the 1 expected failure (forced-paged bar

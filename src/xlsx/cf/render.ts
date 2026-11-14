@@ -349,8 +349,9 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
         const rect = { firstRow: row, lastRow: row, firstCol: col, lastCol: Math.min(to, col + maxCells - 1) }
         // Ruling I4: Per-batch work budget so static sheets (e.g. 3000x20) do not exhaust
         // the 1M whole-sheet limit. If a batch exceeds the budget, refusal is per-range.
+        // Ruling S3-I1-UNITS: the batch is capped at CF_LIMITS.activeUnits work units, not wall time.
         const batchBudget = createCfWorkBudget({ signal })
-        const statsBudgetFactory = options.statisticsBudget ?? (() => createCfWorkBudget({ signal, noTimeLimit: true, maxUnits: options.statisticsMaxUnits ?? 10_000_000 }))
+        const statsBudgetFactory = options.statisticsBudget ?? (() => createCfWorkBudget({ signal, scan: true, maxUnits: options.statisticsMaxUnits ?? 10_000_000 }))
         const service = createCfService(rules, memory, { evidence, budget: () => batchBudget, statisticsBudget: statsBudgetFactory, statistics, statisticsOptions, dateContext, merges: sheetMerges })
         try {
           const lease = await service.prepareCf({ stamp, sourceRects: [rect], signal, grantBytes: options.request?.grantBytes ?? CF_LIMITS.scratchBytes }, source)

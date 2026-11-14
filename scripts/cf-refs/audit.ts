@@ -1066,7 +1066,7 @@ export async function pressureScale1MRowSharedStatistics(): Promise<PressureSamp
   const stamp = { owner: 'audit', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: 1, viewGen: 0, structureGen: 0, clockGen: 0 }
   const source = residentSource(sheet, stamp, memory, 'engine')
   const session = createCfStatistics(memory, { retainEntries: true })
-  const work = createCfWorkBudget({ noTimeLimit: true, maxUnits: 10_000_000 })
+  const work = createCfWorkBudget({ scan: true, maxUnits: 10_000_000 })
   const wholeCol = [{ firstRow: 0, lastRow: 1048575, firstCol: 0, lastCol: 0 }]
   const scopes = Array.from({ length: 100 }, () => wholeCol)
   const outs = await session.prepareStatistics(
@@ -1299,7 +1299,7 @@ export async function pressureBar1MRowSharedScan(): Promise<PressureSample & { s
   const stamp = { owner: 'audit', sheetId: inner.sheetId ?? inner.name, workbookValueGen: 0, cfGen: 1, viewGen: 0, structureGen: 0, clockGen: 0 }
   const session = createCfStatistics(memory, { retainEntries: true })
   const outs = await session.prepareStatistics(rules.map(r => r.ranges), stamp, residentSource(inner, stamp, memory, 'engine'),
-    createCfWorkBudget({ noTimeLimit: true, maxUnits: 10_000_000 }), { signal: new AbortController().signal })
+    createCfWorkBudget({ scan: true, maxUnits: 10_000_000 }), { signal: new AbortController().signal })
   const ready = outs.find(o => o.kind === 'ready')
   if (!ready || ready.kind !== 'ready') throw new Error('bar statistics scan must admit')
   const statisticsReads = ready.value.value.storedCells
@@ -1485,7 +1485,7 @@ export async function pressureBarUnitCap(): Promise<{ name: string; admittedCell
     const memory = createCfMemory()
     const session = createCfStatistics(memory)
     const source = syntheticColumnSource(cells, stamp)
-    const budget = createCfWorkBudget({ noTimeLimit: true })
+    const budget = createCfWorkBudget({ scan: true })
     const [out] = await session.prepareStatistics([[{ firstRow: 0, lastRow: 1048575, firstCol: 0, lastCol: 0 }]], stamp, source,
       budget, { signal: new AbortController().signal })
     const result = { kind: out!.kind, reason: out!.kind === 'unresolved' ? out!.reason : '', reads: source.reads(), units: budget.units }
