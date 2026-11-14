@@ -5,7 +5,7 @@ import { encodeMessage, Kind, Reassembler } from '../../src/stream/frame'
 import { CAPS } from '../../src/stream/remote/session'
 import {
   decodeShowMessage, encodeShowMessage, PlanRejected, SHOW_PLAN_LIMITS,
-  type MorphPlanRecord, type ShowPlanRecord,
+  type MorphPlanRecord, type PlanLayerRecord, type ShowPlanRecord,
 } from '../../src/stream/show-plan'
 import type { BehaviourNode, CTn, ContainerNode, TimeNode } from '../../src/slideshow/types'
 import { buildPptxDeck, mainSeqXml, timingXmlOf } from '../../src/testdata/ooxml-builders'
@@ -39,7 +39,7 @@ function flyIn(): ShowPlanRecord {
     },
     layers: [
       { id: 0, part: 'body', bounds: { x: 0, y: 0, w: 960, h: 540 }, z: 0, assetId: 1, decodedBytes: 960 * 540 * 4, scale: 1, background: true },
-      { id: 1, key: '2', part: 'fill', parent: 0, bounds: { x: 100, y: 100, w: 300, h: 120 }, z: 1, assetId: 2, decodedBytes: 300 * 120 * 4, scale: 2, maskBox: { x: 100, y: 100, w: 300, h: 120 } },
+      { id: 1, key: '2', part: 'fill', bounds: { x: 100, y: 100, w: 300, h: 120 }, z: 1, assetId: 2, decodedBytes: 300 * 120 * 4, scale: 2, maskBox: { x: 100, y: 100, w: 300, h: 120 } },
     ],
     base: [['2', { x: 100, y: 100, w: 300, h: 120, rot: 0 }]],
     steps: [{ trigger: 'click', eligibility: 'layers' }, { trigger: 'after', eligibility: 'composited', reason: 'mark-rest', track: { fps: 15, count: 8 } }],
@@ -250,6 +250,30 @@ describe('hostile plan records', () => {
   it('accepts exactly 128 iterate items', () => {
     expect(() => decodeShowMessage(mutated((p) => { p.iterate = { keys: [['a', Array.from({ length: 127 }, (_, i) => String(i))]], groups: [] } }), E)).not.toThrow()
   })
+  describe('group container records (Task 6 follow-up)', () => {
+    const grouped = (p: Record<string, any>) => {
+      p.layers.push({ id: 7, key: 'g', z: 1.5, container: true })
+      p.layers.push({ id: 8, key: '9', parent: 7, bounds: { x: 0, y: 0, w: 10, h: 10 }, z: 2, assetId: 9, decodedBytes: 400, scale: 1 })
+    }
+    it('accepts a container and a child naming it', () => {
+      const m = decodeShowMessage(mutated(grouped), E)
+      expect(m.tag === 1 && m.plan.layers.map(l => l.id)).toEqual([0, 1, 7, 8])
+    })
+    it('accepts a container nested in a container', () => expect(() => decodeShowMessage(mutated((p) => { grouped(p); p.layers.splice(3, 0, { id: 10, key: 'h', z: 1.6, container: true, parent: 7 }); p.layers[4].parent = 10 }), E)).not.toThrow())
+    it('rejects a container carrying an assetId', () => expect(rej(mutated((p) => { grouped(p); p.layers[2].assetId = 20 }))).toBe('layers[2].assetId'))
+    it('rejects a container carrying decodedBytes', () => expect(rej(mutated((p) => { grouped(p); p.layers[2].decodedBytes = 4 }))).toBe('layers[2].decodedBytes'))
+    it('rejects a container carrying bounds', () => expect(rej(mutated((p) => { grouped(p); p.layers[2].bounds = { x: 0, y: 0, w: 1, h: 1 } }))).toBe('layers[2].bounds'))
+    it('rejects a container without a key', () => expect(rej(mutated((p) => { grouped(p); delete p.layers[2].key }))).toBe('layers[2].key'))
+    it('rejects container: false', () => expect(rej(mutated((p) => { grouped(p); p.layers[2].container = false }))).toBe('layers[2].container'))
+    it('rejects a parent that names no record', () => expect(rej(mutated((p) => { grouped(p); p.layers[3].parent = 99 }))).toBe('layers[3].parent'))
+    it('rejects a parent listed later', () => expect(rej(mutated((p) => { grouped(p); p.layers.reverse() }))).toMatch(/^layers\[\d\]\.parent$/))
+    it('rejects a parent that is a raster layer', () => expect(rej(mutated((p) => { grouped(p); p.layers[3].parent = 0 }))).toBe('layers[3].parent'))
+    it('rejects a self-parent and a cycle', () => {
+      expect(rej(mutated((p) => { grouped(p); p.layers[2].parent = 7 }))).toBe('layers[2].parent')
+      expect(rej(mutated((p) => { grouped(p); p.layers.splice(3, 0, { id: 10, key: 'h', z: 1.6, container: true, parent: 7 }); p.layers[2].parent = 10 }))).toBe('layers[2].parent')
+    })
+    it('rejects a duplicate layer id', () => expect(rej(mutated((p) => { grouped(p); p.layers[3].id = 7 }))).toBe('layers[3].id'))
+  })
   it('rejects a duplicate assetId', () => expect(rej(mutated((p) => { p.layers[1].assetId = p.layers[0].assetId }))).toBe('layers[1].assetId'))
   it('rejects an entry assetId that collides with a layer', () => expect(rej(mutated((p) => { p.entry = p.layers[0].assetId }))).toBe('entry'))
   it('rejects a layer decodedBytes of 64 MiB + 1', () => expect(rej(mutated((p) => { p.layers[0].decodedBytes = 64 * MiB + 1 }))).toBe('layers[0].decodedBytes'))
@@ -361,7 +385,7 @@ describe('hostile plan records', () => {
   })
   it('encode refuses what decode refuses', () => {
     const plan = flyIn()
-    plan.layers[1].assetId = plan.layers[0].assetId
+    ;(plan.layers[1] as PlanLayerRecord).assetId = (plan.layers[0] as PlanLayerRecord).assetId
     expect(pathOf(() => encodeShowMessage({ tag: 1, plan }))).toBe('layers[1].assetId')
     expect(pathOf(() => encodeShowMessage({ tag: 5, morph: { ...morph(), composited: { fps: 15, count: 3 } } }))).toBe('composited')
   })

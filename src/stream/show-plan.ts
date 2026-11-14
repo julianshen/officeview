@@ -48,14 +48,22 @@ export const SHOW_DIAGNOSTIC_CODES = [
 ] as const
 
 export interface Rect { x: number; y: number; w: number; h: number }
+/** A raster layer: one asset. `parent`: the id of an enclosing group's container record, listed earlier. */
 export interface PlanLayerRecord { id: number; key?: string; part?: 'fill' | 'line' | 'text' | 'body' | 'range'; parent?: number; bounds: Rect; z: number; assetId: number; decodedBytes: number; scale: number; maskBox?: Rect; background?: true }
+/**
+ * Task 6 follow-up (controller ruling): a group target whose animated descendants are their own layers. It has no
+ * raster (no `assetId`, `decodedBytes`, `bounds` or `scale`); it carries the group's `key`, so the client can
+ * compose the group's state over its children. It is listed before every record naming it as `parent`.
+ */
+export interface PlanContainerRecord { id: number; key: string; z: number; container: true; parent?: number }
+export const isRasterLayer = (l: PlanLayerRecord | PlanContainerRecord): l is PlanLayerRecord => !('container' in l && l.container)
 export interface PlanStepRecord { trigger: 'click' | 'after' | 'with' | 'shape'; eligibility: 'layers' | 'composited'; reason?: string; track?: { fps: 15; count: number } }
 export interface ShowPlanRecord {
   v: 1
   slide: { index: number; w: number; h: number }
   options: { showAnimation: boolean; useTimings: boolean }
   show: Pick<ShowSlide, 'transition' | 'timing' | 'builds'>
-  layers: PlanLayerRecord[]
+  layers: Array<PlanLayerRecord | PlanContainerRecord>
   base: Array<[string, BaseGeometry]>
   steps: PlanStepRecord[]
   triggers: Array<{ spid: string; rects: Rect[] }>
@@ -379,11 +387,24 @@ function validatePlan(v: unknown, expect: { unit: number; maxDecoded: number }):
   const layers = arr(o.layers, 'layers', SHOW_PLAN_LIMITS.layers)
   let sum = 0
   const sumCap = Math.min(SHOW_PLAN_LIMITS.showDecoded, expect.maxDecoded)
+  // Layer ids are unique; a `parent` names a container record listed earlier (so no cycle can form).
+  const layerIds = new Set<number>(), containers = new Set<number>()
+  const layerId = (v: unknown, p: string) => { const id = u32(v, p); if (layerIds.has(id)) fail(p); layerIds.add(id); return id }
+  const parentOf = (v: unknown, p: string) => { const id = u32(v, p); if (!containers.has(id)) fail(p) }
   layers.forEach((l, i) => {
     const p = ix('layers', i)
+    if (isObj(l) && has(l, 'container')) {
+      const co = obj(l, p, ['id', 'key', 'z', 'container'], ['parent'])
+      yes(co.container, at(p, 'container'))
+      opt(co, 'parent', p, parentOf)
+      containers.add(layerId(co.id, at(p, 'id')))
+      str(co.key, at(p, 'key')); num(co.z, at(p, 'z'), -1e9, 1e9)
+      return
+    }
     const lo = obj(l, p, ['id', 'bounds', 'z', 'assetId', 'decodedBytes', 'scale'], ['key', 'part', 'parent', 'maskBox', 'background'])
-    u32(lo.id, at(p, 'id'))
-    opt(lo, 'key', p, (s, q) => str(s, q)); opt(lo, 'part', p, (s, q) => oneOf(s, q, PARTS)); opt(lo, 'parent', p, u32)
+    opt(lo, 'parent', p, parentOf)
+    layerId(lo.id, at(p, 'id'))
+    opt(lo, 'key', p, (s, q) => str(s, q)); opt(lo, 'part', p, (s, q) => oneOf(s, q, PARTS))
     rect(lo.bounds, at(p, 'bounds'), W, H); opt(lo, 'maskBox', p, (b, q) => rect(b, q, W, H))
     num(lo.z, at(p, 'z'), -1e9, 1e9); num(lo.scale, at(p, 'scale'), 1e-6, 64); opt(lo, 'background', p, yes)
     const id = u32(lo.assetId, at(p, 'assetId'))

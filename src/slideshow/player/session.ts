@@ -25,21 +25,17 @@
  */
 import { preparedPlacement, SlideShowError, type ShowStart, type SlideShowSession } from '../../components/present'
 import { emuToPx } from '../../core/geometry'
-import { attrs } from '../../core/xml'
 import { throwIfAborted } from '../../core/package-error'
-import { HandlePackage } from '../../pptx/appearance/handle-package'
-import { masterArtwork } from '../../pptx/appearance/master-art'
 import { validateSlideSize } from '../../pptx/appearance/size'
-import { slideTheme } from '../../pptx/parse'
-import type { PptxPackageHandle, PptxShape } from '../../pptx/types'
+import type { PptxPackageHandle } from '../../pptx/types'
 import { ManualClock, RafClock } from '../clock'
 import { createDiagnosticSink } from '../diagnostics'
 import type { SlideCursor } from '../engine/steps'
-import { openShowPackage, readRelationships, readShowIndex } from '../read/deck'
+import { openShowPackage, readShowIndex } from '../read/deck'
 import { shapeResolver } from '../read/resolve'
 import { createSlideMetadataStore } from '../read/store'
+import { createUnderlayReader } from '../read/underlay'
 import { readSlideTiming } from '../read/timing'
-import { diagnoseInheritedTransition } from '../read/transition'
 import type { DiagnosticSink, LinkSpec, MetadataHandle, RenderState, ShowClock, ShowIndex, ShowSlide, SlideShowWorkspace, TerminalReserve } from '../types'
 import { admitShow, createSlideShowWorkspace, type SlideShowProfile } from '../workspace'
 import { createShowA11y, showTargets, slideTitle, visibleText, type ShowA11y, type ShowTarget } from './a11y'
@@ -293,63 +289,14 @@ export async function createSession(start: ShowStart): Promise<SessionController
   terminal = admitted.terminal
 
   // The model assembly point: the timing reader and a resolver over the slide and its layout and master artwork.
-  const underlays = new Map<number, readonly PptxShape[]>()
+  const underlay = createUnderlayReader(handle, index, sink, signal)
   store = createSlideMetadataStore({
     doc, handle, index, workspace, sink, signal,
     timing: readSlideTiming,
-    resolver: (slide) => shapeResolver(slide, underlays.get(doc.slides.indexOf(slide)) ?? []),
+    resolver: (slide) => shapeResolver(slide, underlay.underlays.get(doc.slides.indexOf(slide)) ?? []),
   })
 
-  /**
-   * Layout and master artwork ids per layout, parsed once per show (S1-19
-   * review M2): the resolver only needs the ids, so the cache keeps an
-   * id-only skeleton (no geometry, text or image bytes). A slide that hides
-   * the master shapes (`showMasterSp="0"`) has no underlay.
-   */
-  const underlayCache = new Map<string, Promise<readonly PptxShape[]>>()
-  const skeleton = (list: readonly PptxShape[], depth = 0): PptxShape[] =>
-    depth > 64 ? [] : list.map((s) => ({ source: s.source && { ...s.source }, children: s.children && skeleton(s.children, depth + 1) }) as PptxShape)
-  /** Layout and master artwork for the resolver; inherited transitions are diagnosed on the way (they are not inherited). */
-  async function underlayOf(i: number): Promise<readonly PptxShape[]> {
-    const part = index.slides[i]?.partPath
-    if (!handle || !part) return []
-    try {
-      const rels = await readRelationships(handle, part, signal)
-      const local = (list: typeof rels, kind: string) => list.find((r) => !r.external && r.type?.endsWith(`/${kind}`))?.target
-      const layout = local(rels, 'slideLayout')
-      const master = layout ? local(await readRelationships(handle, layout, signal), 'slideMaster') : local(rels, 'slideMaster')
-      // A private, bounded view over the handle: its cache dies with this call.
-      const pkg = HandlePackage.over(handle)
-      for (const [path, kind] of [[layout, 'layout'], [master, 'master']] as const) {
-        const root = path ? await pkg.xmlOrdered(path) : undefined
-        if (root) diagnoseInheritedTransition(root, kind, i, sink)
-      }
-      if (['0', 'false'].includes(attrs(await pkg.xmlOrdered(part)).showMasterSp ?? '')) return []
-      const key = `${layout ?? ''}|${master ?? ''}`
-      let art = underlayCache.get(key)
-      if (!art) {
-        art = slideTheme(pkg, part).then((theme) => masterArtwork(pkg, part, theme.context)).then((a) => skeleton([...a.master, ...a.layout]))
-        underlayCache.set(key, art)
-        art.catch(() => underlayCache.delete(key))
-      }
-      return await art
-    } catch (e) {
-      throwIfAborted(signal)
-      sink.add({ code: 'underlay', slideIndex: i, message: `Layout and master artwork could not be read (${e instanceof Error ? e.message : String(e)}); master-only targets read as missing` })
-      return []
-    }
-  }
-
-  async function acquire(i: number): Promise<MetadataHandle> {
-    const mine = store!.resident().includes(i) ? undefined : await underlayOf(i)
-    if (mine) underlays.set(i, mine)
-    try {
-      return await store!.acquire(i, signal)
-    } finally {
-      // A second visit to the same slide may have joined the same read with its own copy: leave that one.
-      if (mine && underlays.get(i) === mine) underlays.delete(i)
-    }
-  }
+  const acquire = (i: number): Promise<MetadataHandle> => underlay.acquire(store!, i)
 
   // ---------------------------------------------------------------------
   // State

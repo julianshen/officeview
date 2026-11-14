@@ -1,13 +1,22 @@
 /** Piece 4 Task 6: the show-plan bundle build (plan record, entry frame, layers), its refusals, links, growth and caches. */
 import { describe, expect, it } from 'bun:test'
-import { decodeShowMessage, encodeShowMessage, SHOW_PLAN_LIMITS, type ShowPlanRecord } from '../../src/stream/show-plan'
+import { decodeShowMessage, encodeShowMessage, isRasterLayer, SHOW_PLAN_LIMITS, type ShowPlanRecord } from '../../src/stream/show-plan'
+const R = (p: ShowPlanRecord) => p.layers.filter(isRasterLayer)
 import { ADVERSARY_KINDS, adversaryDeck, flyInDeck, manyLayersDeck, spinStepsDeck } from '../../src/testdata/show-decks'
 import { Pool } from '../src/pool'
+import { moveTwiceDeck } from '../../src/testdata/show-decks'
+import { stateMatrix } from '../../src/slideshow/affine'
+import { createDiagnosticSink } from '../../src/slideshow/diagnostics'
+import { createRng } from '../../src/slideshow/rng'
+import { trackInputs } from '../src/show/build'
+import { drawsAt, slideStateAt } from '../src/show/compose'
+import type { DocumentHost } from '../src/render'
+import { appearMoveDeck } from './show-fixtures'
 import { inkPixels } from './show-classify-helper'
 import { decodePng } from '../src/mark/png'
 import { SHOW_BUNDLE_BUDGET, type BuiltShowPlan, type ShowPlanJob } from '../src/show/build'
 import { showPlanL1Key, showPlanL2Key } from '../src/cache'
-import { cmdDeck, growthDeck, hiddenLinkDeck, openDeck, transitionOnlyDeck } from './show-fixtures'
+import { cmdDeck, groupDeck, growthDeck, hiddenLinkDeck, masterTargetDeck, openDeck, transitionOnlyDeck } from './show-fixtures'
 
 const job = (over: Partial<ShowPlanJob> = {}): ShowPlanJob => ({ unitIndex: 0, scale: 1, motion: 'full', mark: { kind: 'fixed' }, strictMarks: false, ...over })
 const built = (r: Awaited<ReturnType<import('../src/render').DocumentHost['showPlan']>>): BuiltShowPlan => {
@@ -35,19 +44,19 @@ describe('buildShowPlan', () => {
     expect(plan.slide).toEqual({ index: 0, w: 960, h: 720 })
     expect(plan.options).toEqual({ showAnimation: true, useTimings: true })
     expect(plan.steps).toEqual([{ trigger: 'click', eligibility: 'layers' }])
-    expect(plan.layers.length).toBeGreaterThanOrEqual(2)
-    expect(plan.layers.some(l => l.key === 'sp:3')).toBe(true)
-    expect(plan.layers.filter(l => l.background).length).toBe(1)
+    expect(R(plan).length).toBeGreaterThanOrEqual(2)
+    expect(R(plan).some(l => l.key === 'sp:3')).toBe(true)
+    expect(R(plan).filter(l => l.background).length).toBe(1)
     expect(plan.base.map(([k]) => k)).toContain('sp:3')
     // Order: the entry frame first, then the layers in z order.
     expect(b.assets[0]!.tag).toBe(3)
     expect(b.assets[0]!.assetId).toBe(plan.entry)
-    expect(b.assets.slice(1).map(a => a.assetId)).toEqual([...plan.layers].sort((x, y) => x.z - y.z).map(l => l.assetId))
+    expect(b.assets.slice(1).map(a => a.assetId)).toEqual([...R(plan)].sort((x, y) => x.z - y.z).map(l => l.assetId))
     expect(b.assets.slice(1).every(a => a.tag === 2)).toBe(true)
     const ids = b.assets.map(a => a.assetId)
     expect(new Set(ids).size).toBe(ids.length)
     // Each asset is what its record says.
-    for (const l of plan.layers) {
+    for (const l of R(plan)) {
       const a = b.assets.find(x => x.assetId === l.assetId)!
       expect(l.decodedBytes).toBe(a.w * a.h * 4)
       const d = decodePng(a.png)
@@ -55,7 +64,7 @@ describe('buildShowPlan', () => {
     }
     const entry = b.assets[0]!
     expect([entry.w, entry.h]).toEqual([960, 720])
-    expect(b.decodedBytes).toBe(plan.layers.reduce((s, l) => s + l.decodedBytes, 0) + entry.w * entry.h * 4 + planBytes(plan))
+    expect(b.decodedBytes).toBe(R(plan).reduce((s, l) => s + l.decodedBytes, 0) + entry.w * entry.h * 4 + planBytes(plan))
     // The client accepts every message.
     const rt = roundTrip(b)
     expect(rt.plan.tag).toBe(1)
@@ -66,7 +75,7 @@ describe('buildShowPlan', () => {
     const { host, open, docKey } = await openDeck(await transitionOnlyDeck())
     expect(open.anim).toEqual([0])
     const b = built(await host.showPlan(docKey, job()))
-    expect(b.plan.layers).toEqual([])
+    expect(R(b.plan)).toEqual([])
     expect(b.plan.steps).toEqual([])
     expect(b.plan.show.transition?.element).toBe('fade')
     expect(b.assets.map(a => [a.tag, a.assetId])).toEqual([[3, b.plan.entry]])
@@ -76,7 +85,7 @@ describe('buildShowPlan', () => {
   it('129-layer slide plays every step composited', async () => {
     const { host, docKey } = await openDeck(await manyLayersDeck(129))
     const b = built(await host.showPlan(docKey, job()))
-    expect(b.plan.layers).toEqual([])
+    expect(R(b.plan)).toEqual([])
     expect(b.plan.steps.length).toBe(5)
     for (const s of b.plan.steps) {
       expect(s.eligibility).toBe('composited')
@@ -114,16 +123,86 @@ describe('buildShowPlan', () => {
     expect('refused' in await host.showPlan(docKey, job())).toBe(false)
   })
 
-  it('a build past the deadline is refused show-plan-timeout, and the refusal is not cached', async () => {
+  it('a build past the deadline is refused show-plan-timeout, and a repeat request plays the still without building', async () => {
     const { host, docKey } = await openDeck(await flyInDeck())
     host.showOptions = { deadlineMs: 0, now: (() => { let t = 0; return () => (t += 1) })() }
     const r = await host.showPlan(docKey, job())
     expect('refused' in r && r.refused).toBe('show-plan-timeout')
     expect('refused' in r && r.diagnostics.map(d => d.code)).toEqual(['show-plan-timeout'])
+    const before = host.showCacheStats()
     host.showOptions = {}
-    expect('refused' in await host.showPlan(docKey, job())).toBe(false)
-    expect(host.showCacheStats().l2.hits).toBe(0)
+    // Cached under the L1 key (controller ruling): any mark, no classification, no assembly.
+    const again = await host.showPlan(docKey, job({ mark: { kind: 'viewer', text: 'someone else' } }))
+    expect('refused' in again && again.refused).toBe('show-plan-timeout')
+    const after = host.showCacheStats()
+    expect(after.l2.misses).toBe(before.l2.misses)
+    expect(after.l1.misses).toBe(before.l1.misses)
+    // Another bucket is another slide preparation, and builds.
+    expect('refused' in await host.showPlan(docKey, job({ scale: 2 }))).toBe(false)
+  }, 60_000)
+
+  it('timing targets resolve with the layout and master artwork, as in local mode', async () => {
+    const { host, docKey } = await openDeck(await masterTargetDeck())
+    built(await host.showPlan(docKey, job()))
+    const show = (host as unknown as { docs: Map<string, { show: { sink: { list(): Array<{ code: string; effect?: string }> } } }> }).docs.get(docKey)!.show
+    const codes = show.sink.list().map(d => d.code)
+    expect(codes).toContain('master-target')
+    expect(codes).not.toContain('unresolved-target')
   })
+
+  it('a group with animated sub-layers ships a container record before its children', async () => {
+    const { host, docKey } = await openDeck(await groupDeck())
+    const b = built(await host.showPlan(docKey, job()))
+    const containers = b.plan.layers.filter(l => !isRasterLayer(l))
+    expect(containers.map(c => c.key)).toEqual(['sp:10'])
+    const group = containers[0]!
+    const children = R(b.plan).filter(l => l.parent === group.id)
+    expect(children.map(c => c.key).sort()).toContain('sp:12')
+    // Listed before every child; no asset of its own.
+    const at = b.plan.layers.indexOf(group)
+    for (const c of children) expect(b.plan.layers.indexOf(c)).toBeGreaterThan(at)
+    expect(b.assets.some(a => a.assetId === (group as { assetId?: number }).assetId)).toBe(false)
+    roundTrip(b)
+  })
+
+  /**
+   * Every boundary the layers display (the end of a `layers` step, or the start of one): each shipped layer drawn
+   * there sits exactly at the rest its mark was burned at (`asset.rest`).
+   */
+  async function restsHold(host: DocumentHost, docKey: string, b: BuiltShowPlan) {
+    const show = (host as unknown as { docs: Map<string, { show: Parameters<typeof trackInputs>[0] }> }).docs.get(docKey)!.show
+    const { ps, timeline } = trackInputs(show, job())
+    const steps = b.plan.steps, n = steps.length
+    let checked = 0
+    for (let k = 0; k <= n; k++) {
+      const layered = (k > 0 && steps[k - 1]!.eligibility === 'layers') || (k < n && steps[k]!.eligibility === 'layers')
+      if (!layered) continue
+      const draws = drawsAt(ps, slideStateAt(ps, timeline, timeline.checkpoint(k), 0, createRng(1), createDiagnosticSink()))
+      for (const rec of R(b.plan)) {
+        const d = draws.find(y => y.layer === ps.layers[rec.id])
+        if (!d || !d.state.visible || !(d.state.opacity > 0)) continue
+        const m = stateMatrix(d.state), a = b.assets.find(x => x.assetId === rec.assetId)!
+        expect({ k, key: rec.key, x: Math.round((rec.bounds.x + m[4]) * job().scale), y: Math.round((rec.bounds.y + m[5]) * job().scale) }).toEqual({ k, key: rec.key, x: a.rest.x, y: a.rest.y })
+        checked++
+      }
+    }
+    return checked
+  }
+
+  it('D8 strengthened: a layer with two rests plays every step from its first move composited; no boundary shows a mark off its rest', async () => {
+    const { host, docKey } = await openDeck(await moveTwiceDeck())
+    const b = built(await host.showPlan(docKey, job()))
+    expect(b.plan.steps.map(s => [s.eligibility, s.reason])).toEqual([['composited', 'mark-rest'], ['composited', 'mark-rest']])
+    expect(b.plan.diagnostics.filter(d => d.code === 'mark-rest').map(d => d.step)).toEqual([0, 1])
+    await restsHold(host, docKey, b)
+    // Slides whose layers keep one rest still play from layers, and every displayed boundary holds it.
+    for (const deck of [await flyInDeck(), await appearMoveDeck(0.25)]) {
+      const o = await openDeck(deck)
+      const ok = built(await o.host.showPlan(o.docKey, job()))
+      expect(ok.plan.steps.map(s => s.eligibility)).toEqual(['layers'])
+      expect(await restsHold(o.host, o.docKey, ok)).toBeGreaterThan(2)
+    }
+  }, 60_000)
 
   it('cmd nodes dropped with cmd-dropped', async () => {
     const { host, docKey } = await openDeck(await cmdDeck())
@@ -161,19 +240,19 @@ describe('buildShowPlan', () => {
     {
       const { host, docKey } = await openDeck(await growthDeck(2))
       const b = built(await host.showPlan(docKey, job({ scale: 1 })))
-      const grow = b.plan.layers.find(l => l.key === 'sp:2')!
+      const grow = R(b.plan).find(l => l.key === 'sp:2')!
       expect(grow.scale).toBeCloseTo(2, 6)
       const a = b.assets.find(x => x.assetId === grow.assetId)!
       expect(Math.abs(a.w - grow.bounds.w * 2)).toBeLessThanOrEqual(2)
       expect(b.plan.steps.map(s => s.eligibility)).toEqual(['layers'])
-      expect(b.plan.layers.find(l => l.background)!.scale).toBe(1)
+      expect(R(b.plan).find(l => l.background)!.scale).toBe(1)
       roundTrip(b)
     }
     {
       // A full-width strip grown 10× at bucket 2 would be 19,200 px wide: capped at maxUnitPx.
       const { host, docKey } = await openDeck(await growthDeck(10, { x: 0, y: 340, w: 960, h: 24 }))
       const b = built(await host.showPlan(docKey, job({ scale: 2 })))
-      const grow = b.plan.layers.find(l => l.key === 'sp:2')!
+      const grow = R(b.plan).find(l => l.key === 'sp:2')!
       const a = b.assets.find(x => x.assetId === grow.assetId)!
       expect(Math.max(a.w, a.h)).toBeLessThanOrEqual(8192)
       expect(Math.max(a.w, a.h)).toBeGreaterThan(8000)
@@ -235,6 +314,27 @@ describe('pool show jobs', () => {
       const m = await pool.markLayer('s1', { png: layer.png, w: layer.w, h: layer.h, kBasis: new Uint8Array(32).fill(7), code: Int8Array.from({ length: 512 }, (_, i) => (i % 3 ? 1 : -1)), crop: { ...layer.rest, pageW: 960, pageH: 720 } }, 1024)
       expect('carriers' in m && m.carriers).toBeGreaterThan(0)
       expect(pool.stats()).toMatchObject({ reserved: 0, running: 0 })
+    } finally {
+      pool.dispose()
+    }
+  }, 60_000)
+
+  it('a timed-out slide is answered from the pool refusal cache: no admission, no worker, no second retirement', async () => {
+    const pool = new Pool({ workers: 1, testHooks: true, showDeadlineMs: 400 })
+    try {
+      await pool.open('fly', await flyInDeck(), 'full')
+      const first = await pool.showPlan('s1', { docRef: 'fly', contentPolicy: 'full', ...job(), hangMs: 1500 }, 1024)
+      expect('refused' in first && first.refused).toBe('show-plan-timeout')
+      expect(pool.stats().retired).toBe(1)
+      const t0 = performance.now()
+      const again = await pool.showPlan('s2', { docRef: 'fly', contentPolicy: 'full', ...job({ mark: { kind: 'off' } }) }, 1024)
+      expect('refused' in again && again.refused).toBe('show-plan-timeout')
+      expect(performance.now() - t0).toBeLessThan(100)
+      expect(pool.stats()).toMatchObject({ retired: 1, reserved: 0, running: 0 })
+      // Re-registering the document forgets it: the next request runs on a worker again (and, at 400 ms, times out again).
+      await pool.open('fly', await flyInDeck(), 'full')
+      await pool.showPlan('s1', { docRef: 'fly', contentPolicy: 'full', ...job(), hangMs: 1500 }, 1024)
+      expect(pool.stats().retired).toBe(2)
     } finally {
       pool.dispose()
     }

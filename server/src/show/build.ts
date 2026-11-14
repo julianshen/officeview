@@ -30,8 +30,8 @@ import type { PlanLayer } from '../../../src/slideshow/render/plan'
 import { slideSize, textRangeBox } from '../../../src/slideshow/render/scene'
 import { createRng } from '../../../src/slideshow/rng'
 import { targetKey } from '../../../src/slideshow/target'
-import type { CanvasFactory, LayerBitmap, Lease, ShowIndex, ShowSlide, SlideMetadataStore, SlideShowWorkspace, TimeNode, TimingTree, TransitionSpec } from '../../../src/slideshow/types'
-import { encodeShowMessage, PlanRejected, SHOW_DIAGNOSTIC_CODES, SHOW_PLAN_ITERATE_ITEMS, SHOW_PLAN_LIMITS, type PlanLayerRecord, type PlanStepRecord, type Rect, type ShowPlanRecord } from '../../../src/stream/show-plan'
+import type { DiagnosticSink, MetadataHandle, CanvasFactory, LayerBitmap, Lease, ShowIndex, ShowSlide, SlideMetadataStore, SlideShowWorkspace, TimeNode, TimingTree, TransitionSpec } from '../../../src/slideshow/types'
+import { encodeShowMessage, PlanRejected, SHOW_DIAGNOSTIC_CODES, SHOW_PLAN_ITERATE_ITEMS, SHOW_PLAN_LIMITS, type PlanContainerRecord, type PlanLayerRecord, type PlanStepRecord, type Rect, type ShowPlanRecord } from '../../../src/stream/show-plan'
 import { LruBytes, showPlanL1Key, showPlanL2Key } from '../cache'
 import { basis } from '../mark/basis'
 import { extendedCodeword } from '../mark/bch'
@@ -52,7 +52,12 @@ export interface ShowPlanJob {
   motion: 'full' | 'reduced'
   mark: MarkSpec
   strictMarks: boolean
-  /** Additive: the unit's real Layer-1 basis key for the §7 validation; absent, a fixed validation key. */
+  /**
+   * Additive: a Layer-1 basis key for the §7 build-time validation. Controller ruling (Task 6 follow-up): a
+   * fixed validation key (derived from the document key, unit and bucket) is accepted and is the default. The
+   * validation proves that a page basis cropped to each layer's rest survives composition; the session's own
+   * Layer-1 is applied per session at send time (Task 7, `markLayerRaster` with `asset.rest`), never here.
+   */
   kBasis?: Uint8Array
 }
 /**
@@ -103,6 +108,12 @@ interface L1Entry {
   extraDiagnostics?: Array<{ code: string }>
   rasters?: Map<PlanLayer, LayerBitmap>
   classes: Map<boolean, Classification>
+  /**
+   * Task 6 follow-up (controller ruling): a refusal found after preparation (`show-plan-timeout`, `still`,
+   * `show-budget`, `show-limits`), per `strictMarks`, cached under the L1 key so a repeat request for the
+   * slide, bucket and motion plays its still at once, whatever its mark.
+   */
+  refusals: Map<boolean, ShowRefusal>
 }
 interface Stats { l1: { hits: number; misses: number }; l2: { hits: number; misses: number } }
 
@@ -116,6 +127,10 @@ export interface ShowDoc {
   handle: PptxPackageHandle
   index: ShowIndex
   store: SlideMetadataStore
+  /** Acquires slide `i`'s metadata with its layout and master artwork in place for the resolver (as local mode). */
+  acquire(i: number): Promise<MetadataHandle>
+  /** The show reader's diagnostics (index, metadata, underlay). */
+  sink: DiagnosticSink
   units: ReadonlyArray<{ w: number; h: number }>
   hidden: readonly number[]
   /** Loaded by the host before a build (async reads); the build itself is synchronous. */
@@ -265,12 +280,12 @@ function prepareL1(show: ShowDoc, job: ShowPlanJob): L1Entry {
   const settings = show.index.settings
   const timeline = createSlideTimeline(tt?.tree ?? meta.timing, { showAnimation: settings.showAnimation, reducedMotion: job.motion === 'reduced', ...(tt ? { orderOf: tt.orderOf } : {}) })
   const classes = new Map<boolean, Classification>()
-  if (timeline.steps > SHOW_PLAN_LIMITS.steps) return { refusal: { refused: 'show-limits', diagnostics: [{ code: 'show-limits' }] }, classes }
+  if (timeline.steps > SHOW_PLAN_LIMITS.steps) return { refusal: { refused: 'show-limits', diagnostics: [{ code: 'show-limits' }] }, classes, refusals: new Map() }
   // D22: the text items the client fans out itself; over 128 key strings the slide plays its still (Task 4 ruling).
   const keys: Array<[string, string[]]> = tt ? [...tt.items].map(([k, items]) => [k, [...items]]) : []
   const groups: Array<[string, { wd?: string[][]; lt?: string[][] }]> = tt?.groups ? [...tt.groups].map(([k, g]) => [k, { ...(g.wd ? { wd: g.wd.map(x => [...x]) } : {}), ...(g.lt ? { lt: g.lt.map(x => [...x]) } : {}) }]) : []
   const iterateItems = keys.reduce((n, [, xs]) => n + 1 + xs.length, 0) + groups.reduce((n, [, g]) => n + 1 + [...(g.wd ?? []), ...(g.lt ?? [])].reduce((m, l) => m + l.length, 0), 0)
-  if (iterateItems > SHOW_PLAN_ITERATE_ITEMS) return { refusal: { refused: 'show-limits', diagnostics: [{ code: 'show-limits' }] }, classes }
+  if (iterateItems > SHOW_PLAN_ITERATE_ITEMS) return { refusal: { refused: 'show-limits', diagnostics: [{ code: 'show-limits' }] }, classes, refusals: new Map() }
 
   const { w: W, h: H } = slideSize(slide)
   const scale = job.scale
@@ -330,7 +345,7 @@ function prepareL1(show: ShowDoc, job: ShowPlanJob): L1Entry {
     iterate: { keys, groups },
   }
   const extraDiagnostics = [...(cmdDropped ? [{ code: 'cmd-dropped' }] : []), ...(withheld ? [{ code: 'link-withheld' }] : [])]
-  return { ps, timeline, record, extraDiagnostics, rasters, classes }
+  return { ps, timeline, record, extraDiagnostics, rasters, classes, refusals: new Map() }
 }
 
 const rastersBytes = (e: L1Entry) => [...(e.rasters?.values() ?? [])].reduce((n, r) => n + r.canvas.width * r.canvas.height * 4, 0) + 64 * 1024
@@ -413,22 +428,29 @@ export function buildShowPlan(doc: ShowHost, job: ShowPlanJob, opts: ShowBuildOp
   const start = now(), deadline = opts.deadlineMs ?? SHOW_PLAN_DEADLINE_MS
   const check = () => { if (now() - start > deadline) throw new Timeout() }
   const seamed = opts.budget !== undefined || !!opts.compose
+  let e: L1Entry | undefined
   try {
     const l2key = showPlanL2Key(l1KeyOf(show, job), markSettingsOf(job.mark), job.strictMarks, job.kBasis ? Buffer.from(job.kBasis).toString('hex') : '')
     if (!seamed) {
       const hit = show.l2.get(l2key)
       if (hit) { show.stats.l2.hits++; return hit }
     }
-    const e = l1For(show, job)
+    e = l1For(show, job)
     if (e.refusal) return e.refusal
+    const refused = seamed ? undefined : e.refusals.get(job.strictMarks)
+    if (refused) return refused
     show.stats.l2.misses++
     check()
     const out = assemble(show, e, job, opts, check)
-    if (!seamed) show.l2.put(l2key, out, 'refused' in out ? 1024 : out.assets.reduce((n, a) => n + a.png.length, 64 * 1024))
+    if (seamed) return out
+    if ('refused' in out) e.refusals.set(job.strictMarks, out)
+    else show.l2.put(l2key, out, out.assets.reduce((n, a) => n + a.png.length, 64 * 1024))
     return out
   } catch (err) {
-    if (err instanceof Timeout) return { refused: 'show-plan-timeout', diagnostics: [{ code: 'show-plan-timeout' }] }
-    throw err
+    if (!(err instanceof Timeout)) throw err
+    const out: ShowRefusal = { refused: 'show-plan-timeout', diagnostics: [{ code: 'show-plan-timeout' }] }
+    if (e && !seamed) e.refusals.set(job.strictMarks, out)
+    return out
   }
 }
 
@@ -496,10 +518,26 @@ function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOp
       if (shipped.some(s => !Number.isFinite(s.rest.x))) { allComposited('mark-rest'); diagnostics.push({ code: 'mark-rest' }); shipped = [] }
     }
 
-    const layerRecords = (list: readonly Shipped[]): PlanLayerRecord[] => {
-      const parents = parentIds(ps)
+    const layerRecords = (list: readonly Shipped[]): Array<PlanLayerRecord | PlanContainerRecord> => {
+      const { parentOf, groups } = groupTree(ps)
       const measure = measureCtx()
-      return list.map(s => {
+      const out: Array<PlanLayerRecord | PlanContainerRecord> = []
+      const emitted = new Set<number>()
+      /** A group's container record (and its own enclosing groups'), before the first child naming it. */
+      const container = (id: number, z: number) => {
+        if (emitted.has(id)) return
+        const g = groups.get(id)!
+        if (g.parent !== undefined) container(g.parent, z)
+        emitted.add(id)
+        out.push({ id, key: g.key, z: z - 0.5, container: true, ...(g.parent !== undefined ? { parent: g.parent } : {}) })
+      }
+      for (const s of list) {
+        const p = parentOf.get(s.layer)
+        if (p !== undefined) container(p, s.index)
+        out.push(raster(s))
+      }
+      return out
+      function raster(s: Shipped): PlanLayerRecord {
         const l = s.layer
         const r: PlanLayerRecord = { id: s.index, bounds: { ...s.bmp.bounds }, z: s.index, assetId: 1 + s.index, decodedBytes: s.bmp.canvas.width * s.bmp.canvas.height * 4, scale: s.bmp.scale }
         if (l.kind === 'target') {
@@ -510,11 +548,11 @@ function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOp
             if (b) r.maskBox = clampRect({ x: b.minX, y: b.minY, w: b.maxX - b.minX, h: b.maxY - b.minY }, W, H)
           }
         }
-        const parent = parents.get(l)
+        const parent = parentOf.get(l)
         if (parent !== undefined) r.parent = parent
         if (l.kind === 'static' && l.background) r.background = true
         return r
-      })
+      }
     }
     const planOf = (list: readonly Shipped[]): ShowPlanRecord => {
       const triggerOf = stepTriggers(ps.meta.timing && !('refused' in ps.meta.timing) ? ps.meta.timing : undefined, n)
@@ -572,18 +610,28 @@ function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOp
   }
 }
 
-/** The id of each sub-layer's enclosing group target (groups numbered after the raster layers). */
-function parentIds(ps: PreparedSlide): Map<PlanLayer, number> {
-  const out = new Map<PlanLayer, number>()
+/**
+ * The group targets with sub-layers (container records, numbered after the raster layers): each one's key and
+ * enclosing group, and each raster sub-layer's immediate group.
+ */
+function groupTree(ps: PreparedSlide): { parentOf: Map<PlanLayer, number>; groups: Map<number, { key: string; parent?: number }> } {
+  const parentOf = new Map<PlanLayer, number>()
+  const groups = new Map<number, { key: string; parent?: number }>()
   let next = ps.layers.length
-  const walk = (layers: readonly PlanLayer[], parent: number | undefined) => {
+  const walk = (layers: readonly PlanLayer[], parent: number | undefined, depth: number) => {
+    if (depth > 64) return
     for (const l of layers) {
-      if (l.kind === 'target' && l.sub) { const id = next++; walk(l.sub, id); continue }
-      if (parent !== undefined) out.set(l, parent)
+      if (l.kind === 'target' && l.sub) {
+        const id = next++
+        groups.set(id, { key: l.key, ...(parent !== undefined ? { parent } : {}) })
+        walk(l.sub, id, depth + 1)
+        continue
+      }
+      if (parent !== undefined) parentOf.set(l, parent)
     }
   }
-  walk(ps.plan.layers, undefined)
-  return out
+  walk(ps.plan.layers, undefined, 0)
+  return { parentOf, groups }
 }
 
 function stateMatrixOf(s: DrawnLayer['state']): number[] {
@@ -609,14 +657,18 @@ function validate(ps: PreparedSlide, rasters: ReadonlyMap<PlanLayer, LayerBitmap
   const code = codes[0]!
   let chips: ReturnType<typeof basis> | undefined
   try { chips = basis(kBasis, PW, PH, DEFAULT_PARAMS) } catch { chips = undefined }
-  const sent = new Map<PlanLayer, LayerBitmap>()
+  const sent = new Map<PlanLayer, LayerBitmap>(), visible = new Map<PlanLayer, LayerBitmap>()
   for (const s of shipped) {
+    const v = decodePng(s.asset.png)
+    visible.set(s.layer, bitmapOf(v.w, v.h, v.rgba, s.bounds, s.scale))
     const r = markLayerRaster({ png: s.asset.png, w: s.asset.w, h: s.asset.h, kBasis, code, crop: { x: s.asset.rest.x, y: s.asset.rest.y, pageW: PW, pageH: PH, scale: s.asset.rest.scale } })
     const d = decodePng(r.png)
     sent.set(s.layer, bitmapOf(d.w, d.h, d.rgba, s.bounds, s.scale))
   }
   env.check()
   const layered = createSlideComposer(ps, sent, scale)
+  // The visible mark's own contribution (controller ruling): the shipped layers with their visible mark only.
+  const visibleOnly = createSlideComposer(ps, visible, scale)
   const reference = createSlideComposer(ps, rasters, scale)
   for (const l of c.drop) reference.classify(l, null)
   for (const [l, m] of c.masks) { const b = rasters.get(l); if (b) reference.classify(l, maskedRaster(b, m)) }
@@ -640,15 +692,27 @@ function validate(ps: PreparedSlide, rasters: ReadonlyMap<PlanLayer, LayerBitmap
         const composite = image(new Uint8ClampedArray(layered.compose(boundaries[k]!)))
         return env.compose ? env.compose(k, composite) : composite
       },
-      chips ? (k, composite) => {
-        const bmp = (d: Uint8ClampedArray) => ({ width: PW, height: PH, data: d })
-        const decision = detect(bmp(new Uint8ClampedArray(composite.data)), bmp(visibleRef(k)), chips!, codes, DEFAULT_PARAMS, tau)
-        return decision.kind === 'attributed' && decision.index === 0
-      } : undefined)
-    if (layered.takeDiagnostics().length) return false
+      {
+        ...(chips ? {
+          attributes: (k: number, composite: ImageData) => {
+            const bmp = (d: Uint8ClampedArray) => ({ width: PW, height: PH, data: d })
+            const decision = detect(bmp(new Uint8ClampedArray(composite.data)), bmp(visibleRef(k)), chips!, codes, DEFAULT_PARAMS, tau)
+            return decision.kind === 'attributed' && decision.index === 0
+          },
+        } : {}),
+        contribution: {
+          composeMarked: (k) => image(new Uint8ClampedArray(visibleOnly.compose(boundaries[k]!))),
+          // The shipped layers unmarked are the classified rasters: the reference's own unmarked composite.
+          composeUnmarked: (k) => image(new Uint8ClampedArray(reference.compose(boundaries[k]!, undefined, true))),
+          referenceMarked: (k) => image(visibleRef(k)),
+          referenceUnmarked: (k) => image(new Uint8ClampedArray(reference.compose(boundaries[k]!, undefined, true))),
+        },
+      })
+    if (layered.takeDiagnostics().length || visibleOnly.takeDiagnostics().length) return false
     return verdict.ok
   } finally {
     layered.dispose()
+    visibleOnly.dispose()
     reference.dispose()
   }
 }

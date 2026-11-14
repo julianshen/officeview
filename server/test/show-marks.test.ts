@@ -2,6 +2,8 @@
 import { describe, expect, it } from 'bun:test'
 import { canvasBackend, installCanvasBackend } from '../../src/core/canvas-backend'
 import { compareFrames } from '../../src/slideshow/compare'
+import { isRasterLayer, type ShowPlanRecord } from '../../src/stream/show-plan'
+const R = (p: ShowPlanRecord) => p.layers.filter(isRasterLayer)
 import type { LayerBitmap } from '../../src/slideshow/types'
 import { flyInDeck } from '../../src/testdata/show-decks'
 import { basis } from '../src/mark/basis'
@@ -14,7 +16,14 @@ import { decodePng, encodePng } from '../src/mark/png'
 import { paintMark } from '../src/mark/visible'
 import { markOptions } from '../src/render'
 import type { BuiltShowPlan, ShowPlanJob } from '../src/show/build'
-import { burnVisibleMark, MARK_FIDELITY } from '../src/show/marks'
+import { burnVisibleMark, compareMarkContribution, MARK_FIDELITY, validateMarks } from '../src/show/marks'
+import { markFrame } from '../src/show/build'
+import { createSlideComposer, drawsAt, slideStateAt } from '../src/show/compose'
+import { createRng } from '../../src/slideshow/rng'
+import { createDiagnosticSink } from '../../src/slideshow/diagnostics'
+import { stateMatrix } from '../../src/slideshow/affine'
+import { moveTwiceDeck } from '../../src/testdata/show-decks'
+import { classify } from './show-classify-helper'
 import { serverBackend } from '../src/backend'
 import { appearMoveDeck, openDeck, tinyBoxDeck } from './show-fixtures'
 
@@ -35,7 +44,7 @@ const TAU = { abs: 7.93, margin: 3.45 }
 function composeAtRest(b: BuiltShowPlan, scale: number, pngOf: (assetId: number) => Uint8Array, offset: (key: string | undefined) => number = () => 0) {
   const W = Math.ceil(b.plan.slide.w * scale), H = Math.ceil(b.plan.slide.h * scale)
   const c = createCanvas(W, H), ctx = c.getContext('2d')!
-  for (const l of [...b.plan.layers].sort((p, q) => p.z - q.z)) {
+  for (const l of [...R(b.plan)].sort((p, q) => p.z - q.z)) {
     const d = decodePng(pngOf(l.assetId))
     const src = createCanvas(d.w, d.h), sx = src.getContext('2d')!
     const img = sx.createImageData(d.w, d.h); img.data.set(d.rgba); sx.putImageData(img, 0, 0)
@@ -78,7 +87,7 @@ describe('show-plan marks', () => {
     const marked = built(await host.showPlan(docKey, job()))
     const plain = built(await host.showPlan(docKey, job({ mark: { kind: 'off' } })))
     expect(marked.plan.steps.map(s => s.eligibility)).toEqual(['layers'])
-    const mover = marked.plan.layers.find(l => l.key === 'sp:3')!
+    const mover = R(marked.plan).find(l => l.key === 'sp:3')!
     expect(marked.assets.find(a => a.assetId === mover.assetId)!.rest.x).toBe(mover.bounds.x + 240)
     const offset = (k: string | undefined) => (k === 'sp:3' ? 240 : 0)
     const composite = composeAtRest(marked, 1, asset(marked), offset).image
@@ -138,7 +147,7 @@ describe('show-plan marks', () => {
   it('zero-carrier layer is sent and audited unmarked/layer-capacity', async () => {
     const { host, docKey } = await openDeck(await tinyBoxDeck())
     const b = built(await host.showPlan(docKey, job()))
-    const dot = b.plan.layers.find(l => l.key === 'sp:2')!
+    const dot = R(b.plan).find(l => l.key === 'sp:2')!
     const a = b.assets.find(x => x.assetId === dot.assetId)!
     const r = markLayerRaster({ png: a.png, w: a.w, h: a.h, kBasis: key, code: codeFor(3), crop: { x: a.rest.x, y: a.rest.y, pageW: 960, pageH: 720 } })
     expect('unmarked' in r && r.unmarked).toBe('layer-capacity')
@@ -155,11 +164,50 @@ describe('show-plan marks', () => {
     host.showOptions = { compose: (_step, img) => { const d = new Uint8ClampedArray(img.data); for (let i = 0; i < d.length; i += 4) d[i] = 255 - d[i]!; return { width: img.width, height: img.height, data: d } as ImageData } }
     const b = built(await host.showPlan(docKey, job()))
     expect(b.plan.steps.every(s => s.eligibility === 'composited' && !!s.track)).toBe(true)
-    expect(b.plan.layers).toEqual([])
+    expect(R(b.plan)).toEqual([])
     expect(b.assets.map(a => a.tag)).toEqual([3])
     expect(b.plan.diagnostics.map(d => d.code)).toContain('step-composited')
     host.showOptions = {}
     const ok = built(await host.showPlan(docKey, job({ mark: { kind: 'viewer', text: 'fresh' } })))
     expect(ok.plan.steps.map(s => s.eligibility)).toEqual(['layers'])
+  }, 60_000)
+
+  it('validation catches a misplaced mark: moveTwiceDeck burned at its first rest fails at the boundaries it moved to', async () => {
+    // What D8 before the controller ruling would ship: step 0 from layers, the box's mark at its first rest.
+    const run = async (bytes: Uint8Array, restAt: 'first' | 'each') => {
+      const r = await classify(bytes, { scale: 1 })
+      const { ps, timeline, rasters } = r
+      const n = timeline.steps
+      const page = { w: 960, h: 720 }
+      const boundary = (k: number) => drawsAt(ps, slideStateAt(ps, timeline, timeline.checkpoint(k), 0, createRng(1), createDiagnosticSink()))
+      const rests = new Map<unknown, { x: number; y: number }>()
+      for (let k = 0; k <= n; k++) for (const d of boundary(k)) if (d.state.visible && d.state.opacity > 0 && !rests.has(d.layer)) { const m = stateMatrix(d.state); rests.set(d.layer, { x: m[4], y: m[5] }) }
+      const composeAt = (k: number, burn: boolean) => {
+        const draws = boundary(k)
+        const marked = new Map([...rasters].map(([l, b]) => {
+          if (!burn) return [l, b]
+          const d = draws.find(x => x.layer === l), m = restAt === 'each' && d ? stateMatrix(d.state) : undefined
+          const t = m ? { x: m[4], y: m[5] } : rests.get(l) ?? { x: 0, y: 0 }
+          return [l, burnVisibleMark(b, { ...b.bounds, x: b.bounds.x + t.x, y: b.bounds.y + t.y }, { kind: 'fixed' }, page)]
+        }))
+        const c = createSlideComposer(ps, marked, 1)
+        try { return { width: c.width, height: c.height, data: new Uint8ClampedArray(c.compose(draws)) } as unknown as ImageData } finally { c.dispose() }
+      }
+      const refMarked = (k: number) => { const u = composeAt(k, false); return { width: u.width, height: u.height, data: markFrame(u.data, u.width, u.height, 1, page, { kind: 'fixed' }) } as unknown as ImageData }
+      const steps = { plan: { steps: Array.from({ length: n }) } }
+      const whole = validateMarks(steps, refMarked, k => composeAt(k, true))
+      const strong = validateMarks(steps, refMarked, k => composeAt(k, true), {
+        contribution: { composeMarked: k => composeAt(k, true), composeUnmarked: k => composeAt(k, false), referenceMarked: refMarked, referenceUnmarked: k => composeAt(k, false) },
+      })
+      return { whole, strong, at1: compareMarkContribution(composeAt(1, true), composeAt(1, false), refMarked(1), composeAt(1, false)) }
+    }
+    const wrong = await run(await moveTwiceDeck(), 'first')
+    // The whole-frame comparison alone dilutes the 240 px error under MARK_FIDELITY; the contribution does not.
+    expect(wrong.whole.ok).toBe(true)
+    expect(wrong.strong.ok).toBe(false)
+    expect(wrong.at1.pass).toBe(false)
+    // Control: the mark burned where the box rests at each boundary passes both.
+    const right = await run(await moveTwiceDeck(), 'each')
+    expect(right.strong.ok).toBe(true)
   }, 60_000)
 })

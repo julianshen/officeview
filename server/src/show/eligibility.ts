@@ -470,6 +470,22 @@ export function classifySlide(input: ClassifyInput): Classification {
     // D8: each layer's first rest (its draw matrix at the first boundary it is visible at).
     const firstRest = new Map<PlanLayer, Affine>()
     for (const [layer, row] of boundaryStates) { const s = row.find(drawn); if (s) firstRest.set(layer, stateMatrix(s)) }
+    // D8, strengthened (Task 6 follow-up, controller ruling): one marked asset carries one rest. A layer drawn at a
+    // boundary away from its first rest has its mark off the page there, so every step from the last boundary it
+    // was drawn at its first rest onward plays composited (`mark-rest`): no boundary shows it away from its mark.
+    let restCut = Number.POSITIVE_INFINITY
+    for (const [layer, row] of boundaryStates) {
+      const first = firstRest.get(layer)
+      if (!first) continue
+      let lastAtRest = -1
+      for (let j = 0; j < row.length; j++) {
+        const s = row[j]
+        if (!drawn(s)) continue
+        if (!differs(stateMatrix(s), first, 0.5 / scale)) { lastAtRest = j; continue }
+        restCut = Math.min(restCut, Math.max(0, lastAtRest))
+        break
+      }
+    }
 
     /** One interval's lists, proof items and the checks that need no composition. */
     const plan = (cursor: SlideCursor, t0: number, dur: number, start: SchedulerSnapshot, restAt: number | undefined): Planned => {
@@ -512,7 +528,8 @@ export function classifySlide(input: ClassifyInput): Classification {
     // Click steps.
     const plans = Array.from({ length: n }, (_, k) => {
       const iv = stepInterval(timeline, k)
-      return plan(iv.cursor, iv.t0, iv.dur, timeline.stateAt(timeline.checkpoint(k), 0), k)
+      const p = plan(iv.cursor, iv.t0, iv.dur, timeline.stateAt(timeline.checkpoint(k), 0), k)
+      return k >= restCut && !p.early && !p.post ? { ...p, post: 'mark-rest' as const } : p
     })
 
     // Triggers (fix round 1, ruling 2): every subset, in a fixed order, from every checkpoint; over 4, the still.

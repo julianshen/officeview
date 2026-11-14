@@ -152,10 +152,11 @@ describe('show eligibility', () => {
     expect(fade.c.triggers.get('3')).toBe('layers')
   })
 
-  it('two rest positions → later move composited (mark-rest)', async () => {
+  it('two rest positions → every step from the first move composited (mark-rest; D8 strengthened, Task 6 ruling)', async () => {
     const { c } = await classify(await moveTwiceDeck())
-    expect(c.steps[0]).toEqual({ eligibility: 'layers' })
+    expect(c.steps[0]).toMatchObject({ eligibility: 'composited', reason: 'mark-rest' })
     expect(c.steps[1]).toMatchObject({ eligibility: 'composited', reason: 'mark-rest' })
+    expect(c.diagnostics).toContainEqual({ code: 'mark-rest', step: 0 })
     expect(c.diagnostics).toContainEqual({ code: 'mark-rest', step: 1 })
   })
 

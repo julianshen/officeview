@@ -30,6 +30,7 @@ import { createDiagnosticSink } from '../../src/slideshow/diagnostics'
 import { readShowIndex } from '../../src/slideshow/read/deck'
 import { shapeResolver } from '../../src/slideshow/read/resolve'
 import { createSlideMetadataStore } from '../../src/slideshow/read/store'
+import { createUnderlayReader } from '../../src/slideshow/read/underlay'
 import { readSlideTiming } from '../../src/slideshow/read/timing'
 import type { Lease, SlideShowWorkspace } from '../../src/slideshow/types'
 import { buildShowPlan, createShowDoc, type BuiltShowPlan, type ShowBuildOptions, type ShowDoc, type ShowPlanJob, type ShowRefusal } from './show/build'
@@ -138,8 +139,10 @@ const SHOW_META_WORKSPACE: SlideShowWorkspace = {
 async function openShow(docRef: string, docKey: string, contentPolicyId: string, fingerprint: string, doc: PptxDocument, handle: NonNullable<ReturnType<typeof pptxPackageHandle>>, units: UnitSize[], hidden: number[]): Promise<ShowDoc> {
   const sink = createDiagnosticSink()
   const index = await readShowIndex(doc, handle, sink)
-  const store = createSlideMetadataStore({ doc, handle, index, workspace: SHOW_META_WORKSPACE, sink, timing: readSlideTiming, resolver: (slide) => shapeResolver(slide, []) })
-  return createShowDoc({ docRef, docKey, contentPolicyId, fingerprint, doc, handle, index, store, units, hidden })
+  // The resolver sees the slide's layout and master artwork, exactly as local mode's (`createUnderlayReader`).
+  const underlay = createUnderlayReader(handle, index, sink)
+  const store = createSlideMetadataStore({ doc, handle, index, workspace: SHOW_META_WORKSPACE, sink, timing: readSlideTiming, resolver: (slide) => shapeResolver(slide, underlay.underlays.get(doc.slides.indexOf(slide)) ?? []) })
+  return createShowDoc({ docRef, docKey, contentPolicyId, fingerprint, doc, handle, index, store, acquire: (i) => underlay.acquire(store, i), sink, units, hidden })
 }
 
 export class DocumentHost {
@@ -184,7 +187,7 @@ export class DocumentHost {
           show = await openShow(docRef, key, projected.contentPolicyId, fingerprint, parsed as PptxDocument, handle, units, hidden)
           for (let i = 0; i < units.length; i++) {
             if (hidden.includes(i)) continue
-            const h = await show.store.acquire(i)
+            const h = await show.acquire(i)
             if ((h.slide.timing && !('refused' in h.slide.timing)) || h.slide.transition) anim.push(i)
             h.release()
           }
@@ -276,7 +279,7 @@ export class DocumentHost {
 
   private async loadShow(show: ShowDoc, unit: number): Promise<void> {
     if (!show.metas.has(unit)) {
-      const h = await show.store.acquire(unit)
+      const h = await show.acquire(unit)
       // The handle is held for the document's life: the slide's text-build working copy is charged to it.
       show.metas.set(unit, { slide: h.slide, charge: (bytes, tag) => h.attach(bytes, tag) })
     }

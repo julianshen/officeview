@@ -3,6 +3,7 @@
  * (`src/testdata/show-decks.ts`) do not cover — a transition-only slide, a `cmd` node, links into hidden
  * slides, growth, an appear-and-move, and a tiny box. Built the same way, with `buildPptxDeck`.
  */
+import JSZip from 'jszip'
 import { buildPptxDeck, mainSeqXml, timingXmlOf, type PptxShapeSpec } from '../../src/testdata/ooxml-builders'
 import { DocumentHost } from '../src/render'
 
@@ -87,4 +88,46 @@ export const tinyBoxDeck = () => buildPptxDeck({
 export async function openDeck(bytes: Uint8Array, docRef = 'deck', host = new DocumentHost()) {
   const open = await host.open(docRef, bytes, 'full')
   return { host, open, docKey: open.docKey }
+}
+
+/** One slide whose click 1 targets shape 50, which is on the master only (and shape 2, on the slide). */
+export const masterTargetDeck = () => buildPptxDeck({
+  masters: [{ shapes: [rect(50, 'Logo', 860, 20, 80, 40, 'C00000')], layouts: [{}] }],
+  slides: [{ bg: { solid: 'FFFFFF' }, shapes: [rect(2, 'Box', 380, 260, 200, 200, '336699')], timingXml: oneStep(id => [appear(id, 2), appear(id, 50)]) }],
+})
+
+/**
+ * One slide holding a group (id 10) of two boxes (ids 11 and 12): click 1 makes the group appear, click 2 makes
+ * box 12 appear inside it. The group's state composes over its sub-layers (a container record on the wire).
+ */
+export async function groupDeck(): Promise<Uint8Array> {
+  const two = (id: () => number) => [appear(id, 10)]
+  let n = 3
+  const id = () => n++
+  const step = (body: string) => {
+    const outer = id(), inner = id(), own = id()
+    return `<p:par><p:cTn id="${outer}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>` +
+      `<p:par><p:cTn id="${inner}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+      `<p:par><p:cTn id="${own}" presetID="1" presetClass="entr" presetSubtype="0" fill="hold" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst>` +
+      `<p:childTnLst>${body}</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>`
+  }
+  const s1 = step(two(id).join('')), s2 = step(appear(id, 12))
+  const bytes = await buildPptxDeck({
+    slides: [{
+      bg: { solid: 'FFFFFF' },
+      shapes: [rect(2, 'Title', 80, 40, 800, 100, 'DDEBF7'), rect(11, 'A', 200, 260, 200, 200, '336699'), rect(12, 'B', 500, 260, 200, 200, 'F4B183')],
+      timingXml: timingXmlOf(mainSeqXml([s1, s2])),
+    }],
+  })
+  const zip = await JSZip.loadAsync(bytes)
+  const path = 'ppt/slides/slide1.xml'
+  let xml = await zip.file(path)!.async('string')
+  const open = xml.search(/<p:sp>(?:(?!<p:sp>)[\s\S])*?<p:cNvPr id="11"/)
+  const tail = xml.indexOf('</p:sp>', xml.search(/<p:cNvPr id="12"/)) + '</p:sp>'.length
+  if (open < 0 || tail < open) throw new Error('groupDeck: shapes not found')
+  const e = (v: number) => String(Math.round(v * 9525))
+  const xfrm = `<a:xfrm><a:off x="${e(200)}" y="${e(260)}"/><a:ext cx="${e(500)}" cy="${e(200)}"/><a:chOff x="${e(200)}" y="${e(260)}"/><a:chExt cx="${e(500)}" cy="${e(200)}"/></a:xfrm>`
+  xml = `${xml.slice(0, open)}<p:grpSp><p:nvGrpSpPr><p:cNvPr id="10" name="Group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr>${xfrm}</p:grpSpPr>${xml.slice(open, tail)}</p:grpSp>${xml.slice(tail)}`
+  zip.file(path, xml)
+  return new Uint8Array(await zip.generateAsync({ type: 'uint8array' }))
 }

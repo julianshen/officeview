@@ -38,7 +38,7 @@ export type PoolTextJob = { docRef: string; contentPolicy: 'visible-only' | 'ful
  * every prepare it needs is charged separately (`prepareWorkspace`). */
 export const TEXT_JOB_BYTES = TEXT_PREPARE_ALLOWANCE
 /** `servedCacheBytes`: the worker's served-index bound per document (R6 default 32 MiB). */
-export interface PoolOptions { workers?: number; caps?: Caps; recyclePages?: number; now?: () => number; testHooks?: boolean; openDeadlineMs?: number; servedCacheBytes?: number }
+export interface PoolOptions { /** Piece 4 (tests shorten it): the show-plan job deadline, default `SHOW_PLAN_DEADLINE_MS`. */ showDeadlineMs?: number; workers?: number; caps?: Caps; recyclePages?: number; now?: () => number; testHooks?: boolean; openDeadlineMs?: number; servedCacheBytes?: number }
 
 const WORKER_URL = resolve(import.meta.dir, 'worker/render-worker.ts')
 const PRELOAD = resolve(import.meta.dir, '../../scripts/stream-s0/napi-preload.ts')
@@ -74,6 +74,13 @@ export class Pool {
   private readonly now: () => number
   private readonly testHooks: boolean
   private readonly servedCacheBytes?: number
+  private readonly showDeadlineMs: number
+  /**
+   * Piece 4 (controller ruling): show-plan refusals by slide (`docRef|policy|unit|scale|motion|strictMarks`: the
+   * L1 tuple; the fingerprint is per process). A slide that timed out retired its worker, and with it the worker's
+   * cache: a repeat request answers here, with no admission and no worker.
+   */
+  private showRefusals = new Map<string, ShowRefusal>()
   /** `${docRef}|${policy}` → unit sizes from the last parse (prepare charges). */
   private unitSizes = new Map<string, OpenResult['units']>()
   private disposed = false
@@ -87,6 +94,7 @@ export class Pool {
     this.now = opts.now ?? (() => performance.now())
     this.testHooks = opts.testHooks ?? false
     this.servedCacheBytes = opts.servedCacheBytes
+    this.showDeadlineMs = opts.showDeadlineMs ?? SHOW_PLAN_DEADLINE_MS
     for (let i = 0; i < (opts.workers ?? defaultWorkers()); i++) {
       const slot = { index: i, busy: false, queue: [], pending: new Map(), docs: new Map(), pages: 0, parses: 0, generation: 0, closed: false } as unknown as Slot
       this.attach(slot)
@@ -179,6 +187,7 @@ export class Pool {
   async open(docRef: string, bytes: Uint8Array, contentPolicy: 'visible-only' | 'full'): Promise<OpenResult> {
     if (this.disposed) throw new RenderFailed('pool disposed')
     this.sources.set(docRef, bytes)
+    this.dropShowRefusals(docRef)
     const slot = this.pick(docRef)
     return this.exclusive(slot, async () => (await this.ensureOpen(slot, docRef, contentPolicy, true)).open!)
   }
@@ -250,12 +259,18 @@ export class Pool {
    */
   async showPlan(sessionId: string, job: PoolShowJob, bytesEstimate: number): Promise<BuiltShowPlan | ShowRefusal> {
     const { docRef, contentPolicy, hangMs, crash, ...show } = job
+    const key = [docRef, contentPolicy, show.unitIndex, show.scale, show.motion, show.strictMarks].join('|')
+    const known = this.showRefusals.get(key)
+    if (known) return known
+    let r: BuiltShowPlan | ShowRefusal
     try {
-      return await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-plan', id: this.nextId++, docKey, job: show, ...this.hooks(hangMs, crash) })) as BuiltShowPlan | ShowRefusal
+      r = await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-plan', id: this.nextId++, docKey, job: show, ...this.hooks(hangMs, crash) })) as BuiltShowPlan | ShowRefusal
     } catch (e) {
-      if (e instanceof RenderTimeout) return { refused: 'show-plan-timeout', diagnostics: [{ code: 'show-plan-timeout' }] }
-      throw e
+      if (!(e instanceof RenderTimeout)) throw e
+      r = { refused: 'show-plan-timeout', diagnostics: [{ code: 'show-plan-timeout' }] }
     }
+    if ('refused' in r && this.sources.has(docRef)) this.showRefusals.set(key, r)
+    return r
   }
 
   /** Piece 4: the keyframe track of one composited step (affinity, admission, `SHOW_PLAN_DEADLINE_MS`; a timeout throws `RenderTimeout`). */
@@ -278,7 +293,7 @@ export class Pool {
     try {
       return await this.exclusive(slot, () => {
         const msg: WorkerRequest = { type: 'mark-layer', id: this.nextId++, png: job.png, w: job.w, h: job.h, kBasis: job.kBasis, code: job.code, crop: job.crop, ...this.hooks(job.hangMs, job.crash) }
-        return this.runJob(slot, admitted, msg, SHOW_PLAN_DEADLINE_MS) as Promise<MarkLayerResult>
+        return this.runJob(slot, admitted, msg, this.showDeadlineMs) as Promise<MarkLayerResult>
       })
     } finally {
       if (admitted.state === 'running') this.finish(admitted)
@@ -298,7 +313,7 @@ export class Pool {
     try {
       return await this.exclusive(slot, async () => {
         const { docKey } = await this.ensureOpen(slot, docRef, contentPolicy)
-        const r = await this.runJob(slot, admitted, msg(docKey), SHOW_PLAN_DEADLINE_MS)
+        const r = await this.runJob(slot, admitted, msg(docKey), this.showDeadlineMs)
         if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
         return r
       })
@@ -441,7 +456,10 @@ export class Pool {
     this.unitSizes.delete(`${docRef}|visible-only`); this.unitSizes.delete(`${docRef}|full`)
     this.sources.delete(docRef)
     this.affinity.delete(docRef)
+    this.dropShowRefusals(docRef)
   }
+
+  private dropShowRefusals(docRef: string) { for (const k of this.showRefusals.keys()) if (k.startsWith(`${docRef}|`)) this.showRefusals.delete(k) }
 
   stats() {
     return {
