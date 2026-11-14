@@ -24,15 +24,29 @@ findings are open. They are not filed as known differences, because neither is c
      - `3-0-0`, the same picture as the transition's from-frame: 0.0117 / 0.3237 (marks off), and
        0.0155 / 0.3202 (marks fixed).
    - The tolerance used is meanAbs 0.0317, rowMax 0.30.
-   - **Cause, checked.** Each of these slides is a single 44 pt black title line ("Standard transition – …",
-     `Calibri Light`), and nothing else. The parity frames reproduce the layer-raster difference exactly, so
-     the difference is the rasteriser's, not the show path's.
-   - A scratch experiment aliased `Calibri Light` to Carlito on both backends, and the figures did not move. So
-     both backends draw the same face, and the residue is glyph rasterisation and advance drift along one long
-     line of large glyphs. That is node-canvas (cairo/pango/FreeType) against Skia.
-   - The figure depends on this machine's node-canvas build and its fonts.
-   - **Not widened, as the brief requires.** A ruling is needed: either a per-family ceiling above `0.30` for
-     large Latin display text, or this deck held to its own tolerance.
+   - **Cause: a font-availability difference, not rasterisation (measured; the fix is not decided).** Each of
+     these slides is one 44 pt black title line ("Standard transition – …") in `Calibri Light`, and nothing
+     else. The parity frames reproduce the layer-raster difference exactly, so the show path is not involved.
+     - `Calibri Light` is **not in the font pack's aliases**. The pack has Calibri, but not Calibri Light, so the
+       server does not pin it.
+     - `measureText` of the title at 58.67 px gives:
+
+       | font string | node-canvas | napi + pack |
+       |---|---|---|
+       | `"Calibri Light"` | 766.38 | **695.63** |
+       | `"Carlito"` | 709.97 | 709.80 |
+       | `"Calibri Light", sans-serif` | 766.38 | 766.20 |
+
+     - So each backend resolves the unpinned family differently. This Mac has Microsoft's `calibril.ttf`
+       (Calibri Light) installed in its user fonts. Skia appears to find it, while node-canvas falls back to
+       sans-serif.
+     - A scratch alias experiment (registering another face as `Calibri Light` on one backend) was inert: the
+       registration did not take effect. It proves nothing either way.
+   - **The figure is machine-dependent.** It also shows the server resolving an unpinned family from the
+     host's installed fonts, which is a determinism gap in the pinned-pack model, separate from this piece.
+   - **Not widened, as the brief requires.** A ruling is needed. One option is to alias `Calibri Light` (and
+     any other unpinned families) in the pack, or to stop the server reaching host fonts, then re-measure.
+     The other is to hold this deck to its own tolerance.
 2. **`lo-bnc591147.pptx`: click count differs (local 4, streamed 2).**
    - Slide 1 is refused `still`. It is the trigger slide (the Task 5/6 trigger rulings). The `still` refusal is
      an expected difference: `equalExceptStills` removes its one local step.
@@ -43,7 +57,8 @@ findings are open. They are not filed as known differences, because neither is c
        so the slide costs one extra press.
      - The server drops `cmd` nodes (D16; the plan carries the `cmd-dropped` diagnostic, checked on the wire).
        So the streamed group is empty and the press advances.
-     - Waiting 31 s on local slide 1 before pressing makes it advance in one press, which confirms this.
+     - Waiting 31 s on local slide 1, and 351 s on slide 2, before pressing makes each advance in one press,
+       which confirms this for both slides.
    - `lo-narration.pptx` has the same pattern with a 1 ms `cmd`. There, local and streamed agree, with 0 steps
      and 1 click.
    - A ruling is needed: record this as a D16 known difference (a press that would seek a `cmd` interval
@@ -104,7 +119,8 @@ deck twice in one bun process under jsdom:
 
 - **local:** `runShow`, with the session's visible mark spec drawn as the plan's watermark layer;
 - **streamed:** the stream server in-process, with `testOnly.forensicOff`, `contentPolicy: 'full'` and
-  `forensicMark: false`, so neither the units nor the show assets carry Layer-1. The client codecs,
+  `forensicMark: false`, so neither the units nor the show assets carry Layer-1. With the policy off,
+  `testOnly.forensicOff` is redundant, because `ws.ts:841` short-circuits on the policy first. The client codecs,
   `createPlanSource` and the shared driver over `PlanStage` play it.
 
 Common to both sides:
@@ -274,6 +290,16 @@ no close followed. A hold longer than about 12 s on a Morph pair would reach the
     request does not rebuild the slide or retire a worker.
 - **Charging reserves** are track 2, Morph 4, prefetch 8. A revisit charges its tracks and Morph pair again.
 - **`cmd` nodes are dropped** (D16). See finding 2 for the click-count consequence.
+- **Mark validation is a backstop** (Task 6). The structural D8 rest rule is the primary guarantee. A tiny
+  misplacement of a mover's mark is caught only through rowMax.
+- **Tinted colour-split layers** whose raw ink is never observed composite their tinted steps (Task 5,
+  fail closed).
+- **A denied track is not re-asked within the visit** (Task 12). Its step plays as a cut (`step-deferred`).
+- **Over budget on a bucket change.** A bundle over about 64 MiB whose bucket changes (a double copy over the
+  budget) plays its still (`show-budget`). A paused Morph wait stays frozen (Task 11).
+- **A held picture for a missing track; Morph `over` ignored while empty** (Task 8).
+- **Presenter View "Next".** It reads "Next build" while builds remain. `preview-reduced` is emitted for any
+  `composeAt` refusal (Task 13).
 
 ## Owner-review items
 
@@ -303,18 +329,22 @@ no close followed. A hold longer than about 12 s on a Morph pair would reach the
   - Its comment says "at most its rate-limited refusal", but its assertion requires exactly one refusal for
     reqId 161, and the run saw none.
   - The same async-verify ordering is the likely cause. It was not investigated further.
-- **Browser, observed once:** the first → pressed right after `present()` resolved, on a cold server under
-  WebGL2, did not advance the fly-in deck. The driver queues inputs during a slide's load, so the input was
-  lost before the driver. The spec now waits for the bundle's `show-plan-start` before the first →. Not
-  reproduced; it needs investigating (focus, or the input path during the first bundle).
+- **Browser: an extra press was needed in the first test against a fresh server.** It happened in both
+  debug runs. With → every 1.5 s right after `present()` resolved, the fly-in deck needed 3 presses, not 2.
+  - The cause is unverified. One explanation is two presses queued during the cold bundle build and replayed
+    as build plus seek, which is the documented `nextAc="seek"` behaviour, not a lost input. Another is a
+    press lost before the driver.
+  - The spec now waits for the bundle's `show-plan-start` before the first →. This needs investigating.
 
 ## Not machine-checked
 
 - Projector and real-hardware frame pacing.
 - GPUs other than CI's SwiftShader (3-D transitions and the WebGL2 compositor).
 - Script families other than Latin (none in the corpus).
-- Linux CI fonts: the widening figures are from this Mac's node-canvas build. CI's node-canvas and fonts may
-  differ, so the synthetic parity test widens by each deck's own measured figure rather than by a constant.
+- Linux CI fonts: the widening figures are from this Mac, with its installed fonts (see finding 1).
+- **CI runs neither the server suite nor the stream browser project.** `.github/workflows/ci.yml` runs
+  `vitest` and the `slideshow` Playwright project only. So `server/test/stream-show-parity.test.ts` and
+  `tests/browser/stream-present-anim.spec.ts` are local gates, as the whole server suite already is.
 
 ## Test map
 

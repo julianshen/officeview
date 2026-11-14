@@ -544,8 +544,11 @@ piece-3 still.
 - Each kind-6 payload is `u8 tag` + body. An asset body is `u32 LE unit`
   + `u32 LE assetId` + the UNIT_RASTER body.
 - A refusal is one `{ reqId, type: 'error', code }` and nothing more.
-  Diagnostics ride `{ type: 'diag', code }` text on the same `reqId`
-  (`morph-composited`, `cmd-dropped`, `forensic-unmarked`, …).
+- A slide's diagnostics ride its plan record (`diagnostics`, e.g.
+  `cmd-dropped`, `link-withheld`). A Morph pair's diagnostics
+  (`morph-composited` with its `reason`) and an unmarked layer
+  (`forensic-unmarked`, `layer-capacity`) also come as
+  `{ type: 'diag', code }` text on the same `reqId`, before the `*-start`.
 
 | code | when |
 |---|---|

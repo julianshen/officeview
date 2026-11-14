@@ -1687,7 +1687,8 @@ outcomes.
   within the per-message caps above, as print does. A 128-layer bundle
   cannot fit one 8 MiB message. A text header comes first:
   `show-plan-start`, `show-track-start` or `show-morph-start`
-  `{ reqId, unit, messages, decodedBytes }`, ≤ 64 KiB. The client takes
+  `{ reqId, unit, messages, decodedBytes }`, ≤ 64 KiB. `show-track-start` adds `step`. For
+  `show-morph-start`, `unit` is `to`. The client takes
   its admission grant from that header, then admits each message. Every
   kind-6 payload is `u8 tag` + body:
 
