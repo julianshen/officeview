@@ -183,7 +183,8 @@ describe('StreamSession show requests (scripted socket)', () => {
     expect([1, 2, 3].map((id) => b.assets.bitmap(id)?.width)).toEqual([960, 300, 960])
     expect([1, 2, 3].map((id) => b.assets.bytes(id))).toEqual([960 * 540 * 4, 300 * 120 * 4, 960 * 540 * 4])
     expect(b.decodedBytes).toBe(decoded)
-    expect(ws.used()).toBe(2 * 960 * 540 * 4 + 300 * 120 * 4)
+    // Fix round 1: the bitmaps and the plan record, exactly the bundle's decodedBytes.
+    expect(ws.used()).toBe(b.decodedBytes)
     b.release(); b.release()
     expect(ws.used()).toBe(0)
     expect(closed.length).toBe(3)
@@ -284,6 +285,27 @@ describe('StreamSession show requests (scripted socket)', () => {
     const results = (await Promise.all(push.mock.results.map((r) => r.value))).filter(Boolean)
     expect(results).toEqual([{ ok: false, reqId, reason: 'unexpected-reqId' }])
     expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0 })
+    await usable(s, sock)
+  })
+
+  it('a message whose encoded total exceeds the start\'s encoded allowance is rejected before buffering', async () => {
+    const { s, sock } = await opened()
+    const push = vi.spyOn(Reassembler.prototype, 'push')
+    const { p, reqId } = await asking(s, sock)
+    // decodedBytes 1: the grant's encoded part is ceil(1.01) + 65536 bytes; the message is ~1.5 MB of noise.
+    sock.text({ reqId, type: 'show-plan-start', unit: 1, messages: 2, decodedBytes: 1 })
+    const parts = sock.fragments(6, reqId, asset(3, 1, 3, 960, 540, 1_500_000))
+    expect(parts.length).toBeGreaterThan(1)
+    sock.deliver(parts[0]!)
+    await settle()
+    const results = (await Promise.all(push.mock.results.map((r) => r.value))).filter(Boolean)
+    expect(results).toEqual([{ ok: false, reqId, reason: 'encoded-cap' }])
+    expect(await codeOf(p)).toBe('policy-refused')
+    expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0, reassemblyBytes: 0 })
+    expect(WS.used()).toBe(0)
+    for (const f of parts.slice(1)) sock.deliver(f)
+    await settle()
+    expect(s.stats().reassemblyBytes).toBe(0)
     await usable(s, sock)
   })
 
@@ -608,6 +630,31 @@ describe('decodeBundle', () => {
     expect(closed.length).toBe(2)
     const throwing = async () => { throw new Error('bad png') }
     expect((await failure(decodeBundle(1, bundle(1), w, throwing)) as StreamSessionError).code).toBe('policy-refused')
+    expect(w.used()).toBe(0)
+  })
+
+  it('the plan record stays charged for the bundle\'s life: bitmaps that fit without it are refused', async () => {
+    const msgs = bundle(1), bitmaps = 2 * 960 * 540 * 4 + 300 * 120 * 4
+    const tight = createSlideShowWorkspace('desktop', { limit: bitmaps + msgs[0]!.length - 1 })
+    const { decode, closed } = decoder()
+    expect((await failure(decodeBundle(1, msgs, tight, decode)) as StreamSessionError).code).toBe('workspace-full')
+    expect(tight.used()).toBe(0)
+    expect(closed.length).toBe(decode.mock.calls.length)
+    const exact = createSlideShowWorkspace('desktop', { limit: bitmaps + msgs[0]!.length })
+    const b = await decodeBundle(1, msgs, exact, decoder().decode)
+    expect(exact.used()).toBe(b.decodedBytes)
+    b.release(); b.release()
+    expect(exact.used()).toBe(0)
+  })
+
+  it('several retained bundles: the workspace holds the sum of their decodedBytes', async () => {
+    const w = ws()
+    const a = await decodeBundle(1, bundle(1), w, decoder().decode)
+    const b = await decodeBundle(0, bundle(0), w, decoder().decode)
+    expect(w.used()).toBe(a.decodedBytes + b.decodedBytes)
+    a.release()
+    expect(w.used()).toBe(b.decodedBytes)
+    b.release()
     expect(w.used()).toBe(0)
   })
 

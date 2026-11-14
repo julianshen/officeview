@@ -10,7 +10,8 @@
  *   no larger than its layer's `decodedBytes` (`w·h·4`); no keyframe or Morph record;
  * - every asset for the unit asked, and the decoded bitmap the asset's size;
  * - Σ decoded (the plan record's bytes and every asset's `w·h·4`) within the 128 MiB show budget.
- * Each bitmap is charged to the show workspace at `w·h·4` before it is decoded; no room rejects
+ * The plan record is charged at its message bytes for the bundle's life (fix round 1), and each
+ * bitmap at `w·h·4` before it is decoded, so the workspace holds exactly `decodedBytes`; no room rejects
  * `workspace-full`. On any failure every bitmap decoded so far is closed and every lease released.
  * `release()` (idempotent) does the same for a delivered bundle. Given the session's `ShowReply`,
  * it releases the reply's retained-payload leases once it is done with the messages, on success or
@@ -53,6 +54,10 @@ export async function decodeBundle(unit: number, reply: readonly Uint8Array[] | 
     const head = message(0)
     if (head.tag !== 1) return reject('message 0 is not the plan record')
     const plan = head.plan
+    // The record's accounting size (its message bytes, as `decodedBytes` counts it), held while the bundle lives.
+    const record = workspace.lease(messages[0]!.length, 'remote-show:plan')
+    if (!record) throw new StreamSessionError('workspace-full', 'no workspace room for a show plan record')
+    held.set(-1, { lease: record, bytes: 0 })
     // assetId → the decoded bytes its layer allows; the entry frame is bounded by the codec's per-asset cap.
     const want = new Map<number, number>([[plan.entry, SHOW_PLAN_LIMITS.assetDecoded]])
     for (const l of plan.layers) if (isRasterLayer(l)) want.set(l.assetId, l.decodedBytes)
@@ -81,7 +86,7 @@ export async function decodeBundle(unit: number, reply: readonly Uint8Array[] | 
     }
     const assets: PlanAssets = {
       bitmap: (id) => (released ? undefined : held.get(id)?.bmp),
-      bytes: (id) => (released ? 0 : held.get(id)?.bytes ?? 0),
+      bytes: (id) => (released || id < 0 ? 0 : held.get(id)?.bytes ?? 0),
     }
     return { unit, plan, assets, decodedBytes: total, release }
   } catch (e) {

@@ -54,7 +54,7 @@ type Pending = {
 }
 type Options = {
   acceptedVersions: ReadonlySet<number>; expects: (reqId: number, kind: Kind) => boolean;
-  decodedCap: (kind: Kind, reqId: number) => number; encodedCap: (kind: Kind) => number; now?: () => number;
+  decodedCap: (kind: Kind, reqId: number) => number; encodedCap: (kind: Kind, reqId: number) => number; now?: () => number;
 }
 
 /** Owns only admitted fragments. No caller-visible payload exists until all checks pass. */
@@ -111,7 +111,7 @@ export class Reassembler {
     if (count < 1 || count > MAX_FRAGMENTS) return this.reject(id, 'fragment-count')
     if (seq >= count || final !== (seq === count - 1)) return this.reject(id, 'final-count')
     if (!p && !ext && !final) return this.reject(id, 'missing-ext01')
-    const cap = this.opts.encodedCap(kind)
+    const cap = this.opts.encodedCap(kind, id)
     if (!Number.isSafeInteger(cap) || cap < 0 || totalBig > BigInt(cap)) return this.reject(id, 'encoded-cap')
     total = Number(totalBig)
     const received = (p?.received ?? 0) + length

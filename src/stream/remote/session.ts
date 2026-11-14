@@ -133,10 +133,9 @@ const SHOW_MESSAGE_SLACK = 65536
  * 32 MiB kind-6 decoded cap. Controller ruling (Task 10 follow-up): it covers only the message in
  * flight — taken at its first fragment, released when it completes reassembly.
  */
-export const showGrant = (decodedBytes: number) => {
-  const body = Math.min(CAPS[Kind.SHOW_PLAN]![1], decodedBytes)
-  return Math.min(CAPS[Kind.SHOW_PLAN]![0], Math.ceil(decodedBytes * 1.01) + 65536) + 2 * body
-}
+export const showGrant = (decodedBytes: number) => showEncodedAllowance(decodedBytes) + 2 * Math.min(CAPS[Kind.SHOW_PLAN]![1], decodedBytes)
+/** The grant's encoded part: the most encoded bytes one message of the reply may declare (enforced before buffering). */
+export const showEncodedAllowance = (decodedBytes: number) => Math.min(CAPS[Kind.SHOW_PLAN]![0], Math.ceil(decodedBytes * 1.01) + 65536)
 /**
  * A print job's peak transient bytes for one page are its encoded fragments
  * (`Reassembler.push`, src/stream/frame.ts:124, ≤ PRINT_ENCODED_CAP) plus the
@@ -236,7 +235,7 @@ interface ShowReq {
   /** Sent on the current socket (false while it waits for log room or a resume). */
   sent: boolean
   /** The checked start: declared messages and decoded bytes, one message's decoded cap, the retained-bytes bound. */
-  start?: { messages: number; decodedBytes: number; bodyCap: number; retainCap: number }
+  start?: { messages: number; decodedBytes: number; encodedCap: number; bodyCap: number; retainCap: number }
   /** A Morph reply's record says it is composited: its assets are frames (tag 4). */
   composited?: boolean
   /** The checked kind-6 payloads so far, and their bytes. */
@@ -894,6 +893,7 @@ export class StreamSession {
     // Nothing is reserved here: each message takes its grant at its first fragment (`showAdmits`).
     req.start = {
       messages: n as number, decodedBytes: decoded as number,
+      encodedCap: showEncodedAllowance(decoded as number),
       bodyCap: Math.min(CAPS[Kind.SHOW_PLAN]![1], decoded as number),
       retainCap: (decoded as number) + (n as number) * SHOW_MESSAGE_SLACK,
     }
@@ -991,7 +991,9 @@ export class StreamSession {
         // SHOW_PLAN only ever for a live, sent show request holding its declared grant, short of its declared count.
         : kind === Kind.SHOW_PLAN ? this.showAdmits(reqId)
         : this.units.has(reqId) && UNIT_KINDS.has(kind)),
-      encodedCap: (k) => CAPS[k]?.[0] ?? 0,
+      // A show message's declared total is held to its request's encoded allowance (the grant's encoded
+      // part) as well as the kind cap, before any fragment of it is copied.
+      encodedCap: (k, reqId) => Math.min(CAPS[k]?.[0] ?? 0, k === Kind.SHOW_PLAN ? this.liveShow(reqId)?.start?.encodedCap ?? 0 : Infinity),
       // A unit response may never decode past the bytes its request was admitted for.
       decodedCap: (k, reqId) => Math.min(CAPS[k]?.[1] ?? 0, k === Kind.MANIFEST ? Infinity
         : k === Kind.PRINT_RASTER ? this.livePrint(reqId)?.pageCap ?? 0
