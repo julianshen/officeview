@@ -477,7 +477,12 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
       p.H = bmp.height
       if (p === current) setView(p)
     }
-    return bmp ? { key: p.data ? 'entry' : 'still', bmp, bounds: { x: 0, y: 0, w: p.W, h: p.H }, scale: bmp.width / p.W } : undefined
+    if (!bmp) return undefined
+    if (p.data) return { key: 'entry', bmp, bounds: { x: 0, y: 0, w: p.W, h: p.H }, scale: bmp.width / p.W }
+    // A still replaced (a new bucket's bitmap) is a new source: the old upload, placed at the old size, goes (Task 11).
+    const key = `still:${bmp.width}x${bmp.height}`
+    for (const k of [...p.ups.keys()]) if (k.startsWith('still:') && k !== key) releaseUp(p, k)
+    return { key, bmp, bounds: { x: 0, y: 0, w: p.W, h: p.H }, scale: bmp.width / p.W }
   }
 
   function layerSrc(p: Slide, l: PlanLayerRecord): Src | undefined {
@@ -595,7 +600,7 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
     return { key: `t:${step}:${i}`, bmp, bounds: { x: 0, y: 0, w: p.W, h: p.H }, scale: bmp.width / p.W }
   }
 
-  const entryPics = (p: Slide): Pic[] => { const e = entrySrc(p); return e ? [{ src: e, state: PLAIN, kind: e.key }] : [] }
+  const entryPics = (p: Slide): Pic[] => { const e = entrySrc(p); return e ? [{ src: e, state: PLAIN, kind: p.data ? 'entry' : 'still' }] : [] }
 
   /**
    * What `p` shows at `cursor`/`slideT`: the entry frame (or still) under pressure or without a plan, a
@@ -1082,6 +1087,12 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
         else c.frame([])
       }
       return state
+    },
+
+    hitRegions() {
+      // §5.1: the plan's link regions and trigger rects are the stage's, not the slide metadata's (Task 11).
+      const plan = current?.data?.plan
+      return !!plan && (plan.linkRegions.length > 0 || plan.triggers.length > 0)
     },
 
     hitTest(clientX, clientY, cursor, t, on) {

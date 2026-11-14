@@ -18,6 +18,7 @@
  * window is per session and includes the viewer's own paints.
  */
 import { expect, test, type Page } from '@playwright/test'
+import { loadImage, createCanvas } from 'canvas'
 
 const P = Number(process.env.OV_STREAM_PORT ?? 4181)
 const CONTROL = `http://127.0.0.1:${P + 1}`
@@ -133,12 +134,39 @@ test('audience: present, step all 6 slides with →, go to a slide by number + E
   expect((await rec(page)).fullscreen).toBe(1)
   expect((await rec(page)).opens).toBe(0)
   await onSlide(page, 1)
+  // Piece 4: an animated deck shows its stills on the show stage (WebGL2 here): what the audience sees is the
+  // still, not a blank or a stale loading frame — the surface's screenshot holds the slide's own colours across its
+  // middle and a black letterbox.
+  // An opaque black backdrop first, so nothing behind the show surface (the viewer's own page) is measured.
+  await surface(page).evaluate((el: HTMLElement) => { el.style.background = '#000' })
+  await expect.poll(async () => {
+    const img = await loadImage(await surface(page).screenshot())
+    const c = createCanvas(img.width, img.height)
+    const ctx = c.getContext('2d')
+    ctx.drawImage(img, 0, 0)
+    const d = ctx.getImageData(0, Math.floor(img.height / 2), img.width, 1).data
+    const colours = new Set<number>()
+    for (let x = 0; x < img.width; x++) colours.add((d[4 * x]! << 16) | (d[4 * x + 1]! << 8) | d[4 * x + 2]!)
+    const mid = 4 * Math.floor(img.width / 2)
+    // The slide's own pixels (many colours, not the loading frame's grey) in the middle; the letterbox is black.
+    return colours.size > 16 && (d[mid]! + d[mid + 1]! + d[mid + 2]!) > 0 && d[0] === 0 && d[1] === 0 && d[2] === 0
+  }).toBe(true)
   for (let n = 2; n <= 6; n++) {
     await page.keyboard.press('ArrowRight')
     await onSlide(page, n)
   }
-  await page.keyboard.press('ArrowRight')
+  // Piece 4: slide 6 is animated (its six click effects play from its streamed plan), so → steps its builds
+  // before it leaves the slide; slides 1–5 are stills.
+  let presses = 0
+  while (presses < 12 && !(await page.locator('[data-officeview-show-end]').isVisible())) {
+    await page.keyboard.press('ArrowRight')
+    presses++
+    await page.waitForTimeout(700)
+  }
   await expect(page.locator('[data-officeview-show-end]')).toBeVisible()
+  expect(presses).toBeGreaterThan(1)
+  // Its bundle came from a show plan (one charged request); the stills stayed units.
+  expect(w.count('show-plan')).toBeGreaterThan(0)
   await expect(live(page)).toHaveText('End of slide show, click to exit.')
   // goTo by number: digits then Enter (1-based on screen).
   await page.keyboard.press('3')
@@ -184,8 +212,10 @@ test('presenter: Presenter View swaps in single-screen with a painted notes imag
   expect(empty.ink).toBe(0)
   expect(paintedWithText(empty)).toBe(false)
   expect(w.count('notes')).toBe(1)
-  // The audience surface holds its one canvas only.
-  await expect(surface(page).locator('canvas')).toHaveCount(1)
+  // The audience surface holds its one output canvas only (piece 4: plus, for an animated deck, the show stage's
+  // compositor canvas), and never the notes.
+  await expect(surface(page).locator(':scope > canvas')).toHaveCount(1)
+  await expect(surface(page).locator('canvas:not([data-officeview-show-canvas]):not([data-officeview-show-stage] canvas)')).toHaveCount(0)
   await expect(surface(page).locator('canvas[aria-label="Speaker notes (image)"]')).toHaveCount(0)
   // Slide 5 by number from Presenter View: its notes (several lines of text) are asked for after the 300 ms
   // settle and painted, taller than the empty image and with dark text pixels.

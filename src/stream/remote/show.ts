@@ -24,13 +24,27 @@
  *
  * `doc.ended` (revocation, expiry, any terminal end) exits the show; nothing
  * paints after exit. The show never closes the document: the viewer owns it.
+ *
+ * Piece 4 (Task 11): navigation is the shared show driver's (`createShowDriver`)
+ * over the plan-backed source (`createPlanSource`). A deck with an animated
+ * slide (`anim`, D5) on a session that serves show plans plays on `PlanStage`:
+ * each animated slide is fetched as one bundle through the same paced fetcher
+ * (+2 next, +1 previous), its composited steps' keyframe tracks just in time
+ * (D4), its Morph pair on demand (the sequential predecessor's prefetched,
+ * D11). A slide refused a bundle (`still`, `show-budget`, `show-limits`,
+ * `show-plan-timeout`) plays its piece-3 still through the unit path; a failed
+ * bundle shows the typed error frame. Any other deck keeps piece 3's still
+ * stage: every slide is its final image, drawn as before. Links never fire
+ * (`link-withheld`, §5.1); the show never renders locally.
  */
 import { preparedPlacement, SlideShowError, type ShowStart, type SlideShowSession } from '../../components/present'
 import { createDiagnosticSink } from '../../slideshow/diagnostics'
 import { createCursorHider, type CursorHider, type CursorTimer } from '../../slideshow/player/cursor'
+import { createShowDriver, type DriverHooks, type DriverStage, type ShowDriver, type SlideSource } from '../../slideshow/player/driver'
 import { createGestureState, gestureToInput, keyToInput, MODIFIER_KEYS } from '../../slideshow/player/keys'
-import { nextVisible, previousVisible } from '../../slideshow/player/order'
-import type { SessionController, SessionState, ShowInput } from '../../slideshow/player/session'
+import { runLink } from '../../slideshow/player/links'
+import { nextVisible } from '../../slideshow/player/order'
+import type { SessionClock, SessionController, SessionState, ShowInput } from '../../slideshow/player/session'
 import { createAudienceSurface, END_OF_SHOW, type AudienceSurface } from '../../slideshow/player/surface'
 import type { ImageNotes } from '../../slideshow/presenter/notes'
 import { mountPresenterView, type PresenterSource } from '../../slideshow/presenter/PresenterView'
@@ -39,9 +53,13 @@ import { createElapsedTimer, type ElapsedTimer } from '../../slideshow/presenter
 import { adoptPresenterWindow, type PresenterWindow } from '../../slideshow/presenter/window'
 import type { DiagnosticSink, Lease, SlideShowWorkspace, TerminalReserve } from '../../slideshow/types'
 import { admitShow, backingFor, createSlideShowWorkspace, surfaceBytes, type Backing, type SlideShowProfile } from '../../slideshow/workspace'
+import { SHOW_PLAN_LIMITS } from '../show-plan'
 import { StreamSessionError } from './errors'
+import { createPlanSource } from './plan-source'
+import { createPlanStage, type PlanSlideData, type PlanStage, type PlanTrack } from './plan-stage'
 import { bucketFor, type RemoteOfficeDoc } from './remote-doc'
-import { createShowFetcher, type ImageBitmapLike, type RemoteErrorCode, type ShowFetchClock, type ShowFetcher } from './show-fetch'
+import { decodeBundle, decodeMorph, decodeTrack, type ShowBundle, type ShowMorph, type ShowTrack } from './show-bundle'
+import { BACKOFF_MS, createShowFetcher, type ImageBitmapLike, type RemoteErrorCode, type ShowFetchClock, type ShowFetcher } from './show-fetch'
 
 /** What the remote `present()` start hands the lazy show: the local start contract over a streamed deck. */
 export interface RemoteShowStart extends Omit<ShowStart, 'doc' | 'handle' | 'source' | 'isCurrent'> {
@@ -84,7 +102,24 @@ export const remoteShowDeps = {
   }),
   wall: (): number => Date.now(),
   workspace: (profile: SlideShowProfile): SlideShowWorkspace => createSlideShowWorkspace(profile),
+  /** Piece 4: the per-frame driver of an animated show (requestAnimationFrame); returns the stop. */
+  frames: (win: Window | null, frame: () => void): (() => void) => {
+    if (!win || typeof win.requestAnimationFrame !== 'function') return () => {}
+    let on = true
+    let id = 0
+    const loop = () => { if (!on) return; frame(); id = win.requestAnimationFrame(loop) }
+    id = win.requestAnimationFrame(loop)
+    return () => { on = false; win.cancelAnimationFrame(id) }
+  },
+  /** Piece 4: decodes a show asset's PNG. */
+  decode: (png: Uint8Array): Promise<ImageBitmapLike> => createImageBitmap(new Blob([png as BlobPart], { type: 'image/png' })),
+  /** Piece 4: `'canvas2d'` starts PlanStage on Canvas 2D (tests, the forced path). */
+  backend: undefined as 'canvas2d' | undefined,
 }
+
+/** A show refusal that plays the piece-3 still (Task 10), or a transient one that is not a failed slide. */
+const STILL_CODES: ReadonlySet<string> = new Set(['still', 'show-budget', 'show-limits', 'show-plan-timeout'])
+const TRANSIENT: ReadonlySet<string> = new Set(['rate-limited', 'admission'])
 
 const NO_NOTES: readonly never[] = []
 const HIDDEN = 'position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0'
@@ -134,6 +169,12 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
   const order: readonly number[] = unitOf.map((_, i) => i)
   const kiosk = !!start.kiosk
   const loop = !!start.loop || kiosk
+  const motion: 'full' | 'reduced' = (start.motion === 'auto' ? !!win?.matchMedia?.('(prefers-reduced-motion: reduce)').matches : start.motion === 'reduced') ? 'reduced' : 'full'
+  /** Piece 4: the session's show requests (absent: piece 3's still show). */
+  const show = doc.session
+  /** The deck plays on PlanStage when a shown slide is animated and the session serves show plans (D5). */
+  const planned = !!show?.showPlan && unitOf.some((u) => !!list[u]!.anim)
+  const animated = (unit: number) => planned && !!list[unit]?.anim
 
   const seen = createDiagnosticSink()
   const sink: DiagnosticSink = {
@@ -167,6 +208,11 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
   let paused = false
   let exited = false
   let started = false
+  /** The click checkpoint on screen (the driver's cursor step). */
+  let build = 0
+  let driver: ShowDriver | undefined
+  let planStage: PlanStage | undefined
+  let stopFrames: (() => void) | undefined
   let resolveEnded!: () => void
   const ended = new Promise<void>((resolve) => { resolveEnded = resolve })
 
@@ -239,9 +285,217 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
         settledOne()
       }
     },
+    ...(planned ? { bundle: (unit: number, scale: number, dpr: number, m: 'full' | 'reduced', sig: AbortSignal, charge: () => void) => fetchBundle(unit, scale * dpr, m, sig, charge) } : {}),
     // R28: the session's one unit send budget (it outlives this show and stamps every charged send).
     ...(doc.unitBudget ? { budget: doc.unitBudget } : {}),
-  }, clock, { maxCached })
+  }, clock, { maxCached, animated, motion, extraBytes: () => extraBytes() })
+  /** The show scale of a bucket: the server takes 1 or 2 only (Task 10). */
+  const showScale = (bucket: number): 1 | 2 => (bucket >= 2 && doc.manifest.recorder.scalesBuckets.includes(2) ? 2 : 1)
+  /** The scale each bundle was fetched at (its tracks and Morph pairs are asked at it). */
+  const scaleOf = new WeakMap<ShowBundle, 1 | 2>()
+  /** One slide bundle (D1): the plan, the entry frame, the layers, decoded and charged to the workspace. */
+  async function fetchBundle(unit: number, bucket: number, m: 'full' | 'reduced', sig: AbortSignal, charge: () => void): Promise<ShowBundle> {
+    open++
+    try {
+      const scale = showScale(bucket)
+      const reply = await show!.showPlan!(unit, scale, m, sig, { workspace, onSend: charge })
+      const b = await decodeBundle(unit, reply, workspace, remoteShowDeps.decode)
+      if (sig.aborted || exited) { b.release(); throw new StreamSessionError('closed', 'the bundle is no longer wanted') }
+      const p = pinnable(b)
+      scaleOf.set(p, scale)
+      return p
+    } finally {
+      settledOne()
+    }
+  }
+  /**
+   * A bundle the fetcher may evict or replace (a bucket change) while the slide it belongs to is on screen: its
+   * release waits until the slide's lease lets go of it (pinned), so the stage never loses the bitmaps it draws.
+   */
+  const pins = new WeakMap<ShowBundle, { n: number; dead: boolean; release(): void }>()
+  function pinnable(b: ShowBundle): ShowBundle {
+    const p: ShowBundle = { ...b, release() { const h = pins.get(p)!; h.dead = true; if (!h.n) h.release() } }
+    pins.set(p, { n: 0, dead: false, release: () => b.release() })
+    return p
+  }
+  const pin = (b: ShowBundle) => { const h = pins.get(b); if (h) h.n++ }
+  const unpin = (b: ShowBundle) => { const h = pins.get(b); if (!h) return; h.n = Math.max(0, h.n - 1); if (!h.n && h.dead) h.release() }
+  /** Streamed index → the bundle the slide's live lease pins (what the stage draws). */
+  const held = new Map<number, ShowBundle>()
+  const bundleFor = (i: number): ShowBundle | undefined => held.get(i) ?? (unitOf[i] !== undefined && animated(unitOf[i]!) ? fetcher.bundle(unitOf[i]!) : undefined)
+  /** Animated units refused a bundle with a still code: they play their piece-3 still. */
+  const stillOnly = new Set<number>()
+
+  // ---------------------------------------------------------------------
+  // Keyframe tracks (D4) and Morph pairs (D11): held for the slide on screen; their bytes count against the
+  // show budget (the fetcher evicts bundles for them). Each is one charged send, asked only with budget room.
+  // ---------------------------------------------------------------------
+
+  interface TrackSlot { index: number; ctl: AbortController; state: 'pending' | ShowTrack | 'failed' }
+  const tracks = new Map<string, TrackSlot>()
+  interface PairSlot { key: string; from: number; to: number; fromStep: number; ctl: AbortController; result?: ShowMorph; promise: Promise<ShowMorph | undefined> }
+  const pairs = new Map<string, PairSlot>()
+  function extraBytes(): number {
+    let n = 0
+    for (const t of tracks.values()) if (typeof t.state === 'object') n += t.state.bytes
+    for (const p of pairs.values()) n += p.result?.bytes ?? 0
+    return n
+  }
+  const overBudget = () => fetcher.bundleBytes() + extraBytes() > SHOW_PLAN_LIMITS.showDecoded
+  function dropTrack(key: string): void {
+    const t = tracks.get(key)
+    if (!t) return
+    tracks.delete(key)
+    t.ctl.abort()
+    if (typeof t.state === 'object') t.state.dispose()
+  }
+  function dropPair(p: PairSlot): void {
+    if (pairs.get(p.key) === p) pairs.delete(p.key)
+    p.ctl.abort()
+    p.result?.release()
+    p.result = undefined
+  }
+  /** A slide change: the tracks of every other slide go, and every Morph pair not into `p`. */
+  function dropExtras(p: number | 'end' | undefined): void {
+    for (const [k, t] of [...tracks]) if (t.index !== p) dropTrack(k)
+    for (const q of [...pairs.values()]) if (q.to !== p) dropPair(q)
+  }
+  const codeOf = (e: unknown) => (e instanceof StreamSessionError ? e.code : undefined)
+
+  /** The keyframe track of composited step `k` of streamed slide `i` (on screen), when the budget has room (else `step-deferred`). */
+  function requestTrack(i: number, k: number): void {
+    const key = `${i}:${k}`
+    if (exited || tracks.has(key) || !show?.showTrack) return
+    const b = held.get(i)
+    const step = b?.plan.steps[k]
+    if (!b || !step || step.eligibility !== 'composited' || !step.track || !fetcher.room()) return
+    const unit = unitOf[i]!
+    const count = step.track.count
+    const slot: TrackSlot = { index: i, ctl: new AbortController(), state: 'pending' }
+    tracks.set(key, slot)
+    const live = () => tracks.get(key) === slot && !exited
+    show.showTrack(unit, k, scaleOf.get(b) ?? 1, motion, slot.ctl.signal, { workspace }).then((reply) => {
+      if (!live()) { reply.release(); return }
+      try {
+        const t = decodeTrack(unit, count, reply, workspace, remoteShowDeps.decode)
+        if (!live()) { t.dispose(); return }
+        slot.state = t
+        if (overBudget()) {
+          t.dispose()
+          slot.state = 'failed'
+          sink.add({ code: 'show-budget', slideIndex: i, effect: `step:${k}`, message: `The keyframe track of step ${k + 1} does not fit the show budget; the step cuts to its end` })
+        }
+      } catch (e) {
+        slot.state = 'failed'
+        sink.add({ code: 'show-track-refused', slideIndex: i, effect: `step:${k}`, message: `The keyframe track of step ${k + 1} was refused (${codeOf(e) ?? (e as Error).message})` })
+      }
+    }, (e: unknown) => {
+      if (!live()) return
+      slot.state = 'failed'
+      if (codeOf(e) === 'rate-limited') fetcher.paused()
+    })
+  }
+  /** D4: on entering a slide, the tracks of its first two composited steps (from the step entered at). */
+  function tracksOnEntry(i: number, at: number): void {
+    const b = held.get(i)
+    if (!b) return
+    let n = 0
+    for (let k = Math.max(0, at - 1); k < b.plan.steps.length && n < 2; k++) {
+      if (b.plan.steps[k]!.eligibility !== 'composited') continue
+      requestTrack(i, k)
+      n++
+    }
+  }
+
+  /** The Morph pair `(from → to)` left at `fromStep` (streamed indices): asked once, kept until the show leaves `to`. */
+  function requestPair(from: number, to: number, fromStep: number): PairSlot | undefined {
+    const key = `${from}>${to}@${fromStep}`
+    const have = pairs.get(key)
+    if (have) return have
+    // D13: under reduced motion a Morph plays as a fade; nothing is asked (and nothing charged).
+    if (exited || !show?.showMorph || motion === 'reduced' || !fetcher.room()) return undefined
+    const uf = unitOf[from], ut = unitOf[to]
+    if (uf === undefined || ut === undefined) return undefined
+    const target = bundleFor(to)
+    const scale = (target && scaleOf.get(target)) ?? 1
+    const slot = { key, from, to, fromStep, ctl: new AbortController() } as PairSlot
+    const live = () => pairs.get(key) === slot && !exited
+    slot.promise = (async () => {
+      try {
+        const reply = await show.showMorph!(uf, ut, fromStep, scale, motion, slot.ctl.signal, { workspace })
+        if (!live()) { reply.release(); return undefined }
+        const m = await decodeMorph({ from: uf, to: ut, fromStep }, reply, workspace, remoteShowDeps.decode)
+        if (!live()) { m.release(); return undefined }
+        slot.result = m
+        if (overBudget()) {
+          dropPair(slot)
+          sink.add({ code: 'show-budget', slideIndex: to, effect: 'morph', message: 'The Morph pair does not fit the show budget' })
+          return undefined
+        }
+        return m
+      } catch (e) {
+        if (pairs.get(key) === slot) pairs.delete(key)
+        const code = codeOf(e)
+        // The server's own fade (D11): play it.
+        if (code === 'morph-fallback') return undefined
+        if (code === 'rate-limited') fetcher.paused()
+        throw e
+      }
+    })()
+    // A pair nobody waits for (a prefetch dropped) must not reject unhandled.
+    slot.promise.catch(() => {})
+    pairs.set(key, slot)
+    return slot
+  }
+  /** PlanStage's Morph request: a pair asked (or prefetched) at another step is dropped and this one asked for. */
+  function morphFor(from: number, to: number, fromStep: number): Promise<{ record: ShowMorph['record']; assets: ShowMorph['assets']; track?: PlanTrack } | undefined> {
+    for (const p of [...pairs.values()]) if (p.to === to && (p.from !== from || p.fromStep !== fromStep)) dropPair(p)
+    const slot = requestPair(from, to, fromStep)
+    // No room, or no Morph service: the fade plays at the deadline (`morph-late`).
+    if (!slot) return Promise.reject(new StreamSessionError('rate-limited', 'no room for the Morph pair'))
+    return slot.promise.then((m) => m && { record: m.record, assets: m.assets, ...(m.track ? { track: m.track } : {}) })
+  }
+  /** D11: the sequential successor's pair is prefetched with it, at the step this slide is left at by Next (its last). */
+  function prefetchMorph(): void {
+    if (exited || !planned || motion === 'reduced' || slide === 'end') return
+    const v = driver?.visit
+    if (!v || v.index !== slide || !v.timeline) return
+    const q = nextVisible(order, slide) ?? (loop ? order[0] : undefined)
+    if (q === undefined || q === slide) return
+    const b = fetcher.bundle(unitOf[q]!)
+    if (b?.plan.show.transition?.element !== 'morph') return
+    requestPair(slide, q, v.timeline.steps)
+  }
+
+  /** PlanStage's view of streamed slide `i`: its pinned bundle (or the cached one), its tracks. */
+  function planData(i: number): PlanSlideData | undefined {
+    const b = bundleFor(i)
+    if (!b) return undefined
+    return {
+      plan: b.plan, assets: b.assets,
+      track: (k) => { const t = tracks.get(`${i}:${k}`); return !t || t.state === 'failed' ? undefined : t.state },
+    }
+  }
+
+  /** Acquires waiting for their animated unit to settle (a bundle, a still refusal or a failure). */
+  const waiters = new Map<number, Set<() => void>>()
+  const settledFor = (unit: number) => !animated(unit) || stillOnly.has(unit) || failed.has(unit) || !!fetcher.bundle(unit)
+  function settle(unit: number, sig: AbortSignal): Promise<void> {
+    if (settledFor(unit)) return Promise.resolve()
+    return new Promise<void>((resolve, reject) => {
+      let set = waiters.get(unit)
+      if (!set) waiters.set(unit, set = new Set())
+      const s0 = set
+      const done = () => { s0.delete(done); sig.removeEventListener('abort', abort); resolve() }
+      const abort = () => { s0.delete(done); reject(sig.reason ?? new Error('aborted')) }
+      s0.add(done)
+      sig.addEventListener('abort', abort, { once: true })
+    })
+  }
+  const wake = (unit: number) => { const set = waiters.get(unit); if (set && settledFor(unit)) for (const f of [...set]) f() }
+
+  /** When each failed unit failed: a later visit past the fetcher's back-off re-asks for it (an animated slide then waits for it). */
+  const failedAt = new Map<number, number>()
   /** Units whose last request failed (cleared once a bitmap lands). */
   const failed = new Map<number, RemoteErrorCode>()
   /** Bumped on every content change Presenter View shows (bitmaps, errors, notes). */
@@ -266,26 +520,51 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
   // The audience frame
   // ---------------------------------------------------------------------
 
-  function draw(): void {
+  /** The stage box (PlanStage's compositor canvases), hidden while a text frame is shown on the output canvas. */
+  const stageBox = () => surface?.root.querySelector<HTMLElement>('[data-officeview-show-stage]') ?? undefined
+
+  /**
+   * One audience frame. On PlanStage the driver ticks (the stage draws); a slide with nothing to show yet gets the
+   * piece-3 loading or typed error frame over it. On the still stage the slide's bitmap is drawn as piece 3 drew it.
+   * `tick: false` from inside the driver's own calls (a slide change, a slide becoming drawable): the next frame
+   * draws the stage, so the driver is never re-entered.
+   */
+  function render(tick = true): void {
     if (exited || !surface) return
     const canvas = surface.canvas
     let kind: 'image' | 'loading' | 'error' | 'end' = 'end'
     let text = ''
+    let bmp: ImageBitmapLike | undefined
     if (slide !== 'end') {
       const unit = unitOf[slide]!
-      const bmp = fetcher.cached(unit)
+      bmp = planStage ? undefined : fetcher.cached(unit)
       const code = failed.get(unit)
-      if (bmp && fitInto(canvas, bmp)) kind = 'image'
+      // The still stage draws the bitmap here (piece 3); PlanStage draws on its tick.
+      if (planStage ? !!held.get(slide) || !!fetcher.cached(unit) : !!bmp && fitInto(canvas, bmp)) kind = 'image'
       else {
         kind = code ? 'error' : 'loading'
         text = code ? `Slide ${slide + 1} could not be shown (${code})` : `Loading slide ${slide + 1}`
-        textFrame(canvas, text)
       }
     }
+    if (planStage) {
+      // The output canvas under the stage's compositor: black again once a text frame has gone (the letterbox).
+      if (kind !== 'loading' && kind !== 'error' && textShown) {
+        const ctx = canvas.getContext('2d')
+        if (ctx) { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.restore() }
+        textShown = false
+      }
+      if (tick) driver?.tick()
+      if (exited) return
+      const box = stageBox()
+      if (box) box.hidden = kind === 'loading' || kind === 'error'
+    }
+    if (kind === 'loading' || kind === 'error') { textFrame(canvas, text); textShown = true }
     surface.root.setAttribute('data-officeview-show-frame', kind)
     if (frameText && frameText.textContent !== text) frameText.textContent = text
     afterFrame()
   }
+  /** A loading or error frame is on the output canvas (PlanStage clears it once the slide shows). */
+  let textShown = false
 
   /** Each subscriber still subscribed, stopping once one of them ends the show. */
   function notify(set: Set<() => void>, onThrow?: (f: () => void, e: unknown) => void): void {
@@ -318,16 +597,28 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     if (exited) return
     failed.delete(unit)
     content++
-    if (slide !== 'end' && unitOf[slide] === unit) draw()
+    wake(unit)
+    if (slide !== 'end' && unitOf[slide] === unit) render()
+    prefetchMorph()
     syncPresenter()
   })
   fetcher.onError((unit, code) => {
     if (exited) return
-    // A rate refusal pauses the fetcher, which re-issues the unit: not a failed slide.
-    if (code === 'rate-limited') return
+    // A rate refusal pauses the fetcher, which re-issues the unit (as `admission` re-issues it): not a failed slide.
+    if (TRANSIENT.has(code)) return
+    if (STILL_CODES.has(code) && animated(unit)) {
+      // The fetcher re-asks for the piece-3 still; the slide plays it.
+      stillOnly.add(unit)
+      const i = unitOf.indexOf(unit)
+      sink.add({ code, ...(i >= 0 ? { slideIndex: i } : {}), message: `Slide ${i + 1} plays as its still image (${code})` })
+      wake(unit)
+      return
+    }
     failed.set(unit, code)
+    failedAt.set(unit, clock.now())
     content++
-    if (slide !== 'end' && unitOf[slide] === unit) draw()
+    wake(unit)
+    if (slide !== 'end' && unitOf[slide] === unit) render()
     syncPresenter()
   })
 
@@ -467,31 +758,34 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     live.textContent = slide === 'end' ? END_OF_SHOW : `Slide ${slide + 1} of ${count}`
   }
 
-  function enter(p: number | 'end'): void {
+  /** A slide change (the driver's, before the slide's model is in): what piece 3's enter did, but navigation. */
+  function entered(p: number | 'end'): void {
     slide = p
     screen = 'slide'
+    build = 0
     if (p !== 'end') lastShown = p
     surface?.show({ slide: p, count, screen })
     if (p === 'end') surface?.root.removeAttribute('data-unit')
     else surface?.root.setAttribute('data-unit', String(unitOf[p]))
+    dropExtras(p)
+    // An animated slide whose bundle failed long enough ago is asked for again by `want`: its visit waits for it
+    // (shown loading) rather than playing static. A still unit keeps piece 3's error frame until its bitmap lands.
+    const unit = p === 'end' ? undefined : unitOf[p]
+    if (unit !== undefined && animated(unit) && failed.has(unit) && clock.now() - (failedAt.get(unit) ?? 0) >= BACKOFF_MS) { failed.delete(unit); failedAt.delete(unit) }
     want()
-    draw()
+    render(false)
     announce()
-    if (started && p !== 'end') cb.onSlideChange?.(p, 0)
     followNotes()
     syncPresenter()
   }
 
   function next(): void {
     if (exited) return
-    if (slide === 'end') { exit(); return }
-    const after = nextVisible(order, slide)
-    enter(after ?? (loop ? order[0] : undefined) ?? 'end')
+    driver?.next()
   }
   function previous(): void {
     if (exited) return
-    const to = previousVisible(order, slide === 'end' ? Infinity : slide)
-    if (to !== undefined) enter(to)
+    driver?.previous()
   }
   function goTo(i: number): void {
     if (exited) return
@@ -499,17 +793,23 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
       sink.add({ code: 'invalid-slide', message: `goTo(${i}) is outside the shown slides; ignored.` })
       return
     }
-    enter(i)
+    driver?.goTo(i)
   }
-  const firstSlide = () => { if (count) enter(0) }
-  const lastSlide = () => { if (count) enter(count - 1) }
+  const firstSlide = () => { if (!exited) driver?.first() }
+  const lastSlide = () => { if (!exited) driver?.last() }
 
   const release = () => {
     listeners.abort()
     stopManifest?.()
     stopTick?.()
     stopTick = undefined
+    stopFrames?.()
+    stopFrames = undefined
     dropNotes()
+    // The driver lets go of the slide on screen (its pinned bundle), the stage of everything it uploaded.
+    driver?.dispose()
+    planStage?.dispose()
+    dropExtras(undefined)
     fetcher.dispose()
     view?.dispose()
     swapped?.dispose()
@@ -598,8 +898,9 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     buffer = ''
     if (screen !== 'slide') { setScreen('slide'); return }
     switch (target.kind) {
-      // A finished bitmap has no triggers or links: a click advances.
-      case 'click': case 'next': case 'enter': next(); break
+      // A click goes through the driver: a plan's trigger or link region takes it, else it advances.
+      case 'click': driver?.click(target.x, target.y); break
+      case 'next': case 'enter': next(); break
       case 'previous': previous(); break
       case 'first': firstSlide(); break
       case 'last': lastSlide(); break
@@ -614,14 +915,14 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
 
   const session: SessionController = {
     get slideIndex() { return lastShown },
-    buildIndex: 0,
+    get buildIndex() { return build },
     get surface() { return surfaceKind },
     get presenter() { return presenter },
     get state(): SessionState {
-      return { slide, build: 0, screen, buffer, paused, clockPaused: paused, kiosk, loop, order, exited }
+      return { slide, build, screen, buffer, paused, clockPaused: paused, kiosk, loop, order, exited }
     },
     stage: undefined,
-    cursor: undefined,
+    get cursor() { return driver?.visit?.cursor },
     next,
     previous,
     goTo,
@@ -653,15 +954,21 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     get workspace() { return workspace },
     ...(start.watermark ? { watermark: start.watermark } : {}),
     protection: policy,
-    audienceFrame: () => surface?.canvas,
+    // PlanStage's compositor canvas while it is shown, else the output canvas.
+    audienceFrame: () => {
+      const box = planStage ? stageBox() : undefined
+      const gl = box && !box.hidden ? [...box.querySelectorAll<HTMLCanvasElement>('canvas')].pop() : undefined
+      return gl ?? surface?.canvas
+    },
     onFrame(f) {
       frameSubs.add(f)
       return () => { frameSubs.delete(f) }
     },
-    /** Cache-only (R18): the streamed slide's bitmap, fitted; never a fetch. */
+    /** Cache-only (R18): the streamed slide's bitmap (an animated slide's entry frame, D15), fitted; never a fetch. */
     slideImage(i, canvas) {
       const unit = Number.isInteger(i) ? unitOf[i] : undefined
-      const bmp = unit === undefined ? undefined : fetcher.cached(unit)
+      const b = unit === undefined ? undefined : bundleFor(i)
+      const bmp = b ? b.assets.bitmap(b.plan.entry) : unit === undefined ? undefined : fetcher.cached(unit)
       return !!bmp && fitInto(canvas, bmp)
     },
     hidden: () => false,
@@ -693,6 +1000,84 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     frameText.setAttribute('role', 'status')
     frameText.style.cssText = HIDDEN
     surface.root.append(live, frameText)
+    // The driver over the plan-backed source, on PlanStage (an animated deck) or piece 3's still stage.
+    const planSource = createPlanSource({ manifest: doc.manifest, unitOf, bundles: bundleFor, loop, kiosk })
+    const slides: SlideSource = {
+      count,
+      settings: planSource.settings,
+      hidden: planSource.hidden,
+      async acquire(i, sig) {
+        const unit = unitOf[i]!
+        await settle(unit, sig)
+        // The bundle is pinned before the source reads it, for as long as the slide holds its lease.
+        const b = animated(unit) && !stillOnly.has(unit) ? fetcher.bundle(unit) : undefined
+        if (b) { pin(b); held.set(i, b) }
+        const unhold = () => { if (b) { if (held.get(i) === b) held.delete(i); unpin(b) } }
+        let h: Awaited<ReturnType<SlideSource['acquire']>>
+        try { h = await planSource.acquire(i, sig) } catch (e) { unhold(); throw e }
+        // The text fan (S2-8, D22) is charged to the show workspace for the visit's life.
+        const charged: Lease[] = []
+        let done = false
+        return {
+          slide: h.slide,
+          charge(bytes: number, tag: string) {
+            if (done) return false
+            const l = workspace.lease(bytes, tag)
+            if (!l) return false
+            charged.push(l)
+            return true
+          },
+          release() {
+            if (done) return
+            done = true
+            h.release()
+            for (const l of charged.splice(0)) l.release()
+            unhold()
+          },
+        }
+      },
+    }
+    if (planned) {
+      planStage = createPlanStage({
+        root: surface.root, output: surface.canvas, workspace, sink, reduced: motion === 'reduced',
+        showNow: () => clock.now(),
+        data: planData,
+        still: (i) => (unitOf[i] === undefined ? undefined : fetcher.cached(unitOf[i]!)),
+        morph: morphFor,
+        ...(remoteShowDeps.backend ? { force: remoteShowDeps.backend } : {}),
+      })
+    }
+    /** Piece 3's still stage: the slide's bitmap is drawn by `render`; nothing animates. */
+    const stillStage: DriverStage = {
+      prepare() {}, async enter() {}, frame: () => undefined, flattenCurrent() {}, leave() {},
+      hitTest: () => undefined, slideTime: (t) => t,
+    }
+    const showClock: SessionClock = { now: () => clock.now(), paused: false, pause() {}, resume() {} }
+    const hooks: DriverHooks = {
+      onSlideChange(i, b) {
+        if (exited) return
+        build = b
+        if (started) cb.onSlideChange?.(i, b)
+        // D4: starting step k asks for step k + 1's track (and k's, if it is still missing).
+        if (b > 0 && driver?.visit?.index === i) { requestTrack(i, b - 1); requestTrack(i, b) }
+        syncPresenter()
+      },
+      onVisit(v) {
+        if (exited) return
+        if (!v) { entered(driver?.slide ?? 'end'); return }
+        if (v.cursor) tracksOnEntry(v.index, v.cursor.step)
+        prefetchMorph()
+        render(false)
+      },
+      onCursor() { syncPresenter() },
+      runLink(link, v) {
+        runLink(link, { goTo, next, previous, first: firstSlide, last: lastSlide, exit }, win ?? (globalThis as unknown as Window), { sink, slideIndex: v.index })
+      },
+      onEnd() { exit() },
+      // A blanked screen holds the after-timer auto-advance.
+      held: () => screen !== 'slide',
+    }
+    driver = createShowDriver({ source: slides, stage: planStage ?? stillStage, clock: showClock, sink, reducedMotion: motion === 'reduced', kiosk, hooks })
     cursorHider = createCursorHider(surface.root, remoteShowDeps.timer(win))
     const on = { signal: listeners.signal }
     const gestures = createGestureState(() => clock.now())
@@ -743,10 +1128,13 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
         return
       }
       backing = next
-      surface.canvas.width = next.w
-      surface.canvas.height = next.h
+      if (planStage) planStage.resize({ w: next.w, h: next.h }, 1)
+      else {
+        surface.canvas.width = next.w
+        surface.canvas.height = next.h
+      }
       applyBucket()
-      draw()
+      render()
     }
     win?.addEventListener('resize', resized, on)
     owner.addEventListener('fullscreenchange', resized, on)
@@ -768,8 +1156,10 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     } else if (start.from === 'beginning') from = count ? 0 : 'end'
     else from = Number.isInteger(start.from) && start.from >= 0 && start.from < count ? start.from : count ? 0 : 'end'
     applyBucket()
-    enter(from)
+    void driver.start(from)
     if (!start.isCurrent()) throw new SlideShowError('cancelled')
+    // An animated deck draws every frame (transitions, builds, tracks, Morph).
+    if (planStage) stopFrames = remoteShowDeps.frames(win, () => render())
     timer = createElapsedTimer(clock.now())
     const popup = start.popup
     if (popup === null || popup?.closed) {

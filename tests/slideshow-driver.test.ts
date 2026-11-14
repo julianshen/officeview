@@ -70,6 +70,8 @@ interface RigOptions {
   settings?: Partial<SlideSource['settings'] & { kioskRestartMs: number }>
   kiosk?: boolean
   hooks?: Partial<DriverHooks>
+  /** Additive members of the stage (Task 11: `hitRegions`). */
+  stage?: Partial<DriverStage>
 }
 
 function rig(o: RigOptions): Rig {
@@ -106,6 +108,7 @@ function rig(o: RigOptions): Rig {
     leave() { log.push('leave'); origin = Number.POSITIVE_INFINITY },
     hitTest() { log.push('hitTest'); return hit.result },
     slideTime: (t) => t - origin,
+    ...o.stage,
   }
   const hooks: DriverHooks = {
     onSlideChange: (i, b) => { hookLog.push(`slide:${i}:${b}`) },
@@ -268,6 +271,30 @@ describe('show driver', () => {
     expect(r.driver.slide).toBe(0)
     expect(r.log).not.toContain('leave')
     expect(r.sink.list().map((d) => d.code)).toContain('link-withheld')
+  })
+
+  it('a stage that reports hit regions is hit-tested on a slide with no triggers or links (Task 11)', async () => {
+    const r = rig({ slides: [slideOf(0), slideOf(1)], stage: { hitRegions: () => true } })
+    await r.driver.start(0)
+    r.hit.result = { kind: 'withheld' }
+    r.log.length = 0
+    r.driver.click(10, 10)
+    expect(r.log).toEqual(['hitTest'])
+    expect(r.driver.slide).toBe(0)
+    expect(r.sink.list().map((d) => d.code)).toContain('link-withheld')
+    // A miss still advances.
+    r.hit.result = undefined
+    r.driver.click(10, 10)
+    expect(r.driver.slide).toBe(1)
+  })
+
+  it('without hit regions, triggers or links the click advances without a hit test', async () => {
+    const r = rig({ slides: [slideOf(0), slideOf(1)], stage: { hitRegions: () => false } })
+    await r.driver.start(0)
+    r.log.length = 0
+    r.driver.click(10, 10)
+    expect(r.log).not.toContain('hitTest')
+    expect(r.driver.slide).toBe(1)
   })
 
   it('kiosk consumes trigger and link hits without running them', async () => {

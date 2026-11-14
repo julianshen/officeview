@@ -82,6 +82,8 @@ export interface RemoteOfficeDoc {
   readonly ended: Promise<StreamSessionError | undefined>
   /** R28: the session's unit send budget (every paint's sends are stamped on it). */
   readonly unitBudget?: UnitBudgetView
+  /** @internal Piece 4 (Task 11): the session's show requests, read by the lazy streamed show only. */
+  readonly session?: Pick<SessionLike, 'showPlan' | 'showTrack' | 'showMorph'>
 }
 
 /** Rects of one unit, in page px at scale 1 relative to the unit. */

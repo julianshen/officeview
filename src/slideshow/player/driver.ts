@@ -55,6 +55,11 @@ export interface DriverStage {
   hitTest(clientX: number, clientY: number, cursor: SlideCursor, t: number, on: { triggers: readonly string[]; links: readonly LinkSpec[] }): HitResult | undefined
   slideTime(t: number): number
   textTiming?: Stage['textTiming']
+  /**
+   * Additive (piece 4 Task 11): the shown slide has click regions of the stage's own (a streamed plan's link
+   * regions or trigger rects), so a click is hit-tested even when the slide's metadata lists no trigger or link.
+   */
+  hitRegions?(): boolean
 }
 
 /** What the driver needs of a media player for one slide (`MediaController`'s following part). */
@@ -317,7 +322,7 @@ export function createShowDriver(o: { source: SlideSource; stage: DriverStage; c
     if (slide !== 'end' && v?.cursor && v.timeline) {
       const triggers = v.timeline.triggers()
       const links = v.slide?.links ?? []
-      const hit = triggers.length || links.length ? stage.hitTest(clientX, clientY, v.cursor, clock.now(), { triggers, links }) : undefined
+      const hit = triggers.length || links.length || stage.hitRegions?.() ? stage.hitTest(clientX, clientY, v.cursor, clock.now(), { triggers, links }) : undefined
       if (hit) {
         // A hit is consumed whatever it runs: kiosk disables triggers and links, and a withheld target runs nothing (D14).
         if (hit.kind === 'trigger') trigger(hit.spid)

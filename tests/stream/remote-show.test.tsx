@@ -201,7 +201,10 @@ describe('remote show: order and navigation', () => {
   it('next past the end shows the end slide; next again exits', async () => {
     const fd = fakeDoc({ count: 2 })
     const { s, root, log } = await show(fd)
+    // Piece 4: navigation is the shared driver's; a Next typed while the slide entered is still loading its
+    // (static) model is queued and replayed once it is in, a microtask later.
     s.next(); s.next()
+    await flush()
     expect(s.state.slide).toBe('end')
     expect(root.getAttribute('data-slide')).toBe('end')
     s.previous()
