@@ -4029,6 +4029,8 @@ export interface CfObservedIcon {
   textInkLeftPx?: number
   textInkRightPx?: number
   textShiftPx?: number
+  /** `false` when the three scanlines disagreed in `record` mode: a per-cell finding that can back no geometry claim. */
+  edgeStable?: false
 }
 
 /** Ruling S4-A classification: equal within +-8 per channel at zero offset; separated by one pixel of max delta >= 64. */
@@ -4113,8 +4115,9 @@ export function measureIconGeometry(
   png: DecodedPng,
   geom: WorksheetRangeGeometry,
   refs: readonly string[],
-  opts: { controlOf: (ref: string) => string; tolerancePx: number; referenceOf?: (ref: string) => DecodedPng | undefined },
+  opts: { controlOf: (ref: string) => string; tolerancePx: number; referenceOf?: (ref: string) => DecodedPng | undefined; unstable?: 'refuse' | 'record' },
 ): ReadonlyMap<string, CfObservedIcon> | Refusal {
+  const record = opts.unstable === 'record'
   const out = new Map<string, CfObservedIcon>()
   for (const ref of refs) {
     const inner = iconInnerBox(png, geom, ref)
@@ -4151,7 +4154,12 @@ export function measureIconGeometry(
         : {}),
     }
     if (box) {
-      if (box.scans.some(s => s === undefined)) return iconRefusal('icon-edge-unstable', `Cell ${ref}: a scanline through the icon holds no ink`)
+      const iconBox = { leftPx: inner.x + box.left, topPx: inner.y + box.top, rightPx: inner.x + box.right, bottomPx: inner.y + box.bottom, glyphClass: 'unclassified' }
+      if (box.scans.some(s => s === undefined)) {
+        if (!record) return iconRefusal('icon-edge-unstable', `Cell ${ref}: a scanline through the icon holds no ink`)
+        out.set(ref, { ...base, icon: iconBox, edgeStable: false })
+        continue
+      }
       const scans = box.scans as Array<{ l: number; r: number }>
       let lefts = scans.map(s => s.l)
       let rights = scans.map(s => s.r)
@@ -4165,9 +4173,13 @@ export function measureIconGeometry(
       }
       const spread = (v: number[]): number => Math.max(...v) - Math.min(...v)
       if (spread(lefts) > opts.tolerancePx || spread(rights) > opts.tolerancePx) {
+        if (record) {
+          out.set(ref, { ...base, icon: iconBox, edgeStable: false })
+          continue
+        }
         return iconRefusal('icon-edge-unstable', `Cell ${ref}: icon scanline edges disagree (left ${lefts.join('/')}, right ${rights.join('/')}${reference ? ' against the glyph-key reference' : ''}) beyond +-${opts.tolerancePx} px`)
       }
-      base.icon = { leftPx: inner.x + box.left, topPx: inner.y + box.top, rightPx: inner.x + box.right, bottomPx: inner.y + box.bottom, glyphClass: 'unclassified' }
+      base.icon = iconBox
     }
     out.set(ref, base)
   }
@@ -4490,7 +4502,9 @@ export function measureCaseIcons(c: CfOracleCase, png: DecodedPng, geom: Workshe
     const cls = classify(cell.ref)
     const reference = cls !== undefined && key?.classes.has(cls) ? key.classes.get(cls) : undefined
     // The reference is the key cell's full inner-box crop; its ink box is what the scanlines are aligned to.
-    const res = measureIconGeometry(png, geom, [cell.ref], { controlOf, tolerancePx: 1, ...(reference ? { referenceOf: () => reference } : {}) })
+    // An unclassified cell (no reference) or an unstable edge is a per-cell finding (`edgeStable: false`), never a
+    // whole-case refusal: geometry and inset cells cannot classify by design, and no geometry claim rests on them.
+    const res = measureIconGeometry(png, geom, [cell.ref], { controlOf, tolerancePx: 1, unstable: 'record', ...(reference ? { referenceOf: () => reference } : {}) })
     if ('kind' in res) return res as Refusal
     const obs = (res as ReadonlyMap<string, CfObservedIcon>).get(cell.ref)!
     out.set(cell.ref, obs.icon && cls !== undefined ? { ...obs, icon: { ...obs.icon, glyphClass: cls } } : obs)

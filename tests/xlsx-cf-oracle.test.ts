@@ -41,6 +41,7 @@ import {
   buildColorScaleCriteriaProbeScript,
   buildDataBarSettingsProbeScript,
   buildIconOmReachabilityScript,
+  buildIconSidecarExtras,
   parseIconOmReachability,
   buildBarSidecarExtras,
   buildDecorationProbeScript,
@@ -4356,6 +4357,10 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     const triRes = measureIconGeometry(tri, iconGeom, ['A1'], { ...opts, referenceOf: () => reference })
     // Rows r = 0..15 span x 3+8-floor(r/2) .. 3+8+floor(r/2): the widest rows give the box 4..18.
     expect((triRes as ReadonlyMap<string, CfObservedIcon>).get('A1')!.icon).toMatchObject({ leftPx: 4, rightPx: 18, topPx: 2, bottomPx: 17 })
+    // In record mode (the capture path) an unstable glyph is a per-cell finding, never a whole-case refusal.
+    const recorded = (measureIconGeometry(tri, iconGeom, ['A1'], { ...opts, unstable: 'record' }) as ReadonlyMap<string, CfObservedIcon>).get('A1')!
+    expect(recorded).toMatchObject({ edgeStable: false, icon: { leftPx: 4, rightPx: 18 } })
+    expect((triRes as ReadonlyMap<string, CfObservedIcon>).get('A1')!.edgeStable).toBeUndefined()
     // An unknown cell refuses instead of inventing a measurement.
     expect(measureIconGeometry(icon16, iconGeom, ['Z9'], opts)).toMatchObject({ kind: 'refusal' })
   })
@@ -4489,5 +4494,30 @@ describe('Stage 4 icon oracle (Task 24)', () => {
   it.skipIf(!existsSync(EXCEL_AUTHORED_ICONSETS_PATH))('icon templates write what Excel\'s dialog writes (excel-authored-iconsets.xlsx)', async () => {
     const authored = readZipPartsSync(new Uint8Array(readFileSync(EXCEL_AUTHORED_ICONSETS_PATH)))!
     expect(diffAuthoredIconTemplates(readZipPartsSync(await generateCaseArchive('stage4-icon-authored'))!, authored)).toEqual([])
+  })
+
+  it('a capture of non-rectangular, unclassifiable glyphs records per-cell findings instead of refusing the case', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-icon-geom-'))
+    s4dirs.push(dir) // no manifest here: no glyph key, so no cell classifies (as geometry and inset cells never do)
+    const c = CF_STAGE4_CASES.find(x => x.id === 'stage4-icon-geometry')!
+    const parts = readZipPartsSync(new Uint8Array(readFileSync(resolve(REPO_ROOT, c.saved))))!
+    const geom = computeWorksheetRangeGeometry(parts, c.range)!
+    const iconRefs = c.expected.cells.filter(x => x.matched && x.iconApplied).map(x => x.ref)
+    const png = paintPng(geom.expectedWidthPt, geom.expectedHeightPt, ctx => {
+      ctx.fillStyle = '#00a000'
+      for (const ref of iconRefs) {
+        const p = parseA1(ref)!
+        const x0 = Math.round(geom.colWidthsPt.slice(0, p.col - geom.minCol).reduce((a, b) => a + b, 0))
+        const y0 = Math.round(geom.rowHeightsPt.slice(0, p.row - geom.minRow).reduce((a, b) => a + b, 0))
+        const h = Math.min(8, Math.round(geom.rowHeightsPt[p.row - geom.minRow]!) - 3)
+        for (let r = 0; r < h; r++) ctx.fillRect(x0 + 2 + h - r, y0 + 2 + r, 2 * r + 1, 1) // a triangle: never rectangular
+      }
+    })
+    const res = buildIconSidecarExtras(c, parts, png, geom, { lockBefore: 'unlocked', lockAfter: 'unlocked', rootDir: dir })
+    expect(res.refusal).toBeUndefined()
+    expect(res.observed!.size).toBe(iconRefs.length)
+    const unstable = [...res.observed!.values()].filter(o => o.edgeStable === false)
+    expect(unstable.length).toBeGreaterThan(0)
+    for (const o of res.observed!.values()) if (o.icon) expect(o.icon.glyphClass).toBe('unclassified')
   })
 })
