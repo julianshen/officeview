@@ -8,7 +8,7 @@
  * (`tracks.ts`).
  *
  * The order inside one build:
- * 1. Strip what never plays streamed (`cmd` leaves, D16; the transition sound, piece 5) BEFORE preparing, so
+ * 1. Strip what never plays streamed (`cmd` payloads, made inert in place, Task 14 ruling; the transition sound, piece 5) BEFORE preparing, so
  *    the server classifies the tree the client will play.
  * 2. D3 limits before any raster: over 64 steps (or an iterate over 128 keys, Task 4 ruling) the slide is its
  *    piece-3 still (`show-limits`).
@@ -164,25 +164,30 @@ const MAX_DIAGNOSTICS = 1024
 // What never plays streamed (D16)
 // ---------------------------------------------------------------------------
 
-/** The tree without its `cmd` leaves (their parents stay, so the step count and timing are unchanged). */
-export function dropCommands(tree: TimingTree): { tree: TimingTree; dropped: number } {
-  let dropped = 0
-  const walk = (n: TimeNode, depth: number): TimeNode | undefined => {
-    if (!('children' in n)) { if (n.kind === 'cmd') { dropped++; return undefined } return n }
+/**
+ * The tree with every `cmd` leaf made inert (Task 14 controller ruling, replacing D16's drop): the node keeps its
+ * place, `cmdType` and timing (begin, duration, fill, restart), so the step and click structure is local mode's —
+ * a long media call still holds its group, and a → during it seeks as locally — while its command payload (an OLE
+ * verb, a media call, an event name) never leaves the server (`cmd: ''`).
+ */
+export function inertCommands(tree: TimingTree): { tree: TimingTree; stripped: number } {
+  let stripped = 0
+  const walk = (n: TimeNode, depth: number): TimeNode => {
+    if (!('children' in n)) { if (n.kind === 'cmd') { stripped++; return { ...n, cmd: '' } } return n }
     if (depth > 256) return n
-    const children = n.children.map(c => walk(c, depth + 1)).filter((c): c is TimeNode => !!c)
-    return children.length === n.children.length && children.every((c, i) => c === n.children[i]) ? n : { ...n, children }
+    const children = n.children.map(c => walk(c, depth + 1))
+    return children.every((c, i) => c === n.children[i]) ? n : { ...n, children }
   }
-  const root = walk(tree.root, 0) ?? tree.root
-  return { tree: root === tree.root ? tree : { ...tree, root }, dropped }
+  const root = walk(tree.root, 0)
+  return { tree: root === tree.root ? tree : { ...tree, root }, stripped }
 }
 
 function streamedMeta(meta: ShowSlide): { meta: ShowSlide; cmdDropped: boolean } {
   let timing = meta.timing, cmdDropped = false
   if (timing && !('refused' in timing)) {
-    const d = dropCommands(timing)
+    const d = inertCommands(timing)
     timing = d.tree
-    cmdDropped = d.dropped > 0
+    cmdDropped = d.stripped > 0
   }
   let transition: TransitionSpec | undefined = meta.transition
   if (transition?.sound) { const { sound: _s, ...rest } = transition; transition = rest }

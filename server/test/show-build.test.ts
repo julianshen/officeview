@@ -313,16 +313,22 @@ describe('buildShowPlan', () => {
     }, 60_000)
   })
 
-  it('cmd nodes dropped with cmd-dropped', async () => {
+  it('cmd nodes kept inert (timing intact, command stripped) with cmd-dropped', async () => {
+    // Controller ruling (Task 14), replacing D16's drop: the node keeps its place and timing, so the step and
+    // click structure equals local; only the command payload is withheld.
     const { host, docKey } = await openDeck(await cmdDeck())
     const b = built(await host.showPlan(docKey, job()))
+    const cmds: Array<{ kind: string; cmd?: string; cmdType?: string; ctn: { durMs?: unknown } }> = []
     const kinds: string[] = []
-    const walk = (n: { kind: string; children?: unknown[] }) => { kinds.push(n.kind); for (const c of n.children ?? []) walk(c as never) }
+    const walk = (n: { kind: string; children?: unknown[] }) => { kinds.push(n.kind); if (n.kind === 'cmd') cmds.push(n as never); for (const c of n.children ?? []) walk(c as never) }
     const timing = b.plan.show.timing
     if (!timing || 'refused' in timing) throw new Error('no timing')
     walk(timing.root as never)
-    expect(kinds).not.toContain('cmd')
     expect(kinds).toContain('set')
+    expect(cmds.length).toBe(1)
+    expect(cmds[0]!.cmd).toBe('')
+    expect(cmds[0]!.cmdType).toBe('verb')
+    expect(cmds[0]!.ctn.durMs).toBe(1)
     expect(b.plan.steps.length).toBe(1)
     expect(b.plan.diagnostics.map(d => d.code)).toContain('cmd-dropped')
     roundTrip(b)
