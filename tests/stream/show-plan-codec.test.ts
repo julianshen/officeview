@@ -194,6 +194,22 @@ describe('real reader output', () => {
     expect(iterate).toBe(true)
     expect(await roundTrip(bytes)).toBe(1)
   })
+  it('unsigned timing ids above 2^31, a condition referencing one, and a high grpId round-trip', async () => {
+    const hi = 2147483648
+    const tg = '<p:tgtEl><p:spTgt spid="3"/></p:tgtEl>'
+    const set = (id: number) => `<p:set><p:cBhvr><p:cTn id="${id}" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn>${tg}<p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>`
+    const effect = (id: number, grp: number, cond: string) => `<p:par><p:cTn id="${id}" presetID="1" presetClass="entr" presetSubtype="0" grpId="${grp}" fill="hold" nodeType="clickEffect"><p:stCondLst>${cond}</p:stCondLst><p:childTnLst>${set(id + 1)}</p:childTnLst></p:cTn></p:par>`
+    const step = `<p:par><p:cTn id="${hi}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst><p:par><p:cTn id="${hi + 1}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${effect(hi + 2, 4294967295, '<p:cond delay="0"/>')}${effect(hi + 4, hi + 5, `<p:cond evt="onEnd" delay="0"><p:tn val="${hi + 2}"/></p:cond>`)}</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>`
+    const bytes = await buildPptxDeck({ slides: [{ bg: { solid: 'FFFFFF' }, shapes: [{ id: 3, name: 'Box', prst: 'rect', off: ['952500', '952500'], ext: ['1905000', '1905000'], fill: '336699' }], timingXml: timingXmlOf(mainSeqXml([step])) }] })
+    const m = await (await loadShowDeck(bytes)).meta(0)
+    expect(m.timing && 'refused' in m.timing ? m.timing.refused : undefined).toBeUndefined()
+    const ids: number[] = [], tns: unknown[] = []
+    const walk3 = (n: TimeNode) => { ids.push(n.ctn.id); n.ctn.start.forEach((c) => tns.push(c.tn)); if ('children' in n) n.children.forEach(walk3) }
+    if (m.timing && !('refused' in m.timing)) walk3(m.timing.root)
+    expect(Math.max(...ids)).toBeGreaterThan(2 ** 31)
+    expect(tns).toContain(hi + 2)
+    expect(await roundTrip(bytes)).toBe(1)
+  })
   const corpus = 'corpus'
   const decks = existsSync(corpus) ? readdirSync(corpus).filter((f) => /^lo-.*\.pptx$/.test(f)) : []
   it.skipIf(!decks.length)('every slide of the LibreOffice corpus decks round-trips', async () => {
@@ -269,6 +285,32 @@ describe('hostile plan records', () => {
     const at0 = (p: { show: { timing: { root: { children: Array<{ children: unknown[] }> } } } }, v: string) => { p.show.timing.root.children[0]!.children = [{ ...flyY(9, '2'), keys: [{ tm: 0, value: v }] }] }
     expect(() => decodeShowMessage(mutated((p) => at0(p, 'x'.repeat(1024))), E)).not.toThrow()
     expect(rej(mutated((p) => at0(p, 'x'.repeat(1025))))).toBe('show.timing.root.children[0].children[0].keys[0].value')
+  })
+  describe('motion-path structure (the reader\'s parseMotionPath invariants)', () => {
+    const motion = (segments: unknown[], length = 1) => ({
+      kind: 'animMotion', ctn: ctn(2), target: { spid: '2' }, attrNames: ['ppt_x'], additive: 'base', accumulate: 'none', path: { segments, length },
+    })
+    const withPath = (segments: unknown[]) => mutated((p) => { p.show.timing = { root: par(1, [motion(segments) as unknown as BehaviourNode]), build: [] } })
+    const seg = (i: number, leaf: string) => `show.timing.root.children[0].path.segments[${i}].${leaf}`
+    const M = { cmd: 'M', pts: [0, 0] }
+    it('accepts a well-formed M L C Z path', () => {
+      expect(() => decodeShowMessage(withPath([M, { cmd: 'L', pts: [1, 1] }, { cmd: 'C', pts: [1, 2, 3, 4, 5, 6] }, { cmd: 'Z', pts: [] }]), E)).not.toThrow()
+    })
+    it.each([
+      ['M with one operand', [{ cmd: 'M', pts: [0] }], 0],
+      ['L with three operands', [M, { cmd: 'L', pts: [1, 1, 1] }], 1],
+      ['an incomplete cubic', [M, { cmd: 'C', pts: [1] }], 1],
+      ['a cubic with four operands', [M, { cmd: 'C', pts: [1, 2, 3, 4] }], 1],
+      ['Z with an operand', [M, { cmd: 'Z', pts: [0, 0] }], 1],
+    ])('rejects %s', (_n, segments, i) => expect(rej(withPath(segments))).toBe(seg(i, 'pts')))
+    it('rejects a path whose first command is not M', () => {
+      expect(rej(withPath([{ cmd: 'L', pts: [1, 1] }, M]))).toBe(seg(0, 'cmd'))
+      expect(rej(withPath([{ cmd: 'Z', pts: [] }]))).toBe(seg(0, 'cmd'))
+    })
+    it('rejects an empty path', () => expect(rej(withPath([]))).toBe('show.timing.root.children[0].path.segments'))
+    it('rejects more than 10000 commands', () => {
+      expect(rej(withPath([M, ...Array.from({ length: 10000 }, () => ({ cmd: 'L', pts: [1, 1] }))]))).toBe('show.timing.root.children[0].path.segments')
+    })
   })
   it('rejects 2001 time nodes', () => {
     expect(rej(mutated((p) => { p.show.timing = { root: par(1, Array.from({ length: 2000 }, (_, i) => setVisible(i + 2, '2'))), build: [] } }))).toBe('show.timing.root.children[1999]')

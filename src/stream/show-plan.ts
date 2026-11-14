@@ -211,10 +211,12 @@ function condition(v: unknown, p: string, ctx: TimingCtx) {
 function ctnRecord(v: unknown, p: string, ctx: TimingCtx) {
   const o = obj(v, p, ['id', 'accel', 'decel', 'autoRev', 'start', 'end'],
     ['presetClass', 'presetId', 'presetSubtype', 'nodeType', 'grpId', 'durMs', 'repeatCount', 'repeatDurMs', 'fill', 'restart', 'syncBehavior', 'masterRel', 'afterEffect', 'endSync', 'iterate'])
-  int(o.id, at(p, 'id'), -0x7fffffff, 0x7fffffff)
+  // Unsigned ids to 2^32-1 (ST_TLTimeNodeId) plus the reader's negative synthetic ids.
+  int(o.id, at(p, 'id'), -0x7fffffff, 0xffffffff)
   num(o.accel, at(p, 'accel'), 0, 1); num(o.decel, at(p, 'decel'), 0, 1); bool(o.autoRev, at(p, 'autoRev'))
   opt(o, 'presetClass', p, (s, q) => str(s, q)); opt(o, 'nodeType', p, (s, q) => str(s, q))
-  for (const k of ['presetId', 'presetSubtype', 'grpId']) opt(o, k, p, (n, q) => int(n, q, -0x7fffffff, 0x7fffffff))
+  for (const k of ['presetId', 'presetSubtype']) opt(o, k, p, (n, q) => int(n, q, -0x7fffffff, 0xffffffff))
+  opt(o, 'grpId', p, u32)
   for (const k of ['durMs', 'repeatCount', 'repeatDurMs']) opt(o, k, p, (n, q) => { if (n !== 'indefinite') num(n, q, 0, 1e12) })
   opt(o, 'fill', p, (s, q) => oneOf(s, q, ['hold', 'remove', 'freeze', 'transition']))
   opt(o, 'restart', p, (s, q) => oneOf(s, q, ['always', 'whenNotActive', 'never']))
@@ -230,6 +232,9 @@ function ctnRecord(v: unknown, p: string, ctx: TimingCtx) {
   })
 }
 
+/** Operand counts of the reader's motion-path commands (motion-path.ts ARITY x 2; Z takes none) and its coordinate bound. */
+const PATH_OPERANDS: Readonly<Record<string, number>> = { M: 2, L: 2, C: 6, Z: 0 }
+const READER_LIMITS_COORD = 1e6
 const BASE_REQ = ['kind', 'ctn', 'target', 'attrNames', 'additive', 'accumulate']
 const BASE_OPT = ['override', 'xfrmType', 'rctx']
 const BEHAVIOURS: Record<string, { req: string[]; opt: string[] }> = {
@@ -271,8 +276,13 @@ function behaviourFields(kind: string, o: O, p: string, ctx: TimingCtx) {
         arr(po.segments, at(q, 'segments'), READER_LIMITS.motionPathCommands).forEach((sg, i) => {
           const r = ix(at(q, 'segments'), i), so = obj(sg, r, ['cmd', 'pts'])
           oneOf(so.cmd, at(r, 'cmd'), ['M', 'L', 'C', 'Z'])
-          arr(so.pts, at(r, 'pts'), 6).forEach((x, j) => num(x, ix(at(r, 'pts'), j), -1e6, 1e6))
+          // parseMotionPath: the first command is M, and each command has exactly its operand count.
+          if (i === 0 && so.cmd !== 'M') fail(at(r, 'cmd'))
+          const pts = arr(so.pts, at(r, 'pts'), 6)
+          if (pts.length !== PATH_OPERANDS[so.cmd as string]) fail(at(r, 'pts'))
+          pts.forEach((x, j) => num(x, ix(at(r, 'pts'), j), -READER_LIMITS_COORD, READER_LIMITS_COORD))
         })
+        if (!(po.segments as unknown[]).length) fail(at(q, 'segments'))
       })
       opt(o, 'origin', p, (v, q) => oneOf(v, q, ['parent', 'layout'])); n('rAngDeg'); opt(o, 'ptsTypes', p, (v, q) => str(v, q, READER_LIMITS.motionPathCommands))
       pt('by'); pt('from'); pt('to'); pt('rCtr'); break
@@ -311,11 +321,11 @@ function buildTemplate(v: unknown, p: string) {
   if (!isObj(v)) return fail(p)
   if (v.kind === 'bldP') {
     const o = obj(v, p, ['kind', 'spid', 'grpId', 'build', 'bldLvl', 'animBg', 'rev'])
-    str(o.spid, at(p, 'spid')); int(o.grpId, at(p, 'grpId'), 0, 0x7fffffff); oneOf(o.build, at(p, 'build'), ['whole', 'p', 'cust', 'allAtOnce'])
-    int(o.bldLvl, at(p, 'bldLvl'), 0, 1000); bool(o.animBg, at(p, 'animBg')); bool(o.rev, at(p, 'rev'))
+    str(o.spid, at(p, 'spid')); u32(o.grpId, at(p, 'grpId')); oneOf(o.build, at(p, 'build'), ['whole', 'p', 'cust', 'allAtOnce'])
+    u32(o.bldLvl, at(p, 'bldLvl')); bool(o.animBg, at(p, 'animBg')); bool(o.rev, at(p, 'rev'))
   } else if (v.kind === 'bldGraphic' || v.kind === 'bldOleChart' || v.kind === 'bldDgm') {
     const o = obj(v, p, ['kind', 'spid', 'grpId'], ['bld'])
-    str(o.spid, at(p, 'spid')); int(o.grpId, at(p, 'grpId'), 0, 0x7fffffff); opt(o, 'bld', p, (s, q) => str(s, q))
+    str(o.spid, at(p, 'spid')); u32(o.grpId, at(p, 'grpId')); opt(o, 'bld', p, (s, q) => str(s, q))
   } else fail(at(p, 'kind'))
 }
 function timing(v: unknown, p: string) {
