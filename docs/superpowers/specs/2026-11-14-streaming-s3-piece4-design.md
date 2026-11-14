@@ -1,14 +1,14 @@
 # Streaming Stage 3, piece 4 — animations, transitions and Morph for streamed decks
 
-**Status:** draft for owner review, 2026-11-14.
+**Status:** owner decisions taken 2026-11-14 (§11); for owner approval.
 **Parents:** `2026-11-11-streaming-s3-design.md` §4.4 (piece 4), and
 `2026-11-07-server-streaming-design.md` §12a (presentation mode), §16 T5
 (show-plan battery) and §12a.8 (the 3c acceptance list).
 **Builds on:** piece 3 (static show plus notes, PR #75, main `adef68e9`).
 
-The owner chose to skip the design questions. Every choice below that the
-parents leave open is marked **[call]**: it is the author's choice, open to
-review.
+The owner skipped the design interview and answered the two questions
+the builder check raised (§11). Every other choice that the parents leave
+open is marked **[call]**: it is the author's choice, open to review.
 
 ## 1. Intent
 
@@ -220,7 +220,7 @@ admitted. A slide still too big plays as its piece-3 still image with a
 behaviours above the bucket request a larger asset, capped at `maxUnitPx`
 (§12a.7).
 
-**Charging [call; owner question Q2].** The 60-per-minute `'unit'`
+**Charging (owner decision 2026-11-14, Q2: one per slide).** The 60-per-minute `'unit'`
 limit is meant to stop a show being used as a bulk-export path, and it
 counts slides. Piece 4 keeps that meaning:
 - **A slide bundle is one charged send:** its plan, every layer and its
@@ -331,7 +331,7 @@ The server classifies each step **before** sending any asset of the slide.
   every fly-in, motion path and Morph mover falls back to 15 fps
   keyframes, which defeats goal 1 for the most common animations.
 
-  **[call — owner decision needed, §11 Q1]** A mover's mark is drawn in
+  **Owner decision (2026-11-14, Q1): the mark moves with it.** A mover's mark is drawn in
   page coordinates **at its rest (step-end) position**. So at every step
   boundary the composite matches the reference mark exactly. During the
   motion interval, the mover's mark travels with the mover. Every
@@ -418,19 +418,17 @@ Before the first client playback code merges, these must be green:
 - **Not machine-checked:** projector or real-hardware frame pacing, and
   3-D transitions on GPUs other than CI's SwiftShader.
 
-## 11. Owner questions
+## 11. Owner decisions (2026-11-14)
 
-**Q1 — moving marks (§7).** Should a moving object's visible mark travel
-with it during the animation (smooth fly-ins and Morph; marks exact at
-every rest point), or must the mark stay pinned to the page at every
-instant (every moving step plays as 15 fps server keyframes)?
-
-**Q2 — charging (§5).** Is one charged send per animated slide bundle
-(plan, layers and entry frame), per keyframe track and per Morph pair
-acceptable? That keeps the 60-per-minute limit meaning "slides per
-minute". Or must every layer and keyframe count as its own send? Then
-most `composited` steps become cuts: a 90-frame track alone needs more
-than the whole minute's budget.
+1. **Moving marks:** a moving object's visible mark travels with it
+   during the animation. It is exact against the page mark at every rest
+   point. The strict page-anchored behaviour is the server option
+   `animation.strictMarks: true` (§7). This amends parent §12a.4's
+   "moving layer-local marks → composited" rule. Both marks remain on
+   every transmitted pixel.
+2. **Charging:** one charged `'unit'` send per animated slide bundle, per
+   keyframe track and per Morph pair (§5). The limit keeps meaning "slides
+   per minute"; bytes are bounded by the 128 MiB per-show budget.
 
 ## 12. Left to the builder
 
