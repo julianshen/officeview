@@ -206,8 +206,19 @@ In plain words; the ledger has the full list (R1–R26).
     re-sends. It does not stamp the stale-jti re-send, which the server
     refuses before its rate gate. The show's `charge()` only marks its
     request as sent, so nothing is counted twice.
-  - The client window is 62 s: the server's 60 s plus 2 s, because the
-    server stamps a request when it arrives.
+  - **R29 — a send is aged from the server's reply, not from the client's
+    send** (final re-review). The server counts a request when it arrives,
+    which may be long after the client sent it. So each charged send holds
+    its slot from the send until the first server reply for its reqId
+    arrives: a frame, an error or a refusal. This includes replies to
+    requests the client has aborted meanwhile, which stay tracked by reqId.
+    From that reply the send holds its slot for a further 62 s (the
+    server's 60 s plus 2 s). The server received the request no later than
+    its reply arrived, so this is conservative. An unanswered send never
+    expires on time alone; the budget waits for it. At resume, every send
+    still unanswered on the old socket is taken as received at the resume
+    reply. The log tracks at most 256 sends; past that it counts as full
+    (the 56-send cap keeps it far below).
   - A first send waits, first in first out, until fewer than 48 sends are
     in the window. A re-send of a request already sent waits for fewer
     than 56. A viewer paint over budget therefore waits for room. It is
@@ -219,10 +230,10 @@ In plain words; the ledger has the full list (R1–R26).
     request, from any caller, until the log shows room and 2 s have
     passed. The log never holds 60 sends, so a refusal means the server
     counted sends the log never saw. That history is unknown, so the
-    window is treated as full for a whole 62 s span. After that, every send
-    the server counts is one the log stamped. Resume does not clear the
-    log: the server keeps the sid's window across resume, and the client
-    stamped every send it made, including the ones in flight at the drop.
+    window is treated as full for a whole 62 s span. Resume does not clear
+    the log: the server keeps the sid's window across resume, and the
+    client stamped every send it made, including the ones in flight at the
+    drop.
 - **R17, R19 — hidden slides in the counts.**
   - Presenter View's grid leaves hidden slides out.
   - `slideIndex`, `goTo()`, `from` and the counter count shown slides only.
@@ -252,26 +263,38 @@ In plain words; the ledger has the full list (R1–R26).
   changes can use up the session's 48/min budget. Viewer paints and an
   earlier show in the same minute use it up sooner. The show then waits
   for the window to free a slot ("Loading slide n" meanwhile).
-- **R28 — what "no 4008" rests on.** The session never sends a unit
-  request into its own full window, and after a refusal it holds every unit
-  send for a whole window. The tests above show no close with the real
-  rate gate. What they cannot show: the client's clock is not the
-  server's. The 2 s receipt margin and the 8-send gap between 48 and 56
-  absorb normal latency. If the network delay changes by more than about
-  2 s between two bursts, the server can count more sends in its window
-  than the client did, and refuse. The first refusal starts the 62 s
-  hold, and no new unit request is sent after it. But up to 8 unit
-  requests (the admission limit) may already be on the wire. Each of them
-  can be refused too, and a third refusal inside 60 s closes the session
-  4008. So 4008 is not impossible. It needs a delay swing of more than
-  2 s at a full window with at least 3 requests in flight.
+- **R28, R29 — what "no 4008" rests on.** Every send the server can still
+  count is in the client's log: it holds its slot until its reply arrives
+  and then a whole window. The log holds at most 56 sends. So the client
+  never has more than 56 sends inside any server window, whatever the
+  network delay, and never sends a request into its own full window.
+  - Navigation aborts do not take back a sent request. The reviewer's
+    delayed-delivery case had 25 requests travelling to the server at once.
+    The "at most 8 on the wire" claim of the first fix was wrong. The R29
+    rule covers them, because aborted sends stay tracked until answered.
+  - The tests show no refusal and no close with the real rate gate,
+    including 48 targets over a 10 s outbound delay, then a restarted show
+    once latency recovers (`tests/stream/unit-budget.test.ts`, "R29
+    reviewer counter-example").
+  - What remains rests on two assumptions. First, the server and client
+    measure 60 s at the same rate; the 2 s margin covers drift. Second, the
+    server does not still process an old socket's request after it has
+    answered the resume on the new socket. A request taken as received at
+    resume but counted by the server later would be outside this bound.
+  - A refusal can still come from history the log cannot see. One case is
+    the server's window already full at open. Then the session sends
+    nothing new for 62 s (below).
 - **R28 — a refusal costs a minute.** One `rate-limited` unit refusal
   stalls all unit painting (viewer and show) for 62 s. A refusal for a
   request that was aborted meanwhile counts too.
 - **R28 — waiting holds admission.** A unit request waiting for budget
   room keeps its admission grant (one of the 8 outstanding, and its bytes)
-  for up to 62 s. Meanwhile it can hold back other unit requests, notes and
-  print.
+  until a slot frees: at least 62 s after the reply of the send it waits
+  on. Meanwhile it can hold back other unit requests, notes and print.
+- **R29 — an unanswered send holds its slot.** It holds the slot until its
+  reply arrives, or until the session resumes or ends. A server that went
+  silent on many requests without closing would shrink the budget, and the
+  show would wait.
 - **R16 — accounting.** Charge accounting is conservative, not exact.
   Every server-charged send is counted, retries included, so the show may
   hold back when the server would still accept.
@@ -320,7 +343,7 @@ In plain words; the ledger has the full list (R1–R26).
 | `notes_deliveries` rows (one per request that passes the checks and the plan, written before the draw; a refusal before that step writes none, a failure after it keeps the row, which records the request, not a delivery, R7) and `notes_marks` rows (one per marked image, written just before its send) | `server/test/notes-wire.test.ts`, `server/test/notes-evidence.test.ts` |
 | client notes request: kind-7 admission (R10), hostile frames, unsolicited frames (R9), caps, abort, deadlines, rotation, resume, end barriers and image close (R13) | `tests/stream/remote-notes.test.ts` |
 | show fetcher: target first, the 48/min sliding window, reserve, pacing (R14), charge per send (R16), LRU, bucket change, dispose | `tests/stream/show-fetch.test.ts` |
-| the session's unit send log (R28): one per sid, every charged send stamped, viewer paints wait for room, show restart and resume, hold after a refusal, the real `SessionRates` | `tests/stream/unit-budget.test.ts`, `tests/stream/unit-send-log.test.ts`, `tests/stream/remote-show.test.tsx` ("R28") |
+| the session's unit send log (R28, R29): one per sid, every charged send stamped and aged from its first reply, viewer paints wait for room, show restart and resume, delayed outbound delivery, hold after a refusal, the real `SessionRates` | `tests/stream/unit-budget.test.ts`, `tests/stream/unit-send-log.test.ts`, `tests/stream/remote-show.test.tsx` ("R28") |
 | Presenter View over an image-backed source (counts, Next, grid, go-to, image notes) | `tests/slideshow-presenter-remote-adapters.test.tsx` |
 | remote show session: order, errors, end, notes, bucket, workspace leases, exit inside dispatch, refresh, pane copy | `tests/stream/remote-show.test.tsx` |
 | `present()` wiring: gesture, refusals, popup and full-screen order, lazy loading, Present button, F5, ref | `tests/stream/remote-present-start.test.tsx` |

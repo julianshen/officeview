@@ -77,19 +77,33 @@ class FakeServer {
   sockets: ServerSocket[] = []
   /** While set, unit answers are held (the request is in flight). */
   hold = false
+  /** Outbound (client → server) delivery delay of unit requests, ms. */
+  upstreamDelay = 0
+  /** Unit requests still travelling to the server, and the most at once. */
+  inTransit = 0
+  maxInTransit = 0
+  /** Delay of refusals and the 4008 close back to the client, ms. */
+  refusalDelay = 0
   constructor(readonly rates: Rates) {}
   connect() { const s = new ServerSocket(this); this.sockets.push(s); return s }
   get live() { return this.sockets[this.sockets.length - 1]! }
   receive(sock: ServerSocket, m: Record<string, any>) {
     if (m.type === 'hello') return queueMicrotask(() => sock.frame(1, m.reqId, encodeManifest(manifest())))
     if (m.type !== 'unit') return
+    if (this.upstreamDelay && !m._delayed) {
+      this.inTransit++
+      this.maxInTransit = Math.max(this.maxInTransit, this.inTransit)
+      setTimeout(() => { this.inTransit--; this.receive(sock, { ...m, _delayed: true }) }, this.upstreamDelay)
+      return
+    }
     const now = Date.now()
     this.sends.push(now)
     this.unitMsgs.push(m)
     const result = this.rates.check('unit', now)
     if (result !== 'ok') this.verdicts.push({ at: now, result })
-    if (result === 'close') return sock.end(4008)
-    if (result === 'refuse') return queueMicrotask(() => sock.deliver(JSON.stringify({ reqId: m.reqId, type: 'refused', code: 'rate-limited' })))
+    const back = (f: () => void) => (this.refusalDelay ? setTimeout(f, this.refusalDelay) : queueMicrotask(f))
+    if (result === 'close') return back(() => sock.end(4008))
+    if (result === 'refuse') return back(() => sock.deliver(JSON.stringify({ reqId: m.reqId, type: 'refused', code: 'rate-limited' })))
     if (this.hold) return
     const bad = this.invalidOnce.delete(m.unitIndex)
     queueMicrotask(() => sock.frame(3, m.reqId, bad ? raster(m.unitIndex, 4000, 4000) : raster(m.unitIndex)))
@@ -255,6 +269,39 @@ describe('R28: the unit budget is the session\'s (real StreamSession, real Sessi
     await advance(100)
     expect(t.s.unitBudget.room()).toBe(48)
     s.close(); t.s.close()
+  })
+
+  it('R29 reviewer counter-example: 48 targets over a 10 s outbound delay, dispose, latency recovers, restart — no 4008', async () => {
+    const { s, srv } = await open()
+    srv.upstreamDelay = 10_000
+    let { f } = showOn(s)
+    for (let i = 0; i < 48; i++) { f.want([i % COUNT]); await advance(400) }
+    expect(srv.maxInTransit).toBeGreaterThan(8) // navigation aborts do not retract sends: far more than 8 travel at once
+    f.dispose()
+    await advance(43_000, 500)
+    srv.upstreamDelay = 0
+    srv.refusalDelay = 2_000
+    ;({ f } = showOn(s))
+    for (let i = 0; i < COUNT && !s.isEnded(); i++) { f.want([i]); await advance(400) }
+    await advance(70_000, 500)
+    expect(srv.verdicts).toEqual([])
+    expect(s.isEnded()).toBe(false)
+    f.dispose(); s.close()
+  })
+
+  it('R29: a late answer to an aborted request still ends its occupancy (no permanent leak)', async () => {
+    const { s, srv } = await open()
+    srv.upstreamDelay = 5_000
+    const ac = new AbortController()
+    const p = s.unit(3, 1, ac.signal).catch((e: unknown) => e)
+    await advance(100)
+    ac.abort(); await p
+    expect(s.unitBudget.room()).toBe(47)
+    await advance(62_500, 500)
+    expect(s.unitBudget.room()).toBe(47) // 62 s after the send, but only ~57 s after the answer
+    await advance(4_700, 100) // the answer (at ~5.1 s) plus a whole span
+    expect(s.unitBudget.room()).toBe(48)
+    s.close()
   })
 
   it('createRemoteDoc exposes the session budget', async () => {

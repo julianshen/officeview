@@ -35,4 +35,36 @@ describe('UnitSendLog (pure)', () => {
     expect(log.room()).toBe(0) // the log itself is full until the stamps expire
     expect(log.waitMs()).toBe(62_001 - 2_005)
   })
+
+  it('R29: a send by reqId holds its slot until answered, then a whole span from the answer', () => {
+    let t = 0
+    const log = new UnitSendLog(() => t, 2, 1_000)
+    log.record(1); log.record(2)
+    t = 50_000 // unanswered sends never expire on time alone
+    expect(log.room()).toBe(0)
+    expect(log.waitMs()).toBe(Infinity)
+    log.answered(2)
+    expect(log.has(2)).toBe(true)
+    expect(log.waitMs()).toBe(1_001)
+    t = 51_001
+    expect(log.room()).toBe(1)
+    expect(log.has(2)).toBe(false)
+    log.answered(1); log.answered(1) // only the first reply counts
+    t = 52_001; expect(log.room()).toBe(1)
+    t = 52_002; expect(log.room()).toBe(2)
+  })
+  it('R29: settleAll (resume) takes every unanswered send as received now', () => {
+    let t = 0
+    const log = new UnitSendLog(() => t, 1, 1_000)
+    log.record(7)
+    t = 9_000; log.settleAll()
+    expect(log.waitMs()).toBe(1_001)
+    t = 10_001; expect(log.room()).toBe(1)
+  })
+  it('R29: a table past its bound is treated as full', () => {
+    const t = 0
+    const log = new UnitSendLog(() => t, 1_000, 1_000)
+    for (let i = 1; i <= 256; i++) log.record(i)
+    expect(log.room(0, 10_000)).toBe(0)
+  })
 })

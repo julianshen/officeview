@@ -18,7 +18,7 @@
  * charged is sent while a `rate-limited` refusal blocks the log.
  */
 import { decodeAssets } from '../asset-wire'
-import { FRAGMENT_CAP, Kind, Reassembler, REASSEMBLY_MS, type FrameResult } from '../frame'
+import { FRAGMENT_CAP, HEADER_BYTES, Kind, Reassembler, REASSEMBLY_MS, type FrameResult } from '../frame'
 import { validateManifest, type Manifest } from '../manifest'
 import type { Asset } from '../ops'
 import { decodeRasterBody, UNIT_RASTER_DECODED_CAP } from '../raster'
@@ -64,8 +64,6 @@ export interface PrintOptions { signal?: AbortSignal; onProgress?(done: number, 
 /** READY must reach the server inside its 2 s window; hashing gets 1.5 s of it. */
 export const READY_FACE_BUDGET_MS = 1500
 const RESUME_BACKOFF_MS = [250, 500, 1000]
-/** Charged unit reqIds remembered for late refusals: more than a window's sends (UNIT_RESEND_CAP). */
-const CHARGED_IDS_KEPT = 128
 /** PRINT_RASTER encoded cap (§14; twin of the server's PRINT_ENCODED_CAP). */
 const PRINT_ENCODED_CAP = 8 << 20
 /** NOTES_RASTER encoded cap (§14; twin of the server's NOTES_ENCODED_CAP). */
@@ -230,9 +228,6 @@ export class StreamSession {
   /** Unit requests waiting for log room, oldest first (each still in `units`). */
   private readonly waiting = new Set<UnitReq>()
   private drainTimer?: ReturnType<typeof setTimeout>
-  /** reqIds of recent charged unit sends, so a refusal that lands after its
-   * request was aborted still reaches the log (bounded, oldest dropped). */
-  private readonly chargedIds = new Set<number>()
   /**
    * R28: the session's unit send budget, for callers that pace themselves (the
    * show fetcher). Room is UNIT_FIRST_CAP less the window's charged sends and
@@ -296,7 +291,7 @@ export class StreamSession {
       // A delivered payload keeps the lease (its consumer releases it after
       // decode/replay); a failed or aborted request releases it here, after
       // any message for it that is still being processed (the inbox is serial).
-      req.resolve = (u) => { this.units.delete(req.reqId); this.waiting.delete(req); this.chargedIds.delete(req.reqId); resolve(Object.assign(u, { release })) }
+      req.resolve = (u) => { this.units.delete(req.reqId); this.waiting.delete(req); resolve(Object.assign(u, { release })) }
       req.reject = (e) => { this.units.delete(req.reqId); this.waiting.delete(req); void this.inbox.then(release); reject(e) }
       signal?.addEventListener('abort', () => { if (this.units.get(req.reqId) === req) req.reject(signal.reason ?? abortError()) }, { once: true })
       if (signal?.aborted) return req.reject(signal.reason ?? abortError())
@@ -484,12 +479,17 @@ export class StreamSession {
     this.send({ reqId: req.reqId, type: 'unit', token: this.token, unitIndex: req.index, scale: req.bucket })
     if (charged) {
       req.sent = true
-      this.sendLog.record()
-      this.chargedIds.add(req.reqId)
-      if (this.chargedIds.size > CHARGED_IDS_KEPT) this.chargedIds.delete(this.chargedIds.values().next().value!)
+      // R29: it holds its slot until the server's first reply for this reqId, then a span.
+      this.sendLog.record(req.reqId)
       try { req.onSend?.() } catch { /* a hook never breaks the send */ }
     }
     this.ensureSweeper()
+  }
+  /** R29: the first server reply for a unit send starts its span; a waiting send may now get a timed slot. */
+  private unitAnswered(reqId: number) {
+    if (!this.sendLog.has(reqId)) return
+    this.sendLog.answered(reqId)
+    if (this.drainTimer && this.waiting.size) { clearTimeout(this.drainTimer); this.drainTimer = undefined; this.scheduleDrain() }
   }
   private hasRoom(req: UnitReq) { return this.sendLog.room(0, req.sent ? UNIT_RESEND_CAP : UNIT_FIRST_CAP) > 0 }
   private waitingFirst() { let n = 0; for (const r of this.waiting) if (!r.sent) n++; return n }
@@ -744,6 +744,8 @@ export class StreamSession {
     // The receipt guard runs on arrival, before anything is queued or buffered.
     const size = typeof data === 'string' ? data.length : data instanceof ArrayBuffer ? data.byteLength : (data as Blob).size
     if (size > FRAGMENT_CAP) return this.end(new StreamSessionError('oversized-frame'), 4007, 'oversized-frame')
+    // R29: any fragment for a unit send is evidence the server received it (also for an aborted request).
+    if (data instanceof ArrayBuffer && data.byteLength >= HEADER_BYTES) this.unitAnswered(new DataView(data).getUint32(6, true))
     const gen = this.gen
     this.inbox = this.inbox.then(async () => {
       if (gen !== this.gen) return
@@ -758,6 +760,7 @@ export class StreamSession {
   private onText(data: string) {
     let m: Record<string, unknown>
     try { m = JSON.parse(data) } catch { return }
+    if (typeof m.reqId === 'number') this.unitAnswered(m.reqId)
     if (m.type === 'renew' && typeof m.token === 'string' && typeof m.jti === 'string' && jtiOf(m.token) === m.jti) {
       this.send({ reqId: this.allocId(), type: 'renew-ack', jti: m.jti })
       this.token = m.token
@@ -774,8 +777,7 @@ export class StreamSession {
       const req = this.units.get(m.reqId)
       // R28: the log blocks every charged unit send (any caller) before the caller
       // hears of it — also when the refused request was aborted meanwhile.
-      const unitSend = this.chargedIds.delete(m.reqId)
-      if (m.code === 'rate-limited' && (unitSend || req)) this.sendLog.refused()
+      if (m.code === 'rate-limited' && (this.sendLog.has(m.reqId) || req)) this.sendLog.refused()
       if (!req) return
       if (m.code === 'session-rotated' && !req.rotatedRetry) { req.rotatedRetry = true; return this.issue(req, false) }
       const code = m.code === 'rate-limited' || m.code === 'session-rotated' ? m.code : 'policy-refused'
@@ -892,6 +894,8 @@ export class StreamSession {
     this.manifest = m
     this.token = m.session.token
     this.resumeAttempt = 0
+    // R29: a send still unanswered from the old socket is taken as received now (the resume reply).
+    this.sendLog.settleAll()
     this.ready()
     this.setState('open')
     this.o.onNotice?.({ code: 'resumed' })

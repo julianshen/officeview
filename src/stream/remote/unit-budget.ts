@@ -10,8 +10,8 @@
 
 /** The server's `'unit'` limit per 60 s window. */
 export const UNIT_SERVER_LIMIT = 60
-/** The client window: the server's 60 s plus a margin, as the server stamps a
- * request on receipt, later than the client sent it. */
+/** How long an answered send keeps its slot after its first reply arrived:
+ * the server's 60 s window plus a 2 s margin (R29). */
 export const UNIT_SPAN_MS = 62_000
 /** First sends of a request (any caller) are held to this many per window. */
 export const UNIT_FIRST_CAP = 48
@@ -28,46 +28,77 @@ export interface UnitBudgetView {
   waitMs(pending?: number): number
 }
 
+/** Sends tracked at once; past this the budget is treated as full (the server gate bounds it anyway). */
+export const UNIT_TRACKED_MAX = 256
+
+/**
+ * R29: a send is aged from evidence of server receipt, not from the client
+ * send. A send recorded with its reqId occupies a slot until the first server
+ * reply for that reqId arrives (any reply, also to a request aborted locally),
+ * then for a further `spanMs` from that reply: the server received it no later
+ * than its reply arrived. An unanswered send never expires on time alone.
+ * A send recorded without an id is taken as answered at once (the standalone
+ * fetcher's log of its own charges).
+ */
 export class UnitSendLog implements UnitBudgetView {
-  /** Charged send times inside the window, oldest first. */
-  private readonly stamps: number[] = []
+  /** Send key → when its first reply arrived (undefined: not yet), in send order. */
+  private readonly sends = new Map<number | object, number | undefined>()
   private blockedUntil = -Infinity
 
   constructor(private readonly now: () => number, readonly cap: number, readonly spanMs: number) {}
 
-  /** A stamp at t counts through t + spanMs inclusive (conservative at the boundary). */
-  private prune(t: number) { while (this.stamps.length && this.stamps[0]! + this.spanMs < t) this.stamps.shift() }
+  /** An answered send at t counts through t + spanMs inclusive (conservative at the boundary). */
+  private prune(t: number) {
+    for (const [k, at] of this.sends) if (at !== undefined && at + this.spanMs < t) this.sends.delete(k)
+  }
 
-  /** One server-charged send, now. */
-  record() { this.stamps.push(this.now()) }
+  /** One server-charged send, now; `reqId` ⇒ it waits for its reply (R29). */
+  record(reqId?: number) {
+    const t = this.now()
+    if (reqId === undefined) this.sends.set({}, t)
+    else { this.sends.delete(reqId); this.sends.set(reqId, undefined) }
+  }
+
+  /** The first reply for `reqId` arrived now; later replies change nothing. */
+  answered(reqId: number) { if (this.sends.has(reqId) && this.sends.get(reqId) === undefined) this.sends.set(reqId, this.now()) }
+
+  /** True while `reqId`'s send still occupies a slot. */
+  has(reqId: number) { this.prune(this.now()); return this.sends.has(reqId) }
+
+  /** Resume: every unanswered send is taken as received now. */
+  settleAll() { const t = this.now(); for (const [k, at] of this.sends) if (at === undefined) this.sends.set(k, t) }
 
   room(pending = 0, cap = this.cap): number {
     const t = this.now()
     this.prune(t)
-    if (t < this.blockedUntil) return 0
-    return Math.max(0, cap - this.stamps.length - pending)
+    if (t < this.blockedUntil || this.sends.size >= UNIT_TRACKED_MAX) return 0
+    return Math.max(0, cap - this.sends.size - pending)
   }
 
   waitMs(pending = 0, cap = this.cap): number {
     const t = this.now()
     this.prune(t)
-    // Room needs the stamp at this index (and all older) to have expired.
-    const i = this.stamps.length + pending - cap
-    const byLog = i < 0 ? 0 : i < this.stamps.length ? this.stamps[i]! + this.spanMs + 1 - t : Infinity
-    return Math.max(0, byLog, this.blockedUntil - t)
+    const block = Math.max(0, this.blockedUntil - t)
+    // Room needs this many sends to expire; only answered ones ever do, soonest first.
+    const need = Math.max(this.sends.size + pending - cap + 1, this.sends.size - UNIT_TRACKED_MAX + 1)
+    if (need <= 0) return block
+    const expiries: number[] = []
+    for (const at of this.sends.values()) if (at !== undefined) expiries.push(at + this.spanMs + 1 - t)
+    if (expiries.length < need) return Infinity
+    expiries.sort((a, b) => a - b)
+    return Math.max(block, expiries[need - 1]!)
   }
 
   /**
    * A `'rate-limited'` unit refusal. If the log holds the server's whole limit
    * it explains the refusal: no send for UNIT_REFUSAL_BACKOFF_MS, and then only
-   * once the log has room. Otherwise the server counted sends this log never saw
-   * (its history is unknown here), so the window is treated as full for a whole
-   * span, after which every send it counts is one this log stamped.
+   * once the log has room. Otherwise the server counted sends this log cannot
+   * account for, so the window is treated as full for a whole span.
    */
   refused() {
     const t = this.now()
     this.prune(t)
-    const known = this.stamps.length >= UNIT_SERVER_LIMIT
+    const known = this.sends.size >= UNIT_SERVER_LIMIT
     this.blockedUntil = Math.max(this.blockedUntil, t + (known ? UNIT_REFUSAL_BACKOFF_MS : this.spanMs))
   }
 }

@@ -1620,9 +1620,12 @@ outcomes.
   amendment). That budget belongs to the session, not to a show (R28).
   One send log per StreamSession lives as long as the sid, so it survives
   show restarts and resume. It is stamped on every server-charged unit
-  send, from any caller, over a 62 s client window. A first send waits for
-  fewer than 48 sends in the window, a re-send for fewer than 56. A
-  `rate-limited` unit refusal holds every unit send for 62 s.
+  send, from any caller. Each send holds its slot until the first server
+  reply for its reqId arrives, and then for 62 s more (R29). Aborted
+  requests stay tracked until answered. A send unanswered at resume is
+  taken as received at the resume reply. A first send waits for fewer than
+  48 sends in the log, a re-send for fewer than 56. A `rate-limited` unit
+  refusal holds every unit send for 62 s.
 - **Handshake windows [call]:** `ready window` 2 s from the MANIFEST
   (the one definition of the §6.2 rule-4 window; expiry CLOSEs with
   `ready-timeout`), **renew: a scheduling lead — the server sends RENEW
@@ -2004,9 +2007,12 @@ render pipeline.
       same minute share it (R28). The show then waits for the window,
       showing "Loading slide n". The client never sends into its own full
       window, and after a refusal it sends no new unit request for 62 s.
-      A network delay swing of more than the 2 s margin can still cause
-      refusals. Up to 8 requests already in flight can each be refused,
-      so 4008 remains possible in that case, though not in normal use.
+      Sends are aged from the server's reply, not from the client's send
+      (R29), so outbound delay cannot leave more than 56 of them in a
+      server window. What remains depends on two things. Both sides must
+      measure 60 s alike, and the server must not count an old socket's
+      request after it has answered the resume. An unanswered send holds
+      its slot until it is answered, or the session resumes or ends.
     - (e) The show's charge accounting is conservative, not exact. Every
       server-charged send is counted, so it may hold back while the server
       would still accept.
