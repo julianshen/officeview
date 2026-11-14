@@ -58,7 +58,6 @@ import type { SlideCursor, SlideTimeline } from '../engine/steps'
 import { createBackendManager, createLivePainter, type BackendManager } from '../render/backend'
 import { paintDirect } from '../render/direct'
 import { buildRenderPlan, shapeKey, type ColourPart, type PlanLayer, type RenderPlan } from '../render/plan'
-import { rasterLayer } from '../render/raster'
 import { imageDrawSize, rasteriseSvg } from '../render/svg-raster'
 import { TEXT_BOX_BYTES, textItems, type TextItem } from '../render/text-split'
 import { imageIndices, paintedBounds, slideSize, textFilter, textRangeBox, underlayOf } from '../render/scene'
@@ -68,14 +67,19 @@ import { matchMorph, type MorphOption, type MorphPair } from '../morph/match'
 import { morphFrame, type MorphFrameItem, type MorphFrameSpec, type MorphLayerFrame } from '../morph/render'
 import { createResidency, type LadderLevel, type Residency } from '../residency'
 import { createRng } from '../rng'
-import { textBases, textTimingFor, type TextTiming } from './text-builds'
+import { textBases, type TextTiming } from './text-builds'
 import { targetKey } from '../target'
 import type {
   Affine, AllocationOwner, CanvasFactory, Compositor, CompositorViewport, DiagnosticSink, LayerDraw, LayerHandle, Lease, MetadataHandle,
   RenderState, Rng, ShowSlide, SlideMetadataStore, SlideShowWorkspace, TargetKey, TargetState, TerminalReserve, TimeNode, TimingTree, TransitionSpec,
 } from '../types'
 import { createFrameLimits, LAYER_LIMIT, RERASTER_LIMIT, surfaceBytes, type Backing } from '../workspace'
-import { apply, groupChildMatrix, invert, mul, nodeMatrix, stateMatrix } from './hit-test'
+import { apply, invert, mul, stateMatrix } from './hit-test'
+import { computeTextTiming, layoutTextBases, prepareSlide, rasterLayers, rasterPreparedLayer, targetsOf, type PreparedSlide } from '../prepare/slide'
+
+// Moved to the DOM-free preparation (piece 4 Task 1): re-exported for existing callers.
+export { timingTargets } from '../engine/targets'
+export { baseGeometry, rasterLayers } from '../prepare/slide'
 
 export interface StageDeps {
   doc: { slides: readonly PptxSlide[]; images?: unknown; fonts?: unknown }
@@ -207,12 +211,6 @@ class Pressure extends Error { constructor() { super('pressure') } }
 // Model → plan inputs
 // ---------------------------------------------------------------------------
 
-function isContainer(n: TimeNode): n is Extract<TimeNode, { children: TimeNode[] }> {
-  return n.kind === 'par' || n.kind === 'seq' || n.kind === 'excl'
-}
-
-const COLOUR_ATTR = new Set(['fillcolor', 'stroke.color', 'style.color'])
-
 /**
  * Decoded pixel size from a PNG, GIF, JPEG, WebP, BMP or TIFF header (S1-20 review I1, PR #18 review 2: the
  * decode is charged before it happens). `undefined` for anything else (SVG, unknown, truncated): the caller
@@ -271,80 +269,6 @@ export function imageSize(b: Uint8Array): { w: number; h: number } | undefined {
   return undefined
 }
 
-/**
- * Animated targets, colour-animated targets, and the initially hidden ones with their entrance behaviours.
- *
- * Initial hiding (spec 6.2 "initial"; S1-20 review I2): a target with any behaviour under an entrance preset is
- * hidden until one of those entrance behaviours begins, unless a non-entrance behaviour on it runs before its
- * first entrance in time. "Before in time" is read at click-step granularity: a non-entrance behaviour in a
- * strictly earlier main-sequence step (or before the first click) reveals the target from the start, the way
- * PowerPoint shows a shape whose first effect is an emphasis. Behaviours in the same step run concurrently, and
- * interactive sequences run only when triggered, so neither reveals the target before its entrance.
- */
-export function timingTargets(slide: ShowSlide): {
-  animated: Set<TargetKey>; colour: Set<TargetKey>; hidden: Set<TargetKey>; entrances: Map<TargetKey, Set<TimeNode>>
-} {
-  const animated = new Set<TargetKey>(), colour = new Set<TargetKey>(), hidden = new Set<TargetKey>()
-  const entrances = new Map<TargetKey, Set<TimeNode>>()
-  const timing = slide.timing
-  if (!timing || 'refused' in timing) return { animated, colour, hidden, entrances }
-  const firstEntrance = new Map<TargetKey, number>()
-  const firstOther = new Map<TargetKey, number>()
-  const walk = (n: TimeNode, cls: string | undefined, step: number, depth: number): void => {
-    if (depth > 128) return
-    const here = n.ctn.presetClass ?? cls
-    if (isContainer(n)) {
-      // The main sequence's children are its steps, in order; everything off it (interactive) is "never before".
-      const main = n.kind === 'seq' && n.ctn.nodeType === 'mainSeq'
-      n.children.forEach((c, i) => walk(c, here, main ? i : n.ctn.nodeType === 'interactiveSeq' ? Infinity : step, depth + 1))
-      return
-    }
-    if (!('spid' in n.target)) return
-    const key = targetKey(n.target)
-    animated.add(key)
-    if (n.kind === 'animClr' || n.attrNames.some(a => COLOUR_ATTR.has(a))) colour.add(key)
-    const first = here === 'entr' ? firstEntrance : firstOther
-    first.set(key, Math.min(first.get(key) ?? Infinity, step))
-    if (here === 'entr') {
-      let set = entrances.get(key)
-      if (!set) entrances.set(key, set = new Set())
-      set.add(n)
-    }
-  }
-  walk(timing.root, undefined, Infinity, 0)
-  for (const [key, at] of firstEntrance) if (!((firstOther.get(key) ?? Infinity) < at)) hidden.add(key)
-  for (const key of [...entrances.keys()]) if (!hidden.has(key)) entrances.delete(key)
-  return { animated, colour, hidden, entrances }
-}
-
-/** Base geometry (slide px, group transforms composed) per shape key, groups included; ranges and parts share their shape's. */
-export function baseGeometry(slide: PptxSlide): Map<TargetKey, BaseGeometry> {
-  const out = new Map<TargetKey, BaseGeometry>()
-  const walk = (nodes: readonly PptxShape[], parent: Affine, rot: number, depth: number) => {
-    if (depth > 64) return
-    for (const shape of nodes) {
-      const local = nodeMatrix(shape, parent)
-      if (!local) continue
-      const r = rot + (shape.rotationDeg ?? 0)
-      const key = shapeKey(shape)
-      if (key !== undefined) out.set(key, geometryOf(local.m, local.w, local.h, r))
-      if (shape.group) {
-        const child = groupChildMatrix(shape, local.m)
-        if (child) walk(shape.children ?? [], child, r, depth + 1)
-      }
-    }
-  }
-  walk(slide.shapes, IDENTITY, 0, 0)
-  return out
-}
-
-function geometryOf(m: Affine, w: number, h: number, rot = 0): BaseGeometry {
-  const [cx, cy] = apply(m, w / 2, h / 2)
-  const sx = Math.hypot(m[0], m[1]), sy = Math.hypot(m[2], m[3])
-  const ww = w * sx, hh = h * sy
-  return { x: cx - ww / 2, y: cy - hh / 2, w: ww, h: hh, rot: Number.isFinite(rot) ? rot : 0 }
-}
-
 /** `transform ∘ rotate(−base.rot about the centre)`: layers are painted at their base rotation already. */
 function relativeTo(state: TargetState, g: BaseGeometry | undefined): TargetState {
   if (!g || !g.rot) return state
@@ -365,20 +289,6 @@ function compose(parent: TargetState | undefined, own: TargetState | undefined):
     ...(own?.mask ? { mask: own.mask, ...(own.maskBox ? { maskBox: own.maskBox } : {}), ...(own.maskTransform ? { maskTransform: mul(p, own.maskTransform) } : {}) } : {}),
     ...(own?.color ?? parent.color ? { color: own?.color ?? parent.color } : {}),
   }
-}
-
-/** Every plan layer that rasterises on its own, in paint order (sub-layers included; a group-with-sub paints through them). */
-function rasterLayers(plan: RenderPlan, watermark: boolean): PlanLayer[] {
-  const out: PlanLayer[] = []
-  const walk = (layers: readonly PlanLayer[]) => {
-    for (const l of layers) {
-      if (l.kind === 'watermark') { if (watermark) out.push(l); continue }
-      if (l.kind === 'target' && l.sub) { walk(l.sub); continue }
-      out.push(l)
-    }
-  }
-  walk(plan.layers)
-  return out
 }
 
 /** Slide time far past every finite effect: the settled state a flattened frame shows (PR #18 review 8). */
@@ -407,20 +317,7 @@ interface Built {
   flat?: { key: string; handle: LayerHandle; cursor?: SlideCursor }
 }
 
-interface Prepared {
-  index: number
-  slide: PptxSlide
-  meta: ShowSlide
-  plan: RenderPlan
-  layers: PlanLayer[]
-  /** The plan's inputs (S3-6: a Morph re-plans the slide with every object keyed). */
-  animated: ReadonlySet<TargetKey>
-  parts: ReadonlyMap<TargetKey, ReadonlySet<ColourPart>>
-  splits?: ReadonlyMap<TargetKey, readonly TextItem[]>
-  base: Map<TargetKey, BaseGeometry>
-  hidden: Set<TargetKey>
-  /** The entrance behaviours of each hidden target: it shows once one of them has begun. */
-  entrances: Map<TargetKey, Set<TimeNode>>
+interface Prepared extends PreparedSlide {
   /** The show's sink, scoped to this slide: behaviour diagnostics carry no slide of their own (S1-22). */
   sink: DiagnosticSink
   images: Array<CanvasImageSource | undefined>
@@ -608,7 +505,7 @@ export function createStage(deps: StageDeps): Stage {
 
   /** Rasterises one layer through `owner` and uploads it to `c`. `undefined`: nothing to draw (empty, or deferred while lost). */
   function rasterOne(p: Prepared, layer: PlanLayer, scale: number, owner: AllocationOwner, c: Compositor): LayerHandle | undefined {
-    const r = rasterLayer(layer, p.slide, {
+    const r = rasterPreparedLayer(p, layer, {
       scale, images: p.images, resolveFont, canvas: factory, workspace: asWorkspace(owner),
       maxTextureSize: c.maxTextureSize, sink, ...(deps.watermark ? { watermark: deps.watermark } : {}),
     })
@@ -753,32 +650,9 @@ export function createStage(deps: StageDeps): Stage {
   function textTimingOf(index: number, meta: ShowSlide, charge: ((bytes: number, tag: string) => boolean) | undefined): TextTiming | undefined {
     const have = textTimings.get(meta)
     if (have !== undefined) return have ?? undefined
-    const timing = meta.timing
-    const slide = deps.doc.slides[index]
-    if (!timing || 'refused' in timing || !slide) { textTimings.set(meta, null); return undefined }
-    // Layers the items may take: the layer bound less what the slide plans without them (and a margin per split).
-    const t = timingTargets(meta)
-    const plain = buildRenderPlan(slide, t.animated, new Map(), meta.builds).layers.length
-    const tt = textTimingFor(slide, timing, { sink, slideIndex: index, charge: charge ?? (() => false), layers: LAYER_LIMIT - plain - 4 })
+    const tt = computeTextTiming(index, deps.doc.slides[index], meta, charge, sink)
     textTimings.set(meta, tt ?? null)
     return tt
-  }
-
-  /** Timing targets of the scheduled tree, with every text item hidden and entered as its iterated target is. */
-  function targetsOf(meta: ShowSlide, tt: TextTiming | undefined) {
-    const t = timingTargets(tt ? { ...meta, timing: tt.tree } : meta)
-    if (tt) {
-      for (const [target, keys] of tt.items) {
-        for (const k of keys) {
-          t.animated.add(k)
-          if (t.hidden.has(target)) {
-            t.hidden.add(k)
-            t.entrances.set(k, t.entrances.get(target) ?? new Set())
-          }
-        }
-      }
-    }
-    return t
   }
 
   function prepare(index: number, meta: ShowSlide, handle?: MetadataHandle): Prepared {
@@ -799,15 +673,12 @@ export function createStage(deps: StageDeps): Stage {
       return have
     }
     const slide = deps.doc.slides[index]
-    const tt = textTimingOf(index, meta, handle ? (b, t) => handle.attach(b, t) : undefined)
-    const { animated, colour, hidden, entrances } = targetsOf(meta, tt)
-    // Any colour animation splits its shape into fill, line and text layers (a two-part set forces the split).
-    const parts = new Map<TargetKey, ReadonlySet<ColourPart>>([...colour].map(k => [k, new Set<ColourPart>(['fill', 'line'])]))
-    const plan = buildRenderPlan(slide, animated, parts, meta.builds, tt?.splits)
+    const charge = handle ? (b: number, t: string) => handle.attach(b, t) : undefined
+    const tt = textTimingOf(index, meta, charge)
+    const ps = prepareSlide({ index, slide, meta, watermark: !!deps.watermark, ...(charge ? { charge } : {}), sink, textTiming: tt ?? null })
     const images: Array<CanvasImageSource | undefined> = []
     const p: Prepared = {
-      index, slide, meta, plan, layers: rasterLayers(plan, !!deps.watermark), animated, parts, ...(tt?.splits ? { splits: tt.splits } : {}),
-      base: baseGeometry(slide), hidden, entrances, images,
+      ...ps, images,
       sink: { add: (d) => sink.add(d.slideIndex === undefined ? { ...d, slideIndex: index } : d), list: () => sink.list() },
       ready: Promise.resolve(), handle, chain: Promise.resolve(), dead: false, imageLeases: [],
     }
@@ -888,7 +759,7 @@ export function createStage(deps: StageDeps): Stage {
       if (!l) { sink.add({ code: 'text-build-refused', slideIndex: index, message: 'Text by word or letter: no room to measure the text; the items move as their shape does' }); return }
       try {
         const ctx = factory(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D | null
-        if (ctx) for (const [k, g] of textBases(slide, tt.splits, p.base, ctx, resolveFont)) p.base.set(k, g)
+        if (ctx) layoutTextBases(p, ctx, resolveFont)
       } finally {
         l.release()
       }
