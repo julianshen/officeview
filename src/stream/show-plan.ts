@@ -132,6 +132,8 @@ const arr = (v: unknown, p: string, max: number): unknown[] => {
   return v as unknown[]
 }
 const numOrStr = (v: unknown, p: string) => { if (typeof v === 'string') str(v, p); else num(v, p) }
+/** An animation value: a number, or a string that may be a formula (the reader's `formulaBytes`, not the 256 of D2). */
+const numOrFormula = (v: unknown, p: string) => { if (typeof v === 'string') str(v, p, READER_LIMITS.formulaBytes); else num(v, p) }
 /** `string -> string` map (transition attrs). */
 function strMap(v: unknown, p: string, max: number, value: (x: unknown, q: string) => void) {
   if (!isObj(v)) return fail(p)
@@ -209,7 +211,7 @@ function condition(v: unknown, p: string, ctx: TimingCtx) {
 function ctnRecord(v: unknown, p: string, ctx: TimingCtx) {
   const o = obj(v, p, ['id', 'accel', 'decel', 'autoRev', 'start', 'end'],
     ['presetClass', 'presetId', 'presetSubtype', 'nodeType', 'grpId', 'durMs', 'repeatCount', 'repeatDurMs', 'fill', 'restart', 'syncBehavior', 'masterRel', 'afterEffect', 'endSync', 'iterate'])
-  int(o.id, at(p, 'id'), 0, 0x7fffffff)
+  int(o.id, at(p, 'id'), -0x7fffffff, 0x7fffffff)
   num(o.accel, at(p, 'accel'), 0, 1); num(o.decel, at(p, 'decel'), 0, 1); bool(o.autoRev, at(p, 'autoRev'))
   opt(o, 'presetClass', p, (s, q) => str(s, q)); opt(o, 'nodeType', p, (s, q) => str(s, q))
   for (const k of ['presetId', 'presetSubtype', 'grpId']) opt(o, k, p, (n, q) => int(n, q, -0x7fffffff, 0x7fffffff))
@@ -243,25 +245,25 @@ const BEHAVIOURS: Record<string, { req: string[]; opt: string[] }> = {
   video: { req: [], opt: ['numSld', 'volume', 'muted', 'fullScrn'] },
 }
 function behaviourFields(kind: string, o: O, p: string, ctx: TimingCtx) {
-  const s = (k: string) => opt(o, k, p, (v, q) => str(v, q))
+  const s = (k: string) => opt(o, k, p, (v, q) => str(v, q, READER_LIMITS.formulaBytes))
   const n = (k: string) => opt(o, k, p, (v, q) => num(v, q))
   const pt = (k: string) => opt(o, k, p, point)
   switch (kind) {
-    case 'set': opt(o, 'to', p, numOrStr); break
+    case 'set': opt(o, 'to', p, numOrFormula); break
     case 'anim': {
       const keys = arr(o.keys, at(p, 'keys'), READER_LIMITS.keyframesPerBehaviour)
       if ((ctx.keyframes += keys.length) > READER_LIMITS.keyframesPerSlide) fail(at(p, 'keys'))
       keys.forEach((k, i) => {
         const q = ix(at(p, 'keys'), i), ko = obj(k, q, ['tm', 'value'], ['fmla'])
         if (ko.tm !== 'indefinite') num(ko.tm, at(q, 'tm'))
-        numOrStr(ko.value, at(q, 'value'))
+        numOrFormula(ko.value, at(q, 'value'))
         opt(ko, 'fmla', q, (f, r) => str(f, r, READER_LIMITS.formulaBytes))
       })
       opt(o, 'calcmode', p, (v, q) => oneOf(v, q, ['discrete', 'lin', 'fmla'])); opt(o, 'valueType', p, (v, q) => oneOf(v, q, ['str', 'num', 'clr']))
       s('by'); s('from'); s('to'); break
     }
     case 'animEffect':
-      opt(o, 'transition', p, (v, q) => oneOf(v, q, ['in', 'out', 'none'])); s('filter'); s('prLst'); opt(o, 'progress', p, numOrStr); break
+      opt(o, 'transition', p, (v, q) => oneOf(v, q, ['in', 'out', 'none'])); s('filter'); s('prLst'); opt(o, 'progress', p, numOrFormula); break
     case 'animMotion':
       opt(o, 'path', p, (v, q) => {
         const po = obj(v, q, ['segments', 'length'])

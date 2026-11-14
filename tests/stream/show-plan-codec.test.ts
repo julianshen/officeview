@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { gzipSync } from 'node:zlib'
 import { encodeMessage, Kind, Reassembler } from '../../src/stream/frame'
 import { CAPS } from '../../src/stream/remote/session'
@@ -8,6 +8,8 @@ import {
   type MorphPlanRecord, type ShowPlanRecord,
 } from '../../src/stream/show-plan'
 import type { BehaviourNode, CTn, ContainerNode, TimeNode } from '../../src/slideshow/types'
+import { buildPptxDeck, mainSeqXml, timingXmlOf } from '../../src/testdata/ooxml-builders'
+import { ADVERSARY_KINDS, adversaryDeck, cubeDeck, flyInDeck, linkDeck, loadShowDeck, longStepDeck, morphDeck, triggerDeck } from '../../src/testdata/show-decks'
 
 const MiB = 1 << 20
 const E = { unit: 0, maxDecoded: 128 * MiB }
@@ -139,6 +141,70 @@ describe('round trips', () => {
   })
 })
 
+/** What the real reader produces (transition, timing tree, builds) is what the codec must carry, byte for byte. */
+describe('real reader output', () => {
+  const kinds = new Set<string>()
+  const walk = (n: TimeNode) => { kinds.add(n.kind); if ('children' in n) n.children.forEach(walk) }
+  async function roundTrip(bytes: Uint8Array) {
+    const d = await loadShowDeck(bytes)
+    let slides = 0
+    for (let i = 0; i < d.doc.slides.length; i++) {
+      const m = await d.meta(i)
+      const show = { ...(m.transition ? { transition: m.transition } : {}), timing: m.timing, builds: m.builds } as ShowPlanRecord['show']
+      const plan = { ...flyIn(), show }
+      const back = decodeShowMessage(encodeShowMessage({ tag: 1, plan }), E)
+      expect(back).toEqual({ tag: 1, plan: JSON.parse(JSON.stringify(plan)) })
+      if (m.timing && !('refused' in m.timing)) walk(m.timing.root)
+      slides++
+    }
+    return slides
+  }
+  it.each([
+    ['flyInDeck', flyInDeck], ['cubeDeck', cubeDeck], ['triggerDeck', triggerDeck], ['linkDeck', linkDeck], ['longStepDeck', longStepDeck],
+    ['morphDeck byObject', () => morphDeck({ option: 'byObject' })], ['morphDeck byWord', () => morphDeck({ option: 'byWord', words: 3 })], ['morphDeck byChar', () => morphDeck({ option: 'byChar', words: 3 })],
+  ])('%s: every slide round-trips', async (_n, make) => { expect(await roundTrip(await make())).toBeGreaterThan(0) })
+  it.each(ADVERSARY_KINDS.map((k) => [k]))('adversaryDeck(%s): every slide round-trips', async (k) => { expect(await roundTrip(await adversaryDeck(k))).toBeGreaterThan(0) })
+  it('a motion path, colour, scale, rotation, per-word iterate and text-range target round-trip', async () => {
+    const tg = (spid: number, txt = '') => `<p:tgtEl><p:spTgt spid="${spid}">${txt}</p:spTgt></p:tgtEl>`
+    const bh = (id: number, dur: number, spid: number, attrs: string[], txt = '') =>
+      `<p:cBhvr><p:cTn id="${id}" dur="${dur}" fill="hold"/>${tg(spid, txt)}<p:attrNameLst>${attrs.map((a) => `<p:attrName>${a}</p:attrName>`).join('')}</p:attrNameLst></p:cBhvr>`
+    const effect = (id: number, cls: string, inner: string, extra = '') =>
+      `<p:par><p:cTn id="${id}" presetID="1" presetClass="${cls}" presetSubtype="0" fill="hold" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst>${extra}<p:childTnLst>${inner}</p:childTnLst></p:cTn></p:par>`
+    const step = (id: number, inner: string) => `<p:par><p:cTn id="${id}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst><p:par><p:cTn id="${id + 1}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${inner}</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>`
+    const words = '<p:txEl><p:pRg st="0" end="0"/></p:txEl>'
+    const xml = timingXmlOf(mainSeqXml([
+      step(10, [
+        effect(12, 'path', `<p:animMotion origin="layout" path="M 0 0 L 0.25 0.1 C 0.3 0.2 0.4 0.2 0.5 0.1 E" pathEditMode="relative" ptsTypes="AAAA">${bh(13, 2000, 3, ['ppt_x', 'ppt_y'])}<p:rCtr x="0.1" y="0"/></p:animMotion>`),
+        effect(14, 'emph', `<p:animClr clrSpc="hsl" dir="cw">${bh(15, 500, 3, ['fillcolor'])}<p:by><p:hsl h="0" s="0" l="10000"/></p:by></p:animClr><p:animScale>${bh(16, 500, 3, ['ppt_w'])}<p:by x="150000" y="150000"/></p:animScale><p:animRot by="5400000">${bh(17, 500, 3, ['r'])}</p:animRot>`),
+      ].join('')),
+      step(20, effect(22, 'entr', `<p:set>${bh(23, 1, 2, ['style.visibility'], words)}<p:to><p:strVal val="visible"/></p:to></p:set>`, '<p:iterate type="wd"><p:tmPct val="10000"/></p:iterate>')),
+    ]))
+    const bytes = await buildPptxDeck({ slides: [{ bg: { solid: 'FFFFFF' }, shapes: [
+      { id: 2, name: 'Text', prst: 'rect', off: ['952500', '952500'], ext: ['4762500', '952500'], fill: 'DDEBF7', paragraphs: [{ runs: [{ text: 'one two three' }] }] },
+      { id: 3, name: 'Box', prst: 'rect', off: ['3810000', '2540000'], ext: ['1905000', '1905000'], fill: '336699' },
+    ], timingXml: xml }] })
+    const d = await loadShowDeck(bytes)
+    const m = await d.meta(0)
+    expect(m.timing && 'refused' in m.timing ? m.timing.refused : undefined).toBeUndefined()
+    const seen = new Set<string>()
+    let iterate = false
+    const walk2 = (n: TimeNode) => { seen.add(n.kind); iterate ||= !!n.ctn.iterate; if ('children' in n) n.children.forEach(walk2) }
+    if (m.timing && !('refused' in m.timing)) walk2(m.timing.root)
+    expect([...seen]).toEqual(expect.arrayContaining(['animMotion', 'animClr', 'animScale', 'animRot', 'set']))
+    expect(iterate).toBe(true)
+    expect(await roundTrip(bytes)).toBe(1)
+  })
+  const corpus = 'corpus'
+  const decks = existsSync(corpus) ? readdirSync(corpus).filter((f) => /^lo-.*\.pptx$/.test(f)) : []
+  it.skipIf(!decks.length)('every slide of the LibreOffice corpus decks round-trips', async () => {
+    let slides = 0
+    for (const f of decks) slides += await roundTrip(new Uint8Array(readFileSync(`${corpus}/${f}`)))
+    expect(slides).toBeGreaterThan(0)
+    // eslint-disable-next-line no-console
+    console.info(`OVSP real-reader round trip: ${decks.length} decks, ${slides} slides, node kinds: ${[...kinds].sort().join(',')}`)
+  }, 120_000)
+})
+
 describe('hostile plan records', () => {
   const rej = (p: Uint8Array, e = E) => pathOf(() => decodeShowMessage(p, e))
   const layerAt = (i: number, over: object = {}) => ({ id: i, bounds: { x: 0, y: 0, w: 10, h: 10 }, z: i, assetId: 100 + i, decodedBytes: 400, scale: 1, ...over })
@@ -199,6 +265,11 @@ describe('hostile plan records', () => {
   it('rejects an unknown part', () => expect(rej(mutated((p) => { p.layers[0].part = 'shadow' }))).toBe('layers[0].part'))
   it('rejects a 257-char string', () => expect(rej(mutated((p) => { p.layers[0].key = 'k'.repeat(257) }))).toBe('layers[0].key'))
   it('accepts a 256-char string', () => expect(() => decodeShowMessage(mutated((p) => { p.layers[0].key = 'k'.repeat(256) }), E)).not.toThrow())
+  it('animation formula strings may reach the reader\'s 1024 bytes, no further', () => {
+    const at0 = (p: { show: { timing: { root: { children: Array<{ children: unknown[] }> } } } }, v: string) => { p.show.timing.root.children[0]!.children = [{ ...flyY(9, '2'), keys: [{ tm: 0, value: v }] }] }
+    expect(() => decodeShowMessage(mutated((p) => at0(p, 'x'.repeat(1024))), E)).not.toThrow()
+    expect(rej(mutated((p) => at0(p, 'x'.repeat(1025))))).toBe('show.timing.root.children[0].children[0].keys[0].value')
+  })
   it('rejects 2001 time nodes', () => {
     expect(rej(mutated((p) => { p.show.timing = { root: par(1, Array.from({ length: 2000 }, (_, i) => setVisible(i + 2, '2'))), build: [] } }))).toBe('show.timing.root.children[1999]')
   })
