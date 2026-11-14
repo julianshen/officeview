@@ -6,52 +6,21 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import { installCanvasBackend, type CanvasBackend } from '../../src/core/canvas-backend'
 import { createSlideTimeline } from '../../src/slideshow/engine/steps'
-import { prepareSlide, rasterPreparedLayer, type PreparedSlide } from '../../src/slideshow/prepare'
-import { createDiagnosticSink } from '../../src/slideshow/diagnostics'
-import type { PlanLayer } from '../../src/slideshow/render/plan'
-import type { CanvasFactory, LayerBitmap, Lease, SlideShowWorkspace } from '../../src/slideshow/types'
+import type { PreparedSlide } from '../../src/slideshow/prepare'
 import {
-  MOVER_REVEAL, adversaryDeck, flashColourDeck, flyInDeck, loadShowDeck, longStepDeck, manyLayersDeck, moveTwiceDeck, spinStepsDeck, triggerColourDeck, triggerDartDeck, triggerDeck,
+  MOVER_REVEAL, adversaryDeck, autoplayRevealDeck, triggerRevealDeck, twinDeck, flashColourDeck, flyInDeck, loadShowDeck, longStepDeck, manyLayersDeck, moveTwiceDeck, spinStepsDeck, triggerColourDeck, triggerDartDeck, triggerDeck,
 } from '../../src/testdata/show-decks'
 import { serverBackend } from '../src/backend'
 import {
-  CLASSIFY_BUDGET, SAMPLES_PER_INTERVAL, TRACK_FPS, TRACK_MAX_FRAMES, allocateFrames, classifySlide, sampleTimes, sweptHull, type Classification,
+  CLASSIFY_BUDGET, SAMPLES_PER_INTERVAL, TRACK_FPS, TRACK_MAX_FRAMES, allocateFrames, sampleTimes, sweptHull,
 } from '../src/show/eligibility'
+import { classifiedRasters } from '../src/show/compose'
+import { classify, inkPixels, reconstruct } from './show-classify-helper'
 
 let backend: CanvasBackend
 let previous: CanvasBackend | undefined
 beforeAll(() => { backend = serverBackend(); previous = installCanvasBackend(backend) })
 afterAll(() => { installCanvasBackend(previous) })
-
-function roomyWorkspace(): SlideShowWorkspace {
-  return {
-    limit: Number.POSITIVE_INFINITY, used: () => 0, reserveTerminal: () => undefined,
-    lease: (bytes, tag) => {
-      const lease: Lease = { tag, bytes, grow: () => true, shrink() {}, transfer: () => lease, release() {} }
-      return lease
-    },
-  }
-}
-const factory = (): CanvasFactory => (w, h) => backend.createCanvas(Math.max(1, Math.ceil(w)), Math.max(1, Math.ceil(h))) as never
-
-interface Run { ps: PreparedSlide; c: Classification; rasters: Map<PlanLayer, LayerBitmap>; ms: number }
-
-async function classify(bytes: Uint8Array, opts: { scale?: number; strictMarks?: boolean } = {}): Promise<Run> {
-  const scale = opts.scale ?? 0.25
-  const d = await loadShowDeck(bytes)
-  const meta = await d.meta(0)
-  const ps = prepareSlide({ index: 0, slide: d.doc.slides[0], meta, watermark: false })
-  const sink = createDiagnosticSink()
-  const rasters = new Map<PlanLayer, LayerBitmap>()
-  for (const layer of ps.layers) {
-    const r = rasterPreparedLayer(ps, layer, { scale, images: [], resolveFont: f => f, canvas: factory(), workspace: roomyWorkspace(), maxTextureSize: 8192, sink })
-    if (!('refused' in r)) rasters.set(layer, r)
-  }
-  const timeline = createSlideTimeline(meta.timing, { showAnimation: true, reducedMotion: false })
-  const t0 = performance.now()
-  const c = classifySlide({ ps, timeline, scale, rasters, strictMarks: opts.strictMarks ?? false, triggers: timeline.triggers() })
-  return { ps, c, rasters, ms: performance.now() - t0 }
-}
 
 const targetLayer = (ps: PreparedSlide, key: string) => ps.layers.find(l => l.kind === 'target' && l.key === key)!
 
@@ -166,11 +135,13 @@ describe('show eligibility', () => {
     expect(c.compositions).toBe(0)
   }, 60_000)
 
-  it('over 64 steps: every step composited (limits) with show-limits', async () => {
+  it('over 64 steps: the slide falls back to its still (show-limits)', async () => {
     const { c } = await classify(await spinStepsDeck(65, 100))
+    expect(c.fallback).toBe('still')
     expect(c.steps).toHaveLength(65)
     expect(c.steps.every(s => s.eligibility === 'composited' && s.reason === 'limits')).toBe(true)
     expect(c.diagnostics).toContainEqual({ code: 'show-limits' })
+    expect(c.drop.size + c.masks.size).toBe(0)
   })
 
   it('strictMarks: every moving step composited', async () => {
@@ -227,5 +198,65 @@ describe('show eligibility', () => {
     const { c } = await classify(await triggerColourDeck())
     expect(c.triggers.get('3')).toBe('cut')
     expect(c.diagnostics.some(d => d.code === 'trigger-cut')).toBe(true)
+  })
+
+  describe('the classification reconstructs the show (fix round 1)', () => {
+    it('unproven autoplay before the first click falls back to the still', async () => {
+      const run = await classify(await autoplayRevealDeck())
+      expect(run.timeline.steps).toBe(0)
+      expect(run.c.fallback).toBe('still')
+      expect(run.c.diagnostics).toContainEqual({ code: 'step-composited' })
+      expect(run.c.drop.size + run.c.masks.size).toBe(0)
+      expect(() => reconstruct(run, run.timeline.initial(), MOVER_REVEAL.dartAt + MOVER_REVEAL.dartMs / 2)).toThrow()
+    })
+
+    it('a cover-hiding trigger after a main step: the ink is kept and reconstructs', async () => {
+      const run = await classify(await triggerRevealDeck())
+      const { timeline: tl, ps, c } = run
+      expect(c.fallback).toBeUndefined()
+      expect(c.drop.has(targetLayer(ps, 'sp:2'))).toBe(false)
+      const after = tl.trigger(tl.checkpoint(1), '3', 100)!
+      const r = reconstruct(run, after, 110)
+      expect(r.inkOriginal).toBeGreaterThan(0)
+      expect(r).toEqual({ diff: 0, inkOriginal: r.inkOriginal, inkClassified: r.inkOriginal })
+      // Every checkpoint, with and without the trigger.
+      for (let k = 0; k <= tl.steps; k++) {
+        expect(reconstruct(run, tl.checkpoint(k), 0).diff).toBe(0)
+        expect(reconstruct(run, tl.trigger(tl.checkpoint(k), '3', 100)!, 110).diff).toBe(0)
+      }
+    })
+
+    it('two identical overlapping layers: their joint removal never erases the shown box', async () => {
+      const run = await classify(await twinDeck())
+      const { timeline: tl, c } = run
+      expect(c.steps[0].eligibility).toBe('layers')
+      const r = reconstruct(run, tl.checkpoint(1), 0)
+      expect(r.inkOriginal).toBeGreaterThan(1000)
+      expect(r.diff).toBe(0)
+      expect(r.inkClassified).toBe(r.inkOriginal)
+      for (const t of sampleTimes(tl, 0)) expect(reconstruct(run, tl.next(tl.checkpoint(0), 0), t).diff).toBe(0)
+    })
+
+    it('every fixture classification reconstructs at every boundary', async () => {
+      for (const bytes of [await flyInDeck(), await adversaryDeck('cover'), await adversaryDeck('moverReveal'), await moveTwiceDeck(), await triggerDeck()]) {
+        const run = await classify(bytes)
+        for (let k = 0; k <= run.timeline.steps; k++) expect(reconstruct(run, run.timeline.checkpoint(k), 0).diff).toBe(0)
+      }
+    })
+
+    it('crop: a decoded picture whose cropped-away half is the ink ships without it', async () => {
+      const run = await classify(await adversaryDeck('crop'), { images: true })
+      const { ps, c, timeline: tl } = run
+      const pic = targetLayer(ps, 'sp:2')
+      expect(c.drop.has(pic)).toBe(false)
+      const shipped = classifiedRasters(run.rasters, c.drop, c.masks).get(pic)!
+      const px = (shipped.canvas.getContext('2d') as unknown as CanvasRenderingContext2D).getImageData(0, 0, shipped.canvas.width, shipped.canvas.height).data
+      expect(inkPixels(px)).toBe(0)
+      // The shown half (#3366CC) is there.
+      let blue = 0
+      for (let i = 0; i < px.length; i += 4) if (px[i + 3] > 0 && Math.abs(px[i] - 0x33) <= 6 && Math.abs(px[i + 1] - 0x66) <= 6 && Math.abs(px[i + 2] - 0xcc) <= 6) blue++
+      expect(blue).toBeGreaterThan(0)
+      expect(reconstruct(run, tl.checkpoint(1), 0).diff).toBe(0)
+    })
   })
 })

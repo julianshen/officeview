@@ -112,10 +112,16 @@ export interface SlideComposer {
   /** Output size in device px (`ceil(slide × scale)`). */
   readonly width: number
   readonly height: number
-  /** Composes `draws` (optionally leaving `without` out) and returns the RGBA pixels. Layers without a raster are skipped. */
-  compose(draws: readonly DrawnLayer[], without?: PlanLayer): Uint8ClampedArray
   /** Layers whose raster the compositor refused (over its texture size): they cannot be composed. */
   readonly refused: readonly PlanLayer[]
+  /**
+   * Composes `draws` (optionally leaving `without` out) and returns the RGBA pixels. Layers without a raster are
+   * skipped. With `classified`, each layer given a classified raster (`classify`) is drawn from it instead, or
+   * not at all when it was dropped.
+   */
+  compose(draws: readonly DrawnLayer[], without?: PlanLayer, classified?: boolean): Uint8ClampedArray
+  /** Records a layer's classification: its masked raster, or `null` when it is dropped. */
+  classify(layer: PlanLayer, raster: LayerBitmap | null): void
   /** The codes the compositor diagnosed since the last call (degraded effects: a mask cut, a skipped recolour). */
   takeDiagnostics(): string[]
   dispose(): void
@@ -140,19 +146,58 @@ export function createSlideComposer(ps: PreparedSlide, rasters: ReadonlyMap<Plan
     else handles.set(layer, up)
   }
   const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
+  const alt = new Map<PlanLayer, LayerHandle | null>()
   return {
     width, height, refused,
-    compose(draws, without) {
+    compose(draws, without, classified = false) {
       const list = []
       for (const d of draws) {
         if (d.layer === without) continue
-        const handle = handles.get(d.layer)
+        const handle = classified && alt.has(d.layer) ? alt.get(d.layer) : handles.get(d.layer)
         if (handle) list.push({ handle, state: d.state, ...(d.part ? { part: d.part } : {}) })
       }
       c.frame(list)
       return ctx.getImageData(0, 0, width, height).data
     },
+    classify(layer, raster) {
+      const prev = alt.get(layer)
+      if (prev) c.release(prev)
+      if (!raster) { alt.set(layer, null); return }
+      const up = c.upload(raster, openLease(0, 'classify'))
+      // A refused classified raster is drawn as nothing: the reconstruction check then fails closed.
+      alt.set(layer, 'refused' in up ? null : up)
+    },
     takeDiagnostics: () => codes.splice(0),
     dispose: () => c.dispose(),
   }
+}
+
+/**
+ * The rasters a classification ships (§6 rules 2 and 3): every dropped layer left out, and each masked layer
+ * redrawn with its alpha multiplied by its layer-local mask (0 removes a pixel, 255 keeps it).
+ */
+export function classifiedRasters(rasters: ReadonlyMap<PlanLayer, LayerBitmap>, drop: ReadonlySet<PlanLayer>, masks: ReadonlyMap<PlanLayer, Uint8Array>): Map<PlanLayer, LayerBitmap> {
+  const out = new Map<PlanLayer, LayerBitmap>()
+  for (const [layer, bmp] of rasters) {
+    if (drop.has(layer)) continue
+    const mask = masks.get(layer)
+    out.set(layer, mask ? maskedRaster(bmp, mask) : bmp)
+  }
+  return out
+}
+
+/** `bmp` with its alpha multiplied by `mask` (layer-local, one byte per bitmap px), as a new bitmap. */
+export function maskedRaster(bmp: LayerBitmap, mask: Uint8Array): LayerBitmap {
+  const w = bmp.canvas.width, h = bmp.canvas.height
+  const canvas = canvasBackend().createCanvas(w, h) as unknown as HTMLCanvasElement
+  const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
+  ctx.drawImage(bmp.canvas as CanvasImageSource, 0, 0)
+  const img = ctx.getImageData(0, 0, w, h)
+  const d = img.data
+  for (let i = 0; i < w * h; i++) {
+    const m = mask[i] ?? 255
+    if (m !== 255) d[i * 4 + 3] = Math.round((d[i * 4 + 3] * m) / 255)
+  }
+  ctx.putImageData(img, 0, 0)
+  return { canvas, bounds: { ...bmp.bounds }, scale: bmp.scale, bytes: w * h * 4 }
 }

@@ -1,56 +1,38 @@
 /**
- * The show-plan eligibility classifier (piece 4 spec §6, plan D3, D8, D10).
+ * The show-plan eligibility classifier (piece 4 spec §6, plan D3, D8, D10; fix round 1 rulings).
  *
- * Before any asset of a slide is sent, the server proves that no layer it
- * sends carries ink the composed show never displays. A step it cannot prove
- * plays `composited`, as server-rendered keyframes. Whenever a check is in
- * doubt, the answer is `composited`, never `layers`.
+ * Before any asset of a slide is sent, the server proves that no layer it sends carries ink the composed show
+ * never displays, and that the layers it sends reproduce every state they play. What it cannot prove plays
+ * `composited` (keyframes), or the whole slide plays its piece-3 still (`fallback: 'still'`). Never `layers`
+ * on doubt.
  *
- * - **Rule 1, the observable envelope (D10).** The slide is composed at every
- *   step boundary, at the sampled times of the pre-click interval, and at the
- *   sampled times of each step that may play from layers (`sampleTimes`).
- *   For each layer, each sample is composed with and without it. Every device
- *   pixel the layer changes is mapped back through the layer's draw matrix
- *   into layer-local px. The envelope is then dilated by 1 px. A tinted draw
- *   (a colour part under a non-identity matrix) does not observe the layer's
- *   raw ink (controller ruling 3), so it adds nothing to the envelope.
- * - **Rules 2 and 3.** A layer none of whose inked pixels is observed is
- *   dropped (`drop`). A layer some of whose inked pixels are never observed
- *   gets a layer-local alpha mask (`masks`: 255 keeps a pixel, 0 removes it).
- *   Transparent pixels are kept, since they carry no ink.
- * - **Rule 4, the proof subset (`proveItems`).** A step is `layers` only if
- *   all of these hold:
- *   - none of its draws is tinted;
- *   - none of its draws is masked;
- *   - no mover's swept hull (`sweptHull`) crosses an inked pixel that rule 3
- *     removed from a layer below it.
- *   Visibility and opacity changes pass.
- * - **Then D8 and `strictMarks`.**
- *   - `strictMarks` makes every moving step `composited` (`strict-marks`).
- *   - A mover that starts a step away from its first rest plays that step
- *     `composited` (`mark-rest`).
- *   - A step with an effect still running and never ending at its end is
- *     `composited` (`emphasis`).
- *   - So is a step during which the compositor degraded an effect.
- * - **Rule 5, the budget.** Compositions are counted per slide. Before each
- *   one, the count is checked against `CLASSIFY_BUDGET`. Once the budget is
- *   spent, every step not yet classified is `composited` (`budget`, with a
- *   `show-budget` diagnostic).
- * - **Rule 6, frames (D3).** Each composited step reserves its end frame
- *   first. The rest of the slide's 512 is then shared in step order
- *   (`allocateFrames`).
- * - **Rule 6a, triggers.** A trigger plays from layers only if, at every one
- *   of its samples, it changes nothing but visibility and opacity. Its end
- *   state is then part of the envelope. Otherwise it is `cut`, with a
- *   `trigger-cut` diagnostic.
- * - **Limits (D3).**
- *   - Over 64 steps, the slide plays as its still: every step is `limits`,
- *     every layer is dropped, and every trigger is cut (`show-limits`).
- *   - Over 128 layers, every step is `composited` (`limits`).
- *
- * Steps are proven in order, against the envelope gathered so far. A later
- * sample only adds observed pixels, so the removed set a proof sees always
- * contains the final one: an early proof is conservative.
+ * 1. **Plan the states (no composition).** The observed states are:
+ *    - every step boundary;
+ *    - the autoplay interval before the first click;
+ *    - every trigger subset, applied in a fixed order from every checkpoint (at most `MAX_TRIGGERS`
+ *      triggers, more plays the still);
+ *    - the samples (`sampleTimes`) of each click step that may play from layers.
+ *    Checks that need no composition run first, by sample and by timing (`timedEffects`):
+ *    - a tint or mask gives `colour` or `mask`;
+ *    - an effect still running at the end gives `emphasis`;
+ *    - a mover with `strictMarks` gives `strict-marks`;
+ *    - a mover away from its first rest gives `mark-rest` (D8).
+ *    Unproven autoplay plays the still.
+ * 2. **Budget (rule 5).** Each state costs a with/without pair per observable layer, plus a reconstruction
+ *    pair. The fixed states must fit `CLASSIFY_BUDGET`, or the slide plays the still. Click steps are then
+ *    admitted in order while they fit; the rest are `budget`.
+ * 3. **Envelopes (rules 1–3), top to bottom.** Each layer's with/without pairs are composed with every layer
+ *    above it already dropped or masked, so two layers that each hide the other's pixels cannot both lose
+ *    them. Changed device px map into layer-local px, dilated by 1 px. Tinted draws observe nothing. A layer
+ *    with no observed inked pixel is dropped; otherwise its unobserved inked pixels are masked out.
+ * 4. **Rule 4 (`proveItems`)** runs over every interval with the final masks; a dropped layer counts as fully
+ *    removed. A mover's swept hull must not cross removed pixels below it.
+ * 5. **Reconstruction.** Every observed state, composed from the classified layers, must equal the original:
+ *    - a mismatch in a step's sample composites that step;
+ *    - a mismatch at a boundary composites both steps meeting there (on a slide without triggers);
+ *    - any other mismatch plays the still.
+ * 6. **Frames (D3, `allocateFrames`) and triggers (6a).** A trigger plays from layers only if it is
+ *    visibility and opacity only, by sample and by timing, in every combination.
  */
 import { invert, stateMatrix } from '../../../src/slideshow/affine'
 import type { SchedulerSnapshot } from '../../../src/slideshow/engine/scheduler'
@@ -63,7 +45,7 @@ import { targetKey } from '../../../src/slideshow/target'
 import type { Affine, BehaviourNode, DiagnosticSink, TimeNode, LayerBitmap, RenderState, TargetState } from '../../../src/slideshow/types'
 import { SHOW_PLAN_LIMITS, type Rect } from '../../../src/stream/show-plan'
 import { canvasBackend } from '../../../src/core/canvas-backend'
-import { createSlideComposer, deviceMatrix, drawsAt, slideStateAt, type DrawnLayer } from './compose'
+import { createSlideComposer, deviceMatrix, drawsAt, maskedRaster, slideStateAt, type DrawnLayer } from './compose'
 
 export const SAMPLES_PER_INTERVAL = 8, CLASSIFY_BUDGET = 4096, TRACK_FPS = 15, TRACK_MAX_FRAMES = 90
 
@@ -86,6 +68,12 @@ export interface Classification {
   triggers: Map<string, 'layers' | 'cut'>
   compositions: number
   diagnostics: Array<{ code: string; step?: number }>
+  /**
+   * Fix round 1 (controller ruling): the slide cannot be proven (unproven autoplay, too many or too costly
+   * trigger combinations, over 64 steps, a reconstruction mismatch outside a click step). It plays as its
+   * piece-3 still: no layer ships, so `drop` and `masks` are empty and every trigger is cut.
+   */
+  fallback?: 'still'
 }
 
 type Reason = NonNullable<StepClass['reason']>
@@ -294,36 +282,69 @@ interface LayerInfo {
 }
 
 const NOOP_SINK: DiagnosticSink = { add() {}, list: () => [] }
+const EMPTY_SNAPSHOT: SchedulerSnapshot = { active: [], frozen: [], ended: new Set() }
+
+/** The most triggers whose combinations are classified (controller ruling, fix round 1): more plays the still. */
+export const MAX_TRIGGERS = 4
 
 class OverBudget extends Error { constructor() { super('classify budget') } }
-class Refused extends Error { constructor() { super('classify raster refused') } }
+/** The slide cannot be proven: it plays its still (`Classification.fallback`). */
+class Still extends Error { constructor(readonly reason: Reason) { super(`classify: still (${reason})`) } }
+
+/** Who displays an observed state: a boundary, the autoplay interval, a click step's sample, or a trigger combination. */
+type Owner = { kind: 'boundary'; at: number } | { kind: 'auto' } | { kind: 'step'; step: number } | { kind: 'trigger'; spids: readonly string[] }
+interface Obs { list: readonly DrawnLayer[]; owner: Owner }
+
+/** One interval (the autoplay one or a click step) planned before any composition. */
+interface Planned {
+  lists: DrawnLayer[][]
+  items: ProofItem[]
+  /** Fails rule 4 or 5 without a composition: tinted, masked, or still running at its end. */
+  early?: Reason
+  /** Passes only if rule 4 does, then is composited all the same (D8, strictMarks). */
+  post?: 'strict-marks' | 'mark-rest'
+}
 
 export function classifySlide(input: ClassifyInput): Classification {
   const { ps, timeline, scale, rasters, strictMarks } = input
   const n = timeline.steps
   const out: Classification = { drop: new Set(), masks: new Map(), steps: [], triggers: new Map(), compositions: 0, diagnostics: [] }
   const shipped = ps.layers.filter(l => l.kind !== 'watermark')
-  const cutTriggers = () => {
+  const durOf = (k: number) => stepInterval(timeline, k).dur
+  const finish = (steps: StepClass[]) => {
+    const frames = allocateFrames(steps.map((s, k) => ({ composited: s.eligibility === 'composited', durMs: durOf(k) })))
+    out.steps = steps.map((s, k) => (s.eligibility === 'composited' ? { ...s, frames: frames[k].frames } : s))
+    out.steps.forEach((s, k) => {
+      if (s.eligibility !== 'composited') return
+      out.diagnostics.push({ code: 'step-composited', step: k })
+      if (frames[k].truncated) out.diagnostics.push({ code: 'step-truncated', step: k })
+    })
+    for (const spid of input.triggers) if (!out.triggers.has(spid)) out.triggers.set(spid, 'cut')
+    if ([...out.triggers.values()].includes('cut')) out.diagnostics.push({ code: 'trigger-cut' })
+    return out
+  }
+  /** Fix round 1: the slide plays its piece-3 still. Nothing ships, every step is composited, every trigger cut. */
+  const still = (reason: Reason) => {
+    out.fallback = 'still'
+    out.drop.clear()
+    out.masks.clear()
+    out.triggers.clear()
+    out.diagnostics.push({ code: 'step-composited' })
+    if (reason === 'budget') out.diagnostics.push({ code: 'show-budget' })
+    out.steps = Array.from({ length: n }, () => ({ eligibility: 'composited', reason }))
     for (const spid of input.triggers) out.triggers.set(spid, 'cut')
     if (input.triggers.length) out.diagnostics.push({ code: 'trigger-cut' })
+    return out
   }
 
   // D3 limits: over 64 steps the slide is its still; over 128 layers every step is composited.
   if (n > SHOW_PLAN_LIMITS.steps) {
-    out.steps = Array.from({ length: n }, () => ({ eligibility: 'composited', reason: 'limits' }))
-    for (const l of shipped) out.drop.add(l)
     out.diagnostics.push({ code: 'show-limits' })
-    cutTriggers()
-    return out
+    return still('limits')
   }
   if (shipped.length > SHOW_PLAN_LIMITS.layers) {
-    const frames = allocateFrames(Array.from({ length: n }, (_, k) => ({ composited: true, durMs: stepInterval(timeline, k).dur })))
-    out.steps = frames.map(f => ({ eligibility: 'composited', reason: 'limits', frames: f.frames }))
     for (const l of shipped) out.drop.add(l)
-    out.steps.forEach((_, k) => out.diagnostics.push({ code: 'step-composited', step: k }))
-    frames.forEach((f, k) => { if (f.truncated) out.diagnostics.push({ code: 'step-truncated', step: k }) })
-    cutTriggers()
-    return out
+    return finish(Array.from({ length: n }, () => ({ eligibility: 'composited', reason: 'limits' })))
   }
 
   const infos = new Map<PlanLayer, LayerInfo>()
@@ -336,6 +357,7 @@ export function classifySlide(input: ClassifyInput): Classification {
     for (let i = 0; i < alpha.length; i++) alpha[i] = data[i * 4 + 3]
     infos.set(layer, { layer, bmp, w, h, alpha, seen: new Uint8Array(w * h) })
   }
+  const order = [...infos.values()]
   const composer = createSlideComposer(ps, rasters, scale)
   const W = composer.width, H = composer.height
   const rng = createRng(0x5eed + ps.index)
@@ -345,45 +367,50 @@ export function classifySlide(input: ClassifyInput): Classification {
   const draws = (state: RenderState) => drawsAt(ps, state, drawOpts)
   const byId = behavioursById(ps)
 
-  const composeCounted = (list: readonly DrawnLayer[], without?: PlanLayer) => {
+  const composeCounted = (list: readonly DrawnLayer[], without: PlanLayer | undefined, classified: boolean) => {
     if (out.compositions >= CLASSIFY_BUDGET) throw new OverBudget()
     out.compositions++
-    return composer.compose(list, without)
+    return composer.compose(list, without, classified)
   }
+  /** Layers of `list` whose raw ink a draw would observe (drawn, untinted, with a raster). */
+  const observable = (list: readonly DrawnLayer[]) => list.filter(d => infos.has(d.layer) && drawn(d.state) && !tinted(d.state))
+  /** Compositions one observed state costs: a with/without pair per observable layer, then the reconstruction pair. */
+  const cost = (list: readonly DrawnLayer[]) => 2 * observable(list).length + 2
 
-  /** Rule 1 at one state: every untinted drawn layer's changed pixels, mapped into layer-local px. */
-  const observe = (list: readonly DrawnLayer[]) => {
-    let full: Uint8ClampedArray | undefined
-    for (const d of list) {
-      const info = infos.get(d.layer)
-      if (!info || !drawn(d.state) || tinted(d.state)) continue
-      const m = deviceMatrix(scale, d.state)
-      const inv = invert(m)
-      const box = corners(m, info.bmp.bounds)
-      const x0 = Math.max(0, Math.floor(Math.min(...box.map(p => p[0])))), y0 = Math.max(0, Math.floor(Math.min(...box.map(p => p[1]))))
-      const x1 = Math.min(W, Math.ceil(Math.max(...box.map(p => p[0])))), y1 = Math.min(H, Math.ceil(Math.max(...box.map(p => p[1]))))
-      if (!inv || !(x1 > x0 && y1 > y0)) continue
-      full ??= composeCounted(list)
-      const without = composeCounted(list, d.layer)
-      const b = info.bmp.bounds, kx = info.w / b.w, ky = info.h / b.h
-      const local = (x: number, y: number): [number, number] => [
-        ((inv[0] * x + inv[2] * y + inv[4]) - b.x) * kx, ((inv[1] * x + inv[3] * y + inv[5]) - b.y) * ky,
-      ]
-      for (let y = y0; y < y1; y++) {
-        for (let x = x0; x < x1; x++) {
-          const i = (y * W + x) * 4
-          if (full[i] === without[i] && full[i + 1] === without[i + 1] && full[i + 2] === without[i + 2] && full[i + 3] === without[i + 3]) continue
-          // The device pixel's square, mapped into the bitmap: every bitmap px it touches is observed.
-          const c = [local(x, y), local(x + 1, y), local(x, y + 1), local(x + 1, y + 1)]
-          const u0 = Math.max(0, Math.floor(Math.min(...c.map(p => p[0])))), v0 = Math.max(0, Math.floor(Math.min(...c.map(p => p[1]))))
-          const u1 = Math.min(info.w, Math.ceil(Math.max(...c.map(p => p[0])))), v1 = Math.min(info.h, Math.ceil(Math.max(...c.map(p => p[1]))))
-          for (let v = v0; v < v1; v++) info.seen.fill(1, v * info.w + u0, v * info.w + Math.max(u0, u1))
-        }
+  /**
+   * Rule 1 for one layer at one state (fix round 1, ruling 3): with and without the layer, every layer above it
+   * already classified (dropped or masked), every layer below it raw. Changed device px are mapped into
+   * layer-local px.
+   */
+  const observeLayer = (info: LayerInfo, list: readonly DrawnLayer[]) => {
+    const d = list.find(x => x.layer === info.layer)
+    if (!d || !drawn(d.state) || tinted(d.state)) return
+    const m = deviceMatrix(scale, d.state)
+    const inv = invert(m)
+    const box = corners(m, info.bmp.bounds)
+    const x0 = Math.max(0, Math.floor(Math.min(...box.map(p => p[0])))), y0 = Math.max(0, Math.floor(Math.min(...box.map(p => p[1]))))
+    const x1 = Math.min(W, Math.ceil(Math.max(...box.map(p => p[0])))), y1 = Math.min(H, Math.ceil(Math.max(...box.map(p => p[1]))))
+    if (!inv || !(x1 > x0 && y1 > y0)) return
+    const full = composeCounted(list, undefined, true)
+    const without = composeCounted(list, info.layer, true)
+    const b = info.bmp.bounds, kx = info.w / b.w, ky = info.h / b.h
+    const local = (x: number, y: number): [number, number] => [
+      ((inv[0] * x + inv[2] * y + inv[4]) - b.x) * kx, ((inv[1] * x + inv[3] * y + inv[5]) - b.y) * ky,
+    ]
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1; x++) {
+        const i = (y * W + x) * 4
+        if (full[i] === without[i] && full[i + 1] === without[i + 1] && full[i + 2] === without[i + 2] && full[i + 3] === without[i + 3]) continue
+        // The device pixel's square, mapped into the bitmap: every bitmap px it touches is observed.
+        const c = [local(x, y), local(x + 1, y), local(x, y + 1), local(x + 1, y + 1)]
+        const u0 = Math.max(0, Math.floor(Math.min(...c.map(p => p[0])))), v0 = Math.max(0, Math.floor(Math.min(...c.map(p => p[1]))))
+        const u1 = Math.min(info.w, Math.ceil(Math.max(...c.map(p => p[0])))), v1 = Math.min(info.h, Math.ceil(Math.max(...c.map(p => p[1]))))
+        for (let v = v0; v < v1; v++) info.seen.fill(1, v * info.w + u0, v * info.w + Math.max(u0, u1))
       }
     }
   }
 
-  /** Rule 3's mask of one layer from the envelope so far (dilated by 1 px); `undefined` when no inked pixel is removed. */
+  /** Rule 3's mask of one layer from its envelope (dilated by 1 px); `undefined` when no inked pixel is removed. */
   const maskOf = (info: LayerInfo): Uint8Array | undefined => {
     const { w, h, seen, alpha } = info
     let removed = false
@@ -409,140 +436,179 @@ export function classifySlide(input: ClassifyInput): Classification {
     return false
   }
 
-  const checkpointEnvelope = () => new Map([...infos.values()].map(i => [i, i.seen.slice()]))
-  const restoreEnvelope = (saved: Map<LayerInfo, Uint8Array>) => { for (const [i, seen] of saved) i.seen.set(seen) }
-
   /** The draw state of each info layer at each of `lists` (undefined where not drawn). */
   const statesPerLayer = (lists: readonly (readonly DrawnLayer[])[]) => {
     const per = new Map<PlanLayer, Array<TargetState | undefined>>()
-    for (const info of infos.values()) per.set(info.layer, lists.map(() => undefined))
+    for (const info of order) per.set(info.layer, lists.map(() => undefined))
     lists.forEach((list, k) => { for (const d of list) { const row = per.get(d.layer); if (row) row[k] = d.state } })
     return per
   }
 
-  const steps: Array<StepClass | undefined> = Array.from({ length: n }, () => undefined)
-  const durs: number[] = []
-  let overBudget = false
   try {
     // A raster the compositor refuses cannot be composed, so nothing about the slide can be proven.
-    if (composer.refused.length) throw new Refused()
-    // Rule 1 at every step boundary, and over the pre-click interval.
+    if (composer.refused.length) throw new Still('limits')
+
+    // ---- Plan every state, before any composition -------------------------------------------------------
     const boundaries = Array.from({ length: n + 1 }, (_, k) => draws(stateAt(timeline.checkpoint(k), 0)))
-    for (const list of boundaries) observe(list)
-    const pre = startTime(timeline)
-    if (pre > 0) {
-      const init = timeline.initial()
-      for (const t of samplesOver(pre, timeline.keyTimes(init, 0, pre))) observe(draws(stateAt(init, t)))
-    }
-    // A degraded effect at a boundary or before the first click: the envelope itself is unproven.
-    if (composer.takeDiagnostics().length) throw new Refused()
-    // D8: each layer's first rest (its draw matrix at the first boundary it is visible at).
     const boundaryStates = statesPerLayer(boundaries)
+    // D8: each layer's first rest (its draw matrix at the first boundary it is visible at).
     const firstRest = new Map<PlanLayer, Affine>()
     for (const [layer, row] of boundaryStates) { const s = row.find(drawn); if (s) firstRest.set(layer, stateMatrix(s)) }
 
-    for (let k = 0; k < n; k++) {
-      const iv = stepInterval(timeline, k)
-      durs[k] = iv.dur
-      const times = samplesOver(iv.dur, timeline.keyTimes(iv.cursor, iv.t0, iv.t0 + iv.dur).map(t => t - iv.t0))
-      const lists = times.map(t => draws(stateAt(iv.cursor, iv.t0 + t)))
+    /** One interval's lists, proof items and the checks that need no composition. */
+    const plan = (cursor: SlideCursor, t0: number, dur: number, start: SchedulerSnapshot, restAt: number | undefined): Planned => {
+      const times = samplesOver(dur, timeline.keyTimes(cursor, t0, t0 + dur).map(t => t - t0))
+      const lists = times.map(t => draws(stateAt(cursor, t0 + t)))
       const per = statesPerLayer(lists)
-      const timed = timedEffects(ps, byId, timeline.stateAt(timeline.checkpoint(k), 0), times.map(t => timeline.stateAt(iv.cursor, iv.t0 + t)))
-      const moved = timed.moved
-      const items: ProofItem[] = [...infos.values()].map(info => ({
-        bounds: info.bmp.bounds, size: { w: info.w, h: info.h }, states: per.get(info.layer)!, ...(moved.has(info.layer) ? { moves: true } : {}),
+      const timed = timedEffects(ps, byId, start, times.map(t => timeline.stateAt(cursor, t0 + t)))
+      const items: ProofItem[] = order.map(info => ({
+        bounds: info.bmp.bounds, size: { w: info.w, h: info.h }, states: per.get(info.layer)!, ...(timed.moved.has(info.layer) ? { moves: true } : {}),
       }))
-      // State-only rule 4 checks first: a tinted or masked step needs no compositions.
       let early: Reason | undefined = timed.colour ? 'colour' : timed.mask ? 'mask' : undefined
       for (const it of items) for (const s of it.states) if (drawn(s) && !early) early = tinted(s) ? 'colour' : s.mask ? 'mask' : undefined
-      if (!early) {
-        const still = timeline.stateAt(iv.cursor, iv.t0 + iv.dur + 1).active.some(e => e.node.kind !== 'audio' && e.node.kind !== 'video')
-        if (still) early = 'emphasis'
-      }
-      if (early) { steps[k] = { eligibility: 'composited', reason: early }; continue }
-      const saved = checkpointEnvelope()
-      for (const list of lists) observe(list)
-      const degraded = composer.takeDiagnostics()
-      if (degraded.length) {
-        // What a degraded composition showed is not what the client shows: none of it is observed.
-        restoreEnvelope(saved)
-        steps[k] = { eligibility: 'composited', reason: degraded.some(c => c.startsWith('mask')) ? 'mask' : 'emphasis' }
-        continue
-      }
-      // Rule 4, with each layer's mask from the envelope so far.
-      const proof = proveItems([...infos.values()].map((info, i) => {
-        const mask = maskOf(info)
-        return { ...items[i], ...(mask ? { mask } : {}) }
-      }), scale)
-      if (!proof.ok) { steps[k] = { eligibility: 'composited', reason: proof.reason }; continue }
-      if (proof.movers.length && strictMarks) { steps[k] = { eligibility: 'composited', reason: 'strict-marks' }; continue }
-      // D8: a mover starting this step away from its first rest (over 0.5 device px, or any rotation or scale).
-      const layers = [...infos.keys()]
-      const away = proof.movers.some(i => {
-        const start = boundaryStates.get(layers[i])![k]
-        const first = firstRest.get(layers[i])
-        return drawn(start) && !!first && differs(stateMatrix(start), first, 0.5 / scale)
+      if (!early && timeline.stateAt(cursor, t0 + dur + 1).active.some(e => e.node.kind !== 'audio' && e.node.kind !== 'video')) early = 'emphasis'
+      if (early) return { lists, items, early }
+      const moving = items.map((it, i) => {
+        const ds = it.states.filter(drawn)
+        return it.moves || (ds.length > 1 && ds.some(s => differs(stateMatrix(s), stateMatrix(ds[0]), 1e-6))) ? i : -1
+      }).filter(i => i >= 0)
+      if (moving.length && strictMarks) return { lists, items, post: 'strict-marks' }
+      // D8: a mover starting the interval away from its first rest (over 0.5 device px, or any rotation or scale).
+      const away = moving.some(i => {
+        const layer = order[i].layer
+        const startState = restAt === undefined ? per.get(layer)![0] : boundaryStates.get(layer)![restAt]
+        const first = firstRest.get(layer)
+        return drawn(startState) && !!first && differs(stateMatrix(startState), first, 0.5 / scale)
       })
-      if (away) { steps[k] = { eligibility: 'composited', reason: 'mark-rest' }; out.diagnostics.push({ code: 'mark-rest', step: k }); continue }
-      steps[k] = { eligibility: 'layers' }
+      return away ? { lists, items, post: 'mark-rest' } : { lists, items }
     }
 
-    // Rule 6a: triggers, from the slide's first checkpoint.
-    const base = timeline.checkpoint(0)
-    const baseList = boundaries[0]
+    // Autoplay (fix round 1, ruling 1): the interval before the first click is proven like a step, or the slide is its still.
+    const init = timeline.initial()
+    const pre = startTime(timeline)
+    const init0 = timeline.stateAt(init, 0)
+    const autoKeys = timeline.keyTimes(init, 0, Number.POSITIVE_INFINITY)
+    const auto = pre > 0 || autoKeys.length > 0 || init0.active.length > 0 || init0.frozen.length > 0
+      ? plan(init, 0, pre, EMPTY_SNAPSHOT, undefined) : undefined
+    if (auto?.early) throw new Still(auto.early)
+    if (auto?.post) throw new Still(auto.post)
+
+    // Click steps.
+    const plans = Array.from({ length: n }, (_, k) => {
+      const iv = stepInterval(timeline, k)
+      return plan(iv.cursor, iv.t0, iv.dur, timeline.stateAt(timeline.checkpoint(k), 0), k)
+    })
+
+    // Triggers (fix round 1, ruling 2): every subset, in a fixed order, from every checkpoint; over 4, the still.
+    const triggers = input.triggers
+    if (triggers.length > MAX_TRIGGERS) throw new Still('limits')
     const t0 = startTime(timeline)
-    for (const spid of input.triggers) {
+    const triggerOk = new Map<string, boolean>()
+    for (const spid of triggers) {
+      // Its own effect, from the first checkpoint: visibility and opacity only, at every sample and in its timing.
+      const base = timeline.checkpoint(0)
       const cur = timeline.trigger(base, spid, t0)
-      if (!cur) { out.triggers.set(spid, 'cut'); continue }
+      if (!cur) { triggerOk.set(spid, false); continue }
       const keys = timeline.keyTimes(cur, t0, Number.POSITIVE_INFINITY)
       const dur = keys.length ? keys[keys.length - 1] - t0 : 0
       const keyed = samplesOver(dur, keys.map(t => t - t0))
-      const lists = keyed.map(t => draws(stateAt(cur, t0 + t)))
       const timed = timedEffects(ps, byId, timeline.stateAt(base, 0), keyed.map(t => timeline.stateAt(cur, t0 + t)))
-      const ok = !timed.colour && !timed.mask && timed.moved.size === 0 && lists.every(list => toggleOnly(baseList, list))
-      if (!ok) { out.triggers.set(spid, 'cut'); continue }
-      const saved = checkpointEnvelope()
-      observe(lists[lists.length - 1])
-      if (composer.takeDiagnostics().length) { restoreEnvelope(saved); out.triggers.set(spid, 'cut'); continue }
-      out.triggers.set(spid, 'layers')
+      triggerOk.set(spid, !timed.colour && !timed.mask && timed.moved.size === 0 && keyed.every(t => toggleOnly(boundaries[0], draws(stateAt(cur, t0 + t)))))
     }
+    const combos: Obs[] = []
+    for (let set = 1; set < 1 << triggers.length; set++) {
+      const spids = triggers.filter((_, i) => set & (1 << i))
+      for (let k = 0; k <= n; k++) {
+        let cur: SlideCursor | undefined = timeline.checkpoint(k)
+        let t = t0
+        for (const spid of spids) {
+          cur = cur && timeline.trigger(cur, spid, t)
+          if (!cur) break
+          const keys = timeline.keyTimes(cur, t, Number.POSITIVE_INFINITY)
+          t = keys.length ? Math.max(t, keys[keys.length - 1]) : t
+        }
+        if (!cur) { for (const s of spids) triggerOk.set(s, false); continue }
+        const list = draws(stateAt(cur, t))
+        if (!toggleOnly(boundaries[k], list)) for (const s of spids) triggerOk.set(s, false)
+        combos.push({ list, owner: { kind: 'trigger', spids } })
+      }
+    }
+
+    // ---- Budget (rule 5): the fixed states first, then click steps in order while they fit ---------------
+    const obs: Obs[] = [
+      ...boundaries.map((list, k) => ({ list, owner: { kind: 'boundary', at: k } as Owner })),
+      ...(auto ? auto.lists.map(list => ({ list, owner: { kind: 'auto' } as Owner })) : []),
+      ...combos,
+    ]
+    let room = CLASSIFY_BUDGET - obs.reduce((a, o) => a + cost(o.list), 0)
+    if (room < 0) throw new Still('budget')
+    const budgetCut = new Set<number>()
+    for (let k = 0; k < n; k++) {
+      const p = plans[k]
+      if (p.early || p.post) continue
+      const c = budgetCut.size ? Infinity : p.lists.reduce((a, l) => a + cost(l), 0)
+      if (c > room) { budgetCut.add(k); continue }
+      room -= c
+      for (const list of p.lists) obs.push({ list, owner: { kind: 'step', step: k } })
+    }
+
+    // ---- Rules 1–3: envelopes top to bottom, each against the layers above already classified -------------
+    for (const info of [...order].reverse()) {
+      for (const o of obs) observeLayer(info, o.list)
+      if (!observedInk(info)) { out.drop.add(info.layer); composer.classify(info.layer, null); continue }
+      const mask = maskOf(info)
+      if (mask) { out.masks.set(info.layer, mask); composer.classify(info.layer, maskedRaster(info.bmp, mask)) }
+    }
+    // A degraded effect anywhere: what was composed is not what the client shows.
+    if (composer.takeDiagnostics().length) throw new Still('mask')
+
+    // ---- Rule 4 with the final masks (a dropped layer has every inked pixel removed) ----------------------
+    const proofMask = (info: LayerInfo) => out.drop.has(info.layer) ? info.alpha.map(a => (a > 0 ? 0 : 255)) : out.masks.get(info.layer)
+    const prove = (p: Planned) => proveItems(p.items.map((it, i) => { const mask = proofMask(order[i]); return mask ? { ...it, mask } : it }), scale)
+    if (auto) { const proof = prove(auto); if (!proof.ok) throw new Still(proof.reason) }
+    const steps: StepClass[] = plans.map((p, k) => {
+      if (p.early) return { eligibility: 'composited', reason: p.early }
+      if (budgetCut.has(k)) return { eligibility: 'composited', reason: 'budget' }
+      const proof = prove(p)
+      if (!proof.ok) return { eligibility: 'composited', reason: proof.reason }
+      if (p.post) {
+        if (p.post === 'mark-rest') out.diagnostics.push({ code: 'mark-rest', step: k })
+        return { eligibility: 'composited', reason: p.post }
+      }
+      return { eligibility: 'layers' }
+    })
+
+    // ---- Reconstruction (ruling 3): every observed state, classified, equals the original -----------------
+    for (const o of obs) {
+      if (o.owner.kind === 'step' && steps[o.owner.step].eligibility === 'composited') continue
+      const a = composeCounted(o.list, undefined, false)
+      const b = composeCounted(o.list, undefined, true)
+      let same = a.length === b.length
+      for (let i = 0; same && i < a.length; i++) if (a[i] !== b[i]) same = false
+      if (same) continue
+      // The classified layers cannot show this state. A click step's sample: that step is composited. A
+      // boundary: both steps meeting there are (their keyframe tracks show it), and no trigger can fire from
+      // layers. Autoplay or a trigger combination: the still.
+      const composite = (k: number) => {
+        if (k >= 0 && k < n && steps[k].eligibility === 'layers') steps[k] = { eligibility: 'composited', reason: o.list.some(d => drawn(d.state) && tinted(d.state)) ? 'colour' : 'mask' }
+      }
+      if (o.owner.kind === 'step') composite(o.owner.step)
+      else if (o.owner.kind === 'boundary' && triggers.length === 0) { composite(o.owner.at - 1); composite(o.owner.at) }
+      else throw new Still('mask')
+    }
+    if (composer.takeDiagnostics().length) throw new Still('mask')
+
+    // Rule 6a.
+    for (const spid of triggers) out.triggers.set(spid, triggerOk.get(spid) ? 'layers' : 'cut')
+    if (budgetCut.size) out.diagnostics.push({ code: 'show-budget' })
+    return finish(steps)
   } catch (e) {
-    if (e instanceof OverBudget) overBudget = true
-    else if (e instanceof Refused) {
-      // Nothing about the slide can be proven: every step is composited and no layer ships.
-      for (let k = 0; k < n; k++) steps[k] = { eligibility: 'composited', reason: 'limits' }
-      for (const info of infos.values()) info.seen.fill(0)
-    } else throw e
+    if (e instanceof Still) return still(e.reason)
+    if (e instanceof OverBudget) return still('budget')
+    throw e
   } finally {
     composer.dispose()
   }
-
-  if (overBudget) out.diagnostics.push({ code: 'show-budget' })
-  for (let k = 0; k < n; k++) {
-    steps[k] ??= { eligibility: 'composited', reason: 'budget' }
-    durs[k] ??= stepInterval(timeline, k).dur
-  }
-  for (const spid of input.triggers) if (!out.triggers.has(spid)) out.triggers.set(spid, 'cut')
-  if ([...out.triggers.values()].includes('cut')) out.diagnostics.push({ code: 'trigger-cut' })
-
-  // Rule 6: frames for the composited steps.
-  const frames = allocateFrames(steps.map((s, k) => ({ composited: s!.eligibility === 'composited', durMs: durs[k] })))
-  out.steps = steps.map((s, k) => (s!.eligibility === 'composited' ? { ...s!, frames: frames[k].frames } : s!))
-  out.steps.forEach((s, k) => {
-    if (s.eligibility !== 'composited') return
-    out.diagnostics.push({ code: 'step-composited', step: k })
-    if (frames[k].truncated) out.diagnostics.push({ code: 'step-truncated', step: k })
-  })
-
-  // Rules 2 and 3 over the final envelope.
-  for (const info of infos.values()) {
-    if (!observedInk(info)) { out.drop.add(info.layer); continue }
-    const mask = maskOf(info)
-    if (mask) out.masks.set(info.layer, mask)
-  }
-  // A layer that never rasterised paints nothing: it ships nothing.
-  for (const l of shipped) if (!infos.has(l)) out.drop.add(l)
-  return out
 }
 
 /** Attributes that only show, hide or fade a target. */

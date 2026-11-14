@@ -76,10 +76,10 @@ const effectXml = (id: () => number, e: Effect) => {
     `<p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${e.behaviours(id).join('')}</p:childTnLst></p:cTn></p:par>`
 }
 
-/** One click step of the main sequence holding `effects` (concurrent). */
-const clickStep = (id: () => number, effects: Effect[]) => {
+/** One click step of the main sequence holding `effects` (concurrent); `start` "0" makes it autoplay with the slide. */
+const clickStep = (id: () => number, effects: Effect[], start: 'indefinite' | '0' = 'indefinite') => {
   const outer = id(), inner = id()
-  return `<p:par><p:cTn id="${outer}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>` +
+  return `<p:par><p:cTn id="${outer}" fill="hold"><p:stCondLst><p:cond delay="${start}"/></p:stCondLst><p:childTnLst>` +
     `<p:par><p:cTn id="${inner}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
     `${effects.map((e, i) => effectXml(id, i === 0 ? e : { ...e, node: e.node ?? 'withEffect' })).join('')}</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>`
 }
@@ -281,6 +281,40 @@ const dartEffect = (): Effect => ({
     `<p:animMotion path="M 0 0 L 0.5 0 L 0 0 E"><p:cBhvr>${ctn(id(), MOVER_REVEAL.dartMs, MOVER_REVEAL.dartAt)}${tgt(3)}${attrs('ppt_x', 'ppt_y')}</p:cBhvr></p:animMotion>`,
   ],
 })
+
+/** `moverReveal`'s ink, cover and dart, but autoplayed with the slide (the main sequence's group starts at delay 0). */
+export function autoplayRevealDeck(): Promise<Uint8Array> {
+  const id = ids()
+  return deck([{
+    bg: { solid: 'FFFFFF' },
+    shapes: [rect(2, 'Ink', 400, 300, 160, 120, HIDDEN_INK), rect(3, 'Cover', 360, 260, 240, 200, '336699')],
+    timingXml: timingXmlOf(mainSeqXml([clickStep(id, [dartEffect()], '0')])),
+  }])
+}
+
+/**
+ * One slide: the ink box (id 2) appears on click 1 under an opaque cover (id 3); clicking the cover (an
+ * interactive sequence) hides it. Only "click 1, then the trigger" shows the ink.
+ */
+export function triggerRevealDeck(): Promise<Uint8Array> {
+  const id = ids()
+  const main = clickStep(id, [appear(2)])
+  id() // The main sequence takes the next id (`mainSeqXml`).
+  return deck([{
+    bg: { solid: 'FFFFFF' },
+    shapes: [rect(2, 'Ink', 400, 300, 160, 120, HIDDEN_INK), rect(3, 'Cover', 360, 260, 240, 200, '336699')],
+    timingXml: timingXmlOf(mainSeqXml([main]) + interactiveSeq(id, 3, [disappear(3)])),
+  }])
+}
+
+/** One slide: two identical opaque boxes (ids 2 and 3, same place and fill) that both appear on click 1. */
+export function twinDeck(): Promise<Uint8Array> {
+  return deck([{
+    bg: { solid: 'FFFFFF' },
+    shapes: [rect(2, 'Twin A', 400, 300, 160, 120, HIDDEN_INK), rect(3, 'Twin B', 400, 300, 160, 120, HIDDEN_INK)],
+    timingXml: mainSequence([[appear(2), appear(3)]]),
+  }])
+}
 
 /** `moverReveal`'s cover dart, started by a click on a trigger button (id 4) instead of the main sequence. */
 export function triggerDartDeck(): Promise<Uint8Array> {
