@@ -400,6 +400,22 @@ describe('remote show on the driver (piece 4 Task 11)', () => {
     s.exit()
   })
 
+  it('budget at the Morph reserve: the target bundle still goes out, the Morph pair is not asked and fades (Task 12)', async () => {
+    const fd = animDoc(['fly', 'morphTo', 'fly'])
+    // 3 sends of room: over a track's reserve, under a Morph pair's, over a target's need.
+    Object.assign(fd.doc, { unitBudget: { room: () => 3, waitMs: () => 60_000 } })
+    const { s, log } = await show(fd, { from: 2 })
+    await run(1_500)
+    s.previous()
+    await run(300)
+    expect(s.state.slide).toBe(1)
+    expect(sent(fd, 'plan:')).toContain('plan:1')
+    expect(sent(fd, 'morph:')).toEqual([])
+    await run(600)
+    expect(log).toContain('diag:morph-late')
+    s.exit()
+  })
+
   it('Previous into a Morph slide fetches its own pair or fades at 500 ms', async () => {
     {
       const fd = animDoc(['fly', 'morphTo', 'fly'])

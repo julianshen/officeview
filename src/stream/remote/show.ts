@@ -428,7 +428,7 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     if (exited || tracks.has(key) || !show?.showTrack) return
     const b = held.get(i)
     const step = b?.plan.steps[k]
-    if (!b || !step || step.eligibility !== 'composited' || !step.track || !fetcher.room()) return
+    if (!b || !step || step.eligibility !== 'composited' || !step.track || !fetcher.room('track')) return
     const unit = unitOf[i]!
     const count = step.track.count
     const slot: TrackSlot = { index: i, ctl: new AbortController(), state: 'pending' }
@@ -473,7 +473,7 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     const have = pairs.get(key)
     if (have) return have
     // D13: under reduced motion a Morph plays as a fade; nothing is asked (and nothing charged).
-    if (exited || !show?.showMorph || motion === 'reduced' || !fetcher.room()) return undefined
+    if (exited || !show?.showMorph || motion === 'reduced' || !fetcher.room('morph')) return undefined
     const uf = unitOf[from], ut = unitOf[to]
     if (uf === undefined || ut === undefined) return undefined
     const target = bundleFor(to)

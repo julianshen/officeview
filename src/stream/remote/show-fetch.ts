@@ -17,7 +17,8 @@
  * the slide it stops on goes out within 250 ms. Prefetch waits until the
  * target is cached or has failed and the wanted set has been unchanged for
  * PREFETCH_SETTLE_MS, and is issued only while more than RESERVE requests
- * remain in the budget. A `rate-limited` refusal pauses issuing BACKOFF_MS;
+ * remain in the budget. A track or Morph pair (Task 12, `room(kind)`) needs more than TRACK_RESERVE / MORPH_RESERVE
+ * remaining and no target waiting to go out: under it the step plays `step-deferred`, the Morph fades. A `rate-limited` refusal pauses issuing BACKOFF_MS;
  * the session's log then holds every send until the server window has room.
  * Units no longer wanted, or requested at a replaced bucket, are aborted; a
  * result that still arrives is closed, never kept. Bitmaps live in an LRU of
@@ -74,8 +75,12 @@ export interface ShowFetcher {
    * target are evicted until they fit; `false` when they do not fit even then.
    */
   makeRoom(bytes: number): boolean
-  /** A charged request besides the fetcher's own (a track, a Morph pair) may go now: no rate pause, budget room left. */
-  room(): boolean
+  /**
+   * A charged request besides the fetcher's own (the current slide's `track`, a Morph pair) may go now: no rate pause,
+   * no target waiting to go out, and more budget left than that kind's reserve (strict order: target bundle > track >
+   * Morph pair > prefetch). Default `track`.
+   */
+  room(kind?: 'track' | 'morph'): boolean
   /** Such a request was refused `rate-limited`: every request pauses, as for the fetcher's own. */
   paused(): void
   /** Wanted set changes on every navigation: `[target, ...prefetch]`, target first. */
@@ -87,8 +92,14 @@ export interface ShowFetcher {
 }
 
 const WINDOW_MS = 60_000
-/** Requests kept back from prefetch for navigation targets. */
-const RESERVE = 8
+/**
+ * Budget kept back from prefetch: the reserve the navigation target, the current slide's tracks and Morph pairs share.
+ * Inside it the order is strict — target (needs any room), track (more than TRACK_RESERVE left), Morph pair (more than
+ * MORPH_RESERVE), prefetch (more than RESERVE) — so a run of animated slides starves the optional work first.
+ */
+export const RESERVE = 8
+export const MORPH_RESERVE = 4
+export const TRACK_RESERVE = 2
 /** A failed unit is not re-issued sooner; a `rate-limited` refusal pauses all issuing this long. */
 export const BACKOFF_MS = 2_000
 /** R14 pacing: a target is issued at once if no target went out this recently… */
@@ -159,6 +170,14 @@ export function createShowFetcher(io: ShowFetchIo, clock: ShowFetchClock, opts: 
   const errorCbs = new Set<(unit: number, code: RemoteErrorCode) => void>()
 
   const entryOf = (unit: number, key: string) => cache.get(`${unit}|${key}`)
+  /** Issued, not yet sent: their first send is spoken for. */
+  const unsentCount = () => { let n = 0; for (const req of inflight.values()) if (!req.charged) n++; return n }
+  /** The navigation target has yet to go out (paced, or out of budget): nothing optional may take its slot. */
+  const targetWaiting = () => {
+    const t = wanted[0]
+    if (t === undefined || !bucket) return false
+    return !entryOf(t, bucket.key) && !failed.has(t) && !retryAt.has(t) && !inflight.has(t)
+  }
 
   const schedule = (now: number, at: number) => {
     if (pendingWake && pendingWake.at <= at) return
@@ -270,8 +289,7 @@ export function createShowFetcher(io: ShowFetchIo, clock: ShowFetchClock, opts: 
     }
     const settled = (unit: number) => !!entryOf(unit, key) || failed.has(unit) || retryAt.has(unit)
     const outOfBudget = (reserve: number) => {
-      let unsent = 0 // issued, not yet sent: their first send is spoken for
-      for (const req of inflight.values()) if (!req.charged) unsent++
+      const unsent = unsentCount()
       if (shared.room(unsent) > reserve) return false
       const ms = shared.waitMs(unsent + reserve)
       // Shared: requests waiting in the session free room without telling the fetcher, so look again.
@@ -313,11 +331,9 @@ export function createShowFetcher(io: ShowFetchIo, clock: ShowFetchClock, opts: 
     bundle(unit) { return lookup(unit, (e) => !!e.bundle, (e) => e.bundle!.decodedBytes)?.bundle },
     bundleBytes: heldBytes,
     makeRoom: (bytes) => !disposed && trim(bytes),
-    room() {
-      if (disposed || clock.now() < pausedUntil) return false
-      let unsent = 0
-      for (const req of inflight.values()) if (!req.charged) unsent++
-      return shared.room(unsent) > 0
+    room(kind = 'track') {
+      if (disposed || clock.now() < pausedUntil || targetWaiting()) return false
+      return shared.room(unsentCount()) > (kind === 'morph' ? MORPH_RESERVE : TRACK_RESERVE)
     },
     paused() {
       if (disposed) return
