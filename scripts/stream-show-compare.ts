@@ -21,9 +21,11 @@
  * - A `composited` step (and a composited Morph, D11) is sampled at its keyframe times only: the track frame `i`
  *   the stage shows mid-interval (`(i + ½)/15` s) against the local frame at the time it depicts
  *   (`trackTimes(dur, count)[i]`; the end frame at the step's end).
- * - A slide the server plays as its still (refused: `still`, `show-limits`, `show-plan-timeout`, …) is compared as
- *   a still: the unit image against the local slide settled after its last click, reported with its refusal code
- *   (`status: 'still'`), never counted as a parity failure and never skipped.
+ * - A slide shown as its piece-3 unit image (unanimated, D5; or refused: `still`, `show-limits`,
+ *   `show-plan-timeout`, …) is compared as a still: the unit image against the local slide settled after its last
+ *   click, with the same tolerance. It is reported as `unit-still` in its own section (`unitStills`) and kept
+ *   out of the show-parity exit status, because the unchanged Stage 1–3 unit path draws it (controller ruling,
+ *   Task 14). It is never skipped.
  * - Triggers are not fired: a `trigger-cut` effect is exempt from pixels by construction and counted in clicks.
  * - **Marks (D24):** `--marks off` compares every sample; `--marks fixed` compares the 0 % and 100 % samples and
  *   every sample of a non-moving step (a step is moving when, at one of its samples, a local target's transform
@@ -164,7 +166,13 @@ export interface FrameOutcome {
   kind: 'layers' | 'composited' | 'morph-composited' | 'still' | 'transition'
   rows: string[]
   /** `unmatched`: a local step the streamed slide does not have (a structure difference, reported there). */
-  status: 'pass' | 'fail' | 'still' | 'skipped-mark' | 'unmatched'
+  /**
+   * `unit-still` (controller ruling, Task 14): a piece-3 unit image (an unanimated slide, or the still of a refused
+   * animated slide). It is drawn by the unchanged Stage 1–3 unit path, so it is reported in its own section and
+   * kept out of the show-parity status. The tolerance is the same; `unitStill.pass` records the verdict.
+   */
+  status: 'pass' | 'fail' | 'unit-still' | 'skipped-mark' | 'unmatched'
+  unitStill?: { pass: boolean; source: string }
   meanAbs: number
   rowMax: number
   tol: Tolerance
@@ -733,7 +741,12 @@ export async function compareStreamDeck(deck: string, o: { marks: MarkSpec; rows
           out.hash = { local: fnv(a.img.data), streamed: fnv(b.data) }
           const detail = res.reason ?? `meanAbs ${res.meanAbs.toFixed(4)} rowMax ${res.rowMax.toFixed(4)} (row ${res.worstRow})`
           if (o.marks.kind !== 'off' && anyMoving && smp.pct !== 0 && smp.pct !== 100) { outcomes.push({ ...out, status: 'skipped-mark', meanAbs: res.meanAbs, rowMax: res.rowMax, detail: `mid-motion mark (D24): ${detail}` }); continue }
-          if (smp.kind === 'still' && stills.some((x) => x.slide === si + 1)) { outcomes.push({ ...out, status: 'still', meanAbs: res.meanAbs, rowMax: res.rowMax, detail: `still (${stills.find((x) => x.slide === si + 1)?.code ?? 'still'}): ${detail}` }); continue }
+          if (smp.kind === 'still') {
+            const source = stills.find((x) => x.slide === si + 1)?.code
+            const src = source && source !== 'not-anim' ? `refused:${source}` : 'unanimated'
+            outcomes.push({ ...out, status: 'unit-still', unitStill: { pass: res.pass, source: src }, meanAbs: res.meanAbs, rowMax: res.rowMax, detail: `unit still (${src}): ${detail}` })
+            continue
+          }
           outcomes.push({ ...out, status: res.pass ? 'pass' : 'fail', meanAbs: res.meanAbs, rowMax: res.rowMax, detail })
         }
       }
@@ -812,6 +825,8 @@ export async function runStreamCompareCli(args: string[]): Promise<number> {
     return { family, meanAbs: rnd(w.meanAbs * 1e3) / 1e3, rowMax: rnd(w.rowMax * 1e3) / 1e3, slides: w.slides, over }
   })
   // 2. Parity, per deck and mark pass.
+  /** Unit stills (pre-existing unit path): reported, excluded from the show-parity exit status (controller ruling). */
+  const unitStills: Array<{ deck: string; marks: string; slide: number; source: string; pass: boolean; meanAbs: number; rowMax: number; tol: Tolerance }> = []
   const results: Array<Omit<StreamDeckResult, 'outcomes'> & { frames: Record<string, number>; worst?: FrameOutcome; failures: FrameOutcome[]; stillFrames: FrameOutcome[]; error?: string }> = []
   for (const d of decks) {
     for (const mk of opts.marks) {
@@ -827,7 +842,8 @@ export async function runStreamCompareCli(args: string[]): Promise<number> {
         const compared = r.outcomes.filter((x) => x.status === 'pass' || x.status === 'fail')
         const worst = compared.sort((a, b) => b.rowMax - a.rowMax)[0]
         const { outcomes: _o, ...rest } = r
-        results.push({ ...rest, frames, ...(worst ? { worst } : {}), failures, stillFrames: r.outcomes.filter((x) => x.status === 'still') })
+        results.push({ ...rest, frames, ...(worst ? { worst } : {}), failures, stillFrames: r.outcomes.filter((x) => x.status === 'unit-still') })
+        for (const x of r.outcomes) if (x.status === 'unit-still') unitStills.push({ deck: d, marks: mk, slide: x.slide, source: x.unitStill!.source, pass: x.unitStill!.pass, meanAbs: x.meanAbs, rowMax: x.rowMax, tol: x.tol })
         console.log(`${d} [marks ${mk}]: ${JSON.stringify(frames)} structure ${r.structure.equal ? 'equal' : r.structure.equalExceptStills ? 'equal except stills' : 'DIFFERENT'} fallback ${r.fallback.composited}/${r.fallback.steps} (${Math.round(performance.now() - t0)} ms)`)
         for (const x of failures) console.log(`  FAIL ${x.slide}-${x.step}-${x.pct} ${x.kind} ${x.detail} tol ${x.tol.meanAbs.toFixed(4)}/${x.tol.rowMax.toFixed(4)}`)
       } catch (e) {
@@ -837,7 +853,9 @@ export async function runStreamCompareCli(args: string[]): Promise<number> {
       }
     }
   }
-  const out = { generated: `bun scripts/stream-show-compare.ts ${args.join(' ')}`, approx: TOLERANCE_APPROX, families, widening: wrows, results }
+  console.log('unit stills (pre-existing unit path; not in the show-parity status):')
+  for (const u of unitStills) console.log(`  ${u.pass ? 'pass' : 'FAIL'} ${u.deck} [marks ${u.marks}] slide ${u.slide} ${u.source}: meanAbs ${u.meanAbs.toFixed(4)} rowMax ${u.rowMax.toFixed(4)} tol ${u.tol.meanAbs.toFixed(4)}/${u.tol.rowMax.toFixed(4)}`)
+  const out = { generated: `bun scripts/stream-show-compare.ts ${args.join(' ')}`, approx: TOLERANCE_APPROX, families, widening: wrows, unitStills, results }
   // Only the full run is the published record; a single deck prints.
   if (opts.deck === 'all') writeFileSync(COMPARE_OUT, `${JSON.stringify(out, null, 2)}\n`)
   return failed ? 1 : 0

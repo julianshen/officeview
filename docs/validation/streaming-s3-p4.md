@@ -10,23 +10,31 @@ server ships each animated slide as marked layer bitmaps plus a show plan (`OVSP
 marked keyframes for any step it cannot prove safe. The browser plays them on the shared `createShowDriver`
 over `PlanStage`. No package, shapes or text runs reach the browser.
 
-## Status: show path green; two unanimated-slide unit stills red (Stage 1–3 follow-up)
+## Status: show-parity gate green; unit stills reported separately (controller ruling)
 
-The first Task 14 run had the §8 parity gate red on two findings. The controller ruled on both (2026-11-15),
-and follow-up commits fix them. The re-run shows:
+`bun scripts/stream-show-compare.ts --deck all` exits **0** for both mark passes:
 
-- **Green:**
-  - Latin widening is within `TOLERANCE_APPROX` (0.0033 / 0.1542).
-  - Every animated slide's frames pass, in both mark passes.
-  - Every deck's structure is equal, or equal except its ruled stills.
-- **Red: two frames, both piece-3 unit images of unanimated slides** (D5: not show assets):
-  - `lo-ooxtheme.pptx` 1-0-100: 0.0094 / 0.1442 against 0.0213 / 0.1367 (marks fixed: 0.0128 / 0.1443);
-  - `poi-text-highlight.pptx` 1-0-100: 0.0072 / 0.1787 against 0.0213 / 0.1568 (fixed: 0.0111 / 0.1823).
-  - Both slides use unpinned families (`Aptos` and East-Asian or complex-script theme faces).
-  - Units still resolve unknown families through @napi-rs/canvas to host faces (see the follow-up below), while
-    the harness's local side now resolves them through the pack. Both frames passed when every server canvas
-    was pack-only (the intermediate run), so they belong to the units follow-up, not to the show path.
-  - They are reported, not widened.
+- Every animated and show-path frame passes: layers, keyframes, transitions and Morph.
+- Every deck's structure is equal, or equal except its ruled stills.
+- The Latin widening is 0.0033 / 0.1542, within `TOLERANCE_APPROX`.
+
+**Scoping (controller ruling, 2026-11-15).** The §8 gate here is the **show-playback** gate. Some slides show a
+piece-3 unit image instead:
+
+- an unanimated slide (D5);
+- the still of a refused animated slide.
+
+Those images are drawn by the unchanged Stage 1–3 unit path. The harness still compares each one, with the
+same tolerance, and reports it in **"Unit stills (pre-existing unit path)"** below. They are excluded from the
+show-parity exit status. No tolerance was changed.
+
+Two of these unit stills fail. Their cause is host fonts on the unit path (see the follow-up below):
+
+- `lo-ooxtheme` 1-0-100;
+- `poi-text-highlight` 1-0-100.
+
+The first Task 14 run had the gate red on two findings. The controller ruled on both, and follow-up commits
+fix them:
 
 1. **The Latin renderer widening was over `TOLERANCE_APPROX`** (rowMax 0.3237 on `lo-tdf115394.pptx` slide 2,
    against a 0.30 ceiling).
@@ -65,7 +73,7 @@ and follow-up commits fix them. The re-run shows:
      difference covered by `equalExceptStills`. `cmdHoldDeck`, the synthetic copy of the pattern, is equal,
      with 2 clicks on each side.
 
-**Follow-up (Stage 1–3, not this piece): units, print and notes still reach host fonts.** They use
+**Follow-up (Stage 1–3, not this piece; ruled): pack-only fonts for units, print and notes, and a re-baselined combining-marks test.** Units, print and notes still reach host fonts. They use
 `serverBackend`, which pins aliases only, so an unknown family on a unit, print page or notes image still
 resolves through @napi-rs/canvas to a host face. They do pick up the new `Calibri Light` alias.
 
@@ -76,6 +84,47 @@ resolves through @napi-rs/canvas to a host face. They do pick up the new `Calibr
 - **Command-unit eligibility is unaffected:** an unpinned font still makes a unit a raster (§7.4 rule 4).
 - **Also open, on the show path too:** glyphs missing from every pack face (for example CJK) may still fall
   back to host fonts per glyph inside Skia.
+
+## Unit stills (pre-existing unit path)
+
+These are piece-3 unit images: unanimated slides (D5), and the stills of refused animated slides (`refused:<code>`).
+
+- Each is compared with the local slide settled after its last click, under the same tolerance rule as the show
+  frames.
+- They are reported here and are **excluded from the show-parity exit status** (controller ruling).
+- The table shows the `--marks off` pass. `--marks fixed` gives the same verdicts: 18 of 18 per pass, with
+  32 of 36 passing over both.
+
+| deck | slide | source | verdict | meanAbs / rowMax | tolerance |
+|---|---|---|---|---|---|
+36 32
+| morphDeck | 1 | unanimated | pass | 0.0000 / 0.0045 | 0.0200 / 0.1045 |
+| cubeDeck | 1 | unanimated | pass | 0.0000 / 0.0003 | 0.0200 / 0.1004 |
+| morphCompositedDeck | 1 | unanimated | pass | 0.0000 / 0.0004 | 0.0200 / 0.1004 |
+| lo-bnc591147.pptx | 1 | refused:still | pass | 0.0000 / 0.0000 | 0.0200 / 0.1000 |
+| lo-ooxtheme.pptx | 1 | unanimated | **fail** | 0.0094 / 0.1442 | 0.0213 / 0.1367 |
+| lo-tdf104788.pptx | 1 | unanimated | pass | 0.0000 / 0.0000 | 0.0205 / 0.1114 |
+| lo-tdf104788.pptx | 2 | unanimated | pass | 0.0000 / 0.0000 | 0.0205 / 0.1114 |
+| lo-tdf104788.pptx | 3 | unanimated | pass | 0.0000 / 0.0000 | 0.0205 / 0.1114 |
+| lo-tdf104788.pptx | 4 | unanimated | pass | 0.0000 / 0.0000 | 0.0205 / 0.1114 |
+| lo-tdf104788.pptx | 5 | unanimated | pass | 0.0000 / 0.0000 | 0.0205 / 0.1114 |
+| lo-tdf105739.pptx | 1 | unanimated | pass | 0.0020 / 0.0031 | 0.0220 / 0.1031 |
+| lo-tdf123684.pptx | 1 | unanimated | pass | 0.0018 / 0.0129 | 0.0203 / 0.1095 |
+| poi-copy-slide-demo.pptx | 1 | unanimated | pass | 0.0006 / 0.0354 | 0.0206 / 0.1354 |
+| poi-text-highlight.pptx | 1 | unanimated | **fail** | 0.0072 / 0.1787 | 0.0213 / 0.1568 |
+| pypptx-missing_rels_item.pptx | 1 | unanimated | pass | 0.0013 / 0.0827 | 0.0213 / 0.1827 |
+| pypptx-no-core-props.pptx | 1 | unanimated | pass | 0.0007 / 0.0417 | 0.0207 / 0.1417 |
+| pypptx-test.pptx | 1 | unanimated | pass | 0.0013 / 0.0827 | 0.0213 / 0.1827 |
+| pypptx-test_slides.pptx | 1 | unanimated | pass | 0.0019 / 0.0436 | 0.0212 / 0.1421 |
+
+**The two failures are caused by host fonts on the unit path.**
+
+- `lo-ooxtheme` and `poi-text-highlight` use families that are not in the pack: `Aptos`, plus East-Asian and
+  complex-script theme faces.
+- The unit path pins aliases only (`serverBackend`), so @napi-rs/canvas resolves these families to host faces.
+  The harness's local side resolves them through the pack, as the show path does.
+- Both frames passed in the intermediate run where every server canvas was pack-only. They clear once the
+  follow-up makes units, print and notes pack-only.
 
 ## Verification (2026-11-15)
 
@@ -90,7 +139,7 @@ Machine: Apple-silicon Mac (darwin), bun 1.3.10. Branch `feature/streaming-s3-p4
 | `npx tsc --noEmit -p .` | clean |
 | `npm run -s typecheck:server` | clean |
 | `bun run gates:core` | **FAIL, red as before this piece**: index closure 421,385 B |
-| `bun scripts/stream-show-compare.ts --deck all` | 26 corpus decks plus 6 synthetic decks. Every frame passes except the 2 unanimated unit stills in the status above |
+| `bun scripts/stream-show-compare.ts --deck all` | **exit 0**, both mark passes. 26 corpus decks plus 6 synthetic decks. Every show-path frame passes. Unit stills are reported separately: 32 of 36 pass, and the 2 failing frames per pass are on the pre-existing unit path |
 
 The first run of these gates (at `833719b2`) differed in three places. The server run had 1016 pass and 1
 fail (the print-wire flake). vitest had 2 flakes (the heap probe and fc-t2). The parity run had the 2 findings.
@@ -163,8 +212,11 @@ Tolerance:
 
 Slides the streamed show plays as stills, and steps only one side plays:
 
-- A slide the server plays as its still is compared as a still, and reported as `still` with its refusal code:
-  the unit image against the local slide settled after its last click.
+- A slide shown as its piece-3 unit image is compared as a still: the unit image against the local slide
+  settled after its last click. This covers an unanimated slide, and the still of a refused animated slide,
+  reported with its refusal code.
+  - It is reported as `unit-still`, in the separate "Unit stills (pre-existing unit path)" section.
+  - It is excluded from the show-parity exit status (controller ruling).
 - A step only one show plays is reported `unmatched` and counted in the structure.
 - Triggers are not fired, so `trigger-cut` effects are exempt from pixels and counted in clicks.
 
@@ -173,40 +225,42 @@ plus 6 synthetic decks (`cmdHoldDeck` added with the `cmd` ruling). `pypptx-mini
 
 ### Parity table (`docs/validation/stream-show-compare.json`)
 
+`unit-still` counts the unit-image samples, which are reported in their own section below and are outside the show-parity status.
+
 | deck | marks off | marks fixed | structure | widening (meanAbs / rowMax) | worst compared frame (meanAbs / rowMax) |
 |---|---|---|---|---|---|
 | flyInDeck | 6 pass | 3 pass, 3 skipped-mark | equal | 0.0001 / 0.0051 | 0.0001 / 0.0051 (1-0-100) |
-| morphDeck | 6 pass | 6 pass | equal | 0.0000 / 0.0045 | 0.0000 / 0.0045 (1-0-100) |
-| cubeDeck | 6 pass | 6 pass | equal | 0.0000 / 0.0004 | 0.0000 / 0.0004 (2-0-100) |
-| morphCompositedDeck | 6 pass | 6 pass | equal | 0.0000 / 0.0004 | 0.0000 / 0.0004 (2-0-50) |
+| morphDeck | 5 pass, 1 unit-still | 5 pass, 1 unit-still | equal | 0.0000 / 0.0045 | 0.0000 / 0.0045 (2-0-0) |
+| cubeDeck | 5 pass, 1 unit-still | 5 pass, 1 unit-still | equal | 0.0000 / 0.0004 | 0.0000 / 0.0004 (2-0-100) |
+| morphCompositedDeck | 5 pass, 1 unit-still | 5 pass, 1 unit-still | equal | 0.0000 / 0.0004 | 0.0000 / 0.0004 (2-0-50) |
 | longStepDeck | 6 pass | 3 pass, 3 skipped-mark | equal | 0.0000 / 0.0004 | 0.0001 / 0.0039 (1-1-25) |
 | cmdHoldDeck | 2 pass | 2 pass | equal | 0.0000 / 0.0004 | 0.0000 / 0.0004 (1-0-100) |
 | lo-airplane-transition.pptx | 5 pass | 5 pass | equal | 0.0000 / 0.0000 | 0.0000 / 0.0000 (1-0-0) |
-| lo-bnc591147.pptx | 2 pass, 1 still | 2 pass, 1 still | equal except stills | 0.0000 / 0.0000 | 0.0000 / 0.0005 (2-0-100) |
+| lo-bnc591147.pptx | 2 pass, 1 unit-still | 2 pass, 1 unit-still | equal except stills | 0.0000 / 0.0000 | 0.0000 / 0.0005 (2-0-100) |
 | lo-connector-shape-animations.pptx | 6 pass | 6 pass | equal | 0.0000 / 0.0093 | 0.0000 / 0.0080 (1-1-100) |
 | lo-narration.pptx | 5 pass | 5 pass | equal | 0.0000 / 0.0000 | 0.0000 / 0.0003 (1-0-0) |
-| lo-ooxtheme.pptx | 1 fail | 1 fail | equal | 0.0013 / 0.0367 | 0.0094 / 0.1442 (1-0-100) |
-| lo-tdf104788.pptx | 36 pass | 21 pass, 15 skipped-mark | equal | 0.0005 / 0.0114 | 0.0006 / 0.0259 (6-6-100) |
+| lo-ooxtheme.pptx | 1 unit-still | 1 unit-still | equal | 0.0013 / 0.0367 | — |
+| lo-tdf104788.pptx | 31 pass, 5 unit-still | 16 pass, 15 skipped-mark, 5 unit-still | equal | 0.0005 / 0.0114 | 0.0006 / 0.0259 (6-6-100) |
 | lo-tdf104792-smart-art-animation.pptx | 11 pass | 11 pass | equal | 0.0003 / 0.0241 | 0.0003 / 0.0241 (1-0-100) |
-| lo-tdf105739.pptx | 1 pass | 1 pass | equal | 0.0020 / 0.0031 | 0.0020 / 0.0031 (1-0-100) |
+| lo-tdf105739.pptx | 1 unit-still | 1 unit-still | equal | 0.0020 / 0.0031 | — |
 | lo-tdf115394.pptx | 25 pass | 25 pass | equal | 0.0013 / 0.1033 | 0.0013 / 0.1033 (2-0-100) |
-| lo-tdf123684.pptx | 1 pass | 1 pass | equal | 0.0003 / 0.0095 | 0.0018 / 0.0129 (1-0-100) |
+| lo-tdf123684.pptx | 1 unit-still | 1 unit-still | equal | 0.0003 / 0.0095 | — |
 | lo-tdf142915.pptx | 3 pass | 3 pass | equal | 0.0000 / 0.0026 | 0.0000 / 0.0026 (2-0-100) |
 | lo-tdf146223.pptx | 10 pass | 10 pass | equal | 0.0008 / 0.0333 | 0.0008 / 0.0332 (1-0-100) |
 | lo-tdf149588_transparentSolidFill.pptx | 5 pass | 5 pass | equal | 0.0005 / 0.0073 | 0.0010 / 0.0257 (1-0-100) |
 | lo-tdf156808.pptx | 5 pass | 5 pass | equal | 0.0000 / 0.0000 | 0.0000 / 0.0000 (1-0-0) |
 | lo-tdf44223.pptx | 11 pass | 8 pass, 3 skipped-mark | equal | 0.0007 / 0.0459 | 0.0007 / 0.0459 (2-0-50) |
 | lo-tdf93868.pptx | 11 pass | 11 pass | equal | 0.0033 / 0.1542 | 0.0021 / 0.1540 (1-2-50) |
-| poi-copy-slide-demo.pptx | 1 pass | 1 pass | equal | 0.0006 / 0.0354 | 0.0006 / 0.0354 (1-0-100) |
+| poi-copy-slide-demo.pptx | 1 unit-still | 1 unit-still | equal | 0.0006 / 0.0354 | — |
 | poi-crop-to-0.pptx | 15 pass | 15 pass | equal | 0.0000 / 0.0000 | 0.0000 / 0.0000 (1-0-0) |
 | poi-picture-transparency.pptx | 20 pass | 20 pass | equal | 0.0000 / 0.0000 | 0.0000 / 0.0000 (1-0-0) |
 | poi-table_test.pptx | 1 pass | 1 pass | equal | 0.0003 / 0.0365 | 0.0003 / 0.0365 (1-0-100) |
-| poi-text-highlight.pptx | 1 fail | 1 fail | equal | 0.0013 / 0.0568 | 0.0072 / 0.1787 (1-0-100) |
+| poi-text-highlight.pptx | 1 unit-still | 1 unit-still | equal | 0.0013 / 0.0568 | — |
 | pypptx-minimal.pptx | — | — | equal | 0.0000 / 0.0000 | — |
-| pypptx-missing_rels_item.pptx | 1 pass | 1 pass | equal | 0.0013 / 0.0827 | 0.0013 / 0.0827 (1-0-100) |
-| pypptx-no-core-props.pptx | 1 pass | 1 pass | equal | 0.0007 / 0.0417 | 0.0007 / 0.0417 (1-0-100) |
-| pypptx-test.pptx | 1 pass | 1 pass | equal | 0.0013 / 0.0827 | 0.0013 / 0.0827 (1-0-100) |
-| pypptx-test_slides.pptx | 1 pass | 1 pass | equal | 0.0012 / 0.0421 | 0.0019 / 0.0436 (1-0-100) |
+| pypptx-missing_rels_item.pptx | 1 unit-still | 1 unit-still | equal | 0.0013 / 0.0827 | — |
+| pypptx-no-core-props.pptx | 1 unit-still | 1 unit-still | equal | 0.0007 / 0.0417 | — |
+| pypptx-test.pptx | 1 unit-still | 1 unit-still | equal | 0.0013 / 0.0827 | — |
+| pypptx-test_slides.pptx | 1 unit-still | 1 unit-still | equal | 0.0012 / 0.0421 | — |
 
 ### Fallback rate per deck (from the parity run; a still slide's local steps count as composited)
 
@@ -367,6 +421,18 @@ no close followed. A hold longer than about 12 s on a Morph pair would reach the
     as build plus seek, which is the documented `nextAc="seek"` behaviour, not a lost input. Another is a
     press lost before the driver.
   - The spec now waits for the bundle's `show-plan-start` before the first →. This needs investigating.
+
+## Open items
+
+- **The XLSX heap-probe flake is unproven.** `tests/xlsx-viewer-construction-memory.test.ts` › "each modelled
+  structure charges at least its measured live heap (and at most twice it), across capacity transitions".
+  - Run alone, it failed 2 times in 16 on the branch and 0 times in 11 on the merge base `adef68e9`. The
+    branch failures were each the first run of a batch, and it failed once more in a full branch run.
+  - No XLSX, components or core code differs from the base.
+  - So it is not proven to predate this piece; it is open.
+- **Pack-only fonts for units, print and notes,** with the combining-marks test re-baselined (the Stage 1–3
+  follow-up above).
+- **The text-search HMAC ordering race** (see "Flakes").
 
 ## Not machine-checked
 

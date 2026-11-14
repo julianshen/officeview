@@ -431,6 +431,476 @@
       "rowMax": 0.04210375816993464
     }
   ],
+  "unitStills": [
+    {
+      "deck": "morphDeck",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.00004833310639070443,
+      "rowMax": 0.004497549019607843,
+      "tol": {
+        "meanAbs": 0.020048333106390703,
+        "rowMax": 0.10449754901960785
+      }
+    },
+    {
+      "deck": "morphDeck",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0038857400599128537,
+      "rowMax": 0.006870915032679739,
+      "tol": {
+        "meanAbs": 0.020048333106390703,
+        "rowMax": 0.10449754901960785
+      }
+    },
+    {
+      "deck": "cubeDeck",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 6.35439360929557e-7,
+      "rowMax": 0.0002777777777777778,
+      "tol": {
+        "meanAbs": 0.020000975853304286,
+        "rowMax": 0.10039215686274511
+      }
+    },
+    {
+      "deck": "cubeDeck",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0029982071532316627,
+      "rowMax": 0.005142973856209151,
+      "tol": {
+        "meanAbs": 0.020000975853304286,
+        "rowMax": 0.10039215686274511
+      }
+    },
+    {
+      "deck": "morphCompositedDeck",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0000026892701525054465,
+      "rowMax": 0.0003921568627450981,
+      "tol": {
+        "meanAbs": 0.020002689270152505,
+        "rowMax": 0.10039215686274511
+      }
+    },
+    {
+      "deck": "morphCompositedDeck",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0036657135076252722,
+      "rowMax": 0.006764705882352942,
+      "tol": {
+        "meanAbs": 0.020002689270152505,
+        "rowMax": 0.10039215686274511
+      }
+    },
+    {
+      "deck": "lo-bnc591147.pptx",
+      "marks": "off",
+      "slide": 1,
+      "source": "refused:still",
+      "pass": true,
+      "meanAbs": 0,
+      "rowMax": 0,
+      "tol": {
+        "meanAbs": 0.02,
+        "rowMax": 0.1
+      }
+    },
+    {
+      "deck": "lo-bnc591147.pptx",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "refused:still",
+      "pass": true,
+      "meanAbs": 0.0038800381263616557,
+      "rowMax": 0.006830065359477124,
+      "tol": {
+        "meanAbs": 0.02,
+        "rowMax": 0.1
+      }
+    },
+    {
+      "deck": "lo-ooxtheme.pptx",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": false,
+      "meanAbs": 0.009424870642701526,
+      "rowMax": 0.14416666666666667,
+      "tol": {
+        "meanAbs": 0.021268378097766886,
+        "rowMax": 0.13666360294117647
+      }
+    },
+    {
+      "deck": "lo-ooxtheme.pptx",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": false,
+      "meanAbs": 0.012842584082244009,
+      "rowMax": 0.14428615196078431,
+      "tol": {
+        "meanAbs": 0.021268378097766886,
+        "rowMax": 0.13666360294117647
+      }
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0,
+      "rowMax": 0,
+      "tol": {
+        "meanAbs": 0.020516754039578793,
+        "rowMax": 0.11136846405228759
+      }
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "marks": "off",
+      "slide": 2,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0,
+      "rowMax": 0,
+      "tol": {
+        "meanAbs": 0.020516754039578793,
+        "rowMax": 0.11136846405228759
+      }
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "marks": "off",
+      "slide": 3,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0,
+      "rowMax": 0,
+      "tol": {
+        "meanAbs": 0.020516754039578793,
+        "rowMax": 0.11136846405228759
+      }
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "marks": "off",
+      "slide": 4,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0,
+      "rowMax": 0,
+      "tol": {
+        "meanAbs": 0.020516754039578793,
+        "rowMax": 0.11136846405228759
+      }
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "marks": "off",
+      "slide": 5,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0,
+      "rowMax": 0,
+      "tol": {
+        "meanAbs": 0.020516754039578793,
+        "rowMax": 0.11136846405228759
+      }
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0032054057734204793,
+      "rowMax": 0.006299019607843137,
+      "tol": {
+        "meanAbs": 0.020516754039578793,
+        "rowMax": 0.11136846405228759
+      }
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "marks": "fixed",
+      "slide": 2,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0032054057734204793,
+      "rowMax": 0.006299019607843137,
+      "tol": {
+        "meanAbs": 0.020516754039578793,
+        "rowMax": 0.11136846405228759
+      }
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "marks": "fixed",
+      "slide": 3,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0032054057734204793,
+      "rowMax": 0.006299019607843137,
+      "tol": {
+        "meanAbs": 0.020516754039578793,
+        "rowMax": 0.11136846405228759
+      }
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "marks": "fixed",
+      "slide": 4,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0032054057734204793,
+      "rowMax": 0.006299019607843137,
+      "tol": {
+        "meanAbs": 0.020516754039578793,
+        "rowMax": 0.11136846405228759
+      }
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "marks": "fixed",
+      "slide": 5,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0032054057734204793,
+      "rowMax": 0.006299019607843137,
+      "tol": {
+        "meanAbs": 0.020516754039578793,
+        "rowMax": 0.11136846405228759
+      }
+    },
+    {
+      "deck": "lo-tdf105739.pptx",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0020494749114923745,
+      "rowMax": 0.003057598039215686,
+      "tol": {
+        "meanAbs": 0.022049474911492374,
+        "rowMax": 0.10305759803921569
+      }
+    },
+    {
+      "deck": "lo-tdf105739.pptx",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.004739625885076253,
+      "rowMax": 0.008183210784313727,
+      "tol": {
+        "meanAbs": 0.022049474911492374,
+        "rowMax": 0.10305759803921569
+      }
+    },
+    {
+      "deck": "lo-tdf123684.pptx",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0017951729302832244,
+      "rowMax": 0.012925857843137253,
+      "tol": {
+        "meanAbs": 0.020335907713779956,
+        "rowMax": 0.10947610294117648
+      }
+    },
+    {
+      "deck": "lo-tdf123684.pptx",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.004171934572440087,
+      "rowMax": 0.016240808823529414,
+      "tol": {
+        "meanAbs": 0.020335907713779956,
+        "rowMax": 0.10947610294117648
+      }
+    },
+    {
+      "deck": "poi-copy-slide-demo.pptx",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0005711720452069716,
+      "rowMax": 0.035431985294117646,
+      "tol": {
+        "meanAbs": 0.020571172045206972,
+        "rowMax": 0.13543198529411765
+      }
+    },
+    {
+      "deck": "poi-copy-slide-demo.pptx",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.004535215822440087,
+      "rowMax": 0.04084252450980392,
+      "tol": {
+        "meanAbs": 0.020571172045206972,
+        "rowMax": 0.13543198529411765
+      }
+    },
+    {
+      "deck": "poi-text-highlight.pptx",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": false,
+      "meanAbs": 0.0072149586397058825,
+      "rowMax": 0.1786703431372549,
+      "tol": {
+        "meanAbs": 0.021277024611928104,
+        "rowMax": 0.15683517156862745
+      }
+    },
+    {
+      "deck": "poi-text-highlight.pptx",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": false,
+      "meanAbs": 0.01111063027641612,
+      "rowMax": 0.18231004901960784,
+      "tol": {
+        "meanAbs": 0.021277024611928104,
+        "rowMax": 0.15683517156862745
+      }
+    },
+    {
+      "deck": "pypptx-missing_rels_item.pptx",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.001279224537037037,
+      "rowMax": 0.08272467320261438,
+      "tol": {
+        "meanAbs": 0.02127922453703704,
+        "rowMax": 0.18272467320261437
+      }
+    },
+    {
+      "deck": "pypptx-missing_rels_item.pptx",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.005149668663761801,
+      "rowMax": 0.08838235294117648,
+      "tol": {
+        "meanAbs": 0.02127922453703704,
+        "rowMax": 0.18272467320261437
+      }
+    },
+    {
+      "deck": "pypptx-no-core-props.pptx",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0007456143336964415,
+      "rowMax": 0.0417156862745098,
+      "tol": {
+        "meanAbs": 0.02074561433369644,
+        "rowMax": 0.1417156862745098
+      }
+    },
+    {
+      "deck": "pypptx-no-core-props.pptx",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0046113323801742915,
+      "rowMax": 0.04448120915032679,
+      "tol": {
+        "meanAbs": 0.02074561433369644,
+        "rowMax": 0.1417156862745098
+      }
+    },
+    {
+      "deck": "pypptx-test.pptx",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.001279224537037037,
+      "rowMax": 0.08272467320261438,
+      "tol": {
+        "meanAbs": 0.02127922453703704,
+        "rowMax": 0.18272467320261437
+      }
+    },
+    {
+      "deck": "pypptx-test.pptx",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.005149668663761801,
+      "rowMax": 0.08838235294117648,
+      "tol": {
+        "meanAbs": 0.02127922453703704,
+        "rowMax": 0.18272467320261437
+      }
+    },
+    {
+      "deck": "pypptx-test_slides.pptx",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.001923735929557008,
+      "rowMax": 0.043611111111111114,
+      "tol": {
+        "meanAbs": 0.021230925472040668,
+        "rowMax": 0.14210375816993465
+      }
+    },
+    {
+      "deck": "pypptx-test_slides.pptx",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.005511591094771242,
+      "rowMax": 0.04734885620915033,
+      "tol": {
+        "meanAbs": 0.021230925472040668,
+        "rowMax": 0.14210375816993465
+      }
+    }
+  ],
   "results": [
     {
       "deck": "flyInDeck",
@@ -628,31 +1098,60 @@
         "1:transition-approximate"
       ],
       "frames": {
-        "pass": 6
+        "unit-still": 1,
+        "pass": 5
       },
       "worst": {
-        "slide": 1,
+        "slide": 2,
         "step": 0,
-        "pct": 100,
+        "pct": 0,
         "ms": 0,
         "streamedMs": 0,
-        "kind": "still",
-        "rows": [],
+        "kind": "transition",
+        "rows": [
+          "transition:p159:morph"
+        ],
         "tol": {
-          "meanAbs": 0.020048333106390703,
-          "rowMax": 0.10449754901960785
+          "meanAbs": 0.08,
+          "rowMax": 0.3
         },
         "hash": {
           "local": "085e85b4",
-          "streamed": "b08002cd"
+          "streamed": "f5fb35f6"
         },
         "status": "pass",
-        "meanAbs": 0.00004833310639070443,
+        "meanAbs": 0.000048350127087872184,
         "rowMax": 0.004497549019607843,
         "detail": "meanAbs 0.0000 rowMax 0.0045 (row 92)"
       },
       "failures": [],
-      "stillFrames": []
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020048333106390703,
+            "rowMax": 0.10449754901960785
+          },
+          "hash": {
+            "local": "085e85b4",
+            "streamed": "b08002cd"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.00004833310639070443,
+          "rowMax": 0.004497549019607843,
+          "detail": "unit still (unanimated): meanAbs 0.0000 rowMax 0.0045 (row 92)"
+        }
+      ]
     },
     {
       "deck": "morphDeck",
@@ -713,7 +1212,8 @@
         "1:transition-approximate"
       ],
       "frames": {
-        "pass": 6
+        "unit-still": 1,
+        "pass": 5
       },
       "worst": {
         "slide": 2,
@@ -739,7 +1239,33 @@
         "detail": "meanAbs 0.0041 rowMax 0.0088 (row 301)"
       },
       "failures": [],
-      "stillFrames": []
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020048333106390703,
+            "rowMax": 0.10449754901960785
+          },
+          "hash": {
+            "local": "2e74bd8d",
+            "streamed": "eb237a2a"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0038857400599128537,
+          "rowMax": 0.006870915032679739,
+          "detail": "unit still (unanimated): meanAbs 0.0039 rowMax 0.0069 (row 397)"
+        }
+      ]
     },
     {
       "deck": "cubeDeck",
@@ -788,7 +1314,8 @@
         "1:transition-approximate"
       ],
       "frames": {
-        "pass": 6
+        "unit-still": 1,
+        "pass": 5
       },
       "worst": {
         "slide": 2,
@@ -814,7 +1341,33 @@
         "detail": "meanAbs 0.0000 rowMax 0.0004 (row 580)"
       },
       "failures": [],
-      "stillFrames": []
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020000975853304286,
+            "rowMax": 0.10039215686274511
+          },
+          "hash": {
+            "local": "02d89dba",
+            "streamed": "bbcb11f5"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 6.35439360929557e-7,
+          "rowMax": 0.0002777777777777778,
+          "detail": "unit still (unanimated): meanAbs 0.0000 rowMax 0.0003 (row 120)"
+        }
+      ]
     },
     {
       "deck": "cubeDeck",
@@ -863,7 +1416,8 @@
         "1:transition-approximate"
       ],
       "frames": {
-        "pass": 6
+        "unit-still": 1,
+        "pass": 5
       },
       "worst": {
         "slide": 2,
@@ -889,7 +1443,33 @@
         "detail": "meanAbs 0.0082 rowMax 0.0129 (row 156)"
       },
       "failures": [],
-      "stillFrames": []
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020000975853304286,
+            "rowMax": 0.10039215686274511
+          },
+          "hash": {
+            "local": "b00314d9",
+            "streamed": "4ffa45d2"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0029982071532316627,
+          "rowMax": 0.005142973856209151,
+          "detail": "unit still (unanimated): meanAbs 0.0030 rowMax 0.0051 (row 397)"
+        }
+      ]
     },
     {
       "deck": "morphCompositedDeck",
@@ -981,7 +1561,8 @@
         "1:transition-approximate"
       ],
       "frames": {
-        "pass": 6
+        "unit-still": 1,
+        "pass": 5
       },
       "worst": {
         "slide": 2,
@@ -1007,7 +1588,33 @@
         "detail": "meanAbs 0.0000 rowMax 0.0004 (row 500)"
       },
       "failures": [],
-      "stillFrames": []
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020002689270152505,
+            "rowMax": 0.10039215686274511
+          },
+          "hash": {
+            "local": "ecf354b4",
+            "streamed": "62a04889"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0000026892701525054465,
+          "rowMax": 0.0003921568627450981,
+          "detail": "unit still (unanimated): meanAbs 0.0000 rowMax 0.0004 (row 400)"
+        }
+      ]
     },
     {
       "deck": "morphCompositedDeck",
@@ -1099,31 +1706,60 @@
         "1:transition-approximate"
       ],
       "frames": {
-        "pass": 6
+        "unit-still": 1,
+        "pass": 5
       },
       "worst": {
-        "slide": 1,
+        "slide": 2,
         "step": 0,
-        "pct": 100,
-        "ms": 0,
-        "streamedMs": 0,
-        "kind": "still",
-        "rows": [],
+        "pct": 0,
+        "ms": 66.667,
+        "streamedMs": 33.333,
+        "kind": "morph-composited",
+        "rows": [
+          "transition:p159:morph"
+        ],
         "tol": {
-          "meanAbs": 0.020002689270152505,
-          "rowMax": 0.10039215686274511
+          "meanAbs": 0.08,
+          "rowMax": 0.3
         },
         "hash": {
-          "local": "d3161fc9",
-          "streamed": "aba765f3"
+          "local": "21217beb",
+          "streamed": "7674d1d7"
         },
         "status": "pass",
-        "meanAbs": 0.0036657135076252722,
+        "meanAbs": 0.0036647830428467683,
         "rowMax": 0.006764705882352942,
         "detail": "meanAbs 0.0037 rowMax 0.0068 (row 48)"
       },
       "failures": [],
-      "stillFrames": []
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020002689270152505,
+            "rowMax": 0.10039215686274511
+          },
+          "hash": {
+            "local": "d3161fc9",
+            "streamed": "aba765f3"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0036657135076252722,
+          "rowMax": 0.006764705882352942,
+          "detail": "unit still (unanimated): meanAbs 0.0037 rowMax 0.0068 (row 48)"
+        }
+      ]
     },
     {
       "deck": "longStepDeck",
@@ -1597,7 +2233,7 @@
         "1:harness-steps"
       ],
       "frames": {
-        "still": 1,
+        "unit-still": 1,
         "pass": 2
       },
       "worst": {
@@ -1639,10 +2275,14 @@
             "local": "309d7dc5",
             "streamed": "309d7dc5"
           },
-          "status": "still",
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "refused:still"
+          },
           "meanAbs": 0,
           "rowMax": 0,
-          "detail": "still (still): meanAbs 0.0000 rowMax 0.0000 (row 0)"
+          "detail": "unit still (refused:still): meanAbs 0.0000 rowMax 0.0000 (row 0)"
         }
       ]
     },
@@ -1699,7 +2339,7 @@
         "1:harness-steps"
       ],
       "frames": {
-        "still": 1,
+        "unit-still": 1,
         "pass": 2
       },
       "worst": {
@@ -1741,10 +2381,14 @@
             "local": "c86940cb",
             "streamed": "9f60cb19"
           },
-          "status": "still",
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "refused:still"
+          },
           "meanAbs": 0.0038800381263616557,
           "rowMax": 0.006830065359477124,
-          "detail": "still (still): meanAbs 0.0039 rowMax 0.0068 (row 397)"
+          "detail": "unit still (refused:still): meanAbs 0.0039 rowMax 0.0068 (row 397)"
         }
       ]
     },
@@ -2066,30 +2710,10 @@
         ":backend-fallback"
       ],
       "frames": {
-        "fail": 1
+        "unit-still": 1
       },
-      "worst": {
-        "slide": 1,
-        "step": 0,
-        "pct": 100,
-        "ms": 0,
-        "streamedMs": 0,
-        "kind": "still",
-        "rows": [],
-        "tol": {
-          "meanAbs": 0.021268378097766886,
-          "rowMax": 0.13666360294117647
-        },
-        "hash": {
-          "local": "4ae80895",
-          "streamed": "58aaacf6"
-        },
-        "status": "fail",
-        "meanAbs": 0.009424870642701526,
-        "rowMax": 0.14416666666666667,
-        "detail": "meanAbs 0.0094 rowMax 0.1442 (row 442)"
-      },
-      "failures": [
+      "failures": [],
+      "stillFrames": [
         {
           "slide": 1,
           "step": 0,
@@ -2106,13 +2730,16 @@
             "local": "4ae80895",
             "streamed": "58aaacf6"
           },
-          "status": "fail",
+          "status": "unit-still",
+          "unitStill": {
+            "pass": false,
+            "source": "unanimated"
+          },
           "meanAbs": 0.009424870642701526,
           "rowMax": 0.14416666666666667,
-          "detail": "meanAbs 0.0094 rowMax 0.1442 (row 442)"
+          "detail": "unit still (unanimated): meanAbs 0.0094 rowMax 0.1442 (row 442)"
         }
-      ],
-      "stillFrames": []
+      ]
     },
     {
       "deck": "lo-ooxtheme.pptx",
@@ -2156,30 +2783,10 @@
         ":backend-fallback"
       ],
       "frames": {
-        "fail": 1
+        "unit-still": 1
       },
-      "worst": {
-        "slide": 1,
-        "step": 0,
-        "pct": 100,
-        "ms": 0,
-        "streamedMs": 0,
-        "kind": "still",
-        "rows": [],
-        "tol": {
-          "meanAbs": 0.021268378097766886,
-          "rowMax": 0.13666360294117647
-        },
-        "hash": {
-          "local": "80989f78",
-          "streamed": "cc38076c"
-        },
-        "status": "fail",
-        "meanAbs": 0.012842584082244009,
-        "rowMax": 0.14428615196078431,
-        "detail": "meanAbs 0.0128 rowMax 0.1443 (row 442)"
-      },
-      "failures": [
+      "failures": [],
+      "stillFrames": [
         {
           "slide": 1,
           "step": 0,
@@ -2196,13 +2803,16 @@
             "local": "80989f78",
             "streamed": "cc38076c"
           },
-          "status": "fail",
+          "status": "unit-still",
+          "unitStill": {
+            "pass": false,
+            "source": "unanimated"
+          },
           "meanAbs": 0.012842584082244009,
           "rowMax": 0.14428615196078431,
-          "detail": "meanAbs 0.0128 rowMax 0.1443 (row 442)"
+          "detail": "unit still (unanimated): meanAbs 0.0128 rowMax 0.1443 (row 442)"
         }
-      ],
-      "stillFrames": []
+      ]
     },
     {
       "deck": "lo-tdf104788.pptx",
@@ -2267,7 +2877,8 @@
         ":behaviour-unsupported"
       ],
       "frames": {
-        "pass": 36
+        "unit-still": 5,
+        "pass": 31
       },
       "worst": {
         "slide": 6,
@@ -2293,7 +2904,133 @@
         "detail": "meanAbs 0.0006 rowMax 0.0259 (row 503)"
       },
       "failures": [],
-      "stillFrames": []
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020516754039578793,
+            "rowMax": 0.11136846405228759
+          },
+          "hash": {
+            "local": "d151b053",
+            "streamed": "d151b053"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0,
+          "rowMax": 0,
+          "detail": "unit still (unanimated): meanAbs 0.0000 rowMax 0.0000 (row 0)"
+        },
+        {
+          "slide": 2,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020516754039578793,
+            "rowMax": 0.11136846405228759
+          },
+          "hash": {
+            "local": "d151b053",
+            "streamed": "d151b053"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0,
+          "rowMax": 0,
+          "detail": "unit still (unanimated): meanAbs 0.0000 rowMax 0.0000 (row 0)"
+        },
+        {
+          "slide": 3,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020516754039578793,
+            "rowMax": 0.11136846405228759
+          },
+          "hash": {
+            "local": "d151b053",
+            "streamed": "d151b053"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0,
+          "rowMax": 0,
+          "detail": "unit still (unanimated): meanAbs 0.0000 rowMax 0.0000 (row 0)"
+        },
+        {
+          "slide": 4,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020516754039578793,
+            "rowMax": 0.11136846405228759
+          },
+          "hash": {
+            "local": "d151b053",
+            "streamed": "d151b053"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0,
+          "rowMax": 0,
+          "detail": "unit still (unanimated): meanAbs 0.0000 rowMax 0.0000 (row 0)"
+        },
+        {
+          "slide": 5,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020516754039578793,
+            "rowMax": 0.11136846405228759
+          },
+          "hash": {
+            "local": "d151b053",
+            "streamed": "d151b053"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0,
+          "rowMax": 0,
+          "detail": "unit still (unanimated): meanAbs 0.0000 rowMax 0.0000 (row 0)"
+        }
+      ]
     },
     {
       "deck": "lo-tdf104788.pptx",
@@ -2358,7 +3095,8 @@
         ":behaviour-unsupported"
       ],
       "frames": {
-        "pass": 21,
+        "unit-still": 5,
+        "pass": 16,
         "skipped-mark": 15
       },
       "worst": {
@@ -2385,7 +3123,133 @@
         "detail": "meanAbs 0.0038 rowMax 0.0307 (row 503)"
       },
       "failures": [],
-      "stillFrames": []
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020516754039578793,
+            "rowMax": 0.11136846405228759
+          },
+          "hash": {
+            "local": "73b0f586",
+            "streamed": "a0e13930"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0032054057734204793,
+          "rowMax": 0.006299019607843137,
+          "detail": "unit still (unanimated): meanAbs 0.0032 rowMax 0.0063 (row 397)"
+        },
+        {
+          "slide": 2,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020516754039578793,
+            "rowMax": 0.11136846405228759
+          },
+          "hash": {
+            "local": "73b0f586",
+            "streamed": "a0e13930"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0032054057734204793,
+          "rowMax": 0.006299019607843137,
+          "detail": "unit still (unanimated): meanAbs 0.0032 rowMax 0.0063 (row 397)"
+        },
+        {
+          "slide": 3,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020516754039578793,
+            "rowMax": 0.11136846405228759
+          },
+          "hash": {
+            "local": "73b0f586",
+            "streamed": "a0e13930"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0032054057734204793,
+          "rowMax": 0.006299019607843137,
+          "detail": "unit still (unanimated): meanAbs 0.0032 rowMax 0.0063 (row 397)"
+        },
+        {
+          "slide": 4,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020516754039578793,
+            "rowMax": 0.11136846405228759
+          },
+          "hash": {
+            "local": "73b0f586",
+            "streamed": "a0e13930"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0032054057734204793,
+          "rowMax": 0.006299019607843137,
+          "detail": "unit still (unanimated): meanAbs 0.0032 rowMax 0.0063 (row 397)"
+        },
+        {
+          "slide": 5,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020516754039578793,
+            "rowMax": 0.11136846405228759
+          },
+          "hash": {
+            "local": "73b0f586",
+            "streamed": "a0e13930"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0032054057734204793,
+          "rowMax": 0.006299019607843137,
+          "detail": "unit still (unanimated): meanAbs 0.0032 rowMax 0.0063 (row 397)"
+        }
+      ]
     },
     {
       "deck": "lo-tdf104792-smart-art-animation.pptx",
@@ -2565,31 +3429,36 @@
         ":backend-fallback"
       ],
       "frames": {
-        "pass": 1
-      },
-      "worst": {
-        "slide": 1,
-        "step": 0,
-        "pct": 100,
-        "ms": 0,
-        "streamedMs": 0,
-        "kind": "still",
-        "rows": [],
-        "tol": {
-          "meanAbs": 0.022049474911492374,
-          "rowMax": 0.10305759803921569
-        },
-        "hash": {
-          "local": "b9014b2f",
-          "streamed": "0b510c0b"
-        },
-        "status": "pass",
-        "meanAbs": 0.0020494749114923745,
-        "rowMax": 0.003057598039215686,
-        "detail": "meanAbs 0.0020 rowMax 0.0031 (row 14)"
+        "unit-still": 1
       },
       "failures": [],
-      "stillFrames": []
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.022049474911492374,
+            "rowMax": 0.10305759803921569
+          },
+          "hash": {
+            "local": "b9014b2f",
+            "streamed": "0b510c0b"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0020494749114923745,
+          "rowMax": 0.003057598039215686,
+          "detail": "unit still (unanimated): meanAbs 0.0020 rowMax 0.0031 (row 14)"
+        }
+      ]
     },
     {
       "deck": "lo-tdf105739.pptx",
@@ -2633,31 +3502,36 @@
         ":backend-fallback"
       ],
       "frames": {
-        "pass": 1
-      },
-      "worst": {
-        "slide": 1,
-        "step": 0,
-        "pct": 100,
-        "ms": 0,
-        "streamedMs": 0,
-        "kind": "still",
-        "rows": [],
-        "tol": {
-          "meanAbs": 0.022049474911492374,
-          "rowMax": 0.10305759803921569
-        },
-        "hash": {
-          "local": "6f3cc92e",
-          "streamed": "99fbb56c"
-        },
-        "status": "pass",
-        "meanAbs": 0.004739625885076253,
-        "rowMax": 0.008183210784313727,
-        "detail": "meanAbs 0.0047 rowMax 0.0082 (row 64)"
+        "unit-still": 1
       },
       "failures": [],
-      "stillFrames": []
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.022049474911492374,
+            "rowMax": 0.10305759803921569
+          },
+          "hash": {
+            "local": "6f3cc92e",
+            "streamed": "99fbb56c"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.004739625885076253,
+          "rowMax": 0.008183210784313727,
+          "detail": "unit still (unanimated): meanAbs 0.0047 rowMax 0.0082 (row 64)"
+        }
+      ]
     },
     {
       "deck": "lo-tdf115394.pptx",
@@ -2873,31 +3747,36 @@
         ":backend-fallback"
       ],
       "frames": {
-        "pass": 1
-      },
-      "worst": {
-        "slide": 1,
-        "step": 0,
-        "pct": 100,
-        "ms": 0,
-        "streamedMs": 0,
-        "kind": "still",
-        "rows": [],
-        "tol": {
-          "meanAbs": 0.020335907713779956,
-          "rowMax": 0.10947610294117648
-        },
-        "hash": {
-          "local": "a29fa423",
-          "streamed": "2ae13ef7"
-        },
-        "status": "pass",
-        "meanAbs": 0.0017951729302832244,
-        "rowMax": 0.012925857843137253,
-        "detail": "meanAbs 0.0018 rowMax 0.0129 (row 268)"
+        "unit-still": 1
       },
       "failures": [],
-      "stillFrames": []
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020335907713779956,
+            "rowMax": 0.10947610294117648
+          },
+          "hash": {
+            "local": "a29fa423",
+            "streamed": "2ae13ef7"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0017951729302832244,
+          "rowMax": 0.012925857843137253,
+          "detail": "unit still (unanimated): meanAbs 0.0018 rowMax 0.0129 (row 268)"
+        }
+      ]
     },
     {
       "deck": "lo-tdf123684.pptx",
@@ -2941,31 +3820,36 @@
         ":backend-fallback"
       ],
       "frames": {
-        "pass": 1
-      },
-      "worst": {
-        "slide": 1,
-        "step": 0,
-        "pct": 100,
-        "ms": 0,
-        "streamedMs": 0,
-        "kind": "still",
-        "rows": [],
-        "tol": {
-          "meanAbs": 0.020335907713779956,
-          "rowMax": 0.10947610294117648
-        },
-        "hash": {
-          "local": "1eabe12d",
-          "streamed": "31667c15"
-        },
-        "status": "pass",
-        "meanAbs": 0.004171934572440087,
-        "rowMax": 0.016240808823529414,
-        "detail": "meanAbs 0.0042 rowMax 0.0162 (row 297)"
+        "unit-still": 1
       },
       "failures": [],
-      "stillFrames": []
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020335907713779956,
+            "rowMax": 0.10947610294117648
+          },
+          "hash": {
+            "local": "1eabe12d",
+            "streamed": "31667c15"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.004171934572440087,
+          "rowMax": 0.016240808823529414,
+          "detail": "unit still (unanimated): meanAbs 0.0042 rowMax 0.0162 (row 297)"
+        }
+      ]
     },
     {
       "deck": "lo-tdf142915.pptx",
@@ -3874,31 +4758,36 @@
         ":backend-fallback"
       ],
       "frames": {
-        "pass": 1
-      },
-      "worst": {
-        "slide": 1,
-        "step": 0,
-        "pct": 100,
-        "ms": 0,
-        "streamedMs": 0,
-        "kind": "still",
-        "rows": [],
-        "tol": {
-          "meanAbs": 0.020571172045206972,
-          "rowMax": 0.13543198529411765
-        },
-        "hash": {
-          "local": "623db050",
-          "streamed": "0147b99e"
-        },
-        "status": "pass",
-        "meanAbs": 0.0005711720452069716,
-        "rowMax": 0.035431985294117646,
-        "detail": "meanAbs 0.0006 rowMax 0.0354 (row 306)"
+        "unit-still": 1
       },
       "failures": [],
-      "stillFrames": []
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020571172045206972,
+            "rowMax": 0.13543198529411765
+          },
+          "hash": {
+            "local": "623db050",
+            "streamed": "0147b99e"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0005711720452069716,
+          "rowMax": 0.035431985294117646,
+          "detail": "unit still (unanimated): meanAbs 0.0006 rowMax 0.0354 (row 306)"
+        }
+      ]
     },
     {
       "deck": "poi-copy-slide-demo.pptx",
@@ -3942,31 +4831,36 @@
         ":backend-fallback"
       ],
       "frames": {
-        "pass": 1
-      },
-      "worst": {
-        "slide": 1,
-        "step": 0,
-        "pct": 100,
-        "ms": 0,
-        "streamedMs": 0,
-        "kind": "still",
-        "rows": [],
-        "tol": {
-          "meanAbs": 0.020571172045206972,
-          "rowMax": 0.13543198529411765
-        },
-        "hash": {
-          "local": "333d5907",
-          "streamed": "b873ae53"
-        },
-        "status": "pass",
-        "meanAbs": 0.004535215822440087,
-        "rowMax": 0.04084252450980392,
-        "detail": "meanAbs 0.0045 rowMax 0.0408 (row 306)"
+        "unit-still": 1
       },
       "failures": [],
-      "stillFrames": []
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020571172045206972,
+            "rowMax": 0.13543198529411765
+          },
+          "hash": {
+            "local": "333d5907",
+            "streamed": "b873ae53"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.004535215822440087,
+          "rowMax": 0.04084252450980392,
+          "detail": "unit still (unanimated): meanAbs 0.0045 rowMax 0.0408 (row 306)"
+        }
+      ]
     },
     {
       "deck": "poi-crop-to-0.pptx",
@@ -4458,30 +5352,10 @@
         ":backend-fallback"
       ],
       "frames": {
-        "fail": 1
+        "unit-still": 1
       },
-      "worst": {
-        "slide": 1,
-        "step": 0,
-        "pct": 100,
-        "ms": 0,
-        "streamedMs": 0,
-        "kind": "still",
-        "rows": [],
-        "tol": {
-          "meanAbs": 0.021277024611928104,
-          "rowMax": 0.15683517156862745
-        },
-        "hash": {
-          "local": "6c1f0752",
-          "streamed": "c5ee0810"
-        },
-        "status": "fail",
-        "meanAbs": 0.0072149586397058825,
-        "rowMax": 0.1786703431372549,
-        "detail": "meanAbs 0.0072 rowMax 0.1787 (row 327)"
-      },
-      "failures": [
+      "failures": [],
+      "stillFrames": [
         {
           "slide": 1,
           "step": 0,
@@ -4498,13 +5372,16 @@
             "local": "6c1f0752",
             "streamed": "c5ee0810"
           },
-          "status": "fail",
+          "status": "unit-still",
+          "unitStill": {
+            "pass": false,
+            "source": "unanimated"
+          },
           "meanAbs": 0.0072149586397058825,
           "rowMax": 0.1786703431372549,
-          "detail": "meanAbs 0.0072 rowMax 0.1787 (row 327)"
+          "detail": "unit still (unanimated): meanAbs 0.0072 rowMax 0.1787 (row 327)"
         }
-      ],
-      "stillFrames": []
+      ]
     },
     {
       "deck": "poi-text-highlight.pptx",
@@ -4548,30 +5425,10 @@
         ":backend-fallback"
       ],
       "frames": {
-        "fail": 1
+        "unit-still": 1
       },
-      "worst": {
-        "slide": 1,
-        "step": 0,
-        "pct": 100,
-        "ms": 0,
-        "streamedMs": 0,
-        "kind": "still",
-        "rows": [],
-        "tol": {
-          "meanAbs": 0.021277024611928104,
-          "rowMax": 0.15683517156862745
-        },
-        "hash": {
-          "local": "56d3a492",
-          "streamed": "cc051717"
-        },
-        "status": "fail",
-        "meanAbs": 0.01111063027641612,
-        "rowMax": 0.18231004901960784,
-        "detail": "meanAbs 0.0111 rowMax 0.1823 (row 327)"
-      },
-      "failures": [
+      "failures": [],
+      "stillFrames": [
         {
           "slide": 1,
           "step": 0,
@@ -4588,13 +5445,16 @@
             "local": "56d3a492",
             "streamed": "cc051717"
           },
-          "status": "fail",
+          "status": "unit-still",
+          "unitStill": {
+            "pass": false,
+            "source": "unanimated"
+          },
           "meanAbs": 0.01111063027641612,
           "rowMax": 0.18231004901960784,
-          "detail": "meanAbs 0.0111 rowMax 0.1823 (row 327)"
+          "detail": "unit still (unanimated): meanAbs 0.0111 rowMax 0.1823 (row 327)"
         }
-      ],
-      "stillFrames": []
+      ]
     },
     {
       "deck": "pypptx-minimal.pptx",
@@ -4712,31 +5572,36 @@
         ":backend-fallback"
       ],
       "frames": {
-        "pass": 1
-      },
-      "worst": {
-        "slide": 1,
-        "step": 0,
-        "pct": 100,
-        "ms": 0,
-        "streamedMs": 0,
-        "kind": "still",
-        "rows": [],
-        "tol": {
-          "meanAbs": 0.02127922453703704,
-          "rowMax": 0.18272467320261437
-        },
-        "hash": {
-          "local": "0f2afd4f",
-          "streamed": "83e8f2ea"
-        },
-        "status": "pass",
-        "meanAbs": 0.001279224537037037,
-        "rowMax": 0.08272467320261438,
-        "detail": "meanAbs 0.0013 rowMax 0.0827 (row 307)"
+        "unit-still": 1
       },
       "failures": [],
-      "stillFrames": []
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.02127922453703704,
+            "rowMax": 0.18272467320261437
+          },
+          "hash": {
+            "local": "0f2afd4f",
+            "streamed": "83e8f2ea"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.001279224537037037,
+          "rowMax": 0.08272467320261438,
+          "detail": "unit still (unanimated): meanAbs 0.0013 rowMax 0.0827 (row 307)"
+        }
+      ]
     },
     {
       "deck": "pypptx-missing_rels_item.pptx",
@@ -4780,31 +5645,36 @@
         ":backend-fallback"
       ],
       "frames": {
-        "pass": 1
-      },
-      "worst": {
-        "slide": 1,
-        "step": 0,
-        "pct": 100,
-        "ms": 0,
-        "streamedMs": 0,
-        "kind": "still",
-        "rows": [],
-        "tol": {
-          "meanAbs": 0.02127922453703704,
-          "rowMax": 0.18272467320261437
-        },
-        "hash": {
-          "local": "5827aa88",
-          "streamed": "af3842c8"
-        },
-        "status": "pass",
-        "meanAbs": 0.005149668663761801,
-        "rowMax": 0.08838235294117648,
-        "detail": "meanAbs 0.0051 rowMax 0.0884 (row 307)"
+        "unit-still": 1
       },
       "failures": [],
-      "stillFrames": []
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.02127922453703704,
+            "rowMax": 0.18272467320261437
+          },
+          "hash": {
+            "local": "5827aa88",
+            "streamed": "af3842c8"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.005149668663761801,
+          "rowMax": 0.08838235294117648,
+          "detail": "unit still (unanimated): meanAbs 0.0051 rowMax 0.0884 (row 307)"
+        }
+      ]
     },
     {
       "deck": "pypptx-no-core-props.pptx",
@@ -4848,31 +5718,36 @@
         ":backend-fallback"
       ],
       "frames": {
-        "pass": 1
-      },
-      "worst": {
-        "slide": 1,
-        "step": 0,
-        "pct": 100,
-        "ms": 0,
-        "streamedMs": 0,
-        "kind": "still",
-        "rows": [],
-        "tol": {
-          "meanAbs": 0.02074561433369644,
-          "rowMax": 0.1417156862745098
-        },
-        "hash": {
-          "local": "8757f9c1",
-          "streamed": "f0f8d874"
-        },
-        "status": "pass",
-        "meanAbs": 0.0007456143336964415,
-        "rowMax": 0.0417156862745098,
-        "detail": "meanAbs 0.0007 rowMax 0.0417 (row 293)"
+        "unit-still": 1
       },
       "failures": [],
-      "stillFrames": []
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.02074561433369644,
+            "rowMax": 0.1417156862745098
+          },
+          "hash": {
+            "local": "8757f9c1",
+            "streamed": "f0f8d874"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0007456143336964415,
+          "rowMax": 0.0417156862745098,
+          "detail": "unit still (unanimated): meanAbs 0.0007 rowMax 0.0417 (row 293)"
+        }
+      ]
     },
     {
       "deck": "pypptx-no-core-props.pptx",
@@ -4916,31 +5791,36 @@
         ":backend-fallback"
       ],
       "frames": {
-        "pass": 1
-      },
-      "worst": {
-        "slide": 1,
-        "step": 0,
-        "pct": 100,
-        "ms": 0,
-        "streamedMs": 0,
-        "kind": "still",
-        "rows": [],
-        "tol": {
-          "meanAbs": 0.02074561433369644,
-          "rowMax": 0.1417156862745098
-        },
-        "hash": {
-          "local": "1e042659",
-          "streamed": "9d7c6cb2"
-        },
-        "status": "pass",
-        "meanAbs": 0.0046113323801742915,
-        "rowMax": 0.04448120915032679,
-        "detail": "meanAbs 0.0046 rowMax 0.0445 (row 293)"
+        "unit-still": 1
       },
       "failures": [],
-      "stillFrames": []
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.02074561433369644,
+            "rowMax": 0.1417156862745098
+          },
+          "hash": {
+            "local": "1e042659",
+            "streamed": "9d7c6cb2"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0046113323801742915,
+          "rowMax": 0.04448120915032679,
+          "detail": "unit still (unanimated): meanAbs 0.0046 rowMax 0.0445 (row 293)"
+        }
+      ]
     },
     {
       "deck": "pypptx-test.pptx",
@@ -4984,31 +5864,36 @@
         ":backend-fallback"
       ],
       "frames": {
-        "pass": 1
-      },
-      "worst": {
-        "slide": 1,
-        "step": 0,
-        "pct": 100,
-        "ms": 0,
-        "streamedMs": 0,
-        "kind": "still",
-        "rows": [],
-        "tol": {
-          "meanAbs": 0.02127922453703704,
-          "rowMax": 0.18272467320261437
-        },
-        "hash": {
-          "local": "0f2afd4f",
-          "streamed": "83e8f2ea"
-        },
-        "status": "pass",
-        "meanAbs": 0.001279224537037037,
-        "rowMax": 0.08272467320261438,
-        "detail": "meanAbs 0.0013 rowMax 0.0827 (row 307)"
+        "unit-still": 1
       },
       "failures": [],
-      "stillFrames": []
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.02127922453703704,
+            "rowMax": 0.18272467320261437
+          },
+          "hash": {
+            "local": "0f2afd4f",
+            "streamed": "83e8f2ea"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.001279224537037037,
+          "rowMax": 0.08272467320261438,
+          "detail": "unit still (unanimated): meanAbs 0.0013 rowMax 0.0827 (row 307)"
+        }
+      ]
     },
     {
       "deck": "pypptx-test.pptx",
@@ -5052,31 +5937,36 @@
         ":backend-fallback"
       ],
       "frames": {
-        "pass": 1
-      },
-      "worst": {
-        "slide": 1,
-        "step": 0,
-        "pct": 100,
-        "ms": 0,
-        "streamedMs": 0,
-        "kind": "still",
-        "rows": [],
-        "tol": {
-          "meanAbs": 0.02127922453703704,
-          "rowMax": 0.18272467320261437
-        },
-        "hash": {
-          "local": "5827aa88",
-          "streamed": "af3842c8"
-        },
-        "status": "pass",
-        "meanAbs": 0.005149668663761801,
-        "rowMax": 0.08838235294117648,
-        "detail": "meanAbs 0.0051 rowMax 0.0884 (row 307)"
+        "unit-still": 1
       },
       "failures": [],
-      "stillFrames": []
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.02127922453703704,
+            "rowMax": 0.18272467320261437
+          },
+          "hash": {
+            "local": "5827aa88",
+            "streamed": "af3842c8"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.005149668663761801,
+          "rowMax": 0.08838235294117648,
+          "detail": "unit still (unanimated): meanAbs 0.0051 rowMax 0.0884 (row 307)"
+        }
+      ]
     },
     {
       "deck": "pypptx-test_slides.pptx",
@@ -5120,31 +6010,36 @@
         ":backend-fallback"
       ],
       "frames": {
-        "pass": 1
-      },
-      "worst": {
-        "slide": 1,
-        "step": 0,
-        "pct": 100,
-        "ms": 0,
-        "streamedMs": 0,
-        "kind": "still",
-        "rows": [],
-        "tol": {
-          "meanAbs": 0.021230925472040668,
-          "rowMax": 0.14210375816993465
-        },
-        "hash": {
-          "local": "40860113",
-          "streamed": "17ab33f0"
-        },
-        "status": "pass",
-        "meanAbs": 0.001923735929557008,
-        "rowMax": 0.043611111111111114,
-        "detail": "meanAbs 0.0019 rowMax 0.0436 (row 209)"
+        "unit-still": 1
       },
       "failures": [],
-      "stillFrames": []
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.021230925472040668,
+            "rowMax": 0.14210375816993465
+          },
+          "hash": {
+            "local": "40860113",
+            "streamed": "17ab33f0"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.001923735929557008,
+          "rowMax": 0.043611111111111114,
+          "detail": "unit still (unanimated): meanAbs 0.0019 rowMax 0.0436 (row 209)"
+        }
+      ]
     },
     {
       "deck": "pypptx-test_slides.pptx",
@@ -5188,31 +6083,36 @@
         ":backend-fallback"
       ],
       "frames": {
-        "pass": 1
-      },
-      "worst": {
-        "slide": 1,
-        "step": 0,
-        "pct": 100,
-        "ms": 0,
-        "streamedMs": 0,
-        "kind": "still",
-        "rows": [],
-        "tol": {
-          "meanAbs": 0.021230925472040668,
-          "rowMax": 0.14210375816993465
-        },
-        "hash": {
-          "local": "0f3537a2",
-          "streamed": "13749fcb"
-        },
-        "status": "pass",
-        "meanAbs": 0.005511591094771242,
-        "rowMax": 0.04734885620915033,
-        "detail": "meanAbs 0.0055 rowMax 0.0473 (row 303)"
+        "unit-still": 1
       },
       "failures": [],
-      "stillFrames": []
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.021230925472040668,
+            "rowMax": 0.14210375816993465
+          },
+          "hash": {
+            "local": "0f3537a2",
+            "streamed": "13749fcb"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.005511591094771242,
+          "rowMax": 0.04734885620915033,
+          "detail": "unit still (unanimated): meanAbs 0.0055 rowMax 0.0473 (row 303)"
+        }
+      ]
     }
   ]
 }

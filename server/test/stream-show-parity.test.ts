@@ -58,7 +58,10 @@ describe('streamed show parity (synthetic decks)', () => {
         const fails = r.outcomes.filter((o) => o.status === 'fail')
         expect(fails.map((o) => `${o.slide}-${o.step}-${o.pct} ${o.kind}: ${o.detail}`), at).toEqual([])
         const compared = r.outcomes.filter((o) => o.status === 'pass')
-        expect(compared.length, at).toBeGreaterThanOrEqual(marks === 'off' ? 6 : 3)
+        expect(compared.length, at).toBeGreaterThanOrEqual(marks === 'off' ? 5 : 3)
+        // An unanimated slide's unit image is reported in its own section, never silently skipped.
+        for (const o of r.outcomes.filter((x) => x.status === 'unit-still')) expect(o.unitStill?.source, at).toBe('unanimated')
+        if (deck !== 'flyInDeck') expect(r.outcomes.filter((o) => o.status === 'unit-still').length, at).toBe(1)
         if (marks === 'off') expect(r.outcomes.filter((o) => o.status === 'skipped-mark'), at).toEqual([])
         // D24: under the fixed mark only mid-motion samples (never 0 % or 100 %) are left out.
         for (const o of r.outcomes.filter((x) => x.status === 'skipped-mark')) expect([0, 100], at).not.toContain(o.pct)
