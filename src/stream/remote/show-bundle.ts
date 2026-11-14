@@ -48,6 +48,8 @@ const closeBitmap = (b: ImageBitmapLike | undefined) => { try { b?.close?.() } c
  * Final review finding 2: the cancellation owner of an in-progress decode. `signal`'s abort runs `cancel` at once
  * (the decode's leases go back then, not when an awaited image decode finishes), and `decode` then rejects at once;
  * an image that decodes after the abort is closed, never handed out. `off()` detaches it once the result has an owner.
+ * Re-review: the abort may also run after an image fulfils but before the decoder's `await` resumes, so the decoder
+ * passes every returned bitmap through `took` (closed and thrown on an abort) and checks before every lease it takes.
  */
 function cancellation(signal: AbortSignal | undefined, cancel: () => void) {
   let aborted = false, fail: ((e: unknown) => void) | undefined
@@ -57,6 +59,7 @@ function cancellation(signal: AbortSignal | undefined, cancel: () => void) {
   else signal?.addEventListener('abort', onAbort, { once: true })
   return {
     check() { if (aborted) throw reason() },
+    took(bmp: ImageBitmapLike): ImageBitmapLike { if (aborted) { closeBitmap(bmp); throw reason() } return bmp },
     off() { signal?.removeEventListener('abort', onAbort) },
     decode(decode: (png: Uint8Array) => Promise<ImageBitmapLike>, png: Uint8Array): Promise<ImageBitmapLike> {
       if (aborted) return Promise.reject(reason())
@@ -78,8 +81,8 @@ export async function decodeBundle(unit: number, reply: readonly Uint8Array[] | 
   const done = () => { if (replied) return; replied = true; if (!Array.isArray(reply)) (reply as ShowReply).release() }
   const held = new Map<number, Held>()
   let released = false
+  // Idempotent, and it also frees anything held after an earlier call (each held entry is released once, then dropped).
   const release = () => {
-    if (released) return
     released = true
     for (const h of held.values()) { closeBitmap(h.bmp); h.lease.release() }
     held.clear()
@@ -98,6 +101,7 @@ export async function decodeBundle(unit: number, reply: readonly Uint8Array[] | 
     if (head.tag !== 1) return reject('message 0 is not the plan record')
     const plan = head.plan
     // The record's accounting size (its message bytes, as `decodedBytes` counts it), held while the bundle lives.
+    owner.check()
     const record = workspace.lease(messages[0]!.length, 'remote-show:plan')
     if (!record) throw new StreamSessionError('workspace-full', 'no workspace room for a show plan record')
     held.set(-1, { lease: record, bytes: 0 })
@@ -118,13 +122,14 @@ export async function decodeBundle(unit: number, reply: readonly Uint8Array[] | 
       if (bytes > allow!) reject(`asset ${a.assetId} is larger than its layer`)
       total += bytes
       if (total > SHOW_PLAN_LIMITS.showDecoded) throw new StreamSessionError('show-budget', 'show bundle rejected: the bundle is over the show budget')
+      owner.check()
       const lease = workspace.lease(bytes, `remote-show:asset:${a.assetId}`)
       if (!lease) throw new StreamSessionError('workspace-full', 'no workspace room for a show asset')
       const h: Held = { lease, bytes }
       held.set(a.assetId, h)
       let bmp: ImageBitmapLike
       try { bmp = await owner.decode(decode, a.png) } catch { owner.check(); return reject(`asset ${a.assetId} does not decode`) }
-      h.bmp = bmp
+      h.bmp = owner.took(bmp)
       if (bmp.width !== a.w || bmp.height !== a.h) reject(`asset ${a.assetId} decoded to another size`)
     }
     const assets: PlanAssets = {
@@ -223,13 +228,17 @@ export async function decodeMorph(pair: { from: number; to: number; fromStep: nu
   let released = false
   let window: (PlanTrack & { dispose(): void }) | undefined
   let keepReply = false
+  let replied = false
+  const freeReply = () => { if (replied) return; replied = true; releaseReply(reply) }
+  // Idempotent, and it also frees anything held after an earlier call (each held entry is released once, then dropped).
   const release = () => {
-    if (released) return
     released = true
     for (const h of held.values()) { closeBitmap(h.bmp); h.lease.release() }
     held.clear()
-    window?.dispose()
-    if (keepReply) releaseReply(reply)
+    const w = window
+    window = undefined
+    w?.dispose()
+    if (keepReply) freeReply()
   }
   // An abort mid-decode gives back the reply and everything held at once (finding 2).
   const owner = cancellation(signal, () => { keepReply = true; release() })
@@ -241,6 +250,7 @@ export async function decodeMorph(pair: { from: number; to: number; fromStep: nu
     if (head.tag !== 5) return refuse(what, 'message 0 is not the Morph record')
     const record = head.morph
     if (record.from !== pair.from || record.to !== pair.to || record.fromStep !== pair.fromStep) refuse(what, 'the record is for another pair')
+    owner.check()
     const record0 = workspace.lease(messages[0]!.length, 'remote-show:morph')
     if (!record0) throw new StreamSessionError('workspace-full', 'no workspace room for a Morph record')
     held.set(-1, { lease: record0, bytes: 0 })
@@ -268,16 +278,17 @@ export async function decodeMorph(pair: { from: number; to: number; fromStep: nu
       const bytes = a.w * a.h * 4
       total += bytes
       if (total > SHOW_PLAN_LIMITS.showDecoded) throw new StreamSessionError('show-budget', 'Morph pair rejected: over the show budget')
+      owner.check()
       const lease = workspace.lease(bytes, `remote-show:morph-asset:${a.assetId}`)
       if (!lease) throw new StreamSessionError('workspace-full', 'no workspace room for a Morph asset')
       const h: Held = { lease, bytes }
       held.set(a.assetId, h)
       let bmp: ImageBitmapLike
       try { bmp = await owner.decode(decode, a.png) } catch { owner.check(); return refuse(what, `asset ${a.assetId} does not decode`) }
-      h.bmp = bmp
+      h.bmp = owner.took(bmp)
       if (bmp.width !== a.w || bmp.height !== a.h) refuse(what, `asset ${a.assetId} decoded to another size`)
     }
-    releaseReply(reply)
+    freeReply()
     const assets: PlanAssets = {
       bitmap: (id) => (released ? undefined : held.get(id)?.bmp),
       bytes: (id) => (released || id < 0 ? 0 : held.get(id)?.bytes ?? 0),

@@ -979,6 +979,29 @@ describe('final review finding 2: an in-progress decode has a cancellation owner
     expect(w.used()).toBe(0)
   })
 
+  it('re-review: an abort after the image fulfils but before the decoder resumes closes that bitmap and leases nothing more', async () => {
+    for (const which of ['bundle', 'layered'] as const) {
+      const w = ws(), ac = new AbortController()
+      let deliver: ((b: unknown) => void) | undefined
+      const decode = vi.fn(() => new Promise<never>((res) => { deliver = res as (b: unknown) => void }))
+      const messages = which === 'bundle' ? bundleOf(FLY, 0) : pairOf(0, 1, 0)
+      const release = vi.fn()
+      const p = which === 'bundle'
+        ? decodeBundle(0, { messages, release }, w, decode, ac.signal)
+        : decodeMorph({ from: 0, to: 1, fromStep: 0 }, { messages, release }, w, decode, ac.signal)
+      const outcome = p.then((x) => { x.release(); return 'resolved' }, (e: unknown) => (e as StreamSessionError).code)
+      await flush()
+      const a = decodeShowMessage(messages[1]!, { unit: which === 'bundle' ? 0 : 1, maxDecoded: SHOW_PLAN_LIMITS.assetDecoded }) as Extract<ShowMessage, { tag: 2 | 3 | 4 }>
+      const close = vi.fn()
+      // The image fulfils; the abort runs after the owner's fulfilment handler, before the decoder's continuation.
+      deliver!({ width: a.w, height: a.h, close })
+      queueMicrotask(() => ac.abort(new StreamSessionError('closed')))
+      expect({ which, result: await outcome, used: w.used(), closed: close.mock.calls.length, decodes: decode.mock.calls.length })
+        .toEqual({ which, result: 'closed', used: 0, closed: 1, decodes: 1 })
+      expect(release).toHaveBeenCalled()
+    }
+  })
+
   it('decodeBundle and decodeMorph: an abort mid-decode rejects at once, releases the reply and every lease, closes the late bitmap', async () => {
     for (const which of ['bundle', 'layered', 'composited'] as const) {
       const w = ws(), d = heldDecode(), ac = new AbortController()
