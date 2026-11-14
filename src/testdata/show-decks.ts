@@ -233,6 +233,86 @@ export function longStepDeck(): Promise<Uint8Array> {
   }])
 }
 
+/** A motion path moving `spid` by (dx, dy) slide fractions over `dur` ms and holding there. */
+const moveBy = (spid: number, dx: number, dy: number, dur = 500): Effect => ({
+  cls: 'path', preset: 0, behaviours: id => [`<p:animMotion path="M 0 0 L ${dx} ${dy} E"><p:cBhvr>${ctn(id(), dur)}${tgt(spid)}${attrs('ppt_x', 'ppt_y')}</p:cBhvr></p:animMotion>`],
+})
+
+/** One slide: click 1 moves the box (id 2) right 240 px and holds; click 2 moves it down 120 px (two distinct rests, D8). */
+export function moveTwiceDeck(): Promise<Uint8Array> {
+  return deck([{
+    bg: { solid: 'FFFFFF' },
+    shapes: [rect(2, 'Box', 80, 80, 160, 120, '336699')],
+    timingXml: mainSequence([[moveBy(2, 0.25, 0)], [moveBy(2, 0, 1 / 6)]]),
+  }])
+}
+
+/** One slide: `n` click steps, each spinning the box (id 2) one turn over `durMs` ms. */
+export function spinStepsDeck(n: number, durMs: number): Promise<Uint8Array> {
+  return deck([{
+    bg: { solid: 'FFFFFF' },
+    shapes: [rect(2, 'Box', 380, 260, 200, 200, '336699')],
+    timingXml: mainSequence(Array.from({ length: Math.max(1, Math.floor(n)) }, () => [spin(2, durMs)])),
+  }])
+}
+
+/** One slide: a trigger button (id 3) whose click recolours the box's fill (id 2) to #C00000 over 500 ms. */
+export function triggerColourDeck(): Promise<Uint8Array> {
+  const id = ids()
+  const recolour: Effect = {
+    cls: 'emph', preset: 1, behaviours: id => [
+      `<p:animClr clrSpc="rgb"><p:cBhvr>${ctn(id(), 500)}${tgt(2)}${attrs('fillcolor')}</p:cBhvr><p:to><a:srgbClr val="C00000"/></p:to></p:animClr>`,
+    ],
+  }
+  return deck([{
+    bg: { solid: 'FFFFFF' },
+    shapes: [
+      rect(2, 'Box', 380, 200, 200, 200, '336699'),
+      rect(3, 'Button', 80, 560, 160, 80, 'F4B183', { paragraphs: [{ runs: [{ text: 'Go' }] }] }),
+    ],
+    timingXml: timingXmlOf(interactiveSeq(id, 3, [recolour])),
+  }])
+}
+
+/** `moverReveal`'s 1 s hold and 20 ms dart on the cover (id 3). */
+const dartEffect = (): Effect => ({
+  cls: 'path', preset: 0, behaviours: id => [
+    animNum(id, 3, 'style.opacity', MOVER_REVEAL.stepMs, [[0, 1], [100000, 1]]),
+    `<p:animMotion path="M 0 0 L 0.5 0 L 0 0 E"><p:cBhvr>${ctn(id(), MOVER_REVEAL.dartMs, MOVER_REVEAL.dartAt)}${tgt(3)}${attrs('ppt_x', 'ppt_y')}</p:cBhvr></p:animMotion>`,
+  ],
+})
+
+/** `moverReveal`'s cover dart, started by a click on a trigger button (id 4) instead of the main sequence. */
+export function triggerDartDeck(): Promise<Uint8Array> {
+  const id = ids()
+  return deck([{
+    bg: { solid: 'FFFFFF' },
+    shapes: [
+      rect(2, 'Ink', 400, 300, 160, 120, HIDDEN_INK), rect(3, 'Cover', 360, 260, 240, 200, '336699'),
+      rect(4, 'Button', 80, 560, 160, 80, 'F4B183'),
+    ],
+    timingXml: timingXmlOf(interactiveSeq(id, 4, [dartEffect()])),
+  }])
+}
+
+/**
+ * One slide: click 1 is a 1 s step (the box's opacity held at 1) holding a 20 ms recolour of the box (id 2)
+ * from 300 ms that is not held (`fill="remove"`): no sample of the step shows it tinted.
+ */
+export function flashColourDeck(): Promise<Uint8Array> {
+  return deck([{
+    bg: { solid: 'FFFFFF' },
+    shapes: [rect(2, 'Box', 380, 260, 200, 200, '336699')],
+    timingXml: mainSequence([[{
+      cls: 'emph', preset: 1, behaviours: id => [
+        animNum(id, 2, 'style.opacity', 1000, [[0, 1], [100000, 1]]),
+        `<p:animClr clrSpc="rgb"><p:cBhvr><p:cTn id="${id()}" dur="20" fill="remove"><p:stCondLst><p:cond delay="300"/></p:stCondLst></p:cTn>${tgt(2)}${attrs('fillcolor')}</p:cBhvr>` +
+        `<p:to><a:srgbClr val="${HIDDEN_INK}"/></p:to></p:animClr>`,
+      ],
+    }]]),
+  }])
+}
+
 export interface ManyLayersOptions {
   /** Click steps the entrances are spread over, round-robin (default 5). */
   steps?: number
@@ -260,7 +340,14 @@ export function manyLayersDeck(n: number, options: ManyLayersOptions = {}): Prom
   ])
 }
 
-export type AdversaryKind = 'cover' | 'alpha0' | 'recolourBg' | 'fullMask' | 'crop' | 'exitBeforeEntrance' | 'moverReveal'
+/**
+ * `moverReveal`'s timing (ms from the click): the step lasts `stepMs`; the dart begins at `dartAt` and lasts
+ * `dartMs`. The cover (x 360–600) uncovers the ink (x 400–560) once it is ≥ 200 px out, so the ink shows for
+ * t in `reveal` only.
+ */
+export const MOVER_REVEAL = Object.freeze({ stepMs: 1000, dartAt: 300, dartMs: 20, reveal: Object.freeze([300 + 20 * (200 / 960), 320 - 20 * (200 / 960)] as const) })
+
+export type AdversaryKind ='cover' | 'alpha0' | 'recolourBg' | 'fullMask' | 'crop' | 'exitBeforeEntrance' | 'moverReveal'
 export const ADVERSARY_KINDS: readonly AdversaryKind[] = ['cover', 'alpha0', 'recolourBg', 'fullMask', 'crop', 'exitBeforeEntrance', 'moverReveal']
 
 /**
@@ -280,8 +367,11 @@ export const ADVERSARY_KINDS: readonly AdversaryKind[] = ['cover', 'alpha0', 're
  * - `exitBeforeEntrance`: click 1 runs the ink box's entrance and, listed
  *   after it at the same instant, its exit: the exit wins, so it never shows.
  * - `moverReveal`: the ink box (id 2, static) sits under an opaque mover
- *   (id 3) that, on click 1, darts right and back in 400 ms: the ink shows
- *   only between samples of that motion.
+ *   (id 3). Click 1 is a 1 s step (the cover's opacity held at 1) holding a
+ *   20 ms dart from 300 ms, 480 px right and back (`MOVER_REVEAL`). The ink
+ *   shows only while the dart is out (`MOVER_REVEAL.reveal`, about
+ *   304–316 ms), strictly between the classifier's samples (8 even times
+ *   plus keyframe and behaviour begin/end times) and between 15 fps frames.
  */
 export function adversaryDeck(kind: AdversaryKind): Promise<Uint8Array> {
   const ink = (extra: Partial<PptxShapeSpec> = {}) => rect(2, 'Ink', 400, 300, 160, 120, HIDDEN_INK, extra)
@@ -311,7 +401,10 @@ export function adversaryDeck(kind: AdversaryKind): Promise<Uint8Array> {
     case 'moverReveal':
       return deck([slide([ink(), cover], [[{
         cls: 'path', preset: 0, behaviours: id => [
-          `<p:animMotion path="M 0 0 L 0.5 0 L 0 0 E"><p:cBhvr>${ctn(id(), 400)}${tgt(3)}${attrs('ppt_x', 'ppt_y')}</p:cBhvr></p:animMotion>`,
+          // The step's 1 s interval: the cover's opacity held at 1 (keyframes at 0 and 1000 ms).
+          animNum(id, 3, 'style.opacity', MOVER_REVEAL.stepMs, [[0, 1], [100000, 1]]),
+          // The dart: 20 ms from 300 ms, out 480 px and back (it begins and ends covering the ink).
+          `<p:animMotion path="M 0 0 L 0.5 0 L 0 0 E"><p:cBhvr>${ctn(id(), MOVER_REVEAL.dartMs, MOVER_REVEAL.dartAt)}${tgt(3)}${attrs('ppt_x', 'ppt_y')}</p:cBhvr></p:animMotion>`,
         ],
       }]])])
   }
