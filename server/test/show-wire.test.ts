@@ -7,6 +7,12 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { decodeShowMessage, SHOW_PLAN_LIMITS, isRasterLayer, type MorphPlanRecord, type ShowMessage, type ShowPlanRecord } from '../../src/stream/show-plan'
 import { flyInDeck, morphDeck } from '../../src/testdata/show-decks'
 import { Pool, RenderTimeout } from '../src/pool'
+import { canvasBackend } from '../../src/core/canvas-backend'
+import { morphFrame, type MorphFrameItem } from '../../src/slideshow/morph/render'
+import { createCanvas2DCompositor } from '../../src/slideshow/render/canvas2d'
+import type { LayerHandle, Lease, SlideShowWorkspace } from '../../src/slideshow/types'
+import { createDiagnosticSink } from '../../src/slideshow/diagnostics'
+import { DocumentHost } from '../src/render'
 import { AuditTable } from '../src/audit'
 import { decodePng } from '../src/mark/png'
 import { AuditStore } from '../src/audit-store'
@@ -146,6 +152,54 @@ describe('show wire', () => {
     expect(tags(ms)).toEqual([5, ...ms.slice(1).map(() => 4)])
     expect(r.extra).toContainEqual(expect.objectContaining({ type: 'diag', code: 'morph-composited', reason: 'swept' }))
     expect(s.store.showDeliveries(s.sid)).toEqual([expect.objectContaining({ unitIndex: 1, kind: 'morph', assetCount: ms.length - 1 })])
+    s.stop()
+  }, 60_000)
+
+  test('a layered Morph rebuilt from the wire alone (records + PNGs) composes as the server does at progress 0, 0.5, 1', async () => {
+    const deck = await morphDeck()
+    const s = await session(deck, { policy: { visibleMark: 'off', forensicMark: false } })
+    const r = await s.c.showMorph(0, 1, 0, 1, 'full')
+    const ms = decodeAll(1, r.messages)
+    const rec = morphOf(ms)
+    expect(rec.composited).toBeUndefined()
+    // The server's own composition of the same pair (its rasters, marks off).
+    const host = new DocumentHost()
+    const opened = await host.open('ref', deck, 'full')
+    const ref = await host.showMorphReference(opened.docKey, { from: 0, to: 1, fromStep: 0, scale: 1, motion: 'full', mark: { kind: 'off' } }, [0, 0.5, 1])
+    // The client side: only decoded records and PNGs.
+    const lease = (bytes: number, tag: string): Lease => { const l: Lease = { tag, bytes, grow: () => true, shrink() {}, transfer: () => l, release() {} }; return l }
+    const ws: SlideShowWorkspace = { limit: Number.POSITIVE_INFINITY, used: () => 0, reserveTerminal: () => undefined, lease }
+    const factory = (w: number, h: number) => canvasBackend().createCanvas(Math.max(1, Math.ceil(w)), Math.max(1, Math.ceil(h))) as never
+    const canvas = factory(ref.w, ref.h) as unknown as HTMLCanvasElement
+    const c = createCanvas2DCompositor(canvas, factory, ws, createDiagnosticSink())
+    c.setViewport({ matrix: [1, 0, 0, 1, 0, 0], deviceWidth: ref.w, deviceHeight: ref.h })
+    const pngOf = new Map(ms.filter((m): m is Extract<ShowMessage, { png: Uint8Array }> => 'png' in m).map((m) => [m.assetId, m]))
+    const handles = new Map<number, LayerHandle>()
+    const upload = (side: NonNullable<MorphPlanRecord['items'][number]['from']>): LayerHandle => {
+      const have = handles.get(side.assetId)
+      if (have) return have
+      const a = pngOf.get(side.assetId)!, d = decodePng(a.png)
+      const cv = canvasBackend().createCanvas(d.w, d.h), ctx = cv.getContext('2d') as unknown as CanvasRenderingContext2D
+      const img = ctx.createImageData(d.w, d.h); img.data.set(d.rgba); ctx.putImageData(img, 0, 0)
+      const h = c.upload({ canvas: cv as never, bounds: side.bounds, scale: d.w / side.bounds.w, bytes: d.w * d.h * 4 }, lease(0, 't'))
+      if ('refused' in h) throw new Error('refused')
+      handles.set(side.assetId, h)
+      return h
+    }
+    const pairs: MorphFrameItem[] = rec.items.map(({ from, to, ...rest }) => ({
+      ...rest,
+      ...(from ? { from: { handle: upload(from), geometry: from.geometry, ...(from.state ? { state: from.state } : {}), ...(from.part ? { part: from.part } : {}), ...(from.key ? { key: from.key } : {}) } } : {}),
+      ...(to ? { to: { handle: upload(to), geometry: to.geometry, ...(to.state ? { state: to.state } : {}), ...(to.part ? { part: to.part } : {}), ...(to.key ? { key: to.key } : {}) } } : {}),
+    }))
+    const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
+    ;[0, 0.5, 1].forEach((p, k) => {
+      morphFrame({ pairs }, p, c)
+      const got = ctx.getImageData(0, 0, ref.w, ref.h).data, want = ref.frames[k]!
+      let diff = 0
+      for (let i = 0; i < want.length; i += 4) if (got[i] !== want[i] || got[i + 1] !== want[i + 1] || got[i + 2] !== want[i + 2] || got[i + 3] !== want[i + 3]) diff++
+      expect({ progress: p, diff }).toEqual({ progress: p, diff: 0 })
+    })
+    c.dispose(); host.drop(opened.docKey)
     s.stop()
   }, 60_000)
 

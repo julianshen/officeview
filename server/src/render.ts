@@ -35,7 +35,7 @@ import { readSlideTiming } from '../../src/slideshow/read/timing'
 import type { Lease, SlideShowWorkspace } from '../../src/slideshow/types'
 import { buildShowPlan, createShowDoc, type BuiltShowPlan, type ShowBuildOptions, type ShowDoc, type ShowPlanJob, type ShowRefusal } from './show/build'
 import { renderTrack } from './show/tracks'
-import { buildMorphPlan, MorphInvalid, type BuiltMorph, type MorphJob } from './show/morph'
+import { buildMorphPlan, MorphInvalid, morphReference, type BuiltMorph, type MorphJob } from './show/morph'
 import { answerText, buildServedUnit, OBSERVER_BUDGET, prepareWorkspace, recordSpans, ServedCache, TEXT_RECORD_BUDGET, TextBudgetExceeded, TextRefusal, type ServedUnit, type TextJob, type TextReply } from './text/served'
 
 export const MAX_UNIT_PX = 8192
@@ -275,6 +275,15 @@ export class DocumentHost {
     await this.loadShow(doc.show, job.to)
     this.pages++
     try { return buildMorphPlan(doc, job) } catch (e) { if (e instanceof MorphInvalid) throw new RenderRefusal('unit-range', e.message); throw e }
+  }
+
+  /** TEST-ONLY (Task 7 fix round 1): the Morph pair composed from the server's own rasters, marks off (`morphReference`). */
+  async showMorphReference(docKey: string, job: MorphJob, progresses: readonly number[]) {
+    const doc = this.docs.get(docKey)
+    if (!doc?.show) throw new RenderRefusal('unknown-doc')
+    await this.loadShow(doc.show, job.from)
+    await this.loadShow(doc.show, job.to)
+    return morphReference(doc, job, progresses)
   }
 
   /** Show-plan cache counters, summed over open documents (L1: preparation; L2: marked bundles). */

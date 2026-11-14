@@ -58,15 +58,15 @@ function flyIn(): ShowPlanRecord {
 const morph = (): MorphPlanRecord => ({
   v: 1, from: 0, to: 1, fromStep: 2,
   items: [
-    { background: true, from: { assetId: 1, geometry: { x: 0, y: 0, w: 960, h: 540, rot: 0 } }, to: { assetId: 2, geometry: { x: 0, y: 0, w: 960, h: 540, rot: 0 } } },
+    { background: true, from: { assetId: 1, geometry: { x: 0, y: 0, w: 960, h: 540, rot: 0 }, bounds: { x: 0, y: 0, w: 960, h: 540 } }, to: { assetId: 2, geometry: { x: 0, y: 0, w: 960, h: 540, rot: 0 }, bounds: { x: 0, y: 0, w: 960, h: 540 } } },
     {
       under: true,
-      from: { assetId: 3, geometry: { x: 10, y: 10, w: 100, h: 50, rot: 0 }, state: { visible: true, opacity: 1, transform: [1, 0, 0, 1, 0, 0] }, part: 'fill', key: 'a' },
-      to: { assetId: 4, geometry: { x: 50, y: 60, w: 100, h: 50, rot: 15 }, key: 'b' },
+      from: { assetId: 3, geometry: { x: 10, y: 10, w: 100, h: 50, rot: 0 }, bounds: { x: 0, y: 0, w: 120, h: 70 }, state: { visible: true, opacity: 1, transform: [1, 0, 0, 1, 0, 0] }, part: 'fill', key: 'a' },
+      to: { assetId: 4, geometry: { x: 50, y: 60, w: 100, h: 50, rot: 15 }, bounds: { x: 38.5, y: 41.25, w: 124, h: 88 }, key: 'b' },
       path: { from: { x: 10, y: 10, w: 100, h: 50, rot: 0 }, to: { x: 50, y: 60, w: 100, h: 50, rot: 15 } },
       pathStates: { to: { visible: true, opacity: 0.5, transform: [1, 0, 0, 1, 4, 4], mask: { kind: 'wipe', progress: 0.5, params: { dir: 'l', n: 2 } }, color: { fill: Array(20).fill(0) } } },
     },
-    { to: { assetId: 5, geometry: { x: 0, y: 0, w: 5, h: 5, rot: 0 } } },
+    { to: { assetId: 5, geometry: { x: 0, y: 0, w: 5, h: 5, rot: 0 }, bounds: { x: -10, y: -10, w: 25, h: 25 } } },
   ],
   over: [6], pairs: [{ fromKey: 'a', toKey: 'b', rule: 'name-kind' }],
 })
@@ -394,7 +394,7 @@ describe('hostile plan records', () => {
 describe('hostile Morph records', () => {
   const rej = (p: Uint8Array, e = E) => pathOf(() => decodeShowMessage(p, e))
   const mm = (f: (p: any) => void) => { const p = structuredClone(morph()); f(p); return raw(5, p) } // eslint-disable-line @typescript-eslint/no-explicit-any
-  const item = (id: number) => ({ from: { assetId: id, geometry: { x: 0, y: 0, w: 1, h: 1, rot: 0 } } })
+  const item = (id: number) => ({ from: { assetId: id, geometry: { x: 0, y: 0, w: 1, h: 1, rot: 0 }, bounds: { x: 0, y: 0, w: 1, h: 1 } } })
   it('rejects 513 Morph items', () => expect(rej(mm((p) => { p.items = Array.from({ length: 513 }, (_, i) => item(i + 10)) }))).toBe('items'))
   it('accepts 512 Morph items', () => expect(() => decodeShowMessage(mm((p) => { p.items = Array.from({ length: 512 }, (_, i) => item(i + 10)) }), E)).not.toThrow())
   it.each([0, 91, -1, 1.5])('rejects composited.count %p', (count) => {
@@ -410,6 +410,15 @@ describe('hostile Morph records', () => {
   it('rejects a non-finite or out-of-range geometry', () => {
     expect(rej(mm((p) => { p.items[0].from.geometry.w = 'x' }))).toBe('items[0].from.geometry.w')
     expect(rej(mm((p) => { p.items[0].from.geometry.x = 5 * 8192 + 1 }))).toBe('items[0].from.geometry.x')
+  })
+  it('rejects a side without its raster bounds, or with non-finite or out-of-range bounds (Task 7 fix round 1)', () => {
+    expect(rej(mm((p) => { delete p.items[0].from.bounds }))).toBe('items[0].from.bounds')
+    expect(rej(mm((p) => { p.items[1].to.bounds.x = Number.NaN }))).toBe('items[1].to.bounds.x')
+    expect(rej(mm((p) => { p.items[1].to.bounds.w = 'x' }))).toBe('items[1].to.bounds.w')
+    expect(rej(mm((p) => { p.items[2].to.bounds.x = 5 * 8192 + 1 }))).toBe('items[2].to.bounds.x')
+    expect(rej(mm((p) => { p.items[2].to.bounds.w = -1 }))).toBe('items[2].to.bounds.w')
+    expect(rej(mm((p) => { p.items[2].to.bounds.x = 4 * 8192; p.items[2].to.bounds.w = 8193 }))).toBe('items[2].to.bounds.w')
+    expect(rej(mm((p) => { p.items[0].from.bounds.extra = 1 }))).toBe('items[0].from.bounds.extra')
   })
   it('rejects an unknown rule, key, state key and v: 2', () => {
     expect(rej(mm((p) => { p.pairs[0].rule = 'fuzzy' }))).toBe('pairs[0].rule')

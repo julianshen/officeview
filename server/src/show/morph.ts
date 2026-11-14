@@ -84,7 +84,58 @@ const resolveFont = (f: string) => f
 export type MorphUnproven = 'colour' | 'mask' | 'swept' | 'budget' | 'reconstruction' | 'strict-marks' | 'mark-rest' | 'limits' | 'marks'
 type Unproven = MorphUnproven
 
+interface PairInputs { plan: MorphPlan; bitmaps: Map<MorphLayerRef, LayerBitmap>; page: { w: number; h: number }; durationMs: number; docKey: string }
+
 export function buildMorphPlan(doc: ShowHost, job: MorphJob): BuiltMorph {
+  const p = pairInputs(doc, job)
+  if ('refused' in p) return p
+  try {
+    return assemble(p.plan, p.bitmaps, job, p.page, p.durationMs, p.docKey)
+  } finally {
+    for (const l of p.plan.leases) l.release()
+  }
+}
+
+/**
+ * TEST-ONLY reference (Task 7 fix round 1): the pair composed on the server from its own rasters (no marks, no
+ * masks) at each of `progresses`, as RGBA at the bucket. The wire parity test rebuilds the same frames from the
+ * decoded records and PNGs alone.
+ */
+export function morphReference(doc: ShowHost, job: MorphJob, progresses: readonly number[]): { w: number; h: number; frames: Uint8ClampedArray[] } {
+  const p = pairInputs(doc, job)
+  if ('refused' in p) throw new Error('show-morph: refused')
+  try {
+    const W = Math.max(1, Math.ceil(p.page.w * job.scale)), H = Math.max(1, Math.ceil(p.page.h * job.scale))
+    const { used, spec } = frameSpecOf(p.plan)
+    const rasters = new Map<number, LayerBitmap>()
+    for (const r of used) rasters.set(r, p.bitmaps.get(p.plan.refs[r]!)!)
+    const composer = composerOf(rasters, job.scale, W, H)
+    try {
+      return { w: W, h: H, frames: progresses.map(x => new Uint8ClampedArray(composer.compose(drawsAtProgress(spec, x)))) }
+    } finally { composer.dispose() }
+  } finally {
+    for (const l of p.plan.leases) l.release()
+  }
+}
+
+/** The refs an item side (or `over`) names, and the frame spec over them (handle ids are ref indices). */
+function frameSpecOf(plan: MorphPlan): { used: Set<number>; spec: MorphFrameSpec } {
+  const used = new Set<number>()
+  for (const it of plan.items) { if (it.from) used.add(it.from.ref); if (it.to) used.add(it.to.ref) }
+  for (const r of plan.over) used.add(r)
+  const handles = new Map<number, LayerHandle>()
+  for (const r of used) handles.set(r, { id: r })
+  const spec: MorphFrameSpec = {
+    pairs: plan.items.map((item): MorphFrameItem => {
+      const { from: f, to: t, ...rest } = item
+      return { ...rest, ...(f ? { from: { ...f, handle: handles.get(f.ref)! } } : {}), ...(t ? { to: { ...t, handle: handles.get(t.ref)! } } : {}) }
+    }),
+    ...(plan.over.length ? { over: plan.over.map(r => ({ handle: handles.get(r)!, state: { visible: true, opacity: 1, transform: [1, 0, 0, 1, 0, 0] as Affine } })) } : {}),
+  }
+  return { used, spec }
+}
+
+function pairInputs(doc: ShowHost, job: MorphJob): PairInputs | { refused: 'morph-fallback' } {
   const show = doc.show
   if (!show) throw new Error('show: not a deck')
   const from = prepareShowSlide(show, job.from, job.motion)
@@ -119,11 +170,7 @@ export function buildMorphPlan(doc: ShowHost, job: MorphJob): BuiltMorph {
     },
   })
   if (typeof plan === 'string') return { refused: 'morph-fallback' }
-  try {
-    return assemble(plan, bitmaps, job, slideSize(to.ps.slide), spec.durationMs, show.docKey)
-  } finally {
-    for (const l of plan.leases) l.release()
-  }
+  return { plan, bitmaps, page: slideSize(to.ps.slide), durationMs: spec.durationMs, docKey: show.docKey }
 }
 
 function assemble(plan: MorphPlan, bitmaps: ReadonlyMap<MorphLayerRef, LayerBitmap>, job: MorphJob, page: { w: number; h: number }, durationMs: number, docKey: string): BuiltMorph {
@@ -132,18 +179,7 @@ function assemble(plan: MorphPlan, bitmaps: ReadonlyMap<MorphLayerRef, LayerBitm
   const dur = Number.isFinite(durationMs) && durationMs > 0 ? durationMs : 0
   const bmpOf = (ref: number) => bitmaps.get(plan.refs[ref]!)
   // The refs an item side (or `over`) names: only these ship (D11).
-  const used = new Set<number>()
-  for (const it of plan.items) { if (it.from) used.add(it.from.ref); if (it.to) used.add(it.to.ref) }
-  for (const r of plan.over) used.add(r)
-  const handles = new Map<number, LayerHandle>()
-  for (const r of used) handles.set(r, { id: r })
-  const spec: MorphFrameSpec = {
-    pairs: plan.items.map((item): MorphFrameItem => {
-      const { from: f, to: t, ...rest } = item
-      return { ...rest, ...(f ? { from: { ...f, handle: handles.get(f.ref)! } } : {}), ...(t ? { to: { ...t, handle: handles.get(t.ref)! } } : {}) }
-    }),
-    ...(plan.over.length ? { over: plan.over.map(r => ({ handle: handles.get(r)!, state: { visible: true, opacity: 1, transform: [1, 0, 0, 1, 0, 0] as Affine } })) } : {}),
-  }
+  const { used, spec } = frameSpecOf(plan)
   const samples = Array.from({ length: SAMPLES_PER_INTERVAL + 1 }, (_, k) => k / SAMPLES_PER_INTERVAL)
   const lists = samples.map(p => drawsAtProgress(spec, p))
 
@@ -187,7 +223,9 @@ function assemble(plan: MorphPlan, bitmaps: ReadonlyMap<MorphLayerRef, LayerBitm
   }
   const side = (s: NonNullable<MorphPlan['items'][number]['from']>): MorphSideRecord => {
     const { ref, geometry, state, part, key } = s
-    return { assetId: MORPH_ASSET_BASE + ref, geometry: { x: geometry.x, y: geometry.y, w: geometry.w, h: geometry.h, rot: geometry.rot }, ...(state ? { state } : {}), ...(part ? { part } : {}), ...(key ? { key } : {}) }
+    // `bounds`: where the raster is placed (the compositor's `LayerBitmap.bounds`), apart from the interpolated `geometry`.
+    const b = proved.rasters.get(ref)!.bounds
+    return { assetId: MORPH_ASSET_BASE + ref, geometry: { x: geometry.x, y: geometry.y, w: geometry.w, h: geometry.h, rot: geometry.rot }, bounds: { x: b.x, y: b.y, w: b.w, h: b.h }, ...(state ? { state } : {}), ...(part ? { part } : {}), ...(key ? { key } : {}) }
   }
   const record: MorphPlanRecord = {
     v: 1, from: job.from, to: job.to, fromStep: job.fromStep,

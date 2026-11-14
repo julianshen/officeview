@@ -72,7 +72,12 @@ export interface ShowPlanRecord {
   entry: number
   diagnostics: Array<{ code: string; step?: number }>
 }
-export interface MorphSideRecord { assetId: number; geometry: BaseGeometry; state?: TargetState; part?: 'fill' | 'line' | 'text'; key?: string }
+/**
+ * One side of a Morph item. `geometry`: the object's base box (slide px), which the Morph interpolates. `bounds`
+ * (Task 7 fix round 1, required): where the side's raster is placed, slide px, the asset's `LayerBitmap.bounds`
+ * (same meaning as `PlanLayerRecord.bounds`); the asset's px over `bounds` is its scale.
+ */
+export interface MorphSideRecord { assetId: number; geometry: BaseGeometry; bounds: Rect; state?: TargetState; part?: 'fill' | 'line' | 'text'; key?: string }
 export interface MorphPlanRecord {
   v: 1; from: number; to: number; fromStep: number
   items: Array<Omit<MorphItemRef, 'from' | 'to'> & { from?: MorphSideRecord; to?: MorphSideRecord }>
@@ -496,8 +501,8 @@ function validateMorph(v: unknown): MorphPlanRecord {
     if (!has(io, 'from') && !has(io, 'to')) fail(p)
     for (const side of ['from', 'to']) {
       opt(io, side, p, (s, q) => {
-        const so = obj(s, q, ['assetId', 'geometry'], ['state', 'part', 'key'])
-        claim(so.assetId, at(q, 'assetId')); geometry(so.geometry, at(q, 'geometry'), MAX_PX, MAX_PX)
+        const so = obj(s, q, ['assetId', 'geometry', 'bounds'], ['state', 'part', 'key'])
+        claim(so.assetId, at(q, 'assetId')); geometry(so.geometry, at(q, 'geometry'), MAX_PX, MAX_PX); rect(so.bounds, at(q, 'bounds'), MAX_PX, MAX_PX)
         opt(so, 'state', q, targetState); opt(so, 'part', q, (x, r) => oneOf(x, r, SIDE_PARTS)); opt(so, 'key', q, (x, r) => str(x, r))
       })
     }
