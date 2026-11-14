@@ -1124,7 +1124,25 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       budget,
     })
   }
-  const prepareRemoteScope = async (sheetId: string, rects: readonly SourceRect[], batchSignal: AbortSignal, locale: string, budget: FormatBudget, base?: import('../../xlsx/tableStyles/regionLayer').RegionStyleLayer, onEmpty?: () => void): Promise<EffectiveFormatScope | undefined> => {
+  /**
+   * Ruling S3-A11Y-PAGED: the paged grid semantics' scope never paints, so it reads the frame's own hosts: each cell's
+   * logical box from the sheet metrics (as the viewport placements are laid out) and its screen base style
+   * (`styleForCell`). Read at call time from the committed entry; a cell not loaded yet, hidden or outside the metrics
+   * has no host, which withholds its bar (fail closed). Nothing is retained per cell.
+   */
+  const frameHostSource = (sheetId: string): import('../../xlsx/cf/text').CfFrameHostSource => ({
+    cell: (row, col) => {
+      const sheetEntry = entries.get(sheetId)
+      if (!sheetEntry || !remote || remote.isClosed) return undefined
+      const at = { row, col }
+      const cell = cellAt(sheetEntry, at)
+      if (!cell) return undefined
+      let box: ReturnType<SheetEntry['metrics']['sourceCellToLogical']>
+      try { box = sheetEntry.metrics.sourceCellToLogical(at) } catch { return undefined }
+      return box ? { box, base: styleForCell(sheetEntry, cell) } : undefined
+    },
+  })
+  const prepareRemoteScope = async (sheetId: string, rects: readonly SourceRect[], batchSignal: AbortSignal, locale: string, budget: FormatBudget, base?: import('../../xlsx/tableStyles/regionLayer').RegionStyleLayer, onEmpty?: () => void, hosts?: import('../../xlsx/cf/text').CfFrameHostSource): Promise<EffectiveFormatScope | undefined> => {
     if (!remote || !rects.length || batchSignal.aborted) return undefined
     // A paged worker read that never settles (no failure, no notification)
     // must not hang the preparation forever. 15s covers slow healthy loads
@@ -1187,7 +1205,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         }
       },
       rects,
-      { locale, budget, current: live, base, onEmpty, colors: remote.formatting().colors ?? { theme: doc.sheets[sheetIds.indexOf(sheetId)]?.drawingTheme?.palette }},
+      { locale, budget, current: live, base, onEmpty, ...(hosts ? { hosts } : {}), colors: remote.formatting().colors ?? { theme: doc.sheets[sheetIds.indexOf(sheetId)]?.drawingTheme?.palette }},
     )
   }
   const residentBatch = currentViewportCf?.batch ?? (assets?.cfLiveKey === cfLiveKey ? assets?.lease.assets.conditionalFormatting : undefined)
@@ -1345,7 +1363,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       try {
         const locale = entry.sheet.semantics?.locale ?? 'en-US'
         scope = remote
-          ? await prepareRemoteScope(sheetId, cfTextRects, abort.signal, locale, semanticFormatBudget, undefined, () => { empty = true })
+          ? await prepareRemoteScope(sheetId, cfTextRects, abort.signal, locale, semanticFormatBudget, undefined, () => { empty = true }, frameHostSource(sheetId))
           : await prepareResidentScope(sheet, cfTextRects, abort.signal, semanticFormatBudget)
       } catch {
         scope = undefined

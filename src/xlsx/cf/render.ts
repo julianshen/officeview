@@ -171,6 +171,27 @@ export function residentBarHosts(sheet: XlsxSheet, styleAt: (row: number, col: n
   }
 }
 
+/**
+ * The frame's own host source for a paged or worker-backed view (Ruling S3-A11Y-PAGED): per cell, the logical box the
+ * viewport painter lays it out in (`SheetMetrics.sourceCellToLogical`, as its placements are) and its screen base style
+ * (own style through the region layer), or undefined where the frame has no exact host (a cell not loaded yet, hidden,
+ * outside the metrics): withheld, fail closed. Nothing is retained per call.
+ */
+export interface CfFrameHostSource {
+  cell(row: number, col: number): { readonly box: Readonly<{ x: number; y: number; width: number; height: number }>; readonly base: XlsxCellStyle | undefined } | undefined
+}
+
+/** Each bar cell's host as the viewport frame paints it: the source's box, and the fill the frame resolves under the
+ * bar (`styleAt` over the base, by `spreadsheetColor`), so `barAt`/`describe` share the painter's `barWithheld`. */
+export function frameBarHosts(source: CfFrameHostSource, styleAt: (row: number, col: number, base: XlsxCellStyle | undefined) => XlsxCellStyle | undefined): (row: number, col: number) => CfBarHost | undefined {
+  return (row, col) => {
+    const at = source.cell(row, col)
+    if (!at) return undefined
+    const fill = styleAt(row, col, at.base)?.fillColor
+    return { x: at.box.x, y: at.box.y, width: at.box.width, height: at.box.height, ...(fill ? { fill: spreadsheetColor(fill) } : {}) }
+  }
+}
+
 /** Shared by resident assets and paged callers. paintRects scopes whole-axis
  * rules to the visible/printed source coordinates, including unstored blanks. */
 export async function prepareCfPaint(sheet: XlsxSheet, options: {

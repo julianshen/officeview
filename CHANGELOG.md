@@ -23,8 +23,7 @@ in git history.
   default negative border), equal or single-value scopes, values beyond num/percentile bounds, stop-if-true bars,
   standalone x14 bars and every unresolved shape stay withheld
   with their base formatting and announce "Conditional formatting unavailable". A painted bar announces
-  "Data bar, N% of range" (「資料橫條 N%」 in zh-TW); known issue: the forced-paged view still announces its painted
-  bars as unavailable. Conditional formatting preparation is bounded by a deterministic work-unit cap instead of a
+  "Data bar, N% of range" (「資料橫條 N%」 in zh-TW). Conditional formatting preparation is bounded by a deterministic work-unit cap instead of a
   50 ms wall clock, so whether a rule paints no longer depends on machine load. Details are in
   `docs/validation/xlsx-cf.md` §11.
 
@@ -176,6 +175,8 @@ in git history.
     `docs/validation/xlsx-pivots.md`.
 
 ### Fixed
+
+- **The forced-paged view announces its painted data bars** ("Data bar, N% of range") instead of "Conditional formatting unavailable", deciding each bar from the host the frame paints it in.
 
 - **Conditional-formatting cell text recovers instead of sticking on base formatting.**
   When a CF text preparation failed or was refused while the worker was still

@@ -1157,12 +1157,11 @@ slow device for a load-independent outcome: a device four times slower than this
 call at the cap, in 128-unit slices separated by host yields.
 
 **Browser** (`.superpowers/t22/pw.config.ts`: the stock config's second webServer needs `@napi-rs/canvas`):
-chromium and Playwright WebKit (`webkit-2370`) each 17 passed plus the 1 expected failure (forced-paged bar
-descriptor) reported as expected. The Stage 3 tests (bars paint and the
+chromium and Playwright WebKit (`webkit-2370`) each 18 passed, 0 expected failures (the former expected failure, the forced-paged
+bar descriptor, is a normal test since the S3-A11Y-PAGED fix). The Stage 3 tests (bars paint and the
 resident, worker and forced-paged legs agree within 0.2 % of pixels; six zoom/DPR pairs; frozen panes; a live max
 edit that rescales the bars; print capture with bar pixels on the prepared page) pass on every leg; the bar
-descriptor is asserted on the resident and worker legs, and the forced-paged descriptor by the expected-failure test
-(known limit below).
+descriptor is asserted on all three legs, which announce the same descriptors.
 
 **`cf-compare --stage 3`** (bound to each case's `savedSha256` and oracle hash): static 0 pass / 3 unsupported / 33
 fail, print 0 / 3 / 33 (no printer captures), export 0 / 3 / 33 — whole-image comparisons fail for Stage 1/2 cases
@@ -1173,11 +1172,19 @@ and composition F2 (a matching DXF with no visible property); the two Stage 1 in
 clock-dependent timePeriod cases. Bar geometry fidelity is proven by the Lesson 1 conformance, not by cf-compare.
 
 **Known limits (recorded, not fixed).**
-- **Forced-paged descriptor (defect).** In the forced-paged view the grid semantics read a second wire scope
-  (`InteractiveSheetDoc` semantic text scope) that never paints, and a host-less wire scope announces a bar only after
-  painting it, so every painted bar announces "Conditional formatting unavailable" there. The bars do paint (and the
-  worker sends the same descriptors as the resident path). Pinned by an expected-failure browser test; the fix needs
-  the semantic scope to read the painter's outcome or a host source.
+- **Forced-paged descriptor (fixed, Ruling S3-A11Y-PAGED).** The forced-paged grid semantics read a second wire
+  scope that never paints, and a host-less wire scope announced a bar only after painting it, so every painted bar
+  announced "Conditional formatting unavailable" there. That scope now takes the frame's own host source
+  (`CfFrameHostSource`, `frameBarHosts` in `cf/render.ts`): each cell's logical box from the sheet metrics
+  (`sourceCellToLogical`, as the viewport placements are laid out) and its screen base style (own style through the
+  region layer, then the scope's CF style), and decides each bar with the painter's own `barWithheld` at the capture
+  scale. A cell the frame has no exact host for (not loaded, hidden, outside the metrics) withholds, so no bar the
+  frame would not paint is ever announced, including the too-small host and unverified capabilities. Only the
+  semantic call site passes hosts: the paged paint scope (which still learns from its paints), copy and the resident
+  and worker legs are unchanged, and nothing is retained per host. Evidence: `tests/xlsx-cf-paged-a11y.test.ts`
+  (RED before the fix: 4 of 6 failed, the painted bar announcing unavailable; after: 6 passed, including a test that
+  each hosted descriptor equals a host-less scope's after painting the same hosts), and the browser tests now assert
+  the descriptor on all three legs, which announce the same names for C3, C6 and E3.
 - **Merged hosts.** `assembleScope` (text.ts) would announce a bar inside a merge where `render.ts` refuses to paint
   it; unreachable while `bar:scope-merged-cell` is unverified (the service withholds any bar scope that intersects a
   merge on every production path, as the paged agreement test confirms).
