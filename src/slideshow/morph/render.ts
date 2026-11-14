@@ -24,7 +24,7 @@
  * Morph is always an approximation (spec 10), diagnosed by the dispatch.
  * Reduced motion never reaches this module (`reducedTransition`).
  */
-import { mul } from '../player/hit-test'
+import { mul } from '../affine'
 import type { BaseGeometry } from '../engine/behaviours'
 import type { Affine, Compositor, LayerDraw, LayerHandle, TargetKey, TargetState } from '../types'
 

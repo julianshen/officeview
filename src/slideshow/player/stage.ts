@@ -69,10 +69,11 @@ import type { TextTiming } from './text-builds'
 import { targetKey } from '../target'
 import type {
   Affine, AllocationOwner, CanvasFactory, Compositor, CompositorViewport, DiagnosticSink, LayerDraw, LayerHandle, Lease, MetadataHandle,
-  RenderState, Rng, ShowSlide, SlideMetadataStore, SlideShowWorkspace, TargetKey, TargetState, TerminalReserve, TimeNode, TimingTree, TransitionSpec,
+  LinkSpec, RenderState, Rng, ShowSlide, SlideMetadataStore, SlideShowWorkspace, TargetKey, TargetState, TerminalReserve, TimeNode, TimingTree, TransitionSpec,
 } from '../types'
 import { createFrameLimits, LAYER_LIMIT, RERASTER_LIMIT, surfaceBytes, type Backing } from '../workspace'
-import { apply, invert, mul } from './hit-test'
+import { apply, hitTarget, invert, mul } from './hit-test'
+import type { HitResult } from './driver'
 import { computeTextTiming, layoutTextBases, prepareSlide, rasterPreparedLayer, targetsOf, type PreparedSlide } from '../prepare/slide'
 import { compose, PLAIN, planMorph, type MorphItemRef, type MorphLayerRef } from '../prepare/morph'
 
@@ -119,8 +120,26 @@ export interface StageModel {
 }
 
 export interface Stage {
-  /** The shown slide is being left: its current frame becomes the outgoing transition frame. */
+  /**
+   * The shown slide is gone: everything it held is released. Its current frame becomes the outgoing
+   * transition frame here unless `flattenCurrent` already captured it.
+   */
   leave(): void
+  /**
+   * Additive (piece 4 Task 3): the shown slide is being left: its current frame becomes the outgoing
+   * transition frame now (`leave` then releases the rest).
+   */
+  flattenCurrent?(): void
+  /**
+   * Additive (piece 4 Task 3): prepares slide `index` in the background, a visible neighbour of the
+   * shown slide (its metadata, layers and pictures), once the shown slide is entered.
+   */
+  prepare?(index: number): void
+  /**
+   * Additive (piece 4 Task 3): the topmost trigger (in `on.triggers`) or link (in `on.links`) under client
+   * px (clientX, clientY) on the shown slide at `cursor`/`t`, or `undefined` (the click passes).
+   */
+  hitTest?(clientX: number, clientY: number, cursor: SlideCursor, t: number, on: { triggers: readonly string[]; links: readonly LinkSpec[] }): HitResult | undefined
   /**
    * Shows `model`; resolves once it is drawable and its transition (if any) has started. `t` is the show time
    * of the request; the transition starts at the show clock's reading once the slide is prepared.
@@ -384,6 +403,8 @@ export function createStage(deps: StageDeps): Stage {
   let measurer: ReturnType<CanvasFactory> | undefined
   /** The slide last left and its state then: a Morph's outgoing side (S3-6), consumed by the next `enter`. */
   let left: Left | undefined
+  /** `flattenCurrent` has captured the shown slide's outgoing frame; `leave` does not capture it again. */
+  let captured = false
 
   // -------------------------------------------------------------------
   // Viewport
@@ -1014,7 +1035,9 @@ export function createStage(deps: StageDeps): Stage {
       }
     },
 
-    leave() {
+    flattenCurrent() {
+      if (captured) return
+      captured = true
       const p = current
       running && (releaseFrame(running.from), releaseFrame(running.to), running.morph && releaseMorph(running.morph))
       running = undefined
@@ -1034,9 +1057,59 @@ export function createStage(deps: StageDeps): Stage {
         if (f) outgoing = f
         else sink.add({ code: 'transition-workspace', slideIndex: p.index, message: 'The outgoing frame did not fit the slideshow workspace; the slide change is a cut' })
       }
+    },
+
+    leave() {
+      // A leave without flattenCurrent (every caller before piece 4) still captures the outgoing frame here.
+      if (!captured) stage.flattenCurrent!()
+      captured = false
       current = undefined
       timelineOf = undefined
       origin = Number.POSITIVE_INFINITY
+    },
+
+    prepare(n) {
+      const p = current
+      // Prefetch in the background (catching 'cancelled'); a slide left meanwhile releases what arrives.
+      // (`prepare` below is the stage's own slide preparation, not this method.)
+      if (disposed || !p || n === p.index || prepared.has(n)) return
+      void deps.metadata(n).then((h) => {
+        if (disposed || current !== p) { h.release(); return }
+        const q = prepare(n, h.slide, h)
+        return q.ready.then(() => ensure(q, 'full'))
+      }).catch(() => undefined)
+    },
+
+    hitTest(clientX, clientY, cursor, t, on) {
+      const plan = current?.plan
+      if (!plan) return undefined
+      const at = stage.toSlide(clientX, clientY)
+      if (!at) return undefined
+      const { triggers, links } = on
+      // A trigger beats a link on the same shape (pending D4; recorded in the catalogue). A link on text runs
+      // is taken only over the laid-out run it is on (PR #18 review 3); elsewhere the shape's own link, if any,
+      // else the click passes to the shapes below. Text that cannot be located keeps the first run's link.
+      const accept = (spid: string, leaf: PptxShape, lx: number, ly: number, w: number, h: number): { spid: string; kind: 'trigger' | 'link'; run?: { p: number; r: number } } | undefined => {
+        if (triggers.includes(spid)) return { spid, kind: 'trigger' }
+        const mine = links.filter((l) => l.spid === spid)
+        if (!mine.length) return undefined
+        const own = mine.some((l) => !l.run)
+        const runs = mine.filter((l) => l.run)
+        if (runs.length && leaf.source?.id === spid) {
+          const run = stage.runAt(leaf, lx, ly, w, h)
+          if (run && runs.some((l) => l.run!.p === run.p && l.run!.r === run.r)) return { spid, kind: 'link', run }
+          if (run === undefined && !own) return { spid, kind: 'link', run: runs[0].run }
+        }
+        return own ? { spid, kind: 'link' } : undefined
+      }
+      const target = hitTarget(plan, stage.stateAt(cursor, t), at.x, at.y, accept)
+      if (!target) return undefined
+      if (target.kind === 'trigger') return { kind: 'trigger', spid: target.spid }
+      // The link on the run named, else the shape's own; a target naming no run falls back to the first link.
+      const mine = links.filter((l: LinkSpec) => l.spid === target.spid)
+      const run = target.run
+      const link = run ? mine.find((l) => l.run?.p === run.p && l.run.r === run.r) : mine.find((l) => !l.run) ?? mine[0]
+      return link ? { kind: 'link', link } : { kind: 'withheld' }
     },
 
     textTiming(index, meta, charge) {
@@ -1046,6 +1119,7 @@ export function createStage(deps: StageDeps): Stage {
 
     async enter(model, t, neighbours) {
       if (disposed) return
+      captured = false
       const p = prepare(model.index, model.slide)
       // The slide just left is a Morph's other side (S3-6); the drop loop below
       // may still evict it (not adjacent), and then the morph falls back.
@@ -1119,15 +1193,7 @@ export function createStage(deps: StageDeps): Stage {
       if (!running) { releaseFrame(outgoing); outgoing = undefined }
       container.hidden = level === 'terminal'
       if (level === 'terminal') lastDirect = ''
-      // Prefetch the neighbours in the background (catching 'cancelled').
-      for (const n of neighbours) {
-        if (n === p.index || prepared.has(n)) continue
-        void deps.metadata(n).then((h) => {
-          if (disposed || current !== p) { h.release(); return }
-          const q = prepare(n, h.slide, h)
-          return q.ready.then(() => ensure(q, 'full'))
-        }).catch(() => undefined)
-      }
+      // The neighbours are prefetched by `prepare`, which the driver calls once this resolves.
     },
 
     slideTime(t) { return t - origin },

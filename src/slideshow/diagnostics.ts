@@ -40,6 +40,8 @@ export const DIAGNOSTIC_CODES: Readonly<Record<string, DiagnosticClass>> = Objec
   // Slide metadata
   'notes-limit': 'refused', 'notes-truncated': 'refused', 'metadata-limit': 'resource', 'slide-refused': 'refused',
   'media-refused': 'refused', 'media-limit': 'refused', 'link-refused': 'refused', 'link-open-failed': 'resource',
+  // A link whose target the streamed show does not carry (piece 4 D14): the click is consumed
+  'link-withheld': 'refused',
   // Transitions
   'transition-approximate': 'approximate', 'transition-stand-in': 'stand-in', 'transition-unknown': 'refused',
   'transition-unknown-preset': 'approximate', 'transition-extension': 'refused', 'transition-invalid-value': 'refused',
