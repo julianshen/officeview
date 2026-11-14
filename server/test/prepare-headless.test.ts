@@ -82,4 +82,25 @@ describe('prepare headless', () => {
     expect(rects[0].x + rects[0].w).toBeGreaterThanOrEqual(240)
     expect(rects[0].y + rects[0].h).toBeLessThanOrEqual(720)
   })
+
+  it('a requested group and a requested descendant both own the descendant leaf', async () => {
+    const d = await loadShowDeck(await triggerDeck())
+    const meta = await d.meta(0)
+    const slide = d.doc.slides[0]
+    const [box, button] = slide.shapes
+    // Group 9 holds both shapes with an identity child transform (ext = chExt, chOff = off).
+    const E = 9144000, H = 6858000
+    const group = {
+      ...box, xEmu: 0, yEmu: 0, widthEmu: E, heightEmu: H, rotationDeg: 0, fill: undefined, line: undefined, textBody: undefined,
+      source: { ...box.source!, id: '9', name: 'Group' },
+      group: { ext: { width: E, height: H }, chExt: { width: E, height: H }, chOff: { x: 0, y: 0 } },
+      children: [box, button],
+    } as typeof box
+    const grouped = { ...slide, shapes: [group] }
+    const ps = prepareSlide({ index: 0, slide: grouped, meta, watermark: false })
+    const regions = hitRegionsOf(ps, ['9', '3'], measure(), f => f)
+    expect(regions.get('9')).toHaveLength(2)
+    expect(regions.get('3')).toHaveLength(1)
+    expect(regions.get('9')).toContainEqual(regions.get('3')![0])
+  })
 })

@@ -173,21 +173,24 @@ export function hitRegionsOf(ps: PreparedSlide, spids: readonly string[], measur
   const out = new Map<string, Array<{ x: number; y: number; w: number; h: number }>>()
   const want = new Set(spids)
   const claimed = new Set<string>()
-  const walk = (nodes: readonly PptxShape[], path: PptxShape[], owner: string | undefined, depth: number): void => {
+  // Every requested ancestor-or-self owns each leaf below it (a group and its child may both be asked for).
+  const walk = (nodes: readonly PptxShape[], path: PptxShape[], owners: readonly string[], depth: number): void => {
     if (depth > 64) return
     for (const shape of nodes) {
-      let own = owner
+      let own = owners
       const id = shape.source?.id
-      if (own === undefined && id !== undefined && want.has(id) && !claimed.has(id)) { claimed.add(id); own = id }
+      if (id !== undefined && want.has(id) && !claimed.has(id)) { claimed.add(id); own = [...owners, id] }
       if (shape.group) { walk(shape.children ?? [], [...path, shape], own, depth + 1); continue }
-      if (own === undefined) continue
+      if (own.length === 0) continue
       const b = paintedBounds([chain(path, shape)], ps.slide, resolveFont, measure)
       if (!b) continue
-      let list = out.get(own)
-      if (!list) out.set(own, list = [])
-      list.push({ x: b.minX, y: b.minY, w: b.maxX - b.minX, h: b.maxY - b.minY })
+      for (const o of own) {
+        let list = out.get(o)
+        if (!list) out.set(o, list = [])
+        list.push({ x: b.minX, y: b.minY, w: b.maxX - b.minX, h: b.maxY - b.minY })
+      }
     }
   }
-  walk(ps.slide.shapes ?? [], [], undefined, 0)
+  walk(ps.slide.shapes ?? [], [], [], 0)
   return out
 }
