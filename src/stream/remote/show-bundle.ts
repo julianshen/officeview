@@ -12,7 +12,9 @@
  * - Σ decoded (the plan record's bytes and every asset's `w·h·4`) within the 128 MiB show budget.
  * Each bitmap is charged to the show workspace at `w·h·4` before it is decoded; no room rejects
  * `workspace-full`. On any failure every bitmap decoded so far is closed and every lease released.
- * `release()` (idempotent) does the same for a delivered bundle.
+ * `release()` (idempotent) does the same for a delivered bundle. Given the session's `ShowReply`,
+ * it releases the reply's retained-payload leases once it is done with the messages, on success or
+ * failure (controller ruling 5: the encoded bytes are charged until decoded).
  *
  * Package-free (D25): its only value imports are the codec and the error type.
  */
@@ -20,6 +22,7 @@ import { decodeShowMessage, isRasterLayer, SHOW_PLAN_LIMITS, type ShowMessage, t
 import { StreamSessionError } from './errors'
 import type { Lease, SlideShowWorkspace } from '../../slideshow/types'
 import type { PlanAssets } from './plan-stage'
+import type { ShowReply } from './session'
 import type { ImageBitmapLike } from './show-fetch'
 
 export interface ShowBundle { unit: number; plan: ShowPlanRecord; assets: PlanAssets; decodedBytes: number; release(): void }
@@ -29,7 +32,9 @@ interface Held { lease: Lease; bytes: number; bmp?: ImageBitmapLike }
 
 const closeBitmap = (b: ImageBitmapLike | undefined) => { try { b?.close?.() } catch { /* already released */ } }
 
-export async function decodeBundle(unit: number, messages: readonly Uint8Array[], workspace: SlideShowWorkspace, decode: (png: Uint8Array) => Promise<ImageBitmapLike>): Promise<ShowBundle> {
+export async function decodeBundle(unit: number, reply: readonly Uint8Array[] | ShowReply, workspace: SlideShowWorkspace, decode: (png: Uint8Array) => Promise<ImageBitmapLike>): Promise<ShowBundle> {
+  const messages: readonly Uint8Array[] = Array.isArray(reply) ? reply : (reply as ShowReply).messages
+  const done = () => { if (!Array.isArray(reply)) (reply as ShowReply).release() }
   const held = new Map<number, Held>()
   let released = false
   const release = () => {
@@ -82,5 +87,7 @@ export async function decodeBundle(unit: number, messages: readonly Uint8Array[]
   } catch (e) {
     release()
     throw e
+  } finally {
+    done()
   }
 }

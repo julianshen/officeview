@@ -10,7 +10,7 @@ import type { Manifest } from '../manifest'
 import { replayUnit } from '../replay'
 import { StreamSessionError } from './errors'
 import type { PrintedPage } from './print-wire'
-import type { NotesLease, PrintOptions, ShowMotion, ShowReply, StreamNotice, UnitLease, UnitPayload } from './session'
+import type { NotesLease, PrintOptions, ShowMotion, ShowReply, ShowRequestOptions, StreamNotice, UnitLease, UnitPayload } from './session'
 import type { RemoteRange, TextMessage, TextRequest } from './text-wire'
 import type { UnitBudgetView } from './unit-budget'
 
@@ -29,10 +29,10 @@ export interface SessionLike {
   /** One checked notes image (see StreamSession.notes); absent ⇒ notes are unavailable. */
   notes?(unit: number, scale: 1 | 2, signal?: AbortSignal): Promise<NotesLease>
   /** Piece 4 (D1): one slide bundle, keyframe track or Morph pair (see StreamSession.showPlan); absent ⇒ no animated playback.
-   * `onSend` (R16): called once per server-charged send. */
-  showPlan?(unit: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, onSend?: () => void): Promise<ShowReply>
-  showTrack?(unit: number, step: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, onSend?: () => void): Promise<ShowReply>
-  showMorph?(from: number, to: number, fromStep: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, onSend?: () => void): Promise<ShowReply>
+   * `o.workspace` is charged the retained payloads; `o.onSend` (R16) is called once per server-charged send. */
+  showPlan?(unit: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions): Promise<ShowReply>
+  showTrack?(unit: number, step: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions): Promise<ShowReply>
+  showMorph?(from: number, to: number, fromStep: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions): Promise<ShowReply>
   close(): void
   readonly ended?: Promise<StreamSessionError | undefined>
   /** Calls `cb` after a resume has replaced `manifest`; returns the unsubscribe. */

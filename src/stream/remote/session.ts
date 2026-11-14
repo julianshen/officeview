@@ -23,6 +23,7 @@ import { validateManifest, type Manifest } from '../manifest'
 import type { Asset } from '../ops'
 import { decodeRasterBody, UNIT_RASTER_DECODED_CAP } from '../raster'
 import { decodeShowMessage, SHOW_PLAN_LIMITS } from '../show-plan'
+import type { AllocationOwner, Lease } from '../../slideshow/types'
 import type { StreamSource } from '../source'
 import { decodeUnit } from '../unit'
 import { closeName, StreamSessionError, type StreamErrorCode } from './errors'
@@ -48,6 +49,13 @@ export type NotesLease = { w: number; h: number; png: Uint8Array; release(): voi
 /** A show reply's kind-6 payloads in arrival order, plus its admission lease (released once decoded; idempotent). */
 export type ShowReply = { messages: Uint8Array[]; release(): void }
 export type ShowMotion = 'full' | 'reduced'
+/** What a show request needs besides its fields: the show workspace its retained payloads are charged to, and R16's hook. */
+export interface ShowRequestOptions {
+  /** Each completed message is leased here at its encoded bytes until `decodeBundle` or `release()` frees it (ruling 5). */
+  workspace: AllocationOwner
+  /** R16: called once per server-charged send. */
+  onSend?: () => void
+}
 /** Manifest notices, plus 'face-missing', 'text-unavailable', 'resumed', 'unit-failed'. */
 export type StreamNotice = { code: string; unit?: number }
 export type SessionState = 'open' | 'resuming' | 'closed'
@@ -122,7 +130,8 @@ const SHOW_MESSAGE_SLACK = 65536
  * The admission grant of a show reply declaring `decodedBytes` (D1): one message is in reassembly at
  * a time, so the grant is one message's true peak, as print's: its encoded bound (≤ the 8 MiB kind
  * cap) plus 2 × its decoded body (inflated chunks + their contiguous copy), the body at most the
- * 32 MiB kind-6 decoded cap. Held from `*-start` until the reply's lease is released.
+ * 32 MiB kind-6 decoded cap. Controller ruling (Task 10 follow-up): it covers only the message in
+ * flight — taken at its first fragment, released when it completes reassembly.
  */
 export const showGrant = (decodedBytes: number) => {
   const body = Math.min(CAPS[Kind.SHOW_PLAN]![1], decodedBytes)
@@ -239,8 +248,13 @@ interface ShowReq {
   deadline: number
   /** R16: called once per server-charged send. */
   onSend?: () => void
-  /** Takes the admission grant of the declared reply (released on settle unless leased out). */
-  hold: (release: () => void) => void
+  readonly workspace: AllocationOwner
+  /** The admission grant of the message in flight (one at a time), released when it completes. */
+  grant?: () => void
+  /** The workspace leases of the completed messages (their encoded bytes). */
+  leases: Lease[]
+  /** Admission could not fit its next message: its rejection surfaces as `admission`. */
+  admissionShort: boolean
   resolve: (messages: Uint8Array[]) => void
   fail: (e: unknown) => void
 }
@@ -534,29 +548,32 @@ export class StreamSession {
    * `session-rotated` one (stale jti, uncharged) is re-sent once. Anything else that does not match
    * the request — a start over 64 KiB, for another unit or kind, declaring over 128 MiB or an
    * impossible count; a message before the start, past the declared count, out of order or for
-   * another unit — rejects `policy-refused`, and its grant is released. Nothing is reserved until
-   * the start (R10); the grant (`showGrant`) is taken then or never: no room rejects `rate-limited`.
+   * another unit — rejects `policy-refused`, and everything it holds is released. Admission
+   * (`showGrant`) covers only the message in flight: taken at its first fragment (now or never: no
+   * room fails the reply with the local, transient `admission`, never a server rate pause) and
+   * released once it completes. A completed message is leased in `o.workspace` at its encoded bytes
+   * (no room: `workspace-full`) until `decodeBundle` or the reply's `release()` frees it.
    * The send is charged to the `'unit'` class: it is held to the session's send log like a unit
    * request (R28), recorded once, and `onSend` (R16) is called once. Abort rejects with its reason;
    * a drop with the request sent rejects `session-rotated` (never re-issued: the server charged and
-   * audited it); a session end rejects with the session failure. The lease keeps the grant until `release()`.
+   * audited it); a session end rejects with the session failure.
    */
-  showPlan(unit: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, onSend?: () => void): Promise<ShowReply> {
-    return this.showRequest('plan', unit, { unit }, scale, motion, signal, onSend)
+  showPlan(unit: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions): Promise<ShowReply> {
+    return this.showRequest('plan', unit, { unit }, scale, motion, signal, o)
   }
   /** One keyframe track of `step` (D1, D4): `show-track-start`, then tag-4 frames only. As `showPlan`. */
-  showTrack(unit: number, step: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, onSend?: () => void): Promise<ShowReply> {
+  showTrack(unit: number, step: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions): Promise<ShowReply> {
     const bad = !Number.isInteger(step) || step < 0 || step >= SHOW_PLAN_LIMITS.steps
-    return this.showRequest('track', unit, { unit, step }, scale, motion, signal, onSend, bad ? `no step ${step}` : undefined)
+    return this.showRequest('track', unit, { unit, step }, scale, motion, signal, o, bad ? `no step ${step}` : undefined)
   }
   /**
    * One Morph pair (D1, D11): `show-morph-start`, then the tag-5 record, whose `from`, `to` and
    * `fromStep` must be the request's, then its tag-2 assets or, for a composited record, exactly its
    * `count` tag-4 frames. Every asset carries `to`'s unit. `morph-fallback` means play the fade. As `showPlan`.
    */
-  showMorph(from: number, to: number, fromStep: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, onSend?: () => void): Promise<ShowReply> {
+  showMorph(from: number, to: number, fromStep: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions): Promise<ShowReply> {
     const bad = !this.shownUnit(from) || from === to || !Number.isInteger(fromStep) || fromStep < 0 || fromStep > SHOW_PLAN_LIMITS.steps
-    return this.showRequest('morph', to, { from, to, fromStep }, scale, motion, signal, onSend, bad ? `no Morph pair ${from} → ${to} at ${fromStep}` : undefined)
+    return this.showRequest('morph', to, { from, to, fromStep }, scale, motion, signal, o, bad ? `no Morph pair ${from} → ${to} at ${fromStep}` : undefined)
   }
 
   private shownUnit(u: number) {
@@ -564,7 +581,7 @@ export class StreamSession {
     return !!d && !d.hidden
   }
   /** The one show request path (see `showPlan`); `invalid`: why the request's own fields name nothing (`invalid-unit`). */
-  private async showRequest(show: ShowKind, unit: number, fields: Record<string, number>, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, onSend?: () => void, invalid?: string): Promise<ShowReply> {
+  private async showRequest(show: ShowKind, unit: number, fields: Record<string, number>, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions, invalid?: string): Promise<ShowReply> {
     if (this.state === 'closed') throw this.failure ?? new StreamSessionError('closed')
     if (signal?.aborted) throw signal.reason ?? abortError()
     const m = this.manifest
@@ -576,9 +593,9 @@ export class StreamSession {
     if (show === 'morph' && motion === 'reduced') throw new StreamSessionError('invalid-unit', 'a Morph pair under reduced motion plays as a fade')
     return new Promise<ShowReply>((resolve, reject) => {
       // The one settlement path: idempotent, drops the request, its place in the send queue, its
-      // abort listener, its partial reassembly and — unless leased out — its grant.
-      let settled = false, release: (() => void) | undefined
-      const settle = (done: () => void, keepGrant = false) => {
+      // abort listener, its partial reassembly, its message grant and — unless handed out — its payload leases.
+      let settled = false
+      const settle = (done: () => void, keepLeases = false) => {
         if (settled) return
         settled = true
         if (this.shows.get(req.reqId) === req) this.shows.delete(req.reqId)
@@ -586,18 +603,20 @@ export class StreamSession {
         signal?.removeEventListener('abort', onAbort)
         if (req.reqId) this.reasm.drop(req.reqId)
         // After any message for it that is still being processed (the inbox is serial).
-        if (release && !keepGrant) { const r = release; release = undefined; void this.inbox.then(r) }
+        if (req.grant) { const r = req.grant; req.grant = undefined; void this.inbox.then(r) }
+        if (!keepLeases) for (const l of req.leases.splice(0)) l.release()
         req.received = []; req.bytes = 0
         done()
       }
       const onAbort = () => req.fail(signal!.reason ?? abortError())
       const req: ShowReq = {
         show, fields, unit, scale, motion, reqId: 0, sent: false, received: [], bytes: 0, complete: false, rotatedRetry: false, deadline: 0,
-        ...(onSend ? { onSend } : {}),
-        hold: (r) => { if (settled) r(); else release = r },
+        workspace: o.workspace, leases: [], admissionShort: false,
+        ...(o.onSend ? { onSend: o.onSend } : {}),
         resolve: (messages) => settle(() => {
-          const r = release!
-          resolve({ messages, release: () => { void this.inbox.then(r) } })
+          const leases = req.leases.splice(0)
+          let freed = false
+          resolve({ messages, release: () => { if (freed) return; freed = true; for (const l of leases) l.release() } })
         }, true),
         fail: (e) => settle(() => reject(e)),
       }
@@ -812,7 +831,7 @@ export class StreamSession {
   private issueShow(req: ShowReq, charged = true) {
     const prev = req.reqId
     if (prev) { if (this.shows.get(prev) === req) this.shows.delete(prev); this.reasm.drop(prev) }
-    req.reqId = this.allocId(); req.sent = false; req.start = undefined; req.composited = undefined; req.received = []; req.bytes = 0; req.complete = false
+    req.reqId = this.allocId(); req.sent = false; req.start = undefined; req.composited = undefined; req.received = []; req.bytes = 0; req.complete = false; req.admissionShort = false
     if (!charged) this.sendLog.transfer(prev, req.reqId)
     this.shows.set(req.reqId, req)
     if (this.state === 'resuming' || !this.sock || this.sock.readyState !== 1) return
@@ -839,10 +858,19 @@ export class StreamSession {
     const req = typeof reqId === 'number' ? this.shows.get(reqId) : undefined
     return req?.sent ? req : undefined
   }
-  /** Kind 6 is admitted only for a live show request holding its declared grant, short of its declared count. */
+  /**
+   * Kind 6 is admitted only for a live show request with its start, short of its declared count, and
+   * holding the grant of the message in flight: taken at a message's first fragment, now or never
+   * (§14/R10: waiting in the serial inbox would block the messages whose completion frees the room).
+   */
   private showAdmits(reqId: number): boolean {
     const req = this.liveShow(reqId)
-    return !!req?.start && !req.complete && req.received.length < req.start.messages
+    if (!req?.start || req.complete || req.received.length >= req.start.messages) return false
+    if (req.grant) return true
+    const grant = this.admission.tryAcquire(showGrant(req.start.decodedBytes))
+    if (!grant) { req.admissionShort = true; return false }
+    req.grant = grant
+    return true
   }
   /** The text messages of a show request: a refusal, a `diag`, the `*-start`. */
   private onShowText(req: ShowReq, m: Record<string, unknown>, data: string) {
@@ -863,22 +891,20 @@ export class StreamSession {
     if (!Number.isInteger(n) || (n as number) < 1 || (n as number) > SHOW_MAX_MESSAGES[req.show]) return hostile('the declared message count is out of range')
     // §5 admission: the reply's decoded layer assets and records never exceed the show budget.
     if (!Number.isInteger(decoded) || (decoded as number) < 1 || (decoded as number) > SHOW_PLAN_LIMITS.showDecoded) return hostile('the declared decoded bytes are out of range')
-    // §14/R10: the declared reply's grant, now or never — its messages are already on their way, and
-    // waiting in the serial inbox would block the messages whose leases free the room.
-    const release = this.admission.tryAcquire(showGrant(decoded as number))
-    if (!release) return req.fail(new StreamSessionError('rate-limited', 'no admission room for the show reply'))
-    req.hold(release)
+    // Nothing is reserved here: each message takes its grant at its first fragment (`showAdmits`).
     req.start = {
       messages: n as number, decodedBytes: decoded as number,
       bodyCap: Math.min(CAPS[Kind.SHOW_PLAN]![1], decoded as number),
       retainCap: (decoded as number) + (n as number) * SHOW_MESSAGE_SLACK,
     }
-    // A declared reply holds its grant: its messages must start arriving in time too.
+    // A declared reply's messages must start arriving in time too.
     req.deadline = this.now() + REASSEMBLY_MS
   }
   /** One kind-6 message of a show request: in its kind's order, for the request's unit (a Morph record: the request's pair). */
   private onShowFrame(req: ShowReq, payload: Uint8Array) {
     const hostile = (why: string) => req.fail(new StreamSessionError('policy-refused', why))
+    // Ruling 1: the message is reassembled, so its admission grant is done.
+    if (req.grant) { const r = req.grant; req.grant = undefined; r() }
     const start = req.start
     if (!start || req.complete || req.received.length >= start.messages) return hostile('a show message past the declared reply')
     const i = req.received.length, tag = payload[0]
@@ -903,6 +929,10 @@ export class StreamSession {
     }
     req.bytes += payload.length
     if (req.bytes > start.retainCap) return hostile('the show reply is over its declared bytes')
+    // Ruling 5: a retained payload is charged to the show workspace at its encoded bytes.
+    const lease = req.workspace.lease(payload.length, 'remote-show:message')
+    if (!lease) return req.fail(new StreamSessionError('workspace-full', 'no workspace room for a show message'))
+    req.leases.push(lease)
     req.received.push(payload)
     req.deadline = this.now() + REASSEMBLY_MS
     if (req.received.length < start.messages) return
@@ -1076,7 +1106,7 @@ export class StreamSession {
       if (notes) return notes.fail(new StreamSessionError('policy-refused', `notes frame rejected: ${res.reason}`))
       // Fail closed: a kind-6 message before the start or past the declared count, over a cap, or malformed.
       const show = this.liveShow(res.reqId)
-      if (show) return show.fail(new StreamSessionError('policy-refused', `show frame rejected: ${res.reason}`))
+      if (show) return show.fail(show.admissionShort ? new StreamSessionError('admission', 'no admission room for a show message') : new StreamSessionError('policy-refused', `show frame rejected: ${res.reason}`))
       const req = res.reqId !== undefined ? this.units.get(res.reqId) : undefined
       if (req) this.retryOrFail(req)
       else if (res.reqId !== undefined && res.reqId === this.helloReqId && this.handshake) this.end(new StreamSessionError('manifest-invalid'), 1000)

@@ -13,7 +13,7 @@ import { encodeRasterBody } from '../../src/stream/raster'
 import { encodeUnit } from '../../src/stream/unit'
 import { showGrant, StreamSession, type SessionOptions } from '../../src/stream/remote/session'
 import { StreamSessionError } from '../../src/stream/remote/errors'
-import { UNIT_REFUSAL_BACKOFF_MS, UnitSendLog } from '../../src/stream/remote/unit-budget'
+import { UNIT_REFUSAL_BACKOFF_MS, UNIT_SPAN_MS, UnitSendLog } from '../../src/stream/remote/unit-budget'
 import { decodeBundle } from '../../src/stream/remote/show-bundle'
 import { encodeShowMessage, type MorphPlanRecord, type ShowPlanRecord } from '../../src/stream/show-plan'
 import { createSlideShowWorkspace } from '../../src/slideshow/workspace'
@@ -21,8 +21,10 @@ import { createSlideShowWorkspace } from '../../src/slideshow/workspace'
 const MiB = 1024 * 1024
 const b64url = (o: object) => btoa(JSON.stringify(o)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 const tokenFor = (jti: string) => `h.${b64url({ jti })}.s`
+/** The show workspace the session charges retained reply payloads to. */
+let WS = createSlideShowWorkspace('desktop')
 const settle = (ms = 20): Promise<unknown> => vi.isFakeTimers() ? vi.advanceTimersByTimeAsync(ms) : new Promise((r) => setTimeout(r, ms))
-afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); WS = createSlideShowWorkspace('desktop') })
 
 const exampleManifest = (): Manifest => ({
   v: 1, docRef: 'a'.repeat(24), kind: 'pptx', name: 'deck.pptx',
@@ -114,7 +116,7 @@ const codeOf = async (p: Promise<unknown>) => (await failure(p) as StreamSession
 
 /** Starts a showPlan for `unit` and returns its observed promise and reqId. */
 async function asking(s: StreamSession, sock: FakeSocket, unit = 1, signal = new AbortController().signal) {
-  const p = s.showPlan(unit, 1, 'full', signal)
+  const p = s.showPlan(unit, 1, 'full', signal, { workspace: WS })
   void p.catch(() => {})
   await settle()
   const req = sock.of('show-plan').at(-1)
@@ -148,7 +150,7 @@ describe('StreamSession show requests (scripted socket)', () => {
     const record = vi.spyOn(UnitSendLog.prototype, 'record')
     const { s, sock } = await opened()
     const onSend = vi.fn()
-    const p = s.showPlan(1, 2, 'full', new AbortController().signal, onSend)
+    const p = s.showPlan(1, 2, 'full', new AbortController().signal, { workspace: WS, onSend })
     await settle()
     const req = sock.of('show-plan')[0]!
     expect(req).toEqual({ reqId: req.reqId, type: 'show-plan', token: tokenFor('j1'), unit: 1, scale: 2, motion: 'full' })
@@ -160,19 +162,22 @@ describe('StreamSession show requests (scripted socket)', () => {
     sock.text({ reqId: req.reqId, type: 'diag', code: 'forensic-unmarked', unit: 1, reason: 'layer-capacity', assetIds: [2] })
     sock.text({ reqId: req.reqId, type: 'show-plan-start', unit: 1, messages: msgs.length, decodedBytes: decoded })
     await settle()
-    expect(s.stats()).toMatchObject({ inFlight: 1, inFlightBytes: showGrant(decoded) })
+    // Ruling 1: the grant covers only the message in flight, so a start alone holds none.
+    expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0 })
     for (const m of msgs) sock.frame(6, req.reqId, m)
     const reply = await p
     expect(reply.messages.map((m) => [...m])).toEqual(msgs.map((m) => [...m]))
-    // The lease keeps the grant until released.
-    expect(s.stats()).toMatchObject({ inFlight: 1, inFlightBytes: showGrant(decoded) })
+    // Every message's grant was released at its completion; the retained payloads are charged
+    // to the show workspace at their encoded bytes instead (ruling 5).
+    expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0 })
+    expect(WS.used()).toBe(msgs.reduce((n, m) => n + m.length, 0))
 
-    const ws = createSlideShowWorkspace('desktop')
+    const ws = WS
     const { decode, closed } = decoder()
-    const b = await decodeBundle(1, reply.messages, ws, decode)
+    // decodeBundle takes the reply and releases its retained payloads.
+    const b = await decodeBundle(1, reply, ws, decode)
     reply.release(); reply.release()
     await settle()
-    expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0 })
     expect(b.unit).toBe(1)
     expect(b.plan.slide.index).toBe(1)
     expect([1, 2, 3].map((id) => b.assets.bitmap(id)?.width)).toEqual([960, 300, 960])
@@ -186,8 +191,8 @@ describe('StreamSession show requests (scripted socket)', () => {
 
     // A track and a Morph pair are one charged send each too.
     record.mockClear()
-    const t = s.showTrack(1, 0, 1, 'reduced', new AbortController().signal); void t.catch(() => {})
-    const mo = s.showMorph(0, 1, 2, 1, 'full', new AbortController().signal); void mo.catch(() => {})
+    const t = s.showTrack(1, 0, 1, 'reduced', new AbortController().signal, { workspace: WS }); void t.catch(() => {})
+    const mo = s.showMorph(0, 1, 2, 1, 'full', new AbortController().signal, { workspace: WS }); void mo.catch(() => {})
     await settle()
     const tr = sock.of('show-track')[0]!, mr = sock.of('show-morph')[0]!
     expect(tr).toEqual({ reqId: tr.reqId, type: 'show-track', token: tokenFor('j1'), unit: 1, step: 0, scale: 1, motion: 'reduced' })
@@ -312,16 +317,17 @@ describe('StreamSession show requests (scripted socket)', () => {
     const msgs = bundle(1)
     sock.text({ reqId: a.reqId, type: 'show-plan-start', unit: 1, messages: msgs.length, decodedBytes: decodedOf(msgs) })
     sock.frame(6, a.reqId, msgs[0]!)
-    const t = s.showTrack(1, 0, 1, 'full', new AbortController().signal); void t.catch(() => {})
+    const t = s.showTrack(1, 0, 1, 'full', new AbortController().signal, { workspace: WS }); void t.catch(() => {})
     await settle()
-    expect(s.stats().inFlightBytes).toBeGreaterThan(0)
+    expect(WS.used()).toBe(msgs[0]!.length)
     sock.drop(4005)
     const ended = await s.ended
     expect(ended?.code).toBe('revoked')
     expect(await failure(a.p)).toBe(ended)
     expect(await failure(t)).toBe(ended)
     expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0 })
-    expect(await failure(s.showPlan(1, 1, 'full', new AbortController().signal))).toBe(ended)
+    expect(WS.used()).toBe(0)
+    expect(await failure(s.showPlan(1, 1, 'full', new AbortController().signal, { workspace: WS }))).toBe(ended)
   })
 
   it('rate-limited refusal backs off UNIT_REFUSAL_BACKOFF_MS', async () => {
@@ -334,15 +340,20 @@ describe('StreamSession show requests (scripted socket)', () => {
     expect(refused).toHaveBeenCalledTimes(1)
     expect(s.unitBudget.room()).toBe(0)
     // The next charged send (a show request) waits out the block: nothing goes out inside the back-off.
-    const next = s.showMorph(0, 1, 0, 1, 'full', new AbortController().signal); void next.catch(() => {})
+    const next = s.showMorph(0, 1, 0, 1, 'full', new AbortController().signal, { workspace: WS }); void next.catch(() => {})
     await settle(UNIT_REFUSAL_BACKOFF_MS - 50)
     expect(sock.of('show-morph')).toEqual([])
-    // This log holds one send, so it cannot explain the refusal: the block lasts a whole span.
-    await settle(62_000)
+    // Ruling 2: the hold is the whole span, not 2 s. UnitSendLog.refused() takes the short
+    // UNIT_REFUSAL_BACKOFF_MS only when the log holds the server's whole limit (≥ 60 sends) and so
+    // explains the refusal; the client's own caps (48 first sends, 56 re-sends) never get there, so
+    // a refusal always means unknown server history: no charged send for UNIT_SPAN_MS.
+    await settle(UNIT_SPAN_MS - UNIT_REFUSAL_BACKOFF_MS - 100)
+    expect(sock.of('show-morph')).toEqual([])
+    await settle(500)
     expect(sock.of('show-morph').length).toBe(1)
     // A refusal for a show request aborted meanwhile still blocks the log.
     const ac = new AbortController()
-    const gone = s.showTrack(1, 0, 1, 'full', ac.signal); void gone.catch(() => {})
+    const gone = s.showTrack(1, 0, 1, 'full', ac.signal, { workspace: WS }); void gone.catch(() => {})
     await settle()
     const tr = sock.of('show-track')[0]!
     ac.abort()
@@ -359,7 +370,7 @@ describe('StreamSession show requests (scripted socket)', () => {
       sock.text({ reqId, type: 'error', code })
       expect(await codeOf(p)).toBe(code === 'nonsense' ? 'policy-refused' : code)
     }
-    const m = s.showMorph(0, 1, 1, 1, 'full', new AbortController().signal)
+    const m = s.showMorph(0, 1, 1, 1, 'full', new AbortController().signal, { workspace: WS })
     await settle()
     sock.text({ reqId: sock.of('show-morph')[0]!.reqId, type: 'error', code: 'morph-fallback' })
     expect(await codeOf(m)).toBe('morph-fallback')
@@ -372,7 +383,7 @@ describe('StreamSession show requests (scripted socket)', () => {
     const transfer = vi.spyOn(UnitSendLog.prototype, 'transfer')
     const { s, sock } = await opened()
     const onSend = vi.fn()
-    const p = s.showPlan(1, 1, 'full', new AbortController().signal, onSend)
+    const p = s.showPlan(1, 1, 'full', new AbortController().signal, { workspace: WS, onSend })
     await settle()
     const first = sock.of('show-plan')[0]!
     sock.text({ reqId: 0, type: 'renew', token: tokenFor('j2'), jti: 'j2', exp: 9e9 })
@@ -393,20 +404,20 @@ describe('StreamSession show requests (scripted socket)', () => {
   it('the start and the Morph record are held to the request', async () => {
     const { s, sock } = await opened()
     const cases: Array<[string, () => Promise<unknown>, (reqId: number) => void]> = [
-      ['a start for another unit', () => s.showPlan(1, 1, 'full', new AbortController().signal), (r) => sock.text({ reqId: r, type: 'show-plan-start', unit: 0, messages: 2, decodedBytes: 4 * MiB })],
-      ['a start of another kind', () => s.showPlan(1, 1, 'full', new AbortController().signal), (r) => sock.text({ reqId: r, type: 'show-track-start', unit: 1, step: 0, messages: 2, decodedBytes: 4 * MiB })],
-      ['a track start for another step', () => s.showTrack(1, 1, 1, 'full', new AbortController().signal), (r) => sock.text({ reqId: r, type: 'show-track-start', unit: 1, step: 0, messages: 2, decodedBytes: 4 * MiB })],
-      ['zero messages', () => s.showPlan(1, 1, 'full', new AbortController().signal), (r) => sock.text({ reqId: r, type: 'show-plan-start', unit: 1, messages: 0, decodedBytes: 4 * MiB })],
-      ['more messages than a plan can carry', () => s.showPlan(1, 1, 'full', new AbortController().signal), (r) => sock.text({ reqId: r, type: 'show-plan-start', unit: 1, messages: 131, decodedBytes: 4 * MiB })],
-      ['a second start', () => s.showPlan(1, 1, 'full', new AbortController().signal), (r) => { sock.text({ reqId: r, type: 'show-plan-start', unit: 1, messages: 4, decodedBytes: 4 * MiB }); sock.text({ reqId: r, type: 'show-plan-start', unit: 1, messages: 4, decodedBytes: 4 * MiB }) }],
-      ['a start over 64 KiB', () => s.showPlan(1, 1, 'full', new AbortController().signal), (r) => sock.text({ reqId: r, type: 'show-plan-start', unit: 1, messages: 4, decodedBytes: 4 * MiB, pad: 'x'.repeat(65536) })],
-      ['an unexpected text type', () => s.showPlan(1, 1, 'full', new AbortController().signal), (r) => sock.text({ reqId: r, type: 'show-plan-done' })],
-      ['a plan reply whose first message is not the plan', () => s.showPlan(1, 1, 'full', new AbortController().signal), (r) => { sock.text({ reqId: r, type: 'show-plan-start', unit: 1, messages: 4, decodedBytes: 8 * MiB }); sock.frame(6, r, asset(3, 1, 3, 960, 540)) }],
-      ['a track reply carrying a layer', () => s.showTrack(1, 0, 1, 'full', new AbortController().signal), (r) => { sock.text({ reqId: r, type: 'show-track-start', unit: 1, step: 0, messages: 2, decodedBytes: 8 * MiB }); sock.frame(6, r, asset(2, 1, 0, 960, 540)) }],
-      ['a Morph start for another pair', () => s.showMorph(0, 1, 2, 1, 'full', new AbortController().signal), (r) => sock.text({ reqId: r, type: 'show-morph-start', unit: 1, from: 0, to: 1, fromStep: 1, messages: 3, decodedBytes: 4 * MiB })],
-      ['a Morph record for another fromStep', () => s.showMorph(0, 1, 1, 1, 'full', new AbortController().signal), (r) => { sock.text({ reqId: r, type: 'show-morph-start', unit: 1, from: 0, to: 1, fromStep: 1, messages: 3, decodedBytes: 4 * MiB }); sock.frame(6, r, encodeShowMessage({ tag: 5, morph: morphRecord({ fromStep: 2 }) })) }],
-      ['a Morph record for another from', () => s.showMorph(0, 1, 2, 1, 'full', new AbortController().signal), (r) => { sock.text({ reqId: r, type: 'show-morph-start', unit: 1, from: 0, to: 1, fromStep: 2, messages: 3, decodedBytes: 4 * MiB }); sock.frame(6, r, encodeShowMessage({ tag: 5, morph: morphRecord({ from: 1, to: 0 }) })) }],
-      ['a composited Morph whose frame count is not the declared reply', () => s.showMorph(0, 1, 2, 1, 'full', new AbortController().signal), (r) => { sock.text({ reqId: r, type: 'show-morph-start', unit: 1, from: 0, to: 1, fromStep: 2, messages: 3, decodedBytes: 8 * MiB }); sock.frame(6, r, encodeShowMessage({ tag: 5, morph: morphRecord({ items: [], composited: { fps: 15, count: 5 } }) })) }],
+      ['a start for another unit', () => s.showPlan(1, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => sock.text({ reqId: r, type: 'show-plan-start', unit: 0, messages: 2, decodedBytes: 4 * MiB })],
+      ['a start of another kind', () => s.showPlan(1, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => sock.text({ reqId: r, type: 'show-track-start', unit: 1, step: 0, messages: 2, decodedBytes: 4 * MiB })],
+      ['a track start for another step', () => s.showTrack(1, 1, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => sock.text({ reqId: r, type: 'show-track-start', unit: 1, step: 0, messages: 2, decodedBytes: 4 * MiB })],
+      ['zero messages', () => s.showPlan(1, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => sock.text({ reqId: r, type: 'show-plan-start', unit: 1, messages: 0, decodedBytes: 4 * MiB })],
+      ['more messages than a plan can carry', () => s.showPlan(1, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => sock.text({ reqId: r, type: 'show-plan-start', unit: 1, messages: 131, decodedBytes: 4 * MiB })],
+      ['a second start', () => s.showPlan(1, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => { sock.text({ reqId: r, type: 'show-plan-start', unit: 1, messages: 4, decodedBytes: 4 * MiB }); sock.text({ reqId: r, type: 'show-plan-start', unit: 1, messages: 4, decodedBytes: 4 * MiB }) }],
+      ['a start over 64 KiB', () => s.showPlan(1, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => sock.text({ reqId: r, type: 'show-plan-start', unit: 1, messages: 4, decodedBytes: 4 * MiB, pad: 'x'.repeat(65536) })],
+      ['an unexpected text type', () => s.showPlan(1, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => sock.text({ reqId: r, type: 'show-plan-done' })],
+      ['a plan reply whose first message is not the plan', () => s.showPlan(1, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => { sock.text({ reqId: r, type: 'show-plan-start', unit: 1, messages: 4, decodedBytes: 8 * MiB }); sock.frame(6, r, asset(3, 1, 3, 960, 540)) }],
+      ['a track reply carrying a layer', () => s.showTrack(1, 0, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => { sock.text({ reqId: r, type: 'show-track-start', unit: 1, step: 0, messages: 2, decodedBytes: 8 * MiB }); sock.frame(6, r, asset(2, 1, 0, 960, 540)) }],
+      ['a Morph start for another pair', () => s.showMorph(0, 1, 2, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => sock.text({ reqId: r, type: 'show-morph-start', unit: 1, from: 0, to: 1, fromStep: 1, messages: 3, decodedBytes: 4 * MiB })],
+      ['a Morph record for another fromStep', () => s.showMorph(0, 1, 1, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => { sock.text({ reqId: r, type: 'show-morph-start', unit: 1, from: 0, to: 1, fromStep: 1, messages: 3, decodedBytes: 4 * MiB }); sock.frame(6, r, encodeShowMessage({ tag: 5, morph: morphRecord({ fromStep: 2 }) })) }],
+      ['a Morph record for another from', () => s.showMorph(0, 1, 2, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => { sock.text({ reqId: r, type: 'show-morph-start', unit: 1, from: 0, to: 1, fromStep: 2, messages: 3, decodedBytes: 4 * MiB }); sock.frame(6, r, encodeShowMessage({ tag: 5, morph: morphRecord({ from: 1, to: 0 }) })) }],
+      ['a composited Morph whose frame count is not the declared reply', () => s.showMorph(0, 1, 2, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => { sock.text({ reqId: r, type: 'show-morph-start', unit: 1, from: 0, to: 1, fromStep: 2, messages: 3, decodedBytes: 8 * MiB }); sock.frame(6, r, encodeShowMessage({ tag: 5, morph: morphRecord({ items: [], composited: { fps: 15, count: 5 } }) })) }],
     ]
     for (const [what, ask, hostile] of cases) {
       const before = sock.sent.length
@@ -424,39 +435,72 @@ describe('StreamSession show requests (scripted socket)', () => {
   it('refuses without sending: no present, a bad scale or motion, a unit out of range or hidden, a bad step or pair', async () => {
     const { s, sock } = await opened()
     const sig = () => new AbortController().signal
-    expect(await codeOf(s.showPlan(3, 1, 'full', sig()))).toBe('invalid-unit')
-    expect(await codeOf(s.showPlan(2, 1, 'full', sig()))).toBe('invalid-unit')
-    expect(await codeOf(s.showPlan(0.5, 1, 'full', sig()))).toBe('invalid-unit')
-    expect(await codeOf(s.showTrack(1, 64, 1, 'full', sig()))).toBe('invalid-unit')
-    expect(await codeOf(s.showTrack(1, -1, 1, 'full', sig()))).toBe('invalid-unit')
-    expect(await codeOf(s.showMorph(1, 1, 0, 1, 'full', sig()))).toBe('invalid-unit')
-    expect(await codeOf(s.showMorph(2, 1, 0, 1, 'full', sig()))).toBe('invalid-unit')
-    expect(await codeOf(s.showMorph(0, 1, 65, 1, 'full', sig()))).toBe('invalid-unit')
-    expect(await codeOf(s.showPlan(1, 3 as never, 'full', sig()))).toBe('policy-refused')
-    expect(await codeOf(s.showPlan(1, 1, 'slow' as never, sig()))).toBe('policy-refused')
+    expect(await codeOf(s.showPlan(3, 1, 'full', sig(), { workspace: WS }))).toBe('invalid-unit')
+    expect(await codeOf(s.showPlan(2, 1, 'full', sig(), { workspace: WS }))).toBe('invalid-unit')
+    expect(await codeOf(s.showPlan(0.5, 1, 'full', sig(), { workspace: WS }))).toBe('invalid-unit')
+    expect(await codeOf(s.showTrack(1, 64, 1, 'full', sig(), { workspace: WS }))).toBe('invalid-unit')
+    expect(await codeOf(s.showTrack(1, -1, 1, 'full', sig(), { workspace: WS }))).toBe('invalid-unit')
+    expect(await codeOf(s.showMorph(1, 1, 0, 1, 'full', sig(), { workspace: WS }))).toBe('invalid-unit')
+    expect(await codeOf(s.showMorph(2, 1, 0, 1, 'full', sig(), { workspace: WS }))).toBe('invalid-unit')
+    expect(await codeOf(s.showMorph(0, 1, 65, 1, 'full', sig(), { workspace: WS }))).toBe('invalid-unit')
+    expect(await codeOf(s.showPlan(1, 3 as never, 'full', sig(), { workspace: WS }))).toBe('policy-refused')
+    expect(await codeOf(s.showPlan(1, 1, 'slow' as never, sig(), { workspace: WS }))).toBe('policy-refused')
     const ac = new AbortController(); ac.abort(new Error('gone'))
-    expect(((await failure(s.showPlan(1, 1, 'full', ac.signal))) as Error).message).toBe('gone')
+    expect(((await failure(s.showPlan(1, 1, 'full', ac.signal, { workspace: WS }))) as Error).message).toBe('gone')
     expect(sock.sent.filter((m) => String(m.type).startsWith('show-'))).toEqual([])
     const off = await opened({}, { can: { ...exampleManifest().can, present: false } })
-    expect(await codeOf(off.s.showPlan(1, 1, 'full', sig()))).toBe('policy-refused')
+    expect(await codeOf(off.s.showPlan(1, 1, 'full', sig(), { workspace: WS }))).toBe('policy-refused')
     expect(off.sock.sent.filter((m) => String(m.type).startsWith('show-'))).toEqual([])
   })
 
-  it('no admission room at the start → rate-limited, no grant held, the send log not blocked', async () => {
+  it('two concurrent ≥32 MiB-declared replies both succeed, each message granted in turn within the 96 MiB total', async () => {
+    const { s, sock } = await opened()
+    const a = await asking(s, sock), b = await asking(s, sock)
+    const msgs = bundle(1)
+    // Each declares 40 MiB: one message's grant is 72 MiB, two at once would be 144 MiB.
+    expect(showGrant(40 * MiB) * 2).toBeGreaterThan(96 * MiB)
+    sock.text({ reqId: a.reqId, type: 'show-plan-start', unit: 1, messages: msgs.length, decodedBytes: 40 * MiB })
+    sock.text({ reqId: b.reqId, type: 'show-plan-start', unit: 1, messages: msgs.length, decodedBytes: 40 * MiB })
+    await settle()
+    expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0 })
+    // Interleaved messages: each completes (and frees its grant) before the next one starts.
+    for (const m of msgs) { sock.frame(6, a.reqId, m); sock.frame(6, b.reqId, m) }
+    const [ra, rb] = await Promise.all([a.p, b.p])
+    expect([ra.messages.length, rb.messages.length]).toEqual([4, 4])
+    expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0 })
+    expect(WS.used()).toBe(2 * msgs.reduce((n, m) => n + m.length, 0))
+    ra.release(); rb.release()
+    expect(WS.used()).toBe(0)
+    await usable(s, sock)
+  })
+
+  it('an admission refusal surfaces as `admission` and does not trigger UNIT_REFUSAL_BACKOFF_MS', async () => {
     const refused = vi.spyOn(UnitSendLog.prototype, 'refused')
     const { s, sock } = await opened()
-    const a = await asking(s, sock)
-    sock.text({ reqId: a.reqId, type: 'show-plan-start', unit: 1, messages: 4, decodedBytes: 40 * MiB })
+    const a = await asking(s, sock), b = await asking(s, sock)
+    const big = asset(3, 1, 3, 960, 540, 1_500_000)
+    sock.text({ reqId: a.reqId, type: 'show-plan-start', unit: 1, messages: 2, decodedBytes: 40 * MiB })
+    sock.text({ reqId: b.reqId, type: 'show-plan-start', unit: 1, messages: 2, decodedBytes: 40 * MiB })
+    sock.frame(6, a.reqId, encodeShowMessage({ tag: 1, plan: plan(1) }))
+    // a's second message is in flight (one fragment of several), holding its 72 MiB grant…
+    const parts = sock.fragments(6, a.reqId, big)
+    sock.deliver(parts[0]!)
     await settle()
     expect(s.stats().inFlightBytes).toBe(showGrant(40 * MiB))
-    const b = await asking(s, sock)
-    sock.text({ reqId: b.reqId, type: 'show-plan-start', unit: 1, messages: 4, decodedBytes: 40 * MiB })
-    expect(await codeOf(b.p)).toBe('rate-limited')
-    await settle()
-    expect(s.stats()).toMatchObject({ inFlight: 1, inFlightBytes: showGrant(40 * MiB) })
+    // …so b's first message cannot be admitted: a local, transient refusal.
+    sock.frame(6, b.reqId, encodeShowMessage({ tag: 1, plan: plan(1) }))
+    expect(await codeOf(b.p)).toBe('admission')
     expect(refused).not.toHaveBeenCalled()
     expect(s.unitBudget.room()).toBeGreaterThan(0)
-    a.p.catch(() => {})
+    // The next charged send goes out at once (no server rate pause).
+    const c = s.showPlan(1, 1, 'full', new AbortController().signal, { workspace: WS }); void c.catch(() => {})
+    await settle()
+    expect(sock.of('show-plan').length).toBe(3)
+    // a completes normally.
+    for (const f of parts.slice(1)) sock.deliver(f)
+    const ra = await a.p
+    expect(ra.messages.length).toBe(2)
+    ra.release()
     s.close()
   })
 
@@ -507,7 +551,7 @@ describe('recorded server replies', () => {
       const { s, sock } = await opened({}, { units: { count: units, list: Array.from({ length: units }, () => ({ w: 960, h: 540 })) } })
       for (const r of all) {
         const sig = new AbortController().signal
-        const p = r.op === 1 ? s.showPlan(r.unit, 1, 'full', sig) : r.op === 2 ? s.showTrack(r.unit, r.a, 1, 'full', sig) : s.showMorph(r.a, r.unit, r.b, 1, 'full', sig)
+        const p = r.op === 1 ? s.showPlan(r.unit, 1, 'full', sig, { workspace: WS }) : r.op === 2 ? s.showTrack(r.unit, r.a, 1, 'full', sig, { workspace: WS }) : s.showMorph(r.a, r.unit, r.b, 1, 'full', sig, { workspace: WS })
         void p.catch(() => {})
         await settle()
         const kind = r.op === 1 ? 'plan' : r.op === 2 ? 'track' : 'morph'
