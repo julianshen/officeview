@@ -269,7 +269,8 @@ describe('published bars agree on the resident and the paged worker paths', () =
         for (let row = part.firstRow; row <= part.lastRow; row++) for (let col = part.firstCol; col <= part.lastCol; col++) {
           const o = lease.value.at(row, col)
           const bar = o.kind === 'ready' ? o.value.visual?.dataBar : undefined
-          if (bar) resident.set(`${row},${col}`, { start: bar.startFraction, end: bar.endFraction, axis: bar.axisFraction, fill: bar.fillColor, neg: bar.isNegative, border: bar.borderColor, axisColor: bar.axisColor, gradient: bar.isGradient, show: bar.showValue, rtl: bar.direction === 'rightToLeft' })
+          if (bar) expect(bar.valueFraction, `${c.id} ${row},${col} valueFraction`).toBeGreaterThanOrEqual(0)
+          if (bar) resident.set(`${row},${col}`, { value: bar.valueFraction, start: bar.startFraction, end: bar.endFraction, axis: bar.axisFraction, fill: bar.fillColor, neg: bar.isNegative, border: bar.borderColor, axisColor: bar.axisColor, gradient: bar.isGradient, show: bar.showValue, rtl: bar.direction === 'rightToLeft' })
         }
         lease.release()
       }
@@ -286,7 +287,7 @@ describe('published bars agree on the resident and the paged worker paths', () =
           const rects = [{ r0, r1: Math.min(rect.lastRow, r0 + 7), c0: rect.firstCol, c1: rect.lastCol }]
           const result = await store.readConditionalFormatting?.({ rects, stamp: { owner: 'audit', sheetId, workbookValueGen: store.stamp.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 }, grantBytes: 2 * 1024 * 1024 }, wireMemory, { signal: new AbortController().signal })
           expect(result?.kind, `${c.id} rows ${r0}+`).toBe('ready')
-          for (const st of result!.states) if (st.bar) wire.set(`${st.row},${st.col}`, { start: st.bar.startFraction, end: st.bar.endFraction, axis: st.bar.axisFraction, fill: st.bar.fillColor, neg: st.bar.isNegative, border: st.bar.borderColor, axisColor: st.bar.axisColor, gradient: st.bar.isGradient, show: st.bar.showValue, rtl: st.bar.rtl })
+          for (const st of result!.states) if (st.bar) wire.set(`${st.row},${st.col}`, { value: st.bar.valueFraction, start: st.bar.startFraction, end: st.bar.endFraction, axis: st.bar.axisFraction, fill: st.bar.fillColor, neg: st.bar.isNegative, border: st.bar.borderColor, axisColor: st.bar.axisColor, gradient: st.bar.isGradient, show: st.bar.showValue, rtl: st.bar.rtl })
         }
         await store.release()
       } finally {

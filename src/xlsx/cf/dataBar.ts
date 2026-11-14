@@ -151,6 +151,11 @@ export function evaluateDataBar(
   if (!Number.isFinite(v)) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
   if (v < lo || v > hi) return { kind: 'unresolved', reason: 'cf-value-beyond-bounds' }
 
+  // Ruling S3-P: what the bar announces is the VALUE's position between the resolved thresholds, whatever the geometry
+  // (default lengths and an axis move the painted endpoint, never the value). Under a mixed-sign axis the axis value
+  // reads as its own position in the range, not 0%.
+  const valueFraction = safeFraction(v, lo, hi)
+  if (valueFraction === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
   const isNegative = v < 0
   const fullLengths = def.minLength === 0 && def.maxLength === 100
   // Task 22b: lengths other than 0/100 follow the rule the oracle selected (the plain linear reading is refuted for
@@ -168,7 +173,7 @@ export function evaluateDataBar(
     if (!checkEvidence('bar:lengths-all-negative') || !fullLengths) return unmeasured()
     const f = safeFraction(v, lo, hi)
     if (f === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
-    return finish(def, checkEvidence, { axisFraction: 1, startFraction: f, endFraction: 1, isNegative: v < 0, axisColor: undefined, direction })
+    return finish(def, checkEvidence, { axisFraction: 1, startFraction: f, endFraction: 1, valueFraction, isNegative: v < 0, axisColor: undefined, direction })
   }
 
   // Axis: `middle` always draws one; `automatic` only for mixed-sign thresholds; `none` never.
@@ -206,7 +211,7 @@ export function evaluateDataBar(
     endFraction = isNegative ? axis : axis + extent
   }
 
-  return finish(def, checkEvidence, { axisFraction, startFraction, endFraction, isNegative, axisColor: axis !== undefined ? def.axisArgb : undefined, direction })
+  return finish(def, checkEvidence, { axisFraction, startFraction, endFraction, valueFraction, isNegative, axisColor: axis !== undefined ? def.axisArgb : undefined, direction })
 }
 
 /**
@@ -235,9 +240,9 @@ function defaultLengthsStart(def: CfDataBarDefinition, selected: CfBarDefaultLen
 function finish(
   def: CfDataBarDefinition,
   checkEvidence: (cap: string) => boolean,
-  g: { axisFraction: number; startFraction: number; endFraction: number; isNegative: boolean; axisColor: number | undefined; direction: 'leftToRight' | 'rightToLeft' },
+  g: { axisFraction: number; startFraction: number; endFraction: number; valueFraction: number; isNegative: boolean; axisColor: number | undefined; direction: 'leftToRight' | 'rightToLeft' },
 ): CfOutcome<Omit<CfBarDescriptor, 'ruleId'>> {
-  const { axisFraction, startFraction, endFraction, isNegative, axisColor, direction } = g
+  const { axisFraction, startFraction, endFraction, valueFraction, isNegative, axisColor, direction } = g
   // S3-L negative colours, each under its own evidence; colours never default (S3-F).
   let fillColor: number | undefined = def.fillArgb
   let borderColor: number | undefined = def.border ? def.borderArgb : undefined
@@ -259,13 +264,13 @@ function finish(
   }
   if (fillColor === undefined || (def.border && borderColor === undefined)) return unmeasured()
 
-  for (const n of [axisFraction, startFraction, endFraction]) {
+  for (const n of [axisFraction, startFraction, endFraction, valueFraction]) {
     if (!Number.isFinite(n) || n < 0 || n > 1) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
   }
   return {
     kind: 'ready',
     value: Object.freeze({
-      axisFraction, startFraction, endFraction, fillColor,
+      axisFraction, startFraction, endFraction, valueFraction, fillColor,
       ...(borderColor !== undefined ? { borderColor } : {}),
       isGradient: def.gradient, isNegative,
       ...(axisColor !== undefined ? { axisColor } : {}),

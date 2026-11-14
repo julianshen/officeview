@@ -48,7 +48,7 @@ beforeEach(() => { injectCfBarGradient(NO_EXPORT); injectCfBarGradientBorder(NO_
 afterEach(() => { injectCfBarGradient(null); injectCfBarGradientBorder(null) })
 
 const bar = (overrides: Partial<CfBarDescriptor> = {}): CfBarDescriptor => ({
-  ruleId: 1, axisFraction: 0, startFraction: 0, endFraction: 0.5, fillColor: BLUE, isGradient: false, isNegative: false,
+  ruleId: 1, axisFraction: 0, startFraction: 0, endFraction: 0.5, valueFraction: 0.5, fillColor: BLUE, isGradient: false, isNegative: false,
   showValue: true, direction: 'leftToRight', ...overrides,
 })
 

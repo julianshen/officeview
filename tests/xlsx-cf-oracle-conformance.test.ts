@@ -637,7 +637,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
 
   it('stage 3 bar cells follow the published evidence: a bar only where every capability it needs is verified', async () => {
     // The guard itself has teeth: a ready cell that carries a bar descriptor is NOT withheld.
-    expect(barWithheld({ kind: 'ready', value: { properties: {}, visual: { dataBar: { ruleId: 0, axisFraction: 0, startFraction: 0, endFraction: 0.5, fillColor: 0xff0000ff, isGradient: false, isNegative: false, showValue: true, direction: 'leftToRight' } } } })).toBe(false)
+    expect(barWithheld({ kind: 'ready', value: { properties: {}, visual: { dataBar: { ruleId: 0, axisFraction: 0, startFraction: 0, endFraction: 0.5, valueFraction: 0.5, fillColor: 0xff0000ff, isGradient: false, isNegative: false, showValue: true, direction: 'leftToRight' } } } })).toBe(false)
     expect(barWithheld({ kind: 'ready', value: { properties: {} } })).toBe(true)
     expect(barWithheld({ kind: 'no-match' })).toBe(true)
     expect(barWithheld({ kind: 'unresolved', reason: 'cf-unsupported-rule' })).toBe(true)
@@ -947,7 +947,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
           const host = { x: o.cellLeftPx * 4 / 3, y: top * 4 / 3, width: o.cellWidthPx * 4 / 3, height: height * 4 / 3 }
           const fill = (0xff000000 | (s.fill[0] << 16) | (s.fill[1] << 8) | s.fill[2]) >>> 0
           const borderColor = s.border ? (0xff000000 | (s.border[0] << 16) | (s.border[1] << 8) | s.border[2]) >>> 0 : undefined
-          const bar: CfBarDescriptor = { ruleId: 1, axisFraction: 0, startFraction: 0, endFraction: s.length / s.span, fillColor: fill, ...(borderColor !== undefined ? { borderColor } : {}), isGradient: true, isNegative: false, showValue: true, direction: 'leftToRight' }
+          const bar: CfBarDescriptor = { ruleId: 1, axisFraction: 0, startFraction: 0, endFraction: s.length / s.span, valueFraction: s.length / s.span, fillColor: fill, ...(borderColor !== undefined ? { borderColor } : {}), isGradient: true, isNegative: false, showValue: true, direction: 'leftToRight' }
           const p = layoutDataBar(bar, host, { zoom: 0.75, dpr: 1, output: 'device' })!
           expect(p?.fill, `${s.ref} lays out`).toBeDefined()
           expect([p.fill!.x, p.fill!.w, p.fill!.y, p.fill!.y + p.fill!.h - 1], `${s.ref} rect`).toEqual([s.leftPx, s.length, s.topPx, s.bottomPx])

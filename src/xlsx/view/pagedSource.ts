@@ -2108,7 +2108,7 @@ async function prepareCfRemoteOnce(
           // Ruling S3-S: numbers and booleans only, `direction` as `rtl`; optional colours only when present.
           const d = at.value.visual?.dataBar
           const bar = d ? {
-            ruleId: d.ruleId, axisFraction: d.axisFraction, startFraction: d.startFraction, endFraction: d.endFraction, fillColor: d.fillColor,
+            ruleId: d.ruleId, axisFraction: d.axisFraction, startFraction: d.startFraction, endFraction: d.endFraction, fillColor: d.fillColor, valueFraction: d.valueFraction,
             ...(d.borderColor !== undefined ? { borderColor: d.borderColor } : {}),
             ...(d.axisColor !== undefined ? { axisColor: d.axisColor } : {}),
             isGradient: d.isGradient, isNegative: d.isNegative, showValue: d.showValue, rtl: d.direction === 'rightToLeft',

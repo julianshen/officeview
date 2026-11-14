@@ -728,6 +728,8 @@ Ruling S3-N withholds narrow cells only. No width threshold for "narrow" was mea
 - **Host fills are parsed strictly.** A host fill counts as white only as an exact opaque `#RRGGBB` = FFFFFF, as `spreadsheetColor` resolves it. Any other value withholds the axis bar.
 - **Text is hidden only in two cases.** It is hidden under a bar that paints a fill, or under a bar whose evaluated length is zero (the minimum, or zero on an axis). A non-zero share that rounds away keeps its text.
 
+**PR #74 fix (announced position).** A bar announces the value's position between the resolved min and max thresholds (`valueFraction`, 0 to 100 after rounding), never its painted endpoint. Under a mixed-sign axis the axis value reads as its own position in the range (min -25, max 75: value 0 reads 25%, not 0%); no signed percentage is announced. The descriptor carries `valueFraction` beside its geometry, across the wire, and an invalid one (not a finite number in 0..1) makes the descriptor withheld, like any malformed fraction.
+
 ### Task 22b (2026-11-14): Excel's gradient fill, the 10/90 lengths, and three capabilities closed (owner ruling S3-CLOSE)
 
 No Excel was run. `audit.ts --write` was not run, and `verifiedCapabilities.ts` is unchanged, so production still withholds every bar. The manifest changed only through `generate.ts --stage 3 --case stage3-bar-lengths-default` and `capture.ts --stage 3 --verify-only`.

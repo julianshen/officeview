@@ -26,6 +26,9 @@ export const DATA_BAR_WRITES: ReadonlySet<string> = Object.freeze(new Set(['data
 /** Spec §5.9 evaluated bar descriptor (Task 20 evaluates it; Task 19 only defines it). */
 export type CfBarDescriptor = Readonly<{
   ruleId: number; axisFraction: number; startFraction: number; endFraction: number; fillColor: number
+  /** The value's own position between the resolved min and max thresholds, 0..1: what the bar announces (Ruling S3-P).
+   * Separate from the painted geometry, which default lengths and an axis shift away from the value. */
+  valueFraction: number
   borderColor?: number; isGradient: boolean; isNegative: boolean; axisColor?: number; showValue: boolean
   direction: 'leftToRight' | 'rightToLeft'
 }>

@@ -45,11 +45,11 @@ const oneRule: CfSheetRules = { diagnostics: [], rules: [rule(0, { 'fill.pattern
 const nc = (value: number): CfLiteral => ({ kind: 'number', value })
 /** Wire bar descriptors (S3-S): every optional colour present, and none. */
 const BAR_FULL: NonNullable<CfCellStateWire['bar']> = {
-  ruleId: 3, axisFraction: 1 / 3, startFraction: 1 / 6, endFraction: 1 / 3, fillColor: 0xffff0000, borderColor: 0xff00b050, axisColor: 0xff000000,
+  ruleId: 3, axisFraction: 1 / 3, startFraction: 1 / 6, endFraction: 1 / 3, valueFraction: 1 / 6, fillColor: 0xffff0000, borderColor: 0xff00b050, axisColor: 0xff000000,
   isGradient: false, isNegative: true, showValue: false, rtl: true,
 }
 const BAR_MIN: NonNullable<CfCellStateWire['bar']> = {
-  ruleId: 3, axisFraction: 0, startFraction: 0, endFraction: 0.5, fillColor: 0xff0000ff, isGradient: true, isNegative: false, showValue: true, rtl: false,
+  ruleId: 3, axisFraction: 0, startFraction: 0, endFraction: 0.5, valueFraction: 0.5, fillColor: 0xff0000ff, isGradient: true, isNegative: false, showValue: true, rtl: false,
 }
 
 /** Bare async CF source for provider tests: no admission of its own. */

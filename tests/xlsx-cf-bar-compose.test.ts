@@ -35,7 +35,7 @@ const unresolvedStub = (id: number, priority: number, stop: boolean): CfRule => 
 })
 
 const descriptor: Omit<CfBarDescriptor, 'ruleId'> = Object.freeze({
-  axisFraction: 0, startFraction: 0, endFraction: 0.5, fillColor: 0xff0000ff, isGradient: false, isNegative: false, showValue: true, direction: 'leftToRight',
+  axisFraction: 0, startFraction: 0, endFraction: 0.5, valueFraction: 0.5, fillColor: 0xff0000ff, isGradient: false, isNegative: false, showValue: true, direction: 'leftToRight',
 })
 const barOut: CfOutcome<unknown> = { kind: 'ready', value: descriptor }
 const yes: CfOutcome<unknown> = { kind: 'ready', value: true }

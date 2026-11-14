@@ -114,14 +114,14 @@ interface CopiedState {
 type CfWireBar = NonNullable<CfCellStateWire['bar']>
 /** Wire form of a descriptor (`direction` as `rtl`), the shape every copy is priced in. */
 const wireBar = (d: CfBarDescriptor): CfWireBar => ({
-  ruleId: d.ruleId, axisFraction: d.axisFraction, startFraction: d.startFraction, endFraction: d.endFraction, fillColor: d.fillColor,
+  ruleId: d.ruleId, axisFraction: d.axisFraction, startFraction: d.startFraction, endFraction: d.endFraction, fillColor: d.fillColor, valueFraction: d.valueFraction,
   ...(d.borderColor !== undefined ? { borderColor: d.borderColor } : {}),
   ...(d.axisColor !== undefined ? { axisColor: d.axisColor } : {}),
   isGradient: d.isGradient, isNegative: d.isNegative, showValue: d.showValue, rtl: d.direction === 'rightToLeft',
 })
 /** The descriptor a wire bar encodes: the copy owns plain fields only, never the received object. */
 const descriptorOf = (w: CfWireBar): CfBarDescriptor => ({
-  ruleId: w.ruleId, axisFraction: w.axisFraction, startFraction: w.startFraction, endFraction: w.endFraction, fillColor: w.fillColor,
+  ruleId: w.ruleId, axisFraction: w.axisFraction, startFraction: w.startFraction, endFraction: w.endFraction, fillColor: w.fillColor, valueFraction: w.valueFraction,
   ...(w.borderColor !== undefined ? { borderColor: w.borderColor } : {}),
   isGradient: w.isGradient, isNegative: w.isNegative,
   ...(w.axisColor !== undefined ? { axisColor: w.axisColor } : {}),
@@ -129,7 +129,7 @@ const descriptorOf = (w: CfWireBar): CfBarDescriptor => ({
 })
 
 /** Structural key for one cell's descriptor inputs: shared aspects share one charge. A painted bar keys by its
- * announced position, so the descriptor cache never hands one cell's bar text to another cell. */
+ * announced value position (never its geometry), so the descriptor cache never hands one cell's bar text to another. */
 const winKey = (
   properties: Readonly<Record<string, string | number | boolean | null>>,
   unresolvedWrites: readonly string[] | undefined,
@@ -140,12 +140,9 @@ const winKey = (
   const writes = unresolvedWrites ? [...unresolvedWrites].sort().join(',') : ''
   const fraction = typeof scale === 'number' ? scale : scale?.fraction
   const scaleKey = fraction !== undefined ? `|scale:${Math.round(fraction * 100)}` : ''
-  const barKey = bar ? `|bar:${Math.round(barPosition(bar) * 100)}` : ''
+  const barKey = bar ? `|bar:${Math.round(bar.valueFraction * 100)}` : ''
   return `${paths}|${writes}${scaleKey}${barKey}`
 }
-
-/** The value's position in the bar's range: the bar end away from its anchor (axis, leading or trailing edge). */
-const barPosition = (bar: CfBarDescriptor): number => bar.startFraction === bar.axisFraction ? bar.endFraction : bar.startFraction
 
 const winDescriptor = (
   properties: Readonly<Record<string, string | number | boolean | null>>,
@@ -161,7 +158,7 @@ const winDescriptor = (
   if (cached) return cached
   const descriptor = unresolvedReason !== undefined
     ? describeCfUnavailable(locale)
-    : describeCfWin(properties, unresolvedWrites, undefined, locale, scale, bar ? { fraction: barPosition(bar) } : undefined)
+    : describeCfWin(properties, unresolvedWrites, undefined, locale, scale, bar ? { fraction: bar.valueFraction } : undefined)
   if (descriptor && cache.size < DESCRIPTOR_CACHE_KEYS) cache.set(key, descriptor)
   return descriptor ?? undefined
 }
