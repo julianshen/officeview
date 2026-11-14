@@ -305,6 +305,19 @@ describe('remote show: blank screens reach Presenter View (PR #75)', () => {
     expect(seen).toEqual(['black', 'slide', 'white'])
     s.exit()
   })
+
+  it.each([[-1], [3], [0.5]])('an invalid numbered goto (%p) from a blank screen restores the slide and notifies too', async (index) => {
+    const fd = fakeDoc({ count: 3 })
+    const { s } = await show(fd)
+    await fd.paints[0]!.ok()
+    const seen: string[] = []
+    s.presenterSource.onFrame(() => seen.push(s.state.screen))
+    s.presenterSource.input({ kind: 'black' })
+    s.presenterSource.input({ kind: 'goto', index })
+    expect(s.state.screen).toBe('slide')
+    expect(seen.at(-1)).toBe('slide')
+    s.exit()
+  })
 })
 
 describe('remote show: end and revocation', () => {

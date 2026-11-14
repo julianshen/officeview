@@ -590,8 +590,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     if (input.kind === 'enter' && buffer) target = { kind: 'goto', index: Number(buffer) - 1 }
     if (target.kind === 'goto') {
       buffer = ''
-      screen = 'slide'
-      surface?.show({ slide, count, screen })
+      // Restore first, notifying on its own: an invalid index navigates nowhere (and draws nothing).
+      if (screen !== 'slide') setScreen('slide')
       goTo(target.index)
       return
     }
