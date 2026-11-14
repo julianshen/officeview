@@ -119,16 +119,33 @@ class FakeServer {
     if (result === 'refuse') return back(() => sock.deliver(JSON.stringify({ reqId: m.reqId, type: 'refused', code: 'rate-limited' })))
     if (this.hold) return
     const bad = this.invalidOnce.delete(m.unitIndex)
+    answered.add(m.reqId)
     queueMicrotask(() => sock.frame(3, m.reqId, bad ? raster(m.unitIndex, 4000, 4000) : raster(m.unitIndex)))
   }
 }
 
 /** Lets real async work (the reassembler's DecompressionStream) finish between fake timers. */
 const realFlush = async () => { for (let i = 0; i < 6; i++) await new Promise((r) => setImmediate(r)) }
+/** Requests the fake server has answered with a raster (it answers within microtasks). */
+const answered = new Set<number>()
+/** The open test's session: an answered reqId it still holds, or a frame mid-inflate, is CPU work in real time. */
+let live: StreamSession | undefined
+const decoding = () => {
+  if (!live) return false
+  const internals = live as unknown as { units: Map<number, unknown>; reasm?: { pending: Map<number, { inflating: boolean }> } }
+  // Any frame mid-inflate (a raster, or a resume's manifest), or an answered raster not yet settled.
+  return [...(internals.reasm?.pending.values() ?? [])].some((p) => p.inflating) || [...answered].some((id) => internals.units.has(id))
+}
+/** Lets every answered request finish decoding (real gzip work, slow on CI) before
+ * fake time moves again: fake time then stands for the network, not the CPU. */
+async function drainDecodes() {
+  const until = performance.now() + 20_000
+  do await realFlush(); while (decoding() && performance.now() < until)
+}
 async function advance(ms: number, chunk = 50) {
   for (let left = ms; left > 0; left -= chunk) {
     await vi.advanceTimersByTimeAsync(Math.min(chunk, left))
-    await realFlush()
+    await drainDecodes()
   }
 }
 /** Lets real work (admission frees a slot only after a real gzip decode) catch up
@@ -151,6 +168,7 @@ async function open(prefill = 0) {
   const p = StreamSession.open({ kind: 'stream', url: 'wss://x/stream' }, { client: () => srv.connect() as never, faces: async () => [], now: () => Date.now() })
   await advance(50, 10)
   const s = await p
+  live = s
   return { s, srv }
 }
 
@@ -171,8 +189,8 @@ function showOn(s: StreamSession) {
   return { f, errors }
 }
 
-describe('R28: the unit budget is the session\'s (real StreamSession, real SessionRates)', () => {
-  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] }) })
+describe('R28: the unit budget is the session\'s (real StreamSession, real SessionRates)', { timeout: 60_000 }, () => {
+  beforeEach(() => { answered.clear(); live = undefined; vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] }) })
   afterEach(() => { vi.useRealTimers() })
 
   it('reviewer probe: 40 slides at 400 ms, dispose, restart the show on the same session — no refusal, no close', async () => {
