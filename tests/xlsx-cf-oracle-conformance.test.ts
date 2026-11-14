@@ -725,6 +725,81 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
   })
 
   /**
+   * Stage 4 (Task 24, Lesson 1): every icon cell of every Stage 4 oracle workbook is withheld under production evidence
+   * until its icon:* evidence lands. Withheld means the prepared outcome is not `ready`, or it carries no `iconSet` in its
+   * visual slot. The paint-side `textInsetAt` assertion joins in Task 29, which creates it.
+   */
+  const iconWithheldOutcome = (outcome: CfOutcome<CfCellState>): boolean => outcome.kind !== 'ready' || outcome.value.visual?.iconSet === undefined
+
+  it('stage 4 icon cells are withheld until their evidence lands', async () => {
+    // The guard has teeth: a ready cell carrying an icon in its visual slot is NOT withheld. (The descriptor shape changes
+    // in Task 25; the guard only asks whether the slot is occupied.)
+    const withIcon = { kind: 'ready', value: { properties: {}, visual: { iconSet: { name: '3Arrows', index: 0 } } } } as unknown as CfOutcome<CfCellState>
+    expect(iconWithheldOutcome(withIcon)).toBe(false)
+    expect(iconWithheldOutcome({ kind: 'ready', value: { properties: {} } })).toBe(true)
+    expect(iconWithheldOutcome({ kind: 'no-match' })).toBe(true)
+    expect(iconWithheldOutcome({ kind: 'unresolved', reason: 'cf-unsupported-rule' })).toBe(true)
+
+    const stage4 = manifest.cases.filter(c => c.stage === 4)
+    expect(stage4.map(c => c.id)).toEqual(CF_CASES.filter(c => c.stage === 4).map(c => c.id))
+    expect(stage4).toHaveLength(15)
+    let checked = 0
+    let iconCells = 0
+    let preparedSheets = 0
+    const painted: string[] = []
+    for (const c of stage4) {
+      const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
+      const doc = await parseXlsx(await OfficePackage.load(bytes), parseOptionsFor(c))
+      const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+      if (!sheet.conditionalFormatting) {
+        // Production refused every rule of the sheet at parse: nothing can paint, every cell is withheld.
+        checked += c.expected.cells.length
+        iconCells += c.expected.cells.filter(e => e.iconApplied === true).length
+        continue
+      }
+      preparedSheets++
+      const memory = createCfMemory()
+      const merges = (sheet.mergeRanges ?? []).map(m => ({ firstRow: m.minRow, lastRow: m.maxRow, firstCol: m.minCol, lastCol: m.maxCol }))
+      const service = createCfService(sheet.conditionalFormatting, memory, { evidence: cfRuntimeEvidence, merges })
+      const stamp = { owner: 'conformance', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(sheet.conditionalFormatting), viewGen: 0, structureGen: 0, clockGen: 0 }
+      const source = residentSource(sheet, stamp, memory, 'engine')
+      const ends = c.range.split(':').map(refToRowCol)
+      const rect = { firstRow: ends[0]!.row, lastRow: ends[1]!.row, firstCol: ends[0]!.col, lastCol: ends[1]!.col }
+      const lease = await service.prepareCf({ stamp, sourceRects: [rect], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, source)
+      try {
+        for (const exp of c.expected.cells) {
+          const { row, col } = refToRowCol(exp.ref)
+          checked++
+          if (exp.iconApplied === true) iconCells++
+          if (!iconWithheldOutcome(lease.value.at(row, col))) painted.push(`${c.id}:${exp.ref}`)
+        }
+      } finally {
+        lease.release()
+      }
+      service.dispose()
+      expect(memory.currentBytes, `${c.id} leaked CF memory`).toBe(0)
+    }
+    // Non-vacuous: every designated icon cell and its control was visited, and most sheets were actually prepared.
+    expect(checked).toBe(stage4.reduce((n, c) => n + c.expected.cells.length, 0))
+    expect(iconCells).toBeGreaterThan(200)
+    expect(preparedSheets).toBeGreaterThanOrEqual(13)
+    expect(painted).toEqual([])
+    // No icon capability is published yet: production holds none of them.
+    expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE4_CAPABILITIES')).toBeUndefined()
+    for (const id of VERIFIED_CAPABILITIES) expect(id.startsWith('icon:'), id).toBe(false)
+
+    // Icon FINDINGS are withheld-only (extends the guard): an icon can never be recorded as painted.
+    type IconFinding = { outcome: 'withheld'; reason: string }
+    const ICON_FINDINGS: Record<string, IconFinding> = {}
+    for (const [key, f] of Object.entries(ICON_FINDINGS)) expect(f.outcome, key).toBe('withheld')
+    const validateIconFinding = (f: IconFinding) => {
+      if (f.outcome !== 'withheld') throw new Error(`Non-withheld icon outcome: ${(f as any).outcome}`)
+    }
+    expect(() => validateIconFinding({ outcome: 'painted' as any, reason: 'icon painted before evidence' })).toThrow(/Non-withheld icon outcome/)
+    expect(() => validateIconFinding({ outcome: 'withheld', reason: 'valid' })).not.toThrow()
+  }, 60_000)
+
+  /**
    * Lesson 1: every bar production paints reproduces Excel's measured px, and every bar it cannot reproduce is withheld.
    *
    * Evidence is the audit's OWN result (auditStage3Manifest: the verified set, the selected layout and the measured

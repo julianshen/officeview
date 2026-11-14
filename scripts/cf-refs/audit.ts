@@ -60,6 +60,10 @@ import {
   CF_STAGE3_CASES,
   CF_STAGE3_NONDISCRIMINATING,
   CF_STAGE3_UNSUPPORTED,
+  CF_STAGE4_CAPABILITIES,
+  CF_STAGE4_CASES,
+  CF_STAGE4_NONDISCRIMINATING,
+  iconCapabilityKind,
   type CfManifest,
   type CfOracleCase,
   type CfOracleStatus,
@@ -639,6 +643,86 @@ export function auditStage3Manifest(manifest: CfManifest, options: { rootDir?: s
   }
 }
 
+export type Stage4CaseAudit = Stage1CaseAudit
+export type Stage4CapabilityAudit = Stage1CapabilityAudit
+/** Stage 4 (icon sets): the per-capability dispositions, like Stage 3's, plus the recorded object-model probe answer. */
+export interface Stage4AuditReport extends Stage1AuditReport {
+  /** The `stage4-icon-om-reachability` sidecar's recorded rows (Ruling S4-A, record only), when captured. */
+  iconOmReachability?: unknown
+}
+
+/**
+ * Stage 4 (icon sets, Task 24), following `auditStage3Manifest`. A capability's disposition comes from `verifyCfCase`'s
+ * per-capability result and the cross-case gates in `isCapabilityVerified` (pixel calibration, the glyph key, the family
+ * order), never from the case-level status. Record-only and registry non-discriminating capabilities are
+ * `unverified-nondiscriminating`; the unresolved shapes are `refused-unsupported`.
+ */
+export function auditStage4Manifest(manifest: CfManifest, options: { rootDir?: string } = {}): Stage4AuditReport {
+  const rootDir = options.rootDir ?? process.cwd()
+  const cases = manifest.cases.filter(c => c.stage === 4 || c.id.startsWith('stage4'))
+  const catalogIds = CF_STAGE4_CASES.map(c => c.id)
+  const manifestIds = new Set(cases.map(c => c.id))
+  const missingCases = catalogIds.filter(id => !manifestIds.has(id))
+  const catalogSet = new Set(catalogIds)
+  const extraCases = cases.map(c => c.id).filter(id => !catalogSet.has(id))
+  const evidence = new Map(cases.map(c => [c.id, verifyCfCase(c, { rootDir })] as const))
+  primeVerifiedCases(manifest, { rootDir }, evidence)
+  const perCase = cases.map(c => auditCase(c, rootDir, evidence.get(c.id)))
+  const perCapability: Stage4CapabilityAudit[] = CF_STAGE4_CAPABILITIES.map(entry => {
+    const owning = perCase.find(p => p.id === entry.caseId)
+    let disposition: Stage4CapabilityAudit['disposition'] = 'unaccounted'
+    if (owning?.structuralValid) {
+      if (owning.status === 'unsupported') disposition = 'refused-unsupported'
+      else if (CF_STAGE4_NONDISCRIMINATING[entry.capabilityId] !== undefined || iconCapabilityKind(entry.capabilityId) === 'record') disposition = 'unverified-nondiscriminating'
+      else {
+        disposition = 'supported-structural'
+        const res = evidence.get(entry.caseId)
+        if (res?.kind === 'verified') {
+          if (res.nonDiscriminatingCapabilities?.includes(entry.capabilityId)) disposition = 'unverified-nondiscriminating'
+          else if (res.verifiedCapabilities.includes(entry.capabilityId) && isCapabilityVerified(entry.capabilityId, manifest, { rootDir })) disposition = 'verified'
+        }
+      }
+    }
+    return { capabilityId: entry.capabilityId, caseId: entry.caseId, disposition }
+  })
+  const ids = new Set(CF_STAGE4_CAPABILITIES.map(e => e.capabilityId))
+  const unknownNonDiscriminating = Object.keys(CF_STAGE4_NONDISCRIMINATING).filter(id => !ids.has(id) || !CF_STAGE4_NONDISCRIMINATING[id]!.trim())
+  const caseOk = (p: Stage4CaseAudit): boolean => (p.status === 'measured' ? p.structuralValid && p.code === undefined : p.structuralValid)
+  const ok = missingCases.length === 0 && perCase.length > 0 && perCase.every(caseOk) && perCapability.every(p => p.disposition !== 'unaccounted') && unknownNonDiscriminating.length === 0
+  const gate = stageGateStatus(perCapability)
+  const omCase = cases.find(c => c.id === 'stage4-icon-om-reachability')
+  const omSidecar = omCase?.captures[0]?.sidecarPath ? resolve(rootDir, omCase.captures[0].sidecarPath) : undefined
+  let iconOmReachability: unknown
+  if (omSidecar && existsSync(omSidecar)) {
+    try {
+      iconOmReachability = (JSON.parse(readFileSync(omSidecar, 'utf8')) as Record<string, unknown>).iconOmReachability
+    } catch {
+      iconOmReachability = undefined
+    }
+  }
+  return {
+    ok,
+    perCase,
+    perCapability,
+    missingCases,
+    extraCases,
+    stageComplete: ok && gate.complete,
+    blockedCapabilities: gate.blocked,
+    ...(iconOmReachability !== undefined ? { iconOmReachability } : {}),
+    summary: {
+      cases: perCase.length,
+      structuralValid: perCase.filter(p => p.structuralValid).length,
+      verified: perCase.filter(p => p.status === 'measured' && p.code === undefined).length,
+      unsupported: perCase.filter(p => p.status === 'unsupported').length,
+      pending: perCase.filter(p => p.status === 'recipe-pending' || p.status === 'geometry-unverified').length,
+      capabilities: perCapability.length,
+      covered: perCapability.filter(p => p.disposition !== 'unaccounted').length,
+      verifiedCapabilities: perCapability.filter(p => p.disposition === 'verified').length,
+      unverifiedCapabilities: perCapability.filter(p => p.disposition === 'unverified-nondiscriminating').length,
+    },
+  }
+}
+
 /**
  * The exact text `--stage N --write` puts in `src/xlsx/cf/verifiedCapabilities.ts`, as a pure function of the manifest
  * so the write is testable and idempotent (Lesson 4): the same manifest always renders the same bytes, and the Stage 1/2
@@ -649,6 +733,8 @@ export interface RenderVerifiedOptions {
   publishStage3?: boolean
   /** The current `verifiedCapabilities.ts`, whose Stage 3 export is carried over verbatim unless `publishStage3`. */
   committedSource?: string
+  /** Mirrors Ruling S3-WRITE for Stage 4: publish the audited Stage 4 set (Task 30 only); otherwise the committed Stage 4 export, or its absence, is kept verbatim. */
+  publishStage4?: boolean
 }
 
 /** Per-channel ARGB agreement within the bar colour tolerance (8, the calibration cell's). */
@@ -711,8 +797,11 @@ export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: 
   const lengthsBlock = stage3Report ? renderBarLengthsBlock(stage3Report.barLengths) : exportedLengths(options.committedSource)
   const borderBlock = stage3Report ? renderBarGradientBorderBlock(stage3Report.barGradientBorder) : exportedGradientBorder(options.committedSource)
   const autoBoundsBlock = stage3Report ? renderBarAutoBoundsBlock(stage3Report.barAutoBounds) : exportedAutoBounds(options.committedSource)
+  const stage4Verified = options.publishStage4
+    ? verifiedOf(auditStage4Manifest(manifest, { rootDir }))
+    : exportedSet(options.committedSource, 'VERIFIED_STAGE4_CAPABILITIES')
   const list = (ids: readonly string[]): string => ids.map(id => `  '${id}',`).join('\n')
-  const allVerified = [...new Set([...stage1Verified, ...stage2Verified, ...(stage3Verified ?? [])])].sort()
+  const allVerified = [...new Set([...stage1Verified, ...stage2Verified, ...(stage3Verified ?? []), ...(stage4Verified ?? [])])].sort()
   const block = (name: string, ids: readonly string[]): string => `export const ${name}: ReadonlySet<string> = new Set([\n${list(ids)}\n])\n`
   return `/**
  * Verified conditional formatting capabilities, every stage from its own audit (Stage 3 only once published, Ruling S3-WRITE).
@@ -721,7 +810,7 @@ export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: 
  */
 ${block('VERIFIED_STAGE1_CAPABILITIES', stage1Verified)}
 ${block('VERIFIED_STAGE2_CAPABILITIES', stage2Verified)}
-${stage3Verified !== undefined ? `${block('VERIFIED_STAGE3_CAPABILITIES', stage3Verified)}\n` : ''}${stage3Verified !== undefined && autoColoursBlock !== undefined ? `${autoColoursBlock}\n` : ''}${stage3Verified !== undefined && layoutBlock !== undefined ? `${layoutBlock}\n` : ''}${stage3Verified !== undefined && gradientBlock !== undefined ? `${gradientBlock}\n` : ''}${stage3Verified !== undefined && lengthsBlock !== undefined ? `${lengthsBlock}\n` : ''}${stage3Verified !== undefined && borderBlock !== undefined ? `${borderBlock}\n` : ''}${stage3Verified !== undefined && autoBoundsBlock !== undefined ? `${autoBoundsBlock}\n` : ''}${block('VERIFIED_CAPABILITIES', allVerified)}`
+${stage3Verified !== undefined ? `${block('VERIFIED_STAGE3_CAPABILITIES', stage3Verified)}\n` : ''}${stage3Verified !== undefined && autoColoursBlock !== undefined ? `${autoColoursBlock}\n` : ''}${stage3Verified !== undefined && layoutBlock !== undefined ? `${layoutBlock}\n` : ''}${stage3Verified !== undefined && gradientBlock !== undefined ? `${gradientBlock}\n` : ''}${stage3Verified !== undefined && lengthsBlock !== undefined ? `${lengthsBlock}\n` : ''}${stage3Verified !== undefined && borderBlock !== undefined ? `${borderBlock}\n` : ''}${stage3Verified !== undefined && autoBoundsBlock !== undefined ? `${autoBoundsBlock}\n` : ''}${stage4Verified !== undefined ? `${block('VERIFIED_STAGE4_CAPABILITIES', stage4Verified)}\n` : ''}${block('VERIFIED_CAPABILITIES', allVerified)}`
 }
 
 /* ---------------- pressure + lifecycle scenarios ---------------- */
@@ -1673,9 +1762,9 @@ function printCase(entry: { id: string; status: string; structuralValid: boolean
 async function main(): Promise<void> {
   const args = process.argv.slice(2)
   const stage = Number(args.includes('--stage') ? args[args.indexOf('--stage') + 1] : 1)
-  if (stage !== 1 && stage !== 2 && stage !== 3) {
+  if (stage !== 1 && stage !== 2 && stage !== 3 && stage !== 4) {
     // eslint-disable-next-line no-console
-    console.error('Only --stage 1, --stage 2 and --stage 3 are implemented')
+    console.error('Only --stage 1, --stage 2, --stage 3 and --stage 4 are implemented')
     process.exit(2)
   }
   const only = args.includes('--case') ? args[args.indexOf('--case') + 1] : undefined
@@ -1685,17 +1774,21 @@ async function main(): Promise<void> {
     ? auditStage1Manifest(manifest, { rootDir: REPO_ROOT })
     : stage === 2
       ? auditStage2Manifest(manifest, { rootDir: REPO_ROOT })
-      : auditStage3Manifest(manifest, { rootDir: REPO_ROOT })
+      : stage === 3
+        ? auditStage3Manifest(manifest, { rootDir: REPO_ROOT })
+        : auditStage4Manifest(manifest, { rootDir: REPO_ROOT })
   if (args.includes('--write')) {
     const target = resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts')
     const content = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, {
       committedSource: existsSync(target) ? readFileSync(target, 'utf8') : undefined,
       publishStage3: args.includes('--publish-stage3'),
+      publishStage4: args.includes('--publish-stage4'),
     })
     writeFileSync(target, content, 'utf8')
     const count = (name: string): number => (new RegExp(`export const ${name}: ReadonlySet<string> = new Set\\(\\[([\\s\\S]*?)\\]\\)`).exec(content)?.[1]?.match(/'[^']+'/g) ?? []).length
     const s3 = content.includes('VERIFIED_STAGE3_CAPABILITIES') ? `, ${count('VERIFIED_STAGE3_CAPABILITIES')} S3${args.includes('--publish-stage3') ? ' published' : ' as committed'}` : ', S3 unpublished'
-    const detail = ` (${count('VERIFIED_STAGE1_CAPABILITIES')} S1, ${count('VERIFIED_STAGE2_CAPABILITIES')} S2${s3})`
+    const s4 = content.includes('VERIFIED_STAGE4_CAPABILITIES') ? `, ${count('VERIFIED_STAGE4_CAPABILITIES')} S4${args.includes('--publish-stage4') ? ' published' : ' as committed'}` : ', S4 unpublished'
+    const detail = ` (${count('VERIFIED_STAGE1_CAPABILITIES')} S1, ${count('VERIFIED_STAGE2_CAPABILITIES')} S2${s3}${s4})`
     // eslint-disable-next-line no-console
     console.log(`wrote ${count('VERIFIED_CAPABILITIES')} verified capabilities${detail} to src/xlsx/cf/verifiedCapabilities.ts`)
   }
@@ -1779,6 +1872,10 @@ async function main(): Promise<void> {
     console.log(`${barUnitCap.name}: ${barUnitCap.admittedCells} cells admitted (reads=${barUnitCap.admittedReads}, units=${barUnitCap.admittedUnits}), ${barUnitCap.refusedCells} cells refused ${barUnitCap.refusedReason} (reads=${barUnitCap.refusedReads}, units=${barUnitCap.refusedUnits}) net=${barUnitCap.netBytes} (${barUnitCap.wallMs}ms context only)`)
     if (barUnitCap.netBytes !== 0) throw new Error(`unit-cap scans leaked ${barUnitCap.netBytes} B`)
     stage3Pressure = { barShared, barPercentile, barExtents, barDistinct, barUnitCap }
+  } else if (stage === 4) {
+    // Stage 4 icon pressure scenarios arrive with Task 30; the shared scenarios below still run.
+    // eslint-disable-next-line no-console
+    console.log('stage 4 icon pressure: deferred to Task 30')
   } else {
     const scaleShared = await pressureScale1MRowSharedStatistics()
     // eslint-disable-next-line no-console
@@ -1831,7 +1928,9 @@ async function main(): Promise<void> {
       ? { report, ...stage1Pressure, distinct, cycles, baseline, eager }
       : stage === 3
         ? { report, ...stage3Pressure, distinct, cycles, baseline, eager }
-        : { report, ...stage2Pressure, distinct, cycles, baseline, eager }
+        : stage === 4
+          ? { report, distinct, cycles, baseline, eager }
+          : { report, ...stage2Pressure, distinct, cycles, baseline, eager }
     writeFileSync(join(outDir, `stage${stage}-audit.json`), JSON.stringify(outData, null, 2))
   }
 

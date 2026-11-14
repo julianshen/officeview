@@ -18,6 +18,7 @@ import { deflateRawSync } from 'node:zlib'
 import {
   CF_CASES,
   CF_STAGE3_FIXTURES,
+  CF_STAGE4_FIXTURES,
   DEFAULT_CLOCK_ANCHOR_DATE,
   isoDateToExcelSerial,
   s3ControlOffset,
@@ -29,9 +30,14 @@ import {
   type CfOracleCase,
   type S3BarRule,
   type S3Fixture,
+  type S3RawRule,
   type S3Value,
+  type S4Fixture,
+  type S4IconRule,
+  type S4Style,
 } from './cases'
-import { verifyCfCase } from './verify'
+import { parseXml } from '../../src/core/xml'
+import { readZipPartsSync, verifyCfCase } from './verify'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 export const CF_FIXTURE_DIR = join(REPO_ROOT, 'tests/fixtures/xlsx-cf')
@@ -94,6 +100,10 @@ interface SheetPayload {
   dateStyle?: boolean
   /** Stage 3: a static solid cell fill (ARGB) as the last `cellXfs` entry (`cellFillXf`), for the bar and control cells. */
   cellFillRgb?: string
+  /** Stage 4: a complete `xl/styles.xml` (fonts, `;;;`, alignments); absent keeps the Stage 1-3 styles byte for byte. */
+  stylesXml?: string
+  /** Stage 4: `<sheetView rightToLeft="1">` (Ruling S4-M); absent writes no attribute. */
+  rightToLeft?: boolean
 }
 
 /** The `cellXfs` index of the static cell fill: after the four base styles and the optional date style. */
@@ -1142,6 +1152,8 @@ function casePayload(id: string, anchorDateIso = DEFAULT_CLOCK_ANCHOR_DATE): She
     default: {
       const fx = CF_STAGE3_FIXTURES.find(f => f.id === id)
       if (fx) return stage3Payload(fx)
+      const fx4 = CF_STAGE4_FIXTURES.find(f => f.id === id)
+      if (fx4) return stage4Payload(fx4)
       throw new Error(`Unknown CF case id: ${id}`)
     }
   }
@@ -1272,6 +1284,230 @@ function stage3Payload(fx: S3Fixture): SheetPayload {
   }
 }
 
+// ---- Stage 4: icon set fixtures (the shared `S4Fixture` spec in cases.ts drives both markers and XML) ----
+
+/**
+ * Icon set rule templates. The base form is ECMA-376 `<cfRule type="iconSet"><iconSet>`; the x14 form is a standalone,
+ * priority-bearing `<x14:cfRule type="iconSet">` with `<x14:cfvo>`/`<xm:f>` and `<x14:cfIcon>`. These are the generator's
+ * templates that `diffAuthoredIconTemplates` holds against Excel's own dialog output (Lesson 12, Ruling S4-O): change
+ * `iconRuleXml` (or `ICON_KEY_PERCENT_FORM` in cases.ts) when the diff reports a difference.
+ */
+export function iconRuleXml(r: S4IconRule, guid: string): { legacy?: string; x14?: string } {
+  const stop = r.stopIfTrue ? ' stopIfTrue="1"' : ''
+  const setAttr = r.set !== undefined ? ` iconSet="${esc(r.set)}"` : ''
+  const gteAttr = (gte: boolean | undefined): string => (gte === undefined ? '' : ` gte="${gte ? 1 : 0}"`)
+  if (r.dialect === 'x14') {
+    const cfvo = r.cfvo
+      .map(c => (c.val !== undefined ? `<x14:cfvo type="${esc(c.type)}"${gteAttr(c.gte)}><xm:f>${esc(c.val)}</xm:f></x14:cfvo>` : `<x14:cfvo type="${esc(c.type)}"${gteAttr(c.gte)}/>`))
+      .join('')
+    const icons = (r.custom ?? []).map(i => `<x14:cfIcon iconSet="${esc(i.set)}" iconId="${i.iconId}"/>`).join('')
+    return {
+      x14: `<x14:cfRule type="iconSet" priority="${r.priority}"${stop} id="${guid}"><x14:iconSet${setAttr}${r.custom ? ' custom="1"' : ''}${attrString(r.attrs)}>${cfvo}${icons}</x14:iconSet></x14:cfRule>`,
+    }
+  }
+  const cfvo = r.cfvo.map(c => `<cfvo type="${esc(c.type)}"${c.val !== undefined ? ` val="${esc(c.val)}"` : ''}${gteAttr(c.gte)}/>`).join('')
+  return { legacy: `<cfRule type="iconSet" priority="${r.priority}"${stop}><iconSet${setAttr}${attrString(r.attrs)}>${cfvo}</iconSet></cfRule>` }
+}
+
+const S4_DEFAULT_FONT_PT = 11
+
+/** `xl/styles.xml` for a Stage 4 fixture: the Stage 1-3 base table plus one `cellXfs` entry per distinct column style. */
+function stage4StylesXml(dxfsXml: string, styles: readonly S4Style[]): { xml: string; xfOf: (s: S4Style) => number } {
+  const key = (s: S4Style): string => JSON.stringify([s.fontPt ?? S4_DEFAULT_FONT_PT, s.vertical ?? '', s.horizontal ?? '', s.numFmt ?? ''])
+  const distinct = [...new Map(styles.map(s => [key(s), s])).values()]
+  const fontSizes = [...new Set(distinct.map(s => s.fontPt ?? S4_DEFAULT_FONT_PT).filter(pt => pt !== S4_DEFAULT_FONT_PT))]
+  const fontId = (pt: number): number => (pt === S4_DEFAULT_FONT_PT ? 0 : 2 + fontSizes.indexOf(pt))
+  const BASE_XFS = 5 // four Stage 1-3 base styles plus the date style
+  const xf = (s: S4Style): string => {
+    const numFmtId = s.numFmt === 'hidden' ? 166 : s.numFmt === 'date' ? 14 : 0
+    const align = s.vertical || s.horizontal ? `<alignment${s.horizontal ? ` horizontal="${s.horizontal}"` : ''}${s.vertical ? ` vertical="${s.vertical}"` : ''}/>` : ''
+    const applies = `${numFmtId ? ' applyNumberFormat="1"' : ''}${fontId(s.fontPt ?? S4_DEFAULT_FONT_PT) ? ' applyFont="1"' : ''}${align ? ' applyAlignment="1"' : ''}`
+    return align
+      ? `<xf numFmtId="${numFmtId}" fontId="${fontId(s.fontPt ?? S4_DEFAULT_FONT_PT)}" fillId="0" borderId="0" xfId="0"${applies}>${align}</xf>`
+      : `<xf numFmtId="${numFmtId}" fontId="${fontId(s.fontPt ?? S4_DEFAULT_FONT_PT)}" fillId="0" borderId="0" xfId="0"${applies}/>`
+  }
+  const xml = [
+    XML_DECL,
+    `<styleSheet xmlns="${NS_MAIN}">`,
+    '<numFmts count="3">',
+    '<numFmt numFmtId="164" formatCode="00000"/>',
+    '<numFmt numFmtId="165" formatCode="0.0"/>',
+    '<numFmt numFmtId="166" formatCode=";;;"/>',
+    '</numFmts>',
+    `<fonts count="${2 + fontSizes.length}">`,
+    '<font><sz val="11"/><color rgb="FF000000"/><name val="Calibri"/></font>',
+    '<font><b/><u/><strike/><sz val="11"/><color rgb="FF000000"/><name val="Calibri"/></font>',
+    ...fontSizes.map(pt => `<font><sz val="${pt}"/><color rgb="FF000000"/><name val="Calibri"/></font>`),
+    '</fonts>',
+    '<fills count="3">',
+    '<fill><patternFill patternType="none"/></fill>',
+    '<fill><patternFill patternType="gray125"/></fill>',
+    '<fill><patternFill patternType="solid"><fgColor rgb="FFFFF2CC"/></patternFill></fill>',
+    '</fills>',
+    '<borders count="1">',
+    '<border><left/><right/><top/><bottom/><diagonal/></border>',
+    '</borders>',
+    '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>',
+    `<cellXfs count="${BASE_XFS + distinct.length}">`,
+    '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>',
+    '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>',
+    '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>',
+    '<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>',
+    '<xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>',
+    ...distinct.map(xf),
+    '</cellXfs>',
+    dxfsXml,
+    '</styleSheet>',
+  ].join('')
+  return { xml, xfOf: s => BASE_XFS + distinct.findIndex(d => key(d) === key(s)) }
+}
+
+function stage4Payload(fx: S4Fixture): SheetPayload {
+  const off = s3ControlOffset(fx)
+  const cells: CellSpec[] = []
+  const styled = Object.values(fx.colStyles ?? {})
+  const styles = stage4StylesXml(fx.dxfsXml ?? '<dxfs count="0"/>', styled)
+  const styleOf = (ref: string): { s?: number } => {
+    const st = fx.colStyles?.[/^[A-Z]+/.exec(ref)![0]]
+    return st ? { s: styles.xfOf(st) } : {}
+  }
+  const put = (ref: string, v: S3Value, ctrlRef: string): void => {
+    for (const target of [ref, ctrlRef]) {
+      if (v === null) continue
+      const s = styleOf(target)
+      if (typeof v === 'object') {
+        if ('err' in v) cells.push({ ref: target, err: v.err, ...s })
+        else if ('f' in v) cells.push({ ref: target, f: v.f, v: v.v, ...s })
+        else cells.push({ ref: target, v: v.date, ...(s.s !== undefined ? s : { s: 4 }) })
+      } else {
+        cells.push({ ref: target, v, ...s })
+      }
+    }
+  }
+  cells.push({ ref: 'A1', v: 'Val' }, { ref: `A${1 + off}`, v: 'Val_Ctrl' })
+  for (const c of fx.cols) cells.push({ ref: `${c.col}1`, v: c.header }, { ref: `${c.col}${1 + off}`, v: `${c.header}_Ctrl` })
+  for (let r = 2; r <= fx.n + 1; r++) cells.push({ ref: `A${r}`, v: `r${r}` }, { ref: `A${r + off}`, v: `r${r}_ctrl` })
+  for (const c of fx.cols) c.values.forEach((v, i) => put(`${c.col}${i + 2}`, v, s3ControlRef(fx, `${c.col}${i + 2}`)))
+  for (const e of fx.extraCells ?? []) put(e.ref, e.v, s3ControlRef(fx, e.ref))
+
+  const heights = new Map<number, number>()
+  for (const [row, h] of Object.entries(fx.rowHeights ?? {})) {
+    heights.set(Number(row), h)
+    heights.set(Number(row) + off, h)
+  }
+
+  const legacyBlocks: Array<{ sqref: string; rules: string[] }> = []
+  const x14Blocks: string[] = []
+  fx.rules.forEach((r: S4IconRule | S3BarRule | S3RawRule, i) => {
+    const guid = `{3B3B4F${(CF_STAGE4_FIXTURES.indexOf(fx) + 1).toString(16).toUpperCase().padStart(2, '0')}-0000-4000-8000-${(i + 1).toString(16).toUpperCase().padStart(12, '0')}}`
+    const out = r.kind === 'icon' ? iconRuleXml(r, guid) : r.kind === 'bar' ? barRuleXml(r, guid) : r.where === 'legacy' ? { legacy: r.xml } : { x14: r.xml }
+    if (out.legacy) {
+      const last = legacyBlocks[legacyBlocks.length - 1]
+      if (last && last.sqref === r.sqref && !r.separateBlock) last.rules.push(out.legacy)
+      else legacyBlocks.push({ sqref: r.sqref, rules: [out.legacy] })
+    }
+    if (out.x14) x14Blocks.push(`<x14:conditionalFormatting xmlns:xm="${NS_XM}">${out.x14}<xm:sqref>${esc(r.sqref)}</xm:sqref></x14:conditionalFormatting>`)
+  })
+
+  return {
+    dimension: s3Range(fx),
+    cells,
+    ...(fx.merges ? { merges: fx.merges } : {}),
+    ...(fx.hiddenRows ? { hiddenRows: fx.hiddenRows } : {}),
+    colWidths: fx.cols.map(c => ({ min: colIdxOf(c.col), max: colIdxOf(c.col), width: c.width ?? 12 })),
+    legacyCfXml: legacyBlocks.map(b => `<conditionalFormatting sqref="${esc(b.sqref)}">${b.rules.join('')}</conditionalFormatting>`).join(''),
+    ...(x14Blocks.length > 0 ? { x14CfXml: `<x14:conditionalFormattings>${x14Blocks.join('')}</x14:conditionalFormattings>` } : {}),
+    dxfsXml: fx.dxfsXml ?? '<dxfs count="0"/>',
+    rowHeightsPt: heights,
+    defaultRowHeightPt: 20,
+    showGridLines: fx.gridlines === true,
+    ...(fx.autoFilterXml ? { autoFilterXml: fx.autoFilterXml } : {}),
+    stylesXml: styles.xml,
+    ...(fx.rightToLeft ? { rightToLeft: true } : {}),
+  }
+}
+
+/** One icon set rule as written, for the template diff: where it lives, its attributes and children exactly. */
+interface WrittenIconRule {
+  dialect: 'base' | 'x14'
+  sqref: string
+  ruleAttrs: string[]
+  iconSetAttrs: Record<string, string>
+  cfvo: Array<Record<string, string>>
+  cfIcon: Array<Record<string, string>>
+}
+
+type XNode = Record<string, unknown>
+const xArr = <T>(v: T | T[] | undefined | null): T[] => (v == null ? [] : Array.isArray(v) ? v : [v])
+const xNode = (v: unknown): XNode | undefined => (v === '' ? {} : v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as XNode) : undefined)
+const xAttrs = (n: XNode | undefined): Record<string, string> => Object.fromEntries(Object.entries(xNode(n?.['@attrs']) ?? {}).map(([k, v]) => [k, String(v)]))
+const xText = (n: unknown): string | undefined => (typeof n === 'string' || typeof n === 'number' ? String(n) : xNode(n)?.['#text'] !== undefined ? String(xNode(n)!['#text']) : undefined)
+
+/** Every icon set rule of `xl/worksheets/sheet1.xml`, base and x14, keyed by nothing: order as written. */
+export function readWrittenIconRules(parts: Map<string, Uint8Array>): WrittenIconRule[] {
+  const raw = parts.get('xl/worksheets/sheet1.xml')
+  if (!raw) return []
+  const root = parseXml(new TextDecoder().decode(raw)) as XNode
+  const ws = xNode(root.worksheet) ?? root
+  const out: WrittenIconRule[] = []
+  const read = (rule: XNode, dialect: 'base' | 'x14', sqref: string): void => {
+    const set = xNode(rule.iconSet)
+    if (!set) return
+    out.push({
+      dialect,
+      sqref: sqref.trim().replace(/\s+/g, ' ').toUpperCase(),
+      ruleAttrs: Object.keys(xAttrs(rule)).sort(),
+      iconSetAttrs: xAttrs(set),
+      cfvo: xArr(set.cfvo).map(xNode).map(c => ({ ...xAttrs(c), ...(xText(c?.f) !== undefined ? { f: xText(c?.f)! } : {}) })),
+      cfIcon: xArr(set.cfIcon).map(xNode).map(xAttrs),
+    })
+  }
+  for (const cf of xArr(ws.conditionalFormatting).map(xNode)) {
+    for (const rule of xArr(cf?.cfRule).map(xNode)) if (rule && xAttrs(rule).type === 'iconSet') read(rule, 'base', xAttrs(cf).sqref ?? '')
+  }
+  for (const ext of xArr(xNode(ws.extLst)?.ext).map(xNode)) {
+    for (const cf of xArr(xNode(ext?.conditionalFormattings)?.conditionalFormatting).map(xNode)) {
+      for (const rule of xArr(cf?.cfRule).map(xNode)) if (rule && xAttrs(rule).type === 'iconSet') read(rule, 'x14', xText(cf?.sqref) ?? '')
+    }
+  }
+  return out
+}
+
+/**
+ * Lesson 12 / Ruling S4-O: the generator's icon templates (the `stage4-icon-authored` input) against Excel's own dialog
+ * output (`excel-authored-iconsets.xlsx`), rule by rule on the same sqref. Compares the dialect, the `<cfRule>` attribute
+ * names, the `<iconSet>` attributes as written (form, not only semantics: an omitted `percent` and a written
+ * `percent="1"` differ), every cfvo's attributes and `<xm:f>`, and the cfIcon list. Returns one line per difference;
+ * empty means the templates write what Excel writes.
+ */
+export function diffAuthoredIconTemplates(generated: Map<string, Uint8Array>, authored: Map<string, Uint8Array>): string[] {
+  const gen = readWrittenIconRules(generated)
+  const exc = readWrittenIconRules(authored)
+  const diffs: string[] = []
+  const fix = 'update iconRuleXml (scripts/cf-refs/generate.ts) or ICON_KEY_PERCENT_FORM (scripts/cf-refs/cases.ts)'
+  const json = (v: unknown): string => JSON.stringify(v)
+  const sortedAttrs = (a: Record<string, string>): string => json(Object.fromEntries(Object.entries(a).sort(([x], [y]) => x.localeCompare(y))))
+  for (const g of gen) {
+    const e = exc.find(x => x.sqref === g.sqref)
+    if (!e) {
+      diffs.push(`${g.sqref}: Excel's authored workbook has no icon set rule on this range`)
+      continue
+    }
+    if (e.dialect !== g.dialect) diffs.push(`${g.sqref}: Excel writes the ${e.dialect} dialect, the template writes ${g.dialect}; ${fix}`)
+    const ruleNames = (names: string[]): string[] => names.filter(n => n !== 'priority' && n !== 'id')
+    if (json(ruleNames(e.ruleAttrs)) !== json(ruleNames(g.ruleAttrs)) || e.ruleAttrs.includes('id') !== g.ruleAttrs.includes('id') || e.ruleAttrs.includes('priority') !== g.ruleAttrs.includes('priority')) {
+      diffs.push(`${g.sqref}: <cfRule> attributes Excel ${json(e.ruleAttrs)} vs template ${json(g.ruleAttrs)}; ${fix}`)
+    }
+    if (sortedAttrs(e.iconSetAttrs) !== sortedAttrs(g.iconSetAttrs)) diffs.push(`${g.sqref}: <iconSet> attributes Excel ${sortedAttrs(e.iconSetAttrs)} vs template ${sortedAttrs(g.iconSetAttrs)}; ${fix}`)
+    if (e.cfvo.length !== g.cfvo.length || e.cfvo.some((c, i) => sortedAttrs(c) !== sortedAttrs(g.cfvo[i]!))) diffs.push(`${g.sqref}: cfvo Excel ${json(e.cfvo)} vs template ${json(g.cfvo)}; ${fix}`)
+    if (json(e.cfIcon.map(sortedAttrs)) !== json(g.cfIcon.map(sortedAttrs))) diffs.push(`${g.sqref}: cfIcon Excel ${json(e.cfIcon)} vs template ${json(g.cfIcon)}; ${fix}`)
+  }
+  for (const e of exc) if (!gen.some(g => g.sqref === e.sqref)) diffs.push(`${e.sqref}: Excel's authored workbook has an icon set rule the template does not write`)
+  return diffs
+}
+
+export const EXCEL_AUTHORED_ICONSETS_PATH = join(CF_FIXTURE_DIR, 'excel-authored-iconsets.xlsx')
+
 const colIdxOf = (letters: string): number => {
   let n = 0
   for (const ch of letters) n = n * 26 + (ch.charCodeAt(0) - 64)
@@ -1360,7 +1596,7 @@ function buildWorksheetXml(p: SheetPayload): string {
     XML_DECL,
     `<worksheet xmlns="${NS_MAIN}" xmlns:r="${NS_R}" xmlns:mc="${NS_MC}" mc:Ignorable="x14ac" xmlns:x14ac="${NS_X14AC}" xmlns:x14="${NS_X14}" xmlns:xm="${NS_XM}">`,
     `<dimension ref="${p.dimension}"/>`,
-    `<sheetViews><sheetView workbookViewId="0" showGridLines="${p.showGridLines === false ? 0 : 1}"/></sheetViews>`,
+    `<sheetViews><sheetView${p.rightToLeft ? ' rightToLeft="1"' : ''} workbookViewId="0" showGridLines="${p.showGridLines === false ? 0 : 1}"/></sheetViews>`,
     `<sheetFormatPr defaultRowHeight="${p.defaultRowHeightPt ?? 18}" defaultColWidth="14"/>`,
     colsXml,
     `<sheetData>${rowsXml}</sheetData>`,
@@ -1581,7 +1817,7 @@ export async function generateCaseArchive(id: string, anchorDateIso = DEFAULT_CL
         : []),
       '</Relationships>',
     ].join(''),
-    'xl/styles.xml': buildStylesXml(p.dxfsXml, p.dateStyle === true, p.cellFillRgb),
+    'xl/styles.xml': p.stylesXml ?? buildStylesXml(p.dxfsXml, p.dateStyle === true, p.cellFillRgb),
     'xl/worksheets/sheet1.xml': buildWorksheetXml(p),
   }
   if (p.tablePartXml || p.pivotParts) {
@@ -1755,6 +1991,23 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const stage = args.includes('--stage') ? Number(args[args.indexOf('--stage') + 1]) : undefined
   const anchorLocalDate = args.includes('--anchor-date') ? args[args.indexOf('--anchor-date') + 1] : undefined
   const force = args.includes('--force')
+  if (args.includes('--diff-authored-icons')) {
+    // Lesson 12: the icon templates against Excel's dialog output. Exit 1 on any difference or a missing fixture.
+    if (!existsSync(EXCEL_AUTHORED_ICONSETS_PATH)) {
+      console.error(`[cf-refs/generate] ${EXCEL_AUTHORED_ICONSETS_PATH} does not exist: author it through Excel's dialog first (docs/validation/xlsx-cf-recipes-stage4.md)`)
+      process.exit(1)
+    }
+    const authored = readZipPartsSync(new Uint8Array(readFileSync(EXCEL_AUTHORED_ICONSETS_PATH)))
+    const generated = readZipPartsSync(await generateCaseArchive('stage4-icon-authored'))
+    if (!authored || !generated) {
+      console.error('[cf-refs/generate] could not read the authored or generated workbook')
+      process.exit(1)
+    }
+    const diffs = diffAuthoredIconTemplates(generated, authored)
+    for (const d of diffs) console.log(`DIFF ${d}`)
+    console.log(`[cf-refs/generate] icon template diff: ${diffs.length} difference(s) against ${EXCEL_AUTHORED_ICONSETS_PATH}`)
+    process.exit(diffs.length === 0 ? 0 : 1)
+  }
   const manifest = await generateAllStage1({ onlyCaseId, stage, anchorLocalDate, force })
   console.log(`[cf-refs/generate] generated ${manifest.cases.length} oracle cases -> ${CF_MANIFEST_PATH}`)
 }

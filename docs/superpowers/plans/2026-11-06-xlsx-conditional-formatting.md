@@ -1664,12 +1664,12 @@ Expected non-discriminating candidates, which the rule confirms or clears after 
 - `icon:geometry-snapping` if no edge lands at a fractional point;
 - `icon:composition-noicons-slot` if the lower rule's icon would be withheld anyway.
 
-- [ ] **Conformance first (Lesson 1).** Add `stage 4 icon cells are withheld until their evidence lands` to `tests/xlsx-cf-oracle-conformance.test.ts`.
+- [x] **Conformance first (Lesson 1).** Add `stage 4 icon cells are withheld until their evidence lands` to `tests/xlsx-cf-oracle-conformance.test.ts`.
   - Every Stage 4 cell must have `CfPrepared.at(...)` either not `ready` or with `.value.visual?.iconSet === undefined`, under production evidence. The paint-side `textInsetAt` assertion joins in Task 29, which creates it.
   - The existing Stage 1–3 assertions (`:496`, `:557–560`, the 15-case Stage 3 guard at `:645–646`) stay byte-unchanged.
   - Icon FINDINGS are withheld-only, extending the guard at `:996`.
-- [ ] Write `stage 4 cases join the manifest and stage 1–3 cases are unchanged`. Manifest ids must equal the combined `CF_CASES`, and the Stage 1–3 capability ids must be unchanged. Run RED, then GREEN.
-- [ ] Write `icon marker pins set, cfvo, gte, custom mapping and dialect exactly`. The verifier refuses each of these mutations:
+- [x] Write `stage 4 cases join the manifest and stage 1–3 cases are unchanged`. Manifest ids must equal the combined `CF_CASES`, and the Stage 1–3 capability ids must be unchanged. Run RED, then GREEN.
+- [x] Write `icon marker pins set, cfvo, gte, custom mapping and dialect exactly`. The verifier refuses each of these mutations:
   - `gte` true → false on `cfvo[2]`;
   - reordered cfvo;
   - `cfIcon[1]` `iconId` 2 → 1;
@@ -1681,26 +1681,26 @@ Expected non-discriminating candidates, which the rule confirms or clears after 
   - the glyph key's `<iconSet percent>` attribute form changed from the Excel-authored form.
 
   The verifier compares semantics, not raw strings.
-- [ ] Write `glyph key refuses a mismatched or ambiguous crop`, on synthetic PNGs.
+- [x] Write `glyph key refuses a mismatched or ambiguous crop`, on synthetic PNGs.
   - A 3×3 key of distinct crops classifies a pasted copy of crop 2 as class 2.
   - A crop differing from every key by a strong pixel → `icon-class-none`.
   - Two key entries identical to the test crop with different glyph classes → `icon-class-ambiguous`.
   - A key cell whose resaved XML lost its rule → `icon-key-mismatch`.
-- [ ] Write `icon edges and text ink are located by scan within ±1 px`. A 16×16 icon at px 3–18 gives left 3 and right 18. A text ink start at 24 against a control at 4 gives a shift of 20. Scanlines disagreeing by 2 px → `icon-edge-unstable`.
-- [ ] Write `non-discriminating icon variant keeps its gate closed (Lesson 3)`. All of these leave `hasEvidence` returning `false`:
+- [x] Write `icon edges and text ink are located by scan within ±1 px`. A 16×16 icon at px 3–18 gives left 3 and right 18. A text ink start at 24 against a control at 4 gives a shift of 20. Scanlines disagreeing by 2 px → `icon-edge-unstable`.
+- [x] Write `non-discriminating icon variant keeps its gate closed (Lesson 3)`. All of these leave `hasEvidence` returning `false`:
   - a `gte` capability whose designated cells contain no exact-boundary value;
   - a `reverse` capability judged only on the middle bucket;
   - two box hypotheses 2 px apart.
 
   At 3 px apart, with exactly one matching hypothesis, the capability is verified.
-- [ ] Write `audit --stage 4 --write is idempotent (Lesson 4)`. Two runs produce a byte-identical `verifiedCapabilities.ts`. Without `--publish-stage4` the Stage 4 export is carried over verbatim (absent at first), and the Stage 1–3 sets are unchanged.
-- [ ] Extend the osacompile test with `buildIconOmReachabilityScript` under `it.skipIf(!hasOsacompile)` (Lesson 8). The participation and clock-sensitive cases reuse the TZ pin pattern.
+- [x] Write `audit --stage 4 --write is idempotent (Lesson 4)`. Two runs produce a byte-identical `verifiedCapabilities.ts`. Without `--publish-stage4` the Stage 4 export is carried over verbatim (absent at first), and the Stage 1–3 sets are unchanged.
+- [x] Extend the osacompile test with `buildIconOmReachabilityScript` under `it.skipIf(!hasOsacompile)` (Lesson 8). The participation and clock-sensitive cases reuse the TZ pin pattern.
 - [ ] **Orchestrator:**
   1. Run `stage4-icon-om-reachability` and record the result.
   2. Author `stage4-icon-authored` through Excel's dialog, save it, and diff its XML into the generator templates (Lesson 12).
   3. Run `bun scripts/cf-refs/build.ts --stage 4 --case stage4-icon-glyph-key` and `capture.ts --stage 4 --case stage4-icon-glyph-key`. If calibration or the key fails, stop and record it, because every classification stays unverified.
   4. Run the remaining cases (`--refresh-clock-date`, `--verify-only`). Close owned workbooks between cases, and never manufacture pixels.
-- [ ] Inventory the corpus files that contain `iconSet` (ZIP XML; skip `~$`) into `docs/validation/xlsx-cf.md` §4: dialects, families, custom/`NoIcons`, cfvo types, `gte`, and `reverse`. Record every Stage 4 `[measure]` row with its ruling and status.
+- [x] Inventory the corpus files that contain `iconSet` (ZIP XML; skip `~$`) into `docs/validation/xlsx-cf.md` §4: dialects, families, custom/`NoIcons`, cfvo types, `gte`, and `reverse`. Record every Stage 4 `[measure]` row with its ruling and status.
 - [ ] Run `npx vitest run tests/xlsx-cf-oracle.test.ts tests/xlsx-cf-oracle-conformance.test.ts`, `npx tsc --noEmit -p tsconfig.scripts.json`, `npx tsc --noEmit -p .` and `git diff --check`. Commit (`test(xlsx-cf): add Stage 4 icon-set oracle cases`), then report and review. Pending variants do not block Task 25; their branches stay disabled.
 
 ### Task 25: Icon model, resident and streamed parsing, evidence gates (Claude Sonnet; review opencode)

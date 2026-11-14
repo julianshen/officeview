@@ -10,8 +10,8 @@ import JSZip from 'jszip'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const hasOsacompile = process.platform === 'darwin' && spawnSync('which', ['osacompile']).status === 0
-import { compareCfCase, stage3ObservedBars } from '../scripts/cf-compare'
-import { auditStage3Manifest, renderVerifiedCapabilitiesSource } from '../scripts/cf-refs/audit'
+import { compareCfCase, stage3ObservedBars, stage4ObservedIcons } from '../scripts/cf-compare'
+import { auditStage3Manifest, auditStage4Manifest, renderVerifiedCapabilitiesSource } from '../scripts/cf-refs/audit'
 import { assertCanCloseWorkbook, filterCasesForStage, isDisplayLocked, parseScreenLockState, shouldSkipCaseOnResume } from '../scripts/cf-refs/build'
 import {
   CF_CAPABILITIES,
@@ -24,7 +24,12 @@ import {
   CF_STAGE3_UNSUPPORTED,
   CF_STAGE3_CASES,
   CF_STAGE3_NONDISCRIMINATING,
+  CF_STAGE4_CAPABILITIES,
+  CF_STAGE4_CASES,
+  CF_STAGE4_NONDISCRIMINATING,
+  S4_ICON_FAMILIES,
   barCapabilityKind,
+  iconCapabilityKind,
   type CfCellExpectation,
   type CfManifest,
   type CfOracleCase,
@@ -35,6 +40,8 @@ import {
   buildColorProbeScript,
   buildColorScaleCriteriaProbeScript,
   buildDataBarSettingsProbeScript,
+  buildIconOmReachabilityScript,
+  parseIconOmReachability,
   buildBarSidecarExtras,
   buildDecorationProbeScript,
   buildTextProbeScript,
@@ -49,9 +56,17 @@ import {
   verifyOnlyCaptureState,
 } from '../scripts/cf-refs/capture'
 import { hasEvidence, VERIFIED_CAPABILITIES, VERIFIED_STAGE1_CAPABILITIES, VERIFIED_STAGE2_CAPABILITIES } from '../src/xlsx/cf/evidence'
-import { CF_MANIFEST_PATH, generateAllStage1 } from '../scripts/cf-refs/generate'
+import { CF_MANIFEST_PATH, EXCEL_AUTHORED_ICONSETS_PATH, diffAuthoredIconTemplates, generateAllStage1, generateCaseArchive } from '../scripts/cf-refs/generate'
 import {
   type CfObservedBar,
+  type CfObservedIcon,
+  type DecodedPng,
+  buildIconClassHypotheses,
+  buildIconGlyphKey,
+  classifyIconCrop,
+  discriminateIcon,
+  discriminateIconBox,
+  measureIconGeometry,
   type ComputeGeometryOptions,
   type WorksheetRangeGeometry,
   computeWorksheetRangeGeometry,
@@ -1018,8 +1033,9 @@ describe('CF oracle verifier', () => {
     expect(chunks.flat()).toEqual(refs)
     expect(probeRefChunks(refs.slice(0, 88))).toEqual([refs.slice(0, 88)])
     expect(probeRefChunks([])).toEqual([[]])
-    // Every case before Task 22b fits one chunk, so its probes are byte-identical to the unchunked ones.
-    for (const c of CF_CASES.filter(x => x.id !== 'stage3-bar-lengths-default')) expect(c.expected.cells.length, c.id).toBeLessThanOrEqual(PROBE_CHUNK_CELLS)
+    // Every case before Task 22b fits one chunk, so its probes are byte-identical to the unchunked ones. (Stage 4 cases
+    // postdate the chunking and may span several chunks, as the 152-cell glyph key does.)
+    for (const c of CF_CASES.filter(x => x.id !== 'stage3-bar-lengths-default' && x.stage < 4)) expect(c.expected.cells.length, c.id).toBeLessThanOrEqual(PROBE_CHUNK_CELLS)
   })
 
   it('correctly validates cell coordinates within range even with hidden rows (stage2-scale-scope)', () => {
@@ -3191,7 +3207,8 @@ describe('CF oracle verifier', () => {
     expect(CF_STAGE2_CAPABILITIES).toHaveLength(46)
     expect(CF_STAGE1_CASES).toHaveLength(13)
     expect(CF_STAGE2_CASES).toHaveLength(8)
-    expect(CF_CAPABILITIES.length).toBe(CF_STAGE1_CAPABILITIES.length + CF_STAGE2_CAPABILITIES.length + CF_STAGE3_CAPABILITIES.length)
+    // Stage 4 (Task 24) appends its own registry after Stage 3's.
+    expect(CF_CAPABILITIES.length).toBe(CF_STAGE1_CAPABILITIES.length + CF_STAGE2_CAPABILITIES.length + CF_STAGE3_CAPABILITIES.length + CF_STAGE4_CAPABILITIES.length)
     expect(new Set(CF_CAPABILITIES.map(c => c.capabilityId)).size).toBe(CF_CAPABILITIES.length)
     expect(CF_CASES.slice(0, 21).map(c => c.stage)).toEqual([...Array(13).fill(1), ...Array(8).fill(2)])
 
@@ -4047,5 +4064,430 @@ describe('CF oracle verifier', () => {
     const after = forced.cases.find(x => x.id === measured.id)!
     expect(after.status).toBe('recipe-pending')
     expect(after.captures[0]!.pngSha256).toBeUndefined()
+  })
+})
+
+describe('Stage 4 icon oracle (Task 24)', () => {
+  const s4dirs: string[] = []
+  afterEach(() => {
+    for (const d of s4dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+  const X14 = 'xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"'
+  const XM = 'xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"'
+  const x14Block = (rule: string, sqref = 'B2:B3'): string =>
+    `<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}" ${X14}><x14:conditionalFormattings><x14:conditionalFormatting ${XM}>${rule}<xm:sqref>${sqref}</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>`
+
+  it('stage 4 cases join the manifest and stage 1–3 cases are unchanged', () => {
+    const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
+    expect(manifest.cases.map(c => c.id)).toEqual(CF_CASES.map(c => c.id))
+    // Stage 1-3 catalogues and capability ids are exactly what Stage 3 shipped.
+    expect(CF_STAGE1_CAPABILITIES).toHaveLength(115)
+    expect(CF_STAGE2_CAPABILITIES).toHaveLength(46)
+    expect(CF_STAGE3_CAPABILITIES).toHaveLength(73)
+    expect(CF_STAGE1_CASES).toHaveLength(13)
+    expect(CF_STAGE2_CASES).toHaveLength(8)
+    expect(CF_STAGE3_CASES).toHaveLength(15)
+    expect(CF_CASES.slice(0, 36).map(c => c.id)).toEqual([...CF_STAGE1_CASES, ...CF_STAGE2_CASES, ...CF_STAGE3_CASES].map(c => c.id))
+    expect(CF_CAPABILITIES.length).toBe(CF_STAGE1_CAPABILITIES.length + CF_STAGE2_CAPABILITIES.length + CF_STAGE3_CAPABILITIES.length + CF_STAGE4_CAPABILITIES.length)
+    expect(new Set(CF_CAPABILITIES.map(c => c.capabilityId)).size).toBe(CF_CAPABILITIES.length)
+    for (const c of manifest.cases.filter(x => x.stage !== 4)) expect(c.markers.some(m => m.icon !== undefined), c.id).toBe(false)
+
+    // The brief's matrix, case by case: the capability ids Tasks 25-27 consume.
+    const glyphCaps = S4_ICON_FAMILIES.flatMap(f => Array.from({ length: f.size }, (_, id) => `icon:glyph-${f.name}-${id}`))
+    expect(glyphCaps).toHaveLength(75)
+    const expected: Record<string, string[]> = {
+      'stage4-icon-om-reachability': ['icon:om-reachability-probe'],
+      'stage4-icon-authored': ['icon:dialect-base', 'icon:dialect-standalone'],
+      'stage4-icon-glyph-key': ['icon:glyph-key', 'icon:pixel-calibration', ...glyphCaps],
+      'stage4-icon-families': ['icon:families-base', 'icon:families-x14', 'icon:scope-whole-column', 'icon:settings-schema-defaults'],
+      'stage4-icon-thresholds': ['icon:thresholds-gte-false', 'icon:thresholds-gte-true', 'icon:thresholds-mixed', 'icon:thresholds-num', 'icon:thresholds-percent', 'icon:thresholds-percentile-inc-exc'],
+      'stage4-icon-degenerate': ['icon:attr-percent-false', 'icon:bounds-out-of-domain', 'icon:degenerate-equal-values', 'icon:degenerate-non-monotonic', 'icon:degenerate-single-cell', 'icon:thresholds-floor', 'icon:thresholds-min-max'],
+      'stage4-icon-reverse-custom': ['icon:custom-mapping', 'icon:custom-noicons', 'icon:reverse', 'icon:reverse-custom'],
+      'stage4-icon-geometry': ['icon:geometry-box', 'icon:geometry-narrow-clip', 'icon:geometry-short-row-clip', 'icon:geometry-snapping', 'icon:geometry-vertical-align'],
+      'stage4-icon-inset': ['icon:inset-center', 'icon:inset-left', 'icon:inset-overflow', 'icon:inset-right-aligned', 'icon:noicons-inset', 'icon:noicons-showvalue'],
+      'stage4-icon-showvalue': ['icon:showvalue-canvas-suppression', 'icon:showvalue-copy-text'],
+      'stage4-icon-participation': ['icon:participation-dateserial', 'icon:participation-error-presence', 'icon:participation-types'],
+      'stage4-icon-scope': ['icon:scope-autofilter-hidden-row', 'icon:scope-disjoint', 'icon:scope-duplicate-blocks', 'icon:scope-hidden-row', 'icon:scope-merged-cell'],
+      'stage4-icon-composition': ['icon:composition-bar-showvalue', 'icon:composition-dxf-fill', 'icon:composition-icon-stopIfTrue', 'icon:composition-matching-stopIfTrue-ahead', 'icon:composition-noicons-slot', 'icon:composition-overlapping-icons', 'icon:composition-unresolved-stub', 'icon:composition-with-bar', 'icon:composition-with-scale'],
+      'stage4-icon-rtl': ['icon:placement-rtl-sheet'],
+      'stage4-icon-unresolved-shapes': ['icon:unresolved-active-present', 'icon:unresolved-base-x14-set', 'icon:unresolved-cfvo-count', 'icon:unresolved-cfvo-no-type', 'icon:unresolved-custom-count', 'icon:unresolved-formula-cfvo', 'icon:unresolved-iconid-range', 'icon:unresolved-noicons-id', 'icon:unresolved-unknown-set', 'icon:unresolved-xmf-reference'],
+    }
+    expect(CF_STAGE4_CASES.map(c => c.id)).toEqual(Object.keys(expected))
+    for (const [id, caps] of Object.entries(expected)) {
+      expect(CF_STAGE4_CAPABILITIES.filter(e => e.caseId === id).map(e => e.capabilityId).sort(), id).toEqual([...caps].sort())
+    }
+    // The family table matches the viewer's ICON_SETS, read as source text (the oracle never imports the code under test).
+    const parseSrc = readFileSync(resolve(REPO_ROOT, 'src/xlsx/cf/parse.ts'), 'utf8')
+    const viewerSets = new Map([...(/const ICON_SETS[^[]*\[([\s\S]*?)\]\)/.exec(parseSrc)?.[1] ?? '').matchAll(/\['([^']+)', (\d)\]/g)].map(m => [m[1]!, Number(m[2])]))
+    expect(new Map(S4_ICON_FAMILIES.map(f => [f.name, f.size]))).toEqual(viewerSets)
+
+    for (const c of manifest.cases.filter(x => x.stage === 4)) {
+      expect(['recipe-pending', 'unsupported', 'measured']).toContain(c.status)
+      expect(c.expected.inputSha256).toMatch(/^[0-9a-f]{64}$/)
+      expect(c.expected.savedSha256).toMatch(/^[0-9a-f]{64}$/)
+      if (c.resavedByExcel === true) expect(c.expected.savedSha256).toBe(sha256(new Uint8Array(readFileSync(resolve(REPO_ROOT, c.saved)))))
+      let hasSidecar = false
+      for (const cap of c.captures) {
+        if (cap.pngSha256 === undefined) continue
+        expect(existsSync(resolve(REPO_ROOT, cap.pngPath)), cap.pngPath).toBe(true)
+        expect(sha256(new Uint8Array(readFileSync(resolve(REPO_ROOT, cap.pngPath))))).toBe(cap.pngSha256)
+        hasSidecar = true
+      }
+      for (const cell of c.expected.cells) {
+        if (!cell.iconEvidence) continue
+        expect(['pixel-classified', 'non-discriminating', 'unverified']).toContain(cell.iconEvidence.bucket)
+        expect(['pixel-measured', 'non-discriminating', 'unverified']).toContain(cell.iconEvidence.geometry)
+        if (cell.iconEvidence.bucket !== 'unverified' || cell.iconEvidence.geometry !== 'unverified') {
+          expect(hasSidecar, `${c.id}:${cell.ref} claims icon evidence without a capture`).toBe(true)
+        }
+      }
+      const res = verifyCfCase(c, { rootDir: REPO_ROOT })
+      if (res.kind === 'refusal') {
+        expect(res.structuralValid, `${c.id}: ${res.reason}`).toBe(true)
+        expect(['semantic-evidence-pending', 'unsupported-capability']).toContain(res.code)
+      } else {
+        expect(c.status).toBe('measured')
+      }
+    }
+    // Every Stage 4 capability is an icon:* id citing the S4 ruling it lifts, and production holds none of them.
+    for (const entry of CF_STAGE4_CAPABILITIES) {
+      expect(entry.capabilityId.startsWith('icon:')).toBe(true)
+      expect(entry.failClosedDisposition, entry.capabilityId).toMatch(/S4-[A-R]|Always unsupported/)
+      expect(hasEvidence(entry.capabilityId), entry.capabilityId).toBe(false)
+      expect(VERIFIED_CAPABILITIES.has(entry.capabilityId), entry.capabilityId).toBe(false)
+    }
+    for (const id of Object.keys(CF_STAGE4_NONDISCRIMINATING)) expect(CF_STAGE4_CAPABILITIES.some(e => e.capabilityId === id), id).toBe(true)
+    expect(CF_STAGE4_CAPABILITIES.filter(e => iconCapabilityKind(e.capabilityId) === 'record').map(e => e.capabilityId).sort()).toEqual(
+      [...Object.keys(CF_STAGE4_NONDISCRIMINATING), ...expected['stage4-icon-unresolved-shapes']!].sort(),
+    )
+  }, 60_000)
+
+  it('icon marker pins set, cfvo, gte, custom mapping and dialect exactly', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-icon-pin-'))
+    s4dirs.push(dir)
+    const part = 'xl/worksheets/sheet1.xml'
+    const customMarker: CfPartMarker = {
+      part, extension: 'x14', capabilityId: 'icon:custom-noicons', sqref: 'B2:B3', ruleType: 'iconSet', priority: 1, formulas: [],
+      icon: {
+        dialect: 'x14', set: '3Arrows',
+        custom: [{ set: '3Stars', iconId: 0 }, { set: '3Flags', iconId: 2 }, { set: 'NoIcons', iconId: 0 }],
+        cfvo: [{ type: 'percent', f: '0' }, { type: 'num', f: '20' }, { type: 'percent', f: '67' }],
+        attrs: {},
+      },
+    }
+    const baseMarker: CfPartMarker = {
+      part, extension: 'legacy', capabilityId: 'icon:reverse', sqref: 'B2:B3', ruleType: 'iconSet', priority: 1, formulas: [],
+      icon: { dialect: 'base', set: '4Arrows', cfvo: [{ type: 'percent', val: '0' }, { type: 'percent', val: '25' }, { type: 'percent', val: '50', gte: false }, { type: 'percent', val: '75' }], attrs: { reverse: '1' } },
+    }
+    const keyMarker: CfPartMarker = {
+      part, extension: 'x14', capabilityId: 'icon:glyph-3Arrows-1', sqref: 'B2', ruleType: 'iconSet', priority: 1, formulas: [],
+      icon: { dialect: 'x14', set: '3Arrows', custom: [0, 1, 2].map(() => ({ set: '3Arrows', iconId: 1 })), cfvo: [{ type: 'num', f: '0' }, { type: 'num', f: '1' }, { type: 'num', f: '2' }], attrs: { percent: '(omitted)' } },
+    }
+    const customXml = (o: { setAttrs?: string; cfvo?: string; icons?: string } = {}): string =>
+      x14Block(`<x14:cfRule type="iconSet" priority="1" id="{3B3B4F01-0000-4000-8000-000000000001}"><x14:iconSet${o.setAttrs ?? ' iconSet="3Arrows" custom="1"'}>${o.cfvo ?? '<x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="num"><xm:f>20</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>67</xm:f></x14:cfvo>'}${o.icons ?? '<x14:cfIcon iconSet="3Stars" iconId="0"/><x14:cfIcon iconSet="3Flags" iconId="2"/><x14:cfIcon iconSet="NoIcons" iconId="0"/>'}</x14:iconSet></x14:cfRule>`)
+    const baseXml = (o: { setAttrs?: string; cfvo?: string } = {}): string =>
+      `<conditionalFormatting sqref="B2:B3"><cfRule type="iconSet" priority="1"><iconSet${o.setAttrs ?? ' iconSet="4Arrows" reverse="1"'}>${o.cfvo ?? '<cfvo type="percent" val="0"/><cfvo type="percent" val="25"/><cfvo type="percent" val="50" gte="0"/><cfvo type="percent" val="75"/>'}</iconSet></cfRule></conditionalFormatting>`
+    const keyXml = (setAttrs = ' iconSet="3Arrows" custom="1"'): string =>
+      x14Block(`<x14:cfRule type="iconSet" priority="1" id="{3B3B4F03-0000-4000-8000-000000000001}"><x14:iconSet${setAttrs}><x14:cfvo type="num"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="num"><xm:f>1</xm:f></x14:cfvo><x14:cfvo type="num"><xm:f>2</xm:f></x14:cfvo><x14:cfIcon iconSet="3Arrows" iconId="1"/><x14:cfIcon iconSet="3Arrows" iconId="1"/><x14:cfIcon iconSet="3Arrows" iconId="1"/></x14:iconSet></x14:cfRule>`, 'B2')
+    let n = 0
+    const run = async (xml: string, marker: CfPartMarker) => {
+      const bytes = await makeSyntheticXlsx({ sheetRuleXml: xml, dxfCount: 0 })
+      const name = `icon-${n++}.xlsx`
+      writeFileSync(join(dir, name), bytes)
+      const hash = sha256(bytes)
+      const c: CfOracleCase = {
+        id: 'icon-pin-case', stage: 4, question: 'Pins exact icon set semantics', input: name, saved: name, sheet: 'Sheet1', range: 'A1:B3',
+        requiredAppearances: ['screen'], markers: [marker],
+        expected: {
+          inputSha256: hash, savedSha256: hash, provenance: 'seed-hypothesis', positiveRefs: ['B2'], negativeRefs: ['A2'],
+          cells: [
+            { ref: 'B2', controlRef: 'A2', matched: true, iconApplied: true, fillSource: 'unverified' },
+            { ref: 'A2', controlRef: 'B2', matched: false, iconApplied: false, fillSource: 'unverified' },
+          ],
+        },
+        captures: [], status: 'recipe-pending', reason: 'Testing icon marker pinning', tolerance: { meanAbs: 0.015, rowMax: 0.08, strong: 12 },
+      }
+      return verifyCfCase(c, { rootDir: dir })
+    }
+    const pending = { kind: 'refusal', code: 'semantic-evidence-pending', structuralValid: true }
+    const stripped = { kind: 'refusal', code: 'stripped-rule', structuralValid: false }
+    // Canonical archives verify structurally.
+    expect(await run(customXml(), customMarker)).toMatchObject(pending)
+    expect(await run(baseXml(), baseMarker)).toMatchObject(pending)
+    expect(await run(keyXml(), keyMarker)).toMatchObject(pending)
+
+    const mutations: Array<[string, string, CfPartMarker]> = [
+      ['gte true -> false on cfvo[2]', customXml({ cfvo: '<x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="num"><xm:f>20</xm:f></x14:cfvo><x14:cfvo type="percent" gte="0"><xm:f>67</xm:f></x14:cfvo>' }), customMarker],
+      ['reordered cfvo', customXml({ cfvo: '<x14:cfvo type="num"><xm:f>20</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>67</xm:f></x14:cfvo>' }), customMarker],
+      ['cfIcon[1] iconId 2 -> 1', customXml({ icons: '<x14:cfIcon iconSet="3Stars" iconId="0"/><x14:cfIcon iconSet="3Flags" iconId="1"/><x14:cfIcon iconSet="NoIcons" iconId="0"/>' }), customMarker],
+      ['NoIcons -> 3Arrows:0', customXml({ icons: '<x14:cfIcon iconSet="3Stars" iconId="0"/><x14:cfIcon iconSet="3Flags" iconId="2"/><x14:cfIcon iconSet="3Arrows" iconId="0"/>' }), customMarker],
+      ['reverse flipped', baseXml({ setAttrs: ' iconSet="4Arrows"' }), baseMarker],
+      ['showValue flipped', baseXml({ setAttrs: ' iconSet="4Arrows" reverse="1" showValue="0"' }), baseMarker],
+      ['xm:f "20" -> "2"', customXml({ cfvo: '<x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="num"><xm:f>2</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>67</xm:f></x14:cfvo>' }), customMarker],
+      ['standalone x14 moved to the base dialect', '<conditionalFormatting sqref="B2:B3"><cfRule type="iconSet" priority="1"><iconSet iconSet="3Arrows" custom="1"><cfvo type="percent" val="0"/><cfvo type="num" val="20"/><cfvo type="percent" val="67"/><cfIcon iconSet="3Stars" iconId="0"/><cfIcon iconSet="3Flags" iconId="2"/><cfIcon iconSet="NoIcons" iconId="0"/></iconSet></cfRule></conditionalFormatting>', customMarker],
+      ['glyph key percent form changed from the authored (omitted) form', keyXml(' iconSet="3Arrows" custom="1" percent="1"'), keyMarker],
+      ['set name changed', baseXml({ setAttrs: ' iconSet="4ArrowsGray" reverse="1"' }), baseMarker],
+      ['custom flag dropped', customXml({ setAttrs: ' iconSet="3Arrows"' }), customMarker],
+    ]
+    for (const [label, xml, marker] of mutations) expect(await run(xml, marker), label).toMatchObject(stripped)
+
+    // Semantics, not raw strings: attribute order, explicit schema defaults and numeric spelling all verify.
+    expect(await run(baseXml({ setAttrs: ' reverse="true" showValue="1" percent="1" iconSet="4Arrows"', cfvo: '<cfvo type="percent" val="0" gte="1"/><cfvo type="percent" val="25.0"/><cfvo type="percent" val="50" gte="false"/><cfvo type="percent" val="75"/>' }), baseMarker)).toMatchObject(pending)
+    // An omitted iconSet is 3TrafficLights1, and only that.
+    const defaultsMarker: CfPartMarker = { ...baseMarker, icon: { dialect: 'base', set: '3TrafficLights1', cfvo: [{ type: 'percent', val: '0' }, { type: 'percent', val: '33' }, { type: 'percent', val: '67' }], attrs: {} } }
+    const defaultsXml = (setAttrs: string) => `<conditionalFormatting sqref="B2:B3"><cfRule type="iconSet" priority="1"><iconSet${setAttrs}><cfvo type="percent" val="0"/><cfvo type="percent" val="33"/><cfvo type="percent" val="67"/></iconSet></cfRule></conditionalFormatting>`
+    expect(await run(defaultsXml(''), defaultsMarker)).toMatchObject(pending)
+    expect(await run(defaultsXml(' iconSet="3TrafficLights1"'), defaultsMarker)).toMatchObject(pending)
+    expect(await run(defaultsXml(' iconSet="3Arrows"'), defaultsMarker)).toMatchObject(stripped)
+    // The key's form pin also refuses an explicit percent="1" when the marker pins an omitted form, and accepts the
+    // written form only when that is what it pins.
+    expect(await run(keyXml(' iconSet="3Arrows" custom="1" percent="1"'), { ...keyMarker, icon: { ...keyMarker.icon!, attrs: { percent: '1' } } })).toMatchObject(pending)
+    expect(await run(keyXml(), { ...keyMarker, icon: { ...keyMarker.icon!, attrs: { percent: '1' } } })).toMatchObject(stripped)
+  })
+
+  /** A synthetic capture: white background painted by `paint`. */
+  const paintPng = (w: number, h: number, paint: (ctx: ReturnType<ReturnType<typeof createCanvas>['getContext']>) => void): DecodedPng => {
+    const canvas = createCanvas(w, h)
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, w, h)
+    paint(ctx)
+    return decodePngSync(new Uint8Array(canvas.toBuffer('image/png')))!
+  }
+  const COLOURS = ['#ff0000', '#00a000', '#0000ff', '#ffc000', '#a000a0', '#00a0a0', '#808080', '#000000', '#ff8080']
+
+  it('glyph key refuses a mismatched or ambiguous crop', async () => {
+    // A 3x3 key of distinct 16x16 crops (nine glyph classes, each a differently coloured and placed square).
+    const crop = (i: number): DecodedPng => paintPng(16, 16, ctx => { ctx.fillStyle = COLOURS[i]!; ctx.fillRect(2 + (i % 3), 2 + Math.floor(i / 3), 9, 9) })
+    const key = new Map(Array.from({ length: 9 }, (_, i) => [`class-${i}`, crop(i)] as const))
+    // A capture holding a pasted copy of crop 2 at (40, 10).
+    const pasted = paintPng(80, 40, ctx => { ctx.fillStyle = COLOURS[2]!; ctx.fillRect(40 + 2 + 2, 10 + 2, 9, 9) })
+    const at = { x: 40, y: 10, width: 16, height: 16 }
+    expect(classifyIconCrop(pasted, at, key, { tolerance: 8 })).toEqual({ glyphClass: 'class-2' })
+    // Small antialiasing noise (within +-8 per channel) still classifies.
+    const noisy = paintPng(80, 40, ctx => { ctx.fillStyle = COLOURS[2]!; ctx.fillRect(44, 12, 9, 9); ctx.fillStyle = '#f9f9f9'; ctx.fillRect(41, 11, 1, 1) })
+    expect(classifyIconCrop(noisy, at, key, { tolerance: 8 })).toEqual({ glyphClass: 'class-2' })
+    // One strong pixel away from every key crop: no class.
+    const off = paintPng(80, 40, ctx => { ctx.fillStyle = COLOURS[2]!; ctx.fillRect(44, 12, 9, 9); ctx.fillStyle = '#000000'; ctx.fillRect(41, 24, 1, 1) })
+    expect(classifyIconCrop(off, at, key, { tolerance: 8 })).toMatchObject({ kind: 'refusal', code: 'icon-class-none' })
+    // Two key entries identical to the crop under different glyph classes: ambiguous, never a pick.
+    const twin = new Map([...key, ['class-2-twin', crop(2)] as const])
+    expect(classifyIconCrop(pasted, at, twin, { tolerance: 8 })).toMatchObject({ kind: 'refusal', code: 'icon-class-ambiguous' })
+    // A key entry that differs from the match only within the strong delta (no pixel >= 64) is not separated: ambiguous.
+    const faint = paintPng(16, 16, ctx => { ctx.fillStyle = COLOURS[2]!; ctx.fillRect(4, 2, 9, 9); ctx.fillStyle = '#d0d0d0'; ctx.fillRect(0, 15, 1, 1) })
+    expect(classifyIconCrop(pasted, at, new Map([...key, ['class-faint', faint] as const]), { tolerance: 8 })).toMatchObject({ kind: 'refusal', code: 'icon-class-ambiguous' })
+    // A crop outside the capture refuses.
+    expect(classifyIconCrop(pasted, { x: 70, y: 30, width: 16, height: 16 }, key, { tolerance: 8 })).toMatchObject({ kind: 'refusal', code: 'icon-class-none' })
+
+    // Building the key from a capture: a key cell whose resaved XML lost its rule refuses with icon-key-mismatch.
+    const keyCase = CF_STAGE4_CASES.find(c => c.id === 'stage4-icon-glyph-key')!
+    const savedParts = readZipPartsSync(new Uint8Array(readFileSync(resolve(REPO_ROOT, keyCase.saved))))!
+    const geom = computeWorksheetRangeGeometry(savedParts, keyCase.range)!
+    const blank = paintPng(geom.expectedWidthPt, geom.expectedHeightPt, () => {})
+    const sheet = new TextDecoder().decode(savedParts.get('xl/worksheets/sheet1.xml')!)
+    const lost = new Map(savedParts)
+    lost.set('xl/worksheets/sheet1.xml', new TextEncoder().encode(sheet.replace(/<x14:conditionalFormatting [^>]*><x14:cfRule type="iconSet" priority="2" [\s\S]*?<\/x14:conditionalFormatting>/, '')))
+    expect(buildIconGlyphKey(keyCase, lost, blank, geom)).toMatchObject({ kind: 'refusal', code: 'icon-key-mismatch' })
+    // With every rule present, a capture that shows no icon in a key cell is not a key either.
+    expect(buildIconGlyphKey(keyCase, savedParts, blank, geom)).toMatchObject({ kind: 'refusal', code: 'icon-key-mismatch' })
+  })
+
+  /** A 120x60 capture of A1:B3 (col A 60 px, col B 60 px, rows 20 px). */
+  const iconGeom: WorksheetRangeGeometry = {
+    minRow: 0, maxRow: 2, minCol: 0, maxCol: 1,
+    rowHeightsPt: [20, 20, 20], colWidthChars: [8, 8], colWidthsPt: [60, 60],
+    expectedHeightPt: 60, expectedWidthPt: 120,
+  }
+  const textAt = (ctx: ReturnType<ReturnType<typeof createCanvas>['getContext']>, x: number, y: number) => {
+    // A fixed glyph pattern (three strokes) standing in for value text.
+    ctx.fillStyle = '#000000'
+    ctx.fillRect(x, y, 2, 8); ctx.fillRect(x + 4, y, 2, 8); ctx.fillRect(x + 8, y + 2, 3, 6)
+  }
+
+  it('icon edges and text ink are located by scan within ±1 px', () => {
+    const opts = { controlOf: (ref: string) => (ref === 'A1' ? 'A3' : 'B3'), tolerancePx: 1 }
+    // A 16x16 icon at px 3..18 in A1 (cell 0..59); the control A3 is blank (number format ;;;).
+    const icon16 = paintPng(120, 60, ctx => { ctx.fillStyle = '#00a000'; ctx.fillRect(3, 2, 16, 16) })
+    const res = measureIconGeometry(icon16, iconGeom, ['A1'], opts)
+    expect(res).toBeInstanceOf(Map)
+    const a1 = (res as ReadonlyMap<string, CfObservedIcon>).get('A1')!
+    expect(a1).toMatchObject({ ref: 'A1', cellLeftPx: 0, cellTopPx: 0, cellWidthPx: 60, cellHeightPx: 20, icon: { leftPx: 3, rightPx: 18, topPx: 2, bottomPx: 17 } })
+    expect(a1.textInkLeftPx).toBeUndefined()
+    // Text ink: the icon cell's text starts at 24, the control's at 4 (B1 is 60..119, its control B3): a shift of 20.
+    const inset = paintPng(120, 60, ctx => {
+      ctx.fillStyle = '#00a000'; ctx.fillRect(63, 2, 16, 16)
+      textAt(ctx, 60 + 24, 6)
+      textAt(ctx, 60 + 4, 46)
+    })
+    const b1 = (measureIconGeometry(inset, iconGeom, ['B1'], opts) as ReadonlyMap<string, CfObservedIcon>).get('B1')!
+    expect(b1.icon).toMatchObject({ leftPx: 63, rightPx: 78 })
+    expect(b1.textInkLeftPx).toBe(84)
+    expect(b1.textShiftPx).toBe(20)
+    // showValue="0": the control shows the text, the icon cell does not.
+    const hidden = paintPng(120, 60, ctx => { ctx.fillStyle = '#00a000'; ctx.fillRect(63, 2, 16, 16); textAt(ctx, 64, 46) })
+    const h1 = (measureIconGeometry(hidden, iconGeom, ['B1'], opts) as ReadonlyMap<string, CfObservedIcon>).get('B1')!
+    expect(h1.icon).toMatchObject({ leftPx: 63, rightPx: 78 })
+    expect(h1.textInkLeftPx).toBeUndefined()
+    // No icon: the cell shows exactly its control's text at the same offset.
+    const plain = paintPng(120, 60, ctx => { textAt(ctx, 64, 6); textAt(ctx, 64, 46) })
+    const p1 = (measureIconGeometry(plain, iconGeom, ['B1'], opts) as ReadonlyMap<string, CfObservedIcon>).get('B1')!
+    expect(p1.icon).toBeNull()
+    expect(p1.textShiftPx).toBe(0)
+    // Scanlines (25/50/75 percent of the icon's height) disagreeing by 2 px refuse.
+    const unstable = paintPng(120, 60, ctx => {
+      ctx.fillStyle = '#00a000'
+      ctx.fillRect(3, 2, 16, 6); ctx.fillRect(5, 8, 14, 5); ctx.fillRect(3, 13, 16, 5)
+    })
+    expect(measureIconGeometry(unstable, iconGeom, ['A1'], opts)).toMatchObject({ kind: 'refusal', code: 'icon-edge-unstable' })
+    // 1 px disagreement is inside the tolerance.
+    const within = paintPng(120, 60, ctx => {
+      ctx.fillStyle = '#00a000'
+      ctx.fillRect(3, 2, 16, 6); ctx.fillRect(4, 8, 15, 5); ctx.fillRect(3, 13, 16, 5)
+    })
+    expect(measureIconGeometry(within, iconGeom, ['A1'], opts)).toBeInstanceOf(Map)
+    // A non-rectangular glyph is stable against its own glyph-key crop (same shape, rigidly placed).
+    const triangle = (ctx: ReturnType<ReturnType<typeof createCanvas>['getContext']>, x: number, y: number) => {
+      ctx.fillStyle = '#00a000'
+      for (let r = 0; r < 16; r++) ctx.fillRect(x + 8 - Math.floor(r / 2), y + r, 2 * Math.floor(r / 2) + 1, 1)
+    }
+    const tri = paintPng(120, 60, ctx => triangle(ctx, 3, 2))
+    expect(measureIconGeometry(tri, iconGeom, ['A1'], opts)).toMatchObject({ kind: 'refusal', code: 'icon-edge-unstable' })
+    const reference = paintPng(16, 16, ctx => triangle(ctx, 0, 0))
+    const triRes = measureIconGeometry(tri, iconGeom, ['A1'], { ...opts, referenceOf: () => reference })
+    // Rows r = 0..15 span x 3+8-floor(r/2) .. 3+8+floor(r/2): the widest rows give the box 4..18.
+    expect((triRes as ReadonlyMap<string, CfObservedIcon>).get('A1')!.icon).toMatchObject({ leftPx: 4, rightPx: 18, topPx: 2, bottomPx: 17 })
+    // An unknown cell refuses instead of inventing a measurement.
+    expect(measureIconGeometry(icon16, iconGeom, ['Z9'], opts)).toMatchObject({ kind: 'refusal' })
+  })
+
+  it('non-discriminating icon variant keeps its gate closed (Lesson 3)', () => {
+    const classOf = (set: string, iconId: number): string | null => (set === 'NoIcons' ? null : `${set}:${iconId}`)
+    // gte: num 0/20/40 over off-boundary values only. "gte" and "gt" predict the same bucket everywhere.
+    const gteRule = { set: '3Arrows', cfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '20', gte: true }, { type: 'num', val: '40', gte: true }], attrs: {} }
+    const offBoundary = new Map([['B2', 5], ['B3', 30], ['B4', 75]])
+    const gteHyps = buildIconClassHypotheses('icon:thresholds-gte-true', gteRule, offBoundary, classOf)!
+    expect(discriminateIcon(gteHyps, { B2: '3Arrows:0', B3: '3Arrows:1', B4: '3Arrows:2' })).toMatchObject({ status: 'non-discriminating' })
+    expect(hasEvidence('icon:thresholds-gte-true')).toBe(false)
+    // The exact-boundary cell 20 discriminates gte from gt.
+    const boundary = new Map([...offBoundary, ['B5', 20]])
+    expect(discriminateIcon(buildIconClassHypotheses('icon:thresholds-gte-true', gteRule, boundary, classOf)!, { B2: '3Arrows:0', B3: '3Arrows:1', B4: '3Arrows:2', B5: '3Arrows:1' })).toEqual({ status: 'discriminating', matched: 'as-written' })
+    // ... and refuses when the capture contradicts every hypothesis.
+    expect(discriminateIcon(buildIconClassHypotheses('icon:thresholds-gte-true', gteRule, boundary, classOf)!, { B2: '3Arrows:2', B3: '3Arrows:1', B4: '3Arrows:2', B5: '3Arrows:1' })).toMatchObject({ status: 'none' })
+    // reverse judged only on the middle bucket of a 3-icon set: reversed and not reversed agree.
+    const revRule = { set: '3Arrows', cfvo: [{ type: 'percent', val: '0' }, { type: 'percent', val: '33' }, { type: 'percent', val: '67' }], attrs: { reverse: '1' } }
+    const scope = new Map([['C2', 0], ['C3', 50], ['C4', 100]])
+    const middleOnly = buildIconClassHypotheses('icon:reverse', revRule, scope, classOf, ['C3'])!
+    expect(Object.keys(middleOnly)).toEqual(['C3'])
+    expect(discriminateIcon(middleOnly, { C3: '3Arrows:1' })).toMatchObject({ status: 'non-discriminating' })
+    expect(hasEvidence('icon:reverse')).toBe(false)
+    // The end buckets discriminate.
+    expect(discriminateIcon(buildIconClassHypotheses('icon:reverse', revRule, scope, classOf, ['C2', 'C4'])!, { C2: '3Arrows:2', C4: '3Arrows:0' })).toEqual({ status: 'discriminating', matched: 'reversed' })
+    // A custom set whose end icons are one glyph class is non-discriminating for reverse-custom.
+    const sameEnds = { set: '3Arrows', cfvo: revRule.cfvo, attrs: { reverse: '1' }, custom: [{ set: '3Flags', iconId: 0 }, { set: '3Flags', iconId: 1 }, { set: '3Flags', iconId: 0 }] }
+    expect(discriminateIcon(buildIconClassHypotheses('icon:reverse-custom', sameEnds, scope, classOf, ['C2', 'C4'])!, { C2: '3Flags:0', C4: '3Flags:0' })).toMatchObject({ status: 'non-discriminating' })
+
+    // Box hypotheses 2 px apart at every designated cell cannot be told apart.
+    const measured = { B2: { leftPx: 3, rightPx: 18, topPx: 2, bottomPx: 17 } }
+    const close = { B2: [{ id: 'fixed', leftPx: 3, rightPx: 18, topPx: 2, bottomPx: 17 }, { id: 'font', leftPx: 3, rightPx: 20, topPx: 2, bottomPx: 17 }] }
+    expect(discriminateIconBox(close, measured, 1)).toMatchObject({ status: 'non-discriminating' })
+    expect(hasEvidence('icon:geometry-box')).toBe(false)
+    // 3 px apart with exactly one hypothesis matching: the capability is verified.
+    const apart = { B2: [{ id: 'fixed', leftPx: 3, rightPx: 18, topPx: 2, bottomPx: 17 }, { id: 'font', leftPx: 3, rightPx: 21, topPx: 2, bottomPx: 17 }] }
+    expect(discriminateIconBox(apart, measured, 1)).toEqual({ status: 'discriminating', matched: 'fixed' })
+    expect(discriminateIconBox(apart, { B2: { leftPx: 3, rightPx: 25, topPx: 2, bottomPx: 17 } }, 1)).toMatchObject({ status: 'none' })
+  })
+
+  it('audit --stage 4 --write is idempotent (Lesson 4)', () => {
+    const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
+    const committed = readFileSync(resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts'), 'utf8')
+    const listed = (text: string, name: string): string[] | undefined => {
+      const m = new RegExp(`export const ${name}: ReadonlySet<string> = new Set\\(\\[([\\s\\S]*?)\\]\\)`).exec(text)
+      return m ? [...m[1]!.matchAll(/'([^']+)'/g)].map(x => x[1]!) : undefined
+    }
+    // Two runs, byte-identical; without --publish-stage4 the Stage 4 export is carried over verbatim (absent today), so
+    // the write reproduces the committed file and the Stage 1-3 sets are unchanged.
+    const first = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: committed })
+    expect(renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: committed })).toBe(first)
+    expect(first).toBe(committed)
+    expect(listed(first, 'VERIFIED_STAGE4_CAPABILITIES')).toBeUndefined()
+    for (const name of ['VERIFIED_STAGE1_CAPABILITIES', 'VERIFIED_STAGE2_CAPABILITIES', 'VERIFIED_STAGE3_CAPABILITIES', 'VERIFIED_CAPABILITIES']) {
+      expect(listed(first, name), name).toEqual(listed(committed, name))
+    }
+    // A committed Stage 4 export is carried over verbatim, never re-derived.
+    const withS4 = committed.replace(/(export const VERIFIED_CAPABILITIES)/, "export const VERIFIED_STAGE4_CAPABILITIES: ReadonlySet<string> = new Set([\n  'icon:pixel-calibration',\n])\n\n$1")
+    const kept = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: withS4 })
+    expect(listed(kept, 'VERIFIED_STAGE4_CAPABILITIES')).toEqual(['icon:pixel-calibration'])
+    expect(renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: kept })).toBe(kept)
+    // --publish-stage4 publishes the audit's own verified set (empty: every case is recipe-pending), idempotently.
+    const report = auditStage4Manifest(manifest, { rootDir: REPO_ROOT })
+    expect(report.ok).toBe(true)
+    expect(report.stageComplete).toBe(false)
+    expect(report.summary.cases).toBe(15)
+    expect(report.summary.capabilities).toBe(CF_STAGE4_CAPABILITIES.length)
+    expect(report.perCapability.filter(p => p.disposition === 'verified')).toEqual([])
+    expect(report.perCapability.filter(p => p.disposition === 'unaccounted')).toEqual([])
+    expect(report.perCapability.filter(p => p.disposition === 'refused-unsupported').every(p => p.capabilityId.startsWith('icon:unresolved-'))).toBe(true)
+    expect(report.blockedCapabilities.length).toBeGreaterThan(50)
+    const published = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: committed, publishStage4: true })
+    expect(listed(published, 'VERIFIED_STAGE4_CAPABILITIES')).toEqual([])
+    expect(renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: published, publishStage4: true })).toBe(published)
+    expect(listed(published, 'VERIFIED_STAGE3_CAPABILITIES')).toEqual(listed(committed, 'VERIFIED_STAGE3_CAPABILITIES'))
+    expect(listed(published, 'VERIFIED_CAPABILITIES')).toEqual(listed(committed, 'VERIFIED_CAPABILITIES'))
+  }, 120_000)
+
+  it('builds the icon object-model reachability probe with every read guarded', () => {
+    const lines = buildIconOmReachabilityScript('stage4-icon-om-reachability.xlsx', 'Sheet1')
+    const text = lines.join('\n')
+    expect(text).toContain('workbook "stage4-icon-om-reachability.xlsx"')
+    for (const read of ['format condition 1 of', 'icon criteria', 'reverse icon set order', 'show icon only', 'properties']) expect(text, read).toContain(read)
+    // Every read sits in its own try, so one unreachable class records an error instead of aborting the probe.
+    expect((text.match(/\btry\b/g) ?? []).length).toBeGreaterThanOrEqual(5)
+    expect(parseIconOmReachability('ok:::1|||error:::-1728 Can\'t get icon criteria|||missing value')).toEqual([
+      { status: 'ok', detail: '1' },
+      { status: 'error', detail: '-1728 Can\'t get icon criteria' },
+    ])
+  })
+
+  it.skipIf(!hasOsacompile)('compiles the icon object-model reachability probe under osacompile (Lesson 8)', () => {
+    const full = ['tell application "Microsoft Excel"', ...buildIconOmReachabilityScript('stage4-icon-om-reachability.xlsx', 'Sheet1'), 'end tell'].join('\n')
+    const res = spawnSync('osacompile', ['-o', '/dev/null'], { input: full, encoding: 'utf8' })
+    expect(res.status, res.stderr).toBe(0)
+  })
+
+  it('stage4ObservedIcons reads the recorded px and glyph classes and ignores malformed entries', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-icon-observed-'))
+    s4dirs.push(dir)
+    const c = { ...CF_STAGE4_CASES.find(x => x.id === 'stage4-icon-thresholds')!, captures: [{ appearance: 'screen' as const, pngPath: 'x.png', sidecarPath: 'x.json' }] }
+    expect(stage4ObservedIcons(c, dir)).toBeUndefined()
+    writeFileSync(join(dir, 'x.json'), JSON.stringify({ observedIcons: [
+      { ref: 'b2', cellLeftPx: 0, cellTopPx: 0, cellWidthPx: 60, cellHeightPx: 20, icon: { leftPx: 3, topPx: 2, rightPx: 18, bottomPx: 17, glyphClass: '3Arrows:0' } },
+      { ref: 'B3', cellLeftPx: 0, cellTopPx: 20, cellWidthPx: 60, cellHeightPx: 20, icon: null, textInkLeftPx: 40 },
+      { ref: 'B4', cellLeftPx: 0, cellTopPx: 40, cellWidthPx: 60, cellHeightPx: 20, icon: { leftPx: 3, rightPx: 18 } },
+      { ref: 'B5', cellLeftPx: 'x' },
+    ] }))
+    const got = stage4ObservedIcons(c, dir)!
+    expect([...got.keys()]).toEqual(['B2', 'B3'])
+    expect(got.get('B2')!.icon!.glyphClass).toBe('3Arrows:0')
+    expect(stage4ObservedIcons(CF_STAGE3_CASES[0]!, dir)).toBeUndefined()
+  })
+
+  it('icon template diff reports every way Excel\'s dialog output differs from the generator (Lesson 12)', async () => {
+    const generated = readZipPartsSync(await generateCaseArchive('stage4-icon-authored'))!
+    expect(diffAuthoredIconTemplates(generated, new Map(generated))).toEqual([])
+    const sheet = new TextDecoder().decode(generated.get('xl/worksheets/sheet1.xml')!)
+    const mutate = (xml: string): Map<string, Uint8Array> => new Map([...generated, ['xl/worksheets/sheet1.xml', new TextEncoder().encode(xml)]])
+    // An explicit percent="1" is a form difference (the glyph key pins the dialog's form), not a semantic one.
+    expect(diffAuthoredIconTemplates(generated, mutate(sheet.replace('<x14:iconSet iconSet="3Stars">', '<x14:iconSet iconSet="3Stars" percent="1">'))).join('\n')).toMatch(/B2:B6: <iconSet> attributes/)
+    // A gte flag, a cfIcon and a dropped rule are each reported, and every line names the template to change.
+    const gte = diffAuthoredIconTemplates(generated, mutate(sheet.replace('<cfvo type="percent" val="33" gte="0"/>', '<cfvo type="percent" val="33"/>')))
+    expect(gte.join('\n')).toMatch(/H2:H6: cfvo/)
+    expect(gte.every(d => d.includes('iconRuleXml'))).toBe(true)
+    expect(diffAuthoredIconTemplates(generated, mutate(sheet.replace('<x14:cfIcon iconSet="NoIcons" iconId="0"/>', '<x14:cfIcon iconSet="3Arrows" iconId="1"/>'))).join('\n')).toMatch(/E2:E6: cfIcon/)
+    expect(diffAuthoredIconTemplates(generated, mutate(sheet.replace(/<conditionalFormatting sqref="F2:F6">[\s\S]*?<\/conditionalFormatting>/, ''))).join('\n')).toMatch(/F2:F6: Excel's authored workbook has no icon set rule/)
+  })
+
+  it.skipIf(!existsSync(EXCEL_AUTHORED_ICONSETS_PATH))('icon templates write what Excel\'s dialog writes (excel-authored-iconsets.xlsx)', async () => {
+    const authored = readZipPartsSync(new Uint8Array(readFileSync(EXCEL_AUTHORED_ICONSETS_PATH)))!
+    expect(diffAuthoredIconTemplates(readZipPartsSync(await generateCaseArchive('stage4-icon-authored'))!, authored)).toEqual([])
   })
 })

@@ -24,7 +24,7 @@ import { parseXlsx } from '../src/xlsx/parse'
 import { getPaintables } from '../src/render/paint'
 import { computeMetrics } from '../src/xlsx/render'
 import type { XlsxDocument } from '../src/xlsx/types'
-import { parseRangeA1, parseA1, type CfObservedBar } from './cf-refs/verify'
+import { parseRangeA1, parseA1, type CfObservedBar, type CfObservedIcon } from './cf-refs/verify'
 import type { CfManifest, CfOracleCase } from './cf-refs/cases'
 import { CF_MANIFEST_PATH } from './cf-refs/generate'
 import { verifyCfCase } from './cf-refs/verify'
@@ -214,6 +214,36 @@ export function stage3ObservedBars(c: CfOracleCase, rootDir: string): Map<string
     const edges = b.bar
     if (edges !== null && !(edges && finite(edges.leftPx) && finite(edges.rightPx) && finite(edges.topPx) && finite(edges.bottomPx))) continue
     out.set(b.ref.toUpperCase(), b as CfObservedBar)
+  }
+  return out
+}
+
+/**
+ * Stage 4 observed icons: the raw px and glyph class (`observedIcons`) the Excel capture recorded per designated cell
+ * (Ruling S4-A), so conformance compares production's icon box and bucket at the same scale and no expected value is
+ * computed by the code under test. Only a Stage 4 case with a readable screen sidecar yields a map; an entry with a
+ * malformed box or no glyph class is dropped rather than guessed.
+ */
+export function stage4ObservedIcons(c: CfOracleCase, rootDir: string): Map<string, CfObservedIcon> | undefined {
+  if (c.stage !== 4) return undefined
+  const cap = c.captures.find(x => x.appearance === 'screen') ?? c.captures[0]
+  if (!cap?.sidecarPath) return undefined
+  const path = resolve(rootDir, cap.sidecarPath)
+  if (!existsSync(path)) return undefined
+  let sidecar: { observedIcons?: unknown }
+  try {
+    sidecar = JSON.parse(readFileSync(path, 'utf8')) as { observedIcons?: unknown }
+  } catch {
+    return undefined
+  }
+  const out = new Map<string, CfObservedIcon>()
+  const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n)
+  for (const raw of Array.isArray(sidecar.observedIcons) ? sidecar.observedIcons : []) {
+    const o = raw as Partial<CfObservedIcon> | null
+    if (!o || typeof o.ref !== 'string' || !finite(o.cellLeftPx) || !finite(o.cellTopPx) || !finite(o.cellWidthPx) || !finite(o.cellHeightPx)) continue
+    const i = o.icon
+    if (i !== null && !(i && finite(i.leftPx) && finite(i.rightPx) && finite(i.topPx) && finite(i.bottomPx) && typeof i.glyphClass === 'string')) continue
+    out.set(o.ref.toUpperCase(), { ...(o as CfObservedIcon), ref: o.ref.toUpperCase() })
   }
   return out
 }

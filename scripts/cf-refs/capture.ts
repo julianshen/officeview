@@ -13,11 +13,19 @@ import { fileURLToPath } from 'node:url'
 import { capture } from '../xlsx-refs/capture'
 import { openWorkbook, osa, q, runScript, workbookNames } from '../xlsx-refs/excel'
 import { closeOwnedWorkbook, isDisplayLocked } from './build'
-import { CF_CASES, type CfManifest, type CfOracleCase } from './cases'
+import { CF_CASES, type CfManifest, type CfOracleCase, type Refusal } from './cases'
 import { CF_MANIFEST_PATH, CF_REFS_DIR } from './generate'
 import {
   type BarSettingsRow,
   type CfObservedBar,
+  type CfObservedIcon,
+  type IconCapabilityEvaluation,
+  type IconGlyphKey,
+  buildIconGlyphKey,
+  classifyIconCapture,
+  evaluateIconCapabilities,
+  loadIconGlyphKey,
+  measureCaseIcons,
   type DecodedPng,
   type WorksheetRangeGeometry,
   computeWorksheetRangeGeometry,
@@ -287,6 +295,99 @@ export function buildDataBarSettingsProbeScript(workbookName: string, sheetName:
     `set AppleScript's text item delimiters to "|||"`,
     `return outList as string`,
   ]
+}
+
+/**
+ * Ruling S4-A one-shot probe (`stage4-icon-om-reachability`): is `icon set format condition` (Excel.sdef X315) reachable?
+ * Reads format condition 1 of the range, its `properties`, `icon criteria`, `reverse icon set order` and `show icon
+ * only`, each inside its own `try`, one `|||` row per read: `ok:::<detail>` or `error:::<detail>`. Record only: whatever it
+ * returns lifts no capability, and an unexpected success is an owner question.
+ */
+export function buildIconOmReachabilityScript(workbookName: string, sheetName: string, rangeRef = 'B2:B4'): string[] {
+  const guarded = (label: string, body: string[]): string[] => [
+    'try',
+    ...body.map(l => `  ${l}`),
+    'on error errMsg number errNum',
+    `  set end of outList to ("error:::${label} " & errNum & " " & errMsg)`,
+    'end try',
+  ]
+  return [
+    `set wb to workbook "${q(workbookName)}"`,
+    `set ws to worksheet "${q(sheetName)}" of wb`,
+    `set rng to range "${q(rangeRef)}" of ws`,
+    'set outList to {}',
+    ...guarded('format condition 1 of range', ['set fc to format condition 1 of rng', 'set end of outList to ("ok:::format condition 1 of range is " & ((class of fc) as string))']),
+    ...guarded('properties', ['set props to properties of (format condition 1 of rng)', 'set end of outList to "ok:::properties readable"']),
+    ...guarded('icon criteria', ['set crit to icon criteria of (format condition 1 of rng)', 'set end of outList to ("ok:::icon criteria " & ((count of crit) as string))']),
+    ...guarded('reverse icon set order', ['set end of outList to ("ok:::reverse icon set order " & ((reverse icon set order of (format condition 1 of rng)) as string))']),
+    ...guarded('show icon only', ['set end of outList to ("ok:::show icon only " & ((show icon only of (format condition 1 of rng)) as string))']),
+    `set AppleScript's text item delimiters to "|||"`,
+    'return outList as string',
+  ]
+}
+
+/** Parses the reachability probe's answer into rows; anything not `ok:::`/`error:::` is dropped. */
+export function parseIconOmReachability(out: string): Array<{ status: 'ok' | 'error'; detail: string }> {
+  const rows: Array<{ status: 'ok' | 'error'; detail: string }> = []
+  for (const line of out.split('|||')) {
+    const m = /^(ok|error):::([\s\S]*)$/.exec(line.trim())
+    if (m) rows.push({ status: m[1] as 'ok' | 'error', detail: m[2]!.trim() })
+  }
+  return rows
+}
+
+/**
+ * Ruling S4-N copy-text observation (`icon:showvalue-copy-text`, record only): copies the range and reads `the clipboard
+ * as text`. The AX tree is not observable from the sdef and is recorded as such.
+ */
+export function buildIconCopyTextProbeScript(workbookName: string, sheetName: string, rangeRef: string): string[] {
+  return [
+    `set wb to workbook "${q(workbookName)}"`,
+    `set ws to worksheet "${q(sheetName)}" of wb`,
+    'set copied to "missing value"',
+    'try',
+    `  copy range (range "${q(rangeRef)}" of ws)`,
+    '  delay 0.5',
+    '  set copied to (the clipboard as text)',
+    'on error errMsg number errNum',
+    '  set copied to ("error:::" & errNum & " " & errMsg)',
+    'end try',
+    'return copied',
+  ]
+}
+
+/** Everything a Stage 4 icon capture adds to its sidecar: lock states, raw px, classes, the recomputed hypotheses. */
+export function buildIconSidecarExtras(
+  c: CfOracleCase,
+  parts: Map<string, Uint8Array>,
+  decoded: DecodedPng,
+  geom: WorksheetRangeGeometry,
+  opts: { lockBefore: 'locked' | 'unlocked'; lockAfter: 'locked' | 'unlocked'; rootDir: string; omReadback?: ReturnType<typeof parseIconOmReachability>; copyText?: string },
+): { extras: Record<string, unknown>; observed: ReadonlyMap<string, CfObservedIcon> | undefined; evaluation?: Record<string, IconCapabilityEvaluation>; refusal?: string } {
+  const base: Record<string, unknown> = {
+    zoom: 100,
+    dpr: 1,
+    lockBefore: opts.lockBefore,
+    lockAfter: opts.lockAfter,
+    ...(opts.omReadback ? { iconOmReachability: opts.omReadback } : {}),
+    ...(opts.copyText !== undefined ? { iconCopyText: opts.copyText, accessibilityTree: 'not observable from the sdef (Ruling S4-N)' } : {}),
+  }
+  let key: IconGlyphKey | undefined
+  if (c.markers.some(m => m.capabilityId.startsWith('icon:glyph-'))) {
+    const built = buildIconGlyphKey(c, parts, decoded, geom)
+    if ('kind' in built) return { extras: base, observed: undefined, refusal: `${built.code}: ${built.reason}` }
+    key = built
+    base.glyphClasses = Object.fromEntries(built.classOfPair)
+  } else {
+    const loaded = loadIconGlyphKey(opts.rootDir)
+    key = loaded && !('kind' in loaded) ? loaded : undefined
+  }
+  const measured = measureCaseIcons(c, decoded, geom, key)
+  if ('kind' in measured) return { extras: base, observed: undefined, refusal: `${(measured as Refusal).code}: ${(measured as Refusal).reason}` }
+  const observed = measured as ReadonlyMap<string, CfObservedIcon>
+  const evaluation = evaluateIconCapabilities(c, parts, observed, key)
+  const hypotheses = Object.fromEntries(Object.entries(evaluation).filter(([, e]) => e.hypotheses).map(([cap, e]) => [cap, e.hypotheses]))
+  return { extras: { ...base, observedIcons: [...observed.values()], iconHypotheses: hypotheses }, observed, evaluation }
 }
 
 /** Parses the `buildDataBarSettingsProbeScript` output into rows (an empty or unparseable answer yields no rows). */
@@ -667,6 +768,13 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     let colorScaleCriteria: Record<string, { type: string; value?: string }[]> | undefined
     let barReadback: BarSettingsRow[] | undefined
     const isBarCase = c.stage === 3 && c.markers.some(m => m.ruleType === 'dataBar')
+    // Stage 4: icon cases take the icon branch only (Ruling S4-A); never the Stage 1 contrast observation.
+    const isIconCase = c.stage === 4
+    let iconObserved: ReadonlyMap<string, CfObservedIcon> | undefined
+    let iconEvaluation: Record<string, IconCapabilityEvaluation> | undefined
+    let iconRefusal: string | undefined
+    let iconOm: ReturnType<typeof parseIconOmReachability> | undefined
+    let iconCopyText: string | undefined
     let sidecarLockBefore: 'locked' | 'unlocked' | undefined
     let sidecarLockAfter: 'locked' | 'unlocked' | undefined
     let barObserved: ReadonlyMap<string, CfObservedBar> | undefined
@@ -697,6 +805,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
               }) ?? geom
           }
           if (Array.isArray(sc.barSettingsReadback)) barReadback = sc.barSettingsReadback as BarSettingsRow[]
+          if (Array.isArray(sc.iconOmReachability)) iconOm = sc.iconOmReachability as ReturnType<typeof parseIconOmReachability>
+          if (typeof sc.iconCopyText === 'string') iconCopyText = sc.iconCopyText
           if (sc.lockBefore === 'unlocked' || sc.lockBefore === 'locked') sidecarLockBefore = sc.lockBefore
           if (sc.lockAfter === 'unlocked' || sc.lockAfter === 'locked') sidecarLockAfter = sc.lockAfter
           if (typeof sc.excelTodaySerial === 'number') {
@@ -747,6 +857,16 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       cellColors = liveObs?.cellColors
       colorScaleCriteria = liveObs?.colorScaleCriteria
       barReadback = liveObs?.barSettingsReadback
+      // Record-only Excel observations of two Stage 4 cases (Rulings S4-A and S4-N), each in its own owned open/close.
+      if (c.id === 'stage4-icon-om-reachability' || c.id === 'stage4-icon-showvalue') {
+        const name = openWorkbook(savedAbs)
+        try {
+          if (c.id === 'stage4-icon-om-reachability') iconOm = parseIconOmReachability(runScript(buildIconOmReachabilityScript(name, c.sheet), 30_000))
+          else iconCopyText = runScript(buildIconCopyTextProbeScript(name, c.sheet, 'D2:D4'), 30_000)
+        } finally {
+          if (!preExisting.has(name)) closeOwnedWorkbook(name, preExisting)
+        }
+      }
     }
 
     const updatedTemplate = CF_CASES.find(tc => tc.id === c.id)
@@ -806,6 +926,15 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         isBarCase && decoded && capGeom && sidecarLockBefore && sidecarLockAfter
           ? buildBarSidecarExtras(cWithUpdatedExpected, parts!, decoded, capGeom, { lockBefore: sidecarLockBefore, lockAfter: sidecarLockAfter, ...(barReadback ? { readback: barReadback } : {}) })
           : undefined
+      const iconExtra =
+        isIconCase && decoded && capGeom && sidecarLockBefore && sidecarLockAfter
+          ? buildIconSidecarExtras(cWithUpdatedExpected, parts!, decoded, capGeom, { lockBefore: sidecarLockBefore, lockAfter: sidecarLockAfter, rootDir: REPO_ROOT, ...(iconOm ? { omReadback: iconOm } : {}), ...(iconCopyText !== undefined ? { copyText: iconCopyText } : {}) })
+          : undefined
+      if (iconExtra) {
+        iconObserved = iconExtra.observed
+        iconEvaluation = iconExtra.evaluation
+        if (iconExtra.refusal) iconRefusal = iconExtra.refusal
+      }
       if (barExtra) {
         barObserved = barExtra.observed
         barEvaluation = barExtra.evaluation
@@ -813,7 +942,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       }
 
       const observedCells =
-        isBarCase
+        isBarCase || isIconCase
           ? null
           : decoded && capGeom
           ? observeCellsFromCapture(decoded, capGeom, cWithUpdatedExpected, {
@@ -877,6 +1006,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
               ...(finalObservedCells ? { observedCells: finalObservedCells } : {}),
               ...(colorScaleCriteria ? { colorScaleCriteria } : {}),
               ...(barExtra ? barExtra.extras : {}),
+              ...(iconExtra ? iconExtra.extras : {}),
             },
             null,
             2,
@@ -886,8 +1016,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       return { ...cap, pngSha256 }
     })
 
-    if (lockRefusal || barRefusal) {
-      const why = lockRefusal ?? `bar measurement refused (${barRefusal})`
+    if (lockRefusal || barRefusal || iconRefusal) {
+      const why = lockRefusal ?? (barRefusal ? `bar measurement refused (${barRefusal})` : `icon measurement refused (${iconRefusal})`)
       manifest.cases[i] = { ...c, status: 'recipe-pending', ...(lockRefusal ? {} : { captures: updatedCaptures }), reason: lockRefusal ? `Capture discarded: ${why}` : `Capture kept but not promoted: ${why}` }
       console.warn(`[cf-refs/capture] ${c.id} remained recipe-pending: ${why}`)
       continue
@@ -900,7 +1030,13 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       c.resaveReceipt.openedRepairFree === true
 
     const barLabels = isBarCase && barObserved ? classifyBarCapture(cWithUpdatedExpected, barEvaluation ?? {}) : undefined
+    const iconLabels = isIconCase && iconObserved ? classifyIconCapture(cWithUpdatedExpected, iconEvaluation ?? {}) : undefined
     const populatedExpectedCells = currentExpected.cells.map(exp => {
+      if (iconLabels && exp.matched && exp.iconApplied !== undefined) {
+        // Observed truth, never a guess: iconApplied follows the PNG and iconEvidence the verifier's own rules.
+        const measured = iconObserved?.get(exp.ref)
+        return { ...exp, ...(measured ? { iconApplied: measured.icon !== null } : {}), ...(exp.iconEvidence ? { iconEvidence: iconLabels.get(exp.ref) ?? { bucket: 'unverified' as const, geometry: 'unverified' as const } } : {}) }
+      }
       if (barLabels && exp.matched) {
         // Observed truth, never a guess: barApplied follows the PNG and barEvidence the verifier's own rules.
         const measured = barObserved?.get(exp.ref)

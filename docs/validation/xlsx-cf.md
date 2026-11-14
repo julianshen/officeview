@@ -127,6 +127,10 @@ Scanned all `.xlsx` archives in `corpus/` and `tests/fixtures/` by inspecting ZI
   - **Pairing authored by the oracle** (not yet resaved by Excel): paired = base `<dataBar>` plus a cfRule-level `<extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}"><x14:id>` and an `<x14:cfRule type="dataBar" id>` companion with no `@priority` under `{78C0D931-6437-407d-A8EE-F0AAD7539E65}`; standalone = `<x14:cfRule priority id>` with `<x14:fillColor>`; base-only = the 2007 shape above.
   - **cfvo types authored**: `min`, `max`, `num`, `percent`, `percentile`, x14 `autoMin`/`autoMax`, and (unresolved shapes only) `formula`, `num` with `<xm:f>$A$1</xm:f>`, a cfvo without `type`, and 1 and 3 cfvo; legacy `min val="0"`.
   - **Colour forms authored**: 8-digit ARGB (`rgb="FF0000FF"`), `theme="4" tint="-0.25"`, `indexed="12"`, and (unresolved shapes only) `auto="1"` and alpha `00`.
+- **Icon set (`<iconSet>` / `<x14:iconSet>`) inventory (Task 24, Stage 4)**: scanned every `.xlsx` by reading its ZIP entries (`xl/worksheets/*.xml`), skipping `~$` lockfiles (the two present in `corpus/` are `.docx`, so none applied): `corpus/` (this worktree holds only `corpus.lock.json`; the main checkout's materialized `corpus/` holds 9 `.xlsx`) and `tests/fixtures/` (740 `.xlsx`: 626 outside `xlsx-cf/`, 63 oracle workbooks, 51 oracle inputs).
+  - **No corpus workbook and no fixture outside `tests/fixtures/xlsx-cf/` contains an icon set.** Stage 4 has no third-party writer shapes to be compatible with; the x14 shape comes from `excel-authored-iconsets.xlsx` (Excel's dialog, orchestrator, Lesson 12), which does not exist yet.
+  - **Seen in the wild (Excel-resaved)**: `stage1-priority-composition.xlsx` (and its `.rejected` twin) carries one base rule, `<iconSet>` with the `iconSet` attribute omitted (3TrafficLights1), `percent` cfvo 0/33/67, no `gte`, `reverse`, `showValue` or `percent` attribute: Excel 16.114 omits default-valued attributes on resave, the form the glyph key provisionally pins (`ICON_KEY_PERCENT_FORM = '(omitted)'`).
+  - **Authored by the oracle (30 Stage 4 workbooks, 15 inputs + 15 seeded saves, not yet resaved by Excel)**: dialects base (81 rules per workbook set) and standalone x14 (95 rules, including the 75 glyph-key rules); all 20 families (17 base, and `3Stars`/`3Triangles`/`5Boxes` only as x14), plus `iconSet` omitted; custom `cfIcon` mappings (87 rules) with `NoIcons iconId="0"` in the first, middle and last bucket and in all-`NoIcons` sets; cfvo types `num`, `percent`, `percentile`, `min`, `max` (and, unresolved shapes only, `formula`, `<xm:f>$A$1</xm:f>` and a cfvo without `type`); `gte="1"` written explicitly and `gte="0"`; `reverse="1"` on 3-, 4- and 5-icon and custom sets; `showValue="0"`; `<iconSet percent="0">` once (`stage4-icon-degenerate` H).
 
 ---
 
@@ -1225,3 +1229,47 @@ clock-dependent timePeriod cases. Bar geometry fidelity is proven by the Lesson 
   where the path differs), not a single code per row.
 - **zh-TW label.** 「資料橫條」 is the exact name in Excel 16.114 zh-TW's Conditional Formatting style menu (the orchestrator
   selected it by that name when authoring `excel-authored-databar.xlsx`); no change needed.
+
+---
+
+## 12. Stage 4 Icon Set Oracle Cases (Task 24: glyph key, icon cases, classification, conformance)
+
+Task 24 prepares the Stage 4 oracle. **Nothing below has been run against Excel**: every case is `recipe-pending` (one `unsupported`), every `iconEvidence` is `unverified`, no capture, sidecar or PNG exists, and production withholds every icon (the conformance guard `stage 4 icon cells are withheld until their evidence lands`). The capture sequence is `docs/validation/xlsx-cf-recipes-stage4.md`.
+
+### Harness additions
+
+- **Catalogue (`scripts/cf-refs/cases.ts`)**: `CF_STAGE4_CASES` (15), `CF_STAGE4_CAPABILITIES` (142 `icon:*` ids, each `failClosedDisposition` citing the S4 ruling it lifts), `CF_STAGE4_NONDISCRIMINATING` (3 record-only ids), `S4_ICON_FAMILIES` (the 20 families, cross-checked against the viewer's `ICON_SETS` as source text), `CfPartMarker.icon`, `CfCellExpectation.iconEvidence`/`iconApplied`, `CfOracleCase.iconCalibration`, `iconCapabilityKind`, and five refusal codes (`icon-class-none`, `icon-class-ambiguous`, `icon-key-mismatch`, `icon-edge-unstable`, `icon-hypothesis-none`).
+- **Generator**: `iconRuleXml` (base `<cfRule type="iconSet">` and standalone x14 `<x14:cfRule type="iconSet">` with `<xm:f>` and `<x14:cfIcon>`), Stage 4 styles (`;;;` as numFmt 166, 8/20 pt fonts, alignments, date format 14), `rightToLeft`; all opt-in, so Stage 1-3 inputs are byte-identical. `--diff-authored-icons` / `diffAuthoredIconTemplates` diff the templates against `excel-authored-iconsets.xlsx` by form (attribute names and values as written).
+- **Verifier**: semantic icon marker match (`iconRuleMatches`: set with the 3TrafficLights1 default, ordered cfvo with numeric values and effective `gte`, the cfIcon list, attributes with schema defaults; `percent` pinned by form for the glyph key); the x14-as-legacy fallback is disabled for icon markers, so a standalone x14 rule moved to the base dialect refuses. `measureIconGeometry` (column/row scan, value-text location by the control's ink pattern, three-scanline stability against each other or against the class's key crop), `classifyIconCrop` (±8 at zero offset, one pixel ≥ 64 from every other class), `buildIconGlyphKey`, `buildIconClassHypotheses`/`discriminateIcon` (bucket readings: num/percent/percentile inc-exc/mixed, gte as written vs flipped, family order, reverse, custom order, NoIcons), `discriminateIconBox` (S3-A step 7: one fitting hypothesis, every other ≥ 3 px away), `evaluateIconCapabilities`, `verifyIconCapture`. A measured Stage 4 case takes only the icon branch, never the Stage 1 contrast path; `isCapabilityVerified` gates every `icon:*` on `icon:pixel-calibration` and `icon:glyph-key`, and every reading through the family order on `icon:families-base`.
+- **Capture**: `buildIconOmReachabilityScript`/`parseIconOmReachability`, `buildIconCopyTextProbeScript`, `buildIconSidecarExtras` (lock states, `observedIcons`, `glyphClasses`, `iconHypotheses`), captures through `captureUnderLockGuard`.
+- **Audit**: `auditStage4Manifest`, `--stage 4`, and `--publish-stage4` mirroring S3-WRITE (without it the Stage 4 export is carried verbatim; today it is absent and `--write` reproduces `verifiedCapabilities.ts` byte for byte). `scripts/cf-compare.ts`: `stage4ObservedIcons`.
+
+### Known limits of the prepared machinery (not evidence)
+
+- **Geometry capabilities have no hypotheses yet.** `icon:geometry-*`, `icon:inset-*`, `icon:noicons-*`, `icon:showvalue-canvas-suppression` and `icon:composition-bar-showvalue` are measured (raw px, text shift) but report `no hypotheses`; their candidate boxes are the `CfIconBoxVariant` set that Task 29's `CF_ICON_RENDER_MODEL` defines. A geometry claim refuses until then. Bucket capabilities of scope, participation, degenerate and composition shapes also have no hypotheses yet (they need the viewer-independent statistics of S4-G/S4-H), so they stay unverified.
+- **Classification crop.** Key and classified cells are compared on the same rect: the cell's inner box (gridlines excluded), its left 28 px (`ICON_CROP_WIDTH_PX`). Row height and vertical alignment must match the key's (20 pt, bottom); value text must stay right of the band. Crops over a fill or a bar, and merged hosts, are expected to refuse `icon-class-none` (a recorded finding).
+- **Scanline stability.** Without a reference, the three scanlines must agree (rectangular glyphs); with the class's key crop, the offsets must agree (any shape). A text pattern is matched with at most one column in ten differing.
+- **Whole-column scope.** `icon:scope-whole-column` sits on `stage4-icon-families` (column W, control X), because the scope sheet hides rows (as Stage 3 did).
+- **Record-only capabilities.** `icon:om-reachability-probe`, `icon:showvalue-copy-text` and `icon:placement-rtl-sheet` are never verified, whatever their capture shows. The ten `icon:unresolved-*` shapes are `unsupported`.
+
+### Stage 4 Oracle Cases Matrix (every `[measure]` row, its ruling and status)
+
+| Case | Capabilities | Ruling | Status |
+|---|---|---|---|
+| `stage4-icon-om-reachability` | `icon:om-reachability-probe` (record only) | S4-A | recipe-pending |
+| `stage4-icon-authored` | `icon:dialect-base`, `icon:dialect-standalone` | S4-O | recipe-pending (authored fixture pending) |
+| `stage4-icon-glyph-key` | `icon:pixel-calibration`, `icon:glyph-key`, 75 × `icon:glyph-<set>-<id>` | S4-A, OD-9(b) | recipe-pending |
+| `stage4-icon-families` | `icon:families-base`, `icon:families-x14`, `icon:settings-schema-defaults`, `icon:scope-whole-column` | S4-E, S4-B, S4-F, S4-H | recipe-pending |
+| `stage4-icon-thresholds` | `icon:thresholds-num`, `-percent`, `-percentile-inc-exc`, `-gte-true`, `-gte-false`, `-mixed` | S4-D | recipe-pending |
+| `stage4-icon-degenerate` | `icon:thresholds-floor`, `-min-max`, `icon:degenerate-equal-values`, `-single-cell`, `-non-monotonic`, `icon:bounds-out-of-domain`, `icon:attr-percent-false` | S4-C, S4-D, S4-F | recipe-pending |
+| `stage4-icon-reverse-custom` | `icon:reverse`, `icon:reverse-custom`, `icon:custom-mapping`, `icon:custom-noicons` | S4-E, S4-B | recipe-pending |
+| `stage4-icon-geometry` | `icon:geometry-box`, `-vertical-align`, `-snapping`, `-narrow-clip`, `-short-row-clip` | S4-K | recipe-pending |
+| `stage4-icon-inset` | `icon:inset-left`, `-right-aligned`, `-center`, `-overflow`, `icon:noicons-inset`, `icon:noicons-showvalue` | S4-L | recipe-pending |
+| `stage4-icon-showvalue` | `icon:showvalue-canvas-suppression`, `icon:showvalue-copy-text` (record only) | S4-L, S4-N | recipe-pending |
+| `stage4-icon-participation` | `icon:participation-types`, `-dateserial`, `-error-presence` | S4-G | recipe-pending |
+| `stage4-icon-scope` | `icon:scope-disjoint`, `-duplicate-blocks`, `-hidden-row`, `-autofilter-hidden-row`, `-merged-cell` | S4-H | recipe-pending |
+| `stage4-icon-composition` | `icon:composition-overlapping-icons`, `-with-bar`, `-bar-showvalue`, `-with-scale`, `-dxf-fill`, `-matching-stopIfTrue-ahead`, `-icon-stopIfTrue`, `-noicons-slot`, `-unresolved-stub` | S4-I, S4-J | recipe-pending |
+| `stage4-icon-rtl` | `icon:placement-rtl-sheet` (record only, stays unverified) | S4-M | recipe-pending |
+| `stage4-icon-unresolved-shapes` | 10 × `icon:unresolved-*` (lift nothing) | S4-B, S4-C, S4-O, S4-P | unsupported |
+
+Expected non-discriminating candidates, decided per capture by `discriminateIcon`/`discriminateIconBox` (not pre-registered): `icon:thresholds-gte-*` on off-boundary cells, `icon:reverse` on the middle bucket (the fixture designates only end buckets), `icon:inset-left` on right-aligned numbers, `icon:geometry-snapping` if no edge lands at a fractional point, and `icon:composition-noicons-slot` if the lower rule's icon would be withheld anyway.
