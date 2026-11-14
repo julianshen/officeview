@@ -5,7 +5,8 @@
  */
 import { afterAll, describe, expect, test } from 'bun:test'
 import { decodeShowMessage, SHOW_PLAN_LIMITS, isRasterLayer, type MorphPlanRecord, type ShowMessage, type ShowPlanRecord } from '../../src/stream/show-plan'
-import { morphDeck } from '../../src/testdata/show-decks'
+import { flyInDeck, morphDeck } from '../../src/testdata/show-decks'
+import { Pool, RenderTimeout } from '../src/pool'
 import { AuditTable } from '../src/audit'
 import { decodePng } from '../src/mark/png'
 import { AuditStore } from '../src/audit-store'
@@ -257,4 +258,58 @@ describe('show wire', () => {
     expect(sent).toBe(1)
     s.stop()
   }, 60_000)
+})
+
+describe('show job refusal cache (controller ruling)', () => {
+  const job = { scale: 1 as const, motion: 'full' as const, mark: { kind: 'fixed' as const }, strictMarks: false }
+  const timedOut = async (p: Promise<unknown>) => { try { await p; return false } catch (e) { return e instanceof RenderTimeout } }
+
+  test('a timed-out track is answered from the pool cache: no build, no second retirement; re-register forgets it', async () => {
+    const pool = new Pool({ workers: 1, testHooks: true, showDeadlineMs: 400 })
+    try {
+      await pool.open('fly', await flyInDeck(), 'full')
+      expect(await timedOut(pool.showTrack('s1', { docRef: 'fly', contentPolicy: 'full', ...job, unitIndex: 0, step: 0, hangMs: 1500 }, 1024))).toBe(true)
+      expect(pool.stats().retired).toBe(1)
+      const t0 = performance.now()
+      expect(await timedOut(pool.showTrack('s2', { docRef: 'fly', contentPolicy: 'full', ...job, unitIndex: 0, step: 0 }, 1024))).toBe(true)
+      expect(performance.now() - t0).toBeLessThan(100)
+      expect(pool.stats()).toMatchObject({ retired: 1, reserved: 0, running: 0 })
+      // Another step is its own entry: it runs on a worker (and, hung, times out and retires it).
+      expect(await timedOut(pool.showTrack('s2', { docRef: 'fly', contentPolicy: 'full', ...job, unitIndex: 0, step: 1, hangMs: 1500 }, 1024))).toBe(true)
+      expect(pool.stats().retired).toBe(2)
+      await pool.open('fly', await flyInDeck(), 'full')
+      expect(await timedOut(pool.showTrack('s1', { docRef: 'fly', contentPolicy: 'full', ...job, unitIndex: 0, step: 0, hangMs: 1500 }, 1024))).toBe(true)
+      expect(pool.stats().retired).toBe(3)
+    } finally { pool.dispose() }
+  }, 60_000)
+
+  test('a timed-out Morph pair is answered from the pool cache; morph-fallback is cached too; forget clears both', async () => {
+    const pool = new Pool({ workers: 1, testHooks: true, showDeadlineMs: 400 })
+    try {
+      await pool.open('m', await morphDeck(), 'full')
+      const pair = { docRef: 'm', contentPolicy: 'full' as const, ...job, from: 0, to: 1, fromStep: 0 }
+      expect(await timedOut(pool.showMorph('s1', { ...pair, hangMs: 1500 }, 1024))).toBe(true)
+      expect(pool.stats().retired).toBe(1)
+      const t0 = performance.now()
+      expect(await timedOut(pool.showMorph('s2', { ...pair, mark: { kind: 'off' } }, 1024))).toBe(true)
+      expect(performance.now() - t0).toBeLessThan(100)
+      expect(pool.stats()).toMatchObject({ retired: 1, reserved: 0, running: 0 })
+      // Forgotten, then registered again: the pair runs on a worker again.
+      pool.forget('m')
+      await pool.open('m', await morphDeck(), 'full')
+      expect(await timedOut(pool.showMorph('s1', { ...pair, hangMs: 1500 }, 1024))).toBe(true)
+      expect(pool.stats().retired).toBe(2)
+    } finally { pool.dispose() }
+    const roomy = new Pool({ workers: 1 })
+    try {
+      await roomy.open('many', await manyObjectsMorphDeck(257), 'full')
+      const many = { docRef: 'many', contentPolicy: 'full' as const, ...job, from: 0, to: 1, fromStep: 0 }
+      expect(await roomy.showMorph('s1', many, 1024)).toEqual({ refused: 'morph-fallback' })
+      const pages = roomy.stats().workers[0]!.pages
+      const t1 = performance.now()
+      expect(await roomy.showMorph('s1', many, 1024)).toEqual({ refused: 'morph-fallback' })
+      expect(performance.now() - t1).toBeLessThan(100)
+      expect(roomy.stats().workers[0]!.pages).toBe(pages)
+    } finally { roomy.dispose() }
+  }, 120_000)
 })

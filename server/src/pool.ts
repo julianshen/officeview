@@ -84,6 +84,27 @@ export class Pool {
    * cache: a repeat request answers here, with no admission and no worker.
    */
   private showRefusals = new Map<string, ShowRefusal>()
+  /**
+   * Task 7 follow-up (controller ruling): track and Morph-pair refusals, the same way. A track is keyed by the
+   * slide's L1 tuple and its step, a pair by `docRef|policy|morph|from|to|fromStep|scale|motion|strictMarks`.
+   * `timeout`: the job passed the show deadline (its worker was retired); a repeat throws `RenderTimeout` at once.
+   * `morph-fallback`: `planMorph` refused the pair (deterministic). Cleared with `showRefusals` (re-register, forget).
+   */
+  private jobRefusals = new Map<string, 'timeout' | 'morph-fallback'>()
+  /** Runs `run` unless `key` is known refused; a timeout (and a Morph refusal) is remembered while the document is registered. */
+  private async remembered<T>(docRef: string, key: string, run: () => Promise<T>): Promise<T> {
+    const known = this.jobRefusals.get(key)
+    if (known === 'timeout') throw new RenderTimeout()
+    if (known === 'morph-fallback') return { refused: 'morph-fallback' } as T
+    try {
+      const r = await run()
+      if (r && typeof r === 'object' && (r as { refused?: unknown }).refused === 'morph-fallback' && this.sources.has(docRef)) this.jobRefusals.set(key, 'morph-fallback')
+      return r
+    } catch (e) {
+      if (e instanceof RenderTimeout && this.sources.has(docRef)) this.jobRefusals.set(key, 'timeout')
+      throw e
+    }
+  }
   /** `${docRef}|${policy}` → unit sizes from the last parse (prepare charges). */
   private unitSizes = new Map<string, OpenResult['units']>()
   private disposed = false
@@ -279,13 +300,17 @@ export class Pool {
   /** Piece 4: the keyframe track of one composited step (affinity, admission, `SHOW_PLAN_DEADLINE_MS`; a timeout throws `RenderTimeout`). */
   async showTrack(sessionId: string, job: PoolShowJob & { step: number }, bytesEstimate: number): Promise<Array<{ assetId: number; w: number; h: number; png: Uint8Array }>> {
     const { docRef, contentPolicy, hangMs, crash, ...show } = job
-    return await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-track', id: this.nextId++, docKey, job: show, ...this.hooks(hangMs, crash) })) as Array<{ assetId: number; w: number; h: number; png: Uint8Array }>
+    const plan = [docRef, contentPolicy, show.unitIndex, show.scale, show.motion, show.strictMarks].join('|')
+    // A slide whose bundle is refused has no track.
+    if (this.showRefusals.has(plan)) return []
+    return await this.remembered(docRef, `${plan}|track|${show.step}`, async () => await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-track', id: this.nextId++, docKey, job: show, ...this.hooks(hangMs, crash) })) as Array<{ assetId: number; w: number; h: number; png: Uint8Array }>)
   }
 
   /** Piece 4 Task 7: one Morph pair (affinity, admission, `SHOW_PLAN_DEADLINE_MS`; a timeout throws `RenderTimeout`). */
   async showMorph(sessionId: string, job: PoolMorphJob, bytesEstimate: number): Promise<BuiltMorph> {
     const { docRef, contentPolicy, hangMs, crash, ...morph } = job
-    return await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-morph', id: this.nextId++, docKey, job: morph, ...this.hooks(hangMs, crash) })) as BuiltMorph
+    const key = [docRef, contentPolicy, 'morph', morph.from, morph.to, morph.fromStep, morph.scale, morph.motion, morph.strictMarks === true].join('|')
+    return await this.remembered(docRef, key, async () => await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-morph', id: this.nextId++, docKey, job: morph, ...this.hooks(hangMs, crash) })) as BuiltMorph)
   }
 
   /**
@@ -468,7 +493,10 @@ export class Pool {
     this.dropShowRefusals(docRef)
   }
 
-  private dropShowRefusals(docRef: string) { for (const k of this.showRefusals.keys()) if (k.startsWith(`${docRef}|`)) this.showRefusals.delete(k) }
+  private dropShowRefusals(docRef: string) {
+    for (const k of this.showRefusals.keys()) if (k.startsWith(`${docRef}|`)) this.showRefusals.delete(k)
+    for (const k of this.jobRefusals.keys()) if (k.startsWith(`${docRef}|`)) this.jobRefusals.delete(k)
+  }
 
   stats() {
     return {
