@@ -64,6 +64,9 @@ import {
   type DecodedPng,
   buildIconClassHypotheses,
   buildIconGlyphKey,
+  buildIconScenarioHypotheses,
+  dialectAllAbsent,
+  type IconClassHypothesis,
   classifyIconCrop,
   discriminateIcon,
   discriminateIconBox,
@@ -4099,6 +4102,7 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     const expected: Record<string, string[]> = {
       'stage4-icon-om-reachability': ['icon:om-reachability-probe'],
       'stage4-icon-authored': ['icon:dialect-base', 'icon:dialect-standalone'],
+      'stage4-icon-dialect': ['icon:dialect-base-x14-family', 'icon:dialect-paired'],
       'stage4-icon-glyph-key': ['icon:glyph-key', 'icon:pixel-calibration', ...glyphCaps],
       'stage4-icon-families': ['icon:families-base', 'icon:families-x14', 'icon:scope-whole-column', 'icon:settings-schema-defaults'],
       'stage4-icon-thresholds': ['icon:thresholds-gte-false', 'icon:thresholds-gte-true', 'icon:thresholds-mixed', 'icon:thresholds-num', 'icon:thresholds-percent', 'icon:thresholds-percentile-inc-exc'],
@@ -4159,7 +4163,7 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     }
     for (const id of Object.keys(CF_STAGE4_NONDISCRIMINATING)) expect(CF_STAGE4_CAPABILITIES.some(e => e.capabilityId === id), id).toBe(true)
     expect(CF_STAGE4_CAPABILITIES.filter(e => iconCapabilityKind(e.capabilityId) === 'record').map(e => e.capabilityId).sort()).toEqual(
-      [...Object.keys(CF_STAGE4_NONDISCRIMINATING), ...expected['stage4-icon-unresolved-shapes']!].sort(),
+      [...Object.keys(CF_STAGE4_NONDISCRIMINATING).filter(id => !id.startsWith('icon:composition-')), ...expected['stage4-icon-unresolved-shapes']!].sort(),
     )
   }, 60_000)
 
@@ -4427,7 +4431,7 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     const report = auditStage4Manifest(manifest, { rootDir: REPO_ROOT })
     expect(report.ok).toBe(true)
     expect(report.stageComplete).toBe(false)
-    expect(report.summary.cases).toBe(15)
+    expect(report.summary.cases).toBe(16)
     expect(report.summary.capabilities).toBe(CF_STAGE4_CAPABILITIES.length)
     expect(report.perCapability.filter(p => p.disposition === 'verified')).toEqual([])
     expect(report.perCapability.filter(p => p.disposition === 'unaccounted')).toEqual([])
@@ -4519,5 +4523,164 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     const unstable = [...res.observed!.values()].filter(o => o.edgeStable === false)
     expect(unstable.length).toBeGreaterThan(0)
     for (const o of res.observed!.values()) if (o.icon) expect(o.icon.glyphClass).toBe('unclassified')
+  })
+
+  /** Fix round 1: hypotheses predicted from the real saved workbook, with a class per (set, iconId). */
+  const s4classOf = (set: string, iconId: number): string | null => (set === 'NoIcons' ? null : `${set}:${iconId}`)
+  const scenario = (caseId: string, cap: string) => {
+    const c = CF_STAGE4_CASES.find(x => x.id === caseId)!
+    const parts = readZipPartsSync(new Uint8Array(readFileSync(resolve(REPO_ROOT, c.saved))))!
+    return buildIconScenarioHypotheses(cap, c, parts, s4classOf)
+  }
+  /** Whether two hypotheses predict a different class at some designated cell. */
+  const separates = (h: Record<string, IconClassHypothesis[]> | undefined, a: string, b: string): boolean =>
+    h !== undefined && Object.values(h).some(list => list.find(x => x.id === a)?.glyphClass !== list.find(x => x.id === b)?.glyphClass)
+
+  it('every bucket capability of the authored data has competing readings that predict different classes (S4-DIALECT-EVIDENCE, concern 2)', () => {
+    const rows: Array<[string, string, string, string]> = [
+      ['stage4-icon-authored', 'icon:dialect-base', 'as-modelled', 'no-icon'],
+      ['stage4-icon-authored', 'icon:dialect-base', 'as-modelled', 'reversed-order'],
+      ['stage4-icon-authored', 'icon:dialect-standalone', 'as-modelled', 'reversed-order'],
+      ['stage4-icon-families', 'icon:settings-schema-defaults', 'as-modelled', 'family:3Arrows'],
+      ['stage4-icon-families', 'icon:settings-schema-defaults', 'as-modelled', 'no-icon'],
+      ['stage4-icon-dialect', 'icon:dialect-base-x14-family', 'as-modelled', 'no-icon'],
+      ['stage4-icon-dialect', 'icon:dialect-base-x14-family', 'as-modelled', 'family:3TrafficLights1'],
+      ['stage4-icon-dialect', 'icon:dialect-paired', 'companion', 'base'],
+      ['stage4-icon-dialect', 'icon:dialect-paired', 'companion', 'no-icon'],
+      ['stage4-icon-scope', 'icon:scope-disjoint', 'union', 'per-range'],
+      ['stage4-icon-scope', 'icon:scope-hidden-row', 'exclude-hidden', 'include-hidden'],
+      ['stage4-icon-scope', 'icon:scope-autofilter-hidden-row', 'exclude-hidden', 'include-hidden'],
+      ['stage4-icon-scope', 'icon:scope-merged-cell', 'all-stored', 'merged-excluded'],
+      ['stage4-icon-families', 'icon:scope-whole-column', 'whole-column', 'data-block-only'],
+      ['stage4-icon-scope', 'icon:scope-duplicate-blocks', 'first-paints', 'second-paints'],
+      ['stage4-icon-participation', 'icon:participation-types', 'no-icon-for-non-numbers', 'coerce-booleans'],
+      ['stage4-icon-participation', 'icon:participation-dateserial', 'evaluated', 'no-icon'],
+      ['stage4-icon-participation', 'icon:participation-error-presence', 'error-ignored', 'rule-suppressed'],
+      ['stage4-icon-degenerate', 'icon:degenerate-equal-values', 'as-model', 'lowest'],
+      ['stage4-icon-degenerate', 'icon:degenerate-single-cell', 'as-model', 'lowest'],
+      ['stage4-icon-degenerate', 'icon:degenerate-non-monotonic', 'as-model', 'sorted'],
+      ['stage4-icon-degenerate', 'icon:degenerate-non-monotonic', 'as-model', 'first-fail'],
+      ['stage4-icon-degenerate', 'icon:bounds-out-of-domain', 'as-model', 'clamped'],
+      ['stage4-icon-degenerate', 'icon:thresholds-floor', 'below-floor-bucket0', 'below-floor-no-icon'],
+      ['stage4-icon-degenerate', 'icon:thresholds-min-max', 'max-reached', 'max-unreachable'],
+      ['stage4-icon-degenerate', 'icon:attr-percent-false', 'cfvo-as-percent', 'cfvo-as-num'],
+      ['stage4-icon-composition', 'icon:composition-overlapping-icons', 'first-paints', 'second-paints'],
+      ['stage4-icon-composition', 'icon:composition-with-bar', 'both-paint', 'icon-withheld'],
+      ['stage4-icon-composition', 'icon:composition-matching-stopIfTrue-ahead', 'halted', 'not-halted'],
+      ['stage4-icon-composition', 'icon:composition-icon-stopIfTrue', 'later-withheld', 'later-applies'],
+      ['stage4-icon-composition', 'icon:composition-noicons-slot', 'first-paints', 'second-paints'],
+      ['stage4-icon-composition', 'icon:composition-unresolved-stub', 'halted', 'not-halted'],
+    ]
+    for (const [caseId, cap, a, b] of rows) expect(separates(scenario(caseId, cap), a, b), `${cap}: ${a} vs ${b}`).toBe(true)
+    // Composition over a fill is the one shape no data can discriminate under the S4-A rule (registry, one-line reason).
+    for (const id of ['icon:composition-with-scale', 'icon:composition-dxf-fill']) expect(CF_STAGE4_NONDISCRIMINATING[id], id).toMatch(/fill/)
+    // A reading with no competitor on its cells stays non-discriminating: a dialect on all-equal buckets cannot tell order.
+    const flat = buildIconScenarioHypotheses('icon:dialect-base', { ...CF_STAGE4_CASES.find(x => x.id === 'stage4-icon-authored')!, expected: { ...CF_STAGE4_CASES.find(x => x.id === 'stage4-icon-authored')!.expected, cells: [{ ref: 'F4', controlRef: 'F10', matched: true, iconApplied: true }] } }, readZipPartsSync(new Uint8Array(readFileSync(resolve(REPO_ROOT, 'tests/fixtures/xlsx-cf/stage4-icon-authored.xlsx'))))!, s4classOf)!
+    expect(discriminateIcon(flat, { F4: '3Arrows:1' })).toMatchObject({ status: 'non-discriminating' })
+  })
+
+  it('a dialect capture where every marked cell shows no icon refuses the case (S4-DIALECT-EVIDENCE)', () => {
+    const c = CF_STAGE4_CASES.find(x => x.id === 'stage4-icon-authored')!
+    const parts = readZipPartsSync(new Uint8Array(readFileSync(resolve(REPO_ROOT, c.saved))))!
+    const hyps = buildIconScenarioHypotheses('icon:dialect-base', c, parts, s4classOf)!
+    const none = Object.fromEntries(Object.keys(hyps).map(ref => [ref, null]))
+    expect(dialectAllAbsent('icon:dialect-base', none)).toBe(true)
+    expect(dialectAllAbsent('icon:dialect-base', { ...none, F2: '3Arrows:2' })).toBe(false)
+    // The dialect case records the outcome instead: no icon there is an answer, not a refusal.
+    expect(dialectAllAbsent('icon:dialect-base-x14-family', none)).toBe(false)
+  })
+
+  it('stage4-icon-dialect authors an x14-only family on a base rule and a paired base + x14 rule', () => {
+    const c = CF_STAGE4_CASES.find(x => x.id === 'stage4-icon-dialect')!
+    expect(c.status).toBe('recipe-pending')
+    expect(c.markers.map(m => [m.capabilityId, m.extension, m.icon?.set, m.priority ?? null])).toEqual([
+      ['icon:dialect-base-x14-family', 'legacy', '3Stars', 1],
+      ['icon:dialect-paired', 'legacy', '3Arrows', 2],
+      ['icon:dialect-paired', 'x14', '3Triangles', null],
+    ])
+    const sheet = new TextDecoder().decode(readZipPartsSync(new Uint8Array(readFileSync(resolve(REPO_ROOT, c.input))))!.get('xl/worksheets/sheet1.xml')!)
+    const guid = /<x14:id>(\{[^}]+\})<\/x14:id>/.exec(sheet)?.[1]
+    expect(guid).toBeDefined()
+    expect(sheet).toContain(`<x14:cfRule type="iconSet" id="${guid}">`)
+    const entry = (JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest).cases.find(x => x.id === c.id)!
+    expect(verifyCfCase(entry, { rootDir: REPO_ROOT })).toMatchObject({ kind: 'refusal', code: 'semantic-evidence-pending', structuralValid: true })
+  })
+
+  it('a measured Stage 4 case verifies and audits from its stored capture alone, and re-derives with no Excel run (concern 3)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ov-cf-icon-e2e-'))
+    s4dirs.push(root)
+    const c0 = CF_STAGE4_CASES.find(x => x.id === 'stage4-icon-glyph-key')!
+    mkdirSync(join(root, 'tests/fixtures/xlsx-cf/inputs'), { recursive: true })
+    mkdirSync(join(root, 'tests/fixtures/xlsx-cf/refs'), { recursive: true })
+    for (const f of [c0.input, c0.saved]) cpSync(resolve(REPO_ROOT, f), join(root, f))
+    const savedBytes = new Uint8Array(readFileSync(join(root, c0.saved)))
+    const parts = readZipPartsSync(savedBytes)!
+    const geom = computeWorksheetRangeGeometry(parts, c0.range)!
+    // A synthetic "Excel" capture: gridlines, one distinct glyph per key pair inside the left band, the solid DXF cell.
+    const pairs = S4_ICON_FAMILIES.flatMap(f => Array.from({ length: f.size }, (_, id) => `${f.name}:${id}`))
+    const boxOf = (ref: string) => { const p = parseA1(ref)!; return { x0: Math.round(geom.colWidthsPt.slice(0, p.col - geom.minCol).reduce((a, b) => a + b, 0)), y0: Math.round(geom.rowHeightsPt.slice(0, p.row - geom.minRow).reduce((a, b) => a + b, 0)), w: Math.round(geom.colWidthsPt[p.col - geom.minCol]!), h: Math.round(geom.rowHeightsPt[p.row - geom.minRow]!) } }
+    const W = geom.expectedWidthPt, H = geom.expectedHeightPt
+    const canvas = createCanvas(W + 1, H + 1)
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W + 1, H + 1)
+    ctx.fillStyle = '#d4d4d4'
+    let x = 0; for (const w of geom.colWidthsPt) { ctx.fillRect(Math.round(x), 0, 1, H + 1); x += w } ctx.fillRect(Math.round(x), 0, 1, H + 1)
+    let y = 0; for (const h of geom.rowHeightsPt) { ctx.fillRect(0, Math.round(y), W + 1, 1); y += h } ctx.fillRect(0, Math.round(y), W + 1, 1)
+    const k2 = boxOf('K2'); ctx.fillStyle = '#c6efce'; ctx.fillRect(k2.x0 + 1, k2.y0 + 1, k2.w - 1, k2.h - 1)
+    ctx.fillStyle = '#202080'
+    for (const m of c0.markers.filter(mm => mm.capabilityId.startsWith('icon:glyph-'))) {
+      const i = pairs.indexOf(`${m.icon!.custom![0]!.set}:${m.icon!.custom![0]!.iconId}`)
+      const b = boxOf(m.sqref)
+      ctx.fillRect(b.x0 + 3 + (i % 10) * 2, b.y0 + 3 + Math.floor(i / 10), 6, 6)
+    }
+    const pngBytes = new Uint8Array(canvas.toBuffer('image/png'))
+    const cap = c0.captures[0]!
+    writeFileSync(join(root, cap.pngPath), pngBytes)
+    const decoded = decodePngSync(pngBytes)!
+    const savedSha256 = sha256(savedBytes)
+    const inputSha256 = sha256(new Uint8Array(readFileSync(join(root, c0.input))))
+    const sidecarFor = () => {
+      const extra = buildIconSidecarExtras(c0, parts, decoded, geom, { lockBefore: 'unlocked', lockAfter: 'unlocked', rootDir: root })
+      expect(extra.refusal).toBeUndefined()
+      return JSON.stringify({
+        excelVersion: '16.114', route: 'copy-picture', appearance: 'screen', scale: 1, pxPerPt: 1, width: decoded.width, height: decoded.height,
+        colWidthsPt: geom.colWidthsPt, rowHeightsPt: geom.rowHeightsPt, geometrySource: 'excel-measured', resavedByExcel: true, resaveSavedSha256: savedSha256,
+        sheet: c0.sheet, range: c0.range, hostTimeZone: 'Asia/Taipei', savedSha256, pngSha256: sha256(pngBytes), capturedAt: '2026-11-14T12:00:00Z', ...extra.extras,
+      }, null, 2) + '\n'
+    }
+    writeFileSync(join(root, cap.sidecarPath), sidecarFor())
+    const measured: CfOracleCase = {
+      ...c0,
+      status: 'measured',
+      resavedByExcel: true,
+      resaveReceipt: { resavedAt: '2026-11-14T12:00:00Z', excelVersion: '16.114', inputSha256, savedSha256, openedRepairFree: true },
+      captures: [{ ...cap, pngSha256: sha256(pngBytes) }],
+      expected: { ...c0.expected, inputSha256, savedSha256, provenance: 'excel-observed' },
+    }
+    const manifest: CfManifest = { version: 1, excelBuild: '16.114', locale: 'zh-TW', dateSystem: '1900', hostTimeZone: 'Asia/Taipei', generatedAt: '2026-11-06T00:00:00Z', cases: [measured] }
+    writeFileSync(join(root, 'tests/fixtures/xlsx-cf/manifest.json'), JSON.stringify(manifest))
+    const res = verifyCfCase(measured, { rootDir: root })
+    expect(res.kind, res.kind === 'refusal' ? `${res.code}: ${res.reason}` : '').toBe('verified')
+    const verified = (res as { verifiedCapabilities: readonly string[] }).verifiedCapabilities
+    expect(verified).toEqual(expect.arrayContaining(['icon:pixel-calibration', 'icon:glyph-key', 'icon:glyph-3Arrows-0', 'icon:glyph-5Boxes-4']))
+    const audited = auditStage4Manifest(manifest, { rootDir: root }).perCapability
+    for (const id of ['icon:pixel-calibration', 'icon:glyph-key']) expect(audited.find(p => p.capabilityId === id)!.disposition, id).toBe('verified')
+    // Re-deriving the sidecar from the stored PNG (what capture --verify-only does with newer hypotheses) needs no Excel
+    // and verifies the same evidence; a tampered sidecar refuses.
+    writeFileSync(join(root, cap.sidecarPath), sidecarFor())
+    expect(verifyCfCase(measured, { rootDir: root })).toMatchObject({ kind: 'verified' })
+    const tampered = JSON.parse(readFileSync(join(root, cap.sidecarPath), 'utf8'))
+    tampered.observedIcons[0].icon.leftPx += 1
+    writeFileSync(join(root, cap.sidecarPath), JSON.stringify(tampered))
+    expect(verifyCfCase(measured, { rootDir: root })).toMatchObject({ kind: 'refusal', code: 'sidecar-mismatch' })
+  }, 60_000)
+
+  it('the icon template diff catches a template that departs from an independently written Excel form', async () => {
+    // The 3Stars rule of stage4-icon-authored as Excel's x14 form is expected to be written, typed here by hand (not
+    // produced by iconRuleXml): a wrong template fails this test.
+    const excelForm = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><sheetData/><extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}"><x14:conditionalFormattings><x14:conditionalFormatting><x14:cfRule type="iconSet" priority="1" id="{00000000-0000-4000-8000-000000000001}"><x14:iconSet iconSet="3Stars"><x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>33</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>67</xm:f></x14:cfvo></x14:iconSet></x14:cfRule><xm:sqref>B2:B6</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst></worksheet>'
+    const authored = new Map([['xl/worksheets/sheet1.xml', new TextEncoder().encode(excelForm)]])
+    const diffs = diffAuthoredIconTemplates(readZipPartsSync(await generateCaseArchive('stage4-icon-authored'))!, authored)
+    expect(diffs.filter(d => d.startsWith('B2:B6'))).toEqual([])
   })
 })

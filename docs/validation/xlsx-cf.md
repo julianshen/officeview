@@ -1246,6 +1246,24 @@ Task 24 prepares the Stage 4 oracle. **Nothing below has been run against Excel*
 
 ### Known limits of the prepared machinery (not evidence)
 
+- **Fix round 1 (rulings S4-DIALECT-EVIDENCE, S4-DIALECT-CASE, concern 2).**
+  - `buildIconScenarioHypotheses` gives competing readings that predict different classes on the authored data. The readings are:
+    - dialect and schema defaults: as modelled, no icon, reversed order, or another family;
+    - paired dialect: companion, base or neither;
+    - scope: union vs per-range, hidden rows excluded vs included, merged-covered cell included or excluded, whole column vs data block, first vs second rule;
+    - participation: booleans coerced or not, dates evaluated or not, error ignored or rule suppressed;
+    - degenerate data: as modelled, lowest bucket, sorted, first-fail, or clamped;
+    - floor and `min`/`max`, and `percent="0"` read as num;
+    - composition: halted or not, later rule withheld or applied, icon withheld beside a bar.
+  - Fixture data changed so these discriminate:
+    - scope hides rows 5 and 6, and uses a one-row merge `B8:C8` whose covered C8 holds 0;
+    - `stage4-icon-degenerate` H covers {10..110};
+    - the composition bars run right to left, and only the shorter bars' cells are designated;
+    - `stage4-icon-families` W12 holds 1000.
+  - A dialect capture whose marked cells all show no icon refuses the case.
+  - `icon:composition-with-scale` and `icon:composition-dxf-fill` are registry non-discriminating: a fill under the icon defeats the S4-A white-background classification for any data.
+  - Capabilities that can verify from this harness: 115 of 144 (77 key and calibration, 38 bucket).
+  - The 13 geometry, inset and suppression capabilities wait for Task 29's box candidates. They re-verify from the stored captures with no new Excel run (`capture --verify-only` re-derives the sidecar from the PNG; pinned by a test).
 - **Geometry capabilities have no hypotheses yet.** `icon:geometry-*`, `icon:inset-*`, `icon:noicons-*`, `icon:showvalue-canvas-suppression` and `icon:composition-bar-showvalue` are measured (raw px, text shift) but report `no hypotheses`; their candidate boxes are the `CfIconBoxVariant` set that Task 29's `CF_ICON_RENDER_MODEL` defines. A geometry claim refuses until then. Bucket capabilities of scope, participation, degenerate and composition shapes also have no hypotheses yet (they need the viewer-independent statistics of S4-G/S4-H), so they stay unverified.
 - **Classification crop.** Key and classified cells are compared on the same rect: the cell's inner box (gridlines excluded), its left 28 px (`ICON_CROP_WIDTH_PX`). Row height and vertical alignment must match the key's (20 pt, bottom); value text must stay right of the band. Crops over a fill or a bar, and merged hosts, are expected to refuse `icon-class-none` (a recorded finding).
 - **Scanline stability.** Without a reference, the three scanlines must agree (rectangular glyphs); with the class's key crop, the offsets must agree (any shape). A text pattern is matched with at most one column in ten differing.
@@ -1258,6 +1276,7 @@ Task 24 prepares the Stage 4 oracle. **Nothing below has been run against Excel*
 |---|---|---|---|
 | `stage4-icon-om-reachability` | `icon:om-reachability-probe` (record only) | S4-A | recipe-pending |
 | `stage4-icon-authored` | `icon:dialect-base`, `icon:dialect-standalone` | S4-O | recipe-pending (authored fixture pending) |
+| `stage4-icon-dialect` | `icon:dialect-base-x14-family`, `icon:dialect-paired` (outcomes recorded as competing hypotheses) | S4-B, S4-O (S4-DIALECT-CASE) | recipe-pending |
 | `stage4-icon-glyph-key` | `icon:pixel-calibration`, `icon:glyph-key`, 75 × `icon:glyph-<set>-<id>` | S4-A, OD-9(b) | recipe-pending |
 | `stage4-icon-families` | `icon:families-base`, `icon:families-x14`, `icon:settings-schema-defaults`, `icon:scope-whole-column` | S4-E, S4-B, S4-F, S4-H | recipe-pending |
 | `stage4-icon-thresholds` | `icon:thresholds-num`, `-percent`, `-percentile-inc-exc`, `-gte-true`, `-gte-false`, `-mixed` | S4-D | recipe-pending |

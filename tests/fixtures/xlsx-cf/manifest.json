@@ -29648,6 +29648,299 @@
       "resavedByExcel": false
     },
     {
+      "id": "stage4-icon-dialect",
+      "stage": 4,
+      "question": "S4-B/S4-O dialect outcomes, recorded rather than predicted: an x14-only family (3Stars) on a BASE <cfRule> (B; hypotheses: drawn as 3Stars in bucket order, not drawn, or drawn as another 3-icon family such as the 3TrafficLights1 default), and a paired base + x14 rule (C; a base 3Arrows rule carrying an <x14:id> link to a priority-less x14 3Triangles companion; hypotheses: the companion draws, the base draws, or neither). The capture decides; build.ts keeps a stripped or repaired resave as the rejected workbook, itself the recorded outcome.",
+      "input": "tests/fixtures/xlsx-cf/inputs/stage4-icon-dialect.xlsx",
+      "saved": "tests/fixtures/xlsx-cf/stage4-icon-dialect.xlsx",
+      "sheet": "Sheet1",
+      "range": "A1:C12",
+      "requiredAppearances": [
+        "screen"
+      ],
+      "markers": [
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B2:B6",
+          "capabilityId": "icon:dialect-base-x14-family",
+          "ruleType": "iconSet",
+          "priority": 1,
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Stars",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "percent",
+                "val": "33"
+              },
+              {
+                "type": "percent",
+                "val": "67"
+              }
+            ],
+            "attrs": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "C2:C6",
+          "capabilityId": "icon:dialect-paired",
+          "ruleType": "iconSet",
+          "priority": 2,
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "percent",
+                "val": "33"
+              },
+              {
+                "type": "percent",
+                "val": "67"
+              }
+            ],
+            "attrs": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "sqref": "C2:C6",
+          "capabilityId": "icon:dialect-paired",
+          "ruleType": "iconSet",
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Triangles",
+            "cfvo": [
+              {
+                "type": "percent",
+                "f": "0"
+              },
+              {
+                "type": "percent",
+                "f": "33"
+              },
+              {
+                "type": "percent",
+                "f": "67"
+              }
+            ],
+            "attrs": {}
+          }
+        }
+      ],
+      "expected": {
+        "inputSha256": "5790fef00598018f1c7a7306e2972619c05b1956293f7fa28dd96f3c887016ed",
+        "savedSha256": "5790fef00598018f1c7a7306e2972619c05b1956293f7fa28dd96f3c887016ed",
+        "provenance": "seed-hypothesis",
+        "positiveRefs": [
+          "B2",
+          "B3",
+          "B4",
+          "B5",
+          "B6",
+          "C2",
+          "C3",
+          "C4",
+          "C5",
+          "C6"
+        ],
+        "negativeRefs": [
+          "B8",
+          "B9",
+          "B10",
+          "B11",
+          "B12",
+          "C8",
+          "C9",
+          "C10",
+          "C11",
+          "C12"
+        ],
+        "cells": [
+          {
+            "ref": "B2",
+            "controlRef": "B8",
+            "matched": true,
+            "iconApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B3",
+            "controlRef": "B9",
+            "matched": true,
+            "iconApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B4",
+            "controlRef": "B10",
+            "matched": true,
+            "iconApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B5",
+            "controlRef": "B11",
+            "matched": true,
+            "iconApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B6",
+            "controlRef": "B12",
+            "matched": true,
+            "iconApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C2",
+            "controlRef": "C8",
+            "matched": true,
+            "iconApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C3",
+            "controlRef": "C9",
+            "matched": true,
+            "iconApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C4",
+            "controlRef": "C10",
+            "matched": true,
+            "iconApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C5",
+            "controlRef": "C11",
+            "matched": true,
+            "iconApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C6",
+            "controlRef": "C12",
+            "matched": true,
+            "iconApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B8",
+            "controlRef": "B2",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B9",
+            "controlRef": "B3",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B10",
+            "controlRef": "B4",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B11",
+            "controlRef": "B5",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B12",
+            "controlRef": "B6",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C8",
+            "controlRef": "C2",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C9",
+            "controlRef": "C3",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C10",
+            "controlRef": "C4",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C11",
+            "controlRef": "C5",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C12",
+            "controlRef": "C6",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          }
+        ]
+      },
+      "captures": [
+        {
+          "appearance": "screen",
+          "pngPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-dialect.png",
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-dialect.json"
+        }
+      ],
+      "status": "recipe-pending",
+      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
+      "tolerance": {
+        "meanAbs": 0.015,
+        "rowMax": 0.08,
+        "strong": 12
+      },
+      "resavedByExcel": false
+    },
+    {
       "id": "stage4-icon-glyph-key",
       "stage": 4,
       "question": "S4-A glyph key: 75 single-cell x14 custom rules, one per (set, iconId) pair, every bucket mapped to that pair (num cfvo 0..k-1, value 10, so no threshold semantics are involved). One row per family (rows 2..21), iconId 0..4 in columns B..F. Uniform geometry and number format ;;; so each crop holds only icon ink against the same-format unformatted control block below. Calibration columns of 10, 30 and 60 characters and one solid DXF cell give icon:pixel-calibration. Every classification of every other case is made against these crops, so icon:glyph-key needs all 75 cells classified into distinct, stable glyph classes and the resaved XML to round-trip all 75 rules.",
@@ -33546,8 +33839,8 @@
         "solidArgb": "FFC6EFCE"
       },
       "expected": {
-        "inputSha256": "1c7912cb35a0ed7cb09a04789badea2edd2ebd5daba7388e9affb7f7e8efdcd5",
-        "savedSha256": "1c7912cb35a0ed7cb09a04789badea2edd2ebd5daba7388e9affb7f7e8efdcd5",
+        "inputSha256": "341453b42f26a35e66146a09860ef73431d6ac2b725deea1a6da90cda561851e",
+        "savedSha256": "341453b42f26a35e66146a09860ef73431d6ac2b725deea1a6da90cda561851e",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -35167,11 +35460,11 @@
     {
       "id": "stage4-icon-families",
       "stage": 4,
-      "question": "S4-E family order: each of the 20 built-in families over k values far from every default threshold (bucket order only, default percent thresholds), one family per column B..U; which icon id each bucket shows is read from the glyph key. Column V omits every <iconSet> attribute (schema defaults, 3TrafficLights1). Column W holds a whole-column icon set (W:W, icon:scope-whole-column; this sheet hides no rows, the scope sheet does) whose control is the neighbour column X.",
+      "question": "S4-E family order: each of the 20 built-in families over k values far from every default threshold (bucket order only, default percent thresholds), one family per column B..U; which icon id each bucket shows is read from the glyph key. Column V omits every <iconSet> attribute (schema defaults, 3TrafficLights1). Column W holds a whole-column icon set (W:W, icon:scope-whole-column; this sheet hides no rows, the scope sheet does) whose control is the neighbour column X; W12 holds 1000, so whole-column statistics and data-block statistics put W2..W4 in different buckets.",
       "input": "tests/fixtures/xlsx-cf/inputs/stage4-icon-families.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage4-icon-families.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:X12",
+      "range": "A1:X24",
       "requiredAppearances": [
         "screen"
       ],
@@ -35854,8 +36147,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "f5217d8417ab73e3de1015a358d4254443711706480210596f1cba608eae9970",
-        "savedSha256": "f5217d8417ab73e3de1015a358d4254443711706480210596f1cba608eae9970",
+        "inputSha256": "6c31d94a844722ad7d1aaa6e2c1f6a2792de4117afc257f32766f0e1bc1a5c77",
+        "savedSha256": "6c31d94a844722ad7d1aaa6e2c1f6a2792de4117afc257f32766f0e1bc1a5c77",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -35941,84 +36234,84 @@
           "W4"
         ],
         "negativeRefs": [
-          "B8",
-          "B9",
-          "B10",
-          "C8",
-          "C9",
-          "C10",
-          "D8",
-          "D9",
-          "D10",
-          "E8",
-          "E9",
-          "E10",
-          "F8",
-          "F9",
-          "F10",
-          "G8",
-          "G9",
-          "G10",
-          "H8",
-          "H9",
-          "H10",
-          "I8",
-          "I9",
-          "I10",
-          "J8",
-          "J9",
-          "J10",
-          "J11",
-          "K8",
-          "K9",
-          "K10",
-          "K11",
-          "L8",
-          "L9",
-          "L10",
-          "L11",
-          "M8",
-          "M9",
-          "M10",
-          "M11",
-          "N8",
-          "N9",
-          "N10",
-          "N11",
-          "O8",
-          "O9",
-          "O10",
-          "O11",
-          "O12",
-          "P8",
-          "P9",
-          "P10",
-          "P11",
-          "P12",
-          "Q8",
-          "Q9",
-          "Q10",
-          "Q11",
-          "Q12",
-          "R8",
-          "R9",
-          "R10",
-          "R11",
-          "R12",
-          "S8",
-          "S9",
-          "S10",
-          "T8",
-          "T9",
-          "T10",
-          "U8",
-          "U9",
-          "U10",
-          "U11",
-          "U12",
-          "V8",
-          "V9",
-          "V10",
+          "B14",
+          "B15",
+          "B16",
+          "C14",
+          "C15",
+          "C16",
+          "D14",
+          "D15",
+          "D16",
+          "E14",
+          "E15",
+          "E16",
+          "F14",
+          "F15",
+          "F16",
+          "G14",
+          "G15",
+          "G16",
+          "H14",
+          "H15",
+          "H16",
+          "I14",
+          "I15",
+          "I16",
+          "J14",
+          "J15",
+          "J16",
+          "J17",
+          "K14",
+          "K15",
+          "K16",
+          "K17",
+          "L14",
+          "L15",
+          "L16",
+          "L17",
+          "M14",
+          "M15",
+          "M16",
+          "M17",
+          "N14",
+          "N15",
+          "N16",
+          "N17",
+          "O14",
+          "O15",
+          "O16",
+          "O17",
+          "O18",
+          "P14",
+          "P15",
+          "P16",
+          "P17",
+          "P18",
+          "Q14",
+          "Q15",
+          "Q16",
+          "Q17",
+          "Q18",
+          "R14",
+          "R15",
+          "R16",
+          "R17",
+          "R18",
+          "S14",
+          "S15",
+          "S16",
+          "T14",
+          "T15",
+          "T16",
+          "U14",
+          "U15",
+          "U16",
+          "U17",
+          "U18",
+          "V14",
+          "V15",
+          "V16",
           "X2",
           "X3",
           "X4"
@@ -36026,7 +36319,7 @@
         "cells": [
           {
             "ref": "B2",
-            "controlRef": "B8",
+            "controlRef": "B14",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36037,7 +36330,7 @@
           },
           {
             "ref": "B3",
-            "controlRef": "B9",
+            "controlRef": "B15",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36048,7 +36341,7 @@
           },
           {
             "ref": "B4",
-            "controlRef": "B10",
+            "controlRef": "B16",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36059,7 +36352,7 @@
           },
           {
             "ref": "C2",
-            "controlRef": "C8",
+            "controlRef": "C14",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36070,7 +36363,7 @@
           },
           {
             "ref": "C3",
-            "controlRef": "C9",
+            "controlRef": "C15",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36081,7 +36374,7 @@
           },
           {
             "ref": "C4",
-            "controlRef": "C10",
+            "controlRef": "C16",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36092,7 +36385,7 @@
           },
           {
             "ref": "D2",
-            "controlRef": "D8",
+            "controlRef": "D14",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36103,7 +36396,7 @@
           },
           {
             "ref": "D3",
-            "controlRef": "D9",
+            "controlRef": "D15",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36114,7 +36407,7 @@
           },
           {
             "ref": "D4",
-            "controlRef": "D10",
+            "controlRef": "D16",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36125,7 +36418,7 @@
           },
           {
             "ref": "E2",
-            "controlRef": "E8",
+            "controlRef": "E14",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36136,7 +36429,7 @@
           },
           {
             "ref": "E3",
-            "controlRef": "E9",
+            "controlRef": "E15",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36147,7 +36440,7 @@
           },
           {
             "ref": "E4",
-            "controlRef": "E10",
+            "controlRef": "E16",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36158,7 +36451,7 @@
           },
           {
             "ref": "F2",
-            "controlRef": "F8",
+            "controlRef": "F14",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36169,7 +36462,7 @@
           },
           {
             "ref": "F3",
-            "controlRef": "F9",
+            "controlRef": "F15",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36180,7 +36473,7 @@
           },
           {
             "ref": "F4",
-            "controlRef": "F10",
+            "controlRef": "F16",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36191,7 +36484,7 @@
           },
           {
             "ref": "G2",
-            "controlRef": "G8",
+            "controlRef": "G14",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36202,7 +36495,7 @@
           },
           {
             "ref": "G3",
-            "controlRef": "G9",
+            "controlRef": "G15",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36213,7 +36506,7 @@
           },
           {
             "ref": "G4",
-            "controlRef": "G10",
+            "controlRef": "G16",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36224,7 +36517,7 @@
           },
           {
             "ref": "H2",
-            "controlRef": "H8",
+            "controlRef": "H14",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36235,7 +36528,7 @@
           },
           {
             "ref": "H3",
-            "controlRef": "H9",
+            "controlRef": "H15",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36246,7 +36539,7 @@
           },
           {
             "ref": "H4",
-            "controlRef": "H10",
+            "controlRef": "H16",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36257,7 +36550,7 @@
           },
           {
             "ref": "I2",
-            "controlRef": "I8",
+            "controlRef": "I14",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36268,7 +36561,7 @@
           },
           {
             "ref": "I3",
-            "controlRef": "I9",
+            "controlRef": "I15",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36279,7 +36572,7 @@
           },
           {
             "ref": "I4",
-            "controlRef": "I10",
+            "controlRef": "I16",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36290,7 +36583,7 @@
           },
           {
             "ref": "J2",
-            "controlRef": "J8",
+            "controlRef": "J14",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36301,7 +36594,7 @@
           },
           {
             "ref": "J3",
-            "controlRef": "J9",
+            "controlRef": "J15",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36312,7 +36605,7 @@
           },
           {
             "ref": "J4",
-            "controlRef": "J10",
+            "controlRef": "J16",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36323,7 +36616,7 @@
           },
           {
             "ref": "J5",
-            "controlRef": "J11",
+            "controlRef": "J17",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36334,7 +36627,7 @@
           },
           {
             "ref": "K2",
-            "controlRef": "K8",
+            "controlRef": "K14",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36345,7 +36638,7 @@
           },
           {
             "ref": "K3",
-            "controlRef": "K9",
+            "controlRef": "K15",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36356,7 +36649,7 @@
           },
           {
             "ref": "K4",
-            "controlRef": "K10",
+            "controlRef": "K16",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36367,7 +36660,7 @@
           },
           {
             "ref": "K5",
-            "controlRef": "K11",
+            "controlRef": "K17",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36378,7 +36671,7 @@
           },
           {
             "ref": "L2",
-            "controlRef": "L8",
+            "controlRef": "L14",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36389,7 +36682,7 @@
           },
           {
             "ref": "L3",
-            "controlRef": "L9",
+            "controlRef": "L15",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36400,7 +36693,7 @@
           },
           {
             "ref": "L4",
-            "controlRef": "L10",
+            "controlRef": "L16",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36411,7 +36704,7 @@
           },
           {
             "ref": "L5",
-            "controlRef": "L11",
+            "controlRef": "L17",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36422,7 +36715,7 @@
           },
           {
             "ref": "M2",
-            "controlRef": "M8",
+            "controlRef": "M14",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36433,7 +36726,7 @@
           },
           {
             "ref": "M3",
-            "controlRef": "M9",
+            "controlRef": "M15",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36444,7 +36737,7 @@
           },
           {
             "ref": "M4",
-            "controlRef": "M10",
+            "controlRef": "M16",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36455,7 +36748,7 @@
           },
           {
             "ref": "M5",
-            "controlRef": "M11",
+            "controlRef": "M17",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36466,7 +36759,7 @@
           },
           {
             "ref": "N2",
-            "controlRef": "N8",
+            "controlRef": "N14",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36477,7 +36770,7 @@
           },
           {
             "ref": "N3",
-            "controlRef": "N9",
+            "controlRef": "N15",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36488,7 +36781,7 @@
           },
           {
             "ref": "N4",
-            "controlRef": "N10",
+            "controlRef": "N16",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36499,7 +36792,7 @@
           },
           {
             "ref": "N5",
-            "controlRef": "N11",
+            "controlRef": "N17",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36510,7 +36803,7 @@
           },
           {
             "ref": "O2",
-            "controlRef": "O8",
+            "controlRef": "O14",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36521,7 +36814,7 @@
           },
           {
             "ref": "O3",
-            "controlRef": "O9",
+            "controlRef": "O15",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36532,7 +36825,7 @@
           },
           {
             "ref": "O4",
-            "controlRef": "O10",
+            "controlRef": "O16",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36543,7 +36836,7 @@
           },
           {
             "ref": "O5",
-            "controlRef": "O11",
+            "controlRef": "O17",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36554,7 +36847,7 @@
           },
           {
             "ref": "O6",
-            "controlRef": "O12",
+            "controlRef": "O18",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36565,7 +36858,7 @@
           },
           {
             "ref": "P2",
-            "controlRef": "P8",
+            "controlRef": "P14",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36576,7 +36869,7 @@
           },
           {
             "ref": "P3",
-            "controlRef": "P9",
+            "controlRef": "P15",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36587,7 +36880,7 @@
           },
           {
             "ref": "P4",
-            "controlRef": "P10",
+            "controlRef": "P16",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36598,7 +36891,7 @@
           },
           {
             "ref": "P5",
-            "controlRef": "P11",
+            "controlRef": "P17",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36609,7 +36902,7 @@
           },
           {
             "ref": "P6",
-            "controlRef": "P12",
+            "controlRef": "P18",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36620,7 +36913,7 @@
           },
           {
             "ref": "Q2",
-            "controlRef": "Q8",
+            "controlRef": "Q14",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36631,7 +36924,7 @@
           },
           {
             "ref": "Q3",
-            "controlRef": "Q9",
+            "controlRef": "Q15",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36642,7 +36935,7 @@
           },
           {
             "ref": "Q4",
-            "controlRef": "Q10",
+            "controlRef": "Q16",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36653,7 +36946,7 @@
           },
           {
             "ref": "Q5",
-            "controlRef": "Q11",
+            "controlRef": "Q17",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36664,7 +36957,7 @@
           },
           {
             "ref": "Q6",
-            "controlRef": "Q12",
+            "controlRef": "Q18",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36675,7 +36968,7 @@
           },
           {
             "ref": "R2",
-            "controlRef": "R8",
+            "controlRef": "R14",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36686,7 +36979,7 @@
           },
           {
             "ref": "R3",
-            "controlRef": "R9",
+            "controlRef": "R15",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36697,7 +36990,7 @@
           },
           {
             "ref": "R4",
-            "controlRef": "R10",
+            "controlRef": "R16",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36708,7 +37001,7 @@
           },
           {
             "ref": "R5",
-            "controlRef": "R11",
+            "controlRef": "R17",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36719,7 +37012,7 @@
           },
           {
             "ref": "R6",
-            "controlRef": "R12",
+            "controlRef": "R18",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36730,7 +37023,7 @@
           },
           {
             "ref": "S2",
-            "controlRef": "S8",
+            "controlRef": "S14",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36741,7 +37034,7 @@
           },
           {
             "ref": "S3",
-            "controlRef": "S9",
+            "controlRef": "S15",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36752,7 +37045,7 @@
           },
           {
             "ref": "S4",
-            "controlRef": "S10",
+            "controlRef": "S16",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36763,7 +37056,7 @@
           },
           {
             "ref": "T2",
-            "controlRef": "T8",
+            "controlRef": "T14",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36774,7 +37067,7 @@
           },
           {
             "ref": "T3",
-            "controlRef": "T9",
+            "controlRef": "T15",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36785,7 +37078,7 @@
           },
           {
             "ref": "T4",
-            "controlRef": "T10",
+            "controlRef": "T16",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36796,7 +37089,7 @@
           },
           {
             "ref": "U2",
-            "controlRef": "U8",
+            "controlRef": "U14",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36807,7 +37100,7 @@
           },
           {
             "ref": "U3",
-            "controlRef": "U9",
+            "controlRef": "U15",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36818,7 +37111,7 @@
           },
           {
             "ref": "U4",
-            "controlRef": "U10",
+            "controlRef": "U16",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36829,7 +37122,7 @@
           },
           {
             "ref": "U5",
-            "controlRef": "U11",
+            "controlRef": "U17",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36840,7 +37133,7 @@
           },
           {
             "ref": "U6",
-            "controlRef": "U12",
+            "controlRef": "U18",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36851,7 +37144,7 @@
           },
           {
             "ref": "V2",
-            "controlRef": "V8",
+            "controlRef": "V14",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36862,7 +37155,7 @@
           },
           {
             "ref": "V3",
-            "controlRef": "V9",
+            "controlRef": "V15",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36873,7 +37166,7 @@
           },
           {
             "ref": "V4",
-            "controlRef": "V10",
+            "controlRef": "V16",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -36916,7 +37209,7 @@
             }
           },
           {
-            "ref": "B8",
+            "ref": "B14",
             "controlRef": "B2",
             "matched": false,
             "iconApplied": false,
@@ -36924,7 +37217,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "B9",
+            "ref": "B15",
             "controlRef": "B3",
             "matched": false,
             "iconApplied": false,
@@ -36932,7 +37225,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "B10",
+            "ref": "B16",
             "controlRef": "B4",
             "matched": false,
             "iconApplied": false,
@@ -36940,7 +37233,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "C8",
+            "ref": "C14",
             "controlRef": "C2",
             "matched": false,
             "iconApplied": false,
@@ -36948,7 +37241,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "C9",
+            "ref": "C15",
             "controlRef": "C3",
             "matched": false,
             "iconApplied": false,
@@ -36956,7 +37249,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "C10",
+            "ref": "C16",
             "controlRef": "C4",
             "matched": false,
             "iconApplied": false,
@@ -36964,7 +37257,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "D8",
+            "ref": "D14",
             "controlRef": "D2",
             "matched": false,
             "iconApplied": false,
@@ -36972,7 +37265,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "D9",
+            "ref": "D15",
             "controlRef": "D3",
             "matched": false,
             "iconApplied": false,
@@ -36980,7 +37273,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "D10",
+            "ref": "D16",
             "controlRef": "D4",
             "matched": false,
             "iconApplied": false,
@@ -36988,7 +37281,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "E8",
+            "ref": "E14",
             "controlRef": "E2",
             "matched": false,
             "iconApplied": false,
@@ -36996,7 +37289,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "E9",
+            "ref": "E15",
             "controlRef": "E3",
             "matched": false,
             "iconApplied": false,
@@ -37004,7 +37297,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "E10",
+            "ref": "E16",
             "controlRef": "E4",
             "matched": false,
             "iconApplied": false,
@@ -37012,7 +37305,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "F8",
+            "ref": "F14",
             "controlRef": "F2",
             "matched": false,
             "iconApplied": false,
@@ -37020,7 +37313,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "F9",
+            "ref": "F15",
             "controlRef": "F3",
             "matched": false,
             "iconApplied": false,
@@ -37028,7 +37321,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "F10",
+            "ref": "F16",
             "controlRef": "F4",
             "matched": false,
             "iconApplied": false,
@@ -37036,7 +37329,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "G8",
+            "ref": "G14",
             "controlRef": "G2",
             "matched": false,
             "iconApplied": false,
@@ -37044,7 +37337,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "G9",
+            "ref": "G15",
             "controlRef": "G3",
             "matched": false,
             "iconApplied": false,
@@ -37052,7 +37345,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "G10",
+            "ref": "G16",
             "controlRef": "G4",
             "matched": false,
             "iconApplied": false,
@@ -37060,7 +37353,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "H8",
+            "ref": "H14",
             "controlRef": "H2",
             "matched": false,
             "iconApplied": false,
@@ -37068,7 +37361,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "H9",
+            "ref": "H15",
             "controlRef": "H3",
             "matched": false,
             "iconApplied": false,
@@ -37076,7 +37369,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "H10",
+            "ref": "H16",
             "controlRef": "H4",
             "matched": false,
             "iconApplied": false,
@@ -37084,7 +37377,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "I8",
+            "ref": "I14",
             "controlRef": "I2",
             "matched": false,
             "iconApplied": false,
@@ -37092,7 +37385,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "I9",
+            "ref": "I15",
             "controlRef": "I3",
             "matched": false,
             "iconApplied": false,
@@ -37100,7 +37393,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "I10",
+            "ref": "I16",
             "controlRef": "I4",
             "matched": false,
             "iconApplied": false,
@@ -37108,7 +37401,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "J8",
+            "ref": "J14",
             "controlRef": "J2",
             "matched": false,
             "iconApplied": false,
@@ -37116,7 +37409,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "J9",
+            "ref": "J15",
             "controlRef": "J3",
             "matched": false,
             "iconApplied": false,
@@ -37124,7 +37417,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "J10",
+            "ref": "J16",
             "controlRef": "J4",
             "matched": false,
             "iconApplied": false,
@@ -37132,7 +37425,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "J11",
+            "ref": "J17",
             "controlRef": "J5",
             "matched": false,
             "iconApplied": false,
@@ -37140,7 +37433,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "K8",
+            "ref": "K14",
             "controlRef": "K2",
             "matched": false,
             "iconApplied": false,
@@ -37148,7 +37441,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "K9",
+            "ref": "K15",
             "controlRef": "K3",
             "matched": false,
             "iconApplied": false,
@@ -37156,7 +37449,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "K10",
+            "ref": "K16",
             "controlRef": "K4",
             "matched": false,
             "iconApplied": false,
@@ -37164,7 +37457,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "K11",
+            "ref": "K17",
             "controlRef": "K5",
             "matched": false,
             "iconApplied": false,
@@ -37172,7 +37465,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "L8",
+            "ref": "L14",
             "controlRef": "L2",
             "matched": false,
             "iconApplied": false,
@@ -37180,7 +37473,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "L9",
+            "ref": "L15",
             "controlRef": "L3",
             "matched": false,
             "iconApplied": false,
@@ -37188,7 +37481,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "L10",
+            "ref": "L16",
             "controlRef": "L4",
             "matched": false,
             "iconApplied": false,
@@ -37196,7 +37489,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "L11",
+            "ref": "L17",
             "controlRef": "L5",
             "matched": false,
             "iconApplied": false,
@@ -37204,7 +37497,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "M8",
+            "ref": "M14",
             "controlRef": "M2",
             "matched": false,
             "iconApplied": false,
@@ -37212,7 +37505,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "M9",
+            "ref": "M15",
             "controlRef": "M3",
             "matched": false,
             "iconApplied": false,
@@ -37220,7 +37513,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "M10",
+            "ref": "M16",
             "controlRef": "M4",
             "matched": false,
             "iconApplied": false,
@@ -37228,7 +37521,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "M11",
+            "ref": "M17",
             "controlRef": "M5",
             "matched": false,
             "iconApplied": false,
@@ -37236,7 +37529,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "N8",
+            "ref": "N14",
             "controlRef": "N2",
             "matched": false,
             "iconApplied": false,
@@ -37244,7 +37537,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "N9",
+            "ref": "N15",
             "controlRef": "N3",
             "matched": false,
             "iconApplied": false,
@@ -37252,7 +37545,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "N10",
+            "ref": "N16",
             "controlRef": "N4",
             "matched": false,
             "iconApplied": false,
@@ -37260,7 +37553,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "N11",
+            "ref": "N17",
             "controlRef": "N5",
             "matched": false,
             "iconApplied": false,
@@ -37268,7 +37561,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "O8",
+            "ref": "O14",
             "controlRef": "O2",
             "matched": false,
             "iconApplied": false,
@@ -37276,7 +37569,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "O9",
+            "ref": "O15",
             "controlRef": "O3",
             "matched": false,
             "iconApplied": false,
@@ -37284,7 +37577,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "O10",
+            "ref": "O16",
             "controlRef": "O4",
             "matched": false,
             "iconApplied": false,
@@ -37292,7 +37585,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "O11",
+            "ref": "O17",
             "controlRef": "O5",
             "matched": false,
             "iconApplied": false,
@@ -37300,7 +37593,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "O12",
+            "ref": "O18",
             "controlRef": "O6",
             "matched": false,
             "iconApplied": false,
@@ -37308,7 +37601,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "P8",
+            "ref": "P14",
             "controlRef": "P2",
             "matched": false,
             "iconApplied": false,
@@ -37316,7 +37609,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "P9",
+            "ref": "P15",
             "controlRef": "P3",
             "matched": false,
             "iconApplied": false,
@@ -37324,7 +37617,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "P10",
+            "ref": "P16",
             "controlRef": "P4",
             "matched": false,
             "iconApplied": false,
@@ -37332,7 +37625,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "P11",
+            "ref": "P17",
             "controlRef": "P5",
             "matched": false,
             "iconApplied": false,
@@ -37340,7 +37633,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "P12",
+            "ref": "P18",
             "controlRef": "P6",
             "matched": false,
             "iconApplied": false,
@@ -37348,7 +37641,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "Q8",
+            "ref": "Q14",
             "controlRef": "Q2",
             "matched": false,
             "iconApplied": false,
@@ -37356,7 +37649,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "Q9",
+            "ref": "Q15",
             "controlRef": "Q3",
             "matched": false,
             "iconApplied": false,
@@ -37364,7 +37657,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "Q10",
+            "ref": "Q16",
             "controlRef": "Q4",
             "matched": false,
             "iconApplied": false,
@@ -37372,7 +37665,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "Q11",
+            "ref": "Q17",
             "controlRef": "Q5",
             "matched": false,
             "iconApplied": false,
@@ -37380,7 +37673,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "Q12",
+            "ref": "Q18",
             "controlRef": "Q6",
             "matched": false,
             "iconApplied": false,
@@ -37388,7 +37681,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "R8",
+            "ref": "R14",
             "controlRef": "R2",
             "matched": false,
             "iconApplied": false,
@@ -37396,7 +37689,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "R9",
+            "ref": "R15",
             "controlRef": "R3",
             "matched": false,
             "iconApplied": false,
@@ -37404,7 +37697,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "R10",
+            "ref": "R16",
             "controlRef": "R4",
             "matched": false,
             "iconApplied": false,
@@ -37412,7 +37705,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "R11",
+            "ref": "R17",
             "controlRef": "R5",
             "matched": false,
             "iconApplied": false,
@@ -37420,7 +37713,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "R12",
+            "ref": "R18",
             "controlRef": "R6",
             "matched": false,
             "iconApplied": false,
@@ -37428,7 +37721,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "S8",
+            "ref": "S14",
             "controlRef": "S2",
             "matched": false,
             "iconApplied": false,
@@ -37436,7 +37729,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "S9",
+            "ref": "S15",
             "controlRef": "S3",
             "matched": false,
             "iconApplied": false,
@@ -37444,7 +37737,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "S10",
+            "ref": "S16",
             "controlRef": "S4",
             "matched": false,
             "iconApplied": false,
@@ -37452,7 +37745,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "T8",
+            "ref": "T14",
             "controlRef": "T2",
             "matched": false,
             "iconApplied": false,
@@ -37460,7 +37753,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "T9",
+            "ref": "T15",
             "controlRef": "T3",
             "matched": false,
             "iconApplied": false,
@@ -37468,7 +37761,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "T10",
+            "ref": "T16",
             "controlRef": "T4",
             "matched": false,
             "iconApplied": false,
@@ -37476,7 +37769,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "U8",
+            "ref": "U14",
             "controlRef": "U2",
             "matched": false,
             "iconApplied": false,
@@ -37484,7 +37777,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "U9",
+            "ref": "U15",
             "controlRef": "U3",
             "matched": false,
             "iconApplied": false,
@@ -37492,7 +37785,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "U10",
+            "ref": "U16",
             "controlRef": "U4",
             "matched": false,
             "iconApplied": false,
@@ -37500,7 +37793,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "U11",
+            "ref": "U17",
             "controlRef": "U5",
             "matched": false,
             "iconApplied": false,
@@ -37508,7 +37801,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "U12",
+            "ref": "U18",
             "controlRef": "U6",
             "matched": false,
             "iconApplied": false,
@@ -37516,7 +37809,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "V8",
+            "ref": "V14",
             "controlRef": "V2",
             "matched": false,
             "iconApplied": false,
@@ -37524,7 +37817,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "V9",
+            "ref": "V15",
             "controlRef": "V3",
             "matched": false,
             "iconApplied": false,
@@ -37532,7 +37825,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "V10",
+            "ref": "V16",
             "controlRef": "V4",
             "matched": false,
             "iconApplied": false,
@@ -40790,8 +41083,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "5054121ca84937fdae1d8df1567e78094b2affec35430be1cc024214848ab48c",
-        "savedSha256": "5054121ca84937fdae1d8df1567e78094b2affec35430be1cc024214848ab48c",
+        "inputSha256": "38eeb105653be724a661802736f7e7a773c5b1317406d143fdb501e335f24766",
+        "savedSha256": "38eeb105653be724a661802736f7e7a773c5b1317406d143fdb501e335f24766",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -42425,8 +42718,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "f01e36273b3ada65782cbdf71e5b287a9c130668565f92635c6adb0628c5313c",
-        "savedSha256": "f01e36273b3ada65782cbdf71e5b287a9c130668565f92635c6adb0628c5313c",
+        "inputSha256": "b67f26ff69ebcff0be711a4dcb21950c590c97c46a854b7d45180d72fde9ce3e",
+        "savedSha256": "b67f26ff69ebcff0be711a4dcb21950c590c97c46a854b7d45180d72fde9ce3e",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -45174,8 +45467,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "8243d93f046b6f4de23af76fc73ec8684fc3cd931ef35a15111ba8e036a25b13",
-        "savedSha256": "8243d93f046b6f4de23af76fc73ec8684fc3cd931ef35a15111ba8e036a25b13",
+        "inputSha256": "d0df14e7a5d7049531fb807f7f7c40616a00b497599bfdd60e47a1fd1214c676",
+        "savedSha256": "d0df14e7a5d7049531fb807f7f7c40616a00b497599bfdd60e47a1fd1214c676",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -46472,7 +46765,7 @@
     {
       "id": "stage4-icon-scope",
       "stage": 4,
-      "question": "S4-H scope statistics, measured for icons: disjoint B2:B4 D2:D4; duplicate blocks on E2:E4 (two blocks, different sets); a hidden row holding the extreme value (F6 = 100, row 6 hidden); an autofilter-hidden row holding the extreme value (G5 = 100); a merged B8:C9 host with non-equal values. The whole-column shape sits on stage4-icon-families, which hides no rows.",
+      "question": "S4-H scope statistics, measured for icons: disjoint B2:B4 D2:D4; duplicate blocks on E2:E4 (two blocks, different sets); a hidden row holding the extreme value (F6 = 100, row 6 hidden); an autofilter-hidden row holding the extreme value (G5 = 100; rows 5 and 6 are hidden); a one-row merge B8:C8 inside the B8:C9 scope whose covered cell C8 holds 0, so statistics with and without it put B9/C9 in different buckets. The whole-column shape sits on stage4-icon-families, which hides no rows.",
       "input": "tests/fixtures/xlsx-cf/inputs/stage4-icon-scope.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage4-icon-scope.xlsx",
       "sheet": "Sheet1",
@@ -46651,8 +46944,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "7bb33032a3e73b1faf8b98ceb438b023bfee8735681d17936349537bbd2bf08a",
-        "savedSha256": "7bb33032a3e73b1faf8b98ceb438b023bfee8735681d17936349537bbd2bf08a",
+        "inputSha256": "539297e556824c942c4d553299502e3ef74c69899de51917b4a89030bba07b25",
+        "savedSha256": "539297e556824c942c4d553299502e3ef74c69899de51917b4a89030bba07b25",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -46667,12 +46960,12 @@
           "F2",
           "F3",
           "F4",
-          "F5",
           "G2",
           "G3",
           "G4",
-          "G5",
-          "B8"
+          "B8",
+          "B9",
+          "C9"
         ],
         "negativeRefs": [
           "B11",
@@ -46687,12 +46980,12 @@
           "F11",
           "F12",
           "F13",
-          "F14",
           "G11",
           "G12",
           "G13",
-          "G14",
-          "B17"
+          "B17",
+          "B18",
+          "C18"
         ],
         "cells": [
           {
@@ -46828,17 +47121,6 @@
             }
           },
           {
-            "ref": "F5",
-            "controlRef": "F14",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
             "ref": "G2",
             "controlRef": "G11",
             "matched": true,
@@ -46872,8 +47154,8 @@
             }
           },
           {
-            "ref": "G5",
-            "controlRef": "G14",
+            "ref": "B8",
+            "controlRef": "B17",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -46883,8 +47165,19 @@
             }
           },
           {
-            "ref": "B8",
-            "controlRef": "B17",
+            "ref": "B9",
+            "controlRef": "B18",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C9",
+            "controlRef": "C18",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -46990,14 +47283,6 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "F14",
-            "controlRef": "F5",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
             "ref": "G11",
             "controlRef": "G2",
             "matched": false,
@@ -47022,16 +47307,24 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "G14",
-            "controlRef": "G5",
+            "ref": "B17",
+            "controlRef": "B8",
             "matched": false,
             "iconApplied": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "B17",
-            "controlRef": "B8",
+            "ref": "B18",
+            "controlRef": "B9",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C18",
+            "controlRef": "C9",
             "matched": false,
             "iconApplied": false,
             "fillSource": "unverified",
@@ -47195,7 +47488,8 @@
             "attrs": {
               "minLength": "0",
               "maxLength": "100",
-              "gradient": "0"
+              "gradient": "0",
+              "direction": "rightToLeft"
             },
             "colors": {}
           }
@@ -47244,7 +47538,8 @@
             "attrs": {
               "minLength": "0",
               "maxLength": "100",
-              "gradient": "0"
+              "gradient": "0",
+              "direction": "rightToLeft"
             },
             "colors": {}
           }
@@ -47693,19 +47988,17 @@
         }
       ],
       "expected": {
-        "inputSha256": "f961674119cc10ecea39765c71b526838903fd78e0469569fea6fa26ee3b3b02",
-        "savedSha256": "f961674119cc10ecea39765c71b526838903fd78e0469569fea6fa26ee3b3b02",
+        "inputSha256": "fb9ae26f4b32f21163a48432caaabe3359241ad5dfb556b546cf86bdb77da99a",
+        "savedSha256": "fb9ae26f4b32f21163a48432caaabe3359241ad5dfb556b546cf86bdb77da99a",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
           "B3",
           "B4",
           "B5",
-          "C2",
           "C3",
           "C4",
           "C5",
-          "D2",
           "D3",
           "D4",
           "D5",
@@ -47747,11 +48040,9 @@
           "B8",
           "B9",
           "B10",
-          "C7",
           "C8",
           "C9",
           "C10",
-          "D7",
           "D8",
           "D9",
           "D10",
@@ -47834,17 +48125,6 @@
             }
           },
           {
-            "ref": "C2",
-            "controlRef": "C7",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
             "ref": "C3",
             "controlRef": "C8",
             "matched": true,
@@ -47869,17 +48149,6 @@
           {
             "ref": "C5",
             "controlRef": "C10",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "D2",
-            "controlRef": "D7",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -48306,14 +48575,6 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "C7",
-            "controlRef": "C2",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
             "ref": "C8",
             "controlRef": "C3",
             "matched": false,
@@ -48332,14 +48593,6 @@
           {
             "ref": "C10",
             "controlRef": "C5",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "D7",
-            "controlRef": "D2",
             "matched": false,
             "iconApplied": false,
             "fillSource": "unverified",

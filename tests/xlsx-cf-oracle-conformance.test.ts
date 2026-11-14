@@ -742,7 +742,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
 
     const stage4 = manifest.cases.filter(c => c.stage === 4)
     expect(stage4.map(c => c.id)).toEqual(CF_CASES.filter(c => c.stage === 4).map(c => c.id))
-    expect(stage4).toHaveLength(15)
+    expect(stage4).toHaveLength(16)
     let checked = 0
     let iconCells = 0
     let preparedSheets = 0
@@ -782,7 +782,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     // Non-vacuous: every designated icon cell and its control was visited, and most sheets were actually prepared.
     expect(checked).toBe(stage4.reduce((n, c) => n + c.expected.cells.length, 0))
     expect(iconCells).toBeGreaterThan(200)
-    expect(preparedSheets).toBeGreaterThanOrEqual(13)
+    expect(preparedSheets).toBeGreaterThanOrEqual(14)
     expect(painted).toEqual([])
     // No icon capability is published yet: production holds none of them.
     expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE4_CAPABILITIES')).toBeUndefined()

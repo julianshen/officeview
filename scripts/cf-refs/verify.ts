@@ -4452,6 +4452,228 @@ export function discriminateIconBox(
   return { status: 'discriminating', matched: winner }
 }
 
+/** Dialect capabilities whose marked cells must show an icon (Ruling S4-DIALECT-EVIDENCE); the dialect case records instead. */
+const ICON_DIALECT_PRESENCE = new Set(['icon:dialect-base', 'icon:dialect-standalone', 'icon:settings-schema-defaults'])
+
+/** Ruling S4-DIALECT-EVIDENCE: a capture in which every marked cell of a dialect capability shows no icon refuses the case. */
+export function dialectAllAbsent(capabilityId: string, observed: Readonly<Record<string, string | null>>): boolean {
+  const refs = Object.keys(observed)
+  return ICON_DIALECT_PRESENCE.has(capabilityId) && refs.length > 0 && refs.every(ref => observed[ref] === null)
+}
+
+const S4_FAMILY_SIZES: ReadonlyArray<readonly [string, number]> = [
+  ['3Arrows', 3], ['3ArrowsGray', 3], ['3Flags', 3], ['3TrafficLights1', 3], ['3TrafficLights2', 3], ['3Signs', 3], ['3Symbols', 3], ['3Symbols2', 3],
+  ['4Arrows', 4], ['4ArrowsGray', 4], ['4RedToBlack', 4], ['4Rating', 4], ['4TrafficLights', 4], ['5Arrows', 5], ['5ArrowsGray', 5], ['5Rating', 5],
+  ['5Quarters', 5], ['3Stars', 3], ['3Triangles', 3], ['5Boxes', 5],
+]
+
+/**
+ * Hypotheses for the Stage 4 capabilities whose question is not a threshold reading (fix round 1: Ruling
+ * S4-DIALECT-EVIDENCE and the concern-2 ruling). Each names the competing readings of the authored workbook and predicts,
+ * per designated cell, the glyph class (`null` for no icon, `icon-class-none` for an icon over a fill no key crop can
+ * match). Statistics are the oracle's own (`resolveIconThresholds`, exact percent/percentile, sheet facts for hidden rows
+ * and merges), never the viewer's. Returns undefined for capabilities handled by `buildIconClassHypotheses`.
+ */
+export function buildIconScenarioHypotheses(
+  capabilityId: string,
+  c: CfOracleCase,
+  parts: Map<string, Uint8Array>,
+  classOf: (set: string, iconId: number) => string | null,
+): Record<string, IconClassHypothesis[]> | undefined {
+  const facts = readBarSheetFacts(parts)
+  const rowOf = (ref: string): number => Number(/\d+/.exec(ref)![0])
+  const iconMarkers = c.markers.filter(m => m.capabilityId === capabilityId && m.icon).sort((a, b) => (a.priority ?? Infinity) - (b.priority ?? Infinity))
+  const otherMarkers = c.markers.filter(m => m.capabilityId === capabilityId && !m.icon)
+  if (iconMarkers.length === 0) return undefined
+  const designated = (m: CfPartMarker): string[] => c.expected.cells.filter(x => x.matched && x.iconApplied !== undefined && isCellInSqref(x.ref, m.sqref)).map(x => x.ref.toUpperCase())
+  const nums = (sqref: string, keep: (ref: string) => boolean = () => true): Map<string, number> => {
+    const out = new Map<string, number>()
+    for (const [ref, v] of facts.values) if (v.kind === 'num' && isCellInSqref(ref, sqref) && keep(ref.toUpperCase())) out.set(ref.toUpperCase(), v.v)
+    return out
+  }
+  const visible = (ref: string): boolean => !facts.hiddenRows.has(rowOf(ref))
+  const mergeCovered = (ref: string): boolean => {
+    const p = parseA1(ref)!
+    return facts.merges.some(g => p.row + 1 >= g.minRow && p.row + 1 <= g.maxRow && p.col >= g.minCol && p.col <= g.maxCol && !(p.row + 1 === g.minRow && p.col === g.minCol))
+  }
+  type Pred = { scope?: number[]; spec?: IconRuleSpec; mirror?: boolean; family?: string; gteFlip?: boolean; thresholds?: number[]; bucket?: (b: number, t: number[]) => number }
+  /** The class one reading predicts for value `v`. */
+  const predict = (m: CfPartMarker, v: number, o: Pred = {}): string | null => {
+    const spec = o.spec ?? m.icon!
+    const k = spec.custom?.length ?? spec.cfvo.length
+    const t = o.thresholds ?? resolveIconThresholds(spec, o.scope ?? [...nums(m.sqref, visible).values()], 'per-type', 'inc')
+    if (!t) return 'unresolved'
+    const gte = spec.cfvo.map(x => (o.gteFlip ? x.gte === false : x.gte !== false))
+    let b = iconBucketOf(v, t, gte)
+    if (o.bucket) b = o.bucket(b, t)
+    if (b < 0) return null
+    const reverse = normIconBool(spec.attrs.reverse, '0') === '1'
+    const idx = (reverse ? k - 1 - b : b)
+    const pos = o.mirror ? k - 1 - idx : idx
+    if (spec.custom) {
+      const target = spec.custom[pos]!
+      return target.set === 'NoIcons' ? null : classOf(target.set, target.iconId)
+    }
+    return classOf(o.family ?? spec.set, pos)
+  }
+  const out: Record<string, IconClassHypothesis[]> = {}
+  const each = (m: CfPartMarker, readings: Array<[string, (ref: string, v: number | undefined) => string | null]>, refs = designated(m)): void => {
+    const values = new Map([...facts.values].map(([r, v]) => [r.toUpperCase(), v.kind === 'num' ? v.v : undefined] as const))
+    for (const ref of refs) out[ref] = readings.map(([id, f]) => ({ id, glyphClass: f(ref, values.get(ref)) }))
+  }
+  const numeric = (f: (v: number) => string | null) => (_ref: string, v: number | undefined): string | null => (v === undefined ? null : f(v))
+  const m0 = iconMarkers[0]!
+  const size = m0.icon!.custom?.length ?? m0.icon!.cfvo.length
+  switch (capabilityId) {
+    case 'icon:dialect-base':
+    case 'icon:dialect-standalone':
+    case 'icon:settings-schema-defaults':
+    case 'icon:dialect-base-x14-family':
+      for (const m of iconMarkers) {
+        const families = capabilityId === 'icon:settings-schema-defaults' || capabilityId === 'icon:dialect-base-x14-family'
+          ? S4_FAMILY_SIZES.filter(([f, n]) => n === (m.icon!.custom?.length ?? m.icon!.cfvo.length) && f !== m.icon!.set).map(([f]) => f)
+          : []
+        each(m, [
+          ['as-modelled', numeric(v => predict(m, v))],
+          ['no-icon', () => null],
+          ['reversed-order', numeric(v => predict(m, v, { mirror: true }))],
+          ...families.map((f): [string, (ref: string, v: number | undefined) => string | null] => [`family:${f}`, numeric(v => predict(m, v, { family: f }))]),
+        ])
+      }
+      return out
+    case 'icon:dialect-paired': {
+      const base = iconMarkers.find(m => m.extension === 'legacy')
+      const companion = iconMarkers.find(m => m.extension === 'x14')
+      if (!base || !companion) return undefined
+      each(base, [
+        ['companion', numeric(v => predict(base, v, { spec: companion.icon! }))],
+        ['base', numeric(v => predict(base, v))],
+        ['no-icon', () => null],
+      ])
+      return out
+    }
+    case 'icon:scope-disjoint':
+      each(m0, [
+        ['union', numeric(v => predict(m0, v))],
+        ['per-range', (ref, v) => (v === undefined ? null : predict(m0, v, { scope: [...nums(m0.sqref.split(/\s+/).find(tok => isCellInSqref(ref, tok))!, visible).values()] }))],
+      ])
+      return out
+    case 'icon:scope-hidden-row':
+    case 'icon:scope-autofilter-hidden-row':
+      each(m0, [
+        ['exclude-hidden', numeric(v => predict(m0, v))],
+        ['include-hidden', numeric(v => predict(m0, v, { scope: [...nums(m0.sqref).values()] }))],
+      ])
+      return out
+    case 'icon:scope-whole-column': {
+      const lastDataRow = Math.max(...designated(m0).map(rowOf))
+      each(m0, [
+        ['whole-column', numeric(v => predict(m0, v, { scope: [...nums(m0.sqref).values()] }))],
+        ['data-block-only', numeric(v => predict(m0, v, { scope: [...nums(m0.sqref, r => rowOf(r) <= lastDataRow).values()] }))],
+        ['no-icon', () => null],
+      ])
+      return out
+    }
+    case 'icon:scope-merged-cell':
+      each(m0, [
+        ['all-stored', numeric(v => predict(m0, v, { scope: [...nums(m0.sqref).values()] }))],
+        ['merged-excluded', numeric(v => predict(m0, v, { scope: [...nums(m0.sqref, r => !mergeCovered(r)).values()] }))],
+      ])
+      return out
+    case 'icon:scope-duplicate-blocks':
+    case 'icon:composition-overlapping-icons':
+    case 'icon:composition-noicons-slot': {
+      if (iconMarkers.length < 2) return undefined
+      const [first, second] = iconMarkers as [CfPartMarker, CfPartMarker]
+      each(first, [
+        ['first-paints', numeric(v => predict(first, v))],
+        ['second-paints', numeric(v => predict(second, v))],
+        ['no-icon', () => null],
+      ])
+      return out
+    }
+    case 'icon:participation-types':
+      each(m0, [
+        ['no-icon-for-non-numbers', (_ref, v) => (v === undefined ? null : predict(m0, v))],
+        ['coerce-booleans', (ref, v) => (v !== undefined ? predict(m0, v) : facts.values.get(ref)?.kind === 'bool' ? predict(m0, 1) : null)],
+      ], c.expected.cells.filter(x => x.matched && x.iconApplied !== undefined && isCellInSqref(x.ref, m0.sqref)).map(x => x.ref.toUpperCase()))
+      return out
+    case 'icon:participation-dateserial':
+      each(m0, [['evaluated', numeric(v => predict(m0, v))], ['no-icon', () => null]])
+      return out
+    case 'icon:participation-error-presence':
+      for (const m of iconMarkers) each(m, [['error-ignored', numeric(v => predict(m, v))], ['rule-suppressed', () => null]])
+      return out
+    case 'icon:degenerate-equal-values':
+    case 'icon:degenerate-single-cell':
+      each(m0, [['as-model', numeric(v => predict(m0, v))], ['lowest', numeric(v => predict(m0, v, { bucket: () => 0 }))], ['no-icon', () => null]])
+      return out
+    case 'icon:degenerate-non-monotonic':
+      each(m0, [
+        ['as-model', numeric(v => predict(m0, v))],
+        ['sorted', numeric(v => predict(m0, v, { thresholds: (resolveIconThresholds(m0.icon!, [...nums(m0.sqref).values()], 'per-type', 'inc') ?? []).slice().sort((a, b) => a - b) }))],
+        ['first-fail', numeric(v => predict(m0, v, { bucket: (_b, t) => { let i = 0; while (i + 1 < t.length && v >= t[i + 1]!) i++; return i } }))],
+        ['no-icon', () => null],
+      ])
+      return out
+    case 'icon:bounds-out-of-domain':
+      each(m0, [
+        ['as-model', numeric(v => predict(m0, v))],
+        ['clamped', numeric(v => predict(m0, v, { spec: { ...m0.icon!, cfvo: m0.icon!.cfvo.map(x => (x.type === 'percent' || x.type === 'percentile') && x.val !== undefined ? { ...x, val: String(Math.min(100, Math.max(0, Number(x.val)))) } : x) } }))],
+        ['no-icon', () => null],
+      ])
+      return out
+    case 'icon:thresholds-floor': {
+      const floor = Number(m0.icon!.cfvo[0]!.val ?? m0.icon!.cfvo[0]!.f)
+      each(m0, [['below-floor-bucket0', numeric(v => predict(m0, v))], ['below-floor-no-icon', numeric(v => (v < floor ? null : predict(m0, v)))]])
+      return out
+    }
+    case 'icon:thresholds-min-max':
+      each(m0, [
+        ['max-reached', numeric(v => predict(m0, v))],
+        ['max-unreachable', numeric(v => predict(m0, v, { bucket: b => (b === size - 1 && m0.icon!.cfvo[size - 1]!.type === 'max' ? size - 2 : b) }))],
+      ])
+      return out
+    case 'icon:attr-percent-false':
+      each(m0, [
+        ['cfvo-as-percent', numeric(v => predict(m0, v))],
+        ['cfvo-as-num', numeric(v => predict(m0, v, { thresholds: m0.icon!.cfvo.map(x => Number(x.val ?? x.f)) }))],
+      ])
+      return out
+    case 'icon:composition-with-bar':
+      for (const m of iconMarkers) each(m, [['both-paint', numeric(v => predict(m, v))], ['icon-withheld', () => null]])
+      return out
+    case 'icon:composition-matching-stopIfTrue-ahead':
+    case 'icon:composition-icon-stopIfTrue':
+    case 'icon:composition-unresolved-stub': {
+      // The non-icon rule sharing the capability: a cellIs `greaterThan` literal, or the Stage 5 stub `MOD(x,2)=1`.
+      const matchesOther = (ref: string, v: number | undefined): boolean => otherMarkers.some(o => {
+        if (!isCellInSqref(ref, o.sqref) || v === undefined) return false
+        if (o.ruleType === 'cellIs' && o.operator === 'greaterThan') return v > Number(o.formulas[0])
+        if (o.ruleType === 'expression' && /^MOD\([A-Z]+\d+,2\)=1$/.test(o.formulas[0] ?? '')) return Math.abs(v % 2) === 1
+        return false
+      })
+      for (const m of iconMarkers) {
+        const filled = (ref: string): boolean => otherMarkers.some(o => o.dxf !== undefined && isCellInSqref(ref, o.sqref))
+        if (capabilityId === 'icon:composition-icon-stopIfTrue') {
+          each(m, [
+            ['later-withheld', numeric(v => predict(m, v))],
+            ['later-applies', (ref, v) => (v === undefined ? null : matchesOther(ref, v) && filled(ref) ? 'icon-class-none' : predict(m, v))],
+          ])
+        } else {
+          each(m, [
+            ['halted', (ref, v) => (v === undefined || matchesOther(ref, v) ? null : predict(m, v))],
+            ['not-halted', (ref, v) => (v === undefined ? null : matchesOther(ref, v) && filled(ref) ? 'icon-class-none' : predict(m, v))],
+          ])
+        }
+      }
+      return out
+    }
+    default:
+      return undefined
+  }
+}
+
 /** Per-path cache of the committed glyph key (decoding the key capture dominates the cost of verifying a case). */
 const iconKeyCache = new Map<string, IconGlyphKey | Refusal | undefined>()
 
@@ -4540,9 +4762,9 @@ export function evaluateIconCapabilities(c: CfOracleCase, parts: Map<string, Uin
       continue
     }
     const classOf = (set: string, iconId: number): string | null => (set === 'NoIcons' ? null : key.classOfPair.get(`${set}:${iconId}`) ?? `unkeyed:${set}:${iconId}`)
-    const merged: Record<string, IconClassHypothesis[]> = {}
+    const merged: Record<string, IconClassHypothesis[]> = buildIconScenarioHypotheses(cap, c, parts, classOf) ?? {}
     let refusal: { code: CfRefusalCode; reason: string } | undefined
-    for (const m of c.markers.filter(x => x.capabilityId === cap && x.icon)) {
+    for (const m of Object.keys(merged).length > 0 ? [] : c.markers.filter(x => x.capabilityId === cap && x.icon)) {
       const scopeValues = new Map([...values].filter(([ref]) => isCellInSqref(ref, m.sqref)))
       const designated = iconCellsOf(c, cap).map(x => x.ref.toUpperCase()).filter(ref => isCellInSqref(ref, m.sqref))
       const hyps = buildIconClassHypotheses(cap, m.icon!, scopeValues, classOf, designated)
@@ -4558,7 +4780,8 @@ export function evaluateIconCapabilities(c: CfOracleCase, parts: Map<string, Uin
       const o = observed.get(ref)
       if (!o) { refusal = { code: 'sidecar-mismatch', reason: `designated cell ${ref} was not measured` }; break }
       const cls = o.icon ? o.icon.glyphClass : null
-      if (cls === 'icon-class-none' || cls === 'icon-class-ambiguous' || cls === 'unclassified') { refusal = { code: cls === 'unclassified' ? 'icon-class-none' : cls, reason: `designated cell ${ref}: ${cls}` }; break }
+      const predicted = merged[ref]!.some(h => h.glyphClass === cls)
+      if (!predicted && (cls === 'icon-class-none' || cls === 'icon-class-ambiguous' || cls === 'unclassified')) { refusal = { code: cls === 'unclassified' ? 'icon-class-none' : cls, reason: `designated cell ${ref}: ${cls}` }; break }
       seen[ref] = cls
     }
     if (refusal) {
@@ -4621,6 +4844,11 @@ function verifyIconCapture(
     if (!r || JSON.stringify(r) !== JSON.stringify(o)) return fail('sidecar-mismatch', `Sidecar observedIcons for ${o.ref} disagrees with the PNG measurement`)
   }
   const evaluation = evaluateIconCapabilities(c, parts, observed, key)
+  for (const cap of Object.keys(evaluation)) {
+    const marked = Object.keys(evaluation[cap]!.hypotheses ?? {})
+    const seen = Object.fromEntries(marked.map(ref => [ref, observed.get(ref)?.icon ? observed.get(ref)!.icon!.glyphClass : null]))
+    if (dialectAllAbsent(cap, seen)) return fail('icon-hypothesis-none', `Ruling S4-DIALECT-EVIDENCE: every cell marked by ${cap} shows no icon, so the capture cannot evidence the dialect`)
+  }
   for (const cap of Object.keys(evaluation)) {
     const rec = evaluation[cap]!
     const cells = iconCellsOf(c, cap)

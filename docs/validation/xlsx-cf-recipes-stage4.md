@@ -1,6 +1,6 @@
 # Stage 4 (icon sets): Excel capture recipes for the orchestrator
 
-Task 24 prepared the Stage 4 oracle; **none of it has been run against Excel.** This page is the exact sequence the orchestrator runs on the host Mac (Excel for Mac 16.114 or later, zh-TW, `Asia/Taipei`) to turn the 15 prepared cases into evidence. Preparing scripts is not evidence: a case without captures stays `recipe-pending` and refused, and production withholds every icon until Task 30 publishes the audited set (`--publish-stage4`).
+Task 24 prepared the Stage 4 oracle; **none of it has been run against Excel.** This page is the exact sequence the orchestrator runs on the host Mac (Excel for Mac 16.114 or later, zh-TW, `Asia/Taipei`) to turn the 16 prepared cases into evidence. Preparing scripts is not evidence: a case without captures stays `recipe-pending` and refused, and production withholds every icon until Task 30 publishes the audited set (`--publish-stage4`).
 
 All commands run from the Stage 4 worktree root (`.worktrees/cf-s4`). **Always pass `--stage 4`** (and `--case` where shown): `generate.ts`, `build.ts` and `capture.ts` without `--stage` act on Stage 1 or on every stage. Never pass `--write` to the audit (Ruling S3-WRITE, mirrored for Stage 4: only Task 30 publishes).
 
@@ -81,7 +81,7 @@ Record the failure in `docs/validation/xlsx-cf.md` §12 and stop. Never retouch 
 
 Run each case's build and capture, closing owned workbooks in between (the harness does it):
 ```
-for id in families thresholds degenerate reverse-custom geometry inset showvalue participation scope composition rtl; do
+for id in dialect families thresholds degenerate reverse-custom geometry inset showvalue participation scope composition rtl; do
   bun scripts/cf-refs/build.ts --stage 4 --case stage4-icon-$id --refresh-clock-date
   bun scripts/cf-refs/capture.ts --stage 4 --case stage4-icon-$id
 done
@@ -93,9 +93,11 @@ npx tsx scripts/cf-refs/audit.ts --stage 4
 - `--refresh-clock-date` has no effect on Stage 4 (no clock cases); it is passed so the sequence matches the plan.
 - `stage4-icon-showvalue`'s capture also copies `D2:D4` and records `the clipboard as text` as `iconCopyText` (record only, `icon:showvalue-copy-text`; the AX tree is recorded as not observable).
 - `stage4-icon-unresolved-shapes` is `unsupported`: it is built only when named, to record Excel's open/repair/strip outcome (a stripped result is preserved as `stage4-icon-unresolved-shapes.rejected.xlsx`); it is never captured.
+- `stage4-icon-dialect` (Ruling S4-DIALECT-CASE) records Excel's outcome for an x14-only family (3Stars) on a base rule and for a paired base 3Arrows + x14 3Triangles rule. Both outcomes are hypotheses (drawn as modelled, not drawn, drawn as another family; companion, base, neither) and the capture decides. If `build.ts` reports the resave stripped or repaired a rule, the `stage4-icon-dialect.rejected.xlsx` it keeps IS the recorded outcome: note it in §12 and do not retry.
+- A dialect capture (`stage4-icon-authored`, or the schema-defaults column V of `stage4-icon-families`) in which every marked cell shows no icon refuses the case (Ruling S4-DIALECT-EVIDENCE): stop and report it, as with the Stage 3 ext-URI bug.
 - `stage4-icon-rtl` is record only (`icon:placement-rtl-sheet` stays unverified, Ruling S4-M).
 
-What to expect from the audit (`npx tsx scripts/cf-refs/audit.ts --stage 4`): `summary: ok=true ... stageComplete=false`, a `BLOCKED: Stage 4 semantic evidence incomplete` line and exit 1. That is the correct result for Task 24. The bucket capabilities (families, thresholds, gte, reverse, custom) verify only when the capture discriminates their hypotheses and the cross-case gates hold (calibration, glyph key, and `icon:families-base` for every reading through the family order). Geometry, inset, scope, participation, degenerate and composition capabilities report `no hypotheses` and stay `supported-structural` until their candidates exist (see `docs/validation/xlsx-cf.md` §12, known limits). `npx tsx scripts/cf-refs/audit.ts --stage 3` must still print `ok=true ... stageComplete=true`.
+What to expect from the audit (`npx tsx scripts/cf-refs/audit.ts --stage 4`): `summary: ok=true ... stageComplete=false`, a `BLOCKED: Stage 4 semantic evidence incomplete` line and exit 1. That is the correct result for Task 24. The bucket capabilities (families, thresholds, gte, reverse, custom) verify only when the capture discriminates their hypotheses and the cross-case gates hold (calibration, glyph key, and `icon:families-base` for every reading through the family order). Geometry, inset and canvas-suppression capabilities report `no hypotheses` and stay `supported-structural` until Task 29's box candidates exist; they re-verify later from the stored captures with `bun scripts/cf-refs/capture.ts --stage 4 --verify-only`, with no new Excel run (see `docs/validation/xlsx-cf.md` §12, known limits). `npx tsx scripts/cf-refs/audit.ts --stage 3` must still print `ok=true ... stageComplete=true`.
 
 ## 5. After the run
 

@@ -3843,7 +3843,7 @@ export interface S3RawRule {
   sqref: string
   xml: string
   separateBlock?: boolean
-  marker: Pick<CfPartMarker, 'capabilityId' | 'ruleType' | 'formulas'> & Partial<Pick<CfPartMarker, 'operator' | 'priority' | 'stopIfTrue' | 'dxf' | 'scale' | 'bar'>>
+  marker: Pick<CfPartMarker, 'capabilityId' | 'ruleType' | 'formulas'> & Partial<Pick<CfPartMarker, 'operator' | 'priority' | 'stopIfTrue' | 'dxf' | 'scale' | 'bar' | 'icon'>>
   /** Cells designated for this raw rule's marker coverage (defaults to the stored cells of the scope). */
   cells?: readonly string[]
 }
@@ -4923,6 +4923,39 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
       ],
     },
   ),
+  // 2b. stage4-icon-dialect (Ruling S4-DIALECT-CASE)
+  s4rect(
+    'stage4-icon-dialect',
+    'S4-B/S4-O dialect outcomes, recorded rather than predicted: an x14-only family (3Stars) on a BASE <cfRule> (B; hypotheses: drawn as 3Stars in bucket order, not drawn, or drawn as another 3-icon family such as the 3TrafficLights1 default), and a paired base + x14 rule (C; a base 3Arrows rule carrying an <x14:id> link to a priority-less x14 3Triangles companion; hypotheses: the companion draws, the base draws, or neither). The capture decides; build.ts keeps a stripped or repaired resave as the rejected workbook, itself the recorded outcome.',
+    {
+      n: 5,
+      colStyles: s4keyStyles(['B', 'C']),
+      cols: [s4col('B', 'BaseStars', [0, 25, 50, 75, 100]), s4col('C', 'Paired', [0, 25, 50, 75, 100])],
+      rules: [
+        {
+          kind: 'raw',
+          where: 'legacy',
+          sqref: 'B2:B6',
+          xml: '<cfRule type="iconSet" priority="1"><iconSet iconSet="3Stars"><cfvo type="percent" val="0"/><cfvo type="percent" val="33"/><cfvo type="percent" val="67"/></iconSet></cfRule>',
+          marker: { capabilityId: 'icon:dialect-base-x14-family', ruleType: 'iconSet', priority: 1, formulas: [], icon: { dialect: 'base', set: '3Stars', cfvo: [{ type: 'percent', val: '0' }, { type: 'percent', val: '33' }, { type: 'percent', val: '67' }], attrs: {} } },
+        },
+        {
+          kind: 'raw',
+          where: 'legacy',
+          sqref: 'C2:C6',
+          xml: `<cfRule type="iconSet" priority="2"><iconSet iconSet="3Arrows"><cfvo type="percent" val="0"/><cfvo type="percent" val="33"/><cfvo type="percent" val="67"/></iconSet><extLst><ext uri="${DB_EXT_URI}" ${NS_X14_DECL}><x14:id>{3B3B4F10-0000-4000-8000-000000000002}</x14:id></ext></extLst></cfRule>`,
+          marker: { capabilityId: 'icon:dialect-paired', ruleType: 'iconSet', priority: 2, formulas: [], icon: { dialect: 'base', set: '3Arrows', cfvo: [{ type: 'percent', val: '0' }, { type: 'percent', val: '33' }, { type: 'percent', val: '67' }], attrs: {} } },
+        },
+        {
+          kind: 'raw',
+          where: 'x14',
+          sqref: 'C2:C6',
+          xml: '<x14:cfRule type="iconSet" id="{3B3B4F10-0000-4000-8000-000000000002}"><x14:iconSet iconSet="3Triangles"><x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>33</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>67</xm:f></x14:cfvo></x14:iconSet></x14:cfRule>',
+          marker: { capabilityId: 'icon:dialect-paired', ruleType: 'iconSet', formulas: [], icon: { dialect: 'x14', set: '3Triangles', cfvo: [{ type: 'percent', f: '0' }, { type: 'percent', f: '33' }, { type: 'percent', f: '67' }], attrs: {} } },
+        },
+      ],
+    },
+  ),
   // 3. stage4-icon-glyph-key
   s4rect(
     'stage4-icon-glyph-key',
@@ -4946,11 +4979,13 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
   // 4. stage4-icon-families
   s4rect(
     'stage4-icon-families',
-    'S4-E family order: each of the 20 built-in families over k values far from every default threshold (bucket order only, default percent thresholds), one family per column B..U; which icon id each bucket shows is read from the glyph key. Column V omits every <iconSet> attribute (schema defaults, 3TrafficLights1). Column W holds a whole-column icon set (W:W, icon:scope-whole-column; this sheet hides no rows, the scope sheet does) whose control is the neighbour column X.',
+    'S4-E family order: each of the 20 built-in families over k values far from every default threshold (bucket order only, default percent thresholds), one family per column B..U; which icon id each bucket shows is read from the glyph key. Column V omits every <iconSet> attribute (schema defaults, 3TrafficLights1). Column W holds a whole-column icon set (W:W, icon:scope-whole-column; this sheet hides no rows, the scope sheet does) whose control is the neighbour column X; W12 holds 1000, so whole-column statistics and data-block statistics put W2..W4 in different buckets.',
     {
       n: 5,
       colStyles: s4keyStyles([...letters('B', 22), 'X']),
       controlCells: { W2: 'X2', W3: 'X3', W4: 'X4' },
+      // A stored value far below the data block: statistics over the whole column and over the data block differ.
+      extraCells: [{ ref: 'W12', v: 1000 }],
       cols: [
         ...S4_ICON_FAMILIES.map((f, i) => s4col(colLetter(2 + i), f.name, f.size === 3 ? [0, 50, 100] : f.size === 4 ? [0, 37, 62, 100] : [0, 30, 50, 70, 100])),
         s4col('V', 'SchemaDefaults', [0, 50, 100]),
@@ -4963,7 +4998,7 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
           return icon(f.dialect === 'x14' ? 'icon:families-x14' : 'icon:families-base', `${c}2:${c}${f.size + 1}`, i + 1, f.name, pct(f.size), { dialect: f.dialect })
         }),
         icon('icon:settings-schema-defaults', 'V2:V4', 21, undefined, [{ type: 'percent', val: '0' }, { type: 'percent', val: '33' }, { type: 'percent', val: '67' }]),
-        icon('icon:scope-whole-column', 'W1:W1048576', 22, '3Arrows', pct(3)),
+        icon('icon:scope-whole-column', 'W1:W1048576', 22, '3Arrows', pct(3), { cells: ['W2', 'W3', 'W4'] }),
       ],
     },
   ),
@@ -5008,7 +5043,7 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
         s4col('E', 'OutOfDomain', VALUES_0_100_BY10),
         s4col('F', 'Floor', VALUES_0_100_BY10),
         s4col('G', 'MinMax', VALUES_0_100_BY10),
-        s4col('H', 'PercentAttr0', VALUES_0_100_BY10),
+        s4col('H', 'PercentAttr0', range(11, 10, 10)),
       ],
       rules: [
         icon('icon:degenerate-equal-values', 'B2:B6', 1, '3Arrows', pct(3)),
@@ -5148,11 +5183,13 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
   // 12. stage4-icon-scope
   s4rect(
     'stage4-icon-scope',
-    'S4-H scope statistics, measured for icons: disjoint B2:B4 D2:D4; duplicate blocks on E2:E4 (two blocks, different sets); a hidden row holding the extreme value (F6 = 100, row 6 hidden); an autofilter-hidden row holding the extreme value (G5 = 100); a merged B8:C9 host with non-equal values. The whole-column shape sits on stage4-icon-families, which hides no rows.',
+    'S4-H scope statistics, measured for icons: disjoint B2:B4 D2:D4; duplicate blocks on E2:E4 (two blocks, different sets); a hidden row holding the extreme value (F6 = 100, row 6 hidden); an autofilter-hidden row holding the extreme value (G5 = 100; rows 5 and 6 are hidden); a one-row merge B8:C8 inside the B8:C9 scope whose covered cell C8 holds 0, so statistics with and without it put B9/C9 in different buckets. The whole-column shape sits on stage4-icon-families, which hides no rows.',
     {
       n: 5,
-      hiddenRows: [6],
-      merges: ['B8:C9'],
+      // Row 5 is the autofilter-hidden row (G5) and row 6 the manually hidden one (F6), as stage3-bar-scope hides both.
+      hiddenRows: [5, 6],
+      // A one-row merge keeps the host's crop the key's height (classifiable); C8 is a stored value under the merge.
+      merges: ['B8:C8'],
       autoFilterXml: '<autoFilter ref="G1:G6"><filterColumn colId="0"><filters><filter val="10"/><filter val="20"/><filter val="30"/></filters></filterColumn></autoFilter>',
       colStyles: s4keyStyles(['B', 'C', 'D', 'E', 'F', 'G']),
       cols: [
@@ -5165,9 +5202,9 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
       ],
       extraCells: [
         { ref: 'B8', v: 100 },
-        { ref: 'C8', v: 50 },
-        { ref: 'B9', v: 20 },
-        { ref: 'C9', v: 70 },
+        { ref: 'C8', v: 0 },
+        { ref: 'B9', v: 50 },
+        { ref: 'C9', v: 60 },
       ],
       rules: [
         icon('icon:scope-disjoint', 'B2:B4 D2:D4', 1, '3Arrows', pct(3)),
@@ -5175,7 +5212,7 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
         icon('icon:scope-duplicate-blocks', 'E2:E4', 3, '3Flags', pct(3), { separateBlock: true }),
         icon('icon:scope-hidden-row', 'F2:F6', 4, '3Arrows', pct(3)),
         icon('icon:scope-autofilter-hidden-row', 'G2:G6', 5, '3Arrows', pct(3)),
-        icon('icon:scope-merged-cell', 'B8:C9', 6, '3Arrows', pct(3), { cells: ['B8'] }),
+        icon('icon:scope-merged-cell', 'B8:C9', 6, '3Arrows', pct(3), { cells: ['B8', 'B9', 'C9'] }),
       ],
     },
   ),
@@ -5193,10 +5230,12 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
       rules: [
         icon('icon:composition-overlapping-icons', 'B2:B5', 1, '3Arrows', pct(3), { separateBlock: true }),
         icon('icon:composition-overlapping-icons', 'B2:B5', 2, '3Flags', pct(3), { separateBlock: true }),
-        icon('icon:composition-with-bar', 'C2:C5', 3, '3Arrows', pct(3)),
-        bar('icon:composition-with-bar', 'C2:C5', 4, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
-        bar('icon:composition-with-bar', 'D2:D5', 5, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
-        icon('icon:composition-with-bar', 'D2:D5', 6, '3Arrows', pct(3)),
+        // Right-to-left bars leave the icon band (the cell's left 28 px) clear on the three shorter bars, so those cells
+        // classify against the key; the longest bar's cell is not designated.
+        icon('icon:composition-with-bar', 'C2:C5', 3, '3Arrows', pct(3), { cells: ['C3', 'C4', 'C5'] }),
+        bar('icon:composition-with-bar', 'C2:C5', 4, { x14Attrs: { ...SOLID_0_100, direction: 'rightToLeft' }, colors: { fill: BLUE }, cells: ['C3', 'C4', 'C5'] }),
+        bar('icon:composition-with-bar', 'D2:D5', 5, { x14Attrs: { ...SOLID_0_100, direction: 'rightToLeft' }, colors: { fill: BLUE }, cells: ['D3', 'D4', 'D5'] }),
+        icon('icon:composition-with-bar', 'D2:D5', 6, '3Arrows', pct(3), { cells: ['D3', 'D4', 'D5'] }),
         bar('icon:composition-bar-showvalue', 'E2:E5', 7, { baseAttrs: { showValue: '0' }, x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
         icon('icon:composition-bar-showvalue', 'E2:E5', 8, '3Arrows', pct(3), { attrs: { showValue: '1' } }),
         icon('icon:composition-with-scale', 'F2:F5', 9, '3Arrows', pct(3)),
@@ -5417,6 +5456,10 @@ export const CF_STAGE4_NONDISCRIMINATING: Readonly<Record<string, string>> = {
     'Record only (Ruling S4-A): the object-model probe answers whether `icon set format condition` is reachable; whatever it returns lifts no capability.',
   'icon:showvalue-copy-text':
     'Copy text is a clipboard observation (`copy range` then `the clipboard as text`), not a pixel one, and the AX tree is not observable from the sdef (Ruling S4-N): no capture can discriminate it.',
+  'icon:composition-with-scale':
+    'Under the S4-A rule a crop must equal a white-background key crop within +-8 at zero offset; a colour-scale fill under the icon changes every background pixel, so no data that keeps the fill can classify the icon.',
+  'icon:composition-dxf-fill':
+    'Under the S4-A rule a crop must equal a white-background key crop within +-8 at zero offset; a DXF fill under the icon changes every background pixel, so no data that keeps the fill can classify the icon.',
   'icon:placement-rtl-sheet':
     'Record only (Ruling S4-M): the viewer does not lay out RTL sheets in Stage 4, so the recorded placement and inset stay unverified, as S3-K did for bars.',
 }
