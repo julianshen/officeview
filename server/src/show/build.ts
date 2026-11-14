@@ -493,7 +493,7 @@ function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOp
         shipped.push({ layer, index, bmp, rest })
       })
       // A rest that is not a pure translation cannot carry a page-anchored mark: fail closed.
-      if (shipped.some(s => !Number.isFinite(s.rest.x))) { allComposited('mark-rest'); shipped = [] }
+      if (shipped.some(s => !Number.isFinite(s.rest.x))) { allComposited('mark-rest'); diagnostics.push({ code: 'mark-rest' }); shipped = [] }
     }
 
     const layerRecords = (list: readonly Shipped[]): PlanLayerRecord[] => {

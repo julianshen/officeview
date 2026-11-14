@@ -114,6 +114,17 @@ describe('buildShowPlan', () => {
     expect('refused' in await host.showPlan(docKey, job())).toBe(false)
   })
 
+  it('a build past the deadline is refused show-plan-timeout, and the refusal is not cached', async () => {
+    const { host, docKey } = await openDeck(await flyInDeck())
+    host.showOptions = { deadlineMs: 0, now: (() => { let t = 0; return () => (t += 1) })() }
+    const r = await host.showPlan(docKey, job())
+    expect('refused' in r && r.refused).toBe('show-plan-timeout')
+    expect('refused' in r && r.diagnostics.map(d => d.code)).toEqual(['show-plan-timeout'])
+    host.showOptions = {}
+    expect('refused' in await host.showPlan(docKey, job())).toBe(false)
+    expect(host.showCacheStats().l2.hits).toBe(0)
+  })
+
   it('cmd nodes dropped with cmd-dropped', async () => {
     const { host, docKey } = await openDeck(await cmdDeck())
     const b = built(await host.showPlan(docKey, job()))
@@ -132,6 +143,8 @@ describe('buildShowPlan', () => {
   it('links: internal jump carries a streamed index; URL and hidden target are withheld', async () => {
     const { host, open, docKey } = await openDeck(await hiddenLinkDeck())
     expect(open.hidden).toEqual([1])
+    // Slide 2 has neither timing nor a transition: no plan is requested for it (D5); slide 1 is hidden.
+    expect(open.anim).toEqual([0])
     const b = built(await host.showPlan(docKey, job()))
     const byX = [...b.plan.linkRegions].sort((p, q) => p.rect.y - q.rect.y || p.rect.x - q.rect.x)
     expect(byX.map(l => l.action)).toEqual([{ kind: 'slide', index: 1 }, { kind: 'withheld' }, { kind: 'withheld' }])
@@ -222,6 +235,20 @@ describe('pool show jobs', () => {
       const m = await pool.markLayer('s1', { png: layer.png, w: layer.w, h: layer.h, kBasis: new Uint8Array(32).fill(7), code: Int8Array.from({ length: 512 }, (_, i) => (i % 3 ? 1 : -1)), crop: { ...layer.rest, pageW: 960, pageH: 720 } }, 1024)
       expect('carriers' in m && m.carriers).toBeGreaterThan(0)
       expect(pool.stats()).toMatchObject({ reserved: 0, running: 0 })
+    } finally {
+      pool.dispose()
+    }
+  }, 60_000)
+
+  it('show jobs run under the 10 s show deadline, not the 2 s render deadline', async () => {
+    const pool = new Pool({ workers: 1, testHooks: true })
+    try {
+      await pool.open('fly', await flyInDeck(), 'full')
+      const t0 = performance.now()
+      const r = await pool.showPlan('s1', { docRef: 'fly', contentPolicy: 'full', ...job(), hangMs: 3000 }, 1024)
+      expect(performance.now() - t0).toBeGreaterThan(3000)
+      expect('refused' in r).toBe(false)
+      expect(pool.stats().retired).toBe(0)
     } finally {
       pool.dispose()
     }

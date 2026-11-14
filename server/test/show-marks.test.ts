@@ -1,7 +1,6 @@
 /** Piece 4 Task 6: both marks on show-plan layer assets (§7, D7, D9), and the validation that gates them. */
 import { describe, expect, it } from 'bun:test'
-import { createCanvas, ImageData as NapiImageData } from '@napi-rs/canvas'
-import { installCanvasBackend } from '../../src/core/canvas-backend'
+import { canvasBackend, installCanvasBackend } from '../../src/core/canvas-backend'
 import { compareFrames } from '../../src/slideshow/compare'
 import type { LayerBitmap } from '../../src/slideshow/types'
 import { flyInDeck } from '../../src/testdata/show-decks'
@@ -20,6 +19,8 @@ import { serverBackend } from '../src/backend'
 import { appearMoveDeck, openDeck, tinyBoxDeck } from './show-fixtures'
 
 installCanvasBackend(serverBackend())
+/** Canvases from the server backend: the visible mark's font resolves as it does in the build. */
+const createCanvas = (w: number, h: number) => canvasBackend().createCanvas(w, h) as unknown as HTMLCanvasElement
 
 const job = (over: Partial<ShowPlanJob> = {}): ShowPlanJob => ({ unitIndex: 0, scale: 1, motion: 'full', mark: { kind: 'fixed' }, strictMarks: false, ...over })
 const built = (r: unknown): BuiltShowPlan => { if ((r as { refused?: string }).refused) throw new Error(`refused: ${(r as { refused: string }).refused}`); return r as BuiltShowPlan }
@@ -33,11 +34,11 @@ const TAU = { abs: 7.93, margin: 3.45 }
  */
 function composeAtRest(b: BuiltShowPlan, scale: number, pngOf: (assetId: number) => Uint8Array, offset: (key: string | undefined) => number = () => 0) {
   const W = Math.ceil(b.plan.slide.w * scale), H = Math.ceil(b.plan.slide.h * scale)
-  const c = createCanvas(W, H), ctx = c.getContext('2d')
+  const c = createCanvas(W, H), ctx = c.getContext('2d')!
   for (const l of [...b.plan.layers].sort((p, q) => p.z - q.z)) {
     const d = decodePng(pngOf(l.assetId))
-    const src = createCanvas(d.w, d.h)
-    src.getContext('2d').putImageData(new NapiImageData(d.rgba, d.w, d.h), 0, 0)
+    const src = createCanvas(d.w, d.h), sx = src.getContext('2d')!
+    const img = sx.createImageData(d.w, d.h); img.data.set(d.rgba); sx.putImageData(img, 0, 0)
     ctx.drawImage(src, (l.bounds.x + offset(l.key)) * scale, l.bounds.y * scale, l.bounds.w * scale, l.bounds.h * scale)
   }
   return { canvas: c, ctx, image: ctx.getImageData(0, 0, W, H) }
@@ -48,7 +49,7 @@ describe('show-plan marks', () => {
   it('layer asset carries the visible mark source-atop: alpha unchanged, mark ink only where alpha > 0', () => {
     const w = 800, h = 600
     const canvas = createCanvas(w, h)
-    const ctx = canvas.getContext('2d')
+    const ctx = canvas.getContext('2d')!
     ctx.fillStyle = '#336699'
     ctx.beginPath(); ctx.ellipse(w / 2, h / 2, 380, 280, 0, 0, Math.PI * 2); ctx.fill()
     const layer: LayerBitmap = { canvas: canvas as never, bounds: { x: 80, y: 60, w, h }, scale: 1, bytes: w * h * 4 }
@@ -84,16 +85,29 @@ describe('show-plan marks', () => {
     // The reference: the unmarked layers composed, then the page mark painted once.
     const ref = composeAtRest(plain, 1, asset(plain), offset)
     paintMark(ref.ctx as never, { widthPx: 960, heightPx: 720 }, markOptions({ kind: 'fixed' })!)
-    const r = compareFrames(composite as never, ref.ctx.getImageData(0, 0, 960, 720) as never, MARK_FIDELITY)
-    expect(r.pass).toBe(true)
-    // Drawn at its painted position instead, the mover's mark would not line up with the page's.
-    const wrongCanvas = createCanvas(200, 200), wctx = wrongCanvas.getContext('2d')
-    const md = decodePng(asset(plain)(mover.assetId))
-    wctx.putImageData(new NapiImageData(md.rgba, md.w, md.h), 0, 0)
-    const wrong = burnVisibleMark({ canvas: wrongCanvas as never, bounds: mover.bounds, scale: 1, bytes: 0 }, mover.bounds, { kind: 'fixed' }, { w: 960, h: 720 })
-    const right = burnVisibleMark({ canvas: wrongCanvas as never, bounds: mover.bounds, scale: 1, bytes: 0 }, { ...mover.bounds, x: mover.bounds.x + 240 }, { kind: 'fixed' }, { w: 960, h: 720 })
-    const px = (l: LayerBitmap) => (l.canvas.getContext('2d') as unknown as CanvasRenderingContext2D).getImageData(0, 0, md.w, md.h).data
-    expect(Buffer.compare(Buffer.from(px(wrong)), Buffer.from(px(right)))).not.toBe(0)
+    const reference = ref.ctx.getImageData(0, 0, 960, 720)
+    expect(compareFrames(composite as never, reference as never, MARK_FIDELITY).pass).toBe(true)
+    // Per pixel over the mover's rest box (inset past its antialiased edge): its mark lines up with the page's.
+    const region = { x: mover.bounds.x + 240 + 12, y: mover.bounds.y + 12, w: mover.bounds.w - 24, h: mover.bounds.h - 24 }
+    const worst = (img: { data: Uint8ClampedArray }) => {
+      let m = 0
+      for (let y = region.y; y < region.y + region.h; y++) for (let x = region.x; x < region.x + region.w; x++) {
+        const i = (y * 960 + x) * 4
+        for (let c = 0; c < 3; c++) m = Math.max(m, Math.abs(img.data[i + c]! - reference.data[i + c]!))
+      }
+      return m
+    }
+    expect(worst(composite)).toBeLessThanOrEqual(2)
+    // Control: burned at its painted position instead, the mover's mark is off the page's by whole glyphs.
+    const wrongPng = (id: number) => {
+      if (id !== mover.assetId) return asset(marked)(id)
+      const d = decodePng(asset(plain)(id))
+      const c = createCanvas(d.w, d.h), x = c.getContext('2d')!
+      const img = x.createImageData(d.w, d.h); img.data.set(d.rgba); x.putImageData(img, 0, 0)
+      const w = burnVisibleMark({ canvas: c as never, bounds: mover.bounds, scale: 1, bytes: 0 }, mover.bounds, { kind: 'fixed' }, { w: 960, h: 720 })
+      return encodePng(d.w, d.h, (w.canvas.getContext('2d') as unknown as CanvasRenderingContext2D).getImageData(0, 0, d.w, d.h).data)
+    }
+    expect(worst(composeAtRest(marked, 1, wrongPng, offset).image)).toBeGreaterThan(8)
   }, 60_000)
 
   it('Layer-1 page basis cropped to rest bounds: composite at rest attributes the code', async () => {
