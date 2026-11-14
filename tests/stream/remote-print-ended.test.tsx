@@ -37,7 +37,7 @@ function fakeDoc(o: { maxPages?: number; pending?: boolean } = {}) {
     kind: 'remote',
     manifest: {
       name: 'deck.pptx', kind: 'pptx', units: { count, list },
-      can: { search: true, copy: false, print: true, textA11y: false, present: false, notes: false, links: false },
+      can: { search: true, copy: false, print: true, textA11y: false, present: true, notes: false, links: false },
       caps: { copy: null, a11y: 'off', print: { maxPages: o.maxPages ?? null, maxSessionPages: null } },
       recorder: { scalesBuckets: [1, 2] }, notices: [],
     },

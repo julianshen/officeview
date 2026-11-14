@@ -23,8 +23,14 @@ export interface DeliveryRecord { sid: string; unitIndex: number; scale: number;
 export interface CopyRecord { sid: string; kind: 'copy' | 'a11y'; paragraphs: number; fromUnit: number; toUnit: number; at: number }
 /** One print job answered to a sid (Stage 3b): its page count, unit range and render scale. Never deduplicated. */
 export interface PrintRecord { sid: string; pages: number; fromUnit: number; toUnit: number; scale: 1 | 2; at: number }
+/** One notes image answered to a sid (Stage 3c): the unit, scale and notes characters drawn (0 for a slide without notes). Never deduplicated (C4). */
+export interface NotesRecord { sid: string; unitIndex: number; scale: 1 | 2; charsDrawn: number; at: number }
+/** One notes image actually delivered Layer-1 marked (written after the mark, before the send): what trace
+ * needs to re-derive it — the unit, scale and the canonical notes PNG the mark was applied to. Distinct from
+ * `NotesRecord` (written before the draw, also for images that then failed) and from slide deliveries. */
+export interface NotesMarkRecord { sid: string; unitIndex: number; scale: 1 | 2; refSha256: string; at: number }
 /** A resume that changed the sid's resolved text services (the open row keeps the first value, write-once). */
-export interface ServicesRecord { sid: string; copy: CopyPolicy; textA11y: A11yMode; print: PrintPolicy; at: number }
+export interface ServicesRecord { sid: string; copy: CopyPolicy; textA11y: A11yMode; print: PrintPolicy; notes: boolean; at: number }
 export interface DetectionLog { at: number; osUser: string; investigator?: string; imageSha256: string; docRefs: string[]; unitIndex: number; answer: string; sid?: string }
 
 const SCHEMA = `
@@ -37,7 +43,11 @@ CREATE TABLE IF NOT EXISTS copies (sid TEXT NOT NULL REFERENCES rows (sid), kind
 CREATE INDEX IF NOT EXISTS copies_sid ON copies (sid);
 CREATE TABLE IF NOT EXISTS prints (sid TEXT NOT NULL REFERENCES rows (sid), pages INTEGER NOT NULL, from_unit INTEGER NOT NULL, to_unit INTEGER NOT NULL, scale REAL NOT NULL, at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS prints_sid ON prints (sid);
-CREATE TABLE IF NOT EXISTS services (sid TEXT NOT NULL REFERENCES rows (sid), copy TEXT NOT NULL, text_a11y TEXT NOT NULL, print TEXT, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS notes_deliveries (sid TEXT NOT NULL REFERENCES rows (sid), unit_index INTEGER NOT NULL, scale REAL NOT NULL, chars_drawn INTEGER NOT NULL, at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS notes_deliveries_sid ON notes_deliveries (sid);
+CREATE TABLE IF NOT EXISTS notes_marks (sid TEXT NOT NULL REFERENCES rows (sid), unit_index INTEGER NOT NULL, scale REAL NOT NULL, ref_sha256 TEXT NOT NULL, at INTEGER NOT NULL, UNIQUE (sid, unit_index, scale, ref_sha256));
+CREATE INDEX IF NOT EXISTS notes_marks_unit ON notes_marks (unit_index);
+CREATE TABLE IF NOT EXISTS services (sid TEXT NOT NULL REFERENCES rows (sid), copy TEXT NOT NULL, text_a11y TEXT NOT NULL, print TEXT, notes INTEGER, at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS services_sid ON services (sid);
 CREATE TABLE IF NOT EXISTS counters (gen INTEGER PRIMARY KEY, next INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS detections (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, log TEXT NOT NULL);
@@ -73,7 +83,10 @@ export class AuditStore {
     db.exec('PRAGMA foreign_keys = ON')
     db.exec(SCHEMA)
     // A store created before Stage 3b has no `services.print` column (CREATE IF NOT EXISTS leaves it alone); add it, null = not recorded.
-    if (!db.query<{ name: string }, []>('PRAGMA table_info(services)').all().some((c) => c.name === 'print')) db.exec('ALTER TABLE services ADD COLUMN print TEXT')
+    const servicesColumns = db.query<{ name: string }, []>('PRAGMA table_info(services)').all().map((c) => c.name)
+    if (!servicesColumns.includes('print')) db.exec('ALTER TABLE services ADD COLUMN print TEXT')
+    // One created before Stage 3c has no `services.notes` column; add it, null = not recorded (reads as notes off).
+    if (!servicesColumns.includes('notes')) db.exec('ALTER TABLE services ADD COLUMN notes INTEGER')
     // The sidecars now exist (WAL mode, schema written). Do not rely on the VFS
     // copying the db's mode, nor on the umask: pre-existing or recreated
     // sidecars hold session rows (IPs, viewer ids) until checkpoint.
@@ -126,14 +139,37 @@ export class AuditStore {
     return this.db.query<{ sid: string; pages: number; from_unit: number; to_unit: number; scale: 1 | 2; at: number }, [string]>('SELECT * FROM prints WHERE sid = ? ORDER BY rowid').all(sid)
       .map((r) => ({ sid: r.sid, pages: r.pages, fromUnit: r.from_unit, toUnit: r.to_unit, scale: r.scale, at: r.at }))
   }
+  /** Appends one notes image record (repeats are kept); throws for a sid with no row. */
+  putNotes(r: NotesRecord): void {
+    this.writable()
+    this.db.query('INSERT INTO notes_deliveries (sid, unit_index, scale, chars_drawn, at) VALUES (?, ?, ?, ?, ?)').run(r.sid, r.unitIndex, r.scale, r.charsDrawn, r.at)
+  }
+  notesDeliveries(sid: string): NotesRecord[] {
+    return this.db.query<{ sid: string; unit_index: number; scale: 1 | 2; chars_drawn: number; at: number }, [string]>('SELECT * FROM notes_deliveries WHERE sid = ? ORDER BY rowid').all(sid)
+      .map((r) => ({ sid: r.sid, unitIndex: r.unit_index, scale: r.scale, charsDrawn: r.chars_drawn, at: r.at }))
+  }
+  /** Idempotent on `(sid, unitIndex, scale, refSha256)`; throws for a sid with no row. */
+  putNotesMark(r: NotesMarkRecord): void {
+    this.writable()
+    this.db.query('INSERT OR IGNORE INTO notes_marks (sid, unit_index, scale, ref_sha256, at) VALUES (?, ?, ?, ?, ?)').run(r.sid, r.unitIndex, r.scale, r.refSha256, r.at)
+  }
+  notesMarks(sid: string): NotesMarkRecord[] {
+    return this.db.query<{ sid: string; unit_index: number; scale: 1 | 2; ref_sha256: string; at: number }, [string]>('SELECT * FROM notes_marks WHERE sid = ? ORDER BY rowid').all(sid)
+      .map((r) => ({ sid: r.sid, unitIndex: r.unit_index, scale: r.scale, refSha256: r.ref_sha256, at: r.at }))
+  }
+  /** Every marked notes delivery of `docRef`'s unit `unitIndex`, with its row, as a Layer-1 delivery (trace's notes target). */
+  notesCandidates(docRef: string, unitIndex: number): Array<{ sid: string; row: StoredRow; delivery: DeliveryRecord }> {
+    return this.db.query<{ sid: string; unit_index: number; scale: number; ref_sha256: string; at: number; row: string }, [string, number]>('SELECT n.*, r.row FROM notes_marks n JOIN rows r ON r.sid = n.sid WHERE r.doc_ref = ? AND n.unit_index = ? ORDER BY n.rowid')
+      .all(docRef, unitIndex).map((x) => ({ sid: x.sid, row: JSON.parse(x.row) as StoredRow, delivery: { sid: x.sid, unitIndex: x.unit_index, scale: x.scale, status: 'l1' as const, refSha256: x.ref_sha256, at: x.at } }))
+  }
   /** Appends one services change; throws for a sid with no row. */
   putServices(r: ServicesRecord): void {
     this.writable()
-    this.db.query('INSERT INTO services (sid, copy, text_a11y, print, at) VALUES (?, ?, ?, ?, ?)').run(r.sid, JSON.stringify(r.copy), r.textA11y, JSON.stringify(r.print), r.at)
+    this.db.query('INSERT INTO services (sid, copy, text_a11y, print, notes, at) VALUES (?, ?, ?, ?, ?, ?)').run(r.sid, JSON.stringify(r.copy), r.textA11y, JSON.stringify(r.print), r.notes ? 1 : 0, r.at)
   }
   services(sid: string): ServicesRecord[] {
-    return this.db.query<{ sid: string; copy: string; text_a11y: A11yMode; print: string | null; at: number }, [string]>('SELECT * FROM services WHERE sid = ? ORDER BY rowid').all(sid)
-      .map((r) => ({ sid: r.sid, copy: JSON.parse(r.copy) as CopyPolicy, textA11y: r.text_a11y, print: r.print === null ? false : JSON.parse(r.print) as PrintPolicy, at: r.at }))
+    return this.db.query<{ sid: string; copy: string; text_a11y: A11yMode; print: string | null; notes: number | null; at: number }, [string]>('SELECT * FROM services WHERE sid = ? ORDER BY rowid').all(sid)
+      .map((r) => ({ sid: r.sid, copy: JSON.parse(r.copy) as CopyPolicy, textA11y: r.text_a11y, print: r.print === null ? false : JSON.parse(r.print) as PrintPolicy, notes: r.notes === 1, at: r.at }))
   }
   /** The token `takeToken(gen)` would return. */
   nextToken(gen: number): number {
@@ -160,12 +196,12 @@ export class AuditStore {
   detections(): DetectionLog[] {
     return this.db.query<{ log: string }, []>('SELECT log FROM detections ORDER BY id').all().map((r) => JSON.parse(r.log) as DetectionLog)
   }
-  /** Deletes rows older than the retention window with their deliveries, copies, prints and services changes (and so their messages); counters stay. */
+  /** Deletes rows older than the retention window with their deliveries, copies, prints, notes images (audited and marked) and services changes (and so their messages); counters stay. */
   expire(nowSec: number): number {
     this.writable()
     const cutoff = nowSec - AUDIT_RETENTION_SEC
     return this.db.transaction(() => {
-      for (const t of ['deliveries', 'copies', 'prints', 'services']) this.db.query(`DELETE FROM ${t} WHERE sid IN (SELECT sid FROM rows WHERE started_at <= ?)`).run(cutoff)
+      for (const t of ['deliveries', 'copies', 'prints', 'notes_deliveries', 'notes_marks', 'services']) this.db.query(`DELETE FROM ${t} WHERE sid IN (SELECT sid FROM rows WHERE started_at <= ?)`).run(cutoff)
       return this.db.query('DELETE FROM rows WHERE started_at <= ?').run(cutoff).changes
     })()
   }

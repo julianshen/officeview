@@ -6,7 +6,7 @@ export interface Manifest {
   docRef: string
   kind: 'docx' | 'xlsx' | 'pptx'
   name: string
-  units: { count: number; list: Array<{ w: number; h: number }> }
+  units: { count: number; list: ManifestUnit[] }
   layoutFingerprint: string
   session: { sid: string; token: string; expiresSec: number; resume: 'session' }
   policy: { contentPolicy: 'visible-only' | 'full'; protection: 'final-raster' | 'culled-commands' | 'commands'; semantic: 'visible-only' | 'off'; contentPolicyId: string; viewerMarkId: string }
@@ -17,6 +17,8 @@ export interface Manifest {
   limits: { maxUnitPx: number; maxAssetBytes: number; wsFrameBytes: number; tilePx: number }
   notices: string[]
 }
+/** `hidden`: a hidden slide under contentPolicy 'full' (it is a unit, but a show skips it). Only `true` is valid. */
+export interface ManifestUnit { w: number; h: number; hidden?: true }
 export type ManifestResult = { ok: true; manifest: Manifest } | { ok: false; field: string }
 
 export const MANIFEST_CAP = 256 * 1024
@@ -40,7 +42,12 @@ export function validateManifest(json: unknown): ManifestResult {
     const m = obj(json, '$')
     if (m.v !== 1) throw new Bad('v')
     const units = obj(m.units, 'units')
-    const list = arr(units.list, 'units.list', MAX_UNITS).map((u, i) => { const o = obj(u, `units.list[${i}]`); return { w: int(o.w, `units.list[${i}].w`, 1, 8192), h: int(o.h, `units.list[${i}].h`, 1, 8192) } })
+    const list = arr(units.list, 'units.list', MAX_UNITS).map((u, i): ManifestUnit => {
+      const o = obj(u, `units.list[${i}]`), size = { w: int(o.w, `units.list[${i}].w`, 1, 8192), h: int(o.h, `units.list[${i}].h`, 1, 8192) }
+      if (o.hidden === undefined) return size
+      if (o.hidden !== true) throw new Bad(`units.list[${i}].hidden`)
+      return { ...size, hidden: true }
+    })
     if (int(units.count, 'units.count', 0, MAX_UNITS) !== list.length) throw new Bad('units.count')
     const s = obj(m.session, 'session'), p = obj(m.policy, 'policy'), c = obj(m.can, 'can'), r = obj(m.recorder, 'recorder'), l = obj(m.limits, 'limits'), k = obj(m.caps, 'caps')
     const kc = k.copy === null ? null : obj(k.copy, 'caps.copy')

@@ -20,6 +20,10 @@ import { UNIT_RASTER_DECODED_CAP } from '../../src/stream/raster'
 import { serverBackend } from './backend'
 import { facesUsed, loadPack, pinFonts } from './fonts'
 import { admit, projectPackage, type PolicyDiagnostic } from './policy'
+import { hiddenSlideUnits } from './policy/pptx'
+import { pptxPackageHandle } from '../../src/pptx/parse'
+import { drawNotes, NOTES_WIDTH_CSS, planNotes, readSlideNotes } from './notes'
+import type { PptxDocument } from '../../src/pptx/types'
 import { answerText, buildServedUnit, OBSERVER_BUDGET, prepareWorkspace, recordSpans, ServedCache, TEXT_RECORD_BUDGET, TextBudgetExceeded, TextRefusal, type ServedUnit, type TextJob, type TextReply } from './text/served'
 
 export const MAX_UNIT_PX = 8192
@@ -71,8 +75,14 @@ export function layoutFingerprint(contentPolicyId: string): string {
   return h.digest('hex')
 }
 
-interface OpenDoc { key: string; paintables: PaintableArray; units: UnitSize[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx' }
-export interface OpenResult { docKey: string; units: UnitSize[]; layoutFingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; diagnostics: PolicyDiagnostic[]; fontDiagnostics: number }
+/** `notes`: a deck's ORIGINAL package (the projection drops notes slides) and unit i's slide part. */
+interface OpenDoc { key: string; paintables: PaintableArray; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
+/** A notes job (Stage 3c): `draw: false` plans only (size, truncation, characters drawn); `true` draws with the visible mark. */
+export interface NotesJob { unitIndex: number; scale: number; mark: MarkSpec; draw: boolean }
+export interface NotesPlan { kind: 'notes-plan'; w: number; h: number; truncated: boolean; chars: number }
+export type NotesRaster = RenderedUnit & { kind: 'raster'; truncated: boolean; chars: number }
+/** `hidden`: unit indices of hidden slides (pptx under `'full'` only; elsewhere they are not units). */
+export interface OpenResult { docKey: string; units: UnitSize[]; hidden: number[]; layoutFingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; diagnostics: PolicyDiagnostic[]; fontDiagnostics: number }
 
 const registerFont = () => { throw new Error('stream server: embedded fonts are not registered in Stage 1') }
 
@@ -116,12 +126,23 @@ function paintMark(ctx: CanvasRenderingContext2D, page: { widthPx: number; heigh
   paintWatermark(ctx, page, mark)
 }
 
+/** Hidden slides of a deck opened under `'full'`, read from the original
+ * package (there the projection is the identity). A slide list that does not
+ * line up with the units refuses the open: never guess which unit is hidden. */
+export async function hiddenUnits(doc: PptxDocument, units: number): Promise<number[]> {
+  const handle = pptxPackageHandle(doc)
+  if (!handle || handle.slideParts.length !== units) throw new RenderRefusal('unsupported-format', 'slide list does not match the units')
+  return hiddenSlideUnits(handle)
+}
+
 export class DocumentHost {
   readonly backend: CanvasBackend
   private docs = new Map<string, OpenDoc>()
   private served: ServedCache
   parses = 0
   pages = 0
+  /** Reads a 'full' deck's hidden units after its paintables exist (TEST-ONLY override: fault injection). */
+  hiddenReader: (doc: PptxDocument, paintables: PaintableArray) => Promise<number[]> = (doc, paintables) => hiddenUnits(doc, paintables.length)
   constructor(backend = serverBackend(), servedCacheBytes?: number) { this.backend = backend; installCanvasBackend(backend); this.served = new ServedCache(servedCacheBytes) }
 
   async open(docRef: string, bytes: Uint8Array, contentPolicy: 'visible-only' | 'full'): Promise<OpenResult> {
@@ -138,10 +159,20 @@ export class DocumentHost {
       const paintables = await getPaintables(parsed, { registerFont })
       this.parses++
       const raw = paintables.map((p) => ({ widthPx: p.spec.widthPx, heightPx: p.spec.heightPx }))
-      doc = { key, paintables, raw, units: raw.map((r) => ({ w: sizeCeil(Math.max(1, r.widthPx)), h: sizeCeil(Math.max(1, r.heightPx)) })), fingerprint, contentPolicyId: projected.contentPolicyId, diagnostics: projected.diagnostics, format: admitted.format }
+      let hidden: number[] = []
+      // The lease is ours until the doc is cached: a refusal here must release it.
+      if (contentPolicy === 'full' && admitted.format === 'pptx') {
+        try { hidden = await this.hiddenReader(parsed as PptxDocument, paintables) } catch (e) { paintables.dispose(); throw e }
+      }
+      // Projected slide parts keep their original paths; a list that does not line up with the units serves no notes.
+      const handle = admitted.format === 'pptx' ? pptxPackageHandle(parsed as PptxDocument) : undefined
+      const notes = handle && handle.slideParts.length === paintables.length ? { pkg: original, slideParts: [...handle.slideParts] } : undefined
+      // Projection read every original entry through the cache: the retained package keeps the archive, not those reads.
+      original.dropCache()
+      doc = { key, paintables, raw, hidden, ...(notes ? { notes } : {}), units: raw.map((r) => ({ w: sizeCeil(Math.max(1, r.widthPx)), h: sizeCeil(Math.max(1, r.heightPx)) })), fingerprint, contentPolicyId: projected.contentPolicyId, diagnostics: projected.diagnostics, format: admitted.format }
       this.docs.set(key, doc)
     }
-    return { docKey: key, units: doc.units, layoutFingerprint: doc.fingerprint, contentPolicyId: doc.contentPolicyId, format: doc.format, diagnostics: doc.diagnostics, fontDiagnostics: doc.paintables.fontDiagnostics?.length ?? 0 }
+    return { docKey: key, units: doc.units, hidden: doc.hidden, layoutFingerprint: doc.fingerprint, contentPolicyId: doc.contentPolicyId, format: doc.format, diagnostics: doc.diagnostics, fontDiagnostics: doc.paintables.fontDiagnostics?.length ?? 0 }
   }
 
   has(docKey: string) { return this.docs.has(docKey) }
@@ -169,6 +200,28 @@ export class DocumentHost {
       return { ...this.raster(paintable, job.unitIndex, w, h, job.scale, page, mark, observers), fallback: `recorder:${cmd.reason}` }
     }
     return this.raster(paintable, job.unitIndex, w, h, job.scale, page, mark, observers)
+  }
+
+  /** Stage 3c notes: unit i's notes slide read from the original package
+   * (uncached afterwards: C4, every request reads again), planned or drawn.
+   * A deck whose slide list does not line up with its units has no notes. */
+  async notes(docKey: string, job: NotesJob): Promise<NotesPlan | NotesRaster> {
+    const doc = this.docs.get(docKey)
+    if (!doc) throw new RenderRefusal('unknown-doc')
+    if (!doc.notes) throw new RenderRefusal('unsupported-format', 'no notes for this document')
+    if (!Number.isInteger(job.unitIndex) || job.unitIndex < 0 || job.unitIndex >= doc.notes.slideParts.length) throw new RenderRefusal('unit-range')
+    if (job.scale !== 1 && job.scale !== 2) throw new RenderRefusal('scale')
+    const scale = job.scale
+    let notes
+    try { notes = await readSlideNotes(doc.notes.pkg, doc.notes.slideParts[job.unitIndex]!, job.unitIndex) } finally { doc.notes.pkg.dropCache() }
+    if (!job.draw) return { kind: 'notes-plan', ...planNotes(notes, scale, this.backend) }
+    const d = drawNotes(notes.paragraphs, scale, this.backend, notes.truncated)
+    if (!unitSurfaceAllowed(d.w, d.h)) throw new RenderRefusal('oversize')
+    const mark = markOptions(job.mark)
+    if (mark) paintMark(d.ctx, { widthPx: NOTES_WIDTH_CSS, heightPx: d.h / scale }, mark)
+    this.pages++
+    const png = criticalChunksOnly(new Uint8Array((d.canvas as unknown as { toBuffer(m: 'image/png'): Buffer }).toBuffer('image/png')))
+    return { kind: 'raster', w: d.w, h: d.h, png, truncated: d.truncated, chars: d.chars }
   }
 
   /**

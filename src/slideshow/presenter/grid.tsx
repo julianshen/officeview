@@ -8,6 +8,10 @@
  * of it is handed back with `releaseGrid` so its slot opens. The window is
  * computed from the scroller's own geometry on `scroll` (no
  * IntersectionObserver: the popup realm and jsdom both may lack it).
+ *
+ * A streamed deck (additive): `omitHidden` leaves hidden slides out of the
+ * grid entirely (no cell, no thumbnail), and a `paint` that returns `false`
+ * (the bitmap is not there yet) is retried on the next `version` change.
  */
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react'
 
@@ -42,48 +46,83 @@ export interface SlideGridProps {
   thumb(i: number): HTMLCanvasElement
   /** Hands the thumbnail back. */
   release(i: number): boolean
-  paint(i: number, canvas: HTMLCanvasElement): void
+  /** Paints the thumbnail; `false` means not ready yet, retried on the next `version` change. */
+  paint(i: number, canvas: HTMLCanvasElement): boolean | void
   onJump(i: number): void
+  /** Hidden slides get no cell at all (a streamed deck: hidden slides never appear). */
+  omitHidden?: boolean
+  /** The source's change counter: thumbnails whose paint returned `false` are painted again when it moves. */
+  version?: number
   /** The grid covers the controls, so it carries its own close button. */
   onClose?(): void
 }
 
 const label = (i: number, hidden: boolean) => `Slide ${i + 1}${hidden ? ' (hidden)' : ''}`
 
+/** The deck indices the grid lists, in order: every slide, or the shown ones with `omitHidden`. */
+const listed = (p: SlideGridProps): number[] => {
+  const out: number[] = []
+  for (let i = 0; i < p.count; i++) if (!p.omitHidden || !p.hidden(i)) out.push(i)
+  return out
+}
+
 export function SlideGrid(p: SlideGridProps): ReactElement {
   const scroller = useRef<HTMLDivElement>(null)
-  const [range, setRange] = useState<[number, number]>(() => gridWindow({ top: 0, width: 0, height: 0 }, p.count))
+  const list = listed(p)
+  // The window is over cell positions; `list` maps a position to its deck index.
+  const [range, setRange] = useState<[number, number]>(() => gridWindow({ top: 0, width: 0, height: 0 }, list.length))
   const held = useRef(new Map<number, HTMLCanvasElement>())
   const slots = useRef(new Map<number, HTMLElement>())
+  /** Thumbnails whose paint said the picture is not there yet. */
+  const unpainted = useRef(new Set<number>())
   const props = useRef(p)
   props.current = p
+  const listRef = useRef(list)
+  listRef.current = list
 
   const measure = () => {
     const el = scroller.current
     if (!el) return
-    const next = gridWindow({ top: el.scrollTop, width: el.clientWidth, height: el.clientHeight }, props.current.count)
+    const next = gridWindow({ top: el.scrollTop, width: el.clientWidth, height: el.clientHeight }, listRef.current.length)
     setRange((r) => (r[0] === next[0] && r[1] === next[1] ? r : next))
+  }
+
+  const paintThumb = (i: number, c: HTMLCanvasElement) => {
+    if (props.current.paint(i, c) === false) unpainted.current.add(i)
+    else unpainted.current.delete(i)
   }
 
   // Lease the window, release what left it: never more than 48 held at once.
   useLayoutEffect(() => {
-    const [start, end] = range
+    const inWindow = new Set(listRef.current.slice(range[0], range[1]))
     const map = held.current
     for (const [i, c] of map) {
-      if (i >= start && i < end) continue
+      if (inWindow.has(i)) continue
       c.remove()
       props.current.release(i)
       map.delete(i)
+      unpainted.current.delete(i)
     }
-    for (let i = start; i < end; i++) {
+    for (const i of inWindow) {
       if (map.has(i)) continue
       const c = props.current.thumb(i)
       map.set(i, c)
       c.setAttribute('aria-hidden', 'true')
       slots.current.get(i)?.append(c)
-      if (c.width > 0) props.current.paint(i, c)
+      if (c.width > 0) paintThumb(i, c)
     }
   }, [range])
+
+  // A thumbnail not ready at lease is painted again once the source moves on (not at mount: the lease just painted).
+  const seenVersion = useRef(p.version)
+  useLayoutEffect(() => {
+    if (seenVersion.current === p.version) return
+    seenVersion.current = p.version
+    for (const i of [...unpainted.current]) {
+      const c = held.current.get(i)
+      if (c && c.width > 0) paintThumb(i, c)
+    }
+  }, [p.version])
 
   // Every thumbnail goes back with the grid.
   useEffect(() => () => {
@@ -103,7 +142,8 @@ export function SlideGrid(p: SlideGridProps): ReactElement {
   }, [])
 
   const items: ReactElement[] = []
-  for (let i = 0; i < p.count; i++) {
+  for (let n = 0; n < list.length; n++) {
+    const i = list[n]!
     const hidden = p.hidden(i)
     items.push(
       <li key={i}>
@@ -118,7 +158,7 @@ export function SlideGrid(p: SlideGridProps): ReactElement {
           <span
             data-officeview-presenter-thumb=""
             // Beyond the 48-thumbnail window (a very large grid pane): the cell says so instead of staying blank.
-            data-unheld={i < range[0] || i >= range[1] ? '' : undefined}
+            data-unheld={n < range[0] || n >= range[1] ? '' : undefined}
             ref={(el) => {
               if (el) {
                 slots.current.set(i, el)

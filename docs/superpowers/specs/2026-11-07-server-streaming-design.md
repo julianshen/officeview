@@ -312,6 +312,15 @@ export interface StreamSource {
   number | null }`, and the manifest carries `can.print` and `caps.print`
   (`null` when print is off; the client fails closed on `can.print: true`
   with `caps.print: null`). Stage 3 design §4.2 amendment.
+  *Amendment (2026-11-14, Stage 3c):* `policy.notes?: boolean` (default
+  on). Only `undefined` or `true` is on; any other value (`false`, `null`,
+  a string, a number) is off (fail closed). The manifest's `can.notes` is
+  `role === 'presenter' && notes`, so an audience viewer never gets notes
+  whatever `notes` says. `can.present` is true for every PPTX session and
+  false otherwise. Under audited `contentPolicy: 'full'` the manifest flags
+  each hidden slide `units.list[i].hidden: true` (owner call C1; under
+  `visible-only` hidden slides are not units). Stage 3 design §4.3
+  amendment.
   Relaxations are recorded in the audit table (§9.3/§13.4); **the client has
   no relax surface** — a client-requested relax closes with `policy-refused`
   (§16 T6). Turning both marks off makes the session **untraceable** and its
@@ -416,6 +425,11 @@ states: HELLO → MANIFEST → READY(ack) → STREAM → (RENEW → STREAM)* →
    already printed in the session are kept and measured against them, the
    resumed MANIFEST carries the new `caps.print`, and the change is
    audited in `services` (its `print` column) before it takes effect.
+   *Amendment (2026-11-14, Stage 3c):* `notes` leaves the policy match
+   too. A resume may turn notes on or off. The resumed MANIFEST carries the
+   new `can.notes`, and the change is audited in `services` (its `notes`
+   column, added by `ALTER TABLE` to an older store) before it takes effect.
+   `role` stays exact-match: a role change on resume closes `auth-failed`.
 8. **Code registry (round-10 F4; one normative registry, complete):**
    the only session CLOSE codes and op-refusal codes in the protocol are
    in this table — "no other code exists" means exactly this list, and
@@ -442,6 +456,7 @@ states: HELLO → MANIFEST → READY(ack) → STREAM → (RENEW → STREAM)* →
    | `copy-quota-exhausted` | op refusal, never a CLOSE, carries `limit` and `requested` (added 2026-11-12) | a copy or focused a11y read that would pass `maxSessionParagraphs` |
    | `print-too-large` | op refusal, never a CLOSE (added 2026-11-13, Stage 3b); carries `limit` and `requested` over `maxPages`, neither when the job fits at no print scale | a print job over `maxPages`, or one whose pages fit neither scale 2 nor scale 1 (`planPrint`); the client also fails a job locally with this code (no `limit`) over its 192 MiB blob ceiling (Stage 3 design §4.2) |
    | `print-quota-exhausted` | op refusal, never a CLOSE, carries `limit` and `requested` (added 2026-11-13) | a print job that would take the session's printed pages past `maxSessionPages` |
+   | `invalid-unit` | op refusal, never a CLOSE (added 2026-11-14, Stage 3c) | a `notes` request for a unit out of range, not an integer, or a hidden slide (Stage 3 design §4.3) |
 
    `session-rotated` is **only** an op refusal (a typed text-message
    reply; the session stays open) — never a CLOSE. `rate-limited` and
@@ -1297,6 +1312,38 @@ never grants notes. Notes assets live in the §9.3
 `notes:<presenterId>` namespace. **Limit:** a presenter can retype the
 notes; marks trace screenshots, not retyping (§19.5).
 
+*Amendment (2026-11-14, Stage 3c, as built; Stage 3 design §4.3
+amendment):*
+- **Notes travel as one image per request.** The image is the notes body
+  text (the text local Presenter View shows), drawn by the server as plain
+  text on white (owner call C2). Its width is 720 CSS px × scale, scale 1
+  or 2 by the viewer's DPR. Its height fits the text, up to 8,192 device
+  px, and longer text ends with the drawn line "Notes continue — too long
+  to show in full.". A slide with no notes, or with an empty body, gets a
+  valid white image with the marks only.
+- **Both marks.** Each image carries both marks; one that cannot carry
+  Layer-1 is refused, not sent.
+- **Wire.** Client → server `{reqId, type: 'notes', token, unit, scale}`;
+  server → client `notes-start {reqId, w, h, scale}`, then one
+  NOTES_RASTER (kind 7) frame (`u32 LE unitIndex` + the UNIT_RASTER
+  body). A refusal is one `{reqId, type: 'error', code}`, where `code` is
+  `policy-refused`, `invalid-unit`, `rate-limited` or `session-rotated`,
+  and nothing more follows.
+- **Check order, all before any render:** token, `can.notes`, unit (in
+  range and not hidden), scale, then the `'notes'` rate. Then the plan,
+  the durable `notes_deliveries (sid, unit_index, scale, chars_drawn, at)`
+  row, the draw, Layer-1 and the `notes_marks` row, and only then
+  `notes-start` and the frame.
+- **Not cached** (owner call C4): every request renders and audits again.
+  `presenterId` is the session id (owner call C3), so no notes are shared
+  across sessions. Notes never go through the page-asset table.
+- **Notes accessibility is out of this piece.** No notes a11y, semantic or
+  search answer exists; the notes canvas is labelled "Speaker notes
+  (image)" only (§19 item 12).
+- **The client asks only when it may.** It asks for notes only with
+  `can.notes`, only for the slide that has been current for 300 ms, and
+  shows them only in Presenter View, never on the audience surface.
+
 ### 12a.6 Media
 
 Poster frames by default; optional Stage 3d transcodes (mark-burned,
@@ -1322,6 +1369,34 @@ metadata-free, via `src/slideshow/media/lease.ts`), never original bytes.
   `ended` resolves, and the show **never falls back to local rendering**.
 - **Session lifetime:** token renew/revocation/expiry follow §10.
 
+*Amendment (2026-11-14, Stage 3c, as built; Stage 3 design §4.3
+amendment):*
+- **Counts.** The show counts shown slides only: `slideIndex`, `goTo()`,
+  a numeric `from` and the counter skip hidden units.
+- **Synchronous checks.** `present()` checks synchronously from the
+  manifest: `can.present`; at least one shown slide; `from` in range; and
+  `presenterView: true` only with `can.notes`, else `not-presentable`, with
+  no `window.open` and no full screen. Without `can.notes`, `'auto'` opens
+  no presenter window.
+- **Lazy loading.** The remote show is a lazy chunk loaded after the
+  surface is up. The eager cost is 72 B: a launch hook in `present.ts`, and
+  an `OfficeDoc` ref bridge that refuses `not-presentable` before the
+  remote view mounts.
+- **Unit rate.** The show keeps under the `'unit'` rate with a client
+  budget of 48 requests in any 60 s (sliding window):
+  - prefetch is withheld while fewer than 8 remain;
+  - every server-charged send counts, validation retries included;
+  - a navigation target goes out at once unless another went out under
+    400 ms ago, and then after 250 ms of stability;
+  - prefetch waits for the target and 1 s of stability.
+
+  More than about 19 s of non-stop target changes waits for the window
+  ("Loading slide n" meanwhile) and never closes 4008 (§19 item 12).
+- **Slide cache.** At most 8 slide bitmaps, sized from half the free show
+  workspace at the largest bucket. Each bitmap's bytes are leased before
+  its request; with no room the slide shows a typed error frame and the
+  show stays navigable.
+
 ### 12a.8 Acceptance criteria (restored round 8; referenced by §17/T5)
 
 - **3b (static show + notes):** present a streamed deck; forward, back,
@@ -1331,6 +1406,9 @@ metadata-free, via `src/slideshow/media/lease.ts`), never original bytes.
   request; no PPTX, notes text outside the a11y service, or media bytes
   cross the wire; both marks on every slide and notes image; revocation
   mid-show exits cleanly.
+  *Validated 2026-11-14:* `docs/validation/streaming-s3c.md` maps each
+  line to its tests. Notes text crosses the wire nowhere, since there is
+  no notes a11y service yet.
 - **3c (animation):** the corpus's animated decks play through the
   stream with pixel-diff against local playback at fixed timeline
   samples within the §7.4 tolerance; the §12a.3 wire audit is green; the
@@ -1532,6 +1610,23 @@ outcomes.
   `PRINT_SEND_HIGH_WATER` = 4 MiB unsent (Bun's default 16 MiB
   `backpressureLimit` is kept). A job's pages must fit
   `PRINT_JOB_MAX_DECODED` = 1 GiB of RGBA together.
+  *Amendment (2026-11-14, Stage 3c, as built):* notes are rate class
+  `'notes'`, `NOTES_RATE_PER_MIN` = 30 requests per minute per sid,
+  counted on every request that reaches the rate check (after the token,
+  `can.notes`, unit and scale checks). An overflow is an op refusal
+  (`rate-limited`) only and never counts toward the 4008 breach window.
+  The show's slide requests stay in `'unit'` (60/min, third breach in
+  60 s closes 4008), and the client holds them to 48/min (§12a.7
+  amendment). That budget belongs to the session, not to a show (R28).
+  One send log per StreamSession lives as long as the sid, so it survives
+  show restarts and resume. It is stamped on every server-charged unit
+  send, from any caller. Each send holds its slot until the first server
+  reply for its reqId arrives, and then for 62 s more (R29). Aborted
+  requests stay tracked until answered. A stale-token re-send takes over
+  the refused send's slot under its new reqId (R30). A send unanswered at resume is
+  taken as received at the resume reply. A first send waits for fewer than
+  48 sends in the log, a re-send for fewer than 56. A `rate-limited` unit
+  refusal holds every unit send for 62 s.
 - **Handshake windows [call]:** `ready window` 2 s from the MANIFEST
   (the one definition of the §6.2 rule-4 window; expiry CLOSEs with
   `ready-timeout`), **renew: a scheduling lead — the server sends RENEW
@@ -1581,6 +1676,30 @@ outcomes.
   per job (`PRINT_JOB_MAX_BLOB_BYTES`). `print-start` and `print-done` are
   text messages of a few dozen bytes (the wire tests pin them ≤ 48 KiB);
   the client fails a job on one over 48 KiB.
+
+  *Amendment (2026-11-14, Stage 3c, as built):* NOTES_RASTER (kind 7) is
+  `u32 LE unitIndex` + the UNIT_RASTER body. It is admitted only on the
+  reqId of a live notes request, after its `notes-start`, and for the unit
+  asked; an unsolicited or late frame is dropped (`unexpected-reqId`) and
+  the session stays open. Caps:
+  - encoded: `NOTES_ENCODED_CAP` = 8 MiB on both sides;
+  - decoded: 64 MiB, and per request `16 + w × h × 4` of the declared
+    image. The frame's size must equal the declaration.
+
+  The client's grant from the aggregate below is `min(encoded bound,
+  8 MiB) + 2 × body`, sized from the declared `w × h`.
+  - **Tallest images.** The tallest scale-2 image (1,440 × 8,192) needs
+    about 98 MiB, so the grant is clamped to the 96 MiB aggregate and fits
+    only when nothing else is in flight.
+  - **No room.** The request is refused `rate-limited` client-side, and
+    the show retries it once after its slide requests drain.
+  - **Workspace.** The show also reserves the worst-case image (1,440 ×
+    8,192 × 4 B, about 45 MiB, at scale 2) in its own workspace before
+    asking, then trims to the delivered image and its Presenter View copy.
+  - **Deadline.** A request has a 5 s deadline from its send and again
+    from `notes-start`.
+
+  `notes-start` is a text message of a few dozen bytes.
 
   Admission is **streaming inflation** (round-10 F3): the compressed
   payload is inflated incrementally and the inflate/parse **aborts the
@@ -1871,6 +1990,42 @@ render pipeline.
     - (h) Printing through the browser's own menu prints a blank page for
       the remote view (its root is hidden in print media); only the Print
       button or Ctrl/Cmd+P prints the document.
+
+12. **Stage 3c presenting as built (2026-11-14; Stage 3 design §4.3
+    amendment; `docs/validation/streaming-s3c.md`).**
+    - (a) Notes accessibility is out: the notes image has no text
+      alternative ("Speaker notes (image)"), and no notes text is served as
+      text to anyone.
+    - (b) The tallest scale-2 notes images (about 98 MiB inflate peak) are
+      clamped to the 96 MiB session aggregate. They are admitted only when
+      nothing else is in flight; otherwise they are retried once, then shown
+      as "Notes could not be loaded".
+    - (c) Every notes request reserves the worst-case image in the show
+      workspace first (about 45 MiB at scale 2). With less free, the notes
+      are refused.
+    - (d) More than about 19 s of non-stop slide changes can use up the
+      session's 48/min budget. Viewer paints and an earlier show in the
+      same minute share it (R28). The show then waits for the window,
+      showing "Loading slide n". The client never sends into its own full
+      window, and after a refusal it sends no new unit request for 62 s.
+      Sends are aged from the server's reply, not from the client's send
+      (R29), so outbound delay cannot leave more than 56 of them in a
+      server window. What remains depends on two things. Both sides must
+      measure 60 s alike, and the server must not count an old socket's
+      request after it has answered the resume. An unanswered send holds
+      its slot until it is answered, or the session resumes or ends.
+    - (e) The show's charge accounting is conservative, not exact. Every
+      server-charged send is counted, so it may hold back while the server
+      would still accept.
+    - (f) Notes appear at least 300 ms after a slide becomes current (the
+      server has no notes-cancel).
+    - (g) Hidden flags are fixed at session open (read from the package);
+      a resume does not change which slides are hidden.
+    - (h) Open, pre-existing (units too): the client buffers up to the
+      8 MiB per-kind encoded cap before the per-request decoded cap rejects
+      a frame.
+    - (i) A presenter can retype the notes (item 5); each notes request is
+      audited and both marks are on the image.
 
 ## 20. Appendix: command-projection extension (Stage 2+)
 

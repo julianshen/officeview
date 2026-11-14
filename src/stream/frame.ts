@@ -75,6 +75,8 @@ export class Reassembler {
   /** Drops `reqId`'s pending message, if any: its buffered fragments are
    * released and an inflation in progress is cancelled (that push resolves
    * `cancelled`). Idempotent; later fragments of it are out of sequence. */
+  /** A message for `reqId` is in partial reassembly or inflation. */
+  has(reqId: number): boolean { return this.pending.has(reqId) }
   drop(reqId: number): void { if (this.pending.has(reqId)) this.reject(reqId, 'cancelled') }
   sweep(): Rejection[] {
     const rejections: Rejection[] = [], now = this.now()

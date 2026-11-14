@@ -9,7 +9,7 @@ export const exampleManifest = (): Manifest => ({
   layoutFingerprint: 'f'.repeat(64),
   session: { sid: '0123456789ab', token: 'x.y.z', expiresSec: 300, resume: 'session' },
   policy: { contentPolicy: 'visible-only', protection: 'final-raster', semantic: 'visible-only', contentPolicyId: 'visible-only@1', viewerMarkId: 'fixed' },
-  can: { search: true, copy: false, print: true, textA11y: false, present: false, notes: false, links: false },
+  can: { search: true, copy: false, print: true, textA11y: false, present: true, notes: false, links: false },
   caps: { copy: null, a11y: 'off', print: { maxPages: null, maxSessionPages: null } },
   recorder: { commands: 'ovsd-1', textMode: 'text', scalesBuckets: [1, 2], requiredFaces: [{ id: 'carlito-regular', hash: 'f6418f708baede9789daef5d', alias: 'Calibri' }], projection: 'final-raster' },
   limits: { maxUnitPx: 8192, maxAssetBytes: 8 * 1024 * 1024, wsFrameBytes: 1 << 20, tilePx: 512 },
@@ -58,6 +58,19 @@ describe('MANIFEST', () => {
   ])('keeps caps %j', (caps) => {
     const r = validateManifest({ ...exampleManifest(), caps: { ...caps, extra: 1 } })
     expect(r).toEqual({ ok: true, manifest: { ...exampleManifest(), caps } })
+  })
+  it('a hidden unit keeps hidden: true; others carry no hidden key', () => {
+    const units = { count: 2, list: [{ w: 960, h: 540 }, { w: 960, h: 540, hidden: true }] }
+    const r = validateManifest({ ...exampleManifest(), units })
+    expect(r).toEqual({ ok: true, manifest: { ...exampleManifest(), units } })
+    expect(r.ok && 'hidden' in r.manifest.units.list[0]!).toBe(false)
+  })
+  it.each([[false], ['x'], [1], [null], [{}]])('rejects units.list[i].hidden %p (fail closed)', (hidden) => {
+    const units = { count: 2, list: [{ w: 960, h: 540 }, { w: 960, h: 540, hidden }] }
+    expect(validateManifest({ ...exampleManifest(), units })).toEqual({ ok: false, field: 'units.list[1].hidden' })
+  })
+  it.each([['present'], ['notes']])('rejects a non-boolean can.%s', (k) => {
+    expect(validateManifest({ ...exampleManifest(), can: { ...exampleManifest().can, [k]: 'yes' } })).toEqual({ ok: false, field: `can.${k}` })
   })
   it('a gzip space bomb is refused at the decoded cap', async () => {
     const res = await throughFrames(new Uint8Array(1 << 20).fill(0x20))

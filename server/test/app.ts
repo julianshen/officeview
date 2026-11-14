@@ -13,6 +13,8 @@
  *          unit = copy 'full'; focused = copy capped 3 / session 5; off = copy and a11y off.
  *   ?print=on|off|cap2|session3 sets the session's print policy (Stage 3b):
  *          on = true; off = false; cap2 = {maxPages: 2}; session3 = {maxPages: 5, maxSessionPages: 3}.
+ *   ?role=presenter makes the viewer a presenter (Stage 3c); absent = the demo's role (audience).
+ *   ?notes=off sets the session's notes policy to false (Stage 3c); absent = the demo default (on).
  *   P + 1  controls: POST /drop|/revoke|/oversize?sid=&srv=short, GET /sessions,
  *          GET /fontpack/* (CORS), GET /__stream-harness (identity)
  */
@@ -35,6 +37,9 @@ const COPY = { full: 'full', cap3: { maxParagraphs: 3 }, off: false } as const
 const A11Y = { unit: { copy: 'full' }, focused: { copy: { maxParagraphs: 3, maxSessionParagraphs: 5 } }, off: { copy: false, textA11y: false } } as const
 /** TEST-ONLY `?print=on|off|cap2|session3` (Stage 3b Task 8): the session's print policy; absent = the demo default. */
 const PRINT = { on: true, off: false, cap2: { maxPages: 2 }, session3: { maxPages: 5, maxSessionPages: 3 } } as const
+/** TEST-ONLY `?role=presenter` and `?notes=off` (Stage 3c Task 7). */
+const ROLE = { presenter: 'presenter', audience: 'audience' } as const
+const NOTES = { off: false } as const
 const pick = <T extends object>(table: T, v: string | null): T[keyof T] | undefined => (v !== null && v in table ? table[v as keyof T] : undefined)
 const hooks = {
   ...demo,
@@ -43,7 +48,11 @@ const hooks = {
     if (!d) return d
     const copy = pick(COPY, req.url.searchParams.get('copy')), a11y = pick(A11Y, req.url.searchParams.get('a11y'))
     const print = pick(PRINT, req.url.searchParams.get('print'))
-    return { ...d, policy: { ...d.policy, ...(copy !== undefined ? { copy } : {}), ...a11y, ...(print !== undefined ? { print } : {}) } }
+    const role = pick(ROLE, req.url.searchParams.get('role')), notes = pick(NOTES, req.url.searchParams.get('notes'))
+    return {
+      ...d, ...(role !== undefined ? { role } : {}),
+      policy: { ...d.policy, ...(copy !== undefined ? { copy } : {}), ...a11y, ...(print !== undefined ? { print } : {}), ...(notes !== undefined ? { notes } : {}) },
+    }
   },
 }
 

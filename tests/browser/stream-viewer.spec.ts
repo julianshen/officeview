@@ -32,10 +32,10 @@ test('happy: a protected deck streams rasters with no text layer and the host wa
   await expect(page.getByText('text unavailable in this viewing mode')).toHaveCount(1)
   expect(await page.locator('[role="document"] input, [role="document"] [contenteditable]').count()).toBe(0)
   await expect(page.getByText('HOSTMARK')).toHaveCount(0)
-  // No selectable text inside the viewer (the Stage 3b Print button's label is chrome, not document text).
+  // No selectable text inside the viewer (the Stage 3b Print and Stage 3c Present buttons' labels are chrome, not document text).
   expect(await viewer(page).evaluate((el) => {
     const c = el.cloneNode(true) as Element
-    c.querySelectorAll('[data-ov-print-button]').forEach((b) => b.remove())
+    c.querySelectorAll('[data-ov-print-button], [data-ov-present-button]').forEach((b) => b.remove())
     return (c.textContent ?? '').replace('text unavailable in this viewing mode', '').trim()
   })).toBe('')
 })

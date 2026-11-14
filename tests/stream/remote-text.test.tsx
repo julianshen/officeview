@@ -15,7 +15,7 @@ function fakeDoc(can: Can = {}, textCaps: TextCaps = { copy: null, a11y: 'off' }
   const caps: RemoteOfficeDoc['manifest']['caps'] = { ...textCaps, print: { maxPages: null, maxSessionPages: null } }
   const manifest = {
     name: 'deck.pptx', kind: 'pptx', units: { count: 2, list: [{ w: 200, h: 100 }, { w: 200, h: 100 }] },
-    can: { search: true, copy: false, print: true, textA11y: false, present: false, notes: false, links: false, ...can },
+    can: { search: true, copy: false, print: true, textA11y: false, present: true, notes: false, links: false, ...can },
     caps, recorder: { scalesBuckets: [1, 2] }, notices: [],
   }
   const listeners = new Set<() => void>()

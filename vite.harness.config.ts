@@ -83,6 +83,8 @@ function lazyPagedChunks(): Plugin {
         // The stream client (useOfficeFile's dynamic import) and the remote view (OfficeDoc's lazy dispatch).
         '/src/stream/remote/open.ts',
         '/src/components/remote/RemoteDocView.tsx',
+        // The remote slide show (stream/remote/present-start's dynamic import, Stage 3c).
+        '/src/stream/remote/show.ts',
       ]) void server.warmupRequest(url)
     },
   }

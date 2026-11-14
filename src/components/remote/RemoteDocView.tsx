@@ -4,14 +4,19 @@
  * scale bucket for devicePixelRatio when it nears the viewport. Stage 3a adds
  * server-answered search, selection and copy and the screen-reader text layer
  * (RemoteText.tsx); Stage 3b prints server-drawn print rasters
- * (RemotePrint.tsx), never these canvases. There is no zoom or presentation.
+ * (RemotePrint.tsx), never these canvases. Stage 3c presents a streamed deck
+ * (Present button, F5, the `present()` handle): the eager start in present.ts
+ * over this view's show host, then the lazy remote show (stream/remote/show.ts).
+ * There is no zoom.
  * With copy and text a11y both off the view says "text unavailable in this
  * viewing mode" once.
  */
-import { useEffect, useId, useRef, useState, type CSSProperties, type ReactElement } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type MutableRefObject, type ReactElement } from 'react'
 import type { RemoteOfficeDoc } from '../../stream/remote/remote-doc'
+import { presentRemote } from '../../stream/remote/present-start'
+import { defaultPlatform, type OfficeViewerHandle, type PresentOptions, type PresentPlatform, type SlideShowDiagnostic, type SlideShowMotion } from '../present'
 import { themeRootProps, type ThemeMode } from '../theme'
-import { useRemotePrint } from './RemotePrint'
+import { BUTTON, useRemotePrint } from './RemotePrint'
 import { UnitWrap, useRemoteText } from './RemoteText'
 
 export interface RemoteDocViewProps {
@@ -23,6 +28,19 @@ export interface RemoteDocViewProps {
   pageGapPx?: number
   allowPrint?: boolean
   title?: string
+  /** As on <OfficeDoc>: the host may withhold presenting; the server's `can.present` decides too. */
+  allowPresent?: boolean
+  presentShortcuts?: boolean
+  slideShowMotion?: SlideShowMotion
+  onSlideShowStart?: () => void
+  onSlideShowEnd?: () => void
+  /** Streamed slide index (hidden slides not counted, R19). */
+  onSlideShowSlideChange?: (slideIndex: number, buildIndex: number) => void
+  onSlideShowDiagnostic?: (diagnostic: SlideShowDiagnostic) => void
+  /** <OfficeDoc>'s ref handle reaches this view's start through here while it is mounted. */
+  presentRef?: MutableRefObject<OfficeViewerHandle['present'] | null>
+  /** @internal Tests inject the full-screen/popup platform. */
+  __presentPlatform?: PresentPlatform
 }
 
 export const TEXT_UNAVAILABLE = 'text unavailable in this viewing mode'
@@ -43,14 +61,30 @@ export function remotePrintGuard(instance: string): string {
 /** Host props that do not apply to a remote document are ignored: the baked
  * mark is authoritative (no `watermark`), copy follows the server's `can.copy`,
  * and print follows the server's `can.print`. */
-export default function RemoteDocView({ document: doc, theme, className, style, background, pageGapPx = 16, allowPrint = true, title }: RemoteDocViewProps): ReactElement {
+export default function RemoteDocView({
+  document: doc, theme, className, style, background, pageGapPx = 16, allowPrint = true, title,
+  allowPresent = true, presentShortcuts = true, slideShowMotion = 'auto', onSlideShowStart, onSlideShowEnd, onSlideShowSlideChange, onSlideShowDiagnostic,
+  presentRef, __presentPlatform = defaultPlatform,
+}: RemoteDocViewProps): ReactElement {
   const canvases = useRef<Array<HTMLCanvasElement | null>>([])
   const units = doc.manifest.units.list
   const scroller = useRef<HTMLDivElement | null>(null)
   const text = useRemoteText(doc, scroller)
   const root = useRef<HTMLDivElement | null>(null)
   const instance = useId()
-  const print = useRemotePrint(doc, { allowPrint, themeRoot: root, ...(title !== undefined ? { title } : {}) })
+  const present = useRemotePresent(doc, scroller, canvases, pageGapPx, {
+    allowPresent, slideShowMotion, platform: __presentPlatform,
+    callbacks: { onStart: onSlideShowStart, onEnd: onSlideShowEnd, onSlideChange: onSlideShowSlideChange, onDiagnostic: onSlideShowDiagnostic },
+  })
+  useLayoutEffect(() => {
+    if (!presentRef) return
+    presentRef.current = present.start
+    return () => { presentRef.current = null }
+  })
+  const presentButton = present.offered
+    ? <button type="button" data-ov-present-button="" onClick={() => void present.start({ from: 'beginning' }).catch(() => {})} style={BUTTON}>Present</button>
+    : null
+  const print = useRemotePrint(doc, { allowPrint, themeRoot: root, lead: presentButton, ...(title !== undefined ? { title } : {}) })
   // The observer below is created per document; it reaches the latest a11y handler through this ref.
   const a11yVisible = useRef(text.a11yVisible)
   a11yVisible.current = text.a11yVisible
@@ -97,6 +131,13 @@ export default function RemoteDocView({ document: doc, theme, className, style, 
     // is server-drawn print rasters only (RemotePrint.tsx).
     <div ref={root} {...themeRootProps(theme, instance)} data-ov-print="false" className={className} style={style}
       onKeyDown={(e) => {
+        // F5, Shift+F5 from the current slide, Alt+F5 Presenter View (as the local viewer);
+        // Ctrl/Cmd+F5 stays the browser's hard reload.
+        if (e.key === 'F5' && presentShortcuts && present.offered && !(e.ctrlKey || e.metaKey)) {
+          e.preventDefault()
+          void present.start({ from: e.shiftKey ? 'current' : 'beginning', ...(e.altKey ? { presenterView: true } : {}) }).catch(() => {})
+          return
+        }
         if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'p') {
           // Always swallowed: the browser's own print would print the (hidden) screen.
           e.preventDefault()
@@ -114,6 +155,7 @@ export default function RemoteDocView({ document: doc, theme, className, style, 
         {/* One line is always reserved: a copy message coming or going must not
             shift the units under a drag in progress. */}
         <div role="status" data-officeview-notice="" data-ov-remote-chrome="" style={{ minHeight: '1lh' }}>{text.message ?? (textOff ? TEXT_UNAVAILABLE : '')}</div>
+        {present.notice ? <div role="alert" data-ov-present-notice="" data-ov-remote-chrome="">{present.notice}</div> : null}
         {ended ? <div role="alert" data-stream-error={ended}>Viewing session ended ({ended}).</div> : null}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: pageGapPx, padding: pageGapPx }}>
           {units.map((u, i) => (
@@ -124,6 +166,74 @@ export default function RemoteDocView({ document: doc, theme, className, style, 
           ))}
         </div>
       </div>
+      {/* The show host (slideshow spec 4.1): always mounted, empty and hidden, inside the theme root. */}
+      <div ref={present.host} data-officeview-show="" tabIndex={-1} style={{ visibility: 'hidden' }} />
     </div>
   )
+}
+
+/**
+ * Presenting a streamed deck: offered while the server's `can.present`, the
+ * host's `allowPresent` and the session all allow it (re-read on a resume).
+ * `start` calls `presentRemote` (the eager prologue) synchronously (the
+ * gesture rule); the start belongs to the document epoch (a new document,
+ * unmount, `allowPresent` withdrawn or the session's end cancels it, even
+ * while the show module is still loading, or ends the show). The navigation
+ * callbacks speak unit (page) indices.
+ */
+function useRemotePresent(doc: RemoteOfficeDoc, scroller: MutableRefObject<HTMLDivElement | null>, canvases: MutableRefObject<Array<HTMLCanvasElement | null>>, gap: number, o: {
+  allowPresent: boolean; slideShowMotion: SlideShowMotion; platform: PresentPlatform
+  callbacks: Parameters<typeof presentRemote>[0]['callbacks']
+}) {
+  const host = useRef<HTMLDivElement | null>(null)
+  const epoch = useRef<AbortController | null>(null)
+  const gen = useRef(0)
+  const [notice, setNotice] = useState('')
+  const [, setManifestRev] = useState(0)
+  useEffect(() => doc.onManifestChange?.(() => setManifestRev((n) => n + 1)), [doc])
+  const [endedDoc, setEndedDoc] = useState<RemoteOfficeDoc>()
+  useEffect(() => {
+    let live = true
+    void doc.ended.then(() => { if (live) setEndedDoc(doc) })
+    return () => { live = false }
+  }, [doc])
+  useLayoutEffect(() => {
+    const c = epoch.current = new AbortController()
+    gen.current++
+    // A terminal end (revoked, expired, closed) aborts this document's epoch only.
+    void doc.ended.then(() => c.abort())
+    return () => c.abort()
+  }, [doc, o.allowPresent])
+  const allow = o.allowPresent && endedDoc !== doc
+  const start = (opts?: PresentOptions) => {
+    setNotice('')
+    const r = scroller.current
+    const back = r?.ownerDocument.activeElement ?? null
+    const run = presentRemote({
+      doc, host: host.current!, opts, platform: o.platform, generation: gen.current, allow, motion: o.slideShowMotion, signal: epoch.current!.signal,
+      callbacks: {
+        ...o.callbacks,
+        currentSlide() {
+          if (!r) return 0
+          const box = r.getBoundingClientRect(), mid = box.top + box.height / 2
+          const list = canvases.current.slice(0, doc.manifest.units.list.length)
+          const i = list.findIndex((c) => c && c.getBoundingClientRect().bottom > mid)
+          return i < 0 ? Math.max(0, list.length - 1) : i
+        },
+        scrollToSlide(i) {
+          const c = canvases.current[i]
+          // Its own scrollTop only: never scrollIntoView, so host ancestors never scroll.
+          if (r && c) r.scrollTop += c.getBoundingClientRect().top - r.getBoundingClientRect().top - gap
+        },
+        restoreFocus() {
+          const own = back?.ownerDocument
+          const el = back?.isConnected && back !== own?.body && back !== own?.documentElement ? back : r
+          ;(el as HTMLElement | null)?.focus?.()
+        },
+      },
+    })
+    run.catch((e) => e.code == 'load-failed' && setNotice(e.message))
+    return run
+  }
+  return { host, start, notice, offered: allow && doc.manifest.can.present }
 }

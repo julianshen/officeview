@@ -6,6 +6,7 @@ import { encodeManifest, type Manifest } from '../../src/stream/manifest'
 import { encodeRasterBody } from '../../src/stream/raster'
 import { encodeUnit } from '../../src/stream/unit'
 import { StreamSession } from '../../src/stream/remote/session'
+import { createRemoteDoc } from '../../src/stream/remote/remote-doc'
 import { StreamSessionError } from '../../src/stream/remote/errors'
 import { AssetTable } from '../../src/stream/record/recorder'
 import { encodeAssets } from '../../src/stream/asset-wire'
@@ -17,7 +18,7 @@ const exampleManifest = (): Manifest => ({
   layoutFingerprint: 'f'.repeat(64),
   session: { sid: '0123456789ab', token: 'x.y.z', expiresSec: 300, resume: 'session' },
   policy: { contentPolicy: 'visible-only', protection: 'final-raster', semantic: 'visible-only', contentPolicyId: 'visible-only@1', viewerMarkId: 'fixed' },
-  can: { search: true, copy: false, print: true, textA11y: false, present: false, notes: false, links: false },
+  can: { search: true, copy: false, print: true, textA11y: false, present: true, notes: false, links: false },
   caps: { copy: null, a11y: 'off', print: { maxPages: null, maxSessionPages: null } },
   recorder: { commands: 'ovsd-1', textMode: 'text', scalesBuckets: [1, 2], requiredFaces: [{ id: 'carlito-regular', hash: 'f6418f708baede9789daef5d', alias: 'Calibri' }], projection: 'final-raster' },
   limits: { maxUnitPx: 8192, maxAssetBytes: 8 * 1024 * 1024, wsFrameBytes: 1 << 20, tilePx: 512 },
@@ -264,5 +265,64 @@ describe('StreamSession (scripted socket)', () => {
     expect(calls).toBe(4)
     expect(closedWith?.code).toBe('connect-failed')
     expect(await s.ended).toMatchObject({ code: 'connect-failed' })
+  })
+})
+
+/** R16: the per-send hook fires once per server-charged unit send. */
+describe('StreamSession unit onSend (R16)', () => {
+  it('fires once on the first send', async () => {
+    const { s, sock } = await opened({ units: { count: 1, list: [{ w: 2, h: 2 }] } })
+    const onSend = vi.fn()
+    const p = s.unit(0, 1, undefined, onSend)
+    await settle()
+    expect(sock.units().length).toBe(1)
+    expect(onSend).toHaveBeenCalledTimes(1)
+    sock.frame(3, sock.units()[0]!.reqId, raster(0))
+    ;(await p).release()
+    expect(onSend).toHaveBeenCalledTimes(1)
+  })
+  it('a validation re-send is charged again: 2 sends, 2 charges', async () => {
+    const { s, sock } = await opened({ units: { count: 1, list: [{ w: 2, h: 2 }] } })
+    const onSend = vi.fn()
+    const p = s.unit(0, 1, undefined, onSend)
+    await settle()
+    sock.frame(3, sock.units()[0]!.reqId, raster(0, 40, 40))
+    await settle()
+    expect(sock.units().length).toBe(2)
+    expect(onSend).toHaveBeenCalledTimes(2)
+    sock.frame(3, sock.units()[1]!.reqId, raster(0))
+    ;(await p).release()
+  })
+  it('a stale-jti re-send is not charged: 2 sends, 1 charge', async () => {
+    const { s, sock } = await opened()
+    const onSend = vi.fn()
+    const p = s.unit(0, 1, undefined, onSend)
+    void p.catch(() => {})
+    await settle()
+    sock.deliver(JSON.stringify({ reqId: sock.units()[0]!.reqId, type: 'refused', code: 'session-rotated' }))
+    await settle()
+    expect(sock.units().length).toBe(2)
+    expect(onSend).toHaveBeenCalledTimes(1)
+  })
+  it('RemoteOfficeDoc.paint: a replay failure re-requests and charges the re-send: 2 charges', async () => {
+    const { s, sock } = await opened({ units: { count: 1, list: [{ w: 2, h: 2 }] } })
+    let decodes = 0
+    const backend = {
+      name: 'fake',
+      createCanvas: (w: number, h: number) => Object.assign(document.createElement('canvas'), { width: w, height: h }),
+      decodeImage: async () => { if (decodes++ === 0) throw new Error('bad png'); return document.createElement('canvas') },
+    } as never
+    const doc = createRemoteDoc(s, { backend })
+    const onSend = vi.fn()
+    const canvas = document.createElement('canvas')
+    const p = doc.paint(0, 1, 1, canvas, undefined, { onSend })
+    await settle()
+    sock.frame(3, sock.units()[0]!.reqId, raster(0))
+    await settle()
+    expect(sock.units().length).toBe(2)
+    expect(onSend).toHaveBeenCalledTimes(2)
+    sock.frame(3, sock.units()[1]!.reqId, raster(0))
+    await p
+    expect(onSend).toHaveBeenCalledTimes(2)
   })
 })

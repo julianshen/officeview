@@ -7,10 +7,12 @@
  * comments off class members, object-literal properties and JSX props
  * (the library build keeps those verbatim; slideshow plan S1-1).
  */
-import type { OfficeDocSource } from './OfficeDoc'
+import type { DocxDocument } from '../docx/types'
+import type { XlsxDocument } from '../xlsx/types'
 import type { PptxDocument, PptxPackageHandle } from '../pptx/types'
 import type { SlideShowDiagnostic } from '../slideshow/types'
 import type { WatermarkOptions } from '../core/watermark'
+import type { RemoteOfficeDoc } from '../stream/remote/remote-doc'
 import { pptxPackageHandle } from '../pptx/parse'
 
 export type { SlideShowDiagnostic }
@@ -24,13 +26,14 @@ export class SlideShowError extends Error {
 }
 
 export interface PresentOptions {
+  /** A number is a slide index; on a streamed deck it counts the shown slides only (hidden left out). */
   from?: 'beginning' | 'current' | number
   /** 'auto' (default): Presenter View when a second screen can be used, else audience only. */
   presenterView?: boolean | 'auto'
 }
 
 export interface SlideShowSession {
-  /** 0-based, in deck order (hidden slides keep their index). */
+  /** 0-based. Local deck: deck order (hidden slides keep their index). Streamed deck: over the shown slides only (hidden not counted). */
   readonly slideIndex: number
   /** Click checkpoint within the slide. */
   readonly buildIndex: number
@@ -154,7 +157,8 @@ export interface ShowStart {
 }
 
 export interface PresentRequest {
-  doc: PptxDocument | OfficeDocSource
+  /** OfficeDoc's `OfficeDocSource`, named from its parts: the remote path (show.ts) must not reach OfficeDoc.tsx. */
+  doc: DocxDocument | XlsxDocument | PptxDocument | RemoteOfficeDoc
   host: HTMLElement
   opts?: PresentOptions
   platform: PresentPlatform
@@ -168,10 +172,23 @@ export interface PresentRequest {
   allowCopy?: boolean
   /** The viewer's document epoch: aborting it cancels the start or ends the show. */
   signal?: AbortSignal
+  launch?: ShowLaunch
 }
 
 /** @internal Tests defer or fail the chunk through this. */
 export const showLoader = { load: () => import('../slideshow') }
+
+/** The start handed to a launch once its chunk has loaded. */
+export type ShowHandoff = Omit<ShowStart, 'doc' | 'handle' | 'source' | 'isCurrent' | 'callbacks'> & { callbacks: Partial<SlideShowCallbacks> }
+
+/**
+ * A caller-prepared start (a streamed deck, stream/remote/present-start.ts):
+ * the caller has already made its own document checks; this loads its lazy
+ * runner. The shared prologue (allow, activation, token, popup per
+ * `opts.presenterView`, full screen, host, cleanup) stays here; the eager
+ * start knows nothing else about the document.
+ */
+export type ShowLaunch = () => Promise<(s: ShowHandoff) => Promise<SlideShowSession>>
 
 /**
  * The start sequence. Everything up to the import runs synchronously inside
@@ -181,8 +198,9 @@ export function startPresent(req: PresentRequest): Promise<SlideShowSession> {
   const { doc, host, opts = {}, platform: P } = req
   const from = opts.from ?? 'beginning'
   const d = host.ownerDocument, w = d.defaultView!
-  const code: SlideShowErrorCode | 0 = !req.allow || !('slides' in doc) ? 'not-presentable'
-    : typeof from == 'number' && !doc.slides[from] ? 'invalid-slide'
+  const L = req.launch
+  const code: SlideShowErrorCode | 0 = !req.allow || !(L || 'slides' in doc) ? 'not-presentable'
+    : typeof from == 'number' && !(L || (doc as PptxDocument).slides[from]) ? 'invalid-slide'
     : P.hasActivation(w) === false ? 'gesture-required' : 0
   const token = code ? 0 : acquireShowToken(host)
   if (!token) return Promise.reject(new SlideShowError(code || 'already-presenting'))
@@ -232,13 +250,10 @@ export function startPresent(req: PresentRequest): Promise<SlideShowSession> {
   host.focus()
   return Promise.race([
     new Promise<never>((_, no) => signal.addEventListener('abort', () => handed || no(new SlideShowError('cancelled')))),
-    showLoader.load().then((m) => {
+    (L ? L() : showLoader.load().then((m) => (s: ShowHandoff) => m.runShow({ ...s, doc: doc as PptxDocument, handle: pptxPackageHandle(doc as PptxDocument), callbacks: { ...m.viewerCallbacks(host, back), ...s.callbacks } }))).then((run) => {
       if (signal.aborted) return
       handed = 1
-      return m.runShow({
-        ...req, ...opts, doc: doc as PptxDocument, handle: pptxPackageHandle(doc as PptxDocument), token, fullscreen, retryFullscreen, from, signal, cleanup, popup,
-        callbacks: { ...m.viewerCallbacks(host, back), ...req.callbacks },
-      })
+      return run({ ...req, ...opts, token, fullscreen, retryFullscreen, from, signal, cleanup, popup })
     }),
   ]).catch((e) => {
     cleanup()

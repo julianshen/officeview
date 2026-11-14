@@ -25,6 +25,11 @@
  * Protection (spec 6.3): every presenter surface paints the watermark;
  * allowCopy=false makes the notes unselectable; allowPrint=false keeps the
  * popup out of print (the session marks its theme root).
+ *
+ * Image-backed sources (a streamed deck, additive): with `slideImage` the
+ * source has no deck or model; Next and the grid thumbnails paint finished
+ * slide bitmaps, the count is `slideCount`, hidden slides come from
+ * `hidden`, and the notes may be a server-drawn image (notes.tsx).
  */
 import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactElement } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -38,7 +43,7 @@ import { nextVisible } from '../player/order'
 import type { DiagnosticSink, NoteParagraph, ShowModel, SlideShowDiagnostic, SlideShowWorkspace } from '../types'
 import { DiagnosticsPanel } from './diagnostics'
 import { SlideGrid } from './grid'
-import { NotesPane } from './notes'
+import { NotesPane, type ImageNotes } from './notes'
 import type { PresenterPlacement } from './placement'
 import { createPresenterSurfaces, END_CURSOR, mirrorFrame, nextCheckpoint, paintPreview, previewTimeline, primePreview, releasePreview, type PresenterSurfaces, type PreviewOptions, type PreviewPosition } from './preview'
 import { formatElapsed, formatWallClock, type ElapsedTimer } from './timer'
@@ -48,8 +53,10 @@ export interface PresenterSource {
   /** Change notifications: slide, build, screen, presenter mode, diagnostics, the timer's second and the clock's minute. */
   subscribe(cb: () => void): () => void
   readonly version: number
-  readonly deck: PptxDocument
-  notes(): readonly NoteParagraph[]
+  /** The deck (a local show). An image-backed source has none and supplies `slideCount` instead. */
+  readonly deck?: PptxDocument
+  /** The shown slide's notes: paragraphs, or (an image-backed source) a server-drawn image. */
+  notes(): readonly NoteParagraph[] | ImageNotes
   diagnostics(): readonly SlideShowDiagnostic[]
   readonly sink: DiagnosticSink
   /** The show's elapsed timer (one per show, so it survives a swap or a closed popup). */
@@ -60,7 +67,7 @@ export interface PresenterSource {
   wall(): number
   /** The shown slide's timeline time on the show clock (never negative): what `next()` judges at. */
   slideTime(): number
-  readonly model: ShowModel | undefined
+  readonly model?: ShowModel | undefined
   readonly previewOptions: PreviewOptions
   readonly workspace: SlideShowWorkspace
   readonly watermark?: WatermarkOptions
@@ -74,6 +81,16 @@ export interface PresenterSource {
    * audience frame landed (`dest`, the mirror's px). Additive (PR #19 review 2).
    */
   drawMedia?(ctx: CanvasRenderingContext2D, dest: { x: number; y: number; w: number; h: number }): void
+  /** Image-backed (additive): the number of slides, in place of `deck.slides.length`. */
+  readonly slideCount?: number
+  /**
+   * Image-backed (additive): paints slide `index`'s finished bitmap fitted into `canvas` (Next and the grid
+   * thumbnails), in place of `previewOf`. `false` when the bitmap is not there yet: the view clears the canvas
+   * and calls again on the next `version` change, so it must be cheap and must not fetch per call.
+   */
+  slideImage?(index: number, canvas: HTMLCanvasElement): boolean
+  /** Image-backed (additive): whether slide `index` is hidden (no grid cell), in place of the model's flag. */
+  hidden?(index: number): boolean
   /** Paint inputs for slide `index` (the stage's, or a static stand-in). */
   previewOf(index: number, cursor?: SlideCursor, timeline?: SlideTimeline): StagePreview
   /** The presenter key rule (spec 4.3): text controls and the notes keep their keys, Esc exits. */
@@ -132,7 +149,9 @@ export function PresenterView({ session, host, doc }: PresenterViewProps): React
   const src = session.presenterSource
   useSyncExternalStore(src.subscribe, () => src.version)
   const st = session.state
-  const count = src.deck.slides.length
+  const count = src.slideCount ?? src.deck?.slides.length ?? 0
+  /** An image-backed source: finished slide bitmaps, no deck or model. */
+  const imageBacked = !!src.slideImage
   const slide = st.slide
   const model = src.model
   const ids = useId()
@@ -187,6 +206,26 @@ export function PresenterView({ session, host, doc }: PresenterViewProps): React
     win?.addEventListener('resize', fit)
     return () => win?.removeEventListener('resize', fit)
   }, [surfaces])
+
+  /** Image-backed: the slide's bitmap, or the black a local preview's letterbox shows while it waits. */
+  const paintImage = (canvas: HTMLCanvasElement, index: number): boolean => {
+    const ctx = canvas.width > 0 ? canvas.getContext('2d') : null
+    if (!ctx) return false
+    let ok = false
+    try {
+      ok = src.slideImage!(index, canvas)
+    } catch (e) {
+      src.sink.add({ code: 'presenter-paint', slideIndex: index, message: `Presenter View could not paint slide ${index + 1} (${e instanceof Error ? e.message : String(e)})` })
+    }
+    if (!ok) {
+      ctx.save()
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.fillStyle = '#000'
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.restore()
+    }
+    return ok
+  }
 
   const paintSlide = (canvas: HTMLCanvasElement, index: number, cursor?: SlideCursor, timeline?: SlideTimeline) => {
     const ctx = canvas.width > 0 ? canvas.getContext('2d') : null
@@ -249,17 +288,23 @@ export function PresenterView({ session, host, doc }: PresenterViewProps): React
       // A cursor the preview timeline cannot replay (a text build's fanned history): the slide advance.
       pos = after === undefined ? 'end' : { slide: after, cursor: END_CURSOR }
     }
+  } else if (slide !== 'end' && imageBacked) {
+    // Finished bitmaps have no builds: Next is the next shown slide.
+    pos = after === undefined ? 'end' : { slide: after, cursor: END_CURSOR }
   }
   const posKey = pos === 'end' ? 'end' : `${pos.slide}:${pos.cursor.step}:${pos.cursor.mode}`
   /** What Next was last painted with: the stage decodes a neighbour's pictures after its metadata, so they can arrive late. */
   const painted = useRef<{ images: ReadonlyArray<unknown>; ready: number } | undefined>(undefined)
   const paintNext = () => {
-    if (!surfaces || pos === 'end' || !model) return
+    if (!surfaces || pos === 'end') return
+    if (imageBacked) { paintImage(surfaces.preview, pos.slide); return }
+    if (!model) return
     painted.current = paintSlide(surfaces.preview, pos.slide, pos.cursor, previewTimeline(model, pos.slide))
   }
   const paintNextRef = useRef(paintNext)
   paintNextRef.current = paintNext
-  useLayoutEffect(paintNext, [posKey, surfaces, primed, epoch])
+  // Image-backed: every change repaints Next, so a bitmap that lands (or is replaced) shows; local deps are unchanged.
+  useLayoutEffect(paintNext, [posKey, surfaces, primed, epoch, imageBacked ? src.version : 0])
   useEffect(() => src.onFrame(() => {
     const p = painted.current
     if (p && countReady(p.images) !== p.ready) paintNextRef.current()
@@ -274,7 +319,9 @@ export function PresenterView({ session, host, doc }: PresenterViewProps): React
   const t = src.now()
   const timer = src.timer
   const status = slide === 'end' ? 'End of slide show' : `Slide ${slide + 1} of ${count}`
-  const nextLabel = pos === 'end' ? 'Next: end of slide show' : `Next: slide ${pos.slide + 1}${pos.slide === slide ? ', next build' : ''}`
+  // A finished bitmap has no builds: Next on the same slide (a looping single-slide show) is that slide again.
+  const nextBuild = pos !== 'end' && pos.slide === slide && !imageBacked
+  const nextLabel = pos === 'end' ? 'Next: end of slide show' : `Next: slide ${pos.slide + 1}${nextBuild ? ', next build' : ''}`
   const placement = host === 'window' ? src.placement : undefined
   const goField = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== 'Enter') return
@@ -310,7 +357,7 @@ export function PresenterView({ session, host, doc }: PresenterViewProps): React
         <figure data-officeview-presenter-next="" aria-label={nextLabel}>
           <div data-officeview-presenter-pane="" ref={previewSlot} hidden={pos === 'end'} />
           {pos === 'end' && <div data-officeview-presenter-end="">End of slide show</div>}
-          <figcaption>{pos === 'end' ? 'Next: end of slide show' : pos.slide === slide ? 'Next build' : `Next slide (${pos.slide + 1})`}</figcaption>
+          <figcaption>{pos === 'end' ? 'Next: end of slide show' : nextBuild ? 'Next build' : `Next slide (${pos.slide + 1})`}</figcaption>
         </figure>
         <NotesPane notes={src.notes()} selectable={src.protection.copy} />
       </div>
@@ -329,10 +376,11 @@ export function PresenterView({ session, host, doc }: PresenterViewProps): React
         <SlideGrid
           count={count}
           current={slide === 'end' ? -1 : slide}
-          hidden={(i) => !!src.model?.index.slides[i]?.hidden}
+          hidden={(i) => (src.hidden ? src.hidden(i) : !!src.model?.index.slides[i]?.hidden)}
           thumb={(i) => surfaces.grid(i)}
           release={(i) => surfaces.releaseGrid(i)}
-          paint={(i, c) => { paintSlide(c, i) }}
+          paint={(i, c) => (imageBacked ? paintImage(c, i) : void paintSlide(c, i))}
+          {...(imageBacked ? { omitHidden: true, version: src.version } : {})}
           onJump={(i) => { setGridOpen(false); session.goTo(i) }}
           onClose={() => setGridOpen(false)}
         />

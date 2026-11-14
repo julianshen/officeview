@@ -136,8 +136,8 @@ describe('select and copy over the wire', () => {
     expect((await copy(b, 22, await paragraphs(b, 204, 4, 4))).refused).toMatchObject({ code: 'copy-quota-exhausted', limit: 4, requested: 1 })
     // The audit keeps the open-time services and every change, with when.
     const row = h.stream.audit.get(sid)!
-    expect(row.services).toEqual({ copy: { maxParagraphs: 3, maxSessionParagraphs: 10 }, textA11y: 'focused', print: { maxPages: null, maxSessionPages: null } })
-    expect(row.servicesChanged).toEqual([{ copy: { maxParagraphs: 3, maxSessionParagraphs: 4 }, textA11y: 'focused', print: { maxPages: null, maxSessionPages: null }, at: expect.any(Number) }])
+    expect(row.services).toEqual({ copy: { maxParagraphs: 3, maxSessionParagraphs: 10 }, textA11y: 'focused', print: { maxPages: null, maxSessionPages: null }, notes: false })
+    expect(row.servicesChanged).toEqual([{ copy: { maxParagraphs: 3, maxSessionParagraphs: 4 }, textA11y: 'focused', print: { maxPages: null, maxSessionPages: null }, notes: false, at: expect.any(Number) }])
     expect(row.copied).toEqual({ events: 2, paragraphs: 4 })
     // A resume that changes nothing writes no services event; one to 'full' does.
     const c3 = new Client(h.url)
@@ -245,7 +245,7 @@ describe('select and copy over the wire', () => {
       { sid, kind: 'copy', paragraphs: 3, fromUnit: 0, toUnit: 0, at: expect.any(Number) },
     ])
     expect(h.stream.audit.get(sid)!.copied).toEqual({ events: 2, paragraphs: 5 })
-    expect(h.stream.audit.get(sid)!.services).toEqual({ copy: { maxParagraphs: 3, maxSessionParagraphs: null }, textA11y: 'focused', print: { maxPages: null, maxSessionPages: null } })
+    expect(h.stream.audit.get(sid)!.services).toEqual({ copy: { maxParagraphs: 3, maxSessionParagraphs: null }, textA11y: 'focused', print: { maxPages: null, maxSessionPages: null }, notes: false })
     stop()
   }, 60_000)
 

@@ -957,9 +957,11 @@ export const OfficeDoc = forwardRef(function OfficeDoc(props: OfficeDocProps, re
   // rows on the main thread: only the interactive viewer can show it.
   const paged = pagedWorkbookOf(document)
   const sheet = !remote && (interactiveSheets || paged) && 'sheets' in document
-  // The spreadsheet's (or remote document's) handle; the legacy viewer sets its own.
-  useImperativeHandle(sheet || remote ? ref : null, () => SHEET)
-  if (remote) return <Suspense><RemoteDocView {...rest} document={remote} /></Suspense>
+  // A streamed deck presents through its (lazy) view while mounted; until then, and
+  // for a spreadsheet, the handle says not-presentable. The legacy viewer sets its own.
+  const remoteStart = useRef<OfficeViewerHandle['present']>(null)
+  useImperativeHandle(sheet || remote ? ref : null, () => ({ present: (o) => remoteStart.current?.(o) ?? SHEET.present() }), [])
+  if (remote) return <Suspense><RemoteDocView {...rest} document={remote} presentRef={remoteStart} /></Suspense>
   if (sheet) {
     return (
       <Suspense fallback={<SheetStatus theme={props.theme} text="Loading spreadsheet viewer…" />}>

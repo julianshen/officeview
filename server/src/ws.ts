@@ -20,13 +20,14 @@ import { deriveBasisKey } from './mark/basis'
 import { LeaseFull, ScratchLease } from './scratch'
 import { createRenderCache, DocumentLedger, renderKey, type RenderKeyFields } from './cache'
 import { loadPack, requiredFacesOf } from './fonts'
-import { effectivePolicy, forensicNotices, resumeInvariant, type AuthDecision, type AuthRequest, type Authorize, type EffectivePolicy, type ResolveDocument } from './hooks'
+import { canNotes, effectivePolicy, forensicNotices, resumeInvariant, type AuthDecision, type AuthRequest, type Authorize, type EffectivePolicy, type ResolveDocument } from './hooks'
 import { docRefOf, type Keys } from './keys'
 import { admit } from './policy'
 import { AdmissionRefused, RenderFailed, type Pool } from './pool'
+import { encodeNotesBody, NOTES_ENCODED_CAP, notesBasisLabel } from './notes'
 import { encodePrintBody, planPrint, PRINT_ENCODED_CAP, PRINT_SEND_HIGH_WATER, printArgs, printSizeOk, runPrint, type PrintJob, type PrintSlot } from './print'
 import { IpRates, SessionRates } from './rate'
-import { layoutFingerprint, SCALE_BUCKETS, type MarkSpec, type RenderedUnit, type UnitSize } from './render'
+import { layoutFingerprint, SCALE_BUCKETS, type MarkSpec, type NotesPlan, type NotesRaster, type RenderedUnit, type UnitSize } from './render'
 import { SessionTable, type Session } from './sessionTable'
 import { a11yArgs, rangeArg, runA11y, runCopy, runSearch, runSelect, searchArgs, type SearchRun, type TextSlot } from './text/ops'
 import { issueToken, newSid, verifyToken } from './tokens'
@@ -38,8 +39,12 @@ export const CLOSE = {
 } as const
 export type CloseName = keyof typeof CLOSE
 export type RefusalCode = 'rate-limited' | 'policy-refused' | 'session-rotated' | 'text-unavailable' | 'copy-too-large' | 'copy-quota-exhausted' | 'print-too-large' | 'print-quota-exhausted'
+/** A notes refusal (Stage 3c), sent as `{reqId, type: 'error', code}`; `session-rotated` is the token preamble's retry signal. */
+export type NotesErrorCode = 'policy-refused' | 'invalid-unit' | 'rate-limited' | 'session-rotated'
 
-const KIND = { MANIFEST: 1, ASSET_DEFINE: 2, UNIT_RASTER: 3, UNIT_COMMANDS: 4, PRINT_RASTER: 8 } as const
+const KIND = { MANIFEST: 1, ASSET_DEFINE: 2, UNIT_RASTER: 3, UNIT_COMMANDS: 4, NOTES_RASTER: 7, PRINT_RASTER: 8 } as const
+/** Admission charge of a notes plan (a measuring context and the notes part's parse). */
+const NOTES_PLAN_BYTES = 4 * 1024 * 1024
 const HELLO_CAP = 4 * 1024, TEXT_CAP = 64 * 1024, FRAGMENT = 1 << 20
 const PROCESS_SOCKETS = 256
 const enc = new TextEncoder()
@@ -88,7 +93,8 @@ interface Conn {
 }
 type WS = ServerWebSocket<Conn>
 
-interface DocState { docRef: string; name: string; bytes: Uint8Array; units: UnitSize[]; fingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; refs: number }
+/** `hidden`: unit indices of hidden slides (pptx under 'full'); the show skips them and notes refuse them. */
+interface DocState { docRef: string; name: string; bytes: Uint8Array; units: UnitSize[]; hidden: ReadonlySet<number>; fingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; refs: number }
 
 const isU32 = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 0 && (n as number) <= 0xffffffff
 
@@ -137,7 +143,7 @@ export function createStreamServer(o: StreamServerOptions) {
   }
   /** §14 per-kind encoded (`totalLen`) caps. A message over its cap is never
    * framed, so a conforming client never sees an encoded-cap rejection. */
-  const ENCODED: Record<number, number> = { [KIND.MANIFEST]: 256 << 10, [KIND.ASSET_DEFINE]: 1 << 20, [KIND.UNIT_RASTER]: 8 << 20, [KIND.UNIT_COMMANDS]: 8 << 20, [KIND.PRINT_RASTER]: PRINT_ENCODED_CAP }
+  const ENCODED: Record<number, number> = { [KIND.MANIFEST]: 256 << 10, [KIND.ASSET_DEFINE]: 1 << 20, [KIND.UNIT_RASTER]: 8 << 20, [KIND.UNIT_COMMANDS]: 8 << 20, [KIND.NOTES_RASTER]: NOTES_ENCODED_CAP, [KIND.PRINT_RASTER]: PRINT_ENCODED_CAP }
   const frame = (kind: number, reqId: number, payload: Uint8Array): Uint8Array[] | undefined => {
     const z = new Uint8Array(gzipSync(payload, { level: 6 }))
     if (z.length + 4 > ENCODED[kind]!) return undefined
@@ -239,10 +245,10 @@ export function createStreamServer(o: StreamServerOptions) {
       // The issuance row is durable before anything is committed or sent; a failed write refuses the session.
       const startedAt = nowSec()
       try {
-        audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, services: { copy: policy.copy, textA11y: policy.textA11y, print: policy.print }, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, docRef, contentPolicy: policy.contentPolicy, visibleMark: markOf(policy, decision) })
+        audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, services: { copy: policy.copy, textA11y: policy.textA11y, print: policy.print, notes: canNotes(policy) }, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, docRef, contentPolicy: policy.contentPolicy, visibleMark: markOf(policy, decision) })
       } catch { return close(ws, 'policy-refused') }
       table.create({ sid, docRef, ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), role: policy.role, effectivePolicy: policy, activeSocket: ws as never, jti: token.jti, startedAt })
-      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, copiedParagraphs: 0, printedPages: 0, ...(forensic ? { forensic } : {}) })
+      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, hidden: new Set(opened.hidden), fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, copiedParagraphs: 0, printedPages: 0, ...(forensic ? { forensic } : {}) })
       sessionRates.set(sid, ws.data.rates)
       ws.data.sid = sid
       committed = true
@@ -266,7 +272,7 @@ export function createStreamServer(o: StreamServerOptions) {
     const tokenProof = v.ok && ['current', 'rotating'].includes(table.acceptJti(s.sid, v.claims.jti))
     const d = await o.authorize({ ...req, resume: { sid: s.sid }, ...(tokenProof ? {} : { token: resume.resumeProof }) })
     if (gone(ws)) return
-    // R3: copy, textA11y and the print caps (Stage 3b P4) may change on resume; every other field is exact-match.
+    // R3: copy, textA11y, the print caps (Stage 3b P4) and notes (Stage 3c) may change on resume; every other field, role included, is exact-match.
     const policy = d ? effectivePolicy(d) : undefined
     const ok = !!d && !!policy && (tokenProof || d.resumeGranted === true) && d.viewerId === s.viewerId && JSON.stringify(resumeInvariant(policy)) === JSON.stringify(resumeInvariant(s.effectivePolicy))
     if (!ok || table.get(s.sid) !== s || s.jti !== generation) return close(ws, 'auth-failed')
@@ -275,8 +281,8 @@ export function createStreamServer(o: StreamServerOptions) {
     if (table.get(s.sid) !== s || s.jti !== generation) return close(ws, 'auth-failed')
     // A change of the mutable text services is durable before it takes effect
     // (the open row stays write-once); a failed write refuses the resume.
-    if (JSON.stringify([policy!.copy, policy!.textA11y, policy!.print]) !== JSON.stringify([sd.policy.copy, sd.policy.textA11y, sd.policy.print])) {
-      try { audit.recordServices(s.sid, { copy: policy!.copy, textA11y: policy!.textA11y, print: policy!.print }) } catch { return close(ws, 'policy-refused') }
+    if (JSON.stringify([policy!.copy, policy!.textA11y, policy!.print, canNotes(policy!)]) !== JSON.stringify([sd.policy.copy, sd.policy.textA11y, sd.policy.print, canNotes(sd.policy)])) {
+      try { audit.recordServices(s.sid, { copy: policy!.copy, textA11y: policy!.textA11y, print: policy!.print, notes: canNotes(policy!) }) } catch { return close(ws, 'policy-refused') }
     }
     const old = s.activeSocket as unknown as WS | undefined
     if (old && old !== ws && old.data) { old.data.phase = 'closed'; for (const t of old.data.timers) clearTimeout(t); wakeDrain(old) }
@@ -319,12 +325,12 @@ export function createStreamServer(o: StreamServerOptions) {
     const sd = sessionDoc.get(sid)!, p = sd.policy
     const m: Manifest = {
       v: 1, docRef: sd.doc.docRef, kind: sd.doc.format, name: sd.doc.name,
-      units: { count: sd.doc.units.length, list: sd.doc.units },
+      units: { count: sd.doc.units.length, list: sd.doc.units.map((u, i) => sd.doc.hidden.has(i) ? { ...u, hidden: true as const } : u) },
       layoutFingerprint: sd.doc.fingerprint,
       session: { sid, token, expiresSec: ttl, resume: 'session' },
       policy: { contentPolicy: p.contentPolicy, protection: p.projection, semantic: 'visible-only', contentPolicyId: sd.doc.contentPolicyId, viewerMarkId: p.visibleMark },
-      // Presentation, notes and links land later in Stage 3.
-      can: { search: true, copy: p.copy !== false, print: p.print !== false, textA11y: p.textA11y !== 'off', present: false, notes: false, links: false },
+      // Links land later in Stage 3.
+      can: { search: true, copy: p.copy !== false, print: p.print !== false, textA11y: p.textA11y !== 'off', present: sd.doc.format === 'pptx', notes: canNotes(p), links: false },
       caps: { copy: p.copy === false ? null : { ...p.copy }, a11y: p.textA11y, print: p.print === false ? null : { ...p.print } },
       recorder: { commands: 'ovsd-1', textMode: 'text', scalesBuckets: [...SCALE_BUCKETS], requiredFaces: p.projection === 'commands' ? requiredFacesOf(pack.faces.map((f) => f.id), pack) : [], projection: p.projection },
       limits: { maxUnitPx: 8192, maxAssetBytes: 8 * 1024 * 1024, wsFrameBytes: FRAGMENT, tilePx: 512 },
@@ -417,7 +423,7 @@ export function createStreamServer(o: StreamServerOptions) {
     let unmarked: string | undefined
     const canonical = sd.forensic ? unit.png : undefined
     if (sd.forensic) {
-      const m = await markUnit(sid, sd, unitIndex, scale, unit)
+      const m = await markUnit(sid, sd, `${unitIndex}@${scale}`, unit)
       if (!alive()) return undefined
       if (typeof m === 'string') return m
       unit = m.unit; unmarked = m.unmarked
@@ -433,17 +439,18 @@ export function createStreamServer(o: StreamServerOptions) {
 
   /** The onUnit preamble for a text op: stream phase, reqId, token, ownership
    * after the await, jti. Answers (refuse/close) and returns undefined on failure. */
-  /** `cancelled`: checked after the token await; true ⇒ nothing is sent (a print cancelled while it was validated). */
-  async function textOp(ws: WS, msg: Record<string, unknown>, cancelled?: () => boolean) {
+  /** `cancelled`: checked after the token await; true ⇒ nothing is sent (a print cancelled while it was validated).
+   * `deny`: how a refusal is answered (default `refused`; notes answer `error`). */
+  async function textOp(ws: WS, msg: Record<string, unknown>, cancelled?: () => boolean, deny: (reqId: unknown, code: 'policy-refused' | 'session-rotated') => void = (reqId, code) => refuse(ws, reqId, code)) {
     const reqId = msg.reqId
     const sid = ws.data.sid, s = sid ? table.get(sid) : undefined, sd = sid ? sessionDoc.get(sid) : undefined
-    if (ws.data.phase !== 'stream' || !s || !sd || !isU32(reqId) || reqId === 0) return void refuse(ws, reqId, 'policy-refused')
+    if (ws.data.phase !== 'stream' || !s || !sd || !isU32(reqId) || reqId === 0) return void deny(reqId, 'policy-refused')
     const v = await verifyToken(o.keys.kToken, msg.token, { now: nowSec(), docRef: sd.doc.docRef, sid: s.sid })
     if (!owns(ws, s.sid) || cancelled?.()) return
-    if (!v.ok) return void (v.reason === 'exp' ? close(ws, 'session-expired') : refuse(ws, reqId, 'policy-refused'))
+    if (!v.ok) return void (v.reason === 'exp' ? close(ws, 'session-expired') : deny(reqId, 'policy-refused'))
     const jti = table.acceptJti(s.sid, v.claims.jti)
-    if (jti === 'rotated') return void refuse(ws, reqId, 'session-rotated')
-    if (jti === 'unknown') return void refuse(ws, reqId, 'policy-refused')
+    if (jti === 'rotated') return void deny(reqId, 'session-rotated')
+    if (jti === 'unknown') return void deny(reqId, 'policy-refused')
     return { reqId, s, sd }
   }
   /** The issuing socket still owns the sid, in `stream`, with the same entry. */
@@ -620,6 +627,64 @@ export function createStreamServer(o: StreamServerOptions) {
     } finally { if (sd.print === job) sd.print = undefined }
   }
 
+  /** §12a.5/§12a.8 notes (Stage 3c): a presenter's notes image of one unit.
+   * Checks in the plan's order, all before any render: token → `canNotes`
+   * (and a deck) → unit in range and not hidden → scale → the 'notes' rate.
+   * Then the plan (size, characters drawn), the durable `notes_deliveries`
+   * row, the draw with the visible mark, Layer-1, the frame — and only then
+   * `notes-start` and the kind-7 frame. A refusal is one `error` message: no
+   * frame; before the row, no row. Never cached across requests (C4). */
+  async function onNotes(ws: WS, msg: Record<string, unknown>) {
+    const deny = (reqId: unknown, code: NotesErrorCode) => send(ws, { reqId: isU32(reqId) ? reqId : 0, type: 'error', code })
+    const a = await textOp(ws, msg, undefined, deny)
+    if (!a) return
+    const { reqId, s, sd } = a
+    if (!canNotes(sd.policy) || sd.doc.format !== 'pptx') return deny(reqId, 'policy-refused')
+    const unit = msg.unit, scale = msg.scale
+    if (!Number.isInteger(unit) || (unit as number) < 0 || (unit as number) >= sd.doc.units.length || sd.doc.hidden.has(unit as number)) return deny(reqId, 'invalid-unit')
+    if (!(SCALE_BUCKETS as readonly unknown[]).includes(scale)) return deny(reqId, 'policy-refused')
+    // A 'notes' overflow is a refusal only (never a breach toward 4008).
+    if (ws.data.rates.check('notes', now()) !== 'ok') return deny(reqId, 'rate-limited')
+    if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
+    const alive = textAlive(ws, s.sid, sd)
+    const ui = unit as number, sc = scale as 1 | 2
+    const job = { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, unitIndex: ui, scale: sc, mark: markOf(sd.policy, sd.decision) }
+    const run = async <T extends NotesPlan | NotesRaster>(draw: boolean, estimate: number): Promise<T | 'rate-limited' | 'policy-refused' | undefined> => {
+      if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return 'policy-refused'
+      let r: NotesPlan | NotesRaster
+      try { r = await o.pool.notes(s.sid, { ...job, draw }, estimate) } catch (e) { return alive() ? (e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined }
+      return alive() ? r as T : undefined
+    }
+    const plan = await run<NotesPlan>(false, NOTES_PLAN_BYTES)
+    if (plan === undefined) return
+    if (typeof plan === 'string') return deny(reqId, plan)
+    // Durable before the draw and before anything about it goes out; a failed write refuses it.
+    try { audit.recordNotes({ sid: s.sid, unitIndex: ui, scale: sc, charsDrawn: plan.chars }) } catch { return deny(reqId, 'policy-refused') }
+    const drawn = await run<NotesRaster>(true, plan.w * plan.h * 4 * 2)
+    if (drawn === undefined) return
+    if (typeof drawn === 'string') return deny(reqId, drawn)
+    // Fail closed: the image must be the one planned and audited.
+    if (drawn.kind !== 'raster' || drawn.w !== plan.w || drawn.h !== plan.h || drawn.chars !== plan.chars) return deny(reqId, 'policy-refused')
+    let img: NotesRaster = drawn
+    if (sd.forensic) {
+      const m = await markUnit(s.sid, sd, notesBasisLabel(ui, sc), drawn)
+      if (!alive()) return
+      if (typeof m === 'string') return deny(reqId, m === 'rate-limited' ? m : 'policy-refused')
+      // Both marks on every notes image (§13.1): one that cannot carry Layer-1 is not sent.
+      if (m.unmarked) return deny(reqId, 'policy-refused')
+      img = m.unit
+    }
+    const f = frame(KIND.NOTES_RASTER, reqId, encodeNotesBody(ui, img.w, img.h, img.png))
+    if (!f) return deny(reqId, 'policy-refused')
+    // The marked delivery trace attributes (its notes basis and canonical): durable before the send, after the frame
+    // (an image over its cap leaves no delivery row); a failed write refuses it.
+    if (sd.forensic) {
+      try { audit.recordNotesMark({ sid: s.sid, unitIndex: ui, scale: sc, refSha256: createHash('sha256').update(drawn.png).digest('hex') }) } catch { return deny(reqId, 'policy-refused') }
+    }
+    send(ws, { reqId, type: 'notes-start', w: img.w, h: img.h, scale: sc })
+    sendFrames(ws, [f])
+  }
+
   /** A page failure: `rate-limited` (admission or lease full), anything else `policy-refused`. */
   const pageCode = (c: RefusalCode) => c === 'rate-limited' ? c : 'policy-refused'
 
@@ -640,12 +705,13 @@ export function createStreamServer(o: StreamServerOptions) {
   }
 
   /** §9.4 steps 4–5 for one session: Layer-1 over the canonical raster under
-   * the scratch lease. Unmarkable units ship canonical bytes with a reason. */
-  async function markUnit(sid: string, sd: { doc: DocState; forensic?: Issued }, unitIndex: number, scale: number, unit: RenderedUnit & { kind: 'raster' }): Promise<{ unit: RenderedUnit & { kind: 'raster' }; unmarked?: string } | RefusalCode> {
+   * the scratch lease, on the basis keyed by `label` (a unit's `${i}@${scale}`,
+   * or `notesBasisLabel`). Unmarkable units ship canonical bytes with a reason. */
+  async function markUnit<U extends RenderedUnit & { kind: 'raster' }>(sid: string, sd: { doc: DocState; forensic?: Issued }, label: string, unit: U): Promise<{ unit: U; unmarked?: string } | RefusalCode> {
     let release: () => void
     try { release = await leaseFor(sid).acquire() } catch (e) { return e instanceof LeaseFull ? 'rate-limited' : 'policy-refused' }
     try {
-      const kBasis = deriveBasisKey(o.keys.kBasisRoot, sd.doc.docRef, `${unitIndex}@${scale}`)
+      const kBasis = deriveBasisKey(o.keys.kBasisRoot, sd.doc.docRef, label)
       const r = await o.pool.encode(sid, { png: unit.png, w: unit.w, h: unit.h, kBasis, code: sd.forensic!.code, ...(o.encodeHangMs ? { hangMs: o.encodeHangMs } : {}) }, encodeEstimate(unit.w, unit.h, unit.png.length))
       if ('unmarked' in r) { forensicStats.unmarked++; return { unit, unmarked: r.unmarked } }
       forensicStats.marked++
@@ -716,6 +782,7 @@ export function createStreamServer(o: StreamServerOptions) {
     if (m.type === 'a11y') return onA11y(ws, m)
     if (m.type === 'print') return onPrint(ws, m)
     if (m.type === 'print-cancel') return onPrintCancel(ws, m)
+    if (m.type === 'notes') return onNotes(ws, m)
     return refuse(ws, m.reqId, 'policy-refused')
   }
 
@@ -777,6 +844,8 @@ export function createStreamServer(o: StreamServerOptions) {
       return true
     },
     audit,
+    /** The sid's hidden slide units (tests). */
+    hiddenOf: (sid: string) => sessionDoc.get(sid)?.doc.hidden,
     /** The sid's Layer-1 issuance (tests and the validation script). */
     forensicOf: (sid: string) => sessionDoc.get(sid)?.forensic,
     /** TEST-ONLY view: the canonical cached PNG this session's raster unit is built from. */

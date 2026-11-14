@@ -40,6 +40,17 @@ export class Admission {
       this.pump()
     })
   }
+  /** The grant now if it fits (bytes and outstanding count), else undefined; never queues.
+   * For a reservation that must hold before an answer already on its way (a
+   * notes image declared by `notes-start`): waiting in the serial inbox would
+   * block the very messages whose leases free the room. */
+  tryAcquire(cost: number): (() => void) | undefined {
+    const c = Math.min(cost, this.limit)
+    if (this.outstanding >= this.max || this.used + c > this.limit) return undefined
+    this.used += c; this.outstanding++
+    let done = false
+    return () => { if (done) return; done = true; this.used -= c; this.outstanding--; this.pump() }
+  }
   private pump() {
     while (this.queue.length) {
       const next = this.queue[0]!

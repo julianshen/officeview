@@ -36,7 +36,7 @@ const exampleManifest = (): Manifest => ({
   layoutFingerprint: 'f'.repeat(64),
   session: { sid: '0123456789ab', token: tokenFor('j1'), expiresSec: 300, resume: 'session' },
   policy: { contentPolicy: 'visible-only', protection: 'final-raster', semantic: 'visible-only', contentPolicyId: 'visible-only@1', viewerMarkId: 'fixed' },
-  can: { search: true, copy: false, print: true, textA11y: false, present: false, notes: false, links: false },
+  can: { search: true, copy: false, print: true, textA11y: false, present: true, notes: false, links: false },
   caps: { copy: null, a11y: 'off', print: { maxPages: null, maxSessionPages: null } },
   recorder: { commands: 'ovsd-1', textMode: 'text', scalesBuckets: [1, 2], requiredFaces: [], projection: 'final-raster' },
   limits: { maxUnitPx: 8192, maxAssetBytes: 8 * 1024 * 1024, wsFrameBytes: 1 << 20, tilePx: 512 },
