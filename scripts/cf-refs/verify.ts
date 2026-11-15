@@ -4301,6 +4301,57 @@ export function classifyIconCrop(
   return { glyphClass: matches[0]!.cls }
 }
 
+/** The key frame's height at 1 px/pt: the union of the 54 classes' ink rows in the glyph key (cell y 7..18). */
+export const ICON_KEY_FRAME_HEIGHT_PX = 12
+
+/** The frame columns of a classification crop (crop x 0..13, cell x 1..14): every key class's ink lies inside them. */
+export const ICON_SHIFT_WINDOW_PX = 14
+
+/**
+ * Task 28 round 2 (Ruling S4-ROWS-CAPTURE): classifies a crop whose height differs from the key crops' (another row
+ * height) by sliding each key crop vertically over it. Over the frame columns (`ICON_SHIFT_WINDOW_PX`, so left-aligned
+ * text right of the frame is outside the comparison), the crop must equal the key crop shifted by some `dy` within
+ * ±tolerance per channel at every row, white where the shifted key crop has no row. Exactly one class may match (at one
+ * shift), and it must be separated from every other class's best shift by a pixel of delta >= `ICON_STRONG_DELTA`;
+ * otherwise `icon-class-none` / `icon-class-ambiguous`. Same-height crops classify as `classifyIconCrop` does.
+ */
+export function classifyIconCropShifted(
+  png: DecodedPng,
+  crop: { x: number; y: number; width: number; height: number },
+  key: ReadonlyMap<string, DecodedPng>,
+  opts: { tolerance: number; twins?: ReadonlyMap<string, ReadonlySet<string>>; faint?: ReadonlySet<string> },
+): { glyphClass: string; referenceClass?: string; dy?: number } | Refusal {
+  const sample = cropPng(png, crop)
+  if (!sample) return iconRefusal('icon-class-none', `Crop ${crop.x},${crop.y} ${crop.width}x${crop.height} lies outside the ${png.width}x${png.height} capture`)
+  if ([...key.values()].some(k => k.width === sample.width && k.height === sample.height)) {
+    // The key's own row height: a crop at the key's place classifies as everywhere else; another place shifts.
+    const same = classifyIconCrop(png, crop, key, opts)
+    if (!('kind' in same)) return same
+  }
+  const W = Math.min(ICON_SHIFT_WINDOW_PX, sample.width)
+  const px = (img: DecodedPng, x: number, y: number, c: number): number => (y < 0 || y >= img.height ? 255 : img.data[(y * img.width + x) * 4 + c]!)
+  const best = [...key].map(([cls, k]) => {
+    let kt = -1, kb = -1
+    for (let y = 0; y < k.height; y++) for (let x = 0; x < W; x++) {
+      if (Math.max(255 - px(k, x, y, 0), 255 - px(k, x, y, 1), 255 - px(k, x, y, 2)) > opts.tolerance) { if (kt < 0) kt = y; kb = y }
+    }
+    let max = Infinity, at = 0, hits = 0
+    if (kt >= 0) for (let dy = -kt; dy <= sample.height - 1 - kb; dy++) {
+      let m = 0
+      for (let y = 0; y < sample.height && m <= 255; y++) for (let x = 0; x < W; x++) for (let c = 0; c < 3; c++) m = Math.max(m, Math.abs(px(sample, x, y, c) - px(k, x, y - dy, c)))
+      if (m <= opts.tolerance) hits++
+      if (m < max) { max = m; at = dy }
+    }
+    return { cls, max, dy: at, hits }
+  })
+  const matches = best.filter(d => d.max <= opts.tolerance)
+  if (matches.length === 0) return iconRefusal('icon-class-none', `The crop matches no glyph-key class at any vertical shift within +-${opts.tolerance} per channel`)
+  if (matches.length > 1 || matches[0]!.hits > 1) return iconRefusal('icon-class-ambiguous', `The crop matches ${matches.map(m => m.cls).join(', ')} at ${matches[0]!.hits} shift(s)`)
+  const unseparated = best.filter(d => d.cls !== matches[0]!.cls && d.max < ICON_STRONG_DELTA)
+  if (unseparated.length > 0 || opts.faint?.has(matches[0]!.cls)) return iconRefusal('icon-class-ambiguous', `The shifted crop matches ${matches[0]!.cls} but is not separated from ${unseparated.map(d => d.cls).join(', ') || 'no icon (faint)'}`)
+  return { glyphClass: matches[0]!.cls, dy: matches[0]!.dy }
+}
+
 /** The glyph key a capture establishes: each pair's crop, its class, and one reference crop per class. */
 export interface IconGlyphKey {
   /** `${set}:${iconId}` -> the key cell's crop. */
@@ -4905,7 +4956,8 @@ export function measureCaseIcons(c: CfOracleCase, png: DecodedPng, geom: Workshe
     if (!key) return undefined
     const rect = iconCropRect(png, geom, ref)
     if (!rect) return { cls: 'icon-class-none' }
-    const res = classifyIconCrop(png, rect, key.classes, { tolerance: ICON_CLASS_TOLERANCE, twins: key.twins, faint: key.faint })
+    const classify = c.iconShiftedKey ? classifyIconCropShifted : classifyIconCrop
+    const res = classify(png, rect, key.classes, { tolerance: ICON_CLASS_TOLERANCE, twins: key.twins, faint: key.faint })
     return 'glyphClass' in res ? { cls: res.glyphClass, reference: res.referenceClass ?? res.glyphClass } : { cls: res.code }
   }
   const out = new Map<string, CfObservedIcon>()
@@ -4984,6 +5036,11 @@ export const ICON_GEOMETRY_READINGS: Readonly<Record<string, readonly string[]>>
   'icon:showvalue-canvas-suppression': ['text-hidden', 'text-shown'],
   // Fix round 8: production hides the value when either the bar or the icon hides it (each suppresses on its own).
   'icon:composition-bar-showvalue': ['any-hides', 'priority-wins', 'bar-wins', 'icon-wins'],
+  // Task 28 round 2 (Ruling S4-ROWS-CAPTURE): how the icon's offset follows the row height, per column (one glyph class
+  // and one alignment): a constant gap to the alignment's anchor (the bottom gridline, or the row centre), the frame
+  // centred in the row whatever the alignment, or a top offset proportional to the row (claimed on rows of at least the
+  // key's 20 pt only: a shorter row cannot hold a frame scaled down from the key's).
+  'icon:geometry-row-offset': ['anchor-constant', 'centred', 'row-scaled'],
 }
 
 const r3 = (v: number): number => Math.round(v * 1000) / 1000
@@ -5101,6 +5158,23 @@ export function evaluateIconGeometryCapability(cap: string, designated: readonly
         const bottom = o.cellTopPx + o.cellHeightPx - 2 - icon.bottomPx
         const centre = (icon.topPx + icon.bottomPx) / 2 - (o.cellTopPx + o.cellHeightPx / 2)
         return { group: `${col(c.ref)}:${v}`, value: r3(v === 'top' ? top : v === 'bottom' ? bottom : centre) }
+      }
+      case 'icon:geometry-row-offset': {
+        // A row whose inner box is shorter than the key frame (12 px: the union of the glyph classes' ink at 1 px/pt,
+        // `CF_ICON_RENDER_MODEL.keyFrame`) cannot hold the glyph unshrunk (`icon:geometry-short-row-clip` reads `shrink`):
+        // no claim about the offset there.
+        if (o.cellHeightPx - 2 < ICON_KEY_FRAME_HEIGHT_PX) return V('excluded')
+        if (!o.icon) return V('fail')
+        if (!icon) return V('unknown')
+        const top = icon.topPx - (o.cellTopPx + 1)
+        const bottom = o.cellTopPx + o.cellHeightPx - 2 - icon.bottomPx
+        const centre = (icon.topPx + icon.bottomPx) / 2 - (o.cellTopPx + o.cellHeightPx / 2)
+        const v = c.facts.vertical
+        if (reading === 'row-scaled' && c.facts.rowPt < 20) return V('excluded')
+        // Row-scaled values are the top offset per pt of row, in px of the case's tallest (30 pt) row.
+        const value = reading === 'anchor-constant' ? (v === 'top' ? top : v === 'bottom' ? bottom : centre)
+          : reading === 'centred' ? centre : ((icon.topPx - o.cellTopPx) * 30) / c.facts.rowPt
+        return { group: col(c.ref), value: r3(value) }
       }
       case 'icon:geometry-narrow-clip':
       case 'icon:geometry-short-row-clip': {

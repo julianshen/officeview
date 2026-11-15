@@ -278,6 +278,12 @@ export interface CfOracleCase {
   barCalibration?: { columns: readonly string[]; scanRow: number; solidRef: string; solidArgb: string }
   /** Stage 4 pixel calibration (`icon:pixel-calibration`, Ruling S4-A: S3-A step 3 rerun in the glyph-key workbook). */
   iconCalibration?: { columns: readonly string[]; scanRow: number; solidRef: string; solidArgb: string }
+  /**
+   * Task 28 round 2 (Ruling S4-ROWS-CAPTURE): classify icon crops whose row height differs from the glyph key's by a
+   * vertical shift of the key crop over the frame columns (`classifyIconCropShifted`), so non-rectangular glyphs on other
+   * rows measure against their key reference. Opt-in per case: no other case's classification changes.
+   */
+  iconShiftedKey?: true
   captures: readonly CfCaptureSpec[]
   status: CfOracleStatus
   reason?: string
@@ -4825,6 +4831,8 @@ export interface S4Fixture extends Omit<S3Fixture, 'rules' | 'calibration' | 'da
   /** Capabilities the case settles that no single rule carries (the glyph key as a whole). */
   caseCapabilities?: readonly string[]
   calibration?: CfOracleCase['iconCalibration']
+  /** See `CfOracleCase.iconShiftedKey`. */
+  shiftedKey?: true
 }
 
 const S4_WIDTH = 12
@@ -5336,6 +5344,31 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
       ],
     },
   ),
+  // 18. stage4-icon-rows (Task 28 round 2, Ruling S4-ROWS-CAPTURE): the icon frame across row heights
+  s4rect(
+    'stage4-icon-rows',
+    'S4-ROWS-CAPTURE: where the icon frame sits on rows other than the glyph key\'s 20 pt, so default 15 pt rows can paint. 11 pt Calibri regular (the Normal font) on rows of 15 (the default), 12.75, 16.5, 18, 20 (the key\'s, a replication), 22.5, 25 and 30 pt (rows 2..9). Bottom-aligned (B..E) and centred (F..I) cells, cell-align being verified; right-aligned numbers (general alignment: B..D, F..H) and left-aligned numbers (E, I). Every cell holds 10 under num 0/5/8, so 3Arrows (B, E, F, I), 3TrafficLights1 (C, G) and 3Symbols (D, H) all draw bucket 2, whose key crops (3Arrows:2, 3TrafficLights1:2, 3Symbols:2) the harness shifts vertically to classify and to align scanlines (iconShiftedKey). icon:geometry-row-offset reads how the offset follows the row: anchor-constant (a constant gap to the bottom gridline, or a centred frame), top-constant (a constant gap to the top) or row-scaled (the offset scales with the row); they differ by >= 3 px between the 12.75 and 30 pt rows. Whatever Excel draws, the frame offsets at each measured height are recorded per cell; production extends the frame only to those heights, never between them.',
+    {
+      n: 8,
+      rowHeights: { 2: 15, 3: 12.75, 4: 16.5, 5: 18, 6: 20, 7: 22.5, 8: 25, 9: 30 },
+      shiftedKey: true,
+      colStyles: {
+        B: { vertical: 'bottom' }, C: { vertical: 'bottom' }, D: { vertical: 'bottom' }, E: { vertical: 'bottom', horizontal: 'left' },
+        F: { vertical: 'center' }, G: { vertical: 'center' }, H: { vertical: 'center' }, I: { vertical: 'center', horizontal: 'left' },
+      },
+      cols: ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'].map(c => s4col(c, `Row${c}`, [10, 10, 10, 10, 10, 10, 10, 10])),
+      rules: [
+        icon('icon:geometry-row-offset', 'B2:B9', 1, '3Arrows', nums(0, 5, 8)),
+        icon('icon:geometry-row-offset', 'C2:C9', 2, '3TrafficLights1', nums(0, 5, 8)),
+        icon('icon:geometry-row-offset', 'D2:D9', 3, '3Symbols', nums(0, 5, 8)),
+        icon('icon:geometry-row-offset', 'E2:E9', 4, '3Arrows', nums(0, 5, 8)),
+        icon('icon:geometry-row-offset', 'F2:F9', 5, '3Arrows', nums(0, 5, 8)),
+        icon('icon:geometry-row-offset', 'G2:G9', 6, '3TrafficLights1', nums(0, 5, 8)),
+        icon('icon:geometry-row-offset', 'H2:H9', 7, '3Symbols', nums(0, 5, 8)),
+        icon('icon:geometry-row-offset', 'I2:I9', 8, '3Arrows', nums(0, 5, 8)),
+      ],
+    },
+  ),
 ]
 
 // ---- fixture -> oracle case ----
@@ -5418,6 +5451,7 @@ function s4Case(fx: S4Fixture): CfOracleCase {
     requiredAppearances: ['screen'],
     markers: s4Markers(fx),
     ...(fx.calibration ? { iconCalibration: fx.calibration } : {}),
+    ...(fx.shiftedKey ? { iconShiftedKey: true as const } : {}),
     expected: {
       inputSha256: '',
       savedSha256: '',

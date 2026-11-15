@@ -1060,7 +1060,8 @@ describe('CF oracle verifier', () => {
     for (const c of CF_CASES.filter(x => x.id !== 'stage3-bar-lengths-default' && x.stage < 4)) expect(c.expected.cells.length, c.id).toBeLessThanOrEqual(PROBE_CHUNK_CELLS)
     // Stage 4 postdates the chunking: exactly these cases span several chunks, and each still probes every cell in order.
     // (fix round 3: stage4-icon-degenerate lost its H column and now fits one chunk.)
-    const STAGE4_MULTI_CHUNK = ['stage4-icon-glyph-key', 'stage4-icon-families', 'stage4-icon-thresholds', 'stage4-icon-reverse-custom']
+    // (Task 28 round 2: stage4-icon-rows holds 64 designated cells and their 64 controls.)
+    const STAGE4_MULTI_CHUNK = ['stage4-icon-glyph-key', 'stage4-icon-families', 'stage4-icon-thresholds', 'stage4-icon-reverse-custom', 'stage4-icon-rows']
     expect(CF_CASES.filter(x => x.stage === 4 && x.expected.cells.length > PROBE_CHUNK_CELLS).map(x => x.id)).toEqual(STAGE4_MULTI_CHUNK)
     for (const c of CF_CASES.filter(x => x.stage === 4)) {
       const refs = c.expected.cells.map(x => x.ref)
@@ -4145,6 +4146,8 @@ describe('Stage 4 icon oracle (Task 24)', () => {
       'stage4-icon-composition': ['icon:composition-dxf-fill', 'icon:composition-matching-stopIfTrue-ahead', 'icon:composition-noicons-slot', 'icon:composition-overlapping-icons', 'icon:composition-unresolved-stub', 'icon:composition-with-bar', 'icon:composition-with-scale'],
       'stage4-icon-rtl': ['icon:placement-rtl-sheet'],
       'stage4-icon-unresolved-shapes': ['icon:unresolved-active-present', 'icon:unresolved-base-x14-set', 'icon:unresolved-cfvo-count', 'icon:unresolved-cfvo-no-type', 'icon:unresolved-custom-count', 'icon:unresolved-formula-cfvo', 'icon:unresolved-iconid-range', 'icon:unresolved-noicons-id', 'icon:unresolved-unknown-set', 'icon:unresolved-xmf-reference', 'icon:attr-percent-false', 'icon:reverse-custom', 'icon:composition-icon-stopIfTrue'],
+      // Task 28 round 2 (Ruling S4-ROWS-CAPTURE): the icon frame across row heights.
+      'stage4-icon-rows': ['icon:geometry-row-offset'],
     }
     expect(CF_STAGE4_CASES.map(c => c.id)).toEqual(Object.keys(expected))
     for (const [id, caps] of Object.entries(expected)) {
@@ -4460,7 +4463,7 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     // whatever the committed captures verify; publishing itself is Task 30 and is only rendered in memory here).
     const report = auditStage4Manifest(manifest, { rootDir: REPO_ROOT })
     expect(report.ok).toBe(true)
-    expect(report.summary.cases).toBe(17)
+    expect(report.summary.cases).toBe(18)
     expect(report.summary.capabilities).toBe(CF_STAGE4_CAPABILITIES.length)
     expect(report.perCapability.filter(p => p.disposition === 'unaccounted')).toEqual([])
     expect(report.stageComplete).toBe(report.blockedCapabilities.length === 0)

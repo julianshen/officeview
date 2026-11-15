@@ -1619,3 +1619,32 @@ After verify-only (38d3d872), production paints icons only behind `CF_ICON_PAINT
   - **Top and centred alignment.** These are measured only at 30 and 60 pt rows (geometry-2 E, F), never at 20 pt.
 - The column width and the horizontal alignment do not move the frame. Geometry-2 I5, I6, J5 and J6 have 180 pt columns and left-aligned text on 20 pt rows, and measure ink at 2..12 × 7..18, as the key's right-aligned 3Arrows:0 does at 72 pt.
 - Right-aligned numbers still withhold, because `rightInsetPt` is unmeasured (`unshifted`). At the key geometry, only left-aligned text and centred text can paint an icon, once Task 30 publishes the glyph and paint capabilities.
+
+### Task 28 round 2 (2026-11-15): S4-RIGHTINSET-ZERO and the `stage4-icon-rows` case (S4-ROWS-CAPTURE)
+
+**Ruling S4-RIGHTINSET-ZERO.**
+- `icon:inset-right-aligned` reads `unshifted`: a left inset does not move right-aligned text. So production's `rightInsetPt` is `{ 11: 0 }`, and a right-aligned number keeps its text box.
+- A right-aligned host paints its icon only where its text fits right of the icon frame and its measured gap. That gap is the 12 pt left inset at that font size; at 11 pt it is 16 px plus the 6 px padding.
+- A number that reaches the frame would take the overflow path. The '#' fill beside an icon over right-aligned text is unmeasured, so it withholds, even under `icon:inset-overflow`.
+- One predicate decides this for the static, resident, worker, print and export views. It is pinned on the production model and glyph table at the key geometry (tests/xlsx-cf-icon-render.test.ts).
+
+**Ruling S4-ROWS-CAPTURE: the case `stage4-icon-rows`.** It measures the icon frame on rows other than the key's 20 pt.
+- **Rows:** 11 pt Calibri regular, rows of 15 (the default), 12.75, 16.5, 18, 20 (a replication of the key), 22.5, 25 and 30 pt (rows 2..9).
+- **Columns:**
+  - bottom-aligned B..E and centred F..I;
+  - right-aligned numbers in B..D and F..H, left-aligned numbers in E and I;
+  - each cell holds 10 under num 0/5/8, so the cells draw 3Arrows:2 (B, E, F, I), 3TrafficLights1:2 (C, G) and 3Symbols:2 (D, H).
+- **Capability `icon:geometry-row-offset`.** Its readings are evaluated per column:
+  - `anchor-constant`: a constant gap to the alignment's anchor (the bottom gridline, or the row centre);
+  - `centred`: the frame centred whatever the alignment;
+  - `row-scaled`: the top offset proportional to the row. It makes claims only on rows of at least the key's 20 pt, because a shorter row cannot hold a frame scaled down from the key's.
+- **Excluded rows.** A row whose inner box is shorter than the 12 px key frame (the 12.75 pt row) makes no claim. Its icon shrinks (`icon:geometry-short-row-clip` reads `shrink`); it is recorded only.
+- **Shifted key.** The case opts in to `iconShiftedKey`. Its crops are classified by shifting each key crop vertically over the frame columns (`classifyIconCropShifted`: ±8, one class at one shift, separated by ≥ 64). The key crop then aligns the scanlines, so non-rectangular glyphs measure at every row. No other case's classification changes.
+- **Mechanism tests.** tests/xlsx-cf-icon-rows.test.ts draws synthetic captures by pasting the key crops where each rule puts the frame. Each rule is discriminated. A capture that follows no rule (bottom gap 1 at 20 pt and 5 elsewhere, as the earlier evidence suggests) is not.
+- **What production does with the capture.** Whatever reading Excel matches, the per-cell offsets at each measured height are recorded in the sidecar. Production extends `keyFrame` only to those heights, never between them.
+- **Audit.** Until the capture lands, `audit --stage 4` reports `ok=true` but `stageComplete=false`: `icon:geometry-row-offset` lacks a capture.
+- **Capture order (Excel):**
+  1. `bun scripts/cf-refs/build.ts --stage 4 --case stage4-icon-rows`
+  2. `bun scripts/cf-refs/capture.ts --stage 4 --case stage4-icon-rows`
+  3. `bun scripts/cf-refs/capture.ts --stage 4 --verify-only`
+  4. `bun scripts/cf-refs/audit.ts --stage 4`

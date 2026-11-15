@@ -771,7 +771,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
 
     const stage4 = manifest.cases.filter(c => c.stage === 4)
     expect(stage4.map(c => c.id)).toEqual(CF_CASES.filter(c => c.stage === 4).map(c => c.id))
-    expect(stage4).toHaveLength(17)
+    expect(stage4).toHaveLength(18)
     let checked = 0
     let iconCells = 0
     let preparedSheets = 0
