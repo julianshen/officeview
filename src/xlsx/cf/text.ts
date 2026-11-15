@@ -38,6 +38,10 @@ export interface CfTextScopeRequest {
   readonly dateContext?: import('./predicates').CfDateContext
   /** The measuring context resident icon hosts use (Ruling S4-L; default: an offscreen canvas, or none: withheld). */
   readonly layoutContext?: () => CanvasRenderingContext2D | null | undefined
+  /** Final review I3: the frame's live hosts (`createFrameHostSource`). Given, the scope decides bars and icons on the
+   * hosts the frame lays out (row and column resizes included), exactly as the paged scope does; absent, on the
+   * sheet's authored geometry (static batches, find and copy). */
+  readonly hosts?: CfFrameHostSource
 }
 
 /** Fixed admitted descriptor workspace per scope with a charged budget. */
@@ -499,8 +503,8 @@ export async function prepareCfTextScope(
         request.budget.release(bytes + hostBytes)
       }
     }, () => source.stamp(stamp.sheetId).workbookValueGen === stamp.workbookValueGen && source.stamp(stamp.sheetId).structureGen === stamp.structureGen,
-    undefined, styleAt => residentBarHosts(sheet, (row, col, own) => styleAt(row, col, base?.styleAt(row, col, own) ?? own), admitHosts),
-    styleAt => residentBarHosts(sheet, (row, col, own) => styleAt(row, col, base?.styleAt(row, col, own) ?? own), admitHosts, { layoutContext: request.layoutContext }),
+    undefined, request.hosts ? styleAt => frameBarHosts(request.hosts!, styleAt) : styleAt => residentBarHosts(sheet, (row, col, own) => styleAt(row, col, base?.styleAt(row, col, own) ?? own), admitHosts),
+    request.hosts ? styleAt => frameBarHosts(request.hosts!, styleAt) : styleAt => residentBarHosts(sheet, (row, col, own) => styleAt(row, col, base?.styleAt(row, col, own) ?? own), admitHosts, { layoutContext: request.layoutContext }),
     createCfMemory({ limitBytes: CF_LIMITS.scratchBytes, context: budgetAllocationContext(request.budget) }), cfRowPtOfSheet(sheet), cfRowUniformOfSheet(sheet))
     if (request.signal.aborted) {
       scope.dispose()

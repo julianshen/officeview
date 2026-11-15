@@ -1,5 +1,5 @@
 /** Async CF preparation; painters only consume admitted source-space snapshots. */
-import { cfNonUniformFontRows, cfRowUniformOfLayout } from '../rowFont'
+import { cfSheetNonUniformFontRows, cfRowUniformOfLayout } from '../rowFont'
 import { createCfStatistics } from './statistics'
 import { sameCfStamp } from './cache'
 import { cfRuntimeEvidence, type CfEvidenceGate } from './predicates'
@@ -195,9 +195,10 @@ export function cfRowPtOfSheet(sheet: Pick<XlsxSheet, 'rows' | 'defaultRowHeight
 
 /** Ruling S4-ROW-UNIFORM: each row's font uniformity from the resident sheet (`rowFont.ts`); rows the sheet does not
  * store hold no cell, so they are uniform (their icons have no cell to sit on). */
-export function cfRowUniformOfSheet(sheet: Pick<XlsxSheet, 'rows' | 'rowFontsBlocked'>): (row: number) => boolean | undefined {
+export function cfRowUniformOfSheet(sheet: Pick<XlsxSheet, 'rows' | 'rowFontsBlocked' | 'conditionalFormatting' | 'tables'>): (row: number) => boolean | undefined {
   let of: ((row: number) => boolean | undefined) | undefined
-  return row => (of ??= cfRowUniformOfLayout(cfNonUniformFontRows(sheet.rows, sheet.rowFontsBlocked)))(row)
+  // S4-ROW-EFFECTIVE: CF font rules and tables too. A resident sheet without tables has `tables` absent (none).
+  return row => (of ??= cfRowUniformOfLayout(cfSheetNonUniformFontRows({ ...sheet, tables: sheet.tables ?? [] })))(row)
 }
 
 export function residentBarHosts(sheet: XlsxSheet, styleAt: (row: number, col: number, own: XlsxCellStyle | undefined) => XlsxCellStyle | undefined,

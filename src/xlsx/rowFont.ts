@@ -51,3 +51,43 @@ export function cfRowUniformOfLayout(nonUniform: ReadonlyArray<{ start: number; 
     return true
   }
 }
+
+type RowRange = { start: number; end: number }
+/** The sorted union of row intervals. */
+function mergeRows(parts: readonly RowRange[]): RowRange[] {
+  const out: RowRange[] = []
+  for (const r of [...parts].sort((a, b) => a.start - b.start)) {
+    const last = out[out.length - 1]
+    if (last && r.start <= last.end + 1) last.end = Math.max(last.end, r.end)
+    else out.push({ start: r.start, end: r.end })
+  }
+  return out
+}
+
+/** What `cfSheetNonUniformFontRows` reads of a sheet: the same fields on the resident sheet and the paged one. */
+export interface CfRowFontSheet {
+  rows?: ReadonlyArray<{ index: number; styled?: boolean; richText?: boolean; cells: ReadonlyArray<{ style?: XlsxCellStyle }> }>
+  rowFontsBlocked?: boolean
+  conditionalFormatting?: { unresolvedSheet?: unknown; rules: ReadonlyArray<{ ranges: ReadonlyArray<{ firstRow: number; lastRow: number }>; writes?: ReadonlySet<string>; dxf?: Readonly<Record<string, unknown>> }> }
+  tables?: ReadonlyArray<{ extent: { firstRow: number; rows: number } }>
+}
+
+/**
+ * Ruling S4-ROW-EFFECTIVE (final review I1): the rows whose effective font is not known to be uniformly Calibri 11
+ * regular. Besides the stored formatting (`cfNonUniformFontRows`): every row a conditional-formatting rule that writes
+ * a font (`font.*`, a DXF `<font>`) can reach, every row a table covers (its style or table DXF may carry a font), and
+ * every row when the sheet's rules are refused as a whole or its tables are unknown. Computed from the sheet model,
+ * identical on the resident and the paged paths (their CF rules and table inventories are the same).
+ */
+export function cfSheetNonUniformFontRows(sheet: CfRowFontSheet, nonUniform?: readonly RowRange[]): RowRange[] {
+  const base = nonUniform ?? cfNonUniformFontRows(sheet.rows ?? [], sheet.rowFontsBlocked)
+  const cf = sheet.conditionalFormatting
+  if (cf?.unresolvedSheet !== undefined || sheet.tables === undefined) return [{ ...CF_ALL_ROWS }]
+  const parts: RowRange[] = [...base]
+  for (const rule of cf?.rules ?? []) {
+    const font = [...(rule.writes ?? [])].some(k => k.startsWith('font')) || Object.keys(rule.dxf ?? {}).some(k => k.startsWith('font'))
+    if (font) for (const r of rule.ranges) parts.push({ start: Math.max(0, r.firstRow), end: Math.min(CF_ALL_ROWS.end, r.lastRow) })
+  }
+  for (const t of sheet.tables) if (t.extent.rows > 0) parts.push({ start: t.extent.firstRow, end: Math.min(CF_ALL_ROWS.end, t.extent.firstRow + t.extent.rows - 1) })
+  return mergeRows(parts)
+}

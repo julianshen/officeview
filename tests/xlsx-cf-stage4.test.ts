@@ -524,6 +524,16 @@ describe('S4-ROW-UNIFORM covers column and default styles and rich-text runs on 
       edit('xl/sharedStrings.xml', x => x.replace('</sst>', `<si><t>y</t>${PHONETIC}</si></sst>`)),
       edit('xl/worksheets/sheet1.xml', x => x.replace(/(<row r="2"[^>]*>.*?)<\/row>/, '$1<c r="G2" s="2" t="s" ph="1"><v>RICH</v></c></row>')),
     ],
+    // Final review P3: the phonetic run and phoneticPr alone, without ph="1", on both string kinds.
+    'a neighbouring inline phonetic run with a 20 pt phoneticPr font, no ph': [
+      edit('xl/styles.xml', x => fonts(x, FONT20)),
+      edit('xl/worksheets/sheet1.xml', x => x.replace(/(<row r="2"[^>]*>.*?)<\/row>/, `$1<c r="G2" s="2" t="inlineStr"><is><t>x</t>${PHONETIC}</is></c></row>`)),
+    ],
+    'a neighbouring shared-string phonetic run with a 20 pt phoneticPr font, no ph': [
+      edit('xl/styles.xml', x => fonts(x, FONT20)),
+      edit('xl/sharedStrings.xml', x => x.replace('</sst>', `<si><t>y</t>${PHONETIC}</si></sst>`)),
+      edit('xl/worksheets/sheet1.xml', x => x.replace(/(<row r="2"[^>]*>.*?)<\/row>/, '$1<c r="G2" s="2" t="s"><v>RICH</v></c></row>')),
+    ],
     'a neighbouring plain cell showing phonetics (ph="1")': [
       edit('xl/worksheets/sheet1.xml', x => x.replace(/(<row r="2"[^>]*>.*?)<\/row>/, '$1<c r="G2" s="2" ph="1"><v>1</v></c></row>')),
     ],
@@ -604,4 +614,61 @@ describe('Stage 4 per-case validation records are complete', () => {
     }
     expect(rows.filter(r => r.produced.paints).length).toBeGreaterThanOrEqual(39)
   }, 300000)
+})
+
+/**
+ * Final review I3: resident display semantics read the live frame hosts, so a row or column resize reaches the icon
+ * decision exactly as on the forced-paged leg. Codex's reproduction: stage4-icon-rows-bottom, row 2 resized from 20 to
+ * 24 CSS px withholds B2's icon and announces it the same way on both scopes; a column resize narrow enough to clip
+ * the frame likewise.
+ */
+describe('resident and paged semantics follow live resizes identically (final review I3)', () => {
+  async function scopes(rowPx: number, colPx?: number) {
+    const { prepareCfRemote, createPagedWorkbookSource: _unused } = await import('../src/xlsx/view/pagedSource').then(m => ({ ...m, createPagedWorkbookSource: undefined }))
+    const { computeMetrics } = await import('../src/xlsx/render')
+    const { createCellLayoutHost } = await import('../src/xlsx/view/renderViewport')
+    const { createCfWorkBudget } = await import('../src/xlsx/cf/limits')
+    const { cfRowPtOfSheet, cfRowUniformOfSheet } = await import('../src/xlsx/cf/render')
+    const { createCanvas } = await import('canvas')
+    const sheet = await savedSheet('tests/fixtures/xlsx-cf/stage4-icon-rows-bottom.xlsx')
+    const m = computeMetrics(sheet)
+    m.rowHeightsPx[1] = rowPx
+    if (colPx !== undefined) m.colWidthsPx[1] = colPx
+    const ctx = createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D
+    const layout = createCellLayoutHost(ctx)
+    const hosts = { cell: (row: number, col: number) => {
+      const cell = sheet.rows.find(r => r.index === row)?.cells.find(c => c.col === col)
+      if (!cell) return undefined
+      const box = { x: m.colWidthsPx.slice(0, col).reduce((a, b) => a + b, 0), y: m.rowHeightsPx.slice(0, row).reduce((a, b) => a + b, 0), width: m.colWidthsPx[col]!, height: m.rowHeightsPx[row]! }
+      const body = layout.layoutBody(cell, box.width, box.height)
+      return { box, base: cell.style, cell, textWidth: body.text?.kind === 'plain' ? body.text.width : body.text?.kind === 'layout' ? body.text.layout.lines[0]!.segments.reduce((n, g) => n + g.width, 0) : undefined }
+    } }
+    const rects = [{ r0: 1, r1: 1, c0: 1, c1: 1 }]
+    const { budget } = trackingBudget()
+    const resident = (await prepareCfTextScope(sheet, { rects, signal: new AbortController().signal, locale: 'en-US', budget, hosts } as never))!
+    const rules = sheet.conditionalFormatting!, sheetId = sheet.sheetId ?? sheet.name
+    const st = { owner: 'paged', sheetId, workbookValueGen: 1, cfGen: cfRulesVersion(rules), viewGen: 1, structureGen: 1, clockGen: 1 }
+    const memory = createCfMemory({})
+    const wire = await prepareCfRemote({ rects, stamp: { ...st }, grantBytes: 1 << 22 }, sheetId, residentSource(sheet, st, memory, 'engine'), rules, memory, { budget: () => createCfWorkBudget({ now: () => 0 }) })
+    const paged = (await prepareCfWireScope(async () => ({ result: structuredClone(wire), release() {} }), rects, { budget: { reserve() {}, release() {} }, locale: 'en-US', hosts, rowPtOf: cfRowPtOfSheet(sheet), rowUniformOf: cfRowUniformOfSheet(sheet) }))!
+    const out = [resident, paged].map(s => ({ icon: s.iconAt?.(1, 1) !== undefined, text: s.describe(1, 1)?.text }))
+    resident.dispose(); paged.dispose()
+    void _unused
+    return out
+  }
+  it('row 2 at its authored 20 px: both announce the icon; resized to 24 px: both withhold it the same way', async () => {
+    const [r20, p20] = await scopes(20)
+    expect(r20).toEqual(p20)
+    expect(r20).toMatchObject({ icon: true })
+    expect(r20!.text).toContain('Icon 3 of 3')
+    const [r24, p24] = await scopes(24)
+    expect(r24).toEqual(p24)
+    expect(r24).toMatchObject({ icon: false })
+    expect(r24!.text ?? '').not.toContain('Icon 3 of 3')
+  }, 120000)
+  it('a column resize that cuts into the frame: both scopes agree', async () => {
+    const [r, p] = await scopes(20, 10)
+    expect(r).toEqual(p)
+    expect(r).toMatchObject({ icon: false })
+  }, 120000)
 })

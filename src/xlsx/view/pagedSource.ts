@@ -10,6 +10,7 @@
  * without one is `unavailable`. Answers match ObjectXlsxSheetAdapter over the
  * same file parsed with valuePolicy 'cached' (adapter parity, §4.2).
  */
+import { CF_ALL_ROWS, cfSheetNonUniformFontRows } from '../rowFont'
 import { isDateNumberStyle } from '../dateNumberFormat'
 import { defaultColumnWidthPx, defaultRowPtOf } from '../columnWidth'
 import type {
@@ -2704,7 +2705,7 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
       let geometry = geometries.get(sheetId)
       if (!geometry) {
         // Row metadata arrives with the rows; cache only once the sheet is complete.
-        geometry = withFrozen(buildGeometry(sheet.metadata.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), sheet.metadata.cols, sheet.metadata.hiddenRows, { hiddenCols: true, columns: pagedColumns(workbook, sheet.metadata), ...pagedDefaultRow(sheet.metadata) }), sheet.metadata.frozen)
+        geometry = withFrozen(buildGeometry(sheet.metadata.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), sheet.metadata.cols, sheet.metadata.hiddenRows, { hiddenCols: true, columns: pagedColumns(workbook, sheet.metadata), ...pagedDefaultRow(sheet.metadata, sheet as never) }), sheet.metadata.frozen)
         if (sheet.state === 'complete') geometries.set(sheetId, geometry)
       }
       return geometry
@@ -2734,10 +2735,14 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
 }
 
 /** Ruling S4-DEFAULT-ROW: the authored height (pt) of the paged sheet's rows without `ht`, from its sheetFormatPr. */
-function pagedDefaultRow(meta: { format?: import('../columnWidth').SheetFormat; nonUniformFontRows?: readonly { start: number; end: number }[] }): { defaultRowPt?: number; nonUniformFontRows?: readonly { start: number; end: number }[] } {
+function pagedDefaultRow(meta: { format?: import('../columnWidth').SheetFormat; nonUniformFontRows?: readonly { start: number; end: number }[] }, sheet?: import('../rowFont').CfRowFontSheet & { state?: string }): { defaultRowPt?: number; nonUniformFontRows?: readonly { start: number; end: number }[] } {
   const pt = defaultRowPtOf(meta.format)
-  // Ruling S4-ROW-UNIFORM: the reader's row font uniformity travels beside the default row height.
-  return { ...(pt !== undefined ? { defaultRowPt: pt } : {}), ...(meta.nonUniformFontRows ? { nonUniformFontRows: meta.nonUniformFontRows } : {}) }
+  // Ruling S4-ROW-UNIFORM: the reader's row font uniformity travels beside the default row height. S4-ROW-EFFECTIVE:
+  // with the sheet's CF font rules and table rows, known only once the sheet is complete (every row withholds before).
+  const rows = !meta.nonUniformFontRows ? undefined
+    : !sheet ? meta.nonUniformFontRows
+      : sheet.state !== 'complete' ? [{ ...CF_ALL_ROWS }] : cfSheetNonUniformFontRows(sheet, meta.nonUniformFontRows)
+  return { ...(pt !== undefined ? { defaultRowPt: pt } : {}), ...(rows ? { nonUniformFontRows: rows } : {}) }
 }
 /** Excel column pixel model of a paged sheet: workbook MDW and its sheetFormatPr. */
 function pagedColumns(workbook: PagedWorkbook, meta: { format?: { baseColWidth?: number; defaultColWidth?: number } }) {

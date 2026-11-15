@@ -19,7 +19,7 @@ import { LayoutCache, withTextInset, type CellLayoutHost, type PlacedCell } from
 import { prepareCfPaint, residentSource, type CfPaintBatch } from '../src/xlsx/cf/render'
 import { cfRowPtOfOverrides, prepareCfTextScope, prepareCfWireScope, type CfFrameHostSource } from '../src/xlsx/cf/text'
 import { buildGeometry } from '../src/xlsx/view/source'
-import { cfNonUniformFontRows, cfRowUniformOfLayout } from '../src/xlsx/rowFont'
+import { cfSheetNonUniformFontRows, cfRowUniformOfLayout } from '../src/xlsx/rowFont'
 import { SHEET_ZOOM_STEPS } from '../src/xlsx/view/sheetZoom'
 import { cfRulesVersion, prepareCfRemote } from '../src/xlsx/view/pagedSource'
 import { createCfMemory, createCfWorkBudget } from '../src/xlsx/cf/limits'
@@ -27,7 +27,7 @@ import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
 import { CF_ICON_PAINT_CAPABILITIES, CF_ICON_RENDER_MODEL, CF_ICON_SCALES, iconClearsRightTextAt, CF_ICON_TEXT_PADDING_PX, iconWithheld, layoutIcon } from '../src/xlsx/cf/iconPaint'
 import { admitIconGlyphs, cfIconGlyphHeader, iconGlyph, injectCfIconGlyphs, type CfGlyphOp } from '../src/xlsx/cf/iconGlyphs'
 import { getPaintables } from '../src/render/paint'
-import type { CfIconDescriptor, CfStamp } from '../src/xlsx/cf/model'
+import type { CfIconDescriptor, CfRule, CfStamp } from '../src/xlsx/cf/model'
 import type { XlsxCellStyle, XlsxSheet } from '../src/xlsx/types'
 import type { EffectiveFormatScope } from '../src/xlsx/view/formatWorkspace'
 import { ICON_COLOURS, ICON_PAINT_EVIDENCE, ICON_SHOWVALUE_EVIDENCE, STUB_INSET_PX, STUB_MODEL, iconRecorder, iconSheet, stubGlyph, withIcons } from './helpers/cf-icons'
@@ -55,7 +55,7 @@ async function pagedScope(sheet: XlsxSheet, rows: number, cols = 1, hosts?: CfFr
   expect(wire.kind, JSON.stringify(wire.reason)).toBe('ready')
   // S4-ROW-EXACT: the row heights the paged main thread holds, as InteractiveSheetDoc passes them: the worker's authored
   // row overrides (view/source.ts `buildGeometry`), read back as pt.
-  const geometry = buildGeometry(sheet.rows, sheet.cols ?? [], [], { defaultRowPt: sheet.defaultRowHeightPt, nonUniformFontRows: cfNonUniformFontRows(sheet.rows, sheet.rowFontsBlocked) })
+  const geometry = buildGeometry(sheet.rows, sheet.cols ?? [], [], { defaultRowPt: sheet.defaultRowHeightPt, nonUniformFontRows: cfSheetNonUniformFontRows({ ...sheet, tables: sheet.tables ?? [] }) })
   const rowPtOf = cfRowPtOfOverrides(geometry.rowOverrides, geometry.defaultRowPt)
   // S4-ROW-UNIFORM: the rows' font uniformity travels with the layout, as the row heights do.
   const rowUniformOf = cfRowUniformOfLayout(geometry.nonUniformFontRows)
@@ -742,6 +742,38 @@ describe('S4-RIGHTINSET-ZERO: right-aligned numbers at the key geometry', () => 
       expect(await count('bottom', rowPt, true), `bottom ${rowPt} pt with a 20 pt cell`).toEqual({ static: 0, resident: 0, worker: 0, 'forced-paged': 0, print: 0, described: 0, inset: 0 })
       expect((await count('center', rowPt, true)).worker, `centre ${rowPt} pt with a 20 pt cell`).toBe(6)
     }
+  })
+
+  it('final review I1 (S4-ROW-EFFECTIVE): a CF font rule enlarging another cell of a Calibri 11 row withholds the bottom icon in every view', async () => {
+    // Codex's reproduction: a Calibri 11 row whose G cell a cellIs rule enlarges to 20 pt (its dxf carries a <font>).
+    const run = async (fontRule: boolean, table = false) => {
+      const sheet = iconSheet([10, 50, 90], { style: { ...KEY_STYLE, horizontal: 'left', vertical: 'bottom' } })
+      for (const row of sheet.rows) { row.heightPt = 15; row.customHeight = true; row.cells.push({ ref: `G${row.index + 1}`, row: row.index, col: 6, value: 1, styleIndex: 0, style: { ...KEY_STYLE } }) }
+      if (fontRule) (sheet.conditionalFormatting!.rules as CfRule[]).push({ id: 9, priority: 9, documentOrder: 8, ranges: [{ firstRow: 1, lastRow: 1, firstCol: 6, lastCol: 6 }], stopIfTrue: false, writes: new Set(['font.size']), dxf: { 'font.size': 20 }, definition: { kind: 'cellIs', operator: 'greaterThan', operands: [{ kind: 'number', value: 0 }], dialect: 'base', formulas: [] } } as never)
+      if (table) sheet.tables = [{ id: '1', name: 'T', displayName: 'T', sheetId: sheet.sheetId!, partPath: 'xl/tables/table1.xml', extent: { sheetId: sheet.sheetId!, firstCol: 6, firstRow: 2, cols: 1, rows: 1 }, headerRowCount: 0, totalsRowCount: 0, columns: [] }] as never
+      return withIcons(async () => {
+        const metrics = computeMetrics(sheet)
+        const resident = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, layoutContext }))!
+        const worker = asBatch(await pagedScope(sheet, 3))
+        const out: Record<string, number[]> = {}
+        const rowsOf = (ops: Array<{ y: number }>) => [...new Set(ops.map(o => Math.floor(o.y / 20)))].sort()
+        { const r = recorder(metrics.widthPx, metrics.heightPx); renderSheet(sheet, r.ctx, metrics, undefined, { conditionalFormatting: resident }); out.static = rowsOf(r.ops.filter(o => o.op === 'icon')) }
+        const geometry = buildSheetGeometry(sheet)
+        for (const [name, batch] of [['resident', resident], ['worker', worker]] as const) {
+          const r = recorder(metrics.widthPx, metrics.heightPx)
+          renderSheetViewport(sheet, r.ctx, geometry, { box: { x: 0, y: 0, width: metrics.widthPx, height: metrics.heightPx }, zoom: 1, deviceScale: 1 }, { conditionalFormatting: batch }, { cache: new LayoutCache() })
+          out[name] = rowsOf(r.ops.filter(o => o.op === 'icon'))
+        }
+        out.described = [0, 1, 2].filter(row => resident.iconAt(row, 0) !== undefined)
+        resident.dispose(); worker.dispose()
+        return out
+      }, { model: false, glyphs: false, extra: [...GLYPH_CAPS, 'icon:inset-left'] })
+    }
+    expect(await run(false)).toEqual({ static: [0, 1, 2], resident: [0, 1, 2], worker: [0, 1, 2], described: [0, 1, 2] })
+    // The rule's row (row 2) withholds in every view; the other rows paint.
+    expect(await run(true)).toEqual({ static: [0, 2], resident: [0, 2], worker: [0, 2], described: [0, 2] })
+    // A table covering a cell of row 3 withholds that row (its style may carry a font).
+    expect(await run(false, true)).toEqual({ static: [0, 1], resident: [0, 1], worker: [0, 1], described: [0, 1] })
   })
 
   it('fix round P3: right-aligned text clears the positioned frame\'s right edge (4Rating:3, 15 pt row, 100 px cell)', async () => {

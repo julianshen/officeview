@@ -1,5 +1,7 @@
 # Stage 4 (icon sets): Excel capture recipes for the orchestrator
 
+> **Historical (Task 24).** The expectations below (no captures run, an incomplete audit, every icon withheld) describe the oracle before its Excel captures. Current results, the published Stage 4 set and what paints, are in [`xlsx-cf.md` §13](xlsx-cf.md#13-stage-4-validation-publication-resource-audit-and-pr-4-evidence-task-30).
+
 Task 24 prepared the Stage 4 oracle; **none of it has been run against Excel.** This page is the exact sequence the orchestrator runs on the host Mac (Excel for Mac 16.114 or later, zh-TW, `Asia/Taipei`) to turn the 16 prepared cases into evidence. Preparing scripts is not evidence: a case without captures stays `recipe-pending` and refused, and production withholds every icon until Task 30 publishes the audited set (`--publish-stage4`).
 
 All commands run from the Stage 4 worktree root (`.worktrees/cf-s4`). **Always pass `--stage 4`** (and `--case` where shown): `generate.ts`, `build.ts` and `capture.ts` without `--stage` act on Stage 1 or on every stage. Never pass `--write` to the audit (Ruling S3-WRITE, mirrored for Stage 4: only Task 30 publishes).

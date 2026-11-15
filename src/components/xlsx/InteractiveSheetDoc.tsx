@@ -1113,7 +1113,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // Resident sheets gate on their parsed rules; remote sheets gate on the
   // worker-published CF presence flag, so plain sheets never take a receiver
   // grant. A missing or refused scope always means base formatting, never a guess.
-  const prepareResidentScope = async (sheet: XlsxSheet, rects: readonly SourceRect[], batchSignal: AbortSignal, budget: FormatBudget): Promise<EffectiveFormatScope | undefined> => {
+  const prepareResidentScope = async (sheet: XlsxSheet, rects: readonly SourceRect[], batchSignal: AbortSignal, budget: FormatBudget, hosts?: import('../../xlsx/cf/text').CfFrameHostSource): Promise<EffectiveFormatScope | undefined> => {
     if (!sheet.conditionalFormatting?.rules.length || !rects.length || batchSignal.aborted) return undefined
     const text = await import('../../xlsx/cf/text')
     if (batchSignal.aborted) return undefined
@@ -1123,6 +1123,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       signal: batchSignal,
       locale: sheet.semantics?.locale ?? 'en-US',
       budget,
+      ...(hosts ? { hosts } : {}),
     })
   }
   /**
@@ -1134,7 +1135,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
    */
   const frameHostSource = (sheetId: string): import('../../xlsx/cf/text').CfFrameHostSource => createFrameHostSource(() => {
     const sheetEntry = entries.get(sheetId)
-    if (!sheetEntry || !remote || remote.isClosed) return undefined
+    // Final review I3: resident display semantics read the same live hosts (no remote session needed).
+    if (!sheetEntry || (remote && remote.isClosed)) return undefined
     return {
       metrics: sheetEntry.metrics,
       cellAt: at => cellAt(sheetEntry, at),
@@ -1365,7 +1367,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         const locale = entry.sheet.semantics?.locale ?? 'en-US'
         scope = remote
           ? await prepareRemoteScope(sheetId, cfTextRects, abort.signal, locale, semanticFormatBudget, undefined, () => { empty = true }, frameHostSource(sheetId))
-          : await prepareResidentScope(sheet, cfTextRects, abort.signal, semanticFormatBudget)
+          : await prepareResidentScope(sheet, cfTextRects, abort.signal, semanticFormatBudget, frameHostSource(sheetId))
       } catch {
         scope = undefined
       }

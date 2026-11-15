@@ -237,6 +237,10 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
   let cfStyles: import('../cf/parse').CfStylesSource | undefined
   let cfStylesRefused = false
   let cfStyleHold: import('./constructionMemory').ConstructionShare | undefined
+  // Ruling S4-ROW-UNIFORM (final review I2): one bit per shared string, set when it holds rich-text or phonetic runs.
+  // Charged to construction memory before it grows, held until the import ends (completion, cancellation, failure).
+  let richHold: import('./constructionMemory').ConstructionShare | undefined
+  let richBits = new Uint8Array(0)
   const dropCf = () => {
     for (const sheet of sheets) {
       delete sheet.conditionalFormatting
@@ -294,8 +298,20 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
     }
     // Shared strings, chunked into the store.
     let sstCount = 0
-    // Ruling S4-ROW-UNIFORM (fix round 2): the shared strings that hold rich-text runs.
-    const richStrings = new Set<number>()
+    const isRichString = (index: number): boolean => index >= 0 && (index >> 3) < richBits.length && (richBits[index >> 3]! & (1 << (index & 7))) !== 0
+    const markRich = (index: number): void => {
+      const byte = index >> 3
+      if (byte >= richBits.length) {
+        // Grow geometrically, charging the new size before allocating it.
+        const size = Math.max(byte + 1, Math.min(richBits.length * 2 || 64, (limits.paged.uniqueStrings >> 3) + 1))
+        richHold ??= store.construction.share('rich shared-string flags', { untilReleased: true })
+        richHold.need(size)
+        const grown = new Uint8Array(size)
+        grown.set(richBits)
+        richBits = grown
+      }
+      richBits[byte] = richBits[byte]! | (1 << (index & 7))
+    }
     if (sstPath) {
       const entry = inventory.find(sstPath)!
       let chunk: string[] = []
@@ -306,7 +322,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       const share = store.construction.share('pending shared strings')
       let pendingBytes = 0
       const events = sharedStringEvents(sstPath, (text, rich) => {
-        if (rich) richStrings.add(sstCount)
+        if (rich) markRich(sstCount)
         const cost = 2 * text.length + PENDING_STRING_BYTES
         share.need(pendingBytes + cost)
         pendingBytes += cost
@@ -445,7 +461,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         declared: container,
         // Ruling S4-ROW-UNIFORM: the rows whose font is not uniformly Calibri 11 regular (icon frames).
         keyFontStyle: index => Number.isInteger(index) && index >= 0 && cfKeyFontStyle(workbook.formatting.styles[index]),
-        richString: index => richStrings.has(index),
+        richString: isRichString,
         onCell(record) {
           // Charged before the builder retains the record's text and formula metadata.
           account(builder.costOf(record.text, record.meta))
@@ -718,6 +734,8 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
     } finally {
       cfStyles = undefined
       cfStyleHold?.release(); cfStyleHold = undefined
+      richHold?.release(); richHold = undefined
+      richBits = new Uint8Array(0)
       options.signal?.removeEventListener('abort', forward)
       pulse()
     }
