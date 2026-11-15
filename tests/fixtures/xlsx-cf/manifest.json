@@ -50265,8 +50265,8 @@
       "iconShiftedKey": true,
       "expected": {
         "inputSha256": "2be510ead9af93d6cace55a9fa948ba71adfe6502543f8669da6fd24a682974f",
-        "savedSha256": "2be510ead9af93d6cace55a9fa948ba71adfe6502543f8669da6fd24a682974f",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "b5e21293296c3d37bd4c1cc9097ac4e11e67dedabdb8facc687b488d9e9daf69",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -50360,7 +50360,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50371,7 +50371,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50382,7 +50382,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50393,7 +50393,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50404,7 +50404,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50415,7 +50415,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50426,7 +50426,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50437,7 +50437,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50448,7 +50448,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50459,7 +50459,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50470,7 +50470,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50481,7 +50481,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50492,7 +50492,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50503,7 +50503,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50514,7 +50514,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50525,7 +50525,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50536,7 +50536,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50547,7 +50547,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50558,7 +50558,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50569,7 +50569,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50580,7 +50580,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50591,7 +50591,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50602,7 +50602,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50613,7 +50613,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50624,7 +50624,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50635,7 +50635,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50646,7 +50646,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50657,7 +50657,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50668,7 +50668,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50679,7 +50679,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50690,7 +50690,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50701,7 +50701,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50712,7 +50712,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50723,7 +50723,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50734,7 +50734,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50745,7 +50745,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50756,7 +50756,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50767,7 +50767,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50778,7 +50778,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50789,7 +50789,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -51118,17 +51118,24 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-rows-bottom.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-rows-bottom.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-rows-bottom.json",
+          "pngSha256": "bde3489d3e03220f01fd8eb0d3cdfc2ff842686e0c1a09f9f3873357b5f56e4d"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-15T11:08:36.955Z",
+        "excelVersion": "16.115",
+        "inputSha256": "2be510ead9af93d6cace55a9fa948ba71adfe6502543f8669da6fd24a682974f",
+        "savedSha256": "b5e21293296c3d37bd4c1cc9097ac4e11e67dedabdb8facc687b488d9e9daf69",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage4-icon-rows",
