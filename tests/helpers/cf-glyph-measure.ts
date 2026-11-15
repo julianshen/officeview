@@ -214,3 +214,51 @@ export function inkIoU(img: Uint8ClampedArray, crop: DecodedPng, threshold: numb
   }
   return union ? inter / union : 1
 }
+
+/**
+ * Round 8 (S4-NO-FIT): a glyph's fills, each with its ops and area (px² in frame points at the key scale), for the
+ * ablation test. A "patch" is a fill of at most `PATCH_MAX_AREA` px².
+ */
+export const PATCH_MAX_AREA = 6
+export function glyphFills(glyph: CfIconGlyph): Array<{ ops: CfIconGlyph['path']; area: number }> {
+  const out: Array<{ ops: CfIconGlyph['path']; area: number }> = []
+  let ops: CfIconGlyph['path'][number][] = []
+  for (const op of glyph.path) {
+    ops.push(op)
+    if (op[0] !== 'F') continue
+    let area = 0
+    const pts: Array<[number, number]> = []
+    for (const o of ops) {
+      if (o[0] === 'M' || o[0] === 'L') pts.push([o[1], o[2]])
+      if (o[0] === 'A') area += Math.PI * o[3] * o[3] * Math.min(1, Math.abs(o[5] - o[4]) / (2 * Math.PI))
+    }
+    for (let i = 0; i < pts.length; i++) { const a = pts[i]!, b = pts[(i + 1) % pts.length]!; area += (a[0] * b[1] - b[0] * a[1]) / 2 }
+    out.push({ ops, area: Math.abs(area) })
+    ops = []
+  }
+  return out
+}
+/** The glyph without fill `index` (its ops removed). */
+export function withoutFill(glyph: CfIconGlyph, index: number): CfIconGlyph {
+  return { ...glyph, path: glyphFills(glyph).filter((_, i) => i !== index).flatMap(f => f.ops) }
+}
+/**
+ * A patch is fitted when removing it barely moves the ink IoU (< `FIT_IOU_DELTA`) yet flips a reference region from
+ * passing (>= 50 %) to failing: it exists only to colour a region of the map, not to draw the shape.
+ */
+export const FIT_IOU_DELTA = 0.01
+export function fittedPatches(glyph: CfIconGlyph, crop: DecodedPng, faint: boolean): number[] {
+  const t = faint ? ICON_CLASS_TOLERANCE + 1 : ICON_STRONG_DELTA
+  const regions = referenceRegions(crop)
+  const base = renderAtKey(glyph)
+  const baseIoU = inkIoU(base, crop, t)
+  const basePass = regions.map(r => regionAgreement(base, r, REGION_TOLERANCE) >= REGION_AGREEMENT_MIN)
+  const fitted: number[] = []
+  glyphFills(glyph).forEach((f, i) => {
+    if (f.area > PATCH_MAX_AREA) return
+    const img = renderAtKey(withoutFill(glyph, i))
+    const flips = regions.some((r, k) => basePass[k] && regionAgreement(img, r, REGION_TOLERANCE) < REGION_AGREEMENT_MIN)
+    if (flips && Math.abs(inkIoU(img, crop, t) - baseIoU) < FIT_IOU_DELTA) fitted.push(i)
+  })
+  return fitted
+}

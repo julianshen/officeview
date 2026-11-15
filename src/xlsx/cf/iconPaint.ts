@@ -23,6 +23,8 @@ import { admitIconGlyphs, drawIconGlyph, iconGlyph, type CfGlyphCache, type CfIc
 import { barHidesText, type CfBarHost, type CfBarScale } from './dataBarPaint'
 import type { CfMemory, CfWorkBudget } from './limits'
 import type { XlsxCell } from '../types'
+import { SHEET_MIN_ZOOM } from '../view/contracts'
+import { SHEET_ZOOM_STEPS } from '../view/sheetZoom'
 
 /** The static layout's horizontal text padding, both sides (`render.ts` PADDING_L + PADDING_R; pinned by
  * tests/xlsx-cf-icon-render.test.ts). Kept here so the eager renderer exports nothing for icons. */
@@ -349,26 +351,29 @@ export function iconWithheld(icon: CfIconDescriptor, host: CfBarHost | undefined
   return font.horizontal === 'right' && model.keyFrame !== undefined && !rightTextClearsAtEveryScale(host, model.keyFrame)
 }
 
-/** The zoom/DPR pairs the viewer paints at (the views' supported scales; tests paint at each). */
-export const CF_ICON_SCALES: ReadonlyArray<readonly [number, number]> = Object.freeze([[0.5, 1], [0.75, 1], [1, 1], [1, 2], [1.5, 2], [2, 3]] as const)
+/** The supported DPRs the clearance is pinned at (the viewer follows the live `devicePixelRatio`; the bound below
+ * covers every DPR >= 1). */
+const CF_ICON_DPRS: readonly number[] = Object.freeze([1, 1.25, 1.5, 2, 3])
+/** Every keyboard zoom step (`SHEET_ZOOM_STEPS`) at every pinned DPR: the scales tests enumerate. */
+export const CF_ICON_SCALES: ReadonlyArray<readonly [number, number]> = Object.freeze(SHEET_ZOOM_STEPS.flatMap(zoom => CF_ICON_DPRS.map(dpr => [zoom, dpr] as const)))
 
 /**
- * Ruling S4-CLEAR-SNAP (round 7): at every supported scale, the right-aligned text's first device column (the text box
- * start, `host.x + host.width - PADDING_R - textWidth`, floored on the device grid) lies at or after the frame's
- * snapped right edge (`layoutIcon`'s grid: the host's left gridline and the frame's left inset and width each rounded
- * half up). One decision for every scale (the conservative one: withheld if it would meet the text at any), so the
- * description and the paint never change with zoom.
+ * Ruling S4-CLEAR-ALLZOOM (round 8): the right-aligned text's first device column lies at or after the frame's snapped
+ * right edge at every zoom the viewer reaches (keyboard steps and continuous wheel or pinch zoom, all within
+ * [SHEET_MIN_ZOOM, SHEET_MAX_ZOOM]) and every DPR >= 1. One conservative decision for all scales, so the description and
+ * the paint never change with zoom.
+ *
+ * At device scale s = zoom × DPR the frame's edge is `round(x·s) + round(2 pt·s′) + round(13 pt·s′)` (`layoutIcon`,
+ * each rounded half up: at most e·s + 1.5 for the exact edge e = x + 20 px), and the text's first column is
+ * `floor(t·s)` (at least t·s − 1 for the exact start t). So `(t − e)·s >= 2.5` suffices; it is hardest at the smallest
+ * s = SHEET_MIN_ZOOM × 1, which needs t − e >= 10 px.
  */
 function rightTextClearsAtEveryScale(host: CfBarHost, frame: CfIconKeyFrame): boolean {
   const width = host.textWidth
   if (width === undefined || !Number.isFinite(width)) return false
   const textStart = host.x + host.width - CF_ICON_TEXT_PADDING_PX / 2 - width
-  for (const [zoom, dpr] of CF_ICON_SCALES) {
-    const devPerPx = zoom * dpr, devPerPt = devPerPx * PT_PX
-    const edge = roundHalfUp(host.x * devPerPx) + roundHalfUp(frame.leftPt * devPerPt) + roundHalfUp(frame.widthPt * devPerPt)
-    if (Math.floor(textStart * devPerPx + 1e-9) < edge) return false
-  }
-  return true
+  const edge = host.x + (frame.leftPt + frame.widthPt) * PT_PX
+  return textStart - edge >= 2.5 / (SHEET_MIN_ZOOM * 1) - 1e-9
 }
 
 /**

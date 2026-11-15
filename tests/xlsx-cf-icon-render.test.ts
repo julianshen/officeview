@@ -19,6 +19,7 @@ import { LayoutCache, withTextInset, type CellLayoutHost, type PlacedCell } from
 import { prepareCfPaint, residentSource, type CfPaintBatch } from '../src/xlsx/cf/render'
 import { cfRowPtOfOverrides, prepareCfTextScope, prepareCfWireScope, type CfFrameHostSource } from '../src/xlsx/cf/text'
 import { buildGeometry } from '../src/xlsx/view/source'
+import { SHEET_ZOOM_STEPS } from '../src/xlsx/view/sheetZoom'
 import { cfRulesVersion, prepareCfRemote } from '../src/xlsx/view/pagedSource'
 import { createCfMemory, createCfWorkBudget } from '../src/xlsx/cf/limits'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
@@ -693,40 +694,46 @@ describe('S4-RIGHTINSET-ZERO: right-aligned numbers at the key geometry', () => 
 
   it('fix round P3: right-aligned text clears the positioned frame\'s right edge (4Rating:3, 15 pt row, 100 px cell)', async () => {
     // The reproduction: 78 px of text in a 100 px cell starts at 100 - 3 - 78 = 19 px, inside the frame (2 pt + 13 pt =
-    // 20 px); 77 px starts at 20 px, clear of it.
+    // 20 px). Round 8 (S4-CLEAR-ALLZOOM): admission needs a 10 px clearance (every zoom and DPR >= 1): 67 px paints.
     const desc: CfIconDescriptor = { ruleId: 1, set: '4Rating', iconId: 3, bucket: 3, buckets: 4, showValue: true }
     const host = (textWidth: number) => ({ x: 0, y: 0, width: 100, height: 20, textWidth, rowPt: 15, cell: { value: 1234, style: { ...KEY_STYLE, vertical: 'center' as const } } })
     const caps = new Set([...ICON_PAINT_EVIDENCE, 'icon:geometry-row-offset'])
     injectCfIconGlyphs((set, id) => cfIconGlyphHeader(`${set}:${id}`))
     try {
       expect(iconWithheld(desc, host(78), c => caps.has(c), CF_ICON_RENDER_MODEL)).toBe(true)
-      expect(iconWithheld(desc, host(77), c => caps.has(c), CF_ICON_RENDER_MODEL)).toBe(false)
+      expect(iconWithheld(desc, host(77), c => caps.has(c), CF_ICON_RENDER_MODEL)).toBe(true)
+      expect(iconWithheld(desc, host(67), c => caps.has(c), CF_ICON_RENDER_MODEL)).toBe(false)
     } finally { injectCfIconGlyphs(null) }
   })
 
-  it('round 7 (S4-CLEAR-SNAP): text that clears the frame at the capture scale but meets its snapped edge at one zoom/DPR pair withholds', () => {
+  it('round 8 (S4-CLEAR-ALLZOOM): right-aligned clearance holds at every supported zoom (steps and continuous) and DPR', () => {
     const desc: CfIconDescriptor = { ruleId: 1, set: '3Arrows', iconId: 2, bucket: 2, buckets: 3, showValue: true }
-    const host = (x: number) => ({ x, y: 0, width: 100, height: 20, textWidth: 77, rowPt: 15, cell: { value: 1234, style: { ...KEY_STYLE, vertical: 'center' as const } } })
+    const host = (x: number, textWidth = 77) => ({ x, y: 0, width: 100, height: 20, textWidth, rowPt: 15, cell: { value: 1234, style: { ...KEY_STYLE, vertical: 'center' as const } } })
     const caps = new Set([...ICON_PAINT_EVIDENCE, 'icon:geometry-row-offset'])
     injectCfIconGlyphs((set, id) => cfIconGlyphHeader(`${set}:${id}`))
     try {
-      // At x = 0 the text starts at 20 px, the frame's edge at every scale: paints.
-      expect(iconWithheld(desc, host(0), c => caps.has(c), CF_ICON_RENDER_MODEL)).toBe(false)
-      // At x = 0.5 the text starts at 20.5 logical px (clear at the capture scale: 15.375 device px against an edge at
-      // 15), but at zoom 1 / DPR 1 the cell's left gridline snaps to 1, the frame's edge to 21 and the text's first
-      // device column is 20: it would meet the frame, so the icon withholds at every scale (one decision for all).
+      // Codex's reproduction: x = 0, 77 px of text (it starts at 20 px, the frame's exact edge). At zoom 0.33 the
+      // snapped frame ends at device 7 while the text starts in column 6; at 0.67, 14 against 13. Withheld.
+      expect(iconWithheld(desc, host(0), c => caps.has(c), CF_ICON_RENDER_MODEL)).toBe(true)
+      // The round-7 case (x = 0.5) as well.
       expect(iconWithheld(desc, host(0.5), c => caps.has(c), CF_ICON_RENDER_MODEL)).toBe(true)
-      // Property: wherever the predicate admits, no supported scale lays the frame over the text's first device column.
-      const roundHalfUp = (v: number) => Math.floor(v + 0.5)
-      for (let i = 0; i < 400; i++) {
-        const x = (i * 7.31) % 50, tw = 60 + (i * 3.17) % 20
-        const h = { ...host(x), textWidth: tw }
+      // 10 px of clearance (67 px of text) paints; 9.9 px does not.
+      expect(iconWithheld(desc, host(0, 67), c => caps.has(c), CF_ICON_RENDER_MODEL)).toBe(false)
+      expect(iconWithheld(desc, host(0, 67.1), c => caps.has(c), CF_ICON_RENDER_MODEL)).toBe(true)
+      // Property: wherever the predicate admits, no keyboard zoom step x supported DPR, nor any continuous wheel zoom
+      // in [0.25, 4], lays the frame over the text's first device column.
+      const scales: Array<readonly [number, number]> = [...CF_ICON_SCALES]
+      for (let k = 0; k <= 60; k++) for (const dpr of [1, 1.25, 1.5, 2, 3]) scales.push([0.25 * Math.pow(16, k / 60), dpr])
+      expect(CF_ICON_SCALES.map(([z]) => z)).toEqual(expect.arrayContaining([...SHEET_ZOOM_STEPS]))
+      for (let i = 0; i < 300; i++) {
+        const x = (i * 7.31) % 50, tw = 50 + (i * 3.17) % 30
+        const h = host(x, tw)
         if (iconWithheld(desc, h, c => caps.has(c), CF_ICON_RENDER_MODEL)) continue
-        for (const [zoom, dpr] of CF_ICON_SCALES) {
-          const laid = layoutIcon(desc, h, { sizePt: 11, vertical: 'center', horizontal: 'right' }, { zoom, dpr, output: 'device' }, CF_ICON_RENDER_MODEL, c => caps.has(c))!
+        for (const [zoom, dpr] of scales) {
+          const laid = layoutIcon(desc, h, { sizePt: 11, vertical: 'center', horizontal: 'right' }, { zoom, dpr, output: 'device' }, CF_ICON_RENDER_MODEL, c => caps.has(c))
+          if (!laid) continue
           const textStart = Math.floor((x + 100 - 3 - tw) * zoom * dpr)
           expect(laid.box.x + laid.box.w, `x=${x} tw=${tw} ${zoom}/${dpr}`).toBeLessThanOrEqual(textStart)
-          void roundHalfUp
         }
       }
     } finally { injectCfIconGlyphs(null) }
@@ -737,8 +744,8 @@ describe('S4-RIGHTINSET-ZERO: right-aligned numbers at the key geometry', () => 
     const value = 1234567
     const body = probe.layoutBody({ ref: 'A1', row: 0, col: 0, value, styleIndex: 0, style: { ...KEY_STYLE, vertical: 'center' } }, 500, 20)
     const width = body.text?.kind === 'plain' ? body.text.width : body.text?.kind === 'layout' ? body.text.layout.lines[0]!.segments.reduce((n, g) => n + g.width, 0) : NaN
-    // The text starts at col - 3 - width; it must start at or after the frame's right edge, 20 px.
-    const clear = Math.ceil(3 + width + 20)
+    // The text starts at col - 3 - width; it must start at least 10 px after the frame's right edge, 20 px (round 8).
+    const clear = Math.ceil(3 + width + 20 + 10)
     for (const [name, px, want] of [['clear', clear, 2], ['one px in', clear - 1, 0]] as const) {
       const sheet = keySheet([value], px / 7)
       expect(computeMetrics(sheet).colWidthsPx[0], name).toBe(px)
@@ -775,7 +782,7 @@ describe('S4-RIGHTINSET-ZERO: right-aligned numbers at the key geometry', () => 
     expect(width).toBeGreaterThan(20)
     // Fits the cell (w - 6 >= width) but not right of the 12 pt (16 px) frame and gap.
     const colPx = Math.ceil(width + CF_ICON_TEXT_PADDING_PX + 8)
-    for (const [name, px, want] of [['tight', colPx, 0], ['control', colPx + 16, 2]] as const) {
+    for (const [name, px, want] of [['tight', colPx, 0], ['control', colPx + 30, 2]] as const) {
       const sheet = keySheet([value], px / 7)
       expect(computeMetrics(sheet).colWidthsPx[0], name).toBe(px)
       const got = await withIcons(() => views(sheet), { ...production, extra: [...GLYPH_CAPS, 'icon:inset-overflow'] })

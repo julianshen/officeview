@@ -18,6 +18,8 @@
  *   `CfPaintBatch`/`EffectiveFormatScope` methods.
  *
  * Ruling S4-ORDER: Task 29 ran first against a stub seam; `injectCfIconGlyphs` stays its test hook.
+ * Size budget (Ruling S4-GLYPHCAP-R2, round 8): revised from 3,786 B to 5,417 B gzip + 10 % (the admission-owned decoder
+ * and the redrawn classes), pinned in tests/xlsx-cf-icon-glyphs.test.ts.
  */
 import type { CfIconSetName } from './model'
 import type { CfMemory, CfWorkBudget } from './limits'
@@ -104,6 +106,14 @@ function encodedBound(glyphClass: string): { bytes: number; ops: number } | unde
 /** The bytes admission charges for a class before decoding it (equals `glyphBytes` of the decoded glyph). */
 export function cfGlyphBytesBound(glyphClass: string): number | undefined {
   return encodedBound(glyphClass)?.bytes
+}
+
+/** Every call of the decoder (round 8): instrumented apart from live entries, so a decode outside a successful
+ * admission is observable. */
+let decodeCalls = 0
+/** How many times the encoded table has been decoded (any caller). */
+export function cfDecodeCalls(): number {
+  return decodeCalls
 }
 
 /** Live decoded glyphs held by admissions (fix round P1): decoding happens only inside an admission, which owns them. */
@@ -222,8 +232,11 @@ export const CF_ICON_GLYPH_WITHHELD: ReadonlySet<string> = new Set<string>([
   '3Stars:0',
   // Fix round / round 7 (S4-REDRAW): these fail the frozen reference-region check (each colour region of the key crop
   // drawn in its own colour on at least half its pixels, ±48) or the ink IoU >= 0.85 even after an honest redraw from
-  // primitives: the stars' and rating bars' shading and the green pennant's fold. Withheld.
-  '3Stars:1', '3Stars:2', '3Flags:2', '4Rating:0', '4Rating:1', '4Rating:2', '4Rating:3', '5Rating:0',
+  // primitives: the stars' and rating bars' shading. Withheld.
+  '3Stars:1', '3Stars:2', '4Rating:0', '4Rating:1', '4Rating:2', '4Rating:3', '5Rating:0',
+  // Round 8 (S4-NO-FIT): fitted patches (removing one barely moved the ink IoU but flipped a reference region from
+  // pass to fail) were removed, with no further redraw; these then fail the frozen check. Withheld.
+  '3ArrowsGray:2', '3Flags:0', '3Flags:1', '3Flags:2', '3Signs:1', '3Symbols2:1', '3Triangles:0',
 ])
 
 /** The key frame every glyph is drawn in (pt): `CF_ICON_RENDER_MODEL.keyFrame` `widthPt`/`heightPt`. */
@@ -257,21 +270,20 @@ const DOWN_RIGHT_2: readonly Shape[] = [
   ['p', 1, 6.5, 11, 11, 11, 11, 6.5], ['p', 2, 1.25, 2.75, 2.75, 1.25, 9.5, 8, 8, 9.5],
 ]
 /** Round 7 (S4-REDRAW): a lamp housing with clipped corners (colour 0), lit from the top left (colour 4), a black
- * bezel (colour 1), the lamp (colour 2) and its highlight (colour 3). */
+ * bezel (colour 1), the lamp (colour 2) and a soft halo (colour 5). Round 8 (S4-NO-FIT) removed a fitted highlight. */
 const LAMP_2: readonly Shape[] = [
   ['p', 0, 2.6, 1, 10.4, 1, 12, 2.6, 12, 10.4, 10.4, 12, 2.6, 12, 1, 10.4, 1, 2.6],
   ['p', 4, 2.6, 1, 10.4, 1, 11, 2, 2, 2, 2, 11, 1, 10.4, 1, 2.6],
   ['p', 1, 2.6, 2, 10.4, 2, 11, 2.6, 11, 10.4, 10.4, 11, 2.6, 11, 2, 10.4, 2, 2.6],
-  ['c', 2, 6.5, 6.5, 3.9], ['c', 5, 5.3, 5.3, 1.9], ['c', 3, 5, 5, 1.1],
+  ['c', 2, 6.5, 6.5, 3.9], ['c', 5, 5.3, 5.3, 1.9],
 ]
 /** Round 7 (S4-REDRAW): a pennant on a slanted pole: a soft grey halo round the pole (colour 0) and under the cloth's
- * tip (colour 4), the cloth's lighter edge (colour 5), the cloth (colour 2), a darker fold at the hoist (colour 3), the
- * pole (colour 1) and its dark core (colour 6). */
+ * tip (colour 4), the cloth's lighter edge (colour 5), the cloth (colour 2), the pole (colour 1) and its dark core
+ * (colour 6). Round 8 (S4-NO-FIT) removed a fitted fold at the hoist. */
 const FLAG_2: readonly Shape[] = [
   ['p', 0, -0.6, 0, 2.6, 0, 6.6, 12, 3.4, 12], ['p', 4, 7.6, 2.6, 11, 4.4, 9.6, 6.8, 4.6, 6.8],
   ['p', 5, 2.1, -0.2, 6.4, 0.2, 10.6, 4, 10.4, 5.8, 3.3, 6.3],
   ['p', 2, 2.4, 0.6, 5.9, 1, 9.8, 4.4, 9.4, 5.4, 3.4, 5.6],
-  ['p', 3, 2, 0, 4.2, 0, 3, 1.2, 3, 3, 2.4, 3],
   ['p', 1, 0.2, 0, 1.8, 0, 5.8, 12, 4.2, 12], ['p', 6, 0.5, 0, 1.5, 0, 5.5, 12, 4.5, 12],
 ]
 const DISC: readonly Shape[] = [['c', 0, 5.5, 5.5, 5.5]]
@@ -296,7 +308,7 @@ const boxes = (...filled: number[]): readonly Shape[] => [[1, 1], [6.5, 1], [1, 
 
 const GEOMETRY: Readonly<Record<string, readonly Shape[]>> = {
   '3Arrows:0': DOWN, '3Arrows:1': RIGHT, '3Arrows:2': UP,
-  '3ArrowsGray:0': DOWN, '3ArrowsGray:1': RIGHT, '3ArrowsGray:2': [...UP, ['p', 2, 4.8, 1, 6, 1, 3.2, 4.8, 2, 4.8], ['p', 3, 6, 9, 7, 9, 7, 11, 5, 11, 5, 10, 6, 10]],
+  '3ArrowsGray:0': DOWN, '3ArrowsGray:1': RIGHT, '3ArrowsGray:2': [...UP, ['p', 3, 6, 9, 7, 9, 7, 11, 5, 11, 5, 10, 6, 10]],
   '3Flags:0': FLAG_2, '3Flags:1': FLAG_2, '3Flags:2': FLAG_2,
   '3TrafficLights1:0': RIMMED, '3TrafficLights1:1': [...RIMMED, ['p', 2, 1.5, 6, 1.5, 4, 3, 2.5, 5, 1.5, 6.5, 1.5, 6.5, 2.5, 4.5, 3, 3, 4.5, 2.5, 6]], '3TrafficLights1:2': RIMMED,
   '3TrafficLights2:0': LAMP_2, '3TrafficLights2:1': LAMP_2, '3TrafficLights2:2': LAMP_2,
@@ -308,7 +320,7 @@ const GEOMETRY: Readonly<Record<string, readonly Shape[]>> = {
     ['p', 3, 5.6, 3, 7.4, 3, 8.8, 4.6, 4.6, 8.8, 3.6, 7.2, 3.6, 5],
   ],
   // A warning triangle: dark rim, light interior, a saturated band low on the right.
-  '3Signs:1': [['p', 0, 6.5, -0.3, 12.3, 11, 0.7, 11], ['p', 3, 5.6, 1.6, 6.4, 1.6, 1.8, 10.2, 0.9, 10.2], ['p', 1, 6.5, 1.8, 10.6, 9.9, 2.4, 9.9], ['p', 2, 8.6, 6.5, 10.6, 9.9, 8, 9.9]], '3Signs:2': [['c', 0, 6.5, 6.5, 5.5], ['c', 1, 6.5, 6.5, 4.5]],
+  '3Signs:1': [['p', 0, 6.5, -0.3, 12.3, 11, 0.7, 11], ['p', 1, 6.5, 1.8, 10.6, 9.9, 2.4, 9.9], ['p', 2, 8.6, 6.5, 10.6, 9.9, 8, 9.9]], '3Signs:2': [['c', 0, 6.5, 6.5, 5.5], ['c', 1, 6.5, 6.5, 4.5]],
   '3Symbols:0': [...RIMMED, ...CROSS_MARK], '3Symbols:1': [...RIMMED, ...BANG_MARK], '3Symbols:2': [...RIMMED, ...TICK_MARK],
   // Round 7 (S4-REDRAW): a broad cross with a soft edge and a darker core.
   '3Symbols2:0': [
@@ -317,7 +329,7 @@ const GEOMETRY: Readonly<Record<string, readonly Shape[]>> = {
   ],
   // An exclamation mark: an orange stroke narrowing to a stem, a light core, a light cap and a dot.
   '3Symbols2:1': [
-    ['r', 0, 5, 0, 3, 1], ['r', 4, 5, 5, 3, 1], ['r', 1, 5, 1, 3, 4], ['r', 6, 6, 5, 1, 2], ['r', 2, 6, 2, 1, 2], ['r', 5, 5, 4, 2, 1], ['r', 7, 6, 7, 1, 1.5], ['r', 3, 5, 9, 3, 2],
+    ['r', 1, 5, 1, 3, 4], ['r', 6, 6, 5, 1, 2], ['r', 7, 6, 7, 1, 1.5], ['r', 3, 5, 9, 3, 2],
   ],
   // A check mark: a light edge, a mid-green body and a dark core along the long stroke.
   '3Symbols2:2': [
@@ -333,7 +345,7 @@ const GEOMETRY: Readonly<Record<string, readonly Shape[]>> = {
   '3Stars:0': [['p', 0, ...STAR], ['p', 1, ...STAR_CORE]],
   '3Stars:1': [['p', 0, ...STAR], ['p', 1, ...STAR_CORE], ['p', 2, ...STAR_LEFT]],
   '3Stars:2': [['p', 0, ...STAR]],
-  '3Triangles:0': [['p', 0, 1, 5, 11, 5, 6.5, 11], ['p', 1, 4.5, 7, 8.5, 7, 6.5, 9.5]], '3Triangles:1': [['r', 0, 0, 5, 11, 1], ['r', 1, 0, 6, 8, 2], ['r', 2, 8, 6, 3, 2]], '3Triangles:2': [['p', 0, 6, 2.5, 11, 8, 1, 8]],
+  '3Triangles:0': [['p', 0, 1, 5, 11, 5, 6.5, 11]], '3Triangles:1': [['r', 0, 0, 5, 11, 1], ['r', 1, 0, 6, 8, 2], ['r', 2, 8, 6, 3, 2]], '3Triangles:2': [['p', 0, 6, 2.5, 11, 8, 1, 8]],
   '5Boxes:0': boxes(), '5Boxes:1': boxes(2), '5Boxes:2': boxes(2, 3), '5Boxes:3': boxes(0, 2, 3), '5Boxes:4': boxes(0, 1, 2, 3),
 }
 
@@ -350,24 +362,24 @@ const COLOURS: Readonly<Record<string, readonly number[]>> = {
   '3Arrows:2': [0xff255e1b, 0xff5bbb76],
   '3ArrowsGray:0': [0xff404040, 0xffadadad],
   '3ArrowsGray:1': [0xff404040, 0xffa8a8a8],
-  '3ArrowsGray:2': [0xff404040, 0xffa3a3a3, 0xff717171, 0xff949494],
-  '3Flags:0': [0xffffffff, 0xffafafaf, 0xfff56563, 0xffbc2a20, 0xffefefef, 0xffbfb8b8, 0xff504848],
-  '3Flags:1': [0xffffffff, 0xffafafaf, 0xfffdbb46, 0xffbf930f, 0xffefefef, 0xffbfbfb6, 0xff504848],
-  '3Flags:2': [0xffffffff, 0xffafafaf, 0xff72b357, 0xff358d29, 0xffefefef, 0xffb9bcb7, 0xff484a48],
+  '3ArrowsGray:2': [0xff404040, 0xffa3a3a3, 0, 0xff949494],
+  '3Flags:0': [0xffffffff, 0xffafafaf, 0xfff56563, 0, 0xffefefef, 0xffbf797b, 0xff504848],
+  '3Flags:1': [0xffffffff, 0xffafafaf, 0xfffdbb46, 0, 0xffefefef, 0xffbfb16b, 0xff504848],
+  '3Flags:2': [0xffffffff, 0xffafafaf, 0xff72b357, 0, 0xffefefef, 0xff7fad71, 0xff484a48],
   '3TrafficLights1:0': [0xffa44f45, 0xfff58284],
   '3TrafficLights1:1': [0xffdf8b31, 0xfffedc68, 0xffffeba7],
   '3TrafficLights1:2': [0xff4d7c45, 0xff61bb7a],
-  '3TrafficLights2:0': [0xff404040, 0xff131110, 0xffef4b45, 0xfffabebb, 0xff777777, 0xfff4827b],
-  '3TrafficLights2:1': [0xff404040, 0xff131111, 0xfff5a92c, 0xfffee2b3, 0xff777777, 0xfffac469],
-  '3TrafficLights2:2': [0xff404040, 0xff101110, 0xff54a948, 0xffc0e0bb, 0xff777878, 0xff7ec175],
+  '3TrafficLights2:0': [0xff404040, 0xff131110, 0xffef4b45, 0, 0xff777777, 0xfff48b85],
+  '3TrafficLights2:1': [0xff404040, 0xff131111, 0xfff5a92c, 0, 0xff777777, 0xfffbcd7c],
+  '3TrafficLights2:2': [0xff404040, 0xff101110, 0xff54a948, 0, 0xff777878, 0xff99cd92],
   '3Signs:0': [0xffc48d86, 0xffa64037, 0xfff47475, 0xfff79294],
-  '3Signs:1': [0xffe49219, 0xfffedf73, 0xfffdcf2e, 0xffe39638],
+  '3Signs:1': [0xffe49619, 0xfffedf73, 0xfffdcf2e],
   '3Signs:2': [0xff4d7c45, 0xff61bb7a],
   '3Symbols:0': [0xffa44f45, 0xffe37a75, 0xfffae9e8],
   '3Symbols:1': [0xffdf8b2f, 0xffeeb352, 0xffffffff],
   '3Symbols:2': [0xff4d7c45, 0xff6db377, 0xffddebdf],
   '3Symbols2:0': [0xffd5aea9, 0xffb74f49],
-  '3Symbols2:1': [0xfffaeddf, 0xffdd8323, 0xfff9e1b3, 0xffde8817, 0xfff4d7b8, 0xffe8a85b, 0xffdd8119, 0xffeab47a],
+  '3Symbols2:1': [0, 0xffe2943d, 0, 0xffde8817, 0, 0, 0xffdd8119, 0xffeab47a],
   '3Symbols2:2': [0xff85a57f, 0xff519a5e, 0xff3a833f],
   '4Arrows:1': [0xffe8a039, 0xfffee691, 0xffd87103, 0xfffdd23a],
   '4Arrows:2': [0xffd87103, 0xfffee17d],
@@ -391,7 +403,7 @@ const COLOURS: Readonly<Record<string, readonly number[]>> = {
   '3Stars:0': [0xffc0c0c0, 0xffdbdbdb],
   '3Stars:1': [0xffb8bbb6, 0xffdbdce7, 0xffe1cc4d],
   '3Stars:2': [0xffe2c957],
-  '3Triangles:0': [0xffc06b66, 0xfffc7577],
+  '3Triangles:0': [0xffc86d67],
   '3Triangles:1': [0xffe6a352, 0xffedb042, 0xffeca51d],
   '3Triangles:2': [0xff5a9a5c],
   '5Boxes:0': [0, 0xffeaeaea],
@@ -405,6 +417,7 @@ const COLOURS: Readonly<Record<string, readonly number[]>> = {
 /** Decodes one class's shapes into glyph ops (fresh each call; admissions own what they decode). `undefined` for an
  * unknown class. */
 function decode(glyphClass: string): CfIconGlyph | undefined {
+  decodeCalls++
   const shapes = Object.prototype.hasOwnProperty.call(GEOMETRY, glyphClass) ? GEOMETRY[glyphClass] : undefined
   const colours = COLOURS[glyphClass]
   if (!shapes || !colours) return undefined

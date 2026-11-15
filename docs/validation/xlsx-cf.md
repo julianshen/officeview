@@ -1600,7 +1600,7 @@ After verify-only (38d3d872), production paints icons only behind `CF_ICON_PAINT
 - **Classes:** 54 entries over 75 pairs, exactly the sidecar's `glyphClasses`. The twins `4RedToBlack:0`/`5Quarters:4` and `4RedToBlack:1`/`5Boxes:0` are separate entries (S4-NEARTWIN).
 - **Withheld:** `3Stars:0` (`CF_ICON_GLYPH_WITHHELD`). Excel's empty star is a speckle of greys. The median over any outline region we draw is about 190, so after anti-aliasing our outline draws no ink at delta 64, against a measured box of 3..12 × 9..17. Its one pair, `3Stars:0`, never paints. The other 53 classes pass both checks.
 - **Gates:** a pair paints only with its own `icon:glyph-<set>-<iconId>` evidence. None is published before Task 30, so production still paints no icon.
-- **Size:** the `iconGlyphs.ts` module (encoded table, class map and decoder) renders 18,192 B, or 5,462 B gzip (round 7), inside the lazy `cf` chunk (`render-*.js`). Measured with `OV_MODULE_MAP=1 npx vite build`; `scripts/vite-module-map.ts` now records each module's `moduleBytes`. The test asserts ≤ 16 KiB and ≤ 5,462 B + 10 % (Ruling S4-GLYPHCAP). No CF module is in the eager closure.
+- **Size:** the `iconGlyphs.ts` module (encoded table, class map and decoder) renders 18,048 B, or 5,417 B gzip (round 8; budget revised from 3,786 B, S4-GLYPHCAP-R2), inside the lazy `cf` chunk (`render-*.js`). Measured with `OV_MODULE_MAP=1 npx vite build`; `scripts/vite-module-map.ts` now records each module's `moduleBytes`. The test asserts ≤ 16 KiB and ≤ 5,417 B + 10 % (Ruling S4-GLYPHCAP). No CF module is in the eager closure.
 
 **The key frame (`CF_ICON_RENDER_MODEL.keyFrame`).**
 - The frame is the union of the 54 classes' ink boxes in the key's `observedIcons`, which are cell-relative, inclusive and at 1 px/pt:
@@ -1820,3 +1820,37 @@ So the case measured:
 - **Property test:** wherever the predicate admits, no scale lays the frame over the text.
 
 **Size.** `iconGlyphs.ts` is 18,192 B, or 5,462 B gzip, in the lazy `cf` chunk.
+
+### Task 28 round 8 (2026-11-15): S4-NO-FIT, S4-CLEAR-ALLZOOM, S4-GLYPHCAP-R2, decoder instrumentation
+
+**S4-NO-FIT.**
+- **Ablation rule.** Each patch, meaning a fill of at most 6 px², is removed in turn. A patch is fitted when its removal moves the ink IoU by less than 0.01 yet flips a reference region from passing to failing.
+- **Fitted patches found and removed:**
+  - 3ArrowsGray:2's shading strip;
+  - the flag's hoist fold (3Flags:0 and 3Flags:1);
+  - the lamp's highlight (3TrafficLights2:0 and 3TrafficLights2:2; removed from all three lamps, which share their geometry);
+  - 3Signs:1's left-edge strip;
+  - 3Symbols2:1's cap, lower rect, core and row-4 patch;
+  - 3Triangles:0's inner triangle.
+- **No further redraws.** Glyphs that then fail the frozen check are withheld.
+- **Pinned:** no admitted glyph keeps a fitted patch.
+
+**Final withheld list (15):** 3Stars:0, 3Stars:1, 3Stars:2, 4Rating:0, 4Rating:1, 4Rating:2, 4Rating:3, 5Rating:0, 3ArrowsGray:2, 3Flags:0, 3Flags:1, 3Flags:2, 3Signs:1, 3Symbols2:1, 3Triangles:0. **39 classes are admitted.**
+
+**S4-CLEAR-ALLZOOM.**
+- **Supported scales:** zoom takes the keyboard steps `SHEET_ZOOM_STEPS` (0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2, 3, 4) and any continuous wheel or pinch zoom in [0.25, 4]. The DPR is the live `devicePixelRatio`.
+- **Bound.** Right-aligned text must start at least 10 px (logical) after the frame's exact right edge. This is sufficient at every zoom in [0.25, 4] and every DPR ≥ 1: the snapped edge is at most e·s + 1.5, and the text's first column is at least t·s − 1, so (t − e)·s ≥ 2.5 holds whenever t − e ≥ 2.5 / 0.25.
+- **One decision for all scales,** shared by a11y and paint.
+- **Codex's reproduction** (x = 0, 77 px of text, 15 pt row, which meets the frame at zoom 0.33 and 0.67) is withheld and pinned.
+- **Property test:** wherever an icon is admitted, the frame never meets the text at any step × DPR {1, 1.25, 1.5, 2, 3} or across 61 continuous zooms.
+- The ±1 px boundary is pinned in every view.
+
+**S4-GLYPHCAP-R2.**
+- The size budget is revised explicitly from 3,786 B to 5,417 B gzip, the measured size after round 8 (18,048 B raw, in the lazy `cf` chunk).
+- The growth comes from the fix round's admission-owned decoder and prepared fills, and from round 7's redrawn classes.
+- The test asserts ≤ baseline + 10 % and ≤ 16 KiB.
+
+**Decoder instrumentation.**
+- `cfDecodeCalls` counts every decoder call, separately from live entries.
+- **Tests:** a refused admission causes no decode. A successful one has decoded nothing when it reserves memory, and decodes exactly once per class after.
+- **Mutation check:** a mutant that decodes before admission fails the test.

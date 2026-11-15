@@ -12,7 +12,7 @@ import { join, resolve } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { describe, expect, it, vi } from 'vitest'
 import {
-  CF_ICON_GLYPH_CLASSES, CF_ICON_GLYPH_WITHHELD, admitIconGlyphs, cfDecodedGlyphCount, cfGlyphBytesBound, cfIconGlyphClass, cfIconGlyphHeader, drawIconGlyph, glyphBytes, iconGlyph, type CfIconGlyph,
+  CF_ICON_GLYPH_CLASSES, CF_ICON_GLYPH_WITHHELD, admitIconGlyphs, cfDecodeCalls, cfDecodedGlyphCount, cfGlyphBytesBound, cfIconGlyphClass, cfIconGlyphHeader, drawIconGlyph, glyphBytes, iconGlyph, type CfIconGlyph,
 } from '../src/xlsx/cf/iconGlyphs'
 import { CF_ICON_PAINT_CAPABILITIES, CF_ICON_RENDER_MODEL, admitBatchGlyphs, layoutIcon, paintIconCells } from '../src/xlsx/cf/iconPaint'
 import { withExactCfEvidence } from '../src/xlsx/cf/evidence'
@@ -22,7 +22,7 @@ import type { CfIconSetName } from '../src/xlsx/cf/model'
 import { loadIconGlyphKey, type IconGlyphKey } from '../scripts/cf-refs/verify'
 import { S4_ICON_FAMILIES } from '../scripts/cf-refs/cases'
 import { createCanvas } from 'canvas'
-import { AT_CAPTURE, KEY_CELL_W, KEY_FONT, checkGlyph, cropInkBox, cropMedian, inkBoxOf, keyHost } from './helpers/cf-glyph-measure'
+import { AT_CAPTURE, KEY_CELL_W, KEY_FONT, checkGlyph, cropInkBox, cropMedian, fittedPatches, inkBoxOf, keyHost } from './helpers/cf-glyph-measure'
 import { ICON_CLASS_TOLERANCE } from '../scripts/cf-refs/verify'
 
 const ROOT = resolve(__dirname, '..')
@@ -179,10 +179,14 @@ describe('Task 28: the glyph table', () => {
   })
 })
 
-/** Measured 2026-11-15 by `OV_MODULE_MAP=1 npx vite build` (dist/.module-map.json `moduleBytes`): the iconGlyphs.ts
- * module (encoded table, class map, headers, admission-owned decoder) renders 18,192 B, 5,462 B gzip, inside the lazy
- * cf chunk (round 7: the redrawn classes). */
-const CF_GLYPH_TABLE_GZIP_BYTES = 5462
+/**
+ * Ruling S4-GLYPHCAP-R2 (round 8): an explicit budget revision. The baseline was 3,786 B gzip (round 1, 33 admitted
+ * classes in a smaller encoding). It is revised to 5,417 B: the measured size after round 8 (`OV_MODULE_MAP=1 npx vite
+ * build`, dist/.module-map.json `moduleBytes`: iconGlyphs.ts renders 18,048 B, 5,417 B gzip, in the lazy cf chunk).
+ * The growth is the fix round's admission-owned decoder and prepared fills, and round 7's redrawn classes. The test
+ * holds the module to that baseline + 10 % and to the 16 KiB ceiling.
+ */
+const CF_GLYPH_TABLE_GZIP_BYTES = 5417
 
 describe('Task 28: the icon frame at the glyph key geometry', () => {
   const icon = { ruleId: 1, set: '3Arrows' as const, iconId: 0, bucket: 0, buckets: 3, showValue: true }
@@ -399,5 +403,34 @@ describe('S4-REDRAW: glyphs stay primitive', () => {
       expect(g.path.filter(o => o[0] === 'F').length, cls).toBeLessThanOrEqual(MAX_FILLS)
       expect(g.path.filter(o => o[0] === 'M' || o[0] === 'L' || o[0] === 'A').length, cls).toBeLessThanOrEqual(MAX_VERTICES)
     }
+  })
+})
+
+/** Round 8 (codex review of the fix round and round 7). */
+describe('Task 28 round 8', () => {
+  it('S4-NO-FIT: no admitted glyph keeps a fitted patch (removing it barely moves IoU yet flips a reference region)', () => {
+    for (const cls of CLASSES) {
+      if (CF_ICON_GLYPH_WITHHELD.has(cls)) continue
+      expect(fittedPatches(cfIconGlyphClass(cls)!, KEY.classes.get(cls)!, SIDECAR.glyphFaint.includes(cls)), cls).toEqual([])
+    }
+  })
+
+  it('P2: no decode happens before a successful admission charges memory and work', () => {
+    const all = new Set(CLASSES.filter(c => !CF_ICON_GLYPH_WITHHELD.has(c)))
+    // A refused admission (memory or budget) decodes nothing.
+    let before = cfDecodeCalls()
+    expect(admitIconGlyphs(all, createCfMemory({ limitBytes: 16 }), createCfWorkBudget({ now: () => 0 }), cfIconGlyphHeader)).toBeUndefined()
+    expect(admitIconGlyphs(all, createCfMemory({}), { spend: () => 'refused' as const, resume() {}, units: 0 }, cfIconGlyphHeader)).toBeUndefined()
+    expect(cfDecodeCalls()).toBe(before)
+    // A successful one decodes only after the reservation, once per class.
+    const memory = createCfMemory({})
+    let atReserve = -1
+    const watched = Object.create(memory) as typeof memory
+    watched.reserve = (bytes: number) => { atReserve = cfDecodeCalls(); return memory.reserve(bytes) }
+    before = cfDecodeCalls()
+    const cache = admitIconGlyphs(all, watched, createCfWorkBudget({ now: () => 0 }), cfIconGlyphHeader)!
+    expect(atReserve).toBe(before)
+    expect(cfDecodeCalls()).toBe(before + all.size)
+    cache.release()
   })
 })
