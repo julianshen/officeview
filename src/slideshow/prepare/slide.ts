@@ -21,6 +21,8 @@ import { textBases, textTimingFor, type TextTiming } from '../player/text-builds
 import { buildRenderPlan, shapeKey, type ColourPart, type PlanLayer, type RenderPlan } from '../render/plan'
 import { rasterLayer, type RasterContext, type RasterResult } from '../render/raster'
 import { paintedBounds } from '../render/scene'
+import { layoutTextBody } from '../../drawing/text-layout'
+import { createTextBodyMeasurer } from '../../drawing/text-paint'
 import type { TextItem } from '../render/text-split'
 import type { Affine, DiagnosticSink, ShowSlide, TargetKey, TimeNode } from '../types'
 import { LAYER_LIMIT } from '../workspace'
@@ -192,5 +194,58 @@ export function hitRegionsOf(ps: PreparedSlide, spids: readonly string[], measur
     }
   }
   walk(ps.slide.shapes ?? [], [], [], 0)
+  return out
+}
+
+/**
+ * The laid-out boxes (slide px) of each run link `{spid, run}`, keyed `spid|p|r`: one rect per line segment of that run
+ * of the text shape `spid` (the first slide shape holding the id, as `hitRegionsOf`), laid out as the local stage's
+ * `runAt` lays it out. A run that cannot be located gets no entry, so it never takes another run's clicks: a group,
+ * vertical or warped text, a transformed segment, or a rotated or skewed shape (an axis-aligned box around a turned
+ * run would cover its neighbours). Local mode instead gives an unlocated run the first run's link.
+ */
+export function runRegionsOf(ps: PreparedSlide, runs: ReadonlyArray<{ spid: string; run: { p: number; r: number } }>, measure: CanvasRenderingContext2D, resolveFont: FontResolver): Map<string, Array<{ x: number; y: number; w: number; h: number }>> {
+  const out = new Map<string, Array<{ x: number; y: number; w: number; h: number }>>()
+  const want = new Map<string, Array<{ p: number; r: number }>>()
+  for (const { spid, run } of runs) { const l = want.get(spid) ?? []; l.push(run); want.set(spid, l) }
+  const seen = new Set<string>()
+  const walk = (nodes: readonly PptxShape[], parent: Affine, depth: number): void => {
+    if (depth > 64) return
+    for (const shape of nodes) {
+      const local = nodeMatrix(shape, parent)
+      if (!local) continue
+      const id = shape.source?.id
+      if (id !== undefined && want.has(id) && !seen.has(id)) {
+        seen.add(id)
+        if (!shape.group) located(shape, id, local)
+      }
+      if (shape.group) {
+        const child = groupChildMatrix(shape, local.m)
+        if (child) walk(shape.children ?? [], child, depth + 1)
+      }
+    }
+  }
+  const located = (shape: PptxShape, spid: string, local: { m: Affine; w: number; h: number }) => {
+    const body = shape.textBody
+    const m = local.m
+    if (!body || body.paragraphs.length === 0 || (body.direction && body.direction !== 'horz') || body.textWarp) return
+    if (Math.abs(m[1]) > 1e-9 || Math.abs(m[2]) > 1e-9) return
+    const layout = layoutTextBody(body, local.w, local.h, createTextBodyMeasurer(measure, resolveFont), ps.slide.theme)
+    for (const run of want.get(spid)!) {
+      const rects: Array<{ x: number; y: number; w: number; h: number }> = []
+      let transformed = false
+      for (const line of layout.lines) {
+        if (line.paragraphIndex !== run.p) continue
+        for (const seg of line.segments) {
+          if (seg.runIndex !== run.r || !(seg.width > 0) || !(line.height > 0)) continue
+          if (seg.transform) { transformed = true; continue }
+          const [x0, y0] = apply(m, seg.x, line.y), [x1, y1] = apply(m, seg.x + seg.width, line.y + line.height)
+          rects.push({ x: Math.min(x0, x1), y: Math.min(y0, y1), w: Math.abs(x1 - x0), h: Math.abs(y1 - y0) })
+        }
+      }
+      if (rects.length && !transformed) out.set(`${spid}|${run.p}|${run.r}`, rects)
+    }
+  }
+  walk(ps.slide.shapes ?? [], IDENTITY, 0)
   return out
 }

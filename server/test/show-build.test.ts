@@ -20,7 +20,7 @@ import { inkPixels } from './show-classify-helper'
 import { decodePng } from '../src/mark/png'
 import { SHOW_BUNDLE_BUDGET, type BuiltShowPlan, type ShowPlanJob } from '../src/show/build'
 import { showPlanL1Key, showPlanL2Key } from '../src/cache'
-import { cmdDeck, groupDeck, growthDeck, hiddenLinkDeck, masterTargetDeck, openDeck, transitionOnlyDeck } from './show-fixtures'
+import { cmdDeck, groupDeck, growthDeck, hiddenLinkDeck, masterTargetDeck, openDeck, runLinkDeck, transitionOnlyDeck } from './show-fixtures'
 
 const job = (over: Partial<ShowPlanJob> = {}): ShowPlanJob => ({ unitIndex: 0, scale: 1, motion: 'full', mark: { kind: 'fixed' }, strictMarks: false, ...over })
 const built = (r: Awaited<ReturnType<import('../src/render').DocumentHost['showPlan']>>): BuiltShowPlan => {
@@ -347,6 +347,31 @@ describe('buildShowPlan', () => {
     expect(r.x).toBeLessThanOrEqual(80); expect(r.y).toBeLessThanOrEqual(80)
     expect(r.x + r.w).toBeGreaterThanOrEqual(320); expect(r.y + r.h).toBeGreaterThanOrEqual(200)
     expect(r.w).toBeLessThanOrEqual(240 + 24); expect(r.h).toBeLessThanOrEqual(120 + 24)
+    expect(b.plan.diagnostics.map(d => d.code)).toContain('link-withheld')
+    roundTrip(b)
+  })
+
+  it('run links: each linked run gets its own line boxes; unlinked text and the empty box take no click (PR #78 round 6)', async () => {
+    const { host, open, docKey } = await openDeck(await runLinkDeck())
+    expect(open.anim).toEqual([0])
+    const b = built(await host.showPlan(docKey, job()))
+    const regions = b.plan.linkRegions
+    // PlanStage.hitTest: the last region holding the point wins.
+    const hit = (x: number, y: number) => { for (let i = regions.length - 1; i >= 0; i--) { const r = regions[i]!.rect; if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return regions[i]!.action } return undefined }
+    const of = (kind: string) => regions.filter(r => r.action.kind === kind).map(r => r.rect)
+    const jump = of('slide'), web = of('withheld')
+    expect(jump.length).toBe(1)
+    expect(web.length).toBe(1)
+    const centre = (r: { x: number; y: number; w: number; h: number }) => [r.x + r.w / 2, r.y + r.h / 2] as const
+    // Disjoint, in reading order, each well inside the 600 px box (not the whole shape).
+    expect(jump[0]!.x + jump[0]!.w).toBeLessThan(web[0]!.x)
+    expect(jump[0]!.w).toBeLessThan(200)
+    expect(web[0]!.w).toBeLessThan(200)
+    expect(hit(...centre(jump[0]!))).toEqual({ kind: 'slide', index: 1 })
+    expect(hit(...centre(web[0]!))).toEqual({ kind: 'withheld' })
+    // The unlinked run between them, and the box's empty lower half: no action.
+    expect(hit((jump[0]!.x + jump[0]!.w + web[0]!.x) / 2, centre(jump[0]!)[1])).toBeUndefined()
+    expect(hit(380, 260)).toBeUndefined()
     expect(b.plan.diagnostics.map(d => d.code)).toContain('link-withheld')
     roundTrip(b)
   })

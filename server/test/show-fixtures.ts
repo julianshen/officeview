@@ -63,6 +63,28 @@ export const hiddenLinkDeck = () => buildPptxDeck({
   ],
 })
 
+/**
+ * Two slides. Slide 0 holds one text box (id 2, 80,80 600×200) of three runs on one line: "Jump" links to slide 2,
+ * " plain text " has no link, "Web" links to an external URL. Click 1 makes shape 5 appear (so a plan is built).
+ */
+export const runLinkDeck = () => buildPptxDeck({
+  slides: [
+    {
+      bg: { solid: 'FFFFFF' },
+      shapes: [
+        rect(2, 'Runs', 80, 80, 600, 200, 'FFFFFF', { paragraphs: [{ runs: [{ text: 'Jump', sz: '2800' }, { text: ' plain text ', sz: '2800' }, { text: 'Web', sz: '2800' }] }] }),
+        rect(5, 'Late', 400, 360, 240, 120, '70AD47'),
+      ],
+      links: [
+        { shapeId: 2, target: 'slide2.xml', action: 'ppaction://hlinksldjump', onRun: 0 },
+        { shapeId: 2, target: 'https://example.com/', external: true, onRun: 2 },
+      ],
+      timingXml: oneStep(id => [appear(id, 5)]),
+    },
+    { bg: { solid: 'FFFFFF' }, shapes: [rect(2, 'Two', 300, 300, 200, 120, 'C00000')] },
+  ],
+})
+
 /** One slide: click 1 makes the shape (id 2, `w` × `h` at x, y) appear and grows it by `by` (`p:animScale`). */
 export const growthDeck = (by: number, box: { x: number; y: number; w: number; h: number } = { x: 380, y: 260, w: 200, h: 200 }) => buildPptxDeck({
   slides: [{

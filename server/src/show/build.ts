@@ -25,7 +25,7 @@ import { showCanvasBackend } from './canvas'
 import type { PptxDocument, PptxPackageHandle } from '../../../src/pptx/types'
 import { createDiagnosticSink } from '../../../src/slideshow/diagnostics'
 import { createSlideTimeline, type SlideTimeline } from '../../../src/slideshow/engine/steps'
-import { hitRegionsOf, layoutTextBases, prepareSlide, rasterPreparedLayer, type PreparedSlide } from '../../../src/slideshow/prepare'
+import { hitRegionsOf, layoutTextBases, prepareSlide, rasterPreparedLayer, runRegionsOf, type PreparedSlide } from '../../../src/slideshow/prepare'
 import type { PlanLayer } from '../../../src/slideshow/render/plan'
 import { slideSize, textRangeBox } from '../../../src/slideshow/render/scene'
 import { createRng } from '../../../src/slideshow/rng'
@@ -336,9 +336,19 @@ function prepareL1(show: ShowDoc, job: ShowPlanJob): L1Entry {
     const rects = rectsOf(spid)
     return { spid, rects: rects.length > SHOW_PLAN_LIMITS.rectsPerStep ? [union(rects)] : rects }
   })
+  // A link on a text run covers only that run's laid-out line boxes (PR #78 round 6); one that cannot be located
+  // gets no region, so it never takes the clicks of other runs or of unlinked text.
+  const runLinks = meta.links.flatMap(l => (l.run ? [{ spid: l.spid, run: l.run }] : []))
+  const runRegions = runLinks.length ? runRegionsOf(ps, runLinks, measure, resolveFont) : new Map<string, Rect[]>()
+  const linkRectsOf = (link: (typeof meta.links)[number]) => (link.run ? runRegions.get(`${link.spid}|${link.run.p}|${link.run.r}`) ?? [] : rectsOf(link.spid)).map(r => clampRect(r, W, H)).filter(r => r.w > 0 && r.h > 0)
+  // The hit test takes the last region holding a point: a shape's own link goes before its runs' links, so a run wins
+  // over its shape (as locally). Shapes keep the order of their first link.
+  const bySpid = new Map<string, Array<(typeof meta.links)[number]>>()
+  for (const link of meta.links) { const l = bySpid.get(link.spid) ?? []; l.push(link); bySpid.set(link.spid, l) }
+  const ordered = [...bySpid.values()].flatMap(ls => [...ls.filter(l => !l.run), ...ls.filter(l => l.run)])
   let withheld = false
   const linkRegions: ShowPlanRecord['linkRegions'] = []
-  for (const link of meta.links) {
+  for (const link of ordered) {
     let action: ShowPlanRecord['linkRegions'][number]['action']
     const a = link.action
     if (a.kind === 'slide') {
@@ -348,7 +358,9 @@ function prepareL1(show: ShowDoc, job: ShowPlanJob): L1Entry {
     } else if (a.kind === 'jump') action = { kind: 'jump', verb: a.verb }
     else action = { kind: 'withheld' }
     if (action.kind === 'withheld') withheld = true
-    for (const rect of rectsOf(link.spid)) if (linkRegions.length < SHOW_PLAN_LIMITS.links) linkRegions.push({ rect, action })
+    // A link whose rects do not all fit the cap is dropped whole, never cut to part of its text.
+    const rects = linkRectsOf(link)
+    if (linkRegions.length + rects.length <= SHOW_PLAN_LIMITS.links) for (const rect of rects) linkRegions.push({ rect, action })
   }
 
   const base = [...ps.base].filter(([k]) => ps.animated.has(k)).map(([k, g]): [string, typeof g] => [k, { x: g.x, y: g.y, w: g.w, h: g.h, rot: g.rot }])

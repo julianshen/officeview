@@ -397,6 +397,12 @@ Evidence:
 ## Known differences (rulings recorded in the plan and the Task 1–13 ledger)
 
 - **Hit regions are static rectangles** (§5.1). Link and trigger regions do not follow animated geometry.
+- **Run links cover their run only (PR #78 round 6).** A link on a text run ships one rect per laid-out line segment
+  of that run (`runRegionsOf`, `src/slideshow/prepare/slide.ts`, laid out as the local stage's `runAt`); a shape's own
+  link ships before its runs', so a run wins over its shape. A run that cannot be located gets no region (local mode
+  gives it the first run's link instead), so it never takes another run's clicks: vertical or warped text, a
+  transformed segment, or a rotated or skewed shape, where an axis-aligned box would cover its neighbours. A link
+  whose rects do not all fit the 64-region cap is dropped whole. Like every region, run rects are static.
 - **Morph starts from a settled checkpoint (D11).** The server re-plans the from-slide at `checkpoint(fromStep)`.
   Local Morph starts from the live state (mid-step, or with trigger history). The harness samples Morph only
   from settled states.
