@@ -518,10 +518,19 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     if (!step || step.eligibility !== 'composited' || !step.track) return undefined
     requestTrack(slide, build - 1)
     requestTrack(slide, build)
+    const at = `${slide}:${build}`
     const t = tracks.get(`${slide}:${build - 1}`)
-    if (!t) return show?.showTrack ? 'rate-limited' : 'policy-refused'
-    return t.state === 'failed' ? t.why ?? 'closed' : undefined
+    const code: RemoteErrorCode | undefined = !t ? (show?.showTrack ? 'rate-limited' : 'policy-refused') : t.state === 'failed' ? t.why ?? 'closed' : undefined
+    if (code) { gapShown = { at, code }; return code }
+    // Round 8: once this activation showed the error frame, it stays until its end frame is drawable (not when the
+    // retry goes out, nor when the reply lands while the frame still decodes). A first request never failed holds.
+    if (gapShown?.at !== at) return undefined
+    if (typeof t!.state === 'object' && t!.state.frame(t!.state.count - 1)) { gapShown = undefined; return undefined }
+    if (typeof t!.state === 'object') t!.state.want(t!.state.count - 1)
+    return gapShown.code
   }
+  /** Round 8: the activation (`slide:build`) that showed the track's error frame, and its code, until it recovers. */
+  let gapShown: { at: string; code: RemoteErrorCode } | undefined
   /** D4: the first two composited steps of slide `i` from step `from` (the tracks asked on entering at `from + 1`). */
   function nextComposited(i: number, from: number): number[] {
     const steps = held.get(i)?.plan.steps ?? []
@@ -922,6 +931,7 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     else surface?.root.setAttribute('data-unit', String(unitOf[p]))
     dropExtras(p)
     refusedAt.clear()
+    gapShown = undefined
     // An animated slide whose bundle failed long enough ago is asked for again by `want`: its visit waits for it
     // (shown loading) rather than playing static. A still unit keeps piece 3's error frame until its bitmap lands.
     const unit = p === 'end' ? undefined : unitOf[p]

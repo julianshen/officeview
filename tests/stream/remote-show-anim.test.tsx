@@ -572,6 +572,46 @@ describe('remote show on the driver (piece 4 Task 11)', () => {
     s.exit()
   })
 
+  it('a step that showed the error frame keeps it until its end frame is drawable: through a delayed reply and a delayed decode (round 8)', async () => {
+    const one = { messages: (u: number) => bundleOf(FLY, u, compositedFly(1)) }
+    const fd = animDoc([one])
+    let room = false
+    Object.assign(fd.doc, { unitBudget: { room: () => (!fd.log.includes('plan:0') || room ? 60 : 0), waitMs: () => 60_000 } })
+    // Track keyframes decode only when let go (the 96×72 frames; the bundle's assets decode at once).
+    const gate: Array<() => void> = []
+    let gated = false
+    vi.spyOn(remoteShowDeps, 'decode').mockImplementation(async (bytes) => {
+      const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+      if (gated && v.getUint32(16) === FRAME_W) await new Promise<void>((r) => gate.push(r))
+      return bitmapOf(bytes)
+    })
+    const { s, root, canvas } = await show(fd)
+    await run(300)
+    s.next()
+    await run(600)
+    expect(frameKind(root)).toBe('error')
+    // codex r7-probe: room returns, the request goes out, the reply is held: still the error frame.
+    fd.rules.set('track:0:0', 'hold')
+    room = true
+    await run(300)
+    expect(sent(fd, 'track:')).toEqual(['track:0:0'])
+    expect(frameKind(root), 'the retry is pending').toBe('error')
+    // The reply lands; its end frame is still decoding: still the error frame, never the earlier picture.
+    gated = true
+    fd.rules.delete('track:0:0')
+    fd.release('track:0:0')
+    await run(300)
+    expect(gate.length).toBeGreaterThan(0)
+    expect(frameKind(root), 'the end frame is decoding').toBe('error')
+    // Decoded: the step cuts to its end frame (red).
+    gated = false
+    for (const f of gate.splice(0)) f()
+    await run(300)
+    expect(frameKind(root)).toBe('image')
+    expect(px(canvas, canvas.width >> 1, canvas.height >> 1)).toEqual([255, 0, 0])
+    s.exit()
+  })
+
   it('budget at the Morph reserve: the target bundle still goes out, the Morph pair is not asked and fades (Task 12)', async () => {
     const fd = animDoc(['fly', 'morphTo', 'fly'])
     // 3 sends of room: over a track's reserve, under a Morph pair's, over a target's need.

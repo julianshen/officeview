@@ -449,7 +449,10 @@ Evidence:
   "not re-asked within the visit").** While the playing composited step's track cannot be requested (the budget at
   the track reserve), or after a rate refusal, every frame asks again; the step shows the typed error frame
   ("Slide N could not be shown (rate-limited)") with `step-deferred`, never the previous picture. When the track
-  arrives, the step cuts to its end frame (the spec's cut to the step end): a composited step ships no layers for
+  arrives and its end frame is decoded, the step cuts to that frame (round 8: an activation that showed the error
+  keeps it through the pending retry and the decode, never the earlier picture; tested with a held reply and a
+  held decode). A first request that never failed still holds briefly. That cut is the spec's cut to the step
+  end: a composited step ships no layers for
   its interval, so nothing already resident draws that end state sooner. A track refused for another reason
   (policy, decode, the show budget) is not re-asked; its step shows the error frame with that code.
 - **Over budget on a bucket change.** A bundle over about 64 MiB whose bucket changes (a double copy over the
