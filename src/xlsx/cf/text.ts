@@ -614,7 +614,7 @@ export async function prepareCfWireScope(
           for (const key of Object.keys(state.properties)) properties[key] = state.properties[key]!
           // A malformed wire icon decodes to no icon (descriptorOfIcon), its cell keeping every base property.
           const icon = state.icon ? descriptorOfIcon(state.icon) : undefined
-          if (Object.keys(properties).length || state.scale?.argb !== undefined || state.bar || icon) regions.push({minRow:state.row,maxRow:state.row,minCol:state.col,maxCol:state.col})
+          if (Object.keys(properties).length || state.scale?.argb !== undefined || state.bar) regions.push({minRow:state.row,maxRow:state.row,minCol:state.col,maxCol:state.col})
           states.set(state.row * 16384 + state.col, {
             properties,
             writes: state.unresolvedWrites ? [...state.unresolvedWrites] : undefined,

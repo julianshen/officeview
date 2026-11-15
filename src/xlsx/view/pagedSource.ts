@@ -1803,7 +1803,7 @@ async function prepareCfRemoteOnce(
   }
   // Bound validation-tier work upfront: the rule count caps every
   // normalization, definition build and per-cell bound below, so no
-  // unbounded structure is ever built before admission. Both lazy CF modules
+  // unbounded structure is ever built before admission. The lazy CF modules (limits, service, model)
   // load before any reservation, so an import failure admits nothing.
   const limitsModule = await import('../cf/limits')
   const serviceModule = await import('../cf/service')
