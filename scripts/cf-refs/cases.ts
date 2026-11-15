@@ -4926,9 +4926,11 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
   // 2b. stage4-icon-dialect (Ruling S4-DIALECT-CASE)
   s4rect(
     'stage4-icon-dialect',
-    'S4-B/S4-O dialect outcomes, recorded rather than predicted: an x14-only family (3Stars) on a BASE <cfRule> (B; hypotheses: drawn as 3Stars in bucket order, not drawn, or drawn as another 3-icon family such as the 3TrafficLights1 default), and a paired base + x14 rule (C; a base 3Arrows rule carrying an <x14:id> link to a priority-less x14 3Triangles companion; hypotheses: the companion draws, the base draws, or neither). The capture decides; build.ts keeps a stripped or repaired resave as the rejected workbook, itself the recorded outcome.',
+    'S4-B/S4-O dialect outcomes, recorded rather than predicted: an x14-only family (3Stars) on a BASE <cfRule> (B; hypotheses: drawn as 3Stars in bucket order, not drawn, or drawn as another 3-icon family such as the 3TrafficLights1 default), and a paired base + x14 rule (C; a base 3Arrows rule carrying an <x14:id> link to a priority-less x14 3Triangles companion; hypotheses: the companion draws, the base draws, or neither). The capture decides; build.ts keeps a stripped or repaired resave as the rejected workbook, itself the recorded outcome. Fix round 7 (Ruling S4-DIALECT-UNSUPPORTED): Excel 16.115 repairs both shapes (B loses its iconSet name, C loses its companion), so they cannot be authored repair-free; the case is unsupported and records the rejected resave only.',
     {
       n: 5,
+      status: 'unsupported',
+      reason: 'Ruling S4-DIALECT-UNSUPPORTED: Excel cannot author either shape repair-free (the rejected resave is the recorded outcome); production withholds both under S4-X14BASE and the paired-dialect gate',
       colStyles: s4keyStyles(['B', 'C']),
       cols: [s4col('B', 'BaseStars', [0, 25, 50, 75, 100]), s4col('C', 'Paired', [0, 25, 50, 75, 100])],
       rules: [
@@ -5032,7 +5034,7 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
   // 6. stage4-icon-degenerate
   s4rect(
     'stage4-icon-degenerate',
-    'S4-C/S4-D degenerate shapes: all values equal (B); a single numeric cell (C); non-monotonic num 60/30 (D); percent -10 and 150 (E); a cfvo[0] floor of num 50 with values below it (F); min/max cfvo types (G). (<iconSet percent="0"> moved to stage4-icon-unresolved-shapes in fix round 3: Excel 16.114 drops the attribute on resave.)',
+    'S4-C/S4-D degenerate shapes: all values equal (B); a single numeric cell (C); non-monotonic num 60/30 (D); percent -10 and 150 (E); a cfvo[0] floor of num 50 with values below it (F); min/max cfvo types (G; recorded only, refused-unsupported per Ruling S4-MINMAX in fix round 7). (<iconSet percent="0"> moved to stage4-icon-unresolved-shapes in fix round 3: Excel 16.114 drops the attribute on resave.)',
     {
       n: 11,
       colStyles: s4keyStyles(['B', 'C', 'D', 'E', 'F', 'G']),
@@ -5425,11 +5427,12 @@ function s4Ruling(cap: string): string {
     [/^icon:pixel-calibration$/, 'S4-A (calibration: every pixel-classified and pixel-measured icon capability stays unverified until gridline widths and one solid DXF cell calibrate in the key workbook)'],
     [/^icon:glyph-key$/, 'S4-A (the glyph key: every classification stays unverified until all 75 key cells classify into distinct, stable classes and the resaved XML round-trips the 75 single-pair rules)'],
     [/^icon:glyph-/, 'S4-A and OD-9(b) (glyph artwork: original vectors compared with this key crop for box and dominant colour only, labelled pixel-approximated, never relabelled measured)'],
-    [/^icon:dialect-base-x14-family$/, 'S4-B, S4-O and S4-DIALECT-CASE (recorded answer, c63de53a: Excel 16.114 drops the x14-only iconSet name from a base <cfRule> on resave, leaving <iconSet> to its schema default 3TrafficLights1; production withholds a base rule naming an x14-only family outright, whatever the evidence)'],
-    [/^icon:dialect-paired$/, 'S4-O and S4-DIALECT-CASE (recorded answer, c63de53a: Excel 16.114 strips a priority-less x14 companion linked by <x14:id> on resave and keeps the base rule alone; production withholds the paired shape until a repair-free capture evidences it)'],
+    [/^icon:dialect-base-x14-family$/, 'S4-B, S4-O, S4-DIALECT-CASE and S4-DIALECT-UNSUPPORTED (refused-unsupported: the case records the rejected resave only; recorded answer, c63de53a: Excel 16.114 drops the x14-only iconSet name from a base <cfRule> on resave, leaving <iconSet> to its schema default 3TrafficLights1; production withholds a base rule naming an x14-only family outright, whatever the evidence)'],
+    [/^icon:dialect-paired$/, 'S4-O, S4-DIALECT-CASE and S4-DIALECT-UNSUPPORTED (refused-unsupported: the case records the rejected resave only; recorded answer, c63de53a: Excel 16.114 strips a priority-less x14 companion linked by <x14:id> on resave and keeps the base rule alone; production withholds the paired shape until a repair-free capture evidences it)'],
     [/^icon:dialect-/, 'S4-O (base and standalone x14 icon sets need their own dialect capability; the x14 XML shape comes from excel-authored-iconsets.xlsx)'],
     [/^icon:families-/, 'S4-E (which icon id bucket b shows is measured per family group; until then every built-in, non-custom icon is unresolved)'],
     [/^icon:settings-schema-defaults$/, 'S4-B and S4-F (an omitted iconSet means 3TrafficLights1, and percent="1"/omitted resolves, only with this capability)'],
+    [/^icon:thresholds-min-max$/, 'S4-C and S4-MINMAX (refused-unsupported: no icon dialog authors a min/max cfvo, so the capability is listed in CF_STAGE4_UNSUPPORTED (as S3-CLOSE did for Stage 3) and its degenerate column G is recorded only; Excel 16.115 drew 3Arrows:2 in every cell for [min, num 40, max] over 0..100 (6cb13bdf, a recorded finding, not a reading); production withholds any icon set with a min or max cfvo)'],
     [/^icon:thresholds-(floor|min-max)$/, 'S4-C (the cfvo[0] floor and min/max cfvo types are unresolved until measured)'],
     [/^icon:thresholds-/, 'S4-D (each threshold type and gte value needs its own capability; gte is judged only on exact-boundary cells)'],
     [/^icon:(degenerate-|bounds-out-of-domain)/, 'S4-D (degenerate data is unresolved until measured, never clamped)'],
@@ -5448,6 +5451,15 @@ function s4Ruling(cap: string): string {
     [/^icon:placement-rtl-sheet$/, 'S4-M (icons on an RTL or unknown-direction sheet are unresolved throughout Stage 4; placement is recorded only)'],
   ]
   return rules.find(([re]) => re.test(cap))?.[1] ?? 'S4-A (withheld until measured)'
+}
+
+/**
+ * Stage 4 capabilities that are unsupported although their case is captured (the S3-CLOSE mechanism, fix round 7): the
+ * audit reports them `refused-unsupported`, they never verify, and production keeps withholding their shape.
+ */
+export const CF_STAGE4_UNSUPPORTED: Readonly<Record<string, string>> = {
+  'icon:thresholds-min-max':
+    'Unsupported per Ruling S4-MINMAX: no icon dialog authors a min or max cfvo, and Excel 16.115 drew 3Arrows:2 in every cell of [min, num 40, max] over 0..100 (6cb13bdf), which no reading predicted; recorded as a finding, never fitted. Production withholds any icon set with a min or max cfvo (icon:thresholds-min-max is never published).',
 }
 
 /**

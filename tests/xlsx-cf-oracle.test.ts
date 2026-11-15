@@ -27,6 +27,7 @@ import {
   CF_STAGE4_CAPABILITIES,
   CF_STAGE4_CASES,
   CF_STAGE4_NONDISCRIMINATING,
+  CF_STAGE4_UNSUPPORTED,
   S4_ICON_FAMILIES,
   barCapabilityKind,
   iconCapabilityKind,
@@ -75,6 +76,8 @@ import {
   iconTwinSetClass,
   iconTwinSetMembers,
   iconGlyphFaintRecord,
+  evaluateIconGeometryCapability,
+  type IconGeometryCell,
   ICON_NO_ICON_MEMBER,
   measureCaseIcons,
   observedIconClass,
@@ -4456,7 +4459,8 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     expect(report.perCapability.filter(p => p.disposition === 'unaccounted')).toEqual([])
     expect(report.stageComplete).toBe(report.blockedCapabilities.length === 0)
     // Refused-unsupported is exactly the unresolved-shapes case (its own shapes plus those Excel canonicalises).
-    expect(report.perCapability.filter(p => p.disposition === 'refused-unsupported').map(p => p.capabilityId).sort()).toEqual(CF_STAGE4_CAPABILITIES.filter(e => e.caseId === 'stage4-icon-unresolved-shapes').map(e => e.capabilityId).sort())
+    const unsupportedCases = new Set(CF_STAGE4_CASES.filter(c => c.status === 'unsupported').map(c => c.id))
+    expect(report.perCapability.filter(p => p.disposition === 'refused-unsupported').map(p => p.capabilityId).sort()).toEqual(CF_STAGE4_CAPABILITIES.filter(e => unsupportedCases.has(e.caseId) || CF_STAGE4_UNSUPPORTED[e.capabilityId] !== undefined).map(e => e.capabilityId).sort())
     const verified = report.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId)
     // Every verified id is backed by its owning case's own verification and the cross-case gates.
     const byCase = new Map<string, ReturnType<typeof verifyCfCase>>()
@@ -4579,10 +4583,7 @@ describe('Stage 4 icon oracle (Task 24)', () => {
       ['stage4-icon-authored', 'icon:dialect-standalone', 'as-modelled', 'reversed-order'],
       ['stage4-icon-families', 'icon:settings-schema-defaults', 'as-modelled', 'family:3Arrows'],
       ['stage4-icon-families', 'icon:settings-schema-defaults', 'as-modelled', 'no-icon'],
-      ['stage4-icon-dialect', 'icon:dialect-base-x14-family', 'as-modelled', 'no-icon'],
-      ['stage4-icon-dialect', 'icon:dialect-base-x14-family', 'as-modelled', 'family:3TrafficLights1'],
-      ['stage4-icon-dialect', 'icon:dialect-paired', 'companion', 'base'],
-      ['stage4-icon-dialect', 'icon:dialect-paired', 'companion', 'no-icon'],
+      // (stage4-icon-dialect is unsupported since fix round 7, S4-DIALECT-UNSUPPORTED: it designates no cell.)
       ['stage4-icon-scope', 'icon:scope-disjoint', 'union', 'per-range'],
       ['stage4-icon-scope', 'icon:scope-hidden-row', 'exclude-hidden', 'include-hidden'],
       ['stage4-icon-scope', 'icon:scope-autofilter-hidden-row', 'exclude-hidden', 'include-hidden'],
@@ -4626,7 +4627,8 @@ describe('Stage 4 icon oracle (Task 24)', () => {
 
   it('stage4-icon-dialect authors an x14-only family on a base rule and a paired base + x14 rule', () => {
     const c = CF_STAGE4_CASES.find(x => x.id === 'stage4-icon-dialect')!
-    expect(c.status).toBe('recipe-pending')
+    // Ruling S4-DIALECT-UNSUPPORTED (fix round 7): the case records Excel's rejected resave and lifts nothing.
+    expect(c.status).toBe('unsupported')
     expect(c.markers.map(m => [m.capabilityId, m.extension, m.icon?.set, m.priority ?? null])).toEqual([
       ['icon:dialect-base-x14-family', 'legacy', '3Stars', 1],
       ['icon:dialect-paired', 'legacy', '3Arrows', 2],
@@ -4637,7 +4639,7 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     expect(guid).toBeDefined()
     expect(sheet).toContain(`<x14:cfRule type="iconSet" id="${guid}">`)
     const entry = (JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest).cases.find(x => x.id === c.id)!
-    expect(verifyCfCase(entry, { rootDir: REPO_ROOT })).toMatchObject({ kind: 'refusal', code: 'semantic-evidence-pending', structuralValid: true })
+    expect(verifyCfCase(entry, { rootDir: REPO_ROOT })).toMatchObject({ kind: 'refusal', structuralValid: true })
   })
 
   it('a measured Stage 4 case verifies and audits from its stored capture alone, and re-derives with no Excel run (concern 3)', () => {
@@ -4745,6 +4747,146 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     expect(un.markers.filter(m => m.capabilityId === 'icon:composition-icon-stopIfTrue').map(m => [m.ruleType, m.stopIfTrue === true])).toEqual([['iconSet', true], ['cellIs', false]])
     expect(sheetOf(un.input)).toMatch(/<conditionalFormatting sqref="O2:O6"><cfRule type="iconSet" priority="14" stopIfTrue="1">/)
     expect(CF_STAGE4_CAPABILITIES.find(e => e.capabilityId === 'icon:composition-icon-stopIfTrue')!.failClosedDisposition).toMatch(/S4-ICON-STOPIFTRUE/)
+  })
+
+  it('fix round 7: S4-DIALECT-UNSUPPORTED and S4-MINMAX make the dialect and min/max capabilities refused-unsupported', async () => {
+    const dialect = CF_STAGE4_CASES.find(x => x.id === 'stage4-icon-dialect')!
+    expect(dialect.status).toBe('unsupported')
+    // S4-MINMAX uses the S3-CLOSE registry: the degenerate capture keeps its other evidence (no recapture).
+    expect(Object.keys(CF_STAGE4_UNSUPPORTED)).toEqual(['icon:thresholds-min-max'])
+    expect(CF_STAGE4_UNSUPPORTED['icon:thresholds-min-max']).toMatch(/S4-MINMAX[\s\S]*3Arrows:2/)
+    const owner = (cap: string) => CF_STAGE4_CASES.find(c => c.id === CF_STAGE4_CAPABILITIES.find(e => e.capabilityId === cap)!.caseId)!
+    for (const cap of ['icon:dialect-base-x14-family', 'icon:dialect-paired']) expect(owner(cap).status, cap).toBe('unsupported')
+    for (const cap of ['icon:dialect-base-x14-family', 'icon:dialect-paired', 'icon:thresholds-min-max']) {
+      expect(CF_STAGE4_CAPABILITIES.find(e => e.capabilityId === cap)!.failClosedDisposition, cap).toMatch(/S4-DIALECT-UNSUPPORTED|S4-MINMAX/)
+    }
+    const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
+    const dispositions = auditStage4Manifest(manifest, { rootDir: REPO_ROOT }).perCapability
+    for (const cap of ['icon:dialect-base-x14-family', 'icon:dialect-paired', 'icon:thresholds-min-max']) {
+      expect(dispositions.find(p => p.capabilityId === cap)!.disposition, cap).toBe('refused-unsupported')
+      expect(isCapabilityVerified(cap, manifest, { rootDir: REPO_ROOT }), cap).toBe(false)
+    }
+  }, 120_000)
+
+  describe('fix round 7: icon geometry, inset and showValue hypotheses (S4-K/S4-L, S3-A style)', () => {
+    type Facts = IconGeometryCell['facts']
+    /** A synthetic measured cell at 1 px/pt: cell box from its column/row, icon box relative to the cell's outer box. */
+    const cellAt = (ref: string, facts: Partial<Facts> & { rowPt: number }, icon: { l: number; t: number; w: number; h: number } | null, o: { widthPx?: number; text?: number; stable?: boolean } = {}): IconGeometryCell => {
+      const p = parseA1(ref)!
+      const x0 = 100 + p.col * 80, y0 = 20 + p.row * 70, W = o.widthPx ?? 72
+      const observed: CfObservedIcon = {
+        ref, cellLeftPx: x0, cellTopPx: y0, cellWidthPx: W, cellHeightPx: facts.rowPt,
+        icon: icon ? { leftPx: x0 + icon.l, topPx: y0 + icon.t, rightPx: x0 + icon.l + icon.w - 1, bottomPx: y0 + icon.t + icon.h - 1, glyphClass: 'icon-class-none' } : null,
+        ...(o.text !== undefined ? { textInkLeftPx: x0 + 40, textInkRightPx: x0 + 50, textShiftPx: o.text } : {}),
+        ...(o.stable === false ? { edgeStable: false as const } : {}),
+      }
+      return { ref, facts: { fontPt: 11, vertical: 'bottom', horizontal: 'left', showValue: true, ...facts }, observed }
+    }
+    const FONTS: Record<string, number> = { B: 8, C: 11, D: 20 }
+    const ROWS: Record<string, number> = { '2': 12, '3': 30, '4': 60 }
+    const boxGrid = (w: (fontPt: number, rowPt: number) => number, stable: (ref: string) => boolean = () => true) =>
+      ['B', 'C', 'D'].flatMap(col => ['2', '3', '4'].map(r => {
+        const ref = `${col}${r}`, fontPt = FONTS[col]!, rowPt = ROWS[r]!
+        const side = w(fontPt, rowPt)
+        return cellAt(ref, { fontPt, rowPt }, { l: 2, t: rowPt - 1 - side, w: side, h: side }, { stable: stable(ref) })
+      }))
+
+    it('geometry-box discriminates the font-scaled box from the fixed and row boxes, and only on stable cells', () => {
+      // Font-scaled: side = font pt (a 20 pt box cannot fit the 12 pt row, so that cell is no evidence for "font").
+      const font = boxGrid(f => f)
+      expect(evaluateIconGeometryCapability('icon:geometry-box', font, font)).toMatchObject({ status: 'discriminating', matched: 'font' })
+      // Fixed 11 px everywhere.
+      const fixed = boxGrid(() => 11)
+      expect(evaluateIconGeometryCapability('icon:geometry-box', fixed, fixed)).toMatchObject({ status: 'discriminating', matched: 'fixed' })
+      // Row-scaled: side = row less 4 px.
+      const row = boxGrid((_, r) => r - 4)
+      expect(evaluateIconGeometryCapability('icon:geometry-box', row, row)).toMatchObject({ status: 'discriminating', matched: 'row' })
+      // Only the 11 pt column is edge-stable: fixed and font cannot be told apart (honestly non-discriminating).
+      const onlyC = boxGrid(f => f, ref => ref.startsWith('C'))
+      expect(evaluateIconGeometryCapability('icon:geometry-box', onlyC, onlyC).status).toBe('non-discriminating')
+      // A designated cell with no icon refutes every box reading.
+      const gone = boxGrid(f => f).map(c => (c.ref === 'C3' ? { ...c, observed: { ...c.observed, icon: null } } : c))
+      expect(evaluateIconGeometryCapability('icon:geometry-box', gone, gone).status).toBe('none')
+    })
+
+    it('geometry-vertical-align separates top, centre, bottom and the cell alignment', () => {
+      const side = 11
+      const place = (v: 'top' | 'center' | 'bottom', rowPt: number) => (v === 'top' ? 1 : v === 'bottom' ? rowPt - 1 - side : Math.round((rowPt - side) / 2))
+      const grid = (how: (cellV: 'top' | 'center') => 'top' | 'center' | 'bottom') => (['E', 'H'] as const).flatMap(col => ['3', '4'].map(r => {
+        const cellV = col === 'E' ? 'top' as const : 'center' as const
+        const rowPt = ROWS[r]!
+        return cellAt(`${col}${r}`, { rowPt, vertical: cellV }, { l: 2, t: place(how(cellV), rowPt), w: side, h: side })
+      }))
+      const follows = grid(v => v)
+      expect(evaluateIconGeometryCapability('icon:geometry-vertical-align', follows, follows)).toMatchObject({ status: 'discriminating', matched: 'cell-align' })
+      const bottom = grid(() => 'bottom')
+      expect(evaluateIconGeometryCapability('icon:geometry-vertical-align', bottom, bottom)).toMatchObject({ status: 'discriminating', matched: 'bottom' })
+      // Only centred cells: centre and cell-align agree.
+      const centred = follows.filter(c => c.ref.startsWith('H'))
+      expect(evaluateIconGeometryCapability('icon:geometry-vertical-align', centred, centred).status).toBe('non-discriminating')
+    })
+
+    it('narrow and short-row hosts: clipped, shrunk or no icon, against a same-font reference box', () => {
+      const ref11 = [cellAt('M3', { rowPt: 30 }, { l: 2, t: 18, w: 11, h: 11 }, { widthPx: 188 })]
+      const narrowClip = [cellAt('K3', { rowPt: 30 }, { l: 2, t: 18, w: 9, h: 11 }, { widthPx: 12 })]
+      expect(evaluateIconGeometryCapability('icon:geometry-narrow-clip', narrowClip, [...narrowClip, ...ref11])).toMatchObject({ status: 'discriminating', matched: 'clip' })
+      const narrowShrink = [cellAt('K3', { rowPt: 30 }, { l: 2, t: 22, w: 7, h: 7 }, { widthPx: 12 })]
+      expect(evaluateIconGeometryCapability('icon:geometry-narrow-clip', narrowShrink, [...narrowShrink, ...ref11])).toMatchObject({ status: 'discriminating', matched: 'shrink' })
+      const narrowNone = [cellAt('K3', { rowPt: 30 }, null, { widthPx: 12 })]
+      expect(evaluateIconGeometryCapability('icon:geometry-narrow-clip', narrowNone, [...narrowNone, ...ref11])).toMatchObject({ status: 'discriminating', matched: 'no-icon' })
+      // Short row (6 pt): a clip keeps the reference width, a shrink does not.
+      const shortClip = [cellAt('L5', { rowPt: 6 }, { l: 2, t: 1, w: 11, h: 4 })]
+      expect(evaluateIconGeometryCapability('icon:geometry-short-row-clip', shortClip, [...shortClip, ...ref11])).toMatchObject({ status: 'discriminating', matched: 'clip' })
+      const shortShrink = [cellAt('L5', { rowPt: 6 }, { l: 2, t: 1, w: 4, h: 4 })]
+      expect(evaluateIconGeometryCapability('icon:geometry-short-row-clip', shortShrink, [...shortShrink, ...ref11])).toMatchObject({ status: 'discriminating', matched: 'shrink' })
+      // No reference box in the case: clip and shrink cannot be told apart.
+      expect(evaluateIconGeometryCapability('icon:geometry-short-row-clip', shortShrink, shortShrink).status).toBe('non-discriminating')
+    })
+
+    it('snapping is non-discriminating when no measured gridline lands at a fractional pt', () => {
+      const cells = [cellAt('M2', { rowPt: 12 }, { l: 2, t: 1, w: 11, h: 8 }, { widthPx: 188 }), cellAt('N2', { rowPt: 12 }, { l: 2, t: 1, w: 11, h: 8 }, { widthPx: 195 })]
+      expect(evaluateIconGeometryCapability('icon:geometry-snapping', cells, cells)).toMatchObject({ status: 'non-discriminating', reason: expect.stringMatching(/fractional/) })
+    })
+
+    it('text insets: left, right-aligned, centred and overflow readings, and the NoIcons inset and showValue', () => {
+      const icon = { l: 2, t: 7, w: 11, h: 11 }
+      const at = (ref: string, horizontal: Facts['horizontal'], text: number | undefined, ic: typeof icon | null = icon, more: Partial<Facts> = {}) => cellAt(ref, { rowPt: 20, horizontal, ...more }, ic, text === undefined ? {} : { text })
+      const left = [at('B2', 'left', 12), at('B3', 'left', 12)]
+      expect(evaluateIconGeometryCapability('icon:inset-left', left, left)).toMatchObject({ status: 'discriminating', matched: 'inset' })
+      const leftNone = [at('B2', 'left', 0), at('B3', 'left', 1)]
+      expect(evaluateIconGeometryCapability('icon:inset-left', leftNone, leftNone)).toMatchObject({ status: 'discriminating', matched: 'none' })
+      expect(evaluateIconGeometryCapability('icon:inset-right-aligned', [at('C2', 'right', 0)], [at('C2', 'right', 0)])).toMatchObject({ status: 'discriminating', matched: 'unshifted' })
+      expect(evaluateIconGeometryCapability('icon:inset-right-aligned', [at('C2', 'right', -12)], [at('C2', 'right', -12)])).toMatchObject({ status: 'discriminating', matched: 'shifted-left' })
+      expect(evaluateIconGeometryCapability('icon:inset-center', [at('D2', 'center', 0)], [at('D2', 'center', 0)])).toMatchObject({ status: 'discriminating', matched: 'full-cell' })
+      expect(evaluateIconGeometryCapability('icon:inset-center', [at('D2', 'center', 6)], [at('D2', 'center', 6)])).toMatchObject({ status: 'discriminating', matched: 'inset-box' })
+      // Overflow: an icon plus overflowing ink wider than the reference icon; or the icon withheld (production's fallback).
+      const pool = [at('B2', 'left', 12)]
+      const wide = [at('E2', 'right', undefined, { l: 2, t: 4, w: 24, h: 12 })]
+      expect(evaluateIconGeometryCapability('icon:inset-overflow', wide, [...wide, ...pool])).toMatchObject({ status: 'discriminating', matched: 'icon-and-text' })
+      const withheld = [at('E2', 'right', 0, null)]
+      expect(evaluateIconGeometryCapability('icon:inset-overflow', withheld, [...withheld, ...pool])).toMatchObject({ status: 'discriminating', matched: 'icon-withheld' })
+      // NoIcons: production reads "no inset" and "text shown"; Excel may inset or hide.
+      const noIconsInset = [at('F2', 'left', 12, null)]
+      expect(evaluateIconGeometryCapability('icon:noicons-inset', noIconsInset, noIconsInset)).toMatchObject({ status: 'discriminating', matched: 'inset' })
+      const noIconsFlat = [at('F2', 'left', 0, null)]
+      expect(evaluateIconGeometryCapability('icon:noicons-inset', noIconsFlat, noIconsFlat)).toMatchObject({ status: 'discriminating', matched: 'no-inset' })
+      const hidden = [at('G2', 'left', undefined, null, { showValue: false })]
+      expect(evaluateIconGeometryCapability('icon:noicons-showvalue', hidden, hidden)).toMatchObject({ status: 'discriminating', matched: 'text-hidden' })
+      const shown = [at('G2', 'left', 0, null, { showValue: false })]
+      expect(evaluateIconGeometryCapability('icon:noicons-showvalue', shown, shown)).toMatchObject({ status: 'discriminating', matched: 'text-shown' })
+    })
+
+    it('showvalue canvas suppression decides only on cells whose text and icon band cannot overlap', () => {
+      const icon = { l: 2, t: 7, w: 11, h: 11 }
+      // General (right-aligned) number, showValue 0: the only ink matching the text pattern is far left (the icon): hidden.
+      const general = [cellAt('B2', { rowPt: 20, horizontal: 'right', showValue: false }, null, { text: -164 })]
+      expect(evaluateIconGeometryCapability('icon:showvalue-canvas-suppression', general, general)).toMatchObject({ status: 'discriminating', matched: 'text-hidden' })
+      const visible = [cellAt('B2', { rowPt: 20, horizontal: 'right', showValue: false }, icon, { text: 0 })]
+      expect(evaluateIconGeometryCapability('icon:showvalue-canvas-suppression', visible, visible)).toMatchObject({ status: 'discriminating', matched: 'text-shown' })
+      // Centred: a centred icon can sit where the text would, so the cell is no evidence either way.
+      const centred = [cellAt('C2', { rowPt: 20, horizontal: 'center', showValue: false }, null, { text: -1 })]
+      expect(evaluateIconGeometryCapability('icon:showvalue-canvas-suppression', centred, centred).status).toBe('non-discriminating')
+    })
   })
 
   describe('Ruling S4-NEARTWIN (fix round 3): near-twin glyph classes', () => {

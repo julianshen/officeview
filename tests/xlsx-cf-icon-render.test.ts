@@ -78,7 +78,7 @@ const paint = (sheet: XlsxSheet, batch: CfPaintBatch, view: 'static' | 'viewport
 }
 
 describe('CF_ICON_RENDER_MODEL equals the measured sidecars', () => {
-  it('the Stage 4 geometry and inset sidecars carry no verified geometry yet, so the production model carries no measured value', () => {
+  it('the Stage 4 geometry and inset sidecars are captured, and the production model carries no measured value until Task 30 publishes it', () => {
     // The captures have landed (c63de53a) and record raw px, but no geometry capability can verify until the box
     // hypotheses exist (Task 29): every geometry claim is unverified. When one verifies, this fails and the comparison
     // against the sidecar is written here.
@@ -87,9 +87,10 @@ describe('CF_ICON_RENDER_MODEL equals the measured sidecars', () => {
       expect(existsSync(join(REFS, `${id}.json`)), id).toBe(true)
       const sidecar = JSON.parse(readFileSync(join(REFS, `${id}.json`), 'utf8')) as { observedIcons?: Array<{ icon: unknown }> }
       expect(sidecar.observedIcons?.some(o => o.icon !== null), `${id} records measured icons`).toBe(true)
+      // Fix round 7 gives these capabilities readings, so cells may be pixel-measured; the model stays empty until Task 30.
       const cells = manifest.cases.find(c => c.id === id)!.expected.cells.filter(e => e.iconEvidence !== undefined)
       expect(cells.length, id).toBeGreaterThan(0)
-      for (const e of cells) expect(e.iconEvidence!.geometry, id).toBe('unverified')
+      for (const e of cells) expect(['pixel-measured', 'non-discriminating', 'unverified'], id).toContain(e.iconEvidence!.geometry)
     }
     expect(CF_ICON_RENDER_MODEL).toEqual({})
     expect(Object.isFrozen(CF_ICON_RENDER_MODEL)).toBe(true)

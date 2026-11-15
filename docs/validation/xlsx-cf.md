@@ -1309,7 +1309,7 @@ Task 24 prepares the Stage 4 oracle. The first Excel capture run (c63de53a) and 
 |---|---|---|---|
 | `stage4-icon-om-reachability` | `icon:om-reachability-probe` (record only) | S4-A | recipe-pending |
 | `stage4-icon-authored` | `icon:dialect-base`, `icon:dialect-standalone` | S4-O | recipe-pending (authored fixture pending) |
-| `stage4-icon-dialect` | `icon:dialect-base-x14-family`, `icon:dialect-paired` (outcomes recorded as competing hypotheses) | S4-B, S4-O (S4-DIALECT-CASE) | recipe-pending |
+| `stage4-icon-dialect` | `icon:dialect-base-x14-family`, `icon:dialect-paired` (the rejected resave is the recorded outcome) | S4-B, S4-O (S4-DIALECT-CASE, S4-DIALECT-UNSUPPORTED) | unsupported (fix round 7) |
 | `stage4-icon-glyph-key` | `icon:pixel-calibration`, `icon:glyph-key`, 75 × `icon:glyph-<set>-<id>` | S4-A, OD-9(b), S4-NEARTWIN | recipe-pending (run 1: key refused, see below) |
 | `stage4-icon-families` | `icon:families-base`, `icon:families-x14`, `icon:settings-schema-defaults`, `icon:scope-whole-column` | S4-E, S4-B, S4-F, S4-H | recipe-pending |
 | `stage4-icon-thresholds` | `icon:thresholds-num`, `-percent`, `-percentile-inc-exc`, `-gte-true`, `-gte-false`, `-mixed` | S4-D | recipe-pending |
@@ -1436,3 +1436,42 @@ This is a label only. Bucket evidence comes from the set-consistency recomputati
 - `iconTwinSetMembers` rejects a twin-set string with an empty or repeated member, or with fewer than two members.
 - `iconSidecarMalformed` validates `glyphTwins` (a symmetric map of non-empty names), `glyphFaint` and every observed twin-set string. A malformed sidecar refuses `sidecar-mismatch` in `loadIconGlyphKey` and in `verifyIconCapture`.
 - The `audit --stage 4` idempotence test is evidence-driven. The published Stage 4 set equals the audit's verified set; each verified id is backed by its own case's verification and the cross-case gates. Stage 4 is rendered in memory only; publication is Task 30.
+
+### Fix round 7: S4-DIALECT-UNSUPPORTED, S4-MINMAX, and the geometry, inset and showValue readings
+
+**S4-DIALECT-UNSUPPORTED.** `stage4-icon-dialect` is now an `unsupported` case, the same mechanism as `stage4-icon-unresolved-shapes`. It was regenerated with `--case`, and its input is unchanged. `icon:dialect-base-x14-family` and `icon:dialect-paired` are `refused-unsupported`. Production withholds both shapes (S4-X14BASE and the paired-dialect gate).
+
+**S4-MINMAX.** `icon:thresholds-min-max` is `refused-unsupported` through the new `CF_STAGE4_UNSUPPORTED` registry, the S3-CLOSE mechanism (`CF_STAGE3_UNSUPPORTED`).
+- The degenerate capture keeps its other evidence: column G stays in the workbook and is only recorded, so nothing needs a recapture.
+- **Finding (not a reading):** Excel 16.115 drew `3Arrows:2`, the top icon, in all 11 cells of `[min, num 40, max]` over 0..100 (6cb13bdf). Neither `max-reached` nor `max-unreachable` predicts that.
+- Production withholds any icon set that has a `min` or `max` cfvo, because the rule needs `icon:thresholds-min-max`, which is never published. Two tests prove this:
+  - `tests/xlsx-cf-icon-parse.test.ts`, "min/max cfvo without icon:thresholds-min-max" → `cf-unsupported-rule`;
+  - `iconRequiredCapabilities(minMax).has('icon:thresholds-min-max')`.
+
+**Geometry, inset and showValue readings (S4-K/S4-L, the S3-A step 7 discipline).**
+- `evaluateIconGeometryCapability` gives each of the 12 capabilities competing readings:
+  - the box and placement readings are Task 29's closed `CfIconBoxVariant` set (size fixed | font | row; vertical top | center | bottom | cell-align);
+  - the clip, inset and showValue readings are production's own, set against the plausible alternatives (clip | shrink | no icon; inset | none; NoIcons insets or hides nothing vs inset or hidden).
+- Production's model carries no measured values. So no reading predicts absolute px, and no scale is fitted: each reading predicts either a relation (the same measured value, within ±1 px, across a group of cells) or a direct test.
+- A reading is refuted by a failed test or a group spread ≥ 3 px, and is consistent at spreads ≤ 1 px. Edge-unstable cells back no box claim (S4-A).
+- A centred showValue cell is excluded, because a centred icon can sit where centred text would.
+- The predictions are recorded per cell as `iconGeometryHypotheses` and recomputed by the verifier. A sidecar derived before this round has none, so its geometry capabilities stay unverified until `capture --verify-only` re-derives it.
+
+**Read-only scratch pass on the stored captures** (computed in memory, key restored):
+
+| Capability | Disposition | Reading | Matches production? |
+|---|---|---|---|
+| `icon:geometry-box` | non-discriminating | fixed ≈ font (only the 11 pt column and D2 are edge-stable) | n/a |
+| `icon:geometry-vertical-align` | non-discriminating | center ≈ cell-align (no top-aligned column has two stable cells) | n/a |
+| `icon:geometry-narrow-clip` | discriminating | `clip` | yes (clip where measured) |
+| `icon:geometry-short-row-clip` | discriminating | `shrink` (L5 is 5 px wide against an 11 px reference) | **no**: production clips; finding |
+| `icon:geometry-snapping` | non-discriminating | Excel-measured widths are whole pt, so no fractional edge | n/a |
+| `icon:inset-left` | discriminating | `inset` (+12 px) | yes |
+| `icon:inset-right-aligned` | discriminating | `unshifted` | yes (a left inset does not move right-aligned text) |
+| `icon:inset-center` | discriminating | `full-cell` (centred text not moved) | **no**, unless the centre inset is 0; finding |
+| `icon:inset-overflow` | discriminating | `icon-and-text` | **no**: production withholds the icon; finding |
+| `icon:noicons-inset` | discriminating | `inset` (+12 px) | **no**: S4-L says NoIcons insets nothing; finding |
+| `icon:noicons-showvalue` | discriminating | `text-hidden` | **no**: S4-L says NoIcons hides nothing; finding |
+| `icon:showvalue-canvas-suppression` | discriminating | `text-hidden` (B only; C excluded) | yes |
+
+A verified capability records the reading Excel showed (`matched`). Where that reading is not production's, publishing the capability as-is would enable production behaviour that Excel contradicts. Task 30 must publish only a capability whose matched reading equals production's, or production must change first (an owner decision). Production was not changed in this round.

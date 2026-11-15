@@ -8,7 +8,7 @@ import { resolve } from 'node:path'
 import { inflateRawSync, inflateSync } from 'node:zlib'
 import { parseXml } from '../../src/core/xml'
 import { columnWidthPx, maxDigitWidthPx } from '../../src/xlsx/columnWidth'
-import { CF_STAGE3_NONDISCRIMINATING, CF_STAGE3_UNSUPPORTED, CF_STAGE4_CAPABILITIES, CF_STAGE4_NONDISCRIMINATING, barCapabilityKind, iconCapabilityKind } from './cases'
+import { CF_STAGE3_NONDISCRIMINATING, CF_STAGE3_UNSUPPORTED, CF_STAGE4_CAPABILITIES, CF_STAGE4_NONDISCRIMINATING, CF_STAGE4_UNSUPPORTED, barCapabilityKind, iconCapabilityKind } from './cases'
 import type {
   CfDxfExpectation,
   CfManifest,
@@ -4831,6 +4831,52 @@ export function loadIconGlyphKey(rootDir: string): IconGlyphKey | Refusal | unde
   return key
 }
 
+/**
+ * Per-cell workbook facts the geometry readings need (fix round 7): the font size and alignment of the cell's xf, with a
+ * general horizontal alignment resolved as Excel lays it out (numbers right, errors centred, anything else left), and the
+ * showValue of the icon rules covering the cell (false when any of them hides the value).
+ */
+function readIconCellFacts(parts: Map<string, Uint8Array>, c: CfOracleCase): (ref: string) => Omit<IconGeometryCell['facts'], 'rowPt'> | undefined {
+  const dec = new TextDecoder()
+  const fonts: number[] = []
+  const xfs: Array<{ fontId: number; horizontal?: string; vertical?: string }> = []
+  const stylesRaw = parts.get('xl/styles.xml')
+  if (stylesRaw) {
+    const root = parseXml(dec.decode(stylesRaw))
+    const st = asNode(root.styleSheet) ?? root
+    for (const f of asArray(asNode(st?.fonts)?.font).map(asNode)) fonts.push(Number(attr(asNode(f?.sz), 'val') ?? '11'))
+    for (const xf of asArray(asNode(st?.cellXfs)?.xf).map(asNode)) {
+      const al = asNode(xf?.alignment)
+      xfs.push({ fontId: Number(attr(xf, 'fontId') ?? '0'), ...(attr(al, 'horizontal') ? { horizontal: attr(al, 'horizontal') } : {}), ...(attr(al, 'vertical') ? { vertical: attr(al, 'vertical') } : {}) })
+    }
+  }
+  const styleOf = new Map<string, number>()
+  const sheetRaw = parts.get('xl/worksheets/sheet1.xml')
+  if (sheetRaw) {
+    const root = parseXml(dec.decode(sheetRaw))
+    const ws = asNode(root.worksheet) ?? root
+    for (const row of asArray(asNode(ws?.sheetData)?.row).map(asNode)) {
+      for (const cell of asArray(row?.c).map(asNode)) {
+        const ref = attr(cell, 'r')?.toUpperCase()
+        if (ref) styleOf.set(ref, Number(attr(cell, 's') ?? '0'))
+      }
+    }
+  }
+  const values = readBarSheetFacts(parts).values
+  return (ref: string) => {
+    const xf = xfs[styleOf.get(ref) ?? 0] ?? { fontId: 0 }
+    const fontPt = fonts[xf.fontId] ?? fonts[0] ?? 11
+    const kind = values.get(ref)?.kind
+    const h = xf.horizontal
+    const horizontal = h === 'left' || h === 'right' || h === 'center' ? h : h === undefined || h === 'general' ? (kind === 'num' ? 'right' : kind === 'error' ? 'center' : 'left') : undefined
+    const v = xf.vertical ?? 'bottom'
+    const vertical = v === 'top' || v === 'center' || v === 'bottom' ? v : undefined
+    if (!horizontal || !vertical || !Number.isFinite(fontPt)) return undefined
+    const showValue = !c.markers.some(m => m.ruleType === 'iconSet' && isCellInSqref(ref, m.sqref) && ['0', 'false'].includes(String(m.icon?.attrs?.showValue ?? '1')))
+    return { fontPt, vertical, horizontal, showValue }
+  }
+}
+
 /** Numeric cell values of the saved sheet (cached numbers, date serials included), for icon hypotheses. */
 function iconNumericValues(parts: Map<string, Uint8Array>): Map<string, number> {
   const out = new Map<string, number>()
@@ -4883,6 +4929,181 @@ export interface IconCapabilityEvaluation {
   matched?: string
   code?: CfRefusalCode
   hypotheses?: Record<string, IconClassHypothesis[]>
+  /** Fix round 7: a geometry capability's per-cell readings (designated ref -> reading -> its prediction there). */
+  geometry?: Record<string, Record<string, IconGeometryPrediction>>
+}
+
+/**
+ * Fix round 7 (S4-K/S4-L, the S3-A step 7 discipline): one reading's prediction at one designated cell. A `group`
+ * prediction says the measured `value` is the same (within +-1 px) across every cell of the group under that reading;
+ * a `verdict` is a direct test of the cell. `excluded`: the reading makes no claim here (for example a box the row cannot
+ * hold); `unknown`: the measurement cannot test it (unstable edges, no text found, a 2 px residual).
+ */
+export type IconGeometryPrediction = { group: string; value: number } | { verdict: 'pass' | 'fail' | 'unknown' | 'excluded' }
+
+/** One measured cell with the workbook facts the geometry readings need (fonts, alignment, showValue; 1 px per pt). */
+export interface IconGeometryCell {
+  ref: string
+  facts: { fontPt: number; vertical: 'top' | 'center' | 'bottom'; horizontal: 'left' | 'right' | 'center'; rowPt: number; showValue: boolean }
+  observed: CfObservedIcon
+}
+
+/**
+ * The competing readings of each Stage 4 geometry capability (fix round 7). The box and placement readings are the
+ * closed `CfIconBoxVariant` set of Task 29's production model (`src/xlsx/cf/iconPaint.ts`: size fixed | font | row,
+ * vertical top | center | bottom | cell-align); the clip, inset and showValue readings are production's (clip where
+ * measured; a left-aligned inset; NoIcons insets and hides nothing; showValue 0 hides canvas text) against the plausible
+ * alternatives. Production's model carries no measured values, so no reading predicts absolute px: each predicts a
+ * relation (equal within +-1 px across a group, or a direct test), and a free scale is never fitted.
+ */
+export const ICON_GEOMETRY_READINGS: Readonly<Record<string, readonly string[]>> = {
+  'icon:geometry-box': ['fixed', 'font', 'row'],
+  'icon:geometry-vertical-align': ['top', 'center', 'bottom', 'cell-align'],
+  'icon:geometry-narrow-clip': ['clip', 'shrink', 'no-icon'],
+  'icon:geometry-short-row-clip': ['clip', 'shrink', 'no-icon'],
+  'icon:geometry-snapping': ['half-up', 'floor', 'ceil'],
+  'icon:inset-left': ['inset', 'none'],
+  'icon:inset-right-aligned': ['unshifted', 'shifted-left', 'shifted-right'],
+  'icon:inset-center': ['full-cell', 'inset-box'],
+  'icon:inset-overflow': ['icon-withheld', 'icon-only', 'icon-and-text'],
+  'icon:noicons-inset': ['no-inset', 'inset'],
+  'icon:noicons-showvalue': ['text-shown', 'text-hidden'],
+  'icon:showvalue-canvas-suppression': ['text-hidden', 'text-shown'],
+}
+
+const r3 = (v: number): number => Math.round(v * 1000) / 1000
+
+/**
+ * Evaluates one geometry capability over its designated cells (fix round 7). `pool` holds every measured cell of the case
+ * (the reference box of the same font, for the clip and overflow readings, comes from its non-designated, edge-stable,
+ * wide cells). A reading is consistent when every test passes and every group spreads <= 1 px; refuted when a test fails
+ * or a group spreads >= 3 px (S3-A step 7: 2 x tolerance + 1); otherwise undecided. Exactly one consistent reading and
+ * every other refuted is `discriminating`; none consistent and none undecided is `none`; anything else is
+ * `non-discriminating`. Edge-unstable cells never back a box claim (S4-A).
+ */
+export function evaluateIconGeometryCapability(cap: string, designated: readonly IconGeometryCell[], pool: readonly IconGeometryCell[]): IconCapabilityEvaluation {
+  const readings = ICON_GEOMETRY_READINGS[cap]
+  if (!readings) return { status: 'no-hypotheses', reason: `${cap} has no geometry readings` }
+  if (designated.length === 0) return { status: 'non-discriminating', reason: 'no designated cell was measured' }
+  const designatedRefs = new Set(designated.map(c => c.ref.toUpperCase()))
+  const fits = (c: IconGeometryCell): boolean => c.facts.fontPt <= c.facts.rowPt
+  const stableIcon = (c: IconGeometryCell) => (c.observed.icon && c.observed.edgeStable !== false ? c.observed.icon : undefined)
+  const widthOf = (i: NonNullable<CfObservedIcon['icon']>): number => i.rightPx - i.leftPx + 1
+  const heightOf = (i: NonNullable<CfObservedIcon['icon']>): number => i.bottomPx - i.topPx + 1
+  const median = (v: number[]): number | undefined => (v.length === 0 ? undefined : [...v].sort((a, b) => a - b)[Math.floor(v.length / 2)])
+  const refs = (c: IconGeometryCell, sameRow: boolean) => pool.filter(p => !designatedRefs.has(p.ref.toUpperCase()) && p.observed.cellWidthPx >= 40 && fits(p) && p.facts.fontPt === c.facts.fontPt && (!sameRow || p.facts.rowPt === c.facts.rowPt)).map(stableIcon).filter((i): i is NonNullable<CfObservedIcon['icon']> => i !== undefined)
+  const V = (verdict: 'pass' | 'fail' | 'unknown' | 'excluded'): IconGeometryPrediction => ({ verdict })
+  const col = (ref: string): string => /^[A-Z]+/.exec(ref.toUpperCase())![0]
+  const shiftTest = (s: number | undefined, want: 'zero' | 'pos' | 'neg'): IconGeometryPrediction => {
+    if (s === undefined) return V('unknown')
+    const t = want === 'zero' ? Math.abs(s) : want === 'pos' ? s : -s
+    if (want === 'zero') return V(t <= 1 ? 'pass' : t >= 3 ? 'fail' : 'unknown')
+    return t >= 3 ? { group: 'shift', value: s } : V(t <= 1 || (want === 'pos' ? s < 0 : s > 0) ? 'fail' : 'unknown')
+  }
+  const predict = (reading: string, c: IconGeometryCell): IconGeometryPrediction => {
+    const o = c.observed
+    const icon = stableIcon(c)
+    const shift = o.textShiftPx
+    switch (cap) {
+      case 'icon:geometry-box': {
+        if (reading === 'font' && !fits(c)) return V('excluded')
+        if (!o.icon) return V('fail')
+        if (!icon) return V('unknown')
+        const w = widthOf(icon)
+        return { group: 'all', value: r3(reading === 'fixed' ? w : reading === 'font' ? (w * 11) / c.facts.fontPt : c.facts.rowPt - w) }
+      }
+      case 'icon:geometry-vertical-align': {
+        if (!fits(c)) return V('excluded')
+        if (!o.icon) return V('fail')
+        if (!icon) return V('unknown')
+        const v = reading === 'cell-align' ? c.facts.vertical : reading
+        const top = icon.topPx - (o.cellTopPx + 1)
+        const bottom = o.cellTopPx + o.cellHeightPx - 2 - icon.bottomPx
+        const centre = (icon.topPx + icon.bottomPx) / 2 - (o.cellTopPx + o.cellHeightPx / 2)
+        return { group: `${col(c.ref)}:${v}`, value: r3(v === 'top' ? top : v === 'bottom' ? bottom : centre) }
+      }
+      case 'icon:geometry-narrow-clip':
+      case 'icon:geometry-short-row-clip': {
+        if (reading === 'no-icon') return V(o.icon ? 'fail' : 'pass')
+        if (!o.icon) return V('fail')
+        if (!icon) return V('unknown')
+        const narrow = cap === 'icon:geometry-narrow-clip'
+        const ref = median(refs(c, narrow).map(narrow ? heightOf : widthOf))
+        if (ref === undefined) return V('unknown')
+        const got = narrow ? heightOf(icon) : widthOf(icon)
+        if (reading === 'shrink') return V(got <= ref - 3 ? 'pass' : Math.abs(got - ref) <= 1 ? 'fail' : 'unknown')
+        const innerLast = o.cellLeftPx + o.cellWidthPx - 2
+        const edge = narrow ? Math.abs(icon.rightPx - innerLast) <= 1 : true
+        return V(Math.abs(got - ref) <= 1 && edge ? 'pass' : got <= ref - 3 || !edge ? 'fail' : 'unknown')
+      }
+      case 'icon:geometry-snapping': {
+        if (!o.icon) return V('fail')
+        // The measured gridlines are whole px at 1 px/pt: every rounding of an integral edge is that edge.
+        const x = o.cellLeftPx
+        const snapped = reading === 'floor' ? Math.floor(x) : reading === 'ceil' ? Math.ceil(x) : Math.floor(x + 0.5)
+        return { group: 'left', value: r3(snapped - x) }
+      }
+      case 'icon:inset-left':
+        return reading === 'inset' ? shiftTest(shift, 'pos') : shiftTest(shift, 'zero')
+      case 'icon:inset-right-aligned':
+        return shiftTest(shift, reading === 'unshifted' ? 'zero' : reading === 'shifted-left' ? 'neg' : 'pos')
+      case 'icon:inset-center':
+        return shiftTest(shift, reading === 'full-cell' ? 'zero' : 'pos')
+      case 'icon:noicons-inset':
+        return shiftTest(shift, reading === 'no-inset' ? 'zero' : 'pos')
+      case 'icon:inset-overflow': {
+        if (reading === 'icon-withheld') return V(o.icon ? 'fail' : 'pass')
+        if (!o.icon) return V('fail')
+        if (!icon) return V('unknown')
+        const ref = median(refs(c, false).map(widthOf))
+        if (ref === undefined) return V('unknown')
+        const w = widthOf(icon)
+        const wide = w >= ref + 3 || shift !== undefined
+        if (reading === 'icon-and-text') return V(wide ? 'pass' : Math.abs(w - ref) <= 1 ? 'fail' : 'unknown')
+        return V(!wide && Math.abs(w - ref) <= 1 ? 'pass' : wide ? 'fail' : 'unknown')
+      }
+      case 'icon:noicons-showvalue':
+      case 'icon:showvalue-canvas-suppression': {
+        // A centred icon can sit where centred text would: such a cell cannot tell text from icon.
+        if (cap === 'icon:showvalue-canvas-suppression' && c.facts.horizontal === 'center') return V('excluded')
+        const atText = shift !== undefined && Math.abs(shift) <= 1
+        const noText = shift === undefined || Math.abs(shift) >= 3
+        if (cap === 'icon:noicons-showvalue' && reading === 'text-hidden') return V(atText ? 'fail' : noText && !o.icon ? 'pass' : 'unknown')
+        if (reading === 'text-shown') return V(atText ? 'pass' : noText ? 'fail' : 'unknown')
+        return V(noText ? 'pass' : atText ? 'fail' : 'unknown')
+      }
+      default:
+        return V('unknown')
+    }
+  }
+  const table: Record<string, Record<string, IconGeometryPrediction>> = {}
+  for (const c of designated) table[c.ref.toUpperCase()] = Object.fromEntries(readings.map(r => [r, predict(r, c)]))
+  const consistent: string[] = [], undecided: string[] = []
+  for (const r of readings) {
+    const preds = Object.values(table).map(t => t[r]!)
+    let refuted = false, open = false, claims = 0
+    const groups = new Map<string, number[]>()
+    for (const p of preds) {
+      if ('verdict' in p) {
+        if (p.verdict === 'fail') refuted = true
+        else if (p.verdict === 'unknown') open = true
+        else if (p.verdict === 'pass') claims++
+      } else groups.set(p.group, [...(groups.get(p.group) ?? []), p.value])
+    }
+    for (const vals of groups.values()) {
+      const spread = Math.max(...vals) - Math.min(...vals)
+      claims++
+      if (spread >= 3) refuted = true
+      else if (spread > 1) open = true
+    }
+    if (refuted) continue
+    if (open || claims === 0) undecided.push(r)
+    else consistent.push(r)
+  }
+  if (consistent.length === 1 && undecided.length === 0) return { status: 'discriminating', reason: `only ${consistent[0]} fits every designated cell; ${readings.filter(r => r !== consistent[0]).join(', ')} refuted`, matched: consistent[0]!, geometry: table }
+  if (consistent.length === 0 && undecided.length === 0) return { status: 'none', reason: 'the measured cells refute every reading', geometry: table }
+  const fractional = cap === 'icon:geometry-snapping' ? ' (no measured gridline lands at a fractional pt: every rounding agrees)' : ''
+  return { status: 'non-discriminating', reason: `readings ${[...consistent, ...undecided].join(', ')} are not separated by the measured cells${fractional}`, geometry: table }
 }
 
 /**
@@ -4896,8 +5117,21 @@ export function evaluateIconCapabilities(c: CfOracleCase, parts: Map<string, Uin
   const values = iconNumericValues(parts)
   for (const cap of new Set(c.markers.filter(m => m.ruleType === 'iconSet').map(m => m.capabilityId))) {
     const kind = iconCapabilityKind(cap)
+    if (kind === 'geometry' && ICON_GEOMETRY_READINGS[cap]) {
+      // Fix round 7: geometry readings rest on the measured boxes and text, not on the glyph key.
+      const facts = readIconCellFacts(parts, c)
+      const cellOf = (ref: string): IconGeometryCell | undefined => {
+        const o = observed.get(ref)
+        const f = facts(ref)
+        return o && f ? { ref, facts: { ...f, rowPt: o.cellHeightPx }, observed: o } : undefined
+      }
+      const designated = iconCellsOf(c, cap).map(x => cellOf(x.ref.toUpperCase())).filter((x): x is IconGeometryCell => x !== undefined)
+      const pool = [...observed.keys()].map(cellOf).filter((x): x is IconGeometryCell => x !== undefined)
+      out[cap] = evaluateIconGeometryCapability(cap, designated, pool)
+      continue
+    }
     if (kind !== 'bucket') {
-      out[cap] = { status: 'no-hypotheses', reason: kind === 'geometry' ? 'no box hypotheses yet (the CfIconBoxVariant candidates arrive with CF_ICON_RENDER_MODEL)' : `${kind} capability` }
+      out[cap] = { status: 'no-hypotheses', reason: `${kind} capability` }
       continue
     }
     if (!key) {
@@ -5000,18 +5234,29 @@ function verifyIconCapture(
     const rec = evaluation[cap]!
     const cells = iconCellsOf(c, cap)
     const claims = cells.map(cell => cell.iconEvidence ?? ({ bucket: 'unverified', geometry: 'unverified' } as IconEvidenceClaim))
-    if (claims.some(e => e.geometry !== 'unverified')) return fail('unobserved-expectation', `Capability ${cap} claims geometry evidence, but no icon box hypotheses exist yet`)
+    const isGeometry = iconCapabilityKind(cap) === 'geometry'
+    if (!isGeometry && claims.some(e => e.geometry !== 'unverified')) return fail('unobserved-expectation', `Capability ${cap} is not a geometry capability but claims geometry evidence`)
+    if (isGeometry && claims.some(e => e.bucket !== 'unverified')) return fail('unobserved-expectation', `Geometry capability ${cap} claims bucket evidence`)
     for (const cell of cells) {
       const o = observed.get(cell.ref)
       if (o && cell.iconApplied !== undefined && claims.some(e => e.bucket !== 'unverified') && (o.icon !== null) !== cell.iconApplied) {
         return fail('cell-expectation-mismatch', `Cell ${cell.ref} iconApplied=${String(cell.iconApplied)} but the capture ${o.icon ? 'shows an icon' : 'shows no icon'}`)
       }
     }
-    const labels = new Set(claims.map(e => e.bucket))
-    if (labels.size > 1) return fail('unobserved-expectation', `Capability ${cap} mixes ${[...labels].join(', ')} bucket labels across its cells`)
-    const label = claims[0]?.bucket ?? 'unverified'
+    const labels = new Set(claims.map(e => (isGeometry ? e.geometry : e.bucket)))
+    if (labels.size > 1) return fail('unobserved-expectation', `Capability ${cap} mixes ${[...labels].join(', ')} ${isGeometry ? 'geometry' : 'bucket'} labels across its cells`)
+    const raw = isGeometry ? claims[0]?.geometry : claims[0]?.bucket
+    const label = raw === 'pixel-measured' ? 'pixel-classified' : (raw ?? 'unverified')
     const recordedHyps = (sidecar.iconHypotheses as Record<string, unknown> | undefined)?.[cap]
     if (rec.hypotheses && JSON.stringify(recordedHyps ?? null) !== JSON.stringify(rec.hypotheses)) return fail('sidecar-mismatch', `Sidecar iconHypotheses for ${cap} differ from the hypotheses the verifier recomputes`)
+    const recordedGeo = (sidecar.iconGeometryHypotheses as Record<string, unknown> | undefined)?.[cap]
+    if (rec.geometry && recordedGeo === undefined && label === 'unverified') {
+      // A sidecar derived before fix round 7 records no geometry readings: the capability stays unverified until
+      // `capture --verify-only` re-derives the sidecar (no claim rests on readings the sidecar does not carry).
+      outcome.notes[cap] = `geometry readings not yet recorded in this sidecar (re-derive with capture --verify-only): recomputed ${rec.status}`
+      continue
+    }
+    if (rec.geometry && JSON.stringify(recordedGeo ?? null) !== JSON.stringify(rec.geometry)) return fail('sidecar-mismatch', `Sidecar iconGeometryHypotheses for ${cap} differ from the readings the verifier recomputes`)
     if (cap === 'icon:composition-icon-stopIfTrue' && !savedIconRuleHasStop(parts, c, cap)) {
       outcome.notes[cap] = 'Excel dropped stopIfTrue on resave (Ruling S4-J): recorded from the input workbook only, never verified'
       if (label !== 'unverified') return fail('unobserved-expectation', `${cap} claims evidence although the saved rule carries no stopIfTrue`)
@@ -5054,8 +5299,20 @@ export function classifyIconCapture(c: CfOracleCase, evaluation: Readonly<Record
       votes.set(cell.ref, v)
     }
   }
+  const geo = new Map<string, Set<string>>()
+  for (const [cap, rec] of Object.entries(evaluation)) {
+    if (iconCapabilityKind(cap) !== 'geometry') continue
+    const label = rec.status === 'discriminating' ? 'pixel-measured' : rec.status === 'non-discriminating' ? 'non-discriminating' : 'unverified'
+    for (const cell of iconCellsOf(c, cap)) geo.set(cell.ref, (geo.get(cell.ref) ?? new Set<string>()).add(label))
+  }
   const out = new Map<string, IconEvidenceClaim>()
-  for (const [ref, v] of votes) out.set(ref, { bucket: (v.size === 1 ? [...v][0]! : 'unverified') as IconEvidenceClaim['bucket'], geometry: 'unverified' })
+  for (const ref of new Set([...votes.keys(), ...geo.keys()])) {
+    const b = votes.get(ref), g = geo.get(ref)
+    out.set(ref, {
+      bucket: (b && b.size === 1 ? [...b][0]! : 'unverified') as IconEvidenceClaim['bucket'],
+      geometry: (g && g.size === 1 ? [...g][0]! : 'unverified') as IconEvidenceClaim['geometry'],
+    })
+  }
   return out
 }
 
@@ -6168,7 +6425,7 @@ export function isCapabilityVerified(
   // capability needs the key workbook's calibration and the glyph key; a bucket capability read through the family order
   // (anything but the family groups and the custom mappings) needs that order verified too.
   if (capabilityId.startsWith('icon:')) {
-    if (CF_STAGE4_NONDISCRIMINATING[capabilityId] !== undefined || iconCapabilityKind(capabilityId) === 'record') return false
+    if (CF_STAGE4_NONDISCRIMINATING[capabilityId] !== undefined || CF_STAGE4_UNSUPPORTED[capabilityId] !== undefined || iconCapabilityKind(capabilityId) === 'record') return false
     if (capabilityId !== 'icon:pixel-calibration' && !isCapabilityVerified('icon:pixel-calibration', manifest, options)) return false
     if (capabilityId !== 'icon:pixel-calibration' && capabilityId !== 'icon:glyph-key' && !isCapabilityVerified('icon:glyph-key', manifest, options)) return false
     const viaFamilyOrder = iconCapabilityKind(capabilityId) === 'bucket' && !capabilityId.startsWith('icon:families-') && !['icon:custom-mapping', 'icon:custom-noicons', 'icon:reverse-custom'].includes(capabilityId)

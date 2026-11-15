@@ -890,12 +890,13 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     const { computeMetrics } = await import('../src/xlsx/render')
     const stage4 = manifest.cases.filter(c => c.stage === 4)
     const verified = stage4.filter(c => c.status === 'measured')
-    // The captures have landed (c63de53a): measured Stage 4 cases exist. No geometry claim can exist yet, because the icon
-    // box hypotheses arrive with Task 29's CF_ICON_RENDER_MODEL; when one lands, this fails and the layoutIcon comparison
-    // (+-1 px box, exact text shift) is written for its pixel-measured cells.
+    // The captures have landed (c63de53a) and fix round 7 gave the geometry capabilities their readings, so pixel-measured
+    // cells may exist. Production's CF_ICON_RENDER_MODEL is still empty (Task 30 publishes the measured model), so every
+    // Stage 4 cell, pixel-measured or not, must paint no icon and no inset; when the model is published, the layoutIcon
+    // comparison (+-1 px box, exact text shift) replaces this for the pixel-measured cells.
     expect(verified.length).toBeGreaterThan(0)
-    const measuredCells = verified.flatMap(c => c.expected.cells.filter(e => e.iconEvidence?.geometry === 'pixel-measured').map(e => `${c.id}:${e.ref}`))
-    expect(measuredCells).toEqual([])
+    const { CF_ICON_RENDER_MODEL } = await import('../src/xlsx/cf/iconPaint')
+    expect(CF_ICON_RENDER_MODEL, 'Task 30 dependency: the measured icon model is not published').toEqual({})
     let checked = 0
     for (const c of stage4) {
       const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
@@ -906,7 +907,6 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       try {
         for (const exp of c.expected.cells) {
           const { row, col } = refToRowCol(exp.ref)
-          if (exp.iconEvidence?.geometry === 'pixel-measured' && c.status === 'measured') continue
           const cell = sheet.rows.find(r => r.index === row)?.cells.find(x => x.col === col)
           const host = { x: m.colWidthsPx.slice(0, col).reduce((a, b) => a + b, 0), y: m.rowHeightsPx.slice(0, row).reduce((a, b) => a + b, 0), width: m.colWidthsPx[col] ?? 64, height: m.rowHeightsPx[row] ?? 20, textWidth: 0, ...(cell ? { cell } : {}) }
           expect(batch?.iconAt(row, col), `${c.id}:${exp.ref}`).toBeUndefined()

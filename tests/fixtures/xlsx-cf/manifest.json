@@ -29664,7 +29664,7 @@
     {
       "id": "stage4-icon-dialect",
       "stage": 4,
-      "question": "S4-B/S4-O dialect outcomes, recorded rather than predicted: an x14-only family (3Stars) on a BASE <cfRule> (B; hypotheses: drawn as 3Stars in bucket order, not drawn, or drawn as another 3-icon family such as the 3TrafficLights1 default), and a paired base + x14 rule (C; a base 3Arrows rule carrying an <x14:id> link to a priority-less x14 3Triangles companion; hypotheses: the companion draws, the base draws, or neither). The capture decides; build.ts keeps a stripped or repaired resave as the rejected workbook, itself the recorded outcome.",
+      "question": "S4-B/S4-O dialect outcomes, recorded rather than predicted: an x14-only family (3Stars) on a BASE <cfRule> (B; hypotheses: drawn as 3Stars in bucket order, not drawn, or drawn as another 3-icon family such as the 3TrafficLights1 default), and a paired base + x14 rule (C; a base 3Arrows rule carrying an <x14:id> link to a priority-less x14 3Triangles companion; hypotheses: the companion draws, the base draws, or neither). The capture decides; build.ts keeps a stripped or repaired resave as the rejected workbook, itself the recorded outcome. Fix round 7 (Ruling S4-DIALECT-UNSUPPORTED): Excel 16.115 repairs both shapes (B loses its iconSet name, C loses its companion), so they cannot be authored repair-free; the case is unsupported and records the rejected resave only.",
       "input": "tests/fixtures/xlsx-cf/inputs/stage4-icon-dialect.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage4-icon-dialect.xlsx",
       "sheet": "Sheet1",
@@ -29761,180 +29761,88 @@
         "inputSha256": "5790fef00598018f1c7a7306e2972619c05b1956293f7fa28dd96f3c887016ed",
         "savedSha256": "5790fef00598018f1c7a7306e2972619c05b1956293f7fa28dd96f3c887016ed",
         "provenance": "seed-hypothesis",
-        "positiveRefs": [
-          "B2",
-          "B3",
-          "B4",
-          "B5",
-          "B6",
-          "C2",
-          "C3",
-          "C4",
-          "C5",
-          "C6"
-        ],
-        "negativeRefs": [
-          "B8",
-          "B9",
-          "B10",
-          "B11",
-          "B12",
-          "C8",
-          "C9",
-          "C10",
-          "C11",
-          "C12"
-        ],
+        "positiveRefs": [],
+        "negativeRefs": [],
         "cells": [
           {
             "ref": "B2",
             "controlRef": "B8",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified"
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
           },
           {
             "ref": "B3",
             "controlRef": "B9",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified"
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
           },
           {
             "ref": "B4",
             "controlRef": "B10",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified"
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
           },
           {
             "ref": "B5",
             "controlRef": "B11",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified"
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
           },
           {
             "ref": "B6",
             "controlRef": "B12",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified"
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
           },
           {
             "ref": "C2",
             "controlRef": "C8",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified"
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
           },
           {
             "ref": "C3",
             "controlRef": "C9",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified"
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
           },
           {
             "ref": "C4",
             "controlRef": "C10",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified"
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
           },
           {
             "ref": "C5",
             "controlRef": "C11",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified"
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
           },
           {
             "ref": "C6",
             "controlRef": "C12",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "B8",
-            "controlRef": "B2",
             "matched": false,
             "iconApplied": false,
             "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "B9",
-            "controlRef": "B3",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "B10",
-            "controlRef": "B4",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "B11",
-            "controlRef": "B5",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "B12",
-            "controlRef": "B6",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "C8",
-            "controlRef": "C2",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "C9",
-            "controlRef": "C3",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "C10",
-            "controlRef": "C4",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "C11",
-            "controlRef": "C5",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "C12",
-            "controlRef": "C6",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
+            "note": "unresolved shape fails closed (no icon)"
           }
         ]
       },
@@ -29946,8 +29854,8 @@
           "pngSha256": "8f3478b046fa57ce5460d60b1597732988e4f9de8797ed2de3553c79d20ca23b"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Capture verification failed (semantic-evidence-pending): Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured",
+      "status": "unsupported",
+      "reason": "Ruling S4-DIALECT-UNSUPPORTED: Excel cannot author either shape repair-free (the rejected resave is the recorded outcome); production withholds both under S4-X14BASE and the paired-dialect gate",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,

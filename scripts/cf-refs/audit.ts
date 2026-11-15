@@ -63,6 +63,7 @@ import {
   CF_STAGE4_CAPABILITIES,
   CF_STAGE4_CASES,
   CF_STAGE4_NONDISCRIMINATING,
+  CF_STAGE4_UNSUPPORTED,
   iconCapabilityKind,
   type CfManifest,
   type CfOracleCase,
@@ -672,7 +673,7 @@ export function auditStage4Manifest(manifest: CfManifest, options: { rootDir?: s
     const owning = perCase.find(p => p.id === entry.caseId)
     let disposition: Stage4CapabilityAudit['disposition'] = 'unaccounted'
     if (owning?.structuralValid) {
-      if (owning.status === 'unsupported') disposition = 'refused-unsupported'
+      if (owning.status === 'unsupported' || CF_STAGE4_UNSUPPORTED[entry.capabilityId] !== undefined) disposition = 'refused-unsupported'
       else if (CF_STAGE4_NONDISCRIMINATING[entry.capabilityId] !== undefined || iconCapabilityKind(entry.capabilityId) === 'record') disposition = 'unverified-nondiscriminating'
       else {
         disposition = 'supported-structural'
