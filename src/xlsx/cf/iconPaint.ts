@@ -322,7 +322,12 @@ function slotFit(font: CfIconText, insetPx: number, model: CfIconRenderModel): {
   if (font.horizontal !== 'right') return { roomPx: insetPx, overflow: true }
   const gap = model.leftInsetPt?.[font.sizePt]
   if (gap === undefined || !Number.isFinite(gap) || gap < 0) return undefined
-  return { roomPx: Math.max(insetPx, gap * PT_PX), overflow: false }
+  // Fix round P3: the text box (starting `host.width - PADDING_R - textWidth`) must also start at or after the frame's
+  // own right edge, the widest glyph's extent (every class is drawn in the one frame): leftPt + widthPt. `slotTextFits`
+  // subtracts both paddings, so the room is that edge less the left padding.
+  const frame = model.keyFrame
+  const edgePx = frame ? (frame.leftPt + frame.widthPt) * PT_PX - CF_ICON_TEXT_PADDING_PX / 2 : 0
+  return { roomPx: Math.max(insetPx, gap * PT_PX, edgePx), overflow: false }
 }
 
 /**

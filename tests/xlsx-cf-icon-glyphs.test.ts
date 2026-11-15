@@ -10,9 +10,9 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { gzipSync } from 'node:zlib'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
-  CF_ICON_GLYPH_CLASSES, CF_ICON_GLYPH_WITHHELD, admitIconGlyphs, cfIconGlyphClass, drawIconGlyph, glyphBytes, iconGlyph, type CfIconGlyph,
+  CF_ICON_GLYPH_CLASSES, CF_ICON_GLYPH_WITHHELD, admitIconGlyphs, cfDecodedGlyphCount, cfGlyphBytesBound, cfIconGlyphClass, cfIconGlyphHeader, drawIconGlyph, glyphBytes, iconGlyph, type CfIconGlyph,
 } from '../src/xlsx/cf/iconGlyphs'
 import { CF_ICON_PAINT_CAPABILITIES, CF_ICON_RENDER_MODEL, admitBatchGlyphs, layoutIcon, paintIconCells } from '../src/xlsx/cf/iconPaint'
 import { withExactCfEvidence } from '../src/xlsx/cf/evidence'
@@ -22,7 +22,7 @@ import type { CfIconSetName } from '../src/xlsx/cf/model'
 import { loadIconGlyphKey, type IconGlyphKey } from '../scripts/cf-refs/verify'
 import { S4_ICON_FAMILIES } from '../scripts/cf-refs/cases'
 import { createCanvas } from 'canvas'
-import { AT_CAPTURE, KEY_CELL_W, KEY_FONT, checkGlyph, cropInkBox, inkBoxOf, keyHost } from './helpers/cf-glyph-measure'
+import { AT_CAPTURE, KEY_CELL_W, KEY_FONT, checkGlyph, cropInkBox, cropMedian, inkBoxOf, keyHost } from './helpers/cf-glyph-measure'
 import { ICON_CLASS_TOLERANCE } from '../scripts/cf-refs/verify'
 
 const ROOT = resolve(__dirname, '..')
@@ -68,7 +68,7 @@ describe('Task 28: the glyph table', () => {
       const entries = new Map<string, CfIconGlyph>()
       for (const pair of PAIRS) {
         const cls = SIDECAR.glyphClasses[pair]!
-        const g = CF_ICON_GLYPH_WITHHELD.has(cls) ? cfIconGlyphClass(cls) : iconGlyph(...split(pair))
+        const g = CF_ICON_GLYPH_WITHHELD.has(cls) ? cfIconGlyphHeader(cls) : iconGlyph(...split(pair))
         expect(g?.glyphClass, pair).toBe(cls)
         // Pairs that share a crop share one table entry.
         if (entries.has(cls)) expect(g).toBe(entries.get(cls))
@@ -102,9 +102,9 @@ describe('Task 28: the glyph table', () => {
     const baseline = memory.currentBytes
     const budget = createCfWorkBudget({ now: () => 0 })
     const all = new Set(CLASSES.filter(c => !CF_ICON_GLYPH_WITHHELD.has(c)))
-    const cache = admitIconGlyphs(all, memory, budget, cfIconGlyphClass)!
+    const cache = admitIconGlyphs(all, memory, budget, cfIconGlyphHeader)!
     expect(cache).toBeDefined()
-    const expected = [...all].reduce((n, c) => n + glyphBytes(cfIconGlyphClass(c)!), 0)
+    const expected = [...all].reduce((n, c) => n + cfGlyphBytesBound(c)!, 0)
     expect(cache.bytes).toBe(expected)
     expect(memory.currentBytes - baseline).toBe(expected)
     // Decoding spends work units (one per op, plus one per class), never wall time.
@@ -113,7 +113,7 @@ describe('Task 28: the glyph table', () => {
     // Drawing an admitted glyph at each zoom/DPR allocates nothing: the ledger is unchanged.
     const ctx = createCanvas(64, 64).getContext('2d') as unknown as CanvasRenderingContext2D
     for (const [zoom, dpr] of [[0.5, 1], [0.75, 1], [1, 1], [1, 2], [1.5, 2], [2, 3]] as const) {
-      for (const cls of all) expect(drawIconGlyph(ctx, cfIconGlyphClass(cls)!, { x: 1, y: 1, w: 13 * zoom * dpr, h: 12 * zoom * dpr }, { zoom, dpr }, cache)).toBe(true)
+      for (const cls of all) expect(drawIconGlyph(ctx, cfIconGlyphHeader(cls)!, { x: 1, y: 1, w: 13 * zoom * dpr, h: 12 * zoom * dpr }, { zoom, dpr }, cache)).toBe(true)
       expect(memory.currentBytes - baseline).toBe(expected)
     }
     cache.release()
@@ -121,16 +121,16 @@ describe('Task 28: the glyph table', () => {
 
     // A refused charge returns false/undefined, draws nothing and leaves the ledger at baseline.
     const tiny = createCfMemory({ limitBytes: 16 })
-    expect(admitIconGlyphs(all, tiny, createCfWorkBudget({ now: () => 0 }), cfIconGlyphClass)).toBeUndefined()
+    expect(admitIconGlyphs(all, tiny, createCfWorkBudget({ now: () => 0 }), cfIconGlyphHeader)).toBeUndefined()
     expect(tiny.currentBytes).toBe(0)
     const refusing = { spend: () => 'refused' as const, resume() {}, units: 0 }
-    expect(admitIconGlyphs(all, memory, refusing, cfIconGlyphClass)).toBeUndefined()
+    expect(admitIconGlyphs(all, memory, refusing, cfIconGlyphHeader)).toBeUndefined()
     expect(memory.currentBytes).toBe(baseline)
     const cls = [...all][0]!
-    const other = admitIconGlyphs(new Set([[...all][1]!]), memory, createCfWorkBudget({ now: () => 0 }), cfIconGlyphClass)!
+    const other = admitIconGlyphs(new Set([[...all][1]!]), memory, createCfWorkBudget({ now: () => 0 }), cfIconGlyphHeader)!
     const blank = createCanvas(20, 20)
     const bctx = blank.getContext('2d') as unknown as CanvasRenderingContext2D
-    expect(drawIconGlyph(bctx, cfIconGlyphClass(cls)!, { x: 0, y: 0, w: 13, h: 12 }, AT_CAPTURE, other)).toBe(false)
+    expect(drawIconGlyph(bctx, cfIconGlyphHeader(cls)!, { x: 0, y: 0, w: 13, h: 12 }, AT_CAPTURE, other)).toBe(false)
     expect([...bctx.getImageData(0, 0, 20, 20).data].every(v => v === 0)).toBe(true)
     other.release()
     expect(memory.currentBytes).toBe(baseline)
@@ -180,8 +180,9 @@ describe('Task 28: the glyph table', () => {
 })
 
 /** Measured 2026-11-15 by `OV_MODULE_MAP=1 npx vite build` (dist/.module-map.json `moduleBytes`): the iconGlyphs.ts
- * module (encoded table, class map and decoder) renders 12,932 B, 3,786 B gzip, inside the lazy cf chunk. */
-const CF_GLYPH_TABLE_GZIP_BYTES = 3786
+ * module (encoded table, class map, headers, admission-owned decoder) renders 15,870 B, 4,614 B gzip, inside the lazy
+ * cf chunk (fix round: bounds from the encoded table, prepared fill styles). */
+const CF_GLYPH_TABLE_GZIP_BYTES = 4614
 
 describe('Task 28: the icon frame at the glyph key geometry', () => {
   const icon = { ruleId: 1, set: '3Arrows' as const, iconId: 0, bucket: 0, buckets: 3, showValue: true }
@@ -324,5 +325,63 @@ describe('S4-BOTTOM-REPLICATE: the measured placements stand only on icon:geomet
     const host = keyHost({ rowPt: 15, height: 20 })
     expect(layoutIcon(icon, host, KEY_FONT, AT_CAPTURE, CF_ICON_RENDER_MODEL, () => true)).toBeDefined()
     expect(layoutIcon(icon, host, KEY_FONT, AT_CAPTURE, CF_ICON_RENDER_MODEL, c => c !== 'icon:geometry-row-offset')).toBeUndefined()
+  })
+})
+
+/** Fix round (codex review of rounds 1–5). */
+describe('Task 28 fix round', () => {
+  it('P1: negative controls fail the approximation check (a solid median-colour box for 3TrafficLights1:0 and each 3Symbols glyph)', () => {
+    for (const cls of ['3TrafficLights1:0', '3Symbols:0', '3Symbols:1', '3Symbols:2']) {
+      const crop = KEY.classes.get(cls)!
+      const b = cropInkBox(crop, 64)!
+      const pix: Array<{ x: number; y: number }> = []
+      for (let y = b.top; y <= b.bottom; y++) for (let x = b.left; x <= b.right; x++) pix.push({ x, y })
+      const m = cropMedian(crop, pix)!
+      const argb = (0xff000000 | (m[0] << 16) | (m[1] << 8) | m[2]) >>> 0
+      const x0 = b.left - 2, y0 = b.top - 7, x1 = b.right - 1, y1 = b.bottom - 6
+      const box: CfIconGlyph = { glyphClass: cls, widthPt: 13, heightPt: 12, source: 'original', path: [['M', x0, y0], ['L', x1, y0], ['L', x1, y1], ['L', x0, y1], ['Z'], ['F', argb]] }
+      const check = checkGlyph(box, crop, measuredBox(cls), false)
+      expect(check.ok, cls).toBe(false)
+      // It fails on the independent checks, not on the box or the candidate-region palette.
+      expect(check.reasons.some(r => r.startsWith('reference region') || r.startsWith('ink IoU')), cls).toBe(true)
+    }
+  })
+
+  it('P1: admission charges before decoding; a refused admission decodes nothing; release drops the decoded glyphs', () => {
+    expect(cfDecodedGlyphCount()).toBe(0)
+    const all = new Set(CLASSES.filter(c => !CF_ICON_GLYPH_WITHHELD.has(c)))
+    // The charge is computed from the encoded table and equals the decoded size.
+    for (const cls of all) expect(cfGlyphBytesBound(cls), cls).toBe(glyphBytes(cfIconGlyphClass(cls)!))
+    const tiny = createCfMemory({ limitBytes: 16 })
+    expect(admitIconGlyphs(all, tiny, createCfWorkBudget({ now: () => 0 }), cfIconGlyphHeader)).toBeUndefined()
+    expect(cfDecodedGlyphCount()).toBe(0)
+    expect(tiny.currentBytes).toBe(0)
+    const refusing = { spend: () => 'refused' as const, resume() {}, units: 0 }
+    expect(admitIconGlyphs(all, createCfMemory({}), refusing, cfIconGlyphHeader)).toBeUndefined()
+    expect(cfDecodedGlyphCount()).toBe(0)
+    const memory = createCfMemory({})
+    const cache = admitIconGlyphs(all, memory, createCfWorkBudget({ now: () => 0 }), cfIconGlyphHeader)!
+    expect(cfDecodedGlyphCount()).toBe(all.size)
+    const one = [...all][0]!
+    expect(cache.glyph?.(one)?.path.length).toBeGreaterThan(0)
+    cache.release()
+    expect(cfDecodedGlyphCount()).toBe(0)
+    expect(cache.glyph?.(one)).toBeUndefined()
+    expect(memory.currentBytes).toBe(0)
+    // The production lookup returns an undecoded header: no ops until admission.
+    withGlyphEvidence(() => expect(iconGlyph('3Arrows', 0)?.path).toEqual([]))
+    expect(cfDecodedGlyphCount()).toBe(0)
+  })
+
+  it('P2: drawing builds no colour strings (prepared and charged at admission)', () => {
+    const all = new Set(CLASSES.filter(c => !CF_ICON_GLYPH_WITHHELD.has(c)))
+    const cache = admitIconGlyphs(all, createCfMemory({}), createCfWorkBudget({ now: () => 0 }), cfIconGlyphHeader)!
+    const ctx = createCanvas(64, 64).getContext('2d') as unknown as CanvasRenderingContext2D
+    const toString = vi.spyOn(Number.prototype, 'toString'), padStart = vi.spyOn(String.prototype, 'padStart')
+    try {
+      for (let i = 0; i < 2; i++) for (const cls of all) expect(drawIconGlyph(ctx, cfIconGlyphHeader(cls)!, { x: 1, y: 1, w: 13, h: 12 }, AT_CAPTURE, cache)).toBe(true)
+      expect(toString).not.toHaveBeenCalled()
+      expect(padStart).not.toHaveBeenCalled()
+    } finally { toString.mockRestore(); padStart.mockRestore(); cache.release() }
   })
 })

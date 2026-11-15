@@ -23,7 +23,7 @@ import { cfRulesVersion, prepareCfRemote } from '../src/xlsx/view/pagedSource'
 import { createCfMemory, createCfWorkBudget } from '../src/xlsx/cf/limits'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
 import { CF_ICON_PAINT_CAPABILITIES, CF_ICON_RENDER_MODEL, CF_ICON_TEXT_PADDING_PX, iconWithheld, layoutIcon } from '../src/xlsx/cf/iconPaint'
-import { admitIconGlyphs, iconGlyph, type CfGlyphOp } from '../src/xlsx/cf/iconGlyphs'
+import { admitIconGlyphs, cfIconGlyphHeader, iconGlyph, injectCfIconGlyphs, type CfGlyphOp } from '../src/xlsx/cf/iconGlyphs'
 import { getPaintables } from '../src/render/paint'
 import type { CfIconDescriptor, CfStamp } from '../src/xlsx/cf/model'
 import type { XlsxCellStyle, XlsxSheet } from '../src/xlsx/types'
@@ -689,6 +689,35 @@ describe('S4-RIGHTINSET-ZERO: right-aligned numbers at the key geometry', () => 
     const none = await withIcons(run, { ...production, extra: GLYPH_CAPS })
     for (const [name, n] of Object.entries(none.out)) expect(n, `no defaultRowHeight: ${name}`).toBe(0)
     expect(none.describedIcons).toBe(0)
+  })
+
+  it('fix round P3: right-aligned text clears the positioned frame\'s right edge (4Rating:3, 15 pt row, 100 px cell)', async () => {
+    // The reproduction: 78 px of text in a 100 px cell starts at 100 - 3 - 78 = 19 px, inside the frame (2 pt + 13 pt =
+    // 20 px); 77 px starts at 20 px, clear of it.
+    const desc: CfIconDescriptor = { ruleId: 1, set: '4Rating', iconId: 3, bucket: 3, buckets: 4, showValue: true }
+    const host = (textWidth: number) => ({ x: 0, y: 0, width: 100, height: 20, textWidth, rowPt: 15, cell: { value: 1234, style: { ...KEY_STYLE, vertical: 'center' as const } } })
+    const caps = new Set([...ICON_PAINT_EVIDENCE, 'icon:geometry-row-offset'])
+    injectCfIconGlyphs((set, id) => cfIconGlyphHeader(`${set}:${id}`))
+    try {
+      expect(iconWithheld(desc, host(78), c => caps.has(c), CF_ICON_RENDER_MODEL)).toBe(true)
+      expect(iconWithheld(desc, host(77), c => caps.has(c), CF_ICON_RENDER_MODEL)).toBe(false)
+    } finally { injectCfIconGlyphs(null) }
+  })
+
+  it('fix round P3: the ±1 px boundary of the frame clearance holds in every view', async () => {
+    const probe = createCellLayoutHost(layoutContext())
+    const value = 1234567
+    const body = probe.layoutBody({ ref: 'A1', row: 0, col: 0, value, styleIndex: 0, style: { ...KEY_STYLE, vertical: 'center' } }, 500, 20)
+    const width = body.text?.kind === 'plain' ? body.text.width : body.text?.kind === 'layout' ? body.text.layout.lines[0]!.segments.reduce((n, g) => n + g.width, 0) : NaN
+    // The text starts at col - 3 - width; it must start at or after the frame's right edge, 20 px.
+    const clear = Math.ceil(3 + width + 20)
+    for (const [name, px, want] of [['clear', clear, 2], ['one px in', clear - 1, 0]] as const) {
+      const sheet = keySheet([value], px / 7)
+      expect(computeMetrics(sheet).colWidthsPx[0], name).toBe(px)
+      const got = await withIcons(() => views(sheet), { ...production, extra: GLYPH_CAPS })
+      for (const view of ['static', 'resident', 'paged', 'print', 'export']) expect(got.result[view]!.icons, `${name}: ${view}`).toBe(want)
+      expect(got.iconAt, name).toEqual([want > 0, want > 0])
+    }
   })
 
   it('the production model reads rightInsetPt 0 at 11 pt', () => {

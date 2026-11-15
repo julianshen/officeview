@@ -44,8 +44,14 @@ export type CfIconRect = Readonly<{ x: number; y: number; w: number; h: number }
 export interface CfGlyphCache {
   readonly classes: ReadonlySet<string>
   readonly bytes: number
+  /** The decoded glyph of an admitted class, owned by this admission (fix round P1): undefined after `release`. */
+  glyph?(glyphClass: string): CfIconGlyph | undefined
+  /** The decoded ops and their prepared fill styles (fix round P2), owned by this admission. */
+  prepared?(glyphClass: string): CfPreparedGlyph | undefined
   release(): void
 }
+/** A decoded glyph with each fill's CSS colour prepared (and charged) at admission, so drawing builds no strings. */
+export type CfPreparedGlyph = Readonly<{ glyph: CfIconGlyph; fills: readonly string[] }>
 
 type GlyphTable = (set: CfIconSetName, iconId: number) => CfIconGlyph | undefined
 let testGlyphs: GlyphTable | null = null
@@ -64,14 +70,47 @@ export function iconGlyph(set: CfIconSetName, iconId: number): CfIconGlyph | und
   if (testGlyphs) return testGlyphs(set, iconId) ?? undefined
   const glyphClass = Object.prototype.hasOwnProperty.call(CF_ICON_GLYPH_CLASSES, `${set}:${iconId}`) ? CF_ICON_GLYPH_CLASSES[`${set}:${iconId}`] : undefined
   if (!glyphClass || CF_ICON_GLYPH_WITHHELD.has(glyphClass) || !hasEvidence(`icon:glyph-${set}-${iconId}`)) return undefined
-  return cfIconGlyphClass(glyphClass)
+  return cfIconGlyphHeader(glyphClass)
 }
 
-/** Retained bytes of one decoded glyph class: measured from its op list (not hand-counted per glyph). */
+/** Retained bytes of one prepared CSS fill style (`#rrggbb`: a string header and 7 UTF-16 code units). */
+const FILL_STYLE_BYTES = 16 + 7 * 2
+/** Retained bytes of one decoded glyph class: measured from its op list (not hand-counted per glyph), with each fill's
+ * prepared style. */
 export function glyphBytes(glyph: CfIconGlyph): number {
   let bytes = 64 + glyph.glyphClass.length * 2
-  for (const op of glyph.path) bytes += 16 + op.length * 8
+  for (const op of glyph.path) bytes += 16 + op.length * 8 + (op[0] === 'F' ? FILL_STYLE_BYTES : 0)
   return bytes
+}
+
+/** The op lengths one encoded shape decodes to (fix round P1: bounds from the encoded table, before decoding). */
+function shapeOpLengths(shape: Shape, each: (length: number) => void): void {
+  const [kind, , ...v] = shape
+  if (kind === 'p') { each(3); for (let i = 2; i + 1 < v.length; i += 2) each(3); each(1) }
+  else if (kind === 'r') { each(3); each(3); each(3); each(3); each(1) }
+  else if (kind === 'c') each(6)
+  else { each(3); each(6); each(1) }
+  each(2) // F
+}
+/** The exact bytes (`glyphBytes`) and ops one class decodes to, read from the encoded table without decoding it.
+ * Undefined for a class the table does not hold. */
+function encodedBound(glyphClass: string): { bytes: number; ops: number } | undefined {
+  const shapes = Object.prototype.hasOwnProperty.call(GEOMETRY, glyphClass) ? GEOMETRY[glyphClass] : undefined
+  if (!shapes || !COLOURS[glyphClass]) return undefined
+  let bytes = 64 + glyphClass.length * 2, ops = 0
+  for (const shape of shapes) shapeOpLengths(shape, n => { ops++; bytes += 16 + n * 8 + (n === 2 ? FILL_STYLE_BYTES : 0) })
+  return { bytes, ops }
+}
+/** The bytes admission charges for a class before decoding it (equals `glyphBytes` of the decoded glyph). */
+export function cfGlyphBytesBound(glyphClass: string): number | undefined {
+  return encodedBound(glyphClass)?.bytes
+}
+
+/** Live decoded glyphs held by admissions (fix round P1): decoding happens only inside an admission, which owns them. */
+let liveDecoded = 0
+/** How many decoded glyphs live admissions hold (a refused admission holds none; a released one none). */
+export function cfDecodedGlyphCount(): number {
+  return liveDecoded
 }
 
 /**
@@ -81,39 +120,69 @@ export function glyphBytes(glyph: CfIconGlyph): number {
  * batch's whole life.
  */
 export function admitIconGlyphs(classes: ReadonlySet<string>, memory: CfMemory, budget: CfWorkBudget, glyphOf: (glyphClass: string) => CfIconGlyph | undefined = () => undefined): CfGlyphCache | undefined {
+  // Fix round P1: every bound comes from what is already held (an injected glyph's ops, or the encoded table for a
+  // production header, whose `path` is empty), and work and memory are charged before anything is decoded.
   let bytes = 0
+  const heads: CfIconGlyph[] = []
   for (const glyphClass of classes) {
     const glyph = glyphOf(glyphClass)
     if (!glyph) return undefined
-    bytes += glyphBytes(glyph)
-    if (budget.spend(glyph.path.length + 1) === 'refused') return undefined
+    const bound = glyph.path.length > 0 ? { bytes: glyphBytes(glyph), ops: glyph.path.length } : encodedBound(glyphClass)
+    if (!bound) return undefined
+    bytes += bound.bytes
+    if (budget.spend(bound.ops + 1) === 'refused') return undefined
+    heads.push(glyph)
   }
   const hold = memory.reserve(bytes)
   if (hold.kind !== 'reserved') return undefined
+  // Charged: now decode, into entries this admission owns and releases.
+  const entries = new Map<string, CfPreparedGlyph>()
+  for (const head of heads) {
+    const glyph = head.path.length > 0 ? head : decode(head.glyphClass)
+    if (!glyph) { hold.release(); return undefined }
+    const fills: string[] = []
+    for (const op of glyph.path) if (op[0] === 'F') fills.push(css(op[1]))
+    entries.set(head.glyphClass, Object.freeze({ glyph, fills: Object.freeze(fills) }))
+  }
+  liveDecoded += entries.size
   let released = false
   return {
     classes: new Set(classes), bytes,
-    release() { if (released) return; released = true; hold.release() },
+    glyph: glyphClass => entries.get(glyphClass)?.glyph,
+    prepared: glyphClass => entries.get(glyphClass),
+    release() {
+      if (released) return
+      released = true
+      liveDecoded -= entries.size
+      entries.clear()
+      hold.release()
+    },
   }
 }
 
 const css = (argb: number): string => `#${(argb & 0xffffff).toString(16).padStart(6, '0')}`
 
 /**
- * Replays one admitted glyph into `box` (output units). Allocates nothing: the ops map from glyph points onto the box
- * directly. `false` (nothing drawn) when the glyph's class was not admitted for this batch.
+ * Replays one admitted glyph into `box` (output units). Allocates nothing: the admission's decoded ops map from glyph
+ * points onto the box directly, with the fill styles it prepared (fix round P2). `false` (nothing drawn) when the
+ * glyph's class was not admitted for this batch.
  */
 export function drawIconGlyph(ctx: CanvasRenderingContext2D, glyph: CfIconGlyph, box: CfIconRect, _scale: CfBarScale, admitted: CfGlyphCache): boolean {
   if (!admitted.classes.has(glyph.glyphClass) || !(glyph.widthPt > 0 && glyph.heightPt > 0)) return false
+  const entry = admitted.prepared?.(glyph.glyphClass)
+  const path = entry ? entry.glyph.path : glyph.path
+  const fills = entry?.fills
+  if (path.length === 0) return false
   const sx = box.w / glyph.widthPt, sy = box.h / glyph.heightPt
+  let fill = 0
   ctx.beginPath()
-  for (const op of glyph.path) {
+  for (const op of path) {
     switch (op[0]) {
       case 'M': ctx.moveTo(box.x + op[1] * sx, box.y + op[2] * sy); break
       case 'L': ctx.lineTo(box.x + op[1] * sx, box.y + op[2] * sy); break
       case 'A': ctx.arc(box.x + op[1] * sx, box.y + op[2] * sy, op[3] * Math.min(sx, sy), op[4], op[5]); break
       case 'Z': ctx.closePath(); break
-      case 'F': ctx.fillStyle = css(op[1]); ctx.fill(); ctx.beginPath(); break
+      case 'F': ctx.fillStyle = fills ? fills[fill++]! : css(op[1]); ctx.fill(); ctx.beginPath(); break
     }
   }
   return true
@@ -151,6 +220,14 @@ export const CF_ICON_GLYPH_WITHHELD: ReadonlySet<string> = new Set<string>([
   // Excel's empty star is a speckle of greys whose median over any outline we draw stays below the ink threshold (it
   // measures 3..12 × 9..17 from scattered pixels at delta >= 64): our outline draws no ink, so its box fails.
   '3Stars:0',
+  // Fix round (review P1): the reference-region check (each colour region of the key crop drawn in its own colour on
+  // at least half its pixels, ±48) and the ink-mask IoU >= 0.85, thresholds fixed from negative controls before any
+  // real glyph was measured (tests/helpers/cf-glyph-measure.ts). Our simplified artwork misses a shading or detail
+  // region, or the shape, of these; they are withheld until redrawn as original artwork.
+  '3ArrowsGray:2', '3Flags:0', '3Flags:1', '3Flags:2', '3TrafficLights1:1', '3TrafficLights2:0', '3TrafficLights2:1',
+  '3TrafficLights2:2', '3Signs:0', '3Signs:1', '3Symbols2:0', '3Symbols2:1', '3Symbols2:2', '4Arrows:2', '4ArrowsGray:1',
+  '4ArrowsGray:2', '4Rating:0', '4Rating:1', '4Rating:2', '4Rating:3', '5Rating:0', '3Stars:1', '3Stars:2',
+  '3Triangles:0', '3Triangles:1',
 ])
 
 /** The key frame every glyph is drawn in (pt): `CF_ICON_RENDER_MODEL.keyFrame` `widthPt`/`heightPt`. */
@@ -288,8 +365,8 @@ const COLOURS: Readonly<Record<string, readonly number[]>> = {
 }
 // COLOURS:END
 
-const decoded = new Map<string, CfIconGlyph>()
-/** Decodes one class's shapes into glyph ops (memoised). `undefined` for an unknown class. */
+/** Decodes one class's shapes into glyph ops (fresh each call; admissions own what they decode). `undefined` for an
+ * unknown class. */
 function decode(glyphClass: string): CfIconGlyph | undefined {
   const shapes = Object.prototype.hasOwnProperty.call(GEOMETRY, glyphClass) ? GEOMETRY[glyphClass] : undefined
   const colours = COLOURS[glyphClass]
@@ -316,12 +393,20 @@ function decode(glyphClass: string): CfIconGlyph | undefined {
   return Object.freeze({ glyphClass, widthPt: FRAME_W, heightPt: FRAME_H, source: 'original', fidelity: 'pixel-approximated', path: Object.freeze(path) })
 }
 
-/** One class's glyph, decoded on first use, past every pair gate (admission and tests). `undefined`: unknown class. */
+/**
+ * One class's glyph, freshly decoded and owned by the caller, past every pair gate: the approximation audit and tests
+ * only. Production never calls it: it looks glyphs up as headers (`cfIconGlyphHeader`) and decodes only inside an
+ * admission (fix round P1). `undefined`: unknown class.
+ */
 export function cfIconGlyphClass(glyphClass: string): CfIconGlyph | undefined {
-  let glyph = decoded.get(glyphClass)
-  if (!glyph) {
-    glyph = decode(glyphClass)
-    if (glyph) decoded.set(glyphClass, glyph)
-  }
-  return glyph
+  return decode(glyphClass)
+}
+
+const NO_OPS: readonly CfGlyphOp[] = Object.freeze([])
+/** Per-class headers (class, frame, provenance; no ops): static metadata built with the table, not decoded data. */
+const HEADERS: Readonly<Record<string, CfIconGlyph>> = Object.freeze(Object.fromEntries(Object.keys(GEOMETRY).map(glyphClass => [glyphClass,
+  Object.freeze({ glyphClass, widthPt: FRAME_W, heightPt: FRAME_H, source: 'original' as const, fidelity: 'pixel-approximated' as const, path: NO_OPS })])))
+/** A class's undecoded header (`path` empty): what `iconGlyph` returns and admissions decode. `undefined`: unknown. */
+export function cfIconGlyphHeader(glyphClass: string): CfIconGlyph | undefined {
+  return Object.prototype.hasOwnProperty.call(HEADERS, glyphClass) ? HEADERS[glyphClass] : undefined
 }

@@ -127,6 +127,13 @@ export type GlyphCheck = { ok: boolean; reasons: string[]; drawn?: InkBox; measu
 export function checkGlyph(glyph: CfIconGlyph, crop: DecodedPng, measured: InkBox | undefined, faint: boolean): GlyphCheck {
   const reasons: string[] = []
   const img = renderAtKey(glyph)
+  // Fix round (review P1): the reference's own regions and ink, independent of the candidate's paths.
+  const iou = inkIoU(img, crop, faint ? ICON_CLASS_TOLERANCE + 1 : ICON_STRONG_DELTA)
+  if (iou < INK_IOU_MIN) reasons.push(`ink IoU ${iou.toFixed(3)} < ${INK_IOU_MIN}`)
+  for (const r of referenceRegions(crop)) {
+    const a = regionAgreement(img, r, REGION_TOLERANCE)
+    if (a < REGION_AGREEMENT_MIN) reasons.push(`reference region ${r.median.join(',')} (${r.pixels.length} px) agrees on ${Math.round(a * 100)}% < ${REGION_AGREEMENT_MIN * 100}%`)
+  }
   const drawn = inkBoxOf(img, KEY_CELL_W, KEY_CELL_H, faint ? ICON_CLASS_TOLERANCE + 1 : ICON_STRONG_DELTA)
   if (faint && inkBoxOf(img, KEY_CELL_W, KEY_CELL_H, ICON_STRONG_DELTA)) reasons.push('a faint class draws strong ink')
   if (!drawn || !measured) reasons.push(`no ${!drawn ? 'drawn' : 'measured'} ink box`)
@@ -139,4 +146,71 @@ export function checkGlyph(glyph: CfIconGlyph, crop: DecodedPng, measured: InkBo
     return { argb: r.argb, size: r.pixels.length, ...(med ? { median: med } : {}) }
   })
   return { ok: reasons.length === 0, reasons, ...(drawn ? { drawn } : {}), ...(measured ? { measured } : {}), regions }
+}
+
+/**
+ * Fix round (review P1): reference-derived semantic regions, frozen from the key crop alone and independent of any
+ * candidate's paths. The crop's visible pixels (max delta > 8 from white) are grouped by colour: each pixel joins the
+ * first region whose seed colour lies within `REGION_RADIUS` per channel, seeds taken in order of how many pixels share
+ * a colour; a region of fewer than `REGION_MIN_PX` pixels is noise. Each region carries its median colour.
+ */
+export const REGION_RADIUS = 48
+/**
+ * The approximation thresholds, fixed from the negative controls before any real glyph was measured (fix round):
+ * a solid rectangle in the crop's median colour over the measured ink box, substituted for 3TrafficLights1:0 and each
+ * 3Symbols glyph, scores ink IoU 0.835 / 0.736 / 0.777 / 0.736 and leaves one reference region at 0 % agreement.
+ * - `INK_IOU_MIN` 0.85: above every control (a box over a round glyph is about π/4 of it plus edges), so substituting a
+ *   box for a round or symbol glyph fails on shape alone.
+ * - `REGION_AGREEMENT_MIN` 0.5 at `REGION_TOLERANCE` ±48 per channel: each reference region must be drawn in its own
+ *   colour on a majority of its pixels; every control has a region at 0 % (the rim, or the symbol, drawn in the wrong
+ *   colour), so a vanished symbol or rim fails.
+ */
+export const INK_IOU_MIN = 0.85
+export const REGION_TOLERANCE = 48
+export const REGION_AGREEMENT_MIN = 0.5
+export const REGION_MIN_PX = 3
+export type ReferenceRegion = { pixels: Array<{ x: number; y: number }>; median: [number, number, number] }
+export function referenceRegions(crop: DecodedPng): ReferenceRegion[] {
+  const px: Array<{ x: number; y: number; c: [number, number, number] }> = []
+  for (let cy = 0; cy < crop.height; cy++) for (let cx = 0; cx < crop.width; cx++) {
+    const k = (cy * crop.width + cx) * 4
+    const c: [number, number, number] = [crop.data[k]!, crop.data[k + 1]!, crop.data[k + 2]!]
+    if (delta(...c) > ICON_CLASS_TOLERANCE) px.push({ x: cx + 1, y: cy + 1, c })
+  }
+  const freq = new Map<string, number>()
+  for (const p of px) freq.set(p.c.join(), (freq.get(p.c.join()) ?? 0) + 1)
+  const seeds = [...new Set(px.map(p => p.c.join()))].sort((a, b) => freq.get(b)! - freq.get(a)! || (a < b ? -1 : 1)).map(s => s.split(',').map(Number) as [number, number, number])
+  const near = (a: readonly number[], b: readonly number[]) => a.every((v, i) => Math.abs(v - b[i]!) <= REGION_RADIUS)
+  const groups: Array<{ seed: [number, number, number]; pixels: typeof px }> = []
+  for (const p of px) {
+    let g = groups.find(x => near(x.seed, p.c))
+    if (!g) { const seed = seeds.find(s => near(s, p.c))!; g = groups.find(x => x.seed === seed) ?? (groups.push({ seed, pixels: [] }), groups[groups.length - 1]!) }
+    g.pixels.push(p)
+  }
+  return groups.filter(g => g.pixels.length >= REGION_MIN_PX).map(g => ({
+    pixels: g.pixels.map(({ x, y }) => ({ x, y })),
+    median: [median(g.pixels.map(p => p.c[0])), median(g.pixels.map(p => p.c[1])), median(g.pixels.map(p => p.c[2]))],
+  }))
+}
+/** The share of a region's pixels where the candidate image's colour lies within `tol` per channel of its median. */
+export function regionAgreement(img: Uint8ClampedArray, region: ReferenceRegion, tol: number): number {
+  let hit = 0
+  for (const { x, y } of region.pixels) {
+    const k = (y * KEY_CELL_W + x) * 4
+    if ([img[k]!, img[k + 1]!, img[k + 2]!].every((v, i) => Math.abs(v - region.median[i]!) <= tol)) hit++
+  }
+  return hit / region.pixels.length
+}
+/** Intersection over union of the candidate's and the crop's ink masks (max delta >= `threshold`), cell coordinates. */
+export function inkIoU(img: Uint8ClampedArray, crop: DecodedPng, threshold: number): number {
+  let inter = 0, union = 0
+  for (let y = 1; y < KEY_CELL_H - 1; y++) for (let x = 1; x < KEY_CELL_W - 1; x++) {
+    const k = (y * KEY_CELL_W + x) * 4
+    const a = delta(img[k]!, img[k + 1]!, img[k + 2]!) >= threshold
+    const p = cropAt(crop, x, y)
+    const b = p !== undefined && delta(...p) >= threshold
+    if (a && b) inter++
+    if (a || b) union++
+  }
+  return union ? inter / union : 1
 }

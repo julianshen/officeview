@@ -1600,7 +1600,7 @@ After verify-only (38d3d872), production paints icons only behind `CF_ICON_PAINT
 - **Classes:** 54 entries over 75 pairs, exactly the sidecar's `glyphClasses`. The twins `4RedToBlack:0`/`5Quarters:4` and `4RedToBlack:1`/`5Boxes:0` are separate entries (S4-NEARTWIN).
 - **Withheld:** `3Stars:0` (`CF_ICON_GLYPH_WITHHELD`). Excel's empty star is a speckle of greys. The median over any outline region we draw is about 190, so after anti-aliasing our outline draws no ink at delta 64, against a measured box of 3..12 × 9..17. Its one pair, `3Stars:0`, never paints. The other 53 classes pass both checks.
 - **Gates:** a pair paints only with its own `icon:glyph-<set>-<iconId>` evidence. None is published before Task 30, so production still paints no icon.
-- **Size:** the `iconGlyphs.ts` module (encoded table, class map and decoder) renders 12,932 B, or 3,786 B gzip, inside the lazy `cf` chunk (`render-*.js`). Measured with `OV_MODULE_MAP=1 npx vite build`; `scripts/vite-module-map.ts` now records each module's `moduleBytes`. The test asserts ≤ 16 KiB and ≤ 3,786 B + 10 % (Ruling S4-GLYPHCAP). No CF module is in the eager closure.
+- **Size:** the `iconGlyphs.ts` module (encoded table, class map and decoder) renders 15,870 B, or 4,614 B gzip (fix round), inside the lazy `cf` chunk (`render-*.js`). Measured with `OV_MODULE_MAP=1 npx vite build`; `scripts/vite-module-map.ts` now records each module's `moduleBytes`. The test asserts ≤ 16 KiB and ≤ 4,614 B + 10 % (Ruling S4-GLYPHCAP). No CF module is in the eager closure.
 
 **The key frame (`CF_ICON_RENDER_MODEL.keyFrame`).**
 - The frame is the union of the 54 classes' ink boxes in the key's `observedIcons`, which are cell-relative, inclusive and at 1 px/pt:
@@ -1760,3 +1760,39 @@ So the case measured:
 - A session-resized row still withholds, by the host-height check.
 
 **Search scope (round 4, concern 5).** Find and copy use their scope only for text (`effectiveStyle`/display text); neither calls `iconAt`, `describe` or `hidesTextAt`. The a11y description and the paint come from the scopes that carry `rowPtOf`: the resident batch and text scope, and the paged paint and semantic scopes via `prepareRemoteScope`. So a scope without row heights can change no description, visible text or paint.
+
+### Task 28 fix round (2026-11-15): review of rounds 1–5
+
+**P1: decode after admission.**
+- `iconGlyph` returns an undecoded per-class header (`cfIconGlyphHeader`: class, frame and provenance, empty `path`).
+- `admitIconGlyphs` computes each class's exact bytes and ops from the encoded table (`cfGlyphBytesBound`, which equals `glyphBytes` of the decoded glyph). It spends work units and reserves memory first, and only then decodes, into entries the admission owns.
+- `release` clears them. `cfDecodedGlyphCount` is 0 after a refused admission and after release.
+- No global decoded cache remains. `cfIconGlyphClass` decodes fresh for the audit and the tests only.
+
+**P1: an independent approximation check (tests/helpers/cf-glyph-measure.ts).**
+- **Reference regions.** These are frozen from the key crop alone. Visible pixels (delta > 8) are grouped by colour: each joins the first seed within ±48, seeds are taken by frequency, and a region needs at least 3 px.
+- **Checks added to the box and palette checks:**
+  - every region must be drawn within ±48 of its median on at least 50 % of its pixels;
+  - the ink-mask IoU must be at least 0.85.
+- **Thresholds came from the negative controls, before any real glyph was measured.** Each control is a solid box in the crop's median colour over the ink box, substituted for 3TrafficLights1:0 and each 3Symbols glyph. The controls score IoU 0.835, 0.736, 0.777 and 0.736, and each leaves one region at 0 % (the rim or the symbol in the wrong colour). All four fail, and the test pins that.
+- **Withheld: 26 classes.** Our simplified artwork misses a region or the shape of these, so they wait to be redrawn as original artwork:
+  - `3Stars:0` (as before), `3Stars:1`, `3Stars:2`;
+  - `3ArrowsGray:2`, `4Arrows:2`, `4ArrowsGray:1`, `4ArrowsGray:2`;
+  - `3Flags:0`, `3Flags:1`, `3Flags:2`;
+  - `3TrafficLights1:1`, `3TrafficLights2:0`, `3TrafficLights2:1`, `3TrafficLights2:2`;
+  - `3Signs:0`, `3Signs:1`;
+  - `3Symbols2:0`, `3Symbols2:1`, `3Symbols2:2`;
+  - `4Rating:0`, `4Rating:1`, `4Rating:2`, `4Rating:3`, `5Rating:0`;
+  - `3Triangles:0`, `3Triangles:1`.
+- **Admitted: 28 classes.**
+
+**P2: right-aligned clearance.**
+- A right-aligned text box must start at or after the frame's own right edge: (2 + 13) pt = 20 px, the widest class's extent, since every class is drawn in the one frame.
+- `slotFit` takes the larger of that edge and the 12 pt gap.
+- The reproduction is pinned: 4Rating:3 on a 15 pt row in a 100 px cell withholds with 78 px of text (it starts at 19 px) and paints with 77. The ±1 px boundary is pinned in the static, resident, paged, print and export views.
+
+**P2: no strings per draw.**
+- Each fill's CSS colour is prepared at admission and charged at 30 B per fill in `glyphBytes`.
+- Drawing reuses the prepared strings. A test spies on `Number.prototype.toString` and `String.prototype.padStart` across two draws of every admitted class and sees neither called.
+
+**Size.** The `iconGlyphs.ts` module is now 15,870 B, or 4,614 B gzip, in the lazy `cf` chunk.
