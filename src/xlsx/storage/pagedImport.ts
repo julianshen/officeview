@@ -294,6 +294,8 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
     }
     // Shared strings, chunked into the store.
     let sstCount = 0
+    // Ruling S4-ROW-UNIFORM (fix round 2): the shared strings that hold rich-text runs.
+    const richStrings = new Set<number>()
     if (sstPath) {
       const entry = inventory.find(sstPath)!
       let chunk: string[] = []
@@ -303,7 +305,8 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       // Strings waiting for their chunk commit are construction memory (§12.4).
       const share = store.construction.share('pending shared strings')
       let pendingBytes = 0
-      const events = sharedStringEvents(sstPath, (text) => {
+      const events = sharedStringEvents(sstPath, (text, rich) => {
+        if (rich) richStrings.add(sstCount)
         const cost = 2 * text.length + PENDING_STRING_BYTES
         share.need(pendingBytes + cost)
         pendingBytes += cost
@@ -441,7 +444,8 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         },
         declared: container,
         // Ruling S4-ROW-UNIFORM: the rows whose font is not uniformly Calibri 11 regular (icon frames).
-        keyFontStyle: index => cfKeyFontStyle(workbook.formatting.styles[index]),
+        keyFontStyle: index => Number.isInteger(index) && index >= 0 && cfKeyFontStyle(workbook.formatting.styles[index]),
+        richString: index => richStrings.has(index),
         onCell(record) {
           // Charged before the builder retains the record's text and formula metadata.
           account(builder.costOf(record.text, record.meta))

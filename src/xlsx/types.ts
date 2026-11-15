@@ -102,6 +102,8 @@ export interface XlsxRow {
   hidden?: boolean
   /** `customFormat="1"`: the row carries a row style, which its empty cells take (Ruling S4-ROW-UNIFORM). */
   styled?: boolean
+  /** A cell of the row holds a run-formatted (rich-text) string (Ruling S4-ROW-UNIFORM, fix round 2). */
+  richText?: boolean
   cells: XlsxCell[]
 }
 
@@ -163,6 +165,9 @@ export interface XlsxSheet {
   /** Ruling S4-DEFAULT-ROW: the authored height (pt) of rows without `ht` (`sheetFormatPr defaultRowHeight`, absent
    * under zeroHeight/thickTop/thickBottom). Used by the icon frame only; the grid keeps its own default. */
   defaultRowHeightPt?: number
+  /** Ruling S4-ROW-UNIFORM (fix round 2): the default cell style (xf 0) or a `<cols>` style is not, or not known to
+   * be, Calibri 11 regular, so no row of the sheet is uniformly the default font. */
+  rowFontsBlocked?: boolean
   name: string
   sourcePartPath?: string
   /** Resolved workbook semantics (date system/locale/zone/clock) so the

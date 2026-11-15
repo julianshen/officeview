@@ -195,9 +195,9 @@ export function cfRowPtOfSheet(sheet: Pick<XlsxSheet, 'rows' | 'defaultRowHeight
 
 /** Ruling S4-ROW-UNIFORM: each row's font uniformity from the resident sheet (`rowFont.ts`); rows the sheet does not
  * store hold no cell, so they are uniform (their icons have no cell to sit on). */
-export function cfRowUniformOfSheet(sheet: Pick<XlsxSheet, 'rows'>): (row: number) => boolean | undefined {
+export function cfRowUniformOfSheet(sheet: Pick<XlsxSheet, 'rows' | 'rowFontsBlocked'>): (row: number) => boolean | undefined {
   let of: ((row: number) => boolean | undefined) | undefined
-  return row => (of ??= cfRowUniformOfLayout(cfNonUniformFontRows(sheet.rows)))(row)
+  return row => (of ??= cfRowUniformOfLayout(cfNonUniformFontRows(sheet.rows, sheet.rowFontsBlocked)))(row)
 }
 
 export function residentBarHosts(sheet: XlsxSheet, styleAt: (row: number, col: number, own: XlsxCellStyle | undefined) => XlsxCellStyle | undefined,

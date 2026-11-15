@@ -1912,6 +1912,117 @@ export async function pressureIconDistinctRanges(): Promise<PressureSample> {
   return { name: 'icon-distinct-range-300', outcome: scope === undefined ? 'refused' : 'admitted', peakBytes: peak(), netBytes: net(), sourceReads: visits() - visitedBefore, cellsWithResults: 0, wallMs: Date.now() - started }
 }
 
+/* ---------------- Stage 4 per-case validation records (Task 30 fix round 2, codex P2) ---------------- */
+
+/** One validation row per measured Stage 4 case and variant (a designated cell, its control included). */
+export interface Stage4CaseRecord {
+  caseId: string
+  /** The variant: the designated cell. */
+  ref: string
+  status: string
+  /** The cell's evidence labels (`iconEvidence` bucket/geometry), or `control`. */
+  evidenceKind: string
+  /** What Excel drew: the sidecar's ink box in cell-relative px at 1 px/pt and its observed class (null: no icon). */
+  measured: { box?: { l: number; t: number; r: number; b: number }; glyphClass: string | null | undefined }
+  /** What production does: its evaluated class (`withheld` when the slot is withheld), whether it paints, and the
+   * painted frame's ink box (frame plus the class's glyph-key ink offset), cell-relative px at 1 px/pt. */
+  produced: { glyphClass: string | null | 'withheld'; paints: boolean; box?: { l: number; t: number; r: number; b: number } }
+  /** The mode the row was produced in. */
+  mode: 'resident'
+  stamp: { cfGen: number; workbookValueGen: number }
+  /** The case's CF memory peak (bytes) and the work units its preparations spent. */
+  bytePeak: number
+  workUnits: number
+}
+
+/** The per-case/variant records of every measured Stage 4 case, under production evidence (nothing injected). */
+export async function stage4CaseRecords(manifest: CfManifest, rootDir: string = REPO_ROOT): Promise<Stage4CaseRecord[]> {
+  const { OfficePackage } = await import('../../src/core/zip')
+  const { parseXlsx } = await import('../../src/xlsx/parse')
+  const { createCfService } = await import('../../src/xlsx/cf/service')
+  const { CF_LIMITS } = await import('../../src/xlsx/cf/limits')
+  const { cfRuntimeEvidence } = await import('../../src/xlsx/cf/predicates')
+  const { prepareCfPaint, cfRowPtOfSheet, cfRowUniformOfSheet } = await import('../../src/xlsx/cf/render')
+  const { iconTextOf, layoutIcon } = await import('../../src/xlsx/cf/iconPaint')
+  const { cfRulesVersion } = await import('../../src/xlsx/view/pagedSource')
+  const { createCellLayoutHost } = await import('../../src/xlsx/view/renderViewport')
+  const { observedIconClass, iconTwinSetMembers } = await import('./verify')
+  const { createCanvas } = await import('canvas')
+  const ctx = createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D
+  // Each class's ink offset inside the frame, from the glyph key (20 px rows: frame 2 px in, 1 px above the bottom).
+  const keyCase = manifest.cases.find(c => c.id === 'stage4-icon-glyph-key')!
+  const key = JSON.parse(readFileSync(resolve(rootDir, keyCase.captures[0]!.sidecarPath), 'utf8')) as { observedIcons: Array<{ cellLeftPx: number; cellTopPx: number; cellHeightPx: number; icon: null | { leftPx: number; topPx: number; rightPx: number; bottomPx: number; glyphClass: string } }> }
+  const inkOffset = new Map<string, { l: number; t: number; r: number; b: number }>()
+  for (const o of key.observedIcons) {
+    if (!o.icon || iconTwinSetMembers(o.icon.glyphClass)) continue
+    const fx = o.cellLeftPx + 2, fy = o.cellTopPx + o.cellHeightPx - 1 - 12
+    if (!inkOffset.has(o.icon.glyphClass)) inkOffset.set(o.icon.glyphClass, { l: o.icon.leftPx - fx, t: o.icon.topPx - fy, r: o.icon.rightPx - fx, b: o.icon.bottomPx - fy })
+  }
+  const refRC = (ref: string) => { const m = /^([A-Z]+)(\d+)$/.exec(ref)!; return { row: Number(m[2]) - 1, col: [...m[1]!].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1 } }
+  const out: Stage4CaseRecord[] = []
+  for (const c of manifest.cases.filter(x => x.stage === 4 && x.status === 'measured')) {
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(resolve(rootDir, c.saved)))))
+    const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+    const sidecar = c.captures[0] && existsSync(resolve(rootDir, c.captures[0].sidecarPath)) ? JSON.parse(readFileSync(resolve(rootDir, c.captures[0].sidecarPath), 'utf8')) as { observedIcons?: CfObservedIconRow[] } : undefined
+    const observed = new Map((sidecar?.observedIcons ?? []).map(o => [o.ref.toUpperCase(), o] as const))
+    const memory = createCfMemory()
+    let units = 0
+    const budgets: CfWorkBudgetLike[] = []
+    const budget = (scan: boolean) => () => { const b = createCfWorkBudget(scan ? { scan: true } : {}); budgets.push(b); return b }
+    const cf = sheet.conditionalFormatting
+    const service = cf ? createCfService(cf, memory, { evidence: cfRuntimeEvidence, budget: budget(false), statisticsBudget: budget(true) }) : undefined
+    const stamp = { owner: 'audit-records', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cf ? cfRulesVersion(cf) : 0, viewGen: 0, structureGen: 0, clockGen: 0 }
+    const source = residentSource(sheet, stamp, memory, 'engine')
+    const batch = cf ? await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, layoutContext: () => ctx }) : undefined
+    const m = computeMetrics(sheet)
+    const rowPtOf = cfRowPtOfSheet(sheet), rowUniformOf = cfRowUniformOfSheet(sheet)
+    try {
+      for (const exp of c.expected.cells) {
+        const { row, col } = refRC(exp.ref)
+        let produced: Stage4CaseRecord['produced'] = { glyphClass: 'withheld', paints: false }
+        if (service) {
+          const lease = await service.prepareCf({ stamp, sourceRects: [{ firstRow: row, lastRow: row, firstCol: col, lastCol: col }], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, source)
+          const o = lease.value.at(row, col)
+          lease.release()
+          const tainted = o.kind === 'ready' && (o.value.unresolvedWrites?.size ?? 0) > 0
+          const icon = o.kind === 'ready' ? o.value.visual?.iconSet : undefined
+          produced.glyphClass = icon ? (icon.set === 'NoIcons' ? null : CF_ICON_GLYPH_CLASSES[`${icon.set}:${icon.iconId}`] ?? `unknown:${icon.set}:${icon.iconId}`)
+            : o.kind === 'no-match' || (o.kind === 'ready' && !tainted) ? null : 'withheld'
+          const painted = batch?.iconAt(row, col)
+          if (painted) {
+            const cell = sheet.rows.find(r => r.index === row)?.cells.find(x => x.col === col)
+            const width = m.colWidthsPx[col] ?? 64, height = m.rowHeightsPx[row] ?? 20
+            const body = cell ? createCellLayoutHost(ctx).layoutBody(cell, width, height) : undefined
+            const textWidth = body?.text?.kind === 'layout' ? body.text.layout.lines[0]!.segments.reduce((n, sg) => n + sg.width, 0) : 0
+            const rowPt = rowPtOf(row), rowUniform = rowUniformOf(row)
+            const host = { x: m.colWidthsPx.slice(0, col).reduce((a, b) => a + b, 0), y: m.rowHeightsPx.slice(0, row).reduce((a, b) => a + b, 0), width, height, textWidth, ...(cell ? { cell } : {}), ...(rowPt !== undefined ? { rowPt } : {}), ...(rowUniform !== undefined ? { rowUniform } : {}) }
+            const laid = layoutIcon(painted, host, iconTextOf(cell)!, { zoom: 3 / 4, dpr: 1, output: 'device' })
+            const off = inkOffset.get(CF_ICON_GLYPH_CLASSES[`${painted.set}:${painted.iconId}`] ?? '')
+            const X0 = Math.floor(host.x * 3 / 4 + 0.5), Y0 = Math.floor(host.y * 3 / 4 + 0.5)
+            produced = { ...produced, paints: true, ...(laid && off ? { box: { l: laid.box.x - X0 + off.l, t: laid.box.y - Y0 + off.t, r: laid.box.x - X0 + off.r, b: laid.box.y - Y0 + off.b } } : {}) }
+          }
+        }
+        const obs = observed.get(exp.ref.toUpperCase())
+        out.push({
+          caseId: c.id, ref: exp.ref, status: c.status,
+          evidenceKind: exp.iconEvidence ? `${exp.iconEvidence.bucket}/${exp.iconEvidence.geometry}` : 'control',
+          measured: { glyphClass: obs ? observedIconClass(obs as never) : undefined, ...(obs?.icon ? { box: { l: obs.icon.leftPx - obs.cellLeftPx, t: obs.icon.topPx - obs.cellTopPx, r: obs.icon.rightPx - obs.cellLeftPx, b: obs.icon.bottomPx - obs.cellTopPx } } : {}) },
+          produced, mode: 'resident', stamp: { cfGen: stamp.cfGen, workbookValueGen: stamp.workbookValueGen },
+          bytePeak: 0, workUnits: 0,
+        })
+      }
+    } finally {
+      batch?.dispose()
+      service?.dispose()
+    }
+    for (const b of budgets) units += b.units
+    for (const r of out) if (r.caseId === c.id) { r.bytePeak = memory.peakBytes; r.workUnits = units }
+  }
+  return out
+}
+type CfWorkBudgetLike = { readonly units: number }
+type CfObservedIconRow = { ref: string; cellLeftPx: number; cellTopPx: number; icon: null | { leftPx: number; topPx: number; rightPx: number; bottomPx: number; glyphClass: string } }
+
 export interface CycleSample {
   cycles: number
   reads: number
@@ -2232,7 +2343,10 @@ async function main(): Promise<void> {
     // eslint-disable-next-line no-console
     console.log(`statistics unit cap (family-agnostic scan, shared by icons): ${unitCap.admittedCells} cells admitted (units=${unitCap.admittedUnits}), ${unitCap.refusedCells} refused ${unitCap.refusedReason} (reads=${unitCap.refusedReads}) net=${unitCap.netBytes}`)
     if (unitCap.netBytes !== 0) throw new Error(`unit-cap scans leaked ${unitCap.netBytes} B`)
-    stage4Pressure = { iconShared, iconPercentile, iconExtents, glyphs, iconDistinct, unitCap }
+    const caseRecords = await stage4CaseRecords(manifest, REPO_ROOT)
+    // eslint-disable-next-line no-console
+    console.log(`stage 4 case records: ${caseRecords.length} rows over ${new Set(caseRecords.map(r => r.caseId)).size} measured cases (resident mode); painted ${caseRecords.filter(r => r.produced.paints).length}`)
+    stage4Pressure = { iconShared, iconPercentile, iconExtents, glyphs, iconDistinct, unitCap, caseRecords }
   } else {
     const scaleShared = await pressureScale1MRowSharedStatistics()
     // eslint-disable-next-line no-console

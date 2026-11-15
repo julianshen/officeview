@@ -1,4 +1,5 @@
 /** Parse XLSX parts into the XlsxDocument model. */
+import { cfKeyFontStyle } from './rowFont'
 import { admittedFormatCode } from './formatCodeLimit'
 import type { OfficePackage } from '../core/zip'
 import type { ChartDocumentContext } from '../charts/context'
@@ -52,11 +53,16 @@ export function parseMergeRange(ref: string): XlsxMergeRange {
   return { minRow: Math.min(r1, r2), minCol: Math.min(c1, c2), maxRow: Math.max(r1, r2), maxCol: Math.max(c1, c2) }
 }
 
+/** Ruling S4-ROW-UNIFORM (fix round 2): the shared-string indices whose `<si>` holds rich-text runs (`<r>`). */
+const RICH_SHARED_STRINGS = new WeakMap<string[], ReadonlySet<number>>()
 async function sharedStrings(pkg: OfficePackage): Promise<string[]> {
   const root = await pkg.xml('xl/sharedStrings.xml')
   if (!root) return []
   const out: string[] = []
+  const rich = new Set<number>()
+  RICH_SHARED_STRINGS.set(out, rich)
   for (const si of getChildren(root, 'si')) {
+    if (getChildren(si, 'r').length > 0) rich.add(out.length)
     // si may be plain t, or rich text runs (r/t), or phonetic — concatenate all t
     let s = ''
     const direct = si['t']
@@ -655,6 +661,8 @@ async function parseSheet(
   const defaultRowPt = defaultRowPtOf(format)
   if (defaultRowPt !== undefined) sheet.defaultRowHeightPt = defaultRowPt
   if (columns.maxDigitWidthPx !== 7 || columns.defaultWidthPx !== 64) sheet.columnMetrics = columns
+  // Ruling S4-ROW-UNIFORM (fix round 2): empty cells take xf 0 (the Normal style's font).
+  { const xf0 = styles.xfs[0]; if (!xf0 || !cfKeyFontStyle(resolveXfStyle(styles, xf0))) sheet.rowFontsBlocked = true }
   const colsNode = getChildren(data, 'cols')[0]
   if (colsNode) {
     for (const col of getChildren(colsNode, 'col')) {
@@ -665,6 +673,12 @@ async function parseSheet(
         widthChars: a.width !== undefined ? parseFloat(a.width as string) : undefined,
         hidden: a.hidden === '1' || a.hidden === 'true',
       })
+      // Ruling S4-ROW-UNIFORM (fix round 2): a column style other than Calibri 11 regular (or an unknown one) reaches
+      // every row's empty cells in that column.
+      if (a.style !== undefined) {
+        const xf = styles.xfs[parseInt(a.style as string, 10)]
+        if (!xf || !cfKeyFontStyle(resolveXfStyle(styles, xf))) sheet.rowFontsBlocked = true
+      }
     }
   }
   const mergeCells = getChildren(data, 'mergeCells')[0]
@@ -782,7 +796,10 @@ async function parseSheet(
       if (t === 's') {
         const idx = vNode ? parseInt(textOf(vNode), 10) : NaN
         value = Number.isFinite(idx) ? (strings[idx] ?? '') : ''
+        // Ruling S4-ROW-UNIFORM (fix round 2): a run-formatted string may name any font.
+        if (Number.isFinite(idx) && RICH_SHARED_STRINGS.get(strings)?.has(idx)) row.richText = true
       } else if (t === 'inlineStr') {
+        if (isNode && getChildren(isNode, 'r').length > 0) row.richText = true
         value = isNode ? decodeXlsxString(textOf(getChildren(isNode,'t')[0]))+
           getChildren(isNode,'r').map(r=>decodeXlsxString(textOf(getChildren(r,'t')[0]))).join('') : ''
       } else if (t === 'b') {

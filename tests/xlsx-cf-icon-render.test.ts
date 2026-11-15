@@ -55,7 +55,7 @@ async function pagedScope(sheet: XlsxSheet, rows: number, cols = 1, hosts?: CfFr
   expect(wire.kind, JSON.stringify(wire.reason)).toBe('ready')
   // S4-ROW-EXACT: the row heights the paged main thread holds, as InteractiveSheetDoc passes them: the worker's authored
   // row overrides (view/source.ts `buildGeometry`), read back as pt.
-  const geometry = buildGeometry(sheet.rows, sheet.cols ?? [], [], { defaultRowPt: sheet.defaultRowHeightPt, nonUniformFontRows: cfNonUniformFontRows(sheet.rows) })
+  const geometry = buildGeometry(sheet.rows, sheet.cols ?? [], [], { defaultRowPt: sheet.defaultRowHeightPt, nonUniformFontRows: cfNonUniformFontRows(sheet.rows, sheet.rowFontsBlocked) })
   const rowPtOf = cfRowPtOfOverrides(geometry.rowOverrides, geometry.defaultRowPt)
   // S4-ROW-UNIFORM: the rows' font uniformity travels with the layout, as the row heights do.
   const rowUniformOf = cfRowUniformOfLayout(geometry.nonUniformFontRows)

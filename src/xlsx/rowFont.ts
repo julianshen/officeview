@@ -15,12 +15,21 @@ export function cfKeyFontStyle(style: Pick<XlsxCellStyle, 'fontName' | 'fontSize
   return style !== undefined && style.fontName === 'Calibri' && style.fontSizePt === 11 && style.bold !== true && style.italic !== true
 }
 
-/** The rows (as inclusive intervals) whose font is not uniformly the default: a stored cell in another font, or a row
- * style (`customFormat`), which applies to the row's empty cells. */
-export function cfNonUniformFontRows(rows: ReadonlyArray<{ index: number; styled?: boolean; cells: ReadonlyArray<{ style?: XlsxCellStyle }> }>): { start: number; end: number }[] {
+/** Every worksheet row: the sheet-wide interval (Task 30 fix round 2). */
+export const CF_ALL_ROWS: Readonly<{ start: number; end: number }> = Object.freeze({ start: 0, end: 1_048_575 })
+
+/**
+ * The rows (as inclusive intervals) whose font is not uniformly the default (fix round 2, codex P1). Every row is when
+ * `blocked`: the sheet's default cell style (xf 0, the Normal style's font, which empty cells take) or a `<cols>` style
+ * is not, or not known to be, Calibri 11 regular. Otherwise a row is when it carries a row style (`customFormat`, which
+ * its empty cells take), a stored cell in another font, or a run-formatted string (`richText`: rich-text runs may name
+ * any font; withheld whatever they name, the simplest fail-closed reading).
+ */
+export function cfNonUniformFontRows(rows: ReadonlyArray<{ index: number; styled?: boolean; richText?: boolean; cells: ReadonlyArray<{ style?: XlsxCellStyle }> }>, blocked = false): { start: number; end: number }[] {
+  if (blocked) return [{ ...CF_ALL_ROWS }]
   const out: { start: number; end: number }[] = []
   for (const row of [...rows].sort((a, b) => a.index - b.index)) {
-    if (row.styled !== true && row.cells.every(c => cfKeyFontStyle(c.style))) continue
+    if (row.styled !== true && row.richText !== true && row.cells.every(c => cfKeyFontStyle(c.style))) continue
     const last = out[out.length - 1]
     if (last && last.end + 1 === row.index) last.end = row.index
     else if (!last || last.end < row.index) out.push({ start: row.index, end: row.index })

@@ -474,7 +474,7 @@ describe('S4-ROW-UNIFORM: the resident sheet and the worker reader agree on each
     const { cfNonUniformFontRows } = await import('../src/xlsx/rowFont')
     const path = `tests/fixtures/xlsx-cf/${id}.xlsx`
     const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, path)))
-    const resident = cfNonUniformFontRows((await savedSheet(path)).rows)
+    const rs = await savedSheet(path); const resident = cfNonUniformFontRows(rs.rows, rs.rowFontsBlocked)
     if (expected) expect(resident).toEqual(expected)
     else expect(resident.some(r => r.start <= 2 && r.end >= 2), 'row 3 (C3, M3..O3) holds a 20 pt cell').toBe(true)
     const session = await openImportSession({ kind: 'blob', blob: new Blob([bytes.slice().buffer as ArrayBuffer]) }, { docId: `row-uniform-${id}`, profile: 'D' })
@@ -486,4 +486,108 @@ describe('S4-ROW-UNIFORM: the resident sheet and the worker reader agree on each
       await session.release()
     }
   }, 120000)
+})
+
+/**
+ * Fix round 2 (codex P1 ×2): the effective font of a row's empty cells and of rich-text runs. Codex's variants of
+ * stage4-icon-rows-bottom, each on both paths (resident parse and the worker's record reader): a 20 pt column style; a
+ * 20 pt Normal style (xf 0) with every stored cell explicitly Calibri 11; a neighbouring inline run in Calibri 20; a
+ * neighbouring shared-string run in Calibri 20. Each withholds B2's bottom icon; the unmodified workbook paints it.
+ */
+describe('S4-ROW-UNIFORM covers column and default styles and rich-text runs on both paths (fix round 2)', () => {
+  const BASE = 'tests/fixtures/xlsx-cf/stage4-icon-rows-bottom.xlsx'
+  const FONT20 = '<font><sz val="20"/><color rgb="FF000000"/><name val="Calibri"/></font>'
+  const FONT11 = '<font><sz val="11"/><color rgb="FF000000"/><name val="Calibri"/></font>'
+  const RUN20 = '<r><rPr><sz val="20"/><rFont val="Calibri"/></rPr><t>x</t></r>'
+  const edit = (part: string, fn: (xml: string) => string) => ({ part, fn })
+  const fonts = (xml: string, extra: string, first?: string) => xml.replace(/<fonts count="\d+"([^>]*)>(<font>.*?<\/font>)/, (_m, a, f0) => `<fonts count="3"${a}>${first ?? f0}`).replace('</fonts>', `${extra}</fonts>`)
+  const VARIANTS: Record<string, ReturnType<typeof edit>[]> = {
+    'a 20 pt column style': [
+      edit('xl/styles.xml', x => fonts(x, FONT20).replace(/<cellXfs count="3">(.*?)<\/cellXfs>/, '<cellXfs count="4">$1<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>')),
+      edit('xl/worksheets/sheet1.xml', x => x.replace('</cols>', '<col min="8" max="8" width="10" style="3" customWidth="1"/></cols>')),
+    ],
+    'a 20 pt Normal style with explicitly Calibri 11 cells': [
+      edit('xl/styles.xml', x => fonts(x, FONT11, FONT20).replace(/(<cellXfs count="3"><xf [^>]*>.*?<\/xf>)<xf numFmtId="0" fontId="0"/, '$1<xf numFmtId="0" fontId="2"').replace(/(<cellXfs count="3"><xf [^>]*>.*?<\/xf><xf [^>]*>.*?<\/xf>)<xf numFmtId="0" fontId="0"/, '$1<xf numFmtId="0" fontId="2"')),
+      edit('xl/worksheets/sheet1.xml', x => x.replace(/<c r="([A-Z]+\d+)" t="s">/g, '<c r="$1" s="2" t="s">').replace(/<c r="([A-Z]+\d+)">/g, '<c r="$1" s="2">')),
+    ],
+    'a neighbouring inline run in Calibri 20': [
+      edit('xl/worksheets/sheet1.xml', x => x.replace(/(<row r="2"[^>]*>.*?)<\/row>/, `$1<c r="G2" s="2" t="inlineStr"><is>${RUN20}</is></c></row>`)),
+    ],
+    'a neighbouring shared-string run in Calibri 20': [
+      edit('xl/sharedStrings.xml', x => x.replace('</sst>', `<si>${RUN20}</si></sst>`)),
+      edit('xl/worksheets/sheet1.xml', x => x.replace(/(<row r="2"[^>]*>.*?)<\/row>/, '$1<c r="G2" s="2" t="s"><v>RICH</v></c></row>')),
+    ],
+  }
+  async function variant(edits: ReturnType<typeof edit>[]): Promise<Uint8Array> {
+    const JSZip = (await import('jszip')).default
+    const zip = await JSZip.loadAsync(readFileSync(join(REPO_ROOT, BASE)))
+    const sstCount = ((await zip.file('xl/sharedStrings.xml')!.async('string')).match(/<si>/g) ?? []).length
+    for (const e of edits) {
+      const before = await zip.file(e.part)!.async('string')
+      const after = e.fn(before).replace('<v>RICH</v>', `<v>${sstCount}</v>`)
+      expect(after, `${e.part} edited`).not.toBe(before)
+      zip.file(e.part, after)
+    }
+    return new Uint8Array(await zip.generateAsync({ type: 'uint8array' }))
+  }
+  async function bothPaths(bytes: Uint8Array) {
+    const { openImportSession } = await import('../src/xlsx/storage/pagedImport')
+    const { cfNonUniformFontRows } = await import('../src/xlsx/rowFont')
+    const { prepareCfPaint } = await import('../src/xlsx/cf/render')
+    const { createCanvas } = await import('canvas')
+    const sheet = (await parseXlsx(await OfficePackage.load(bytes))).sheets[0]! as unknown as XlsxSheet
+    const resident = cfNonUniformFontRows(sheet.rows, sheet.rowFontsBlocked)
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([bytes.slice().buffer as ArrayBuffer]) }, { docId: `row-font-${resident.length}-${Math.random()}`, profile: 'D' })
+    let worker: unknown
+    try {
+      await session.done
+      worker = (session.workbook.sheets.find(s => s.kind === 'worksheet') as unknown as { metadata: { nonUniformFontRows?: unknown } }).metadata.nonUniformFontRows
+    } finally { await session.release() }
+    const ctx = createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D
+    const batch = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, layoutContext: () => ctx }))!
+    const b2 = batch.iconAt(1, 1) !== undefined
+    batch.dispose()
+    return { resident, worker, b2 }
+  }
+
+  it('the unmodified workbook: no non-uniform row on either path, B2 paints', async () => {
+    const got = await bothPaths(new Uint8Array(readFileSync(join(REPO_ROOT, BASE))))
+    expect(got).toEqual({ resident: [], worker: [], b2: true })
+  }, 120000)
+
+  it.each(Object.keys(VARIANTS))('%s: row 2 is non-uniform on both paths, and B2 withholds', async name => {
+    const got = await bothPaths(await variant(VARIANTS[name]!))
+    expect(got.worker, 'worker equals resident').toEqual(got.resident)
+    expect(got.resident.some(r => r.start <= 1 && r.end >= 1), 'row 2 is non-uniform').toBe(true)
+    if (name.includes('style')) expect(got.resident).toEqual([{ start: 0, end: 1_048_575 }])
+    else expect(got.resident).toEqual([{ start: 1, end: 1 }])
+    expect(got.b2, 'B2 bottom icon withheld').toBe(false)
+  }, 120000)
+})
+
+/** Fix round 2 (codex P2): the per-case/variant validation records `audit --stage 4` emits. */
+describe('Stage 4 per-case validation records are complete', () => {
+  it('every measured Stage 4 case and every designated cell (variant) has a row with measured and produced fields', async () => {
+    const { stage4CaseRecords } = await import('../scripts/cf-refs/audit')
+    const m = manifest()
+    const rows = await stage4CaseRecords(m, REPO_ROOT)
+    const measured = m.cases.filter(c => c.stage === 4 && c.status === 'measured')
+    expect(measured.length).toBeGreaterThan(10)
+    const keys = new Set(rows.map(r => `${r.caseId}:${r.ref}`))
+    for (const c of measured) for (const e of c.expected.cells) expect(keys.has(`${c.id}:${e.ref}`), `${c.id}:${e.ref}`).toBe(true)
+    expect(rows).toHaveLength(measured.reduce((n, c) => n + c.expected.cells.length, 0))
+    for (const r of rows) {
+      expect(r.mode).toBe('resident')
+      expect(r.stamp.cfGen, r.caseId).toBeGreaterThan(0)
+      expect(r.bytePeak, r.caseId).toBeGreaterThan(0)
+      expect(r.workUnits, r.caseId).toBeGreaterThan(0)
+      expect(['withheld', null].includes(r.produced.glyphClass as never) || typeof r.produced.glyphClass === 'string', r.ref).toBe(true)
+      // Every painted icon carries its produced box, within +-1 px of Excel's measured one where Excel measured one.
+      if (r.produced.paints) {
+        expect(r.produced.box, `${r.caseId}:${r.ref}`).toBeDefined()
+        if (r.measured.box) for (const k of ['l', 't', 'r', 'b'] as const) expect(Math.abs(r.produced.box![k] - r.measured.box[k]), `${r.caseId}:${r.ref} ${k}`).toBeLessThanOrEqual(1)
+      }
+    }
+    expect(rows.filter(r => r.produced.paints).length).toBeGreaterThanOrEqual(39)
+  }, 300000)
 })
