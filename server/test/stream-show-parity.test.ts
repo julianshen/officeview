@@ -122,6 +122,15 @@ describe('streamed show parity (synthetic decks)', () => {
     expect(r.outcomes.filter((o) => o.status === 'fail' || o.status === 'unmatched').map((o) => o.detail)).toEqual([])
   }, 120_000)
 
+  test('autoplayTransitionDeck: the incoming transition shows the slide as it arrives, as local (PR #78 round 7)', async () => {
+    const r = await compareStreamDeck('autoplayTransitionDeck', { marks: { kind: 'off' }, widening: { meanAbs: 0.01, rowMax: 0.05 }, family: 'latin' })
+    expect(r.structure.equal).toBe(true)
+    // The transition's own samples are compared, mid-transition included (where a settled entry frame showed the box).
+    const transition = r.outcomes.filter((o) => o.kind === 'transition')
+    expect(transition.some((o) => o.pct > 0 && o.pct < 100 && o.status === 'pass')).toBe(true)
+    expect(r.outcomes.filter((o) => o.status === 'fail' || o.status === 'unmatched').map((o) => `${o.slide}-${o.step}-${o.pct} ${o.kind}: ${o.detail}`)).toEqual([])
+  }, 120_000)
+
   test('the CLI fails on an unmatched sample, an unexcused structure difference or a non-still refusal (fix round 1)', async () => {
     const base = await run('flyInDeck', 'off')
     expect(deckVerdict(base)).toEqual([])

@@ -446,6 +446,16 @@ function boundaryDraws(ps: PreparedSlide, timeline: SlideTimeline): DrawnLayer[]
   return Array.from({ length: timeline.steps + 1 }, (_, k) => drawsAt(ps, slideStateAt(ps, timeline, timeline.checkpoint(k), 0, rng, sink), { measure, resolveFont }))
 }
 
+/**
+ * PR #78 round 7: the slide as it arrives, `timeline.initial()` at time 0, the state the local stage draws its
+ * incoming transition frame from (`stateOf(p, initial, 0)`). With autoplay it differs from `checkpoint(0)`, which
+ * settles the pre-click effects (an auto fade is at progress 1 there, 0 here).
+ */
+function arrivalDraws(ps: PreparedSlide, timeline: SlideTimeline): DrawnLayer[] {
+  const rng = createRng(0x5eed + ps.index), sink = createDiagnosticSink()
+  return drawsAt(ps, slideStateAt(ps, timeline, timeline.initial(), 0, rng, sink), { measure: measureCtx(), resolveFont })
+}
+
 // ---------------------------------------------------------------------------
 // The build
 // ---------------------------------------------------------------------------
@@ -537,12 +547,13 @@ function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOp
   try {
     const n = timeline.steps
     const boundaries = boundaryDraws(ps, timeline)
-    // The entry frame: the slide before step 1, composed from the original rasters, marked once (as a unit).
-    const entryRgba = markFrame(composer.compose(boundaries[0]!), PW, PH, scale, page, job.mark)
-    check()
-
     const init = timeline.initial(), init0 = timeline.stateAt(init, 0)
     const autoplay = timeline.busyUntil(init) > 0 || timeline.keyTimes(init, 0, Number.POSITIVE_INFINITY).length > 0 || init0.active.length > 0 || init0.frozen.length > 0
+    // The entry frame: the slide as it arrives (what the incoming transition shows; round 7: with autoplay, the
+    // initial state at time 0, not the settled checkpoint 0, which stays the boundary the rests are validated at),
+    // composed from the original rasters, marked once (as a unit).
+    const entryRgba = markFrame(composer.compose(autoplay ? arrivalDraws(ps, timeline) : boundaries[0]!), PW, PH, scale, page, job.mark)
+    check()
     // Fix round 1 (controller ruling): a trigger needs the layers that draw its end state whether it plays from
     // layers or is cut (§6a: a cut jumps to its end state), and so does autoplay. Task 5 lets a trigger slide play
     // from layers only with zero drops and masks, so its layers are complete.

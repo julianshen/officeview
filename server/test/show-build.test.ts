@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'bun:test'
 import { decodeShowMessage, encodeShowMessage, isRasterLayer, SHOW_PLAN_LIMITS, type ShowPlanRecord } from '../../src/stream/show-plan'
 const R = (p: ShowPlanRecord) => p.layers.filter(isRasterLayer)
-import { ADVERSARY_KINDS, adversaryDeck, triggerFadeDeck, flyInDeck, manyLayersDeck, spinStepsDeck } from '../../src/testdata/show-decks'
+import { ADVERSARY_KINDS, adversaryDeck, autoplayTransitionDeck, triggerFadeDeck, flyInDeck, manyLayersDeck, spinStepsDeck } from '../../src/testdata/show-decks'
 import { Pool } from '../src/pool'
 import { moveTwiceDeck } from '../../src/testdata/show-decks'
 import { stateMatrix } from '../../src/slideshow/affine'
@@ -73,6 +73,20 @@ describe('buildShowPlan', () => {
     const rt = roundTrip(b)
     expect(rt.plan.tag).toBe(1)
     expect(rt.assets.map(m => m.tag)).toEqual(b.assets.map(a => a.tag))
+  })
+
+  it('entry frame of an autoplayed slide with a transition is its arrival state (timeline.initial() at 0), as local plays it (PR #78 round 7)', async () => {
+    const { host, docKey } = await openDeck(await autoplayTransitionDeck())
+    const b = built(await host.showPlan(docKey, job({ unitIndex: 1 })))
+    expect(b.plan.show.transition?.element).toBe('fade')
+    const entry = b.assets.find(a => a.assetId === b.plan.entry)!
+    const d = decodePng(entry.png)
+    const at = (x: number, y: number) => [...d.rgba.subarray((y * d.w + x) * 4, (y * d.w + x) * 4 + 3)]
+    // The box (id 3, 380,260 200×200, #336699) fades in after the transition: at arrival it is not drawn.
+    expect(at(480, 360)).toEqual([255, 255, 255])
+    // The title (no effect) is.
+    expect(at(480, 90)).toEqual([0xdd, 0xeb, 0xf7])
+    roundTrip(b)
   })
 
   it('transition-only slide ships layers: [] and an entry frame', async () => {

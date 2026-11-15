@@ -129,6 +129,8 @@ export const SYNTHETIC: Record<string, () => Promise<Uint8Array>> = {
   longStepDeck: async () => (await import('../src/testdata/show-decks')).longStepDeck(),
   /** An autoplayed `cmd` media call held 3 s, then a click (the lo-bnc591147 pattern; Task 14 cmd ruling). */
   cmdHoldDeck: async () => (await import('../src/testdata/show-decks')).cmdHoldDeck(),
+  /** A fade transition into a slide whose box fades in with it: the incoming frame is the arrival state (round 7). */
+  autoplayTransitionDeck: async () => (await import('../src/testdata/show-decks')).autoplayTransitionDeck(),
 }
 
 export function deckFile(deck: string): string {

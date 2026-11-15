@@ -200,6 +200,23 @@ export function navDeck(): Promise<Uint8Array> {
 }
 
 /**
+ * Two slides; the second enters with a 1 s fade transition, and its box (id 3) fades in with the slide (the main
+ * sequence's first group starts at delay 0): its arrival frame has the box hidden (PR #78 round 7).
+ */
+export function autoplayTransitionDeck(): Promise<Uint8Array> {
+  const id = ids()
+  return deck([
+    { bg: { solid: 'FFFFFF' }, shapes: [rect(2, 'One', 120, 120, 300, 200, 'F4B183')] },
+    {
+      bg: { solid: 'FFFFFF' },
+      shapes: [rect(2, 'Title', 80, 40, 800, 100, 'DDEBF7'), rect(3, 'Box', 380, 260, 200, 200, '336699')],
+      transition: { xml: '<p:transition spd="slow" p14:dur="1000"><p:fade/></p:transition>' },
+      timingXml: timingXmlOf(mainSeqXml([clickStep(id, [fadeIn(3, 500)], '0')])),
+    },
+  ])
+}
+
+/**
  * Two slides, each holding shape id 2 named "Box" (the same kind, a text
  * rectangle), moved and resized; the second enters with a Morph
  * (`option`, default `byObject`).
