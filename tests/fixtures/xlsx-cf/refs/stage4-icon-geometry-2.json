@@ -5,7 +5,7 @@
   "scale": 1,
   "pxPerPt": 1,
   "width": 1057,
-  "height": 261,
+  "height": 341,
   "colWidthsPt": [
     84,
     72,
@@ -24,19 +24,23 @@
     60,
     20,
     20,
+    20,
+    20,
     30,
     60,
+    20,
+    20,
     20
   ],
   "geometrySource": "excel-measured",
   "resavedByExcel": true,
-  "resaveSavedSha256": "e60f6b27bfba57f220052cfa7125bf7bef86a74ed7837690ee392483a7653556",
+  "resaveSavedSha256": "f250749b7763400e067f911dbb5cc53619c7d13bfbd064c9fda1d41394c5d882",
   "sheet": "Sheet1",
-  "range": "A1:J8",
+  "range": "A1:J12",
   "hostTimeZone": "Asia/Taipei",
-  "savedSha256": "e60f6b27bfba57f220052cfa7125bf7bef86a74ed7837690ee392483a7653556",
-  "pngSha256": "84317140dda9c44d9204c63632ccd42bea78ac24daf2575e51dd9eb89ff52b5b",
-  "capturedAt": "2026-11-15T07:48:06.077Z",
+  "savedSha256": "f250749b7763400e067f911dbb5cc53619c7d13bfbd064c9fda1d41394c5d882",
+  "pngSha256": "a695cb0217805bc6b16b1cda9f6f8d63451b7ed61d343f97e2d25c6a39747a6f",
+  "capturedAt": "2026-11-15T08:13:49.929Z",
   "zoom": 100,
   "dpr": 1,
   "lockBefore": "unlocked",
@@ -239,6 +243,28 @@
       "textShiftPx": 165
     },
     {
+      "ref": "H5",
+      "cellLeftPx": 516,
+      "cellTopPx": 130,
+      "cellWidthPx": 180,
+      "cellHeightPx": 20,
+      "icon": null,
+      "textInkLeftPx": 519,
+      "textInkRightPx": 528,
+      "textShiftPx": -1
+    },
+    {
+      "ref": "H6",
+      "cellLeftPx": 516,
+      "cellTopPx": 150,
+      "cellWidthPx": 180,
+      "cellHeightPx": 20,
+      "icon": null,
+      "textInkLeftPx": 519,
+      "textInkRightPx": 528,
+      "textShiftPx": -1
+    },
+    {
       "ref": "I2",
       "cellLeftPx": 696,
       "cellTopPx": 20,
@@ -273,6 +299,40 @@
       "textShiftPx": 165
     },
     {
+      "ref": "I5",
+      "cellLeftPx": 696,
+      "cellTopPx": 130,
+      "cellWidthPx": 180,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 698,
+        "topPx": 137,
+        "rightPx": 708,
+        "bottomPx": 148,
+        "glyphClass": "icon-class-none"
+      },
+      "textInkLeftPx": 712,
+      "textInkRightPx": 721,
+      "textShiftPx": 12
+    },
+    {
+      "ref": "I6",
+      "cellLeftPx": 696,
+      "cellTopPx": 150,
+      "cellWidthPx": 180,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 698,
+        "topPx": 157,
+        "rightPx": 708,
+        "bottomPx": 168,
+        "glyphClass": "icon-class-none"
+      },
+      "textInkLeftPx": 712,
+      "textInkRightPx": 721,
+      "textShiftPx": 12
+    },
+    {
       "ref": "J2",
       "cellLeftPx": 876,
       "cellTopPx": 20,
@@ -305,6 +365,40 @@
       "textInkLeftPx": 1045,
       "textInkRightPx": 1054,
       "textShiftPx": 165
+    },
+    {
+      "ref": "J5",
+      "cellLeftPx": 876,
+      "cellTopPx": 130,
+      "cellWidthPx": 180,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 878,
+        "topPx": 137,
+        "rightPx": 888,
+        "bottomPx": 148,
+        "glyphClass": "icon-class-none"
+      },
+      "textInkLeftPx": 892,
+      "textInkRightPx": 901,
+      "textShiftPx": 12
+    },
+    {
+      "ref": "J6",
+      "cellLeftPx": 876,
+      "cellTopPx": 150,
+      "cellWidthPx": 180,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 878,
+        "topPx": 157,
+        "rightPx": 888,
+        "bottomPx": 168,
+        "glyphClass": "icon-class-none"
+      },
+      "textInkLeftPx": 892,
+      "textInkRightPx": 901,
+      "textShiftPx": 12
     }
   ],
   "iconHypotheses": {},
@@ -534,6 +628,34 @@
           "verdict": "excluded"
         }
       },
+      "H5": {
+        "any-hides": {
+          "verdict": "pass"
+        },
+        "priority-wins": {
+          "verdict": "pass"
+        },
+        "bar-wins": {
+          "verdict": "pass"
+        },
+        "icon-wins": {
+          "verdict": "fail"
+        }
+      },
+      "H6": {
+        "any-hides": {
+          "verdict": "pass"
+        },
+        "priority-wins": {
+          "verdict": "pass"
+        },
+        "bar-wins": {
+          "verdict": "pass"
+        },
+        "icon-wins": {
+          "verdict": "fail"
+        }
+      },
       "I2": {
         "any-hides": {
           "verdict": "fail"
@@ -560,6 +682,34 @@
         },
         "icon-wins": {
           "verdict": "excluded"
+        }
+      },
+      "I5": {
+        "any-hides": {
+          "verdict": "fail"
+        },
+        "priority-wins": {
+          "verdict": "pass"
+        },
+        "bar-wins": {
+          "verdict": "pass"
+        },
+        "icon-wins": {
+          "verdict": "fail"
+        }
+      },
+      "I6": {
+        "any-hides": {
+          "verdict": "fail"
+        },
+        "priority-wins": {
+          "verdict": "pass"
+        },
+        "bar-wins": {
+          "verdict": "pass"
+        },
+        "icon-wins": {
+          "verdict": "fail"
         }
       },
       "J2": {
@@ -589,8 +739,52 @@
         "icon-wins": {
           "verdict": "excluded"
         }
+      },
+      "J5": {
+        "any-hides": {
+          "verdict": "fail"
+        },
+        "priority-wins": {
+          "verdict": "pass"
+        },
+        "bar-wins": {
+          "verdict": "fail"
+        },
+        "icon-wins": {
+          "verdict": "pass"
+        }
+      },
+      "J6": {
+        "any-hides": {
+          "verdict": "fail"
+        },
+        "priority-wins": {
+          "verdict": "pass"
+        },
+        "bar-wins": {
+          "verdict": "fail"
+        },
+        "icon-wins": {
+          "verdict": "pass"
+        }
       }
     }
   },
-  "iconGeometryRulesVersion": 2
+  "iconGeometryRulesVersion": 3,
+  "iconTextExclusions": {
+    "icon:composition-bar-showvalue": [
+      {
+        "ref": "H3",
+        "reason": "the matched text ink (685..694) overlaps the measured bar (685..694)"
+      },
+      {
+        "ref": "I3",
+        "reason": "the matched text ink (865..874) overlaps the measured bar (865..874)"
+      },
+      {
+        "ref": "J3",
+        "reason": "the matched text ink (1045..1054) overlaps the measured bar (1045..1054)"
+      }
+    ]
+  }
 }

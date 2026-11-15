@@ -44051,8 +44051,8 @@
       ],
       "expected": {
         "inputSha256": "dfe5b459c70870c421395e94c7b8fcd79176e0b27f4437f83f925bce33dc4c98",
-        "savedSha256": "dfe5b459c70870c421395e94c7b8fcd79176e0b27f4437f83f925bce33dc4c98",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "f250749b7763400e067f911dbb5cc53619c7d13bfbd064c9fda1d41394c5d882",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "C2",
@@ -44114,7 +44114,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44125,7 +44125,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44136,7 +44136,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44147,7 +44147,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44158,7 +44158,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44169,7 +44169,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44180,7 +44180,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44191,7 +44191,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44202,7 +44202,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44213,7 +44213,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44224,7 +44224,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44235,18 +44235,18 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
             "ref": "H2",
             "controlRef": "H8",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44257,29 +44257,29 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
             "ref": "H5",
             "controlRef": "H11",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
             "ref": "H6",
             "controlRef": "H12",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44290,7 +44290,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44301,7 +44301,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44312,7 +44312,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44323,7 +44323,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44334,7 +44334,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44345,7 +44345,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44356,7 +44356,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44367,7 +44367,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44568,17 +44568,24 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-geometry-2.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-geometry-2.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-geometry-2.json",
+          "pngSha256": "a695cb0217805bc6b16b1cda9f6f8d63451b7ed61d343f97e2d25c6a39747a6f"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-15T08:13:49.589Z",
+        "excelVersion": "16.115",
+        "inputSha256": "dfe5b459c70870c421395e94c7b8fcd79176e0b27f4437f83f925bce33dc4c98",
+        "savedSha256": "f250749b7763400e067f911dbb5cc53619c7d13bfbd064c9fda1d41394c5d882",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage4-icon-geometry",
