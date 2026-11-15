@@ -187,16 +187,20 @@ describe('Task 28: the glyph table', () => {
  * holds the module to that baseline + 10 % and to the 16 KiB ceiling.
  */
 const CF_GLYPH_TABLE_GZIP_BYTES = 5417
+/** The key font centred: Task 30 (S4-ROW-BASELINE) withholds bottom placement, so admitted hosts are centred. */
+const CENTRE = { ...KEY_FONT, vertical: 'center' as const }
 
 describe('Task 28: the icon frame at the glyph key geometry', () => {
   const icon = { ruleId: 1, set: '3Arrows' as const, iconId: 0, bucket: 0, buckets: 3, showValue: true }
   const ALL = (): boolean => true
   it('S4-ROW-EXACT: the key\'s own 20 pt row withholds (Excel draws 20 px; the viewer\'s 27 or 80/3 px rows are 20.25 or 20 px at capture)', () => {
-    expect(layoutIcon(icon, keyHost({ rowPt: 20 }), KEY_FONT, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)).toBeUndefined()
-    expect(layoutIcon(icon, keyHost({ rowPt: 20, height: 27 }), KEY_FONT, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)).toBeUndefined()
-    // The frame (13 × 12, 2 px in) lays out on an admitted 15 pt row, whatever the column width.
-    expect(layoutIcon(icon, keyHost({ rowPt: 15, height: 20 }), KEY_FONT, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)?.box).toEqual({ x: 2, y: 2, w: 13, h: 12 })
-    expect(layoutIcon(icon, keyHost({ rowPt: 15, height: 20, width: 240 }), KEY_FONT, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)?.box).toEqual({ x: 2, y: 2, w: 13, h: 12 })
+    expect(layoutIcon(icon, keyHost({ rowPt: 20 }), CENTRE, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)).toBeUndefined()
+    expect(layoutIcon(icon, keyHost({ rowPt: 20, height: 27 }), CENTRE, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)).toBeUndefined()
+    // The frame (13 × 12, 2 px in) lays out on an admitted 15 pt row, centred, whatever the column width.
+    expect(layoutIcon(icon, keyHost({ rowPt: 15, height: 20 }), CENTRE, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)?.box).toEqual({ x: 2, y: 2, w: 13, h: 12 })
+    expect(layoutIcon(icon, keyHost({ rowPt: 15, height: 20, width: 240 }), CENTRE, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)?.box).toEqual({ x: 2, y: 2, w: 13, h: 12 })
+    // Task 30 (S4-ROW-BASELINE): bottom-aligned (the key font's own alignment) withholds on every row.
+    expect(layoutIcon(icon, keyHost({ rowPt: 15, height: 20 }), KEY_FONT, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)).toBeUndefined()
   })
 
   it('with its evidence, a key-geometry host paints the original glyph where Excel inks it (left-aligned text, as I5/J5)', () => {
@@ -207,12 +211,12 @@ describe('Task 28: the icon frame at the glyph key geometry', () => {
         const [set, iconId] = split(pair)
         const desc = { ruleId: 1, set, iconId, bucket: iconId, buckets: Number(set[0]), showValue: true }
         const admitted = admitBatchGlyphs([desc], memory, () => createCfWorkBudget({ now: () => 0 }))
-        // A 15 pt row (admitted): bottom-anchored, the frame top is 15 - 1 - 12 = 2, 5 px above the key's 7.
+        // A 15 pt row (admitted), centred (S4-ROW-BASELINE withholds bottom): the frame top is 2, 5 px above the key's 7.
         const H = 15
         const canvas = createCanvas(KEY_CELL_W, H)
         const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
         ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, KEY_CELL_W, H)
-        const host = keyHost({ rowPt: H, height: H * 4 / 3, textWidth: 10, cell: { value: 'ab', style: { numFmtId: 0, fontSizePt: 11, fontName: 'Calibri', horizontal: 'left' } } })
+        const host = keyHost({ rowPt: H, height: H * 4 / 3, textWidth: 10, cell: { value: 'ab', style: { numFmtId: 0, fontSizePt: 11, fontName: 'Calibri', horizontal: 'left', vertical: 'center' } } })
         const layouts: boolean[] = []
         paintIconCells(ctx, new Map([[0, desc]]), () => desc, () => host, { r0: 0, c0: 0, r1: 0, c1: 0 }, AT_CAPTURE,
           { admitted, hasBar: () => false, check: () => true, rowPtOf: () => H }, (_r, _c, withheld) => layouts.push(withheld))
@@ -227,9 +231,10 @@ describe('Task 28: the icon frame at the glyph key geometry', () => {
 
   it('every input the key fixes must equal the key: other font sizes, rows, alignments and faces withhold', () => {
     const at = (host: ReturnType<typeof keyHost>, font: { sizePt?: number; vertical?: 'top' | 'center' | 'bottom' } = {}) =>
-      layoutIcon(icon, host, { ...KEY_FONT, ...font }, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)
+      layoutIcon(icon, host, { ...CENTRE, ...font }, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)
     const row15 = (o: Record<string, unknown> = {}) => keyHost({ rowPt: 15, height: 20, ...o })
     expect(at(row15())).toBeDefined()
+    expect(at(row15(), { vertical: 'bottom' }), 'bottom (S4-ROW-BASELINE)').toBeUndefined()
     for (const sizePt of [8, 10, 10.5, 12, 20]) expect(at(row15(), { sizePt }), `${sizePt} pt`).toBeUndefined()
     for (const rowPt of [12.75, 19, 21, 35, 60]) expect(at(keyHost({ rowPt, height: rowPt * 4 / 3 })), `${rowPt} pt row`).toBeUndefined()
     expect(at(row15(), { vertical: 'top' }), 'top').toBeUndefined()
@@ -280,7 +285,9 @@ describe('Task 28 round 3: the frame at the measured row heights (stage4-icon-ro
     it(`a ${rowPt} pt row lays the frame out where Excel measured it`, () => {
       const r = CF_ICON_RENDER_MODEL.keyFrame!.rows[rowPt]!
       expect(r.excelPx).toBe(rowPt)
-      for (const h of r.bottom!.horizontal) expect(at(rowPt, 'bottom', h)?.box, `bottom ${h}`).toEqual({ x: 2, y: rowPt - 1 - 12, w: 13, h: 12 })
+      // Task 30 (S4-ROW-BASELINE): the measured bottom placement is kept in the model but withholds (the row's shared
+      // baseline moves it with fonts no view knows).
+      for (const h of r.bottom!.horizontal) expect(at(rowPt, 'bottom', h), `bottom ${h}`).toBeUndefined()
       for (const h of r.center!.horizontal) expect(at(rowPt, 'center', h)?.box, `center ${h}`).toEqual({ x: 2, y: r.center!.offsetPt, w: 13, h: 12 })
       expect(r.bottom!.horizontal, 'round 5: stage4-icon-rows-bottom measured right-aligned numbers too').toEqual(['left', 'right'])
       // An alignment the capture did not measure at this height withholds.
@@ -327,8 +334,8 @@ describe('S4-BOTTOM-REPLICATE: the measured placements stand only on icon:geomet
   it('without its evidence every row withholds', () => {
     const icon = { ruleId: 1, set: '3Arrows' as const, iconId: 2, bucket: 2, buckets: 3, showValue: true }
     const host = keyHost({ rowPt: 15, height: 20 })
-    expect(layoutIcon(icon, host, KEY_FONT, AT_CAPTURE, CF_ICON_RENDER_MODEL, () => true)).toBeDefined()
-    expect(layoutIcon(icon, host, KEY_FONT, AT_CAPTURE, CF_ICON_RENDER_MODEL, c => c !== 'icon:geometry-row-offset')).toBeUndefined()
+    expect(layoutIcon(icon, host, CENTRE, AT_CAPTURE, CF_ICON_RENDER_MODEL, () => true)).toBeDefined()
+    expect(layoutIcon(icon, host, CENTRE, AT_CAPTURE, CF_ICON_RENDER_MODEL, c => c !== 'icon:geometry-row-offset')).toBeUndefined()
   })
 })
 

@@ -274,6 +274,12 @@ function framePlacement(frame: CfIconKeyFrame, variant: CfIconBoxVariant, host: 
   if (font.sizePt !== frame.fontPt || style?.fontName !== frame.fontName || style.bold === true || style.italic === true) return undefined
   const vertical = variant.vertical === 'cell-align' ? font.vertical : variant.vertical
   if (!vertical || !font.horizontal) return undefined
+  // Ruling S4-ROW-BASELINE (Task 30): Excel lifts a bottom-aligned icon onto its row's shared baseline, which a larger
+  // font anywhere in the row moves (stage4-icon-geometry C3, M3..O3 and stage4-icon-geometry-2 C2, G2, I2, J2 sit 2 px
+  // above the `bottom` frame in rows that hold a 20 pt cell). No view knows a row's other fonts on every leg, so the
+  // measured `bottom` placements withhold; centred icons do not follow the baseline (I3 and F2 in those rows land on
+  // the `center` frame).
+  if (vertical === 'bottom') return undefined
   // Ruling S4-ROW-EXACT: the host's row must be known to be a measured height (its authored pt, never inferred from
   // px, which many heights share), drawn at Excel's px in every view: the viewer's px (pt × 4/3 unrounded, or rounded)
   // at the capture scale must both be Excel's `excelPx`, so the row px is whole and the host has exactly it (a

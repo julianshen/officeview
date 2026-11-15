@@ -692,6 +692,48 @@ describe('S4-RIGHTINSET-ZERO: right-aligned numbers at the key geometry', () => 
     expect(none.describedIcons).toBe(0)
   })
 
+  it('Task 30 (S4-ROW-BASELINE): a bottom-aligned icon withholds on every leg at every measured row height; the same cells centred paint', async () => {
+    // Excel lifts a bottom-aligned icon onto its row's shared baseline, which a larger font anywhere in the row moves
+    // (stage4-icon-geometry C3/M3..O3 and stage4-icon-geometry-2 C2/G2/I2/J2: 2 px above the measured frame in rows that
+    // hold a 20 pt cell). No leg knows the row's other fonts, so bottom placement withholds; centre placement does not
+    // follow the baseline (I3, F2 in those rows land exactly on the centre frame).
+    const count = async (vertical: 'bottom' | 'center', rowPt: number) => {
+      const sheet = iconSheet([10, 50, 90], { style: { ...KEY_STYLE, horizontal: 'left', vertical } })
+      for (const row of sheet.rows) { row.heightPt = rowPt; row.customHeight = true }
+      return withIcons(async () => {
+        const metrics = computeMetrics(sheet)
+        const resident = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, layoutContext }))!
+        const worker = asBatch(await pagedScope(sheet, 3))
+        const host = createCellLayoutHost(layoutContext())
+        const forced = asBatch(await pagedScope(sheet, 3, 1, { cell: (row, col) => {
+          const cell = sheet.rows[row]!.cells[col]!
+          const body = host.layoutBody(cell, metrics.colWidthsPx[0]!, metrics.rowHeightsPx[row]!)
+          return { box: { x: 0, y: metrics.rowHeightsPx.slice(0, row).reduce((a, b) => a + b, 0), width: metrics.colWidthsPx[0]!, height: metrics.rowHeightsPx[row]! }, base: cell.style!, textWidth: body.text?.kind === 'plain' ? body.text.width : undefined, cell }
+        } }))
+        const out: Record<string, number> = {}
+        { const r = recorder(metrics.widthPx, metrics.heightPx); renderSheet(sheet, r.ctx, metrics, undefined, { conditionalFormatting: resident }); out.static = r.ops.filter(o => o.op === 'icon').length }
+        const geometry = buildSheetGeometry(sheet)
+        for (const [name, batch] of [['resident', resident], ['worker', worker], ['forced-paged', forced]] as const) {
+          const r = recorder(metrics.widthPx, metrics.heightPx)
+          renderSheetViewport(sheet, r.ctx, geometry, { box: { x: 0, y: 0, width: metrics.widthPx, height: metrics.heightPx }, zoom: 1, deviceScale: 1 }, { conditionalFormatting: batch }, { cache: new LayoutCache() })
+          out[name] = r.ops.filter(o => o.op === 'icon').length
+        }
+        { const print = computePrintMetrics(sheet, metrics); const r = recorder(print.paperPx.width, print.paperPx.height); renderPrintPage(sheet, r.ctx, metrics, print, 0, 0, undefined, { conditionalFormatting: resident }); out.print = r.ops.filter(o => o.op === 'icon').length }
+        out.described = [0, 1, 2].filter(row => resident.iconAt(row, 0) !== undefined).length
+        out.inset = [0, 1, 2].filter(row => resident.textInsetAt(row, 0, { x: 0, y: 0, width: metrics.colWidthsPx[0]!, height: metrics.rowHeightsPx[row]!, textWidth: 10, rowPt, cell: sheet.rows[row]!.cells[0]! }, { zoom: 1, dpr: 1 }) !== undefined).length
+        resident.dispose(); worker.dispose(); forced.dispose()
+        return out
+      }, { ...production, extra: [...GLYPH_CAPS, 'icon:inset-left'] })
+    }
+    for (const rowPt of [15, 18, 30]) {
+      const centre = await count('center', rowPt)
+      for (const name of ['static', 'resident', 'worker', 'forced-paged', 'print']) expect(centre[name], `centre ${rowPt} pt: ${name}`).toBeGreaterThan(0)
+      expect(centre.described, `centre ${rowPt} pt`).toBe(3)
+      const bottom = await count('bottom', rowPt)
+      expect(bottom, `bottom ${rowPt} pt`).toEqual({ static: 0, resident: 0, worker: 0, 'forced-paged': 0, print: 0, described: 0, inset: 0 })
+    }
+  })
+
   it('fix round P3: right-aligned text clears the positioned frame\'s right edge (4Rating:3, 15 pt row, 100 px cell)', async () => {
     // The reproduction: 78 px of text in a 100 px cell starts at 100 - 3 - 78 = 19 px, inside the frame (2 pt + 13 pt =
     // 20 px). Round 8 (S4-CLEAR-ALLZOOM): admission needs a 10 px clearance (every zoom and DPR >= 1): 67 px paints.
