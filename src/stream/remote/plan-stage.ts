@@ -913,7 +913,7 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
     let run: MorphRun | string | undefined
     if (r && r !== 'refused') run = morphRun(r)
     if (why) sink.add({ code: why.code, slideIndex: p.index, effect: 'morph', message: why.message })
-    else if (r === 'refused' || r === undefined) sink.add({ code: 'transition-approximate', slideIndex: p.index, effect: 'morph-fallback', message: 'Morph could not run (the server refused the pair); the fade look-alike plays' })
+    else if (r === 'refused' || r === undefined) sink.add({ code: 'transition-approximate', slideIndex: p.index, effect: 'morph-fallback', message: `Morph could not run (${r === 'refused' ? 'the server refused the pair' : 'the pair is unavailable'}); the fade look-alike plays` })
     else if (typeof run === 'string') sink.add({ code: 'morph-late', slideIndex: p.index, effect: 'morph', message: `Morph could not run (${run}); the fade look-alike plays` })
     const start = deps.showNow()
     if (run && typeof run !== 'string') {
