@@ -1807,6 +1807,7 @@ async function prepareCfRemoteOnce(
   // load before any reservation, so an import failure admits nothing.
   const limitsModule = await import('../cf/limits')
   const serviceModule = await import('../cf/service')
+  const modelModule = await import('../cf/model')
   if (rules && rules.rules.length > limitsModule.CF_LIMITS.rules) {
     return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-scope-too-large', 'Conditional formatting exceeds the bounded rule count.'), requiredBytes: undefined }
   }
@@ -1998,17 +1999,21 @@ async function prepareCfRemoteOnce(
   // Priced by definition kind, not by outcome: a resolved rule whose bars evaluation or the painter will still withhold
   // (unverified layout, gradient, paint gates) is charged in full. That over-prices fail closed, never under-prices.
   const hasBar = rules.rules.some(r => r.definition.kind === 'dataBar')
+  // Ruling S4-Q: likewise one full icon descriptor per cell for a resolved icon-set rule, priced by kind (a rule whose icons
+  // evaluation or the painter will still withhold is charged in full: over-prices, never under-prices).
+  const hasIcon = rules.rules.some(r => r.definition.kind === 'iconSet')
   let perCell = 96
   for (const rule of rules.rules) perCell += measureCfPropertiesBytes((rule.dxf ?? {}) as Record<string, string | number | boolean | null>)
   const perCellScale = perCell + (hasScale ? limitsModule.CF_SCALE_CELL_BYTES : 0)
   const perCellBar = perCellScale + (hasBar ? limitsModule.CF_BAR_CELL_BYTES : 0)
-  const hasVisual = hasScale || hasBar
+  const perCellIcon = perCellBar + (hasIcon ? limitsModule.CF_ICON_CELL_BYTES : 0)
+  const hasVisual = hasScale || hasBar || hasIcon
   if (templateBytes === undefined || diagBytes === undefined || !Number.isSafeInteger(perCell)) {
     working.release()
     return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting exceeds the receiver grant; retry with at least the estimated size.'), requiredBytes: undefined }
   }
   const estimate = estimateCfPreparationBytes(cells, perCell, 0, 0, 0)
-  const estimateWithVisuals = estimateCfPreparationBytes(cells, perCellBar, 0, 0, 0)
+  const estimateWithVisuals = estimateCfPreparationBytes(cells, perCellIcon, 0, 0, 0)
   if (estimate === undefined || estimateWithVisuals === undefined) {
     working.release()
     return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting exceeds the receiver grant; retry with at least the estimated size.'), requiredBytes: undefined }
@@ -2113,12 +2118,17 @@ async function prepareCfRemoteOnce(
             ...(d.axisColor !== undefined ? { axisColor: d.axisColor } : {}),
             isGradient: d.isGradient, isNegative: d.isNegative, showValue: d.showValue, rtl: d.direction === 'rightToLeft',
           } : undefined
+          // Ruling S4-Q: numbers and booleans only; `set` is the index into the frozen `CF_ICON_SET_NAMES` table.
+          const ic = at.value.visual?.iconSet
+          const iconSet = ic ? modelModule.CF_ICON_SET_NAMES.indexOf(ic.set) : -1
+          const icon = ic && iconSet >= 0 ? { ruleId: ic.ruleId, set: iconSet, iconId: ic.iconId, bucket: ic.bucket, buckets: ic.buckets, showValue: ic.showValue } : undefined
           states.push({
             row, col,
             properties: { ...at.value.properties },
             ...(won === undefined ? {} : { unresolvedWrites: won }),
             ...(scale ? { scale } : {}),
             ...(bar ? { bar } : {}),
+            ...(icon ? { icon } : {}),
           })
         }
       }
@@ -2163,15 +2173,16 @@ async function prepareCfRemoteOnce(
         finalStates = states
         finalDiagnostics = []
       } else if (hasVisual) {
-        // A visual payload that exceeds the grant is omitted, never replaced (Ruling S3-S): bar fields go first,
-        // then scale fields, while every cell's base properties still return. Each step offers the bounded
+        // A visual payload that exceeds the grant is omitted, never replaced (Rulings S3-S, S4-Q): icon fields go first,
+        // then bar fields, then scale fields, while every cell's base properties still return. Each step offers the bounded
         // cf-grant-required diagnostics of the families omitted so far, and drops them when only the base fits.
-        const omit = (from: typeof states, field: 'bar' | 'scale'): typeof states => from.map(s => {
+        const omit = (from: typeof states, field: 'icon' | 'bar' | 'scale'): typeof states => from.map(s => {
           if (s[field] === undefined) return s
           const { [field]: _, ...rest } = s
           return rest
         })
-        const families: { field: 'bar' | 'scale'; message: string }[] = [
+        const families: { field: 'icon' | 'bar' | 'scale'; message: string }[] = [
+          ...(hasIcon ? [{ field: 'icon' as const, message: 'Conditional formatting icon sets omitted due to receiver grant limit.' }] : []),
           ...(hasBar ? [{ field: 'bar' as const, message: 'Conditional formatting data bars omitted due to receiver grant limit.' }] : []),
           ...(hasScale ? [{ field: 'scale' as const, message: 'Conditional formatting scale fill omitted due to receiver grant limit.' }] : []),
         ]

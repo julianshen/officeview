@@ -1,5 +1,5 @@
 import type { XlsxSheet } from '../types'
-import type { CfBarDescriptor, CfLease, CfPrepared, CfStamp, SourceRect as ModelRect } from './model'
+import { CF_ICON_SET_NAMES, type CfBarDescriptor, type CfIconDescriptor, type CfLease, type CfPrepared, type CfStamp, type SourceRect as ModelRect } from './model'
 import { CF_LIMITS, createCfMemory } from './limits'
 import { createCfService, estimateCfPrepareBytes, type CfPaintStatistics } from './service'
 import { createCfStatistics } from './statistics'
@@ -110,6 +110,8 @@ interface CopiedState {
   readonly scale?: Readonly<{ fraction?: number; ruleId?: number; argb?: number }>
   /** The resolved bar descriptor, identical on the resident and paged paths (Ruling S3-S). */
   readonly bar?: CfBarDescriptor
+  /** The resolved icon descriptor, plain wire-field data identical on the resident and paged paths (Ruling S4-Q). */
+  readonly icon?: CfIconDescriptor
 }
 
 type CfWireBar = NonNullable<CfCellStateWire['bar']>
@@ -128,6 +130,27 @@ const descriptorOf = (w: CfWireBar): CfBarDescriptor => ({
   ...(w.axisColor !== undefined ? { axisColor: w.axisColor } : {}),
   showValue: w.showValue, direction: w.rtl ? 'rightToLeft' : 'leftToRight',
 })
+
+export type CfWireIcon = NonNullable<CfCellStateWire['icon']>
+/** Wire form of an icon descriptor: `set` becomes its index in the frozen `CF_ICON_SET_NAMES` table (Ruling S4-Q). */
+export const wireIcon = (d: CfIconDescriptor): CfWireIcon => ({
+  ruleId: d.ruleId, set: CF_ICON_SET_NAMES.indexOf(d.set), iconId: d.iconId, bucket: d.bucket, buckets: d.buckets, showValue: d.showValue,
+})
+const wholeIn = (n: unknown, min: number, max: number): n is number => typeof n === 'number' && Number.isInteger(n) && n >= min && n <= max
+/** The descriptor a wire icon encodes, or `undefined` for any field that is not the exact shape the worker writes: a `set`
+ * outside the frozen table, a non-integer or negative id, a bucket past its count, a non-boolean flag. A malformed icon is
+ * no icon, never a guessed one (fail closed, like a malformed bar). The copy owns plain fields only. */
+export const descriptorOfIcon = (w: CfWireIcon): CfIconDescriptor | undefined => {
+  if (typeof w !== 'object' || w === null) return undefined
+  if (!wholeIn(w.set, 0, CF_ICON_SET_NAMES.length - 1)) return undefined
+  const set = CF_ICON_SET_NAMES[w.set]!
+  if (!wholeIn(w.ruleId, 0, Number.MAX_SAFE_INTEGER) || !wholeIn(w.buckets, 3, 5) || !wholeIn(w.bucket, 0, w.buckets - 1)) return undefined
+  if (!wholeIn(w.iconId, 0, 4) || (set === 'NoIcons' && w.iconId !== 0) || typeof w.showValue !== 'boolean') return undefined
+  return { ruleId: w.ruleId, set, iconId: w.iconId, bucket: w.bucket, buckets: w.buckets, showValue: w.showValue }
+}
+/** What a scope exposes of its copied icon states (Task 29 builds the painted `iconAt` on this): the plain descriptor of
+ * one cell in the scope's own generation, `undefined` once the scope is stale or disposed. */
+export interface CfCopiedIconProbe { copiedIconAt?(row: number, col: number): CfIconDescriptor | undefined }
 
 /** Structural key for one cell's descriptor inputs: shared aspects share one charge. A painted bar keys by its
  * announced value position (never its geometry), so the descriptor cache never hands one cell's bar text to another. */
@@ -216,6 +239,8 @@ function assembleScope(
   // The bar cells of the copied states (descriptors are shared, not copied again): the painter walks only these.
   const bars = new Map<number, CfBarDescriptor>()
   for (const [key, state] of states) if (state.bar) bars.set(key, state.bar)
+  const icons = new Map<number, CfIconDescriptor>()
+  for (const [key, state] of states) if (state.icon) icons.set(key, state.icon)
   const paintableAt = (row: number, col: number): CfBarDescriptor | undefined => {
     if (disposed || !current()) return undefined
     const bar = bars.get(row * 16384 + col)
@@ -232,7 +257,7 @@ function assembleScope(
     if (barHosts) return barWithheld(bar, (hostAt ??= barHosts(scope.effectiveStyle))(row, col)) ? undefined : bar
     return laidOut.get(row * 16384 + col) === false ? bar : undefined
   }
-  const scope: EffectiveFormatScope = {
+  const scope: EffectiveFormatScope & CfCopiedIconProbe = {
     gen,
     bytes,
     regions,
@@ -251,6 +276,7 @@ function assembleScope(
       }, colors)
     },
     barAt,
+    copiedIconAt: (row, col) => (disposed || !current() ? undefined : icons.get(row * 16384 + col)),
     paintBars: (ctx, cellRect, visible, scale) => paintDataBars(ctx, bars, paintableAt, cellRect, visible, scale, undefined,
       (row, col, withheld) => { if (bars.has(row * 16384 + col)) laidOut.set(row * 16384 + col, withheld) }),
     hidesTextAt: (row, col, host, scale) => barHidesText(paintableAt(row, col), host, scale),
@@ -270,6 +296,7 @@ function assembleScope(
       disposed = true
       states.clear()
       bars.clear()
+      icons.clear()
       laidOut.clear()
       cache.clear()
       release()
@@ -398,13 +425,15 @@ export async function prepareCfTextScope(
                 // for measurement; the stored copy is built after admission).
                 const writes = outcome.value.unresolvedWrites ? [...outcome.value.unresolvedWrites] : undefined
                 const dataBar = outcome.value.visual?.dataBar
-                const occupied = measureCfCellBytes({ properties: outcome.value.properties, unresolvedWrites: writes, scale: outcome.value.visual?.colorScale, ...(dataBar ? { bar: wireBar(dataBar) } : {}) })
+                const iconSet = outcome.value.visual?.iconSet
+                const occupied = measureCfCellBytes({ properties: outcome.value.properties, unresolvedWrites: writes, scale: outcome.value.visual?.colorScale, ...(dataBar ? { bar: wireBar(dataBar) } : {}), ...(iconSet ? { icon: wireIcon(iconSet) } : {}) })
                 if (!Number.isSafeInteger(bytes + occupied)) { service.dispose(); closeAccount(); throw refused('CF text preparation exceeds its admitted batch') }
                 admit(occupied)
                 bytes += occupied
                 const properties: Record<string, string | number | boolean | null> = {}
                 for (const key of Object.keys(outcome.value.properties)) properties[key] = outcome.value.properties[key]!
-                states.set(row * 16384 + col, { properties, writes, reason: undefined, scale: outcome.value.visual?.colorScale, ...(dataBar ? { bar: descriptorOf(wireBar(dataBar)) } : {}) })
+                const icon = iconSet ? descriptorOfIcon(wireIcon(iconSet)) : undefined
+                states.set(row * 16384 + col, { properties, writes, reason: undefined, scale: outcome.value.visual?.colorScale, ...(dataBar ? { bar: descriptorOf(wireBar(dataBar)) } : {}), ...(icon ? { icon } : {}) })
               }
             }
           }
@@ -583,13 +612,16 @@ export async function prepareCfWireScope(
           bytes = next
           const properties: Record<string, string | number | boolean | null> = {}
           for (const key of Object.keys(state.properties)) properties[key] = state.properties[key]!
-          if (Object.keys(properties).length || state.scale?.argb !== undefined || state.bar) regions.push({minRow:state.row,maxRow:state.row,minCol:state.col,maxCol:state.col})
+          // A malformed wire icon decodes to no icon (descriptorOfIcon), its cell keeping every base property.
+          const icon = state.icon ? descriptorOfIcon(state.icon) : undefined
+          if (Object.keys(properties).length || state.scale?.argb !== undefined || state.bar || icon) regions.push({minRow:state.row,maxRow:state.row,minCol:state.col,maxCol:state.col})
           states.set(state.row * 16384 + state.col, {
             properties,
             writes: state.unresolvedWrites ? [...state.unresolvedWrites] : undefined,
             reason: state.unresolvedReason,
             scale: state.scale,
             ...(state.bar ? { bar: descriptorOf(state.bar) } : {}),
+            ...(icon ? { icon } : {}),
           })
         }
       } finally {
