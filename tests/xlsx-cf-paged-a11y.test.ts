@@ -270,3 +270,66 @@ describe('the forced-paged semantic scope announces an icon exactly where the fr
     })
   })
 })
+
+/**
+ * Task 29 fix round 1 (the S3-A11Y-PAGED lesson for icons): the viewer's own frame host source
+ * (`createFrameHostSource`, which InteractiveSheetDoc builds for its forced-paged grid semantics) supplies each cell and
+ * its text width from the projection metrics, the viewer's layout host and the CF-effective style the frame lays it out
+ * with. So the forced-paged semantic leg decides each icon exactly as the resident and worker legs do.
+ */
+describe('the viewer frame host source announces icons as the other legs do (Task 29 fix round 1)', () => {
+  const run = async (glyphs: boolean) => {
+    const { iconSheet, withIcons } = await import('./helpers/cf-icons')
+    const { prepareCfTextScope } = await import('../src/xlsx/cf/text')
+    const { createCanvas } = await import('canvas')
+    const { createFrameHostSource } = await import('../src/xlsx/view/frameHosts')
+    const { createCellLayoutHost, renderSheetViewport } = await import('../src/xlsx/view/renderViewport')
+    const { buildSheetGeometry } = await import('../src/xlsx/view/viewport')
+    const { LayoutCache } = await import('../src/xlsx/view/textLayout')
+    const ctx = () => createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D
+    return withIcons(async () => {
+      const sheet = iconSheet([10, 50, 90])
+      const geometry = buildSheetGeometry(sheet)
+      if (geometry.kind !== 'ready') throw new Error('geometry')
+      const layoutHost = createCellLayoutHost(ctx(), sheet)
+      // The inputs InteractiveSheetDoc reads from its sheet entry: metrics, stored cells, screen base style, layout host.
+      const hosts = createFrameHostSource(() => ({
+        metrics: geometry.metrics,
+        cellAt: at => geometry.cellsOf(at.row)?.find(c => c.col === at.col),
+        styleOf: cell => cell.style,
+        layoutHost: () => layoutHost,
+      }))
+      const wire = await wireOf(sheet, 3)
+      const semantic = (await scopeOver(wire, 3, 'zh-TW', hosts))!
+      const resident = (await prepareCfTextScope(sheet, { rects: [{ r0: 0, r1: 2, c0: 0, c1: 0 }], signal: new AbortController().signal, locale: 'zh-TW', budget: { reserve() {}, release() {} }, layoutContext: ctx }))!
+      // The worker leg: the host-less paged paint scope after the real frame painted it.
+      const worker = (await scopeOver(wire, 3, 'zh-TW'))!
+      const batch = { stamp: wire.stamp, key: 'paged', layer: worker.paintLayer!,
+        barAt: (r: number, c: number) => worker.barAt?.(r, c), paintBars: () => true,
+        hidesTextAt: (r: number, c: number, h: never, s: never) => worker.hidesTextAt?.(r, c, h, s) ?? false,
+        iconAt: (r: number, c: number) => worker.iconAt?.(r, c),
+        paintIcons: (cx: CanvasRenderingContext2D, rect: never, v: { r0: number; c0: number; r1: number; c1: number }, s: never) => worker.paintIcons?.(cx, rect, v, s) ?? true,
+        textInsetAt: (r: number, c: number, h: never, s: never) => worker.textInsetAt?.(r, c, h, s), dispose: () => {} }
+      renderSheetViewport(sheet, createCanvas(400, 100).getContext('2d') as unknown as CanvasRenderingContext2D, geometry, { box: { x: 0, y: 0, width: 400, height: 100 }, zoom: 1, deviceScale: 1 }, { conditionalFormatting: batch } as never, { cache: new LayoutCache(), layoutHost })
+      const out = [0, 1, 2].map(row => ({ resident: resident.describe(row, 0), worker: worker.describe(row, 0), semantic: semantic.describe(row, 0) }))
+      for (const s of [semantic, resident, worker]) s.dispose()
+      return out
+    }, glyphs ? {} : { glyphs: () => undefined })
+  }
+  it('all three legs announce the same 「圖示 b/k」; a withheld icon announces unavailable on all three', async () => {
+    const painted = await run(true)
+    painted.forEach((legs, row) => {
+      const want = { key: 'cf:iconSet', text: `圖示 ${row + 1}/3` }
+      expect(legs, `row ${row}`).toEqual({ resident: want, worker: want, semantic: want })
+    })
+    const withheld = await run(false)
+    const unavailable = { key: 'cf-unavailable', text: '無法使用條件式格式設定' }
+    withheld.forEach((legs, row) => expect(legs, `row ${row}`).toEqual({ resident: unavailable, worker: unavailable, semantic: unavailable }))
+  })
+  it('InteractiveSheetDoc builds its forced-paged semantic hosts with createFrameHostSource', async () => {
+    const { readFileSync } = await import('node:fs')
+    const source = readFileSync('src/components/xlsx/InteractiveSheetDoc.tsx', 'utf8')
+    expect(source).toMatch(/createFrameHostSource\(/)
+    expect(source).not.toMatch(/const frameHostSource = \(sheetId: string\)[^]*?return box \? \{ box, base: styleForCell/)
+  })
+})

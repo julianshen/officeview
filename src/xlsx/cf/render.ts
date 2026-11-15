@@ -14,7 +14,8 @@ import { regionStylesFor } from '../tableStyleLoader'
 import { cellSourceRow } from '../view/sheetCells'
 import { isValueUnavailable, type ValuePolicy } from '../view/values'
 import { cfNeedsViewport, cfExplicitBounds } from '../cfLoader'
-import { STATIC_SHEET_BUDGET, cellTextWidth, computeMetrics, layoutCellBody, spreadsheetColor, textMeasurer, type MeasureCached } from '../render'
+import { STATIC_SHEET_BUDGET, computeMetrics, layoutCellBody, spreadsheetColor, textMeasurer, type MeasureCached } from '../render'
+import { cellTextWidth, withTextInset, type CellBodyLayout } from '../view/textLayout'
 import type { XlsxCell, XlsxCellStyle } from '../types'
 import { CfPageFault, cfRulesVersion, pagedStoreCfPages } from '../view/pagedSource'
 import { isDateNumberStyle } from '../dateNumberFormat'
@@ -41,6 +42,11 @@ export interface CfPaintBatch {
     visible: { r0: number; c0: number; r1: number; c1: number }, scale: CfBarScale): boolean
   /** Ruling S4-L: the text inset of this host when its icon paints there, else undefined (no icon, no inset). */
   textInsetAt(row: number, col: number, host: CfBarHost, scale: CfBarScale): { left: number; right: number } | undefined
+  /** The static renderer's one call per CF cell (Ruling S4-L, fix round 1): lays the cell out un-inset, builds its one
+   * host (box, fill, un-inset `textWidth`, the cell as laid out), and lays it out again inset and/or with its text
+   * hidden where this batch's icon or bar says so on that host. Keeps all icon arithmetic out of the eager renderer. */
+  layoutCell(ctx: CanvasRenderingContext2D, sheet: XlsxSheet, cell: XlsxCell, x: number, y: number, w: number, h: number, measured: MeasureCached,
+    overflow: { left: number; right: number } | undefined, scale: CfBarScale): { layout: CellBodyLayout; host: CfBarHost }
   dispose(): void
 }
 
@@ -227,6 +233,9 @@ export interface CfFrameHostSource {
    * `cell` that cell (value and base style); without them an icon is withheld. */
   cell(row: number, col: number): { readonly box: Readonly<{ x: number; y: number; width: number; height: number }>; readonly base: XlsxCellStyle | undefined
     readonly textWidth?: number; readonly cell?: Pick<XlsxCell, 'value' | 'valueIsError' | 'style'> } | undefined
+  /** The frame's own measurement of a cell as it lays it out (Task 29 fix round 1): the un-inset text width of `cell`
+   * (carrying the CF-effective style) in `box`, from the viewer's layout host. Used when `cell()` gives no `textWidth`. */
+  textWidth?(cell: XlsxCell, box: Readonly<{ width: number; height: number }>): number | undefined
 }
 
 /** Each bar cell's host as the viewport frame paints it: the source's box, and the fill the frame resolves under the
@@ -236,10 +245,13 @@ export function frameBarHosts(source: CfFrameHostSource, styleAt: (row: number, 
     const at = source.cell(row, col)
     if (!at) return undefined
     const style = styleAt(row, col, at.base), fill = style?.fillColor
-    // The icon host's cell carries the CF-effective style the frame lays it out with (as `fill` does).
+    // The icon host's cell carries the CF-effective style the frame lays it out with (as `fill` does), and its text
+    // width is measured on that cell when the source measures.
+    const cell = at.cell && { ...at.cell, ...(style ? { style } : { style: undefined }) }
+    const textWidth = at.textWidth ?? (cell && 'row' in cell && source.textWidth ? source.textWidth(cell as XlsxCell, at.box) : undefined)
     return { x: at.box.x, y: at.box.y, width: at.box.width, height: at.box.height, ...(fill ? { fill: spreadsheetColor(fill) } : {}),
-      ...(at.textWidth !== undefined ? { textWidth: at.textWidth } : {}),
-      ...(at.cell ? { cell: { value: at.cell.value, ...(at.cell.valueIsError !== undefined ? { valueIsError: at.cell.valueIsError } : {}), ...(style ? { style } : {}) } } : {}) }
+      ...(textWidth !== undefined ? { textWidth } : {}),
+      ...(cell ? { cell: { value: cell.value, ...(cell.valueIsError !== undefined ? { valueIsError: cell.valueIsError } : {}), ...(style ? { style } : {}) } } : {}) }
   }
 }
 
@@ -505,15 +517,20 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
         return state ? resolveCfCellStyle(style, state, colors) : style
       },
     }
+    const batchDecisions = {
+      textInsetAt: (row: number, col: number, host: CfBarHost, scale: CfBarScale) => iconTextInset(iconCandidate(row, col), row, col, host, scale, gate),
+      hidesTextAt: (row: number, col: number, host: CfBarHost, scale: CfBarScale) => !showValueConflict(row, col)
+        && (barHidesText(paintableAt(row, col), host, scale, allows) || iconHidesText(iconCandidate(row, col), row, col, host, gate)),
+    }
     return { stamp, key: JSON.stringify([stamp.owner, stamp.sheetId, stamp.workbookValueGen, stamp.cfGen, stamp.viewGen, stamp.structureGen, stamp.clockGen]), layer,
       barAt,
       paintBars: (ctx, cellRect, visible, scale) => paintDataBars(ctx, bars, paintableAt, cellRect, visible, scale, allows),
       // One predicate over both visuals: a bar/icon showValue conflict (the 'showValue' token) keeps the text (S4-L).
-      hidesTextAt: (row, col, host, scale) => !showValueConflict(row, col)
-        && (barHidesText(paintableAt(row, col), host, scale, allows) || iconHidesText(iconCandidate(row, col), row, col, host, gate)),
+      hidesTextAt: batchDecisions.hidesTextAt,
       iconAt,
       paintIcons: (ctx, cellRect, visible, scale) => paintIconCells(ctx, icons, iconCandidate, cellRect, visible, scale, gate),
-      textInsetAt: (row, col, host, scale) => iconTextInset(iconCandidate(row, col), row, col, host, scale, gate),
+      textInsetAt: batchDecisions.textInsetAt,
+      layoutCell: (ctx, sheetArg, cell, x, y, w, h, measured, overflow, scale) => layoutCfCell(batchDecisions, ctx, sheetArg, cell, x, y, w, h, measured, overflow, scale),
       dispose() { if (disposed) return; disposed = true; states.clear(); bars.clear(); icons.clear(); glyphs.release(); hold.release() } }
   } catch (error) { hold.release(); return error instanceof CfPageFault && (error.fault === 'incomplete' || error.fault === 'stale') ? undefined : unavailable(sheet) } finally {
     for (const result of statistics.results.values()) if (result.kind === 'ready') result.value.release()
@@ -521,6 +538,21 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
 }
 
 export { createCfMemory as createPaintMemory } from './limits'
+
+/** The CF layout of one static or print cell (Ruling S4-L): laid out un-inset, one host built from that layout (box, the
+ * fill under it, the un-inset `textWidth`, the cell as laid out), then laid out again inset and/or with its text hidden
+ * where `decide` says so on that same host. Shared by the paint batch and the paged scopes. */
+export function layoutCfCell(decide: Pick<CfPaintBatch, 'textInsetAt' | 'hidesTextAt'>, ctx: CanvasRenderingContext2D, sheet: XlsxSheet, cell: XlsxCell,
+  x: number, y: number, w: number, h: number, measured: MeasureCached, overflow: { left: number; right: number } | undefined, scale: CfBarScale): { layout: CellBodyLayout; host: CfBarHost } {
+  const lay = (inset?: { left: number; right: number }, hide?: boolean) =>
+    withTextInset(x, w, inset, (bx, bw) => layoutCellBody(ctx, sheet, cell, bx, y, bw, h, measured, overflow, undefined, undefined, hide))
+  let layout = lay()
+  const textWidth = cellTextWidth(layout)
+  const host: CfBarHost = { x, y, width: w, height: h, ...(layout.fill ? { fill: layout.fill } : {}), ...(textWidth !== undefined ? { textWidth } : {}), cell }
+  const inset = decide.textInsetAt(cell.row, cell.col, host, scale), hide = decide.hidesTextAt(cell.row, cell.col, host, scale)
+  if (inset || hide) layout = lay(inset, hide)
+  return { layout, host }
+}
 
 /** One facet per receiving document and parent. Parent admission precedes every
  * local allocation, including overlapping viewport and print leases. */

@@ -10,8 +10,8 @@ import type { XlsxCell, XlsxSheet } from '../types'
 import type { CacheIdentity, LogicalViewport, WorkerDiagnostic } from './contracts'
 import type { SourceCell } from './coordinates'
 import { COARSE_NOTICE, admitRegionSurfaces, emptyWork, planViewport, type CoarseGroup, type FrameBudget, type MergeQueryCache, type SheetGeometry, type SheetGeometryResult, type ViewportPlan, type ViewportProfile, type ViewportWork } from './viewport'
-import { buildCellRecords, LayoutAdmissionError, LayoutCache, type CellLayout, type CellLayoutHost, type LayoutAdmission, type Rect } from './textLayout'
-import { cellDisplayText, cellTextWidth, layoutCellBody, paintCellLayout, paintCoveredLines, paintSheetDrawings, spillSpan, spreadsheetColor, textMeasurer, type RenderSheetAssets } from '../render'
+import { buildCellRecords, cellTextWidth, LayoutAdmissionError, LayoutCache, withTextInset, type CellLayout, type CellLayoutHost, type LayoutAdmission, type Rect } from './textLayout'
+import { cellDisplayText, layoutCellBody, paintCellLayout, paintCoveredLines, paintSheetDrawings, spillSpan, spreadsheetColor, textMeasurer, type RenderSheetAssets } from '../render'
 import { paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../../core/watermark'
 import { CSS_PX_PER_INCH, EMU_PER_INCH } from '../../core/geometry'
 import { paintSparklinesIn, type SparklineCandidates } from '../sparklineLoader'
@@ -31,7 +31,7 @@ export function createCellLayoutHost(ctx: CanvasRenderingContext2D, sheet: Parti
   // Format diagnostics land on the caller's sheet when one is given.
   const target = sheet as XlsxSheet
   return {
-    layoutBody: (cell, w, h, overflow, preformatted, allocation, inset) => layoutCellBody(ctx, target, cell, 0, 0, w, h, measured, overflow, preformatted, allocation, undefined, inset),
+    layoutBody: (cell, w, h, overflow, preformatted, allocation, inset) => withTextInset(0, w, inset, (x, width) => layoutCellBody(ctx, target, cell, x, 0, width, h, measured, overflow, preformatted, allocation)),
     // Formats under the admission's allocation observer (each UTF-16 builder is
     // admitted before it is made) and bounds the painted text: the canonical
     // display text, or a '#' fill of the box for a number that does not fit.

@@ -52,6 +52,7 @@ import { SheetNavigationSession, emptyGridSelection, navigateSelection, recordCo
 import { FIND_PAGE_HITS, FindController, hitGeometry, navigateToHit, type FindHit, type FindInput, type FindOptions, type FindPublication } from '../../xlsx/view/find'
 import { LayoutCache, type CellLayoutHost, type LayoutAdmission } from '../../xlsx/view/textLayout'
 import { SharedMeasureContext } from './measureContext'
+import { createFrameHostSource } from '../../xlsx/view/frameHosts'
 import { cellDisplayText } from '../../xlsx/render'
 import { SemanticPresentationCache, cfTextKeyFor, liveScopeFor, withCfDescription } from './formatPresentation'
 import { mainFormatBudget } from './mainFormatBudget'
@@ -1125,22 +1126,21 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     })
   }
   /**
-   * Ruling S3-A11Y-PAGED: the paged grid semantics' scope never paints, so it reads the frame's own hosts: each cell's
-   * logical box from the sheet metrics (as the viewport placements are laid out) and its screen base style
-   * (`styleForCell`). Read at call time from the committed entry; a cell not loaded yet, hidden or outside the metrics
-   * has no host, which withholds its bar (fail closed). Nothing is retained per cell.
+   * Rulings S3-A11Y-PAGED and S4-L: the paged grid semantics' scope never paints, so it reads the frame's own hosts
+   * (`createFrameHostSource`): each cell's logical box from the sheet metrics, its screen base style (`styleForCell`),
+   * the cell itself, and its un-inset text width measured by the frame's own layout host on the CF-effective cell. Read
+   * at call time from the committed entry; a cell not loaded yet, hidden or outside the metrics has no host, which
+   * withholds its bar or icon (fail closed). Nothing is retained per cell.
    */
-  const frameHostSource = (sheetId: string): import('../../xlsx/cf/text').CfFrameHostSource => ({
-    cell: (row, col) => {
-      const sheetEntry = entries.get(sheetId)
-      if (!sheetEntry || !remote || remote.isClosed) return undefined
-      const at = { row, col }
-      const cell = cellAt(sheetEntry, at)
-      if (!cell) return undefined
-      let box: ReturnType<SheetEntry['metrics']['sourceCellToLogical']>
-      try { box = sheetEntry.metrics.sourceCellToLogical(at) } catch { return undefined }
-      return box ? { box, base: styleForCell(sheetEntry, cell) } : undefined
-    },
+  const frameHostSource = (sheetId: string): import('../../xlsx/cf/text').CfFrameHostSource => createFrameHostSource(() => {
+    const sheetEntry = entries.get(sheetId)
+    if (!sheetEntry || !remote || remote.isClosed) return undefined
+    return {
+      metrics: sheetEntry.metrics,
+      cellAt: at => cellAt(sheetEntry, at),
+      styleOf: cell => styleForCell(sheetEntry, cell),
+      layoutHost: () => layoutHost(sheetEntry.sheet),
+    }
   })
   const prepareRemoteScope = async (sheetId: string, rects: readonly SourceRect[], batchSignal: AbortSignal, locale: string, budget: FormatBudget, base?: import('../../xlsx/tableStyles/regionLayer').RegionStyleLayer, onEmpty?: () => void, hosts?: import('../../xlsx/cf/text').CfFrameHostSource): Promise<EffectiveFormatScope | undefined> => {
     if (!remote || !rects.length || batchSignal.aborted) return undefined
@@ -1437,7 +1437,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       // Its icon painter (Task 29): the paged view paints, insets and hides text exactly where the wire icon paints.
       iconAt:(row:number,col:number)=>scope.iconAt?.(row,col),
       paintIcons:(ctx:CanvasRenderingContext2D,cellRect:Parameters<NonNullable<typeof scope.paintIcons>>[1],visible:{r0:number;c0:number;r1:number;c1:number},scale:{zoom:number;dpr:number;output?:'logical'|'device'})=>scope.paintIcons?.(ctx,cellRect,visible,scale)??true,
-      textInsetAt:(row:number,col:number,host:Parameters<NonNullable<typeof scope.textInsetAt>>[2],scale:{zoom:number;dpr:number;output?:'logical'|'device'})=>scope.textInsetAt?.(row,col,host,scale),dispose(){}}
+      textInsetAt:(row:number,col:number,host:Parameters<NonNullable<typeof scope.textInsetAt>>[2],scale:{zoom:number;dpr:number;output?:'logical'|'device'})=>scope.textInsetAt?.(row,col,host,scale),
+      layoutCell:(...args:Parameters<NonNullable<typeof scope.layoutCell>>)=>scope.layoutCell!(...args),dispose(){}}
   },[remote,currentRemotePaint,liveCfScope,activeSheetId,cfLiveKey])
   const frameAssets=remote && hasRemoteCf && residentFrameAssets ? {...residentFrameAssets,conditionalFormatting:remotePaint} : residentFrameAssets
 

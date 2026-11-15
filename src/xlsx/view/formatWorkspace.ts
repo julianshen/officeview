@@ -45,6 +45,10 @@ export interface EffectiveFormatScope {
     visible: { r0: number; c0: number; r1: number; c1: number }, scale: { zoom: number; dpr: number; output?: 'logical' | 'device' }): boolean
   /** The text inset of a host whose icon paints there, else undefined (`CfPaintBatch.textInsetAt`). */
   textInsetAt?(row: number, col: number, host: CfHost, scale: { zoom: number; dpr: number; output?: 'logical' | 'device' }): { left: number; right: number } | undefined
+  /** The static/print layout of one CF cell on its one host (`CfPaintBatch.layoutCell`, Task 29 fix round 1). */
+  layoutCell?(ctx: CanvasRenderingContext2D, sheet: import('../types').XlsxSheet, cell: import('../types').XlsxCell, x: number, y: number, w: number, h: number,
+    measured: (font: string, text: string) => number, overflow: { left: number; right: number } | undefined, scale: { zoom: number; dpr: number; output?: 'logical' | 'device' }):
+    { layout: import('./textLayout').CellBodyLayout; host: CfHost }
   dispose(): void
 }
 

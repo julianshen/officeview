@@ -1239,6 +1239,30 @@ clock-dependent timePeriod cases. Bar geometry fidelity is proven by the Lesson 
 - **zh-TW label.** 「資料橫條」 is the exact name in Excel 16.114 zh-TW's Conditional Formatting style menu (the orchestrator
   selected it by that name when authoring `excel-authored-databar.xlsx`); no change needed.
 
+### Task 29 (2026-11-15): icon painting rulings and known limits
+
+Icons paint through one lazy painter (`src/xlsx/cf/iconPaint.ts`). No Stage 4 capture exists and no glyph table exists
+(Ruling S4-ORDER: Task 28 follows), so production withholds every icon with no inset. These rulings fail closed:
+
+- **S4-SHOWVALUE-TOKEN.** A bar and an icon whose `showValue` disagree keep the canvas text; the cell announces
+  unavailable, because the `'showValue'` token counts as an unresolved write.
+- **Label order.** One bounded label per cell: bar+icon, then bar, then icon, then colour scale, then the DXF aspects.
+- **Inset overflow.** A host whose un-inset text would not fit beside the inset withholds its icon. This holds even
+  once `icon:inset-overflow` verifies, until a measured overflow variant exists. An unknown text width withholds.
+- **Icon on a bar cell.** No icon paints on a cell holding a paintable bar without `icon:composition-with-bar` (the
+  painter's own gate, beyond the evaluator's).
+- **Merged hosts.** The paint batch withholds icons on merged hosts, as it does bars.
+- **Inset scale.** The text inset is logical and independent of scale (pt × 4/3); the box snaps per scale, and
+  withholding is decided at the capture scale.
+
+Known limit (recorded, not fixed):
+
+- **Forced-paged row offset on `stage4-icon-inset`.** The forced-paged frame lays this fixture's rows out about 1 px
+  apart from the resident and worker frames from header row 1 on, which no CF range covers. A resident vs
+  forced-paged screenshot of the grid differs on 14.429 % of pixels, identically at base 93cadb26 and after Task 29.
+  `stage3-bar-lengths` shows no difference (0 %). It is a paged row-metrics difference unrelated to CF, so the Stage
+  4 browser leg test compares resident and worker pixels only, and checks the forced-paged leg by its labels.
+
 ---
 
 ## 12. Stage 4 Icon Set Oracle Cases (Task 24: glyph key, icon cases, classification, conformance)

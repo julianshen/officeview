@@ -4,7 +4,7 @@ import { CF_LIMITS, createCfMemory, createCfWorkBudget, type CfMemory } from './
 import { createCfService, estimateCfPrepareBytes, type CfPaintStatistics } from './service'
 import { createCfStatistics } from './statistics'
 import { resolveCfCellStyle } from './dxf'
-import { frameBarHosts, residentBarHosts, residentSource, storeCfSource, type CfFrameHostSource } from './render'
+import { frameBarHosts, layoutCfCell, residentBarHosts, residentSource, storeCfSource, type CfFrameHostSource } from './render'
 export type { CfFrameHostSource } from './render'
 import { regionStylesFor } from '../tableStyleLoader'
 import type { XlsxCellStyle } from '../types'
@@ -311,6 +311,7 @@ function assembleScope(
     paintIcons: (ctx, cellRect, visible, scale) => paintIconCells(ctx, icons, iconCandidate, cellRect, visible, scale, iconGate,
       (row, col, withheld) => { if (icons.has(row * 16384 + col)) iconLaidOut.set(row * 16384 + col, withheld) }),
     textInsetAt: (row, col, host, scale) => iconTextInset(iconCandidate(row, col), row, col, host, scale, iconGate),
+    layoutCell: (ctx, sheet, cell, x, y, w, h, measured, overflow, scale) => layoutCfCell(scope as Required<Pick<EffectiveFormatScope, 'textInsetAt' | 'hidesTextAt'>>, ctx, sheet, cell, x, y, w, h, measured, overflow, scale),
     // One predicate over both visuals (S4-L): a bar/icon showValue conflict (the 'showValue' token) keeps the text.
     hidesTextAt: (row, col, host, scale) => {
       if (disposed || !current() || states.get(row * 16384 + col)?.writes?.includes('showValue')) return false

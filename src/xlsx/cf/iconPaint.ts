@@ -20,8 +20,10 @@ import { admitIconGlyphs, drawIconGlyph, iconGlyph, type CfGlyphCache, type CfIc
 import type { CfBarHost, CfBarScale } from './dataBarPaint'
 import type { CfMemory, CfWorkBudget } from './limits'
 import type { XlsxCell } from '../types'
-import { PADDING_L, PADDING_R } from '../render'
 
+/** The static layout's horizontal text padding, both sides (`render.ts` PADDING_L + PADDING_R; pinned by
+ * tests/xlsx-cf-icon-render.test.ts). Kept here so the eager renderer exports nothing for icons. */
+export const CF_ICON_TEXT_PADDING_PX = 6
 /** 1 pt in logical (CSS) px (`sparklines/geometry.ts`, `dataBarPaint.ts`). */
 const PT_PX = 4 / 3
 
@@ -148,7 +150,7 @@ export function iconWithheld(icon: CfIconDescriptor, host: CfBarHost | undefined
   if (!laid) return true
   const width = host.textWidth
   if (width === undefined || !Number.isFinite(width) || width < 0) return true
-  return width > host.width - PADDING_L - PADDING_R - laid.inset.left - laid.inset.right
+  return width > host.width - CF_ICON_TEXT_PADDING_PX - laid.inset.left - laid.inset.right
 }
 
 /** The glyph classes a batch admitted (Ruling S4-R): one charge per class, at preparation. */

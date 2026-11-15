@@ -15,13 +15,13 @@ import { describe, expect, it } from 'vitest'
 import { computeMetrics, computePrintMetrics, layoutCellBody, renderPrintPage, renderSheet, textMeasurer } from '../src/xlsx/render'
 import { buildSheetGeometry } from '../src/xlsx/view/viewport'
 import { createCellLayoutHost, renderSheetViewport } from '../src/xlsx/view/renderViewport'
-import { LayoutCache, type CellLayoutHost, type PlacedCell } from '../src/xlsx/view/textLayout'
+import { LayoutCache, withTextInset, type CellLayoutHost, type PlacedCell } from '../src/xlsx/view/textLayout'
 import { prepareCfPaint, residentSource, type CfPaintBatch } from '../src/xlsx/cf/render'
 import { prepareCfTextScope, prepareCfWireScope, type CfFrameHostSource } from '../src/xlsx/cf/text'
 import { cfRulesVersion, prepareCfRemote } from '../src/xlsx/view/pagedSource'
 import { createCfMemory, createCfWorkBudget } from '../src/xlsx/cf/limits'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
-import { CF_ICON_PAINT_CAPABILITIES, CF_ICON_RENDER_MODEL, iconWithheld, layoutIcon } from '../src/xlsx/cf/iconPaint'
+import { CF_ICON_PAINT_CAPABILITIES, CF_ICON_RENDER_MODEL, CF_ICON_TEXT_PADDING_PX, iconWithheld, layoutIcon } from '../src/xlsx/cf/iconPaint'
 import { admitIconGlyphs, iconGlyph, type CfGlyphOp } from '../src/xlsx/cf/iconGlyphs'
 import { getPaintables } from '../src/render/paint'
 import type { CfIconDescriptor, CfStamp } from '../src/xlsx/cf/model'
@@ -60,6 +60,7 @@ const asBatch = (scope: EffectiveFormatScope): CfPaintBatch => ({
   iconAt: (r, c) => scope.iconAt?.(r, c),
   paintIcons: (ctx, cellRect, visible, scale) => scope.paintIcons?.(ctx, cellRect, visible, scale) ?? true,
   textInsetAt: (r, c, h, scale) => scope.textInsetAt?.(r, c, h, scale),
+  layoutCell: (...args) => scope.layoutCell!(...args),
   dispose: () => scope.dispose(),
 })
 const paint = (sheet: XlsxSheet, batch: CfPaintBatch, view: 'static' | 'viewport', options: { coarse?: boolean; active?: { row: number; col: number }; cache?: LayoutCache } = {}) => {
@@ -361,7 +362,7 @@ describe('inset enters the layout key and the ### width', () => {
     const ctx = layoutContext(), measured = textMeasurer(ctx)
     const sheet = { name: 's', rows: [], cols: [], merges: [], mergeRanges: [] } as unknown as XlsxSheet
     const plain = layoutCellBody(ctx, sheet, cellOf(1), 0, 0, 40, 20, measured)
-    const inset = layoutCellBody(ctx, sheet, cellOf(1), 0, 0, 40, 20, measured, undefined, undefined, undefined, undefined, { left: 20, right: 0 })
+    const inset = withTextInset(0, 40, { left: 20, right: 0 }, (x, w) => layoutCellBody(ctx, sheet, cellOf(1), x, 0, w, 20, measured))
     const x = (b: typeof plain) => (b.text?.kind === 'layout' ? b.text.layout.lines[0]!.segments[0]!.x + (b.text.clip.x) : b.text?.kind === 'plain' ? b.text.tx : NaN)
     expect(plain.formattedText).toBe('1')
     expect(inset.formattedText).toBe('1')
@@ -374,7 +375,7 @@ describe('inset enters the layout key and the ### width', () => {
     expect(value, 'a number between 14 and 34 px wide').toBeDefined()
     const fits = layoutCellBody(ctx, sheet, cellOf(value), 0, 0, 40, 20, measured)
     expect(fits.formattedText).toBe(String(value))
-    const hashed = layoutCellBody(ctx, sheet, cellOf(value), 0, 0, 40, 20, measured, undefined, undefined, undefined, undefined, { left: 20, right: 0 })
+    const hashed = withTextInset(0, 40, { left: 20, right: 0 }, (x, w) => layoutCellBody(ctx, sheet, cellOf(value), x, 0, w, 20, measured))
     expect(hashed.formattedText).toMatch(/^#+$/)
     expect(measured(hashed.text!.font, hashed.formattedText)).toBeLessThanOrEqual(14)
   })
@@ -534,5 +535,23 @@ describe('production withholds every icon (S4-ORDER)', () => {
       expect(got.texts.map(t => t.x)).toEqual([3, 3, 3])
       batch.dispose()
     }, { glyphs: false, extra: [...ICON_PAINT_EVIDENCE] })
+  })
+})
+
+describe('the eager renderer reaches icon layout only through the batch (Task 29 fix round 1)', () => {
+  it('render.ts holds no icon host, text-width or inset code: the static leg calls CfPaintBatch.layoutCell', async () => {
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync('src/xlsx/render.ts', 'utf8')
+    expect(src).not.toMatch(/cellTextWidth|textInsetAt|inset\.left|export const PADDING_[LR]/)
+    expect(src).toMatch(/cf\.layoutCell\(/)
+  })
+  it('the lazy text padding equals the static layout padding (plain left text starts 3 px in, plain numbers end 3 px short)', () => {
+    const ctx = layoutContext(), measured = textMeasurer(ctx)
+    const sheet = { name: 's', rows: [], cols: [], merges: [], mergeRanges: [] } as unknown as XlsxSheet
+    const text = layoutCellBody(ctx, sheet, { ref: 'A1', row: 0, col: 0, value: 'ab', styleIndex: 0 }, 0, 0, 100, 20, measured)
+    const num = layoutCellBody(ctx, sheet, { ref: 'A1', row: 0, col: 0, value: 5, styleIndex: 0 }, 0, 0, 100, 20, measured)
+    expect(text.text?.kind === 'plain' && text.text.tx).toBe(3)
+    expect(num.text?.kind === 'plain' && num.text.tx + num.text.width).toBeCloseTo(97, 9)
+    expect(CF_ICON_TEXT_PADDING_PX).toBe(6)
   })
 })
