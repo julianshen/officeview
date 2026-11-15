@@ -105,8 +105,8 @@ These are piece-3 unit images: unanimated slides (D5), and the stills of refused
 - Each is compared with the local slide settled after its last click, under the same tolerance rule as the show
   frames.
 - They are reported here and are **excluded from the show-parity exit status** (controller ruling).
-- The table shows the `--marks off` pass. `--marks fixed` gives the same verdicts: 18 of 18 per pass, with
-  32 of 36 passing over both.
+- The table shows the `--marks off` pass. `--marks fixed` gives the same verdicts: 23 per pass, with
+  42 of 46 passing over both (PR #78 round 12 added the media stills).
 
 | deck | slide | source | verdict | meanAbs / rowMax | tolerance |
 |---|---|---|---|---|---|
@@ -114,7 +114,10 @@ These are piece-3 unit images: unanimated slides (D5), and the stills of refused
 | morphDeck | 1 | unanimated | pass | 0.0000 / 0.0045 | 0.0200 / 0.1045 |
 | cubeDeck | 1 | unanimated | pass | 0.0000 / 0.0003 | 0.0200 / 0.1004 |
 | morphCompositedDeck | 1 | unanimated | pass | 0.0000 / 0.0004 | 0.0200 / 0.1004 |
+| mediaEndDeck | 1 | refused:still | pass | 0.0000 / 0.0004 | 0.0200 / 0.1004 |
 | lo-bnc591147.pptx | 1 | refused:still | pass | 0.0000 / 0.0000 | 0.0200 / 0.1000 |
+| lo-bnc591147.pptx | 2 | refused:still (media) | pass | 0.0000 / 0.0005 | 0.0200 / 0.1000 |
+| lo-narration.pptx | 1 | refused:still (media) | pass | 0.0000 / 0.0003 | 0.0200 / 0.1000 |
 | lo-ooxtheme.pptx | 1 | unanimated | **fail** | 0.0094 / 0.1442 | 0.0213 / 0.1367 |
 | lo-tdf104788.pptx | 1 | unanimated | pass | 0.0000 / 0.0000 | 0.0205 / 0.1114 |
 | lo-tdf104788.pptx | 2 | unanimated | pass | 0.0000 / 0.0000 | 0.0205 / 0.1114 |
@@ -123,6 +126,7 @@ These are piece-3 unit images: unanimated slides (D5), and the stills of refused
 | lo-tdf104788.pptx | 5 | unanimated | pass | 0.0000 / 0.0000 | 0.0205 / 0.1114 |
 | lo-tdf105739.pptx | 1 | unanimated | pass | 0.0020 / 0.0031 | 0.0220 / 0.1031 |
 | lo-tdf123684.pptx | 1 | unanimated | pass | 0.0018 / 0.0129 | 0.0203 / 0.1095 |
+| lo-tdf44223.pptx | 1 | refused:still (media) | pass | 0.0003 / 0.0019 | 0.0207 / 0.1459 |
 | poi-copy-slide-demo.pptx | 1 | unanimated | pass | 0.0006 / 0.0354 | 0.0206 / 0.1354 |
 | poi-text-highlight.pptx | 1 | unanimated | **fail** | 0.0072 / 0.1787 | 0.0213 / 0.1568 |
 | pypptx-missing_rels_item.pptx | 1 | unanimated | pass | 0.0013 / 0.0827 | 0.0213 / 0.1827 |
@@ -172,7 +176,7 @@ adds no client product code: the harness, test and debug-page changes do not rea
 | The corpus's animated decks play through the stream with pixel diff against local playback at fixed timeline samples, within the tolerance | `bun scripts/stream-show-compare.ts --deck all` → `docs/validation/stream-show-compare.json` (parity table below): **green** after the font ruling (finding 1). `server/test/stream-show-parity.test.ts` holds the synthetic decks green (fly-in, Morph, Cube, composited Morph, `cmdHoldDeck`), plus a check that both backends measure `Calibri Light` and unknown families identically |
 | The §12a.3 wire audit is green | `server/test/t5-wire-audit.test.ts`: 7 appearance adversaries in both mark modes, 4 Morph adversaries, and a positive control (T5, Task 9) |
 | The `step-composited` fallback rate is recorded | `scripts/show-fallback-rate.ts` → `docs/validation/streaming-s3-p4-rates.json` (Task 9). Per-deck rates from the parity run are below |
-| Build steps, transitions and Morph pairs match local mode's step count and order | the harness's `structure` (steps per slide from presses on both shows, transition kind and attributes, Morph pairs as `(fromKey, toKey, rule)`, clicks to the end): **green** after the `cmd` ruling (finding 2); `lo-bnc591147` is equal except its ruled still. The tests "Morph pairs map to the local keys" and "cmdHoldDeck: an inert cmd keeps its interval, so the clicks equal local" |
+| Build steps, transitions and Morph pairs match local mode's step count and order | the harness's `structure` (steps per slide from presses on both shows, transition kind and attributes, Morph pairs as `(fromKey, toKey, rule)`, clicks to the end): **green** after the `cmd` ruling (finding 2); `lo-bnc591147`, `lo-narration` and `lo-tdf44223` are equal except their ruled stills (round 12: media slides). The tests "Morph pairs map to the local keys" and "cmdHoldDeck: an inert cmd keeps its interval, so the clicks equal local" |
 | Browser: a fly-in, a Morph and a 3-D deck play end to end, under WebGL2 and Canvas 2D | `tests/browser/stream-present-anim.spec.ts` "fly-in, Morph and 3-D decks play end to end" (each backend asserted from the DOM) |
 | No 4008 | the same spec, "holding → for 10 s: socket stays open (no 4008)", on the Morph deck, where revisits charge again (measurement below) |
 | Revocation mid-animation exits, and nothing draws after `ended` | the same spec, "revocation mid-animation exits; no canvas mutation after ended". It counts the draws on show canvases after the page's own `ended` time, checks that the canvas hash holds for 500 ms, and uses the draws while the fly-in plays as its control |
@@ -186,7 +190,7 @@ adds no client product code: the harness, test and debug-page changes do not rea
 | 2. No-package prototype | `tests/stream/t5-no-package.test.ts` (package modules mocked to throw; the recorded `fly`/`morph` wire bytes) and `tests/stream/t5-import-graph.test.ts` (the D25 static-import walk) | green |
 | 3. Appearance adversaries (cover, alpha 0, recolour, full mask, crop, exit before entrance, mover reveal; Morph: hiddenFrom, sweptCover, coveredPair, movingCover) | `server/test/t5-wire-audit.test.ts`: every transmitted asset decoded, `#13F00D` absent | green in the server run (0 hidden-ink pixels) |
 | 4. Mixed-page decoder pin | `server/test/render-determinism.test.ts` (Task 9 re-run) | green |
-| 5. Fallback-rate reporting | `docs/validation/streaming-s3-p4-rates.json`. 43 shown slides, 29 animated, 12 click steps, 3 composited (rate 0.25, all `mask`). 1 still: the `lo-bnc591147` trigger slide | recorded |
+| 5. Fallback-rate reporting | `docs/validation/streaming-s3-p4-rates.json`. 43 shown slides, 29 animated, 12 click steps, 4 composited (rate 0.33: 3 `mask`, 1 `still`). 4 stills: the `lo-bnc591147` trigger slide, and since PR #78 round 12 the three media slides (`lo-bnc591147` slide 2, `lo-narration` slide 1, `lo-tdf44223` slide 1) | recorded |
 
 ## Parity harness
 
@@ -234,7 +238,7 @@ Slides the streamed show plays as stills, and steps only one side plays:
 - Triggers are not fired, so `trigger-cut` effects are exempt from pixels and counted in clicks.
 
 **Corpus:** 26 fetched `.pptx` decks (the brief's "16" is the LibreOffice slideshow list; the corpus has 26),
-plus 6 synthetic decks (`cmdHoldDeck` added with the `cmd` ruling). `pypptx-minimal.pptx` has no slides.
+plus 8 synthetic decks (`cmdHoldDeck` added with the `cmd` ruling, `autoplayTransitionDeck` in round 7, `mediaEndDeck` in round 12). `pypptx-minimal.pptx` has no slides.
 
 ### Parity table (`docs/validation/stream-show-compare.json`)
 
@@ -248,10 +252,11 @@ plus 6 synthetic decks (`cmdHoldDeck` added with the `cmd` ruling). `pypptx-mini
 | morphCompositedDeck | 5 pass, 1 unit-still | 5 pass, 1 unit-still | equal | 0.0000 / 0.0004 | 0.0000 / 0.0004 (2-0-50) |
 | longStepDeck | 6 pass | 3 pass, 3 skipped-mark | equal | 0.0000 / 0.0004 | 0.0001 / 0.0039 (1-1-25) |
 | cmdHoldDeck | 2 pass | 2 pass | equal | 0.0000 / 0.0004 | 0.0000 / 0.0004 (1-0-100) |
+| mediaEndDeck | 1 unit-still | 1 unit-still | equal | 0.0000 / 0.0004 | — |
 | lo-airplane-transition.pptx | 5 pass | 5 pass | equal | 0.0000 / 0.0000 | 0.0000 / 0.0000 (1-0-0) |
-| lo-bnc591147.pptx | 2 pass, 1 unit-still | 2 pass, 1 unit-still | equal except stills | 0.0000 / 0.0000 | 0.0000 / 0.0005 (2-0-100) |
+| lo-bnc591147.pptx | 2 unit-still | 2 unit-still | equal except stills | 0.0000 / 0.0000 | — |
 | lo-connector-shape-animations.pptx | 6 pass | 6 pass | equal | 0.0000 / 0.0093 | 0.0000 / 0.0080 (1-1-100) |
-| lo-narration.pptx | 5 pass | 5 pass | equal | 0.0000 / 0.0000 | 0.0000 / 0.0003 (1-0-0) |
+| lo-narration.pptx | 1 unit-still | 1 unit-still | equal except stills | 0.0000 / 0.0000 | — |
 | lo-ooxtheme.pptx | 1 unit-still | 1 unit-still | equal | 0.0013 / 0.0367 | — |
 | lo-tdf104788.pptx | 31 pass, 5 unit-still | 16 pass, 15 skipped-mark, 5 unit-still | equal | 0.0005 / 0.0114 | 0.0006 / 0.0259 (6-6-100) |
 | lo-tdf104792-smart-art-animation.pptx | 11 pass | 11 pass | equal | 0.0003 / 0.0241 | 0.0003 / 0.0241 (1-0-100) |
@@ -262,7 +267,7 @@ plus 6 synthetic decks (`cmdHoldDeck` added with the `cmd` ruling). `pypptx-mini
 | lo-tdf146223.pptx | 10 pass | 10 pass | equal | 0.0008 / 0.0333 | 0.0008 / 0.0332 (1-0-100) |
 | lo-tdf149588_transparentSolidFill.pptx | 5 pass | 5 pass | equal | 0.0005 / 0.0073 | 0.0010 / 0.0257 (1-0-100) |
 | lo-tdf156808.pptx | 5 pass | 5 pass | equal | 0.0000 / 0.0000 | 0.0000 / 0.0000 (1-0-0) |
-| lo-tdf44223.pptx | 11 pass | 8 pass, 3 skipped-mark | equal | 0.0007 / 0.0459 | 0.0007 / 0.0459 (2-0-50) |
+| lo-tdf44223.pptx | 5 pass, 1 unit-still | 5 pass, 1 unit-still | equal except stills | 0.0007 / 0.0459 | 0.0007 / 0.0459 (2-0-50) |
 | lo-tdf93868.pptx | 11 pass | 11 pass | equal | 0.0033 / 0.1542 | 0.0021 / 0.1540 (1-2-50) |
 | poi-copy-slide-demo.pptx | 1 unit-still | 1 unit-still | equal | 0.0006 / 0.0354 | — |
 | poi-crop-to-0.pptx | 15 pass | 15 pass | equal | 0.0000 / 0.0000 | 0.0000 / 0.0000 (1-0-0) |
@@ -285,10 +290,11 @@ plus 6 synthetic decks (`cmdHoldDeck` added with the `cmd` ruling). `pypptx-mini
 | morphCompositedDeck | 2 | 0 | 0 | — | — |
 | longStepDeck | 1 | 1 | 1 | 1 | — |
 | cmdHoldDeck | 1 | 0 | 0 | — | — |
+| mediaEndDeck | 1 | 0 | 0 | — | slide 1 `still` (media) |
 | lo-airplane-transition.pptx | 1 | 0 | 0 | — | — |
-| lo-bnc591147.pptx | 2 | 1 | 1 | 1 | slide 1 `still` |
+| lo-bnc591147.pptx | 2 | 2 | 2 | 1 | slide 1 `still`; slide 2 `still` (media) |
 | lo-connector-shape-animations.pptx | 1 | 1 | 1 | 1 | — |
-| lo-narration.pptx | 1 | 0 | 0 | — | — |
+| lo-narration.pptx | 1 | 0 | 0 | — | slide 1 `still` (media) |
 | lo-ooxtheme.pptx | 1 | 0 | 0 | — | — |
 | lo-tdf104788.pptx | 6 | 6 | 0 | 0 | — |
 | lo-tdf104792-smart-art-animation.pptx | 1 | 2 | 0 | 0 | — |
@@ -299,7 +305,7 @@ plus 6 synthetic decks (`cmdHoldDeck` added with the `cmd` ruling). `pypptx-mini
 | lo-tdf146223.pptx | 2 | 0 | 0 | — | — |
 | lo-tdf149588_transparentSolidFill.pptx | 1 | 0 | 0 | — | — |
 | lo-tdf156808.pptx | 1 | 0 | 0 | — | — |
-| lo-tdf44223.pptx | 2 | 1 | 0 | 0 | — |
+| lo-tdf44223.pptx | 2 | 1 | 1 | 1 | slide 1 `still` (media) |
 | lo-tdf93868.pptx | 1 | 2 | 2 | 1 | — |
 | poi-copy-slide-demo.pptx | 1 | 0 | 0 | — | — |
 | poi-crop-to-0.pptx | 3 | 0 | 0 | — | — |
@@ -396,6 +402,41 @@ Evidence:
 
 ## Known differences (rulings recorded in the plan and the Task 1–13 ledger)
 
+- **A slide whose timing holds audio or video plays its piece-3 still (PR #78 round 12).** A streamed show plays no
+  media: the remote show passes no `hooks.media`, so the shared driver ends each audio and video node itself
+  (`syntheticEnds`, `src/slideshow/player/driver.ts`). The end goes on the first frame the node is active, at that
+  frame's slide time, and only on a live cursor. A checkpoint entry, `previous()` and `enter(…, 'last')` record no
+  end. No history the server builds carries a media end: not the boundaries, autoplay, steps, trigger combinations,
+  tracks, or Morph's `checkpoint(fromStep)`. So whatever such an end starts or cuts short was never observed.
+  Examples: an entrance on the video's `onEnd`; an effect after a finite clip in a `p:seq`; a group's `endSync` or
+  implicit end. Before the fix, `mediaEndRevealDeck` had its ink layer dropped. Under the synthetic history the
+  ink showed (1131 px), and none of it was reconstructed.
+  - **Ruling: option (b), refuse.** Option (a), evaluating the synthetic histories on the server, would need new
+    timing assumptions. The server would have to pick a canonical end time for a frame-dependent one, and
+    enumerate both the "ended" and "not ended" pictures of every step. "Unproven → still" applies.
+    - `classifySlide` refuses any slide whose scheduled tree (text builds fanned out) holds an `audio` or
+      `video` node: `holdsMedia`, reason `media`. The plan answers `still`, so no layers or tracks ship
+      (`renderTrack` returns none for a refused plan).
+    - `buildMorphPlan` answers `morph-fallback` for a pair into or out of such a slide. The client already asks
+      no pair for a still-only slide; this guards the server too.
+    - The predicate covers at least the driver's own `mediaNodes` set. That walk stops at depth 64 and this one at
+      256, so a deeper node the client never ends is refused too.
+    - `cmd` nodes are not media. They stay inert, as the Task 14 ruling says, and get no synthetic end;
+      `cmdHoldDeck` still plays from layers with 2 clicks.
+  - **Measured cost:** three corpus slides that passed parity before now play their still: `lo-bnc591147` slide 2,
+    `lo-narration` slide 1, and `lo-tdf44223` slide 1 (a fly-in with its `wind.wav` effect sound). All three pass as
+    unit stills. Stills go from 1 to 4, and the composited rate from 0.25 to 0.33 (`streaming-s3-p4-rates.json`).
+  - **Follow-up (not done):** a narrower predicate could keep a slide whose media end no draw depends on, such as
+    an effect sound. It would have to prove that for every way the scheduler reads an end: `onEnd`/`end`
+    conditions, `endSync`, implicit ends, seq chaining, fill, and step completion.
+  - **Audit of other client-injected events:** the driver writes a cursor in only these ways:
+    - `initial()` or `checkpoint(n)` on entry;
+    - `next()` and `previous()`;
+    - a trigger;
+    - `mediaEnd`.
+
+    The classifier enumerates all but `mediaEnd`, which is now refused. Mid-step `next` is the ruled
+    settled-start difference (D11).
 - **Hit regions are static rectangles** (§5.1). Link and trigger regions do not follow animated geometry.
 - **The entry frame is the slide as it arrives (PR #78 round 7).** For a slide with autoplay, the entry frame (what
   the incoming transition shows) is composed from `timeline.initial()` at time 0, the state the local stage draws its
@@ -578,7 +619,8 @@ Evidence:
 | file | what |
 |---|---|
 | `scripts/stream-show-compare.ts` | the harness (`compareStreamDeck`, `measureWidening`, `installDom`, CLI) |
-| `server/test/stream-show-parity.test.ts` | synthetic decks: widening within the ceiling; structure equal and every frame within tolerance (fly-in, Morph, Cube, both mark modes); Morph pairs map to local keys; composited Morph at its keyframe times; fallback rate reported |
+| `server/test/stream-show-parity.test.ts` | synthetic decks: widening within the ceiling; structure equal and every frame within tolerance (fly-in, Morph, Cube, both mark modes); Morph pairs map to local keys; composited Morph at its keyframe times; `mediaEndDeck` plays its still (round 12); fallback rate reported |
+| `server/test/show-eligibility.test.ts`, `server/test/show-wire.test.ts` | round 12: a media end that reveals ink (`onEnd`, and after a finite clip) gives the still; the wire answers `still` for the plan and `morph-fallback` for a Morph into a media slide |
 | `tests/browser/stream-present-anim.spec.ts` | Chromium × {webgl2, canvas2d}: end to end; the 10 s hold; revocation mid-animation |
 | `server/test/app.ts` | `?deck=fly\|morph\|cube` (synthetic decks) |
 | `src/debug/stream-viewer.tsx` | `deck=` forwarded; `backend=canvas2d` makes WebGL2 unavailable to the page; `__ovStream.endedAt` |

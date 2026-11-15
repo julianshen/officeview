@@ -10,16 +10,17 @@
   "total": {
     "slides": 43,
     "anim": 29,
-    "stills": 1,
+    "stills": 4,
     "steps": 12,
-    "composited": 3,
-    "rate": 0.25,
+    "composited": 4,
+    "rate": 0.3333,
     "reasons": {
-      "mask": 3
+      "mask": 3,
+      "still:still": 1
     },
     "stillReasons": {
-      "still": 1,
-      "still/step-composited": 1,
+      "still": 4,
+      "still/step-composited": 4,
       "still/trigger-cut": 1
     }
   },
@@ -43,10 +44,10 @@
       "rate": null,
       "reasons": {},
       "anim": 2,
-      "stills": 1,
+      "stills": 2,
       "stillReasons": {
-        "still": 1,
-        "still/step-composited": 1,
+        "still": 2,
+        "still/step-composited": 2,
         "still/trigger-cut": 1
       }
     },
@@ -71,8 +72,11 @@
       "rate": null,
       "reasons": {},
       "anim": 1,
-      "stills": 0,
-      "stillReasons": {}
+      "stills": 1,
+      "stillReasons": {
+        "still": 1,
+        "still/step-composited": 1
+      }
     },
     {
       "deck": "lo-ooxtheme.pptx",
@@ -188,12 +192,17 @@
       "deck": "lo-tdf44223.pptx",
       "slides": 2,
       "steps": 1,
-      "composited": 0,
-      "rate": 0,
-      "reasons": {},
+      "composited": 1,
+      "rate": 1,
+      "reasons": {
+        "still:still": 1
+      },
       "anim": 2,
-      "stills": 0,
-      "stillReasons": {}
+      "stills": 1,
+      "stillReasons": {
+        "still": 1,
+        "still/step-composited": 1
+      }
     },
     {
       "deck": "lo-tdf93868.pptx",
