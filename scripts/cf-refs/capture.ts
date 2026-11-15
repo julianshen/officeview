@@ -24,6 +24,7 @@ import {
   buildIconGlyphKey,
   iconGlyphFaintRecord,
   ICON_GEOMETRY_RULES_VERSION,
+  measureCaseBarExtents,
   iconGlyphTwinsRecord,
   classifyIconCapture,
   evaluateIconCapabilities,
@@ -390,11 +391,13 @@ export function buildIconSidecarExtras(
   const measured = measureCaseIcons(c, decoded, geom, key)
   if ('kind' in measured) return { extras: base, observed: undefined, refusal: `${(measured as Refusal).code}: ${(measured as Refusal).reason}` }
   const observed = measured as ReadonlyMap<string, CfObservedIcon>
-  const evaluation = evaluateIconCapabilities(c, parts, observed, key)
+  const evaluation = evaluateIconCapabilities(c, parts, observed, key, { barExtents: measureCaseBarExtents(c, decoded, geom) })
   const hypotheses = Object.fromEntries(Object.entries(evaluation).filter(([, e]) => e.hypotheses).map(([cap, e]) => [cap, e.hypotheses]))
   // Fix round 7: the geometry readings' per-cell predictions, recomputed and compared by the verifier like iconHypotheses.
   const geometry = Object.fromEntries(Object.entries(evaluation).filter(([, e]) => e.geometry).map(([cap, e]) => [cap, e.geometry]))
-  return { extras: { ...base, observedIcons: [...observed.values()], iconHypotheses: hypotheses, ...(Object.keys(geometry).length > 0 ? { iconGeometryHypotheses: geometry, iconGeometryRulesVersion: ICON_GEOMETRY_RULES_VERSION } : {}) }, observed, evaluation }
+  // Fix round 10: the designated cells excluded from text detection (matched ink inside a measured bar), and why.
+  const exclusions = Object.fromEntries(Object.entries(evaluation).filter(([, e]) => e.textExclusions).map(([cap, e]) => [cap, e.textExclusions]))
+  return { extras: { ...base, observedIcons: [...observed.values()], iconHypotheses: hypotheses, ...(Object.keys(geometry).length > 0 ? { iconGeometryHypotheses: geometry, iconGeometryRulesVersion: ICON_GEOMETRY_RULES_VERSION } : {}), ...(Object.keys(exclusions).length > 0 ? { iconTextExclusions: exclusions } : {}) }, observed, evaluation }
 }
 
 /** Parses the `buildDataBarSettingsProbeScript` output into rows (an empty or unparseable answer yields no rows). */

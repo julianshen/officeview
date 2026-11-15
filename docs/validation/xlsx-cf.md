@@ -1542,3 +1542,29 @@ After verify-only (38d3d872), production paints icons only behind `CF_ICON_PAINT
 **Review minors (rounds 6–7).**
 - The unresolved-shapes matrix row now lists column O (`icon:composition-icon-stopIfTrue`, S4-J and S4-ICON-STOPIFTRUE).
 - `iconTwinSetMembers` accepts only the canonical, strictly increasing member order.
+
+### Fix round 10: S4-REPLICATE, bar-extent exclusion and the free-scale band (review of rounds 8–9)
+
+**S4-REPLICATE.** A showValue or composition verdict must rest on at least two designated cells per configuration, that is, per rule shape, one column of the case, and those cells must agree. Otherwise the capability is non-discriminating.
+- The rule covers `icon:showvalue-canvas-suppression`, `icon:noicons-showvalue`, `icon:composition-bar-showvalue` and every bucket `icon:composition-*` capability (`replicationShortfall`).
+- Recomputed on the stored captures (in memory), only `icon:composition-bar-showvalue` drops to non-discriminating: each of H, I and J had one readable cell (row 2).
+- Every other showValue and composition capability already has ≥ 2 agreeing cells per configuration:
+  - canvas suppression: B2..B4;
+  - NoIcons showValue: G2..G4;
+  - composition: C3..C5, D3..D5, and so on.
+- **Data change.** `stage4-icon-geometry-2` gains rows 5 and 6 at the range minimum (10, so no bar paints). H, I and J are designated on rows 2, 3, 5 and 6, which gives three readable cells per configuration. The case was regenerated (`--force` on this case only, as the orchestrator authorised) and must be rebuilt and recaptured.
+
+**Bar-extent exclusion (finding 4).**
+- A cell is excluded from text detection only when the matched text ink overlaps the bar extent measured in that cell. The round-9 "right half of the cell" heuristic is gone.
+- `measureBarExtentInCell` measures the extent: the run of columns whose ink covers ≥ 60 % of the inner height, starting within 2 px of the bar's anchored edge (the right edge for a right-to-left bar).
+- Excluded cells and their reasons are recorded in the sidecar as `iconTextExclusions`.
+- On the stored capture, H3, I3 and J3 are excluded: their matched ink 685..694, 865..874 and 1045..1054 is exactly the measured bar.
+
+**The free-scale band (finding 1).**
+- The font-scaled box reading is consistent when some shared scale k puts every cell within 1 px of k × font. It is refuted when no k puts every cell within 1.5 px, and undecided in between.
+- 1.5 px is the free-scale analogue of S3-A's group rule. A 3 px group spread (2 × tolerance + 1) is a best-fit residual of 1.5 px about the group's centre, so both rules refute at the same residual and leave the same (1, 1.5] px band of tolerance plus rounding undecided.
+- Synthetic mechanism tests pin both edges: a ~1.35 px residual is undecided, and a ~1.95 px residual is refuted (`none`).
+
+**Test labels (finding 2).** Tests that use Excel's stored numbers are labelled regression tests, and the band tests are labelled mechanism tests. Neither is independent evidence.
+
+**Rules version 3.** `iconGeometryRulesVersion` is now 3, because the derived readings changed. Version-2 sidecars leave their geometry capabilities unverified until `capture --stage 4 --verify-only` re-derives them.

@@ -78,6 +78,8 @@ import {
   iconSidecarMalformed,
   iconGlyphFaintRecord,
   evaluateIconGeometryCapability,
+  measureBarExtentInCell,
+  replicationShortfall,
   ICON_GEOMETRY_RULES_VERSION,
   type IconGeometryCell,
   ICON_NO_ICON_MEMBER,
@@ -4957,25 +4959,29 @@ describe('Stage 4 icon oracle (Task 24)', () => {
       expect(evaluateIconGeometryCapability('icon:noicons-inset', noIconsInset, noIconsInset)).toMatchObject({ status: 'discriminating', matched: 'inset' })
       const noIconsFlat = [at('F2', 'left', 0, null)]
       expect(evaluateIconGeometryCapability('icon:noicons-inset', noIconsFlat, noIconsFlat)).toMatchObject({ status: 'discriminating', matched: 'no-inset' })
-      const hidden = [at('G2', 'left', undefined, null, { showValue: false })]
+      // S4-REPLICATE (fix round 10): a showValue verdict needs two agreeing cells per configuration (column).
+      const hidden = [at('G2', 'left', undefined, null, { showValue: false }), at('G3', 'left', undefined, null, { showValue: false })]
       expect(evaluateIconGeometryCapability('icon:noicons-showvalue', hidden, hidden)).toMatchObject({ status: 'discriminating', matched: 'text-hidden' })
-      const shown = [at('G2', 'left', 0, null, { showValue: false })]
+      const shown = [at('G2', 'left', 0, null, { showValue: false }), at('G3', 'left', 1, null, { showValue: false })]
       expect(evaluateIconGeometryCapability('icon:noicons-showvalue', shown, shown)).toMatchObject({ status: 'discriminating', matched: 'text-shown' })
+      expect(evaluateIconGeometryCapability('icon:noicons-showvalue', hidden.slice(0, 1), hidden.slice(0, 1))).toMatchObject({ status: 'non-discriminating', reason: expect.stringMatching(/S4-REPLICATE/) })
     })
 
     it('fix round 9: a sidecar derived under older geometry rules leaves its geometry capabilities unverified, never refuses the case', () => {
       const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
-      const c = manifest.cases.find(x => x.id === 'stage4-icon-geometry-2')!
+      // A measured case with geometry capabilities (fix round 10: geometry-2 is regenerated, so the inset case stands in).
+      const c = manifest.cases.find(x => x.id === 'stage4-icon-inset')!
+      expect(c.status).toBe('measured')
       const sidecar = JSON.parse(readFileSync(resolve(REPO_ROOT, c.captures[0]!.sidecarPath), 'utf8')) as { iconGeometryRulesVersion?: number }
       const res = verifyCfCase(c, { rootDir: REPO_ROOT })
       expect(res.kind, res.kind === 'refusal' ? `${res.code}: ${res.reason}` : '').toBe('verified')
       if ((sidecar.iconGeometryRulesVersion ?? 1) !== ICON_GEOMETRY_RULES_VERSION) {
         const v = res as { verifiedCapabilities: readonly string[] }
-        for (const cap of ['icon:geometry-box', 'icon:geometry-vertical-align', 'icon:composition-bar-showvalue']) expect(v.verifiedCapabilities, cap).not.toContain(cap)
+        for (const cap of ['icon:inset-left', 'icon:inset-right-aligned', 'icon:noicons-inset']) expect(v.verifiedCapabilities, cap).not.toContain(cap)
       }
     }, 60_000)
 
-    it('fix round 9: a font-scaled box is judged within +-1 px in measured px, not in normalised units', () => {
+    it('fix round 9 (regression test on Excel\'s stored numbers, not independent evidence): a font-scaled box is judged within +-1 px in measured px', () => {
       // Excel 16.115 (stage4-icon-geometry-2): 5Boxes:2 ink widths 7 / 10 / 20 px at 8 / 11 / 20 pt, the same in 30 and
       // 60 pt rows. Some scale k puts every cell within 1 px of k x font (k in [0.95, 1]): font fits; fixed and row do not.
       const cells = ['B', 'C', 'D'].flatMap(col => ['2', '3'].map(r => {
@@ -4991,29 +4997,73 @@ describe('Stage 4 icon oracle (Task 24)', () => {
       expect(evaluateIconGeometryCapability('icon:geometry-box', far, far).status).toBe('none')
     })
 
-    it('fix round 9: bar ink in the right half is no text evidence for the bar/icon showValue conflict', () => {
+    it('fix round 10 (mechanism test): the free-scale band: a ~1.3 px best residual is undecided, a ~2 px one refutes', () => {
+      const grid = (w: Record<string, number>) => ['B', 'C', 'D'].flatMap(col => ['2', '3'].map(r => {
+        const fontPt = ({ B: 8, C: 11, D: 20 } as Record<string, number>)[col]!, rowPt = r === '2' ? 30 : 60
+        return cellAt(`${col}${r}`, { fontPt, rowPt }, { l: 3, t: 2, w: w[col]!, h: 4 })
+      }))
+      // 7 / 10 / 22 px: min over k of max |w - k x font| is about 1.35 px, inside the (1, 1.5) band: font undecided.
+      const near = grid({ B: 7, C: 10, D: 22 })
+      expect(evaluateIconGeometryCapability('icon:geometry-box', near, near)).toMatchObject({ status: 'non-discriminating' })
+      // 7 / 14 / 20 px: the best residual is about 1.95 px, past 1.5: font refuted, and with fixed and row refuted, none.
+      const far = grid({ B: 7, C: 14, D: 20 })
+      expect(evaluateIconGeometryCapability('icon:geometry-box', far, far)).toMatchObject({ status: 'none' })
+    })
+
+    it('fix round 10 (mechanism test): ink inside the measured bar extent is no text evidence, and each configuration needs two agreeing cells', () => {
       const conflict = (barShow: boolean, iconShow: boolean, barFirst: boolean) => ({ barShow, iconShow, barFirst })
-      const at = (ref: string, k: ReturnType<typeof conflict>, text: { shift: number; left: number } | undefined) => {
+      const at = (ref: string, k: ReturnType<typeof conflict>, text: { shift: number; left: number } | undefined, bar?: { l: number; r: number }) => {
         const c = cellAt(ref, { rowPt: 30, horizontal: 'left', conflict: k }, { l: 2, t: 15, w: 11, h: 12 }, { widthPx: 180 })
-        return text ? { ...c, observed: { ...c.observed, textShiftPx: text.shift, textInkLeftPx: c.observed.cellLeftPx + text.left } } : c
+        const x0 = c.observed.cellLeftPx
+        const withText = text ? { ...c, observed: { ...c.observed, textShiftPx: text.shift, textInkLeftPx: x0 + text.left, textInkRightPx: x0 + text.left + 10 } } : c
+        return bar ? { ...withText, barExtent: { leftPx: x0 + bar.l, rightPx: x0 + bar.r } } : withText
       }
       const H = conflict(false, true, true), I = conflict(true, false, true), J = conflict(false, true, false)
-      // Excel's row 2 (no bar): H hidden (only the icon matches the text pattern), I and J shown after the inset;
-      // row 3 (a short bar at the right): the rightmost match is the bar, 169 px in, so those cells say nothing.
-      const cells = [at('H2', H, { shift: -1, left: 3 }), at('I2', I, { shift: 12, left: 16 }), at('J2', J, { shift: 12, left: 16 }),
-        at('H3', H, { shift: 165, left: 169 }), at('I3', I, { shift: 165, left: 169 }), at('J3', J, { shift: 165, left: 169 })]
-      const got = evaluateIconGeometryCapability('icon:composition-bar-showvalue', cells, cells)
+      const bar = { l: 166, r: 178 }
+      // Rows 2 and 5 (no bar): H hidden (only the icon matches the text pattern), I and J shown after the inset; row 3 (a
+      // short bar at the right): the rightmost match lies inside the measured bar, so those cells say nothing.
+      const clean = [at('H2', H, { shift: -1, left: 3 }), at('I2', I, { shift: 12, left: 16 }), at('J2', J, { shift: 12, left: 16 }),
+        at('H5', H, { shift: -1, left: 3 }), at('I5', I, { shift: 12, left: 16 }), at('J5', J, { shift: 12, left: 16 })]
+      const barred = [at('H3', H, { shift: 165, left: 169 }, bar), at('I3', I, { shift: 165, left: 169 }, bar), at('J3', J, { shift: 165, left: 169 }, bar)]
+      const got = evaluateIconGeometryCapability('icon:composition-bar-showvalue', [...clean, ...barred], [...clean, ...barred])
       expect(got).toMatchObject({ status: 'discriminating', matched: 'priority-wins' })
       expect(got.geometry!['H3']!['priority-wins']).toEqual({ verdict: 'excluded' })
+      expect(got.textExclusions).toEqual(['H3', 'I3', 'J3'].map(ref => ({ ref, reason: expect.stringMatching(/bar/) })))
+      // S4-REPLICATE: one clean cell per configuration (row 2 only) is not enough.
+      const single = [...clean.slice(0, 3), ...barred]
+      expect(evaluateIconGeometryCapability('icon:composition-bar-showvalue', single, single)).toMatchObject({ status: 'non-discriminating', reason: expect.stringMatching(/S4-REPLICATE/) })
+      // Ink in the right half but outside any measured bar is text evidence (the old half-cell rule would have dropped it):
+      // a shown value there refutes the readings that hide it.
+      const farText = [at('H2', H, { shift: 120, left: 124 }), at('H5', H, { shift: 120, left: 124 }), ...clean.slice(1, 3), ...clean.slice(4)]
+      expect(evaluateIconGeometryCapability('icon:composition-bar-showvalue', farText, farText).geometry!['H2']!['priority-wins']).toEqual({ verdict: 'fail' })
+    })
+
+    it('fix round 10: the bar extent of a right-to-left bar is measured from the capture, anchored at the inner right edge', () => {
+      // A 180 x 30 cell: an icon at the left, text after it, and a 12 px solid bar flush with the inner right edge.
+      const png = paintPng(400, 120, ctx => {
+        ctx.fillStyle = '#202080'; ctx.fillRect(102, 37, 11, 12)
+        ctx.fillStyle = '#000000'; ctx.fillRect(116, 40, 2, 8)
+        ctx.fillStyle = '#0000ff'; ctx.fillRect(266, 22, 12, 26)
+      })
+      expect(measureBarExtentInCell(png, { x: 101, y: 21, width: 178, height: 28 }, 'right')).toEqual({ leftPx: 266, rightPx: 277 })
+      // No bar: nothing tall enough touches the anchored edge.
+      expect(measureBarExtentInCell(png, { x: 101, y: 21, width: 160, height: 28 }, 'right')).toBeUndefined()
+    })
+
+    it('fix round 10: S4-REPLICATE counts decisive cells per configuration', () => {
+      expect(replicationShortfall(['H2', 'H5', 'I2', 'I5'])).toBeUndefined()
+      expect(replicationShortfall(['H2', 'H5', 'I2'])).toMatch(/S4-REPLICATE: configuration I has 1/)
     })
 
     it('showvalue canvas suppression decides only on cells whose text and icon band cannot overlap', () => {
       const icon = { l: 2, t: 7, w: 11, h: 11 }
       // General (right-aligned) number, showValue 0: the only ink matching the text pattern is far left (the icon): hidden.
-      const general = [cellAt('B2', { rowPt: 20, horizontal: 'right', showValue: false }, null, { text: -164 })]
+      const general = ['B2', 'B3'].map(ref => cellAt(ref, { rowPt: 20, horizontal: 'right', showValue: false }, null, { text: -164 }))
       expect(evaluateIconGeometryCapability('icon:showvalue-canvas-suppression', general, general)).toMatchObject({ status: 'discriminating', matched: 'text-hidden' })
-      const visible = [cellAt('B2', { rowPt: 20, horizontal: 'right', showValue: false }, icon, { text: 0 })]
+      const visible = ['B2', 'B3'].map(ref => cellAt(ref, { rowPt: 20, horizontal: 'right', showValue: false }, icon, { text: 0 }))
       expect(evaluateIconGeometryCapability('icon:showvalue-canvas-suppression', visible, visible)).toMatchObject({ status: 'discriminating', matched: 'text-shown' })
+      // S4-REPLICATE: one decisive cell in the configuration is not enough.
+      expect(evaluateIconGeometryCapability('icon:showvalue-canvas-suppression', general.slice(0, 1), general.slice(0, 1)).status).toBe('non-discriminating')
       // Centred: a centred icon can sit where the text would, so the cell is no evidence either way.
       const centred = [cellAt('C2', { rowPt: 20, horizontal: 'center', showValue: false }, null, { text: -1 })]
       expect(evaluateIconGeometryCapability('icon:showvalue-canvas-suppression', centred, centred).status).toBe('non-discriminating')

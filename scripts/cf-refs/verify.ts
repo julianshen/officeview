@@ -4936,6 +4936,8 @@ export interface IconCapabilityEvaluation {
   hypotheses?: Record<string, IconClassHypothesis[]>
   /** Fix round 7: a geometry capability's per-cell readings (designated ref -> reading -> its prediction there). */
   geometry?: Record<string, Record<string, IconGeometryPrediction>>
+  /** Fix round 10: designated cells excluded from text detection, and why (recorded in the sidecar). */
+  textExclusions?: Array<{ ref: string; reason: string }>
 }
 
 /**
@@ -4955,6 +4957,8 @@ export interface IconGeometryCell {
     conflict?: { barShow: boolean; iconShow: boolean; barFirst: boolean }
   }
   observed: CfObservedIcon
+  /** Fix round 10: the measured extent of a data bar in the cell, if one paints there. */
+  barExtent?: { leftPx: number; rightPx: number }
 }
 
 /**
@@ -4990,7 +4994,64 @@ const r3 = (v: number): number => Math.round(v * 1000) / 1000
  * right half excluded from the bar/icon showValue conflict. A sidecar derived under other rules backs no geometry claim
  * until `capture --verify-only` re-derives it.
  */
-export const ICON_GEOMETRY_RULES_VERSION = 2
+export const ICON_GEOMETRY_RULES_VERSION = 3
+
+/**
+ * Ruling S4-REPLICATE (fix round 10): a showValue or composition verdict rests on at least two decisive designated cells
+ * per configuration (a configuration is one rule shape: one column of the case). Returns why the refs fall short, or
+ * undefined when every configuration present has at least `min` of them.
+ */
+export function replicationShortfall(refs: readonly string[], min = 2): string | undefined {
+  const byCol = new Map<string, number>()
+  for (const ref of refs) {
+    const col = /^[A-Z]+/.exec(ref.toUpperCase())?.[0] ?? ref
+    byCol.set(col, (byCol.get(col) ?? 0) + 1)
+  }
+  for (const [col, n] of byCol) if (n < min) return `S4-REPLICATE: configuration ${col} has ${n} decisive cell${n === 1 ? '' : 's'}, fewer than ${min}`
+  return undefined
+}
+
+/** S4-REPLICATE: the geometry-kind capabilities whose verdict is a showValue or composition outcome. */
+const ICON_REPLICATED_CAPS = new Set(['icon:showvalue-canvas-suppression', 'icon:noicons-showvalue', 'icon:composition-bar-showvalue'])
+
+/**
+ * Fix round 10 (review finding 4): the extent of a data bar inside one cell's inner box, anchored at the `anchor` edge
+ * (a right-to-left bar grows from the right). Bar columns are those whose ink (max channel delta >= `ICON_STRONG_DELTA`
+ * against the box's own perimeter background) covers at least 60 % of the box height; the extent is the run of such
+ * columns that starts within 2 px of the anchored edge. Undefined when no such run exists.
+ */
+export function measureBarExtentInCell(png: DecodedPng, r: { x: number; y: number; width: number; height: number }, anchor: 'left' | 'right'): { leftPx: number; rightPx: number } | undefined {
+  const bg = perimeterBackground(png, r)
+  const tall = (x: number): boolean => {
+    let n = 0
+    for (let y = r.y; y < r.y + r.height; y++) if (rgbMaxDelta(pixelAt(png, x, y), bg) >= ICON_STRONG_DELTA) n++
+    return n >= 0.6 * r.height
+  }
+  const cols = Array.from({ length: r.width }, (_, i) => r.x + i)
+  const ordered = anchor === 'right' ? [...cols].reverse() : cols
+  let start = -1
+  for (let i = 0; i < Math.min(3, ordered.length); i++) if (tall(ordered[i]!)) { start = i; break }
+  if (start < 0) return undefined
+  let end = start
+  while (end + 1 < ordered.length && tall(ordered[end + 1]!)) end++
+  const a = ordered[start]!, b = ordered[end]!
+  return { leftPx: Math.min(a, b), rightPx: Math.max(a, b) }
+}
+
+/** Fix round 10: the measured bar extent of every designated cell under a data bar rule of the case. */
+export function measureCaseBarExtents(c: CfOracleCase, png: DecodedPng, geom: WorksheetRangeGeometry): Map<string, { leftPx: number; rightPx: number }> {
+  const out = new Map<string, { leftPx: number; rightPx: number }>()
+  for (const cell of c.expected.cells.filter(x => x.matched)) {
+    const bars = c.markers.filter(m => m.ruleType === 'dataBar' && isCellInSqref(cell.ref, m.sqref))
+    if (bars.length === 0) continue
+    const rtl = bars.some(m => m.bar?.attrs?.direction === 'rightToLeft')
+    const inner = iconInnerBox(png, geom, cell.ref)
+    if (!inner) continue
+    const e = measureBarExtentInCell(png, { x: inner.x, y: inner.y, width: inner.width, height: inner.height }, rtl ? 'right' : 'left')
+    if (e) out.set(cell.ref.toUpperCase(), e)
+  }
+  return out
+}
 
 /**
  * Evaluates one geometry capability over its designated cells (fix round 7). `pool` holds every measured cell of the case
@@ -5084,9 +5145,13 @@ export function evaluateIconGeometryCapability(cap: string, designated: readonly
       case 'icon:composition-bar-showvalue': {
         const k = c.facts.conflict
         if (!k) return V('excluded')
-        // Fix round 9: the text search takes the rightmost match of the control's pattern, so ink found in the cell's right
-        // half (where the right-to-left bar paints) is the bar, not left-aligned text: the cell is no evidence either way.
-        if (o.textInkLeftPx !== undefined && o.textInkLeftPx > o.cellLeftPx + o.cellWidthPx / 2) return V('excluded')
+        // Fix round 10 (review finding 4): the text search takes the rightmost match of the control's pattern, so a match
+        // that overlaps the cell's measured bar extent is the bar, not text: the cell is no evidence either way.
+        const bar = c.barExtent
+        if (bar && o.textInkLeftPx !== undefined && o.textInkLeftPx <= bar.rightPx && (o.textInkRightPx ?? o.textInkLeftPx) >= bar.leftPx) {
+          excluded.set(c.ref.toUpperCase(), `the matched text ink (${o.textInkLeftPx}..${o.textInkRightPx ?? o.textInkLeftPx}) overlaps the measured bar (${bar.leftPx}..${bar.rightPx})`)
+          return V('excluded')
+        }
         const hide = reading === 'any-hides' ? !(k.barShow && k.iconShow) : reading === 'bar-wins' ? !k.barShow : reading === 'icon-wins' ? !k.iconShow : !(k.barFirst ? k.barShow : k.iconShow)
         // Left-aligned text sits after the icon's inset when shown; hidden text leaves at most the icon (shift <= 1) or nothing.
         const shown = shift !== undefined && shift >= 3
@@ -5108,11 +5173,16 @@ export function evaluateIconGeometryCapability(cap: string, designated: readonly
     }
   }
   const table: Record<string, Record<string, IconGeometryPrediction>> = {}
+  const excluded = new Map<string, string>()
   for (const c of designated) table[c.ref.toUpperCase()] = Object.fromEntries(readings.map(r => [r, predict(r, c)]))
+  const textExclusions = [...excluded].map(([ref, reason]) => ({ ref, reason }))
+  const extra = textExclusions.length > 0 ? { textExclusions } : {}
   // Fix round 9: the font-scaled box is judged in measured px. Its group values are widths normalised to 11 pt, so the
   // +-1 px tolerance is applied to the unnormalised width against one shared scale k, as S3-A applies it per cell:
-  // consistent when some k puts every cell within 1 px of k * font, refuted when none puts every cell within 1.5 px
-  // (the >= 3 px group spread of the other readings), undecided in between.
+  // consistent when some k puts every cell within 1 px of k * font, refuted when none puts every cell within 1.5 px,
+  // undecided in between. The 1.5 px band is the free-scale analogue of the group rule: a group spread of 3 px (S3-A's
+  // 2 x tolerance + 1) is a best-fit residual of 1.5 px about the group's centre, so both rules refute at the same
+  // residual and stay undecided over the same (1, 1.5] px band of tolerance plus rounding (fix round 10, finding 1).
   const fontOf = new Map(designated.map(c => [c.ref.toUpperCase(), c.facts.fontPt] as const))
   const scaledSpread = (pairs: Array<{ w: number; f: number }>): number => {
     const ks = pairs.map(p => p.w / p.f)
@@ -5156,10 +5226,18 @@ export function evaluateIconGeometryCapability(cap: string, designated: readonly
     if (open || claims === 0) undecided.push(r)
     else consistent.push(r)
   }
-  if (consistent.length === 1 && undecided.length === 0) return { status: 'discriminating', reason: `only ${consistent[0]} fits every designated cell; ${readings.filter(r => r !== consistent[0]).join(', ')} refuted`, matched: consistent[0]!, geometry: table }
-  if (consistent.length === 0 && undecided.length === 0) return { status: 'none', reason: 'the measured cells refute every reading', geometry: table }
+  if (consistent.length === 1 && undecided.length === 0) {
+    const winner = consistent[0]!
+    if (ICON_REPLICATED_CAPS.has(cap)) {
+      const decisive = Object.keys(table).filter(ref => { const p = table[ref]![winner]!; return 'verdict' in p && p.verdict === 'pass' })
+      const short = replicationShortfall(decisive)
+      if (short) return { status: 'non-discriminating', reason: `${winner} fits every designated cell, but ${short}`, geometry: table, ...extra }
+    }
+    return { status: 'discriminating', reason: `only ${winner} fits every designated cell; ${readings.filter(r => r !== winner).join(', ')} refuted`, matched: winner, geometry: table, ...extra }
+  }
+  if (consistent.length === 0 && undecided.length === 0) return { status: 'none', reason: 'the measured cells refute every reading', geometry: table, ...extra }
   const fractional = cap === 'icon:geometry-snapping' ? ' (no measured gridline lands at a fractional pt: every rounding agrees)' : ''
-  return { status: 'non-discriminating', reason: `readings ${[...consistent, ...undecided].join(', ')} are not separated by the measured cells${fractional}`, geometry: table }
+  return { status: 'non-discriminating', reason: `readings ${[...consistent, ...undecided].join(', ')} are not separated by the measured cells${fractional}`, geometry: table, ...extra }
 }
 
 /**
@@ -5168,7 +5246,7 @@ export function evaluateIconGeometryCapability(cap: string, designated: readonly
  * no box hypotheses yet (their candidate set is the `CF_ICON_RENDER_MODEL` variants Task 29 defines), so they report
  * `no-hypotheses` and stay unverified.
  */
-export function evaluateIconCapabilities(c: CfOracleCase, parts: Map<string, Uint8Array>, observed: ReadonlyMap<string, CfObservedIcon>, key: IconGlyphKey | undefined): Record<string, IconCapabilityEvaluation> {
+export function evaluateIconCapabilities(c: CfOracleCase, parts: Map<string, Uint8Array>, observed: ReadonlyMap<string, CfObservedIcon>, key: IconGlyphKey | undefined, opts: { barExtents?: ReadonlyMap<string, { leftPx: number; rightPx: number }> } = {}): Record<string, IconCapabilityEvaluation> {
   const out: Record<string, IconCapabilityEvaluation> = {}
   const values = iconNumericValues(parts)
   for (const cap of new Set(c.markers.filter(m => m.ruleType === 'iconSet').map(m => m.capabilityId))) {
@@ -5179,7 +5257,8 @@ export function evaluateIconCapabilities(c: CfOracleCase, parts: Map<string, Uin
       const cellOf = (ref: string): IconGeometryCell | undefined => {
         const o = observed.get(ref)
         const f = facts(ref)
-        return o && f ? { ref, facts: { ...f, rowPt: o.cellHeightPx }, observed: o } : undefined
+        const bar = opts.barExtents?.get(ref)
+        return o && f ? { ref, facts: { ...f, rowPt: o.cellHeightPx }, observed: o, ...(bar ? { barExtent: bar } : {}) } : undefined
       }
       const designated = iconCellsOf(c, cap).map(x => cellOf(x.ref.toUpperCase())).filter((x): x is IconGeometryCell => x !== undefined)
       const pool = [...observed.keys()].map(cellOf).filter((x): x is IconGeometryCell => x !== undefined)
@@ -5222,7 +5301,9 @@ export function evaluateIconCapabilities(c: CfOracleCase, parts: Map<string, Uin
       continue
     }
     const d = discriminateIcon(merged, seen)
-    out[cap] = d.status === 'discriminating' ? { status: 'discriminating', reason: 'exactly one hypothesis agrees', matched: d.matched, hypotheses: merged } : { status: d.status, reason: d.reason, hypotheses: merged }
+    // S4-REPLICATE (fix round 10): a composition verdict rests on at least two designated cells per configuration.
+    const short = d.status === 'discriminating' && cap.startsWith('icon:composition-') ? replicationShortfall(Object.keys(merged)) : undefined
+    out[cap] = short ? { status: 'non-discriminating', reason: `${d.status === 'discriminating' ? d.matched : ''} agrees, but ${short}`, hypotheses: merged } : d.status === 'discriminating' ? { status: 'discriminating', reason: 'exactly one hypothesis agrees', matched: d.matched, hypotheses: merged } : { status: d.status, reason: d.reason, hypotheses: merged }
   }
   return out
 }
@@ -5280,7 +5361,7 @@ function verifyIconCapture(
     const r = recorded.find(x => typeof x?.ref === 'string' && x.ref.toUpperCase() === o.ref.toUpperCase())
     if (!r || JSON.stringify(r) !== JSON.stringify(o)) return fail('sidecar-mismatch', `Sidecar observedIcons for ${o.ref} disagrees with the PNG measurement`)
   }
-  const evaluation = evaluateIconCapabilities(c, parts, observed, key)
+  const evaluation = evaluateIconCapabilities(c, parts, observed, key, { barExtents: measureCaseBarExtents(c, decoded, geom) })
   for (const cap of Object.keys(evaluation)) {
     const marked = Object.keys(evaluation[cap]!.hypotheses ?? {})
     const seen = Object.fromEntries(marked.map(ref => [ref, observed.get(ref) ? observedIconClass(observed.get(ref)!) : null]))
@@ -5314,6 +5395,8 @@ function verifyIconCapture(
       outcome.notes[cap] = `geometry readings ${recordedGeo === undefined ? 'not yet recorded' : `derived under geometry rules v${rulesVersion}, not v${ICON_GEOMETRY_RULES_VERSION}`} (re-derive with capture --verify-only): recomputed ${rec.status}`
       continue
     }
+    const recordedExcl = (sidecar.iconTextExclusions as Record<string, unknown> | undefined)?.[cap]
+    if (rec.geometry && JSON.stringify(recordedExcl ?? null) !== JSON.stringify(rec.textExclusions ?? null)) return fail('sidecar-mismatch', `Sidecar iconTextExclusions for ${cap} differ from the cells the verifier excludes from text detection`)
     if (rec.geometry && JSON.stringify(recordedGeo ?? null) !== JSON.stringify(rec.geometry)) return fail('sidecar-mismatch', `Sidecar iconGeometryHypotheses for ${cap} differ from the readings the verifier recomputes`)
     if (cap === 'icon:composition-icon-stopIfTrue' && !savedIconRuleHasStop(parts, c, cap)) {
       outcome.notes[cap] = 'Excel dropped stopIfTrue on resave (Ruling S4-J): recorded from the input workbook only, never verified'

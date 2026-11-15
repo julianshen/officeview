@@ -43723,11 +43723,11 @@
     {
       "id": "stage4-icon-geometry-2",
       "stage": 4,
-      "question": "Fix round 8 (S4-K, S4-I): the paint gates on a rectangular glyph so every edge is stable. An x14 5Boxes rule under num 0/5/8/12/15 puts every value 10 in bucket 2 (5Boxes:2, two filled boxes). Box size: fonts 8/11/20 pt bottom-aligned (B..D) x rows 30/60 pt (rows 2, 3), so fixed, font-scaled and row-scaled boxes differ by >= 3 px. Vertical placement: top (E), centred (F) and bottom (G) cells at 11 pt over the same two rows, so top, centre, bottom and cell-align differ by >= 3 px. Bar/icon showValue conflict on left-aligned text with short right-to-left bars (only the 10 and 15 rows are designated): bar(showValue 0) ahead of icon(1) (H), bar(1) ahead of icon(0) (I), icon(1) ahead of bar(0) (J), which separates any-hides, priority-wins, bar-wins and icon-wins.",
+      "question": "Fix round 8 (S4-K, S4-I): the paint gates on a rectangular glyph so every edge is stable. An x14 5Boxes rule under num 0/5/8/12/15 puts every value 10 in bucket 2 (5Boxes:2, two filled boxes). Box size: fonts 8/11/20 pt bottom-aligned (B..D) x rows 30/60 pt (rows 2, 3), so fixed, font-scaled and row-scaled boxes differ by >= 3 px. Vertical placement: top (E), centred (F) and bottom (G) cells at 11 pt over the same two rows, so top, centre, bottom and cell-align differ by >= 3 px. Bar/icon showValue conflict on left-aligned text with short right-to-left bars (only the 10 and 15 rows are designated): bar(showValue 0) ahead of icon(1) (H), bar(1) ahead of icon(0) (I), icon(1) ahead of bar(0) (J), which separates any-hides, priority-wins, bar-wins and icon-wins. Fix round 10 (Ruling S4-REPLICATE): rows 5 and 6 repeat the range minimum (10, no bar painted) so every configuration has at least two cells whose text can be read.",
       "input": "tests/fixtures/xlsx-cf/inputs/stage4-icon-geometry-2.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage4-icon-geometry-2.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:J8",
+      "range": "A1:J12",
       "requiredAppearances": [
         "screen"
       ],
@@ -43808,7 +43808,7 @@
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
           "capabilityId": "icon:composition-bar-showvalue",
-          "sqref": "H2:H4",
+          "sqref": "H2:H6",
           "ruleType": "dataBar",
           "priority": 3,
           "formulas": [],
@@ -43834,7 +43834,7 @@
           "part": "xl/worksheets/sheet1.xml",
           "extension": "x14",
           "capabilityId": "icon:composition-bar-showvalue",
-          "sqref": "H2:H4",
+          "sqref": "H2:H6",
           "ruleType": "dataBar",
           "formulas": [],
           "bar": {
@@ -43860,7 +43860,7 @@
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
           "capabilityId": "icon:composition-bar-showvalue",
-          "sqref": "H2:H4",
+          "sqref": "H2:H6",
           "ruleType": "iconSet",
           "priority": 4,
           "formulas": [],
@@ -43890,7 +43890,7 @@
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
           "capabilityId": "icon:composition-bar-showvalue",
-          "sqref": "I2:I4",
+          "sqref": "I2:I6",
           "ruleType": "dataBar",
           "priority": 5,
           "formulas": [],
@@ -43914,7 +43914,7 @@
           "part": "xl/worksheets/sheet1.xml",
           "extension": "x14",
           "capabilityId": "icon:composition-bar-showvalue",
-          "sqref": "I2:I4",
+          "sqref": "I2:I6",
           "ruleType": "dataBar",
           "formulas": [],
           "bar": {
@@ -43940,7 +43940,7 @@
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
           "capabilityId": "icon:composition-bar-showvalue",
-          "sqref": "I2:I4",
+          "sqref": "I2:I6",
           "ruleType": "iconSet",
           "priority": 6,
           "formulas": [],
@@ -43970,7 +43970,7 @@
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
           "capabilityId": "icon:composition-bar-showvalue",
-          "sqref": "J2:J4",
+          "sqref": "J2:J6",
           "ruleType": "iconSet",
           "priority": 7,
           "formulas": [],
@@ -44000,7 +44000,7 @@
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
           "capabilityId": "icon:composition-bar-showvalue",
-          "sqref": "J2:J4",
+          "sqref": "J2:J6",
           "ruleType": "dataBar",
           "priority": 8,
           "formulas": [],
@@ -44026,7 +44026,7 @@
           "part": "xl/worksheets/sheet1.xml",
           "extension": "x14",
           "capabilityId": "icon:composition-bar-showvalue",
-          "sqref": "J2:J4",
+          "sqref": "J2:J6",
           "ruleType": "dataBar",
           "formulas": [],
           "bar": {
@@ -44050,9 +44050,9 @@
         }
       ],
       "expected": {
-        "inputSha256": "404151c1960013710e2568120f320c9d628d624ed3e93f7881ee9691d4e85ea2",
-        "savedSha256": "e60f6b27bfba57f220052cfa7125bf7bef86a74ed7837690ee392483a7653556",
-        "provenance": "excel-observed",
+        "inputSha256": "dfe5b459c70870c421395e94c7b8fcd79176e0b27f4437f83f925bce33dc4c98",
+        "savedSha256": "dfe5b459c70870c421395e94c7b8fcd79176e0b27f4437f83f925bce33dc4c98",
+        "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
           "C2",
@@ -44068,232 +44068,310 @@
           "G3",
           "H2",
           "H3",
+          "H5",
+          "H6",
           "I2",
           "I3",
+          "I5",
+          "I6",
           "J2",
-          "J3"
+          "J3",
+          "J5",
+          "J6"
         ],
         "negativeRefs": [
-          "B6",
-          "C6",
-          "D6",
-          "B7",
-          "C7",
-          "D7",
-          "E6",
-          "F6",
-          "G6",
-          "E7",
-          "F7",
-          "G7",
-          "H6",
-          "H7",
-          "I6",
-          "I7",
-          "J6",
-          "J7"
+          "B8",
+          "C8",
+          "D8",
+          "B9",
+          "C9",
+          "D9",
+          "E8",
+          "F8",
+          "G8",
+          "E9",
+          "F9",
+          "G9",
+          "H8",
+          "H9",
+          "H11",
+          "H12",
+          "I8",
+          "I9",
+          "I11",
+          "I12",
+          "J8",
+          "J9",
+          "J11",
+          "J12"
         ],
         "cells": [
           {
             "ref": "B2",
-            "controlRef": "B6",
+            "controlRef": "B8",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "unverified"
             }
           },
           {
             "ref": "C2",
-            "controlRef": "C6",
+            "controlRef": "C8",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "unverified"
             }
           },
           {
             "ref": "D2",
-            "controlRef": "D6",
+            "controlRef": "D8",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "unverified"
             }
           },
           {
             "ref": "B3",
-            "controlRef": "B7",
+            "controlRef": "B9",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "unverified"
             }
           },
           {
             "ref": "C3",
-            "controlRef": "C7",
+            "controlRef": "C9",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "unverified"
             }
           },
           {
             "ref": "D3",
-            "controlRef": "D7",
+            "controlRef": "D9",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "unverified"
             }
           },
           {
             "ref": "E2",
-            "controlRef": "E6",
+            "controlRef": "E8",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "unverified"
             }
           },
           {
             "ref": "F2",
-            "controlRef": "F6",
+            "controlRef": "F8",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "unverified"
             }
           },
           {
             "ref": "G2",
-            "controlRef": "G6",
+            "controlRef": "G8",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "unverified"
             }
           },
           {
             "ref": "E3",
-            "controlRef": "E7",
+            "controlRef": "E9",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "unverified"
             }
           },
           {
             "ref": "F3",
-            "controlRef": "F7",
+            "controlRef": "F9",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "unverified"
             }
           },
           {
             "ref": "G3",
-            "controlRef": "G7",
+            "controlRef": "G9",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "unverified"
             }
           },
           {
             "ref": "H2",
-            "controlRef": "H6",
+            "controlRef": "H8",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "unverified"
             }
           },
           {
             "ref": "H3",
-            "controlRef": "H7",
+            "controlRef": "H9",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "H5",
+            "controlRef": "H11",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "H6",
+            "controlRef": "H12",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
             }
           },
           {
             "ref": "I2",
-            "controlRef": "I6",
+            "controlRef": "I8",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "unverified"
             }
           },
           {
             "ref": "I3",
-            "controlRef": "I7",
+            "controlRef": "I9",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "I5",
+            "controlRef": "I11",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "I6",
+            "controlRef": "I12",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
             }
           },
           {
             "ref": "J2",
-            "controlRef": "J6",
+            "controlRef": "J8",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "unverified"
             }
           },
           {
             "ref": "J3",
-            "controlRef": "J7",
+            "controlRef": "J9",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "unverified"
             }
           },
           {
-            "ref": "B6",
+            "ref": "J5",
+            "controlRef": "J11",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "J6",
+            "controlRef": "J12",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B8",
             "controlRef": "B2",
             "matched": false,
             "iconApplied": false,
@@ -44301,7 +44379,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "C6",
+            "ref": "C8",
             "controlRef": "C2",
             "matched": false,
             "iconApplied": false,
@@ -44309,7 +44387,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "D6",
+            "ref": "D8",
             "controlRef": "D2",
             "matched": false,
             "iconApplied": false,
@@ -44317,7 +44395,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "B7",
+            "ref": "B9",
             "controlRef": "B3",
             "matched": false,
             "iconApplied": false,
@@ -44325,7 +44403,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "C7",
+            "ref": "C9",
             "controlRef": "C3",
             "matched": false,
             "iconApplied": false,
@@ -44333,7 +44411,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "D7",
+            "ref": "D9",
             "controlRef": "D3",
             "matched": false,
             "iconApplied": false,
@@ -44341,7 +44419,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "E6",
+            "ref": "E8",
             "controlRef": "E2",
             "matched": false,
             "iconApplied": false,
@@ -44349,7 +44427,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "F6",
+            "ref": "F8",
             "controlRef": "F2",
             "matched": false,
             "iconApplied": false,
@@ -44357,7 +44435,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "G6",
+            "ref": "G8",
             "controlRef": "G2",
             "matched": false,
             "iconApplied": false,
@@ -44365,7 +44443,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "E7",
+            "ref": "E9",
             "controlRef": "E3",
             "matched": false,
             "iconApplied": false,
@@ -44373,7 +44451,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "F7",
+            "ref": "F9",
             "controlRef": "F3",
             "matched": false,
             "iconApplied": false,
@@ -44381,7 +44459,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "G7",
+            "ref": "G9",
             "controlRef": "G3",
             "matched": false,
             "iconApplied": false,
@@ -44389,7 +44467,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "H6",
+            "ref": "H8",
             "controlRef": "H2",
             "matched": false,
             "iconApplied": false,
@@ -44397,7 +44475,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "H7",
+            "ref": "H9",
             "controlRef": "H3",
             "matched": false,
             "iconApplied": false,
@@ -44405,7 +44483,23 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "I6",
+            "ref": "H11",
+            "controlRef": "H5",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "H12",
+            "controlRef": "H6",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "I8",
             "controlRef": "I2",
             "matched": false,
             "iconApplied": false,
@@ -44413,7 +44507,7 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "I7",
+            "ref": "I9",
             "controlRef": "I3",
             "matched": false,
             "iconApplied": false,
@@ -44421,7 +44515,23 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "J6",
+            "ref": "I11",
+            "controlRef": "I5",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "I12",
+            "controlRef": "I6",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "J8",
             "controlRef": "J2",
             "matched": false,
             "iconApplied": false,
@@ -44429,8 +44539,24 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "J7",
+            "ref": "J9",
             "controlRef": "J3",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "J11",
+            "controlRef": "J5",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "J12",
+            "controlRef": "J6",
             "matched": false,
             "iconApplied": false,
             "fillSource": "unverified",
@@ -44442,24 +44568,17 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-geometry-2.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-geometry-2.json",
-          "pngSha256": "84317140dda9c44d9204c63632ccd42bea78ac24daf2575e51dd9eb89ff52b5b"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-geometry-2.json"
         }
       ],
-      "status": "measured",
+      "status": "recipe-pending",
+      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": true,
-      "resaveReceipt": {
-        "resavedAt": "2026-11-15T07:48:05.717Z",
-        "excelVersion": "16.115",
-        "inputSha256": "404151c1960013710e2568120f320c9d628d624ed3e93f7881ee9691d4e85ea2",
-        "savedSha256": "e60f6b27bfba57f220052cfa7125bf7bef86a74ed7837690ee392483a7653556",
-        "openedRepairFree": true
-      }
+      "resavedByExcel": false
     },
     {
       "id": "stage4-icon-geometry",
