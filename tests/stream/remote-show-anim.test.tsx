@@ -17,9 +17,10 @@
  * pacing and the frame loop run on an injected manual clock.
  */
 import { createCanvas, loadImage } from 'canvas'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it as vitestIt, vi } from 'vitest'
 
 const { boom, calls } = vi.hoisted(() => ({
   boom: (m: string) => () => { throw new Error(`T5: package module reached: ${m}`) },
@@ -256,13 +257,30 @@ function manualClock() {
   }
 }
 
-let clock: ReturnType<typeof manualClock>
-let frame: (() => void) | undefined
 /**
- * Which test owns `clock` and `frame`. A test body that outlives its test (a timeout) keeps running; it must not
- * advance the next test's clock or stop its frame loop (PR #78 CI: a timed-out test made the pause test fail).
+ * One test's harness: its manual clock and its show's frame loop. A test body that outlives its test (a timeout)
+ * keeps running; it must never advance the next test's clock or call its frame loop (PR #78 CI: a timed-out test
+ * made the pause test fail). Each body runs inside its own owner (AsyncLocalStorage follows it through every
+ * await), the owner dies at teardown, and `run` throws whenever the owner it runs in is not the live one.
  */
-let epoch = 0
+interface Owner { clock: ReturnType<typeof manualClock>; frame?: () => void; live: boolean }
+const owners = new AsyncLocalStorage<Owner>()
+let current: Owner | undefined
+function newOwner(): Owner {
+  if (current) current.live = false
+  return (current = { clock: manualClock(), live: true })
+}
+/** The calling test's owner, or a throw when that test has ended. */
+function own(): Owner {
+  const o = owners.getStore()
+  if (!o || !o.live || o !== current) throw new Error('run: the test that started this run has ended')
+  return o
+}
+/** `it`, with the body bound to the owner its beforeEach made. */
+const it = Object.assign(
+  (name: string, fn: () => unknown, timeout?: number) => vitestIt(name, () => owners.run(current!, fn), timeout),
+  { each: vitestIt.each.bind(vitestIt) as typeof vitestIt.each },
+)
 const bitmapOf = async (bytes: Uint8Array) => {
   const img = await loadImage(Buffer.from(bytes))
   const cv = document.createElement('canvas')
@@ -271,34 +289,42 @@ const bitmapOf = async (bytes: Uint8Array) => {
   return cv
 }
 beforeEach(() => {
-  epoch++
-  clock = manualClock()
-  frame = undefined
-  vi.spyOn(remoteShowDeps, 'clock').mockImplementation(() => clock)
+  const o = newOwner()
+  vi.spyOn(remoteShowDeps, 'clock').mockImplementation(() => o.clock)
   vi.spyOn(remoteShowDeps, 'every').mockImplementation(() => () => {})
   // The stop clears only its own loop: a show left over from an earlier test never stops this test's.
-  vi.spyOn(remoteShowDeps, 'frames').mockImplementation((_w, f) => { frame = f; return () => { if (frame === f) frame = undefined } })
+  vi.spyOn(remoteShowDeps, 'frames').mockImplementation((_w, f) => { o.frame = f; return () => { if (o.frame === f) o.frame = undefined } })
   vi.spyOn(remoteShowDeps, 'decode').mockImplementation(bitmapOf)
   remoteShowDeps.backend = 'canvas2d'
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 960 })
   Object.defineProperty(window, 'innerHeight', { configurable: true, value: 540 })
 })
 afterEach(() => {
+  current!.live = false
   remoteShowDeps.backend = undefined
   vi.restoreAllMocks()
   document.body.replaceChildren()
 })
 
+/** What the next test's beforeEach does to the shared harness, done mid-test: returns its clock and a paint count. */
+function nextTest() {
+  const o = newOwner()
+  let paints = 0
+  o.frame = () => { paints++ }
+  return { clock: o.clock, paints: () => paints }
+}
+
 /** Runs the show `ms` at ~60 fps: the clock, then one frame, letting decodes settle. */
 async function run(ms: number) {
-  const mine = epoch
   for (let t = 0; t < ms; t += 16) {
-    // A body left over from an ended test stops here instead of driving the current test's show.
-    if (epoch !== mine) throw new Error('run: the test that started this run has ended')
-    clock.advance(16)
-    frame?.()
+    // Checked before every tick, so also after every await (the last flush included): a body left over from an
+    // ended test stops here, and a later run in that body throws at once, never adopting the next test's owner.
+    const o = own()
+    o.clock.advance(16)
+    o.frame?.()
     await flush()
   }
+  own()
 }
 
 async function show(fd: ReturnType<typeof animDoc>, o: Partial<RemoteShowStart> = {}) {
@@ -523,7 +549,7 @@ describe('remote show on the driver (piece 4 Task 11)', () => {
     await fd.end(new StreamSessionError('revoked'))
     await s.ended
     expect(s.state.exited).toBe(true)
-    expect(frame).toBeUndefined()
+    expect(own().frame).toBeUndefined()
     expect(host.children.length).toBe(0)
     // Every bundle, pair, decoded bitmap, retained message and stage frame has been given back.
     expect(ws.used()).toBe(0)
@@ -842,7 +868,7 @@ describe('fix round 1: decoded track frames are admitted against the show budget
     })
     const { s } = await show(fd)
     await run(100)
-    s.next(); frame?.(); await flush()
+    s.next(); own().frame?.(); await flush()
     s.exit()
     expect(ws.used()).toBe(0)
     expect(peak).toBeLessThanOrEqual(SHOW_PLAN_LIMITS.showDecoded)
@@ -1082,6 +1108,20 @@ describe('PR #78 review: the outgoing frame is captured before the visit lets go
     const now = pixels()
     const differing = now.reduce((n, v, k) => n + (v === shown[k] ? 0 : 1), 0)
     expect(differing / now.length).toBeLessThan(0.01)
+    s.exit()
+  })
+})
+
+describe('PR #78 review round 2: a stale run never drives the next test', () => {
+  it('a run awaiting its last flush when its test ends, and a run chained after it, leave the next test\'s clock and frame alone', async () => {
+    const fd = animDoc(['fly'])
+    const { s } = await show(fd)
+    await run(100)
+    // Started now, the first run is awaiting its last (only) flush when the "next test" takes over.
+    const pending = run(16).then(() => run(16))
+    const next = nextTest()
+    await pending.catch(() => {})
+    expect({ now: next.clock.now(), paints: next.paints() }).toEqual({ now: 0, paints: 0 })
     s.exit()
   })
 })
