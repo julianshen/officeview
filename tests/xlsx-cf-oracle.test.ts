@@ -75,8 +75,10 @@ import {
   iconCropRect,
   iconTwinSetClass,
   iconTwinSetMembers,
+  iconSidecarMalformed,
   iconGlyphFaintRecord,
   evaluateIconGeometryCapability,
+  ICON_GEOMETRY_RULES_VERSION,
   type IconGeometryCell,
   ICON_NO_ICON_MEMBER,
   measureCaseIcons,
@@ -4188,7 +4190,7 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     }
     for (const id of Object.keys(CF_STAGE4_NONDISCRIMINATING)) expect(CF_STAGE4_CAPABILITIES.some(e => e.capabilityId === id), id).toBe(true)
     expect(CF_STAGE4_CAPABILITIES.filter(e => iconCapabilityKind(e.capabilityId) === 'record').map(e => e.capabilityId).sort()).toEqual(
-      [...Object.keys(CF_STAGE4_NONDISCRIMINATING).filter(id => !id.startsWith('icon:composition-')), ...expected['stage4-icon-unresolved-shapes']!.filter(id => id.startsWith('icon:unresolved-'))].sort(),
+      [...Object.keys(CF_STAGE4_NONDISCRIMINATING).filter(id => iconCapabilityKind(id) === 'record'), ...expected['stage4-icon-unresolved-shapes']!.filter(id => id.startsWith('icon:unresolved-'))].sort(),
     )
   }, 60_000)
 
@@ -4926,6 +4928,9 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     })
 
     it('snapping is non-discriminating when no measured gridline lands at a fractional pt', () => {
+      // Ruling S4-SNAP-SHARED (fix round 9): registry non-discriminating by construction; the paint gate will use
+      // bar:geometry-snapping (S4-PROD-ALIGN).
+      expect(CF_STAGE4_NONDISCRIMINATING['icon:geometry-snapping']).toMatch(/S4-SNAP-SHARED[\s\S]*bar:geometry-snapping/)
       const cells = [cellAt('M2', { rowPt: 12 }, { l: 2, t: 1, w: 11, h: 8 }, { widthPx: 188 }), cellAt('N2', { rowPt: 12 }, { l: 2, t: 1, w: 11, h: 8 }, { widthPx: 195 })]
       expect(evaluateIconGeometryCapability('icon:geometry-snapping', cells, cells)).toMatchObject({ status: 'non-discriminating', reason: expect.stringMatching(/fractional/) })
     })
@@ -4956,6 +4961,50 @@ describe('Stage 4 icon oracle (Task 24)', () => {
       expect(evaluateIconGeometryCapability('icon:noicons-showvalue', hidden, hidden)).toMatchObject({ status: 'discriminating', matched: 'text-hidden' })
       const shown = [at('G2', 'left', 0, null, { showValue: false })]
       expect(evaluateIconGeometryCapability('icon:noicons-showvalue', shown, shown)).toMatchObject({ status: 'discriminating', matched: 'text-shown' })
+    })
+
+    it('fix round 9: a sidecar derived under older geometry rules leaves its geometry capabilities unverified, never refuses the case', () => {
+      const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
+      const c = manifest.cases.find(x => x.id === 'stage4-icon-geometry-2')!
+      const sidecar = JSON.parse(readFileSync(resolve(REPO_ROOT, c.captures[0]!.sidecarPath), 'utf8')) as { iconGeometryRulesVersion?: number }
+      const res = verifyCfCase(c, { rootDir: REPO_ROOT })
+      expect(res.kind, res.kind === 'refusal' ? `${res.code}: ${res.reason}` : '').toBe('verified')
+      if ((sidecar.iconGeometryRulesVersion ?? 1) !== ICON_GEOMETRY_RULES_VERSION) {
+        const v = res as { verifiedCapabilities: readonly string[] }
+        for (const cap of ['icon:geometry-box', 'icon:geometry-vertical-align', 'icon:composition-bar-showvalue']) expect(v.verifiedCapabilities, cap).not.toContain(cap)
+      }
+    }, 60_000)
+
+    it('fix round 9: a font-scaled box is judged within +-1 px in measured px, not in normalised units', () => {
+      // Excel 16.115 (stage4-icon-geometry-2): 5Boxes:2 ink widths 7 / 10 / 20 px at 8 / 11 / 20 pt, the same in 30 and
+      // 60 pt rows. Some scale k puts every cell within 1 px of k x font (k in [0.95, 1]): font fits; fixed and row do not.
+      const cells = ['B', 'C', 'D'].flatMap(col => ['2', '3'].map(r => {
+        const fontPt = ({ B: 8, C: 11, D: 20 } as Record<string, number>)[col]!, rowPt = r === '2' ? 30 : 60
+        const w = ({ B: 7, C: 10, D: 20 } as Record<string, number>)[col]!
+        return cellAt(`${col}${r}`, { fontPt, rowPt }, { l: 3, t: rowPt - 2 - Math.round(w / 2), w, h: Math.round(w / 2) })
+      }))
+      expect(evaluateIconGeometryCapability('icon:geometry-box', cells, cells)).toMatchObject({ status: 'discriminating', matched: 'font' })
+      // Widths 7 / 10 / 22: the best scale leaves a 1.35 px residual (undecided); 3 / 16 / 20 refutes every reading.
+      const off = cells.map(c => (c.ref.startsWith('D') ? cellAt(c.ref, { ...c.facts }, { l: 3, t: 1, w: 22, h: 11 }) : c))
+      expect(evaluateIconGeometryCapability('icon:geometry-box', off, off).status).toBe('non-discriminating')
+      const far = cells.map(c => (c.ref.startsWith('B') ? cellAt(c.ref, { ...c.facts }, { l: 3, t: 1, w: 3, h: 2 }) : c.ref.startsWith('C') ? cellAt(c.ref, { ...c.facts }, { l: 3, t: 1, w: 16, h: 8 }) : c))
+      expect(evaluateIconGeometryCapability('icon:geometry-box', far, far).status).toBe('none')
+    })
+
+    it('fix round 9: bar ink in the right half is no text evidence for the bar/icon showValue conflict', () => {
+      const conflict = (barShow: boolean, iconShow: boolean, barFirst: boolean) => ({ barShow, iconShow, barFirst })
+      const at = (ref: string, k: ReturnType<typeof conflict>, text: { shift: number; left: number } | undefined) => {
+        const c = cellAt(ref, { rowPt: 30, horizontal: 'left', conflict: k }, { l: 2, t: 15, w: 11, h: 12 }, { widthPx: 180 })
+        return text ? { ...c, observed: { ...c.observed, textShiftPx: text.shift, textInkLeftPx: c.observed.cellLeftPx + text.left } } : c
+      }
+      const H = conflict(false, true, true), I = conflict(true, false, true), J = conflict(false, true, false)
+      // Excel's row 2 (no bar): H hidden (only the icon matches the text pattern), I and J shown after the inset;
+      // row 3 (a short bar at the right): the rightmost match is the bar, 169 px in, so those cells say nothing.
+      const cells = [at('H2', H, { shift: -1, left: 3 }), at('I2', I, { shift: 12, left: 16 }), at('J2', J, { shift: 12, left: 16 }),
+        at('H3', H, { shift: 165, left: 169 }), at('I3', I, { shift: 165, left: 169 }), at('J3', J, { shift: 165, left: 169 })]
+      const got = evaluateIconGeometryCapability('icon:composition-bar-showvalue', cells, cells)
+      expect(got).toMatchObject({ status: 'discriminating', matched: 'priority-wins' })
+      expect(got.geometry!['H3']!['priority-wins']).toEqual({ verdict: 'excluded' })
     })
 
     it('showvalue canvas suppression decides only on cells whose text and icon band cannot overlap', () => {
@@ -5253,6 +5302,10 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     it('iconTwinSetMembers refuses a twin-set string with fewer than two non-empty members (review minor)', () => {
       expect(iconTwinSetMembers(iconTwinSetClass(['A', 'B']))).toEqual(['A', 'B'])
       for (const bad of ['twin-set:', 'twin-set:A', 'twin-set:A|', 'twin-set:|B', 'twin-set:A|A', 'twin-set:||']) expect(iconTwinSetMembers(bad), bad).toBeUndefined()
+      // Fix round 9 (review minor): only the canonical, strictly increasing order is a set.
+      expect(iconTwinSetMembers('twin-set:B|A')).toBeUndefined()
+      expect(iconTwinSetMembers('twin-set:A|C|B')).toBeUndefined()
+      expect(iconSidecarMalformed({ observedIcons: [{ ref: 'B2', icon: { glyphClass: 'twin-set:B|A' } }] })).toMatch(/twin set/)
       expect(iconTwinSetMembers('3Arrows:0')).toBeUndefined()
       expect(iconTwinSetMembers(null)).toBeUndefined()
       // A malformed observation is no set at all: it matches no hypothesis (not even one predicting '').

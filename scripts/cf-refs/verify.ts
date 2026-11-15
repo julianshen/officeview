@@ -4231,7 +4231,8 @@ export function iconTwinSetClass(members: readonly string[]): string {
 export function iconTwinSetMembers(glyphClass: string | null | undefined): string[] | undefined {
   if (typeof glyphClass !== 'string' || !glyphClass.startsWith(ICON_TWIN_SET_PREFIX)) return undefined
   const members = glyphClass.slice(ICON_TWIN_SET_PREFIX.length).split('|')
-  return members.length >= 2 && members.every(m => m.length > 0) && new Set(members).size === members.length ? members : undefined
+  // Fix round 9 (review minor): only the canonical form `iconTwinSetClass` writes, strictly increasing, is a set.
+  return members.length >= 2 && members.every(m => m.length > 0) && members.every((m, i) => i === 0 || members[i - 1]! < m) ? members : undefined
 }
 
 /**
@@ -4984,6 +4985,14 @@ export const ICON_GEOMETRY_READINGS: Readonly<Record<string, readonly string[]>>
 const r3 = (v: number): number => Math.round(v * 1000) / 1000
 
 /**
+ * The version of the geometry decision rules a sidecar's `iconGeometryHypotheses` were derived under (recorded as
+ * `iconGeometryRulesVersion`; absent means 1). 2 (fix round 9): the font-scaled box in measured px, and bar ink in the
+ * right half excluded from the bar/icon showValue conflict. A sidecar derived under other rules backs no geometry claim
+ * until `capture --verify-only` re-derives it.
+ */
+export const ICON_GEOMETRY_RULES_VERSION = 2
+
+/**
  * Evaluates one geometry capability over its designated cells (fix round 7). `pool` holds every measured cell of the case
  * (the reference box of the same font, for the clip and overflow readings, comes from its non-designated, edge-stable,
  * wide cells). A reading is consistent when every test passes and every group spreads <= 1 px; refuted when a test fails
@@ -5075,6 +5084,9 @@ export function evaluateIconGeometryCapability(cap: string, designated: readonly
       case 'icon:composition-bar-showvalue': {
         const k = c.facts.conflict
         if (!k) return V('excluded')
+        // Fix round 9: the text search takes the rightmost match of the control's pattern, so ink found in the cell's right
+        // half (where the right-to-left bar paints) is the bar, not left-aligned text: the cell is no evidence either way.
+        if (o.textInkLeftPx !== undefined && o.textInkLeftPx > o.cellLeftPx + o.cellWidthPx / 2) return V('excluded')
         const hide = reading === 'any-hides' ? !(k.barShow && k.iconShow) : reading === 'bar-wins' ? !k.barShow : reading === 'icon-wins' ? !k.iconShow : !(k.barFirst ? k.barShow : k.iconShow)
         // Left-aligned text sits after the icon's inset when shown; hidden text leaves at most the icon (shift <= 1) or nothing.
         const shown = shift !== undefined && shift >= 3
@@ -5097,20 +5109,45 @@ export function evaluateIconGeometryCapability(cap: string, designated: readonly
   }
   const table: Record<string, Record<string, IconGeometryPrediction>> = {}
   for (const c of designated) table[c.ref.toUpperCase()] = Object.fromEntries(readings.map(r => [r, predict(r, c)]))
+  // Fix round 9: the font-scaled box is judged in measured px. Its group values are widths normalised to 11 pt, so the
+  // +-1 px tolerance is applied to the unnormalised width against one shared scale k, as S3-A applies it per cell:
+  // consistent when some k puts every cell within 1 px of k * font, refuted when none puts every cell within 1.5 px
+  // (the >= 3 px group spread of the other readings), undecided in between.
+  const fontOf = new Map(designated.map(c => [c.ref.toUpperCase(), c.facts.fontPt] as const))
+  const scaledSpread = (pairs: Array<{ w: number; f: number }>): number => {
+    const ks = pairs.map(p => p.w / p.f)
+    let lo = Math.min(...ks), hi = Math.max(...ks)
+    const r = (k: number): number => Math.max(...pairs.map(p => Math.abs(p.w - k * p.f)))
+    for (let i = 0; i < 100; i++) {
+      const a = lo + (hi - lo) / 3, b = hi - (hi - lo) / 3
+      if (r(a) <= r(b)) hi = b
+      else lo = a
+    }
+    return r((lo + hi) / 2)
+  }
   const consistent: string[] = [], undecided: string[] = []
   for (const r of readings) {
     const preds = Object.values(table).map(t => t[r]!)
     let refuted = false, open = false, claims = 0
     const groups = new Map<string, number[]>()
-    for (const p of preds) {
+    const scaled = new Map<string, Array<{ w: number; f: number }>>()
+    const refsOf = Object.keys(table)
+    preds.forEach((p, i) => {
       if ('verdict' in p) {
         if (p.verdict === 'fail') refuted = true
         else if (p.verdict === 'unknown') open = true
         else if (p.verdict === 'pass') claims++
-      } else groups.set(p.group, [...(groups.get(p.group) ?? []), p.value])
-    }
-    for (const vals of groups.values()) {
-      const spread = Math.max(...vals) - Math.min(...vals)
+      } else {
+        groups.set(p.group, [...(groups.get(p.group) ?? []), p.value])
+        const f = fontOf.get(refsOf[i]!)
+        if (cap === 'icon:geometry-box' && r === 'font' && f !== undefined) scaled.set(p.group, [...(scaled.get(p.group) ?? []), { w: (p.value * f) / 11, f }])
+      }
+    })
+    for (const [g, vals] of groups) {
+      const sc = scaled.get(g)
+      // Scaled groups: the minimax residual r* mapped onto the group thresholds (r* <= 1 consistent, >= 1.5 refuted).
+      const res = sc ? scaledSpread(sc) : undefined
+      const spread = res !== undefined ? (res <= 1 ? 0 : res >= 1.5 ? 3 : 2) : Math.max(...vals) - Math.min(...vals)
       claims++
       if (spread >= 3) refuted = true
       else if (spread > 1) open = true
@@ -5269,10 +5306,12 @@ function verifyIconCapture(
     const recordedHyps = (sidecar.iconHypotheses as Record<string, unknown> | undefined)?.[cap]
     if (rec.hypotheses && JSON.stringify(recordedHyps ?? null) !== JSON.stringify(rec.hypotheses)) return fail('sidecar-mismatch', `Sidecar iconHypotheses for ${cap} differ from the hypotheses the verifier recomputes`)
     const recordedGeo = (sidecar.iconGeometryHypotheses as Record<string, unknown> | undefined)?.[cap]
-    if (rec.geometry && recordedGeo === undefined && label === 'unverified') {
-      // A sidecar derived before fix round 7 records no geometry readings: the capability stays unverified until
-      // `capture --verify-only` re-derives the sidecar (no claim rests on readings the sidecar does not carry).
-      outcome.notes[cap] = `geometry readings not yet recorded in this sidecar (re-derive with capture --verify-only): recomputed ${rec.status}`
+    const rulesVersion = typeof sidecar.iconGeometryRulesVersion === 'number' ? sidecar.iconGeometryRulesVersion : 1
+    if (rec.geometry && ((recordedGeo === undefined && label === 'unverified') || (recordedGeo !== undefined && rulesVersion !== ICON_GEOMETRY_RULES_VERSION))) {
+      // A sidecar derived before fix round 7 records no geometry readings, and one derived under older geometry rules
+      // (fix round 9) records stale ones: the capability stays unverified, its label unchecked, until
+      // `capture --verify-only` re-derives the sidecar (no claim rests on readings the current rules did not derive).
+      outcome.notes[cap] = `geometry readings ${recordedGeo === undefined ? 'not yet recorded' : `derived under geometry rules v${rulesVersion}, not v${ICON_GEOMETRY_RULES_VERSION}`} (re-derive with capture --verify-only): recomputed ${rec.status}`
       continue
     }
     if (rec.geometry && JSON.stringify(recordedGeo ?? null) !== JSON.stringify(rec.geometry)) return fail('sidecar-mismatch', `Sidecar iconGeometryHypotheses for ${cap} differ from the readings the verifier recomputes`)

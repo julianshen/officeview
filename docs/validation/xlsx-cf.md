@@ -1323,7 +1323,7 @@ Task 24 prepares the Stage 4 oracle. The first Excel capture run (c63de53a) and 
 | `stage4-icon-scope` | `icon:scope-disjoint`, `-duplicate-blocks`, `-hidden-row`, `-autofilter-hidden-row`, `-merged-cell` | S4-H | recipe-pending |
 | `stage4-icon-composition` | `icon:composition-overlapping-icons`, `-with-bar`, `-bar-showvalue`, `-with-scale`, `-dxf-fill`, `-matching-stopIfTrue-ahead`, `-noicons-slot`, `-unresolved-stub` (`-icon-stopIfTrue` moved to unresolved-shapes in fix round 6) | S4-I, S4-J | recipe-pending |
 | `stage4-icon-rtl` | `icon:placement-rtl-sheet` (record only, stays unverified) | S4-M | recipe-pending |
-| `stage4-icon-unresolved-shapes` | 10 × `icon:unresolved-*`, plus `icon:attr-percent-false` (M) and `icon:reverse-custom` (N), the two shapes Excel canonicalises on resave (lift nothing) | S4-B, S4-C, S4-E, S4-F, S4-O, S4-P | unsupported |
+| `stage4-icon-unresolved-shapes` | 10 × `icon:unresolved-*`, plus `icon:attr-percent-false` (M) and `icon:reverse-custom` (N), the two shapes Excel canonicalises on resave, and `icon:composition-icon-stopIfTrue` (O), the icon rule carrying stopIfTrue that Excel strips (lift nothing) | S4-B, S4-C, S4-E, S4-F, S4-J, S4-O, S4-P, S4-ICON-STOPIFTRUE | unsupported |
 
 Expected non-discriminating candidates, decided per capture by `discriminateIcon`/`discriminateIconBox` (not pre-registered): `icon:thresholds-gte-*` on off-boundary cells, `icon:reverse` on the middle bucket (the fixture designates only end buckets), `icon:inset-left` on right-aligned numbers, `icon:geometry-snapping` if no edge lands at a fractional point, and `icon:composition-noicons-slot` if the lower rule's icon would be withheld anyway.
 
@@ -1504,3 +1504,41 @@ After verify-only (38d3d872), production paints icons only behind `CF_ICON_PAINT
   - S4-PROD-ALIGN drops snapping from `CF_ICON_PAINT_CAPABILITIES`.
 
 **Build and capture:** `stage4-icon-geometry-2` (build, then capture). Then run `capture --stage 4 --verify-only`. No other case changes.
+
+### Fix round 9: what `stage4-icon-geometry-2` shows (a08c8a39), S4-SNAP-SHARED, and the review minors
+
+**What Excel 16.115 draws.** These are the stored capture's measured values, re-read in memory.
+
+- **5Boxes:2 ink box (B..D, bottom-aligned):**
+
+  | Font | Row 30 pt | Row 60 pt |
+  |---|---|---|
+  | 8 pt | 7×3 | 7×3 |
+  | 11 pt | 10×5 | 10×5 |
+  | 20 pt | 20×10 | 20×10 |
+
+  The width is independent of the row and close to the font size in px. The **font-scaled** box is the reading closest to Excel: k ∈ [0.95, 1] puts every width within 1 px of k × font. `fixed` (spread 13 px) and `row` are refuted.
+- **Why the round-8 evaluator said non-discriminating: a harness bug.** It judged the font reading on widths normalised to 11 pt (9.625 / 10 / 11). Normalising scales the ±1 px tolerance by 11/font, so the 8 pt cell's 1 px became 1.375. The font reading is now judged in measured px against one shared scale, as S3-A applies ±1 px per cell:
+  - consistent when some k puts every cell within 1 px of k × font;
+  - refuted when no k puts every cell within 1.5 px;
+  - undecided in between.
+- **Bar/icon showValue (H..J).**
+  - Row 2 holds the 10s, at the range minimum, so no bar is drawn:
+    - **H2** (bar 0 ahead of icon 1): the value is hidden; the only ink matching the text pattern is the icon itself, shift −1.
+    - **I2** (bar 1 ahead of icon 0): the value is shown after the inset (+12).
+    - **J2** (icon 1 ahead of bar 0): the value is shown (+12).
+
+    That is the **priority-wins** pattern: the higher-priority rule's showValue governs.
+  - Row 3 holds the 15s, with a short bar at the right edge. There the text search's rightmost pattern match is the bar, 169 px in (`textInkLeftPx` 685, 865, 1045), so H3 read as "shown" and every reading was refuted (`none`, so the capability stayed blocked).
+  - **This was a harness bug.** Ink found in the cell's right half (where the right-to-left bar paints) is no text evidence: the cell is excluded.
+- **Results recomputed in memory, not yet committed evidence:**
+  - `icon:geometry-box` discriminates **font**;
+  - `icon:geometry-vertical-align` discriminates **cell-align**;
+  - `icon:composition-bar-showvalue` discriminates **priority-wins**. This contradicts production's `any-hides` and is a finding for S4-PROD-ALIGN.
+- **Versioned rules.** Sidecars record `iconGeometryRulesVersion` (now 2). A sidecar derived under other rules leaves its geometry capabilities unverified, with its labels unchecked, until `capture --stage 4 --verify-only` re-derives it. No Excel run is needed.
+
+**Ruling S4-SNAP-SHARED.** `icon:geometry-snapping` is in `CF_STAGE4_NONDISCRIMINATING`: it is non-discriminating by construction, since whole-pt column widths mean every rounding agrees. Nothing waits on it. The icon paint gate will use the verified `bar:geometry-snapping`, and that production change belongs to S4-PROD-ALIGN.
+
+**Review minors (rounds 6–7).**
+- The unresolved-shapes matrix row now lists column O (`icon:composition-icon-stopIfTrue`, S4-J and S4-ICON-STOPIFTRUE).
+- `iconTwinSetMembers` accepts only the canonical, strictly increasing member order.

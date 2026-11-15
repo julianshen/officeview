@@ -5511,6 +5511,8 @@ export const CF_STAGE4_NONDISCRIMINATING: Readonly<Record<string, string>> = {
     'Under the S4-A rule a crop must equal a white-background key crop within +-8 at zero offset; a colour-scale fill under the icon changes every background pixel, so no data that keeps the fill can classify the icon.',
   'icon:composition-dxf-fill':
     'Under the S4-A rule a crop must equal a white-background key crop within +-8 at zero offset; a DXF fill under the icon changes every background pixel, so no data that keeps the fill can classify the icon.',
+  'icon:geometry-snapping':
+    'Non-discriminating by construction (Ruling S4-SNAP-SHARED, fix round 9): Excel lays columns out in whole pt at 1 px/pt, so every rounding of a measured icon edge agrees; the icon paint gate will use bar:geometry-snapping (verified in Stage 3, the same roundHalfUp device grid) in S4-PROD-ALIGN.',
   'icon:placement-rtl-sheet':
     'Record only (Ruling S4-M): the viewer does not lay out RTL sheets in Stage 4, so the recorded placement and inset stay unverified, as S3-K did for bars.',
 }

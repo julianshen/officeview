@@ -23,6 +23,7 @@ import {
   type IconGlyphKey,
   buildIconGlyphKey,
   iconGlyphFaintRecord,
+  ICON_GEOMETRY_RULES_VERSION,
   iconGlyphTwinsRecord,
   classifyIconCapture,
   evaluateIconCapabilities,
@@ -393,7 +394,7 @@ export function buildIconSidecarExtras(
   const hypotheses = Object.fromEntries(Object.entries(evaluation).filter(([, e]) => e.hypotheses).map(([cap, e]) => [cap, e.hypotheses]))
   // Fix round 7: the geometry readings' per-cell predictions, recomputed and compared by the verifier like iconHypotheses.
   const geometry = Object.fromEntries(Object.entries(evaluation).filter(([, e]) => e.geometry).map(([cap, e]) => [cap, e.geometry]))
-  return { extras: { ...base, observedIcons: [...observed.values()], iconHypotheses: hypotheses, ...(Object.keys(geometry).length > 0 ? { iconGeometryHypotheses: geometry } : {}) }, observed, evaluation }
+  return { extras: { ...base, observedIcons: [...observed.values()], iconHypotheses: hypotheses, ...(Object.keys(geometry).length > 0 ? { iconGeometryHypotheses: geometry, iconGeometryRulesVersion: ICON_GEOMETRY_RULES_VERSION } : {}) }, observed, evaluation }
 }
 
 /** Parses the `buildDataBarSettingsProbeScript` output into rows (an empty or unparseable answer yields no rows). */
