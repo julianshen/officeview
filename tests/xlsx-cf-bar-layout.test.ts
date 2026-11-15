@@ -71,7 +71,8 @@ describe('Stage 3 bar layout variant (Ruling S3-B)', () => {
   it('rendering without --publish-stage3 is byte-identical to the committed file; publishing carries the layout export', () => {
     const committed = readFileSync(resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts'), 'utf8')
     expect(renderVerifiedCapabilitiesSource(manifest(), REPO_ROOT, { committedSource: committed })).toBe(committed)
-    const published = renderVerifiedCapabilitiesSource(manifest(), REPO_ROOT, { publishStage3: true })
+    // The committed Stage 4 publication (Task 30) is carried over; only Stage 3 is re-derived here.
+    const published = renderVerifiedCapabilitiesSource(manifest(), REPO_ROOT, { committedSource: committed, publishStage3: true })
     const block = renderBarLayoutBlock(auditStage3Manifest(manifest(), { rootDir: REPO_ROOT }).barLayout.layout)
     expect(published).toContain(block)
     // Task 23 published it: the committed file is exactly the published rendering.

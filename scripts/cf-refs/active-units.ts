@@ -82,6 +82,21 @@ const populated = (n: number, k: number) => async () => {
   return { sheet, rect: { firstRow: 0, lastRow: k - 1, firstCol: 0, lastCol: 0 }, cells: k }
 }
 
+/** Task 26: four icon rules (percentile, percent, num, custom num) over the populated column, as the units test uses. */
+const populatedIcons = (n: number, k: number) => async () => {
+  const all = { firstRow: 0, lastRow: n - 1, firstCol: 0, lastCol: 0 }
+  const th = (type: 'num' | 'percent' | 'percentile', value: number) => ({ bound: { type, value }, gte: true })
+  const icon = (thresholds: ReturnType<typeof th>[], custom?: { set: string; iconId: number }[]) => ({ kind: 'iconSet', dialect: 'base', formulas: [], set: '3Arrows', thresholds, reverse: false, showValue: true, percentAttr: true, sheetRightToLeft: false, ...(custom ? { custom } : {}) })
+  const defs = [
+    icon([th('percentile', 0), th('percentile', 33), th('percentile', 67)]), icon([th('percent', 0), th('percent', 33), th('percent', 67)]),
+    icon([th('num', 0), th('num', 5), th('num', 10)]), icon([th('num', 0), th('num', 5), th('num', 10)], [{ set: '3Flags', iconId: 2 }, { set: 'NoIcons', iconId: 0 }, { set: '3Flags', iconId: 0 }]),
+  ]
+  const rules = defs.map((definition, i) => ({ id: i, priority: i + 1, documentOrder: i, stopIfTrue: false, ranges: [all], writes: new Set(['iconSet']), definition }))
+  const rows = Array.from({ length: n }, (_, r) => ({ index: r, cells: [{ ref: `A${r + 1}`, row: r, col: 0, styleIndex: 0, value: (r % 2) * 10 + 5, hasCachedValue: true }] }))
+  const sheet = { name: 'P', sheetId: 'p', rows, cols: [], mergeRefs: [], mergeRanges: [], conditionalFormatting: { diagnostics: [], rules } } as unknown as XlsxSheet
+  return { sheet, rect: { firstRow: 0, lastRow: k - 1, firstCol: 0, lastCol: 0 }, cells: k }
+}
+
 const scenarios: Array<{ name: string; build: () => Promise<{ sheet: XlsxSheet; rect: Rect; cells: number }> }> = [
   { name: 'stage3-bar-lengths-default A1:V28 (largest fixture)', build: () => fixture('stage3-bar-lengths-default') },
   { name: 'stage3-bar-auto-bounds', build: () => fixture('stage3-bar-auto-bounds') },
@@ -94,6 +109,8 @@ const scenarios: Array<{ name: string; build: () => Promise<{ sheet: XlsxSheet; 
   { name: 'populated 100,000-row A:A, 1 bar, 1,000-cell call (text-path maximum)', build: populated(100_000, 1000) },
   { name: 'populated 100,000-row A:A, 1 bar, 256-cell call (paint-path maximum)', build: populated(100_000, 256) },
   { name: 'populated 100,000-row A:A, 1 bar, 5,000-cell call (not a production size)', build: populated(100_000, 5000) },
+  { name: 'populated 100,000-row A:A, 4 icon rules, 1,000-cell call (text-path maximum)', build: populatedIcons(100_000, 1000) },
+  { name: 'populated 100,000-row A:A, 4 icon rules, 256-cell call (paint-path maximum)', build: populatedIcons(100_000, 256) },
 ]
 
 const runs = Math.max(1, Number(process.argv[2] ?? 5))

@@ -15,6 +15,12 @@ export const CF_BAR_CELL_BYTES: number = measureCfCellBytes({ properties: {}, ba
   isGradient: false, isNegative: false, showValue: false, rtl: false,
 } }) - measureCfCellBytes({ properties: {} })
 
+/** The wire bytes one icon descriptor adds to a cell state (Ruling S4-Q), DERIVED from the wire measurer so the grant
+ * estimate cannot drift from `measureCfCellBytes` (Lesson 6). The descriptor has no optional field. */
+export const CF_ICON_CELL_BYTES: number = measureCfCellBytes({ properties: {}, icon: {
+  ruleId: 0, set: 0, iconId: 0, bucket: 0, buckets: 0, showValue: false,
+} }) - measureCfCellBytes({ properties: {} })
+
 /** Upper bound of one normalized data-bar definition's own fields (the rule origin is priced by the rule bound),
  * DERIVED from the payload measurer with every optional field present and the longest enum spellings. */
 export const CF_BAR_DEFINITION_BYTES: number = measurePayloadBytes({
@@ -22,6 +28,16 @@ export const CF_BAR_DEFINITION_BYTES: number = measurePayloadBytes({
   fillArgb: 0, negativeFillArgb: 0, borderArgb: 0, negativeBorderArgb: 0, axisArgb: 0, minLength: 0, maxLength: 0,
   gradient: false, border: false, negativeBarColorSameAsPositive: false, negativeBarBorderColorSameAsPositive: false,
   axisPosition: 'automatic', direction: 'rightToLeft', showValue: false, sheetRightToLeft: false, pairing: 'base-only', autoColors: ['negativeFill', 'axis'],
+})!
+
+/** Upper bound of one normalized icon-set definition's own fields (the rule origin is priced by the rule bound),
+ * DERIVED from the payload measurer for the largest shape: five thresholds with the longest bound spelling, five custom
+ * refs and the longest set names (Lesson 6). */
+export const CF_ICON_DEFINITION_BYTES: number = measurePayloadBytes({
+  kind: 'iconSet', set: '3TrafficLights1',
+  thresholds: Array.from({ length: 5 }, () => ({ bound: { type: 'percentile', value: 0 }, gte: false })),
+  reverse: false, showValue: false, percentAttr: false,
+  custom: Array.from({ length: 5 }, () => ({ set: '3TrafficLights1', iconId: 0 })), sheetRightToLeft: false,
 })!
 
 export const CF_LIMITS = Object.freeze({ rules: 4096, rangesPerRule: 256, rangesPerSheet: 16384,

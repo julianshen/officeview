@@ -40,9 +40,30 @@ export function defaultColumnWidthPx(format: { baseColWidth?: number; defaultCol
   return Math.ceil(columnWidthPx(width, mdw) / 8) * 8
 }
 
+/** `<sheetFormatPr>`: the column defaults, and the default row height with its flags (Task 28 round 5). */
+export type SheetFormat = { baseColWidth?: number; defaultColWidth?: number; defaultRowHeight?: number; customHeight?: boolean; zeroHeight?: boolean; thickTop?: boolean; thickBottom?: boolean }
 /** Parse `<sheetFormatPr>` attributes. */
-export function sheetFormat(a: Record<string, unknown>): { baseColWidth?: number; defaultColWidth?: number } {
+export function sheetFormat(a: Record<string, unknown>): SheetFormat {
   const num = (v: unknown) => typeof v === 'string' && v !== '' && Number.isFinite(Number(v)) ? Number(v) : undefined
-  const baseColWidth = num(a.baseColWidth), defaultColWidth = num(a.defaultColWidth)
-  return { ...(baseColWidth !== undefined ? { baseColWidth } : {}), ...(defaultColWidth !== undefined ? { defaultColWidth } : {}) }
+  const flag = (v: unknown) => (v === '1' || v === 'true' ? true : v === '0' || v === 'false' ? false : undefined)
+  const out: SheetFormat = {}
+  const baseColWidth = num(a.baseColWidth), defaultColWidth = num(a.defaultColWidth), defaultRowHeight = num(a.defaultRowHeight)
+  if (baseColWidth !== undefined) out.baseColWidth = baseColWidth
+  if (defaultColWidth !== undefined) out.defaultColWidth = defaultColWidth
+  if (defaultRowHeight !== undefined) out.defaultRowHeight = defaultRowHeight
+  for (const k of ['customHeight', 'zeroHeight', 'thickTop', 'thickBottom'] as const) {
+    const f = flag(a[k])
+    if (f !== undefined) out[k] = f
+  }
+  return out
+}
+/**
+ * The authored height (pt) of a row without `ht` (Ruling S4-DEFAULT-ROW): `defaultRowHeight`, unless `zeroHeight`
+ * hides such rows or `thickTop`/`thickBottom` change their height; `customHeight` only marks the value as set by hand.
+ * Undefined: not known (absent or invalid).
+ */
+export function defaultRowPtOf(format: SheetFormat | undefined): number | undefined {
+  const h = format?.defaultRowHeight
+  if (h === undefined || !Number.isFinite(h) || h < 0 || format?.zeroHeight || format?.thickTop || format?.thickBottom) return undefined
+  return h
 }

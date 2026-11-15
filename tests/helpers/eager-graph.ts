@@ -3,7 +3,7 @@
  * scripts/vite-module-map.ts writes. Shared by tests/ui-eager-graph.test.ts
  * and scripts/check-eager.ts.
  */
-export type ModuleMap = Record<string, { modules: string[]; imports: string[]; dynamicImports: string[] }>
+export type ModuleMap = Record<string, { modules: string[]; imports: string[]; dynamicImports: string[]; moduleBytes?: Record<string, { raw: number; gzip: number }> }>
 
 /** Every module bundled into `entry` or a chunk it statically imports.
  * Dynamic imports are lazy and never followed. */

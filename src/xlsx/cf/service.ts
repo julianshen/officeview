@@ -4,9 +4,10 @@ import { createCfCache, sameCfStamp } from './cache'
 import { composeCellAsync } from './compose'
 import { resolveScaleThresholds, safeFraction, scaleColorAt } from './colorScale'
 import { evaluateDataBar, resolveBarThresholds } from './dataBar'
+import { evaluateIconSet, resolveIconThresholds } from './iconSet'
 import { barLayoutEvidence } from './evidence'
 import { resolveCfCellStyle } from './dxf'
-import { CF_BAR_CELL_BYTES, CF_LIMITS, createCfWorkBudget, type CfMemory, type CfWorkBudget } from './limits'
+import { CF_BAR_CELL_BYTES, CF_ICON_CELL_BYTES, CF_LIMITS, createCfWorkBudget, type CfMemory, type CfWorkBudget } from './limits'
 import type { CfCellState, CfLease, CfLiteral, CfOutcome, CfPrepared, CfPrepareRequest, CfRule, CfSheetRules, CfValueSource, SourceRect } from './model'
 import { cfRuntimeEvidence, evaluatePredicate, type CfEvidenceGate } from './predicates'
 import { createCfStatistics, type CfRangeStatistics, type CfStatisticsOptions, type CfStatisticsSession } from './statistics'
@@ -16,6 +17,8 @@ const blank: CfLiteral = Object.freeze({ kind: 'blank' })
 const inside = (r: SourceRect, row: number, col: number) => row >= r.firstRow && row <= r.lastRow && col >= r.firstCol && col <= r.lastCol
 function statistical(rule: CfRule) {
   const d = rule.definition
+  // An icon set reads statistics only through a non-`num` threshold; a `num`-only set requests none (Ruling S4-G).
+  if (d.kind === 'iconSet') return d.thresholds.some(t => t.bound.type !== 'num')
   return d.kind === 'colorScale' || d.kind === 'dataBar' || d.kind === 'top10' || d.kind === 'aboveAverage' || (d.kind === 'predicate' && (d.type === 'uniqueValues' || d.type === 'duplicateValues'))
 }
 
@@ -55,6 +58,8 @@ export function estimateCfPrepareBytes(rules: CfSheetRules, sourceRects: readonl
     } else if (rule.definition.kind === 'dataBar') {
       // Derived from the wire measurer (Lesson 6), never a hand constant.
       propertyBytes += CF_BAR_CELL_BYTES
+    } else if (rule.definition.kind === 'iconSet') {
+      propertyBytes += CF_ICON_CELL_BYTES
     }
     for (const key of rule.writes) propertyBytes += 128 + String(key).length * 4
   }
@@ -144,7 +149,8 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
           const scopeBlock = new Map<CfRule, CfOutcome<never>>()
           // Scales and bars share the shape checks, each under its own family's evidence: bar scope capabilities are
           // measured for bars and never inherited from scale:scope-* (Ruling S3-H).
-          const blockScope = async (rule: CfRule, prepared: CfRangeStatistics | undefined, family: 'scale' | 'bar'): Promise<void> => {
+          // Icons likewise under icon:scope-* (Ruling S4-H), never bar:* or scale:*.
+          const blockScope = async (rule: CfRule, prepared: CfRangeStatistics | undefined, family: 'scale' | 'bar' | 'icon'): Promise<void> => {
             const unmeasured = (): void => { scopeBlock.set(rule, { kind: 'unresolved', reason: 'cf-unmeasured-capability' }) }
             const allows = (capability: string): boolean => evidence.allows(`${family}:${capability}`)
             if (rule.ranges.length > 1 && !allows('scope-disjoint')) return unmeasured()
@@ -163,14 +169,16 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
             if (prepared?.hasErrors && !allows('participation-error-presence')) return unmeasured()
             // S3-G: date serials join a bar's statistics only with evidence; a source that cannot tell dates from
             // numbers withholds every bar until then.
-            if (family === 'bar' && !allows('participation-dateserial') && (source.numberFormats !== 'resolved' || prepared?.hasDateSerials)) return unmeasured()
+            // Icons follow the same table (S4-G); a `num`-only set has no statistics, so its date cells are judged per cell.
+            if (family !== 'scale' && !allows('participation-dateserial') && (source.numberFormats !== 'resolved' || prepared?.hasDateSerials)) return unmeasured()
           }
           // Only a percentile bound needs the sorted copy; min/max/num/percent scales and bars stream, and every other
           // statistical rule (top10, duplicates, averages) takes the session default (sorted).
           const ownSorted = (rule: CfRule): boolean => {
             const d = rule.definition
             return d.kind === 'colorScale' ? d.points.some(p => p.bound.type === 'percentile')
-              : d.kind === 'dataBar' ? d.bounds.some(b => b.type === 'percentile') : true
+              : d.kind === 'dataBar' ? d.bounds.some(b => b.type === 'percentile')
+              : d.kind === 'iconSet' ? d.thresholds.some(t => t.bound.type === 'percentile') : true
           }
           // One scan per scope whatever the priority order: a sorted entry serves unsorted requests but not the reverse,
           // so a streaming rule whose scope another rule needs sorted asks for the sorted copy too (Bounded work).
@@ -193,13 +201,16 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
             if (!options.statistics && out.kind === 'ready') leases.push(out.value)
           }
           budget.resume()
-          for (const rule of ordered) if (rule.definition.kind === 'colorScale' || rule.definition.kind === 'dataBar') {
+          for (const rule of ordered) if (rule.definition.kind === 'colorScale' || rule.definition.kind === 'dataBar' || rule.definition.kind === 'iconSet') {
             const prepared = stats.get(rule)
-            await blockScope(rule, prepared?.kind === 'ready' ? prepared.value.value : undefined, rule.definition.kind === 'colorScale' ? 'scale' : 'bar')
+            const family = rule.definition.kind === 'colorScale' ? 'scale' : rule.definition.kind === 'dataBar' ? 'bar' : 'icon'
+            await blockScope(rule, prepared?.kind === 'ready' ? prepared.value.value : undefined, family)
           }
           budget.resume()
           // Ruling S3-B: the published layout, gated by this service's evidence; undefined withholds every bar.
           const barLayout = barLayoutEvidence(cap => evidence.allows(cap))
+          // Icon thresholds depend on the rule and its scope statistics only: resolved once per rule, not per cell.
+          const iconThresholds = new Map<CfRule, CfOutcome<readonly number[]>>()
           const evaluate = async (row: number, col: number, value: CfLiteral): Promise<CfOutcome<CfCellState>> => {
             const textBytes = value.kind === 'string' ? 256 + value.value.length * 8 : 0
             if (textBytes > CF_LIMITS.scratchBytes) return { kind: 'unresolved', reason: 'cf-resource-limit' }
@@ -262,6 +273,25 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                   const thresh = resolveBarThresholds(rule.definition, preparedStats.value.value, gate)
                   outcomes.push(thresh.kind !== 'ready' ? thresh
                     : evaluateDataBar(value, rule.definition, thresh.value, preparedStats.value.value, gate))
+                } else if (rule.definition.kind === 'iconSet') {
+                  // No icon:* capability measures an icon rule that also carries a DXF (spec §5.7 and Ruling S4-I are
+                  // silent on whether its fill and font apply): the whole contribution is withheld, which taints the
+                  // icon slot and every DXF write (fail closed).
+                  if (rule.dxf && Object.keys(rule.dxf).length > 0) { outcomes.push({ kind: 'unresolved', reason: 'cf-unmeasured-capability' }); continue }
+                  const blocked = scopeBlock.get(rule)
+                  if (blocked) { outcomes.push(blocked); continue }
+                  const needsStats = statistical(rule)
+                  if (needsStats && preparedStats?.kind !== 'ready') {
+                    outcomes.push(preparedStats?.kind === 'unresolved' ? preparedStats : { kind: 'unresolved', reason: 'cf-no-statistics' })
+                    continue
+                  }
+                  const gate = { hasEvidence: (cap: string) => evidence.allows(cap) }
+                  let thresh = iconThresholds.get(rule)
+                  if (!thresh) {
+                    thresh = resolveIconThresholds(rule.definition, needsStats && preparedStats?.kind === 'ready' ? preparedStats.value.value : undefined, gate)
+                    iconThresholds.set(rule, thresh)
+                  }
+                  outcomes.push(thresh.kind !== 'ready' ? thresh : evaluateIconSet(value, rule.definition, thresh.value, gate))
                 } else {
                   outcomes.push(preparedStats?.kind === 'unresolved' ? preparedStats
                     : evaluatePredicate(rule, { row, col }, value, preparedStats?.kind === 'ready' ? preparedStats.value.value : undefined, evidence, options.dateContext))
@@ -279,7 +309,7 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                 const outcome = outcomes[i]!
                 if (outcome.kind !== 'ready' || !outcome.value) continue
                 // Visuals never count as DXF positives: their slots are arbitrated by composeCell.
-                if (matching[i]!.definition.kind === 'colorScale' || matching[i]!.definition.kind === 'dataBar') continue
+                if (matching[i]!.definition.kind === 'colorScale' || matching[i]!.definition.kind === 'dataBar' || matching[i]!.definition.kind === 'iconSet') continue
                 const priority = matching[i]!.priority
                 if (priorities.has(priority) && !evidence.allows('priority:equal-priority-first')) {
                   return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }

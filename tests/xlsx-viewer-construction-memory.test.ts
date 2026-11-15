@@ -360,3 +360,121 @@ describe('review round 3 (codex) MINOR 2: the detached leftover sweep charges it
     await session.release()
   })
 })
+
+/**
+ * Final review I2 (Ruling S4-ROW-UNIFORM's rich-string flags): the per-shared-string rich/phonetic flags are a bitset
+ * charged to construction memory before it grows, held until the import ends and released on completion, cancellation
+ * and failure; a refused charge fails the import typed, with nothing left charged.
+ */
+describe('rich shared-string flags are charged construction memory (final review I2)', () => {
+  const RICH = 'r</t><r><t>run</t></r><t>'
+  const strings = (n: number) => Array.from({ length: n }, (_, i) => (i % 2 ? `plain ${i}` : `${RICH}${i}`))
+  const watch = (store: SourcePageStore) => {
+    const shares: Array<{ needs: number[]; released: boolean }> = []
+    const real = store.construction.share.bind(store.construction)
+    vi.spyOn(store.construction, 'share').mockImplementation((what, options) => {
+      const inner = real(what, options)
+      if (what !== 'rich shared-string flags') return inner
+      const rec = { needs: [] as number[], released: false }
+      shares.push(rec)
+      return { get bytes() { return inner.bytes }, need: (b: number) => { rec.needs.push(b); inner.need(b) }, release: () => { rec.released = true; inner.release() } }
+    })
+    return shares
+  }
+
+  it('completion: the bitset is charged before it grows (one bit per string) and released when the import completes', async () => {
+    const pool = new MemoryPool({ limitBytes: 256 * MiB })
+    const store = new SourcePageStore({ docId: 'd', backend: memoryPageBackend() })
+    store.bindMemory(pool)
+    const shares = watch(store)
+    const n = 20_000
+    const session = await openImportSession(blobOf(xlsxBytes({ sheetData: rowsXml(3), sharedStrings: strings(n) })), { docId: 'd', profile: 'D', store })
+    expect(await session.done).toMatchObject({ kind: 'complete' })
+    expect(shares).toHaveLength(1)
+    expect(Math.max(...shares[0]!.needs)).toBeGreaterThanOrEqual(Math.ceil((n - 1) / 8))
+    expect(shares[0]!.released).toBe(true)
+    expect(pool.stats().transientBytes).toBe(0)
+    await session.release()
+    expect(pool.stats().totalBytes).toBe(0)
+  })
+
+  it('cancellation releases the bitset', async () => {
+    const pool = new MemoryPool({ limitBytes: 256 * MiB })
+    const gated = gatedBackend(1)
+    const store = new SourcePageStore({ docId: 'd', backend: gated.backend })
+    store.bindMemory(pool)
+    const shares = watch(store)
+    const session = await openImportSession(blobOf(xlsxBytes({ sheetData: rowsXml(3000), sharedStrings: strings(4000) })), { docId: 'd', profile: 'D', store, pageRows: 500 })
+    await gated.reached
+    expect(shares[0]?.released, 'held while the import runs').toBe(false)
+    const cancelled = session.cancel()
+    gated.release()
+    await cancelled
+    expect(await session.done).toEqual({ kind: 'cancelled' })
+    expect(shares[0]!.released).toBe(true)
+    expect(pool.stats().transientBytes).toBe(0)
+    expect(pool.stats().totalBytes).toBe(0)
+  })
+
+  it('a refused bitset charge fails the import typed and leaves nothing charged', async () => {
+    const pool = new MemoryPool({ limitBytes: 256 * MiB })
+    const store = new SourcePageStore({ docId: 'd', backend: memoryPageBackend() })
+    store.bindMemory(pool)
+    const real = store.construction.share.bind(store.construction)
+    let refused = false
+    vi.spyOn(store.construction, 'share').mockImplementation((what, options) => {
+      const inner = real(what, options)
+      if (what !== 'rich shared-string flags') return inner
+      return { get bytes() { return inner.bytes }, need: (b: number) => { refused = true; inner.need(b > 0 ? 2 ** 40 : b) }, release: () => inner.release() }
+    })
+    const session = await openImportSession(blobOf(xlsxBytes({ sheetData: rowsXml(3), sharedStrings: strings(100) })), { docId: 'd', profile: 'D', store })
+    const done = await session.done
+    expect({ refused, done: done.kind }).toEqual({ refused: true, done: 'incomplete' })
+    expect(done).toMatchObject({ kind: 'incomplete', failure: { code: 'resource-limit' } })
+    expect(session.diagnostics.map(d => d.code)).toContain('import-memory-budget')
+    expect(pool.stats().transientBytes).toBe(0)
+    await session.release()
+    expect(pool.stats().totalBytes).toBe(0)
+  })
+})
+
+/** Residual (codex re-review): while the bitset grows, the old buffer is still live, so the charge covers both. */
+describe('rich-flag bitset growth charges the old and new buffers together (residual I2)', () => {
+  const RICH = 'r</t><r><t>run</t></r><t>'
+  const strings = (n: number) => Array.from({ length: n }, (_, i) => `${RICH}${i}`)
+  function spy(store: SourcePageStore, refuseAt?: number) {
+    const needs: number[] = []
+    const real = store.construction.share.bind(store.construction)
+    vi.spyOn(store.construction, 'share').mockImplementation((what, options) => {
+      const inner = real(what, options)
+      if (what !== 'rich shared-string flags') return inner
+      return { get bytes() { return inner.bytes }, need: (b: number) => { needs.push(b); inner.need(refuseAt !== undefined && b === refuseAt ? 2 ** 40 : b) }, release: () => inner.release() }
+    })
+    return needs
+  }
+  it('each growth reserves old + new before allocating, then shrinks to the new size', async () => {
+    const pool = new MemoryPool({ limitBytes: 256 * MiB })
+    const store = new SourcePageStore({ docId: 'd', backend: memoryPageBackend() })
+    store.bindMemory(pool)
+    const needs = spy(store)
+    const session = await openImportSession(blobOf(xlsxBytes({ sheetData: rowsXml(3), sharedStrings: strings(2000) })), { docId: 'd', profile: 'D', store })
+    expect(await session.done).toMatchObject({ kind: 'complete' })
+    // 2,000 flags need 250 bytes: buffers of 64, 128 and 256 bytes; each growth peaks at old + new.
+    expect(needs).toEqual([64, 64, 192, 128, 384, 256])
+    expect(pool.stats().transientBytes).toBe(0)
+    await session.release()
+    expect(pool.stats().totalBytes).toBe(0)
+  })
+  it('a refusal exactly at a growth peak fails the import typed, the ledger back at baseline', async () => {
+    const pool = new MemoryPool({ limitBytes: 256 * MiB })
+    const store = new SourcePageStore({ docId: 'd', backend: memoryPageBackend() })
+    store.bindMemory(pool)
+    spy(store, 384)
+    const session = await openImportSession(blobOf(xlsxBytes({ sheetData: rowsXml(3), sharedStrings: strings(2000) })), { docId: 'd', profile: 'D', store })
+    expect(await session.done).toMatchObject({ kind: 'incomplete', failure: { code: 'resource-limit' } })
+    expect(session.diagnostics.map(d => d.code)).toContain('import-memory-budget')
+    expect(pool.stats().transientBytes).toBe(0)
+    await session.release()
+    expect(pool.stats().totalBytes).toBe(0)
+  })
+})

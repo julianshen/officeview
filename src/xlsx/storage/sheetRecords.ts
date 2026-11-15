@@ -237,7 +237,7 @@ const FORMULA_TEXT_LIMIT = 1 << 20
  * then the first `t` of each `r` run is decoded and appended, in that order
  * whatever the document order; phonetic runs never count.
  */
-export function sharedStringEvents(partId: string, onString: (text: string) => void, maxStringChars: number): XmlEvents {
+export function sharedStringEvents(partId: string, onString: (text: string, rich?: boolean) => void, maxStringChars: number): XmlEvents {
   const stack: string[] = []
   let mcDepth = 0
   let inSi = false
@@ -248,6 +248,8 @@ export function sharedStringEvents(partId: string, onString: (text: string) => v
   let directDecoder = new XstringDecoder()
   let runDecoder = new XstringDecoder()
   let runTSeen = false
+  // Ruling S4-ROW-UNIFORM (fix round 2): whether the open `<si>` holds rich-text runs (`<r>`).
+  let rich = false
   return {
     open(qname, _names, _values, _count, selfClosing) {
       const local = localName(qname)
@@ -255,9 +257,10 @@ export function sharedStringEvents(partId: string, onString: (text: string) => v
       else if (local === 'si') {
         if (mcDepth > 0) throw new PackageError('unsupported', 'si inside mc:AlternateContent is not supported; shared strings would be lost', partId)
         if (selfClosing) { onString(''); return }
-        inSi = true; direct = ''; runs = ''; directDecoder = new XstringDecoder()
-      } else if (inSi && local === 'rPh' && !selfClosing) inPhonetic++
-      else if (inSi && local === 'r') runTSeen = false
+        inSi = true; direct = ''; runs = ''; directDecoder = new XstringDecoder(); rich = false
+      } else if (inSi && local === 'rPh') { if (stack[stack.length - 1] === 'si') rich = true; if (!selfClosing) inPhonetic++ }
+      else if (inSi && local === 'phoneticPr' && stack[stack.length - 1] === 'si') rich = true
+      else if (inSi && local === 'r' && stack[stack.length - 1] === 'si') { runTSeen = false; rich = true }
       else if (inSi && inPhonetic === 0 && local === 't' && !selfClosing) {
         const parent = stack[stack.length - 1]
         if (parent === 'si') collecting = 'direct'
@@ -277,7 +280,7 @@ export function sharedStringEvents(partId: string, onString: (text: string) => v
       else if (local === 't' && collecting) {
         if (collecting === 'run') runs += runDecoder.push('', true)
         collecting = undefined
-      } else if (local === 'si' && inSi) { inSi = false; onString(direct + directDecoder.push('', true) + runs) }
+      } else if (local === 'si' && inSi) { inSi = false; onString(direct + directDecoder.push('', true) + runs, rich) }
     },
     text(text) {
       if (!collecting) return
@@ -312,8 +315,8 @@ export interface SheetMetadata {
   rowHeights: { row: number; heightPt: number }[]
   hiddenRows: { r0: number; r1: number }[]
   cols: { min: number; max: number; widthChars?: number; hidden: boolean }[]
-  /** `<sheetFormatPr>` column defaults (Excel column-width model). */
-  format?: { baseColWidth?: number; defaultColWidth?: number }
+  /** `<sheetFormatPr>`: column defaults (Excel column-width model) and the default row height (S4-DEFAULT-ROW). */
+  format?: import('../columnWidth').SheetFormat
   merges: string[]
   tablePartIds: (string | undefined)[]
   slicerRelationshipIds: string[]
@@ -337,6 +340,8 @@ export interface SheetMetadata {
   /** The first sheet view's reading order, as the resident parser reads it: absent until a right-to-left sheet view is
    * seen (no sheet view is left-to-right, Ruling S3-K as amended), `null` for a malformed `rightToLeft` (unknown). */
   sheetRightToLeft?: boolean | null
+  /** Ruling S4-ROW-UNIFORM: rows (inclusive intervals) whose cells or row style are not Calibri 11 regular. */
+  nonUniformFontRows?: { start: number; end: number }[]
   /** Metadata-only rows arrived out of order: rowHeights/hiddenRows need normalizeRowMetadata. */
   unorderedRows?: boolean
   /** Bounded sparkline records parsed from worksheet extension parts. */
@@ -369,6 +374,11 @@ export interface SheetRecordOptions {
   onCell(record: CellRecord): void
   /** Called after every complete row; the importer cuts pages at row boundaries. */
   onRowEnd(row: number): void
+  /** Ruling S4-ROW-UNIFORM: whether a cell style index is Calibri 11 regular. Given, the reader records
+   * `meta.nonUniformFontRows`; absent, it records nothing (unknown). */
+  keyFontStyle?(styleIndex: number): boolean
+  /** Fix round 2: whether a shared string holds rich-text runs (its row then withholds bottom placement). */
+  richString?(index: number): boolean
   declared?: {
     autoFilter(attrs: Record<string, string>): { addColumn(input: { attrs: Record<string, string>; ruleCount: number; firstRule?: { tag: string; attrs: Record<string, string>; filterCount: number; dateGroupItemCount: number; customFilters: Record<string, string>[]; customFilterCount: number } }): void } | undefined
     sortState(attrs: Record<string, string>, placement: 'direct' | 'nested'): { addCondition(attrs: Record<string, string>): void } | undefined
@@ -471,6 +481,22 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
   // cell state
   let inCell = false
   let cRow = 0, cCol = 0, cT: string | undefined, cS = 0, cCm: string | undefined, cCa = false
+  // S4-ROW-UNIFORM: the open row's font uniformity, recorded at its end. Fix round 2: xf 0 (the Normal style's font,
+  // which empty cells take) or a `<cols>` style other than Calibri 11 regular blocks every row; so does a run-formatted
+  // string in a row (rich-text runs may name any font).
+  let rowUniform = true, cellRich = false, allBlocked = false
+  const blockAll = (): void => { allBlocked = true; meta.nonUniformFontRows = [{ start: 0, end: MAX_COORD_ROW }] }
+  if (options.keyFontStyle) {
+    meta.nonUniformFontRows ??= []
+    if (!options.keyFontStyle(0)) blockAll()
+  }
+  const endRowFont = (r: number): void => {
+    const out = meta.nonUniformFontRows
+    if (!out || rowUniform || allBlocked) return
+    const last = out[out.length - 1]
+    if (last && last.end + 1 === r) last.end = r
+    else if (!last || last.end < r) out.push({ start: r, end: r })
+  }
   let fSeen = false, fText = '', fAttrs: Record<string, string> = {}
   let vSeen = false, vText = ''
   let isSeen = false, isText = '', isTDirectSeen = false, runTSeen = false
@@ -502,7 +528,9 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
     if (t === 's') {
       const idx = vSeen ? parseInt(vText, 10) : NaN
       if (Number.isFinite(idx) && idx >= 0 && idx < options.sharedStringCount) { kind = K_SST; num = idx } else kind = K_TEXT
+      if (kind === K_SST && options.richString?.(idx)) rowUniform = false
     } else if (t === 'inlineStr') {
+      if (cellRich) rowUniform = false
       kind = K_TEXT; text = isSeen ? isText : ''
     } else if (t === 'b') {
       kind = K_BOOL; num = vSeen && vText === '1' ? 1 : 0
@@ -680,7 +708,8 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
           }
         }
         rowOpen = !selfClosing
-        if (selfClosing && !rowBehind) options.onRowEnd(r)
+        rowUniform = !(a.customFormat === '1' || a.customFormat === 'true')
+        if (selfClosing && !rowBehind) { endRowFont(r); options.onRowEnd(r) }
       } else if (rowOpen && local === 'c' && stack[stack.length - 1] === 'row') {
         const a = attrMap(names, values, count)
         const ref = a.r === undefined ? undefined : refOf(a.r)
@@ -695,6 +724,10 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
         cT = a.t
         const s = parseInt(a.s ?? '0', 10)
         cS = Number.isFinite(s) ? s : 0
+        cellRich = false
+        // Fix round 3: a cell showing phonetics (`ph="1"`) draws them in its phonetic font.
+        if (options.keyFontStyle && !cellSkipped && (a.ph === '1' || a.ph === 'true')) rowUniform = false
+        if (options.keyFontStyle && !cellSkipped && !options.keyFontStyle(cS)) rowUniform = false
         cCm = a.cm
         cCa = a.ca === '1' || a.ca === 'true'
         fSeen = false; fText = ''; fAttrs = {}
@@ -714,8 +747,12 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
           if (!selfClosing) { collect = 'v'; decoder = new XstringDecoder() }
         } else if (local === 'is' && parent === 'c' && !isSeen) {
           isSeen = true
-        } else if (local === 'rPh' && !selfClosing) inPhonetic++
-        else if (local === 'r' && parent === 'is') runTSeen = false
+        } else if (local === 'rPh') {
+          // Fix round 3: a phonetic run may name any font (its phoneticPr's); withheld like a rich-text run.
+          if (parent === 'is') cellRich = true
+          if (!selfClosing) inPhonetic++
+        } else if (local === 'phoneticPr' && parent === 'is') cellRich = true
+        else if (local === 'r' && parent === 'is') { runTSeen = false; cellRich = true }
         else if (local === 't' && isSeen && inPhonetic === 0 && !selfClosing) {
           if (parent === 'is' ? !isTDirectSeen : (parent === 'r' && stack[stack.length - 2] === 'is' && !runTSeen)) {
             if (parent === 'is') isTDirectSeen = true
@@ -726,7 +763,7 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
         }
       } else if (depth === 1 && local === 'sheetFormatPr') {
         const format = sheetFormat(attrMap(names, values, count))
-        if (format.baseColWidth !== undefined || format.defaultColWidth !== undefined) meta.format = format
+        if (Object.keys(format).length > 0) meta.format = format
       } else if (depth === 1 && local === 'cols') {
         // columns are collected below
       } else if (depth === 2 && local === 'col' && stack[1] === 'cols') {
@@ -736,6 +773,7 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
           min: parseInt(a.min ?? '1', 10) - 1, max: parseInt(a.max ?? '1', 10) - 1,
           widthChars: a.width !== undefined ? parseFloat(a.width) : undefined, hidden: a.hidden === '1' || a.hidden === 'true',
         })
+        if (options.keyFontStyle && a.style !== undefined && !options.keyFontStyle(parseInt(a.style, 10))) blockAll()
       } else if (depth === 2 && local === 'mergeCell' && stack[1] === 'mergeCells') {
         const ref = attrMap(names, values, count).ref
         if (ref) {
@@ -847,7 +885,7 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
       if (mcDepth > 0) return
       const depth = stack.length
       if (local === 'sheetData' && depth === 1) inSheetData = false
-      else if (local === 'row' && rowOpen) { rowOpen = false; if (!rowBehind) options.onRowEnd(rowIndex) }
+      else if (local === 'row' && rowOpen) { rowOpen = false; if (!rowBehind) { endRowFont(rowIndex); options.onRowEnd(rowIndex) } }
       else if (inCell && local === 'c' && depth === stack.length && stack[stack.length - 1] === 'row') finishCell()
       else if (inCell) {
         if (local === 'f' && collect === 'f') collect = undefined

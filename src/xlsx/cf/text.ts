@@ -1,10 +1,10 @@
 import type { XlsxSheet } from '../types'
-import type { CfBarDescriptor, CfLease, CfPrepared, CfStamp, SourceRect as ModelRect } from './model'
-import { CF_LIMITS, createCfMemory } from './limits'
+import { CF_ICON_SET_NAMES, type CfBarDescriptor, type CfIconDescriptor, type CfLease, type CfPrepared, type CfStamp, type SourceRect as ModelRect } from './model'
+import { CF_LIMITS, createCfMemory, createCfWorkBudget, type CfMemory } from './limits'
 import { createCfService, estimateCfPrepareBytes, type CfPaintStatistics } from './service'
 import { createCfStatistics } from './statistics'
 import { resolveCfCellStyle } from './dxf'
-import { frameBarHosts, residentBarHosts, residentSource, storeCfSource, type CfFrameHostSource } from './render'
+import { cfRowPtOfSheet, cfRowUniformOfSheet, frameBarHosts, layoutCfCell, residentBarHosts, residentSource, storeCfSource, type CfFrameHostSource } from './render'
 export type { CfFrameHostSource } from './render'
 import { regionStylesFor } from '../tableStyleLoader'
 import type { XlsxCellStyle } from '../types'
@@ -18,7 +18,8 @@ import type { CfCellStateWire, SourceStore, CfReadResult } from '../view/contrac
 import { measureCfCellBytes, versionCfRules } from '../view/contracts'
 import type { SourceRect } from '../view/coordinates'
 import { describeCfUnavailable, describeCfWin, type CfDescriptor } from './describe'
-import { barHidesText, barPaintable, barWithheld, paintDataBars, type CfBarHost } from './dataBarPaint'
+import { barPaintable, barWithheld, paintDataBars, type CfBarHost } from './dataBarPaint'
+import { admitBatchGlyphs, cfHidesText, iconPaintsOn, iconTextInset, paintIconCells, type CfAdmittedGlyphs, type CfIconGate } from './iconPaint'
 import { PackageError } from '../../core/package-error'
 
 const refused = (message: string): PackageError => new PackageError('resource-limit', message)
@@ -35,6 +36,12 @@ export interface CfTextScopeRequest {
   readonly workbookValueGen?: number
   readonly store?: SourceStore
   readonly dateContext?: import('./predicates').CfDateContext
+  /** The measuring context resident icon hosts use (Ruling S4-L; default: an offscreen canvas, or none: withheld). */
+  readonly layoutContext?: () => CanvasRenderingContext2D | null | undefined
+  /** Final review I3: the frame's live hosts (`createFrameHostSource`). Given, the scope decides bars and icons on the
+   * hosts the frame lays out (row and column resizes included), exactly as the paged scope does; absent, on the
+   * sheet's authored geometry (static batches, find and copy). */
+  readonly hosts?: CfFrameHostSource
 }
 
 /** Fixed admitted descriptor workspace per scope with a charged budget. */
@@ -110,6 +117,10 @@ interface CopiedState {
   readonly scale?: Readonly<{ fraction?: number; ruleId?: number; argb?: number }>
   /** The resolved bar descriptor, identical on the resident and paged paths (Ruling S3-S). */
   readonly bar?: CfBarDescriptor
+  /** The resolved icon descriptor, plain wire-field data identical on the resident and paged paths (Ruling S4-Q). */
+  readonly icon?: CfIconDescriptor
+  /** A wire icon the decoder rejected (malformed): the cell announces unavailable formatting, as a rejected bar does. */
+  readonly iconRejected?: true
 }
 
 type CfWireBar = NonNullable<CfCellStateWire['bar']>
@@ -129,6 +140,27 @@ const descriptorOf = (w: CfWireBar): CfBarDescriptor => ({
   showValue: w.showValue, direction: w.rtl ? 'rightToLeft' : 'leftToRight',
 })
 
+export type CfWireIcon = NonNullable<CfCellStateWire['icon']>
+/** Wire form of an icon descriptor: `set` becomes its index in the frozen `CF_ICON_SET_NAMES` table (Ruling S4-Q). */
+export const wireIcon = (d: CfIconDescriptor): CfWireIcon => ({
+  ruleId: d.ruleId, set: CF_ICON_SET_NAMES.indexOf(d.set), iconId: d.iconId, bucket: d.bucket, buckets: d.buckets, showValue: d.showValue,
+})
+const wholeIn = (n: unknown, min: number, max: number): n is number => typeof n === 'number' && Number.isInteger(n) && n >= min && n <= max
+/** The descriptor a wire icon encodes, or `undefined` for any field that is not the exact shape the worker writes: a `set`
+ * outside the frozen table, a non-integer or negative id, a bucket past its count, a non-boolean flag. A malformed icon is
+ * no icon, never a guessed one (fail closed, like a malformed bar). The copy owns plain fields only. */
+export const descriptorOfIcon = (w: CfWireIcon): CfIconDescriptor | undefined => {
+  if (typeof w !== 'object' || w === null) return undefined
+  if (!wholeIn(w.set, 0, CF_ICON_SET_NAMES.length - 1)) return undefined
+  const set = CF_ICON_SET_NAMES[w.set]!
+  if (!wholeIn(w.ruleId, 0, Number.MAX_SAFE_INTEGER) || !wholeIn(w.buckets, 3, 5) || !wholeIn(w.bucket, 0, w.buckets - 1)) return undefined
+  if (!wholeIn(w.iconId, 0, 4) || (set === 'NoIcons' && w.iconId !== 0) || typeof w.showValue !== 'boolean') return undefined
+  return { ruleId: w.ruleId, set, iconId: w.iconId, bucket: w.bucket, buckets: w.buckets, showValue: w.showValue }
+}
+/** What a scope exposes of its copied icon states (Task 29 builds the painted `iconAt` on this): the plain descriptor of
+ * one cell in the scope's own generation, `undefined` once the scope is stale or disposed. */
+export interface CfCopiedIconProbe { copiedIconAt?(row: number, col: number): CfIconDescriptor | undefined }
+
 /** Structural key for one cell's descriptor inputs: shared aspects share one charge. A painted bar keys by its
  * announced value position (never its geometry), so the descriptor cache never hands one cell's bar text to another. */
 const winKey = (
@@ -136,13 +168,16 @@ const winKey = (
   unresolvedWrites: readonly string[] | undefined,
   scale?: Readonly<{ fraction?: number; ruleId?: number; argb?: number }> | number,
   bar?: CfBarDescriptor,
+  icon?: CfIconDescriptor,
 ): string => {
   const paths = Object.keys(properties).sort().join(',')
   const writes = unresolvedWrites ? [...unresolvedWrites].sort().join(',') : ''
   const fraction = typeof scale === 'number' ? scale : scale?.fraction
   const scaleKey = fraction !== undefined ? `|scale:${Math.round(fraction * 100)}` : ''
   const barKey = bar ? `|bar:${Math.round(bar.valueFraction * 100)}` : ''
-  return `${paths}|${writes}${scaleKey}${barKey}`
+  // A painted icon keys by its bucket position (its label), never its glyph.
+  const iconKey = icon ? `|icon:${icon.bucket}/${icon.buckets}` : ''
+  return `${paths}|${writes}${scaleKey}${barKey}${iconKey}`
 }
 
 const winDescriptor = (
@@ -153,13 +188,14 @@ const winDescriptor = (
   cache: Map<string, CfDescriptor>,
   scale?: Readonly<{ fraction?: number; ruleId?: number; argb?: number }> | number,
   bar?: CfBarDescriptor,
+  icon?: CfIconDescriptor,
 ): CfDescriptor | undefined => {
-  const key = winKey(properties, unresolvedWrites, scale, bar)
+  const key = winKey(properties, unresolvedWrites, scale, bar, icon)
   const cached = cache.get(key)
   if (cached) return cached
   const descriptor = unresolvedReason !== undefined
     ? describeCfUnavailable(locale)
-    : describeCfWin(properties, unresolvedWrites, undefined, locale, scale, bar ? { fraction: bar.valueFraction } : undefined)
+    : describeCfWin(properties, unresolvedWrites, undefined, locale, scale, bar ? { fraction: bar.valueFraction } : undefined, icon ? { bucket: icon.bucket, buckets: icon.buckets } : undefined)
   if (descriptor && cache.size < DESCRIPTOR_CACHE_KEYS) cache.set(key, descriptor)
   return descriptor ?? undefined
 }
@@ -210,16 +246,40 @@ function assembleScope(
    * source for the paged semantic scope (S3-A11Y-PAGED). Absent (the paged paint scope), the scope learns withholding
    * from its own paints and announces no bar it has not seen laid out. */
   barHosts?: (styleAt: (row: number, col: number, base: XlsxCellStyle | undefined) => XlsxCellStyle | undefined) => (row: number, col: number) => CfBarHost | undefined,
+  /** Each icon's host (Ruling S4-L): the bar host plus the cell as laid out and its un-inset `textWidth`. Absent (the
+   * paged paint scope), the scope learns withholding from its own paints, as for bars. */
+  iconHosts?: (styleAt: (row: number, col: number, base: XlsxCellStyle | undefined) => XlsxCellStyle | undefined) => (row: number, col: number) => CfBarHost | undefined,
+  /** Where the scope's glyph classes are charged (Ruling S4-R); a scope without icons decodes nothing. */
+  glyphMemory?: CfMemory,
+  /** Ruling S4-ROW-EXACT: each row's authored height in pt; absent, every icon frame withholds. */
+  rowPtOf?: (row: number) => number | undefined,
+  rowUniformOf?: (row: number) => boolean | undefined,
 ): EffectiveFormatScope {
   const cache = new Map<string, CfDescriptor>()
   let disposed = false
   // The bar cells of the copied states (descriptors are shared, not copied again): the painter walks only these.
   const bars = new Map<number, CfBarDescriptor>()
   for (const [key, state] of states) if (state.bar) bars.set(key, state.bar)
+  const icons = new Map<number, CfIconDescriptor>()
+  for (const [key, state] of states) if (state.icon) icons.set(key, state.icon)
   const paintableAt = (row: number, col: number): CfBarDescriptor | undefined => {
     if (disposed || !current()) return undefined
     const bar = bars.get(row * 16384 + col)
     return barPaintable(bar) ? bar : undefined
+  }
+  // Ruling S4-R: the icons' glyph classes, decoded and charged once for the scope's life.
+  const glyphs: CfAdmittedGlyphs = icons.size && glyphMemory ? admitBatchGlyphs(icons.values(), glyphMemory, () => createCfWorkBudget({})) : { cacheFor: () => undefined, release() {} }
+  const iconGate: CfIconGate = { admitted: glyphs, hasBar: (row, col) => paintableAt(row, col) !== undefined, ...(rowPtOf ? { rowPtOf } : {}), ...(rowUniformOf ? { rowUniformOf } : {}) }
+  const iconCandidate = (row: number, col: number): CfIconDescriptor | undefined => (disposed || !current() ? undefined : icons.get(row * 16384 + col))
+  let iconHostAt: ((row: number, col: number) => CfBarHost | undefined) | undefined
+  const iconLaidOut = new Map<number, boolean>()
+  // `iconAt` (and so `describe`) reports an icon only where the painter's own predicate paints it on this scope's host;
+  // a host-less scope reports one only after painting it (S4-N, as S3-A11Y-PAGED does for bars).
+  const iconAt = (row: number, col: number): CfIconDescriptor | undefined => {
+    const icon = iconCandidate(row, col)
+    if (!icon) return undefined
+    if (iconHosts) return iconPaintsOn(icon, row, col, (iconHostAt ??= iconHosts(scope.effectiveStyle))(row, col), iconGate) ? icon : undefined
+    return iconLaidOut.get(row * 16384 + col) === false ? icon : undefined
   }
   // Fix round 2: `barAt` (and so `describe`) reports a bar only where painting does not withhold it, by the painter's
   // own predicate. Without hosts (the paged paint scope) the outcome is learned at paint time; until then the bar counts
@@ -232,7 +292,7 @@ function assembleScope(
     if (barHosts) return barWithheld(bar, (hostAt ??= barHosts(scope.effectiveStyle))(row, col)) ? undefined : bar
     return laidOut.get(row * 16384 + col) === false ? bar : undefined
   }
-  const scope: EffectiveFormatScope = {
+  const scope: EffectiveFormatScope & CfCopiedIconProbe = {
     gen,
     bytes,
     regions,
@@ -251,9 +311,19 @@ function assembleScope(
       }, colors)
     },
     barAt,
+    copiedIconAt: (row, col) => (disposed || !current() ? undefined : icons.get(row * 16384 + col)),
+    iconAt,
     paintBars: (ctx, cellRect, visible, scale) => paintDataBars(ctx, bars, paintableAt, cellRect, visible, scale, undefined,
       (row, col, withheld) => { if (bars.has(row * 16384 + col)) laidOut.set(row * 16384 + col, withheld) }),
-    hidesTextAt: (row, col, host, scale) => barHidesText(paintableAt(row, col), host, scale),
+    paintIcons: (ctx, cellRect, visible, scale) => paintIconCells(ctx, icons, iconCandidate, cellRect, visible, scale, iconGate,
+      (row, col, withheld) => { if (icons.has(row * 16384 + col)) iconLaidOut.set(row * 16384 + col, withheld) }),
+    textInsetAt: (row, col, host, scale) => iconTextInset(iconCandidate(row, col), row, col, host, scale, iconGate),
+    layoutCell: (ctx, sheet, cell, x, y, w, h, measured, overflow, scale) => layoutCfCell(scope as Required<Pick<EffectiveFormatScope, 'textInsetAt' | 'hidesTextAt'>>, ctx, sheet, cell, x, y, w, h, measured, overflow, scale),
+    // One predicate over both visuals (S4-L): a bar/icon showValue conflict (the 'showValue' token) keeps the text.
+    hidesTextAt: (row, col, host, scale) => {
+      if (disposed || !current() || states.get(row * 16384 + col)?.writes?.includes('showValue')) return false
+      return cfHidesText(paintableAt(row, col), iconCandidate(row, col), row, col, host, scale, iconGate)
+    },
     describe: (row, col) => {
       if (disposed || !current()) return undefined
       const state = states.get(row * 16384 + col)
@@ -262,15 +332,22 @@ function assembleScope(
       // the evaluator left unresolved (that one reaches here through its writes or reason).
       const bar = barAt(row, col)
       if (state.bar && !bar) return describeCfUnavailable(locale)
-      if (Object.keys(state.properties).length === 0 && (state.writes?.length ?? 0) === 0 && state.reason === undefined && !state.scale && !bar) return undefined
-      return winDescriptor(state.properties, state.writes, state.reason, locale, cache, state.scale, bar)
+      // An icon announces itself only where it paints (S4-N); one the painter withholds, or a malformed wire icon, is
+      // unavailable formatting. NoIcons adds nothing.
+      const icon = iconAt(row, col)
+      if (state.iconRejected || (state.icon && state.icon.set !== 'NoIcons' && !icon)) return describeCfUnavailable(locale)
+      if (Object.keys(state.properties).length === 0 && (state.writes?.length ?? 0) === 0 && state.reason === undefined && !state.scale && !bar && !icon) return undefined
+      return winDescriptor(state.properties, state.writes, state.reason, locale, cache, state.scale, bar, icon)
     },
     dispose: () => {
       if (disposed) return
       disposed = true
       states.clear()
       bars.clear()
+      icons.clear()
       laidOut.clear()
+      iconLaidOut.clear()
+      glyphs.release()
       cache.clear()
       release()
     },
@@ -398,13 +475,15 @@ export async function prepareCfTextScope(
                 // for measurement; the stored copy is built after admission).
                 const writes = outcome.value.unresolvedWrites ? [...outcome.value.unresolvedWrites] : undefined
                 const dataBar = outcome.value.visual?.dataBar
-                const occupied = measureCfCellBytes({ properties: outcome.value.properties, unresolvedWrites: writes, scale: outcome.value.visual?.colorScale, ...(dataBar ? { bar: wireBar(dataBar) } : {}) })
+                const iconSet = outcome.value.visual?.iconSet
+                const occupied = measureCfCellBytes({ properties: outcome.value.properties, unresolvedWrites: writes, scale: outcome.value.visual?.colorScale, ...(dataBar ? { bar: wireBar(dataBar) } : {}), ...(iconSet ? { icon: wireIcon(iconSet) } : {}) })
                 if (!Number.isSafeInteger(bytes + occupied)) { service.dispose(); closeAccount(); throw refused('CF text preparation exceeds its admitted batch') }
                 admit(occupied)
                 bytes += occupied
                 const properties: Record<string, string | number | boolean | null> = {}
                 for (const key of Object.keys(outcome.value.properties)) properties[key] = outcome.value.properties[key]!
-                states.set(row * 16384 + col, { properties, writes, reason: undefined, scale: outcome.value.visual?.colorScale, ...(dataBar ? { bar: descriptorOf(wireBar(dataBar)) } : {}) })
+                const icon = iconSet ? descriptorOfIcon(wireIcon(iconSet)) : undefined
+                states.set(row * 16384 + col, { properties, writes, reason: undefined, scale: outcome.value.visual?.colorScale, ...(dataBar ? { bar: descriptorOf(wireBar(dataBar)) } : {}), ...(icon ? { icon } : {}) })
               }
             }
           }
@@ -424,7 +503,9 @@ export async function prepareCfTextScope(
         request.budget.release(bytes + hostBytes)
       }
     }, () => source.stamp(stamp.sheetId).workbookValueGen === stamp.workbookValueGen && source.stamp(stamp.sheetId).structureGen === stamp.structureGen,
-    undefined, styleAt => residentBarHosts(sheet, (row, col, own) => styleAt(row, col, base?.styleAt(row, col, own) ?? own), admitHosts))
+    undefined, request.hosts ? styleAt => frameBarHosts(request.hosts!, styleAt) : styleAt => residentBarHosts(sheet, (row, col, own) => styleAt(row, col, base?.styleAt(row, col, own) ?? own), admitHosts),
+    request.hosts ? styleAt => frameBarHosts(request.hosts!, styleAt) : styleAt => residentBarHosts(sheet, (row, col, own) => styleAt(row, col, base?.styleAt(row, col, own) ?? own), admitHosts, { layoutContext: request.layoutContext }),
+    createCfMemory({ limitBytes: CF_LIMITS.scratchBytes, context: budgetAllocationContext(request.budget) }), cfRowPtOfSheet(sheet), cfRowUniformOfSheet(sheet))
     if (request.signal.aborted) {
       scope.dispose()
       return undefined
@@ -511,6 +592,26 @@ export async function awaitSettled(
  * closed; an empty first chunk means absent CF and resolves undefined.
  * `onEmpty` fires exactly in that absent case so callers can cache presence.
  */
+/**
+ * Ruling S4-ROW-EXACT: each row's authored height in pt on the paged main thread, read back from the paged layout's row
+ * overrides (`view/source.ts` `buildGeometry`: one interval per row with `ht`, `sizeCss` = pt × 96/72 unrounded).
+ * Rows without an override take `defaultRowPt` (the layout's, S4-DEFAULT-ROW), else are unknown (undefined).
+ */
+export { cfRowUniformOfLayout } from '../rowFont'
+export function cfRowPtOfOverrides(overrides: ReadonlyArray<{ start: number; end: number; sizeCss: number }>, defaultRowPt?: number): (row: number) => number | undefined {
+  return row => {
+    let lo = 0, hi = overrides.length - 1
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1, o = overrides[mid]!
+      if (row < o.start) hi = mid - 1
+      else if (row > o.end) lo = mid + 1
+      else return (o.sizeCss * 72) / 96
+    }
+    // Ruling S4-DEFAULT-ROW: a row without an override (no `ht`) takes the sheet's `defaultRowPt`, if known.
+    return defaultRowPt
+  }
+}
+
 export async function prepareCfWireScope(
   read: (rects: readonly SourceRect[]) => Promise<{ result: CfReadResult | undefined; release(): void }>,
   rects: readonly SourceRect[],
@@ -524,6 +625,12 @@ export async function prepareCfWireScope(
     /** The frame's host source (S3-A11Y-PAGED): a scope that never paints (the paged grid semantics) decides each bar
      * with the painter's own predicate on the host the frame lays it out in, instead of waiting for a paint. */
     hosts?: CfFrameHostSource
+    /** Ruling S4-ROW-EXACT: each row's authored height in pt (`cfRowPtOfOverrides` of the paged layout's row
+     * overrides); absent, every icon frame withholds. */
+    rowPtOf?: (row: number) => number | undefined
+    /** Ruling S4-ROW-UNIFORM: each row's font uniformity (`cfRowUniformOfLayout` of the paged layout's
+     * `nonUniformFontRows`); absent, every bottom-anchored icon frame withholds. */
+    rowUniformOf?: (row: number) => boolean | undefined
   },
 ): Promise<EffectiveFormatScope | undefined> {
   if (!rects.length) return undefined
@@ -583,13 +690,16 @@ export async function prepareCfWireScope(
           bytes = next
           const properties: Record<string, string | number | boolean | null> = {}
           for (const key of Object.keys(state.properties)) properties[key] = state.properties[key]!
-          if (Object.keys(properties).length || state.scale?.argb !== undefined || state.bar) regions.push({minRow:state.row,maxRow:state.row,minCol:state.col,maxCol:state.col})
+          // A malformed wire icon decodes to no icon (descriptorOfIcon), its cell keeping every base property.
+          const icon = state.icon ? descriptorOfIcon(state.icon) : undefined
+          if (Object.keys(properties).length || state.scale?.argb !== undefined || state.bar || state.icon) regions.push({minRow:state.row,maxRow:state.row,minCol:state.col,maxCol:state.col})
           states.set(state.row * 16384 + state.col, {
             properties,
             writes: state.unresolvedWrites ? [...state.unresolvedWrites] : undefined,
             reason: state.unresolvedReason,
             scale: state.scale,
             ...(state.bar ? { bar: descriptorOf(state.bar) } : {}),
+            ...(icon ? { icon } : state.icon ? { iconRejected: true as const } : {}),
           })
         }
       } finally {
@@ -598,7 +708,7 @@ export async function prepareCfWireScope(
     }
     // The paint-time withholding record (fix round 2) holds at most one entry per bar cell: admitted up front.
     let barCells = 0
-    for (const state of states.values()) if (state.bar) barCells++
+    for (const state of states.values()) if (state.bar || state.icon) barCells++
     if (barCells) { admitWire(barCells * 48); bytes += barCells * 48 }
     const colors = options.colors ?? {}
     const locale = options.locale ?? 'en-US'
@@ -608,7 +718,9 @@ export async function prepareCfWireScope(
         disposed = true
         options.budget.release(bytes)
       }
-    }, options.current, regions, options.hosts ? styleAt => frameBarHosts(options.hosts!, styleAt) : undefined)
+    }, options.current, regions, options.hosts ? styleAt => frameBarHosts(options.hosts!, styleAt) : undefined,
+    options.hosts ? styleAt => frameBarHosts(options.hosts!, styleAt) : undefined,
+    createCfMemory({ limitBytes: CF_LIMITS.scratchBytes, context: budgetAllocationContext(options.budget) }), options.rowPtOf, options.rowUniformOf)
     const paintLayer: import('../tableStyles/regionLayer').RegionStyleLayer = {
       rects: [...options.base?.rects ?? [], ...regions], retainedBytes: 0,
       styleAt: (row,col,own,mode) => scope.effectiveStyle(row,col,options.base?.styleAt(row,col,own,mode) ?? own),

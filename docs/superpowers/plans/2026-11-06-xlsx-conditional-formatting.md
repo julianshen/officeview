@@ -1198,9 +1198,849 @@ Expected non-discriminating candidates, which the rule confirms or clears after 
 - **Interfaces.** Every Consumes citation was grepped on `adc2b757`. Every Produces name was grepped absent and is marked with its task.
 - **Proportion.** Six tasks against Stage 2's six. Three things are new compared with Stage 2: the pixel-measurement harness (Task 18), the bar paint seam (Task 22) and the reading-order meta (Task 19).
 
-## Stage 4 stub: icon sets (PR 4)
+## Stage 4: icon sets (PR 4)
 
-Oracle first: every built-in family, x14 custom mappings, NoIcons, exact gte thresholds, percent/reverse, RTL placement, showValue/text inset and accessibility. Refine lazy glyph encoding, definition transfers and paint/shaping charges. Unknown icon mappings refuse whole contribution. Validate six scale pairs and text/semantic caches; general formula thresholds/activation remain unresolved. No eager glyph library.
+Refined from spec draft 4 (§3 lines 60–90, especially the `iconSet` schema defaults at line 84; §4 row 4 at line 112; §5.7 lines 175–176; §5.10 lines 199–205; §6.4 lines 261–266; §6.7 lines 282–284; §6.8 line 292; §8; §9 items 4/6/10 at lines 328/330/334; §10 item 4 at line 341; §11 line 350), owner decisions OD-7 (as amended) and OD-8, and the merged code on `main` at `bdc2b217`. Stage 3 merged at `1abea535` (PR #74) and the paged a11y fix at `bdc2b217` (PR #76). The branch is `feature/xlsx-cf-s4`. Every `file:line` below was grepped on `bdc2b217`.
+
+**Goal.** Icon-set rules show an icon inside the host cell where Excel shows it, with Excel's bucket choice, or they show nothing. The scope covers:
+- base `<cfRule type="iconSet">`;
+- standalone priority-bearing `<x14:cfRule type="iconSet">` (the x14-only sets `3Triangles`, `3Stars` and `5Boxes`, and custom sets);
+- custom `<x14:cfIcon>` mappings, including the intentional `NoIcons` bucket.
+
+Icons paint in every view (page, interactive, paged/worker, print, PNG/PDF export) on the resident and paged paths. The text box is inset when `showValue="1"`, text is hidden when `showValue="0"`, and the accessible label is derived from the bucket. None of the Stage 1–3 correctness is lost.
+
+The scope (spec §4 row 4, §10 item 4):
+- `cfvo` thresholds of type `num`, `percent` and `percentile`, with `gte`;
+- the `<iconSet>` attributes `iconSet`, `reverse`, `showValue` and `percent`;
+- all 17 base and 3 x14 built-in families;
+- custom `cfIcon` and `NoIcons`;
+- icon glyph painting and the horizontal text inset;
+- screen-reader icon labels.
+
+`formula` cfvo thresholds, reference `xm:f` thresholds and `activePresent="1"` stay unresolved (`cf-unsupported-rule`) until Stage 5 (spec §3 x14 bullet, §4 fail-closed staging rule). There is no eager glyph library (spec §11 line 350).
+
+**Architecture delta.** Stage 4 adds one visual family. It generalises the Stage 3 seams instead of duplicating them. It adds no second priority mechanism, no new lazy chunk, and no painter outside `src/xlsx/cf/`.
+- **Model.**
+  - The `iconSet` stub (`parse.ts:1367–1372`) currently ends in `finishUnresolved('cf-unsupported-rule', withDxf(slot))`. It gets a resolved `CfDefinition` arm.
+  - Its write mask, `new Set([type])`, becomes the canonical `ICON_SET_WRITES = {'iconSet'}` for resolved and unresolved icon sets.
+  - `CfCellState.visual.iconSet?: { name; index }` (`model.ts:64`) is replaced in place by the evaluated descriptor, as Stage 3 did for the bar scalar. A grep of `src/` and `tests/` finds no consumer of the old shape. The only `iconSet` hits outside `parse.ts` are the capability id `priority:cross-visual-iconSet` (`verifiedCapabilities.ts:69,351`) and the manifest.
+- **Recognition gap on main.**
+  - `ICON_SETS` (`parse.ts:151–155`) lists the 17 base and 3 x14 families but not `NoIcons`. `scanRuleVisual` (`parse.ts:1481–1498`) therefore refuses every `<x14:cfIcon iconSet="NoIcons" iconId="0"/>` as `cf-unsupported-icon`, which contradicts spec §5.10 line 203 ("valid output, not a refusal").
+  - Stage 4 admits `NoIcons` only as a `cfIcon` target with `iconId="0"` (S4-B).
+  - The limits already fit icon sets: `CF_LIMITS.cfvo: 5` and `customIcons: 5` (`limits.ts:29`), and `cfChildLimit` already bounds `cfvo`/`cfIcon` at 6 with one overflow witness (`parse.ts:2109`). The streamed capture already keeps `cfIcon` (`src/xlsx/cf/capture.ts:146,240`).
+- **Dialect.**
+  - Main refuses every standalone x14 colour scale (OD-3, `parseColorScaleRule`, `parse.ts:750`).
+  - Icon sets cannot do the same, because `3Triangles`/`3Stars`/`5Boxes` and custom sets exist only as standalone x14 rules (spec §3 standalone bullet).
+  - Their XML shape comes from an Excel-authored fixture (Lesson 12), not from the generator.
+- **Statistics.**
+  - Icons reuse `createCfStatistics`/`CfStatisticsSession` (`statistics.ts:397`), `CfRangeStatistics` (`:58`), `percentileOrderStatistic` (`colorScale.ts:41`) and the overflow-safe `lerp` (`colorScale.ts:36`).
+  - `resolveScaleThresholds` (`colorScale.ts:282`) accepts only 2 or 3 points and gates on `scale:*` ids. Icons therefore get their own `resolveIconThresholds`, which composes those primitives and contains no sort and no percentile code. It does not widen the scale function a second time.
+  - In `service.ts`, `statistical()` (`:17`), `ownSorted` (`:170`), `blockScope` (`:147`, family `'scale' | 'bar'` → `| 'icon'`) and the per-cell branch (`:254`) gain an `iconSet` arm. `estimateCfPrepareBytes` (`:34`) adds `CF_ICON_CELL_BYTES`, the way it adds `CF_BAR_CELL_BYTES` (`:55–57`).
+- **Composition.**
+  - `visualSlotOf` (`compose.ts:25`) returns `'colorScale' | 'dataBar'`. It gains `'iconSet'`, an independent slot with its own exclusivity and halting gates (S4-I, S4-J).
+  - Fill-slot and bar-slot arbitration are untouched.
+- **Bytes (Lesson 6).**
+  - `CfCellStateWire` (`src/xlsx/view/contracts.ts:396`) gains `icon?`, built from numbers and booleans only.
+  - `measureCfCellBytes` (`:481`) adds `'icon'` to its `Pick` and gains a branch. `CF_ICON_CELL_BYTES` is derived from the measurer next to `CF_BAR_CELL_BYTES` (`limits.ts:13`).
+  - `pagedSource.ts` gains `hasIcon`/`perCellIcon` and an `icon` omit family, parallel to `hasBar` (`:2000–2005`) and the `families` list (`:2174–2177`).
+- **Paint seam (generalised, not duplicated).**
+  - `CfPaintBatch` (`src/xlsx/cf/render.ts:23`) has `barAt`/`paintBars`/`hidesTextAt` (`:28–34`).
+  - Stage 4 adds `iconAt` and `textInsetAt`. Its own `paintIcons` call sits beside each `paintBars` call: `src/xlsx/render.ts:928` and `src/xlsx/view/renderViewport.ts:305`, in the fill phase before `'content'`.
+  - `hidesTextAt` becomes the single text-suppression predicate for both visuals: a painted `showValue="0"` bar or icon.
+  - Hosts reuse `residentBarHosts`/`frameBarHosts` (`render.ts:151,186`) unchanged. Their `CfBarHost` (`dataBarPaint.ts:139`) is a plain rect plus fill, so no icon-specific host function is added.
+  - Wire states reach the paged main thread through `text.ts` (`CopiedState` at `:106`, `assembleScope` at `:200`, `prepareCfWireScope` at `:514`), which gains `icon`.
+- **Text inset (the structurally new piece).**
+  - Bars never move text, but an icon does (§5.10 line 204, §6.4 line 264). The viewport path hides text at replay time (`renderViewport.ts:277` strips `body.text`), after layout.
+  - An inset, by contrast, changes measurement, the `paintedText` `###` width (`renderViewport.ts:38`) and overflow. It must therefore be decided before layout and must enter the layout key.
+  - `layoutCellBody` (`render.ts:1265`, `suppressText` at `:1279`) gains a trailing `inset?`. `CellLayoutHost.layoutBody` (`src/xlsx/view/textLayout.ts:44`) and `createCellLayoutHost` (`renderViewport.ts:29`, its `layoutBody` at `:34`) pass it. `PlacedCell` (`textLayout.ts:88`) gains `textInset?`, and `layoutKey` (`textLayout.ts:288`) includes it.
+  - The inset is decided from the placement box with the painter's own predicate (`iconWithheld`), never from a paint-learned map. The paged paint scope's `laidOut` learning (`text.ts:228–234`) cannot drive a pre-layout decision (S4-L, Lesson 11).
+- **Glyphs (OD-9).**
+  - All glyph data sits behind one interface in a new lazy module, `src/xlsx/cf/iconGlyphs.ts`: `iconGlyph(set, iconId)` returns a glyph or `undefined`.
+  - The painter, the wire and the a11y path never see glyph data. The worker does evaluate CF (it loads the lazy chunk; `prepareCfRemoteOnce`, `pagedSource.ts:1772`), but glyph data is static paint-side data in the lazy chunk, so the wire carries ids only and never glyph bytes.
+  - OD-9 is decided as (b), original vectors with no Microsoft artwork. That decision shapes Task 28 only.
+- **Accessibility.**
+  - `describeCfWin` (`describe.ts:65`) gains an `icon` parameter after `bar`, with the label derived from the descriptor's bucket semantics (Lesson 10).
+  - The cache key is the existing `descriptorKey` in `SemanticPresentationCache` (`src/components/xlsx/formatPresentation.ts:66,84`). The spec's `cfA11yKey` (§6.7 line 281) is still not a symbol in the code.
+- **Invalidation.** It stays whole-sheet, pinned by `tests/xlsx-cf-live.test.tsx:342` and its bar-only twin at `:482`.
+
+**Global Constraints delta.** The Stage 1–3 Global Constraints, binding requirements and common gates apply unchanged. Stage 4 adds or re-binds:
+- **Eager budget (Lesson 7).**
+  - The eager bundle stays strictly below 38,720 B gzip (`scripts/eager-budget.ts:14`).
+  - `src/xlsx/cf/` (including the new `iconSet.ts`, `iconPaint.ts` and `iconGlyphs.ts`) stays in `EAGER_FORBIDDEN`/`PAGED_WORKER_FORBIDDEN`.
+  - The only eager additions are the `iconAt`/`paintIcons`/`textInsetAt` call sites, the `inset` parameter, and the `PlacedCell.textInset` key field. Their gzip growth is recorded in `scripts/eager-baseline.json` and passes `bun run gates:core` (+16 B allowance).
+  - Glyph data lives only in the lazy `cf` chunk (`vite.config.ts:66`).
+- **Exact or withheld (Lesson 2).**
+  - Each icon cell gets Excel's bucket, Excel's box and Excel's inset, or no icon and no inset.
+  - A ruling default never simplifies a rendering: there is no "icon without inset", no "inset without icon", and no "nearest bucket".
+  - Every `[measure]` branch refuses until its named `icon:*` capability is verified. Glyph artwork follows OD-9(b): original vectors, labelled `pixel-approximated`/`*unverified*`, each glyph withheld unless it passes the box and colour check.
+- **Evidence (Lesson 4).**
+  - `verifiedCapabilities.ts` changes only via `bun scripts/cf-refs/audit.ts --stage 4 --write`, which must be idempotent.
+  - Mirroring Ruling S3-WRITE (`audit.ts:648,695`), the Stage 4 export is carried over verbatim unless `--publish-stage4` is passed. Only Task 30 passes it.
+  - The stage gate is dual: audit `stageComplete=true` AND conformance green under production evidence, with no injection.
+- **Invalidation (Lesson 5).**
+  - Any CF generation change that keeps the lease invalidates the whole sheet, icon-only sheets included.
+  - An inset change is a layout change. It invalidates through the same whole-sheet path, and the layout cache misses through `cfKey` (`renderViewport.ts:245`) plus `textInset` in `layoutKey`.
+- **Bytes and numerics (Lesson 6).**
+  - Icon wire bytes come from `measureCfCellBytes`.
+  - Glyph bytes are measured from the encoded table, not hand-counted.
+  - Threshold arithmetic stays finite near ±1e308, through `lerp` and `safeFraction` (`colorScale.ts:36,431`).
+- **Bounded work (Lesson 9).**
+  - Icon evaluation, bucket search and glyph decoding spend deterministic work units under `CF_LIMITS.activeUnits` (`limits.ts:33`), never wall time.
+  - Statistics over 20k+ cells use `scan: true` budgets (`limits.ts:257`) and share the session cache with scales, bars and `top10`.
+  - A fallback attempt, such as the unsorted retry at `service.ts:191`, gets its own fresh budget.
+  - `scripts/cf-refs/active-units.ts` is re-run so that `activeUnits` stays at least 5× the largest production call with icons present.
+  - CF ranges never enlarge static, print or export extents.
+- **CI (Lesson 8).**
+  - osacompile and Excel tests use `it.skipIf(!hasOsacompile)` (`tests/xlsx-cf-oracle.test.ts:12,992`).
+  - Clock-dependent harnesses pin `process.env.TZ` (conformance `:1012–1031`).
+
+### Stage 4 scope rulings
+
+Each ruling names the spec clause it interprets, its fail-closed default and its cost if wrong. "Unresolved" means the spec §5.7 atomic fail-closed outcome:
+- the icon is withheld and no inset is applied;
+- an unresolved `stopIfTrue` rule withholds everything after it;
+- any other unresolved rule taints the `iconSet` slot for the rules after it.
+
+A default never ships as a measured fact. Only the named `icon:*` capability lifts a ruling, through `hasEvidence` (`evidence.ts:88`).
+
+- **Ruling S4-A: evidence authority for icons (OD-7 as amended).**
+  - **Spec tie:** §8 (reference evidence) and §5.10 (every icon outcome is `[measure]`).
+  - **No object-model leg.**
+    - The settings readback that OD-7 originally relied on is unreachable on Excel 16.114 for bars (`docs/validation/xlsx-cf.md:445`, recipes-stage3 `:33`). The sdef shows the same construction for icons: `icon set format condition` (`X315`, Excel.sdef `:3362–3374`, with `icon criteria`/`icon criterion icon` at `:3355–3368`) is the type of no element or property. It appears only as an enumerator at `:6605/:6614/:6623`.
+    - Stage 4 is therefore pixel-first from the start. The one-shot reachability probe `stage4-icon-om-reachability` records what the object model returns. It lifts nothing, and an unexpected success becomes an owner question, never an automatic evidence kind.
+  - **Evidence kinds:**
+
+  | Item | Trusted source | Evidence kind |
+  |---|---|---|
+  | Which glyph a cell shows: bucket choice, `gte`, `reverse`, custom mapping, `NoIcons`, participation, composition, `stopIfTrue` effect | The cell's icon crop, matched against the glyph key (below) | `pixel-classified` |
+  | Icon box (left offset, width, height, vertical position), font-size and row-height dependence, clipping, text ink shift (inset), `showValue="0"` canvas outcome | Column/row scan of the `copy picture` bitmap, using the S3-A procedure steps 1–7 (lock check, capture at 1 px/pt, calibration, raw px, per-capability tolerance, discrimination) | `pixel-measured` |
+  | Glyph artwork | Original vectors (OD-9(b), owner-decided). They are compared with the glyph-key crops for box and dominant colour only. | `pixel-approximated`, labelled `*unverified*` and never relabelled measured. No Microsoft artwork is shipped. |
+
+  - **Glyph key (`stage4-icon-glyph-key`).** For each of the 75 `(set, iconId)` pairs, one single-cell x14 custom rule maps every bucket to that same pair.
+    - The cell therefore shows that glyph whatever its bucket. Each key rule uses `num` cfvo (0, 1, …, k−1) and its cell holds 10, above every threshold, so the single-cell scope needs no statistics and never meets a degenerate `percent` scope (S4-D). The key therefore depends on no threshold semantics.
+    - **`percent` attribute:** the key template writes `<iconSet>` in exactly the attribute form Excel's own dialog writes, taken from `excel-authored-iconsets.xlsx` (Lesson 12). If the dialog omits `percent`, the template omits it, and the resaved XML must keep that form. Because every bucket maps to the same icon, no value of `percent` can change the glyph a key cell shows, so S4-F's open question cannot perturb the key. The attribute is pinned in the Task 24 marker test all the same.
+    - Key cells and classified cells share one geometry: column width, row height, font, size, vertical alignment, and number format `;;;`. That format hides the value text while the icon still follows the value, so the crop holds only icon ink against a same-format unformatted control.
+  - **Classification rule.**
+    - A crop is `pixel-classified` as pair P when it equals P's key crop within ±8 per channel at zero offset. It must also differ from every other key crop of a different glyph by at least one pixel of max-channel delta ≥ 64 (`STRONG_DELTA`).
+    - Crops identical across pairs (for example the green up arrow of `3Arrows` and of `4Arrows`) form one glyph class. The class, not the pair, is what classification proves.
+    - Matching none refuses with `icon-class-none`, and matching two refuses with `icon-class-ambiguous`.
+  - **Preconditions:** `icon:pixel-calibration` (S3-A step 3, rerun in the key workbook) and `icon:glyph-key` (all 75 key cells classified into distinct, stable classes) gate every `pixel-classified` and `pixel-measured` icon capability.
+  - **Stub composition:** `icon:composition-unresolved-stub` records an unresolved p1 stub ahead of an icon. The viewer withholds either way (§5.7).
+  - **Cost if wrong.** If a key is mis-authored, every classification built on it is wrong. The gate is that the key's own resaved XML must round-trip the 75 single-pair rules (Lesson 12). A misread box is off by at most the tolerance, and `cf-compare` still runs.
+- **Ruling S4-B: set names, icon ids and unknown mappings.**
+  - **Spec tie:** §5.10 line 203, "An unrecognised `iconSet` name or out-of-range `iconId` refuses the rule (`cf-unsupported-icon`)", and §3 line 84.
+  - **Default:**
+    - The `iconSet` attribute must name one of the 20 families in `ICON_SETS`. An omitted attribute means `3TrafficLights1` only with `icon:settings-schema-defaults`.
+    - A `cfIcon` must name one of those families with `0 ≤ iconId < size`, or `NoIcons` with `iconId="0"`.
+    - Anything else (an unknown name, `NoIcons` with another id, a non-integer id, or `custom="1"` with a `cfIcon` count different from the bucket count) refuses the whole contribution: `cf-unsupported-icon`, icon slot tainted, never a partial set.
+    - An x14-only family (`3Triangles`, `3Stars`, `5Boxes`) on a base `<cfRule>` is unresolved until `stage4-icon-dialect` records Excel's outcome.
+  - **Cost if wrong:** third-party files with legal but unusual mappings stay plain.
+- **Ruling S4-C: cfvo structure.**
+  - **Spec tie:** §3 `CT_Cfvo` and §5.10 line 201 ("`<cfvo>[0]` is the lowest bucket floor").
+  - **Count:** exactly k cfvo children for a k-icon family, or for a custom set's bucket count. Any other count → `cf-invalid-rule`, and more than `CF_LIMITS.cfvo` → `cf-resource-limit` before construction.
+  - **Missing `type`:** a cfvo without `type` → `cf-invalid-cfvo`, as main already does (`parse.ts:1369`).
+  - **Values:** values resolve only as numeric literals under the Stage 1 grammar (`cfvoLiteral`, `parse.ts:952`). A reference, an expression or `type="formula"` → `cf-unsupported-rule` (Stage 5).
+  - **`min`/`max`:** these types on an icon cfvo, which Excel's UI does not author, are unresolved until `icon:thresholds-min-max` is measured.
+  - **The floor:** the value and type of `cfvo[0]`, and whether values below it draw bucket 0 or no icon, are `[measure]` (`icon:thresholds-floor`). Until then a cell whose value is below a non-trivial floor (anything other than `percent 0`, `percentile 0`, or `num` ≤ the scope minimum) is unresolved.
+  - **Cost if wrong:** icon sets with unusual floors stay plain.
+- **Ruling S4-D: thresholds and `gte`.**
+  - **Spec tie:** §5.10 line 202 (`>=` when `gte` is true, `>` when false `[measure]`), and §9 item 4 (line 328).
+  - **Hypothesis:** with resolved thresholds t₁ … t_{k−1}, bucket(v) is the largest i such that v ≥ tᵢ (or v > tᵢ when `gte="0"`), and 0 when there is none.
+  - **Threshold resolution:**
+    - `percent` p resolves to `lerp(min, max, p/100)`;
+    - `percentile` p resolves to `percentileOrderStatistic(sortedAsc, p, variant)`, with the variant chosen by `icon:thresholds-percentile-inc-exc`. It is measured for icons, not inherited from `scale:*`;
+    - `num` resolves to the literal.
+  - **Gates:** each type needs its own `icon:thresholds-*` capability, and `gte="0"` needs `icon:thresholds-gte-false`.
+  - **Layer (as bars split it):** parse-time gates (`iconRequiredCapabilities`, refusing `cf-unsupported-rule`) cover dialect, schema defaults, custom mapping, `NoIcons`, the `percent` attribute and RTL. Evaluation-time gates (`iconEvaluationRequiredCapabilities`, refusing `cf-unmeasured-capability`) cover family order, threshold types, `gte`, the floor, `reverse` and degenerate data.
+  - **Ids:** `icon:thresholds-num`, `icon:thresholds-percent`, `icon:thresholds-percentile-inc-exc`, `icon:thresholds-gte-true` (also required for the default `gte`) and `icon:thresholds-mixed` (a list mixing types).
+  - **Degenerate data:** non-monotonic thresholds (tᵢ < tᵢ₋₁ after resolution; `icon:degenerate-non-monotonic`), all values equal (`icon:degenerate-equal-values`), a single numeric cell (`icon:degenerate-single-cell`), and `percent`/`percentile` outside 0..100 (`icon:bounds-out-of-domain`) are unresolved until `stage4-icon-degenerate` measures them.
+  - **Discrimination (Lesson 3).**
+    - `gte` is judged only on cells whose value equals a threshold exactly. The fixture uses binary-exact data and thresholds (`num` 20/40; `percent` 25/50/75 over min 0 and max 100), so the boundary is not lost to rounding. Adjacent buckets also show different glyph classes.
+    - Off-boundary cells are designated non-discriminating for `gte`.
+  - **Cost if wrong:** boundary cells keep their value with no icon until measured.
+- **Ruling S4-E: `reverse` and custom order.**
+  - **Spec tie:** §5.10 line 202, "`reverse="1"` reverses the icon assignment order"; §9 item 4.
+  - **Family order:** for a built-in family, which icon id bucket b shows (the hypothesis is id b) is `[measure]`. It is enabled only by `icon:families-base` (the 17 base families) or `icon:families-x14` (`3Triangles`, `3Stars`, `5Boxes`), settled by `stage4-icon-families` against the glyph key. Until then every built-in, non-custom icon is unresolved.
+  - **Default:**
+    - `reverse` maps bucket b to icon (k−1−b) only with `icon:reverse`.
+    - `reverse="1"` on a custom set is unresolved until `icon:reverse-custom` is measured, because whether the reversal applies before or after the `cfIcon` mapping is not stated.
+  - **Discrimination (Lesson 3):** the middle bucket of an odd-k set maps to itself, so it is non-discriminating for `reverse`. Only the end buckets are designated. A custom set whose end icons are one glyph class is non-discriminating as a whole.
+  - **Cost if wrong:** reversed sets stay plain until measured.
+- **Ruling S4-F: the `<iconSet percent>` attribute.**
+  - **Spec tie:** §3 line 84 ("`percent` (on `<iconSet>`) defaults to `true`"). This attribute is distinct from the cfvo `type="percent"`.
+  - **Default:**
+    - `percent="1"` or omitted needs `icon:settings-schema-defaults`.
+    - `percent="0"` is unresolved until `icon:attr-percent-false` records what Excel does with it, for example whether it reinterprets `percent` cfvo values.
+    - The attribute never changes cfvo types in the viewer.
+  - **Cost if wrong:** rare third-party files stay plain.
+- **Ruling S4-G: participation.**
+  - **Spec tie:** §5.10 line 205, "Text, boolean, error and blank cells draw no icon `[measure]`", and §5.1 for date serials.
+  - **Per-cell table, as S3-G:**
+    - number → evaluated;
+    - date serial → evaluated only with `icon:participation-dateserial`, else unresolved, with `numberFormats === 'resolved'` required as at `service.ts:166`;
+    - text, boolean, error, `""` and an unstored blank → no icon only with `icon:participation-types`, else unresolved (slot tainted);
+    - an error anywhere in a statistic-bearing scope → the whole rule is unresolved unless `icon:participation-error-presence` is verified.
+  - **`num`-only rules:** a rule whose thresholds are all `num` needs no statistics. It is not blocked by a scope error, but the erroring cell itself still follows the per-cell table.
+  - **Cost if wrong:** lower-priority icons on text cells stay missing until measured.
+- **Ruling S4-H: scope statistics.**
+  - **Spec tie:** §5.7 multi-range (line 177) and §6.3.
+  - **Default:** `blockScope` gains the `'icon'` family. These shapes are each unresolved until their `icon:scope-*` capability is verified, measured for icons and not inherited: disjoint `sqref` (`icon:scope-disjoint`), duplicate blocks (`icon:scope-duplicate-blocks`), hidden row (`icon:scope-hidden-row`), autofilter-hidden row (`icon:scope-autofilter-hidden-row`), merged host (`icon:scope-merged-cell`), and whole column (`icon:scope-whole-column`).
+  - **Merged hosts:** a merged host also withholds the paint, as for bars (`src/xlsx/cf/render.ts:412–416`).
+  - **Cost if wrong:** multi-range or filtered icon sets stay plain.
+- **Ruling S4-I: slot exclusivity and cross-visual composition.**
+  - **Spec tie:** §5.7 line 176, "At most one `dataBar` and one `iconSet` render per cell … `[measure]`".
+  - **Two icons:** two matching icon rules on one cell withhold both and taint `iconSet`, until `icon:composition-overlapping-icons` is verified. Then the first in priority order paints, as in Ruling S3-I-OVERLAP.
+  - **Icon with a bar:** an icon and a bar on one cell paint together only with `icon:composition-with-bar`, which also measures the icon's z-order relative to the bar. Until then the icon is withheld and the bar keeps its own Stage 3 outcome.
+  - **Conflicting `showValue`:** if the bar says `showValue="1"` and the icon `"0"` (or the reverse), text suppression is unresolved and the text stays, until `icon:composition-bar-showvalue` is verified.
+  - **Fills:** an icon never changes the fill slot. It paints over a scale or DXF fill only with `icon:composition-with-scale` or `icon:composition-dxf-fill`.
+  - **`NoIcons`:** whether a `NoIcons` bucket occupies the slot, halting a lower icon rule, is `[measure]` (`icon:composition-noicons-slot`). Until then, a lower matching icon rule under a `NoIcons` win is withheld.
+  - **Halting:** a matching DXF `stopIfTrue` ahead of an icon halts it. Until `icon:composition-matching-stopIfTrue-ahead` is verified, the icon is withheld, which is also what halting would show.
+  - **Cost if wrong:** icons over filled or barred cells stay plain until measured.
+- **Ruling S4-J: an icon rule carrying `stopIfTrue="1"` (OD-1 analogue).**
+  - **Spec tie:** §5.7 line 175, which is silent on whether a visual "matches".
+  - **Default:** until `icon:composition-icon-stopIfTrue` is verified, the rule is unresolved, so later rules on its cells are withheld (`tainted.add('ALL')`, as the S3-J path does through `halts` at `compose.ts:65–66`).
+  - **Lesson 12:** if Excel drops the flag on resave (S3-CLOSE did so for bars), the capability is recorded from the input workbook and stays unverified.
+  - **Cost if wrong:** later formatting under such icons is withheld.
+- **Ruling S4-K: icon box, placement, clipping and zoom.**
+  - **Spec tie:** §5.10 line 204 (the box width plus gap is `[measure]`) and §6.4 line 266 (clip to host, snap per §8, tile seams at 50/100/175 % × DPR 1/2).
+  - **Default:** the box rect follows a closed variant set, `CfIconBoxVariant = { size: 'fixed' | 'font' | 'row'; vertical: 'bottom' | 'center' | 'top' | 'cell-align' }`. Exactly one variant is enabled, by `icon:geometry-box` and `icon:geometry-vertical-align` evidence.
+  - **Fixtures:** they vary font size (8, 11, 20 pt), row height (12, 30, 60 pt) and vertical alignment, so each pair of hypotheses differs by ≥ 3 px at a designated cell (S3-A step 7).
+  - **Edge cases:** a cell narrower or shorter than the box withholds its icon until `icon:geometry-narrow-clip`/`icon:geometry-short-row-clip` is verified.
+  - **Constants:** they are pinned in `CF_ICON_RENDER_MODEL` and checked against the sidecars.
+  - **Zoom (OD-8 extends to icons):** at other zoom/DPR values the measured point geometry is scaled and snapped to device px, with fidelity labelled `*unverified*`. Buckets stay exact.
+  - **Cost if wrong:** sub-pixel drift at non-100 % zoom.
+- **Ruling S4-L: text inset and `showValue` on canvas.**
+  - **Spec tie:** §5.10 line 204 and §6.4 lines 263–264.
+  - **One predicate:** the inset is applied, and text hidden, only on a host whose icon this frame actually paints. The decision is made before layout from the placement box with `iconWithheld(icon, host)`, the painter's own predicate. Every input of that predicate is known before layout:
+    - evidence;
+    - the host rect;
+    - the glyph admission, which S4-R makes at batch preparation, independent of scale;
+    - the text width needed by the `icon:inset-overflow` fallback, carried on the host as a typed optional field. `CfBarHost` (`dataBarPaint.ts:139`) widens to `Rect & { fill?: string; textWidth?: number }`, and `CfFrameHostSource.cell` (`render.ts:180–182`, today `{ box, base }`) gains an optional `textWidth`. Paint legs supply it from layout. The paged semantic leg supplies it from the frame's own laid-out record through `CfFrameHostSource.cell` → `frameBarHosts`, and the resident semantic leg through `residentBarHosts` from the static renderer's measurer. An unknown width withholds while `icon:inset-overflow` is unverified.
+    - In coarse frames, only the retained active cell has an exact host (`renderViewport.ts:289–306`). It alone gets inset or hiding, and the icon pass paints exactly that host (Lesson 11).
+    - The paged paint scope's paint-learned `laidOut` map is not consulted for icons.
+  - **The inset:** the inset width comes from `icon:inset-left` on left-aligned numbers in columns wide enough that no `###` appears.
+    - The effect on general/right-aligned numbers (`icon:inset-right-aligned`) and centred text (`icon:inset-center`) is measured separately.
+    - A right-aligned number in a wide column is non-discriminating for the inset width (Lesson 3).
+    - Whether an inset that leaves too little room turns a number into `###`, clips it or overlaps it is `[measure]` (`icon:inset-overflow`). Until then, a cell whose inset text would not fit withholds its icon and keeps its un-inset text.
+  - **`NoIcons`:** a `NoIcons` bucket applies no inset and suppresses no text, until `icon:noicons-inset` and `icon:noicons-showvalue` say otherwise (§5.10 line 203 `[measure]`).
+  - **`showValue="0"`:** the canvas hides the text only for a painted icon whose `showValue` is `false`, with `icon:showvalue-canvas-suppression`. Whether the icon also moves (for example, centred) when the text is hidden is part of `icon:geometry-box`.
+  - **Cost if wrong:** text is shown un-inset with no icon. That is more information, never a wrong value.
+- **Ruling S4-M: reading order (RTL).**
+  - **Spec tie:** §5.10 line 204 ("or right in RTL `[measure]`").
+  - **Default:** on a sheet whose `CfParseMeta.sheetRightToLeft` (`parse.ts:67–73`) is `true` or `undefined`, every icon is unresolved throughout Stage 4, because the viewer does not lay out RTL sheets.
+  - **Evidence:** `stage4-icon-rtl` records Excel's placement only (`icon:placement-rtl-sheet` stays unverified, as S3-K did).
+  - **Cost if wrong:** icons on RTL sheets stay plain.
+- **Ruling S4-N: accessibility, copy and find (OD-2 analogue).**
+  - **Spec tie:** §6.7 lines 282–284. The icon label is localised, nothing is added for `NoIcons`, and the `showValue="0"` AX-tree outcome is `[measure]`. That outcome is not observable from the sdef.
+  - **Default:**
+    - The value text always stays in the accessible name, copy and find. `icon:showvalue-copy-text` records Excel's clipboard text, and a disagreement is a finding, never a viewer change.
+    - The descriptor comes from the descriptor's `(bucket, buckets)` semantics, never from paint geometry, glyph data or the glyph class (Lesson 10). The default wording is positional: zh-TW 「圖示 2/3」 and en "Icon 2 of 3".
+    - OD-10 (owner-decided 2026-11-14) keeps the positional wording for PR 4. Named labels (for example "green up arrow", from the sdef `XlIcon` names at Excel.sdef `:6393–6446`) are a follow-up and are not built in Stage 4.
+    - A cell with both a painted bar and a painted icon announces one bounded label, the bar's then the icon's, joined by the locale joiner, under key `cf:dataBar+iconSet`. If the combined label exceeds `CF_LIMITS.descriptorUnits` (128), only the bar label is announced.
+    - The descriptor carries no RGB, thresholds, set names or formulas.
+  - **Paged leg:** the paged semantic scope decides with `frameBarHosts` and `iconWithheld`, exactly as S3-A11Y-PAGED does for bars, so the resident, worker and forced-paged legs announce identically.
+  - **Cost if wrong:** less informative, never false.
+- **Ruling S4-O: dialect and pairing.**
+  - **Spec tie:** §3 standalone bullet.
+  - **Base:** a base `<iconSet>` needs `icon:dialect-base`.
+  - **Standalone x14:** a standalone x14 `<x14:iconSet>` with `@priority` and `<xm:sqref>` needs `icon:dialect-standalone`.
+  - **Paired base and x14:** a base rule with an `<x14:id>` companion is unresolved until `stage4-icon-dialect` records whether Excel writes one. Main's `cf-invalid-x14-link` handling for orphans and duplicates is unchanged.
+  - **Primary source (Lesson 12):** `tests/fixtures/xlsx-cf/excel-authored-iconsets.xlsx`, written by Excel's own dialog, is the source for the x14 XML. The generator's templates are diffed against it.
+  - **Cost if wrong:** x14 icon sets stay plain until their dialect is measured.
+- **Ruling S4-P: activation.**
+  - **Spec tie:** §3 x14 bullet and §4.
+  - **Default:** `activePresent="1"` on an icon set → `cf-unsupported-rule` until Stage 5. The check at `parse.ts:1257` already admits `iconSet` as a visual, so it stays the right shape.
+  - **Cost if wrong:** activated icon sets stay plain until Stage 5.
+- **Ruling S4-Q: wire form and shared definitions.**
+  - **Spec tie:** §6.8, including line 292 (shared definitions such as custom icon descriptors).
+  - **Payload:** the per-cell descriptor travels as `CfCellStateWire.icon = { ruleId, set, iconId, bucket, buckets, showValue }`. All fields are numbers and booleans. `set` is an index into the frozen `CF_ICON_SET_NAMES` table, which has 21 entries including `NoIcons`.
+  - **No shared table (owner-accepted 2026-11-14):**
+    - Spec §6.8 line 292 lists custom icon descriptors among the shared per-sheet definitions. It binds the `RemoteSparklineCache` lifecycle (grant, transfer and adoption, cancellation, eviction, close) to any such definition the main thread holds.
+    - In Stage 4 the worker resolves a custom mapping per cell to one `(set, iconId)`. The main thread then needs no per-rule icon data: painting, inset, hiding and the label all read the per-cell descriptor, and the glyph table is static code in the lazy chunk, not transferred data.
+    - So no shared icon table exists, and `CfSharedDefinition` (`contracts.ts:409`) is unchanged.
+    - The per-cell icon states are not exempt from §6.8. They ride the existing `CfCellStateWire` reply and `RemoteCfCache` (`viewerRemoteCf.ts:147`) adoption accounting, so they inherit that grant, adoption and close lifecycle.
+    - Task 27's `the main thread consumes no per-rule icon data` (an acceptance test plus a source grep) proves this.
+    - If a later measurement needs per-rule data on the main thread, it must adopt the `RemoteSparklineCache` lifecycle and be priced in grants. This plan adds none.
+  - **Pricing:** the payload is priced before construction from `CF_ICON_CELL_BYTES`.
+  - **Overflow:** an icon field that exceeds the grant is omitted, with the base cells returned and a `cf-grant-required` diagnostic if it fits. Pending pages yield `pendingSheetIds`, never provisional icons.
+  - **Cost if wrong:** reply headroom only.
+- **Ruling S4-R: chunking, glyph encoding and charges.**
+  - **Spec tie:** §6.1, §7 and §11 line 350.
+  - **Placement:** icon code and the glyph table live in the lazy `cf` chunk.
+  - **Decoding:** each glyph class a batch uses is decoded once, scale-independently, at batch preparation, charged before allocation to the batch's paint memory (`paintMemoryFor`, `render.ts:450`) and spending work units. Drawing at any zoom/DPR allocates nothing. A refused charge withholds that class's icons, and their insets, for the batch's whole life, never the cell. So no cached inset layout can outlive a refusal.
+  - **No-icon sheets:** a sheet without icon rules decodes nothing.
+  - **Reporting:** Task 30 reports the `cf` chunk delta against PR 3.
+  - **Cost if wrong:** a larger `cf` chunk; the eager bundle is unaffected.
+
+### Planned files and interfaces
+
+| File | Stage 4 responsibility |
+|---|---|
+| `scripts/cf-refs/cases.ts`, `generate.ts`, `capture.ts`, `verify.ts`, `build.ts`, `audit.ts`, `scripts/cf-compare.ts` | `CF_STAGE4_*`; icon markers; `iconEvidence`; glyph key; OM reachability probe; icon locate/classify; inset measurement; Stage 4 audit and `--publish-stage4`; observed icons |
+| `tests/fixtures/xlsx-cf/excel-authored-iconsets.xlsx` (new, orchestrator) | Excel-dialog-authored x14 and custom icon XML (Lesson 12) |
+| `src/xlsx/cf/model.ts`, `parse.ts`, `evidence.ts` | Icon definition and descriptor; `NoIcons` admission; both-path icon normalisation |
+| `src/xlsx/cf/iconSet.ts` (new), `service.ts`, `compose.ts`, `limits.ts`; `src/xlsx/view/contracts.ts` | Thresholds, buckets, slot composition, measurer branch, `CF_ICON_CELL_BYTES` |
+| `src/xlsx/view/pagedSource.ts`, `src/worker/viewerRemoteCf.ts`, `src/xlsx/cf/text.ts` | Icon wire under grants, pending pages, whole-sheet invalidation |
+| `src/xlsx/cf/iconGlyphs.ts` (new; the only OD-9-dependent file) | Compact glyph table and decoder |
+| `src/xlsx/cf/iconPaint.ts` (new), `src/xlsx/cf/render.ts`, `src/xlsx/render.ts`, `src/xlsx/view/renderViewport.ts`, `src/xlsx/view/textLayout.ts`, `src/xlsx/view/formatWorkspace.ts`, `src/xlsx/cf/describe.ts` | `iconAt`/`paintIcons`/`textInsetAt`, fill-phase painting, inset through layout, `showValue` suppression, descriptor |
+
+**Consumes** (all verified on `bdc2b217`):
+- **Model and parse:**
+  - `CfDefinition`/`CfCellState`/`CfOutcome`/`CfScaleBound` (`model.ts:35,57,6,15`), `CfParseMeta` (`parse.ts:67`);
+  - `ICON_SETS` (`:151`), `scanRuleVisual` (`:1451`), `cfvoLiteral` (`:952`), `barRequiredCapabilities` (`:910`, the pattern to mirror);
+  - `parseCfSheet`/`finalizeCfSubtrees` (`:2160,2142`), `cfChildLimit` (`:2107`), `CF_LIMITS.cfvo`/`customIcons` (`limits.ts:29`).
+- **Evaluation and composition:** `lerp`/`percentileOrderStatistic`/`safeFraction`/`CfPercentileVariant` (`colorScale.ts:36,41,431,24`), `CfRangeStatistics` (`statistics.ts:58`), `createCfStatistics` (`:397`), `visualSlotOf`/`composeCell`/`composeCellAsync` (`compose.ts:25,289,301`), `createCfWorkBudget` (`limits.ts:260`).
+- **Evidence:** `hasEvidence`/`withExactCfEvidence`/`injectCfEvidence` (`evidence.ts:88,28,54`), and the `barLayoutEvidence` pattern (`:156`) for exporting a measured variant.
+- **Bytes and worker:** `measureCfCellBytes`/`CfCellStateWire` (`contracts.ts:481,396`), `CF_BAR_CELL_BYTES` (`limits.ts:13`, the pattern), `measurePayloadBytes` (`src/xlsx/view/payloadBytes.ts:62`), `measureCfPayload`/`measureCfWalkedBytes` (`limits.ts:131,148`), `admitReply` (`src/worker/viewerReplyLimit.ts:26`), `RemoteCfCache` (`src/worker/viewerRemoteCf.ts:147`), `prepareCfRemoteOnce` (`pagedSource.ts:1772`).
+- **Paint, layout and text:**
+  - `CfPaintBatch`/`prepareCfPaint`/`paintMemoryFor` (`cf/render.ts:23,197,450`), `residentBarHosts`/`frameBarHosts`/`CfFrameHostSource` (`:151,186,180`);
+  - `barHidesText`/`barWithheld`/`CfBarHost`/`CfBarScale` (`dataBarPaint.ts:113,126,139,148`), `paintDataBars` (`:287`, the pattern);
+  - `assembleScope`/`CopiedState`/`prepareCfWireScope` (`text.ts:200,106,514`), `EffectiveFormatScope` (`formatWorkspace.ts:18`);
+  - `layoutCellBody`/`paintCellLayout` (`render.ts:1265,1433`), `CellLayoutHost`/`PlacedCell`/`layoutKey` (`textLayout.ts:43,88,288`), `createCellLayoutHost` (`renderViewport.ts:29`), `describeCfWin` (`describe.ts:65`), `SemanticPresentationCache` (`formatPresentation.ts:66`).
+- **Oracle harness:**
+  - `capture` (`scripts/xlsx-refs/capture.ts:20`), `isDisplayLocked`/`parseScreenLockState` (`scripts/cf-refs/build.ts:88,68`), `captureUnderLockGuard` (`scripts/cf-refs/capture.ts:369`);
+  - `decodePngSync`/`computeWorksheetRangeGeometry`/`measureBarGeometry`/`discriminateBar`/`verifyCfCase` (`verify.ts:815,991,1706,1957,3958`), `buildDataBarSettingsProbeScript` (`capture.ts:260`, the pattern);
+  - `auditStage3Manifest`/`renderVerifiedCapabilitiesSource` (`audit.ts:500,697`), `CF_STAGE3_CASES`/`CF_STAGE3_NONDISCRIMINATING`/`CF_CASES` (`cases.ts:4542,4635,4694`), `CfCellExpectation.barEvidence` (`cases.ts:136`, the pattern), `stage3ObservedBars` (`cf-compare.ts:197`, the pattern).
+
+**Produces** (every name below is new; the creating task is given):
+```ts
+// Task 24 — scripts/cf-refs
+CfPartMarker.icon?: { dialect: 'base' | 'x14'; set: string; custom?: readonly { set: string; iconId: number }[];
+  cfvo: readonly { type: string; val?: string; f?: string; gte?: boolean }[]; attrs: Readonly<Record<string, string>> }
+CfCellExpectation.iconEvidence?: { bucket: 'pixel-classified' | 'non-discriminating' | 'unverified';
+  geometry: 'pixel-measured' | 'non-discriminating' | 'unverified' }
+CfCellExpectation.iconApplied?: boolean
+CF_STAGE4_CASES: readonly CfOracleCase[]                                                                   // cases.ts
+CF_STAGE4_CAPABILITIES: readonly CfCapabilityEntry[]                                                       // cases.ts
+CF_STAGE4_NONDISCRIMINATING: Readonly<Record<string, string>>                                              // cases.ts
+CfObservedIcon (new): { ref; cellLeftPx; cellTopPx; cellWidthPx; cellHeightPx;
+  icon: { leftPx; topPx; rightPx; bottomPx; glyphClass: string } | null; textInkLeftPx?: number; textInkRightPx?: number }
+buildIconOmReachabilityScript(workbookName: string, sheetName: string): string[]                         // capture.ts
+classifyIconCrop(png: DecodedPng, crop: Rect, key: ReadonlyMap<string, DecodedPng>, opts: { tolerance: number }):
+  { glyphClass: string } | Refusal                                                                         // verify.ts
+measureIconGeometry(png: DecodedPng, geom: WorksheetRangeGeometry, refs: readonly string[],
+  opts: { controlOf: (ref: string) => string; tolerancePx: number }): ReadonlyMap<string, CfObservedIcon> | Refusal  // verify.ts
+CfRefusalCode += 'icon-class-none' | 'icon-class-ambiguous' | 'icon-key-mismatch' | 'icon-edge-unstable' | 'icon-hypothesis-none'
+auditStage4Manifest(manifest: CfManifest, options?: { rootDir?: string }): Stage4AuditReport               // audit.ts
+RenderVerifiedOptions.publishStage4?: boolean                                                              // audit.ts (--publish-stage4)
+stage4ObservedIcons(c: CfOracleCase, rootDir: string): Map<string, CfObservedIcon> | undefined            // cf-compare.ts
+// Task 25 — src/xlsx/cf/model.ts, parse.ts
+type CfIconSetName = '3Arrows' | … | '5Boxes'          // the 20 ICON_SETS keys, as a literal union
+CF_ICON_SET_NAMES: readonly (CfIconSetName | 'NoIcons')[]   // frozen, 21 entries; the wire index table
+ICON_SET_WRITES: ReadonlySet<string>                        // = {'iconSet'}
+type CfIconThreshold = Readonly<{ bound: { type: 'num' | 'percent' | 'percentile'; value: number } | { type: 'min' } | { type: 'max' }; gte: boolean }>
+type CfIconRef = Readonly<{ set: CfIconSetName | 'NoIcons'; iconId: number }>
+// CfDefinition gains: { kind: 'iconSet'; set: CfIconSetName; thresholds: readonly CfIconThreshold[]; reverse: boolean;
+//   showValue: boolean; percentAttr: boolean; custom?: readonly CfIconRef[]; sheetRightToLeft?: boolean }
+type CfIconDescriptor = Readonly<{ ruleId: number; set: CfIconSetName | 'NoIcons'; iconId: number; bucket: number; buckets: number; showValue: boolean }>
+// CfCellState.visual.iconSet?: CfIconDescriptor   — replaces { name; index } in place
+iconRequiredCapabilities(def: Extract<CfDefinition, { kind: 'iconSet' }>, options?: { defaultedAttributes?: boolean }): Set<string>
+// Task 26 — src/xlsx/cf/iconSet.ts, compose.ts, limits.ts, contracts.ts
+resolveIconThresholds(def, stats: CfRangeStatistics, options?: { hasEvidence?: (cap: string) => boolean }): CfOutcome<readonly number[]>
+iconBucket(value: number, thresholds: readonly number[], gte: readonly boolean[]): number
+evaluateIconSet(value: CfLiteral | number, def, thresholds: readonly number[],
+  options?: { hasEvidence?: (cap: string) => boolean }): CfOutcome<Omit<CfIconDescriptor, 'ruleId'>>
+iconEvaluationRequiredCapabilities(def): Set<string>
+// visualSlotOf(rule) widens to 'colorScale' | 'dataBar' | 'iconSet' | undefined
+CfCellStateWire.icon?: Readonly<{ ruleId: number; set: number; iconId: number; bucket: number; buckets: number; showValue: boolean }>
+CF_ICON_CELL_BYTES: number  // measureCfCellBytes({properties:{}, icon: <full>}) − measureCfCellBytes({properties:{}})
+// Task 28 — src/xlsx/cf/iconGlyphs.ts (OD-9(b), owner-decided; the only task the decision shapes)
+type CfIconGlyph = Readonly<{ glyphClass: string; widthPt: number; heightPt: number; source: 'original'; path: readonly CfGlyphOp[] }>  // OD-9(b): original vector ops only
+type CfGlyphOp (new): a compact move/line/arc/fill opcode tuple with an ARGB fill
+iconGlyph(set: CfIconSetName, iconId: number): CfIconGlyph | undefined     // undefined ⇒ the icon is withheld
+drawIconGlyph(ctx: CanvasRenderingContext2D, glyph: CfIconGlyph, box: CfIconRect, scale: CfBarScale,
+  admitted: CfGlyphCache): boolean                                          // false ⇒ class not admitted, nothing drawn
+admitIconGlyphs(classes: ReadonlySet<string>, memory: CfMemory, budget: CfWorkBudget): CfGlyphCache | undefined  // at batch preparation
+// Also new in Task 28: CfIconRect (the box type drawIconGlyph takes; Task 29's layoutIcon produces it), CfGlyphCache
+CF_ICON_GLYPH_CLASSES: ReadonlyMap<string, string>   // `${set}:${iconId}` → glyph class, copied from the stage4 glyph-key sidecar
+// Task 29 — src/xlsx/cf/iconPaint.ts, cf/render.ts, text.ts, layout
+// Also new in Task 29: CfIconRenderModel. Elsewhere: Stage4AuditReport (Task 24, audit.ts), CF_ICON_DEFINITION_BYTES (Task 25, limits.ts)
+CfBarHost.textWidth?: number                         // widened in place (dataBarPaint.ts:139); residentBarHosts/frameBarHosts pass it through
+CfFrameHostSource.cell(...) → { box; base; textWidth?: number }   // widened in place (cf/render.ts:180–182)
+CF_ICON_RENDER_MODEL: CfIconRenderModel   // box variant, offsets, gap, clip rules — values copied from stage4 sidecars
+type CfIconBoxVariant = Readonly<{ size: 'fixed' | 'font' | 'row'; vertical: 'bottom' | 'center' | 'top' | 'cell-align' }>
+layoutIcon(icon: CfIconDescriptor, host: CfBarHost, font: { sizePt: number; vertical?: string }, scale: CfBarScale,
+  model: CfIconRenderModel): { box: CfIconRect; inset: { left: number; right: number } } | undefined
+iconWithheld(icon: CfIconDescriptor, host: CfBarHost | undefined, check?: (cap: string) => boolean): boolean
+CfPaintBatch.iconAt(row: number, col: number): CfIconDescriptor | undefined
+CfPaintBatch.paintIcons(ctx: CanvasRenderingContext2D, cellRect: (row: number, col: number) => CfBarHost | undefined,
+  visible: { r0: number; c0: number; r1: number; c1: number }, scale: CfBarScale): boolean
+CfPaintBatch.textInsetAt(row: number, col: number, host: CfBarHost, scale: CfBarScale): { left: number; right: number } | undefined
+EffectiveFormatScope.iconAt? / paintIcons? / textInsetAt?          // same signatures, optional
+layoutCellBody(..., suppressText?: boolean, inset?: { left: number; right: number })   // new optional trailing parameter
+CellLayoutHost.layoutBody(..., allocation?, inset?)  ;  PlacedCell.textInset?: { left: number; right: number }
+describeCfWin(..., bar?, icon?: Readonly<{ bucket: number; buckets: number }>)          // new optional trailing parameter
+```
+
+### Execution, assignments and review
+
+Implementers are Claude subagents: Sonnet for mechanical tasks, Opus for judgment-heavy ones. opencode, a different model family, reviews every task. Before dispatch, record the actual model of each seat. Never relabel a same-family review as independent. Implementers do not run Excel: the orchestrator executes every host-Excel step (AppleScript and System Events) while the owner keeps the display unlocked. Reports and reviews go in `.superpowers/sdd/<plan>/task-N-report.md` / `task-N-review.md`. After every agent, check `git status` and `git diff --stat` for test files.
+
+| Task | Implementer | Reviewer |
+|---|---|---|
+| 24 Stage 4 Excel oracle: glyph key, icon cases, classification, conformance | Claude Opus (orchestrator executes host Excel) | opencode |
+| 25 Icon model, resident and streamed parsing, evidence gates | Claude Sonnet | opencode |
+| 26 Thresholds, buckets, statistics reuse, slot composition, measurer | Claude Opus | opencode |
+| 27 Icon wire, worker grant, pending pages, whole-sheet invalidation | Claude Sonnet | opencode |
+| 28 Original vector glyph table and decoder (OD-9(b)) | Claude Opus | opencode |
+| 29 All-view icon painting, text inset, `showValue`, accessibility, copy/find | Claude Opus | opencode |
+| 30 Stage 4 validation, resource audit and PR evidence | Claude Sonnet | opencode |
+
+Task 28 depends on OD-9 and on the Task 24 glyph-key sidecar, but nothing else depends on Task 28 except the paint step in Task 29. OD-9 is decided (b), so Task 28 waits only on the Task 24 glyph-key capture, while Tasks 25–27 proceed in parallel. Until Task 28 lands, `iconGlyph` returns `undefined`, so every icon is withheld and no inset is applied.
+
+### Review Focus (Stage 4)
+
+1. A `gte` capability verified from cells off the threshold, a `reverse` capability verified from the middle bucket, or a custom set whose end icons are one glyph class. Each is non-discriminating and must withhold (S4-D, S4-E, Task 24).
+2. A classification that matches two key crops, or a key whose resaved XML lost a single-pair rule. Each must refuse (`icon-class-ambiguous`, `icon-key-mismatch`), never pick one (S4-A, Task 24).
+3. An inset applied where no icon paints, or an icon painted with no inset. That covers coarse frames, a withheld glyph, a refused glyph charge, `NoIcons`, and a narrow cell. The inset and the paint come from one predicate on one host (S4-L, Tasks 29, 30).
+4. A layout-cache hit that keeps un-inset text after an icon starts painting, or inset text after it stops. `layoutKey` must carry `textInset`, and the `###` width must use the inset width (S4-L, Task 29).
+5. `NoIcons` refused at parse (the main-branch gap), a `NoIcons` bucket that insets or hides text without evidence, or an unknown `cfIcon` that refuses only its bucket instead of the whole contribution (S4-B, Task 25).
+6. Two icons on one cell; an icon with a bar and conflicting `showValue`; an icon under a matching DXF `stopIfTrue`; an icon carrying `stopIfTrue="1"`; a lower icon under a `NoIcons` win. Each withholds as ruled, and the Stage 3 bar outcome is unchanged (S4-I, S4-J, Task 26).
+7. Thresholds at ±1e308, `percent` over an overflowing span, and equal or non-monotonic thresholds. Results are finite or unresolved, with no NaN bucket (S4-D, Lesson 6, Task 26).
+8. A value edit that moves `max` across a threshold: every icon in the scope re-buckets in the same generation, and every tile of an icon-only sheet invalidates (Lesson 5, Task 27).
+9. An icon payload at grant − 1: base cells and bars return, the `icon` field is omitted, and the bytes match the walker exactly (S4-Q, Task 27).
+10. The resident, worker and forced-paged legs announce the same `Icon b of k` label, derived from the bucket and not the glyph. Copy and find keep the value under `showValue="0"`, and a no-icon sheet decodes no glyph and does zero icon work (S4-N, S4-R, Tasks 29, 30).
+
+### Task 24: Stage 4 Excel oracle: glyph key, icon cases, classification, conformance (Claude Opus; review opencode)
+
+**Size:** kept as one task. The harness, the cases and the withheld-only conformance guard are reviewed together, so no case lands without its guard (Lesson 1), and the dual gate already lives in Task 30.
+
+**Dependencies:**
+- Stage 3 merged (PR #74), and the paged a11y fix merged (PR #76).
+- Host Excel runs only through the orchestrator (AppleScript and System Events, per the automate-Excel-recipes practice) while the owner keeps the screen unlocked.
+- Preparing scripts is not evidence. Every case without captures stays `recipe-pending`, and refused.
+
+**Files:**
+- Modify `scripts/cf-refs/cases.ts`:
+  - add `CF_STAGE4_CASES`, `CF_STAGE4_CAPABILITIES` and `CF_STAGE4_NONDISCRIMINATING` beside the Stage 3 exports (no separate file, which would create the same cycle as before);
+  - add `CfPartMarker.icon`, `CfCellExpectation.iconEvidence` and `iconApplied`;
+  - extend `CF_CASES`/`CF_CAPABILITIES`.
+- Modify the other oracle scripts:
+  - `generate.ts`: icon templates diffed against the Excel-authored fixture;
+  - `capture.ts`: `buildIconOmReachabilityScript`, captures through `captureUnderLockGuard`;
+  - `verify.ts`: `classifyIconCrop`, `measureIconGeometry` and the icon refusal codes;
+  - `audit.ts`: the guard at `:1676` accepts 4, `auditStage4Manifest` follows `:500`, and `--publish-stage4` mirrors S3-WRITE (`:648,695,1693`);
+  - `scripts/cf-compare.ts`: `stage4ObservedIcons` beside `stage3ObservedBars` (`:197`).
+- Modify the tests and fixtures:
+  - `tests/xlsx-cf-oracle.test.ts`, `tests/xlsx-cf-oracle-conformance.test.ts`;
+  - `tests/fixtures/xlsx-cf/manifest.json`, plus the case `.xlsx` files and `refs/*`;
+  - create `tests/fixtures/xlsx-cf/excel-authored-iconsets.xlsx` (orchestrator).
+- Create `docs/validation/xlsx-cf-recipes-stage4.md`. Update `docs/validation/xlsx-cf.md`.
+
+**Interfaces:**
+- **Consumes:** `CfOracleCase`, `CfPartMarker`, `CfCellExpectation`, `verifyCfCase`, `capture`, `captureUnderLockGuard`, `decodePngSync`, `computeWorksheetRangeGeometry`, `measureBarGeometry`/`discriminateBar` (patterns), `auditStage3Manifest` (pattern), `renderVerifiedCapabilitiesSource`, and the resave receipt. `cf-compare.ts:623` filters `c.stage > stage`, so `--stage 4` includes Stages 1–3.
+- **Produces:** the Task 24 block of **Produces**.
+
+The capability prefix is `icon:*`, one capability per variant. Each capability's `failClosedDisposition` cites the S4 ruling it lifts. Each `iconEvidence` value has defined semantics:
+- `bucket: 'pixel-classified'`: the S4-A classification rule matched exactly one glyph class, and the designated cells discriminate;
+- `geometry: 'pixel-measured'`: located after calibration and the lock checks, stable on three scanlines, and discriminating;
+- `non-discriminating`: measured, but it fails the rule;
+- `unverified`: anything else.
+
+**Required Stage 4 oracle matrix.** Every row is `[measure]`. No expected bucket, px or glyph is written by the plan or by the code's authors. The spec §8 rules apply: a same-content unformatted control block, positive and negative controls, a repair-free open, and retained markers diffed against Excel's resaved XML (Lesson 12).
+
+| Case ID | Input / question to settle | Capabilities |
+|---|---|---|
+| `stage4-icon-om-reachability` | Is `icon set format condition` reachable? Read `format condition 1 of range` and its `properties`, `icon criteria`, `reverse icon set order` and `show icon only`. Record only. | — (lifts nothing) |
+| `stage4-icon-authored` | The orchestrator authors through Excel's own dialog (System Events): `3Stars`, `3Triangles`, `5Boxes`, a custom set with one `NoIcons` bucket, `reverse`, "show icon only", and a `gte` toggle. The output is `excel-authored-iconsets.xlsx`. Its XML becomes the generator's template source. | `icon:dialect-base`, `icon:dialect-standalone` |
+| `stage4-icon-glyph-key` | 75 single-cell custom rules, every bucket mapped to one `(set, iconId)`. Uniform geometry, `;;;` number format, a same-format control, calibration columns 10/30/60 characters wide, and one solid DXF cell. | `icon:pixel-calibration`, `icon:glyph-key`, one `icon:glyph-<set>-<id>` per pair (artwork, per OD-9) |
+| `stage4-icon-families` | Each of the 20 built-in families over k values far from every threshold (bucket order only, default thresholds). This settles which icon id each bucket shows. | `icon:families-base`, `icon:families-x14`, `icon:settings-schema-defaults` |
+| `stage4-icon-thresholds` | `num` 20/40 and `percent` 25/50/75 over {0..100}, binary-exact. Cells exactly at each threshold under `gte` 1 and `gte` 0; the off-boundary cells are designated non-discriminating. `percent` over {10..110}. `percentile` 33/67 over {1,2,3,4,10}, where inc ≠ exc at a designated cell. Mixed `num`+`percent`. | `icon:thresholds-num`, `icon:thresholds-percent`, `icon:thresholds-percentile-inc-exc`, `icon:thresholds-gte-true`, `icon:thresholds-gte-false`, `icon:thresholds-mixed` |
+| `stage4-icon-degenerate` | All values equal; a single numeric cell; non-monotonic `num` 60/30; `percent` −10 and 150; `cfvo[0]` `num` 50 with values below it; `min`/`max` cfvo types; `<iconSet percent="0">`. | `icon:thresholds-floor`, `icon:thresholds-min-max`, `icon:degenerate-equal-values`, `icon:degenerate-single-cell`, `icon:degenerate-non-monotonic`, `icon:bounds-out-of-domain`, `icon:attr-percent-false` |
+| `stage4-icon-reverse-custom` | `reverse` on 3-, 4- and 5-icon sets (end buckets designated). Custom mappings across families. Custom + `reverse`. `NoIcons` in the first, middle and last bucket. | `icon:reverse`, `icon:reverse-custom`, `icon:custom-mapping`, `icon:custom-noicons` |
+| `stage4-icon-geometry` | Font sizes 8/11/20 pt × row heights 12/30/60 pt × vertical alignment top/center/bottom. A 2-character column. A row shorter than the box. Column widths that put predicted box edges at .25/.5/.75 pt. | `icon:geometry-box`, `icon:geometry-vertical-align`, `icon:geometry-snapping`, `icon:geometry-narrow-clip`, `icon:geometry-short-row-clip` |
+| `stage4-icon-inset` | Left-aligned numbers in wide columns: the text ink shift against the control. General (right-aligned) and centred numbers. A column where number plus icon do not fit. `NoIcons` buckets with `showValue` 1 and 0. | `icon:inset-left`, `icon:inset-right-aligned`, `icon:inset-center`, `icon:inset-overflow`, `icon:noicons-inset`, `icon:noicons-showvalue` |
+| `stage4-icon-showvalue` | `showValue` 0/1 on canvas. Icon position with the text hidden. Copy text through `copy range`, then `the clipboard as text`. The AX tree is recorded as not observable. | `icon:showvalue-canvas-suppression`, `icon:showvalue-copy-text` |
+| `stage4-icon-participation` | A number, a date serial, `TRUE`, text `"5"`, `#N/A`, `""`, an unstored blank, and a formula with a cached number. A percent variant with one error present, and a `num`-only variant with one error present. | `icon:participation-types`, `icon:participation-dateserial`, `icon:participation-error-presence` |
+| `stage4-icon-scope` | Disjoint `B2:B4 D2:D4`; duplicate blocks; a hidden row and an autofilter-hidden row each holding the extreme value; a merged `B8:C9` with non-equal values; a whole column `F:F` with no hidden rows. | `icon:scope-disjoint`, `icon:scope-duplicate-blocks`, `icon:scope-hidden-row`, `icon:scope-autofilter-hidden-row`, `icon:scope-merged-cell`, `icon:scope-whole-column` |
+| `stage4-icon-composition` | Two overlapping icon rules; an icon with a data bar (both priority orders, and conflicting `showValue`); an icon over a scale fill and over a DXF fill; a matching and a non-matching DXF `stopIfTrue` ahead; an icon with `stopIfTrue="1"` ahead of a DXF fill; a `NoIcons` win over a lower icon rule; an unresolved `expression` stub at p1. | `icon:composition-overlapping-icons`, `icon:composition-with-bar`, `icon:composition-bar-showvalue`, `icon:composition-with-scale`, `icon:composition-dxf-fill`, `icon:composition-matching-stopIfTrue-ahead`, `icon:composition-icon-stopIfTrue`, `icon:composition-noicons-slot`, `icon:composition-unresolved-stub` |
+| `stage4-icon-rtl` | An icon set on a `rightToLeft="1"` sheet. Placement and inset recorded only (S4-M). | `icon:placement-rtl-sheet` (stays unverified) |
+| `stage4-icon-unresolved-shapes` | Excel's open/repair/strip outcome for: an unknown `iconSet`; `iconId` out of range; `NoIcons` `iconId="1"`; a custom set with fewer `cfIcon` than buckets; a base rule naming `3Stars`; `type="formula"`; `xm:f` `$A$1`; `activePresent="1"`; 2 and 6 cfvo; a cfvo without `type`. Lifts no capability; the viewer refuses either way. | — |
+
+Expected non-discriminating candidates, which the rule confirms or clears after capture:
+- `icon:thresholds-gte-*` on off-boundary cells;
+- `icon:reverse` on the middle bucket;
+- `icon:inset-left` on right-aligned numbers;
+- `icon:geometry-snapping` if no edge lands at a fractional point;
+- `icon:composition-noicons-slot` if the lower rule's icon would be withheld anyway.
+
+- [x] **Conformance first (Lesson 1).** Add `stage 4 icon cells are withheld until their evidence lands` to `tests/xlsx-cf-oracle-conformance.test.ts`.
+  - Every Stage 4 cell must have `CfPrepared.at(...)` either not `ready` or with `.value.visual?.iconSet === undefined`, under production evidence. The paint-side `textInsetAt` assertion joins in Task 29, which creates it.
+  - The existing Stage 1–3 assertions (`:496`, `:557–560`, the 15-case Stage 3 guard at `:645–646`) stay byte-unchanged.
+  - Icon FINDINGS are withheld-only, extending the guard at `:996`.
+- [x] Write `stage 4 cases join the manifest and stage 1–3 cases are unchanged`. Manifest ids must equal the combined `CF_CASES`, and the Stage 1–3 capability ids must be unchanged. Run RED, then GREEN.
+- [x] Write `icon marker pins set, cfvo, gte, custom mapping and dialect exactly`. The verifier refuses each of these mutations:
+  - `gte` true → false on `cfvo[2]`;
+  - reordered cfvo;
+  - `cfIcon[1]` `iconId` 2 → 1;
+  - `NoIcons` → `3Arrows:0`;
+  - `reverse` flipped;
+  - `showValue` flipped;
+  - `xm:f` `"20"` → `"2"`;
+  - a standalone x14 rule moved to the base dialect;
+  - the glyph key's `<iconSet percent>` attribute form changed from the Excel-authored form.
+
+  The verifier compares semantics, not raw strings.
+- [x] Write `glyph key refuses a mismatched or ambiguous crop`, on synthetic PNGs.
+  - A 3×3 key of distinct crops classifies a pasted copy of crop 2 as class 2.
+  - A crop differing from every key by a strong pixel → `icon-class-none`.
+  - Two key entries identical to the test crop with different glyph classes → `icon-class-ambiguous`.
+  - A key cell whose resaved XML lost its rule → `icon-key-mismatch`.
+- [x] Write `icon edges and text ink are located by scan within ±1 px`. A 16×16 icon at px 3–18 gives left 3 and right 18. A text ink start at 24 against a control at 4 gives a shift of 20. Scanlines disagreeing by 2 px → `icon-edge-unstable`.
+- [x] Write `non-discriminating icon variant keeps its gate closed (Lesson 3)`. All of these leave `hasEvidence` returning `false`:
+  - a `gte` capability whose designated cells contain no exact-boundary value;
+  - a `reverse` capability judged only on the middle bucket;
+  - two box hypotheses 2 px apart.
+
+  At 3 px apart, with exactly one matching hypothesis, the capability is verified.
+- [x] Write `audit --stage 4 --write is idempotent (Lesson 4)`. Two runs produce a byte-identical `verifiedCapabilities.ts`. Without `--publish-stage4` the Stage 4 export is carried over verbatim (absent at first), and the Stage 1–3 sets are unchanged.
+- [x] Extend the osacompile test with `buildIconOmReachabilityScript` under `it.skipIf(!hasOsacompile)` (Lesson 8). The participation and clock-sensitive cases reuse the TZ pin pattern.
+- [ ] **Orchestrator:**
+  1. Run `stage4-icon-om-reachability` and record the result.
+  2. Author `stage4-icon-authored` through Excel's dialog, save it, and diff its XML into the generator templates (Lesson 12).
+  3. Run `bun scripts/cf-refs/build.ts --stage 4 --case stage4-icon-glyph-key` and `capture.ts --stage 4 --case stage4-icon-glyph-key`. If calibration or the key fails, stop and record it, because every classification stays unverified.
+  4. Run the remaining cases (`--refresh-clock-date`, `--verify-only`). Close owned workbooks between cases, and never manufacture pixels.
+- [x] Inventory the corpus files that contain `iconSet` (ZIP XML; skip `~$`) into `docs/validation/xlsx-cf.md` §4: dialects, families, custom/`NoIcons`, cfvo types, `gte`, and `reverse`. Record every Stage 4 `[measure]` row with its ruling and status.
+- [ ] Run `npx vitest run tests/xlsx-cf-oracle.test.ts tests/xlsx-cf-oracle-conformance.test.ts`, `npx tsc --noEmit -p tsconfig.scripts.json`, `npx tsc --noEmit -p .` and `git diff --check`. Commit (`test(xlsx-cf): add Stage 4 icon-set oracle cases`), then report and review. Pending variants do not block Task 25; their branches stay disabled.
+
+### Task 25: Icon model, resident and streamed parsing, evidence gates (Claude Sonnet; review opencode)
+
+**Files:**
+- Modify `src/xlsx/cf/model.ts`, `parse.ts` and `evidence.ts`.
+- Modify `tests/xlsx-cf-parse.test.ts` and `tests/xlsx-cf-paged-parse.test.ts`. Create `tests/xlsx-cf-icon-parse.test.ts`.
+- `src/xlsx/cf/capture.ts` changes only if the deep-equality test shows streamed `cfIcon` or `x14:iconSet` attributes are lost.
+
+**Interfaces:**
+- **Consumes:** `parseCfSheet`, `finalizeCfSubtrees`, `scanRuleVisual`, `ICON_SETS`, `cfvoLiteral`, `barRequiredCapabilities` (pattern), `CF_LIMITS.cfvo`/`customIcons`, `CfParseMeta.sheetRightToLeft`, `hasEvidence`, and the Task 24 `icon:settings-*`/`icon:dialect-*` ids.
+- **Produces:** the Task 25 block of **Produces**. The old `visual.iconSet` is replaced in place.
+
+- [ ] Write `canonical icon write mask is ['iconSet'] for resolved and unresolved icon sets`. A resolved set, an unresolved set and a set carrying a DXF each carry exactly `ICON_SET_WRITES` plus any DXF writes. Broken links keep `ALL` (`invalidLinkRule`, `parse.ts:1617`).
+- [ ] Write `base 3Arrows resolves with schema defaults`. The input is `<iconSet iconSet="3Arrows"><cfvo type="percent" val="0"/><cfvo type="percent" val="33"/><cfvo type="percent" val="67"/></iconSet>`.
+  - With `icon:settings-schema-defaults` and `icon:dialect-base` injected (the parse layer), it yields `set '3Arrows'`, thresholds `[{percent 0, gte true}, {percent 33, gte true}, {percent 67, gte true}]`, `reverse false`, `showValue true`, `percentAttr true`, and no `custom`.
+  - With `withExactCfEvidence([])` it yields `cf-unsupported-rule`, writes `{iconSet}`, and one deduplicated diagnostic.
+  - An omitted `iconSet` attribute yields `set '3TrafficLights1'` (spec line 84).
+- [ ] Write `standalone x14 custom set with NoIcons resolves`. The input is `<x14:iconSet iconSet="3Arrows" custom="1">` with three `<x14:cfvo type="num"><xm:f>…</xm:f></x14:cfvo>` (0, 20, 40, the second with `gte="0"`) and `cfIcon`s `3Flags:0`, `NoIcons:0` and `3Stars:2`, at `@priority 3`.
+  - Under evidence, `custom` = `[{set '3Flags', iconId 0}, {set 'NoIcons', iconId 0}, {set '3Stars', iconId 2}]`, the gte list is `[true, false, true]`, and the priority is 3.
+  - This is the main-branch gap: today the `NoIcons` entry refuses as `cf-unsupported-icon` (`parse.ts:1490–1492`).
+- [ ] Write `unknown icon mappings refuse the whole contribution (S4-B)`. Each of these → `cf-unsupported-icon` with the slot tainted and no partial set:
+  - `iconSet="7Moons"`;
+  - `cfIcon iconSet="3Arrows" iconId="3"`;
+  - `NoIcons iconId="1"`;
+  - `iconId="1.5"`;
+  - `custom="1"` with 2 `cfIcon`s on a 3-icon set.
+
+  The diagnostics cap stays at 64.
+- [ ] Write `icon cfvo structure refusals`, one row per S4-C/O/P ruling:
+  - 2 cfvo on a 3-icon set → `cf-invalid-rule`;
+  - 6 cfvo → `cf-resource-limit` before construction;
+  - missing `type` → `cf-invalid-cfvo`;
+  - `formula` cfvo, `xm:f` `$A$1` and `activePresent="1"` → `cf-unsupported-rule`;
+  - `min`/`max` cfvo → unresolved without `icon:thresholds-min-max`;
+  - base `3Stars` → unresolved without the dialect evidence;
+  - `<iconSet percent="0">` → unresolved (S4-F);
+  - `activePresent` on `top10` keeps `cf-invalid-rule`.
+- [ ] Write `icon sets on an RTL sheet are unresolved on both paths (S4-M)`. A `<sheetView rightToLeft="1">` sheet, and a sheet with a malformed flag, each yield unresolved on the resident and streamed paths. An LTR sheet resolves under evidence.
+- [ ] Write `iconRequiredCapabilities is never empty and names each feature`.
+  - A base default set needs exactly `{icon:dialect-base, icon:settings-schema-defaults}`.
+  - A standalone x14 set needs `icon:dialect-standalone`.
+  - A custom set adds `icon:custom-mapping`, plus `icon:custom-noicons` when it maps a `NoIcons` bucket.
+  - `<iconSet percent="0">` adds `icon:attr-percent-false`.
+  - `min`/`max` cfvo add `icon:thresholds-min-max`.
+  - No evaluation-layer id (`icon:thresholds-*`, `icon:families-*`, `icon:reverse`) appears in the parse set.
+- [ ] Write `icon definition bytes are measurer-derived (Lesson 6)`. `CF_ICON_DEFINITION_BYTES` equals `measurePayloadBytes` of the largest icon definition (5 thresholds, 5 custom refs, longest names). The parse reservation uses it beside `CF_BAR_DEFINITION_BYTES` (`parse.ts:1174,1574`).
+- [ ] Extend `resident and streamed CF are deep equal at every chunk boundary` (`tests/xlsx-cf-paged-parse.test.ts:32`) with a base set, a standalone x14 custom set carrying `NoIcons`, and `3Stars`, with a chunk boundary inside `<x14:cfIcon>` and inside `<xm:f>`.
+- [ ] Run `npx vitest run tests/xlsx-cf-icon-parse.test.ts tests/xlsx-cf-parse.test.ts tests/xlsx-cf-paged-parse.test.ts tests/xlsx-cf-bar-parse.test.ts tests/xlsx-cf-scale-parse.test.ts` to record RED, implement, then run GREEN. Then run `npx tsc --noEmit -p .`, `bun scripts/check-eager.ts` and `bun scripts/eager-budget.ts`. Commit (`feat(xlsx-cf): parse icon-set rules behind evidence gates`), then report and review.
+
+### Task 26: Thresholds, buckets, statistics reuse, slot composition and measurer (Claude Opus; review opencode)
+
+**Files:**
+- Create `src/xlsx/cf/iconSet.ts`, `tests/xlsx-cf-icon-eval.test.ts` and `tests/xlsx-cf-icon-compose.test.ts`.
+- Modify:
+  - `src/xlsx/cf/service.ts`: `statistical`, `ownSorted`, `blockScope` with the `'icon'` family, the per-cell branch, and `estimateCfPrepareBytes` via `CF_ICON_CELL_BYTES`;
+  - `compose.ts`;
+  - `limits.ts`;
+  - `src/xlsx/view/contracts.ts`: `CfCellStateWire.icon`, plus the `measureCfCellBytes` `Pick` and branch.
+- Extend `tests/xlsx-cf-worker.test.ts`, `tests/xlsx-cf-lazy.test.ts`, `tests/xlsx-cf-statistics.test.ts` and `tests/xlsx-cf-active-units.test.ts`.
+
+**Interfaces:**
+- **Consumes:** the Task 25 definition; `lerp`, `percentileOrderStatistic`, `safeFraction`, `CfRangeStatistics`, `createCfStatistics`, `composeCellAsync`, `visualSlotOf`, `measurePayloadBytes`, `createCfWorkBudget`, and `hasEvidence`.
+- **Produces:** the Task 26 block of **Produces**.
+- **Constraints:** the evaluator stays pure: no DOM, no clock, no glyph data. Every bucket expectation below is a hypothesis run under injected evidence through `withExactCfEvidence`, never an Excel fact; the facts come from Task 24 sidecars.
+
+- [ ] Write `iconEvaluationRequiredCapabilities names each feature`. A default `3Arrows` percent set needs `{icon:families-base, icon:thresholds-percent}`. `3Stars` needs `icon:families-x14`. `gte="0"` adds `icon:thresholds-gte-false`, `reverse` adds `icon:reverse` (and `icon:reverse-custom` on a custom set), and a percentile threshold adds `icon:thresholds-percentile-inc-exc`. A custom set needs no `icon:families-*` id.
+- [ ] Write `no threshold evidence ⇒ unresolved`. With no evidence, every icon evaluates to `{ kind: 'unresolved', reason: 'cf-unmeasured-capability' }`, and `CfCellState.visual` carries no `iconSet`.
+- [ ] Write `bucket boundaries under the S4-D hypothesis`. Over {0..100} with `num` 20/40 (`gte` true, true):
+  - v=19 → bucket 0, v=20 → 1, v=39 → 1, v=40 → 2, v=100 → 2.
+  - With `cfvo[1].gte=false`: v=20 → bucket 0.
+  - `iconBucket(20, [0, 20, 40], [true, false, true])` returns 0.
+  - `iconBucket(40, [0, 20, 40], [true, true, false])` returns 1.
+- [ ] Write `percent and percentile thresholds reuse the shared primitives`.
+  - `percent` 25/50/75 over {0..100} resolves to `[0, 25, 50, 75]` exactly. Over {10..110} it resolves to `[10, 35, 60, 85]`.
+  - `percentile` 33/67 over {1,2,3,4,10} equals `percentileOrderStatistic` under the injected variant ('inc' → `[1, 2.32, 3.68]` within 1e-12 for the hypothesis run).
+  - `iconSet.ts` contains no `sort(` and no percentile implementation (source-text assertion).
+- [ ] Write `reverse and custom mapping`.
+  - A 3-icon `reverse` maps buckets 0/1/2 to icon ids 2/1/0.
+  - A custom mapping returns its `(set, iconId)` per bucket.
+  - `NoIcons` returns `{ set: 'NoIcons', iconId: 0 }`.
+  - Custom + `reverse` without `icon:reverse-custom` → unresolved.
+  - `bucket` and `buckets` are always the semantic bucket (pre-reverse) and k.
+- [ ] Write `icon evaluation stays finite at ±1e308 (Lesson 6)`.
+  - `percent` 50 over a scope of {−1e308, 1e308} resolves to a finite threshold through `lerp`.
+  - Every field of every result is `Number.isFinite`.
+  - Equal values, a single numeric cell and non-monotonic thresholds are unresolved, with nothing NaN.
+- [ ] Write `icons share the statistics session`.
+  - A percentile icon set, a min/max scale, a percent bar and a `top10` rule on one 50-row `A:A` scope visit the source at most 50 times, and a warm hit does zero loops.
+  - A `num`-only icon set requests no statistics.
+- [ ] Write `icon percentile copy reserves before allocation, and the fallback gets a fresh budget (Lesson 9)`. On 100,000 numeric cells at `requiredBytes − 1`:
+  - the result is `cf-resource-limit`, while a `num`-only icon set on the same scope stays ready;
+  - the over-cap refusal is cached per (scope, generation) with one diagnostic;
+  - an upgraded-sorted refusal retries unsorted under a new `createCfWorkBudget({ scan: true })` (spy: two distinct budgets).
+- [ ] Write `icon participation and scope gates`. The S4-G table is applied row by row. A text cell taints the icon slot for a lower icon without evidence. An error makes a percent rule unresolved but not a `num`-only rule. Each S4-H shape is unresolved until its `icon:scope-*` evidence is injected, and `bar:scope-*` evidence never lifts it.
+- [ ] Write `icon slot composition` in `tests/xlsx-cf-icon-compose.test.ts`:
+  - two matching icons → no icon, with `unresolvedWrites` containing `iconSet`;
+  - with `icon:composition-overlapping-icons`, the first in priority order wins;
+  - icon + bar → the bar keeps its Stage 3 outcome, and the icon paints only with `icon:composition-with-bar`;
+  - bar `showValue=1` + icon `showValue=0` → the descriptor pair is kept, and the text-suppression decision is marked unresolved (`icon:composition-bar-showvalue`);
+  - icon + scale / DXF fill → the fill paints, and the icon only with its capability;
+  - a matching p1 DXF `stopIfTrue` → no icon;
+  - an icon with `stopIfTrue="1"` → `tainted` contains `ALL` until `icon:composition-icon-stopIfTrue`;
+  - a `NoIcons` win over a lower matching icon → the lower icon is withheld until `icon:composition-noicons-slot`;
+  - an unresolved p1 `stopIfTrue` stub → no icon.
+
+  `visualSlotOf` returns `'iconSet'` for an icon rule and an icon stub. All Stage 2/3 compose tests (`tests/xlsx-cf-scale-compose.test.ts`, `tests/xlsx-cf-bar-compose.test.ts`, `tests/xlsx-cf-bot-fixes.test.ts`) stay green unchanged.
+- [ ] Extend `wire measures match the kernel payload walker exactly` (`tests/xlsx-cf-worker.test.ts:165`) with `cell-icon` and `cell-icon-bar`. `measureCfCellBytes` must equal `measurePayloadBytes` for both. `CF_ICON_CELL_BYTES` must equal the full-minus-empty difference, and `estimateCfPrepareBytes` must use it, with no hand constant (source-text assertion: no new integer literal on the icon arm).
+- [ ] Add `'iconSet'`, `'iconPaint'` and `'iconGlyphs'` (created by Tasks 28 and 29, which re-run this test) to the file list in `excludes every CF implementation from both ordinary static closures` (`tests/xlsx-cf-lazy.test.ts:14–17`) (Lesson 7).
+- [ ] Extend `tests/xlsx-cf-active-units.test.ts`. The largest production call with icons present (1,000 text-path cells and 256 paint-path cells, four icon rules each) spends ≤ `CF_LIMITS.activeUnits / 5` units. Re-run `npx tsx scripts/cf-refs/active-units.ts` and record the numbers in `docs/validation/xlsx-cf.md` §11 (Lesson 9).
+- [ ] Run `npx vitest run tests/xlsx-cf-icon-eval.test.ts tests/xlsx-cf-icon-compose.test.ts tests/xlsx-cf-worker.test.ts tests/xlsx-cf-lazy.test.ts tests/xlsx-cf-statistics.test.ts tests/xlsx-cf-active-units.test.ts tests/xlsx-cf-bar-compose.test.ts tests/xlsx-cf-scale-compose.test.ts` to record RED, implement, then run GREEN. Run tsc and the eager gates. Commit (`feat(xlsx-cf): evaluate and compose icon sets`), then report and review.
+
+### Task 27: Icon wire, worker grant, pending pages and whole-sheet invalidation (Claude Sonnet; review opencode)
+
+**Files:**
+- Modify:
+  - `src/xlsx/view/pagedSource.ts`: `hasIcon`/`perCellIcon` and the `icon` omit family in `prepareCfRemoteOnce`, parallel to `:2000–2005` and `:2174–2177`;
+  - `src/xlsx/cf/text.ts`: `CopiedState.icon`, `wireIcon`/`descriptorOfIcon` beside `wireBar`/`descriptorOf` (`:117,124`), `assembleScope`, and `prepareCfWireScope`;
+  - `src/worker/viewerRemoteCf.ts`: icon bytes in `RemoteCfCache` adoption accounting.
+- Create `tests/xlsx-cf-icon-worker.test.ts`. Extend `tests/xlsx-cf-live.test.tsx`.
+
+**Interfaces:**
+- **Consumes:** `CfCellStateWire.icon`, `CF_ICON_CELL_BYTES`, `measureCfCellBytes` and `CF_ICON_SET_NAMES` (Tasks 25–26); `measureCfWalkedBytes`, `measureCfPayload`, `admitReply`, `RemoteCfCache`, and `cfRulesVersion`.
+- **Produces:**
+  - icon states on the wire under the receiver grant, omitted when they do not fit (S4-Q);
+  - `CopiedState.icon`, so the paged main thread sees the same descriptor;
+  - the icon-only whole-sheet invalidation test.
+
+- [ ] Write `icon payload fits the grant or is omitted`. A 1,000-cell viewport's icon bytes are priced from `CF_ICON_CELL_BYTES` before the payload is built.
+  - At grant − 1, base cells and bars return, every `icon` field is omitted, and `cf-grant-required` ("…icon sets omitted…") is present only if it fits.
+  - At exactly the grant, the reply carries every icon.
+  - `admitReply` never replaces the reply.
+- [ ] Write `wire icons equal the resident descriptor`. For a custom set with `NoIcons` under injected evidence, each decoded wire `icon` (with `set` → `CF_ICON_SET_NAMES[set]`) deep-equals the resident `visual.iconSet`. A wire `set` outside 0..20 decodes to no icon, never to a guessed set.
+- [ ] Write `the main thread consumes no per-rule icon data (S4-Q, owner-accepted)`.
+  - After a worker read of a sheet with a custom set carrying `NoIcons`, the adopted `RemoteCfCache` entry and every `CopiedState` hold only `CfCellStateWire` fields: no `iconSet` definition, no thresholds, no `cfIcon` list, and no `CfSharedDefinition` for icons.
+  - A source grep in the test asserts no `definition.custom`, `definition.thresholds` or `kind === 'iconSet'` read in `src/xlsx/cf/text.ts`, `src/worker/viewerRemoteCf.ts`, `src/xlsx/view/renderViewport.ts` or `src/components/`.
+- [ ] Write `CF_ICON_SET_NAMES is an immutable wire table`. A snapshot pins its 21 entries in order, so a reorder fails the test and is a breaking wire change. A wire `set` of −1, 21 or 2.5 decodes to no icon.
+- [ ] Write `the advertised requiredBytes of a refused icon read carries every icon` (retry at exactly that grant) and `clone copies of icon states are counted on both sides until adoption`.
+- [ ] Write `max edit re-buckets every icon of the scope in one generation`. With the resident and worker shells at g1 (max 100, v=60 in bucket 1 under `percent` 33/67), commit max 50 at g2 while preparation is pending: no cell paints its g1 icon at g2, and v=60 gets its g2 bucket.
+- [ ] Write `a CF generation change with the lease kept invalidates every tile of an icon-only sheet (Lesson 5)`. It follows `tests/xlsx-cf-live.test.tsx:482` on a 60-row sheet whose only rule is an icon set. Every tile of the sheet invalidates, and no tile of another sheet does.
+- [ ] Write `unimported scope pages withhold icons then repaint once`. The page shows no icon, no inset and no permanent diagnostic, then exactly one invalidation on arrival.
+- [ ] Write `no-icon sheets do zero icon work`. A bar-only sheet's wire carries no `icon` key, and its byte estimate equals the Stage 3 estimate.
+- [ ] Run `npx vitest run tests/xlsx-cf-icon-worker.test.ts tests/xlsx-cf-live.test.tsx tests/xlsx-cf-bar-worker.test.ts tests/xlsx-cf-scale-worker.test.ts tests/xlsx-cf-worker.test.ts tests/xlsx-cf-lifecycle.test.ts tests/worker-package-bootstrap.test.ts` to record RED, implement, then run GREEN. Run tsc and the eager gates. Commit (`feat(xlsx-cf): transfer icon sets under receiver grants`), then report and review.
+
+### Task 28: Original vector glyph table and decoder (OD-9(b)) (Claude Opus; review opencode)
+
+**Dependencies:** Task 28 depends on the Task 24 glyph-key sidecar `refs/stage4-icon-glyph-key.json` and on OD-9, which the owner decided on 2026-11-14 as option (b), original vectors. It cannot start until Task 24's glyph-key capture has succeeded (`icon:pixel-calibration` and `icon:glyph-key` verified). **This is the only task whose content depends on OD-9.** Every other task consumes only `iconGlyph`/`drawIconGlyph` and treats `undefined`/`false` as withheld.
+
+**Files:**
+- Create `src/xlsx/cf/iconGlyphs.ts`, holding original, hand-authored vector glyphs (one per glyph class, drawn to the measured box and dominant colours), and `tests/xlsx-cf-icon-glyphs.test.ts`.
+- No crop, bitmap or traced Microsoft artwork enters the repository's source or package. The sidecar crops stay test fixtures, used only for comparison.
+- Update `docs/validation/xlsx-cf.md` with the glyph provenance: original artwork, the author, the approximation tolerance, and the `pixel-approximated` label.
+
+**Interfaces:**
+- **Consumes:** `refs/stage4-icon-glyph-key.json` (crops, glyph classes, box px), `CfBarScale`, `paintMemoryFor`, and `createCfWorkBudget`.
+- **Produces:** the Task 28 block of **Produces**: one table, one decoder and one per-batch, scale-independent admission of the glyph classes the batch uses, charged before allocation.
+
+- [ ] Write `every (set, iconId) maps to the measured glyph class`. `CF_ICON_GLYPH_CLASSES` equals the sidecar's classification for all 75 pairs. Pairs that share a crop share one table entry (deduplicated), and the entry count equals the sidecar's class count.
+- [ ] Write `unknown or unverified glyphs are withheld`. `iconGlyph('3Arrows', 3)` is `undefined`. A pair whose `icon:glyph-<set>-<id>` capability is unverified returns `undefined`, and so does `NoIcons`, which is drawn as nothing by the caller.
+- [ ] Write `glyph decode is charged and bounded`.
+  - Admitting every class the sidecar records (its class count, not a plan-authored number) stays within the cap, and `dispose` returns the ledger to baseline.
+  - Drawing an admitted glyph at each of the six zoom/DPR pairs allocates nothing (ledger unchanged).
+  - A refused charge returns `false`, draws nothing, and leaves the ledger at baseline.
+  - Decoding spends work units, not wall time.
+- [ ] Write `glyph table bytes are measured`. The encoded table's byte size, as read from the built `cf` chunk by `OV_MODULE_MAP=1 bun run build`, is recorded and asserted ≤ 16 KiB gzip (a vector table; the cap is stated here and reported in Task 30). Once Task 28 has measured the table, the assertion tightens to that measured size plus 10 % (Ruling S4-GLYPHCAP, plan r2 review); 16 KiB is only the ceiling before measurement. No glyph bytes appear in the eager closure (checked through the `tests/xlsx-cf-lazy.test.ts` file list).
+- [ ] Write `original glyphs approximate the measured box and colours (OD-9(b))`.
+  - At 100 %/DPR 1, each glyph's drawn ink bounding box equals the sidecar's measured box within ±1 px.
+  - Its dominant colour per region equals the crop's within ±8 per channel.
+  - The result is labelled `pixel-approximated`, never `pixel-measured`.
+  - A glyph failing either check makes `iconGlyph` return `undefined` for its pairs (withheld).
+- [ ] Write `the glyph table ships no Microsoft artwork`. A source-text assertion over `src/xlsx/cf/iconGlyphs.ts` finds no `data:` URI, no base64 run longer than 64 characters, no PNG/`ImageData` construction, and no import from `tests/fixtures/`. `CfIconGlyph.source` is `'original'` for every entry.
+- [ ] Run `npx vitest run tests/xlsx-cf-icon-glyphs.test.ts tests/xlsx-cf-lazy.test.ts`, tsc and the eager gates. Commit (`feat(xlsx-cf): add the lazy icon glyph table`), then report and review.
+
+### Task 29: All-view icon painting, text inset, `showValue`, accessibility and copy/find (Claude Opus; review opencode)
+
+**Files:**
+- Create `src/xlsx/cf/iconPaint.ts`, `tests/xlsx-cf-icon-render.test.ts` and `tests/xlsx-cf-icon-a11y.test.tsx`.
+- Modify:
+  - `src/xlsx/cf/render.ts`: `CfPaintBatch.iconAt`/`paintIcons`/`textInsetAt`, and `hidesTextAt` over both visuals;
+  - `src/xlsx/render.ts`: beside `:913` (inset into `layoutCellBody`) and `:928` (`paintIcons` after `paintBars`), plus the new `inset` parameter of `layoutCellBody`;
+  - `src/xlsx/view/renderViewport.ts`: `createCellLayoutHost` (`:29`; its `layoutBody` at `:34`), placements carrying `textInset` (`:245–246`), and `paintIcons` beside `:305`;
+  - `src/xlsx/view/textLayout.ts`: `CellLayoutHost.layoutBody` `inset`, `PlacedCell.textInset`, and `layoutKey`;
+  - `src/xlsx/view/formatWorkspace.ts`: the optional `EffectiveFormatScope` methods;
+  - `src/xlsx/cf/text.ts`;
+  - `src/xlsx/cf/describe.ts`;
+  - `src/components/xlsx/InteractiveSheetDoc.tsx`: forward the new scope methods beside `:1434–1436`.
+- Extend `tests/xlsx-cf-print.test.ts`, `tests/xlsx-cf-export.test.ts`, `tests/xlsx-cf-copy-find.test.ts`, `tests/xlsx-cf-paged-a11y.test.ts`, `tests/xlsx-cf-oracle-conformance.test.ts` and `tests/browser/xlsx-cf.spec.ts`.
+- Eager modules reach `iconPaint.ts`/`iconGlyphs.ts` only through `CfPaintBatch`/`EffectiveFormatScope` methods, never by import.
+
+**Interfaces:**
+- **Consumes:** `CfIconDescriptor`, Task 24 sidecars (`observedIcons`), Task 28 `iconGlyph`/`drawIconGlyph`, `paintCellLayout` phases, `layoutCellBody`, `residentBarHosts`/`frameBarHosts`, `barHidesText`/`barWithheld`, `describeCfWin`, `descriptorKey`, `getPaintables`, `renderPrintPage` (`render.ts:524`), and the sparkline RTL/snap convention (`sparklines/geometry.ts:95–97`, `PT_PX` at `:40`).
+- **Produces:**
+  - the Task 29 block of **Produces**;
+  - one shared icon painter for static, interactive, paged, print and export;
+  - one inset/hide predicate;
+  - the S4-N descriptor;
+  - `CfBarHost.textWidth` and `CfFrameHostSource.cell().textWidth`, threaded through `residentBarHosts`/`frameBarHosts`. Resident hosts take `textWidth` from the existing static `textMeasurer` (`render.ts:1225`) while the host is built. That measurement counts as layout work under the existing `admit()` byte/work budget, never as a fresh uncharged pass. An unknown width withholds the icon (plan r2 review).
+
+- [ ] Write `icon geometry conformance (Lesson 1)`.
+  - For every `pixel-measured` cell of every verified Stage 4 case, `layoutIcon` at the capture scale (1 device px per pt) on the sidecar's cell rect reproduces the box `leftPx`/`topPx`/`rightPx`/`bottomPx` within ±1 px, and the text ink shift exactly.
+  - Every pending, refused or non-discriminating cell asserts `iconAt(...) === undefined` and `textInsetAt(...) === undefined`.
+  - No expected px is computed by the function under test.
+- [ ] Write `icon bucket conformance (Lesson 1)`. For every `pixel-classified` cell, production's `visual.iconSet` maps, through `CF_ICON_GLYPH_CLASSES`, to the sidecar's glyph class.
+- [ ] Write `CF_ICON_RENDER_MODEL equals the measured sidecars`. The box variant, offsets, gap and clip rules equal `refs/stage4-icon-geometry.json` and `refs/stage4-icon-inset.json`. Without the capability, the matching branch of `layoutIcon` returns `undefined`.
+- [ ] Write `icons paint in the fill phase in all five views`.
+  - A recording context shows fill → bar → icon → content (the bar/icon order only once `icon:composition-with-bar` has settled z-order; until then no icon paints on a bar cell).
+  - The views are `renderSheet`, `renderSheetViewport` (resident and forced-paged), `renderPrintPage` at `PRINT_SCALE = 2`, and the PNG/PDF export route.
+  - The icon rect is identical in source space across the five.
+- [ ] Write `inset and icon come from one predicate on one host (S4-L, Lesson 11)`. Each of these lays the text out un-inset, keeps it visible, and paints no icon:
+  - `iconGlyph` returning `undefined`;
+  - a glyph class refused at batch preparation (`admitIconGlyphs` returning `undefined`);
+  - a `NoIcons` bucket;
+  - a narrow cell without `icon:geometry-narrow-clip`;
+  - a coarse frame on a non-active cell.
+
+  In a coarse frame, the retained active cell alone is inset and painted. A mutant that insets from `iconAt` alone (ignoring the host) fails.
+- [ ] Write `inset overflow decides identically on every leg`. While `icon:inset-overflow` is unverified, a left-aligned number whose inset text would not fit is laid out un-inset with no icon. The resident, worker and forced-paged legs all announce no icon for it, because each takes `textWidth` from its own layout or measurer. A host with an unknown `textWidth` withholds.
+- [ ] Write `inset enters the layout key and the ### width`.
+  - `layoutKey` of two otherwise equal placements differs when `textInset` differs.
+  - A left-aligned number "12345" in a 40 px cell with a 20 px inset is laid out from x = 20 (the hypothesis run).
+  - A number that fits without the inset but not with it follows `icon:inset-overflow`, or withholds the icon.
+  - Toggling a rule from no-icon to icon within one session yields a layout-cache miss, never a stale hit.
+- [ ] Write `showValue=0 hides canvas text only where an icon paints (S4-L)`.
+  - With `icon:showvalue-canvas-suppression`, the content phase draws no glyph run, and the icon paints.
+  - Without it, the text draws.
+  - A withheld icon never suppresses text.
+  - Bar plus icon with conflicting `showValue` keeps the text until `icon:composition-bar-showvalue` is verified.
+- [ ] Write `tile and full render carry identical icon primitives at six scales`. At 50/100/175 % zoom × DPR 1/2, an icon cell straddling a tile edge has identical device-snapped rects in the full and tiled renders. A mutant that drops icons on non-first tiles fails (mirroring `tests/xlsx-cf-scale-render.test.ts:264`).
+- [ ] Write `CF icons never expand static, print or export extents`. A whole-column icon set on `A:A` leaves the print canvas and export dimensions at the data extent.
+- [ ] Write `icon cell announces a bounded positional label, without a tab stop (S4-N, Lesson 10)`.
+  - `describeCfWin` returns `{ key: 'cf:iconSet', text: '圖示 2/3' }` in zh-TW and `'Icon 2 of 3'` in en for bucket 1 of 3, whatever the glyph class or `reverse`.
+  - Bar + icon gives `{ key: 'cf:dataBar+iconSet', text: '資料橫條 72%、圖示 2/3' }` (zh-TW).
+  - `NoIcons` adds nothing.
+  - The descriptor is ≤ 128 units, with no RGB or set name.
+  - The value text stays in the accessible name, and focus order is unchanged.
+  - An icon win changes `descriptorKey`, so the presentation cache misses.
+- [ ] Extend `tests/xlsx-cf-paged-a11y.test.ts`. The forced-paged semantic scope announces an icon exactly where the frame painter paints it. It decides through `frameBarHosts` + `iconWithheld`. The test's `CfFrameHostSource` supplies `textWidth` from the frame's laid-out record, and a source without it withholds. The resident, worker and forced-paged labels are identical for the same cells (S4-N, Lesson 10).
+- [ ] Write `showValue=0 value still copies and finds`. Resident and worker copy and find return the formatted value text for a `showValue="0"` icon cell in near and far rows.
+- [ ] Extend `tests/browser/xlsx-cf.spec.ts` with `Stage 4 icon sets paint and announce on every leg, and legs agree`, `Stage 4 icon sets keep painting at the six zoom/DPR pairs`, `Stage 4 icons under frozen panes`, `Stage 4 live max edit re-buckets the icons`, and `Stage 4 print capture paints icons`.
+- [ ] Run `npx vitest run tests/xlsx-cf-icon-render.test.ts tests/xlsx-cf-icon-a11y.test.tsx tests/xlsx-cf-paged-a11y.test.ts tests/xlsx-cf-print.test.ts tests/xlsx-cf-export.test.ts tests/xlsx-cf-copy-find.test.ts tests/xlsx-cf-oracle-conformance.test.ts tests/xlsx-cf-bar-render.test.ts tests/xlsx-cf-render.test.ts` to record RED, implement, then run GREEN. Then run `npx playwright test --config playwright.viewer.config.ts tests/browser/xlsx-cf.spec.ts --project chromium`, and `bun scripts/cf-compare.ts --stage 4 --mode static` and `--mode print`, recording pass/refused/pending separately. Commit (`feat(xlsx-cf): paint icon sets in every view`), then report and review.
+
+### Task 30: Stage 4 validation, resource audit and PR evidence (Claude Sonnet; review opencode)
+
+**Files:**
+- Create `tests/xlsx-cf-stage4.test.ts`.
+- Extend `tests/xlsx-cf-oracle-conformance.test.ts` (Stage 4 counts) and `tests/browser/xlsx-cf.spec.ts`.
+- Update `docs/validation/xlsx-cf.md`, the manifest statuses, `scripts/eager-baseline.json` (any recorded growth), `src/xlsx/cf/verifiedCapabilities.ts` (via `--write --publish-stage4` only) and `CHANGELOG.md`.
+- Fix product regressions in separate focused commits, each with RED evidence and an opencode re-review.
+
+**Interfaces:**
+- **Consumes:** everything above, `auditStage4Manifest`, and the Stage 1–3 audits.
+- **Produces:**
+  - a Stage 4 audit row per case and variant: status, evidence kind, measured vs produced px and glyph class, mode, stamp, byte peak, and work units;
+  - the generated `VERIFIED_STAGE4_CAPABILITIES`;
+  - the PR 4 evidence.
+
+- [ ] Write `every enabled icon capability has verified evidence` and `every unresolved icon shape refuses atomically on both paths`. The tests cover only the `icon:*` rows: manifest-format mutations stay in Task 24, and nothing is duplicated here. Run RED, then GREEN.
+- [ ] Write `corpus iconSet files parse identically on both paths`, with `describe.skipIf` when `corpus/` is absent (as in `tests/xlsx-pivots-axes.test.ts:543`). For every inventoried file, the resident and streamed `CfSheetRules` deep-equal and nothing throws. The file count must equal the one recorded in `docs/validation/xlsx-cf.md` §4.
+- [ ] **Dual gate (Lessons 1, 4).**
+  - Run `bun scripts/cf-refs/audit.ts --stage 4` until it reports `stageComplete=true`, with every `icon:*` disposition in {`verified`, `unverified-nondiscriminating`, `refused-unsupported`, `supported-structural`} and none `unaccounted`.
+  - AND `npx vitest run tests/xlsx-cf-oracle-conformance.test.ts` must be GREEN with no injection.
+  - Then run `--write --publish-stage4` twice; `git diff --exit-code src/xlsx/cf/verifiedCapabilities.ts` after the second run proves idempotency.
+- [ ] Run `npx tsc --noEmit -p .`, `npx tsc --noEmit -p tsconfig.scripts.json`, `npx vitest run`, `bun run gates:core` (which includes `OV_MODULE_MAP=1 bun run build`), `bun scripts/check-eager.ts`, `bun scripts/eager-budget.ts` and `git diff --check`. Record:
+  - the exact summaries;
+  - the eager gzip (strictly below 38,720 B);
+  - the `scripts/eager-baseline.json` delta;
+  - the `cf` chunk delta against PR 3, with the glyph table's share.
+- [ ] Browser: run `npx playwright test --config playwright.viewer.config.ts tests/browser/xlsx-cf.spec.ts --project chromium`, plus `--project webkit` if it is installed.
+  - Cover saved, interactive, resident and forced-paged views, the six zoom/DPR pairs, frozen panes, a live max edit, print capture, the icon descriptor, and the inset.
+  - An unavailable engine is a named blocked gate.
+- [ ] Run `bun scripts/cf-compare.ts --stage 4 --mode static|interactive|paged|print|export`, bound to the workbook and oracle hashes. Unverified fidelity (zoom ≠ 100 %, and OD-9(b) artwork) is labelled `*unverified*`. `pixel-classified`/`pixel-approximated` is never relabelled as measured fidelity.
+- [ ] Run `bun scripts/cf-refs/audit.ts --stage 4` over:
+  - a 1M-row synthetic `A:A` scope with 100 icon sets, bars and scales sharing one scan;
+  - a refused percentile icon set with a `num` icon set still rendering;
+  - whole-column extents isolation;
+  - glyph-admission pressure with every class the sidecar records in one batch;
+  - distinct-range pressure up to the 1,000,000-unit cap;
+  - 20 open/read/cancel/close cycles.
+
+  Pass when there are zero unowned live bytes at every transition, and zero icon work, glyph decodes or reads on a no-CF baseline.
+- [ ] In `docs/validation/xlsx-cf.md`, publish one row per Stage 4 `[measure]` item: ruling, capability, evidence kind, status, and the exact refusal still in force. Confirm that the Stage 1–3 suites and capability sets are byte-unchanged (`git diff main -- src/xlsx/cf/verifiedCapabilities.ts` touches only `VERIFIED_STAGE4_CAPABILITIES` and the combined set).
+- [ ] Update the changelog. The opencode review is recorded at `.superpowers/sdd/<plan>/task-30-review.md` with verdict APPROVE. Budget one extra PR-bot round for cross-path semantics (the Stage 3 lesson). Prepare the PR 4 evidence and leave the merge to the owner. Stage 5 refinement starts only after PR 4 merges.
+
+### Lesson-to-task mapping
+
+| Lesson (brief numbering) | Task | Test |
+|---|---|---|
+| 1 Oracle first + production conformance | 24, 29, 30 | `stage 4 icon cells are withheld until their evidence lands`; `icon geometry conformance (Lesson 1)`; `icon bucket conformance (Lesson 1)`; the dual gate |
+| 2 Exact rendering or withheld | 25–29 | `no threshold evidence ⇒ unresolved`; `unknown or unverified glyphs are withheld`; `every unresolved icon shape refuses atomically on both paths`; withheld-only FINDINGS guard |
+| 3 Non-discriminating ⇒ gate withholds | 24 | `non-discriminating icon variant keeps its gate closed (Lesson 3)` (`gte` off-boundary, `reverse` middle bucket, 2 px box hypotheses) |
+| 4 `--write` idempotent + dual gate | 24, 30 | `audit --stage 4 --write is idempotent (Lesson 4)`; the Task 30 `--publish-stage4` dual-gate step |
+| 5 Whole-sheet invalidation | 27 | `a CF generation change with the lease kept invalidates every tile of an icon-only sheet (Lesson 5)` |
+| 6 Measurer-derived bytes, ±1e308 safety | 26, 27, 28 | `wire measures match the kernel payload walker exactly` (cell-icon rows); `icon evaluation stays finite at ±1e308 (Lesson 6)`; `icon payload fits the grant or is omitted`; `glyph table bytes are measured` |
+| 7 Eager budget; CF out of eager/paged-worker | 26, 28, 30 | `excludes every CF implementation from both ordinary static closures` (+`iconSet`, `iconPaint`, `iconGlyphs`); `bun run gates:core` with `eager-baseline.json` |
+| 8 Linux CI: skipIf + TZ pin | 24 | osacompile test under `it.skipIf(!hasOsacompile)`; conformance TZ pin |
+| 9 Deterministic work units; fresh fallback budget | 26, 28 | `icon percentile copy reserves before allocation, and the fallback gets a fresh budget (Lesson 9)`; the active-units extension; `glyph decode is charged and bounded` |
+| 10 A11y from semantics; three legs agree; paged scope uses the painter's host rule | 29 | `icon cell announces a bounded positional label, without a tab stop (S4-N, Lesson 10)`; the `xlsx-cf-paged-a11y` extension; browser `… legs agree` |
+| 11 Coarse plans: text changes only on a painted host | 29 | `inset and icon come from one predicate on one host (S4-L, Lesson 11)` |
+| 12 Excel canonicalises; Excel-authored x14 source | 24, 25 | the `stage4-icon-authored` orchestrator step; the marker tests diffed against resaved XML; `standalone x14 custom set with NoIcons resolves` |
+
+### Stage 4 owner decisions
+
+1. **OD-7 (as amended) and OD-8, binding.**
+   - Icon evidence is pixel-only (S4-A). The object-model probe lifts nothing.
+   - At other zoom/DPR values, the measured point geometry is scaled and snapped, labelled `*unverified*`. Buckets stay exact (S4-K).
+2. **OD-9 (decided 2026-11-14): glyph source = (b), original vector icons.**
+   - **The icons:** they match Excel's measured box, placement, inset and dominant colours, but not its artwork.
+   - **Exact-or-withheld:** buckets, placement and inset stay exact-or-withheld. The artwork is `pixel-approximated` and labelled `*unverified*` (spec §8, "Unverified features ship"). Each glyph is withheld unless its box (±1 px) and dominant colours (±8) pass the Task 28 check.
+   - **Provenance:** no Microsoft artwork, crop, bitmap or trace ships, in the source or in the npm package. Captures remain test fixtures only.
+   - **Why:** the capture route is fixed at 1 px/pt, so no Excel reference exists at 175 % or at DPR 2 under any option. Vectors stay crisp at the six zoom/DPR pairs, and they avoid redistributing Microsoft artwork in the MIT package.
+   - **Rejected:** (a) measured Excel bitmaps (a licensing issue, and soft at high DPR); (c) withholding glyphs entirely, or a hybrid.
+   - **Scope of the decision:** it shapes Task 28 only.
+3. **OD-10 (decided 2026-11-14): positional labels.**
+   - The label is 「圖示 b/k」 / "Icon b of k", from the bucket semantics (S4-N).
+   - Named labels (`XlIcon` names, zh-TW UI strings, a `(set, iconId)` → name table confirmed by the owner) are a follow-up after PR 4.
+4. **Ruling S4-Q (accepted 2026-11-14): no per-sheet icon definition transfer.** Per-cell ids ride the existing `CfCellStateWire`/`RemoteCfCache` lifecycle. Task 27's acceptance test and grep prove that the main thread consumes no per-rule icon data (spec §6.8 line 292).
+
+### Self-review
+
+- **Coverage.**
+  - §3 line 84 defaults → S4-B/F, Task 25.
+  - §5.10 thresholds, `gte`, `reverse`, custom and `NoIcons` → S4-B/C/D/E, Tasks 25–26.
+  - Participation → S4-G.
+  - §5.7 exclusivity and `stopIfTrue` → S4-I/J, Task 26.
+  - §6.3 scope → S4-H.
+  - §5.10 line 204 and §6.4 lines 261–266 (inset, `showValue`, fill phase, tile seams, zoom) → S4-K/L, Task 29.
+  - RTL → S4-M.
+  - §6.7 → S4-N, Task 29.
+  - §6.8 including line 292 → S4-Q, Task 27.
+  - §3/§4 dialect and refusals → S4-B/C/O/P, Task 25.
+  - §7 and §11 line 350 → Global Constraints delta, S4-R, Tasks 28, 30.
+  - §8 → S4-A, Task 24.
+  - §9 items 4/6/10 → Review Focus 1–5, 8, 10.
+- **Interfaces.** Every Consumes and architecture citation was checked by printing the cited line on `bdc2b217`, and eight wrong line numbers were corrected. The check was a hand-built list, not an automatic extraction of every citation in the prose. Round 1 fixes re-checked every changed citation: `renderViewport.ts:29/:34`, `cf-compare.ts:197`, conformance `:645–646`, `cf/render.ts:180–182`, `dataBarPaint.ts:139`, `viewerRemoteCf.ts:147` and `contracts.ts:409`. Every Produces name was grepped absent and is marked with its task. `visual.iconSet` has no consumer, so replacing it in place is safe.
+- **Main-branch facts that change the plan.**
+  - `NoIcons` is refused today (`parse.ts:151–155,1490–1492`).
+  - The icon object model is unreachable by construction (sdef).
+  - Layout caching keys on `cfKey`, but the inset must also enter `layoutKey`.
+  - `resolveScaleThresholds` cannot take 4–5 points.
+- **Proportion.** Seven tasks against Stage 3's six. Three things are new compared with Stage 3: the glyph key and classification (Task 24), the text inset through layout (Task 29), and the OD-9(b) glyph table (Task 28).
 
 ## Stage 5 stub: general formulas and cross-kind completion (PR 5)
 

@@ -237,6 +237,10 @@ export interface SheetGeometry {
   hiddenCols?: readonly { start: number; end: number }[]
   /** Authored frozen panes (leading rows/columns pinned by the interactive viewer). */
   frozen?: XlsxFrozenPane
+  /** Ruling S4-DEFAULT-ROW: the authored height (pt) of rows without `ht`, for the icon frame. */
+  defaultRowPt?: number
+  /** Ruling S4-ROW-UNIFORM: rows not uniformly Calibri 11 regular; absent: unknown. */
+  nonUniformFontRows?: readonly { start: number; end: number }[]
 }
 /** Resident workbook source boundary. S1 swaps the implementation (paged
  * adapters, blob/page handles) without changing the session. */
@@ -3483,6 +3487,8 @@ export class DocumentSession {
       ...(this.source.hasPivotDisplay ? { hasPivotDisplay: this.source.hasPivotDisplay(sheetId) } : {}),
       ...(this.source.pivotTableCount ? { pivotTableCount: this.source.pivotTableCount(sheetId) } : {}),
       ...(geometry.frozen ? { frozen: { ...geometry.frozen } } : {}),
+      ...(geometry.defaultRowPt !== undefined ? { defaultRowPt: geometry.defaultRowPt } : {}),
+      ...(geometry.nonUniformFontRows ? { nonUniformFontRows: geometry.nonUniformFontRows.map(interval => ({ ...interval })) } : {}),
     }
   }
   /** One bounded source read for the paged viewer (S5.4), owned by the sheet's

@@ -19,14 +19,15 @@ import { VERIFIED_CAPABILITIES, injectCfAutoBarColours, injectCfBarGradient, inj
 import * as verifiedExports from '../src/xlsx/cf/verifiedCapabilities'
 import { CF_BAR_RENDER_MODEL, layoutDataBar, paintDataBars } from '../src/xlsx/cf/dataBarPaint'
 import { createCanvas } from 'canvas'
-import { auditStage3Manifest, barGradientsAcrossCases } from '../scripts/cf-refs/audit'
+import { auditStage3Manifest, auditStage4Manifest, barGradientsAcrossCases } from '../scripts/cf-refs/audit'
 import { stage3ObservedBars } from '../scripts/cf-compare'
 import { CF_LIMITS, createCfMemory } from '../src/xlsx/cf/limits'
 import { createCfService } from '../src/xlsx/cf/service'
 import type { CfBarDescriptor, CfCellState, CfOutcome } from '../src/xlsx/cf/model'
 import { cfRulesVersion } from '../src/xlsx/view/pagedSource'
-import { decodePngSync, isCellInSqref, loadBarScreenCapture, sampleBarGradients, type DecodedPng } from '../scripts/cf-refs/verify'
-import { CF_CASES, type CfManifest } from '../scripts/cf-refs/cases'
+import { decodePngSync, ICON_NO_ICON_MEMBER, iconTwinSetClass, iconTwinSetMembers, isCellInSqref, loadBarScreenCapture, observedIconClass, sampleBarGradients, verifyCfCase, type CfObservedIcon, type DecodedPng } from '../scripts/cf-refs/verify'
+import { CF_ICON_GLYPH_CLASSES } from '../src/xlsx/cf/iconGlyphs'
+import { CF_CASES, CF_STAGE4_CAPABILITIES, type CfManifest } from '../scripts/cf-refs/cases'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const MANIFEST_PATH = join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json')
@@ -187,6 +188,10 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     let stage3BarEvidenced = 0
     let stage3NonBarChecked = 0
     let stage3NonBarWithheld = 0
+    let stage4Unverified = 0
+    let stage4IconOnlyWithheld = 0
+    let stage4Evidenced = 0
+    let stage4StubWithheld = 0
 
     for (const c of manifest.cases) {
       if (c.status !== 'measured' || c.stage === 2) continue
@@ -257,6 +262,34 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
               continue
             }
           }
+          if (c.stage === 4) {
+            // Stage 4 (fix round 3, item 7; Task 30): an icon (like a bar, S3-I / S4-I) never reaches the cell style:
+            // withheld or published, its descriptor is compared with Excel's glyph class per cell in the "icon bucket
+            // conformance" test below. So a cell covered only by icon (and bar) rules paints no style; a cell whose
+            // non-icon rule (composition DXF, scale, expression) carries an unverified capability is not compared here.
+            // Controls (no rule) take the normal path below.
+            const covering = c.markers.filter(m => isCellInSqref(exp.ref, m.sqref))
+            const caps = covering.map(m => m.capabilityId)
+            if (caps.length > 0) {
+              if (!caps.every(id => VERIFIED_CAPABILITIES.has(id))) stage4Unverified++
+              else stage4Evidenced++
+              // Style writers: a colour scale, or a DXF rule that carries a DXF. A DXF-less stopIfTrue rule (H, I) writes nothing.
+              const writers = covering.filter(m => m.ruleType === 'colorScale' || (m.ruleType !== 'iconSet' && m.ruleType !== 'dataBar' && Object.keys(m.dxf ?? {}).length > 0))
+              if (writers.length === 0) {
+                expect(gotMatched, `${cellKey}: no style-writing rule covers it (${caps.join(', ')}), so no style may paint`).toBe(false)
+                stage4IconOnlyWithheld++
+                continue
+              }
+              // The Stage 5 expression stub (L, its capability withheld) is unresolved, so it paints no fill.
+              if (writers.some(m => m.ruleType === 'expression')) {
+                expect(gotMatched, `${cellKey}: the Stage 5 expression stub is withheld`).toBe(false)
+                stage4StubWithheld++
+                continue
+              }
+              if (!caps.every(id => VERIFIED_CAPABILITIES.has(id))) continue
+              // Any other evidenced writer (the glyph key's calibration cellIs fill) takes the normal path below.
+            }
+          }
           if (cellKey === 'stage1-priority-composition:F2') {
             // Stage 3 dataBar blue fill is withheld, but Stage 1 bold font matches
             expect(st?.bold, `${cellKey} bold`).toBe(true)
@@ -317,6 +350,20 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     // Non-vacuous (Task 18b review): the non-bar outcomes on bar cells were compared with Excel's background.
     expect(stage3NonBarChecked).toBeGreaterThan(10)
     expect(stage3NonBarWithheld).toBe(Object.keys(STAGE3_NONBAR_WITHHELD).length)
+    // Stage 4 (non-vacuous, derived from the manifest): every ruled cell of a measured Stage 4 case is unverified, and
+    // most of them are covered by icon rules only.
+    const expectedStage4Unverified = manifest.cases
+      .filter(c => c.stage === 4 && c.status === 'measured')
+      .flatMap(c => c.expected.cells.filter(exp => {
+        const caps = c.markers.filter(m => isCellInSqref(exp.ref, m.sqref)).map(m => m.capabilityId)
+        return caps.length > 0 && !caps.every(id => VERIFIED_CAPABILITIES.has(id))
+      })).length
+    // Task 30: the publication evidences most ruled cells; the rest (withheld ids) stay unverified.
+    expect(expectedStage4Unverified).toBeGreaterThan(20)
+    expect(stage4Unverified).toBe(expectedStage4Unverified)
+    expect(stage4Evidenced).toBeGreaterThan(200)
+    expect(stage4IconOnlyWithheld).toBeGreaterThan(200)
+    expect(stage4StubWithheld).toBe(4)
   })
 
   it('proves all 53 previously withheld cells now paint under production evidence (C1)', async () => {
@@ -723,6 +770,358 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(() => validateBarFinding({ outcome: 'painted' as any, reason: 'bar painted before evidence' })).toThrow(/Non-withheld bar outcome/)
     expect(() => validateBarFinding({ outcome: 'withheld', reason: 'valid' })).not.toThrow()
   })
+
+  /**
+   * Stage 4 (Task 24, Lesson 1; Task 30 flips it to the published state): under production evidence, nothing injected,
+   * every icon cell of every Stage 4 oracle workbook either carries the icon Excel drew or is withheld. Production's
+   * evaluated `(set, iconId)` maps through `CF_ICON_GLYPH_CLASSES` (Task 28, the glyph key's own classes) to a glyph
+   * class that must equal the sidecar's observed class (or lie in its twin set); `NoIcons` and `no-match` stand for no
+   * icon. A disagreement is a violation; withholding is always allowed, and the published shapes must not be vacuous.
+   */
+  const iconWithheldOutcome = (outcome: CfOutcome<CfCellState>): boolean => outcome.kind !== 'ready' || outcome.value.visual?.iconSet === undefined
+  /** The sidecar's observed classes of a case (`observedIconClass`: a class, a twin set, or null for no icon). */
+  const observedIconClasses = (c: { captures: readonly { sidecarPath: string }[] }): Map<string, string | null> => {
+    const path = c.captures[0] ? join(REPO_ROOT, c.captures[0].sidecarPath) : undefined
+    const rows = path && existsSync(path) ? ((JSON.parse(readFileSync(path, 'utf8')) as { observedIcons?: CfObservedIcon[] }).observedIcons ?? []) : []
+    return new Map(rows.map(o => [o.ref.toUpperCase(), observedIconClass(o)] as const))
+  }
+  /** Whether production's class (null: no icon) is the observed outcome. Unclassifiable crops never agree. */
+  const iconClassAgrees = (observed: string | null, produced: string | null): boolean => {
+    const twins = iconTwinSetMembers(observed)
+    if (twins) return twins.includes(produced ?? ICON_NO_ICON_MEMBER)
+    return observed === produced
+  }
+  const producedClass = (icon: { set: string; iconId: number }): string | null => (icon.set === 'NoIcons' ? null : CF_ICON_GLYPH_CLASSES[`${icon.set}:${icon.iconId}`] ?? `unknown:${icon.set}:${icon.iconId}`)
+
+  it('stage 4 icon cells follow the published evidence: Excel\'s glyph class or withheld (Lesson 1, no injection)', async () => {
+    // The guard has teeth: a ready cell carrying an icon in its visual slot is NOT withheld.
+    const withIcon = { kind: 'ready', value: { properties: {}, visual: { iconSet: { set: '3Arrows', iconId: 0 } } } } as unknown as CfOutcome<CfCellState>
+    expect(iconWithheldOutcome(withIcon)).toBe(false)
+    expect(iconWithheldOutcome({ kind: 'ready', value: { properties: {} } })).toBe(true)
+    expect(iconWithheldOutcome({ kind: 'no-match' })).toBe(true)
+    expect(iconWithheldOutcome({ kind: 'unresolved', reason: 'cf-unsupported-rule' })).toBe(true)
+    expect(iconClassAgrees('twin-set:4RedToBlack:1|5Boxes:0', '5Boxes:0')).toBe(true)
+    expect(iconClassAgrees(iconTwinSetClass([ICON_NO_ICON_MEMBER, '5Boxes:0']), null)).toBe(true)
+    expect(iconClassAgrees('3Arrows:0', '3Arrows:1')).toBe(false)
+    expect(iconClassAgrees('icon-class-none', '3Arrows:0')).toBe(false)
+
+    const s4 = Reflect.get(verifiedExports, 'VERIFIED_STAGE4_CAPABILITIES') as ReadonlySet<string> | undefined
+    expect(s4, 'Task 30 publishes the Stage 4 set').toBeDefined()
+    const stage4 = manifest.cases.filter(c => c.stage === 4)
+    expect(stage4.map(c => c.id)).toEqual(CF_CASES.filter(c => c.stage === 4).map(c => c.id))
+    expect(stage4).toHaveLength(19)
+    let checked = 0, iconCells = 0, preparedSheets = 0, agreedIcon = 0, agreedNone = 0, withheld = 0, unclassified = 0, unobserved = 0, controls = 0
+    const violations: string[] = []
+    const shownBy = new Map<string, number>()
+    for (const c of stage4) {
+      const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
+      const doc = await parseXlsx(await OfficePackage.load(bytes), parseOptionsFor(c))
+      const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+      const observed = observedIconClasses(c)
+      if (!sheet.conditionalFormatting) {
+        // Production refused every rule of the sheet at parse: nothing can paint, every cell is withheld.
+        checked += c.expected.cells.length
+        withheld += c.expected.cells.length
+        iconCells += c.expected.cells.filter(e => e.iconApplied === true).length
+        continue
+      }
+      preparedSheets++
+      const memory = createCfMemory()
+      const merges = (sheet.mergeRanges ?? []).map(m => ({ firstRow: m.minRow, lastRow: m.maxRow, firstCol: m.minCol, lastCol: m.maxCol }))
+      const service = createCfService(sheet.conditionalFormatting, memory, { evidence: cfRuntimeEvidence, merges })
+      const stamp = { owner: 'conformance', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(sheet.conditionalFormatting), viewGen: 0, structureGen: 0, clockGen: 0 }
+      const source = residentSource(sheet, stamp, memory, 'engine')
+      // Each expected cell in its own one-cell batch: a whole case range of 75 icon rules exceeds one paint batch's grant.
+      for (const exp of c.expected.cells) {
+        const { row, col } = refToRowCol(exp.ref)
+        const lease = await service.prepareCf({ stamp, sourceRects: [{ firstRow: row, lastRow: row, firstCol: col, lastCol: col }], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, source)
+        try {
+          checked++
+          if (exp.iconApplied === true) iconCells++
+          const outcome = lease.value.at(row, col)
+          const key = `${c.id}:${exp.ref}`
+          const obs = observed.get(exp.ref.toUpperCase())
+          // Production's claim: an icon class; no icon (no-match, or a ready outcome whose icon slot is neither filled nor
+          // tainted, e.g. halted by a stopIfTrue rule ahead); or withheld (tainted or unresolved). A cell no icon rule
+          // covers is a control: production's "no icon" there is not evidence.
+          const covered = c.markers.some(m => m.ruleType === 'iconSet' && isCellInSqref(exp.ref, m.sqref))
+          // Any unresolved write makes the cell's composition unknown (an unresolved stopping rule ahead halts it, and the
+          // cell announces unavailable): withheld, not a claim of no icon.
+          const tainted = outcome.kind === 'ready' && ((outcome.value.unresolvedWrites?.size ?? 0) > 0)
+          const produced = outcome.kind === 'no-match' || (outcome.kind === 'ready' && !outcome.value.visual?.iconSet && !tainted) ? null
+            : outcome.kind === 'ready' && outcome.value.visual?.iconSet ? producedClass(outcome.value.visual.iconSet) : undefined
+          if (!covered) { controls++; if (produced !== null && produced !== undefined) violations.push(`${c.id}:${exp.ref}: production draws ${produced} on a control`); continue }
+          if (produced === undefined) { withheld++; continue }
+          // Only a captured case is evidence (the OM probe crashed before any capture), and a null observation means "no
+          // icon" only on a cell whose bucket was classified (geometry and text cases record text ink, not icons).
+          if (c.status !== 'measured' || (obs === null && exp.iconEvidence?.bucket !== 'pixel-classified')) { unobserved++; continue }
+          if (obs === undefined) {
+            // No sidecar row (a control or an unobserved cell): production may only claim no icon.
+            if (produced !== null) violations.push(`${key}: production draws ${produced}, Excel recorded nothing`)
+            else agreedNone++
+            continue
+          }
+          if (obs === 'icon-class-none' || obs === 'icon-class-ambiguous' || obs === 'unclassified') { unclassified++; continue }
+          if (!iconClassAgrees(obs, produced)) violations.push(`${key}: production ${produced ?? 'no icon'}, Excel ${obs ?? 'no icon'}`)
+          else if (produced === null) agreedNone++
+          else { agreedIcon++; shownBy.set(c.id, (shownBy.get(c.id) ?? 0) + 1) }
+        } finally {
+          lease.release()
+        }
+      }
+      service.dispose()
+      expect(memory.currentBytes, `${c.id} leaked CF memory`).toBe(0)
+    }
+    // Non-vacuous: every designated icon cell and its control was visited, and most sheets were actually prepared.
+    expect(checked).toBe(stage4.reduce((n, c) => n + c.expected.cells.length, 0))
+    expect(iconCells).toBeGreaterThan(200)
+    expect(preparedSheets).toBeGreaterThanOrEqual(14)
+    expect(violations).toEqual([])
+    // The publication is not vacuous: production evaluates Excel's icon on most icon cells, across the bucket cases.
+    // Pinned at publication (Task 30): any change in what production evaluates moves these.
+    expect({ checked, agreedIcon, agreedNone, withheld, unclassified, unobserved, controls }).toEqual({ checked: 1506, agreedIcon: 549, agreedNone: 25, withheld: 111, unclassified: 86, unobserved: 21, controls: 714 })
+    for (const id of ['stage4-icon-families', 'stage4-icon-thresholds', 'stage4-icon-degenerate', 'stage4-icon-reverse-custom', 'stage4-icon-participation', 'stage4-icon-scope', 'stage4-icon-composition', 'stage4-icon-glyph-key', 'stage4-icon-rows-bottom', 'stage4-icon-authored']) {
+      expect(shownBy.get(id) ?? 0, id).toBeGreaterThan(0)
+    }
+
+    // Icon FINDINGS are withheld-only (extends the guard): an icon can never be recorded as painted.
+    type IconFinding = { outcome: 'withheld'; reason: string }
+    const ICON_FINDINGS: Record<string, IconFinding> = {
+      // Ruling S4-M: on a rightToLeft sheet every icon is unresolved throughout Stage 4, whatever Excel draws there.
+      'stage4-icon-rtl:B2': { outcome: 'withheld', reason: 'S4-M: icons on an RTL sheet stay unresolved in Stage 4 (icon:placement-rtl-sheet is record only)' },
+    }
+    const validateIconFinding = (f: IconFinding) => {
+      if (f.outcome !== 'withheld') throw new Error(`Non-withheld icon outcome: ${(f as any).outcome}`)
+    }
+    // Non-vacuous (review fix 1): every recorded finding names a visited Stage 4 cell, passes the validator, and is a
+    // cell production actually withholds.
+    expect(Object.keys(ICON_FINDINGS).length).toBeGreaterThan(0)
+    for (const [key, f] of Object.entries(ICON_FINDINGS)) {
+      expect(f.outcome, key).toBe('withheld')
+      expect(() => validateIconFinding(f), key).not.toThrow()
+      const [caseId, ref] = key.split(':')
+      const c = stage4.find(x => x.id === caseId)!
+      expect(c.expected.cells.some(e => e.ref === ref && e.iconApplied === true), key).toBe(true)
+      const sheet = (await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))), parseOptionsFor(c))).sheets[0]!
+      const batch = sheet.conditionalFormatting ? await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence }) : undefined
+      const { row, col } = refToRowCol(ref!)
+      expect(batch?.iconAt(row, col), key).toBeUndefined()
+      batch?.dispose()
+    }
+    expect(() => validateIconFinding({ outcome: 'painted' as any, reason: 'icon painted before evidence' })).toThrow(/Non-withheld icon outcome/)
+    expect(() => validateIconFinding({ outcome: 'withheld', reason: 'valid' })).not.toThrow()
+  }, 120_000)
+
+  /**
+   * Task 29/30, Lesson 1 at the paint layer: wherever production's batch paints an icon (`iconAt`: every paint gate held,
+   * on the resident host), its glyph class is the one Excel drew there. The admitted geometry (Calibri 11 regular, 15, 18
+   * or 30 pt rows, bottom or centre, left text or short right-aligned numbers) holds in `stage4-icon-rows-bottom` (and
+   * `stage4-icon-rows`) only: every other Stage 4 workbook uses 20 pt rows and paints nothing.
+   */
+  it('icon bucket conformance (Lesson 1): every icon production paints is Excel\'s glyph class, and the admitted rows paint', async () => {
+    const stage4 = manifest.cases.filter(c => c.stage === 4)
+    expect(existsSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/refs/stage4-icon-glyph-key.json'))).toBe(true)
+    const ctx = createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D
+    let painted = 0, observedIcons = 0
+    const paintedRefs: string[] = []
+    const violations: string[] = []
+    for (const c of stage4) {
+      const observed = observedIconClasses(c)
+      const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
+      const doc = await parseXlsx(await OfficePackage.load(bytes), parseOptionsFor(c))
+      const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+      const batch = sheet.conditionalFormatting ? await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, layoutContext: () => ctx }) : undefined
+      try {
+        for (const exp of c.expected.cells) {
+          const obs = observed.get(exp.ref.toUpperCase())
+          if (obs !== undefined && obs !== null) observedIcons++
+          const { row, col } = refToRowCol(exp.ref)
+          const icon = batch?.iconAt(row, col)
+          if (!icon) continue
+          painted++
+          paintedRefs.push(`${c.id}:${exp.ref}`)
+          // An unclassifiable crop (icon-class-none) is compared by px in the geometry test; no icon at all is a violation.
+          if (obs === undefined || obs === null || (obs !== 'icon-class-none' && !iconClassAgrees(obs, producedClass(icon)))) violations.push(`${c.id}:${exp.ref}: paints ${producedClass(icon)}, Excel ${obs}`)
+        }
+      } finally { batch?.dispose() }
+    }
+    expect(observedIcons).toBeGreaterThan(300)
+    expect(violations).toEqual([])
+    // Ruling S4-ROW-UNIFORM (Task 30 fix round): bottom-aligned icons paint only on rows whose every cell is Calibri 11
+    // regular. Every row of stage4-icon-rows-bottom and stage4-icon-rows is, so on the admitted heights, 15, 18 and 30 pt
+    // (rows 2, 5 and 9), all five columns of the one and all eight of the other paint; 12.75, 16.5, 20, 22.5 and 25 pt
+    // withhold.
+    const at = (id: string) => paintedRefs.filter(k => k.startsWith(`${id}:`)).map(k => k.split(':')[1]!).sort()
+    expect(at('stage4-icon-rows-bottom')).toEqual(['B', 'C', 'D', 'E', 'F'].flatMap(col => [2, 5, 9].map(row => `${col}${row}`)).sort())
+    expect(at('stage4-icon-rows')).toEqual(['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'].flatMap(col => [2, 5, 9].map(row => `${col}${row}`)).sort())
+    // Conformance evidence for the ruling: the bottom-anchored cells Excel lifted 2 px (their rows hold a 20 pt cell)
+    // withhold; the centred ones in the same rows (stage4-icon-geometry I3, stage4-icon-geometry-2 F2) still paint.
+    for (const k of ['stage4-icon-geometry:C3', 'stage4-icon-geometry:M3', 'stage4-icon-geometry:N3', 'stage4-icon-geometry:O3', 'stage4-icon-geometry-2:C2', 'stage4-icon-geometry-2:G2', 'stage4-icon-geometry-2:I2', 'stage4-icon-geometry-2:J2']) expect(paintedRefs, k).not.toContain(k)
+    for (const k of ['stage4-icon-geometry:I3', 'stage4-icon-geometry-2:F2']) expect(paintedRefs, k).toContain(k)
+    // Outside stage4-icon-rows only centred 30 pt cells of the geometry cases can paint (their px are compared below).
+    for (const k of paintedRefs.filter(x => !x.startsWith('stage4-icon-rows'))) expect(k, k).toMatch(/^stage4-icon-geometry(-2)?:/)
+    // Nothing paints on a 20 pt row (the glyph key's own row height is not an admitted placement): every other painted
+    // cell is on a 15, 18 or 30 pt row (geometry conformance compares each one's px with Excel's).
+    expect(painted).toBe(paintedRefs.length)
+    expect(painted).toBeGreaterThanOrEqual(39)
+  }, 120_000)
+
+  /**
+   * Ruling S4-PROD-ALIGN (Task 29 fix round 3), carried to Task 30's publication gate: for every geometry, inset and
+   * showValue capability, the reading production implements (`CF_ICON_PAINT_READINGS`, each pinned to behaviour in
+   * tests/xlsx-cf-icon-align.test.ts) equals the reading Excel matched, recomputed by `verifyCfCase` from the committed
+   * sidecar of the capability's owning case. Nothing is injected.
+   */
+  it('S4-PROD-ALIGN: production\'s icon readings equal the matched readings of the committed Stage 4 sidecars', async () => {
+    const { CF_ICON_PAINT_READINGS } = await import('../src/xlsx/cf/iconPaint')
+    const caps = Object.keys(CF_ICON_PAINT_READINGS)
+    expect(caps.length).toBe(13)
+    const byCase = new Map<string, ReturnType<typeof verifyCfCase>>()
+    for (const cap of caps) {
+      const owners = CF_STAGE4_CAPABILITIES.filter(e => e.capabilityId === cap)
+      expect(owners.length, `${cap}: one owning case`).toBe(1)
+      const caseId = owners[0]!.caseId
+      const c = manifest.cases.find(x => x.id === caseId)!
+      if (!byCase.has(caseId)) byCase.set(caseId, verifyCfCase(c, { rootDir: REPO_ROOT }))
+      const res = byCase.get(caseId)!
+      expect(res.kind, `${cap} (${caseId})`).toBe('verified')
+      const matched = res.kind === 'verified' ? res.matchedHypotheses?.[cap] : undefined
+      expect(matched, `${cap} (${caseId}): Excel's matched reading`).toBeDefined()
+      expect(CF_ICON_PAINT_READINGS[cap], `${cap} (${caseId}): production's reading`).toBe(matched)
+    }
+  }, 60_000)
+
+  /**
+   * S4-PROD-ALIGN, behaviour: the pieces production can decide without a box or a glyph, run on Excel's own saved
+   * workbooks under the audit's own verified Stage 4 set (on top of production's published Stage 1–3 set, as the Stage 3
+   * Lesson 1 test injects its audit result), against the committed sidecars' measured text:
+   * - `stage4-icon-inset` F2..F4 (NoIcons, left 11 pt): the text inset equals the measured shift (+12 px at 1 px/pt);
+   * - `stage4-icon-inset` G2..G4 (NoIcons, showValue 0): the text is hidden (no text ink);
+   * - `stage4-icon-geometry-2` H/I/J rows 2, 5, 6 (zero-length bars at the range minimum beside 3Arrows): hidden,
+   *   shown, shown, as the sidecar's text shift says (priority-wins; any-hides would hide J).
+   */
+  it('S4-PROD-ALIGN: NoIcons inset and hiding and the bar/icon showValue decision reproduce the sidecars on Excel\'s workbooks', async () => {
+    const audit = auditStage4Manifest(manifest, { rootDir: REPO_ROOT })
+    expect(audit.ok).toBe(true)
+    const verified = audit.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId)
+    for (const cap of ['icon:noicons-inset', 'icon:noicons-showvalue', 'icon:composition-bar-showvalue', 'icon:composition-with-bar']) expect(verified, cap).toContain(cap)
+    const { createCellLayoutHost } = await import('../src/xlsx/view/renderViewport')
+    const { computeMetrics } = await import('../src/xlsx/render')
+    const ctx = createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D
+    type Obs = { ref: string; textShiftPx?: number; textInkLeftPx?: number }
+    let checked = 0
+    await withExactCfEvidence([...VERIFIED_CAPABILITIES, ...verified], async () => {
+      for (const [caseId, refs] of [['stage4-icon-inset', ['F2', 'F3', 'F4', 'G2', 'G3', 'G4']], ['stage4-icon-geometry-2', ['H2', 'H5', 'H6', 'I2', 'I5', 'I6', 'J2', 'J5', 'J6']]] as const) {
+        const c = manifest.cases.find(x => x.id === caseId)!
+        const observed = (JSON.parse(readFileSync(join(REPO_ROOT, c.captures[0]!.sidecarPath), 'utf8')) as { observedIcons: Obs[] }).observedIcons
+        const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))), parseOptionsFor(c))
+        const sheet = doc.sheets.find(x => x.name === c.sheet) ?? doc.sheets[0]!
+        const batch = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, layoutContext: () => ctx }))!
+        const m = computeMetrics(sheet)
+        try {
+          for (const ref of refs) {
+            const { row, col } = refToRowCol(ref)
+            const cell = sheet.rows.find(r => r.index === row)!.cells.find(x => x.col === col)!
+            const width = m.colWidthsPx[col]!, height = m.rowHeightsPx[row]!
+            const body = createCellLayoutHost(ctx).layoutBody(cell, width, height)
+            const textWidth = body.text?.kind === 'layout' ? body.text.layout.lines[0]!.segments.reduce((n, sg) => n + sg.width, 0) : undefined
+            const host = { x: m.colWidthsPx.slice(0, col).reduce((a, b) => a + b, 0), y: m.rowHeightsPx.slice(0, row).reduce((a, b) => a + b, 0), width, height, textWidth, cell }
+            const o = observed.find(x => x.ref === ref)!
+            const hidden = batch.hidesTextAt(row, col, host, { zoom: 1, dpr: 1 })
+            // Shown text sits at the inset (+12); hidden text leaves no ink or only the icon (shift <= 1).
+            const excelHides = o.textShiftPx === undefined || o.textShiftPx <= 1
+            expect(hidden, `${caseId}:${ref} hidden (sidecar shift ${o.textShiftPx})`).toBe(excelHides)
+            if (caseId === 'stage4-icon-inset' && ref.startsWith('F')) {
+              // The sidecar's shift is in px at 1 px/pt, so in pt; production's inset is logical px (4/3 per pt).
+              expect(batch.textInsetAt(row, col, host, { zoom: 1, dpr: 1 })?.left, `${caseId}:${ref} inset`).toBeCloseTo(o.textShiftPx! * 4 / 3, 9)
+            }
+            checked++
+          }
+        } finally { batch.dispose() }
+      }
+    })
+    expect(checked).toBe(15)
+  }, 120_000)
+
+  it('icon geometry conformance (Lesson 1): every icon production paints sits where Excel drew it (+-1 px), and unpainted cells are not inset', async () => {
+    const { computeMetrics } = await import('../src/xlsx/render')
+    const { createCellLayoutHost } = await import('../src/xlsx/view/renderViewport')
+    const { CF_ICON_RENDER_MODEL, iconTextOf, layoutIcon } = await import('../src/xlsx/cf/iconPaint')
+    const { cfRowPtOfSheet, cfRowUniformOfSheet } = await import('../src/xlsx/cf/render')
+    const ctx = createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D
+    expect(CF_ICON_RENDER_MODEL, 'S4-PROD-ALIGN: only the evidence-determined values').toEqual({ box: { size: 'font', vertical: 'cell-align' }, leftInsetPt: { 11: 12 }, rightInsetPt: { 11: 0 }, keyFrame: { fontPt: 11, fontName: 'Calibri', widthPt: 13, heightPt: 12, leftPt: 2, rows: CF_ICON_RENDER_MODEL.keyFrame!.rows } })
+    // Each class's ink offset inside the frame, from the glyph key itself (20 px rows: frame 2 px in, 1 px above the
+    // bottom gridline). The produced ink is the produced frame origin plus this offset; nothing is fitted to the case.
+    const key = JSON.parse(readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/refs/stage4-icon-glyph-key.json'), 'utf8')) as { observedIcons: CfObservedIcon[] }
+    const inkOffset = new Map<string, { l: number; t: number; r: number; b: number }>()
+    for (const o of key.observedIcons) {
+      if (!o.icon || iconTwinSetMembers(o.icon.glyphClass)) continue
+      const fx = o.cellLeftPx + 2, fy = o.cellTopPx + o.cellHeightPx - 1 - 12
+      if (!inkOffset.has(o.icon.glyphClass)) inkOffset.set(o.icon.glyphClass, { l: o.icon.leftPx - fx, t: o.icon.topPx - fy, r: o.icon.rightPx - fx, b: o.icon.bottomPx - fy })
+    }
+    expect(inkOffset.size).toBeGreaterThan(40)
+    const capture = { zoom: 3 / 4, dpr: 1, output: 'device' as const }
+    const stage4 = manifest.cases.filter(c => c.stage === 4)
+    let checked = 0, compared = 0, insetCompared = 0
+    const violations: string[] = []
+    for (const c of stage4) {
+      const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
+      const doc = await parseXlsx(await OfficePackage.load(bytes), parseOptionsFor(c))
+      const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+      const batch = sheet.conditionalFormatting ? await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, layoutContext: () => ctx }) : undefined
+      const observed = new Map(((c.captures[0] && existsSync(join(REPO_ROOT, c.captures[0].sidecarPath)) ? (JSON.parse(readFileSync(join(REPO_ROOT, c.captures[0].sidecarPath), 'utf8')) as { observedIcons?: CfObservedIcon[] }).observedIcons : undefined) ?? []).map(o => [o.ref.toUpperCase(), o] as const))
+      const m = computeMetrics(sheet)
+      const rowPtOf = cfRowPtOfSheet(sheet), rowUniformOf = cfRowUniformOfSheet(sheet)
+      try {
+        for (const exp of c.expected.cells) {
+          checked++
+          const { row, col } = refToRowCol(exp.ref)
+          const cell = sheet.rows.find(r => r.index === row)?.cells.find(x => x.col === col)
+          const width = m.colWidthsPx[col] ?? 64, height = m.rowHeightsPx[row] ?? 20
+          const body = cell ? createCellLayoutHost(ctx).layoutBody(cell, width, height) : undefined
+          const textWidth = body?.text?.kind === 'layout' ? body.text.layout.lines[0]!.segments.reduce((n, sg) => n + sg.width, 0) : 0
+          const rowPt = rowPtOf(row)
+          const host = { x: m.colWidthsPx.slice(0, col).reduce((a, b) => a + b, 0), y: m.rowHeightsPx.slice(0, row).reduce((a, b) => a + b, 0), width, height, textWidth, ...(cell ? { cell } : {}), ...(rowPt !== undefined ? { rowPt } : {}), ...(rowUniformOf(row) !== undefined ? { rowUniform: rowUniformOf(row) } : {}) }
+          const icon = batch?.iconAt(row, col)
+          const o = observed.get(exp.ref.toUpperCase())
+          const where = `${c.id}:${exp.ref}`
+          const inset = batch?.textInsetAt(row, col, host, { zoom: 1, dpr: 1 })
+          if (!icon) {
+            // Hidden text (a NoIcons showValue="0" cell) has no position to compare.
+            if (batch?.hidesTextAt(row, col, host, { zoom: 1, dpr: 1 })) continue
+            // No icon, no inset; a NoIcons cell's inset is the measured shift (S4-PROD-ALIGN), checked in its own test.
+            if (inset !== undefined && !(inset.left === 0 && inset.right === 0)) {
+              if (o?.textShiftPx === undefined || Math.abs(inset.left - o.textShiftPx * 4 / 3) > 1e-9) violations.push(`${where}: inset ${inset.left} without an icon (Excel shift ${o?.textShiftPx})`)
+            }
+            continue
+          }
+          if (!o?.icon) { violations.push(`${where}: paints ${icon.set}:${icon.iconId}, Excel drew no icon box`); continue }
+          const cls = CF_ICON_GLYPH_CLASSES[`${icon.set}:${icon.iconId}`]!
+          const off = inkOffset.get(cls)
+          expect(off, `${where}: ${cls} has a key ink box`).toBeDefined()
+          const laid = layoutIcon(icon, host, iconTextOf(cell)!, capture)
+          expect(laid, where).toBeDefined()
+          // Cell-relative px: the viewer's column widths (character units) and earlier rows' rounding differ from Excel's
+          // whole-pt layout, which moves every cell origin; the icon's place in its own cell is what Excel measured.
+          const X0 = Math.floor(host.x * 3 / 4 + 0.5), Y0 = Math.floor(host.y * 3 / 4 + 0.5)
+          const want = { l: laid!.box.x - X0 + off!.l, t: laid!.box.y - Y0 + off!.t, r: laid!.box.x - X0 + off!.r, b: laid!.box.y - Y0 + off!.b }
+          const got = { l: o.icon.leftPx - o.cellLeftPx, t: o.icon.topPx - o.cellTopPx, r: o.icon.rightPx - o.cellLeftPx, b: o.icon.bottomPx - o.cellTopPx }
+          const d = Math.max(Math.abs(want.l - got.l), Math.abs(want.t - got.t), Math.abs(want.r - got.r), Math.abs(want.b - got.b))
+          if (d > 1) violations.push(`${where}: ${cls} produced ink ${JSON.stringify(want)}, Excel ${JSON.stringify(got)} (row ${rowPt} pt, ${iconTextOf(cell)?.vertical})`)
+          compared++
+          // The text: a measured shift equals production's inset (px at 1 px/pt = pt; inset in logical px).
+          if (o.textShiftPx !== undefined && inset) {
+            if (Math.abs(inset.left - o.textShiftPx * 4 / 3) > 1e-9) violations.push(`${where}: inset ${inset.left} vs Excel shift ${o.textShiftPx} pt`)
+            insetCompared++
+          }
+        }
+      } finally { batch?.dispose() }
+    }
+    expect(checked).toBe(stage4.reduce((n, c) => n + c.expected.cells.length, 0))
+    expect(violations).toEqual([])
+    expect(compared).toBeGreaterThanOrEqual(39)
+    expect(insetCompared).toBeGreaterThan(0)
+  }, 120_000)
 
   /**
    * Lesson 1: every bar production paints reproduces Excel's measured px, and every bar it cannot reproduce is withheld.

@@ -202,3 +202,42 @@ describe('S3-I1-UNITS: the default per-call budget refuses deterministically pas
     }
   }, 60_000)
 })
+
+describe('Task 26 (Lesson 9): icon rules keep the largest production call under CF_LIMITS.activeUnits / 5', () => {
+  const th = (type: 'num' | 'percent' | 'percentile', value: number) => ({ bound: { type, value }, gte: true })
+  const iconDef = (thresholds: ReturnType<typeof th>[], custom?: { set: '3Flags' | 'NoIcons'; iconId: number }[]) => ({
+    kind: 'iconSet', dialect: 'base', formulas: [], set: '3Arrows', thresholds, reverse: false, showValue: true, percentAttr: true, sheetRightToLeft: false, ...(custom ? { custom } : {}),
+  })
+  const ROWS_POPULATED = 5_000
+  function iconSheet(): XlsxSheet {
+    const all = rect(0, ROWS_POPULATED - 1)
+    const defs = [
+      iconDef([th('percentile', 0), th('percentile', 33), th('percentile', 67)]),
+      iconDef([th('percent', 0), th('percent', 33), th('percent', 67)]),
+      iconDef([th('num', 0), th('num', 1000), th('num', 3000)]),
+      iconDef([th('num', 0), th('num', 2000), th('num', 4000)], [{ set: '3Flags', iconId: 2 }, { set: 'NoIcons', iconId: 0 }, { set: '3Flags', iconId: 0 }]),
+    ]
+    const rules = defs.map((definition, i) => ({ id: i + 1, priority: i + 1, documentOrder: i, stopIfTrue: false, ranges: [all], writes: new Set(['iconSet']), definition })) as unknown as CfRule[]
+    const rows = Array.from({ length: ROWS_POPULATED }, (_, r) => ({ index: r, cells: [{ ref: `A${r + 1}`, row: r, col: 0, value: r, styleIndex: 0, hasCachedValue: true } as XlsxCell] }))
+    return { name: 'I', sheetId: 'i', rows, cols: [], merges: [], mergeRanges: [], conditionalFormatting: { diagnostics: [], rules } } as unknown as XlsxSheet
+  }
+
+  it('1,000 text-path cells and 256 paint-path cells, four icon rules each', async () => {
+    const { injectCfIconSelections } = await import('../src/xlsx/cf/evidence')
+    injectCfIconSelections({ 'icon:thresholds-percentile-inc-exc': 'inc' })
+    try {
+      for (const cellsPerCall of [1000, 256]) {
+        const s = iconSheet(), stamp = stampOf(s), memory = createCfMemory()
+        let counter: CfWorkBudget | undefined
+        const service = createCfService(s.conditionalFormatting!, memory, { evidence: { allows: () => true },
+          budget: () => (counter = createCfWorkBudget({ now: frozen(), scan: true, maxUnits: 10_000_000 })) })
+        const lease = await service.prepareCf({ stamp, sourceRects: [rect(1000, 1000 + cellsPerCall - 1)], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, residentSource(s, stamp, memory, 'engine'))
+        let icons = 0
+        for (let r = 1000; r < 1000 + cellsPerCall; r++) { const o = lease.value.at(r, 0); if (o.kind === 'ready' && o.value.visual?.iconSet) icons++ }
+        lease.release(); service.dispose()
+        expect(icons, `${cellsPerCall} cells`).toBe(cellsPerCall) // the full icon path ran on every cell
+        expect(counter!.units, `${cellsPerCall} cells`).toBeLessThanOrEqual(CF_LIMITS.activeUnits / 5)
+      }
+    } finally { injectCfIconSelections(null) }
+  }, 60_000)
+})

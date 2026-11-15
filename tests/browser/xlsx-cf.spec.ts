@@ -764,3 +764,359 @@ test('the forced-paged view announces its painted bars (Ruling S3-A11Y-PAGED)', 
     await page.close()
   }
 })
+
+// Stage 4 (Task 29; Task 30 published the evidence and the glyphs). Icons paint only on the admitted geometry
+// (Calibri 11 regular, 15/18/30 pt rows, centred: S4-ROW-EXACT and S4-ROW-BASELINE). stage4-icon-inset uses 20 pt rows,
+// so on every leg its icons stay withheld: each cell keeps its value text un-inset and announces no icon (the tests on
+// ICONS below pin that fail-closed outcome). The tests on ROWS further down pin the painted outcome. Column B of
+// stage4-icon-inset is a 3Arrows num 0/5/8 rule over left-aligned B2:B4 (10, 50, 90), whose values are visible (the
+// thresholds fixture hides its values behind a ';;;' format).
+const ICONS = 'stage4-icon-inset'
+const ICON_CELLS = ['B2', 'B3', 'B4'] as const
+const ICON_VALUES: Record<(typeof ICON_CELLS)[number], string> = { B2: '10', B3: '50', B4: '90' }
+const named = (page: Page, ref: string, value: string) => page.getByRole('gridcell', { name: new RegExp(`^${ref}, value ${value}\\b`) })
+async function expectNoIcon(page: Page, label: string): Promise<void> {
+  for (const ref of ICON_CELLS) {
+    await expect(named(page, ref, ICON_VALUES[ref]), `${label}: ${ref} keeps its value in its accessible name`).toHaveCount(1, { timeout: 30_000 })
+    await expect(cell(page, ref), `${label}: ${ref} announces no icon`).not.toContainText(/Icon \d of \d|圖示/)
+  }
+}
+/** Screenshot once the canvas stops changing. */
+async function settledGrid(page: Page): Promise<Img> {
+  const box = await page.locator('canvas').first().boundingBox()
+  expect(box, 'the grid canvas has a box').not.toBeNull()
+  const shoot = async () => page.screenshot({ clip: { x: box!.x, y: box!.y, width: Math.min(box!.width, 1000), height: Math.min(box!.height, 480) }, animations: 'disabled', caret: 'hide' })
+  let previous = await shoot()
+  const deadline = Date.now() + 30_000
+  for (;;) {
+    await page.waitForTimeout(250)
+    const next = await shoot()
+    if (next.equals(previous) || Date.now() > deadline) return decode(next)
+    previous = next
+  }
+}
+
+test('Stage 4 icons off the admitted geometry (20 pt rows) stay withheld and announce nothing on every leg, and legs agree', async ({ context }) => {
+  const bytes = readFileSync(`${CF_FIXTURES}${ICONS}.xlsx`)
+  const shots: Img[] = []
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      const page = await context.newPage()
+      try {
+        await openCf(page, ICONS, bytes, leg)
+        await expectNoIcon(page, leg.name)
+        await expect(page.getByRole('alert'), `${leg.name}: no error alert`).toHaveCount(0)
+        shots.push(await settledGrid(page))
+      } finally {
+        await page.close()
+      }
+    })
+  }
+  // Pixels: the worker leg matches the resident one. The forced-paged frame lays this fixture's rows out about 1 px
+  // apart from the resident one (observed on header row 1, which no CF range covers), so its agreement is the announced
+  // labels above plus the un-inset text on every leg; a pixel comparison there would measure the row metrics, not CF
+  // (a known limit of this fixture only, docs/validation/xlsx-cf.md §11; the Stage 3 test keeps all three legs).
+  const [resident, worker] = shots as [Img, Img, Img]
+  for (const [name, other] of [['worker', worker]] as const) {
+    expect(other.width, name).toBe(resident.width)
+    expect(other.height, name).toBe(resident.height)
+    let differing = 0
+    for (let i = 0; i < resident.data.length; i += 4) {
+      if ([0, 1, 2].some(k => Math.abs(resident.data[i + k]! - other.data[i + k]!) > 4)) differing++
+    }
+    expect(differing / (resident.width * resident.height), `${name} matches resident`).toBeLessThan(0.002)
+  }
+})
+
+test('Stage 4 withheld icons stay withheld at the six zoom/DPR pairs', async ({ browser }) => {
+  const bytes = readFileSync(`${CF_FIXTURES}${ICONS}.xlsx`)
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      for (const dpr of [1, 2]) {
+        const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: dpr })
+        try {
+          const page = await context.newPage()
+          try {
+            await openCf(page, ICONS, bytes, leg)
+            for (const zoom of ['50%', '100%', '200%']) {
+              const label = page.getByRole('button', { name: 'Reset zoom' })
+              for (let i = 0; i < 12; i++) {
+                if ((await label.textContent()) === zoom) break
+                const current = Number((await label.textContent())!.replace('%', ''))
+                await page.getByRole('button', { name: current < Number(zoom.replace('%', '')) ? 'Zoom in' : 'Zoom out' }).click()
+              }
+              await expect(label).toHaveText(zoom, { timeout: 10_000 })
+              await page.getByTestId('officeview-sheet-scroller').evaluate(node => { node.scrollTop = 0; node.scrollLeft = 0 })
+              await expect(named(page, 'B2', '10'), `dpr=${dpr} zoom=${zoom}`).toHaveCount(1, { timeout: 30_000 })
+              await expect(cell(page, 'B2')).not.toContainText(/Icon \d of \d/)
+              await expect(page.getByRole('alert'), `dpr=${dpr} zoom=${zoom}: no error alert`).toHaveCount(0)
+            }
+          } finally {
+            await page.close()
+          }
+        } finally {
+          await context.close()
+        }
+      }
+    })
+  }
+})
+
+test('Stage 4 withheld icons under frozen panes', async ({ context }) => {
+  const bytes = await frozenBytes(ICONS, { xSplit: 1, ySplit: 1, topLeftCell: 'B2' })
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      const page = await context.newPage()
+      try {
+        await openCf(page, `${ICONS}-frozen`, bytes, leg)
+        await expectNoIcon(page, `${leg.name} frozen`)
+        const scroller = page.getByTestId('officeview-sheet-scroller')
+        await scroller.evaluate(node => { node.scrollTop = 40; node.scrollLeft = 60 })
+        await page.waitForTimeout(500)
+        await expect(page.getByRole('columnheader', { name: /^Column A/ }).first(), 'frozen column header').toBeVisible()
+        await expect(page.getByRole('rowheader', { name: 'Row 1' }).first(), 'frozen row header').toBeVisible()
+        await expect(page.getByRole('alert'), 'no error alert').toHaveCount(0)
+      } finally {
+        await page.close()
+      }
+    })
+  }
+})
+
+test('Stage 4 live max edit on withheld icons keeps the value and no icon', async ({ context }) => {
+  const raw = readFileSync(`${CF_FIXTURES}${ICONS}.xlsx`)
+  // B4 holds the rule's maximum (90); editing it to 1 moves it from the top bucket to the bottom one. With no icon
+  // painted in production, the edit must reach the value text and still announce no icon.
+  const edited = await editCellInWorkbook(raw, 'B4', '1')
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      const page = await context.newPage()
+      try {
+        await openCf(page, `${ICONS}-init`, raw, leg)
+        await expectNoIcon(page, `${leg.name} before`)
+        await openCf(page, `${ICONS}-edited`, edited, leg)
+        await expect(named(page, 'B4', '1'), `${leg.name}: the edited value`).toHaveCount(1, { timeout: 30_000 })
+        await expect(cell(page, 'B4')).not.toContainText(/Icon \d of \d/)
+      } finally {
+        await page.close()
+      }
+    })
+  }
+})
+
+test('Stage 4 print capture paints no withheld icon', async ({ context }) => {
+  const bytes = readFileSync(`${CF_FIXTURES}${ICONS}.xlsx`)
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      const page = await context.newPage()
+      await page.addInitScript(() => {
+        (window as unknown as { print: () => void }).print = () => { (window as unknown as { __printed: number }).__printed = 1 }
+      })
+      try {
+        await openCf(page, ICONS, bytes, leg)
+        await expectNoIcon(page, leg.name)
+        await page.getByRole('button', { name: 'Print', exact: true }).click()
+        if (!leg.paged) {
+          await page.waitForFunction(() => (window as unknown as { __printed?: number }).__printed === 1, { timeout: 30_000 })
+          const printCanvases = page.locator('[data-testid="officeview-sheet-print-pages"] canvas')
+          await expect(printCanvases).toHaveCount(1)
+          // The prepared page paints the sheet's value text (dark ink), and no icon (20 pt rows: withheld).
+          const ink = await printCanvases.first().evaluate(canvas => {
+            const c = canvas as HTMLCanvasElement
+            const data = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data
+            let n = 0
+            for (let i = 0; i < data.length; i += 4) if (data[i]! < 96 && data[i + 1]! < 96 && data[i + 2]! < 96) n++
+            return n
+          })
+          expect(ink, 'value text on the prepared print canvas').toBeGreaterThan(200)
+          await page.emulateMedia({ media: 'print' })
+          await expect(printCanvases.first()).toBeVisible()
+        } else {
+          await page.emulateMedia({ media: 'print' })
+          await expect(page.locator('[data-testid="officeview-sheet-print-pages"] canvas')).toHaveCount(0)
+          await expect(page.getByTestId('officeview-sheet-print-notice')).toBeVisible()
+        }
+      } finally {
+        await page.close()
+      }
+    })
+  }
+})
+
+// Task 30: painted icons. stage4-icon-rows is Excel's own resave (Excel 16.115): 11 pt Calibri, every cell 10 under num
+// 0/5/8 (bucket 2: "Icon 3 of 3"), rows 2..9 at 15, 12.75, 16.5, 18, 20, 22.5, 25 and 30 pt. Its Normal style is centred,
+// so B..D and F..I are centred; column E keeps its own xf, bottom-aligned. Every cell is Calibri 11 regular, so bottom
+// placement is admitted too (S4-ROW-UNIFORM). Admitted: rows 2, 5 and 9 (15, 18, 30 pt). Withheld: every other row.
+const ROWS = 'stage4-icon-rows'
+const PAINTED = ['B2', 'F2', 'I2', 'E2', 'B5', 'F5', 'E5', 'B9', 'H9', 'E9'] as const
+const WITHHELD = ['B3', 'F4', 'F6', 'B7', 'F8', 'E3', 'E7'] as const
+/** Pixels of the 3Arrows:2 / 3TrafficLights1:2 / 3Symbols:2 light green (0x5bbb76 and kin, +-40): only an icon draws it. */
+function greenPixels(img: Img): number {
+  let n = 0
+  for (let i = 0; i < img.data.length; i += 4) {
+    const r = img.data[i]!, g = img.data[i + 1]!, b = img.data[i + 2]!
+    if (g > 120 && g - r > 40 && g - b > 20) n++
+  }
+  return n
+}
+async function expectRowsIcons(page: Page, label: string): Promise<void> {
+  for (const ref of PAINTED) await expect(cell(page, ref), `${label}: ${ref} announces its icon`).toContainText('Icon 3 of 3', { timeout: 30_000 })
+  for (const ref of WITHHELD) await expect(cell(page, ref), `${label}: ${ref} announces no icon`).not.toContainText(/Icon \d of \d/)
+}
+
+test('Stage 4 icons paint on the admitted geometry, announce on every leg, and the three legs agree', async ({ context }) => {
+  const bytes = readFileSync(`${CF_FIXTURES}${ROWS}.xlsx`)
+  const shots: Img[] = []
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      const page = await context.newPage()
+      try {
+        await openCf(page, ROWS, bytes, leg)
+        await expectRowsIcons(page, leg.name)
+        await expect(page.getByRole('alert'), `${leg.name}: no error alert`).toHaveCount(0)
+        const shot = await settledGrid(page)
+        expect(greenPixels(shot), `${leg.name}: the icons' green is on the canvas`).toBeGreaterThan(100)
+        shots.push(shot)
+      } finally {
+        await page.close()
+      }
+    })
+  }
+  // The worker leg matches the resident one pixel for pixel. The forced-paged frame differs from the resident one from
+  // the header row down (text and gridlines, about 1 px; the forced-paged frame offset that exists at base,
+  // docs/validation/xlsx-cf.md §11), so its agreement on CF is the icon pixels: every pixel only an icon draws (the
+  // glyphs' green) is the same pixel on every leg, its colour within 4 (anti-aliased edges). The left-text inset is not
+  // pixel-compared on the forced-paged leg (uncovered there; its announced icon and the unit tests cover it).
+  const [resident, worker, forced] = shots as [Img, Img, Img]
+  const greenMask = (img: Img): string[] => {
+    const out: string[] = []
+    for (let i = 0; i < img.data.length; i += 4) {
+      const r = img.data[i]!, g = img.data[i + 1]!, b = img.data[i + 2]!
+      if (g > 120 && g - r > 40 && g - b > 20) out.push(`${(i / 4) % img.width},${Math.floor(i / 4 / img.width)}:${r},${g},${b}`)
+    }
+    return out
+  }
+  expect(worker.width).toBe(resident.width)
+  expect(worker.height).toBe(resident.height)
+  let differing = 0
+  for (let i = 0; i < resident.data.length; i += 4) if ([0, 1, 2].some(k => resident.data[i + k] !== worker.data[i + k])) differing++
+  expect(differing, 'worker matches resident pixel for pixel').toBe(0)
+  // Positions exact; colours within the Stage 3 three-leg tolerance (4 per channel: anti-aliased glyph edges move by 1).
+  const icons = greenMask(resident), forcedIcons = greenMask(forced)
+  expect(icons.length).toBeGreaterThan(100)
+  expect(forcedIcons.map(p => p.split(':')[0]), 'forced paged paints the icons at the same pixels as resident').toEqual(icons.map(p => p.split(':')[0]))
+  for (let i = 0; i < icons.length; i++) {
+    const a = icons[i]!.split(':')[1]!.split(',').map(Number), b = forcedIcons[i]!.split(':')[1]!.split(',').map(Number)
+    expect(Math.max(...a.map((v, k) => Math.abs(v - b[k]!))), icons[i]).toBeLessThanOrEqual(4)
+  }
+})
+
+test('Stage 4 painted icons at the six zoom/DPR pairs: painted and announced at each (fidelity *unverified* off 100 %)', async ({ browser }) => {
+  const bytes = readFileSync(`${CF_FIXTURES}${ROWS}.xlsx`)
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      for (const dpr of [1, 2]) {
+        const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: dpr })
+        try {
+          const page = await context.newPage()
+          try {
+            await openCf(page, ROWS, bytes, leg)
+            for (const zoom of ['50%', '100%', '200%']) {
+              const label = page.getByRole('button', { name: 'Reset zoom' })
+              for (let i = 0; i < 12; i++) {
+                if ((await label.textContent()) === zoom) break
+                const current = Number((await label.textContent())!.replace('%', ''))
+                await page.getByRole('button', { name: current < Number(zoom.replace('%', '')) ? 'Zoom in' : 'Zoom out' }).click()
+              }
+              await expect(label).toHaveText(zoom, { timeout: 10_000 })
+              await page.getByTestId('officeview-sheet-scroller').evaluate(node => { node.scrollTop = 0; node.scrollLeft = 0 })
+              // The description is decided at the capture scale: the same at every zoom and DPR.
+              await expect(cell(page, 'F2'), `dpr=${dpr} zoom=${zoom}`).toContainText('Icon 3 of 3', { timeout: 30_000 })
+              await expect(cell(page, 'E3'), `dpr=${dpr} zoom=${zoom}`).not.toContainText(/Icon \d of \d/)
+              expect(greenPixels(await settledGrid(page)), `dpr=${dpr} zoom=${zoom}: icons painted`).toBeGreaterThan(20)
+              await expect(page.getByRole('alert'), `dpr=${dpr} zoom=${zoom}: no error alert`).toHaveCount(0)
+            }
+          } finally {
+            await page.close()
+          }
+        } finally {
+          await context.close()
+        }
+      }
+    })
+  }
+})
+
+test('Stage 4 painted icons under frozen panes', async ({ context }) => {
+  const bytes = await frozenBytes(ROWS, { xSplit: 1, ySplit: 1, topLeftCell: 'B2' })
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      const page = await context.newPage()
+      try {
+        await openCf(page, `${ROWS}-frozen`, bytes, leg)
+        await expectRowsIcons(page, `${leg.name} frozen`)
+        expect(greenPixels(await settledGrid(page)), `${leg.name} frozen: icons painted`).toBeGreaterThan(100)
+        await expect(page.getByRole('alert'), 'no error alert').toHaveCount(0)
+      } finally {
+        await page.close()
+      }
+    })
+  }
+})
+
+test('Stage 4 live edit re-buckets a painted icon', async ({ context }) => {
+  const raw = readFileSync(`${CF_FIXTURES}${ROWS}.xlsx`)
+  // F2 holds 10 (bucket 2 under num 0/5/8); 1 moves it to bucket 0 ("Icon 1 of 3", 3Arrows:0).
+  const edited = await editCellInWorkbook(raw, 'F2', '1')
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      const page = await context.newPage()
+      try {
+        await openCf(page, `${ROWS}-init`, raw, leg)
+        await expect(cell(page, 'F2'), `${leg.name} before`).toContainText('Icon 3 of 3', { timeout: 30_000 })
+        await openCf(page, `${ROWS}-edited`, edited, leg)
+        await expect(named(page, 'F2', '1'), `${leg.name}: the edited value`).toHaveCount(1, { timeout: 30_000 })
+        await expect(cell(page, 'F2'), `${leg.name}: re-bucketed`).toContainText('Icon 1 of 3')
+        await expect(cell(page, 'B2'), `${leg.name}: its neighbour keeps its icon`).toContainText('Icon 3 of 3')
+      } finally {
+        await page.close()
+      }
+    })
+  }
+})
+
+test('Stage 4 print capture paints the admitted icons', async ({ context }) => {
+  const bytes = readFileSync(`${CF_FIXTURES}${ROWS}.xlsx`)
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      const page = await context.newPage()
+      await page.addInitScript(() => {
+        (window as unknown as { print: () => void }).print = () => { (window as unknown as { __printed: number }).__printed = 1 }
+      })
+      try {
+        await openCf(page, ROWS, bytes, leg)
+        await expect(cell(page, 'F2')).toContainText('Icon 3 of 3', { timeout: 30_000 })
+        await page.getByRole('button', { name: 'Print', exact: true }).click()
+        if (!leg.paged) {
+          await page.waitForFunction(() => (window as unknown as { __printed?: number }).__printed === 1, { timeout: 30_000 })
+          const printCanvases = page.locator('[data-testid="officeview-sheet-print-pages"] canvas')
+          await expect(printCanvases).toHaveCount(1)
+          const green = await printCanvases.first().evaluate(canvas => {
+            const c = canvas as HTMLCanvasElement
+            const data = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data
+            let n = 0
+            for (let i = 0; i < data.length; i += 4) if (data[i + 1]! > 120 && data[i + 1]! - data[i]! > 40 && data[i + 1]! - data[i + 2]! > 20) n++
+            return n
+          })
+          expect(green, 'the icons on the prepared print canvas').toBeGreaterThan(100)
+        } else {
+          await page.emulateMedia({ media: 'print' })
+          await expect(page.locator('[data-testid="officeview-sheet-print-pages"] canvas')).toHaveCount(0)
+          await expect(page.getByTestId('officeview-sheet-print-notice')).toBeVisible()
+        }
+      } finally {
+        await page.close()
+      }
+    })
+  }
+})

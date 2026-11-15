@@ -127,6 +127,10 @@ Scanned all `.xlsx` archives in `corpus/` and `tests/fixtures/` by inspecting ZI
   - **Pairing authored by the oracle** (not yet resaved by Excel): paired = base `<dataBar>` plus a cfRule-level `<extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}"><x14:id>` and an `<x14:cfRule type="dataBar" id>` companion with no `@priority` under `{78C0D931-6437-407d-A8EE-F0AAD7539E65}`; standalone = `<x14:cfRule priority id>` with `<x14:fillColor>`; base-only = the 2007 shape above.
   - **cfvo types authored**: `min`, `max`, `num`, `percent`, `percentile`, x14 `autoMin`/`autoMax`, and (unresolved shapes only) `formula`, `num` with `<xm:f>$A$1</xm:f>`, a cfvo without `type`, and 1 and 3 cfvo; legacy `min val="0"`.
   - **Colour forms authored**: 8-digit ARGB (`rgb="FF0000FF"`), `theme="4" tint="-0.25"`, `indexed="12"`, and (unresolved shapes only) `auto="1"` and alpha `00`.
+- **Icon set (`<iconSet>` / `<x14:iconSet>`) inventory (Task 24, Stage 4)**: scanned every `.xlsx` by reading its ZIP entries (`xl/worksheets/*.xml`), skipping `~$` lockfiles (the two present in `corpus/` are `.docx`, so none applied): `corpus/` (this worktree holds only `corpus.lock.json`; the main checkout's materialized `corpus/` holds 9 `.xlsx`) and `tests/fixtures/` (740 `.xlsx`: 626 outside `xlsx-cf/`, 63 oracle workbooks, 51 oracle inputs).
+  - **No corpus workbook and no fixture outside `tests/fixtures/xlsx-cf/` contains an icon set.** Stage 4 has no third-party writer shapes to be compatible with; the x14 shape comes from `excel-authored-iconsets.xlsx` (Excel's dialog, orchestrator, Lesson 12), which does not exist yet.
+  - **Seen in the wild (Excel-resaved)**: `stage1-priority-composition.xlsx` (and its `.rejected` twin) carries one base rule, `<iconSet>` with the `iconSet` attribute omitted (3TrafficLights1), `percent` cfvo 0/33/67, no `gte`, `reverse`, `showValue` or `percent` attribute: Excel 16.114 omits default-valued attributes on resave, the form the glyph key provisionally pins (`ICON_KEY_PERCENT_FORM = '(omitted)'`).
+  - **Authored by the oracle (30 Stage 4 workbooks, 15 inputs + 15 seeded saves, not yet resaved by Excel)**: dialects base (81 rules per workbook set) and standalone x14 (95 rules, including the 75 glyph-key rules); all 20 families (17 base, and `3Stars`/`3Triangles`/`5Boxes` only as x14), plus `iconSet` omitted; custom `cfIcon` mappings (87 rules) with `NoIcons iconId="0"` in the first, middle and last bucket and in all-`NoIcons` sets; cfvo types `num`, `percent`, `percentile`, `min`, `max` (and, unresolved shapes only, `formula`, `<xm:f>$A$1</xm:f>` and a cfvo without `type`); `gte="1"` written explicitly and `gte="0"`; `reverse="1"` on 3-, 4- and 5-icon and custom sets; `showValue="0"`; `<iconSet percent="0">` once (`stage4-icon-degenerate` H).
 
 ---
 
@@ -1141,6 +1145,15 @@ time on this 14-core machine at a load average of about 3.5:
 | populated 100,000-row column, 1 bar (text-path maximum) | 1,000 | 8,001 | 31x | 35.6 / 3.4 | 2,334 |
 | populated 100,000-row column, 1 bar (paint-path maximum) | 256 | 2,049 | 122x | 33.0 / 0.9 | 2,242 |
 | populated 100,000-row column, 1 bar (not a production call size) | 5,000 | 40,001 | 6.2x | 48.2 / 16.5 | 2,427 |
+| populated 100,000-row column, 4 icon rules (text-path maximum; Task 26) | 1,000 | 27,007 | 9.3x | 36.7 / 5.7 | 4,725 |
+| populated 100,000-row column, 4 icon rules (paint-path maximum; Task 26) | 256 | 6,919 | 36x | 32.1 / 1.4 | 4,790 |
+
+Task 26 (Stage 4, 2026-11-15) adds the two icon rows (`npx tsx scripts/cf-refs/active-units.ts 3`): a percentile, a
+percent, a `num` and a custom `num` icon rule over the populated column. Under production evidence no icon capability
+is verified, so these calls take the unresolved path; with every gate open and the percentile reading injected (the
+full bucket path on every cell), `tests/xlsx-cf-active-units.test.ts` counts 23,007 units for 1,000 cells and 5,895
+for 256, and asserts both stay at or below `CF_LIMITS.activeUnits / 5` (50,000). The worst production call is still
+the 200-rule sparse scope at 48,579 units (5.1x).
 
 Every production call shape admits with at least 5.1x margin (the worst is the 200-rule sparse scope; the 4x floor
 would be 194,316 units). The warm rate, 2,242 to 6,894 units per ms, is the one to read: the cold populated rows spend
@@ -1225,3 +1238,769 @@ clock-dependent timePeriod cases. Bar geometry fidelity is proven by the Lesson 
   where the path differs), not a single code per row.
 - **zh-TW label.** 「資料橫條」 is the exact name in Excel 16.114 zh-TW's Conditional Formatting style menu (the orchestrator
   selected it by that name when authoring `excel-authored-databar.xlsx`); no change needed.
+
+### Task 29 (2026-11-15): icon painting rulings and known limits
+
+Icons paint through one lazy painter (`src/xlsx/cf/iconPaint.ts`). No Stage 4 capture exists and no glyph table exists
+(Ruling S4-ORDER: Task 28 follows), so production withholds every icon with no inset. These rulings fail closed:
+
+- **S4-SHOWVALUE-TOKEN.** A bar and an icon whose `showValue` disagree keep the canvas text; the cell announces
+  unavailable, because the `'showValue'` token counts as an unresolved write.
+- **Label order.** One bounded label per cell: bar+icon, then bar, then icon, then colour scale, then the DXF aspects.
+- **Inset overflow.** A host whose un-inset text would not fit beside the inset withholds its icon. This holds even
+  once `icon:inset-overflow` verifies, until a measured overflow variant exists. An unknown text width withholds.
+  *Superseded by S4-PROD-ALIGN (fix round 3, below): a number keeps its icon under `icon:inset-overflow`.*
+- **Icon on a bar cell.** No icon paints on a cell holding a paintable bar without `icon:composition-with-bar` (the
+  painter's own gate, beyond the evaluator's).
+- **Merged hosts.** The paint batch withholds icons on merged hosts, as it does bars.
+- **Inset scale.** The text inset is logical and independent of scale (pt × 4/3); the box snaps per scale, and
+  withholding is decided at the capture scale.
+
+Known limit (recorded, not fixed):
+
+- **Forced-paged row offset on `stage4-icon-inset`.** The forced-paged frame lays this fixture's rows out about 1 px
+  apart from the resident and worker frames from header row 1 on, which no CF range covers. A resident vs
+  forced-paged screenshot of the grid differs on 14.429 % of pixels, identically at base 93cadb26 and after Task 29.
+  `stage3-bar-lengths` shows no difference (0 %). It is a paged row-metrics difference unrelated to CF, so the Stage
+  4 browser leg test compares resident and worker pixels only, and checks the forced-paged leg by its labels.
+
+**Fix round 3: Ruling S4-PROD-ALIGN.** Production adopts the reading Excel 16.115 matched for each geometry, inset
+and showValue capability (`CF_ICON_PAINT_READINGS`). The conformance suite compares these readings with the readings
+recomputed from the committed sidecars.
+
+- **Readings adopted.**
+  - box `font`, vertical `cell-align`;
+  - narrow host `clip`;
+  - short row `shrink`: never clipped, and withheld while the shrink law is unmeasured;
+  - left text `inset`, right-aligned `unshifted`, centred `full-cell` (no inset);
+  - overflow `icon-and-text`, for numbers only;
+  - NoIcons text inset as if an icon were present. This deviates from the spec §6 wording "not NoIcons";
+  - NoIcons with `showValue="0"` hides the text;
+  - a bar/icon showValue conflict is `priority-wins`, decided in composition; one `cfHidesText` predicate serves both
+    painters.
+- **Snapping (S4-SNAP-SHARED).** The paint gate uses `bar:geometry-snapping`.
+- **The model** holds only the box variant and the 11 pt left inset of 12 pt.
+- **Withheld.** The box size and offsets are absent (ink is not the box), as is the right-aligned inset. So production
+  still paints no icon; Task 28 and Task 30 fill those values.
+
+---
+
+## 12. Stage 4 Icon Set Oracle Cases (Task 24: glyph key, icon cases, classification, conformance)
+
+Task 24 prepares the Stage 4 oracle. The first Excel capture run (c63de53a) and what fix round 3 changed are recorded in **Stage 4 capture run 1** at the end of this section. Before that run: every case is `recipe-pending` (one `unsupported`), every `iconEvidence` is `unverified`, no capture, sidecar or PNG exists, and production withholds every icon (the conformance guard `stage 4 icon cells are withheld until their evidence lands`). The capture sequence is `docs/validation/xlsx-cf-recipes-stage4.md`.
+
+### Harness additions
+
+- **Catalogue (`scripts/cf-refs/cases.ts`)**: `CF_STAGE4_CASES` (15), `CF_STAGE4_CAPABILITIES` (142 `icon:*` ids, each `failClosedDisposition` citing the S4 ruling it lifts), `CF_STAGE4_NONDISCRIMINATING` (3 record-only ids), `S4_ICON_FAMILIES` (the 20 families, cross-checked against the viewer's `ICON_SETS` as source text), `CfPartMarker.icon`, `CfCellExpectation.iconEvidence`/`iconApplied`, `CfOracleCase.iconCalibration`, `iconCapabilityKind`, and five refusal codes (`icon-class-none`, `icon-class-ambiguous`, `icon-key-mismatch`, `icon-edge-unstable`, `icon-hypothesis-none`).
+- **Generator**: `iconRuleXml` (base `<cfRule type="iconSet">` and standalone x14 `<x14:cfRule type="iconSet">` with `<xm:f>` and `<x14:cfIcon>`), Stage 4 styles (`;;;` as numFmt 166, 8/20 pt fonts, alignments, date format 14), `rightToLeft`; all opt-in, so Stage 1-3 inputs are byte-identical. `--diff-authored-icons` / `diffAuthoredIconTemplates` diff the templates against `excel-authored-iconsets.xlsx` by form (attribute names and values as written).
+- **Verifier**: semantic icon marker match (`iconRuleMatches`: set with the 3TrafficLights1 default, ordered cfvo with numeric values and effective `gte`, the cfIcon list, attributes with schema defaults; `percent` pinned by form for the glyph key); the x14-as-legacy fallback is disabled for icon markers, so a standalone x14 rule moved to the base dialect refuses. `measureIconGeometry` (column/row scan, value-text location by the control's ink pattern, three-scanline stability against each other or against the class's key crop), `classifyIconCrop` (±8 at zero offset, one pixel ≥ 64 from every other class), `buildIconGlyphKey`, `buildIconClassHypotheses`/`discriminateIcon` (bucket readings: num/percent/percentile inc-exc/mixed, gte as written vs flipped, family order, reverse, custom order, NoIcons), `discriminateIconBox` (S3-A step 7: one fitting hypothesis, every other ≥ 3 px away), `evaluateIconCapabilities`, `verifyIconCapture`. A measured Stage 4 case takes only the icon branch, never the Stage 1 contrast path; `isCapabilityVerified` gates every `icon:*` on `icon:pixel-calibration` and `icon:glyph-key`, and every reading through the family order on `icon:families-base`.
+- **Capture**: `buildIconOmReachabilityScript`/`parseIconOmReachability`, `buildIconCopyTextProbeScript`, `buildIconSidecarExtras` (lock states, `observedIcons`, `glyphClasses`, `iconHypotheses`), captures through `captureUnderLockGuard`.
+- **Audit**: `auditStage4Manifest`, `--stage 4`, and `--publish-stage4` mirroring S3-WRITE (without it the Stage 4 export is carried verbatim; today it is absent and `--write` reproduces `verifiedCapabilities.ts` byte for byte). `scripts/cf-compare.ts`: `stage4ObservedIcons`.
+
+### Known limits of the prepared machinery (not evidence)
+
+- **Fix round 1 (rulings S4-DIALECT-EVIDENCE, S4-DIALECT-CASE, concern 2).**
+  - `buildIconScenarioHypotheses` gives competing readings that predict different classes on the authored data. The readings are:
+    - dialect and schema defaults: as modelled, no icon, reversed order, or another family;
+    - paired dialect: companion, base or neither;
+    - scope: union vs per-range, hidden rows excluded vs included, merged-covered cell included or excluded, whole column vs data block, first vs second rule;
+    - participation: booleans coerced or not, dates evaluated or not, error ignored or rule suppressed;
+    - degenerate data: as modelled, lowest bucket, sorted, first-fail, or clamped;
+    - floor and `min`/`max`, and `percent="0"` read as num;
+    - composition: halted or not, later rule withheld or applied, icon withheld beside a bar.
+  - Fixture data changed so these discriminate:
+    - scope hides rows 5 and 6, and uses a one-row merge `B8:C8` whose covered C8 holds 0;
+    - `stage4-icon-degenerate` H covers {10..110};
+    - the composition bars run right to left, and only the shorter bars' cells are designated;
+    - `stage4-icon-families` W12 holds 1000.
+  - A dialect capture whose marked cells all show no icon refuses the case.
+  - `icon:composition-with-scale` and `icon:composition-dxf-fill` are registry non-discriminating: a fill under the icon defeats the S4-A white-background classification for any data.
+  - Capabilities that can verify from this harness: 115 of 144 (77 key and calibration, 38 bucket).
+  - The 13 geometry, inset and suppression capabilities wait for Task 29's box candidates. They re-verify from the stored captures with no new Excel run (`capture --verify-only` re-derives the sidecar from the PNG; pinned by a test).
+- **Geometry capabilities have no hypotheses yet.** `icon:geometry-*`, `icon:inset-*`, `icon:noicons-*`, `icon:showvalue-canvas-suppression` and `icon:composition-bar-showvalue` are measured (raw px, text shift) but report `no hypotheses`; their candidate boxes are the `CfIconBoxVariant` set that Task 29's `CF_ICON_RENDER_MODEL` defines. A geometry claim refuses until then. Bucket capabilities of scope, participation, degenerate and composition shapes also have no hypotheses yet (they need the viewer-independent statistics of S4-G/S4-H), so they stay unverified.
+- **Classification crop.** Key and classified cells are compared on the same rect: the cell's inner box (gridlines excluded), its left 28 px (`ICON_CROP_WIDTH_PX`). Row height and vertical alignment must match the key's (20 pt, bottom); value text must stay right of the band. Crops over a fill or a bar, and merged hosts, are expected to refuse `icon-class-none` (a recorded finding).
+- **Scanline stability.** Without a reference, the three scanlines must agree (rectangular glyphs); with the class's key crop, the offsets must agree (any shape). A text pattern is matched with at most one column in ten differing.
+- **Whole-column scope.** `icon:scope-whole-column` sits on `stage4-icon-families` (column W, control X), because the scope sheet hides rows (as Stage 3 did).
+- **Record-only capabilities.** `icon:om-reachability-probe`, `icon:showvalue-copy-text` and `icon:placement-rtl-sheet` are never verified, whatever their capture shows. The ten `icon:unresolved-*` shapes are `unsupported`.
+
+### Stage 4 Oracle Cases Matrix (every `[measure]` row, its ruling and status)
+
+| Case | Capabilities | Ruling | Status |
+|---|---|---|---|
+| `stage4-icon-om-reachability` | `icon:om-reachability-probe` (record only) | S4-A | recipe-pending |
+| `stage4-icon-authored` | `icon:dialect-base`, `icon:dialect-standalone` | S4-O | recipe-pending (authored fixture pending) |
+| `stage4-icon-dialect` | `icon:dialect-base-x14-family`, `icon:dialect-paired` (the rejected resave is the recorded outcome) | S4-B, S4-O (S4-DIALECT-CASE, S4-DIALECT-UNSUPPORTED) | unsupported (fix round 7) |
+| `stage4-icon-glyph-key` | `icon:pixel-calibration`, `icon:glyph-key`, 75 × `icon:glyph-<set>-<id>` | S4-A, OD-9(b), S4-NEARTWIN | recipe-pending (run 1: key refused, see below) |
+| `stage4-icon-families` | `icon:families-base`, `icon:families-x14`, `icon:settings-schema-defaults`, `icon:scope-whole-column` | S4-E, S4-B, S4-F, S4-H | recipe-pending |
+| `stage4-icon-thresholds` | `icon:thresholds-num`, `-percent`, `-percentile-inc-exc`, `-gte-true`, `-gte-false`, `-mixed` | S4-D | recipe-pending |
+| `stage4-icon-degenerate` | `icon:thresholds-floor`, `-min-max`, `icon:degenerate-equal-values`, `-single-cell`, `-non-monotonic`, `icon:bounds-out-of-domain` (`icon:attr-percent-false` moved to unresolved-shapes in fix round 3) | S4-C, S4-D, S4-F | recipe-pending |
+| `stage4-icon-reverse-custom` | `icon:reverse`, `icon:custom-mapping`, `icon:custom-noicons` (`icon:reverse-custom` moved to unresolved-shapes in fix round 3) | S4-E, S4-B | recipe-pending |
+| `stage4-icon-geometry-2` | `icon:geometry-box`, `-vertical-align` (owned here since fix round 8), `icon:composition-bar-showvalue` | S4-K, S4-I | recipe-pending (fix round 8) |
+| `stage4-icon-geometry` | `-snapping`, `-narrow-clip`, `-short-row-clip` (plus the original box and placement cells, recorded only) | S4-K | recipe-pending |
+| `stage4-icon-inset` | `icon:inset-left`, `-right-aligned`, `-center`, `-overflow`, `icon:noicons-inset`, `icon:noicons-showvalue` | S4-L | recipe-pending |
+| `stage4-icon-showvalue` | `icon:showvalue-canvas-suppression`, `icon:showvalue-copy-text` (record only) | S4-L, S4-N | recipe-pending |
+| `stage4-icon-participation` | `icon:participation-types`, `-dateserial`, `-error-presence` | S4-G | recipe-pending |
+| `stage4-icon-scope` | `icon:scope-disjoint`, `-duplicate-blocks`, `-hidden-row`, `-autofilter-hidden-row`, `-merged-cell` | S4-H | recipe-pending |
+| `stage4-icon-composition` | `icon:composition-overlapping-icons`, `-with-bar`, `-bar-showvalue`, `-with-scale`, `-dxf-fill`, `-matching-stopIfTrue-ahead`, `-noicons-slot`, `-unresolved-stub` (`-icon-stopIfTrue` moved to unresolved-shapes in fix round 6) | S4-I, S4-J | recipe-pending |
+| `stage4-icon-rtl` | `icon:placement-rtl-sheet` (record only, stays unverified) | S4-M | recipe-pending |
+| `stage4-icon-unresolved-shapes` | 10 × `icon:unresolved-*`, plus `icon:attr-percent-false` (M) and `icon:reverse-custom` (N), the two shapes Excel canonicalises on resave, and `icon:composition-icon-stopIfTrue` (O), the icon rule carrying stopIfTrue that Excel strips (lift nothing) | S4-B, S4-C, S4-E, S4-F, S4-J, S4-O, S4-P, S4-ICON-STOPIFTRUE | unsupported |
+
+Expected non-discriminating candidates, decided per capture by `discriminateIcon`/`discriminateIconBox` (not pre-registered): `icon:thresholds-gte-*` on off-boundary cells, `icon:reverse` on the middle bucket (the fixture designates only end buckets), `icon:inset-left` on right-aligned numbers, `icon:geometry-snapping` if no edge lands at a fractional point, and `icon:composition-noicons-slot` if the lower rule's icon would be withheld anyway.
+
+### Stage 4 capture run 1 (2026-11-15, c63de53a) and fix round 3 (Ruling S4-NEARTWIN)
+
+**Excel builds.** The resave receipts and sidecars record two builds:
+- the `stage4-icon-om-reachability` resave ran on Excel **16.114**;
+- Excel updated when it was relaunched after the OM-probe crash, so every later build and capture (from 05:06: the glyph key and every other case) records Excel **16.115**.
+
+No case was rerun on a single build.
+
+**Per-case outcomes of c63de53a** (as committed):
+
+| Case | Outcome |
+|---|---|
+| `stage4-icon-om-reachability` | Excel crashed while reading the icon set format condition, so there is no readback. Recorded outcome: unreachable (record only, lifts nothing). |
+| `stage4-icon-authored` | `measured`. Classified keyless (`unclassified`), because the key refused. |
+| `stage4-icon-glyph-key` | All 75 cells captured. The key refused `icon-class-ambiguous: Glyph-key crop 5Quarters:4 is ambiguous against 4RedToBlack:0`, so the case is `recipe-pending` and the capture is kept. |
+| `stage4-icon-families`, `-thresholds`, `-geometry`, `-inset`, `-showvalue`, `-participation`, `-scope`, `-composition`, `-rtl` | `measured` structurally. With no key every observed icon is `unclassified` and every bucket capability reports `no hypotheses`. No icon capability verified. |
+| `stage4-icon-dialect` | Excel repaired the workbook; `stage4-icon-dialect.rejected.xlsx` is kept. The case stays `recipe-pending`. See the dialect answer below. |
+| `stage4-icon-degenerate` | Excel's resave dropped `percent="0"` from the H2:H12 `<iconSet>` and changed nothing else. `.rejected.xlsx` is kept and the case stays `recipe-pending`. |
+| `stage4-icon-reverse-custom` | Excel's resave dropped `reverse="1"` from the x14 `custom="1"` rule at priority 5 (F2:F12) and changed nothing else; the base `reverse="1"` rules on B, C and D survive. `.rejected.xlsx` is kept and the case stays `recipe-pending`. |
+| `stage4-icon-unresolved-shapes` | `unsupported`. Excel stripped the shapes (the first missing rule is `icon:unresolved-unknown-set` on B2:B6) and `.rejected.xlsx` is kept. |
+
+Compared with `inputs/`, the three rejected resaves change no other conditional-formatting XML. Their only other sheet differences are Excel's usual resave output: cached `<v>` values on formula cells, and the rewritten file layout. Cell formulas are unchanged.
+
+**The dialect answer (S4-DIALECT-CASE, recorded).**
+- B, a base `<cfRule>` naming the x14-only 3Stars: Excel drops the `iconSet` attribute, so the `<iconSet>` reads as the schema default 3TrafficLights1. This is the `family:3TrafficLights1` reading.
+- C, a base 3Arrows rule linked by `<x14:id>` to a priority-less x14 3Triangles companion: Excel strips the companion (both the x14 rule and the base rule's `<extLst>` link) and keeps the base 3Arrows rule. This is the `base` reading.
+
+Both answers come from the rejected resave, not from a capture of an Excel-saved workbook. **Ruling S4-DIALECT-REJECTED (fix round 4):** `stage4-icon-dialect` stays a case, and its recorded outcome is the rejected resave. Nothing beyond the record above changes. Production already withholds both shapes: a base rule naming an x14-only family is withheld outright (518a13b5), and the paired shape is withheld because nothing evidences it. The `failClosedDisposition` of `icon:dialect-base-x14-family` and `icon:dialect-paired` now cites this outcome. No ruling change is needed for production. Excel's canonical form is the one production refuses, so withholding cannot paint a wrong icon. Whether the dialect case should still be captured is an owner question: Excel cannot save its shapes repair-free.
+
+**Item 8 case-data change (fix round 3).** The two shapes Excel canonicalises cannot be authored repair-free, so they moved to `stage4-icon-unresolved-shapes`, keeping their capability ids:
+- `<iconSet percent="0">` is now column M (priority 12);
+- the x14 custom + `reverse="1"` rule is now column N (priority 13).
+
+Their disposition is `refused-unsupported`, which does not block the stage gate, and production keeps withholding both shapes (`icon:attr-percent-false` and `icon:reverse-custom` are never published). `stage4-icon-degenerate` keeps columns B–G, priorities 1–6. `stage4-icon-reverse-custom` keeps B–E and G–I, with G, H and I renumbered to priorities 5–7 so no gap remains. A test pins that every remaining rule of both inputs is one Excel kept unchanged in its rejected resave. Inputs were regenerated with `generate.ts --stage 4 --case <id>`, one case at a time, so no other manifest entry moved. **Rebuild and recapture: `stage4-icon-degenerate` and `stage4-icon-reverse-custom`; rebuild only: `stage4-icon-unresolved-shapes`.** `capture --verify-only` skips the two stale captures (`staleCaptureSidecar`: their sidecars record the old saved workbook).
+
+**Ruling S4-NEARTWIN (fix round 3).**
+- **Key build.** The harness's 75×75 matrix over the stored key capture holds 25 shared-artwork pairs at delta 0 and exactly two pairs inside the band 8 < d < 64:
+  - `4RedToBlack:0 ~ 5Quarters:4` (32);
+  - `4RedToBlack:1 ~ 5Boxes:0` (62).
+
+  `buildIconGlyphKey` now admits such a crop as its own class with a symmetric twin relation. It still refuses `icon-class-ambiguous` for a crop identical (within 8) to two classes.
+- **Classification.** A crop that matches a class but is unseparated only from that class's twins classifies to the twin set (`twin-set:A|B`, sorted), never to a pick. `discriminateIcon` reads a twin set as the one class the competing hypotheses predict inside it. If two predicted classes lie inside the set, the capability is non-discriminating (withheld); the case is not refused.
+- **Persistence.** The key sidecar persists `glyphTwins`. `loadIconGlyphKey` restores a key only when the key sidecar's `glyphClasses` and `glyphTwins` equal the PNG recomputation; a key sidecar written by a refused build restores none. `capture --verify-only` now visits the glyph key first (`verifyOnlyCaseOrder`) and re-derives every dependent sidecar after it.
+- **Item 5 check.** No marker's hypothesis set in `CF_CASES` predicts both members of one twin pair at the same cell. This was computed with the twin relation of the stored capture.
+
+**What the real key does now: still refused, on a new gate.** With S4-NEARTWIN the stored key gets past `5Quarters:4` and then refuses `icon-key-mismatch: Glyph-key cell B21 (5Boxes:0) shows no icon against its control B42`. The 5Boxes:0 glyph is a faint grey empty grid: its strongest pixel is 34 from the white control, below the S4-A ink threshold of 64. `4RedToBlack:1` sits at exactly 64, with no margin.
+
+The same threshold makes 5Boxes:0 invisible to `measureIconGeometry`'s ink mask: a stored 5Boxes:0 cell measures as `icon: null`. Concretely, `stage4-icon-authored` D2 (the as-modelled lowest bucket of 5 Boxes) is recorded as no icon.
+
+Hypotheses predict 5Boxes:0 at four cells: authored D2 and D6 (`icon:dialect-standalone`), and families U2 and U6 (`icon:families-x14`).
+
+This needed a ruling on low-contrast glyph presence; Ruling S4-FAINT, below, now resolves it. S4-NEARTWIN keeps `icon-key-mismatch` as it was. Until that ruling, the key and every dependent classification stay blocked. `capture --verify-only` will report the key case `recipe-pending` with `icon-key-mismatch`, and the dependents stay keyless.
+
+A diagnostic build without the presence check (scratch only, never committed) yields 54 classes over 75 pairs, with exactly the two twin pairs above.
+
+**Ruling S4-FAINT (fix round 4).** "No icon" (the blank control) is a near-twin class under S4-NEARTWIN. No threshold changes.
+- **Key build.** A key cell whose delta d against its control satisfies 8 < d < 64 is admitted as a faint class twinned with no icon. d <= 8 still refuses `icon-key-mismatch`.
+- **Classification.** A crop that matches a faint class within tolerance classifies to the twin set, which contains `no-icon`. This holds even when the cell has no ink at the 64 threshold; such a cell keeps `icon: null` and records the set as `faintGlyphClass`.
+- **Discrimination.** A null prediction counts as the `no-icon` outcome. A twin set is accepted only when exactly one predicted outcome lies inside it; otherwise the capability is non-discriminating, never a case refusal.
+- **Persistence.** The key sidecar persists `glyphFaint`, and `loadIconGlyphKey` restores it under the same recompute-and-compare check.
+
+On the stored capture, computed in memory without writing to the committed refs:
+- **Key:** builds, with 54 classes over 75 pairs. The twins are `4RedToBlack:0↔5Quarters:4` and `4RedToBlack:1↔5Boxes:0`, and the only faint class is `5Boxes:0`.
+- **`stage4-icon-authored` D2:** the as-modelled lowest bucket shows the twin set {4RedToBlack:1, 5Boxes:0, no-icon}. `icon:dialect-standalone` is competing against its `no-icon` reading there, so it is **non-discriminating** (withheld).
+- **`stage4-icon-authored` D6:** shows 5Boxes:4, as modelled. The capability is still withheld because of D2.
+- **`stage4-icon-authored`, other capability:** `icon:dialect-base` discriminates as modelled.
+- **`stage4-icon-families` U2:** the same twin set resolves to `bucket-order`'s 5Boxes:0.
+- **`stage4-icon-families` U6:** shows 5Boxes:4.
+- **`stage4-icon-families` capabilities:** `icon:families-x14` discriminates `bucket-order`, and `icon:families-base`, `icon:settings-schema-defaults` and `icon:scope-whole-column` discriminate too.
+
+These results become committed evidence only after the orchestrator runs `capture --stage 4 --verify-only`.
+
+**Ruling S4-TWINSET-CONSISTENCY (fix round 5).** This replaces the round-3 rule under which an ambiguous cell withheld the whole capability.
+- Every observation is a set: a singleton for a plain class or for no icon, or a twin set.
+- A hypothesis is consistent iff its predicted outcome (null counts as `no-icon`) lies in the observed set at every designated cell.
+- Exactly one consistent hypothesis means discriminating. None gives `icon-hypothesis-none`. Two or more give non-discriminating.
+- With singletons only, this is exactly the earlier equality rule, and the pre-twin tests pass unchanged.
+
+On the stored captures (in memory, as before), only three capabilities have a twin-set designated cell, and one changed relative to round 4:
+- `icon:dialect-standalone` (authored, twin cell D2) is now **discriminating `as-modelled`**. Clean cells such as D6 = 5Boxes:4 refute the `no-icon` and `reversed-order` readings. It was non-discriminating in round 4.
+- `icon:dialect-base` (authored) is discriminating `as-modelled`, unchanged.
+- `icon:families-base` (twin cells L2, L3, R6) is discriminating `bucket-order`, unchanged.
+- `icon:families-x14` (twin cell U2) is discriminating `bucket-order`, unchanged.
+
+**Known caveat: `iconApplied` on faint and twin-set cells.** A capture writes `iconApplied = (icon !== null)`, which is the ink at the S4-A threshold.
+- A faint cell (`faintGlyphClass`, for example authored D2 or families U2) is labelled `iconApplied: false`, although Excel draws a faint glyph there.
+- A twin-set cell with ink is labelled `true` whichever member it is.
+
+This is a label only. Bucket evidence comes from the set-consistency recomputation, and no geometry claim rests on a faint cell, so there is no code change.
+
+### Stage 4 recapture and verify-only (6cb13bdf) and fix round 6
+
+**Outcomes of 6cb13bdf.**
+- **Recaptures.** `stage4-icon-degenerate` and `stage4-icon-reverse-custom` were recaptured on Excel 16.115, and both now resave repair-free. `stage4-icon-unresolved-shapes` was rebuilt, with its rejected outcome recorded.
+- **verify-only.** `capture --verify-only` re-derived every sidecar from the stored PNGs.
+  - The glyph key is now `measured`: 54 classes over 75 pairs, two twin pairs, and `5Boxes:0` faint.
+  - `measured` cases: authored, glyph-key, families, thresholds, degenerate, reverse-custom, geometry, inset, showvalue, participation, scope and rtl.
+  - `recipe-pending`: om-reachability (record only), dialect (its rejected outcome, S4-DIALECT-REJECTED), and composition (held, see below).
+- **Audit.** `audit --stage 4` reports `ok=true`, 105 verified capabilities, and 22 blocked (was 129).
+
+**Ruling S4-ICON-STOPIFTRUE (fix round 6).** Verify-only held `stage4-icon-composition` with "icon:composition-icon-stopIfTrue claims evidence although the saved rule carries no stopIfTrue". Excel strips `stopIfTrue` from icon-set rules on resave, and its dialog disables the option for icon sets.
+- **Move.** The shape (an icon rule with `stopIfTrue="1"` ahead of a DXF fill, formerly composition J) moved to `stage4-icon-unresolved-shapes` as column O (priorities 14 and 15). The capability id is unchanged and the disposition is `refused-unsupported`.
+- **Renumbering.** Composition's K and L rules were renumbered to priorities 17–20, so no gap remains. Only these two cases' inputs and manifest entries were regenerated.
+- **Production already fails closed.** For a cell whose icon rule carries `stopIfTrue`, `composeCell` taints `ALL` until `icon:composition-icon-stopIfTrue` is evidenced, and it never will be. Every later contribution, and the icon itself, is withheld. The proof is `tests/xlsx-cf-icon-compose.test.ts`, "an icon with stopIfTrue=\"1\" → tainted contains ALL until icon:composition-icon-stopIfTrue": with no evidence, for every icon outcome, it expects `unresolvedWrites` ⊇ {ALL}, empty properties and no icon.
+- **Rebuild and recapture** `stage4-icon-composition`. **Rebuild only** `stage4-icon-unresolved-shapes`.
+
+**Review fixes (fix round 6).**
+- `iconTwinSetMembers` rejects a twin-set string with an empty or repeated member, or with fewer than two members.
+- `iconSidecarMalformed` validates `glyphTwins` (a symmetric map of non-empty names), `glyphFaint` and every observed twin-set string. A malformed sidecar refuses `sidecar-mismatch` in `loadIconGlyphKey` and in `verifyIconCapture`.
+- The `audit --stage 4` idempotence test is evidence-driven. The published Stage 4 set equals the audit's verified set; each verified id is backed by its own case's verification and the cross-case gates. Stage 4 is rendered in memory only; publication is Task 30.
+
+### Fix round 7: S4-DIALECT-UNSUPPORTED, S4-MINMAX, and the geometry, inset and showValue readings
+
+**S4-DIALECT-UNSUPPORTED.** `stage4-icon-dialect` is now an `unsupported` case, the same mechanism as `stage4-icon-unresolved-shapes`. It was regenerated with `--case`, and its input is unchanged. `icon:dialect-base-x14-family` and `icon:dialect-paired` are `refused-unsupported`. Production withholds both shapes (S4-X14BASE and the paired-dialect gate).
+
+**S4-MINMAX.** `icon:thresholds-min-max` is `refused-unsupported` through the new `CF_STAGE4_UNSUPPORTED` registry, the S3-CLOSE mechanism (`CF_STAGE3_UNSUPPORTED`).
+- The degenerate capture keeps its other evidence: column G stays in the workbook and is only recorded, so nothing needs a recapture.
+- **Finding (not a reading):** Excel 16.115 drew `3Arrows:2`, the top icon, in all 11 cells of `[min, num 40, max]` over 0..100 (6cb13bdf). Neither `max-reached` nor `max-unreachable` predicts that.
+- Production withholds any icon set that has a `min` or `max` cfvo, because the rule needs `icon:thresholds-min-max`, which is never published. Two tests prove this:
+  - `tests/xlsx-cf-icon-parse.test.ts`, "min/max cfvo without icon:thresholds-min-max" → `cf-unsupported-rule`;
+  - `iconRequiredCapabilities(minMax).has('icon:thresholds-min-max')`.
+
+**Geometry, inset and showValue readings (S4-K/S4-L, the S3-A step 7 discipline).**
+- `evaluateIconGeometryCapability` gives each of the 12 capabilities competing readings:
+  - the box and placement readings are Task 29's closed `CfIconBoxVariant` set (size fixed | font | row; vertical top | center | bottom | cell-align);
+  - the clip, inset and showValue readings are production's own, set against the plausible alternatives (clip | shrink | no icon; inset | none; NoIcons insets or hides nothing vs inset or hidden).
+- Production's model carries no measured values. So no reading predicts absolute px, and no scale is fitted: each reading predicts either a relation (the same measured value, within ±1 px, across a group of cells) or a direct test.
+- A reading is refuted by a failed test or a group spread ≥ 3 px, and is consistent at spreads ≤ 1 px. Edge-unstable cells back no box claim (S4-A).
+- A centred showValue cell is excluded, because a centred icon can sit where centred text would.
+- The predictions are recorded per cell as `iconGeometryHypotheses` and recomputed by the verifier. A sidecar derived before this round has none, so its geometry capabilities stay unverified until `capture --verify-only` re-derives it.
+
+**Read-only scratch pass on the stored captures** (computed in memory, key restored):
+
+| Capability | Disposition | Reading | Matches production? |
+|---|---|---|---|
+| `icon:geometry-box` | non-discriminating | fixed ≈ font (only the 11 pt column and D2 are edge-stable) | n/a |
+| `icon:geometry-vertical-align` | non-discriminating | center ≈ cell-align (no top-aligned column has two stable cells) | n/a |
+| `icon:geometry-narrow-clip` | discriminating | `clip` | yes (clip where measured) |
+| `icon:geometry-short-row-clip` | discriminating | `shrink` (L5 is 5 px wide against an 11 px reference) | **no**: production clips; finding |
+| `icon:geometry-snapping` | non-discriminating | Excel-measured widths are whole pt, so no fractional edge | n/a |
+| `icon:inset-left` | discriminating | `inset` (+12 px) | yes |
+| `icon:inset-right-aligned` | discriminating | `unshifted` | yes (a left inset does not move right-aligned text) |
+| `icon:inset-center` | discriminating | `full-cell` (centred text not moved) | **no**, unless the centre inset is 0; finding |
+| `icon:inset-overflow` | discriminating | `icon-and-text` | **no**: production withholds the icon; finding |
+| `icon:noicons-inset` | discriminating | `inset` (+12 px) | **no**: S4-L says NoIcons insets nothing; finding |
+| `icon:noicons-showvalue` | discriminating | `text-hidden` | **no**: S4-L says NoIcons hides nothing; finding |
+| `icon:showvalue-canvas-suppression` | discriminating | `text-hidden` (B only; C excluded) | yes |
+
+A verified capability records the reading Excel showed (`matched`). Where that reading is not production's, publishing the capability as-is would enable production behaviour that Excel contradicts. Task 30 must publish only a capability whose matched reading equals production's, or production must change first (an owner decision). Production was not changed in this round.
+
+### Fix round 8: `stage4-icon-geometry-2`, the paint gates and the bar/icon showValue conflict
+
+After verify-only (38d3d872), production paints icons only behind `CF_ICON_PAINT_CAPABILITIES`: `icon:geometry-box`, `icon:geometry-vertical-align` and `icon:geometry-snapping`. All three were non-discriminating on the stored captures.
+
+**Why the old case could not decide.**
+- The arrow glyph at 8 pt and 20 pt is not rectangular, so its three scanlines disagree and the S4-A rule makes those cells no evidence.
+- A glyph-key reference cannot help. A key crop matches only at the key's own font (11 pt), row height (20 pt) and bottom alignment, which are exactly what these questions vary.
+- So the new case uses a rectangular glyph instead. A read-only check of the stored key capture with no reference shows `5Boxes:2` (two filled boxes, 10×5 at 11 pt) and `5Boxes:4` measure stably on their own.
+
+**`stage4-icon-geometry-2`** is placed ahead of `stage4-icon-geometry`, so it owns `icon:geometry-box` and `icon:geometry-vertical-align`. The old case's capture and its other evidence stay intact; it is not regenerated.
+- **Box size.** An x14 `5Boxes` rule under num 0/5/8/12/15, with every value 10, so every icon is `5Boxes:2`. Fonts 8/11/20 pt (B..D, bottom-aligned) over rows of 30 and 60 pt. The fixed, font-scaled and row-scaled readings differ by ≥ 3 px.
+- **Vertical placement.** Top (E), centred (F) and bottom (G) cells at 11 pt over the same rows. The top, centre, bottom and cell-align readings differ by ≥ 3 px.
+- **`icon:composition-bar-showvalue`** gets readings. Production's reading is `any-hides`: either suppressor hides the value on its own (`iconPaint.ts:207`, `dataBarPaint.ts:114`). The alternatives are `priority-wins`, `bar-wins` and `icon-wins`.
+  - The test cells hold left-aligned text with short right-to-left bars; only the 10 and 15 rows are designated.
+  - **H:** bar(showValue 0) ahead of icon(1). **I:** bar(1) ahead of icon(0). **J:** icon(1) ahead of bar(0).
+  - Hidden/shown patterns across H, I, J: `any-hides` HHH, `priority-wins` HSS, `bar-wins` HSH, `icon-wins` SHS.
+  - The existing composition column E (bar 0 ahead of icon 1) alone cannot separate `any-hides`, `priority-wins` and `bar-wins`.
+- **Proof.** Synthetic captures drawn as each reading predicts, run through `measureCaseIcons` and `evaluateIconCapabilities` on the new case's own workbook, give exactly that reading for every reading of all three capabilities.
+
+**Snapping is not designable to ≥ 3 px separation.** Excel lays out whole-pt column widths at 1 px/pt (6cb13bdf sidecars), so no cell edge is fractional.
+- The only fractional quantity left is the centring residual (H − side)/2. Its rounding moves the icon by 1 px, and only when the box side's parity is known. The box side is not measurable: ink is not the box.
+- Stage 3 verified `bar:geometry-snapping` from a solid bar's fractional length, compared exactly. An icon glyph has no such edge.
+- This needs an owner decision, either:
+  - `icon:geometry-snapping` is evidenced by the verified `bar:geometry-snapping`, because production lays icons out on the same `roundHalfUp` device grid as bars (`layoutIcon`, `dataBarPaint`); or
+  - S4-PROD-ALIGN drops snapping from `CF_ICON_PAINT_CAPABILITIES`.
+
+**Build and capture:** `stage4-icon-geometry-2` (build, then capture). Then run `capture --stage 4 --verify-only`. No other case changes.
+
+### Fix round 9: what `stage4-icon-geometry-2` shows (a08c8a39), S4-SNAP-SHARED, and the review minors
+
+**What Excel 16.115 draws.** These are the stored capture's measured values, re-read in memory.
+
+- **5Boxes:2 ink box (B..D, bottom-aligned):**
+
+  | Font | Row 30 pt | Row 60 pt |
+  |---|---|---|
+  | 8 pt | 7×3 | 7×3 |
+  | 11 pt | 10×5 | 10×5 |
+  | 20 pt | 20×10 | 20×10 |
+
+  The width is independent of the row and close to the font size in px. The **font-scaled** box is the reading closest to Excel: k ∈ [0.95, 1] puts every width within 1 px of k × font. `fixed` (spread 13 px) and `row` are refuted.
+- **Why the round-8 evaluator said non-discriminating: a harness bug.** It judged the font reading on widths normalised to 11 pt (9.625 / 10 / 11). Normalising scales the ±1 px tolerance by 11/font, so the 8 pt cell's 1 px became 1.375. The font reading is now judged in measured px against one shared scale, as S3-A applies ±1 px per cell:
+  - consistent when some k puts every cell within 1 px of k × font;
+  - refuted when no k puts every cell within 1.5 px;
+  - undecided in between.
+- **Bar/icon showValue (H..J).**
+  - Row 2 holds the 10s, at the range minimum, so no bar is drawn:
+    - **H2** (bar 0 ahead of icon 1): the value is hidden; the only ink matching the text pattern is the icon itself, shift −1.
+    - **I2** (bar 1 ahead of icon 0): the value is shown after the inset (+12).
+    - **J2** (icon 1 ahead of bar 0): the value is shown (+12).
+
+    That is the **priority-wins** pattern: the higher-priority rule's showValue governs.
+  - Row 3 holds the 15s, with a short bar at the right edge. There the text search's rightmost pattern match is the bar, 169 px in (`textInkLeftPx` 685, 865, 1045), so H3 read as "shown" and every reading was refuted (`none`, so the capability stayed blocked).
+  - **This was a harness bug.** Ink found in the cell's right half (where the right-to-left bar paints) is no text evidence: the cell is excluded.
+- **Results recomputed in memory, not yet committed evidence:**
+  - `icon:geometry-box` discriminates **font**;
+  - `icon:geometry-vertical-align` discriminates **cell-align**;
+  - `icon:composition-bar-showvalue` discriminates **priority-wins**. This contradicts production's `any-hides` and is a finding for S4-PROD-ALIGN.
+- **Versioned rules.** Sidecars record `iconGeometryRulesVersion` (now 2). A sidecar derived under other rules leaves its geometry capabilities unverified, with its labels unchecked, until `capture --stage 4 --verify-only` re-derives it. No Excel run is needed.
+
+**Ruling S4-SNAP-SHARED.** `icon:geometry-snapping` is in `CF_STAGE4_NONDISCRIMINATING`: it is non-discriminating by construction, since whole-pt column widths mean every rounding agrees. Nothing waits on it. The icon paint gate will use the verified `bar:geometry-snapping`, and that production change belongs to S4-PROD-ALIGN.
+
+**Review minors (rounds 6–7).**
+- The unresolved-shapes matrix row now lists column O (`icon:composition-icon-stopIfTrue`, S4-J and S4-ICON-STOPIFTRUE).
+- `iconTwinSetMembers` accepts only the canonical, strictly increasing member order.
+
+### Fix round 10: S4-REPLICATE, bar-extent exclusion and the free-scale band (review of rounds 8–9)
+
+**S4-REPLICATE.** A showValue or composition verdict must rest on at least two designated cells per configuration, that is, per rule shape, one column of the case, and those cells must agree. Otherwise the capability is non-discriminating.
+- The rule covers `icon:showvalue-canvas-suppression`, `icon:noicons-showvalue`, `icon:composition-bar-showvalue` and every bucket `icon:composition-*` capability (`replicationShortfall`).
+- Recomputed on the stored captures (in memory), only `icon:composition-bar-showvalue` drops to non-discriminating: each of H, I and J had one readable cell (row 2).
+- Every other showValue and composition capability already has ≥ 2 agreeing cells per configuration:
+  - canvas suppression: B2..B4;
+  - NoIcons showValue: G2..G4;
+  - composition: C3..C5, D3..D5, and so on.
+- **Data change.** `stage4-icon-geometry-2` gains rows 5 and 6 at the range minimum (10, so no bar paints). H, I and J are designated on rows 2, 3, 5 and 6, which gives three readable cells per configuration. The case was regenerated (`--force` on this case only, as the orchestrator authorised) and must be rebuilt and recaptured.
+
+**Bar-extent exclusion (finding 4).**
+- A cell is excluded from text detection only when the matched text ink overlaps the bar extent measured in that cell. The round-9 "right half of the cell" heuristic is gone.
+- `measureBarExtentInCell` measures the extent: the run of columns whose ink covers ≥ 60 % of the inner height, starting within 2 px of the bar's anchored edge (the right edge for a right-to-left bar).
+- Excluded cells and their reasons are recorded in the sidecar as `iconTextExclusions`.
+- On the stored capture, H3, I3 and J3 are excluded: their matched ink 685..694, 865..874 and 1045..1054 is exactly the measured bar.
+
+**The free-scale band (finding 1).**
+- The font-scaled box reading is consistent when some shared scale k puts every cell within 1 px of k × font. It is refuted when no k puts every cell within 1.5 px, and undecided in between.
+- 1.5 px is the free-scale analogue of S3-A's group rule. A 3 px group spread (2 × tolerance + 1) is a best-fit residual of 1.5 px about the group's centre, so both rules refute at the same residual and leave the same (1, 1.5] px band of tolerance plus rounding undecided.
+- Synthetic mechanism tests pin both edges: a ~1.35 px residual is undecided, and a ~1.95 px residual is refuted (`none`).
+
+**Test labels (finding 2).** Tests that use Excel's stored numbers are labelled regression tests, and the band tests are labelled mechanism tests. Neither is independent evidence.
+
+**Rules version 3.** `iconGeometryRulesVersion` is now 3, because the derived readings changed. Version-2 sidecars leave their geometry capabilities unverified until `capture --stage 4 --verify-only` re-derives them.
+
+### Task 28 (2026-11-15): original icon glyphs (OD-9(b)) and the glyph-key frame
+
+**Glyph provenance.**
+- **Artwork:** original. Every glyph in `src/xlsx/cf/iconGlyphs.ts` is our own vector drawing (polygons, rects, circles, pie sectors), hand-authored for this project by the Task 28 implementer (Claude, Anthropic) on 2026-11-15. Owner decision OD-9(b) (2026-11-14): no Microsoft pixels. No crop, bitmap or traced artwork is in the source or the package; the key crops stay test fixtures. `tests/xlsx-cf-icon-glyphs.test.ts` checks that the source has no `data:` URI, no base64 run over 64 characters, no bitmap construction and no import from `tests/fixtures/` or `scripts/`.
+- **What is matched to Excel, and how:** only the measured box and the dominant colours.
+  - Box: each glyph's drawn ink box (max channel delta ≥ 64 from white, the S4-A rule) at the key geometry equals the sidecar's measured box within ±1 px per edge. For the faint `5Boxes:0` (S4-FAINT), both boxes are read at delta > 8, and the glyph must draw no ink at 64.
+  - Colours: each fill's colour equals the per-channel median of the class's key crop over the pixels that fill owns (coverage ≥ 1/2 of its own path, < 1/2 of every later fill's), within ±8 per channel. The table's colours are those medians. They are computed by `tests/helpers/cf-glyph-measure.ts` from the shapes and the crops; no pixel is copied.
+- **Label:** every entry is `source: 'original'`, `fidelity: 'pixel-approximated'`, never `pixel-measured`.
+- **Classes:** 54 entries over 75 pairs, exactly the sidecar's `glyphClasses`. The twins `4RedToBlack:0`/`5Quarters:4` and `4RedToBlack:1`/`5Boxes:0` are separate entries (S4-NEARTWIN).
+- **Withheld:** `3Stars:0` (`CF_ICON_GLYPH_WITHHELD`). Excel's empty star is a speckle of greys. The median over any outline region we draw is about 190, so after anti-aliasing our outline draws no ink at delta 64, against a measured box of 3..12 × 9..17. Its one pair, `3Stars:0`, never paints. The other 53 classes pass both checks.
+- **Gates:** a pair paints only with its own `icon:glyph-<set>-<iconId>` evidence. None is published before Task 30, so production still paints no icon.
+- **Size:** the `iconGlyphs.ts` module (encoded table, class map and decoder) renders 18,048 B, or 5,417 B gzip (round 8; budget revised from 3,786 B, S4-GLYPHCAP-R2), inside the lazy `cf` chunk (`render-*.js`). Measured with `OV_MODULE_MAP=1 npx vite build`; `scripts/vite-module-map.ts` now records each module's `moduleBytes`. The test asserts ≤ 16 KiB and ≤ 5,417 B + 10 % (Ruling S4-GLYPHCAP). No CF module is in the eager closure.
+
+**The key frame (`CF_ICON_RENDER_MODEL.keyFrame`).**
+- The frame is the union of the 54 classes' ink boxes in the key's `observedIcons`, which are cell-relative, inclusive and at 1 px/pt:
+  - x 2..14: left from, for example, B2; right from the 4Rating cells B13..E13;
+  - y 7..18 (B2).
+- So the frame is 13 × 12 pt, 2 pt in from the left gridline and 1 pt above the next row's gridline. The faint `5Boxes:0` lies inside it (2..11 × 7..16 at delta > 8).
+- It is not Excel's box, which is not measurable. It is the frame our glyphs are drawn in, and at the key geometry it is exact.
+- It applies only when every layout input the key fixes equals the key's:
+  - 11 pt font;
+  - the Calibri face, regular (not bold or italic);
+  - 20 pt row (80/3 px, or the viewer's whole-px 27);
+  - bottom vertical alignment.
+- Every other host withholds:
+  - **Font size.** The box scales with the font by a k bounded only to [0.95, 1]; no k is interpolated or picked.
+  - **Row height.** The bottom offset moves with the row. 5Boxes:2 ink is 3 px above the bottom gridline at 20 pt (key D21) and 5 px at 30 and 60 pt (geometry-2 C2, C3, G2, G3).
+  - **Top and centred alignment.** These are measured only at 30 and 60 pt rows (geometry-2 E, F), never at 20 pt.
+- The column width and the horizontal alignment do not move the frame. Geometry-2 I5, I6, J5 and J6 have 180 pt columns and left-aligned text on 20 pt rows, and measure ink at 2..12 × 7..18, as the key's right-aligned 3Arrows:0 does at 72 pt.
+- Right-aligned numbers still withhold, because `rightInsetPt` is unmeasured (`unshifted`). At the key geometry, only left-aligned text and centred text can paint an icon, once Task 30 publishes the glyph and paint capabilities.
+
+### Task 28 round 2 (2026-11-15): S4-RIGHTINSET-ZERO and the `stage4-icon-rows` case (S4-ROWS-CAPTURE)
+
+**Ruling S4-RIGHTINSET-ZERO.**
+- `icon:inset-right-aligned` reads `unshifted`: a left inset does not move right-aligned text. So production's `rightInsetPt` is `{ 11: 0 }`, and a right-aligned number keeps its text box.
+- A right-aligned host paints its icon only where its text fits right of the icon frame and its measured gap. That gap is the 12 pt left inset at that font size; at 11 pt it is 16 px plus the 6 px padding.
+- A number that reaches the frame would take the overflow path. The '#' fill beside an icon over right-aligned text is unmeasured, so it withholds, even under `icon:inset-overflow`.
+- One predicate decides this for the static, resident, worker, print and export views. It is pinned on the production model and glyph table at the key geometry (tests/xlsx-cf-icon-render.test.ts).
+
+**Ruling S4-ROWS-CAPTURE: the case `stage4-icon-rows`.** It measures the icon frame on rows other than the key's 20 pt.
+- **Rows:** 11 pt Calibri regular, rows of 15 (the default), 12.75, 16.5, 18, 20 (a replication of the key), 22.5, 25 and 30 pt (rows 2..9).
+- **Columns:**
+  - bottom-aligned B..E and centred F..I;
+  - right-aligned numbers in B..D and F..H, left-aligned numbers in E and I;
+  - each cell holds 10 under num 0/5/8, so the cells draw 3Arrows:2 (B, E, F, I), 3TrafficLights1:2 (C, G) and 3Symbols:2 (D, H).
+- **Capability `icon:geometry-row-offset`.** Its readings are evaluated per column:
+  - `anchor-constant`: a constant gap to the alignment's anchor (the bottom gridline, or the row centre);
+  - `centred`: the frame centred whatever the alignment;
+  - `row-scaled`: the top offset proportional to the row. It makes claims only on rows of at least the key's 20 pt, because a shorter row cannot hold a frame scaled down from the key's.
+- **Excluded rows.** A row whose inner box is shorter than the 12 px key frame (the 12.75 pt row) makes no claim. Its icon shrinks (`icon:geometry-short-row-clip` reads `shrink`); it is recorded only.
+- **Shifted key.** The case opts in to `iconShiftedKey`. Its crops are classified by shifting each key crop vertically over the frame columns (`classifyIconCropShifted`: ±8, one class at one shift, separated by ≥ 64). The key crop then aligns the scanlines, so non-rectangular glyphs measure at every row. No other case's classification changes.
+- **Mechanism tests.** tests/xlsx-cf-icon-rows.test.ts draws synthetic captures by pasting the key crops where each rule puts the frame. Each rule is discriminated. A capture that follows no rule (bottom gap 1 at 20 pt and 5 elsewhere, as the earlier evidence suggests) is not.
+- **What production does with the capture.** Whatever reading Excel matches, the per-cell offsets at each measured height are recorded in the sidecar. Production extends `keyFrame` only to those heights, never between them.
+- **Audit.** Until the capture lands, `audit --stage 4` reports `ok=true` but `stageComplete=false`: `icon:geometry-row-offset` lacks a capture.
+- **Capture order (Excel):**
+  1. `bun scripts/cf-refs/build.ts --stage 4 --case stage4-icon-rows`
+  2. `bun scripts/cf-refs/capture.ts --stage 4 --case stage4-icon-rows`
+  3. `bun scripts/cf-refs/capture.ts --stage 4 --verify-only`
+  4. `bun scripts/cf-refs/audit.ts --stage 4`
+
+### Task 28 round 3 (2026-11-15): what `stage4-icon-rows` shows (cd5ae569), and the frame at the measured heights
+
+**The resave changed the case's alignments.** Excel 16.115 resaves every Stage 4 workbook with the Normal style `<alignment vertical="center"/>`:
+- the cellStyleXf and xf 0 carry it in stage4-icon-rows, the glyph key, geometry-2 and inset;
+- the case's bottom-aligned xf (`vertical="bottom"` only) became xf 0 (B..D), so in the resaved file B..D are **centred**;
+- E keeps `horizontal="left"` with no vertical, which is bottom.
+
+So the case measured:
+- **bottom:** one column, E (left-aligned numbers, 3Arrows:2);
+- **centre:** seven columns, B..D and F..H (right-aligned numbers) and I (left-aligned numbers).
+
+`readIconCellFacts` reads the resaved xf, so the readings were judged on the alignments Excel actually drew.
+
+**Verdict: `anchor-constant` (verified).** The table gives, per reading, the spread of its group values in each column. A spread ≤ 1 px is consistent; ≥ 3 px is refuted.
+
+| Reading | B, C, D, F, G, H, I (centred) | E (bottom) |
+|---|---|---|
+| `anchor-constant` | ≤ 0.5 | 0 |
+| `centred` | ≤ 0.5 | **7.5 (refuted)** |
+| `row-scaled` (rows ≥ 20 pt) | 3.0 (refuted) | 6.5 (refuted) |
+
+- For a centred cell, `anchor-constant` and `centred` predict the same value, so B..D and F..I cannot tell those two readings apart.
+- **Only column E separates `anchor-constant` from `centred`.** The verdict between those two rests on E's seven rows (E2, E4..E9), one glyph class and one horizontal alignment.
+- Every column refutes `row-scaled`: E by 6.5 px, the others at exactly the 3 px threshold.
+
+**Measured offsets** (px at 1 px/pt). Each frame top is the ink top, since all three classes ink from the frame top.
+
+| Row (pt) | Excel px | Bottom (E): frame top / gap to next gridline | Centre (B..D, F..I): frame top |
+|---|---|---|---|
+| 15 | 15 | 2 / 1 | 2 |
+| 16.5 | 16 | 3 / 1 | 2 |
+| 18 | 18 | 5 / 1 | 3 |
+| 20 | 20 | 7 / 1 | 4 |
+| 22.5 | 22 | 9 / 1 | 5 |
+| 25 | 25 | 12 / 1 | 7 |
+| 30 | 30 | 17 / 1 | 9 |
+| 12.75 | 12 | ink 1..10 (shrinks; excluded) | ink 1..10 |
+
+**Production (`CF_ICON_RENDER_MODEL.keyFrame.rows`).**
+- The table above sets each row height's placements:
+  - bottom: 1 pt above the next gridline;
+  - centre: the measured top offset.
+- Horizontal alignments, as measured at each height:
+  - centre: left and right;
+  - bottom: left only, except at 20 pt, where the key and geometry-2 also measured right.
+  - Centred horizontal text is measured nowhere, so it withholds. This tightens round 1, which admitted it at the key geometry.
+- Any other height withholds (12.75 pt, 15.75 pt, and every height between the measured ones), as does top alignment.
+- A host's row matches a measured height by its exact px (pt × 4/3) or that rounded. A host that matches two measured heights matches none.
+
+### Task 28 round 4 (2026-11-15): S4-ROW-EXACT and S4-BOTTOM-REPLICATE
+
+**Ruling S4-ROW-EXACT, mechanism (a): the row's authored height reaches the predicate.**
+- Option (b) admits nothing. A whole viewer px comes from a band of 0.75 pt of heights, so every px value is shared.
+- So the icon gate carries `rowPtOf(row)`, the row's authored `ht` in pt:
+  - resident batches and text scopes: `cfRowPtOfSheet`, from the sheet;
+  - paged wire scopes (worker and forced-paged legs): `cfRowPtOfOverrides`, from the paged layout's row overrides. The worker's `view/source.ts` `buildGeometry` writes them unrounded (pt × 96/72), and `InteractiveSheetDoc` passes them.
+- The painter stamps `rowPt` on each host. A row without `ht` is unknown, so its icons withhold: its Excel height follows the sheet default and fonts, which the viewer does not model.
+- A measured height admits an icon only where the viewer's row px equals Excel's at the capture scale in every view:
+  - The static and resident views round rows to whole px; the paged views do not. So the row's px must be whole (`excelPx` × 4/3), and the host must have exactly that height. A session-resized row does not.
+  - **Heights that paint: 15, 18 and 30 pt** (20, 24 and 40 px). Bottom and centre placements apply as measured.
+  - **20 pt withholds, the glyph key's own row included:** 26.67 px unrounded or 27 px rounded, while Excel draws 20 px. **25 pt withholds** for the same reason (33.33 or 33 px).
+  - **16.5 and 22.5 pt withhold:** Excel floors them to 16 and 22 px, while the viewer draws 22 and 30 px (16.5 and 22.5 at capture).
+- Tests:
+  - tests/xlsx-cf-icon-glyphs.test.ts: per height, plus no `rowPt`, another pt with the same px, and a resized row.
+  - tests/xlsx-cf-icon-render.test.ts: the five views at 15 pt, with 15.75, 20 and 25 pt withheld on every leg.
+  - tests/xlsx-cf-icon-rows.test.ts: production on Excel's resaved `stage4-icon-rows.xlsx` paints exactly rows 2, 5 and 9, each 3Arrows frame where the sidecar inked it.
+  - A mutant that drops the px check fails them.
+
+**Ruling S4-BOTTOM-REPLICATE.**
+- **The resave.** Excel 16.115 rewrites the Normal style as `vertical="center"` and folds an xf whose only alignment is `vertical="bottom"` into it. An xf with an explicit horizontal keeps its own xf, whose missing vertical is bottom. stage4-icon-rows E (`horizontal="left"`) came back that way and was drawn 1 px above the next gridline in every row.
+- **Replication rule.** `icon:geometry-row-offset` decides anchor-constant vs centred only on at least two columns whose values refute the other reading (S4-REPLICATE extended). Re-derived with `capture --stage 4 --case stage4-icon-rows --verify-only`, which needs no Excel, the committed stage4-icon-rows capture is **non-discriminating**: only E separates the two readings. Its cells now read `non-discriminating`.
+- **New case `stage4-icon-rows-bottom`.** It is placed ahead of stage4-icon-rows, so it owns the capability.
+  - Rows: the same heights.
+  - Cells: every cell has an explicit xf with horizontal plus `vertical="bottom"`. Right-aligned numbers are B (3Arrows), C (3TrafficLights1) and D (3Symbols); left-aligned numbers are E (3Arrows) and F (3TrafficLights1).
+  - Classification: shifted key.
+  - Mechanism tests: anchor-constant and centred each discriminate; one separating column does not, two do.
+- **Production gate.** Every measured placement now also needs `icon:geometry-row-offset` evidence.
+- **Audit.** `audit --stage 4` stays `ok=true` but `stageComplete=false` until the new case is captured.
+- **Capture order (Excel):**
+  1. `bun scripts/cf-refs/build.ts --stage 4 --case stage4-icon-rows-bottom`
+  2. `bun scripts/cf-refs/capture.ts --stage 4 --case stage4-icon-rows-bottom`
+  3. `bun scripts/cf-refs/capture.ts --stage 4 --verify-only`
+  4. `bun scripts/cf-refs/audit.ts --stage 4`
+
+### Task 28 round 5 (2026-11-15): bottom placement replicated (a6439519), S4-DEFAULT-ROW
+
+**What `stage4-icon-rows-bottom` shows.**
+- **The style survived.** The resave kept both explicit xfs, `<alignment horizontal="right"/>` and `<alignment horizontal="left"/>`. `vertical="bottom"` was dropped as the default, so every cell is bottom-aligned in the resaved file.
+- **Verdict: `anchor-constant`, verified.** All five columns refute `centred`, each with a spread of 7.5 px. They also refute `row-scaled` (6.5 px). `anchor-constant` spreads 0 px in every column.
+- **Offsets.** In every column, the ink top relative to the top gridline is 2, 3, 5, 7, 9, 12 and 17 px on rows of 15, 16, 18, 20, 22, 25 and 30 px. The frame top is that ink top, so the frame bottom sits 1 px above the next gridline.
+  - The 3Arrows ink is 12 rows tall, ending 1 px above the gridline. The 3TrafficLights1 and 3Symbols ink is 11 rows, ending 2 px above.
+  - These match stage4-icon-rows E exactly.
+- **12.75 pt** (12 px) shrinks, with ink rows 1..10. It is not admitted.
+
+**Production.**
+- `keyFrame.rows[*].bottom.horizontal` is now `['left', 'right']`. The bottom placement is unchanged, 1 pt above the next gridline.
+- `CF_ICON_PAINT_READINGS['icon:geometry-row-offset'] = 'anchor-constant'`. The no-injection conformance recomputes it from the owning case's committed sidecar.
+
+**Ruling S4-DEFAULT-ROW.**
+- **Parser.** `<sheetFormatPr>` is read by the one parser both adapters share, `columnWidth.ts` `sheetFormat`, which now also reads `defaultRowHeight`, `customHeight`, `zeroHeight`, `thickTop` and `thickBottom`.
+- **`defaultRowPtOf`** gives the authored height of a row without `ht`:
+  - `defaultRowHeight`, unless `zeroHeight` hides such rows or `thickTop`/`thickBottom` change their height (these withhold);
+  - `customHeight` only marks the value as set by hand.
+  - A correction to the ruling's premise: the viewer did not size such rows from `sheetFormatPr` before. It always draws them 20 px, which is 15 pt. So the S4-ROW-EXACT px check admits a default row only when `defaultRowHeight` is 15 (Calibri 11's default). A 16 pt default (Aptos) is drawn at 20 px and withholds.
+- **Where the value goes, as `rowPtOf` does:**
+  - resident: `XlsxSheet.defaultRowHeightPt`, used by `cfRowPtOfSheet`;
+  - both adapters' source geometry carry `defaultRowPt` (`view/source.ts` `buildGeometry`, and `pagedSource` from the sheet metadata's format);
+  - paged: the worker's `SheetLayout.defaultRowPt`, which `InteractiveSheetDoc` passes to `cfRowPtOfOverrides`.
+- A session-resized row still withholds, by the host-height check.
+
+**Search scope (round 4, concern 5).** Find and copy use their scope only for text (`effectiveStyle`/display text); neither calls `iconAt`, `describe` or `hidesTextAt`. The a11y description and the paint come from the scopes that carry `rowPtOf`: the resident batch and text scope, and the paged paint and semantic scopes via `prepareRemoteScope`. So a scope without row heights can change no description, visible text or paint.
+
+### Task 28 fix round (2026-11-15): review of rounds 1–5
+
+**P1: decode after admission.**
+- `iconGlyph` returns an undecoded per-class header (`cfIconGlyphHeader`: class, frame and provenance, empty `path`).
+- `admitIconGlyphs` computes each class's exact bytes and ops from the encoded table (`cfGlyphBytesBound`, which equals `glyphBytes` of the decoded glyph). It spends work units and reserves memory first, and only then decodes, into entries the admission owns.
+- `release` clears them. `cfDecodedGlyphCount` is 0 after a refused admission and after release.
+- No global decoded cache remains. `cfIconGlyphClass` decodes fresh for the audit and the tests only.
+
+**P1: an independent approximation check (tests/helpers/cf-glyph-measure.ts).**
+- **Reference regions.** These are frozen from the key crop alone. Visible pixels (delta > 8) are grouped by colour: each joins the first seed within ±48, seeds are taken by frequency, and a region needs at least 3 px.
+- **Checks added to the box and palette checks:**
+  - every region must be drawn within ±48 of its median on at least 50 % of its pixels;
+  - the ink-mask IoU must be at least 0.85.
+- **Thresholds came from the negative controls, before any real glyph was measured.** Each control is a solid box in the crop's median colour over the ink box, substituted for 3TrafficLights1:0 and each 3Symbols glyph. The controls score IoU 0.835, 0.736, 0.777 and 0.736, and each leaves one region at 0 % (the rim or the symbol in the wrong colour). All four fail, and the test pins that.
+- **Withheld: 26 classes.** Our simplified artwork misses a region or the shape of these, so they wait to be redrawn as original artwork:
+  - `3Stars:0` (as before), `3Stars:1`, `3Stars:2`;
+  - `3ArrowsGray:2`, `4Arrows:2`, `4ArrowsGray:1`, `4ArrowsGray:2`;
+  - `3Flags:0`, `3Flags:1`, `3Flags:2`;
+  - `3TrafficLights1:1`, `3TrafficLights2:0`, `3TrafficLights2:1`, `3TrafficLights2:2`;
+  - `3Signs:0`, `3Signs:1`;
+  - `3Symbols2:0`, `3Symbols2:1`, `3Symbols2:2`;
+  - `4Rating:0`, `4Rating:1`, `4Rating:2`, `4Rating:3`, `5Rating:0`;
+  - `3Triangles:0`, `3Triangles:1`.
+- **Admitted: 28 classes.**
+
+**P2: right-aligned clearance.**
+- A right-aligned text box must start at or after the frame's own right edge: (2 + 13) pt = 20 px, the widest class's extent, since every class is drawn in the one frame.
+- `slotFit` takes the larger of that edge and the 12 pt gap.
+- The reproduction is pinned: 4Rating:3 on a 15 pt row in a 100 px cell withholds with 78 px of text (it starts at 19 px) and paints with 77. The ±1 px boundary is pinned in the static, resident, paged, print and export views.
+
+**P2: no strings per draw.**
+- Each fill's CSS colour is prepared at admission and charged at 30 B per fill in `glyphBytes`.
+- Drawing reuses the prepared strings. A test spies on `Number.prototype.toString` and `String.prototype.padStart` across two draws of every admitted class and sees neither called.
+
+**Size.** The `iconGlyphs.ts` module is now 15,870 B, or 4,614 B gzip, in the lazy `cf` chunk.
+
+### Task 28 round 7 (2026-11-15): S4-REDRAW and S4-CLEAR-SNAP
+
+**S4-REDRAW.** The 26 withheld classes were redrawn as original artwork, built only from geometric primitives (polygons with few vertices, rects and circles). The frozen check is unchanged: IoU ≥ 0.85, and each reference region within ±48 on ≥ 50 % of its pixels.
+- **17 classes now pass:**
+  - 3ArrowsGray:2, which gains a mid-grey shading strip along the head and the shaft foot;
+  - 4Arrows:2, 4ArrowsGray:1 and 4ArrowsGray:2, outlined diagonal arrows with the head in the corner;
+  - 3TrafficLights1:1, which gains an upper-left highlight band;
+  - 3TrafficLights2:0, 3TrafficLights2:1 and 3TrafficLights2:2: a clipped-corner housing lit from the top left, a black bezel, the lamp, a halo and a highlight;
+  - 3Signs:0, an octagonal diamond with a light edge, a dark rim and an interior lit from the upper left;
+  - 3Signs:1, a rimmed triangle with a saturated lower-right band and a lighter left edge;
+  - 3Symbols2:0, 3Symbols2:1 and 3Symbols2:2: a broad cross with a soft edge, an exclamation mark with a light core and cap, and a check with an edge, body and core;
+  - 3Triangles:0 and 3Triangles:1, which gain inner saturated shapes;
+  - 3Flags:0 and 3Flags:1, a pennant on a slanted pole with a grey halo and a dark core.
+- **Still withheld (9):** 3Stars:0, 3Stars:1, 3Stars:2, 3Flags:2, 4Rating:0, 4Rating:1, 4Rating:2, 4Rating:3 and 5Rating:0. Their shading (the stars, the rating bars' highlights and caps, the green pennant's fold) did not reach the thresholds with simple shapes.
+- **Tracing guard.** Every glyph has at most 12 fills and 48 path vertices, which is pinned. A pixel trace would need hundreds of vertices. The measured maxima are 8 fills and 32 vertices (3Symbols2:1 and 5Rating:0).
+
+**S4-CLEAR-SNAP.**
+- Right-aligned clearance is also checked at each supported zoom/DPR pair (`CF_ICON_SCALES`: 0.5/1, 0.75/1, 1/1, 1/2, 1.5/2, 2/3). At each pair, the text's first device column must lie at or after the frame's snapped right edge, computed on the same grid as `layoutIcon`: the host's left gridline, the left inset and the width, each rounded half up.
+- **The decision is conservative and the same for every scale:** the icon is withheld if the text would meet the frame at any pair. So the description and the paint never change with zoom.
+- **Pinned case:** a 100 px cell with 77 px of text at x = 0.5. It clears at the capture scale, but at zoom 1 / DPR 1 the frame edge snaps to 21 while the text starts at device column 20, so it withholds.
+- **Property test:** wherever the predicate admits, no scale lays the frame over the text.
+
+**Size.** `iconGlyphs.ts` is 18,192 B, or 5,462 B gzip, in the lazy `cf` chunk.
+
+### Task 28 round 8 (2026-11-15): S4-NO-FIT, S4-CLEAR-ALLZOOM, S4-GLYPHCAP-R2, decoder instrumentation
+
+**S4-NO-FIT.**
+- **Ablation rule.** Each patch, meaning a fill of at most 6 px², is removed in turn. A patch is fitted when its removal moves the ink IoU by less than 0.01 yet flips a reference region from passing to failing.
+- **Fitted patches found and removed:**
+  - 3ArrowsGray:2's shading strip;
+  - the flag's hoist fold (3Flags:0 and 3Flags:1);
+  - the lamp's highlight (3TrafficLights2:0 and 3TrafficLights2:2; removed from all three lamps, which share their geometry);
+  - 3Signs:1's left-edge strip;
+  - 3Symbols2:1's cap, lower rect, core and row-4 patch;
+  - 3Triangles:0's inner triangle.
+- **No further redraws.** Glyphs that then fail the frozen check are withheld.
+- **Pinned:** no admitted glyph keeps a fitted patch.
+
+**Final withheld list (15):** 3Stars:0, 3Stars:1, 3Stars:2, 4Rating:0, 4Rating:1, 4Rating:2, 4Rating:3, 5Rating:0, 3ArrowsGray:2, 3Flags:0, 3Flags:1, 3Flags:2, 3Signs:1, 3Symbols2:1, 3Triangles:0. **39 classes are admitted.**
+
+**S4-CLEAR-ALLZOOM.**
+- **Supported scales:** zoom takes the keyboard steps `SHEET_ZOOM_STEPS` (0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2, 3, 4) and any continuous wheel or pinch zoom in [0.25, 4]. The DPR is the live `devicePixelRatio`.
+- **Bound.** Right-aligned text must start at least 10 px (logical) after the frame's exact right edge. This is sufficient at every zoom in [0.25, 4] and every DPR ≥ 1: the snapped edge is at most e·s + 1.5, and the text's first column is at least t·s − 1, so (t − e)·s ≥ 2.5 holds whenever t − e ≥ 2.5 / 0.25.
+- **One decision for all scales,** shared by a11y and paint.
+- **Codex's reproduction** (x = 0, 77 px of text, 15 pt row, which meets the frame at zoom 0.33 and 0.67) is withheld and pinned.
+- **Property test:** wherever an icon is admitted, the frame never meets the text at any step × DPR {1, 1.25, 1.5, 2, 3} or across 61 continuous zooms.
+- The ±1 px boundary is pinned in every view.
+
+**S4-GLYPHCAP-R2.**
+- The size budget is revised explicitly from 3,786 B to 5,417 B gzip, the measured size after round 8 (18,048 B raw, in the lazy `cf` chunk).
+- The growth comes from the fix round's admission-owned decoder and prepared fills, and from round 7's redrawn classes.
+- The test asserts ≤ baseline + 10 % and ≤ 16 KiB.
+
+**Decoder instrumentation.**
+- `cfDecodeCalls` counts every decoder call, separately from live entries.
+- **Tests:** a refused admission causes no decode. A successful one has decoded nothing when it reserves memory, and decodes exactly once per class after.
+- **Mutation check:** a mutant that decodes before admission fails the test.
+
+## 13. Stage 4 Validation, Publication, Resource Audit and PR 4 Evidence (Task 30)
+
+**Excel builds.** The object-model probe ran on Excel 16.114 (it crashed: recorded, lifts nothing). Every other Stage 4 capture is Excel 16.115.
+
+### 13.1 Publication gate and result
+
+`bun scripts/cf-refs/audit.ts --stage 4 --write --publish-stage4` publishes through `stage4Publication` (`scripts/cf-refs/audit.ts`). A capability publishes only when all of these hold:
+- it is `verified` by its owning capture and the cross-case gates;
+- no ruling withholds it (`CF_STAGE4_NEVER_PUBLISH`): `icon:scope-merged-cell` (S4-MERGED-UNPUBLISHED), `icon:geometry-short-row-clip` (S4-SHORTROW-WITHHELD), `icon:inset-overflow` (the `#` layout is unmeasured);
+- the reading Excel matched equals production's (`CF_STAGE4_PRODUCTION_READINGS` = `CF_ICON_PAINT_READINGS` plus the evaluator and composer readings). A list-valued entry is a selection, published in `VERIFIED_STAGE4_ICON_SELECTIONS`;
+- for a glyph pair, its class passed the OD-9(b) approximation check (not in `CF_ICON_GLYPH_WITHHELD`), so publishing a key capability can never un-withhold a failing glyph.
+
+**Result.** 97 of 145 `icon:*` ids published (54 of 75 glyph pairs, 39 of 54 glyph classes); 48 withheld: 21 glyph pairs (approximation check), 3 by ruling, 7 non-discriminating, 16 refused-unsupported, and `icon:composition-unresolved-stub` (Excel matched `halted`, but production cannot evaluate the Stage 5 expression stub and withholds every cell below it, so it implements no reading; as Stage 3 did for `bar:composition-unresolved-stub`). Six selections: percentile `inc`, floor `below-floor-no-icon`, `as-model` for equal values, a single cell, non-monotonic thresholds and out-of-domain bounds. `icon:inset-right-aligned` publishes (S4-RIGHTINSET-ZERO, matched `unshifted`); `icon:geometry-snapping` stays withheld, the paint gate using `bar:geometry-snapping` (S4-SNAP-SHARED).
+
+**Dual gate.** `audit --stage 4`: ok, `stageComplete=true`, 0 blocked, every disposition in {verified, unverified-nondiscriminating, refused-unsupported}. `tests/xlsx-cf-oracle-conformance.test.ts` green with no injection. The second `--write --publish-stage4` run leaves `src/xlsx/cf/verifiedCapabilities.ts` byte-identical (`git diff --exit-code`). Against `bdc2b217` the file gains only `VERIFIED_STAGE4_CAPABILITIES`, `VERIFIED_STAGE4_ICON_SELECTIONS` and the `icon:*` ids of `VERIFIED_CAPABILITIES`; Stage 1–3 sets are byte-unchanged (audits 1–3 ok). Deviation from the plan text: the selections export rides beside the Stage 4 set (the context file allows it; without it the selection shapes stay unresolved).
+
+**Conformance on Excel's own workbooks (no injection).** Production's evaluated `(set, iconId)`, mapped through `CF_ICON_GLYPH_CLASSES`, against the sidecars' classes on all 1,506 Stage 4 cells: 714 are controls (no icon rule covers them; production draws nothing there). On the 792 covered cells, 549 agree on an icon and 25 on no icon (no-match, or halted by a stopIfTrue rule ahead); 0 disagree; 111 are withheld (tainted, or under an unresolved write); 86 are unclassifiable crops and 21 unobserved (an uncaptured case, or a text/geometry cell whose bucket was not classified). Every icon production paints (`iconAt`) is Excel's class, and its frame plus the class's key ink offset lies within ±1 px of Excel's ink box in its cell; the measured inset equals Excel's text shift.
+
+### 13.2 Product fixes found by the gate
+
+- **S4-ROW-BASELINE (`0c1387a5`), replaced in the fix round by Ruling S4-ROW-UNIFORM.** The px conformance found every bottom-anchored icon in a row that also holds a 20 pt cell (`x14ac:dyDescent="0.3"`) 2 px above the measured frame: `stage4-icon-geometry` C3, M3..O3 and `stage4-icon-geometry-2` C2, G2, I2, J2. Excel lifts a bottom-aligned icon onto the row's shared baseline, which other cells' fonts move. **S4-ROW-UNIFORM:** bottom placement is admitted only on rows whose every stored cell is Calibri 11 regular and which carry no row style (`customFormat`), exactly what `stage4-icon-rows-bottom` measured (its resaved `styles.xml`: every `cellXfs` entry uses fontId 0, `<sz val="11"/><name val="Calibri"/>`; no row has a row style). The data source computes the flag (`src/xlsx/rowFont.ts`): the resident sheet for static, resident, print and export; the worker's record reader (`sheetRecords.ts` `nonUniformFontRows`) for the worker and forced-paged views, carried in the layout beside `defaultRowPt`, so a11y and paint share it. An unknown row withholds. The geometry captures above withhold; I3 and F2 (centred) and every row of `stage4-icon-rows`/`-rows-bottom` paint.
+  - **Fix round 2 (codex P1 ×2).** A row is uniform only if, in addition, the sheet's default cell style (xf 0, the Normal style's font, which empty cells take) is Calibri 11 regular, no `<cols>` style names another or an unknown font (else every row of the sheet is non-uniform), and no cell of the row holds a run-formatted string. For rich text I chose the simplest fail-closed option: any `<si>` or `<is>` with an `<r>` run withholds its row, whatever the run's font. Both paths compute it identically (resident `parse.ts`: `rowFontsBlocked`, `XlsxRow.richText`; worker `sheetRecords.ts`: `keyFontStyle(0)`, column styles, the shared-string reader's rich flag and inline runs). Fix round 3 (codex P1): phonetic text counts too: a string with an `<rPh>` run or a `phoneticPr`, and a cell showing phonetics (`ph="1"`), withhold its row on both paths. Cross-path regressions on seven variants of `stage4-icon-rows-bottom` (the four below, plus an inline and a shared-string phonetic run with a 20 pt `phoneticPr` font, and a plain `ph="1"` cell) (a 20 pt column style; a 20 pt Normal style with explicitly Calibri 11 cells; a neighbouring inline run in Calibri 20; a neighbouring shared-string run in Calibri 20): resident and worker agree, row 2 is non-uniform, B2 withholds; the unmodified workbook paints B2.
+- **Final review fixes (codex whole-branch review).**
+  - **I1, S4-ROW-EFFECTIVE.** Row uniformity reflects effective fonts. A row is also non-uniform when a conditional-formatting rule that writes a font (`font.*`, a DXF `<font>`) reaches any cell of it, or a table covers it (its table style or table DXF may carry a font). Every row withholds when the sheet's CF is refused as a whole or its tables are unknown (paged: until the sheet completes). `cfSheetNonUniformFontRows` (`src/xlsx/rowFont.ts`) computes it from the same CF rules and table inventory on the resident sheet and the paged one, so static, resident, worker, forced-paged, print, a11y and the wire layout agree. Codex's reproduction (a CF rule enlarging G2 to 20 pt in a Calibri 11 row) withholds B2 in every view; a table over a row withholds that row.
+  - **I2.** The rich/phonetic shared-string flags are a bitset charged to construction memory before it grows (`rich shared-string flags`), held until the import ends and released on completion, cancellation and failure; a refused charge fails the import typed (`import-memory-budget`) with nothing left charged.
+  - **I3.** Resident display semantics read the frame's live hosts (`CfTextScopeRequest.hosts`, the same `createFrameHostSource` the paged semantics use), so row and column resizes reach the icon decision. `stage4-icon-rows-bottom` row 2 resized from 20 to 24 CSS px withholds B2 and announces it identically on the resident and paged scopes; a column resize that clips the frame agrees too.
+  - **Residuals (codex re-review of `8f85309c`).** I1: the resident parser now records a per-sheet unknown table inventory (`XlsxSheet.tablesUnknown`: an unresolved, unreadable or invalid table part), distinct from known-empty, so the resident, static and print paths withhold every row exactly as the paged path does. Reproduction: an unresolved `tablePart` added to `stage4-icon-rows-bottom` makes both paths withhold B2 and announce it the same way. I2: each bitset growth reserves old + new before allocating, then shrinks to the new size; a refusal exactly at a growth peak fails the import typed with the ledger at baseline.
+  - **M4.** `xlsx-cf-recipes-stage4.md` is marked as Task 24's historical expectations, linking here.
+  - **P3.** The `<rPh>`/`phoneticPr` variants also run without `ph="1"` (inline and shared), so each condition is pinned alone.
+  - **Gates after these fixes:** CF suite 1,138 passed, 2 skipped; viewer/paged/parse 3,413 passed; browser `xlsx-cf.spec.ts` 28/28 on Chromium and WebKit; split full suite `tests/xlsx-*` 8,776 passed (6 missing-corpus failures), the rest 4,946 passed (7: missing corpus, `core-entry`); publication byte-identical on two runs (97/48); conformance pins unchanged; eager gzip 36,520 B, `check-eager` ok; index closure 422,388 B (environmental FAIL, as on main; +330 B over fix round 2 from the shared `rowFont.ts` helpers in `source.ts`); CF chunks 72,231 B gzip.
+- **S4-DPR-FLOOR (`4d80ee30`).** Below device scale 0.25 the paint rechecks the snapped right-aligned clearance and skips an intruding icon; the description is unchanged (known limit). A sweep finds no admitted production frame that intrudes.
+
+### 13.3 Carried decisions
+
+- **Grant omission order:** icons, then bars, then scales (`tests/xlsx-cf-icon-worker.test.ts`, three families).
+- **NoIcons with `showValue="0"`:** the canvas hides the value; nothing is announced as an icon and nothing as unavailable (the outcome is evidenced); the value stays in the accessible name and copy text, as for a Stage 3 bar with `showValue="0"` (S3-O).
+- **Caches and zoom:** the six zoom/DPR pairs paint and announce the same icon on every leg (browser); cfGen and icon state are in the layout keys (Task 29 tests).
+
+### 13.4 Resource audit (`audit --stage 4`)
+
+| Scenario | Result |
+|---|---|
+| 1M-row declared `A:A`, 100 icon sets + 100 bars + 100 scales | one 100-cell scan; first icon on 40/40 cells (and 40/40 without bars and scales); net 0 |
+| refused percentile icon set beside a `num` set | num: 10 icons; percentile (sorted copy refused at 400 KB): 10 withheld; control at 4 MB: 10 icons; net 0 |
+| whole-column icon extents | 10 stored cells, metrics not extended |
+| glyph admission, every class in one batch | 54 classes, 39 admitted and decoded once, 0 withheld decoded, refused admission decodes 0, net 0 |
+| distinct ranges | 300 rects refuse before enumeration (0 reads); the shared scan refuses at the 1,000,000-unit cap (`cf-resource-limit`), net 0 |
+| 20 open/read/cancel/close cycles (thresholds B2:B12) | 220 icon states, final net 0 |
+| no-CF baseline | 0 reserves, 0 reads, no scope, 0 glyph decodes |
+
+**Per-case validation records (fix round 2, codex P2).** `audit --stage 4 --out` writes `caseRecords` in `stage4-audit.json` (`stage4CaseRecords`): one row per measured Stage 4 case and variant (each designated cell, controls included) with status, evidence kind, measured (sidecar ink box, cell-relative px at 1 px/pt, and observed glyph class) vs produced (production's evaluated class or `withheld`, whether it paints, and the painted frame's ink box), mode (`resident`), stamp (cfGen, value generation), the case's CF byte peak and work units. 1,420 rows over 16 measured cases; 41 paint, each within ±1 px of Excel's box where Excel measured one. `tests/xlsx-cf-stage4.test.ts` checks completeness.
+
+### 13.5 Gates and sizes
+
+- Fix round 2, `npx vitest run` split in two (memory pressure stopped an unsplit run once): `tests/xlsx-*` 8,765 passed, 6 failed (the missing-corpus pivot tests), 85 skipped; everything else 4,946 passed, 7 failed (missing corpus: slideshow-morph, stream/local-unchanged, stream/recorder; `core-entry` needs the full build's d.ts), 46 skipped.
+- Full `npx vitest run` at `fbd4fcbb`: 705 files (689 passed, 8 failed, 8 skipped); 13,701 tests passed, 15 failed, 131 skipped, 1 todo. The failures: 12 missing `corpus/` files (slideshow-morph, stream/local-unchanged, stream/recorder, pivots-parse, pivots-records); `tests/build/core-entry.test.ts` (needs the full `bun run build` d.ts step); `tests/fc-t2-drawing-reply-grant.test.ts` (load flake, passes alone); `tests/xlsx-cf-paged-parse.test.ts` "deep equal at every chunk boundary" (5 s timeout, fails identically at `86170f19`, pre-existing). The corpus iconSet test is skipped in this worktree (no `corpus/`); the main checkout's 9 corpus `.xlsx` hold 0 icon sets, matching §4.
+- `npx tsc --noEmit -p .`: the 3 known `@napi-rs/canvas` errors only; `-p tsconfig.scripts.json`: clean.
+- Browser `tests/browser/xlsx-cf.spec.ts`: Chromium 28/28, WebKit 28/28.
+- Eager gzip 36,520 B after fix round 2 (36,516 after fix round 1, 36,519 before it; PR 3 base 36,517; limit 38,720). `check-eager` ok (157 modules; `rowFont.ts` lives outside `cf/`, so the paged worker chunks import no CF code). `core-gates`: core closure ok; index closure 422,058 B after fix round 2 (+504 B: the resident `parse.ts` row-font checks; 421,554 after fix round 1, 421,541 before it) and its module set FAIL environmentally, as on main `bdc2b217` (421,386 B, absolute `node_modules` paths). `scripts/eager-baseline.json` unchanged (record only if Linux CI flags it).
+- CF lazy chunks: 57,081 B gzip at `bdc2b217` → 72,213 B after fix round 2 (+15,132; 72,219 after fix round 1, 72,074 before it). The glyph table (`iconGlyphs.ts`) is 5,417 B gzip of it (36 %).
+- `bun scripts/cf-compare.ts --stage 4`: static, print and export whole-frame pixel diffs fail for every stage, Stage 3 included (cross-renderer frames: a pre-existing limit; all off-capture fidelity is *unverified*, and the OD-9(b) artwork is `pixel-approximated`, never measured). Paged and interactive (fix round: the harness compares an icon cell on whether production draws an icon against the sidecar's observed class, a withheld slot allowed, and on its style expectations only): before publication (`86170f19`) interactive 44 pass / 5 fail and paged 46 pass / 1 pending / 3 fail; after publication with the old harness 38/11 and 32/17; with the icon-aware harness interactive 44 pass / 5 fail and paged 46 pass / 2 pending / 2 fail. Every Stage 1–3 outcome is unchanged throughout. Stage 4 now fails only `stage4-icon-glyph-key` interactive (and is pending paged): one text scope or read over its 76 rules × 462 cells refuses at the byte estimate; `stage4-icon-composition` moved from fail to pass.
+
+### 13.6 Known limits
+
+- 15 withheld glyph classes; whole sets withheld: 3Stars, 4Rating, 5Rating, 3Flags.
+- Admitted geometry only: Calibri 11 regular; rows of 15, 18 or 30 pt (by `ht` or `defaultRowHeight`); centred, or bottom on a row whose every cell is Calibri 11 regular (S4-ROW-UNIFORM); left text or right-aligned numbers clearing the frame by 10 px. Withheld: other fonts, other row heights (20, 25, 16.5, 22.5 included), top alignment, bottom alignment in a mixed-font or row-styled row, centred text, merged hosts, short rows.
+- Forced-paged view: its value text and gridlines sit about 1 px off the resident frame from the header row down (pre-existing, §11), so the browser test compares its icon pixels only (positions exact, colour within 4); the left-text inset is not pixel-compared on that view.
+- The three-family grant omission-order test is a pinning test: the behaviour already existed, so it had no RED run.
+- Very large icon-rule sheets: one text scope, paged read or preparation over many icon rules refuses at the byte estimate (O(rules × cells); `stage4-icon-glyph-key`'s 76 rules × 462 cells), atomically, as Stage 3 bars do.
+- The OM probe crash on Excel 16.114; Excel strips `stopIfTrue` from icon rules; min/max cfvo unsupported; the dialect shapes unsupported.
+- The bar-extent heuristic caveat; twin-set strict order; `iconApplied` labelling on faint cells; the search scope carries no row heights; S4-DPR-FLOOR (description unchanged below device scale 0.25).
+
+### 13.7 Capability rows
+
+Evidence kind is read from the owning case's per-cell `iconEvidence` labels (verified rows only).
+
+| Capability | Ruling | Evidence kind | Matched reading | Status | Refusal still in force |
+|---|---|---|---|---|---|
+| `icon:om-reachability-probe` | S4-A | — | — | withheld | unverified-nondiscriminating |
+| `icon:dialect-standalone` | S4-O | pixel-classified | as-modelled | published | — |
+| `icon:dialect-base` | S4-O | pixel-classified | as-modelled | published | — |
+| `icon:dialect-base-x14-family` | S4-B | — | — | withheld | refused-unsupported |
+| `icon:dialect-paired` | S4-O | — | — | withheld | refused-unsupported |
+| `icon:pixel-calibration` | S4-A | pixel-classified (glyph key) | — | published | — |
+| `icon:glyph-key` | S4-A | pixel-classified (glyph key) | — | published | — |
+| `icon:families-base` | S4-E | pixel-classified | bucket-order | published | — |
+| `icon:families-x14` | S4-E | pixel-classified | bucket-order | published | — |
+| `icon:settings-schema-defaults` | S4-B | pixel-classified | as-modelled | published | — |
+| `icon:scope-whole-column` | S4-H | pixel-classified | whole-column | published | — |
+| `icon:thresholds-num` | S4-D | pixel-classified | literal | published | — |
+| `icon:thresholds-gte-true` | S4-D | pixel-classified | as-written | published | — |
+| `icon:thresholds-gte-false` | S4-D | pixel-classified | as-written | published | — |
+| `icon:thresholds-percent` | S4-D | pixel-classified | percent-of-range | published | — |
+| `icon:thresholds-percentile-inc-exc` | S4-D | pixel-classified | inc | published | — |
+| `icon:thresholds-mixed` | S4-D | pixel-classified | per-type | published | — |
+| `icon:degenerate-equal-values` | S4-D | pixel-classified | as-model | published | — |
+| `icon:degenerate-single-cell` | S4-D | pixel-classified | as-model | published | — |
+| `icon:degenerate-non-monotonic` | S4-D | pixel-classified | as-model | published | — |
+| `icon:bounds-out-of-domain` | S4-D | pixel-classified | as-model | published | — |
+| `icon:thresholds-floor` | S4-C | pixel-classified | below-floor-no-icon | published | — |
+| `icon:thresholds-min-max` | S4-C | — | — | withheld | refused-unsupported |
+| `icon:reverse` | S4-E | pixel-classified | reversed | published | — |
+| `icon:custom-mapping` | S4-E | pixel-classified | custom-order | published | — |
+| `icon:custom-noicons` | S4-B | pixel-classified | no-icon | published | — |
+| `icon:geometry-box` | S4-K | pixel-measured | font | published | — |
+| `icon:geometry-vertical-align` | S4-K | pixel-measured | cell-align | published | — |
+| `icon:composition-bar-showvalue` | S4-I | pixel-measured | priority-wins | published | — |
+| `icon:geometry-narrow-clip` | S4-K | pixel-measured | clip | published | — |
+| `icon:geometry-short-row-clip` | S4-K | pixel-measured | shrink | withheld | Ruling S4-SHORTROW-WITHHELD: Excel shrinks the box in a short row (matched `shrink`) by a law the captures do not determine; production does not implement shrin |
+| `icon:geometry-snapping` | S4-K | — | — | withheld | unverified-nondiscriminating |
+| `icon:inset-left` | S4-L | pixel-measured | inset | published | — |
+| `icon:inset-right-aligned` | S4-L | pixel-measured | unshifted | published | — |
+| `icon:inset-center` | S4-L | pixel-measured | full-cell | published | — |
+| `icon:inset-overflow` | S4-L | pixel-measured | icon-and-text | withheld | Excel draws the icon and a `#` fill (matched `icon-and-text`), whose layout is unmeasured; production withholds every overflowing host. |
+| `icon:noicons-inset` | S4-L | pixel-measured | inset | published | — |
+| `icon:noicons-showvalue` | S4-L | pixel-measured | text-hidden | published | — |
+| `icon:showvalue-canvas-suppression` | S4-L | pixel-measured | text-hidden | published | — |
+| `icon:showvalue-copy-text` | S4-N | — | — | withheld | unverified-nondiscriminating |
+| `icon:participation-types` | S4-G | pixel-classified | no-icon-for-non-numbers | published | — |
+| `icon:participation-dateserial` | S4-G | pixel-classified | evaluated | published | — |
+| `icon:participation-error-presence` | S4-G | pixel-classified | error-ignored | published | — |
+| `icon:scope-disjoint` | S4-H | pixel-classified | union | published | — |
+| `icon:scope-duplicate-blocks` | S4-H | pixel-classified | first-paints | published | — |
+| `icon:scope-hidden-row` | S4-H | pixel-classified | include-hidden | published | — |
+| `icon:scope-autofilter-hidden-row` | S4-H | pixel-classified | include-hidden | published | — |
+| `icon:scope-merged-cell` | S4-H | pixel-classified | all-stored | withheld | Ruling S4-MERGED-UNPUBLISHED: the worker and forced-paged scopes carry no merge knowledge, so publishing would make the resident view paint icons the paged view |
+| `icon:composition-overlapping-icons` | S4-I | pixel-classified | first-paints | published | — |
+| `icon:composition-with-bar` | S4-I | pixel-classified | both-paint | published | — |
+| `icon:composition-with-scale` | S4-I | — | — | withheld | unverified-nondiscriminating |
+| `icon:composition-dxf-fill` | S4-I | — | — | withheld | unverified-nondiscriminating |
+| `icon:composition-matching-stopIfTrue-ahead` | S4-I | pixel-classified | halted | published | — |
+| `icon:composition-noicons-slot` | S4-I | — | — | withheld | unverified-nondiscriminating |
+| `icon:composition-unresolved-stub` | S4-I | pixel-classified | halted | withheld | reading-unimplemented: Excel matched halted, production names no reading |
+| `icon:placement-rtl-sheet` | S4-M | — | — | withheld | unverified-nondiscriminating |
+| `icon:unresolved-unknown-set` | S4-B | — | — | withheld | refused-unsupported |
+| `icon:unresolved-iconid-range` | S4-B | — | — | withheld | refused-unsupported |
+| `icon:unresolved-noicons-id` | S4-B | — | — | withheld | refused-unsupported |
+| `icon:unresolved-custom-count` | S4-B | — | — | withheld | refused-unsupported |
+| `icon:unresolved-base-x14-set` | S4-B | — | — | withheld | refused-unsupported |
+| `icon:unresolved-formula-cfvo` | S4-B | — | — | withheld | refused-unsupported |
+| `icon:unresolved-xmf-reference` | S4-B | — | — | withheld | refused-unsupported |
+| `icon:unresolved-active-present` | S4-B | — | — | withheld | refused-unsupported |
+| `icon:unresolved-cfvo-count` | S4-B | — | — | withheld | refused-unsupported |
+| `icon:unresolved-cfvo-no-type` | S4-B | — | — | withheld | refused-unsupported |
+| `icon:attr-percent-false` | S4-F | — | — | withheld | refused-unsupported |
+| `icon:reverse-custom` | S4-E | — | — | withheld | refused-unsupported |
+| `icon:composition-icon-stopIfTrue` | S4-J | — | — | withheld | refused-unsupported |
+| `icon:geometry-row-offset` | S4-K | pixel-measured | anchor-constant | published | — |
+| `icon:glyph-<set>-<id>` (75 pairs) | S4-A, OD-9(b) | pixel-approximated (*unverified* artwork) | — | 54 published, 21 withheld | the 15 classes in `CF_ICON_GLYPH_WITHHELD` failed the approximation check; their pairs: 3ArrowsGray-2, 3Flags-0, 3Flags-1, 3Flags-2, 3Signs-1, 3Symbols2-1, 4ArrowsGray-3, 4Rating-0, 4Rating-1, 4Rating-2, 4Rating-3, 5ArrowsGray-4, 5Rating-0, 5Rating-1, 5Rating-2, 5Rating-3, 5Rating-4, 3Stars-0, 3Stars-1, 3Stars-2, 3Triangles-0 |

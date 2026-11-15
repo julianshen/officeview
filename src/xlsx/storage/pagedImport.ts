@@ -4,6 +4,7 @@ import { cfExplicitBounds } from '../cfLoader'
  * eager bundle (which imports the limits and ImportRefusal from there) never
  * pulls in the ZIP/XML readers: only the lazy large-source chunk loads this.
  */
+import { cfKeyFontStyle } from '../rowFont'
 import type { WorkbookFormatting } from '../view/contracts'
 import { DEFAULT_FORMATTING, pagedCfStyles, pagedCfStylesBytes, workbookFormattingWithColorContext } from './pagedFormatting'
 import type { Completeness, ProfileId, SourceFailure, SourceHandle, SourceStamp, WorkerDiagnostic } from '../view/contracts'
@@ -236,6 +237,10 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
   let cfStyles: import('../cf/parse').CfStylesSource | undefined
   let cfStylesRefused = false
   let cfStyleHold: import('./constructionMemory').ConstructionShare | undefined
+  // Ruling S4-ROW-UNIFORM (final review I2): one bit per shared string, set when it holds rich-text or phonetic runs.
+  // Charged to construction memory before it grows, held until the import ends (completion, cancellation, failure).
+  let richHold: import('./constructionMemory').ConstructionShare | undefined
+  let richBits = new Uint8Array(0)
   const dropCf = () => {
     for (const sheet of sheets) {
       delete sheet.conditionalFormatting
@@ -293,6 +298,22 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
     }
     // Shared strings, chunked into the store.
     let sstCount = 0
+    const isRichString = (index: number): boolean => index >= 0 && (index >> 3) < richBits.length && (richBits[index >> 3]! & (1 << (index & 7))) !== 0
+    const markRich = (index: number): void => {
+      const byte = index >> 3
+      if (byte >= richBits.length) {
+        // Grow geometrically. The old buffer stays live during the copy, so the charge covers old + new before the
+        // allocation (residual I2), then shrinks to the new buffer once the old one is dropped.
+        const size = Math.max(byte + 1, Math.min(richBits.length * 2 || 64, (limits.paged.uniqueStrings >> 3) + 1))
+        richHold ??= store.construction.share('rich shared-string flags', { untilReleased: true })
+        richHold.need(richBits.length + size)
+        const grown = new Uint8Array(size)
+        grown.set(richBits)
+        richBits = grown
+        richHold.need(size)
+      }
+      richBits[byte] = richBits[byte]! | (1 << (index & 7))
+    }
     if (sstPath) {
       const entry = inventory.find(sstPath)!
       let chunk: string[] = []
@@ -302,7 +323,8 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       // Strings waiting for their chunk commit are construction memory (§12.4).
       const share = store.construction.share('pending shared strings')
       let pendingBytes = 0
-      const events = sharedStringEvents(sstPath, (text) => {
+      const events = sharedStringEvents(sstPath, (text, rich) => {
+        if (rich) markRich(sstCount)
         const cost = 2 * text.length + PENDING_STRING_BYTES
         share.need(pendingBytes + cost)
         pendingBytes += cost
@@ -439,6 +461,9 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
           workbook.diagnostics.push({ code: diagnostic.feature, message: diagnostic.message, partId: sheet.partPath })
         },
         declared: container,
+        // Ruling S4-ROW-UNIFORM: the rows whose font is not uniformly Calibri 11 regular (icon frames).
+        keyFontStyle: index => Number.isInteger(index) && index >= 0 && cfKeyFontStyle(workbook.formatting.styles[index]),
+        richString: isRichString,
         onCell(record) {
           // Charged before the builder retains the record's text and formula metadata.
           account(builder.costOf(record.text, record.meta))
@@ -711,6 +736,8 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
     } finally {
       cfStyles = undefined
       cfStyleHold?.release(); cfStyleHold = undefined
+      richHold?.release(); richHold = undefined
+      richBits = new Uint8Array(0)
       options.signal?.removeEventListener('abort', forward)
       pulse()
     }

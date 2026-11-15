@@ -280,6 +280,30 @@ export function barAutoBoundEvidence(bound: 'autoMin' | 'autoMax', check: (capab
   return r.rule
 }
 
+/**
+ * Stage 4 (Task 26): which reading the oracle matched for a capability whose bare id does not say (a capture verifies an
+ * `icon:*` id for whichever single hypothesis matched, scripts/cf-refs/verify.ts `ICON_HYPOTHESES` and the scenario
+ * hypotheses). It is read from an optional `VERIFIED_STAGE4_ICON_SELECTIONS` export (capability id to matched hypothesis
+ * id), which no audit writes yet. A selection counts only while its capability passes `check`; without one the evaluator
+ * picks no reading and the shape stays unresolved.
+ */
+type CfIconSelectionsExport = Readonly<Record<string, string>>
+// Read through Reflect: the export is optional (absent until an audit publishes it), so it is not a static import.
+const PUBLISHED_ICON_SELECTIONS = Reflect.get(verifiedExports, 'VERIFIED_STAGE4_ICON_SELECTIONS') as CfIconSelectionsExport | undefined
+let testIconSelections: CfIconSelectionsExport | null = null
+
+/** Test injection of matched icon hypotheses (capability id to hypothesis id); null clears. Gated by evidence too. */
+export function injectCfIconSelections(selections: CfIconSelectionsExport | null): void {
+  testIconSelections = selections ? Object.freeze({ ...selections }) : null
+}
+
+/** The matched reading of one icon capability, only when the capability passes `check` and a selection names one. */
+export function iconSelectionEvidence(capability: string, check: (capability: string) => boolean = id => hasEvidence(id)): string | undefined {
+  if (!check(capability)) return undefined
+  const v = (testIconSelections ?? PUBLISHED_ICON_SELECTIONS)?.[capability]
+  return typeof v === 'string' ? v : undefined
+}
+
 export function withCfEvidence<T>(
   capabilityId: string,
   evaluateOrVariant: string | (() => T),

@@ -8,7 +8,7 @@ import { resolve } from 'node:path'
 import { inflateRawSync, inflateSync } from 'node:zlib'
 import { parseXml } from '../../src/core/xml'
 import { columnWidthPx, maxDigitWidthPx } from '../../src/xlsx/columnWidth'
-import { CF_STAGE3_NONDISCRIMINATING, CF_STAGE3_UNSUPPORTED, barCapabilityKind } from './cases'
+import { CF_STAGE3_NONDISCRIMINATING, CF_STAGE3_UNSUPPORTED, CF_STAGE4_CAPABILITIES, CF_STAGE4_NONDISCRIMINATING, CF_STAGE4_UNSUPPORTED, barCapabilityKind, iconCapabilityKind } from './cases'
 import type {
   CfDxfExpectation,
   CfManifest,
@@ -303,7 +303,7 @@ function ruleMatchesAttributes(rule: XmlNode, marker: CfPartMarker): boolean {
     const stopAttr = attr(rule, 'stopIfTrue')
     const actualStop = stopAttr === '1' || stopAttr === 'true'
     if (actualStop !== marker.stopIfTrue) {
-      if ((marker.ruleType === 'colorScale' || marker.ruleType === 'dataBar') && marker.stopIfTrue === true && !actualStop) {
+      if ((marker.ruleType === 'colorScale' || marker.ruleType === 'dataBar' || marker.ruleType === 'iconSet') && marker.stopIfTrue === true && !actualStop) {
         // Excel canonically strips stopIfTrue on colorScale rules upon resave (assumed for bars; a stripped flag is
         // still a recorded outcome because the capture then exercises the unflagged rule)
       } else {
@@ -404,7 +404,63 @@ function ruleMatchesAttributes(rule: XmlNode, marker: CfPartMarker): boolean {
   }
 
   if (marker.bar !== undefined && !barRuleMatches(rule, marker)) return false
+  if (marker.icon !== undefined && !iconRuleMatches(rule, marker)) return false
 
+  return true
+}
+
+/* ---------------- Stage 4: icon set markers (semantic comparison) ---------------- */
+
+/** ECMA-376 §18.3.1.49 `iconSet` and the x14 `iconSet` schema defaults: Excel drops default-valued attributes. */
+const ICON_ATTR_DEFAULTS: Readonly<Record<string, string>> = { reverse: '0', showValue: '1', percent: '1', custom: '0' }
+const normIconBool = (v: string | undefined, fallback: string): string => {
+  const raw = (v ?? fallback).trim().toLowerCase()
+  return raw === '1' || raw === 'true' ? '1' : '0'
+}
+
+/**
+ * Semantic match of an `<iconSet>` / `<x14:iconSet>` against `marker.icon` (Ruling S4-A/S4-O): the set (an omitted
+ * `iconSet` is 3TrafficLights1), the ordered cfvo (type, numeric value, effective `gte`), the custom `cfIcon` list and
+ * the attributes with schema defaults applied. The `percent` attribute, when pinned, is a FORM pin: `(omitted)` requires
+ * it absent and `1`/`0` requires it written (the glyph key's Excel-authored form).
+ */
+function iconRuleMatches(rule: XmlNode, marker: CfPartMarker): boolean {
+  const spec = marker.icon
+  if (!spec) return true
+  const el = asNode(rule.iconSet)
+  if (!el) return false
+  const actual = barElementAttrs(el)
+  if ((actual.iconSet ?? '3TrafficLights1').trim() !== spec.set) return false
+  for (const name of ['reverse', 'showValue', 'percent']) {
+    const pinned = spec.attrs[name]
+    if (name === 'percent' && pinned !== undefined) {
+      if (pinned === '(omitted)') {
+        if (actual.percent !== undefined) return false
+      } else if (actual.percent === undefined || normIconBool(actual.percent, '1') !== normIconBool(pinned, '1')) return false
+      continue
+    }
+    if (normIconBool(actual[name], ICON_ATTR_DEFAULTS[name]!) !== normIconBool(pinned, ICON_ATTR_DEFAULTS[name]!)) return false
+  }
+  const icons = asArray(el.cfIcon).map(asNode).filter((n): n is XmlNode => n !== undefined)
+  const custom = normIconBool(actual.custom, '0') === '1'
+  if (spec.custom) {
+    if (!custom || icons.length !== spec.custom.length) return false
+    for (let i = 0; i < icons.length; i++) {
+      const want = spec.custom[i]!
+      const id = attr(icons[i], 'iconId')
+      if ((attr(icons[i], 'iconSet') ?? '').trim() !== want.set || id === undefined || id.trim() === '' || Number(id) !== want.iconId) return false
+    }
+  } else if (custom || icons.length > 0) return false
+  const cfvoNodes = asArray(el.cfvo).map(asNode).filter((n): n is XmlNode => n !== undefined)
+  if (cfvoNodes.length !== spec.cfvo.length) return false
+  for (let i = 0; i < spec.cfvo.length; i++) {
+    const exp = spec.cfvo[i]!
+    const node = cfvoNodes[i]!
+    if ((attr(node, 'type') ?? '') !== exp.type) return false
+    if (!sameBarBound(attr(node, 'val'), exp.val)) return false
+    if (!sameBarBound(textOf(node.f), exp.f)) return false
+    if (normIconBool(attr(node, 'gte'), '1') !== (exp.gte === false ? '0' : '1')) return false
+  }
   return true
 }
 
@@ -672,7 +728,7 @@ function verifyMarkerInArchive(
   }
   let matchedRule = findMatchedRuleInRoot(xmlRoot, marker)
   let canonicalised: 'x14-as-legacy' | undefined
-  if (!matchedRule && marker.extension === 'x14' && !marker.bar && !marker.scale) {
+  if (!matchedRule && marker.extension === 'x14' && !marker.bar && !marker.scale && !marker.icon && marker.ruleType !== 'iconSet') {
     // Excel 16.114 reads an x14 (Excel 2010) rule it can express in the 2007 schema and resaves it as a LEGACY
     // <cfRule>: same type, priority, operator, @text and formula (<xm:f> becomes <formula>), its inline <x14:dxf>
     // moved into styles.xml (dxfId), the x14 block dropped (stage1-text-predicates.rejected.xlsx,
@@ -3955,6 +4011,1535 @@ function verifyBarCapture(
   return { ok: true, outcome }
 }
 
+/* ---------------- Stage 4: icon locate, classify, hypotheses and discrimination (Ruling S4-A) ---------------- */
+
+/**
+ * One icon cell as the Excel capture shows it, in raw PNG px at 1 px/pt (never fractions). `icon` is the ink box of the
+ * icon (edges inclusive) with the glyph class the S4-A rule assigned (`unclassified` until classified); `textInk*` is
+ * where the cell's value text sits when it shows the control's text; `textShiftPx` is that text's offset against the
+ * control's, the measured inset.
+ */
+export interface CfObservedIcon {
+  ref: string
+  cellLeftPx: number
+  cellTopPx: number
+  cellWidthPx: number
+  cellHeightPx: number
+  icon: { leftPx: number; topPx: number; rightPx: number; bottomPx: number; glyphClass: string } | null
+  textInkLeftPx?: number
+  textInkRightPx?: number
+  textShiftPx?: number
+  /** `false` when the three scanlines disagreed in `record` mode: a per-cell finding that can back no geometry claim. */
+  edgeStable?: false
+  /** Ruling S4-FAINT: a cell with no ink at the S4-A threshold whose crop matches a faint key class (the twin set). */
+  faintGlyphClass?: string
+}
+
+/** The observed outcome of a measured cell for discrimination: its glyph class, a faint twin set, or null (no icon). */
+export function observedIconClass(o: CfObservedIcon): string | null {
+  return o.icon ? o.icon.glyphClass : (o.faintGlyphClass ?? null)
+}
+
+/** Ruling S4-A classification: equal within +-8 per channel at zero offset; separated by one pixel of max delta >= 64. */
+export const ICON_CLASS_TOLERANCE = 8
+export const ICON_STRONG_DELTA = BAR_STRONG_DELTA
+const ICON_SCAN_FRACTIONS: readonly number[] = [0.25, 0.5, 0.75]
+
+const iconRefusal = (code: CfRefusalCode, reason: string): Refusal => ({ kind: 'refusal', id: 'icon-measure', status: 'recipe-pending', code, reason, structuralValid: true })
+
+/** The cell's inner box (gridlines excluded): x/y inclusive start, width/height in px. */
+function iconInnerBox(png: DecodedPng, geom: WorksheetRangeGeometry, ref: string): { x: number; y: number; width: number; height: number; cell: { x0: number; y0: number; x1: number; y1: number } } | null {
+  const box = cellPixelBox(png, geom, ref)
+  if (!box) return null
+  const width = box.x1 - box.x0 - 2
+  const height = box.y1 - box.y0 - 2
+  if (width < 1 || height < 1) return null
+  return { x: box.x0 + 1, y: box.y0 + 1, width, height, cell: box }
+}
+
+/** Median colour of a rect's perimeter: the cell's own background, robust to ink that touches one edge. */
+function perimeterBackground(png: DecodedPng, r: { x: number; y: number; width: number; height: number }): [number, number, number] {
+  const ch: [number[], number[], number[]] = [[], [], []]
+  const take = (x: number, y: number): void => {
+    const p = pixelAt(png, x, y)
+    ch[0].push(p[0]); ch[1].push(p[1]); ch[2].push(p[2])
+  }
+  for (let x = r.x; x < r.x + r.width; x++) { take(x, r.y); take(x, r.y + r.height - 1) }
+  for (let y = r.y; y < r.y + r.height; y++) { take(r.x, y); take(r.x + r.width - 1, y) }
+  return [median(ch[0]), median(ch[1]), median(ch[2])]
+}
+
+/** Ink mask of a rect against its own background: `mask[y * width + x]` is true where max delta >= `ICON_STRONG_DELTA`. */
+function inkMask(png: DecodedPng, r: { x: number; y: number; width: number; height: number }): { mask: boolean[]; width: number; height: number } {
+  const bg = perimeterBackground(png, r)
+  const mask: boolean[] = new Array(r.width * r.height).fill(false)
+  for (let y = 0; y < r.height; y++) for (let x = 0; x < r.width; x++) mask[y * r.width + x] = rgbMaxDelta(pixelAt(png, r.x + x, r.y + y), bg) >= ICON_STRONG_DELTA
+  return { mask, width: r.width, height: r.height }
+}
+
+const columnsWithInk = (m: { mask: boolean[]; width: number; height: number }, rows?: { from: number; to: number }): boolean[] => {
+  const out: boolean[] = new Array(m.width).fill(false)
+  for (let y = rows?.from ?? 0; y <= (rows?.to ?? m.height - 1); y++) for (let x = 0; x < m.width; x++) if (m.mask[y * m.width + x]) out[x] = true
+  return out
+}
+
+/** Leftmost and rightmost ink of one scanline restricted to columns `from..to`, or undefined when the row has none. */
+function scanlineEdges(m: { mask: boolean[]; width: number }, y: number, from: number, to: number): { l: number; r: number } | undefined {
+  let l = -1
+  let r = -1
+  for (let x = from; x <= to; x++) {
+    if (!m.mask[y * m.width + x]) continue
+    if (l < 0) l = x
+    r = x
+  }
+  return l < 0 ? undefined : { l, r }
+}
+
+/** Bounding box and S4-A scanline edges of the ink inside columns `from..to`. */
+function inkBox(m: { mask: boolean[]; width: number; height: number }, from: number, to: number): { left: number; right: number; top: number; bottom: number; scans: Array<{ l: number; r: number } | undefined> } | undefined {
+  let left = Infinity, right = -1, top = Infinity, bottom = -1
+  for (let y = 0; y < m.height; y++) {
+    for (let x = from; x <= to; x++) {
+      if (!m.mask[y * m.width + x]) continue
+      left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y)
+    }
+  }
+  if (right < 0) return undefined
+  const scans = ICON_SCAN_FRACTIONS.map(f => scanlineEdges(m, top + Math.round((bottom - top) * f), left, right))
+  return { left, right, top, bottom, scans }
+}
+
+/**
+ * Locates each cell's icon and value text by a column/row scan (Ruling S4-A, the S3-A procedure). Ink is any pixel whose
+ * max channel delta from the cell's own background (its inner perimeter) reaches `ICON_STRONG_DELTA`. The value text is
+ * the control's ink column pattern found in the cell (the rightmost placement, at most one column in ten differing); the
+ * icon is the remaining ink left of it, or all ink when the cell shows no text (`showValue="0"`, `;;;`). Three scanlines
+ * at 25/50/75 percent of the icon's height must place its edges consistently within `tolerancePx`: against each other
+ * (a rectangular glyph), or as a rigid offset from `referenceOf(ref)`, the glyph-key crop of the cell's class (any
+ * shape). Anything else refuses (`icon-edge-unstable`).
+ */
+export function measureIconGeometry(
+  png: DecodedPng,
+  geom: WorksheetRangeGeometry,
+  refs: readonly string[],
+  opts: { controlOf: (ref: string) => string; tolerancePx: number; referenceOf?: (ref: string) => DecodedPng | undefined; unstable?: 'refuse' | 'record' },
+): ReadonlyMap<string, CfObservedIcon> | Refusal {
+  const record = opts.unstable === 'record'
+  const out = new Map<string, CfObservedIcon>()
+  for (const ref of refs) {
+    const inner = iconInnerBox(png, geom, ref)
+    const ctrlRef = opts.controlOf(ref)
+    const ctrl = iconInnerBox(png, geom, ctrlRef)
+    if (!inner || !ctrl) return iconRefusal('cell-expectation-mismatch', `Cell ${ref} or its control ${ctrlRef} is outside the capture`)
+    const cell = inkMask(png, inner)
+    const control = inkMask(png, ctrl)
+    const cellCols = columnsWithInk(cell)
+    const ctrlCols = columnsWithInk(control)
+    const cl = ctrlCols.indexOf(true)
+    const cr = ctrlCols.lastIndexOf(true)
+    let textAt: number | undefined
+    if (cl >= 0) {
+      const pattern = ctrlCols.slice(cl, cr + 1)
+      const allowed = Math.max(1, Math.floor(pattern.length / 10))
+      for (let d = cellCols.length - pattern.length; d >= 0 && textAt === undefined; d--) {
+        let misses = 0
+        for (let i = 0; i < pattern.length && misses <= allowed; i++) if (cellCols[d + i] !== pattern[i]) misses++
+        if (misses <= allowed) textAt = d
+      }
+    }
+    const iconTo = textAt === undefined ? cell.width - 1 : textAt - 2
+    const box = iconTo >= 0 ? inkBox(cell, 0, iconTo) : undefined
+    const base: CfObservedIcon = {
+      ref,
+      cellLeftPx: inner.cell.x0,
+      cellTopPx: inner.cell.y0,
+      cellWidthPx: inner.cell.x1 - inner.cell.x0,
+      cellHeightPx: inner.cell.y1 - inner.cell.y0,
+      icon: null,
+      ...(textAt !== undefined
+        ? { textInkLeftPx: inner.x + textAt, textInkRightPx: inner.x + textAt + (cr - cl), textShiftPx: (inner.x + textAt - inner.cell.x0) - (ctrl.x + cl - ctrl.cell.x0) }
+        : {}),
+    }
+    if (box) {
+      const iconBox = { leftPx: inner.x + box.left, topPx: inner.y + box.top, rightPx: inner.x + box.right, bottomPx: inner.y + box.bottom, glyphClass: 'unclassified' }
+      if (box.scans.some(s => s === undefined)) {
+        if (!record) return iconRefusal('icon-edge-unstable', `Cell ${ref}: a scanline through the icon holds no ink`)
+        out.set(ref, { ...base, icon: iconBox, edgeStable: false })
+        continue
+      }
+      const scans = box.scans as Array<{ l: number; r: number }>
+      let lefts = scans.map(s => s.l)
+      let rights = scans.map(s => s.r)
+      const reference = opts.referenceOf?.(ref)
+      if (reference) {
+        const refMask = inkMask(reference, { x: 0, y: 0, width: reference.width, height: reference.height })
+        const rb = inkBox(refMask, 0, refMask.width - 1)
+        if (!rb || rb.scans.some(s => s === undefined)) return iconRefusal('icon-edge-unstable', `Cell ${ref}: its glyph-key reference holds no measurable ink`)
+        lefts = lefts.map((l, i) => l - rb.scans[i]!.l)
+        rights = rights.map((r, i) => r - rb.scans[i]!.r)
+      }
+      const spread = (v: number[]): number => Math.max(...v) - Math.min(...v)
+      if (spread(lefts) > opts.tolerancePx || spread(rights) > opts.tolerancePx) {
+        if (record) {
+          out.set(ref, { ...base, icon: iconBox, edgeStable: false })
+          continue
+        }
+        return iconRefusal('icon-edge-unstable', `Cell ${ref}: icon scanline edges disagree (left ${lefts.join('/')}, right ${rights.join('/')}${reference ? ' against the glyph-key reference' : ''}) beyond +-${opts.tolerancePx} px`)
+      }
+      base.icon = iconBox
+    }
+    out.set(ref, base)
+  }
+  return out
+}
+
+/** A crop of a decoded PNG (copied pixels), for glyph-key references and classification. */
+export function cropPng(png: DecodedPng, r: { x: number; y: number; width: number; height: number }): DecodedPng | undefined {
+  if (r.x < 0 || r.y < 0 || r.width < 1 || r.height < 1 || r.x + r.width > png.width || r.y + r.height > png.height) return undefined
+  const data = new Uint8ClampedArray(r.width * r.height * 4)
+  for (let y = 0; y < r.height; y++) data.set(png.data.subarray(((r.y + y) * png.width + r.x) * 4, ((r.y + y) * png.width + r.x + r.width) * 4), y * r.width * 4)
+  return { width: r.width, height: r.height, data }
+}
+
+function cropDelta(a: DecodedPng, b: DecodedPng): { max: number } {
+  let max = 0
+  for (let i = 0; i < a.width * a.height; i++) {
+    for (let k = 0; k < 3; k++) max = Math.max(max, Math.abs(a.data[i * 4 + k]! - b.data[i * 4 + k]!))
+    if (max >= 255) break
+  }
+  return { max }
+}
+
+/** Ruling S4-NEARTWIN: the observed glyph class of a crop that cannot be told apart from its class's near twins. */
+const ICON_TWIN_SET_PREFIX = 'twin-set:'
+
+/**
+ * Ruling S4-FAINT: the twin-set member that stands for "no icon" (a faint key class is twinned with the blank control).
+ * Hypotheses predict it as `glyphClass: null`.
+ */
+export const ICON_NO_ICON_MEMBER = 'no-icon'
+
+/** The canonical (sorted, de-duplicated) observed class of a twin set: sidecars compare it by `JSON.stringify`. */
+export function iconTwinSetClass(members: readonly string[]): string {
+  return ICON_TWIN_SET_PREFIX + [...new Set(members)].sort().join('|')
+}
+
+/**
+ * The members of a twin-set observation (sorted), or undefined for any other observed class. A twin-set string with an
+ * empty or repeated member, or fewer than two members, is malformed and is no set (review fix, fix round 6).
+ */
+export function iconTwinSetMembers(glyphClass: string | null | undefined): string[] | undefined {
+  if (typeof glyphClass !== 'string' || !glyphClass.startsWith(ICON_TWIN_SET_PREFIX)) return undefined
+  const members = glyphClass.slice(ICON_TWIN_SET_PREFIX.length).split('|')
+  // Fix round 9 (review minor): only the canonical form `iconTwinSetClass` writes, strictly increasing, is a set.
+  return members.length >= 2 && members.every(m => m.length > 0) && members.every((m, i) => i === 0 || members[i - 1]! < m) ? members : undefined
+}
+
+/**
+ * Structural validation of the icon class fields a Stage 4 sidecar records (review fix, fix round 6): `glyphTwins` must
+ * be a symmetric map of non-empty class names to non-empty lists of other non-empty class names, `glyphFaint` a list of
+ * non-empty names, and every twin-set `glyphClass` / `faintGlyphClass` in `observedIcons` a well-formed set. Returns the
+ * first defect, or undefined.
+ */
+export function iconSidecarMalformed(sidecar: Record<string, unknown>): string | undefined {
+  const twins = sidecar.glyphTwins
+  if (twins !== undefined) {
+    if (typeof twins !== 'object' || twins === null || Array.isArray(twins)) return 'glyphTwins is not an object'
+    const rec = twins as Record<string, unknown>
+    for (const [cls, list] of Object.entries(rec)) {
+      if (!cls) return 'glyphTwins has an empty class name'
+      if (!Array.isArray(list) || list.length === 0) return `glyphTwins[${cls}] is not a non-empty list`
+      for (const other of list) {
+        if (typeof other !== 'string' || !other || other === cls) return `glyphTwins[${cls}] holds an invalid twin ${JSON.stringify(other)}`
+        const back = rec[other]
+        if (!Array.isArray(back) || !back.includes(cls)) return `glyphTwins is not symmetric: ${cls} -> ${other}`
+      }
+      if (new Set(list).size !== list.length) return `glyphTwins[${cls}] repeats a twin`
+    }
+  }
+  const faint = sidecar.glyphFaint
+  if (faint !== undefined && (!Array.isArray(faint) || faint.some(f => typeof f !== 'string' || !f))) return 'glyphFaint is not a list of class names'
+  if (Array.isArray(sidecar.observedIcons)) {
+    for (const o of sidecar.observedIcons as Array<Partial<CfObservedIcon> | null>) {
+      for (const cls of [o?.icon?.glyphClass, o?.faintGlyphClass]) {
+        if (typeof cls === 'string' && cls.startsWith(ICON_TWIN_SET_PREFIX) && !iconTwinSetMembers(cls)) return `observedIcons ${String(o?.ref)} holds the twin set ${JSON.stringify(cls)}`
+      }
+    }
+  }
+  return undefined
+}
+
+/**
+ * Ruling S4-A classification. A crop is class P when it equals P's key crop within `tolerance` per channel at zero offset
+ * AND differs from every other class's key crop by at least one pixel of max-channel delta >= `ICON_STRONG_DELTA`.
+ * Matching none refuses `icon-class-none`; matching two, or a second class it is not strongly separated from, refuses
+ * `icon-class-ambiguous` (never a pick). Ruling S4-NEARTWIN: when every class the crop is not strongly separated from is
+ * a recorded twin of P (`opts.twins`), the crop classifies to the twin set (`iconTwinSetClass`), never to P alone;
+ * `referenceClass` names P's key crop for geometry alignment only.
+ */
+export function classifyIconCrop(
+  png: DecodedPng,
+  crop: { x: number; y: number; width: number; height: number },
+  key: ReadonlyMap<string, DecodedPng>,
+  opts: { tolerance: number; twins?: ReadonlyMap<string, ReadonlySet<string>>; faint?: ReadonlySet<string> },
+): { glyphClass: string; referenceClass?: string } | Refusal {
+  const sample = cropPng(png, crop)
+  if (!sample) return iconRefusal('icon-class-none', `Crop ${crop.x},${crop.y} ${crop.width}x${crop.height} lies outside the ${png.width}x${png.height} capture`)
+  const sameSize = [...key].filter(([, k]) => k.width === sample.width && k.height === sample.height)
+  const deltas = sameSize.map(([cls, k]) => ({ cls, max: cropDelta(sample, k).max }))
+  const matches = deltas.filter(d => d.max <= opts.tolerance)
+  if (matches.length === 0) return iconRefusal('icon-class-none', `The crop matches no glyph-key class within +-${opts.tolerance} per channel`)
+  if (matches.length > 1) return iconRefusal('icon-class-ambiguous', `The crop matches ${matches.length} glyph classes (${matches.map(m => m.cls).join(', ')})`)
+  const unseparated = deltas.filter(d => d.cls !== matches[0]!.cls && d.max < ICON_STRONG_DELTA)
+  const twins = opts.twins?.get(matches[0]!.cls)
+  const faint = opts.faint?.has(matches[0]!.cls) === true
+  if ((unseparated.length === 0 || (twins && unseparated.every(d => twins.has(d.cls)))) && (unseparated.length > 0 || faint)) {
+    // S4-NEARTWIN (unseparated twins) and S4-FAINT (a faint class is twinned with no icon): a set, never a pick.
+    return { glyphClass: iconTwinSetClass([matches[0]!.cls, ...unseparated.map(d => d.cls), ...(faint ? [ICON_NO_ICON_MEMBER] : [])]), referenceClass: matches[0]!.cls }
+  }
+  if (unseparated.length > 0) return iconRefusal('icon-class-ambiguous', `The crop matches ${matches[0]!.cls} but is not separated from ${unseparated.map(d => d.cls).join(', ')} by a pixel of delta >= ${ICON_STRONG_DELTA}`)
+  return { glyphClass: matches[0]!.cls }
+}
+
+/** The key frame's height at 1 px/pt: the union of the 54 classes' ink rows in the glyph key (cell y 7..18). */
+export const ICON_KEY_FRAME_HEIGHT_PX = 12
+
+/** The frame columns of a classification crop (crop x 0..13, cell x 1..14): every key class's ink lies inside them. */
+export const ICON_SHIFT_WINDOW_PX = 14
+
+/**
+ * Task 28 round 2 (Ruling S4-ROWS-CAPTURE): classifies a crop whose height differs from the key crops' (another row
+ * height) by sliding each key crop vertically over it. Over the frame columns (`ICON_SHIFT_WINDOW_PX`, so left-aligned
+ * text right of the frame is outside the comparison), the crop must equal the key crop shifted by some `dy` within
+ * ±tolerance per channel at every row, white where the shifted key crop has no row. Exactly one class may match (at one
+ * shift), and it must be separated from every other class's best shift by a pixel of delta >= `ICON_STRONG_DELTA`;
+ * otherwise `icon-class-none` / `icon-class-ambiguous`. Same-height crops classify as `classifyIconCrop` does.
+ */
+export function classifyIconCropShifted(
+  png: DecodedPng,
+  crop: { x: number; y: number; width: number; height: number },
+  key: ReadonlyMap<string, DecodedPng>,
+  opts: { tolerance: number; twins?: ReadonlyMap<string, ReadonlySet<string>>; faint?: ReadonlySet<string> },
+): { glyphClass: string; referenceClass?: string; dy?: number } | Refusal {
+  const sample = cropPng(png, crop)
+  if (!sample) return iconRefusal('icon-class-none', `Crop ${crop.x},${crop.y} ${crop.width}x${crop.height} lies outside the ${png.width}x${png.height} capture`)
+  if ([...key.values()].some(k => k.width === sample.width && k.height === sample.height)) {
+    // The key's own row height: a crop at the key's place classifies as everywhere else; another place shifts.
+    const same = classifyIconCrop(png, crop, key, opts)
+    if (!('kind' in same)) return same
+  }
+  const W = Math.min(ICON_SHIFT_WINDOW_PX, sample.width)
+  const px = (img: DecodedPng, x: number, y: number, c: number): number => (y < 0 || y >= img.height ? 255 : img.data[(y * img.width + x) * 4 + c]!)
+  const best = [...key].map(([cls, k]) => {
+    let kt = -1, kb = -1
+    for (let y = 0; y < k.height; y++) for (let x = 0; x < W; x++) {
+      if (Math.max(255 - px(k, x, y, 0), 255 - px(k, x, y, 1), 255 - px(k, x, y, 2)) > opts.tolerance) { if (kt < 0) kt = y; kb = y }
+    }
+    let max = Infinity, at = 0, hits = 0
+    if (kt >= 0) for (let dy = -kt; dy <= sample.height - 1 - kb; dy++) {
+      let m = 0
+      for (let y = 0; y < sample.height && m <= 255; y++) for (let x = 0; x < W; x++) for (let c = 0; c < 3; c++) m = Math.max(m, Math.abs(px(sample, x, y, c) - px(k, x, y - dy, c)))
+      if (m <= opts.tolerance) hits++
+      if (m < max) { max = m; at = dy }
+    }
+    return { cls, max, dy: at, hits }
+  })
+  const matches = best.filter(d => d.max <= opts.tolerance)
+  if (matches.length === 0) return iconRefusal('icon-class-none', `The crop matches no glyph-key class at any vertical shift within +-${opts.tolerance} per channel`)
+  if (matches.length > 1 || matches[0]!.hits > 1) return iconRefusal('icon-class-ambiguous', `The crop matches ${matches.map(m => m.cls).join(', ')} at ${matches[0]!.hits} shift(s)`)
+  const unseparated = best.filter(d => d.cls !== matches[0]!.cls && d.max < ICON_STRONG_DELTA)
+  if (unseparated.length > 0 || opts.faint?.has(matches[0]!.cls)) return iconRefusal('icon-class-ambiguous', `The shifted crop matches ${matches[0]!.cls} but is not separated from ${unseparated.map(d => d.cls).join(', ') || 'no icon (faint)'}`)
+  return { glyphClass: matches[0]!.cls, dy: matches[0]!.dy }
+}
+
+/** The glyph key a capture establishes: each pair's crop, its class, and one reference crop per class. */
+export interface IconGlyphKey {
+  /** `${set}:${iconId}` -> the key cell's crop. */
+  crops: ReadonlyMap<string, DecodedPng>
+  /** `${set}:${iconId}` -> glyph class (named after the first pair of the class, in key order). */
+  classOfPair: ReadonlyMap<string, string>
+  /** glyph class -> its reference crop (the first pair's). */
+  classes: ReadonlyMap<string, DecodedPng>
+  /**
+   * Ruling S4-NEARTWIN: glyph class -> the classes whose key crops it is neither identical to (within tolerance) nor
+   * strongly separated from (symmetric). A crop of such a class classifies to the twin set, never to a pick.
+   */
+  twins: ReadonlyMap<string, ReadonlySet<string>>
+  /**
+   * Ruling S4-FAINT: classes whose key crop differs from its blank control by more than the tolerance but by less than
+   * `ICON_STRONG_DELTA` (no ink at the S4-A threshold). Each is twinned with "no icon" (`ICON_NO_ICON_MEMBER`).
+   */
+  faint: ReadonlySet<string>
+}
+
+/** The faint classes as the glyph-key sidecar records them (`glyphFaint`), in key order. */
+export function iconGlyphFaintRecord(key: IconGlyphKey): string[] {
+  return [...key.classes.keys()].filter(cls => key.faint.has(cls))
+}
+
+/** The twin relation as the glyph-key sidecar records it (`glyphTwins`): classes in key order, members sorted. */
+export function iconGlyphTwinsRecord(key: IconGlyphKey): Record<string, string[]> {
+  return Object.fromEntries([...key.classes.keys()].filter(cls => key.twins.get(cls)?.size).map(cls => [cls, [...key.twins.get(cls)!].sort()]))
+}
+
+/**
+ * Width of the classification crop: the left part of the cell, where an LTR icon sits (Ruling S4-A). Key and classified
+ * cells use the same rect, so a classified column may be wider than the key's as long as its value text stays right of
+ * this band (right-aligned numbers, `;;;`, or hidden text); its row height and vertical alignment must still match.
+ */
+export const ICON_CROP_WIDTH_PX = 28
+
+/** The crop used for every icon classification: the inner box (gridlines excluded), its left `ICON_CROP_WIDTH_PX` px. */
+export function iconCropRect(png: DecodedPng, geom: WorksheetRangeGeometry, ref: string): { x: number; y: number; width: number; height: number } | undefined {
+  const inner = iconInnerBox(png, geom, ref)
+  return inner ? { x: inner.x, y: inner.y, width: Math.min(inner.width, ICON_CROP_WIDTH_PX), height: inner.height } : undefined
+}
+
+/**
+ * Builds the glyph key from the `stage4-icon-glyph-key` capture (Ruling S4-A). Every key marker's single-pair rule must
+ * round-trip in the resaved XML and every key cell must show ink against its same-format control, else
+ * `icon-key-mismatch`; identical crops (within tolerance) form one class, and a crop identical to two classes refuses
+ * `icon-class-ambiguous`. Ruling S4-NEARTWIN: a crop that is neither identical to nor strongly separated from an existing
+ * class is admitted as its own class (or joins the one class it is identical to) and recorded as that class's twin.
+ */
+export function buildIconGlyphKey(c: CfOracleCase, parts: Map<string, Uint8Array>, png: DecodedPng, geom: WorksheetRangeGeometry, tolerance = ICON_CLASS_TOLERANCE): IconGlyphKey | Refusal {
+  const keyMarkers = c.markers.filter(m => m.capabilityId.startsWith('icon:glyph-') && m.icon?.custom?.length)
+  if (keyMarkers.length === 0) return iconRefusal('icon-key-mismatch', `Case ${c.id} carries no glyph-key markers`)
+  const crops = new Map<string, DecodedPng>()
+  const classOfPair = new Map<string, string>()
+  const classes = new Map<string, DecodedPng>()
+  const twins = new Map<string, Set<string>>()
+  const faint = new Set<string>()
+  const twin = (a: string, b: string): void => {
+    if (a === b) return
+    if (!twins.has(a)) twins.set(a, new Set())
+    if (!twins.has(b)) twins.set(b, new Set())
+    twins.get(a)!.add(b)
+    twins.get(b)!.add(a)
+  }
+  for (const m of keyMarkers) {
+    const pair = `${m.icon!.custom![0]!.set}:${m.icon!.custom![0]!.iconId}`
+    const check = verifyMarkerInArchive(parts, m)
+    if (!check.ok) return iconRefusal('icon-key-mismatch', `Glyph-key rule ${m.capabilityId} on ${m.sqref} did not round-trip in the resaved XML: ${check.reason}`)
+    const ctrlRef = c.expected.cells.find(x => x.ref.toUpperCase() === m.sqref.toUpperCase())?.controlRef
+    const rect = iconCropRect(png, geom, m.sqref)
+    const ctrlRect = ctrlRef ? iconCropRect(png, geom, ctrlRef) : undefined
+    const crop = rect ? cropPng(png, rect) : undefined
+    const ctrlCrop = ctrlRect ? cropPng(png, ctrlRect) : undefined
+    if (!crop || !ctrlCrop || crop.width !== ctrlCrop.width || crop.height !== ctrlCrop.height) return iconRefusal('icon-key-mismatch', `Glyph-key cell ${m.sqref} or its control is outside the capture or differs in size`)
+    const ctrlDelta = cropDelta(crop, ctrlCrop).max
+    // Ruling S4-FAINT: within tolerance of the blank control is no key glyph at all; below the strong delta it is faint.
+    if (ctrlDelta <= tolerance) return iconRefusal('icon-key-mismatch', `Glyph-key cell ${m.sqref} (${pair}) shows no icon against its control ${ctrlRef}`)
+    crops.set(pair, crop)
+    const same = [...classes].filter(([, k]) => cropDelta(crop, k).max <= tolerance)
+    const unseparated = [...classes].filter(([, k]) => { const d = cropDelta(crop, k).max; return d > tolerance && d < ICON_STRONG_DELTA })
+    if (same.length > 1) return iconRefusal('icon-class-ambiguous', `Glyph-key crop ${pair} is identical (within +-${tolerance}) to ${same.map(([k]) => k).join(', ')}`)
+    const cls = same.length === 1 ? same[0]![0] : pair
+    if (same.length === 0) classes.set(pair, crop)
+    classOfPair.set(pair, cls)
+    for (const [other] of unseparated) twin(cls, other)
+    if (ctrlDelta < ICON_STRONG_DELTA) faint.add(cls)
+  }
+  return { crops, classOfPair, classes, twins, faint }
+}
+
+/** One class hypothesis at one designated cell: the glyph class it predicts (`null` for no icon). */
+export interface IconClassHypothesis { id: string; glyphClass: string | null }
+
+export type IconDiscrimination =
+  | { status: 'discriminating'; matched: string }
+  | { status: 'non-discriminating'; reason: string }
+  | { status: 'none'; reason: string }
+
+/** The icon rule a hypothesis is predicted from (the marker's `icon` pin, with base `val` or x14 `f` values). */
+export interface IconRuleSpec {
+  set: string
+  cfvo: ReadonlyArray<{ type: string; val?: string; f?: string; gte?: boolean }>
+  attrs: Readonly<Record<string, string>>
+  custom?: ReadonlyArray<{ set: string; iconId: number }>
+}
+
+type ThresholdMode = 'per-type' | 'literal' | 'all-percent'
+const ICON_HYPOTHESES: Readonly<Record<string, readonly string[]>> = {
+  'icon:thresholds-num': ['literal', 'percent-of-range'],
+  'icon:thresholds-percent': ['percent-of-range', 'literal'],
+  'icon:thresholds-percentile-inc-exc': ['inc', 'exc'],
+  'icon:thresholds-mixed': ['per-type', 'all-percent', 'all-literal'],
+  'icon:thresholds-gte-true': ['as-written', 'flipped'],
+  'icon:thresholds-gte-false': ['as-written', 'flipped'],
+  'icon:families-base': ['bucket-order', 'reversed-order'],
+  'icon:families-x14': ['bucket-order', 'reversed-order'],
+  'icon:reverse': ['reversed', 'not-reversed'],
+  'icon:reverse-custom': ['reverse-then-map', 'map-then-mirror', 'ignored'],
+  'icon:custom-mapping': ['custom-order', 'custom-reversed'],
+  'icon:custom-noicons': ['no-icon', 'family-icon'],
+}
+
+/** Resolved thresholds t_0..t_{k-1} under one reading (S4-D): num literal, percent of [min, max], exact percentile. */
+function resolveIconThresholds(rule: IconRuleSpec, values: readonly number[], mode: ThresholdMode, percentile: 'inc' | 'exc'): number[] | undefined {
+  if (values.length === 0) return undefined
+  const sorted = [...values].sort((a, b) => a - b)
+  const min = sorted[0]!
+  const max = sorted[sorted.length - 1]!
+  const out: number[] = []
+  for (const c of rule.cfvo) {
+    const raw = c.val ?? c.f
+    const v = raw === undefined ? NaN : Number(raw)
+    const type = mode === 'literal' && (c.type === 'percent' || c.type === 'percentile') ? 'num' : mode === 'all-percent' && c.type === 'num' ? 'percent' : c.type
+    if (type === 'min') out.push(min)
+    else if (type === 'max') out.push(max)
+    else if (!Number.isFinite(v)) return undefined
+    else if (type === 'num') out.push(v)
+    else if (type === 'percent') out.push(min + (max - min) * (v / 100))
+    else if (type === 'percentile') {
+      const p = percentileOf(sorted, v, percentile)
+      if (p === undefined) return undefined
+      out.push(p)
+    } else return undefined
+  }
+  return out
+}
+
+/** Ruling S4-D hypothesis: the largest i in 1..k-1 with v >= t_i (v > t_i when that cfvo's gte is false), else 0. */
+export function iconBucketOf(v: number, thresholds: readonly number[], gte: readonly boolean[]): number {
+  let bucket = 0
+  for (let i = 1; i < thresholds.length; i++) if (gte[i] === false ? v > thresholds[i]! : v >= thresholds[i]!) bucket = i
+  return bucket
+}
+
+/**
+ * Class hypotheses for one bucket capability at its designated cells (Lesson 3): each named alternative reading of the
+ * rule predicts a glyph class per cell through `classOf` (the glyph key; `null` for no icon). Values are the scope's
+ * numeric cells; `cells` designates the subset judged (all of `values` by default). Returns undefined for a capability
+ * without hypotheses (its claims stay unverified).
+ */
+export function buildIconClassHypotheses(
+  capabilityId: string,
+  rule: IconRuleSpec,
+  values: ReadonlyMap<string, number>,
+  classOf: (set: string, iconId: number) => string | null,
+  cells?: readonly string[],
+): Record<string, IconClassHypothesis[]> | undefined {
+  const ids = ICON_HYPOTHESES[capabilityId]
+  if (!ids) return undefined
+  const k = rule.custom?.length ?? rule.cfvo.length
+  const scope = [...values.values()]
+  const reverse = normIconBool(rule.attrs.reverse, '0') === '1'
+  const gteAsWritten = rule.cfvo.map(c => c.gte !== false)
+  const out: Record<string, IconClassHypothesis[]> = {}
+  for (const ref of cells ?? [...values.keys()]) {
+    const v = values.get(ref)
+    if (v === undefined) continue
+    out[ref] = ids.map(id => {
+      const mode: ThresholdMode = id === 'literal' || id === 'all-literal' ? 'literal' : id === 'all-percent' || id === 'percent-of-range' && capabilityId === 'icon:thresholds-num' ? 'all-percent' : 'per-type'
+      const t = resolveIconThresholds(rule, scope, mode, id === 'exc' ? 'exc' : 'inc')
+      if (!t) return { id, glyphClass: 'unresolved' }
+      const gte = id === 'flipped' ? gteAsWritten.map(g => !g) : gteAsWritten
+      const b = iconBucketOf(v, t, gte)
+      const mirror = (x: number): number => k - 1 - x
+      const famId = (bucket: number, rev: boolean): number => (rev ? mirror(bucket) : bucket)
+      if (rule.custom) {
+        const pick = (i: number): { set: string; iconId: number } => rule.custom![i]!
+        let target: { set: string; iconId: number }
+        if (id === 'reverse-then-map') target = pick(mirror(b))
+        else if (id === 'map-then-mirror') { const p = pick(b); const size = rule.custom.length; target = p.set === 'NoIcons' ? p : { set: p.set, iconId: size - 1 - p.iconId } }
+        else if (id === 'custom-reversed') target = pick(mirror(b))
+        else target = pick(b)
+        if (target.set === 'NoIcons') return { id, glyphClass: id === 'family-icon' ? classOf(rule.set, famId(b, reverse)) : null }
+        return { id, glyphClass: classOf(target.set, target.iconId) }
+      }
+      const rev = id === 'reversed' ? true : id === 'not-reversed' ? false : id === 'reversed-order' ? !reverse : reverse
+      return { id, glyphClass: classOf(rule.set, famId(b, rev)) }
+    })
+  }
+  return out
+}
+
+/**
+ * Lesson 3 for icon classes: exactly one hypothesis must agree with the observed class at every designated cell. Two or
+ * more agreeing (no designated cell separates them, for example `gte` off the boundary or `reverse` on the middle
+ * bucket) is `non-discriminating`; none agreeing is `none` (a finding, `icon-hypothesis-none`). Ruling
+ * S4-TWINSET-CONSISTENCY: "agree" means the prediction lies in the observed set (a twin set, or a singleton).
+ */
+export function discriminateIcon(hyps: Readonly<Record<string, readonly IconClassHypothesis[]>>, observed: Readonly<Record<string, string | null>>): IconDiscrimination {
+  const refs = Object.keys(hyps)
+  const ids = [...new Set(refs.flatMap(r => hyps[r]!.map(h => h.id)))]
+  if (refs.length === 0 || ids.length < 2) return { status: 'non-discriminating', reason: 'fewer than two hypotheses or no designated cell' }
+  // Ruling S4-TWINSET-CONSISTENCY: every observation is a set (a singleton for a plain class or no icon, or a
+  // S4-NEARTWIN / S4-FAINT twin set, where no icon is `ICON_NO_ICON_MEMBER`); a hypothesis is consistent iff its predicted
+  // outcome lies in the observed set at every designated cell. With singletons only this is plain equality.
+  const inObserved = (ref: string, predicted: string | null): boolean => {
+    const members = iconTwinSetMembers(observed[ref])
+    return members ? members.includes(predicted ?? ICON_NO_ICON_MEMBER) : predicted === observed[ref]
+  }
+  const consistent = ids.filter(id => refs.every(ref => {
+    const h = hyps[ref]!.find(x => x.id === id)
+    return h !== undefined && h.glyphClass !== 'unresolved' && ref in observed && inObserved(ref, h.glyphClass)
+  }))
+  if (consistent.length === 0) return { status: 'none', reason: 'the observed classes match no hypothesis' }
+  if (consistent.length > 1) return { status: 'non-discriminating', reason: `hypotheses ${consistent.join(', ')} all agree with every designated cell` }
+  return { status: 'discriminating', matched: consistent[0]! }
+}
+
+/** One box hypothesis at one designated cell (raw px, edges inclusive). */
+export interface IconBoxHypothesis { id: string; leftPx: number; rightPx: number; topPx: number; bottomPx: number }
+
+/**
+ * Lesson 3 for icon geometry (S3-A step 7): a hypothesis matches when every edge is within `tolerancePx`; the capability
+ * discriminates only when exactly one hypothesis matches and every other differs from it by at least `2 * tolerancePx + 1`
+ * px at some designated cell.
+ */
+export function discriminateIconBox(
+  hyps: Readonly<Record<string, readonly IconBoxHypothesis[]>>,
+  measured: Readonly<Record<string, { leftPx: number; rightPx: number; topPx: number; bottomPx: number }>>,
+  tolerancePx: number,
+): IconDiscrimination {
+  const refs = Object.keys(hyps)
+  const ids = [...new Set(refs.flatMap(r => hyps[r]!.map(h => h.id)))]
+  const edges = ['leftPx', 'rightPx', 'topPx', 'bottomPx'] as const
+  const at = (id: string, ref: string): IconBoxHypothesis | undefined => hyps[ref]!.find(h => h.id === id)
+  const matched = ids.filter(id => refs.every(ref => {
+    const h = at(id, ref)
+    const m = measured[ref]
+    return h !== undefined && m !== undefined && edges.every(e => Math.abs(h[e] - m[e]) <= tolerancePx)
+  }))
+  if (matched.length === 0) return { status: 'none', reason: 'the measured box matches no hypothesis within tolerance' }
+  if (ids.length < 2) return { status: 'non-discriminating', reason: 'fewer than two hypotheses' }
+  if (matched.length > 1) return { status: 'non-discriminating', reason: `hypotheses ${matched.join(', ')} all fit` }
+  const minSep = 2 * tolerancePx + 1
+  const winner = matched[0]!
+  const unseparated = ids.filter(id => id !== winner && !refs.some(ref => {
+    const a = at(id, ref)
+    const b = at(winner, ref)
+    return a !== undefined && b !== undefined && edges.some(e => Math.abs(a[e] - b[e]) >= minSep)
+  }))
+  if (unseparated.length > 0) return { status: 'non-discriminating', reason: `${unseparated.join(', ')} lie within ${minSep - 1} px of ${winner} at every designated cell` }
+  return { status: 'discriminating', matched: winner }
+}
+
+/** Dialect capabilities whose marked cells must show an icon (Ruling S4-DIALECT-EVIDENCE); the dialect case records instead. */
+const ICON_DIALECT_PRESENCE = new Set(['icon:dialect-base', 'icon:dialect-standalone', 'icon:settings-schema-defaults'])
+
+/** Ruling S4-DIALECT-EVIDENCE: a capture in which every marked cell of a dialect capability shows no icon refuses the case. */
+export function dialectAllAbsent(capabilityId: string, observed: Readonly<Record<string, string | null>>): boolean {
+  const refs = Object.keys(observed)
+  return ICON_DIALECT_PRESENCE.has(capabilityId) && refs.length > 0 && refs.every(ref => observed[ref] === null)
+}
+
+const S4_FAMILY_SIZES: ReadonlyArray<readonly [string, number]> = [
+  ['3Arrows', 3], ['3ArrowsGray', 3], ['3Flags', 3], ['3TrafficLights1', 3], ['3TrafficLights2', 3], ['3Signs', 3], ['3Symbols', 3], ['3Symbols2', 3],
+  ['4Arrows', 4], ['4ArrowsGray', 4], ['4RedToBlack', 4], ['4Rating', 4], ['4TrafficLights', 4], ['5Arrows', 5], ['5ArrowsGray', 5], ['5Rating', 5],
+  ['5Quarters', 5], ['3Stars', 3], ['3Triangles', 3], ['5Boxes', 5],
+]
+
+/**
+ * Hypotheses for the Stage 4 capabilities whose question is not a threshold reading (fix round 1: Ruling
+ * S4-DIALECT-EVIDENCE and the concern-2 ruling). Each names the competing readings of the authored workbook and predicts,
+ * per designated cell, the glyph class (`null` for no icon, `icon-class-none` for an icon over a fill no key crop can
+ * match). Statistics are the oracle's own (`resolveIconThresholds`, exact percent/percentile, sheet facts for hidden rows
+ * and merges), never the viewer's. Returns undefined for capabilities handled by `buildIconClassHypotheses`.
+ */
+export function buildIconScenarioHypotheses(
+  capabilityId: string,
+  c: CfOracleCase,
+  parts: Map<string, Uint8Array>,
+  classOf: (set: string, iconId: number) => string | null,
+): Record<string, IconClassHypothesis[]> | undefined {
+  const facts = readBarSheetFacts(parts)
+  const rowOf = (ref: string): number => Number(/\d+/.exec(ref)![0])
+  const iconMarkers = c.markers.filter(m => m.capabilityId === capabilityId && m.icon).sort((a, b) => (a.priority ?? Infinity) - (b.priority ?? Infinity))
+  const otherMarkers = c.markers.filter(m => m.capabilityId === capabilityId && !m.icon)
+  if (iconMarkers.length === 0) return undefined
+  const designated = (m: CfPartMarker): string[] => c.expected.cells.filter(x => x.matched && x.iconApplied !== undefined && isCellInSqref(x.ref, m.sqref)).map(x => x.ref.toUpperCase())
+  const nums = (sqref: string, keep: (ref: string) => boolean = () => true): Map<string, number> => {
+    const out = new Map<string, number>()
+    for (const [ref, v] of facts.values) if (v.kind === 'num' && isCellInSqref(ref, sqref) && keep(ref.toUpperCase())) out.set(ref.toUpperCase(), v.v)
+    return out
+  }
+  const visible = (ref: string): boolean => !facts.hiddenRows.has(rowOf(ref))
+  const mergeCovered = (ref: string): boolean => {
+    const p = parseA1(ref)!
+    return facts.merges.some(g => p.row + 1 >= g.minRow && p.row + 1 <= g.maxRow && p.col >= g.minCol && p.col <= g.maxCol && !(p.row + 1 === g.minRow && p.col === g.minCol))
+  }
+  type Pred = { scope?: number[]; spec?: IconRuleSpec; mirror?: boolean; family?: string; gteFlip?: boolean; thresholds?: number[]; bucket?: (b: number, t: number[]) => number }
+  /** The class one reading predicts for value `v`. */
+  const predict = (m: CfPartMarker, v: number, o: Pred = {}): string | null => {
+    const spec = o.spec ?? m.icon!
+    const k = spec.custom?.length ?? spec.cfvo.length
+    const t = o.thresholds ?? resolveIconThresholds(spec, o.scope ?? [...nums(m.sqref, visible).values()], 'per-type', 'inc')
+    if (!t) return 'unresolved'
+    const gte = spec.cfvo.map(x => (o.gteFlip ? x.gte === false : x.gte !== false))
+    let b = iconBucketOf(v, t, gte)
+    if (o.bucket) b = o.bucket(b, t)
+    if (b < 0) return null
+    const reverse = normIconBool(spec.attrs.reverse, '0') === '1'
+    const idx = (reverse ? k - 1 - b : b)
+    const pos = o.mirror ? k - 1 - idx : idx
+    if (spec.custom) {
+      const target = spec.custom[pos]!
+      return target.set === 'NoIcons' ? null : classOf(target.set, target.iconId)
+    }
+    return classOf(o.family ?? spec.set, pos)
+  }
+  const out: Record<string, IconClassHypothesis[]> = {}
+  const each = (m: CfPartMarker, readings: Array<[string, (ref: string, v: number | undefined) => string | null]>, refs = designated(m)): void => {
+    const values = new Map([...facts.values].map(([r, v]) => [r.toUpperCase(), v.kind === 'num' ? v.v : undefined] as const))
+    for (const ref of refs) out[ref] = readings.map(([id, f]) => ({ id, glyphClass: f(ref, values.get(ref)) }))
+  }
+  const numeric = (f: (v: number) => string | null) => (_ref: string, v: number | undefined): string | null => (v === undefined ? null : f(v))
+  const m0 = iconMarkers[0]!
+  const size = m0.icon!.custom?.length ?? m0.icon!.cfvo.length
+  switch (capabilityId) {
+    case 'icon:dialect-base':
+    case 'icon:dialect-standalone':
+    case 'icon:settings-schema-defaults':
+    case 'icon:dialect-base-x14-family':
+      for (const m of iconMarkers) {
+        const families = capabilityId === 'icon:settings-schema-defaults' || capabilityId === 'icon:dialect-base-x14-family'
+          ? S4_FAMILY_SIZES.filter(([f, n]) => n === (m.icon!.custom?.length ?? m.icon!.cfvo.length) && f !== m.icon!.set).map(([f]) => f)
+          : []
+        each(m, [
+          ['as-modelled', numeric(v => predict(m, v))],
+          ['no-icon', () => null],
+          ['reversed-order', numeric(v => predict(m, v, { mirror: true }))],
+          ...families.map((f): [string, (ref: string, v: number | undefined) => string | null] => [`family:${f}`, numeric(v => predict(m, v, { family: f }))]),
+        ])
+      }
+      return out
+    case 'icon:dialect-paired': {
+      const base = iconMarkers.find(m => m.extension === 'legacy')
+      const companion = iconMarkers.find(m => m.extension === 'x14')
+      if (!base || !companion) return undefined
+      each(base, [
+        ['companion', numeric(v => predict(base, v, { spec: companion.icon! }))],
+        ['base', numeric(v => predict(base, v))],
+        ['no-icon', () => null],
+      ])
+      return out
+    }
+    case 'icon:scope-disjoint':
+      each(m0, [
+        ['union', numeric(v => predict(m0, v))],
+        ['per-range', (ref, v) => (v === undefined ? null : predict(m0, v, { scope: [...nums(m0.sqref.split(/\s+/).find(tok => isCellInSqref(ref, tok))!, visible).values()] }))],
+      ])
+      return out
+    case 'icon:scope-hidden-row':
+    case 'icon:scope-autofilter-hidden-row':
+      each(m0, [
+        ['exclude-hidden', numeric(v => predict(m0, v))],
+        ['include-hidden', numeric(v => predict(m0, v, { scope: [...nums(m0.sqref).values()] }))],
+      ])
+      return out
+    case 'icon:scope-whole-column': {
+      const lastDataRow = Math.max(...designated(m0).map(rowOf))
+      each(m0, [
+        ['whole-column', numeric(v => predict(m0, v, { scope: [...nums(m0.sqref).values()] }))],
+        ['data-block-only', numeric(v => predict(m0, v, { scope: [...nums(m0.sqref, r => rowOf(r) <= lastDataRow).values()] }))],
+        ['no-icon', () => null],
+      ])
+      return out
+    }
+    case 'icon:scope-merged-cell':
+      each(m0, [
+        ['all-stored', numeric(v => predict(m0, v, { scope: [...nums(m0.sqref).values()] }))],
+        ['merged-excluded', numeric(v => predict(m0, v, { scope: [...nums(m0.sqref, r => !mergeCovered(r)).values()] }))],
+      ])
+      return out
+    case 'icon:scope-duplicate-blocks':
+    case 'icon:composition-overlapping-icons':
+    case 'icon:composition-noicons-slot': {
+      if (iconMarkers.length < 2) return undefined
+      const [first, second] = iconMarkers as [CfPartMarker, CfPartMarker]
+      each(first, [
+        ['first-paints', numeric(v => predict(first, v))],
+        ['second-paints', numeric(v => predict(second, v))],
+        ['no-icon', () => null],
+      ])
+      return out
+    }
+    case 'icon:participation-types':
+      each(m0, [
+        ['no-icon-for-non-numbers', (_ref, v) => (v === undefined ? null : predict(m0, v))],
+        ['coerce-booleans', (ref, v) => (v !== undefined ? predict(m0, v) : facts.values.get(ref)?.kind === 'bool' ? predict(m0, 1) : null)],
+      ], c.expected.cells.filter(x => x.matched && x.iconApplied !== undefined && isCellInSqref(x.ref, m0.sqref)).map(x => x.ref.toUpperCase()))
+      return out
+    case 'icon:participation-dateserial':
+      each(m0, [['evaluated', numeric(v => predict(m0, v))], ['no-icon', () => null]])
+      return out
+    case 'icon:participation-error-presence':
+      for (const m of iconMarkers) each(m, [['error-ignored', numeric(v => predict(m, v))], ['rule-suppressed', () => null]])
+      return out
+    case 'icon:degenerate-equal-values':
+    case 'icon:degenerate-single-cell':
+      each(m0, [['as-model', numeric(v => predict(m0, v))], ['lowest', numeric(v => predict(m0, v, { bucket: () => 0 }))], ['no-icon', () => null]])
+      return out
+    case 'icon:degenerate-non-monotonic':
+      each(m0, [
+        ['as-model', numeric(v => predict(m0, v))],
+        ['sorted', numeric(v => predict(m0, v, { thresholds: (resolveIconThresholds(m0.icon!, [...nums(m0.sqref).values()], 'per-type', 'inc') ?? []).slice().sort((a, b) => a - b) }))],
+        ['first-fail', numeric(v => predict(m0, v, { bucket: (_b, t) => { let i = 0; while (i + 1 < t.length && v >= t[i + 1]!) i++; return i } }))],
+        ['no-icon', () => null],
+      ])
+      return out
+    case 'icon:bounds-out-of-domain':
+      each(m0, [
+        ['as-model', numeric(v => predict(m0, v))],
+        ['clamped', numeric(v => predict(m0, v, { spec: { ...m0.icon!, cfvo: m0.icon!.cfvo.map(x => (x.type === 'percent' || x.type === 'percentile') && x.val !== undefined ? { ...x, val: String(Math.min(100, Math.max(0, Number(x.val)))) } : x) } }))],
+        ['no-icon', () => null],
+      ])
+      return out
+    case 'icon:thresholds-floor': {
+      const floor = Number(m0.icon!.cfvo[0]!.val ?? m0.icon!.cfvo[0]!.f)
+      each(m0, [['below-floor-bucket0', numeric(v => predict(m0, v))], ['below-floor-no-icon', numeric(v => (v < floor ? null : predict(m0, v)))]])
+      return out
+    }
+    case 'icon:thresholds-min-max':
+      each(m0, [
+        ['max-reached', numeric(v => predict(m0, v))],
+        ['max-unreachable', numeric(v => predict(m0, v, { bucket: b => (b === size - 1 && m0.icon!.cfvo[size - 1]!.type === 'max' ? size - 2 : b) }))],
+      ])
+      return out
+    case 'icon:attr-percent-false':
+      each(m0, [
+        ['cfvo-as-percent', numeric(v => predict(m0, v))],
+        ['cfvo-as-num', numeric(v => predict(m0, v, { thresholds: m0.icon!.cfvo.map(x => Number(x.val ?? x.f)) }))],
+      ])
+      return out
+    case 'icon:composition-with-bar':
+      for (const m of iconMarkers) each(m, [['both-paint', numeric(v => predict(m, v))], ['icon-withheld', () => null]])
+      return out
+    case 'icon:composition-matching-stopIfTrue-ahead':
+    case 'icon:composition-icon-stopIfTrue':
+    case 'icon:composition-unresolved-stub': {
+      // The non-icon rule sharing the capability: a cellIs `greaterThan` literal, or the Stage 5 stub `MOD(x,2)=1`.
+      const matchesOther = (ref: string, v: number | undefined): boolean => otherMarkers.some(o => {
+        if (!isCellInSqref(ref, o.sqref) || v === undefined) return false
+        if (o.ruleType === 'cellIs' && o.operator === 'greaterThan') return v > Number(o.formulas[0])
+        if (o.ruleType === 'expression' && /^MOD\([A-Z]+\d+,2\)=1$/.test(o.formulas[0] ?? '')) return Math.abs(v % 2) === 1
+        return false
+      })
+      for (const m of iconMarkers) {
+        const filled = (ref: string): boolean => otherMarkers.some(o => o.dxf !== undefined && isCellInSqref(ref, o.sqref))
+        if (capabilityId === 'icon:composition-icon-stopIfTrue') {
+          each(m, [
+            ['later-withheld', numeric(v => predict(m, v))],
+            ['later-applies', (ref, v) => (v === undefined ? null : matchesOther(ref, v) && filled(ref) ? 'icon-class-none' : predict(m, v))],
+          ])
+        } else {
+          each(m, [
+            ['halted', (ref, v) => (v === undefined || matchesOther(ref, v) ? null : predict(m, v))],
+            ['not-halted', (ref, v) => (v === undefined ? null : matchesOther(ref, v) && filled(ref) ? 'icon-class-none' : predict(m, v))],
+          ])
+        }
+      }
+      return out
+    }
+    default:
+      return undefined
+  }
+}
+
+/** Per-path cache of the committed glyph key (decoding the key capture dominates the cost of verifying a case). */
+const iconKeyCache = new Map<string, IconGlyphKey | Refusal | undefined>()
+
+/**
+ * The glyph key of the committed `stage4-icon-glyph-key` capture under `rootDir`, if that capture exists and builds, and
+ * only when the key sidecar records exactly the classes (`glyphClasses`) and the twin relation (`glyphTwins`, Ruling
+ * S4-NEARTWIN) the PNG recomputes: the key is restored from what the sidecar persisted, and a key sidecar that predates
+ * the current key build (for example one written while the key refused) restores no key (`sidecar-mismatch`). Every
+ * dependent case is then classified against the key its own sidecar was derived with, until `capture --verify-only`
+ * re-derives the key sidecar first and the dependents after it.
+ */
+export function loadIconGlyphKey(rootDir: string): IconGlyphKey | Refusal | undefined {
+  const manifestAbs = resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json')
+  if (!existsSync(manifestAbs)) return undefined
+  const manifest = JSON.parse(readFileSync(manifestAbs, 'utf8')) as CfManifest
+  const keyCase = manifest.cases.find(c => c.id === 'stage4-icon-glyph-key')
+  const cap = keyCase?.captures.find(x => x.appearance === 'screen')
+  if (!keyCase || !cap?.pngSha256) return undefined
+  const sidecarAbs = resolve(rootDir, cap.sidecarPath)
+  const sidecarText = existsSync(sidecarAbs) ? readFileSync(sidecarAbs, 'utf8') : ''
+  const sidecarSha = createHash('sha256').update(sidecarText).digest('hex')
+  const cacheKey = `${rootDir}\u0000${cap.pngSha256}\u0000${keyCase.expected.savedSha256}\u0000${sidecarSha}`
+  if (iconKeyCache.has(cacheKey)) return iconKeyCache.get(cacheKey)
+  const capture = loadBarScreenCapture(keyCase, rootDir)
+  const built = capture ? buildIconGlyphKey(keyCase, capture.parts, capture.png, capture.geom) : undefined
+  let key: IconGlyphKey | Refusal | undefined = built
+  if (built && !('kind' in built)) {
+    let sidecar: Record<string, unknown> = {}
+    try {
+      sidecar = sidecarText ? (JSON.parse(sidecarText) as Record<string, unknown>) : {}
+    } catch {
+      sidecar = {}
+    }
+    const malformed = iconSidecarMalformed(sidecar)
+    const classesOk = JSON.stringify(sidecar.glyphClasses ?? null) === JSON.stringify(Object.fromEntries(built.classOfPair))
+    const twinsOk = JSON.stringify(sidecar.glyphTwins ?? null) === JSON.stringify(iconGlyphTwinsRecord(built))
+    const faintOk = JSON.stringify(sidecar.glyphFaint ?? null) === JSON.stringify(iconGlyphFaintRecord(built))
+    if (malformed) key = iconRefusal('sidecar-mismatch', `The glyph-key sidecar ${cap.sidecarPath} is malformed: ${malformed}`)
+    else if (!classesOk || !twinsOk || !faintOk) key = iconRefusal('sidecar-mismatch', `The glyph-key sidecar ${cap.sidecarPath} does not record the ${!classesOk ? 'classes (glyphClasses)' : !twinsOk ? 'twin relation (glyphTwins)' : 'faint classes (glyphFaint, Ruling S4-FAINT)'} the key capture recomputes; re-derive it (capture --stage 4 --verify-only)`)
+  }
+  iconKeyCache.set(cacheKey, key)
+  return key
+}
+
+/**
+ * Per-cell workbook facts the geometry readings need (fix round 7): the font size and alignment of the cell's xf, with a
+ * general horizontal alignment resolved as Excel lays it out (numbers right, errors centred, anything else left), and the
+ * showValue of the icon rules covering the cell (false when any of them hides the value).
+ */
+function readIconCellFacts(parts: Map<string, Uint8Array>, c: CfOracleCase): (ref: string) => Omit<IconGeometryCell['facts'], 'rowPt'> | undefined {
+  const dec = new TextDecoder()
+  const fonts: number[] = []
+  const xfs: Array<{ fontId: number; horizontal?: string; vertical?: string }> = []
+  const stylesRaw = parts.get('xl/styles.xml')
+  if (stylesRaw) {
+    const root = parseXml(dec.decode(stylesRaw))
+    const st = asNode(root.styleSheet) ?? root
+    for (const f of asArray(asNode(st?.fonts)?.font).map(asNode)) fonts.push(Number(attr(asNode(f?.sz), 'val') ?? '11'))
+    for (const xf of asArray(asNode(st?.cellXfs)?.xf).map(asNode)) {
+      const al = asNode(xf?.alignment)
+      xfs.push({ fontId: Number(attr(xf, 'fontId') ?? '0'), ...(attr(al, 'horizontal') ? { horizontal: attr(al, 'horizontal') } : {}), ...(attr(al, 'vertical') ? { vertical: attr(al, 'vertical') } : {}) })
+    }
+  }
+  const styleOf = new Map<string, number>()
+  const sheetRaw = parts.get('xl/worksheets/sheet1.xml')
+  if (sheetRaw) {
+    const root = parseXml(dec.decode(sheetRaw))
+    const ws = asNode(root.worksheet) ?? root
+    for (const row of asArray(asNode(ws?.sheetData)?.row).map(asNode)) {
+      for (const cell of asArray(row?.c).map(asNode)) {
+        const ref = attr(cell, 'r')?.toUpperCase()
+        if (ref) styleOf.set(ref, Number(attr(cell, 's') ?? '0'))
+      }
+    }
+  }
+  const values = readBarSheetFacts(parts).values
+  return (ref: string) => {
+    const xf = xfs[styleOf.get(ref) ?? 0] ?? { fontId: 0 }
+    const fontPt = fonts[xf.fontId] ?? fonts[0] ?? 11
+    const kind = values.get(ref)?.kind
+    const h = xf.horizontal
+    const horizontal = h === 'left' || h === 'right' || h === 'center' ? h : h === undefined || h === 'general' ? (kind === 'num' ? 'right' : kind === 'error' ? 'center' : 'left') : undefined
+    const v = xf.vertical ?? 'bottom'
+    const vertical = v === 'top' || v === 'center' || v === 'bottom' ? v : undefined
+    if (!horizontal || !vertical || !Number.isFinite(fontPt)) return undefined
+    const showValue = !c.markers.some(m => m.ruleType === 'iconSet' && isCellInSqref(ref, m.sqref) && ['0', 'false'].includes(String(m.icon?.attrs?.showValue ?? '1')))
+    const barM = c.markers.find(m => m.ruleType === 'dataBar' && m.priority !== undefined && isCellInSqref(ref, m.sqref))
+    const iconM = c.markers.find(m => m.ruleType === 'iconSet' && m.priority !== undefined && isCellInSqref(ref, m.sqref))
+    const off = (v: unknown): boolean => ['0', 'false'].includes(String(v ?? '1'))
+    const conflict = barM && iconM ? { barShow: !off(barM.bar?.attrs?.showValue), iconShow: !off(iconM.icon?.attrs?.showValue), barFirst: barM.priority! < iconM.priority! } : undefined
+    return { fontPt, vertical, horizontal, showValue, ...(conflict ? { conflict } : {}) }
+  }
+}
+
+/** Numeric cell values of the saved sheet (cached numbers, date serials included), for icon hypotheses. */
+function iconNumericValues(parts: Map<string, Uint8Array>): Map<string, number> {
+  const out = new Map<string, number>()
+  for (const [ref, v] of readBarSheetFacts(parts).values) if (v.kind === 'num') out.set(ref.toUpperCase(), v.v)
+  return out
+}
+
+/** Designated (matched) cells of one capability. */
+const iconCellsOf = (c: CfOracleCase, cap: string) =>
+  c.expected.cells.filter(cell => cell.matched && c.markers.some(m => m.capabilityId === cap && isCellInSqref(cell.ref, m.sqref)))
+
+/**
+ * Every designated icon cell of a Stage 4 capture, measured (`measureIconGeometry`) and, when a glyph key is given,
+ * classified (`classifyIconCrop` on the cell's inner-box crop). A cell whose crop matches no class, or two, keeps
+ * `glyphClass` `icon-class-none` / `icon-class-ambiguous`: a recorded finding, never a pick.
+ */
+export function measureCaseIcons(c: CfOracleCase, png: DecodedPng, geom: WorksheetRangeGeometry, key?: IconGlyphKey): ReadonlyMap<string, CfObservedIcon> | Refusal {
+  const cells = c.expected.cells.filter(x => x.matched && x.iconApplied !== undefined && c.markers.some(m => m.ruleType === 'iconSet' && isCellInSqref(x.ref, m.sqref)))
+  const controlOf = (ref: string): string => cells.find(x => x.ref === ref)!.controlRef
+  const classify = (ref: string): { cls: string; reference?: string } | undefined => {
+    if (!key) return undefined
+    const rect = iconCropRect(png, geom, ref)
+    if (!rect) return { cls: 'icon-class-none' }
+    const classify = c.iconShiftedKey ? classifyIconCropShifted : classifyIconCrop
+    const res = classify(png, rect, key.classes, { tolerance: ICON_CLASS_TOLERANCE, twins: key.twins, faint: key.faint })
+    return 'glyphClass' in res ? { cls: res.glyphClass, reference: res.referenceClass ?? res.glyphClass } : { cls: res.code }
+  }
+  const out = new Map<string, CfObservedIcon>()
+  for (const cell of cells) {
+    const got = classify(cell.ref)
+    const cls = got?.cls
+    // A twin-set observation aligns its scanlines on the key crop of the class it matched within tolerance.
+    const reference = got?.reference !== undefined && key?.classes.has(got.reference) ? key.classes.get(got.reference) : undefined
+    // The reference is the key cell's full inner-box crop; its ink box is what the scanlines are aligned to.
+    // An unclassified cell (no reference) or an unstable edge is a per-cell finding (`edgeStable: false`), never a
+    // whole-case refusal: geometry and inset cells cannot classify by design, and no geometry claim rests on them.
+    const res = measureIconGeometry(png, geom, [cell.ref], { controlOf, tolerancePx: 1, unstable: 'record', ...(reference ? { referenceOf: () => reference } : {}) })
+    if ('kind' in res) return res as Refusal
+    const obs = (res as ReadonlyMap<string, CfObservedIcon>).get(cell.ref)!
+    // Ruling S4-FAINT: a cell blank at the ink threshold whose crop matches a faint key class is that faint twin set,
+    // recorded beside `icon: null` (no geometry rests on it), never plain no icon.
+    const faintSet = !obs.icon && cls !== undefined && iconTwinSetMembers(cls)?.includes(ICON_NO_ICON_MEMBER) ? cls : undefined
+    out.set(cell.ref, obs.icon && cls !== undefined ? { ...obs, icon: { ...obs.icon, glyphClass: cls } } : faintSet ? { ...obs, faintGlyphClass: faintSet } : obs)
+  }
+  return out
+}
+
+export interface IconCapabilityEvaluation {
+  status: 'discriminating' | 'non-discriminating' | 'none' | 'no-hypotheses' | 'refused'
+  reason: string
+  matched?: string
+  code?: CfRefusalCode
+  hypotheses?: Record<string, IconClassHypothesis[]>
+  /** Fix round 7: a geometry capability's per-cell readings (designated ref -> reading -> its prediction there). */
+  geometry?: Record<string, Record<string, IconGeometryPrediction>>
+  /** Fix round 10: designated cells excluded from text detection, and why (recorded in the sidecar). */
+  textExclusions?: Array<{ ref: string; reason: string }>
+}
+
+/**
+ * Fix round 7 (S4-K/S4-L, the S3-A step 7 discipline): one reading's prediction at one designated cell. A `group`
+ * prediction says the measured `value` is the same (within +-1 px) across every cell of the group under that reading;
+ * a `verdict` is a direct test of the cell. `excluded`: the reading makes no claim here (for example a box the row cannot
+ * hold); `unknown`: the measurement cannot test it (unstable edges, no text found, a 2 px residual).
+ */
+export type IconGeometryPrediction = { group: string; value: number } | { verdict: 'pass' | 'fail' | 'unknown' | 'excluded' }
+
+/** One measured cell with the workbook facts the geometry readings need (fonts, alignment, showValue; 1 px per pt). */
+export interface IconGeometryCell {
+  ref: string
+  facts: {
+    fontPt: number; vertical: 'top' | 'center' | 'bottom'; horizontal: 'left' | 'right' | 'center'; rowPt: number; showValue: boolean
+    /** Fix round 8: a bar and an icon rule both cover the cell: their showValue and which one has the higher priority. */
+    conflict?: { barShow: boolean; iconShow: boolean; barFirst: boolean }
+  }
+  observed: CfObservedIcon
+  /** Fix round 10: the measured extent of a data bar in the cell, if one paints there. */
+  barExtent?: { leftPx: number; rightPx: number }
+}
+
+/**
+ * The competing readings of each Stage 4 geometry capability (fix round 7). The box and placement readings are the
+ * closed `CfIconBoxVariant` set of Task 29's production model (`src/xlsx/cf/iconPaint.ts`: size fixed | font | row,
+ * vertical top | center | bottom | cell-align); the clip, inset and showValue readings are production's (clip where
+ * measured; a left-aligned inset; NoIcons insets and hides nothing; showValue 0 hides canvas text) against the plausible
+ * alternatives. Production's model carries no measured values, so no reading predicts absolute px: each predicts a
+ * relation (equal within +-1 px across a group, or a direct test), and a free scale is never fitted.
+ */
+export const ICON_GEOMETRY_READINGS: Readonly<Record<string, readonly string[]>> = {
+  'icon:geometry-box': ['fixed', 'font', 'row'],
+  'icon:geometry-vertical-align': ['top', 'center', 'bottom', 'cell-align'],
+  'icon:geometry-narrow-clip': ['clip', 'shrink', 'no-icon'],
+  'icon:geometry-short-row-clip': ['clip', 'shrink', 'no-icon'],
+  'icon:geometry-snapping': ['half-up', 'floor', 'ceil'],
+  'icon:inset-left': ['inset', 'none'],
+  'icon:inset-right-aligned': ['unshifted', 'shifted-left', 'shifted-right'],
+  'icon:inset-center': ['full-cell', 'inset-box'],
+  'icon:inset-overflow': ['icon-withheld', 'icon-only', 'icon-and-text'],
+  'icon:noicons-inset': ['no-inset', 'inset'],
+  'icon:noicons-showvalue': ['text-shown', 'text-hidden'],
+  'icon:showvalue-canvas-suppression': ['text-hidden', 'text-shown'],
+  // Fix round 8: production hides the value when either the bar or the icon hides it (each suppresses on its own).
+  'icon:composition-bar-showvalue': ['any-hides', 'priority-wins', 'bar-wins', 'icon-wins'],
+  // Task 28 round 2 (Ruling S4-ROWS-CAPTURE): how the icon's offset follows the row height, per column (one glyph class
+  // and one alignment): a constant gap to the alignment's anchor (the bottom gridline, or the row centre), the frame
+  // centred in the row whatever the alignment, or a top offset proportional to the row (claimed on rows of at least the
+  // key's 20 pt only: a shorter row cannot hold a frame scaled down from the key's).
+  'icon:geometry-row-offset': ['anchor-constant', 'centred', 'row-scaled'],
+}
+
+const r3 = (v: number): number => Math.round(v * 1000) / 1000
+
+/**
+ * The version of the geometry decision rules a sidecar's `iconGeometryHypotheses` were derived under (recorded as
+ * `iconGeometryRulesVersion`; absent means 1). 2 (fix round 9): the font-scaled box in measured px, and bar ink in the
+ * right half excluded from the bar/icon showValue conflict. A sidecar derived under other rules backs no geometry claim
+ * until `capture --verify-only` re-derives it.
+ */
+export const ICON_GEOMETRY_RULES_VERSION = 3
+
+/**
+ * Ruling S4-REPLICATE (fix round 10): a showValue or composition verdict rests on at least two decisive designated cells
+ * per configuration (a configuration is one rule shape: one column of the case). Returns why the refs fall short, or
+ * undefined when every configuration present has at least `min` of them.
+ */
+export function replicationShortfall(refs: readonly string[], min = 2): string | undefined {
+  const byCol = new Map<string, number>()
+  for (const ref of refs) {
+    const col = /^[A-Z]+/.exec(ref.toUpperCase())?.[0] ?? ref
+    byCol.set(col, (byCol.get(col) ?? 0) + 1)
+  }
+  for (const [col, n] of byCol) if (n < min) return `S4-REPLICATE: configuration ${col} has ${n} decisive cell${n === 1 ? '' : 's'}, fewer than ${min}`
+  return undefined
+}
+
+/** S4-REPLICATE: the geometry-kind capabilities whose verdict is a showValue or composition outcome. */
+const ICON_REPLICATED_CAPS = new Set(['icon:showvalue-canvas-suppression', 'icon:noicons-showvalue', 'icon:composition-bar-showvalue'])
+
+/**
+ * Fix round 10 (review finding 4): the extent of a data bar inside one cell's inner box, anchored at the `anchor` edge
+ * (a right-to-left bar grows from the right). Bar columns are those whose ink (max channel delta >= `ICON_STRONG_DELTA`
+ * against the box's own perimeter background) covers at least 60 % of the box height; the extent is the run of such
+ * columns that starts within 2 px of the anchored edge. Undefined when no such run exists.
+ */
+export function measureBarExtentInCell(png: DecodedPng, r: { x: number; y: number; width: number; height: number }, anchor: 'left' | 'right'): { leftPx: number; rightPx: number } | undefined {
+  const bg = perimeterBackground(png, r)
+  const tall = (x: number): boolean => {
+    let n = 0
+    for (let y = r.y; y < r.y + r.height; y++) if (rgbMaxDelta(pixelAt(png, x, y), bg) >= ICON_STRONG_DELTA) n++
+    return n >= 0.6 * r.height
+  }
+  const cols = Array.from({ length: r.width }, (_, i) => r.x + i)
+  const ordered = anchor === 'right' ? [...cols].reverse() : cols
+  let start = -1
+  for (let i = 0; i < Math.min(3, ordered.length); i++) if (tall(ordered[i]!)) { start = i; break }
+  if (start < 0) return undefined
+  let end = start
+  while (end + 1 < ordered.length && tall(ordered[end + 1]!)) end++
+  const a = ordered[start]!, b = ordered[end]!
+  return { leftPx: Math.min(a, b), rightPx: Math.max(a, b) }
+}
+
+/** Fix round 10: the measured bar extent of every designated cell under a data bar rule of the case. */
+export function measureCaseBarExtents(c: CfOracleCase, png: DecodedPng, geom: WorksheetRangeGeometry): Map<string, { leftPx: number; rightPx: number }> {
+  const out = new Map<string, { leftPx: number; rightPx: number }>()
+  for (const cell of c.expected.cells.filter(x => x.matched)) {
+    const bars = c.markers.filter(m => m.ruleType === 'dataBar' && isCellInSqref(cell.ref, m.sqref))
+    if (bars.length === 0) continue
+    const rtl = bars.some(m => m.bar?.attrs?.direction === 'rightToLeft')
+    const inner = iconInnerBox(png, geom, cell.ref)
+    if (!inner) continue
+    const e = measureBarExtentInCell(png, { x: inner.x, y: inner.y, width: inner.width, height: inner.height }, rtl ? 'right' : 'left')
+    if (e) out.set(cell.ref.toUpperCase(), e)
+  }
+  return out
+}
+
+/**
+ * Evaluates one geometry capability over its designated cells (fix round 7). `pool` holds every measured cell of the case
+ * (the reference box of the same font, for the clip and overflow readings, comes from its non-designated, edge-stable,
+ * wide cells). A reading is consistent when every test passes and every group spreads <= 1 px; refuted when a test fails
+ * or a group spreads >= 3 px (S3-A step 7: 2 x tolerance + 1); otherwise undecided. Exactly one consistent reading and
+ * every other refuted is `discriminating`; none consistent and none undecided is `none`; anything else is
+ * `non-discriminating`. Edge-unstable cells never back a box claim (S4-A).
+ */
+export function evaluateIconGeometryCapability(cap: string, designated: readonly IconGeometryCell[], pool: readonly IconGeometryCell[]): IconCapabilityEvaluation {
+  const readings = ICON_GEOMETRY_READINGS[cap]
+  if (!readings) return { status: 'no-hypotheses', reason: `${cap} has no geometry readings` }
+  if (designated.length === 0) return { status: 'non-discriminating', reason: 'no designated cell was measured' }
+  const designatedRefs = new Set(designated.map(c => c.ref.toUpperCase()))
+  const fits = (c: IconGeometryCell): boolean => c.facts.fontPt <= c.facts.rowPt
+  const stableIcon = (c: IconGeometryCell) => (c.observed.icon && c.observed.edgeStable !== false ? c.observed.icon : undefined)
+  const widthOf = (i: NonNullable<CfObservedIcon['icon']>): number => i.rightPx - i.leftPx + 1
+  const heightOf = (i: NonNullable<CfObservedIcon['icon']>): number => i.bottomPx - i.topPx + 1
+  const median = (v: number[]): number | undefined => (v.length === 0 ? undefined : [...v].sort((a, b) => a - b)[Math.floor(v.length / 2)])
+  const refs = (c: IconGeometryCell, sameRow: boolean) => pool.filter(p => !designatedRefs.has(p.ref.toUpperCase()) && p.observed.cellWidthPx >= 40 && fits(p) && p.facts.fontPt === c.facts.fontPt && (!sameRow || p.facts.rowPt === c.facts.rowPt)).map(stableIcon).filter((i): i is NonNullable<CfObservedIcon['icon']> => i !== undefined)
+  const V = (verdict: 'pass' | 'fail' | 'unknown' | 'excluded'): IconGeometryPrediction => ({ verdict })
+  const col = (ref: string): string => /^[A-Z]+/.exec(ref.toUpperCase())![0]
+  const shiftTest = (s: number | undefined, want: 'zero' | 'pos' | 'neg'): IconGeometryPrediction => {
+    if (s === undefined) return V('unknown')
+    const t = want === 'zero' ? Math.abs(s) : want === 'pos' ? s : -s
+    if (want === 'zero') return V(t <= 1 ? 'pass' : t >= 3 ? 'fail' : 'unknown')
+    return t >= 3 ? { group: 'shift', value: s } : V(t <= 1 || (want === 'pos' ? s < 0 : s > 0) ? 'fail' : 'unknown')
+  }
+  const predict = (reading: string, c: IconGeometryCell): IconGeometryPrediction => {
+    const o = c.observed
+    const icon = stableIcon(c)
+    const shift = o.textShiftPx
+    switch (cap) {
+      case 'icon:geometry-box': {
+        if (reading === 'font' && !fits(c)) return V('excluded')
+        if (!o.icon) return V('fail')
+        if (!icon) return V('unknown')
+        const w = widthOf(icon)
+        return { group: 'all', value: r3(reading === 'fixed' ? w : reading === 'font' ? (w * 11) / c.facts.fontPt : c.facts.rowPt - w) }
+      }
+      case 'icon:geometry-vertical-align': {
+        if (!fits(c)) return V('excluded')
+        if (!o.icon) return V('fail')
+        if (!icon) return V('unknown')
+        const v = reading === 'cell-align' ? c.facts.vertical : reading
+        const top = icon.topPx - (o.cellTopPx + 1)
+        const bottom = o.cellTopPx + o.cellHeightPx - 2 - icon.bottomPx
+        const centre = (icon.topPx + icon.bottomPx) / 2 - (o.cellTopPx + o.cellHeightPx / 2)
+        return { group: `${col(c.ref)}:${v}`, value: r3(v === 'top' ? top : v === 'bottom' ? bottom : centre) }
+      }
+      case 'icon:geometry-row-offset': {
+        // A row whose inner box is shorter than the key frame (12 px: the union of the glyph classes' ink at 1 px/pt,
+        // `CF_ICON_RENDER_MODEL.keyFrame`) cannot hold the glyph unshrunk (`icon:geometry-short-row-clip` reads `shrink`):
+        // no claim about the offset there.
+        if (o.cellHeightPx - 2 < ICON_KEY_FRAME_HEIGHT_PX) return V('excluded')
+        if (!o.icon) return V('fail')
+        if (!icon) return V('unknown')
+        const top = icon.topPx - (o.cellTopPx + 1)
+        const bottom = o.cellTopPx + o.cellHeightPx - 2 - icon.bottomPx
+        const centre = (icon.topPx + icon.bottomPx) / 2 - (o.cellTopPx + o.cellHeightPx / 2)
+        const v = c.facts.vertical
+        if (reading === 'row-scaled' && c.facts.rowPt < 20) return V('excluded')
+        // Row-scaled values are the top offset per pt of row, in px of the case's tallest (30 pt) row.
+        const value = reading === 'anchor-constant' ? (v === 'top' ? top : v === 'bottom' ? bottom : centre)
+          : reading === 'centred' ? centre : ((icon.topPx - o.cellTopPx) * 30) / c.facts.rowPt
+        return { group: col(c.ref), value: r3(value) }
+      }
+      case 'icon:geometry-narrow-clip':
+      case 'icon:geometry-short-row-clip': {
+        if (reading === 'no-icon') return V(o.icon ? 'fail' : 'pass')
+        if (!o.icon) return V('fail')
+        if (!icon) return V('unknown')
+        const narrow = cap === 'icon:geometry-narrow-clip'
+        const ref = median(refs(c, narrow).map(narrow ? heightOf : widthOf))
+        if (ref === undefined) return V('unknown')
+        const got = narrow ? heightOf(icon) : widthOf(icon)
+        if (reading === 'shrink') return V(got <= ref - 3 ? 'pass' : Math.abs(got - ref) <= 1 ? 'fail' : 'unknown')
+        const innerLast = o.cellLeftPx + o.cellWidthPx - 2
+        const edge = narrow ? Math.abs(icon.rightPx - innerLast) <= 1 : true
+        return V(Math.abs(got - ref) <= 1 && edge ? 'pass' : got <= ref - 3 || !edge ? 'fail' : 'unknown')
+      }
+      case 'icon:geometry-snapping': {
+        if (!o.icon) return V('fail')
+        // The measured gridlines are whole px at 1 px/pt: every rounding of an integral edge is that edge.
+        const x = o.cellLeftPx
+        const snapped = reading === 'floor' ? Math.floor(x) : reading === 'ceil' ? Math.ceil(x) : Math.floor(x + 0.5)
+        return { group: 'left', value: r3(snapped - x) }
+      }
+      case 'icon:inset-left':
+        return reading === 'inset' ? shiftTest(shift, 'pos') : shiftTest(shift, 'zero')
+      case 'icon:inset-right-aligned':
+        return shiftTest(shift, reading === 'unshifted' ? 'zero' : reading === 'shifted-left' ? 'neg' : 'pos')
+      case 'icon:inset-center':
+        return shiftTest(shift, reading === 'full-cell' ? 'zero' : 'pos')
+      case 'icon:noicons-inset':
+        return shiftTest(shift, reading === 'no-inset' ? 'zero' : 'pos')
+      case 'icon:inset-overflow': {
+        if (reading === 'icon-withheld') return V(o.icon ? 'fail' : 'pass')
+        if (!o.icon) return V('fail')
+        if (!icon) return V('unknown')
+        const ref = median(refs(c, false).map(widthOf))
+        if (ref === undefined) return V('unknown')
+        const w = widthOf(icon)
+        const wide = w >= ref + 3 || shift !== undefined
+        if (reading === 'icon-and-text') return V(wide ? 'pass' : Math.abs(w - ref) <= 1 ? 'fail' : 'unknown')
+        return V(!wide && Math.abs(w - ref) <= 1 ? 'pass' : wide ? 'fail' : 'unknown')
+      }
+      case 'icon:composition-bar-showvalue': {
+        const k = c.facts.conflict
+        if (!k) return V('excluded')
+        // Fix round 10 (review finding 4): the text search takes the rightmost match of the control's pattern, so a match
+        // that overlaps the cell's measured bar extent is the bar, not text: the cell is no evidence either way.
+        const bar = c.barExtent
+        if (bar && o.textInkLeftPx !== undefined && o.textInkLeftPx <= bar.rightPx && (o.textInkRightPx ?? o.textInkLeftPx) >= bar.leftPx) {
+          excluded.set(c.ref.toUpperCase(), `the matched text ink (${o.textInkLeftPx}..${o.textInkRightPx ?? o.textInkLeftPx}) overlaps the measured bar (${bar.leftPx}..${bar.rightPx})`)
+          return V('excluded')
+        }
+        const hide = reading === 'any-hides' ? !(k.barShow && k.iconShow) : reading === 'bar-wins' ? !k.barShow : reading === 'icon-wins' ? !k.iconShow : !(k.barFirst ? k.barShow : k.iconShow)
+        // Left-aligned text sits after the icon's inset when shown; hidden text leaves at most the icon (shift <= 1) or nothing.
+        const shown = shift !== undefined && shift >= 3
+        const gone = shift === undefined || shift <= 1
+        return V(hide ? (gone ? 'pass' : shown ? 'fail' : 'unknown') : shown ? 'pass' : gone ? 'fail' : 'unknown')
+      }
+      case 'icon:noicons-showvalue':
+      case 'icon:showvalue-canvas-suppression': {
+        // A centred icon can sit where centred text would: such a cell cannot tell text from icon.
+        if (cap === 'icon:showvalue-canvas-suppression' && c.facts.horizontal === 'center') return V('excluded')
+        const atText = shift !== undefined && Math.abs(shift) <= 1
+        const noText = shift === undefined || Math.abs(shift) >= 3
+        if (cap === 'icon:noicons-showvalue' && reading === 'text-hidden') return V(atText ? 'fail' : noText && !o.icon ? 'pass' : 'unknown')
+        if (reading === 'text-shown') return V(atText ? 'pass' : noText ? 'fail' : 'unknown')
+        return V(noText ? 'pass' : atText ? 'fail' : 'unknown')
+      }
+      default:
+        return V('unknown')
+    }
+  }
+  const table: Record<string, Record<string, IconGeometryPrediction>> = {}
+  const excluded = new Map<string, string>()
+  for (const c of designated) table[c.ref.toUpperCase()] = Object.fromEntries(readings.map(r => [r, predict(r, c)]))
+  const textExclusions = [...excluded].map(([ref, reason]) => ({ ref, reason }))
+  const extra = textExclusions.length > 0 ? { textExclusions } : {}
+  // Fix round 9: the font-scaled box is judged in measured px. Its group values are widths normalised to 11 pt, so the
+  // +-1 px tolerance is applied to the unnormalised width against one shared scale k, as S3-A applies it per cell:
+  // consistent when some k puts every cell within 1 px of k * font, refuted when none puts every cell within 1.5 px,
+  // undecided in between. The 1.5 px band is the free-scale analogue of the group rule: a group spread of 3 px (S3-A's
+  // 2 x tolerance + 1) is a best-fit residual of 1.5 px about the group's centre, so both rules refute at the same
+  // residual and stay undecided over the same (1, 1.5] px band of tolerance plus rounding (fix round 10, finding 1).
+  const fontOf = new Map(designated.map(c => [c.ref.toUpperCase(), c.facts.fontPt] as const))
+  const scaledSpread = (pairs: Array<{ w: number; f: number }>): number => {
+    const ks = pairs.map(p => p.w / p.f)
+    let lo = Math.min(...ks), hi = Math.max(...ks)
+    const r = (k: number): number => Math.max(...pairs.map(p => Math.abs(p.w - k * p.f)))
+    for (let i = 0; i < 100; i++) {
+      const a = lo + (hi - lo) / 3, b = hi - (hi - lo) / 3
+      if (r(a) <= r(b)) hi = b
+      else lo = a
+    }
+    return r((lo + hi) / 2)
+  }
+  const consistent: string[] = [], undecided: string[] = []
+  for (const r of readings) {
+    const preds = Object.values(table).map(t => t[r]!)
+    let refuted = false, open = false, claims = 0
+    const groups = new Map<string, number[]>()
+    const scaled = new Map<string, Array<{ w: number; f: number }>>()
+    const refsOf = Object.keys(table)
+    preds.forEach((p, i) => {
+      if ('verdict' in p) {
+        if (p.verdict === 'fail') refuted = true
+        else if (p.verdict === 'unknown') open = true
+        else if (p.verdict === 'pass') claims++
+      } else {
+        groups.set(p.group, [...(groups.get(p.group) ?? []), p.value])
+        const f = fontOf.get(refsOf[i]!)
+        if (cap === 'icon:geometry-box' && r === 'font' && f !== undefined) scaled.set(p.group, [...(scaled.get(p.group) ?? []), { w: (p.value * f) / 11, f }])
+      }
+    })
+    for (const [g, vals] of groups) {
+      const sc = scaled.get(g)
+      // Scaled groups: the minimax residual r* mapped onto the group thresholds (r* <= 1 consistent, >= 1.5 refuted).
+      const res = sc ? scaledSpread(sc) : undefined
+      const spread = res !== undefined ? (res <= 1 ? 0 : res >= 1.5 ? 3 : 2) : Math.max(...vals) - Math.min(...vals)
+      claims++
+      if (spread >= 3) refuted = true
+      else if (spread > 1) open = true
+    }
+    if (refuted) continue
+    if (open || claims === 0) undecided.push(r)
+    else consistent.push(r)
+  }
+  if (consistent.length === 1 && undecided.length === 0) {
+    const winner = consistent[0]!
+    if (ICON_REPLICATED_CAPS.has(cap)) {
+      const decisive = Object.keys(table).filter(ref => { const p = table[ref]![winner]!; return 'verdict' in p && p.verdict === 'pass' })
+      const short = replicationShortfall(decisive)
+      if (short) return { status: 'non-discriminating', reason: `${winner} fits every designated cell, but ${short}`, geometry: table, ...extra }
+    }
+    // Task 28 round 4 (Ruling S4-BOTTOM-REPLICATE): anchor-constant and centred agree on every centred cell, so the
+    // verdict between them rests on the columns whose values refute the other one; at least two must.
+    if (cap === 'icon:geometry-row-offset' && (winner === 'anchor-constant' || winner === 'centred')) {
+      const other = winner === 'anchor-constant' ? 'centred' : 'anchor-constant'
+      const groups = new Map<string, number[]>()
+      for (const t of Object.values(table)) { const p = t[other]!; if ('group' in p) groups.set(p.group, [...(groups.get(p.group) ?? []), p.value]) }
+      const separating = [...groups].filter(([, v]) => Math.max(...v) - Math.min(...v) >= 3).map(([g]) => g)
+      if (separating.length < 2) return { status: 'non-discriminating', reason: `${winner} fits every designated cell, but S4-REPLICATE: ${separating.length} column${separating.length === 1 ? '' : 's'} (${separating.join(', ') || 'none'}) refute ${other}, fewer than 2`, geometry: table, ...extra }
+    }
+    return { status: 'discriminating', reason: `only ${winner} fits every designated cell; ${readings.filter(r => r !== winner).join(', ')} refuted`, matched: winner, geometry: table, ...extra }
+  }
+  if (consistent.length === 0 && undecided.length === 0) return { status: 'none', reason: 'the measured cells refute every reading', geometry: table, ...extra }
+  const fractional = cap === 'icon:geometry-snapping' ? ' (no measured gridline lands at a fractional pt: every rounding agrees)' : ''
+  return { status: 'non-discriminating', reason: `readings ${[...consistent, ...undecided].join(', ')} are not separated by the measured cells${fractional}`, geometry: table, ...extra }
+}
+
+/**
+ * Recomputes every bucket capability of a Stage 4 capture from the hash-bound PNG (Ruling S4-A): the hypotheses come
+ * from the saved workbook's marker pins and values, the observed classes from the glyph key. Geometry capabilities have
+ * no box hypotheses yet (their candidate set is the `CF_ICON_RENDER_MODEL` variants Task 29 defines), so they report
+ * `no-hypotheses` and stay unverified.
+ */
+export function evaluateIconCapabilities(c: CfOracleCase, parts: Map<string, Uint8Array>, observed: ReadonlyMap<string, CfObservedIcon>, key: IconGlyphKey | undefined, opts: { barExtents?: ReadonlyMap<string, { leftPx: number; rightPx: number }> } = {}): Record<string, IconCapabilityEvaluation> {
+  const out: Record<string, IconCapabilityEvaluation> = {}
+  const values = iconNumericValues(parts)
+  for (const cap of new Set(c.markers.filter(m => m.ruleType === 'iconSet').map(m => m.capabilityId))) {
+    const kind = iconCapabilityKind(cap)
+    if (kind === 'geometry' && ICON_GEOMETRY_READINGS[cap]) {
+      // Fix round 7: geometry readings rest on the measured boxes and text, not on the glyph key.
+      const facts = readIconCellFacts(parts, c)
+      const cellOf = (ref: string): IconGeometryCell | undefined => {
+        const o = observed.get(ref)
+        const f = facts(ref)
+        const bar = opts.barExtents?.get(ref)
+        return o && f ? { ref, facts: { ...f, rowPt: o.cellHeightPx }, observed: o, ...(bar ? { barExtent: bar } : {}) } : undefined
+      }
+      const designated = iconCellsOf(c, cap).map(x => cellOf(x.ref.toUpperCase())).filter((x): x is IconGeometryCell => x !== undefined)
+      const pool = [...observed.keys()].map(cellOf).filter((x): x is IconGeometryCell => x !== undefined)
+      out[cap] = evaluateIconGeometryCapability(cap, designated, pool)
+      continue
+    }
+    if (kind !== 'bucket') {
+      out[cap] = { status: 'no-hypotheses', reason: `${kind} capability` }
+      continue
+    }
+    if (!key) {
+      out[cap] = { status: 'no-hypotheses', reason: 'no verified glyph key: every classification stays unverified (Ruling S4-A)' }
+      continue
+    }
+    const classOf = (set: string, iconId: number): string | null => (set === 'NoIcons' ? null : key.classOfPair.get(`${set}:${iconId}`) ?? `unkeyed:${set}:${iconId}`)
+    const merged: Record<string, IconClassHypothesis[]> = buildIconScenarioHypotheses(cap, c, parts, classOf) ?? {}
+    let refusal: { code: CfRefusalCode; reason: string } | undefined
+    for (const m of Object.keys(merged).length > 0 ? [] : c.markers.filter(x => x.capabilityId === cap && x.icon)) {
+      const scopeValues = new Map([...values].filter(([ref]) => isCellInSqref(ref, m.sqref)))
+      const designated = iconCellsOf(c, cap).map(x => x.ref.toUpperCase()).filter(ref => isCellInSqref(ref, m.sqref))
+      const hyps = buildIconClassHypotheses(cap, m.icon!, scopeValues, classOf, designated)
+      if (!hyps) continue
+      Object.assign(merged, hyps)
+    }
+    if (Object.keys(merged).length === 0) {
+      out[cap] = { status: 'no-hypotheses', reason: 'no hypotheses for this capability (its claims stay unverified)' }
+      continue
+    }
+    const seen: Record<string, string | null> = {}
+    for (const ref of Object.keys(merged)) {
+      const o = observed.get(ref)
+      if (!o) { refusal = { code: 'sidecar-mismatch', reason: `designated cell ${ref} was not measured` }; break }
+      const cls = observedIconClass(o)
+      const predicted = merged[ref]!.some(h => h.glyphClass === cls)
+      if (!predicted && (cls === 'icon-class-none' || cls === 'icon-class-ambiguous' || cls === 'unclassified')) { refusal = { code: cls === 'unclassified' ? 'icon-class-none' : cls, reason: `designated cell ${ref}: ${cls}` }; break }
+      seen[ref] = cls
+    }
+    if (refusal) {
+      out[cap] = { status: 'refused', code: refusal.code, reason: refusal.reason, hypotheses: merged }
+      continue
+    }
+    const d = discriminateIcon(merged, seen)
+    // S4-REPLICATE (fix round 10): a composition verdict rests on at least two designated cells per configuration.
+    const short = d.status === 'discriminating' && cap.startsWith('icon:composition-') ? replicationShortfall(Object.keys(merged)) : undefined
+    out[cap] = short ? { status: 'non-discriminating', reason: `${d.status === 'discriminating' ? d.matched : ''} agrees, but ${short}`, hypotheses: merged } : d.status === 'discriminating' ? { status: 'discriminating', reason: 'exactly one hypothesis agrees', matched: d.matched, hypotheses: merged } : { status: d.status, reason: d.reason, hypotheses: merged }
+  }
+  return out
+}
+
+type IconEvidenceClaim = NonNullable<CfOracleCase['expected']['cells'][number]['iconEvidence']>
+
+interface IconCaptureOutcome extends BarCaptureOutcome {}
+
+/**
+ * Evidence verification for one Stage 4 capture (Ruling S4-A). Lock states and zoom/dpr are checked as for bars; the
+ * sidecar's `observedIcons` must equal the PNG recomputation; calibration and the glyph key are recomputed from their own
+ * case; every bucket claim (`iconEvidence.bucket`) must equal `evaluateIconCapabilities`' result, and a geometry claim
+ * refuses while no box hypotheses exist. Record-only capabilities are never verified.
+ */
+function verifyIconCapture(
+  c: CfOracleCase,
+  sidecar: Record<string, unknown>,
+  decoded: DecodedPng,
+  geom: WorksheetRangeGeometry,
+  parts: Map<string, Uint8Array>,
+  rootDir: string,
+): { ok: true; outcome: IconCaptureOutcome } | { ok: false; code: CfRefusalCode; reason: string } {
+  const fail = (code: CfRefusalCode, reason: string): { ok: false; code: CfRefusalCode; reason: string } => ({ ok: false, code, reason })
+  if (sidecar.lockBefore !== 'unlocked' || sidecar.lockAfter !== 'unlocked') {
+    return fail('display-locked', `Capture lock state before="${String(sidecar.lockBefore)}" after="${String(sidecar.lockAfter)}": a capture is valid only when the display was unlocked before and after it`)
+  }
+  const malformed = iconSidecarMalformed(sidecar)
+  if (malformed) return fail('sidecar-mismatch', `Icon sidecar is malformed: ${malformed}`)
+  if (sidecar.zoom !== 100 || sidecar.dpr !== 1) return fail('sidecar-mismatch', `Icon capture must be recorded at zoom 100 and dpr 1 (got zoom=${String(sidecar.zoom)}, dpr=${String(sidecar.dpr)})`)
+  const outcome: IconCaptureOutcome = { verified: [], nonDiscriminating: [], refused: [], notes: {}, matched: {} }
+  const isKeyCase = c.markers.some(m => m.capabilityId.startsWith('icon:glyph-'))
+  let key: IconGlyphKey | undefined
+  if (isKeyCase) {
+    if (!c.iconCalibration) return fail('bar-calibration-failed', `Case ${c.id} carries no iconCalibration spec`)
+    const cal = measureBarCalibration(decoded, geom, c.iconCalibration, 1)
+    if (!cal.ok) return fail('bar-calibration-failed', `Icon pixel calibration failed: ${cal.reason}`)
+    outcome.verified.push('icon:pixel-calibration')
+    const built = buildIconGlyphKey(c, parts, decoded, geom)
+    if ('kind' in built) return fail(built.code, built.reason)
+    key = built
+    outcome.verified.push('icon:glyph-key', ...c.markers.filter(m => m.capabilityId.startsWith('icon:glyph-')).map(m => m.capabilityId))
+    const recordedClasses = sidecar.glyphClasses as Record<string, string> | undefined
+    if (JSON.stringify(recordedClasses ?? null) !== JSON.stringify(Object.fromEntries(key.classOfPair))) return fail('sidecar-mismatch', 'Sidecar glyphClasses differ from the classes recomputed from the key capture')
+    if (JSON.stringify(sidecar.glyphFaint ?? null) !== JSON.stringify(iconGlyphFaintRecord(key))) return fail('sidecar-mismatch', 'Sidecar glyphFaint differs from the faint classes recomputed from the key capture (Ruling S4-FAINT)')
+    if (JSON.stringify(sidecar.glyphTwins ?? null) !== JSON.stringify(iconGlyphTwinsRecord(key))) return fail('sidecar-mismatch', 'Sidecar glyphTwins differ from the twin relation recomputed from the key capture (Ruling S4-NEARTWIN)')
+  } else {
+    const loaded = loadIconGlyphKey(rootDir)
+    key = loaded && !('kind' in loaded) ? loaded : undefined
+  }
+  const measured = measureCaseIcons(c, decoded, geom, key)
+  if ('kind' in measured) return fail((measured as Refusal).code, (measured as Refusal).reason)
+  const observed = measured as ReadonlyMap<string, CfObservedIcon>
+  const recorded = Array.isArray(sidecar.observedIcons) ? (sidecar.observedIcons as CfObservedIcon[]) : []
+  for (const o of observed.values()) {
+    const r = recorded.find(x => typeof x?.ref === 'string' && x.ref.toUpperCase() === o.ref.toUpperCase())
+    if (!r || JSON.stringify(r) !== JSON.stringify(o)) return fail('sidecar-mismatch', `Sidecar observedIcons for ${o.ref} disagrees with the PNG measurement`)
+  }
+  const evaluation = evaluateIconCapabilities(c, parts, observed, key, { barExtents: measureCaseBarExtents(c, decoded, geom) })
+  for (const cap of Object.keys(evaluation)) {
+    const marked = Object.keys(evaluation[cap]!.hypotheses ?? {})
+    const seen = Object.fromEntries(marked.map(ref => [ref, observed.get(ref) ? observedIconClass(observed.get(ref)!) : null]))
+    if (dialectAllAbsent(cap, seen)) return fail('icon-hypothesis-none', `Ruling S4-DIALECT-EVIDENCE: every cell marked by ${cap} shows no icon, so the capture cannot evidence the dialect`)
+  }
+  for (const cap of Object.keys(evaluation)) {
+    const rec = evaluation[cap]!
+    const cells = iconCellsOf(c, cap)
+    const claims = cells.map(cell => cell.iconEvidence ?? ({ bucket: 'unverified', geometry: 'unverified' } as IconEvidenceClaim))
+    const isGeometry = iconCapabilityKind(cap) === 'geometry'
+    if (!isGeometry && claims.some(e => e.geometry !== 'unverified')) return fail('unobserved-expectation', `Capability ${cap} is not a geometry capability but claims geometry evidence`)
+    if (isGeometry && claims.some(e => e.bucket !== 'unverified')) return fail('unobserved-expectation', `Geometry capability ${cap} claims bucket evidence`)
+    for (const cell of cells) {
+      const o = observed.get(cell.ref)
+      if (o && cell.iconApplied !== undefined && claims.some(e => e.bucket !== 'unverified') && (o.icon !== null) !== cell.iconApplied) {
+        return fail('cell-expectation-mismatch', `Cell ${cell.ref} iconApplied=${String(cell.iconApplied)} but the capture ${o.icon ? 'shows an icon' : 'shows no icon'}`)
+      }
+    }
+    const labels = new Set(claims.map(e => (isGeometry ? e.geometry : e.bucket)))
+    if (labels.size > 1) return fail('unobserved-expectation', `Capability ${cap} mixes ${[...labels].join(', ')} ${isGeometry ? 'geometry' : 'bucket'} labels across its cells`)
+    const raw = isGeometry ? claims[0]?.geometry : claims[0]?.bucket
+    const label = raw === 'pixel-measured' ? 'pixel-classified' : (raw ?? 'unverified')
+    const recordedHyps = (sidecar.iconHypotheses as Record<string, unknown> | undefined)?.[cap]
+    if (rec.hypotheses && JSON.stringify(recordedHyps ?? null) !== JSON.stringify(rec.hypotheses)) return fail('sidecar-mismatch', `Sidecar iconHypotheses for ${cap} differ from the hypotheses the verifier recomputes`)
+    const recordedGeo = (sidecar.iconGeometryHypotheses as Record<string, unknown> | undefined)?.[cap]
+    const rulesVersion = typeof sidecar.iconGeometryRulesVersion === 'number' ? sidecar.iconGeometryRulesVersion : 1
+    if (rec.geometry && ((recordedGeo === undefined && label === 'unverified') || (recordedGeo !== undefined && rulesVersion !== ICON_GEOMETRY_RULES_VERSION))) {
+      // A sidecar derived before fix round 7 records no geometry readings, and one derived under older geometry rules
+      // (fix round 9) records stale ones: the capability stays unverified, its label unchecked, until
+      // `capture --verify-only` re-derives the sidecar (no claim rests on readings the current rules did not derive).
+      outcome.notes[cap] = `geometry readings ${recordedGeo === undefined ? 'not yet recorded' : `derived under geometry rules v${rulesVersion}, not v${ICON_GEOMETRY_RULES_VERSION}`} (re-derive with capture --verify-only): recomputed ${rec.status}`
+      continue
+    }
+    const recordedExcl = (sidecar.iconTextExclusions as Record<string, unknown> | undefined)?.[cap]
+    if (rec.geometry && JSON.stringify(recordedExcl ?? null) !== JSON.stringify(rec.textExclusions ?? null)) return fail('sidecar-mismatch', `Sidecar iconTextExclusions for ${cap} differ from the cells the verifier excludes from text detection`)
+    if (rec.geometry && JSON.stringify(recordedGeo ?? null) !== JSON.stringify(rec.geometry)) return fail('sidecar-mismatch', `Sidecar iconGeometryHypotheses for ${cap} differ from the readings the verifier recomputes`)
+    if (cap === 'icon:composition-icon-stopIfTrue' && !savedIconRuleHasStop(parts, c, cap)) {
+      outcome.notes[cap] = 'Excel dropped stopIfTrue on resave (Ruling S4-J): recorded from the input workbook only, never verified'
+      if (label !== 'unverified') return fail('unobserved-expectation', `${cap} claims evidence although the saved rule carries no stopIfTrue`)
+      continue
+    }
+    if (label === 'unverified') {
+      if (rec.status === 'none') outcome.refused.push({ capabilityId: cap, code: 'icon-hypothesis-none', reason: rec.reason })
+      else if (rec.status === 'refused') outcome.refused.push({ capabilityId: cap, code: rec.code ?? 'icon-class-none', reason: rec.reason })
+      else outcome.notes[cap] = rec.status === 'no-hypotheses' ? `no hypotheses: ${rec.reason}` : `unclaimed (${rec.status}: ${rec.reason})`
+      continue
+    }
+    if (rec.status === 'discriminating' && label === 'pixel-classified') {
+      outcome.verified.push(cap)
+      if (rec.matched) outcome.matched[cap] = rec.matched
+    } else if (rec.status === 'non-discriminating' && label === 'non-discriminating') outcome.nonDiscriminating.push(cap)
+    else return fail('unobserved-expectation', `Capability ${cap} is labelled ${label} but recomputation says ${rec.status} (${rec.reason})`)
+  }
+  return { ok: true, outcome }
+}
+
+/** Whether the saved workbook still carries stopIfTrue on the icon rule of `cap` (Ruling S4-J, Lesson 12). */
+function savedIconRuleHasStop(parts: Map<string, Uint8Array>, c: CfOracleCase, cap: string): boolean {
+  const marker = c.markers.find(m => m.capabilityId === cap && m.ruleType === 'iconSet' && m.stopIfTrue)
+  const raw = parts.get('xl/worksheets/sheet1.xml')
+  if (!marker || !raw) return false
+  const rule = findMatchedRuleInRoot(parseXml(new TextDecoder().decode(raw)), marker)
+  const flag = rule ? attr(rule, 'stopIfTrue') : undefined
+  return flag === '1' || flag === 'true'
+}
+
+/** Labels a capture writes into `iconEvidence.bucket`: exactly the verifier's own recomputation. */
+export function classifyIconCapture(c: CfOracleCase, evaluation: Readonly<Record<string, IconCapabilityEvaluation>>): Map<string, IconEvidenceClaim> {
+  const votes = new Map<string, Set<string>>()
+  for (const [cap, rec] of Object.entries(evaluation)) {
+    if (iconCapabilityKind(cap) !== 'bucket') continue
+    const label = rec.status === 'discriminating' ? 'pixel-classified' : rec.status === 'non-discriminating' ? 'non-discriminating' : 'unverified'
+    for (const cell of iconCellsOf(c, cap)) {
+      const v = votes.get(cell.ref) ?? new Set<string>()
+      v.add(label)
+      votes.set(cell.ref, v)
+    }
+  }
+  const geo = new Map<string, Set<string>>()
+  for (const [cap, rec] of Object.entries(evaluation)) {
+    if (iconCapabilityKind(cap) !== 'geometry') continue
+    const label = rec.status === 'discriminating' ? 'pixel-measured' : rec.status === 'non-discriminating' ? 'non-discriminating' : 'unverified'
+    for (const cell of iconCellsOf(c, cap)) geo.set(cell.ref, (geo.get(cell.ref) ?? new Set<string>()).add(label))
+  }
+  const out = new Map<string, IconEvidenceClaim>()
+  for (const ref of new Set([...votes.keys(), ...geo.keys()])) {
+    const b = votes.get(ref), g = geo.get(ref)
+    out.set(ref, {
+      bucket: (b && b.size === 1 ? [...b][0]! : 'unverified') as IconEvidenceClaim['bucket'],
+      geometry: (g && g.size === 1 ? [...g][0]! : 'unverified') as IconEvidenceClaim['geometry'],
+    })
+  }
+  return out
+}
+
 export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): VerifiedEvidence | Refusal {
   const rootDir = options.rootDir ?? process.cwd()
   const savedAbs = resolve(rootDir, c.saved)
@@ -4254,6 +5839,9 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
 
   const isBarCase = c.stage === 3 && c.status === 'measured' && c.markers.some(m => m.ruleType === 'dataBar')
   let barOutcome: BarCaptureOutcome | undefined
+  // Stage 4: icon capabilities come ONLY from the icon branch (never from the Stage 1 contrast path below).
+  const isIconCase = c.stage === 4 && c.status === 'measured'
+  let iconOutcome: IconCaptureOutcome | undefined
   const captureHashes: Record<string, string> = {}
   const passingCellRefs = new Set<string>()
   let positiveContrastMaxDelta = 0
@@ -4504,6 +6092,20 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
         refused: [...(barOutcome?.refused ?? []), ...bar.outcome.refused],
         notes: { ...(barOutcome?.notes ?? {}), ...bar.outcome.notes },
         matched: { ...(barOutcome?.matched ?? {}), ...bar.outcome.matched },
+      }
+      continue
+    }
+
+    if (isIconCase) {
+      // Stage 4: icons are classified glyphs and measured boxes, recomputed from the hash-bound PNG (Ruling S4-A).
+      const iconRes = verifyIconCapture(c, sidecar, decoded, activeGeom, parts, rootDir)
+      if (!iconRes.ok) return { kind: 'refusal', id: c.id, status: c.status, code: iconRes.code, reason: iconRes.reason, structuralValid: true }
+      iconOutcome = {
+        verified: [...new Set([...(iconOutcome?.verified ?? []), ...iconRes.outcome.verified])],
+        nonDiscriminating: [...new Set([...(iconOutcome?.nonDiscriminating ?? []), ...iconRes.outcome.nonDiscriminating])],
+        refused: [...(iconOutcome?.refused ?? []), ...iconRes.outcome.refused],
+        notes: { ...(iconOutcome?.notes ?? {}), ...iconRes.outcome.notes },
+        matched: { ...(iconOutcome?.matched ?? {}), ...iconRes.outcome.matched },
       }
       continue
     }
@@ -4933,6 +6535,29 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     positiveContrastMaxDelta = Math.max(positiveContrastMaxDelta, captureMaxPositive)
   }
 
+  if (isIconCase) {
+    if (!iconOutcome) {
+      return { kind: 'refusal', id: c.id, status: c.status, code: 'missing-capture', reason: `Stage 4 case ${c.id} has no icon capture to recompute`, structuralValid: true }
+    }
+    const blocked = (id: string): boolean => CF_STAGE4_NONDISCRIMINATING[id] !== undefined || iconCapabilityKind(id) === 'record'
+    return {
+      kind: 'verified',
+      id: c.id,
+      status: 'measured',
+      savedSha256,
+      inputSha256,
+      captureHashes,
+      positiveContrastMaxDelta: 0,
+      minPositiveContrastDelta: 0,
+      matchedRules: c.markers.length,
+      verifiedCapabilities: iconOutcome.verified.filter(id => !blocked(id)),
+      nonDiscriminatingCapabilities: [...new Set([...iconOutcome.nonDiscriminating, ...iconOutcome.verified.filter(blocked)])],
+      refusedCapabilities: iconOutcome.refused,
+      capabilityNotes: iconOutcome.notes,
+      matchedHypotheses: iconOutcome.matched,
+    }
+  }
+
   if (isBarCase && barOutcome) {
     return {
       kind: 'verified',
@@ -4989,7 +6614,9 @@ export function isCapabilityVerified(
   manifest: CfManifest,
   options: VerifyCfOptions = {},
 ): boolean {
-  const owningCase = manifest.cases.find(c => c.markers.some(m => m.capabilityId === capabilityId))
+  // Stage 4 case-level capabilities (icon:glyph-key) carry no marker: their owner is the registry's case.
+  const registryCase = CF_STAGE4_CAPABILITIES.find(e => e.capabilityId === capabilityId)?.caseId
+  const owningCase = manifest.cases.find(c => c.markers.some(m => m.capabilityId === capabilityId)) ?? (registryCase ? manifest.cases.find(c => c.id === registryCase) : undefined)
   if (!owningCase) return false
   // The cross-case gates ask for the same few cases again and again; one manifest object's cases are verified once.
   const key = `${options.rootDir ?? process.cwd()}\u0000${owningCase.id}`
@@ -5016,6 +6643,17 @@ export function isCapabilityVerified(
     if (capabilityId !== 'bar:geometry-insets' && BAR_CAPABILITY_HYPOTHESES[capabilityId] !== undefined && !isCapabilityVerified('bar:geometry-insets', manifest, options)) return false
     // Task 22c: a family predicted under the 10/90 rule needs that rule verified (the audit checks the value).
     if (BAR_CAPABILITY_HYPOTHESES[capabilityId]?.knobs?.lengthRule !== undefined && !isCapabilityVerified('bar:lengths-default-10-90', manifest, options)) return false
+  }
+
+  // Stage 4 (Ruling S4-A): record-only and non-discriminating icon capabilities are never verified; every other icon
+  // capability needs the key workbook's calibration and the glyph key; a bucket capability read through the family order
+  // (anything but the family groups and the custom mappings) needs that order verified too.
+  if (capabilityId.startsWith('icon:')) {
+    if (CF_STAGE4_NONDISCRIMINATING[capabilityId] !== undefined || CF_STAGE4_UNSUPPORTED[capabilityId] !== undefined || iconCapabilityKind(capabilityId) === 'record') return false
+    if (capabilityId !== 'icon:pixel-calibration' && !isCapabilityVerified('icon:pixel-calibration', manifest, options)) return false
+    if (capabilityId !== 'icon:pixel-calibration' && capabilityId !== 'icon:glyph-key' && !isCapabilityVerified('icon:glyph-key', manifest, options)) return false
+    const viaFamilyOrder = iconCapabilityKind(capabilityId) === 'bucket' && !capabilityId.startsWith('icon:families-') && !['icon:custom-mapping', 'icon:custom-noicons', 'icon:reverse-custom'].includes(capabilityId)
+    if (viaFamilyOrder && !isCapabilityVerified('icon:families-base', manifest, options)) return false
   }
 
   // Precondition-probe check for scale:* capabilities

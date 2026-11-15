@@ -113,6 +113,22 @@ export interface CfPartMarker {
     attrs: Readonly<Record<string, string>>
     colors: Readonly<Partial<Record<'fill' | 'negativeFill' | 'border' | 'negativeBorder' | 'axis', string>>>
   }
+  /**
+   * Stage 4 icon set pin, compared by semantics (schema defaults applied: `iconSet` 3TrafficLights1, `reverse` 0,
+   * `showValue` 1, `percent` 1, cfvo `gte` 1). `dialect` names where the rule lives: `base` is a worksheet
+   * `<cfRule type="iconSet"><iconSet>` (marker extension `legacy`), `x14` a standalone priority-bearing
+   * `<x14:cfRule type="iconSet"><x14:iconSet>` (marker extension `x14`). `custom` pins the ordered `<x14:cfIcon>` list
+   * (and requires `custom="1"`); without it the rule must carry no `cfIcon`. `cfvo.val` pins a base `@val`, `cfvo.f` an x14
+   * `<xm:f>`. Unpinned `attrs` must carry their schema default. One FORM pin exists (Ruling S4-A, the glyph key only):
+   * `attrs.percent === '(omitted)'` requires the attribute to be absent, and a pinned `'1'`/`'0'` requires it written.
+   */
+  icon?: {
+    dialect: 'base' | 'x14'
+    set: string
+    custom?: readonly { set: string; iconId: number }[]
+    cfvo: readonly { type: string; val?: string; f?: string; gte?: boolean }[]
+    attrs: Readonly<Record<string, string>>
+  }
 }
 
 export interface CfCellExpectation {
@@ -143,6 +159,18 @@ export interface CfCellExpectation {
   }
   /** Whether a data bar is drawn on this cell in Excel. */
   barApplied?: boolean
+  /**
+   * Stage 4: which evidence backs each claim about this cell's icon (Ruling S4-A). `bucket: 'pixel-classified'` means the
+   * S4-A classification rule matched exactly one glyph class and the designated cells discriminate; `geometry:
+   * 'pixel-measured'` means located after calibration and the lock checks, stable on three scanlines and
+   * discriminating; `non-discriminating` was measured but fails the rule; `unverified` is anything else.
+   */
+  iconEvidence?: {
+    bucket: 'pixel-classified' | 'non-discriminating' | 'unverified'
+    geometry: 'pixel-measured' | 'non-discriminating' | 'unverified'
+  }
+  /** Whether an icon is drawn on this cell in Excel. */
+  iconApplied?: boolean
   /** Expected winning font color ARGB hex (`FF9C0006`) when matched. */
   fontRgb?: string
   /** Expected winning bold state when overridden by DXF. */
@@ -248,6 +276,14 @@ export interface CfOracleCase {
    * fill) must sample `solidArgb` within +-8 per channel.
    */
   barCalibration?: { columns: readonly string[]; scanRow: number; solidRef: string; solidArgb: string }
+  /** Stage 4 pixel calibration (`icon:pixel-calibration`, Ruling S4-A: S3-A step 3 rerun in the glyph-key workbook). */
+  iconCalibration?: { columns: readonly string[]; scanRow: number; solidRef: string; solidArgb: string }
+  /**
+   * Task 28 round 2 (Ruling S4-ROWS-CAPTURE): classify icon crops whose row height differs from the glyph key's by a
+   * vertical shift of the key crop over the frame columns (`classifyIconCropShifted`), so non-rectangular glyphs on other
+   * rows measure against their key reference. Opt-in per case: no other case's classification changes.
+   */
+  iconShiftedKey?: true
   captures: readonly CfCaptureSpec[]
   status: CfOracleStatus
   reason?: string
@@ -288,6 +324,11 @@ export type CfRefusalCode =
   | 'bar-background-unresolved'
   | 'bar-hypothesis-none'
   | 'bar-settings-unobserved'
+  | 'icon-class-none'
+  | 'icon-class-ambiguous'
+  | 'icon-key-mismatch'
+  | 'icon-edge-unstable'
+  | 'icon-hypothesis-none'
 
 export interface VerifiedEvidence {
   kind: 'verified'
@@ -3808,7 +3849,7 @@ export interface S3RawRule {
   sqref: string
   xml: string
   separateBlock?: boolean
-  marker: Pick<CfPartMarker, 'capabilityId' | 'ruleType' | 'formulas'> & Partial<Pick<CfPartMarker, 'operator' | 'priority' | 'stopIfTrue' | 'dxf' | 'scale' | 'bar'>>
+  marker: Pick<CfPartMarker, 'capabilityId' | 'ruleType' | 'formulas'> & Partial<Pick<CfPartMarker, 'operator' | 'priority' | 'stopIfTrue' | 'dxf' | 'scale' | 'bar' | 'icon'>>
   /** Cells designated for this raw rule's marker coverage (defaults to the stored cells of the scope). */
   cells?: readonly string[]
 }
@@ -4417,21 +4458,24 @@ function expandSqref(sqref: string, maxRow: number): string[] {
   return out
 }
 
+/** The layout fields the Stage 3 helpers read (Stage 4 fixtures share them). */
+export type S3Shape = Pick<S3Fixture, 'n' | 'cols' | 'extraCells'>
+
 /** The stored (non-null) cell refs of the fixture's data columns and extra cells. */
-export function s3StoredRefs(fx: S3Fixture): Set<string> {
+export function s3StoredRefs(fx: S3Shape): Set<string> {
   const refs = new Set<string>()
   for (const c of fx.cols) c.values.forEach((v, i) => { if (v !== null) refs.add(`${c.col}${i + 2}`) })
   for (const e of fx.extraCells ?? []) refs.add(e.ref)
   return refs
 }
 
-export const s3LastRow = (fx: S3Fixture): number => Math.max(fx.n + 1, ...((fx.extraCells ?? []).map(e => Number(/\d+/.exec(e.ref)![0]))))
-export const s3ControlOffset = (fx: S3Fixture): number => s3LastRow(fx)
-export const s3Range = (fx: S3Fixture): string => {
+export const s3LastRow = (fx: S3Shape): number => Math.max(fx.n + 1, ...((fx.extraCells ?? []).map(e => Number(/\d+/.exec(e.ref)![0]))))
+export const s3ControlOffset = (fx: S3Shape): number => s3LastRow(fx)
+export const s3Range = (fx: S3Shape): string => {
   const lastCol = Math.max(...fx.cols.map(c => colIndex(c.col)), 2)
   return `A1:${colLetter(lastCol)}${s3LastRow(fx) + s3ControlOffset(fx)}`
 }
-export const s3ControlRef = (fx: S3Fixture, ref: string): string => {
+export const s3ControlRef = (fx: S3Shape, ref: string): string => {
   const m = /^([A-Z]+)(\d+)$/.exec(ref)!
   return `${m[1]}${Number(m[2]) + s3ControlOffset(fx)}`
 }
@@ -4691,10 +4735,877 @@ export const CF_STAGE3_CAPABILITIES: readonly CfCapabilityEntry[] = (() => {
   return out
 })()
 
-export const CF_CASES: readonly CfOracleCase[] = [...CF_STAGE1_CASES, ...CF_STAGE2_CASES, ...CF_STAGE3_CASES]
+// ---------------------------------------------------------------------------------------------------------------------
+// Stage 4: icon sets (Task 24). Every case below is a `[measure]` question for the Excel oracle. Nothing here is an Excel
+// fact: no expected bucket, px or glyph is written by the catalogue or by the code's authors; every `iconEvidence` is
+// `unverified` and each case stays `recipe-pending` (or `unsupported`) until the orchestrator captures it under host Excel.
+// Production withholds every icon until the named `icon:*` capability is published (Rulings S4-A to S4-R).
+// ---------------------------------------------------------------------------------------------------------------------
+
+/**
+ * The 20 built-in icon set families and their icon counts (spec §3 line 84, ECMA-376 ST_IconSetType plus the three
+ * x14-only sets). Defined here, not imported from the viewer, so the oracle never depends on the code under test; the
+ * oracle test cross-checks it against the viewer's `ICON_SETS`. 17 base + 3 x14 families, 75 (set, iconId) pairs.
+ */
+export const S4_ICON_FAMILIES: ReadonlyArray<{ readonly name: string; readonly size: 3 | 4 | 5; readonly dialect: 'base' | 'x14' }> = [
+  { name: '3Arrows', size: 3, dialect: 'base' },
+  { name: '3ArrowsGray', size: 3, dialect: 'base' },
+  { name: '3Flags', size: 3, dialect: 'base' },
+  { name: '3TrafficLights1', size: 3, dialect: 'base' },
+  { name: '3TrafficLights2', size: 3, dialect: 'base' },
+  { name: '3Signs', size: 3, dialect: 'base' },
+  { name: '3Symbols', size: 3, dialect: 'base' },
+  { name: '3Symbols2', size: 3, dialect: 'base' },
+  { name: '4Arrows', size: 4, dialect: 'base' },
+  { name: '4ArrowsGray', size: 4, dialect: 'base' },
+  { name: '4RedToBlack', size: 4, dialect: 'base' },
+  { name: '4Rating', size: 4, dialect: 'base' },
+  { name: '4TrafficLights', size: 4, dialect: 'base' },
+  { name: '5Arrows', size: 5, dialect: 'base' },
+  { name: '5ArrowsGray', size: 5, dialect: 'base' },
+  { name: '5Rating', size: 5, dialect: 'base' },
+  { name: '5Quarters', size: 5, dialect: 'base' },
+  { name: '3Stars', size: 3, dialect: 'x14' },
+  { name: '3Triangles', size: 3, dialect: 'x14' },
+  { name: '5Boxes', size: 5, dialect: 'x14' },
+]
+
+/**
+ * Ruling S4-A (`percent` attribute): the glyph-key template writes `<x14:iconSet>` in exactly the attribute form Excel's
+ * own dialog writes. PROVISIONAL until `tests/fixtures/xlsx-cf/excel-authored-iconsets.xlsx` exists: `(omitted)` is the
+ * form Excel is expected to write for the default. `bun scripts/cf-refs/generate.ts --diff-authored-icons` compares it
+ * with the authored fixture and names this constant when it disagrees; changing it regenerates the glyph-key input.
+ */
+export const ICON_KEY_PERCENT_FORM: '(omitted)' | '1' = '(omitted)'
+
+/** Excel's default thresholds for a k-icon family (percent, `gte` default): the floor then the k-1 bucket bounds. */
+export const S4_DEFAULT_THRESHOLDS: Readonly<Record<3 | 4 | 5, readonly string[]>> = {
+  3: ['0', '33', '67'],
+  4: ['0', '25', '50', '75'],
+  5: ['0', '20', '40', '60', '80'],
+}
+
+export interface CfIconCfvo {
+  type: string
+  /** The threshold (written as `@val` on a base `<cfvo>` and as `<xm:f>` on an x14 `<x14:cfvo>`). */
+  val?: string
+  /** `gte`; omitted leaves the attribute unwritten (schema default `1`). */
+  gte?: boolean
+}
+
+export interface S4IconRule {
+  kind: 'icon'
+  cap: string
+  sqref: string
+  priority: number
+  dialect: 'base' | 'x14'
+  /** `iconSet` attribute; omitted leaves it unwritten (schema default 3TrafficLights1). */
+  set?: string
+  cfvo: readonly CfIconCfvo[]
+  /** Attributes written on `<iconSet>` / `<x14:iconSet>` (`reverse`, `showValue`, `percent`), as written. */
+  attrs?: Readonly<Record<string, string>>
+  /** Custom `<x14:cfIcon>` mapping, one per bucket (x14 only; writes `custom="1"`). */
+  custom?: readonly { set: string; iconId: number }[]
+  stopIfTrue?: boolean
+  /** Designated cells; defaults to every stored, visible cell of the scope. */
+  cells?: readonly string[]
+  separateBlock?: boolean
+  /** Marker-only attribute pins (the glyph key's `percent` form pin). Defaults to `attrs`. */
+  markerAttrs?: Readonly<Record<string, string>>
+}
+
+export interface S4Style {
+  fontPt?: number
+  vertical?: 'top' | 'center' | 'bottom'
+  horizontal?: 'left' | 'center' | 'right'
+  /** `hidden` writes number format `;;;` (Ruling S4-A key geometry), `date` the built-in date format 14. */
+  numFmt?: 'hidden' | 'date'
+}
+
+export interface S4Fixture extends Omit<S3Fixture, 'rules' | 'calibration' | 'dateStyle' | 'cellFill'> {
+  rules: readonly (S4IconRule | S3BarRule | S3RawRule)[]
+  /** Cell style per column, applied to the data block and its control block alike. */
+  colStyles?: Readonly<Record<string, S4Style>>
+  /** `<sheetView rightToLeft="1">` (Ruling S4-M). */
+  rightToLeft?: boolean
+  /** Capabilities the case settles that no single rule carries (the glyph key as a whole). */
+  caseCapabilities?: readonly string[]
+  calibration?: CfOracleCase['iconCalibration']
+  /** See `CfOracleCase.iconShiftedKey`. */
+  shiftedKey?: true
+}
+
+const S4_WIDTH = 12
+const KEY_STYLE: S4Style = { numFmt: 'hidden' }
+
+const icon = (cap: string, sqref: string, priority: number, set: string | undefined, cfvo: readonly CfIconCfvo[], o: Partial<Omit<S4IconRule, 'kind' | 'cap' | 'sqref' | 'priority' | 'set' | 'cfvo'>> = {}): S4IconRule => ({
+  kind: 'icon',
+  cap,
+  sqref,
+  priority,
+  dialect: 'base',
+  ...(set !== undefined ? { set } : {}),
+  cfvo,
+  ...o,
+})
+
+const pct = (k: 3 | 4 | 5): CfIconCfvo[] => S4_DEFAULT_THRESHOLDS[k].map(v => ({ type: 'percent', val: v }))
+const nums = (...vals: number[]): CfIconCfvo[] => vals.map(v => ({ type: 'num', val: String(v) }))
+const iconShape = (cap: string, sqref: string, priority: number | undefined, xml: string, where: 'legacy' | 'x14'): S3RawRule => ({
+  kind: 'raw',
+  where,
+  sqref,
+  xml,
+  separateBlock: true,
+  marker: { capabilityId: cap, ruleType: 'iconSet', formulas: [], ...(priority !== undefined ? { priority } : {}) },
+})
+
+const s4col = (c: string, header: string, values: readonly S3Value[], width = S4_WIDTH): S3Column => ({ col: c, header, values, width })
+const S4_PENDING_REASON =
+  'Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)'
+const s4rect = (id: string, question: string, rest: Omit<S4Fixture, 'id' | 'question' | 'status' | 'reason'> & Partial<Pick<S4Fixture, 'status' | 'reason'>>): S4Fixture => ({
+  id,
+  question,
+  status: 'recipe-pending',
+  reason: S4_PENDING_REASON,
+  gridlines: true,
+  ...rest,
+})
+const s4keyStyles = (cols: readonly string[]): Record<string, S4Style> => Object.fromEntries(cols.map(c => [c, KEY_STYLE]))
+const range = (n: number, step: number, from = 0): number[] => Array.from({ length: n }, (_, i) => from + i * step)
+const VALUES_0_100_BY5 = range(21, 5)
+const VALUES_0_100_BY10 = range(11, 10)
+const letters = (from: string, count: number): string[] => Array.from({ length: count }, (_, i) => colLetter(colIndex(from) + i))
+const GLYPH_KEY_COLS = ['B', 'C', 'D', 'E', 'F']
+
+/** The 75 single-pair glyph-key rules (Ruling S4-A): every bucket of rule P maps to P; num cfvo 0..k-1; the cell holds 10. */
+function glyphKeyRules(): S4IconRule[] {
+  const rules: S4IconRule[] = []
+  let priority = 1
+  S4_ICON_FAMILIES.forEach((fam, row) => {
+    for (let id = 0; id < fam.size; id++) {
+      const ref = `${GLYPH_KEY_COLS[id]}${row + 2}`
+      rules.push(icon(`icon:glyph-${fam.name}-${id}`, ref, priority++, fam.name, nums(...range(fam.size, 1)), {
+        dialect: 'x14',
+        custom: Array.from({ length: fam.size }, () => ({ set: fam.name, iconId: id })),
+        ...(ICON_KEY_PERCENT_FORM === '(omitted)' ? {} : { attrs: { percent: ICON_KEY_PERCENT_FORM } }),
+        markerAttrs: { percent: ICON_KEY_PERCENT_FORM },
+        separateBlock: true,
+      }))
+    }
+  })
+  return rules
+}
+
+/** Snap widths (characters) whose cell edges fall at quarter-point fractions after the preceding columns (S4-K). */
+const SNAP_WIDTHS = [31.36, 32.51, 33.66]
+
+export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
+  // 1. stage4-icon-om-reachability
+  s4rect(
+    'stage4-icon-om-reachability',
+    'S4-A one-shot probe: is `icon set format condition` reachable from AppleScript? Reads format condition 1 of the range and its properties, icon criteria, reverse icon set order and show icon only. Record only: an answer, or an error, lifts no capability, and an unexpected success becomes an owner question, never an evidence kind.',
+    {
+      n: 3,
+      colStyles: s4keyStyles(['B']),
+      cols: [s4col('B', 'Probe', [0, 50, 100])],
+      rules: [icon('icon:om-reachability-probe', 'B2:B4', 1, '3Arrows', pct(3))],
+    },
+  ),
+  // 2. stage4-icon-authored
+  s4rect(
+    'stage4-icon-authored',
+    'S4-O dialect: the generator\'s templates for the rules Excel\'s own dialog writes (3Stars, 3Triangles, 5Boxes, a custom set with one NoIcons bucket, reverse, show icon only, a gte toggle). The orchestrator authors the same rules on the same ranges through Excel\'s dialog into tests/fixtures/xlsx-cf/excel-authored-iconsets.xlsx; `generate.ts --diff-authored-icons` diffs these templates against it (Lesson 12). The capture settles whether each dialect paints as Excel paints it.',
+    {
+      n: 5,
+      colStyles: s4keyStyles(['B', 'C', 'D', 'E', 'F', 'G', 'H']),
+      cols: ['B', 'C', 'D', 'E', 'F', 'G', 'H'].map((c, i) => s4col(c, ['Stars3', 'Triangles3', 'Boxes5', 'CustomNoIcons', 'Reverse', 'IconOnly', 'GteToggle'][i]!, [0, 25, 50, 75, 100])),
+      rules: [
+        icon('icon:dialect-standalone', 'B2:B6', 1, '3Stars', pct(3), { dialect: 'x14' }),
+        icon('icon:dialect-standalone', 'C2:C6', 2, '3Triangles', pct(3), { dialect: 'x14' }),
+        icon('icon:dialect-standalone', 'D2:D6', 3, '5Boxes', pct(5), { dialect: 'x14' }),
+        icon('icon:dialect-standalone', 'E2:E6', 4, '3Arrows', pct(3), { dialect: 'x14', custom: [{ set: '3Arrows', iconId: 0 }, { set: 'NoIcons', iconId: 0 }, { set: '3Arrows', iconId: 2 }] }),
+        icon('icon:dialect-base', 'F2:F6', 5, '3Arrows', pct(3), { attrs: { reverse: '1' } }),
+        icon('icon:dialect-base', 'G2:G6', 6, '3Arrows', pct(3), { attrs: { showValue: '0' } }),
+        icon('icon:dialect-base', 'H2:H6', 7, '3Arrows', [{ type: 'percent', val: '0' }, { type: 'percent', val: '33', gte: false }, { type: 'percent', val: '67', gte: false }]),
+      ],
+    },
+  ),
+  // 2b. stage4-icon-dialect (Ruling S4-DIALECT-CASE)
+  s4rect(
+    'stage4-icon-dialect',
+    'S4-B/S4-O dialect outcomes, recorded rather than predicted: an x14-only family (3Stars) on a BASE <cfRule> (B; hypotheses: drawn as 3Stars in bucket order, not drawn, or drawn as another 3-icon family such as the 3TrafficLights1 default), and a paired base + x14 rule (C; a base 3Arrows rule carrying an <x14:id> link to a priority-less x14 3Triangles companion; hypotheses: the companion draws, the base draws, or neither). The capture decides; build.ts keeps a stripped or repaired resave as the rejected workbook, itself the recorded outcome. Fix round 7 (Ruling S4-DIALECT-UNSUPPORTED): Excel 16.115 repairs both shapes (B loses its iconSet name, C loses its companion), so they cannot be authored repair-free; the case is unsupported and records the rejected resave only.',
+    {
+      n: 5,
+      status: 'unsupported',
+      reason: 'Ruling S4-DIALECT-UNSUPPORTED: Excel cannot author either shape repair-free (the rejected resave is the recorded outcome); production withholds both under S4-X14BASE and the paired-dialect gate',
+      colStyles: s4keyStyles(['B', 'C']),
+      cols: [s4col('B', 'BaseStars', [0, 25, 50, 75, 100]), s4col('C', 'Paired', [0, 25, 50, 75, 100])],
+      rules: [
+        {
+          kind: 'raw',
+          where: 'legacy',
+          sqref: 'B2:B6',
+          xml: '<cfRule type="iconSet" priority="1"><iconSet iconSet="3Stars"><cfvo type="percent" val="0"/><cfvo type="percent" val="33"/><cfvo type="percent" val="67"/></iconSet></cfRule>',
+          marker: { capabilityId: 'icon:dialect-base-x14-family', ruleType: 'iconSet', priority: 1, formulas: [], icon: { dialect: 'base', set: '3Stars', cfvo: [{ type: 'percent', val: '0' }, { type: 'percent', val: '33' }, { type: 'percent', val: '67' }], attrs: {} } },
+        },
+        {
+          kind: 'raw',
+          where: 'legacy',
+          sqref: 'C2:C6',
+          xml: `<cfRule type="iconSet" priority="2"><iconSet iconSet="3Arrows"><cfvo type="percent" val="0"/><cfvo type="percent" val="33"/><cfvo type="percent" val="67"/></iconSet><extLst><ext uri="${DB_EXT_URI}" ${NS_X14_DECL}><x14:id>{3B3B4F10-0000-4000-8000-000000000002}</x14:id></ext></extLst></cfRule>`,
+          marker: { capabilityId: 'icon:dialect-paired', ruleType: 'iconSet', priority: 2, formulas: [], icon: { dialect: 'base', set: '3Arrows', cfvo: [{ type: 'percent', val: '0' }, { type: 'percent', val: '33' }, { type: 'percent', val: '67' }], attrs: {} } },
+        },
+        {
+          kind: 'raw',
+          where: 'x14',
+          sqref: 'C2:C6',
+          xml: '<x14:cfRule type="iconSet" id="{3B3B4F10-0000-4000-8000-000000000002}"><x14:iconSet iconSet="3Triangles"><x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>33</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>67</xm:f></x14:cfvo></x14:iconSet></x14:cfRule>',
+          marker: { capabilityId: 'icon:dialect-paired', ruleType: 'iconSet', formulas: [], icon: { dialect: 'x14', set: '3Triangles', cfvo: [{ type: 'percent', f: '0' }, { type: 'percent', f: '33' }, { type: 'percent', f: '67' }], attrs: {} } },
+        },
+      ],
+    },
+  ),
+  // 3. stage4-icon-glyph-key
+  s4rect(
+    'stage4-icon-glyph-key',
+    'S4-A glyph key: 75 single-cell x14 custom rules, one per (set, iconId) pair, every bucket mapped to that pair (num cfvo 0..k-1, value 10, so no threshold semantics are involved). One row per family (rows 2..21), iconId 0..4 in columns B..F. Uniform geometry and number format ;;; so each crop holds only icon ink against the same-format unformatted control block below. Calibration columns of 10, 30 and 60 characters and one solid DXF cell give icon:pixel-calibration. Every classification of every other case is made against these crops, so icon:glyph-key needs all 75 cells classified into distinct, stable glyph classes and the resaved XML to round-trip all 75 rules.',
+    {
+      n: 20,
+      dxfsXml: DXF_FILLS_XML,
+      colStyles: s4keyStyles(GLYPH_KEY_COLS),
+      calibration: { columns: ['H', 'I', 'J'], scanRow: 3, solidRef: 'K2', solidArgb: 'FFC6EFCE' },
+      caseCapabilities: ['icon:glyph-key'],
+      cols: [
+        ...GLYPH_KEY_COLS.map((c, id) => s4col(c, `IconId${id}`, S4_ICON_FAMILIES.map(f => (id < f.size ? 10 : null)))),
+        s4col('H', 'Calib10', [], 10),
+        s4col('I', 'Calib30', [], 30),
+        s4col('J', 'Calib60', [], 60),
+        s4col('K', 'SolidDxf', [100]),
+      ],
+      rules: [...glyphKeyRules(), cellIsRaw('icon:pixel-calibration', 'K2', 76, '0', { dxfId: 1 })],
+    },
+  ),
+  // 4. stage4-icon-families
+  s4rect(
+    'stage4-icon-families',
+    'S4-E family order: each of the 20 built-in families over k values far from every default threshold (bucket order only, default percent thresholds), one family per column B..U; which icon id each bucket shows is read from the glyph key. Column V omits every <iconSet> attribute (schema defaults, 3TrafficLights1). Column W holds a whole-column icon set (W:W, icon:scope-whole-column; this sheet hides no rows, the scope sheet does) whose control is the neighbour column X; W12 holds 1000, so whole-column statistics and data-block statistics put W2..W4 in different buckets.',
+    {
+      n: 5,
+      colStyles: s4keyStyles([...letters('B', 22), 'X']),
+      controlCells: { W2: 'X2', W3: 'X3', W4: 'X4' },
+      // A stored value far below the data block: statistics over the whole column and over the data block differ.
+      extraCells: [{ ref: 'W12', v: 1000 }],
+      cols: [
+        ...S4_ICON_FAMILIES.map((f, i) => s4col(colLetter(2 + i), f.name, f.size === 3 ? [0, 50, 100] : f.size === 4 ? [0, 37, 62, 100] : [0, 30, 50, 70, 100])),
+        s4col('V', 'SchemaDefaults', [0, 50, 100]),
+        s4col('W', 'WholeCol', [0, 50, 100]),
+        s4col('X', 'WholeColCtrl', [0, 50, 100]),
+      ],
+      rules: [
+        ...S4_ICON_FAMILIES.map((f, i) => {
+          const c = colLetter(2 + i)
+          return icon(f.dialect === 'x14' ? 'icon:families-x14' : 'icon:families-base', `${c}2:${c}${f.size + 1}`, i + 1, f.name, pct(f.size), { dialect: f.dialect })
+        }),
+        icon('icon:settings-schema-defaults', 'V2:V4', 21, undefined, [{ type: 'percent', val: '0' }, { type: 'percent', val: '33' }, { type: 'percent', val: '67' }]),
+        icon('icon:scope-whole-column', 'W1:W1048576', 22, '3Arrows', pct(3), { cells: ['W2', 'W3', 'W4'] }),
+      ],
+    },
+  ),
+  // 5. stage4-icon-thresholds
+  s4rect(
+    'stage4-icon-thresholds',
+    'S4-D thresholds and gte over binary-exact data: num 20/40 over {10..110 by 5} (B, where a num threshold is not a percent of the range); explicit gte="1" (C) and gte="0" (D) over {0..100 by 5}, so the cells exactly at 20 and 40 discriminate gte and the off-boundary cells are non-discriminating for it; percent 25/50/75 over {0..100 by 5} (E) and over {10..110 by 5} (F, where percent is not a literal); percentile 33/67 over {1,2,3,4,10} (G, where PERCENTILE.INC and .EXC put 2 and 4 in different buckets); percent 0 / num 30 / percent 70 over {10..110 by 5} (H, where reading every bound as its own type, all as percent or all as literals differ).',
+    {
+      n: 21,
+      colStyles: s4keyStyles(['B', 'C', 'D', 'E', 'F', 'G', 'H']),
+      cols: [
+        s4col('B', 'Num', range(21, 5, 10)),
+        s4col('C', 'GteTrue', VALUES_0_100_BY5),
+        s4col('D', 'GteFalse', VALUES_0_100_BY5),
+        s4col('E', 'Percent', VALUES_0_100_BY5),
+        s4col('F', 'Percent10to110', range(21, 5, 10)),
+        s4col('G', 'Percentile', [1, 2, 3, 4, 10]),
+        s4col('H', 'Mixed', range(21, 5, 10)),
+      ],
+      rules: [
+        icon('icon:thresholds-num', 'B2:B22', 1, '3Arrows', nums(0, 20, 40)),
+        icon('icon:thresholds-gte-true', 'C2:C22', 2, '3Arrows', [{ type: 'num', val: '0' }, { type: 'num', val: '20', gte: true }, { type: 'num', val: '40', gte: true }]),
+        icon('icon:thresholds-gte-false', 'D2:D22', 3, '3Arrows', [{ type: 'num', val: '0' }, { type: 'num', val: '20', gte: false }, { type: 'num', val: '40', gte: false }]),
+        icon('icon:thresholds-percent', 'E2:E22', 4, '4Arrows', pct(4)),
+        icon('icon:thresholds-percent', 'F2:F22', 5, '4Arrows', pct(4)),
+        icon('icon:thresholds-percentile-inc-exc', 'G2:G6', 6, '3Arrows', [{ type: 'percentile', val: '0' }, { type: 'percentile', val: '33' }, { type: 'percentile', val: '67' }]),
+        icon('icon:thresholds-mixed', 'H2:H22', 7, '3Arrows', [{ type: 'percent', val: '0' }, { type: 'num', val: '30' }, { type: 'percent', val: '70' }]),
+      ],
+    },
+  ),
+  // 6. stage4-icon-degenerate
+  s4rect(
+    'stage4-icon-degenerate',
+    'S4-C/S4-D degenerate shapes: all values equal (B); a single numeric cell (C); non-monotonic num 60/30 (D); percent -10 and 150 (E); a cfvo[0] floor of num 50 with values below it (F); min/max cfvo types (G; recorded only, refused-unsupported per Ruling S4-MINMAX in fix round 7). (<iconSet percent="0"> moved to stage4-icon-unresolved-shapes in fix round 3: Excel 16.114 drops the attribute on resave.)',
+    {
+      n: 11,
+      colStyles: s4keyStyles(['B', 'C', 'D', 'E', 'F', 'G']),
+      cols: [
+        s4col('B', 'Equal', [50, 50, 50, 50, 50]),
+        s4col('C', 'Single', [50]),
+        s4col('D', 'NonMonotonic', VALUES_0_100_BY10),
+        s4col('E', 'OutOfDomain', VALUES_0_100_BY10),
+        s4col('F', 'Floor', VALUES_0_100_BY10),
+        s4col('G', 'MinMax', VALUES_0_100_BY10),
+      ],
+      rules: [
+        icon('icon:degenerate-equal-values', 'B2:B6', 1, '3Arrows', pct(3)),
+        icon('icon:degenerate-single-cell', 'C2:C6', 2, '3Arrows', pct(3)),
+        icon('icon:degenerate-non-monotonic', 'D2:D12', 3, '3Arrows', nums(0, 60, 30)),
+        icon('icon:bounds-out-of-domain', 'E2:E12', 4, '3Arrows', [{ type: 'percent', val: '0' }, { type: 'percent', val: '-10' }, { type: 'percent', val: '150' }]),
+        icon('icon:thresholds-floor', 'F2:F12', 5, '3Arrows', nums(50, 60, 80)),
+        icon('icon:thresholds-min-max', 'G2:G12', 6, '3Arrows', [{ type: 'min' }, { type: 'num', val: '40' }, { type: 'max' }]),
+      ],
+    },
+  ),
+  // 7. stage4-icon-reverse-custom
+  s4rect(
+    'stage4-icon-reverse-custom',
+    'S4-E reverse and custom order: reverse on 3-, 4- and 5-icon sets with only the end buckets designated (the middle bucket of an odd set maps to itself); a custom mapping across families (E); NoIcons in the first (G), middle (H) and last (I) bucket of a custom set. (Custom + reverse, formerly F, moved to stage4-icon-unresolved-shapes in fix round 3: Excel 16.114 drops reverse="1" from an x14 custom="1" rule on resave.)',
+    {
+      n: 11,
+      colStyles: s4keyStyles(['B', 'C', 'D', 'E', 'G', 'H', 'I']),
+      cols: ['B', 'C', 'D', 'E', 'G', 'H', 'I'].map((c, i) => s4col(c, ['Reverse3', 'Reverse4', 'Reverse5', 'Custom', 'NoIconsFirst', 'NoIconsMiddle', 'NoIconsLast'][i]!, VALUES_0_100_BY10)),
+      rules: [
+        icon('icon:reverse', 'B2:B12', 1, '3Arrows', pct(3), { attrs: { reverse: '1' }, cells: ['B2', 'B3', 'B4', 'B5', 'B9', 'B10', 'B11', 'B12'] }),
+        icon('icon:reverse', 'C2:C12', 2, '4Arrows', pct(4), { attrs: { reverse: '1' }, cells: ['C2', 'C3', 'C4', 'C10', 'C11', 'C12'] }),
+        icon('icon:reverse', 'D2:D12', 3, '5Arrows', pct(5), { attrs: { reverse: '1' }, cells: ['D2', 'D3', 'D10', 'D11', 'D12'] }),
+        icon('icon:custom-mapping', 'E2:E12', 4, '3Arrows', pct(3), { dialect: 'x14', custom: [{ set: '3Stars', iconId: 2 }, { set: '3Flags', iconId: 0 }, { set: '5Boxes', iconId: 4 }] }),
+        icon('icon:custom-noicons', 'G2:G12', 5, '3Arrows', pct(3), { dialect: 'x14', custom: [{ set: 'NoIcons', iconId: 0 }, { set: '3Symbols', iconId: 1 }, { set: '3Flags', iconId: 2 }] }),
+        icon('icon:custom-noicons', 'H2:H12', 6, '3Arrows', pct(3), { dialect: 'x14', custom: [{ set: '3Symbols', iconId: 0 }, { set: 'NoIcons', iconId: 0 }, { set: '3Flags', iconId: 2 }] }),
+        icon('icon:custom-noicons', 'I2:I12', 7, '3Arrows', pct(3), { dialect: 'x14', custom: [{ set: '3Symbols', iconId: 0 }, { set: '3Flags', iconId: 1 }, { set: 'NoIcons', iconId: 0 }] }),
+      ],
+    },
+  ),
+  // 8a. stage4-icon-geometry-2 (fix round 8): the paint gates on a rectangular glyph, and the bar/icon showValue conflict
+  s4rect(
+    'stage4-icon-geometry-2',
+    'Fix round 8 (S4-K, S4-I): the paint gates on a rectangular glyph so every edge is stable. An x14 5Boxes rule under num 0/5/8/12/15 puts every value 10 in bucket 2 (5Boxes:2, two filled boxes). Box size: fonts 8/11/20 pt bottom-aligned (B..D) x rows 30/60 pt (rows 2, 3), so fixed, font-scaled and row-scaled boxes differ by >= 3 px. Vertical placement: top (E), centred (F) and bottom (G) cells at 11 pt over the same two rows, so top, centre, bottom and cell-align differ by >= 3 px. Bar/icon showValue conflict on left-aligned text with short right-to-left bars (only the 10 and 15 rows are designated): bar(showValue 0) ahead of icon(1) (H), bar(1) ahead of icon(0) (I), icon(1) ahead of bar(0) (J), which separates any-hides, priority-wins, bar-wins and icon-wins. Fix round 10 (Ruling S4-REPLICATE): rows 5 and 6 repeat the range minimum (10, no bar painted) so every configuration has at least two cells whose text can be read.',
+    {
+      n: 5,
+      rowHeights: { 2: 30, 3: 60 },
+      colStyles: {
+        B: { numFmt: 'hidden', fontPt: 8, vertical: 'bottom' },
+        C: { numFmt: 'hidden', fontPt: 11, vertical: 'bottom' },
+        D: { numFmt: 'hidden', fontPt: 20, vertical: 'bottom' },
+        E: { numFmt: 'hidden', vertical: 'top' },
+        F: { numFmt: 'hidden', vertical: 'center' },
+        G: { numFmt: 'hidden', vertical: 'bottom' },
+        H: { horizontal: 'left' },
+        I: { horizontal: 'left' },
+        J: { horizontal: 'left' },
+      },
+      cols: [
+        ...['B', 'C', 'D', 'E', 'F', 'G'].map(c => s4col(c, `Rect${c}`, [10, 10, null, null, null])),
+        ...['H', 'I', 'J'].map(c => s4col(c, `ShowValue${c}`, [10, 15, 100, 10, 10], 30)),
+      ],
+      rules: [
+        icon('icon:geometry-box', 'B2:D3', 1, '5Boxes', nums(0, 5, 8, 12, 15), { dialect: 'x14' }),
+        icon('icon:geometry-vertical-align', 'E2:G3', 2, '5Boxes', nums(0, 5, 8, 12, 15), { dialect: 'x14' }),
+        bar('icon:composition-bar-showvalue', 'H2:H6', 3, { baseAttrs: { showValue: '0' }, x14Attrs: { ...SOLID_0_100, direction: 'rightToLeft' }, colors: { fill: BLUE }, cells: ['H2', 'H3', 'H5', 'H6'] }),
+        icon('icon:composition-bar-showvalue', 'H2:H6', 4, '3Arrows', nums(0, 5, 8), { attrs: { showValue: '1' }, cells: ['H2', 'H3', 'H5', 'H6'] }),
+        bar('icon:composition-bar-showvalue', 'I2:I6', 5, { x14Attrs: { ...SOLID_0_100, direction: 'rightToLeft' }, colors: { fill: BLUE }, cells: ['I2', 'I3', 'I5', 'I6'] }),
+        icon('icon:composition-bar-showvalue', 'I2:I6', 6, '3Arrows', nums(0, 5, 8), { attrs: { showValue: '0' }, cells: ['I2', 'I3', 'I5', 'I6'] }),
+        icon('icon:composition-bar-showvalue', 'J2:J6', 7, '3Arrows', nums(0, 5, 8), { attrs: { showValue: '1' }, cells: ['J2', 'J3', 'J5', 'J6'] }),
+        bar('icon:composition-bar-showvalue', 'J2:J6', 8, { baseAttrs: { showValue: '0' }, x14Attrs: { ...SOLID_0_100, direction: 'rightToLeft' }, colors: { fill: BLUE }, cells: ['J2', 'J3', 'J5', 'J6'] }),
+      ],
+    },
+  ),
+  // 8. stage4-icon-geometry
+  s4rect(
+    'stage4-icon-geometry',
+    'S4-K icon box: font sizes 8/11/20 pt (columns B..D, bottom-aligned) x row heights 12/30/60 pt (rows 2..4) settle the box variant; the same fonts top-aligned (E..G) and centred (H..J) settle vertical placement, so each pair of hypotheses differs by >= 3 px at a designated cell; a 2-character column (K); a 6 pt row shorter than the box (L5); widths that put cell edges at quarter-point fractions (M..O). Every cell holds 10 under num 0/5/8 thresholds and number format ;;;.',
+    {
+      n: 4,
+      rowHeights: { 2: 12, 3: 30, 4: 60, 5: 6 },
+      colStyles: {
+        B: { numFmt: 'hidden', fontPt: 8, vertical: 'bottom' },
+        C: { numFmt: 'hidden', fontPt: 11, vertical: 'bottom' },
+        D: { numFmt: 'hidden', fontPt: 20, vertical: 'bottom' },
+        E: { numFmt: 'hidden', fontPt: 8, vertical: 'top' },
+        F: { numFmt: 'hidden', fontPt: 11, vertical: 'top' },
+        G: { numFmt: 'hidden', fontPt: 20, vertical: 'top' },
+        H: { numFmt: 'hidden', fontPt: 8, vertical: 'center' },
+        I: { numFmt: 'hidden', fontPt: 11, vertical: 'center' },
+        J: { numFmt: 'hidden', fontPt: 20, vertical: 'center' },
+        ...s4keyStyles(['K', 'L', 'M', 'N', 'O']),
+      },
+      cols: [
+        ...['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'].map(c => s4col(c, `Box${c}`, [10, 10, 10])),
+        s4col('K', 'Narrow', [10, 10, 10], 2),
+        s4col('L', 'ShortRow', [null, null, null, 10]),
+        ...SNAP_WIDTHS.map((w, i) => s4col(['M', 'N', 'O'][i]!, `Snap${i}`, [10, 10, 10], w)),
+      ],
+      rules: [
+        icon('icon:geometry-box', 'B2:D4', 1, '3Arrows', nums(0, 5, 8)),
+        icon('icon:geometry-vertical-align', 'E2:J4', 2, '3Arrows', nums(0, 5, 8)),
+        icon('icon:geometry-narrow-clip', 'K2:K4', 3, '3Arrows', nums(0, 5, 8)),
+        icon('icon:geometry-short-row-clip', 'L5', 4, '3Arrows', nums(0, 5, 8)),
+        icon('icon:geometry-snapping', 'M2:O4', 5, '3Arrows', nums(0, 5, 8)),
+      ],
+    },
+  ),
+  // 9. stage4-icon-inset
+  s4rect(
+    'stage4-icon-inset',
+    'S4-L text inset: left-aligned numbers in 30-character columns (B, the text ink shift against the control is the inset); general (right-aligned) numbers (C, non-discriminating for the inset width unless the capture says otherwise) and centred numbers (D); a 6-character column where number plus icon do not fit (E); NoIcons buckets with showValue 1 (F) and 0 (G). Every icon cell holds a value above num 0/5/8, so every icon is the top bucket.',
+    {
+      n: 3,
+      colStyles: {
+        B: { horizontal: 'left' },
+        D: { horizontal: 'center' },
+        F: { horizontal: 'left' },
+        G: { horizontal: 'left' },
+      },
+      cols: [
+        s4col('B', 'Left', [10, 50, 90], 30),
+        s4col('C', 'General', [10, 50, 90], 30),
+        s4col('D', 'Centred', [10, 50, 90], 30),
+        s4col('E', 'Overflow', [12345, 67890, 54321], 6),
+        s4col('F', 'NoIconsShow', [10, 50, 90], 30),
+        s4col('G', 'NoIconsHide', [10, 50, 90], 30),
+      ],
+      rules: [
+        icon('icon:inset-left', 'B2:B4', 1, '3Arrows', nums(0, 5, 8)),
+        icon('icon:inset-right-aligned', 'C2:C4', 2, '3Arrows', nums(0, 5, 8)),
+        icon('icon:inset-center', 'D2:D4', 3, '3Arrows', nums(0, 5, 8)),
+        icon('icon:inset-overflow', 'E2:E4', 4, '3Arrows', nums(0, 5, 8)),
+        icon('icon:noicons-inset', 'F2:F4', 5, '3Arrows', nums(0, 5, 8), { dialect: 'x14', custom: [0, 1, 2].map(() => ({ set: 'NoIcons', iconId: 0 })) }),
+        icon('icon:noicons-showvalue', 'G2:G4', 6, '3Arrows', nums(0, 5, 8), { dialect: 'x14', attrs: { showValue: '0' }, custom: [0, 1, 2].map(() => ({ set: 'NoIcons', iconId: 0 })) }),
+      ],
+    },
+  ),
+  // 10. stage4-icon-showvalue
+  s4rect(
+    'stage4-icon-showvalue',
+    'S4-L/S4-N showValue on canvas: showValue="0" with general (B) and centred (C) numbers (does the icon move when the text is hidden?), and showValue="0" values whose copy text is read through `copy range` then `the clipboard as text` (D). The AX tree outcome is recorded as not observable from the sdef.',
+    {
+      n: 3,
+      colStyles: { C: { horizontal: 'center' } },
+      cols: [
+        s4col('B', 'HiddenGeneral', [10, 50, 90], 30),
+        s4col('C', 'HiddenCentred', [10, 50, 90], 30),
+        s4col('D', 'CopyText', [10, 50, 90], 30),
+      ],
+      rules: [
+        icon('icon:showvalue-canvas-suppression', 'B2:B4', 1, '3Arrows', nums(0, 5, 8), { attrs: { showValue: '0' } }),
+        icon('icon:showvalue-canvas-suppression', 'C2:C4', 2, '3Arrows', nums(0, 5, 8), { attrs: { showValue: '0' } }),
+        icon('icon:showvalue-copy-text', 'D2:D4', 3, '3Arrows', nums(0, 5, 8), { attrs: { showValue: '0' } }),
+      ],
+    },
+  ),
+  // 11. stage4-icon-participation
+  s4rect(
+    'stage4-icon-participation',
+    'S4-G participation: a number, a date serial, TRUE, text "5", #N/A, "", an unstored blank and a formula with a cached number under num-only thresholds (B, number format ;;;); date serials under a date format (C, a wide right-aligned column so the icon crop holds no text); percent thresholds with one error in scope (D) and num-only thresholds with one error in scope (E).',
+    {
+      n: 8,
+      colStyles: { B: KEY_STYLE, C: { numFmt: 'date' }, D: KEY_STYLE, E: KEY_STYLE },
+      cols: [
+        s4col('B', 'Types', [5, { date: 46332 }, true, '5', { err: '#N/A' }, '', null, { f: '2+3', v: 5 }]),
+        s4col('C', 'DateSerial', [{ date: 46330 }, { date: 46332 }, { date: 46334 }], 30),
+        s4col('D', 'PercentErr', [0, 25, { err: '#N/A' }, 75, 100]),
+        s4col('E', 'NumErr', [0, 25, { err: '#N/A' }, 75, 100]),
+      ],
+      rules: [
+        icon('icon:participation-types', 'B2:B9', 1, '3Arrows', nums(0, 3, 6)),
+        icon('icon:participation-dateserial', 'C2:C4', 2, '3Arrows', nums(0, 46331, 46333)),
+        icon('icon:participation-error-presence', 'D2:D6', 3, '3Arrows', pct(3)),
+        icon('icon:participation-error-presence', 'E2:E6', 4, '3Arrows', nums(0, 33, 67)),
+      ],
+    },
+  ),
+  // 12. stage4-icon-scope
+  s4rect(
+    'stage4-icon-scope',
+    'S4-H scope statistics, measured for icons: disjoint B2:B4 D2:D4; duplicate blocks on E2:E4 (two blocks, different sets); a hidden row holding the extreme value (F6 = 100, row 6 hidden); an autofilter-hidden row holding the extreme value (G5 = 100; rows 5 and 6 are hidden); a one-row merge B8:C8 inside the B8:C9 scope whose covered cell C8 holds 0, so statistics with and without it put B9/C9 in different buckets. The whole-column shape sits on stage4-icon-families, which hides no rows.',
+    {
+      n: 5,
+      // Row 5 is the autofilter-hidden row (G5) and row 6 the manually hidden one (F6), as stage3-bar-scope hides both.
+      hiddenRows: [5, 6],
+      // A one-row merge keeps the host's crop the key's height (classifiable); C8 is a stored value under the merge.
+      merges: ['B8:C8'],
+      autoFilterXml: '<autoFilter ref="G1:G6"><filterColumn colId="0"><filters><filter val="10"/><filter val="20"/><filter val="30"/></filters></filterColumn></autoFilter>',
+      colStyles: s4keyStyles(['B', 'C', 'D', 'E', 'F', 'G']),
+      cols: [
+        s4col('B', 'Disjoint', [10, 20, 30]),
+        s4col('C', 'MergeHost', []),
+        s4col('D', 'DisjointB', [80, 90, 100]),
+        s4col('E', 'DupeBlocks', [10, 20, 30]),
+        s4col('F', 'HiddenRow', [10, 20, 30, 40, 100]),
+        s4col('G', 'FilterHidden', [10, 20, 30, 100, 30]),
+      ],
+      extraCells: [
+        { ref: 'B8', v: 100 },
+        { ref: 'C8', v: 0 },
+        { ref: 'B9', v: 50 },
+        { ref: 'C9', v: 60 },
+      ],
+      rules: [
+        icon('icon:scope-disjoint', 'B2:B4 D2:D4', 1, '3Arrows', pct(3)),
+        icon('icon:scope-duplicate-blocks', 'E2:E4', 2, '3Arrows', pct(3), { separateBlock: true }),
+        icon('icon:scope-duplicate-blocks', 'E2:E4', 3, '3Flags', pct(3), { separateBlock: true }),
+        icon('icon:scope-hidden-row', 'F2:F6', 4, '3Arrows', pct(3)),
+        icon('icon:scope-autofilter-hidden-row', 'G2:G6', 5, '3Arrows', pct(3)),
+        icon('icon:scope-merged-cell', 'B8:C9', 6, '3Arrows', pct(3), { cells: ['B8', 'B9', 'C9'] }),
+      ],
+    },
+  ),
+  // 13. stage4-icon-composition
+  s4rect(
+    'stage4-icon-composition',
+    'S4-I/S4-J composition: two overlapping icon rules (B); an icon with a data bar in both priority orders (C, D) and with conflicting showValue (E); an icon over a colour scale (F) and over a DXF fill (G); a matching (H) and a non-matching (I) DXF stopIfTrue ahead of an icon; a NoIcons win over a lower icon rule (K); an unresolved expression stub at a higher priority (L). (The icon carrying stopIfTrue="1", formerly J, moved to stage4-icon-unresolved-shapes in fix round 6: Excel strips stopIfTrue from icon-set rules on resave, Ruling S4-ICON-STOPIFTRUE.)',
+    {
+      n: 4,
+      dxfsXml: DXF_FILLS_XML,
+      colStyles: s4keyStyles(['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L']),
+      cols: ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L'].map((c, i) =>
+        s4col(c, ['Overlapping', 'IconThenBar', 'BarThenIcon', 'BarShowValue', 'WithScale', 'DxfFill', 'MatchStop', 'NonMatchStop', 'NoIconsWin', 'Stub'][i]!, [25, 15, 5, 0], 20),
+      ),
+      rules: [
+        icon('icon:composition-overlapping-icons', 'B2:B5', 1, '3Arrows', pct(3), { separateBlock: true }),
+        icon('icon:composition-overlapping-icons', 'B2:B5', 2, '3Flags', pct(3), { separateBlock: true }),
+        // Right-to-left bars leave the icon band (the cell's left 28 px) clear on the three shorter bars, so those cells
+        // classify against the key; the longest bar's cell is not designated.
+        icon('icon:composition-with-bar', 'C2:C5', 3, '3Arrows', pct(3), { cells: ['C3', 'C4', 'C5'] }),
+        bar('icon:composition-with-bar', 'C2:C5', 4, { x14Attrs: { ...SOLID_0_100, direction: 'rightToLeft' }, colors: { fill: BLUE }, cells: ['C3', 'C4', 'C5'] }),
+        bar('icon:composition-with-bar', 'D2:D5', 5, { x14Attrs: { ...SOLID_0_100, direction: 'rightToLeft' }, colors: { fill: BLUE }, cells: ['D3', 'D4', 'D5'] }),
+        icon('icon:composition-with-bar', 'D2:D5', 6, '3Arrows', pct(3), { cells: ['D3', 'D4', 'D5'] }),
+        bar('icon:composition-bar-showvalue', 'E2:E5', 7, { baseAttrs: { showValue: '0' }, x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        icon('icon:composition-bar-showvalue', 'E2:E5', 8, '3Arrows', pct(3), { attrs: { showValue: '1' } }),
+        icon('icon:composition-with-scale', 'F2:F5', 9, '3Arrows', pct(3)),
+        scaleRaw('icon:composition-with-scale', 'F2:F5', 10),
+        cellIsRaw('icon:composition-dxf-fill', 'G2:G5', 11, '10', { dxfId: 0 }),
+        icon('icon:composition-dxf-fill', 'G2:G5', 12, '3Arrows', pct(3)),
+        cellIsRaw('icon:composition-matching-stopIfTrue-ahead', 'H2:H5', 13, '10', { stop: true }),
+        icon('icon:composition-matching-stopIfTrue-ahead', 'H2:H5', 14, '3Arrows', pct(3)),
+        cellIsRaw('icon:composition-matching-stopIfTrue-ahead', 'I2:I5', 15, '100', { stop: true }),
+        icon('icon:composition-matching-stopIfTrue-ahead', 'I2:I5', 16, '3Arrows', pct(3)),
+        icon('icon:composition-noicons-slot', 'K2:K5', 17, '3Arrows', pct(3), { dialect: 'x14', custom: [0, 1, 2].map(() => ({ set: 'NoIcons', iconId: 0 })) }),
+        icon('icon:composition-noicons-slot', 'K2:K5', 18, '3Flags', pct(3)),
+        {
+          kind: 'raw',
+          where: 'legacy',
+          sqref: 'L2:L5',
+          xml: '<cfRule type="expression" dxfId="0" priority="19" stopIfTrue="1"><formula>MOD(L2,2)=1</formula></cfRule>',
+          marker: { capabilityId: 'icon:composition-unresolved-stub', ruleType: 'expression', priority: 19, stopIfTrue: true, formulas: ['MOD(L2,2)=1'], dxf: S3_DXF_RED },
+        },
+        icon('icon:composition-unresolved-stub', 'L2:L5', 20, '3Arrows', pct(3)),
+      ],
+    },
+  ),
+  // 14. stage4-icon-rtl
+  s4rect(
+    'stage4-icon-rtl',
+    'S4-M reading order: an icon set on a rightToLeft="1" sheet. Excel\'s placement and inset are recorded only; icon:placement-rtl-sheet stays unverified throughout Stage 4 (the viewer does not lay out RTL sheets).',
+    {
+      n: 3,
+      rightToLeft: true,
+      cols: [s4col('B', 'Rtl', [10, 50, 90], 30)],
+      rules: [icon('icon:placement-rtl-sheet', 'B2:B4', 1, '3Arrows', pct(3))],
+    },
+  ),
+  // 15. stage4-icon-unresolved-shapes
+  s4rect(
+    'stage4-icon-unresolved-shapes',
+    'Excel open/repair/strip outcome for shapes the viewer refuses either way (S4-B, S4-C, S4-O, S4-P): an unknown iconSet; an iconId out of range; NoIcons iconId="1"; a custom set with fewer cfIcon than buckets; a base rule naming 3Stars; type="formula"; xm:f $A$1; activePresent="1"; 2 and 6 cfvo; a cfvo without type. Fix round 3 adds two shapes Excel 16.114 canonicalises on resave (c63de53a), so neither can be authored repair-free: <iconSet percent="0"> (M; Excel drops percent) and an x14 custom="1" rule with reverse="1" (N; Excel drops reverse). Fix round 6 adds an icon rule carrying stopIfTrue="1" ahead of a DXF fill (O; Excel strips stopIfTrue from icon-set rules, Ruling S4-ICON-STOPIFTRUE). Lifts no capability.',
+    {
+      n: 5,
+      status: 'unsupported',
+      reason: 'Unresolved icon shapes fail closed per Rulings S4-B, S4-C, S4-O and S4-P; recorded for Excel\'s open/repair/strip outcome and lift no capability',
+      dxfsXml: DXF_FILLS_XML,
+      cols: ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O'].map((c, i) =>
+        s4col(c, ['UnknownSet', 'IconIdRange', 'NoIconsId', 'CustomCount', 'BaseStars', 'FormulaCfvo', 'XmfRef', 'ActivePresent', 'TwoCfvo', 'SixCfvo', 'NoType', 'PercentAttr0', 'CustomReverse', 'IconStop'][i]!, [10, 30, 50, 70, 90]),
+      ),
+      rules: [
+        iconShape('icon:unresolved-unknown-set', 'B2:B6', 1, '<cfRule type="iconSet" priority="1"><iconSet iconSet="3Bogus"><cfvo type="percent" val="0"/><cfvo type="percent" val="33"/><cfvo type="percent" val="67"/></iconSet></cfRule>', 'legacy'),
+        iconShape('icon:unresolved-iconid-range', 'C2:C6', 2, '<x14:cfRule type="iconSet" priority="2" id="{3B3B4F0F-0000-4000-8000-000000000002}"><x14:iconSet iconSet="3Arrows" custom="1"><x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>33</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>67</xm:f></x14:cfvo><x14:cfIcon iconSet="3Arrows" iconId="7"/><x14:cfIcon iconSet="3Arrows" iconId="1"/><x14:cfIcon iconSet="3Arrows" iconId="2"/></x14:iconSet></x14:cfRule>', 'x14'),
+        iconShape('icon:unresolved-noicons-id', 'D2:D6', 3, '<x14:cfRule type="iconSet" priority="3" id="{3B3B4F0F-0000-4000-8000-000000000003}"><x14:iconSet iconSet="3Arrows" custom="1"><x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>33</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>67</xm:f></x14:cfvo><x14:cfIcon iconSet="NoIcons" iconId="1"/><x14:cfIcon iconSet="3Arrows" iconId="1"/><x14:cfIcon iconSet="3Arrows" iconId="2"/></x14:iconSet></x14:cfRule>', 'x14'),
+        iconShape('icon:unresolved-custom-count', 'E2:E6', 4, '<x14:cfRule type="iconSet" priority="4" id="{3B3B4F0F-0000-4000-8000-000000000004}"><x14:iconSet iconSet="3Arrows" custom="1"><x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>33</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>67</xm:f></x14:cfvo><x14:cfIcon iconSet="3Arrows" iconId="0"/><x14:cfIcon iconSet="3Arrows" iconId="1"/></x14:iconSet></x14:cfRule>', 'x14'),
+        iconShape('icon:unresolved-base-x14-set', 'F2:F6', 5, '<cfRule type="iconSet" priority="5"><iconSet iconSet="3Stars"><cfvo type="percent" val="0"/><cfvo type="percent" val="33"/><cfvo type="percent" val="67"/></iconSet></cfRule>', 'legacy'),
+        iconShape('icon:unresolved-formula-cfvo', 'G2:G6', 6, '<cfRule type="iconSet" priority="6"><iconSet iconSet="3Arrows"><cfvo type="percent" val="0"/><cfvo type="formula" val="SUM(A1:A5)"/><cfvo type="percent" val="67"/></iconSet></cfRule>', 'legacy'),
+        iconShape('icon:unresolved-xmf-reference', 'H2:H6', 7, '<x14:cfRule type="iconSet" priority="7" id="{3B3B4F0F-0000-4000-8000-000000000007}"><x14:iconSet iconSet="3Arrows"><x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="num"><xm:f>$A$1</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>67</xm:f></x14:cfvo></x14:iconSet></x14:cfRule>', 'x14'),
+        iconShape('icon:unresolved-active-present', 'I2:I6', 8, '<x14:cfRule type="iconSet" priority="8" activePresent="1" id="{3B3B4F0F-0000-4000-8000-000000000008}"><x14:iconSet iconSet="3Arrows"><x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>33</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>67</xm:f></x14:cfvo></x14:iconSet></x14:cfRule>', 'x14'),
+        iconShape('icon:unresolved-cfvo-count', 'J2:J6', 9, '<cfRule type="iconSet" priority="9"><iconSet iconSet="3Arrows"><cfvo type="percent" val="0"/><cfvo type="percent" val="50"/></iconSet></cfRule>', 'legacy'),
+        iconShape('icon:unresolved-cfvo-count', 'K2:K6', 10, '<cfRule type="iconSet" priority="10"><iconSet iconSet="5Arrows"><cfvo type="percent" val="0"/><cfvo type="percent" val="20"/><cfvo type="percent" val="40"/><cfvo type="percent" val="60"/><cfvo type="percent" val="80"/><cfvo type="percent" val="90"/></iconSet></cfRule>', 'legacy'),
+        iconShape('icon:unresolved-cfvo-no-type', 'L2:L6', 11, '<cfRule type="iconSet" priority="11"><iconSet iconSet="3Arrows"><cfvo type="percent" val="0"/><cfvo val="33"/><cfvo type="percent" val="67"/></iconSet></cfRule>', 'legacy'),
+        // Fix round 3 (item 8): Excel canonicalises these two on resave, so their capabilities are recorded here only.
+        icon('icon:attr-percent-false', 'M2:M6', 12, '3Arrows', pct(3), { attrs: { percent: '0' } }),
+        icon('icon:reverse-custom', 'N2:N6', 13, '3Arrows', pct(3), { dialect: 'x14', attrs: { reverse: '1' }, custom: [{ set: '3Stars', iconId: 2 }, { set: '3Flags', iconId: 0 }, { set: '5Boxes', iconId: 4 }] }),
+        // Fix round 6 (Ruling S4-ICON-STOPIFTRUE): Excel strips stopIfTrue from icon-set rules on resave.
+        icon('icon:composition-icon-stopIfTrue', 'O2:O6', 14, '3Arrows', pct(3), { stopIfTrue: true }),
+        cellIsRaw('icon:composition-icon-stopIfTrue', 'O2:O6', 15, '0', { dxfId: 0 }),
+      ],
+    },
+  ),
+  // 18a. stage4-icon-rows-bottom (Task 28 round 4, Ruling S4-BOTTOM-REPLICATE): bottom placement on styles that survive
+  // the resave, placed ahead of stage4-icon-rows so it owns icon:geometry-row-offset.
+  s4rect(
+    'stage4-icon-rows-bottom',
+    'S4-BOTTOM-REPLICATE: bottom placement across row heights, replicated. Excel 16.115 resaves its Normal style as vertical="center" and folds an xf whose only alignment is vertical="bottom" into it (stage4-icon-rows B..D were drawn centred), while an xf with an explicit horizontal keeps its own xf, whose missing vertical is bottom (stage4-icon-rows E, drawn bottom-anchored). So every cell here has an explicit horizontal with vertical="bottom": right-aligned numbers (B: 3Arrows, C: 3TrafficLights1, D: 3Symbols) and left-aligned numbers (E: 3Arrows, F: 3TrafficLights1), 11 pt Calibri on the stage4-icon-rows heights (15, 12.75, 16.5, 18, 20, 22.5, 25, 30 pt, rows 2..9). Every cell holds 10 under num 0/5/8 (bucket 2). icon:geometry-row-offset reads anchor-constant, centred or row-scaled; anchor-constant vs centred needs at least two separating columns (S4-REPLICATE), and all five columns separate them.',
+    {
+      n: 8,
+      rowHeights: { 2: 15, 3: 12.75, 4: 16.5, 5: 18, 6: 20, 7: 22.5, 8: 25, 9: 30 },
+      shiftedKey: true,
+      colStyles: {
+        B: { vertical: 'bottom', horizontal: 'right' }, C: { vertical: 'bottom', horizontal: 'right' }, D: { vertical: 'bottom', horizontal: 'right' },
+        E: { vertical: 'bottom', horizontal: 'left' }, F: { vertical: 'bottom', horizontal: 'left' },
+      },
+      cols: ['B', 'C', 'D', 'E', 'F'].map(c => s4col(c, `Bottom${c}`, [10, 10, 10, 10, 10, 10, 10, 10])),
+      rules: [
+        icon('icon:geometry-row-offset', 'B2:B9', 1, '3Arrows', nums(0, 5, 8)),
+        icon('icon:geometry-row-offset', 'C2:C9', 2, '3TrafficLights1', nums(0, 5, 8)),
+        icon('icon:geometry-row-offset', 'D2:D9', 3, '3Symbols', nums(0, 5, 8)),
+        icon('icon:geometry-row-offset', 'E2:E9', 4, '3Arrows', nums(0, 5, 8)),
+        icon('icon:geometry-row-offset', 'F2:F9', 5, '3TrafficLights1', nums(0, 5, 8)),
+      ],
+    },
+  ),
+  // 18. stage4-icon-rows (Task 28 round 2, Ruling S4-ROWS-CAPTURE): the icon frame across row heights
+  s4rect(
+    'stage4-icon-rows',
+    'S4-ROWS-CAPTURE: where the icon frame sits on rows other than the glyph key\'s 20 pt, so default 15 pt rows can paint. 11 pt Calibri regular (the Normal font) on rows of 15 (the default), 12.75, 16.5, 18, 20 (the key\'s, a replication), 22.5, 25 and 30 pt (rows 2..9). Bottom-aligned (B..E) and centred (F..I) cells, cell-align being verified; right-aligned numbers (general alignment: B..D, F..H) and left-aligned numbers (E, I). Every cell holds 10 under num 0/5/8, so 3Arrows (B, E, F, I), 3TrafficLights1 (C, G) and 3Symbols (D, H) all draw bucket 2, whose key crops (3Arrows:2, 3TrafficLights1:2, 3Symbols:2) the harness shifts vertically to classify and to align scanlines (iconShiftedKey). icon:geometry-row-offset reads how the offset follows the row: anchor-constant (a constant gap to the bottom gridline, or a centred frame), top-constant (a constant gap to the top) or row-scaled (the offset scales with the row); they differ by >= 3 px between the 12.75 and 30 pt rows. Whatever Excel draws, the frame offsets at each measured height are recorded per cell; production extends the frame only to those heights, never between them.',
+    {
+      n: 8,
+      rowHeights: { 2: 15, 3: 12.75, 4: 16.5, 5: 18, 6: 20, 7: 22.5, 8: 25, 9: 30 },
+      shiftedKey: true,
+      colStyles: {
+        B: { vertical: 'bottom' }, C: { vertical: 'bottom' }, D: { vertical: 'bottom' }, E: { vertical: 'bottom', horizontal: 'left' },
+        F: { vertical: 'center' }, G: { vertical: 'center' }, H: { vertical: 'center' }, I: { vertical: 'center', horizontal: 'left' },
+      },
+      cols: ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'].map(c => s4col(c, `Row${c}`, [10, 10, 10, 10, 10, 10, 10, 10])),
+      rules: [
+        icon('icon:geometry-row-offset', 'B2:B9', 1, '3Arrows', nums(0, 5, 8)),
+        icon('icon:geometry-row-offset', 'C2:C9', 2, '3TrafficLights1', nums(0, 5, 8)),
+        icon('icon:geometry-row-offset', 'D2:D9', 3, '3Symbols', nums(0, 5, 8)),
+        icon('icon:geometry-row-offset', 'E2:E9', 4, '3Arrows', nums(0, 5, 8)),
+        icon('icon:geometry-row-offset', 'F2:F9', 5, '3Arrows', nums(0, 5, 8)),
+        icon('icon:geometry-row-offset', 'G2:G9', 6, '3TrafficLights1', nums(0, 5, 8)),
+        icon('icon:geometry-row-offset', 'H2:H9', 7, '3Symbols', nums(0, 5, 8)),
+        icon('icon:geometry-row-offset', 'I2:I9', 8, '3Arrows', nums(0, 5, 8)),
+      ],
+    },
+  ),
+]
+
+// ---- fixture -> oracle case ----
+
+/** Markers of one icon rule: the cfvo carry their value as `val` (base) or `f` (x14 `<xm:f>`). */
+function iconMarker(r: S4IconRule): CfPartMarker {
+  const part = 'xl/worksheets/sheet1.xml'
+  const cfvo = r.cfvo.map(c => ({
+    type: c.type,
+    ...(c.val !== undefined ? (r.dialect === 'x14' ? { f: c.val } : { val: c.val }) : {}),
+    ...(c.gte !== undefined ? { gte: c.gte } : {}),
+  }))
+  return {
+    part,
+    extension: r.dialect === 'x14' ? 'x14' : 'legacy',
+    capabilityId: r.cap,
+    sqref: r.sqref,
+    ruleType: 'iconSet',
+    priority: r.priority,
+    ...(r.stopIfTrue ? { stopIfTrue: true } : {}),
+    formulas: [],
+    icon: {
+      dialect: r.dialect,
+      set: r.set ?? '3TrafficLights1',
+      ...(r.custom ? { custom: r.custom } : {}),
+      cfvo,
+      attrs: r.markerAttrs ?? r.attrs ?? {},
+    },
+  }
+}
+
+/** Markers authored by a Stage 4 fixture, in rule order. */
+export function s4Markers(fx: S4Fixture): CfPartMarker[] {
+  const part = 'xl/worksheets/sheet1.xml'
+  return fx.rules.flatMap((r): CfPartMarker[] =>
+    r.kind === 'icon' ? [iconMarker(r)] : r.kind === 'bar' ? barMarkers(fx as unknown as S3Fixture, r) : [{ part, extension: r.where, sqref: r.sqref, ...r.marker }],
+  )
+}
+
+function s4Case(fx: S4Fixture): CfOracleCase {
+  const maxRow = s3LastRow(fx)
+  const stored = s3StoredRefs(fx)
+  const hidden = new Set(fx.hiddenRows ?? [])
+  const rowOf = (ref: string): number => Number(/\d+/.exec(ref)![0])
+  const designated = new Map<string, true>()
+  // Only cells under an icon rule are seeded `iconApplied: true` (a seed, never an Excel fact); a DXF-only cell is not.
+  const underIcon = new Set<string>()
+  for (const r of fx.rules) {
+    const refs = r.cells ?? expandSqref(r.sqref, maxRow).filter(ref => stored.has(ref) && !hidden.has(rowOf(ref)))
+    for (const ref of refs) {
+      designated.set(ref, true)
+      if (r.kind === 'icon') underIcon.add(ref)
+    }
+  }
+  const positive = [...designated.keys()]
+  const controlOf = (ref: string): string => fx.controlCells?.[ref] ?? s3ControlRef(fx, ref)
+  const cells: CfCellExpectation[] = []
+  for (const ref of positive) {
+    cells.push({
+      ref,
+      controlRef: controlOf(ref),
+      matched: true,
+      iconApplied: underIcon.has(ref),
+      fillSource: 'unverified',
+      ...(underIcon.has(ref) ? { iconEvidence: { bucket: 'unverified' as const, geometry: 'unverified' as const } } : {}),
+    })
+  }
+  for (const ref of positive) {
+    cells.push({ ref: controlOf(ref), controlRef: ref, matched: false, iconApplied: false, fillSource: 'unverified', note: 'same-content unformatted control' })
+  }
+  const unsupported = fx.status === 'unsupported'
+  return {
+    id: fx.id,
+    stage: 4,
+    question: fx.question,
+    input: `tests/fixtures/xlsx-cf/inputs/${fx.id}.xlsx`,
+    saved: `tests/fixtures/xlsx-cf/${fx.id}.xlsx`,
+    sheet: 'Sheet1',
+    range: s3Range(fx),
+    requiredAppearances: ['screen'],
+    markers: s4Markers(fx),
+    ...(fx.calibration ? { iconCalibration: fx.calibration } : {}),
+    ...(fx.shiftedKey ? { iconShiftedKey: true as const } : {}),
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: unsupported ? [] : positive,
+      negativeRefs: unsupported ? [] : positive.map(controlOf),
+      cells: unsupported
+        ? positive.map(ref => ({ ref, controlRef: controlOf(ref), matched: false, iconApplied: false, fillSource: 'unverified' as const, note: 'unresolved shape fails closed (no icon)' }))
+        : cells,
+    },
+    captures: unsupported
+      ? []
+      : [{ appearance: 'screen', pngPath: `tests/fixtures/xlsx-cf/refs/${fx.id}.png`, sidecarPath: `tests/fixtures/xlsx-cf/refs/${fx.id}.json` }],
+    status: fx.status,
+    reason: fx.reason,
+    tolerance: DEFAULT_TOLERANCE,
+  }
+}
+
+export const CF_STAGE4_CASES: readonly CfOracleCase[] = CF_STAGE4_FIXTURES.map(s4Case)
+
+/**
+ * Evidence kind of an icon capability (Ruling S4-A): `bucket` capabilities are proven by classifying icon crops against
+ * the glyph key, `geometry` ones by a column/row scan, `key`/`calibration` are the cross-case preconditions, and `record`
+ * ones are observations no capture can turn into evidence.
+ */
+export function iconCapabilityKind(capabilityId: string): 'bucket' | 'geometry' | 'key' | 'calibration' | 'record' | 'none' {
+  if (!capabilityId.startsWith('icon:')) return 'none'
+  if (capabilityId === 'icon:pixel-calibration') return 'calibration'
+  if (capabilityId === 'icon:glyph-key' || capabilityId.startsWith('icon:glyph-')) return 'key'
+  if (capabilityId.startsWith('icon:unresolved-') || capabilityId === 'icon:om-reachability-probe' || capabilityId === 'icon:showvalue-copy-text' || capabilityId === 'icon:placement-rtl-sheet') return 'record'
+  if (capabilityId.startsWith('icon:geometry-') || capabilityId.startsWith('icon:inset-') || capabilityId.startsWith('icon:noicons-') || capabilityId === 'icon:showvalue-canvas-suppression' || capabilityId === 'icon:composition-bar-showvalue') return 'geometry'
+  return 'bucket'
+}
+
+/** The S4 ruling each icon capability lifts (Task 24: every `failClosedDisposition` cites it). */
+function s4Ruling(cap: string): string {
+  const rules: Array<[RegExp, string]> = [
+    [/^icon:unresolved-/, 'Always unsupported per S4-B, S4-C, S4-O and S4-P (the viewer refuses the shape either way; Excel\'s open/repair/strip outcome is recorded only)'],
+    [/^icon:om-reachability-probe$/, 'S4-A (record only: the object-model probe lifts nothing; an unexpected success is an owner question)'],
+    [/^icon:pixel-calibration$/, 'S4-A (calibration: every pixel-classified and pixel-measured icon capability stays unverified until gridline widths and one solid DXF cell calibrate in the key workbook)'],
+    [/^icon:glyph-key$/, 'S4-A (the glyph key: every classification stays unverified until all 75 key cells classify into distinct, stable classes and the resaved XML round-trips the 75 single-pair rules)'],
+    [/^icon:glyph-/, 'S4-A and OD-9(b) (glyph artwork: original vectors compared with this key crop for box and dominant colour only, labelled pixel-approximated, never relabelled measured)'],
+    [/^icon:dialect-base-x14-family$/, 'S4-B, S4-O, S4-DIALECT-CASE and S4-DIALECT-UNSUPPORTED (refused-unsupported: the case records the rejected resave only; recorded answer, c63de53a: Excel 16.114 drops the x14-only iconSet name from a base <cfRule> on resave, leaving <iconSet> to its schema default 3TrafficLights1; production withholds a base rule naming an x14-only family outright, whatever the evidence)'],
+    [/^icon:dialect-paired$/, 'S4-O, S4-DIALECT-CASE and S4-DIALECT-UNSUPPORTED (refused-unsupported: the case records the rejected resave only; recorded answer, c63de53a: Excel 16.114 strips a priority-less x14 companion linked by <x14:id> on resave and keeps the base rule alone; production withholds the paired shape until a repair-free capture evidences it)'],
+    [/^icon:dialect-/, 'S4-O (base and standalone x14 icon sets need their own dialect capability; the x14 XML shape comes from excel-authored-iconsets.xlsx)'],
+    [/^icon:families-/, 'S4-E (which icon id bucket b shows is measured per family group; until then every built-in, non-custom icon is unresolved)'],
+    [/^icon:settings-schema-defaults$/, 'S4-B and S4-F (an omitted iconSet means 3TrafficLights1, and percent="1"/omitted resolves, only with this capability)'],
+    [/^icon:thresholds-min-max$/, 'S4-C and S4-MINMAX (refused-unsupported: no icon dialog authors a min/max cfvo, so the capability is listed in CF_STAGE4_UNSUPPORTED (as S3-CLOSE did for Stage 3) and its degenerate column G is recorded only; Excel 16.115 drew 3Arrows:2 in every cell for [min, num 40, max] over 0..100 (6cb13bdf, a recorded finding, not a reading); production withholds any icon set with a min or max cfvo)'],
+    [/^icon:thresholds-(floor|min-max)$/, 'S4-C (the cfvo[0] floor and min/max cfvo types are unresolved until measured)'],
+    [/^icon:thresholds-/, 'S4-D (each threshold type and gte value needs its own capability; gte is judged only on exact-boundary cells)'],
+    [/^icon:(degenerate-|bounds-out-of-domain)/, 'S4-D (degenerate data is unresolved until measured, never clamped)'],
+    [/^icon:attr-percent-false$/, 'S4-F (recorded outcome, c63de53a: Excel 16.114 drops percent="0" on resave, so the shape cannot be authored repair-free; it is recorded in stage4-icon-unresolved-shapes, refused-unsupported, and production keeps withholding <iconSet percent="0">)'],
+    [/^icon:reverse-custom$/, 'S4-E (recorded outcome, c63de53a: Excel 16.114 drops reverse="1" from an x14 custom="1" rule on resave, so custom + reverse cannot be authored repair-free; it is recorded in stage4-icon-unresolved-shapes, refused-unsupported, and production keeps withholding custom + reverse)'],
+    [/^icon:(reverse|custom-mapping)/, 'S4-E (reverse and custom order: the middle bucket of an odd set is non-discriminating; only end buckets are designated)'],
+    [/^icon:custom-noicons$/, 'S4-B and S4-L (NoIcons is admitted only as a cfIcon target with iconId 0; it insets and hides nothing without evidence)'],
+    [/^icon:geometry-/, 'S4-K (the icon box follows exactly one evidenced CfIconBoxVariant; narrow or short hosts withhold their icon until clipping is measured)'],
+    [/^icon:(inset-|noicons-)/, 'S4-L (an inset is applied only where the icon paints, decided before layout by the painter\'s own predicate)'],
+    [/^icon:showvalue-canvas-suppression$/, 'S4-L (canvas text is hidden only for a painted icon whose showValue is false)'],
+    [/^icon:showvalue-copy-text$/, 'S4-N (copy and find keep the value; Excel\'s clipboard text is recorded, a disagreement is a finding)'],
+    [/^icon:participation-/, 'S4-G (text, boolean, error and blank cells draw no icon, date serials evaluate, and a scope error blocks a statistic-bearing rule, each only with this capability)'],
+    [/^icon:scope-/, 'S4-H (each scope shape is measured for icons, never inherited from bar:scope-* or scale:scope-*)'],
+    [/^icon:composition-icon-stopIfTrue$/, 'S4-J and S4-ICON-STOPIFTRUE (recorded outcome, 6cb13bdf: Excel strips stopIfTrue from icon-set rules on resave and its dialog disables the option for icon sets, so the shape cannot be authored repair-free; it is recorded in stage4-icon-unresolved-shapes, refused-unsupported, and production keeps an icon rule carrying stopIfTrue="1" unresolved, tainting every later rule on its cells)'],
+    [/^icon:composition-/, 'S4-I (the iconSet slot is independent; overlapping icons, bars, fills, stopIfTrue ahead and a NoIcons win withhold as ruled until measured)'],
+    [/^icon:placement-rtl-sheet$/, 'S4-M (icons on an RTL or unknown-direction sheet are unresolved throughout Stage 4; placement is recorded only)'],
+  ]
+  return rules.find(([re]) => re.test(cap))?.[1] ?? 'S4-A (withheld until measured)'
+}
+
+/**
+ * Stage 4 capabilities that are unsupported although their case is captured (the S3-CLOSE mechanism, fix round 7): the
+ * audit reports them `refused-unsupported`, they never verify, and production keeps withholding their shape.
+ */
+export const CF_STAGE4_UNSUPPORTED: Readonly<Record<string, string>> = {
+  'icon:thresholds-min-max':
+    'Unsupported per Ruling S4-MINMAX: no icon dialog authors a min or max cfvo, and Excel 16.115 drew 3Arrows:2 in every cell of [min, num 40, max] over 0..100 (6cb13bdf), which no reading predicted; recorded as a finding, never fitted. Production withholds any icon set with a min or max cfvo (icon:thresholds-min-max is never published).',
+}
+
+/**
+ * Stage 4 capabilities no capture can turn into evidence (Lesson 3): the audit reports them `unverified-nondiscriminating`,
+ * `verifiedCapabilities.ts` never lists them and production keeps withholding. The other expected candidates (`gte` on
+ * off-boundary cells, `reverse` on the middle bucket, `inset-left` on right-aligned numbers, `geometry-snapping` with no
+ * fractional edge, `composition-noicons-slot` when the lower icon is withheld anyway) are decided per capture.
+ */
+export const CF_STAGE4_NONDISCRIMINATING: Readonly<Record<string, string>> = {
+  'icon:om-reachability-probe':
+    'Record only (Ruling S4-A): the object-model probe answers whether `icon set format condition` is reachable; whatever it returns lifts no capability.',
+  'icon:showvalue-copy-text':
+    'Copy text is a clipboard observation (`copy range` then `the clipboard as text`), not a pixel one, and the AX tree is not observable from the sdef (Ruling S4-N): no capture can discriminate it.',
+  'icon:composition-with-scale':
+    'Under the S4-A rule a crop must equal a white-background key crop within +-8 at zero offset; a colour-scale fill under the icon changes every background pixel, so no data that keeps the fill can classify the icon.',
+  'icon:composition-dxf-fill':
+    'Under the S4-A rule a crop must equal a white-background key crop within +-8 at zero offset; a DXF fill under the icon changes every background pixel, so no data that keeps the fill can classify the icon.',
+  'icon:geometry-snapping':
+    'Non-discriminating by construction (Ruling S4-SNAP-SHARED, fix round 9): Excel lays columns out in whole pt at 1 px/pt, so every rounding of a measured icon edge agrees; the icon paint gate will use bar:geometry-snapping (verified in Stage 3, the same roundHalfUp device grid) in S4-PROD-ALIGN.',
+  'icon:placement-rtl-sheet':
+    'Record only (Ruling S4-M): the viewer does not lay out RTL sheets in Stage 4, so the recorded placement and inset stay unverified, as S3-K did for bars.',
+}
+
+/** Complete capability-to-evidence registry for every Stage 4 marker and case-level capability (one entry per id). */
+export const CF_STAGE4_CAPABILITIES: readonly CfCapabilityEntry[] = (() => {
+  const seen = new Set<string>()
+  const out: CfCapabilityEntry[] = []
+  const push = (capabilityId: string, caseId: string, category: string, description: string, policy: string): void => {
+    if (seen.has(capabilityId)) return
+    seen.add(capabilityId)
+    out.push({ capabilityId, caseId, category, description, absentOrDivergentFormulaPolicy: policy, failClosedDisposition: s4Ruling(capabilityId) })
+  }
+  CF_STAGE4_CASES.forEach((c, i) => {
+    for (const m of c.markers) {
+      const ic = m.icon
+      push(
+        m.capabilityId,
+        c.id,
+        m.ruleType,
+        `${c.id} :: ${m.extension} ${m.ruleType} on ${m.sqref}`,
+        ic
+          ? `Requires the exact ${ic.dialect} icon set ${ic.set}${ic.custom ? ` with custom [${ic.custom.map(x => `${x.set}:${x.iconId}`).join(', ')}]` : ''} and ordered cfvo [${ic.cfvo.map(v => v.type + (v.val !== undefined ? `=${v.val}` : '') + (v.f !== undefined ? `(xm:f ${v.f})` : '') + (v.gte === false ? ' gte=0' : '')).join(', ')}]; divergent or non-literal thresholds refuse`
+          : 'Requires the exact pinned rule shape',
+      )
+    }
+    for (const cap of CF_STAGE4_FIXTURES[i]!.caseCapabilities ?? []) push(cap, c.id, 'iconSet', `${c.id} :: case-level ${cap}`, 'Requires every glyph-key rule to round-trip and every key crop to classify')
+  })
+  return out
+})()
+
+export const CF_CASES: readonly CfOracleCase[] = [...CF_STAGE1_CASES, ...CF_STAGE2_CASES, ...CF_STAGE3_CASES, ...CF_STAGE4_CASES]
 
 export const CF_CAPABILITIES: readonly CfCapabilityEntry[] = [
   ...CF_STAGE1_CAPABILITIES,
   ...CF_STAGE2_CAPABILITIES,
   ...CF_STAGE3_CAPABILITIES,
+  ...CF_STAGE4_CAPABILITIES,
 ]

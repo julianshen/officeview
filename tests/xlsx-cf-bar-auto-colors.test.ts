@@ -278,7 +278,8 @@ describe('Stage 3 automatic bar colours (Ruling S3-F as amended, Task 19b)', () 
     const committed = readFileSync(resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts'), 'utf8')
     expect(renderVerifiedCapabilitiesSource(manifest(), REPO_ROOT, { committedSource: committed })).toBe(committed)
     // Publishing (Task 23) carries both measured colours, and the committed file is that publication.
-    const published = renderVerifiedCapabilitiesSource(manifest(), REPO_ROOT, { publishStage3: true })
+    // The committed Stage 4 publication (Task 30) is carried over; only Stage 3 is re-derived here.
+    const published = renderVerifiedCapabilitiesSource(manifest(), REPO_ROOT, { committedSource: committed, publishStage3: true })
     expect(published).toContain(renderAutoBarColoursBlock(WHITE))
     expect(committed).toBe(published)
     // Before the capture, publishing carries an empty colour block.

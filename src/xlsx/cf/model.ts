@@ -23,6 +23,26 @@ export const COLOR_SCALE_WRITE_MASK = COLOR_SCALE_WRITES
 export type CfBarBound = CfScaleBound | { type: 'autoMin' } | { type: 'autoMax' }
 /** The one canonical data-bar write mask, for resolved and unresolved bars alike (a bar never writes the fill slot). */
 export const DATA_BAR_WRITES: ReadonlySet<string> = Object.freeze(new Set(['dataBar']))
+/** The 20 built-in icon families (17 base, then the x14-only `3Triangles`, `3Stars`, `5Boxes`). */
+export type CfIconSetName =
+  | '3Arrows' | '3ArrowsGray' | '3Flags' | '3TrafficLights1' | '3TrafficLights2' | '3Signs' | '3Symbols' | '3Symbols2'
+  | '4Arrows' | '4ArrowsGray' | '4RedToBlack' | '4Rating' | '4TrafficLights' | '5Arrows' | '5ArrowsGray' | '5Rating'
+  | '5Quarters' | '3Triangles' | '3Stars' | '5Boxes'
+/** The frozen set-name table: its index is the wire form of a set (Ruling S4-Q). `NoIcons` (the intentional empty
+ * bucket) is the 21st entry and is valid only as a custom `cfIcon` target (Ruling S4-B). */
+export const CF_ICON_SET_NAMES: readonly (CfIconSetName | 'NoIcons')[] = Object.freeze([
+  '3Arrows', '3ArrowsGray', '3Flags', '3TrafficLights1', '3TrafficLights2', '3Signs', '3Symbols', '3Symbols2',
+  '4Arrows', '4ArrowsGray', '4RedToBlack', '4Rating', '4TrafficLights', '5Arrows', '5ArrowsGray', '5Rating',
+  '5Quarters', '3Triangles', '3Stars', '5Boxes', 'NoIcons',
+] as const)
+/** The one canonical icon-set write mask, for resolved and unresolved icon sets alike (an icon never writes the fill slot). */
+export const ICON_SET_WRITES: ReadonlySet<string> = Object.freeze(new Set(['iconSet']))
+/** One icon-set threshold: `bound` is the cfvo, `gte` says whether a value equal to it reaches the bucket (spec §3, default true). */
+export type CfIconThreshold = Readonly<{ bound: { type: 'num' | 'percent' | 'percentile'; value: number } | { type: 'min' } | { type: 'max' }; gte: boolean }>
+/** A custom bucket mapping: the family and icon id one bucket shows, or `NoIcons` (id 0) for an empty bucket. */
+export type CfIconRef = Readonly<{ set: CfIconSetName | 'NoIcons'; iconId: number }>
+/** The evaluated icon of one cell (Task 26 evaluates it): the winning `(set, iconId)` with its bucket position. */
+export type CfIconDescriptor = Readonly<{ ruleId: number; set: CfIconSetName | 'NoIcons'; iconId: number; bucket: number; buckets: number; showValue: boolean }>
 /** Spec §5.9 evaluated bar descriptor (Task 20 evaluates it; Task 19 only defines it). */
 export type CfBarDescriptor = Readonly<{
   ruleId: number; axisFraction: number; startFraction: number; endFraction: number; fillColor: number
@@ -42,6 +62,10 @@ export type CfDefinition = (CfRuleOrigin & (
   | { kind: 'colorScale'; points: readonly [CfScalePoint, CfScalePoint] | readonly [CfScalePoint, CfScalePoint, CfScalePoint] }
   // Colours are resolved ARGB, normalised once. An optional colour is absent when its element is missing or the
   // rule's settings never draw it; an evaluator that needs an absent colour must withhold (Ruling S3-F).
+  // `thresholds` holds one entry per bucket (k cfvo for a k-icon family); every omitted attribute is its schema default.
+  // `set` is the family (for a custom set, the bucket count's family); `custom` maps each bucket to its own icon.
+  | { kind: 'iconSet'; set: CfIconSetName; thresholds: readonly CfIconThreshold[]; reverse: boolean; showValue: boolean
+      percentAttr: boolean; custom?: readonly CfIconRef[]; sheetRightToLeft?: boolean }
   | { kind: 'dataBar'; bounds: readonly [CfBarBound, CfBarBound]; fillArgb: number; negativeFillArgb?: number
       borderArgb?: number; negativeBorderArgb?: number; axisArgb?: number; minLength: number; maxLength: number; gradient: boolean
       border: boolean; negativeBarColorSameAsPositive: boolean; negativeBarBorderColorSameAsPositive: boolean
@@ -61,7 +85,7 @@ export interface CfCellState {
   readonly visual?: Readonly<{
     colorScale?: Readonly<{ ruleId: number; argb: number; fraction?: number }>
     dataBar?: CfBarDescriptor
-    iconSet?: Readonly<{ name: string; index: number }>
+    iconSet?: CfIconDescriptor
   }>
 }
 export interface CfRule { readonly id: number; readonly priority: number; readonly documentOrder: number; readonly ranges: readonly SourceRect[]; readonly stopIfTrue: boolean; readonly writes: CfWriteMask; readonly definition: CfDefinition; readonly dxf?: CfCellState['properties'] }

@@ -41,7 +41,8 @@ export interface CellBodyLayout {
 
 /** The host owns measurement and formatting (spec §11.2: no second text model). */
 export interface CellLayoutHost {
-  layoutBody(cell: XlsxCell, width: number, height: number, overflow?: { left: number; right: number }, preformatted?: string, allocation?: FormatAllocation): CellBodyLayout
+  layoutBody(cell: XlsxCell, width: number, height: number, overflow?: { left: number; right: number }, preformatted?: string, allocation?: FormatAllocation,
+    /** Ruling S4-L: the text box's reduction where an icon paints (absent: none). */ inset?: { left: number; right: number }): CellBodyLayout
   /** Opt-in proof that this exact body remains valid under the given allowance.
    * Only certified bodies share a key across allowances; other hosts retain
    * their complete allowance-dependent formatting/layout identity. */
@@ -88,7 +89,31 @@ export interface CellLayout {
 export interface PlacedCell { cfKey?: string; cell: XlsxCell; source: SourceCell; x: number; y: number; width: number; height: number; merge?: XlsxMergeRange
   /** Room the text may use past the box into empty neighbours (S13); a layout
    * key unless the host certifies an identical body under another allowance. */
-  overflow?: { left: number; right: number } }
+  overflow?: { left: number; right: number }
+  /** Ruling S4-L: the text inset of a host whose icon this frame paints; a layout key (no stale un-inset hit). */
+  textInset?: { left: number; right: number } }
+
+/** Ruling S4-L: lays a body out with its text box narrowed by `inset` (fitting, the '#' width and alignment follow the
+ * narrower box) while the body keeps the cell's own box for its fill and borders. */
+export function withTextInset(x: number, w: number, inset: { left: number; right: number } | undefined, layout: (x: number, w: number) => CellBodyLayout): CellBodyLayout {
+  if (!inset) return layout(x, w)
+  const body = layout(x + inset.left, Math.max(0, w - inset.left - inset.right))
+  body.x = x
+  body.w = w
+  return body
+}
+
+/** Ruling S4-L: the width of the text a body lays out on one unrotated, unwrapped line (an icon host's `textWidth`); 0
+ * without text, undefined for any other layout (withheld). */
+export function cellTextWidth(body: CellBodyLayout): number | undefined {
+  const t = body.text
+  if (!t) return 0
+  if (t.kind === 'plain') return t.width
+  if (t.rotation || t.stacked || t.wrap || t.layout.lines.length !== 1) return undefined
+  let width = 0
+  for (const segment of t.layout.lines[0]!.segments) width += segment.width
+  return width
+}
 
 export function cellIdOf(source: SourceCell): CellId {
   return source.row * MAX_COLS + source.col
@@ -214,7 +239,7 @@ export class LayoutCache {
       catch (error) { painted?.release(); throw error }
     }
     let built: CellBodyLayout
-    try { built = host.layoutBody(placed.cell, placed.width, placed.height, placed.overflow, painted?.text, painted?.allocation) }
+    try { built = host.layoutBody(placed.cell, placed.width, placed.height, placed.overflow, painted?.text, painted?.allocation, placed.textInset) }
     catch (error) { if (batch) batch.admission.release(upper); throw error }
     finally { painted?.release() }
     this.stats.built++
@@ -285,9 +310,9 @@ function styleKey(style: XlsxCellStyle | undefined): string {
   if (key === undefined) styleKeys.set(style, key = JSON.stringify(style))
   return key
 }
-function layoutKey({ cell, source, width, height, cfKey }: PlacedCell): string {
+function layoutKey({ cell, source, width, height, cfKey, textInset }: PlacedCell): string {
   const value = cell.value === null ? 'n' : `${typeof cell.value}:${String(cell.value)}`
-  return `${cfKey ?? ''}|${source.row},${source.col}|${width}|${height}|${cell.valueIsError === undefined ? '' : cell.valueIsError ? 1 : 0}${cell.formula === undefined ? '' : 'f'}|${styleKey(cell.style)}|${value}`
+  return `${cfKey ?? ''}|${source.row},${source.col}|${width}|${height}|${cell.valueIsError === undefined ? '' : cell.valueIsError ? 1 : 0}${cell.formula === undefined ? '' : 'f'}|${styleKey(cell.style)}|${value}${textInset ? `|i${textInset.left},${textInset.right}` : ''}`
 }
 
 /** Raw logical text of a value: what search/copy see before display formatting. */

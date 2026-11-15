@@ -908,9 +908,11 @@ export function renderSheet(
       // Fills go down now; text after every fill, so overflow into an empty
       // formatted neighbour stays visible (Excel draws it over the fill).
       // A bar's host carries the fill painted under it (its axis dash needs it) and decides S3-O text suppression.
-      const host = cf && { x, y, width: w, height: hh, ...(styledCell.style?.fillColor ? { fill: spreadsheetColor(styledCell.style.fillColor) } : {}) }
-      if (host) barHosts.set(cell.row * MAX_COLS + cell.col, host)
-      const layout = layoutCellBody(ctx, sheet, styledCell, x, y, w, hh, measured, rng ? NO_OVERFLOW : overflowFor(styledCell, source), undefined, undefined, host ? cf.hidesTextAt(cell.row, cell.col, host, barScale) : undefined)
+      // The lazy batch lays a CF cell out on its one host (bar, icon, inset, hidden text: Ruling S4-L).
+      const overflow = rng ? NO_OVERFLOW : overflowFor(styledCell, source)
+      const cfCell = cf && cf.layoutCell(ctx, sheet, styledCell, x, y, w, hh, measured, overflow, barScale)
+      if (cfCell) barHosts.set(cell.row * MAX_COLS + cell.col, cfCell.host)
+      const layout = cfCell ? cfCell.layout : layoutCellBody(ctx, sheet, styledCell, x, y, w, hh, measured, overflow)
       paintCellLayout(ctx, layout, extent, 'fill')
       laidOut.push(layout)
     }
@@ -926,6 +928,8 @@ export function renderSheet(
   const grid = { r0: 0, c0: 0, r1: rowHeightsPx.length - 1, c1: colWidthsPx.length - 1 }
   // Data bars paint over the fills and under the text (Task 22), through the lazy painter the batch carries.
   cf?.paintBars(ctx, (row, col) => cellBox(row, col) && barHosts.get(row * MAX_COLS + col), grid, barScale)
+  // Icons over the bars, under the text (Task 29), on the same hosts.
+  cf?.paintIcons(ctx, (row, col) => cellBox(row, col) && barHosts.get(row * MAX_COLS + col), grid, barScale)
   if (sheet.resolvedSparklines?.size) {
     const painted = paintSparklinesIn(ctx, sheet, cellBox, grid, { zoom: sparklineScale, dpr: 1 })
     if (!painted) {

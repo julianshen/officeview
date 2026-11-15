@@ -100,6 +100,10 @@ export interface XlsxRow {
   heightPt?: number
   customHeight?: boolean
   hidden?: boolean
+  /** `customFormat="1"`: the row carries a row style, which its empty cells take (Ruling S4-ROW-UNIFORM). */
+  styled?: boolean
+  /** A cell of the row holds a run-formatted (rich-text) string (Ruling S4-ROW-UNIFORM, fix round 2). */
+  richText?: boolean
   cells: XlsxCell[]
 }
 
@@ -158,6 +162,15 @@ export interface XlsxSheet {
   drawingCoverage?: DrawingCoverageEntry[]
   /** Authored frozen panes of the first sheet view (interactive viewer only). */
   frozen?: XlsxFrozenPane
+  /** Ruling S4-DEFAULT-ROW: the authored height (pt) of rows without `ht` (`sheetFormatPr defaultRowHeight`, absent
+   * under zeroHeight/thickTop/thickBottom). Used by the icon frame only; the grid keeps its own default. */
+  defaultRowHeightPt?: number
+  /** Ruling S4-ROW-UNIFORM (fix round 2): the default cell style (xf 0) or a `<cols>` style is not, or not known to
+   * be, Calibri 11 regular, so no row of the sheet is uniformly the default font. */
+  rowFontsBlocked?: boolean
+  /** This sheet's table inventory could not be established (an unresolved, unreadable or invalid table part): unknown,
+   * distinct from known-empty (`tables` absent). Rulings S4-ROW-EFFECTIVE: every row withholds bottom placement. */
+  tablesUnknown?: boolean
   name: string
   sourcePartPath?: string
   /** Resolved workbook semantics (date system/locale/zone/clock) so the

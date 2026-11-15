@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { CF_BAR_CELL_BYTES, createCfMemory, createCfWorkBudget, type CfWorkBudget } from '../src/xlsx/cf/limits'
+import { CF_BAR_CELL_BYTES, CF_ICON_CELL_BYTES, createCfMemory, createCfWorkBudget, type CfWorkBudget } from '../src/xlsx/cf/limits'
 import type { CfSheetRules, CfStamp, CfLiteral, CfValueSource, CfValuePage, CfLease } from '../src/xlsx/cf/model'
 import type { SourceRect } from '../src/xlsx/view/coordinates'
 import {
@@ -51,6 +53,8 @@ const BAR_FULL: NonNullable<CfCellStateWire['bar']> = {
 const BAR_MIN: NonNullable<CfCellStateWire['bar']> = {
   ruleId: 3, axisFraction: 0, startFraction: 0, endFraction: 0.5, valueFraction: 0.5, fillColor: 0xff0000ff, isGradient: true, isNegative: false, showValue: true, rtl: false,
 }
+/** Ruling S4-Q: the per-cell icon descriptor, numbers and booleans only (`set` indexes CF_ICON_SET_NAMES). */
+const ICON_FULL: NonNullable<CfCellStateWire['icon']> = { ruleId: 4, set: 20, iconId: 4, bucket: 4, buckets: 5, showValue: false }
 
 /** Bare async CF source for provider tests: no admission of its own. */
 function fakeSource(
@@ -173,6 +177,8 @@ describe('CF reply estimator', () => {
       ['diag', { kind: 'unsupported', feature: 'cf-x', message: 'hello' }, (v: never) => measureCfDiagnosticBytes(v as never)],
       ['cell-bar', { row: 4, col: 5, properties: {}, bar: BAR_FULL }, measureCfCellBytes as (v: never) => number],
       ['cell-bar-min', { row: 4, col: 5, properties: {}, bar: BAR_MIN }, measureCfCellBytes as (v: never) => number],
+      ['cell-icon', { row: 6, col: 7, properties: {}, icon: ICON_FULL }, measureCfCellBytes as (v: never) => number],
+      ['cell-icon-bar', { row: 6, col: 7, properties: { 'font.bold': true }, unresolvedWrites: ['showValue'], bar: BAR_FULL, icon: ICON_FULL }, measureCfCellBytes as (v: never) => number],
     ]
     for (const [name, value, fn] of cases) {
       const mine = fn(value as never)
@@ -183,6 +189,18 @@ describe('CF reply estimator', () => {
     // CF_BAR_CELL_BYTES is the full-minus-empty difference of the measurer (Ruling S3-S, Lesson 6).
     expect(CF_BAR_CELL_BYTES).toBe(measureCfCellBytes({ properties: {}, bar: BAR_FULL }) - measureCfCellBytes({ properties: {} }))
     expect(CF_BAR_CELL_BYTES).toBe(measurePayloadBytes({ row: 0, col: 0, properties: {}, bar: BAR_FULL }, () => true)! - measurePayloadBytes({ row: 0, col: 0, properties: {} }, () => true)!)
+    // CF_ICON_CELL_BYTES likewise (Ruling S4-Q, Lesson 6), and estimateCfPrepareBytes prices icons with it, no hand constant.
+    expect(CF_ICON_CELL_BYTES).toBe(measureCfCellBytes({ properties: {}, icon: ICON_FULL }) - measureCfCellBytes({ properties: {} }))
+    expect(CF_ICON_CELL_BYTES).toBe(measurePayloadBytes({ row: 0, col: 0, properties: {}, icon: ICON_FULL }, () => true)! - measurePayloadBytes({ row: 0, col: 0, properties: {} }, () => true)!)
+    const service = readFileSync(resolve(process.cwd(), 'src/xlsx/cf/service.ts'), 'utf8')
+    const estimate = service.slice(service.indexOf('export function estimateCfPrepareBytes'), service.indexOf('export function createCfService'))
+    const iconArm = /kind === 'iconSet'\) \{([^}]*)\}/.exec(estimate)
+    expect(iconArm, 'estimateCfPrepareBytes has an iconSet arm').not.toBeNull()
+    expect(iconArm![1]).toMatch(/propertyBytes \+= CF_ICON_CELL_BYTES/)
+    expect(iconArm![1]).not.toMatch(/\b\d+\b/)
+    const contracts = readFileSync(resolve(process.cwd(), 'src/xlsx/view/contracts.ts'), 'utf8')
+    const measureIcon = /if \(cell\.icon !== undefined\) \{([^}]*)\}/.exec(contracts)
+    expect(measureIcon, 'measureCfCellBytes has an icon branch').not.toBeNull()
   })
 
   it('mirrors the service propertyBytes accounting for admission parity', () => {

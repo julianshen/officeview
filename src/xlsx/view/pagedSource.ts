@@ -10,8 +10,9 @@
  * without one is `unavailable`. Answers match ObjectXlsxSheetAdapter over the
  * same file parsed with valuePolicy 'cached' (adapter parity, §4.2).
  */
+import { CF_ALL_ROWS, cfSheetNonUniformFontRows } from '../rowFont'
 import { isDateNumberStyle } from '../dateNumberFormat'
-import { defaultColumnWidthPx } from '../columnWidth'
+import { defaultColumnWidthPx, defaultRowPtOf } from '../columnWidth'
 import type {
   AuthoritativeCell, CellRead, ColumnEntry, ColumnQuery, DrawingAnchor, OverviewGroup, OverviewQuery, Page, PopulatedQuery, RangeCompletion,
   ReadOptions, RemotePivotDisplay, SheetSparklines, SingleCellPayload, SourceFailure, SourceRowInterval, SourceStamp, SourceStore,
@@ -751,7 +752,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   private drawings(): DrawingAnchor[] {
     const meta = this.sheet.metadata
     this.drawingCache ??= resolveDrawingAnchors(this.sheet.drawingAnchors.records,
-      buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true, columns: pagedColumns(this.workbook, meta) }))
+      buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true, columns: pagedColumns(this.workbook, meta), ...(meta.nonUniformFontRows ? { nonUniformFontRows: meta.nonUniformFontRows } : {}) }))
     return this.drawingCache
   }
 
@@ -779,7 +780,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     if (options.signal.aborted || this.workbook.parts.signal.aborted) abort()
     try {
       const { loadPagedSheetDrawings, pagedDrawingLimits } = await import('../storage/pagedDrawings')
-      const geometry = buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true, columns: pagedColumns(this.workbook, meta) })
+      const geometry = buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true, columns: pagedColumns(this.workbook, meta), ...(meta.nonUniformFontRows ? { nonUniformFontRows: meta.nonUniformFontRows } : {}) })
       const nodes = this.drawingState.nodes, sheetId = this.sheet.sheetId
       const parsed = await loadPagedSheetDrawings(this.workbook.parts, { name: this.sheet.name, partPath: this.sheet.partPath, drawingIds: meta.drawingIds, legacyDrawingIds: meta.legacyDrawingIds, slicerIds: meta.slicerRelationshipIds, timelineIds: meta.timelineRelationshipIds, stylesExtras: this.workbook.tableStyleExtras },
         geometry, pagedDrawingLimits(profile, this.drawingState.payloadBytes, this.workbook.pivotPartBytes), controller.signal, { memory, profile, chartDocument: this.drawingState.charts ??= {}, startNodes: nodes.start(sheetId), fillCharts: (drawings, owner, names, admit, workspace) => this.fillCharts(drawings, owner, controller.signal, names, admit, workspace as ChartWorkspace | undefined) })
@@ -1803,10 +1804,11 @@ async function prepareCfRemoteOnce(
   }
   // Bound validation-tier work upfront: the rule count caps every
   // normalization, definition build and per-cell bound below, so no
-  // unbounded structure is ever built before admission. Both lazy CF modules
+  // unbounded structure is ever built before admission. The lazy CF modules (limits, service, model)
   // load before any reservation, so an import failure admits nothing.
   const limitsModule = await import('../cf/limits')
   const serviceModule = await import('../cf/service')
+  const modelModule = await import('../cf/model')
   if (rules && rules.rules.length > limitsModule.CF_LIMITS.rules) {
     return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-scope-too-large', 'Conditional formatting exceeds the bounded rule count.'), requiredBytes: undefined }
   }
@@ -1998,17 +2000,21 @@ async function prepareCfRemoteOnce(
   // Priced by definition kind, not by outcome: a resolved rule whose bars evaluation or the painter will still withhold
   // (unverified layout, gradient, paint gates) is charged in full. That over-prices fail closed, never under-prices.
   const hasBar = rules.rules.some(r => r.definition.kind === 'dataBar')
+  // Ruling S4-Q: likewise one full icon descriptor per cell for a resolved icon-set rule, priced by kind (a rule whose icons
+  // evaluation or the painter will still withhold is charged in full: over-prices, never under-prices).
+  const hasIcon = rules.rules.some(r => r.definition.kind === 'iconSet')
   let perCell = 96
   for (const rule of rules.rules) perCell += measureCfPropertiesBytes((rule.dxf ?? {}) as Record<string, string | number | boolean | null>)
   const perCellScale = perCell + (hasScale ? limitsModule.CF_SCALE_CELL_BYTES : 0)
   const perCellBar = perCellScale + (hasBar ? limitsModule.CF_BAR_CELL_BYTES : 0)
-  const hasVisual = hasScale || hasBar
+  const perCellIcon = perCellBar + (hasIcon ? limitsModule.CF_ICON_CELL_BYTES : 0)
+  const hasVisual = hasScale || hasBar || hasIcon
   if (templateBytes === undefined || diagBytes === undefined || !Number.isSafeInteger(perCell)) {
     working.release()
     return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting exceeds the receiver grant; retry with at least the estimated size.'), requiredBytes: undefined }
   }
   const estimate = estimateCfPreparationBytes(cells, perCell, 0, 0, 0)
-  const estimateWithVisuals = estimateCfPreparationBytes(cells, perCellBar, 0, 0, 0)
+  const estimateWithVisuals = estimateCfPreparationBytes(cells, perCellIcon, 0, 0, 0)
   if (estimate === undefined || estimateWithVisuals === undefined) {
     working.release()
     return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting exceeds the receiver grant; retry with at least the estimated size.'), requiredBytes: undefined }
@@ -2113,12 +2119,17 @@ async function prepareCfRemoteOnce(
             ...(d.axisColor !== undefined ? { axisColor: d.axisColor } : {}),
             isGradient: d.isGradient, isNegative: d.isNegative, showValue: d.showValue, rtl: d.direction === 'rightToLeft',
           } : undefined
+          // Ruling S4-Q: numbers and booleans only; `set` is the index into the frozen `CF_ICON_SET_NAMES` table.
+          const ic = at.value.visual?.iconSet
+          const iconSet = ic ? modelModule.CF_ICON_SET_NAMES.indexOf(ic.set) : -1
+          const icon = ic && iconSet >= 0 ? { ruleId: ic.ruleId, set: iconSet, iconId: ic.iconId, bucket: ic.bucket, buckets: ic.buckets, showValue: ic.showValue } : undefined
           states.push({
             row, col,
             properties: { ...at.value.properties },
             ...(won === undefined ? {} : { unresolvedWrites: won }),
             ...(scale ? { scale } : {}),
             ...(bar ? { bar } : {}),
+            ...(icon ? { icon } : {}),
           })
         }
       }
@@ -2163,15 +2174,16 @@ async function prepareCfRemoteOnce(
         finalStates = states
         finalDiagnostics = []
       } else if (hasVisual) {
-        // A visual payload that exceeds the grant is omitted, never replaced (Ruling S3-S): bar fields go first,
-        // then scale fields, while every cell's base properties still return. Each step offers the bounded
+        // A visual payload that exceeds the grant is omitted, never replaced (Rulings S3-S, S4-Q): icon fields go first,
+        // then bar fields, then scale fields, while every cell's base properties still return. Each step offers the bounded
         // cf-grant-required diagnostics of the families omitted so far, and drops them when only the base fits.
-        const omit = (from: typeof states, field: 'bar' | 'scale'): typeof states => from.map(s => {
+        const omit = (from: typeof states, field: 'icon' | 'bar' | 'scale'): typeof states => from.map(s => {
           if (s[field] === undefined) return s
           const { [field]: _, ...rest } = s
           return rest
         })
-        const families: { field: 'bar' | 'scale'; message: string }[] = [
+        const families: { field: 'icon' | 'bar' | 'scale'; message: string }[] = [
+          ...(hasIcon ? [{ field: 'icon' as const, message: 'Conditional formatting icon sets omitted due to receiver grant limit.' }] : []),
           ...(hasBar ? [{ field: 'bar' as const, message: 'Conditional formatting data bars omitted due to receiver grant limit.' }] : []),
           ...(hasScale ? [{ field: 'scale' as const, message: 'Conditional formatting scale fill omitted due to receiver grant limit.' }] : []),
         ]
@@ -2693,7 +2705,7 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
       let geometry = geometries.get(sheetId)
       if (!geometry) {
         // Row metadata arrives with the rows; cache only once the sheet is complete.
-        geometry = withFrozen(buildGeometry(sheet.metadata.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), sheet.metadata.cols, sheet.metadata.hiddenRows, { hiddenCols: true, columns: pagedColumns(workbook, sheet.metadata) }), sheet.metadata.frozen)
+        geometry = withFrozen(buildGeometry(sheet.metadata.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), sheet.metadata.cols, sheet.metadata.hiddenRows, { hiddenCols: true, columns: pagedColumns(workbook, sheet.metadata), ...pagedDefaultRow(sheet.metadata, sheet as never) }), sheet.metadata.frozen)
         if (sheet.state === 'complete') geometries.set(sheetId, geometry)
       }
       return geometry
@@ -2722,6 +2734,16 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
   }
 }
 
+/** Ruling S4-DEFAULT-ROW: the authored height (pt) of the paged sheet's rows without `ht`, from its sheetFormatPr. */
+function pagedDefaultRow(meta: { format?: import('../columnWidth').SheetFormat; nonUniformFontRows?: readonly { start: number; end: number }[] }, sheet?: import('../rowFont').CfRowFontSheet & { state?: string }): { defaultRowPt?: number; nonUniformFontRows?: readonly { start: number; end: number }[] } {
+  const pt = defaultRowPtOf(meta.format)
+  // Ruling S4-ROW-UNIFORM: the reader's row font uniformity travels beside the default row height. S4-ROW-EFFECTIVE:
+  // with the sheet's CF font rules and table rows, known only once the sheet is complete (every row withholds before).
+  const rows = !meta.nonUniformFontRows ? undefined
+    : !sheet ? meta.nonUniformFontRows
+      : sheet.state !== 'complete' ? [{ ...CF_ALL_ROWS }] : cfSheetNonUniformFontRows(sheet, meta.nonUniformFontRows)
+  return { ...(pt !== undefined ? { defaultRowPt: pt } : {}), ...(rows ? { nonUniformFontRows: rows } : {}) }
+}
 /** Excel column pixel model of a paged sheet: workbook MDW and its sheetFormatPr. */
 function pagedColumns(workbook: PagedWorkbook, meta: { format?: { baseColWidth?: number; defaultColWidth?: number } }) {
   const mdw = workbook.formatting.maxDigitWidthPx ?? 7

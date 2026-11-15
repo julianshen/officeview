@@ -552,6 +552,72 @@ it('a CF generation change with the lease kept invalidates every tile of a bar-o
   }
 })
 
+it('a CF generation change with the lease kept invalidates every tile of an icon-only sheet (Lesson 5)', async () => {
+  // Stage 4 Task 27: the family ruling holds for a sheet whose only rule is an icon set. Icons come from injected
+  // evidence (nothing Stage 4 is published); the invalidation must not depend on whether the icon resolves.
+  const { TileCache } = await import('../src/xlsx/view/tileCache')
+  const { SheetTileRenderer } = await import('../src/components/xlsx/sheetTiles')
+  const { injectCfEvidence } = await import('../src/xlsx/cf/evidence')
+  const rows = Array.from({ length: 60 }, (_, r) => ({ index: r, cells: [{ row: r, col: 0, ref: `A${r + 1}`, styleIndex: 0, value: r }] }))
+  const iconSheet = {
+    name: 'IconTileSheet', sheetId: 's', cols: [{ min: 0, max: 0, widthChars: 12 }], merges: [], mergeRanges: [], rows,
+    conditionalFormatting: { diagnostics: [], rules: [{
+      id: 1, priority: 1, documentOrder: 0, stopIfTrue: false, ranges: [{ firstRow: 0, lastRow: 59, firstCol: 0, lastCol: 0 }],
+      writes: new Set(['iconSet']),
+      definition: {
+        kind: 'iconSet', dialect: 'base', formulas: [], set: '3Arrows', reverse: false, showValue: true, percentAttr: true, sheetRightToLeft: false,
+        thresholds: [{ bound: { type: 'percent', value: 0 }, gte: true }, { bound: { type: 'percent', value: 33 }, gte: true }, { bound: { type: 'percent', value: 67 }, gte: true }],
+      },
+    }] },
+  } as unknown as XlsxSheet
+  expect(iconSheet.conditionalFormatting!.rules.every(r => r.definition.kind === 'iconSet')).toBe(true)
+  const doc = { sheets: [iconSheet] }
+  const source = createObjectWorkbookSource(doc, 'icon-tile-live')
+  const store = source.store('s')
+  injectCfEvidence(['icon:families-base', 'icon:thresholds-percent', 'icon:thresholds-gte-true', 'icon:participation-types', 'icon:participation-dateserial'])
+  let activeRenderer: InstanceType<typeof SheetTileRenderer> | undefined
+  const origPresent = SheetTileRenderer.prototype.present
+  const presentSpy = vi.spyOn(SheetTileRenderer.prototype, 'present').mockImplementation(function (this: InstanceType<typeof SheetTileRenderer>, ctx, frame) {
+    activeRenderer = this
+    return origPresent.call(this, ctx, frame)
+  })
+  const invalidateCalls: Array<(key: import('../src/xlsx/view/tileCache').TileKey) => boolean> = []
+  const origInvalidate = TileCache.prototype.invalidate
+  const invalidateSpy = vi.spyOn(TileCache.prototype, 'invalidate').mockImplementation(function (this: InstanceType<typeof TileCache>, predicate) {
+    invalidateCalls.push(predicate)
+    return origInvalidate.call(this, predicate)
+  })
+  const ui = render(<InteractiveSheetDoc doc={doc} source={source} />)
+  try {
+    await waitFor(() => expect(activeRenderer).toBeDefined())
+    const identity = { docId: 'icon-tile-live', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 }
+    const tile = (col: number, row: number, sheetId = 's') => ({ paletteKey: 'classic', identity: { ...identity, sheetId }, backend: 'canvas2d', zoom: 1, dpr: 1, col, row })
+    // Tiles of the icon scope (rows 0..25 and 26..51), beyond it (col 5, row 7), and of another sheet.
+    const sheetTiles = [tile(0, 0), tile(0, 1), tile(5, 0), tile(3, 7)]
+    const before = invalidateCalls.length
+    act(() => {
+      iconSheet.rows[49]!.cells[0]!.value = 1000
+      store.noteValuesChanged?.()
+      ui.rerender(<InteractiveSheetDoc doc={doc} source={source} />)
+    })
+    await waitFor(() => expect(invalidateCalls.length).toBeGreaterThan(before))
+    const cfPredicate = invalidateCalls[before]!
+    for (const key of sheetTiles) expect(cfPredicate(key as never), `tile ${key.col},${key.row} of the icon-only sheet`).toBe(true)
+    expect(cfPredicate(tile(0, 0, 'other') as never), 'a tile of another sheet').toBe(false)
+    const testCache = new TileCache(activeRenderer!.cache.pool)
+    const dummySurface = () => ({ width: 512, height: 512, close: vi.fn() })
+    for (const key of [...sheetTiles, tile(0, 0, 'other')]) testCache.put(key as never, dummySurface() as never)
+    testCache.invalidate(cfPredicate)
+    for (const key of sheetTiles) expect(testCache.get(key as never), `tile ${key.col},${key.row} dropped`).toBeUndefined()
+    expect(testCache.get(tile(0, 0, 'other') as never), 'another sheet keeps its tile').toBeDefined()
+  } finally {
+    ui.unmount()
+    presentSpy.mockRestore()
+    invalidateSpy.mockRestore()
+    injectCfEvidence(null)
+  }
+})
+
 it('clock-driven CF invalidation reaches the DISPLAYED rows of a sorted view (I1)', async () => {
   const { TileCache } = await import('../src/xlsx/view/tileCache')
   const { SheetTileRenderer } = await import('../src/components/xlsx/sheetTiles')

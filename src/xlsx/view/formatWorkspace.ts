@@ -10,6 +10,10 @@ export interface FormatBudget {
   settle?(target: object): void
 }
 
+/** A CF paint host: the logical box, the fill under it, and (icons, Ruling S4-L) the un-inset text width and the cell
+ * as laid out. Type-only: the eager side never imports the lazy painter. */
+type CfHost = { x: number; y: number; width: number; height: number; fill?: string; textWidth?: number; cell?: Pick<import('../types').XlsxCell, 'value' | 'valueIsError' | 'style'> }
+
 /** One prepared current-generation effective format for a source batch (Task 9).
  * Implementations live in lazy modules; eager consumers only call these methods.
  * `describe` returns borrowed text owned (and charged) by the scope: callers must
@@ -33,7 +37,18 @@ export interface EffectiveFormatScope {
   paintBars?(ctx: CanvasRenderingContext2D, cellRect: (row: number, col: number) => { x: number; y: number; width: number; height: number; fill?: string } | undefined,
     visible: { r0: number; c0: number; r1: number; c1: number }, scale: { zoom: number; dpr: number; output?: 'logical' | 'device' }): boolean
   /** Ruling S3-O: whether the canvas hides this cell's value text in this host at this scale (`CfPaintBatch.hidesTextAt`). */
-  hidesTextAt?(row: number, col: number, host: { x: number; y: number; width: number; height: number; fill?: string }, scale: { zoom: number; dpr: number; output?: 'logical' | 'device' }): boolean
+  hidesTextAt?(row: number, col: number, host: CfHost, scale: { zoom: number; dpr: number; output?: 'logical' | 'device' }): boolean
+  /** Current-generation icon descriptor where the icon paints (Ruling S4-L), or undefined (`CfPaintBatch.iconAt`). */
+  iconAt?(row: number, col: number): import('../cf/model').CfIconDescriptor | undefined
+  /** Paints the scope's icons after its bars (`CfPaintBatch.paintIcons`, Task 29). */
+  paintIcons?(ctx: CanvasRenderingContext2D, cellRect: (row: number, col: number) => CfHost | undefined,
+    visible: { r0: number; c0: number; r1: number; c1: number }, scale: { zoom: number; dpr: number; output?: 'logical' | 'device' }): boolean
+  /** The text inset of a host whose icon paints there, else undefined (`CfPaintBatch.textInsetAt`). */
+  textInsetAt?(row: number, col: number, host: CfHost, scale: { zoom: number; dpr: number; output?: 'logical' | 'device' }): { left: number; right: number } | undefined
+  /** The static/print layout of one CF cell on its one host (`CfPaintBatch.layoutCell`, Task 29 fix round 1). */
+  layoutCell?(ctx: CanvasRenderingContext2D, sheet: import('../types').XlsxSheet, cell: import('../types').XlsxCell, x: number, y: number, w: number, h: number,
+    measured: (font: string, text: string) => number, overflow: { left: number; right: number } | undefined, scale: { zoom: number; dpr: number; output?: 'logical' | 'device' }):
+    { layout: import('./textLayout').CellBodyLayout; host: CfHost }
   dispose(): void
 }
 

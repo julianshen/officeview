@@ -405,6 +405,8 @@ export interface CfCellStateWire {
     /** The value's position between min and max, 0..1 (Ruling S3-P); the announced percentage, never the geometry. */
     valueFraction: number
     borderColor?: number; axisColor?: number; isGradient: boolean; isNegative: boolean; showValue: boolean; rtl: boolean }>
+  /** Ruling S4-Q: the per-cell evaluated icon, numbers and booleans only; `set` indexes the frozen `CF_ICON_SET_NAMES`. */
+  readonly icon?: Readonly<{ ruleId: number; set: number; iconId: number; bucket: number; buckets: number; showValue: boolean }>
 }
 export interface CfSharedDefinition {
   readonly id: string
@@ -478,7 +480,7 @@ export function cfRulePropertyBytes(rules: readonly { dxf?: Record<string, unkno
  * walker exactly (24 per object; 16 per property slot plus the walked value;
  * arrays 16 + 8 per item plus walked elements; strings 16 + 2 per char;
  * numbers, booleans and null 8; no cross-cell dedup). */
-export function measureCfCellBytes(cell: Pick<CfCellStateWire, 'properties'> & Partial<Pick<CfCellStateWire, 'unresolvedWrites' | 'unresolvedReason' | 'scale' | 'bar'>>): number {
+export function measureCfCellBytes(cell: Pick<CfCellStateWire, 'properties'> & Partial<Pick<CfCellStateWire, 'unresolvedWrites' | 'unresolvedReason' | 'scale' | 'bar' | 'icon'>>): number {
   // {row, col, properties} plus optional unresolvedWrites/unresolvedReason.
   let bytes = 24 + (16 + 8) + (16 + 8) + (16 + measureCfPropertiesBytes(cell.properties))
   if (cell.unresolvedWrites !== undefined) {
@@ -496,6 +498,10 @@ export function measureCfCellBytes(cell: Pick<CfCellStateWire, 'properties'> & P
     bytes += 16 + 24 + 10 * (16 + 8)
     if (cell.bar.borderColor !== undefined) bytes += 16 + 8
     if (cell.bar.axisColor !== undefined) bytes += 16 + 8
+  }
+  if (cell.icon !== undefined) {
+    // 16 prop slot + 24 icon object + six required number/boolean fields at (16 + 8) each.
+    bytes += 16 + 24 + 6 * (16 + 8)
   }
   return bytes
 }
@@ -871,6 +877,11 @@ export interface SheetLayout {
   pivotTableCount?: number
   /** Authored frozen panes. */
   frozen?: { rows: number; cols: number; topRow?: number; leftCol?: number }
+  /** Ruling S4-DEFAULT-ROW: the authored height (pt) of rows without `ht`, for the icon frame. */
+  defaultRowPt?: number
+  /** Ruling S4-ROW-UNIFORM: rows whose cells are not all Calibri 11 regular (bottom-anchored icons withhold there);
+   * absent: unknown, every bottom-anchored icon withholds. */
+  nonUniformFontRows?: readonly { start: number; end: number }[]
 }
 /** Control selection is a separate workbook-scoped revision; it is not a page-field or item-filter delta. */
 export type LinkedControlSelection =

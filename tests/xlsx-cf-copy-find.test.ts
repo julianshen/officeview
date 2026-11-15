@@ -30,6 +30,7 @@ import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
 import { xlsxBytes } from './helpers/xlsx-package'
 import { drain } from './helpers/xlsx-find'
 import { BAR_SHOWVALUE_EVIDENCE, barRule, withBars } from './helpers/cf-bars'
+import { iconRule, withIcons } from './helpers/cf-icons'
 
 function trackingBudget(refuse = false): { budget: FormatBudget; net: () => number; retained: () => number } {
   let held = 0
@@ -652,5 +653,117 @@ describe('showValue=0 value still copies and finds (S3-P)', () => {
         } finally { await worker.release() }
       } finally { await session.release() }
     }, SUPPRESS) } finally { injectCfBarAutoBounds(null) }
+  })
+})
+
+describe('showValue=0 value still copies and finds (S4-N)', () => {
+  // A1 = 1.25 and A501 = 3.75 under a '0.0' format ("1.3", "3.8"), one showValue="0" 3Arrows num 0/2/3 icon set over
+  // A1:A501 (buckets 0 and 2). Icons paint under the injected stubs only (tests/helpers/cf-icons.ts).
+  const thresholds = [0, 2, 3].map(value => ({ bound: { type: 'num' as const, value }, gte: true }))
+  function iconDoc(): XlsxDocument {
+    const doc = cfDoc()
+    const sheet = doc.sheets[0]! as unknown as XlsxSheet
+    sheet.rows = [{ index: 0, cells: [{ ...sheet.rows[0]!.cells[0]!, value: 1.25 }] }, { index: 500, cells: [{ ...sheet.rows[1]!.cells[0]!, value: 3.75 }] }]
+    sheet.conditionalFormatting = { diagnostics: [], rules: [iconRule({ firstRow: 0, lastRow: 500, firstCol: 0, lastCol: 0 }, { showValue: false, thresholds })] }
+    return doc
+  }
+  const ICON_XML = '<conditionalFormatting sqref="A1:A501"><cfRule type="iconSet" priority="1"><iconSet showValue="0"><cfvo type="num" val="0"/><cfvo type="num" val="2"/><cfvo type="num" val="3"/></iconSet></cfRule></conditionalFormatting>'
+  const iconBytes = (): Uint8Array => xlsxBytes({
+    sheetData: '<row r="1"><c r="A1" s="0"><v>1.25</v></c></row><row r="501"><c r="A501" s="0"><v>3.75</v></c></row>',
+    styles: '<numFmts count="1"><numFmt numFmtId="164" formatCode="0.0"/></numFmts><cellXfs count="1"><xf numFmtId="164"/></cellXfs>',
+    afterSheetData: ICON_XML,
+  })
+  /** A 200 px host at 100 % holding the short value: where the canvas would paint these cells. */
+  const hostOf = (value: number) => ({ x: 0, y: 0, width: 200, height: 20, textWidth: 16, cell: { value, style: { numFmtId: 0, formatCode: '0.0' } } })
+  const AT_100 = { zoom: 1, dpr: 1 }
+  const SUPPRESS = { extra: ['icon:showvalue-canvas-suppression', 'icon:dialect-base', 'icon:settings-schema-defaults'] }
+  const layoutContext = async () => { const { createCanvas } = await import('canvas'); return () => createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D }
+
+  it('resident find and copy return the formatted value of a showValue="0" icon cell in near and far rows', async () => {
+    const context = await layoutContext()
+    await withIcons(async () => {
+      const { budget } = trackingBudget()
+      const doc = iconDoc()
+      const source = createObjectWorkbookSource(doc, 'cf-icon-find')
+      const owner = initialWorkbookOwner('cf-icon-find', source.sheets)
+      const sheet = doc.sheets[0]! as unknown as XlsxSheet
+      // Positive control: both cells are painted icons whose canvas text is hidden.
+      const scope = (await prepareCfTextScope(sheet, { rects: [{ r0: 0, r1: 0, c0: 0, c1: 0 }, { r0: 500, r1: 500, c0: 0, c1: 0 }], signal: new AbortController().signal, budget, layoutContext: context }))!
+      for (const [row, value] of [[0, 1.25], [500, 3.75]] as const) {
+        expect(scope.iconAt?.(row, 0)?.showValue, `row ${row}`).toBe(false)
+        expect(scope.hidesTextAt?.(row, 0, hostOf(value), AT_100), `row ${row}`).toBe(true)
+      }
+      scope.dispose()
+      for (const [text, want] of [['1.3', [[0, 0, '1.3']]], ['3.8', [[500, 0, '3.8']]]] as const) {
+        const session = new WorkbookFind({ owner, sheets: residentSheets('cf-icon-find', source, owner) }, { text, caseSensitive: false },
+          { textOf: residentTextOf(sheet), prepareScope: residentPrepare(sheet, budget), formatBudget: budget })
+        expect((await drain(session)).map(hit => [hit.source.row, hit.source.col, hit.text])).toEqual(want)
+      }
+      const store = source.store('cf'), entry = owner.sheetVector[0]!
+      const format: CopyInput['format'] = (cell, allocation, s) => {
+        const baseStyle = docCell(sheet, cell.row, cell.col)?.style
+        return cellDisplayText(sheet, { value: cell.value, style: s?.effectiveStyle(cell.row, cell.col, baseStyle) ?? baseStyle }, allocation)
+      }
+      const input = (r0: number, fmt: CopyInput['format'] = format): CopyInput => ({
+        store, owner: { ...store.stamp, fontGen: 0, viewGen: entry.revision }, currentOwner: () => ({ ...store.stamp, fontGen: 0, viewGen: entry.revision }),
+        selection: { active: null, anchor: null, ranges: [{ rows: { kind: 'intervals', intervals: [{ r0, r1: r0 }] }, cols: [{ c0: 0, c1: 0 }] }] },
+        order: createIdentityOrder(), visibility: visibilityFromHidden(createIntervalSet([])), columns: visibilityFromHidden(createIntervalSet([]), MAX_COLS),
+        allowed: () => true, signal: new AbortController().signal, format: fmt,
+        prepareScope: (rects, signal) => prepareCfTextScope(sheet, { rects, signal, locale: 'en-US', budget, layoutContext: context }),
+      })
+      for (const [row, want, value] of [[0, '1.3', 1.25], [500, '3.8', 3.75]] as const) {
+        const copied = await serializeSelection(input(row))
+        expect(copied.kind === 'ready' ? copied.text : copied.kind, `row ${row}`).toBe(want)
+        // Mutant: a formatter that applies the canvas suppression to copy fails this test.
+        const mutant = await serializeSelection(input(row, (cell, allocation, s) => s?.hidesTextAt?.(cell.row, cell.col, hostOf(value), AT_100) ? '' : format(cell, allocation, s)))
+        expect(mutant.kind === 'ready' ? mutant.text : mutant.kind, `mutant row ${row}`).not.toBe(want)
+      }
+    }, SUPPRESS)
+  })
+
+  it('worker find and main-thread paged copy return the formatted value of a showValue="0" icon cell in near and far rows', async () => {
+    await withIcons(async () => {
+      const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(iconBytes()).buffer]) }, { docId: 'cf-icon-paged', profile: 'D' })
+      try {
+        await session.done
+        const source = createPagedWorkbookSource(session)
+        const sheetId = source.sheets[0]!.sheetId
+        const store = source.store(sheetId)
+        const read = async (rects: readonly SourceRect[]) => store.readConditionalFormatting!({
+          rects, stamp: { owner: 'cf-icon-paged', sheetId, workbookValueGen: store.stamp.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 }, grantBytes: CF_TEXT_SCOPE_GRANT_BYTES,
+        }, undefined, { signal: new AbortController().signal })
+        // Positive control: the worker's wire states carry the showValue="0" icon on both rows.
+        const wire = await read([{ r0: 0, r1: 0, c0: 0, c1: 0 }, { r0: 500, r1: 500, c0: 0, c1: 0 }])
+        expect(wire?.kind, JSON.stringify(wire?.diagnostics)).toBe('ready')
+        expect(wire!.states.filter(s => s.icon?.showValue === false).map(s => s.row).sort((a, b) => a - b)).toEqual([0, 500])
+        const { budget } = trackingBudget()
+        const prepareScope = (rects: readonly SourceRect[]) => prepareCfWireScope(async chunk => ({ result: await read(chunk), release: () => {} }), rects, { budget })
+        const format: CopyInput['format'] = (cell, allocation, scope) => source.displayText!(cell, sheetId, allocation, undefined, scope)
+        const identity = { docId: 'cf-icon-paged', sheetId, valueGen: store.stamp.valueGen, fontGen: 0, viewGen: 0 }
+        for (const [row, want, value] of [[0, '1.3', 1.25], [500, '3.8', 3.75]] as const) {
+          const input: CopyInput = {
+            store, owner: identity, currentOwner: () => identity,
+            selection: { active: null, anchor: null, ranges: [{ rows: { kind: 'intervals', intervals: [{ r0: row, r1: row }] }, cols: [{ c0: 0, c1: 0 }] }] },
+            order: createIdentityOrder(), visibility: visibilityFromHidden(createIntervalSet([])), columns: visibilityFromHidden(createIntervalSet([]), MAX_COLS),
+            allowed: () => true, signal: new AbortController().signal, format, prepareScope,
+          }
+          const copied = await serializeSelection(input)
+          expect(copied.kind === 'ready' ? copied.text : JSON.stringify(copied), `row ${row}`).toBe(want)
+          const scope = (await prepareScope([{ r0: row, r1: row, c0: 0, c1: 0 }]))!
+          expect(scope.hidesTextAt?.(row, 0, hostOf(value), AT_100), `paged scope hides the canvas text at row ${row}`).toBe(true)
+          scope.dispose()
+          const mutant = await serializeSelection({ ...input, format: (cell, allocation, s) => s?.hidesTextAt?.(cell.row, cell.col, hostOf(value), AT_100) ? '' : format(cell, allocation, s) })
+          expect(mutant.kind === 'ready' ? mutant.text : mutant.kind, `mutant row ${row}`).not.toBe(want)
+        }
+        const worker = new DocumentSession('cf-icon-paged', source)
+        try {
+          for (const [text, want] of [['1.3', [[0, 0, '1.3']]], ['3.8', [[500, 0, '3.8']]]] as const) {
+            const found = await worker.search(worker.workbookOwner(), { text, caseSensitive: false }, undefined, new AbortController().signal)
+            if (!('hits' in found)) throw new Error('search did not complete')
+            expect(found.hits.map(hit => [hit.source.row, hit.source.col, hit.text])).toEqual(want)
+          }
+        } finally { await worker.release() }
+      } finally { await session.release() }
+    }, SUPPRESS)
   })
 })

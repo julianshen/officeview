@@ -1,4 +1,5 @@
 /** Parse XLSX parts into the XlsxDocument model. */
+import { cfKeyFontStyle } from './rowFont'
 import { admittedFormatCode } from './formatCodeLimit'
 import type { OfficePackage } from '../core/zip'
 import type { ChartDocumentContext } from '../charts/context'
@@ -26,7 +27,7 @@ import { initializeSavedSpills } from './formula/saved-spills'
 import { dynamicMetadataIndices } from './metadata'
 import { decodeXlsxString } from './strings'
 import { resolveSheetColor, type SheetColorContext } from './sheetColors'
-import { defaultColumnWidthPx, maxDigitWidthPx, sheetFormat } from './columnWidth'
+import { defaultColumnWidthPx, defaultRowPtOf, maxDigitWidthPx, sheetFormat } from './columnWidth'
 import { MAX_COLS, MAX_ROWS, formatA1 } from './view/coordinates'
 import { PackageError } from '../core/package-error'
 import { parseSparklineGroups, SPARKLINE_EXTENSION_URI, SPREADSHEETML_NS, X14_SPARKLINE_NS, MAX_POINTS_PER_SHEET, MAX_SPARKLINE_GROUPS_PER_SHEET } from './sparklines/parseGroups'
@@ -52,11 +53,17 @@ export function parseMergeRange(ref: string): XlsxMergeRange {
   return { minRow: Math.min(r1, r2), minCol: Math.min(c1, c2), maxRow: Math.max(r1, r2), maxCol: Math.max(c1, c2) }
 }
 
+/** Ruling S4-ROW-UNIFORM (fix round 2): the shared-string indices whose `<si>` holds rich-text runs (`<r>`). */
+const RICH_SHARED_STRINGS = new WeakMap<string[], ReadonlySet<number>>()
 async function sharedStrings(pkg: OfficePackage): Promise<string[]> {
   const root = await pkg.xml('xl/sharedStrings.xml')
   if (!root) return []
   const out: string[] = []
+  const rich = new Set<number>()
+  RICH_SHARED_STRINGS.set(out, rich)
   for (const si of getChildren(root, 'si')) {
+    // A rich-text run or a phonetic run/its phoneticPr (fix round 3) may name any font.
+    if (['r', 'rPh', 'phoneticPr'].some(tag => getChildren(si, tag).length > 0)) rich.add(out.length)
     // si may be plain t, or rich text runs (r/t), or phonetic — concatenate all t
     let s = ''
     const direct = si['t']
@@ -363,7 +370,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
       // inventory — unless it is a non-worksheet part, which never declares
       // tableParts. The readable no-tableParts worksheet below stays [].
       if (!wsRoot) {
-        if (identity.kind === 'worksheet') tableInventoryComplete = false
+        if (identity.kind === 'worksheet') { tableInventoryComplete = false; sheets[i]!.tablesUnknown = true }
         continue
       }
       const wsData = getChildren(wsRoot, 'worksheet')[0] ?? wsRoot
@@ -439,11 +446,11 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
         continue
       }
       declaredTableParts += tablePartDecls.length
-      if (wsRelsUnreadable) tableInventoryComplete = false
+      if (wsRelsUnreadable) { tableInventoryComplete = false; sheets[i]!.tablesUnknown = true }
       for (const rid of tablePartDecls) {
         // A declaration without a required relationship id cannot resolve.
         if (rid === undefined) {
-          tableInventoryComplete = false
+          { tableInventoryComplete = false; sheets[i]!.tablesUnknown = true }
           continue
         }
         const rel = wsRelTargets.get(rid)
@@ -451,7 +458,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
         // ownership: missing rels, unresolved r:ids, external targets and
         // wrong relationship types all leave the inventory unavailable.
         if (!rel || !rel.type.endsWith('/table')) {
-          tableInventoryComplete = false
+          { tableInventoryComplete = false; sheets[i]!.tablesUnknown = true }
           continue
         }
         const partPath = resolvePartTarget(sheetPath, rel.target)
@@ -464,7 +471,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
             tableSourceChecks.set(partPath, sourceOk)
           }
           if (!sourceOk) {
-            tableInventoryComplete = false
+            { tableInventoryComplete = false; sheets[i]!.tablesUnknown = true }
             continue
           }
           const tableRoot = await pkg.xml(partPath)
@@ -475,7 +482,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
           if (tableNode) collectDeclaredTable(sheetDeclared, tableNode, partPath)
           const meta = parseTableMetadata(tableNode, identity.sheetId, partPath)
           if (!meta) {
-            tableInventoryComplete = false
+            { tableInventoryComplete = false; sheets[i]!.tablesUnknown = true }
             continue
           }
           resolvedTables.push(meta)
@@ -483,7 +490,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
         } catch {
           // An unreadable table part leaves the inventory unavailable;
           // usable cells are preserved below.
-          tableInventoryComplete = false
+          { tableInventoryComplete = false; sheets[i]!.tablesUnknown = true }
         }
       }
       if (hasDeclaredFiltering(sheetEntry)) declaredFilters.push(sheetEntry)
@@ -491,7 +498,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
       // Worksheet-level discovery failure with declared parts is unavailable,
       // never a false complete registry. Worksheet declarations already read
       // survive independently of the table failure.
-      tableInventoryComplete = false
+      { tableInventoryComplete = false; sheets[i]!.tablesUnknown = true }
       if (hasDeclaredFiltering(sheetEntry)) declaredFilters.push(sheetEntry)
     }
   }
@@ -649,8 +656,14 @@ async function parseSheet(
     }
   }
   // Excel's column pixel model; set before drawings are placed against the grid.
-  const columns = { maxDigitWidthPx: digitWidth, defaultWidthPx: defaultColumnWidthPx(sheetFormat(attrs(getChildren(data, 'sheetFormatPr')[0])), digitWidth) }
+  const format = sheetFormat(attrs(getChildren(data, 'sheetFormatPr')[0]))
+  const columns = { maxDigitWidthPx: digitWidth, defaultWidthPx: defaultColumnWidthPx(format, digitWidth) }
+  // Ruling S4-DEFAULT-ROW: the authored height of rows without `ht`, for the icon frame only.
+  const defaultRowPt = defaultRowPtOf(format)
+  if (defaultRowPt !== undefined) sheet.defaultRowHeightPt = defaultRowPt
   if (columns.maxDigitWidthPx !== 7 || columns.defaultWidthPx !== 64) sheet.columnMetrics = columns
+  // Ruling S4-ROW-UNIFORM (fix round 2): empty cells take xf 0 (the Normal style's font).
+  { const xf0 = styles.xfs[0]; if (!xf0 || !cfKeyFontStyle(resolveXfStyle(styles, xf0))) sheet.rowFontsBlocked = true }
   const colsNode = getChildren(data, 'cols')[0]
   if (colsNode) {
     for (const col of getChildren(colsNode, 'col')) {
@@ -661,6 +674,12 @@ async function parseSheet(
         widthChars: a.width !== undefined ? parseFloat(a.width as string) : undefined,
         hidden: a.hidden === '1' || a.hidden === 'true',
       })
+      // Ruling S4-ROW-UNIFORM (fix round 2): a column style other than Calibri 11 regular (or an unknown one) reaches
+      // every row's empty cells in that column.
+      if (a.style !== undefined) {
+        const xf = styles.xfs[parseInt(a.style as string, 10)]
+        if (!xf || !cfKeyFontStyle(resolveXfStyle(styles, xf))) sheet.rowFontsBlocked = true
+      }
     }
   }
   const mergeCells = getChildren(data, 'mergeCells')[0]
@@ -727,10 +746,13 @@ async function parseSheet(
       heightPt: ra.ht !== undefined ? parseFloat(ra.ht as string) : undefined,
       customHeight: ra.customHeight === '1',
       hidden: ra.hidden === '1' || ra.hidden === 'true',
+      ...(ra.customFormat === '1' || ra.customFormat === 'true' ? { styled: true } : {}),
       cells: [],
     }
     for (const cNode of getChildren(rowNode, 'c')) {
       const ca = attrs(cNode)
+      // Ruling S4-ROW-UNIFORM (fix round 3): a cell showing phonetics draws them in its phonetic font.
+      if (ca.ph === '1' || ca.ph === 'true') row.richText = true
       const explicitRef = typeof ca.r === 'string' && /^[A-Z]+\d+$/.test(ca.r) ? ca.r : undefined
       const [rowIdx, colIdx] = explicitRef ? parseRef(explicitRef) : [rowIndex, previousCol + 1]
       if (!explicitRef && (rowIdx >= MAX_ROWS || colIdx >= MAX_COLS)) {
@@ -777,7 +799,10 @@ async function parseSheet(
       if (t === 's') {
         const idx = vNode ? parseInt(textOf(vNode), 10) : NaN
         value = Number.isFinite(idx) ? (strings[idx] ?? '') : ''
+        // Ruling S4-ROW-UNIFORM (fix round 2): a run-formatted string may name any font.
+        if (Number.isFinite(idx) && RICH_SHARED_STRINGS.get(strings)?.has(idx)) row.richText = true
       } else if (t === 'inlineStr') {
+        if (isNode && ['r', 'rPh', 'phoneticPr'].some(tag => getChildren(isNode, tag).length > 0)) row.richText = true
         value = isNode ? decodeXlsxString(textOf(getChildren(isNode,'t')[0]))+
           getChildren(isNode,'r').map(r=>decodeXlsxString(textOf(getChildren(r,'t')[0]))).join('') : ''
       } else if (t === 'b') {
