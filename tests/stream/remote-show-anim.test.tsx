@@ -165,6 +165,8 @@ function animDoc(deck: Kind[], o: { tracks?: (unit: number, step: number) => Uin
   const rules = new Map<string, Rule>()
   const held = new Map<string, Array<() => void>>()
   const signals = new Map<string, AbortSignal>()
+  /** Replies answered and not yet released, by key (their encoded leases are still held). */
+  const outstanding = new Map<string, number>()
   let endIt!: (e: StreamSessionError | undefined) => void
   const ended = new Promise<StreamSessionError | undefined>((r) => { endIt = r })
   const messagesFor = (unit: number): Uint8Array[] => {
@@ -189,7 +191,8 @@ function animDoc(deck: Kind[], o: { tracks?: (unit: number, step: number) => Uin
         const leases = messages.map((m) => o.workspace.lease(m.length, 'remote-show:message'))
         if (leases.some((l) => !l)) { for (const l of leases) l?.release(); rej(new StreamSessionError('workspace-full')); return }
         let freed = false
-        res({ messages, release: () => { if (freed) return; freed = true; for (const l of leases) l!.release() } })
+        outstanding.set(key, (outstanding.get(key) ?? 0) + 1)
+        res({ messages, release: () => { if (freed) return; freed = true; outstanding.set(key, outstanding.get(key)! - 1); for (const l of leases) l!.release() } })
       }
       sig.addEventListener('abort', () => rej(sig.reason ?? new Error('aborted')), { once: true })
       if (rule === 'hold') { const q = held.get(key) ?? []; q.push(answer); held.set(key, q) } else queueMicrotask(answer)
@@ -227,6 +230,8 @@ function animDoc(deck: Kind[], o: { tracks?: (unit: number, step: number) => Uin
   } as unknown as RemoteOfficeDoc
   return {
     doc, session, log, rules, signals,
+    /** The keys of replies still holding their encoded leases. */
+    held: (prefix: string) => [...outstanding].filter(([k, n]) => n > 0 && k.startsWith(prefix)).map(([k]) => k),
     release(key: string) { const q = held.get(key) ?? []; held.delete(key); for (const f of q) f() },
     end: async (e?: StreamSessionError) => { endIt(e); await flush() },
   }
@@ -430,6 +435,70 @@ describe('remote show on the driver (piece 4 Task 11)', () => {
     await run(100)
     expect(px(canvas, canvas.width >> 1, canvas.height >> 1)).toEqual([0, 255, 0])
     expect(sent(fd, 'track:')).toEqual(['track:0:0', 'track:0:1', 'track:0:2'])
+    s.exit()
+  })
+
+  /** 1920×1080 keyframes, one PNG per colour (encoded once). */
+  const hdPng = new Map<string, Uint8Array>()
+  const hdTrack = (unit: number, step: number) => [0, 1, 2].map((i) => {
+    const c = COLORS[step % 3]!
+    if (!hdPng.has(c)) hdPng.set(c, png(c, 1920, 1080))
+    return encodeShowMessage({ tag: 4, unit, assetId: i, w: 1920, h: 1080, png: hdPng.get(c)! })
+  })
+  const RGB = [[255, 0, 0], [0, 255, 0], [0, 0, 255]]
+
+  it('twenty composited 1080p steps: every step shows its own end frame; tracks outside the working set are released (round 6)', async () => {
+    const twenty = { messages: (u: number) => bundleOf(FLY, u, compositedFly(20)) }
+    const fd = animDoc([twenty], { tracks: hdTrack })
+    const { s, canvas, log } = await show(fd)
+    await run(300)
+    for (let k = 1; k <= 20; k++) {
+      s.next()
+      await run(400)
+      expect(s.state.build).toBe(k)
+      // The picture follows the build index: step k's track (k − 1), never a frame held from an earlier step.
+      expect(px(canvas, canvas.width >> 1, canvas.height >> 1), `step ${k}`).toEqual(RGB[(k - 1) % 3])
+    }
+    expect(log).not.toContain('diag:show-budget')
+    expect(log).not.toContain('diag:step-deferred')
+    // Only a small working set around the build keeps its encoded frames; every other track's reply is released.
+    expect(fd.held('track:').length).toBeLessThanOrEqual(5)
+    expect(fd.held('track:')).not.toContain('track:0:0')
+    s.exit()
+  }, 60_000)
+
+  it('Previous across an evicted track asks for it again and shows its end frame (round 6)', async () => {
+    const ten = { messages: (u: number) => bundleOf(FLY, u, compositedFly(10)) }
+    const fd = animDoc([ten], { tracks: hdTrack })
+    const { s, canvas, log } = await show(fd)
+    await run(300)
+    for (let k = 1; k <= 8; k++) { s.next(); await run(400) }
+    expect(fd.held('track:')).not.toContain('track:0:2')
+    for (let k = 7; k >= 3; k--) {
+      s.previous()
+      await run(400)
+      expect(s.state.build).toBe(k)
+      expect(px(canvas, canvas.width >> 1, canvas.height >> 1), `back at step ${k}`).toEqual(RGB[(k - 1) % 3])
+    }
+    // Track 2 (step 3) was evicted on the way forward: it was asked for again, one charged send.
+    expect(sent(fd, 'track:0:2')).toEqual(['track:0:2', 'track:0:2'])
+    expect(log).not.toContain('diag:show-budget')
+    s.exit()
+  }, 60_000)
+
+  it('a track frame the show budget cannot admit is reported once per step (show-budget), not held silently (round 6)', async () => {
+    // The bundle fits; one 1080p frame (≈ 8 MB) does not.
+    vi.spyOn(remoteShowDeps, 'showBytes', 'get').mockReturnValue(7.5 * 1024 * 1024)
+    const two = { messages: (u: number) => bundleOf(FLY, u, compositedFly(2)) }
+    const fd = animDoc([two], { tracks: hdTrack })
+    const { s, log } = await show(fd)
+    await run(300)
+    s.next()
+    await run(400)
+    expect(log.filter((l) => l === 'diag:show-budget')).toEqual(['diag:show-budget'])
+    s.next()
+    await run(400)
+    expect(log.filter((l) => l === 'diag:show-budget')).toEqual(['diag:show-budget', 'diag:show-budget'])
     s.exit()
   })
 

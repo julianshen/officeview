@@ -428,6 +428,15 @@ Evidence:
 - **Over budget on a bucket change.** A bundle over about 64 MiB whose bucket changes (a double copy over the
   budget) plays its still (`show-budget`). A paused Morph wait stays frozen (Task 11).
 - **A held picture for a missing track; Morph `over` ignored while empty** (Task 8).
+- **Track working set (PR #78 round 6).** On a slide, only the tracks of steps b − 3 … b + 1 (b the build) and the
+  two composited steps D4 asks for from b − 1 stay resident. Every other track releases its decoded window and its
+  encoded reply as the build moves, so finished steps never fill the show budget (twenty 1080p steps play through,
+  `tests/stream/remote-show-anim.test.tsx`). Previous asks for step b − 1's track ahead of need. A track evicted and
+  reached again is asked again, one charged send, as every revisit is. ←/→ across one build boundary costs nothing.
+  Refused (`'failed'`) tracks hold nothing, so they stay and are not re-asked within the visit.
+- **A track frame the budget cannot admit holds the previous picture, reported.** The window's refused frame lease
+  (no room even after evicting bundles) emits `show-budget` once per build of the visit. The picture still holds:
+  a composited step ships no layers for its interval, and no show-safe frame exists to cut to.
 - **Presenter View "Next".** It reads "Next build" while builds remain. `preview-reduced` is emitted for any
   `composeAt` refusal (Task 13).
 

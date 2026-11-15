@@ -382,9 +382,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     reserveTerminal: (bytes) => workspace.reserveTerminal(bytes),
     lease(bytes, tag) {
       if (tag !== 'plan:track-frame') return workspace.lease(bytes, tag)
-      if (exited || !fetcher.makeRoom(bytes)) return undefined
-      const l = workspace.lease(bytes, tag)
-      if (!l) return undefined
+      const l = exited || !fetcher.makeRoom(bytes) ? undefined : workspace.lease(bytes, tag)
+      if (!l) { frameRefused(); return undefined }
       frameBytes += bytes
       let held = bytes
       return {
@@ -396,6 +395,13 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
         release() { frameBytes -= held; held = 0; l.release() },
       }
     },
+  }
+  /** The builds of this visit whose track frame was refused, so far (round 6: reported once each, never silent). */
+  const refusedAt = new Set<number>()
+  function frameRefused(): void {
+    if (exited || slide === 'end' || refusedAt.has(build)) return
+    refusedAt.add(build)
+    sink.add({ code: 'show-budget', slideIndex: slide, effect: `step:${Math.max(0, build - 1)}`, message: `A keyframe frame of step ${build} does not fit the show budget; the step holds its previous picture` })
   }
   function extraBytes(): number {
     let n = frameBytes + pinnedBytes
@@ -457,15 +463,31 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
       if (codeOf(e) === 'rate-limited') fetcher.paused()
     })
   }
+  /** D4: the first two composited steps of slide `i` from step `from` (the tracks asked on entering at `from + 1`). */
+  function nextComposited(i: number, from: number): number[] {
+    const steps = held.get(i)?.plan.steps ?? []
+    const out: number[] = []
+    for (let k = Math.max(0, from); k < steps.length && out.length < 2; k++) if (steps[k]!.eligibility === 'composited') out.push(k)
+    return out
+  }
   /** D4: on entering a slide, the tracks of its first two composited steps (from the step entered at). */
   function tracksOnEntry(i: number, at: number): void {
-    const b = held.get(i)
-    if (!b) return
-    let n = 0
-    for (let k = Math.max(0, at - 1); k < b.plan.steps.length && n < 2; k++) {
-      if (b.plan.steps[k]!.eligibility !== 'composited') continue
-      requestTrack(i, k)
-      n++
+    trimTracks(i, at)
+    for (const k of nextComposited(i, at - 1)) requestTrack(i, k)
+  }
+  /**
+   * PR #78 round 6: the tracks of slide `i` kept at build `b` — steps b − 3 … b + 1 (the one playing, the two Previous
+   * reaches next, one ahead) and the two composited steps D4 asks for from b − 1. Every other track goes, its decoded
+   * window and its encoded reply both, so finished steps never fill the show budget; Previous back into one asks for
+   * it again (one charged send, as every revisit is). A refused track (`'failed'`) holds nothing and stays, so it is
+   * not asked again within the visit (Task 12).
+   */
+  function trimTracks(i: number, b: number): void {
+    const keep = new Set(nextComposited(i, b - 1))
+    for (let k = b - 3; k <= b + 1; k++) keep.add(k)
+    for (const [key, t] of [...tracks]) {
+      if (t.index !== i || t.state === 'failed') continue
+      if (!keep.has(Number(key.slice(key.indexOf(':') + 1)))) dropTrack(key)
     }
   }
 
@@ -834,6 +856,7 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     if (p === 'end') surface?.root.removeAttribute('data-unit')
     else surface?.root.setAttribute('data-unit', String(unitOf[p]))
     dropExtras(p)
+    refusedAt.clear()
     // An animated slide whose bundle failed long enough ago is asked for again by `want`: its visit waits for it
     // (shown loading) rather than playing static. A still unit keeps piece 3's error frame until its bitmap lands.
     const unit = p === 'end' ? undefined : unitOf[p]
@@ -1181,8 +1204,12 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
         if (exited) return
         build = b
         if (started) cb.onSlideChange?.(i, b)
-        // D4: starting step k asks for step k + 1's track (and k's, if it is still missing).
-        if (b > 0 && driver?.visit?.index === i) { requestTrack(i, b - 1); requestTrack(i, b) }
+        // D4: starting step k asks for step k + 1's track (and k's, if it is still missing); round 6: the working set
+        // is trimmed first (room for them), and step k − 1's is asked too, so Previous finds it.
+        if (driver?.visit?.index === i) {
+          trimTracks(i, b)
+          if (b > 0) { requestTrack(i, b - 2); requestTrack(i, b - 1); requestTrack(i, b) }
+        }
         syncPresenter()
       },
       onVisit(v) {
