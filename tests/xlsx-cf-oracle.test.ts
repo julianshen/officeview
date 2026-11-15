@@ -74,6 +74,10 @@ import {
   iconCropRect,
   iconTwinSetClass,
   iconTwinSetMembers,
+  iconGlyphFaintRecord,
+  ICON_NO_ICON_MEMBER,
+  measureCaseIcons,
+  observedIconClass,
   type IconGlyphKey,
   loadIconGlyphKey,
   discriminateIconBox,
@@ -4721,7 +4725,8 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     const keyCase = () => CF_STAGE4_CASES.find(x => x.id === 'stage4-icon-glyph-key')!
     /** A pixel colour `delta` below white on every channel. */
     const grey = (delta: number) => { const v = (255 - delta).toString(16).padStart(2, '0'); return `#${v}${v}${v}` }
-    type Variant = { as: string; faint?: { delta: number; dx?: number } }
+    /** `as`: draw another pair's glyph; `faint`: plus one grey pixel; `onlyGrey`: draw the glyph square in grey of that delta instead. */
+    type Variant = { as?: string; faint?: { delta: number; dx?: number }; onlyGrey?: number }
     /** Cell boxes of a geometry (gridline at x0/y0). */
     const boxIn = (geom: WorksheetRangeGeometry, ref: string) => { const p = parseA1(ref)!; return { x0: Math.round(geom.colWidthsPt.slice(0, p.col - geom.minCol).reduce((a, b) => a + b, 0)), y0: Math.round(geom.rowHeightsPt.slice(0, p.row - geom.minRow).reduce((a, b) => a + b, 0)), w: Math.round(geom.colWidthsPt[p.col - geom.minCol]!), h: Math.round(geom.rowHeightsPt[p.row - geom.minRow]!) } }
     /** White page with gridlines; `cells` draws each glyph cell (its box, and the pair index whose square it shows). */
@@ -4751,7 +4756,10 @@ describe('Stage 4 icon oracle (Task 24)', () => {
           const pair = `${m.icon!.custom![0]!.set}:${m.icon!.custom![0]!.iconId}`
           const v = variants[pair]
           const b = boxIn(geom, m.sqref)
-          glyph(ctx, b, PAIRS.indexOf(v?.as ?? pair))
+          if (v?.onlyGrey !== undefined) {
+            const i = PAIRS.indexOf(pair)
+            ctx.fillStyle = grey(v.onlyGrey); ctx.fillRect(b.x0 + 3 + (i % 10) * 2, b.y0 + 3 + Math.floor(i / 10), 6, 6)
+          } else glyph(ctx, b, PAIRS.indexOf(v?.as ?? pair))
           if (v?.faint) { ctx.fillStyle = grey(v.faint.delta); ctx.fillRect(b.x0 + 24 + (v.faint.dx ?? 0), b.y0 + 15, 1, 1) }
         }
       })
@@ -4814,7 +4822,7 @@ describe('Stage 4 icon oracle (Task 24)', () => {
       const c = CF_STAGE4_CASES.find(x => x.id === 'stage4-icon-thresholds')!
       const parts = readZipPartsSync(new Uint8Array(readFileSync(resolve(REPO_ROOT, c.input))))!
       const empty = new Map<string, DecodedPng>()
-      const key: IconGlyphKey = { crops: empty, classes: empty, classOfPair: new Map(PAIRS.map(x => [x, x])), twins: new Map() }
+      const key: IconGlyphKey = { crops: empty, classes: empty, classOfPair: new Map(PAIRS.map(x => [x, x])), twins: new Map(), faint: new Set() }
       const obs = (ref: string, glyphClass: string | null): CfObservedIcon => ({ ref, cellLeftPx: 0, cellTopPx: 0, cellWidthPx: 60, cellHeightPx: 20, icon: glyphClass === null ? null : { leftPx: 3, topPx: 2, rightPx: 18, bottomPx: 17, glyphClass } })
       const cap = 'icon:thresholds-num'
       const probe = evaluateIconCapabilities(c, parts, new Map(), key)[cap]!
@@ -4840,6 +4848,43 @@ describe('Stage 4 icon oracle (Task 24)', () => {
       expect(other).toBeDefined()
       twinObserved.set(at, obs(at, iconTwinSetClass([p, other!])))
       expect(evaluateIconCapabilities(c, parts, twinObserved, key)[cap]!.status).toBe('non-discriminating')
+    })
+
+    it('S4-FAINT: a faint key glyph (d = 34 against its control) is admitted as a class twinned with no icon', () => {
+      const { c0, parts, geom, decoded } = keyCapture({ '5Boxes:0': { onlyGrey: 34 } })
+      const key = buildIconGlyphKey(c0, parts, decoded, geom)
+      expect('kind' in key ? `${key.code}: ${key.reason}` : 'built').toBe('built')
+      const k = key as IconGlyphKey
+      expect(k.classes.has('5Boxes:0')).toBe(true)
+      expect([...k.faint]).toEqual(['5Boxes:0'])
+      expect(iconGlyphFaintRecord(k)).toEqual(['5Boxes:0'])
+      // The faint key cell itself measures blank at the 64 ink threshold, yet classifies to {no icon, 5Boxes:0}, never to
+      // plain null; a strong glyph still classifies alone.
+      const measured = measureCaseIcons(c0, decoded, geom, k) as ReadonlyMap<string, CfObservedIcon>
+      const refOf = (pair: string) => c0.markers.find(m => m.icon?.custom?.[0] && `${m.icon.custom[0].set}:${m.icon.custom[0].iconId}` === pair)!.sqref
+      const faintCell = measured.get(refOf('5Boxes:0'))!
+      expect(faintCell.icon).toBeNull()
+      expect(observedIconClass(faintCell)).toBe(iconTwinSetClass(['5Boxes:0', ICON_NO_ICON_MEMBER]))
+      expect(observedIconClass(measured.get(refOf('3Flags:1'))!)).toBe('3Flags:1')
+      // A blank control is plain no icon.
+      const ctrl = c0.expected.cells.find(x => x.ref === refOf('5Boxes:0'))!.controlRef
+      expect(observedIconClass({ ...faintCell, ref: ctrl, faintGlyphClass: undefined })).toBeNull()
+    }, 60_000)
+
+    it('S4-FAINT: a key glyph within tolerance of its control (d = 5) still refuses icon-key-mismatch', () => {
+      const { c0, parts, geom, decoded } = keyCapture({ '5Boxes:0': { onlyGrey: 5 } })
+      expect(buildIconGlyphKey(c0, parts, decoded, geom)).toMatchObject({ kind: 'refusal', code: 'icon-key-mismatch' })
+    }, 60_000)
+
+    it('S4-FAINT: a faint twin set verifies against a non-faint competitor and is non-discriminating against a no-icon one', () => {
+      const tw = iconTwinSetClass(['5Boxes:0', ICON_NO_ICON_MEMBER])
+      // Authored-style: D2 predicts 5Boxes:0 (as modelled) against 3Arrows:0 (another reading); D3 agrees for both.
+      expect(discriminateIcon({ D2: [{ id: 'as-modelled', glyphClass: '5Boxes:0' }, { id: 'other', glyphClass: '3Arrows:0' }], D3: [{ id: 'as-modelled', glyphClass: '5Boxes:1' }, { id: 'other', glyphClass: '5Boxes:1' }] }, { D2: tw, D3: '5Boxes:1' })).toEqual({ status: 'discriminating', matched: 'as-modelled' })
+      // Against a reading that predicts no icon at D2, the faint set holds both outcomes: withheld, never refused.
+      const d = discriminateIcon({ D2: [{ id: 'as-modelled', glyphClass: '5Boxes:0' }, { id: 'no-icon', glyphClass: null }], D3: [{ id: 'as-modelled', glyphClass: '5Boxes:1' }, { id: 'no-icon', glyphClass: null }] }, { D2: tw, D3: '5Boxes:1' })
+      expect(d.status).toBe('non-discriminating')
+      // A null prediction alone inside the set resolves to no icon.
+      expect(discriminateIcon({ D2: [{ id: 'a', glyphClass: null }, { id: 'b', glyphClass: '3Arrows:0' }] }, { D2: tw })).toEqual({ status: 'discriminating', matched: 'a' })
     })
 
     it('verify-only re-derives dependent Stage 4 sidecars when the glyph key changes', () => {

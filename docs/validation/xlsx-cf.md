@@ -1328,7 +1328,11 @@ Expected non-discriminating candidates, decided per capture by `discriminateIcon
 
 ### Stage 4 capture run 1 (2026-11-15, c63de53a) and fix round 3 (Ruling S4-NEARTWIN)
 
-**Excel builds.** The resave receipts and sidecars record two builds. `stage4-icon-om-reachability` was resaved on Excel 16.114; every later build and capture (from 05:06, glyph key and every other case) records Excel **16.115**. No case was rerun on one build.
+**Excel builds.** The resave receipts and sidecars record two builds:
+- the `stage4-icon-om-reachability` resave ran on Excel **16.114**;
+- Excel updated when it was relaunched after the OM-probe crash, so every later build and capture (from 05:06: the glyph key and every other case) records Excel **16.115**.
+
+No case was rerun on a single build.
 
 **Per-case outcomes of c63de53a** (as committed):
 
@@ -1349,7 +1353,7 @@ Compared with `inputs/`, the three rejected resaves change no other conditional-
 - B, a base `<cfRule>` naming the x14-only 3Stars: Excel drops the `iconSet` attribute, so the `<iconSet>` reads as the schema default 3TrafficLights1. This is the `family:3TrafficLights1` reading.
 - C, a base 3Arrows rule linked by `<x14:id>` to a priority-less x14 3Triangles companion: Excel strips the companion (both the x14 rule and the base rule's `<extLst>` link) and keeps the base 3Arrows rule. This is the `base` reading.
 
-Both answers come from the rejected resave, not from a capture of an Excel-saved workbook. Production already withholds both shapes: a base rule naming an x14-only family is withheld outright (518a13b5), and the paired shape is withheld because nothing evidences it. The `failClosedDisposition` of `icon:dialect-base-x14-family` and `icon:dialect-paired` now cites this outcome. No ruling change is needed for production. Excel's canonical form is the one production refuses, so withholding cannot paint a wrong icon. Whether the dialect case should still be captured is an owner question: Excel cannot save its shapes repair-free.
+Both answers come from the rejected resave, not from a capture of an Excel-saved workbook. **Ruling S4-DIALECT-REJECTED (fix round 4):** `stage4-icon-dialect` stays a case, and its recorded outcome is the rejected resave. Nothing beyond the record above changes. Production already withholds both shapes: a base rule naming an x14-only family is withheld outright (518a13b5), and the paired shape is withheld because nothing evidences it. The `failClosedDisposition` of `icon:dialect-base-x14-family` and `icon:dialect-paired` now cites this outcome. No ruling change is needed for production. Excel's canonical form is the one production refuses, so withholding cannot paint a wrong icon. Whether the dialect case should still be captured is an owner question: Excel cannot save its shapes repair-free.
 
 **Item 8 case-data change (fix round 3).** The two shapes Excel canonicalises cannot be authored repair-free, so they moved to `stage4-icon-unresolved-shapes`, keeping their capability ids:
 - `<iconSet percent="0">` is now column M (priority 12);
@@ -1373,6 +1377,23 @@ The same threshold makes 5Boxes:0 invisible to `measureIconGeometry`'s ink mask:
 
 Hypotheses predict 5Boxes:0 at four cells: authored D2 and D6 (`icon:dialect-standalone`), and families U2 and U6 (`icon:families-x14`).
 
-This needs a ruling on low-contrast glyph presence. S4-NEARTWIN keeps `icon-key-mismatch` as it was. Until that ruling, the key and every dependent classification stay blocked. `capture --verify-only` will report the key case `recipe-pending` with `icon-key-mismatch`, and the dependents stay keyless.
+This needed a ruling on low-contrast glyph presence; Ruling S4-FAINT, below, now resolves it. S4-NEARTWIN keeps `icon-key-mismatch` as it was. Until that ruling, the key and every dependent classification stay blocked. `capture --verify-only` will report the key case `recipe-pending` with `icon-key-mismatch`, and the dependents stay keyless.
 
 A diagnostic build without the presence check (scratch only, never committed) yields 54 classes over 75 pairs, with exactly the two twin pairs above.
+
+**Ruling S4-FAINT (fix round 4).** "No icon" (the blank control) is a near-twin class under S4-NEARTWIN. No threshold changes.
+- **Key build.** A key cell whose delta d against its control satisfies 8 < d < 64 is admitted as a faint class twinned with no icon. d <= 8 still refuses `icon-key-mismatch`.
+- **Classification.** A crop that matches a faint class within tolerance classifies to the twin set, which contains `no-icon`. This holds even when the cell has no ink at the 64 threshold; such a cell keeps `icon: null` and records the set as `faintGlyphClass`.
+- **Discrimination.** A null prediction counts as the `no-icon` outcome. A twin set is accepted only when exactly one predicted outcome lies inside it; otherwise the capability is non-discriminating, never a case refusal.
+- **Persistence.** The key sidecar persists `glyphFaint`, and `loadIconGlyphKey` restores it under the same recompute-and-compare check.
+
+On the stored capture, computed in memory without writing to the committed refs:
+- **Key:** builds, with 54 classes over 75 pairs. The twins are `4RedToBlack:0↔5Quarters:4` and `4RedToBlack:1↔5Boxes:0`, and the only faint class is `5Boxes:0`.
+- **`stage4-icon-authored` D2:** the as-modelled lowest bucket shows the twin set {4RedToBlack:1, 5Boxes:0, no-icon}. `icon:dialect-standalone` is competing against its `no-icon` reading there, so it is **non-discriminating** (withheld).
+- **`stage4-icon-authored` D6:** shows 5Boxes:4, as modelled. The capability is still withheld because of D2.
+- **`stage4-icon-authored`, other capability:** `icon:dialect-base` discriminates as modelled.
+- **`stage4-icon-families` U2:** the same twin set resolves to `bucket-order`'s 5Boxes:0.
+- **`stage4-icon-families` U6:** shows 5Boxes:4.
+- **`stage4-icon-families` capabilities:** `icon:families-x14` discriminates `bucket-order`, and `icon:families-base`, `icon:settings-schema-defaults` and `icon:scope-whole-column` discriminate too.
+
+These results become committed evidence only after the orchestrator runs `capture --stage 4 --verify-only`.

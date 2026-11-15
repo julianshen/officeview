@@ -22,6 +22,7 @@ import {
   type IconCapabilityEvaluation,
   type IconGlyphKey,
   buildIconGlyphKey,
+  iconGlyphFaintRecord,
   iconGlyphTwinsRecord,
   classifyIconCapture,
   evaluateIconCapabilities,
@@ -380,6 +381,7 @@ export function buildIconSidecarExtras(
     key = built
     base.glyphClasses = Object.fromEntries(built.classOfPair)
     base.glyphTwins = iconGlyphTwinsRecord(built)
+    base.glyphFaint = iconGlyphFaintRecord(built)
   } else {
     const loaded = loadIconGlyphKey(opts.rootDir)
     key = loaded && !('kind' in loaded) ? loaded : undefined

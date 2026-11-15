@@ -4031,6 +4031,13 @@ export interface CfObservedIcon {
   textShiftPx?: number
   /** `false` when the three scanlines disagreed in `record` mode: a per-cell finding that can back no geometry claim. */
   edgeStable?: false
+  /** Ruling S4-FAINT: a cell with no ink at the S4-A threshold whose crop matches a faint key class (the twin set). */
+  faintGlyphClass?: string
+}
+
+/** The observed outcome of a measured cell for discrimination: its glyph class, a faint twin set, or null (no icon). */
+export function observedIconClass(o: CfObservedIcon): string | null {
+  return o.icon ? o.icon.glyphClass : (o.faintGlyphClass ?? null)
 }
 
 /** Ruling S4-A classification: equal within +-8 per channel at zero offset; separated by one pixel of max delta >= 64. */
@@ -4206,6 +4213,12 @@ function cropDelta(a: DecodedPng, b: DecodedPng): { max: number } {
 /** Ruling S4-NEARTWIN: the observed glyph class of a crop that cannot be told apart from its class's near twins. */
 const ICON_TWIN_SET_PREFIX = 'twin-set:'
 
+/**
+ * Ruling S4-FAINT: the twin-set member that stands for "no icon" (a faint key class is twinned with the blank control).
+ * Hypotheses predict it as `glyphClass: null`.
+ */
+export const ICON_NO_ICON_MEMBER = 'no-icon'
+
 /** The canonical (sorted, de-duplicated) observed class of a twin set: sidecars compare it by `JSON.stringify`. */
 export function iconTwinSetClass(members: readonly string[]): string {
   return ICON_TWIN_SET_PREFIX + [...new Set(members)].sort().join('|')
@@ -4228,7 +4241,7 @@ export function classifyIconCrop(
   png: DecodedPng,
   crop: { x: number; y: number; width: number; height: number },
   key: ReadonlyMap<string, DecodedPng>,
-  opts: { tolerance: number; twins?: ReadonlyMap<string, ReadonlySet<string>> },
+  opts: { tolerance: number; twins?: ReadonlyMap<string, ReadonlySet<string>>; faint?: ReadonlySet<string> },
 ): { glyphClass: string; referenceClass?: string } | Refusal {
   const sample = cropPng(png, crop)
   if (!sample) return iconRefusal('icon-class-none', `Crop ${crop.x},${crop.y} ${crop.width}x${crop.height} lies outside the ${png.width}x${png.height} capture`)
@@ -4239,8 +4252,10 @@ export function classifyIconCrop(
   if (matches.length > 1) return iconRefusal('icon-class-ambiguous', `The crop matches ${matches.length} glyph classes (${matches.map(m => m.cls).join(', ')})`)
   const unseparated = deltas.filter(d => d.cls !== matches[0]!.cls && d.max < ICON_STRONG_DELTA)
   const twins = opts.twins?.get(matches[0]!.cls)
-  if (unseparated.length > 0 && twins && unseparated.every(d => twins.has(d.cls))) {
-    return { glyphClass: iconTwinSetClass([matches[0]!.cls, ...unseparated.map(d => d.cls)]), referenceClass: matches[0]!.cls }
+  const faint = opts.faint?.has(matches[0]!.cls) === true
+  if ((unseparated.length === 0 || (twins && unseparated.every(d => twins.has(d.cls)))) && (unseparated.length > 0 || faint)) {
+    // S4-NEARTWIN (unseparated twins) and S4-FAINT (a faint class is twinned with no icon): a set, never a pick.
+    return { glyphClass: iconTwinSetClass([matches[0]!.cls, ...unseparated.map(d => d.cls), ...(faint ? [ICON_NO_ICON_MEMBER] : [])]), referenceClass: matches[0]!.cls }
   }
   if (unseparated.length > 0) return iconRefusal('icon-class-ambiguous', `The crop matches ${matches[0]!.cls} but is not separated from ${unseparated.map(d => d.cls).join(', ')} by a pixel of delta >= ${ICON_STRONG_DELTA}`)
   return { glyphClass: matches[0]!.cls }
@@ -4259,6 +4274,16 @@ export interface IconGlyphKey {
    * strongly separated from (symmetric). A crop of such a class classifies to the twin set, never to a pick.
    */
   twins: ReadonlyMap<string, ReadonlySet<string>>
+  /**
+   * Ruling S4-FAINT: classes whose key crop differs from its blank control by more than the tolerance but by less than
+   * `ICON_STRONG_DELTA` (no ink at the S4-A threshold). Each is twinned with "no icon" (`ICON_NO_ICON_MEMBER`).
+   */
+  faint: ReadonlySet<string>
+}
+
+/** The faint classes as the glyph-key sidecar records them (`glyphFaint`), in key order. */
+export function iconGlyphFaintRecord(key: IconGlyphKey): string[] {
+  return [...key.classes.keys()].filter(cls => key.faint.has(cls))
 }
 
 /** The twin relation as the glyph-key sidecar records it (`glyphTwins`): classes in key order, members sorted. */
@@ -4293,6 +4318,7 @@ export function buildIconGlyphKey(c: CfOracleCase, parts: Map<string, Uint8Array
   const classOfPair = new Map<string, string>()
   const classes = new Map<string, DecodedPng>()
   const twins = new Map<string, Set<string>>()
+  const faint = new Set<string>()
   const twin = (a: string, b: string): void => {
     if (a === b) return
     if (!twins.has(a)) twins.set(a, new Set())
@@ -4310,7 +4336,9 @@ export function buildIconGlyphKey(c: CfOracleCase, parts: Map<string, Uint8Array
     const crop = rect ? cropPng(png, rect) : undefined
     const ctrlCrop = ctrlRect ? cropPng(png, ctrlRect) : undefined
     if (!crop || !ctrlCrop || crop.width !== ctrlCrop.width || crop.height !== ctrlCrop.height) return iconRefusal('icon-key-mismatch', `Glyph-key cell ${m.sqref} or its control is outside the capture or differs in size`)
-    if (cropDelta(crop, ctrlCrop).max < ICON_STRONG_DELTA) return iconRefusal('icon-key-mismatch', `Glyph-key cell ${m.sqref} (${pair}) shows no icon against its control ${ctrlRef}`)
+    const ctrlDelta = cropDelta(crop, ctrlCrop).max
+    // Ruling S4-FAINT: within tolerance of the blank control is no key glyph at all; below the strong delta it is faint.
+    if (ctrlDelta <= tolerance) return iconRefusal('icon-key-mismatch', `Glyph-key cell ${m.sqref} (${pair}) shows no icon against its control ${ctrlRef}`)
     crops.set(pair, crop)
     const same = [...classes].filter(([, k]) => cropDelta(crop, k).max <= tolerance)
     const unseparated = [...classes].filter(([, k]) => { const d = cropDelta(crop, k).max; return d > tolerance && d < ICON_STRONG_DELTA })
@@ -4319,8 +4347,9 @@ export function buildIconGlyphKey(c: CfOracleCase, parts: Map<string, Uint8Array
     if (same.length === 0) classes.set(pair, crop)
     classOfPair.set(pair, cls)
     for (const [other] of unseparated) twin(cls, other)
+    if (ctrlDelta < ICON_STRONG_DELTA) faint.add(cls)
   }
-  return { crops, classOfPair, classes, twins }
+  return { crops, classOfPair, classes, twins, faint }
 }
 
 /** One class hypothesis at one designated cell: the glyph class it predicts (`null` for no icon). */
@@ -4450,9 +4479,10 @@ export function discriminateIcon(hyps: Readonly<Record<string, readonly IconClas
   for (const ref of refs) {
     const members = iconTwinSetMembers(rawObserved[ref])
     if (!members) continue
-    const inSet = [...new Set(hyps[ref]!.map(h => h.glyphClass).filter((g): g is string => g !== null && members.includes(g)))]
-    if (inSet.length > 1) return { status: 'non-discriminating', reason: `Ruling S4-NEARTWIN: designated cell ${ref} shows the twin set {${members.join(', ')}}, which holds the predicted classes ${inSet.join(', ')}` }
-    if (inSet.length === 1) observed[ref] = inSet[0]!
+    // Ruling S4-FAINT: a null prediction (no icon) is an outcome too, the `ICON_NO_ICON_MEMBER` of a faint set.
+    const inSet = [...new Set(hyps[ref]!.map(h => h.glyphClass ?? ICON_NO_ICON_MEMBER).filter(g => g !== 'unresolved' && members.includes(g)))]
+    if (inSet.length > 1) return { status: 'non-discriminating', reason: `Ruling S4-NEARTWIN/S4-FAINT: designated cell ${ref} shows the twin set {${members.join(', ')}}, which holds the predicted outcomes ${inSet.join(', ')}` }
+    if (inSet.length === 1) observed[ref] = inSet[0] === ICON_NO_ICON_MEMBER ? null : inSet[0]!
   }
   const consistent = ids.filter(id => refs.every(ref => {
     const h = hyps[ref]!.find(x => x.id === id)
@@ -4756,7 +4786,8 @@ export function loadIconGlyphKey(rootDir: string): IconGlyphKey | Refusal | unde
     }
     const classesOk = JSON.stringify(sidecar.glyphClasses ?? null) === JSON.stringify(Object.fromEntries(built.classOfPair))
     const twinsOk = JSON.stringify(sidecar.glyphTwins ?? null) === JSON.stringify(iconGlyphTwinsRecord(built))
-    if (!classesOk || !twinsOk) key = iconRefusal('sidecar-mismatch', `The glyph-key sidecar ${cap.sidecarPath} does not record the ${classesOk ? 'twin relation (glyphTwins)' : 'classes (glyphClasses)'} the key capture recomputes; re-derive it (capture --stage 4 --verify-only)`)
+    const faintOk = JSON.stringify(sidecar.glyphFaint ?? null) === JSON.stringify(iconGlyphFaintRecord(built))
+    if (!classesOk || !twinsOk || !faintOk) key = iconRefusal('sidecar-mismatch', `The glyph-key sidecar ${cap.sidecarPath} does not record the ${!classesOk ? 'classes (glyphClasses)' : !twinsOk ? 'twin relation (glyphTwins)' : 'faint classes (glyphFaint, Ruling S4-FAINT)'} the key capture recomputes; re-derive it (capture --stage 4 --verify-only)`)
   }
   iconKeyCache.set(cacheKey, key)
   return key
@@ -4785,7 +4816,7 @@ export function measureCaseIcons(c: CfOracleCase, png: DecodedPng, geom: Workshe
     if (!key) return undefined
     const rect = iconCropRect(png, geom, ref)
     if (!rect) return { cls: 'icon-class-none' }
-    const res = classifyIconCrop(png, rect, key.classes, { tolerance: ICON_CLASS_TOLERANCE, twins: key.twins })
+    const res = classifyIconCrop(png, rect, key.classes, { tolerance: ICON_CLASS_TOLERANCE, twins: key.twins, faint: key.faint })
     return 'glyphClass' in res ? { cls: res.glyphClass, reference: res.referenceClass ?? res.glyphClass } : { cls: res.code }
   }
   const out = new Map<string, CfObservedIcon>()
@@ -4800,7 +4831,10 @@ export function measureCaseIcons(c: CfOracleCase, png: DecodedPng, geom: Workshe
     const res = measureIconGeometry(png, geom, [cell.ref], { controlOf, tolerancePx: 1, unstable: 'record', ...(reference ? { referenceOf: () => reference } : {}) })
     if ('kind' in res) return res as Refusal
     const obs = (res as ReadonlyMap<string, CfObservedIcon>).get(cell.ref)!
-    out.set(cell.ref, obs.icon && cls !== undefined ? { ...obs, icon: { ...obs.icon, glyphClass: cls } } : obs)
+    // Ruling S4-FAINT: a cell blank at the ink threshold whose crop matches a faint key class is that faint twin set,
+    // recorded beside `icon: null` (no geometry rests on it), never plain no icon.
+    const faintSet = !obs.icon && cls !== undefined && iconTwinSetMembers(cls)?.includes(ICON_NO_ICON_MEMBER) ? cls : undefined
+    out.set(cell.ref, obs.icon && cls !== undefined ? { ...obs, icon: { ...obs.icon, glyphClass: cls } } : faintSet ? { ...obs, faintGlyphClass: faintSet } : obs)
   }
   return out
 }
@@ -4850,7 +4884,7 @@ export function evaluateIconCapabilities(c: CfOracleCase, parts: Map<string, Uin
     for (const ref of Object.keys(merged)) {
       const o = observed.get(ref)
       if (!o) { refusal = { code: 'sidecar-mismatch', reason: `designated cell ${ref} was not measured` }; break }
-      const cls = o.icon ? o.icon.glyphClass : null
+      const cls = observedIconClass(o)
       const predicted = merged[ref]!.some(h => h.glyphClass === cls)
       if (!predicted && (cls === 'icon-class-none' || cls === 'icon-class-ambiguous' || cls === 'unclassified')) { refusal = { code: cls === 'unclassified' ? 'icon-class-none' : cls, reason: `designated cell ${ref}: ${cls}` }; break }
       seen[ref] = cls
@@ -4902,6 +4936,7 @@ function verifyIconCapture(
     outcome.verified.push('icon:glyph-key', ...c.markers.filter(m => m.capabilityId.startsWith('icon:glyph-')).map(m => m.capabilityId))
     const recordedClasses = sidecar.glyphClasses as Record<string, string> | undefined
     if (JSON.stringify(recordedClasses ?? null) !== JSON.stringify(Object.fromEntries(key.classOfPair))) return fail('sidecar-mismatch', 'Sidecar glyphClasses differ from the classes recomputed from the key capture')
+    if (JSON.stringify(sidecar.glyphFaint ?? null) !== JSON.stringify(iconGlyphFaintRecord(key))) return fail('sidecar-mismatch', 'Sidecar glyphFaint differs from the faint classes recomputed from the key capture (Ruling S4-FAINT)')
     if (JSON.stringify(sidecar.glyphTwins ?? null) !== JSON.stringify(iconGlyphTwinsRecord(key))) return fail('sidecar-mismatch', 'Sidecar glyphTwins differ from the twin relation recomputed from the key capture (Ruling S4-NEARTWIN)')
   } else {
     const loaded = loadIconGlyphKey(rootDir)
@@ -4918,7 +4953,7 @@ function verifyIconCapture(
   const evaluation = evaluateIconCapabilities(c, parts, observed, key)
   for (const cap of Object.keys(evaluation)) {
     const marked = Object.keys(evaluation[cap]!.hypotheses ?? {})
-    const seen = Object.fromEntries(marked.map(ref => [ref, observed.get(ref)?.icon ? observed.get(ref)!.icon!.glyphClass : null]))
+    const seen = Object.fromEntries(marked.map(ref => [ref, observed.get(ref) ? observedIconClass(observed.get(ref)!) : null]))
     if (dialectAllAbsent(cap, seen)) return fail('icon-hypothesis-none', `Ruling S4-DIALECT-EVIDENCE: every cell marked by ${cap} shows no icon, so the capture cannot evidence the dialect`)
   }
   for (const cap of Object.keys(evaluation)) {

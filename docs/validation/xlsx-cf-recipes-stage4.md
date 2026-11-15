@@ -75,7 +75,7 @@ The case must come back `measured` with `icon:pixel-calibration`, `icon:glyph-ke
 - `icon-key-mismatch`: a key rule did not round-trip in the resaved XML, or a key cell shows no icon against its `;;;` control;
 - `icon-class-ambiguous`: a key crop is identical (±8) to two classes. Since fix round 3 (Ruling S4-NEARTWIN), a crop that is neither identical to nor separated by a pixel of delta ≥ 64 from a class no longer refuses. It becomes its own class with a recorded twin (`glyphTwins` in the sidecar), and cells showing either twin classify to the twin set.
 
-Run 1 (c63de53a): the stored key now stops at `icon-key-mismatch` on `5Boxes:0` (B21). Its faint glyph peaks at a delta of 34 from the control, below the ink threshold of 64. That needs a ruling (see `docs/validation/xlsx-cf.md` §12, "Stage 4 capture run 1"). After the ruling lands, `bun scripts/cf-refs/capture.ts --stage 4 --verify-only` re-derives the key sidecar first and then every dependent sidecar, from the stored PNGs, with no Excel run.
+Run 1 (c63de53a): the faint `5Boxes:0` glyph (B21) peaks at a delta of 34 from its control. Under Ruling S4-FAINT (fix round 4) it is admitted as a faint class twinned with no icon (`glyphFaint`). Only a key cell within ±8 of its control still refuses `icon-key-mismatch`. `bun scripts/cf-refs/capture.ts --stage 4 --verify-only` re-derives the key sidecar first and then every dependent sidecar, from the stored PNGs, with no Excel run.
 
 Record the failure in `docs/validation/xlsx-cf.md` §12 and stop. Never retouch or synthesize a PNG.
 
