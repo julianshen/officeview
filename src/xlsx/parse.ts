@@ -62,7 +62,8 @@ async function sharedStrings(pkg: OfficePackage): Promise<string[]> {
   const rich = new Set<number>()
   RICH_SHARED_STRINGS.set(out, rich)
   for (const si of getChildren(root, 'si')) {
-    if (getChildren(si, 'r').length > 0) rich.add(out.length)
+    // A rich-text run or a phonetic run/its phoneticPr (fix round 3) may name any font.
+    if (['r', 'rPh', 'phoneticPr'].some(tag => getChildren(si, tag).length > 0)) rich.add(out.length)
     // si may be plain t, or rich text runs (r/t), or phonetic — concatenate all t
     let s = ''
     const direct = si['t']
@@ -750,6 +751,8 @@ async function parseSheet(
     }
     for (const cNode of getChildren(rowNode, 'c')) {
       const ca = attrs(cNode)
+      // Ruling S4-ROW-UNIFORM (fix round 3): a cell showing phonetics draws them in its phonetic font.
+      if (ca.ph === '1' || ca.ph === 'true') row.richText = true
       const explicitRef = typeof ca.r === 'string' && /^[A-Z]+\d+$/.test(ca.r) ? ca.r : undefined
       const [rowIdx, colIdx] = explicitRef ? parseRef(explicitRef) : [rowIndex, previousCol + 1]
       if (!explicitRef && (rowIdx >= MAX_ROWS || colIdx >= MAX_COLS)) {
@@ -799,7 +802,7 @@ async function parseSheet(
         // Ruling S4-ROW-UNIFORM (fix round 2): a run-formatted string may name any font.
         if (Number.isFinite(idx) && RICH_SHARED_STRINGS.get(strings)?.has(idx)) row.richText = true
       } else if (t === 'inlineStr') {
-        if (isNode && getChildren(isNode, 'r').length > 0) row.richText = true
+        if (isNode && ['r', 'rPh', 'phoneticPr'].some(tag => getChildren(isNode, tag).length > 0)) row.richText = true
         value = isNode ? decodeXlsxString(textOf(getChildren(isNode,'t')[0]))+
           getChildren(isNode,'r').map(r=>decodeXlsxString(textOf(getChildren(r,'t')[0]))).join('') : ''
       } else if (t === 'b') {

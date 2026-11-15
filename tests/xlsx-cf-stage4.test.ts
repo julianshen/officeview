@@ -499,6 +499,7 @@ describe('S4-ROW-UNIFORM covers column and default styles and rich-text runs on 
   const FONT20 = '<font><sz val="20"/><color rgb="FF000000"/><name val="Calibri"/></font>'
   const FONT11 = '<font><sz val="11"/><color rgb="FF000000"/><name val="Calibri"/></font>'
   const RUN20 = '<r><rPr><sz val="20"/><rFont val="Calibri"/></rPr><t>x</t></r>'
+  const PHONETIC = '<rPh sb="0" eb="1"><t>p</t></rPh><phoneticPr fontId="2" type="noConversion"/>'
   const edit = (part: string, fn: (xml: string) => string) => ({ part, fn })
   const fonts = (xml: string, extra: string, first?: string) => xml.replace(/<fonts count="\d+"([^>]*)>(<font>.*?<\/font>)/, (_m, a, f0) => `<fonts count="3"${a}>${first ?? f0}`).replace('</fonts>', `${extra}</fonts>`)
   const VARIANTS: Record<string, ReturnType<typeof edit>[]> = {
@@ -512,6 +513,19 @@ describe('S4-ROW-UNIFORM covers column and default styles and rich-text runs on 
     ],
     'a neighbouring inline run in Calibri 20': [
       edit('xl/worksheets/sheet1.xml', x => x.replace(/(<row r="2"[^>]*>.*?)<\/row>/, `$1<c r="G2" s="2" t="inlineStr"><is>${RUN20}</is></c></row>`)),
+    ],
+    // Fix round 3 (codex P1): phonetic runs, a phoneticPr naming a 20 pt font, and ph="1".
+    'a neighbouring inline phonetic run with a 20 pt phoneticPr font': [
+      edit('xl/styles.xml', x => fonts(x, FONT20)),
+      edit('xl/worksheets/sheet1.xml', x => x.replace(/(<row r="2"[^>]*>.*?)<\/row>/, `$1<c r="G2" s="2" t="inlineStr" ph="1"><is><t>x</t>${PHONETIC}</is></c></row>`)),
+    ],
+    'a neighbouring shared-string phonetic run with a 20 pt phoneticPr font': [
+      edit('xl/styles.xml', x => fonts(x, FONT20)),
+      edit('xl/sharedStrings.xml', x => x.replace('</sst>', `<si><t>y</t>${PHONETIC}</si></sst>`)),
+      edit('xl/worksheets/sheet1.xml', x => x.replace(/(<row r="2"[^>]*>.*?)<\/row>/, '$1<c r="G2" s="2" t="s" ph="1"><v>RICH</v></c></row>')),
+    ],
+    'a neighbouring plain cell showing phonetics (ph="1")': [
+      edit('xl/worksheets/sheet1.xml', x => x.replace(/(<row r="2"[^>]*>.*?)<\/row>/, '$1<c r="G2" s="2" ph="1"><v>1</v></c></row>')),
     ],
     'a neighbouring shared-string run in Calibri 20': [
       edit('xl/sharedStrings.xml', x => x.replace('</sst>', `<si>${RUN20}</si></sst>`)),

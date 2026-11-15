@@ -258,7 +258,8 @@ export function sharedStringEvents(partId: string, onString: (text: string, rich
         if (mcDepth > 0) throw new PackageError('unsupported', 'si inside mc:AlternateContent is not supported; shared strings would be lost', partId)
         if (selfClosing) { onString(''); return }
         inSi = true; direct = ''; runs = ''; directDecoder = new XstringDecoder(); rich = false
-      } else if (inSi && local === 'rPh' && !selfClosing) inPhonetic++
+      } else if (inSi && local === 'rPh') { if (stack[stack.length - 1] === 'si') rich = true; if (!selfClosing) inPhonetic++ }
+      else if (inSi && local === 'phoneticPr' && stack[stack.length - 1] === 'si') rich = true
       else if (inSi && local === 'r' && stack[stack.length - 1] === 'si') { runTSeen = false; rich = true }
       else if (inSi && inPhonetic === 0 && local === 't' && !selfClosing) {
         const parent = stack[stack.length - 1]
@@ -724,6 +725,8 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
         const s = parseInt(a.s ?? '0', 10)
         cS = Number.isFinite(s) ? s : 0
         cellRich = false
+        // Fix round 3: a cell showing phonetics (`ph="1"`) draws them in its phonetic font.
+        if (options.keyFontStyle && !cellSkipped && (a.ph === '1' || a.ph === 'true')) rowUniform = false
         if (options.keyFontStyle && !cellSkipped && !options.keyFontStyle(cS)) rowUniform = false
         cCm = a.cm
         cCa = a.ca === '1' || a.ca === 'true'
@@ -744,7 +747,11 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
           if (!selfClosing) { collect = 'v'; decoder = new XstringDecoder() }
         } else if (local === 'is' && parent === 'c' && !isSeen) {
           isSeen = true
-        } else if (local === 'rPh' && !selfClosing) inPhonetic++
+        } else if (local === 'rPh') {
+          // Fix round 3: a phonetic run may name any font (its phoneticPr's); withheld like a rich-text run.
+          if (parent === 'is') cellRich = true
+          if (!selfClosing) inPhonetic++
+        } else if (local === 'phoneticPr' && parent === 'is') cellRich = true
         else if (local === 'r' && parent === 'is') { runTSeen = false; cellRich = true }
         else if (local === 't' && isSeen && inPhonetic === 0 && !selfClosing) {
           if (parent === 'is' ? !isTDirectSeen : (parent === 'r' && stack[stack.length - 2] === 'is' && !runTSeen)) {
