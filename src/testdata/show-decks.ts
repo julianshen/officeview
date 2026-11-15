@@ -180,6 +180,26 @@ export function cmdHoldDeck(holdMs = 3000): Promise<Uint8Array> {
 }
 
 /**
+ * Three white slides for slide-change checks (PR #78 round 2): a fly-in (as `flyInDeck`), a static slide entered
+ * by a cut, and a second fly-in. Nothing on them is black.
+ */
+export function navDeck(): Promise<Uint8Array> {
+  const fly = (title: string) => ({
+    bg: { solid: 'FFFFFF' },
+    shapes: [
+      rect(2, 'Title', 80, 40, 800, 100, 'DDEBF7', { paragraphs: [{ runs: [{ text: title }] }] }),
+      rect(3, 'Box', 380, 260, 200, 200, '336699'),
+    ],
+    timingXml: mainSequence([[flyIn(3)]]),
+  })
+  return deck([
+    fly('One'),
+    { bg: { solid: 'FFFFFF' }, shapes: [rect(2, 'Two', 120, 120, 300, 200, 'F4B183')] },
+    fly('Three'),
+  ])
+}
+
+/**
  * Two slides, each holding shape id 2 named "Box" (the same kind, a text
  * rectangle), moved and resized; the second enters with a Morph
  * (`option`, default `byObject`).

@@ -1,7 +1,7 @@
 /**
  * Piece 4 Task 14 — the streamed-show browser smoke (spec §8): animated streamed decks in Chromium against
  * server/test/app.ts, under both compositor backends (`?backend=webgl2`, the browser's own; `?backend=canvas2d`,
- * where the harness page makes WebGL2 unavailable). Decks: `?deck=fly|morph|cube` (src/testdata/show-decks.ts).
+ * where the harness page makes WebGL2 unavailable). Decks: `?deck=fly|morph|cube|nav` (src/testdata/show-decks.ts).
  *
  * An init script records, per page:
  * - every WebSocket close code (Playwright's own websocket `close` event carries no code), so "no 4008" is real;
@@ -15,7 +15,7 @@ import { expect, test, type Page } from '@playwright/test'
 const P = Number(process.env.OV_STREAM_PORT ?? 4181)
 const CONTROL = `http://127.0.0.1:${P + 1}`
 const BACKENDS = ['webgl2', 'canvas2d'] as const
-const SLIDES = { fly: 1, morph: 2, cube: 2 } as const
+const SLIDES = { fly: 1, morph: 2, cube: 2, nav: 3 } as const
 type Deck = keyof typeof SLIDES
 
 const open = (page: Page, deck: Deck, backend: string) => page.goto(`/src/debug/stream-viewer.html?port=${P}&deck=${deck}&backend=${backend}`)
@@ -195,6 +195,75 @@ for (const backend of BACKENDS) {
       // The server's charged window is 60/min per session; the show budgets 48/min of it (Task 12).
       expect(peaks.unit! + peaks['show-plan']! + peaks['show-track']! + peaks['show-morph']!).toBeLessThanOrEqual(60)
       console.log(`hold [${backend}]: ${presses} presses in 10 s; peaks per 60 s ${JSON.stringify(peaks)}; totals ${JSON.stringify(Object.fromEntries(['unit', 'show-plan', 'show-track', 'show-morph'].map((t) => [t, w.count(t)])))}; close codes none`)
+      await page.keyboard.press('Escape')
+      await expect.poll(() => presentState(page)).toBe('ended')
+    })
+
+    test('slide changes (cut and fly-in, bundles prefetched) never show a mostly black frame (PR #78 round 2)', async ({ page }) => {
+      test.setTimeout(60_000)
+      const w = wire(page)
+      await open(page, 'nav', backend)
+      await ready(page, 'nav')
+      await present(page)
+      await expectBackend(page, backend)
+      // Every slide's bundle is in before the first press (target, then +1/+2): what is measured is the change itself.
+      await expect.poll(() => w.count('show-plan')).toBeGreaterThanOrEqual(2)
+      await page.waitForTimeout(1500)
+      type Sample = { slide: string | null; black: number; control: boolean }
+      // Each animation frame, after the show's own frame callback (registered later, so it runs later): the share of
+      // what the audience sees that is black — the surface's visible canvases composited in DOM order (the 2-D
+      // output, then the compositor's WebGL2 or 2-D canvas), read before the frame is presented.
+      await page.evaluate(() => {
+        const layers = () => [...document.querySelectorAll<HTMLCanvasElement>('[data-officeview-show-surface=""] canvas')]
+          .filter((c) => c.width > 0 && c.height > 0 && getComputedStyle(c).display !== 'none' && getComputedStyle(c).visibility !== 'hidden' && !c.closest('[hidden]'))
+        const probe = document.createElement('canvas')
+        probe.width = 64; probe.height = 36
+        const ctx = probe.getContext('2d', { willReadFrequently: true })!
+        const st = { samples: [] as Array<{ slide: string | null; black: number; control: boolean }>, on: true, control: false }
+        ;(window as unknown as { __ovBlack: typeof st }).__ovBlack = st
+        const tick = () => {
+          if (!st.on) return
+          const top = layers().at(-1)
+          const control = st.control && !!top
+          if (control) {
+            // The control: the top canvas made black for this one frame proves the probe sees a black frame.
+            st.control = false
+            const gl = top!.getContext('webgl2')
+            if (gl) { gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT) } else { const c2 = top!.getContext('2d')!; c2.fillStyle = '#000'; c2.fillRect(0, 0, top!.width, top!.height) }
+          }
+          ctx.clearRect(0, 0, 64, 36)
+          for (const c of layers()) ctx.drawImage(c, 0, 0, 64, 36)
+          const d = ctx.getImageData(0, 0, 64, 36).data
+          let black = 0
+          for (let i = 0; i < d.length; i += 4) if (d[i + 3]! > 200 && Math.max(d[i]!, d[i + 1]!, d[i + 2]!) < 32) black++
+          st.samples.push({ slide: document.querySelector('[data-officeview-show-surface=""]')?.getAttribute('data-slide') ?? null, black: black / (64 * 36), control })
+          requestAnimationFrame(tick)
+        }
+        requestAnimationFrame(tick)
+      })
+      // → through the fly-in, the cut to slide 2 and the fly-in on slide 3, then ← back to the first slide.
+      for (const key of ['ArrowRight', 'ArrowRight', 'ArrowRight', 'ArrowRight', 'ArrowLeft', 'ArrowLeft', 'ArrowLeft', 'ArrowLeft']) {
+        await page.keyboard.press(key)
+        await page.waitForTimeout(900)
+      }
+      await page.evaluate(() => { (window as unknown as { __ovBlack: { control: boolean } }).__ovBlack.control = true })
+      await page.waitForTimeout(300)
+      const samples = await page.evaluate(() => {
+        const st = (window as unknown as { __ovBlack: { on: boolean; samples: Sample[] } }).__ovBlack
+        st.on = false
+        return st.samples
+      })
+      // Non-vacuous: every frame for ~7 s, across all three slides, and the probe flags the one black control frame.
+      expect(samples.length).toBeGreaterThan(200)
+      expect(new Set(samples.map((x) => x.slide))).toEqual(new Set(['0', '1', '2']))
+      const controls = samples.filter((x) => x.control)
+      expect(controls.length).toBe(1)
+      expect(controls[0]!.black).toBeGreaterThan(0.9)
+      // A 4:3 slide in the 16:9 surface is pillarboxed: its black bars are 25% of the frame. "Mostly black" is over half.
+      const dark = samples.map((x, i) => ({ i, ...x })).filter((x) => !x.control && x.black > 0.5)
+      expect(dark, `mostly black frames [${backend}]`).toEqual([])
+      console.log(`no-black [${backend}]: ${samples.length} frames; max black share ${Math.max(...samples.filter((x) => !x.control).map((x) => x.black)).toFixed(3)}`)
+      expect(w.refused).toEqual([])
       await page.keyboard.press('Escape')
       await expect.poll(() => presentState(page)).toBe('ended')
     })
