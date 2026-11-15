@@ -44051,8 +44051,8 @@
       ],
       "expected": {
         "inputSha256": "404151c1960013710e2568120f320c9d628d624ed3e93f7881ee9691d4e85ea2",
-        "savedSha256": "404151c1960013710e2568120f320c9d628d624ed3e93f7881ee9691d4e85ea2",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "e60f6b27bfba57f220052cfa7125bf7bef86a74ed7837690ee392483a7653556",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "C2",
@@ -44102,7 +44102,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -44113,7 +44113,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -44124,7 +44124,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -44135,7 +44135,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -44146,7 +44146,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -44157,7 +44157,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -44168,7 +44168,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44179,7 +44179,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44190,7 +44190,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44201,7 +44201,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44212,7 +44212,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -44223,14 +44223,14 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
             "ref": "H2",
             "controlRef": "H6",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -44442,17 +44442,24 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-geometry-2.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-geometry-2.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-geometry-2.json",
+          "pngSha256": "84317140dda9c44d9204c63632ccd42bea78ac24daf2575e51dd9eb89ff52b5b"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-15T07:48:05.717Z",
+        "excelVersion": "16.115",
+        "inputSha256": "404151c1960013710e2568120f320c9d628d624ed3e93f7881ee9691d4e85ea2",
+        "savedSha256": "e60f6b27bfba57f220052cfa7125bf7bef86a74ed7837690ee392483a7653556",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage4-icon-geometry",
@@ -48400,7 +48407,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -48411,7 +48418,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -48422,7 +48429,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -48433,7 +48440,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "non-discriminating"
             }
           },
           {
