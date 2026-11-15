@@ -154,6 +154,24 @@ describe('show driver', () => {
     expect(r.released).toEqual([0])
   })
 
+  it('the outgoing frame is captured while the slide\'s lease is still held; the lease goes before leave (PR #78 review)', async () => {
+    // A streamed slide's lease can be the last pin on the bundle its frame is drawn from.
+    const seen: string[] = []
+    let r: ReturnType<typeof rig> | undefined = undefined
+    r = rig({
+      slides: [slideOf(0), slideOf(1)],
+      stage: {
+        flattenCurrent() { seen.push(`flattenCurrent:released=[${r!.released.join(',')}]`) },
+        leave() { seen.push(`leave:released=[${r!.released.join(',')}]`) },
+      },
+    })
+    await r.driver.start(0)
+    r.driver.next()
+    await flush()
+    expect(r.driver.slide).toBe(1)
+    expect(seen.slice(-2)).toEqual(['flattenCurrent:released=[]', 'leave:released=[0]'])
+  })
+
   it('previous at step 0 enters the previous visible slide at its last checkpoint', async () => {
     const r = rig({ slides: [slideOf(0, { timing: steps(2) }), slideOf(1)] })
     await r.driver.start(1)

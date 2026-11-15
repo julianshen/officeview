@@ -1056,3 +1056,32 @@ describe('final review finding 2: an in-progress decode has a cancellation owner
     }
   })
 })
+
+describe('PR #78 review: the outgoing frame is captured before the visit lets go of its bundle', () => {
+  const fadeIn = (p: Plan): Plan => ({ ...p, show: { ...p.show, transition: { element: 'fade', ns: 'p', attrs: {}, advClick: true, durationMs: 600 } as unknown as NonNullable<Plan['show']['transition']> } })
+
+  it('after a bucket change, the next slide\'s transition starts from the pixels that were displayed', async () => {
+    // Bitmaps that a release really invalidates (as ImageBitmap.close does).
+    vi.spyOn(remoteShowDeps, 'decode').mockImplementation(async (bytes) => Object.assign(await bitmapOf(bytes), { close(this: HTMLCanvasElement) { this.width = 0; this.height = 0 } }))
+    const fd = animDoc(['fly', { messages: (u) => bundleOf(MORPH_TO, u, fadeIn) }])
+    const { s, canvas, log } = await show(fd)
+    await run(1_500)
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1920 })
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 1080 })
+    window.dispatchEvent(new Event('resize'))
+    await run(1_500)
+    // Slide 0's bundle was replaced at the new bucket: the visit's pin is all that keeps the old one alive.
+    expect(fd.log.filter((l) => l === 'motion:full@2').length).toBeGreaterThan(0)
+    const pixels = () => [...canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data]
+    const shown = pixels()
+    s.goTo(1)
+    // One tick enters the target; the next draws the fade's first frame.
+    await run(32)
+    expect(log).not.toContain('diag:transition-workspace')
+    // That frame is the outgoing frame, what the audience saw (a cut to the target differs in ~18% of channels).
+    const now = pixels()
+    const differing = now.reduce((n, v, k) => n + (v === shown[k] ? 0 : 1), 0)
+    expect(differing / now.length).toBeLessThan(0.01)
+    s.exit()
+  })
+})

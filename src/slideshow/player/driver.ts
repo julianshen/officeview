@@ -16,7 +16,8 @@
  * navigation (goTo, first, last) supersedes the queue.
  *
  * On every slide change the stage is told `flattenCurrent()` (the outgoing
- * frame is captured) and then `leave()` (the rest is released), in that
+ * frame is captured, while the slide's visit still holds its lease), then
+ * the visit is released, then `leave()` (the rest is released), in that
  * order, before the next slide's `enter`.
  */
 import { createAutoAdvance, createKioskTimer, type AutoAdvance, type KioskTimer } from '../engine/advance'
@@ -180,8 +181,11 @@ export function createShowDriver(o: { source: SlideSource; stage: DriverStage; c
 
   /** Shows deck slide `i` (a cut, or a transition once its model is in) and loads its click steps. Resolves when the slide is drawable. */
   function enter(i: number | 'end', at: Visit['at'] = 'initial'): Promise<void> {
-    leaveVisit()
+    // The outgoing frame is captured while the visit still holds what it was drawn from: a streamed slide's lease
+    // may be the last pin on a bundle the fetcher replaced (a bucket change), and releasing it closes the bitmaps
+    // the capture re-uploads (PR #78 review). The local stage captures in leave(), after the visit, as before.
     stage.flattenCurrent()
+    leaveVisit()
     stage.leave()
     slide = i
     hooks.onVisit(undefined)
