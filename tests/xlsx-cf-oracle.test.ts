@@ -4146,8 +4146,10 @@ describe('Stage 4 icon oracle (Task 24)', () => {
       'stage4-icon-composition': ['icon:composition-dxf-fill', 'icon:composition-matching-stopIfTrue-ahead', 'icon:composition-noicons-slot', 'icon:composition-overlapping-icons', 'icon:composition-unresolved-stub', 'icon:composition-with-bar', 'icon:composition-with-scale'],
       'stage4-icon-rtl': ['icon:placement-rtl-sheet'],
       'stage4-icon-unresolved-shapes': ['icon:unresolved-active-present', 'icon:unresolved-base-x14-set', 'icon:unresolved-cfvo-count', 'icon:unresolved-cfvo-no-type', 'icon:unresolved-custom-count', 'icon:unresolved-formula-cfvo', 'icon:unresolved-iconid-range', 'icon:unresolved-noicons-id', 'icon:unresolved-unknown-set', 'icon:unresolved-xmf-reference', 'icon:attr-percent-false', 'icon:reverse-custom', 'icon:composition-icon-stopIfTrue'],
-      // Task 28 round 2 (Ruling S4-ROWS-CAPTURE): the icon frame across row heights.
-      'stage4-icon-rows': ['icon:geometry-row-offset'],
+      // Task 28 round 4 (Ruling S4-BOTTOM-REPLICATE): placed ahead of stage4-icon-rows, it owns the row-offset capability;
+      // stage4-icon-rows (round 2, S4-ROWS-CAPTURE) stays captured and recorded.
+      'stage4-icon-rows-bottom': ['icon:geometry-row-offset'],
+      'stage4-icon-rows': [],
     }
     expect(CF_STAGE4_CASES.map(c => c.id)).toEqual(Object.keys(expected))
     for (const [id, caps] of Object.entries(expected)) {
@@ -4463,7 +4465,7 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     // whatever the committed captures verify; publishing itself is Task 30 and is only rendered in memory here).
     const report = auditStage4Manifest(manifest, { rootDir: REPO_ROOT })
     expect(report.ok).toBe(true)
-    expect(report.summary.cases).toBe(18)
+    expect(report.summary.cases).toBe(19)
     expect(report.summary.capabilities).toBe(CF_STAGE4_CAPABILITIES.length)
     expect(report.perCapability.filter(p => p.disposition === 'unaccounted')).toEqual([])
     expect(report.stageComplete).toBe(report.blockedCapabilities.length === 0)

@@ -139,7 +139,10 @@ export function isWhiteFill(fill: string | undefined): boolean {
  * host also carries (Ruling S4-L) the un-inset width of the text the frame lays out there (`textWidth`: from the paint
  * legs' own layout, the resident semantic leg's measurer, or the paged frame's laid-out record; unknown withholds) and
  * the cell as laid out (its value kind and effective style: alignment, font size, vertical alignment). */
-export type CfBarHost = Rect & { readonly fill?: string; readonly textWidth?: number; readonly cell?: Pick<import('../types').XlsxCell, 'value' | 'valueIsError' | 'style'> }
+export type CfBarHost = Rect & { readonly fill?: string; readonly textWidth?: number; readonly cell?: Pick<import('../types').XlsxCell, 'value' | 'valueIsError' | 'style'>
+  /** Ruling S4-ROW-EXACT (Task 28 round 4): the host row's authored height in pt (its `ht`), set by the icon painter
+   * from the batch's own row table (`CfIconGate.rowPtOf`); absent: not known, and the icon frame withholds. */
+  readonly rowPt?: number }
 
 /** One axis-aligned rect in output units; colours stay ARGB. `gradientEnd`, when present, makes the rect a left-to-right
  * linear gradient from `argb` to `gradientEnd` over [`gradientFrom`, `gradientTo`] (default: the rect's own left and

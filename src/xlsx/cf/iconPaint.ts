@@ -64,7 +64,8 @@ export type CfIconFramePlacement = Readonly<{ anchor: 'bottom' | 'top'; offsetPt
 /** The frame (pt; 1 px = 1 pt at the capture) and the row heights (pt) at which its placement was measured. */
 export type CfIconKeyFrame = Readonly<{
   fontPt: number; fontName: string; widthPt: number; heightPt: number; leftPt: number
-  rows: Readonly<Record<number, Readonly<{ bottom?: CfIconFramePlacement; center?: CfIconFramePlacement; top?: CfIconFramePlacement }>>>
+  /** Per measured row height (pt): the px Excel drew it at 1 px/pt (`excelPx`), and the placements measured there. */
+  rows: Readonly<Record<number, Readonly<{ excelPx: number; bottom?: CfIconFramePlacement; center?: CfIconFramePlacement; top?: CfIconFramePlacement }>>>
 }>
 
 /**
@@ -111,15 +112,19 @@ export const CF_ICON_RENDER_MODEL: CfIconRenderModel = Object.freeze({
     //   top 2, 2, 3, 4, 5, 7, 9 px below the top gridline in the same rows (rows 2, 4..9; every column agrees).
     // - 12.75 pt (12 px) is not admitted: its inner box cannot hold the 12 px frame (the icon shrinks, B3..I3 ink 1..10).
     //   Nothing between the measured heights is admitted.
+    // - `excelPx`: the row px Excel drew (sidecar `rowHeightsPt`/`cellHeightPx`: 15, 16, 18, 20, 22, 25, 30; Excel floors
+    //   16.5 and 22.5). Ruling S4-ROW-EXACT (round 4): a row admits only where the viewer's row px equal these at the
+    //   capture scale in every view, and the static and resident views round rows to whole px while the paged ones do
+    //   not, so only whole-px rows (excelPx × 4/3 whole: 15, 18, 30 pt) can agree (`framePlacement`).
     rows: Object.freeze<CfIconKeyFrame['rows']>({
-      15: { bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 2, horizontal: ['left', 'right'] } },
-      16.5: { bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 2, horizontal: ['left', 'right'] } },
-      18: { bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 3, horizontal: ['left', 'right'] } },
+      15: { excelPx: 15, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 2, horizontal: ['left', 'right'] } },
+      16.5: { excelPx: 16, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 2, horizontal: ['left', 'right'] } },
+      18: { excelPx: 18, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 3, horizontal: ['left', 'right'] } },
       // 20 pt bottom also: the glyph key (right-aligned numbers, frame bottom 19 of 20) and geometry-2 I5/J5 (left).
-      20: { bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left', 'right'] }, center: { anchor: 'top', offsetPt: 4, horizontal: ['left', 'right'] } },
-      22.5: { bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 5, horizontal: ['left', 'right'] } },
-      25: { bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 7, horizontal: ['left', 'right'] } },
-      30: { bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 9, horizontal: ['left', 'right'] } },
+      20: { excelPx: 20, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left', 'right'] }, center: { anchor: 'top', offsetPt: 4, horizontal: ['left', 'right'] } },
+      22.5: { excelPx: 22, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 5, horizontal: ['left', 'right'] } },
+      25: { excelPx: 25, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 7, horizontal: ['left', 'right'] } },
+      30: { excelPx: 30, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 9, horizontal: ['left', 'right'] } },
     }),
   }),
 })
@@ -206,7 +211,9 @@ export function layoutIcon(icon: CfIconDescriptor, host: CfBarHost, font: CfIcon
   for (const cap of CF_ICON_PAINT_CAPABILITIES) if (!check(cap)) return undefined
   const variant = model.box, off = model.offsetsPt, frame = model.keyFrame
   if (!variant) return undefined
-  const placement = frame ? framePlacement(frame, variant, host, font) : undefined
+  // Ruling S4-BOTTOM-REPLICATE (round 4): the measured placements stand only while `icon:geometry-row-offset` is
+  // evidenced (its anchor-constant verdict replicated over two separating columns).
+  const placement = frame && check('icon:geometry-row-offset') ? framePlacement(frame, variant, host, font) : undefined
   if (frame ? !placement : (!off || (variant.size !== 'row' && model.sizePt === undefined))) return undefined
   const zoom = scale.zoom > 0 && Number.isFinite(scale.zoom) ? scale.zoom : 1
   const dpr = scale.dpr > 0 && Number.isFinite(scale.dpr) ? scale.dpr : 1
@@ -250,22 +257,27 @@ export function layoutIcon(icon: CfIconDescriptor, host: CfBarHost, font: CfIcon
 
 /**
  * The measured placement for a host, or undefined (withheld): the font size, face and style (regular) must be the
- * frame's, and the row height, the vertical alignment (`cell-align` reads the cell's) and the horizontal alignment one
- * the captures measured. The host carries the row in logical px, which the viewer rounds to whole px (`computeMetrics`,
- * `viewport.cssSize`), so a measured row matches its exact px (pt × 4/3) or that rounded; a host matching two measured
- * rows matches none. The column width is not an input (`keyFrame` cites the evidence).
+ * frame's, and the row height (S4-ROW-EXACT: the host's authored `rowPt`), the vertical alignment (`cell-align` reads
+ * the cell's) and the horizontal alignment one the captures measured. The column width is not an input (`keyFrame`
+ * cites the evidence).
  */
 function framePlacement(frame: CfIconKeyFrame, variant: CfIconBoxVariant, host: CfBarHost, font: CfIconText): CfIconFramePlacement | undefined {
   const style = host.cell?.style
   if (font.sizePt !== frame.fontPt || style?.fontName !== frame.fontName || style.bold === true || style.italic === true) return undefined
   const vertical = variant.vertical === 'cell-align' ? font.vertical : variant.vertical
   if (!vertical || !font.horizontal) return undefined
-  const rows = Object.keys(frame.rows).map(Number).filter(rowPt => {
-    const rowPx = rowPt * PT_PX
-    return Math.abs(host.height - rowPx) < 1e-9 || host.height === Math.round(rowPx)
-  })
-  if (rows.length !== 1) return undefined
-  const placement = frame.rows[rows[0]!]![vertical]
+  // Ruling S4-ROW-EXACT: the host's row must be known to be a measured height (its authored pt, never inferred from
+  // px, which many heights share), drawn at Excel's px in every view: the viewer's px (pt × 4/3 unrounded, or rounded)
+  // at the capture scale must both be Excel's `excelPx`, so the row px is whole and the host has exactly it (a
+  // session-resized row does not).
+  const rowPt = host.rowPt
+  if (rowPt === undefined || !Number.isFinite(rowPt)) return undefined
+  const key = Object.keys(frame.rows).map(Number).find(pt => Math.abs(pt - rowPt) < 1e-9)
+  const row = key === undefined ? undefined : frame.rows[key]
+  if (!row) return undefined
+  const viewPx = row.excelPx * PT_PX
+  if (Math.abs(viewPx - Math.round(viewPx)) > 1e-9 || Math.abs(key! * PT_PX - viewPx) > 1e-9 || Math.abs(host.height - viewPx) > 1e-9) return undefined
+  const placement = row[vertical]
   return placement && placement.horizontal.includes(font.horizontal) ? placement : undefined
 }
 
@@ -369,15 +381,28 @@ export function admitBatchGlyphs(icons: Iterable<CfIconDescriptor>, memory: CfMe
 /** Everything a batch or scope decides an icon by, beyond the host. */
 export interface CfIconGate {
   readonly admitted: CfAdmittedGlyphs
+  /** Ruling S4-ROW-EXACT: a row's authored height in pt (its `ht`), or undefined when the batch does not know it (no
+   * `ht`, or no row table): its icons withhold. */
+  rowPtOf?(row: number): number | undefined
   /** Whether the cell also carries a bar that paints: until `icon:composition-with-bar` settles z-order, no icon paints
    * on a bar cell. */
   hasBar(row: number, col: number): boolean
   readonly check?: (cap: string) => boolean
 }
 
+/** The host with its row's authored height (S4-ROW-EXACT) from the gate's row table. */
+function withRowPt<H extends CfBarHost | undefined>(host: H, row: number, gate: CfIconGate): H {
+  if (!host) return host
+  const rowPt = gate.rowPtOf?.(row)
+  if (rowPt === host.rowPt) return host
+  const { rowPt: _drop, ...rest } = host
+  return (rowPt === undefined ? rest : { ...rest, rowPt }) as H
+}
+
 /** The batch-level predicate: the icon paints on this host (cell predicate, admitted glyph class, bar z-order gate). */
-export function iconPaintsOn(icon: CfIconDescriptor | undefined, row: number, col: number, host: CfBarHost | undefined, gate: CfIconGate): icon is CfIconDescriptor {
+export function iconPaintsOn(icon: CfIconDescriptor | undefined, row: number, col: number, hostIn: CfBarHost | undefined, gate: CfIconGate): icon is CfIconDescriptor {
   if (!icon) return false
+  const host = withRowPt(hostIn, row, gate)
   const check = gate.check ?? defaultHasEvidence
   if (iconWithheld(icon, host, check)) return false
   const glyph = iconGlyph(icon.set as Exclude<CfIconDescriptor['set'], 'NoIcons'>, icon.iconId)
@@ -389,7 +414,7 @@ export function iconPaintsOn(icon: CfIconDescriptor | undefined, row: number, co
 export function iconTextInset(icon: CfIconDescriptor | undefined, row: number, col: number, host: CfBarHost, scale: CfBarScale, gate: CfIconGate): { left: number; right: number } | undefined {
   if (icon?.set === 'NoIcons') return noIconsInset(icon, host, gate.check ?? defaultHasEvidence)
   if (!iconPaintsOn(icon, row, col, host, gate)) return undefined
-  return layoutIcon(icon, host, iconTextOf(host.cell)!, scale, iconRenderModel(), gate.check ?? defaultHasEvidence)?.inset
+  return layoutIcon(icon, withRowPt(host, row, gate), iconTextOf(host.cell)!, scale, iconRenderModel(), gate.check ?? defaultHasEvidence)?.inset
 }
 
 /**
@@ -437,7 +462,7 @@ export function paintIconCells(
     const paints = iconPaintsOn(icon, row, col, host, gate)
     onLayout?.(row, col, !paints)
     if (!paints) return
-    const laid = layoutIcon(icon, host, iconTextOf(host.cell)!, scale, iconRenderModel(), gate.check ?? defaultHasEvidence)
+    const laid = layoutIcon(icon, withRowPt(host, row, gate), iconTextOf(host.cell)!, scale, iconRenderModel(), gate.check ?? defaultHasEvidence)
     const glyph = iconGlyph(icon.set as Exclude<CfIconDescriptor['set'], 'NoIcons'>, icon.iconId)
     const cache = glyph && gate.admitted.cacheFor(glyph)
     if (!laid || !glyph || !cache) return

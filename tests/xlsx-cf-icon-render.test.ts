@@ -17,7 +17,8 @@ import { buildSheetGeometry } from '../src/xlsx/view/viewport'
 import { createCellLayoutHost, renderSheetViewport } from '../src/xlsx/view/renderViewport'
 import { LayoutCache, withTextInset, type CellLayoutHost, type PlacedCell } from '../src/xlsx/view/textLayout'
 import { prepareCfPaint, residentSource, type CfPaintBatch } from '../src/xlsx/cf/render'
-import { prepareCfTextScope, prepareCfWireScope, type CfFrameHostSource } from '../src/xlsx/cf/text'
+import { cfRowPtOfOverrides, prepareCfTextScope, prepareCfWireScope, type CfFrameHostSource } from '../src/xlsx/cf/text'
+import { buildGeometry } from '../src/xlsx/view/source'
 import { cfRulesVersion, prepareCfRemote } from '../src/xlsx/view/pagedSource'
 import { createCfMemory, createCfWorkBudget } from '../src/xlsx/cf/limits'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
@@ -50,7 +51,10 @@ async function pagedScope(sheet: XlsxSheet, rows: number, cols = 1, hosts?: CfFr
   const rects = [{ r0: 0, r1: rows - 1, c0: 0, c1: cols - 1 }]
   const wire = await prepareCfRemote({ rects, stamp: { ...st }, grantBytes: 1 << 22 }, sheetId, residentSource(sheet, st, memory, 'engine'), rules, memory, { budget: () => createCfWorkBudget({ now: () => 0 }) })
   expect(wire.kind, JSON.stringify(wire.reason)).toBe('ready')
-  return (await prepareCfWireScope(async () => ({ result: structuredClone(wire), release() {} }), rects, { budget: { reserve() {}, release() {} }, locale, ...(hosts ? { hosts } : {}) }))!
+  // S4-ROW-EXACT: the row heights the paged main thread holds, as InteractiveSheetDoc passes them: the worker's authored
+  // row overrides (view/source.ts `buildGeometry`), read back as pt.
+  const rowPtOf = cfRowPtOfOverrides(buildGeometry(sheet.rows, sheet.cols ?? []).rowOverrides)
+  return (await prepareCfWireScope(async () => ({ result: structuredClone(wire), release() {} }), rects, { budget: { reserve() {}, release() {} }, locale, rowPtOf, ...(hosts ? { hosts } : {}) }))!
 }
 const asBatch = (scope: EffectiveFormatScope): CfPaintBatch => ({
   stamp: { owner: 'paged', sheetId: 'x', workbookValueGen: 1, cfGen: scope.gen, viewGen: 1, structureGen: 1, clockGen: 1 }, key: 'paged', layer: scope.paintLayer!,
@@ -573,14 +577,15 @@ describe('the eager renderer reaches icon layout only through the batch (Task 29
  * Task 28 round 2, Ruling S4-RIGHTINSET-ZERO: `icon:inset-right-aligned` reads `unshifted` (§12), so a right-aligned
  * number keeps its text box (inset 0) wherever it fits right of the icon frame and its measured gap (the left inset);
  * one that reaches the frame would take the overflow path, unmeasured for right-aligned text: withheld. Production
- * model and production glyph table, at the key geometry (11 pt Calibri, 20 pt rows, bottom).
+ * model and production glyph table, 11 pt Calibri on admitted 15 pt rows, centred (round 4: S4-ROW-EXACT).
  */
 describe('S4-RIGHTINSET-ZERO: right-aligned numbers at the key geometry', () => {
   const KEY_STYLE: XlsxCellStyle = { numFmtId: 0, fontSizePt: 11, fontName: 'Calibri' }
-  const GLYPH_CAPS = ['icon:glyph-3Arrows-0', 'icon:glyph-3Arrows-1', 'icon:glyph-3Arrows-2']
+  const GLYPH_CAPS = ['icon:glyph-3Arrows-0', 'icon:glyph-3Arrows-1', 'icon:glyph-3Arrows-2', 'icon:geometry-row-offset']
   const keySheet = (values: number[], widthChars?: number): XlsxSheet => {
-    const sheet = iconSheet(values, { style: KEY_STYLE, ...(widthChars !== undefined ? { widthChars } : {}) })
-    for (const row of sheet.rows) { row.heightPt = 20; row.customHeight = true }
+    // S4-ROW-EXACT (round 4): the key's own 20 pt row withholds; right-aligned numbers are measured centred at 15 pt.
+    const sheet = iconSheet(values, { style: { ...KEY_STYLE, vertical: 'center' }, ...(widthChars !== undefined ? { widthChars } : {}) })
+    for (const row of sheet.rows) { row.heightPt = 15; row.customHeight = true }
     return sheet
   }
   const production = { model: false as const, glyphs: false as const }
@@ -641,9 +646,12 @@ describe('S4-RIGHTINSET-ZERO: right-aligned numbers at the key geometry', () => 
     for (const name of ['resident', 'worker', 'forced-paged', 'print']) expect(rel(got[name]!), name).toEqual(rel(got.static!))
     expect(got.static![0]!.x).toBeCloseTo(0 + 2 * 4 / 3, 0)
     // The control: an unmeasured 15.75 pt row withholds on every leg.
-    for (const row of sheet.rows) row.heightPt = 15.75
-    const none = await withIcons(run, { ...production, extra: GLYPH_CAPS })
-    for (const [name, ops] of Object.entries(none)) expect(ops.length, `15.75 pt: ${name}`).toBe(0)
+    for (const rowPt of [15.75, 25, 20]) {
+      // Unmeasured (15.75 pt), and measured but with viewer px Excel does not draw (25 pt: 33 or 33.33 px; 20 pt).
+      for (const row of sheet.rows) row.heightPt = rowPt
+      const none = await withIcons(run, { ...production, extra: GLYPH_CAPS })
+      for (const [name, ops] of Object.entries(none)) expect(ops.length, `${rowPt} pt: ${name}`).toBe(0)
+    }
   })
 
   it('the production model reads rightInsetPt 0 at 11 pt', () => {
@@ -652,7 +660,7 @@ describe('S4-RIGHTINSET-ZERO: right-aligned numbers at the key geometry', () => 
 
   it('a short right-aligned number paints its icon in all five views with its text exactly where it is without one', async () => {
     const sheet = keySheet([10, 50, 90])
-    expect(computeMetrics(sheet).rowHeightsPx[0]).toBe(27)
+    expect(computeMetrics(sheet).rowHeightsPx[0]).toBe(20)
     const withIcon = await withIcons(() => views(sheet), { ...production, extra: GLYPH_CAPS })
     const control = await withIcons(() => views(sheet), production)
     for (const name of ['static', 'resident', 'paged', 'print', 'export']) {
@@ -668,8 +676,8 @@ describe('S4-RIGHTINSET-ZERO: right-aligned numbers at the key geometry', () => 
   it('a right-aligned number that reaches the icon frame withholds on every view (overflow unmeasured)', async () => {
     const probe = createCellLayoutHost(layoutContext())
     const value = 1234567
-    const body = probe.layoutBody({ ref: 'A1', row: 0, col: 0, value, styleIndex: 0, style: KEY_STYLE }, 500, 27)
-    const width = body.text?.kind === 'plain' ? body.text.width : NaN
+    const body = probe.layoutBody({ ref: 'A1', row: 0, col: 0, value, styleIndex: 0, style: { ...KEY_STYLE, vertical: 'center' } }, 500, 20)
+    const width = body.text?.kind === 'plain' ? body.text.width : body.text?.kind === 'layout' ? body.text.layout.lines[0]!.segments.reduce((n, s) => n + s.width, 0) : NaN
     expect(width).toBeGreaterThan(20)
     // Fits the cell (w - 6 >= width) but not right of the 12 pt (16 px) frame and gap.
     const colPx = Math.ceil(width + CF_ICON_TEXT_PADDING_PX + 8)

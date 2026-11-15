@@ -22,7 +22,7 @@ import type { CfIconSetName } from '../src/xlsx/cf/model'
 import { loadIconGlyphKey, type IconGlyphKey } from '../scripts/cf-refs/verify'
 import { S4_ICON_FAMILIES } from '../scripts/cf-refs/cases'
 import { createCanvas } from 'canvas'
-import { AT_CAPTURE, KEY_CELL_H, KEY_CELL_W, KEY_FONT, checkGlyph, cropInkBox, inkBoxOf, keyHost } from './helpers/cf-glyph-measure'
+import { AT_CAPTURE, KEY_CELL_W, KEY_FONT, checkGlyph, cropInkBox, inkBoxOf, keyHost } from './helpers/cf-glyph-measure'
 import { ICON_CLASS_TOLERANCE } from '../scripts/cf-refs/verify'
 
 const ROOT = resolve(__dirname, '..')
@@ -186,32 +186,34 @@ const CF_GLYPH_TABLE_GZIP_BYTES = 3786
 describe('Task 28: the icon frame at the glyph key geometry', () => {
   const icon = { ruleId: 1, set: '3Arrows' as const, iconId: 0, bucket: 0, buckets: 3, showValue: true }
   const ALL = (): boolean => true
-  it('production lays the icon out in the key frame: 13 × 12 px, 2 px in from the left gridline, 1 px above the bottom one', () => {
-    const laid = layoutIcon(icon, keyHost(), KEY_FONT, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)
-    expect(laid?.box).toEqual({ x: 2, y: 7, w: 13, h: 12 })
-    // The viewer's whole-px row (20 pt -> 27 px) is the same row.
-    expect(layoutIcon(icon, keyHost({ height: 27 }), KEY_FONT, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)).toBeDefined()
-    // The column width does not move it (stage4-icon-geometry-2 I5/I6/J5/J6, 180 pt columns: ink 2..12 × 7..18).
-    expect(layoutIcon(icon, keyHost({ width: 240 }), KEY_FONT, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)?.box).toEqual({ x: 2, y: 7, w: 13, h: 12 })
+  it('S4-ROW-EXACT: the key\'s own 20 pt row withholds (Excel draws 20 px; the viewer\'s 27 or 80/3 px rows are 20.25 or 20 px at capture)', () => {
+    expect(layoutIcon(icon, keyHost({ rowPt: 20 }), KEY_FONT, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)).toBeUndefined()
+    expect(layoutIcon(icon, keyHost({ rowPt: 20, height: 27 }), KEY_FONT, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)).toBeUndefined()
+    // The frame (13 × 12, 2 px in) lays out on an admitted 15 pt row, whatever the column width.
+    expect(layoutIcon(icon, keyHost({ rowPt: 15, height: 20 }), KEY_FONT, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)?.box).toEqual({ x: 2, y: 2, w: 13, h: 12 })
+    expect(layoutIcon(icon, keyHost({ rowPt: 15, height: 20, width: 240 }), KEY_FONT, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)?.box).toEqual({ x: 2, y: 2, w: 13, h: 12 })
   })
 
   it('with its evidence, a key-geometry host paints the original glyph where Excel inks it (left-aligned text, as I5/J5)', () => {
-    const caps = [...glyphCaps(), ...CF_ICON_PAINT_CAPABILITIES, 'icon:inset-left']
+    const caps = [...glyphCaps(), ...CF_ICON_PAINT_CAPABILITIES, 'icon:inset-left', 'icon:geometry-row-offset']
     withGlyphEvidence(() => {
       const memory = createCfMemory({})
       for (const pair of ['3Arrows:0', '3TrafficLights1:2', '5Boxes:2']) {
         const [set, iconId] = split(pair)
         const desc = { ruleId: 1, set, iconId, bucket: iconId, buckets: Number(set[0]), showValue: true }
         const admitted = admitBatchGlyphs([desc], memory, () => createCfWorkBudget({ now: () => 0 }))
-        const canvas = createCanvas(KEY_CELL_W, KEY_CELL_H)
+        // A 15 pt row (admitted): bottom-anchored, the frame top is 15 - 1 - 12 = 2, 5 px above the key's 7.
+        const H = 15
+        const canvas = createCanvas(KEY_CELL_W, H)
         const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
-        ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, KEY_CELL_W, KEY_CELL_H)
-        const host = keyHost({ textWidth: 10, cell: { value: 'ab', style: { numFmtId: 0, fontSizePt: 11, fontName: 'Calibri', horizontal: 'left' } } })
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, KEY_CELL_W, H)
+        const host = keyHost({ rowPt: H, height: H * 4 / 3, textWidth: 10, cell: { value: 'ab', style: { numFmtId: 0, fontSizePt: 11, fontName: 'Calibri', horizontal: 'left' } } })
         const layouts: boolean[] = []
         paintIconCells(ctx, new Map([[0, desc]]), () => desc, () => host, { r0: 0, c0: 0, r1: 0, c1: 0 }, AT_CAPTURE,
-          { admitted, hasBar: () => false, check: () => true }, (_r, _c, withheld) => layouts.push(withheld))
+          { admitted, hasBar: () => false, check: () => true, rowPtOf: () => H }, (_r, _c, withheld) => layouts.push(withheld))
         expect(layouts, pair).toEqual([false])
-        expect(inkBoxOf(ctx.getImageData(0, 0, KEY_CELL_W, KEY_CELL_H).data, KEY_CELL_W, KEY_CELL_H), pair).toEqual(checks.get(SIDECAR.glyphClasses[pair]!)!.drawn)
+        const drawn = checks.get(SIDECAR.glyphClasses[pair]!)!.drawn!
+        expect(inkBoxOf(ctx.getImageData(0, 0, KEY_CELL_W, H).data, KEY_CELL_W, H), pair).toEqual({ ...drawn, top: drawn.top - 5, bottom: drawn.bottom - 5 })
         admitted.release()
       }
       expect(memory.currentBytes).toBe(0)
@@ -221,13 +223,14 @@ describe('Task 28: the icon frame at the glyph key geometry', () => {
   it('every input the key fixes must equal the key: other font sizes, rows, alignments and faces withhold', () => {
     const at = (host: ReturnType<typeof keyHost>, font: { sizePt?: number; vertical?: 'top' | 'center' | 'bottom' } = {}) =>
       layoutIcon(icon, host, { ...KEY_FONT, ...font }, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)
-    expect(at(keyHost())).toBeDefined()
-    for (const sizePt of [8, 10, 10.5, 12, 20]) expect(at(keyHost(), { sizePt }), `${sizePt} pt`).toBeUndefined()
-    for (const rowPt of [12.75, 19, 21, 35, 60]) expect(at(keyHost({ height: rowPt * 4 / 3 })), `${rowPt} pt row`).toBeUndefined()
-    expect(at(keyHost(), { vertical: 'top' }), 'top').toBeUndefined()
+    const row15 = (o: Record<string, unknown> = {}) => keyHost({ rowPt: 15, height: 20, ...o })
+    expect(at(row15())).toBeDefined()
+    for (const sizePt of [8, 10, 10.5, 12, 20]) expect(at(row15(), { sizePt }), `${sizePt} pt`).toBeUndefined()
+    for (const rowPt of [12.75, 19, 21, 35, 60]) expect(at(keyHost({ rowPt, height: rowPt * 4 / 3 })), `${rowPt} pt row`).toBeUndefined()
+    expect(at(row15(), { vertical: 'top' }), 'top').toBeUndefined()
     const style = { numFmtId: 0, fontSizePt: 11, fontName: 'Calibri' }
     for (const s of [{ ...style, fontName: 'Arial' }, { ...style, fontName: undefined }, { ...style, bold: true }, { ...style, italic: true }]) {
-      expect(at(keyHost({ cell: { value: 10, style: s } })), JSON.stringify(s)).toBeUndefined()
+      expect(at(row15({ cell: { value: 10, style: s } })), JSON.stringify(s)).toBeUndefined()
     }
   })
 })
@@ -239,21 +242,20 @@ describe('Task 28: the icon frame at the glyph key geometry', () => {
 describe('Task 28 round 3: the frame at the measured row heights (stage4-icon-rows)', () => {
   const icon = { ruleId: 1, set: '3Arrows' as const, iconId: 2, bucket: 2, buckets: 3, showValue: true }
   const ALL = (): boolean => true
-  const roundHalfUp = (x: number) => Math.floor(x + 0.5)
   const ROWS = SIDECAR_ROWS()
   const font = (vertical: 'bottom' | 'center', horizontal: 'left' | 'right' | 'center') => ({ sizePt: 11, vertical, horizontal })
-  const at = (rowPt: number, vertical: 'bottom' | 'center', horizontal: 'left' | 'right' | 'center', height = rowPt * 4 / 3) =>
-    layoutIcon(icon, keyHost({ height }), font(vertical, horizontal), AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)
+  const at = (rowPt: number, vertical: 'bottom' | 'center', horizontal: 'left' | 'right' | 'center', height = rowPt * 4 / 3, hostRowPt: number | null = rowPt) =>
+    layoutIcon(icon, keyHost({ height, ...(hostRowPt !== null ? { rowPt: hostRowPt } : {}) }), font(vertical, horizontal), AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)
 
   it('the model carries exactly the sidecar\'s measured placements', () => {
     expect(CF_ICON_RENDER_MODEL.keyFrame?.rows).toEqual({
-      15: { bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 2, horizontal: ['left', 'right'] } },
-      16.5: { bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 2, horizontal: ['left', 'right'] } },
-      18: { bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 3, horizontal: ['left', 'right'] } },
-      20: { bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left', 'right'] }, center: { anchor: 'top', offsetPt: 4, horizontal: ['left', 'right'] } },
-      22.5: { bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 5, horizontal: ['left', 'right'] } },
-      25: { bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 7, horizontal: ['left', 'right'] } },
-      30: { bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 9, horizontal: ['left', 'right'] } },
+      15: { excelPx: 15, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 2, horizontal: ['left', 'right'] } },
+      16.5: { excelPx: 16, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 2, horizontal: ['left', 'right'] } },
+      18: { excelPx: 18, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 3, horizontal: ['left', 'right'] } },
+      20: { excelPx: 20, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left', 'right'] }, center: { anchor: 'top', offsetPt: 4, horizontal: ['left', 'right'] } },
+      22.5: { excelPx: 22, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 5, horizontal: ['left', 'right'] } },
+      25: { excelPx: 25, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 7, horizontal: ['left', 'right'] } },
+      30: { excelPx: 30, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 9, horizontal: ['left', 'right'] } },
     })
   })
 
@@ -266,19 +268,31 @@ describe('Task 28 round 3: the frame at the measured row heights (stage4-icon-ro
     }
   })
 
-  for (const rowPt of [15, 16.5, 18, 20, 22.5, 25, 30]) {
+  // S4-ROW-EXACT: a measured height paints only where the viewer's row px equals Excel's at the capture scale in every
+  // view: the static and resident views round rows to whole px, the paged ones do not, so only heights whose px are whole
+  // (pt × 4/3) agree: 15 (20 px), 18 (24 px) and 30 (40 px).
+  for (const rowPt of [15, 18, 30]) {
     it(`a ${rowPt} pt row lays the frame out where Excel measured it`, () => {
       const r = CF_ICON_RENDER_MODEL.keyFrame!.rows[rowPt]!
-      const Y1 = roundHalfUp(rowPt)
-      for (const h of r.bottom!.horizontal) expect(at(rowPt, 'bottom', h)?.box, `bottom ${h}`).toEqual({ x: 2, y: Y1 - 1 - 12, w: 13, h: 12 })
+      expect(r.excelPx).toBe(rowPt)
+      for (const h of r.bottom!.horizontal) expect(at(rowPt, 'bottom', h)?.box, `bottom ${h}`).toEqual({ x: 2, y: rowPt - 1 - 12, w: 13, h: 12 })
       for (const h of r.center!.horizontal) expect(at(rowPt, 'center', h)?.box, `center ${h}`).toEqual({ x: 2, y: r.center!.offsetPt, w: 13, h: 12 })
-      // The viewer's whole-px row is the same row.
-      expect(at(rowPt, 'center', 'right', Math.round(rowPt * 4 / 3))).toBeDefined()
       // An alignment the capture did not measure at this height withholds.
       expect(at(rowPt, 'center', 'center'), 'center text').toBeUndefined()
-      if (rowPt !== 20) expect(at(rowPt, 'bottom', 'right'), 'bottom right').toBeUndefined()
+      expect(at(rowPt, 'bottom', 'right'), 'bottom right').toBeUndefined()
+      // A host whose row is not known to be this height withholds: no row pt, or another pt with the same px.
+      expect(at(rowPt, 'center', 'right', rowPt * 4 / 3, null), 'no row pt').toBeUndefined()
+      expect(at(rowPt, 'center', 'right', rowPt * 4 / 3, rowPt - 0.2), 'another pt, same px').toBeUndefined()
+      // A session-resized row (another px) withholds.
+      expect(at(rowPt, 'center', 'right', rowPt * 4 / 3 + 1), 'resized').toBeUndefined()
     })
   }
+
+  it('S4-ROW-EXACT: measured heights whose viewer px are not whole (16.5, 20, 22.5, 25 pt) withhold in every view', () => {
+    for (const rowPt of [16.5, 20, 22.5, 25]) for (const height of [rowPt * 4 / 3, Math.round(rowPt * 4 / 3)]) {
+      for (const v of ['bottom', 'center'] as const) expect(at(rowPt, v, 'left', height), `${rowPt} pt ${height} px ${v}`).toBeUndefined()
+    }
+  })
 
   it('unmeasured heights withhold: 12.75 pt (the icon shrinks) and every height between the measured ones', () => {
     for (const rowPt of [12, 12.75, 14.25, 15.75, 17.25, 19.5, 21, 24, 27, 29.25, 33]) {
@@ -302,3 +316,12 @@ function SIDECAR_ROWS(): Record<string, { centre: number[]; bottom: Array<[numbe
   }
   return out
 }
+
+describe('S4-BOTTOM-REPLICATE: the measured placements stand only on icon:geometry-row-offset', () => {
+  it('without its evidence every row withholds', () => {
+    const icon = { ruleId: 1, set: '3Arrows' as const, iconId: 2, bucket: 2, buckets: 3, showValue: true }
+    const host = keyHost({ rowPt: 15, height: 20 })
+    expect(layoutIcon(icon, host, KEY_FONT, AT_CAPTURE, CF_ICON_RENDER_MODEL, () => true)).toBeDefined()
+    expect(layoutIcon(icon, host, KEY_FONT, AT_CAPTURE, CF_ICON_RENDER_MODEL, c => c !== 'icon:geometry-row-offset')).toBeUndefined()
+  })
+})

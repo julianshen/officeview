@@ -1697,3 +1697,38 @@ So the case measured:
   - Centred horizontal text is measured nowhere, so it withholds. This tightens round 1, which admitted it at the key geometry.
 - Any other height withholds (12.75 pt, 15.75 pt, and every height between the measured ones), as does top alignment.
 - A host's row matches a measured height by its exact px (pt × 4/3) or that rounded. A host that matches two measured heights matches none.
+
+### Task 28 round 4 (2026-11-15): S4-ROW-EXACT and S4-BOTTOM-REPLICATE
+
+**Ruling S4-ROW-EXACT, mechanism (a): the row's authored height reaches the predicate.**
+- Option (b) admits nothing. A whole viewer px comes from a band of 0.75 pt of heights, so every px value is shared.
+- So the icon gate carries `rowPtOf(row)`, the row's authored `ht` in pt:
+  - resident batches and text scopes: `cfRowPtOfSheet`, from the sheet;
+  - paged wire scopes (worker and forced-paged legs): `cfRowPtOfOverrides`, from the paged layout's row overrides. The worker's `view/source.ts` `buildGeometry` writes them unrounded (pt × 96/72), and `InteractiveSheetDoc` passes them.
+- The painter stamps `rowPt` on each host. A row without `ht` is unknown, so its icons withhold: its Excel height follows the sheet default and fonts, which the viewer does not model.
+- A measured height admits an icon only where the viewer's row px equals Excel's at the capture scale in every view:
+  - The static and resident views round rows to whole px; the paged views do not. So the row's px must be whole (`excelPx` × 4/3), and the host must have exactly that height. A session-resized row does not.
+  - **Heights that paint: 15, 18 and 30 pt** (20, 24 and 40 px). Bottom and centre placements apply as measured.
+  - **20 pt withholds, the glyph key's own row included:** 26.67 px unrounded or 27 px rounded, while Excel draws 20 px. **25 pt withholds** for the same reason (33.33 or 33 px).
+  - **16.5 and 22.5 pt withhold:** Excel floors them to 16 and 22 px, while the viewer draws 22 and 30 px (16.5 and 22.5 at capture).
+- Tests:
+  - tests/xlsx-cf-icon-glyphs.test.ts: per height, plus no `rowPt`, another pt with the same px, and a resized row.
+  - tests/xlsx-cf-icon-render.test.ts: the five views at 15 pt, with 15.75, 20 and 25 pt withheld on every leg.
+  - tests/xlsx-cf-icon-rows.test.ts: production on Excel's resaved `stage4-icon-rows.xlsx` paints exactly rows 2, 5 and 9, each 3Arrows frame where the sidecar inked it.
+  - A mutant that drops the px check fails them.
+
+**Ruling S4-BOTTOM-REPLICATE.**
+- **The resave.** Excel 16.115 rewrites the Normal style as `vertical="center"` and folds an xf whose only alignment is `vertical="bottom"` into it. An xf with an explicit horizontal keeps its own xf, whose missing vertical is bottom. stage4-icon-rows E (`horizontal="left"`) came back that way and was drawn 1 px above the next gridline in every row.
+- **Replication rule.** `icon:geometry-row-offset` decides anchor-constant vs centred only on at least two columns whose values refute the other reading (S4-REPLICATE extended). Re-derived with `capture --stage 4 --case stage4-icon-rows --verify-only`, which needs no Excel, the committed stage4-icon-rows capture is **non-discriminating**: only E separates the two readings. Its cells now read `non-discriminating`.
+- **New case `stage4-icon-rows-bottom`.** It is placed ahead of stage4-icon-rows, so it owns the capability.
+  - Rows: the same heights.
+  - Cells: every cell has an explicit xf with horizontal plus `vertical="bottom"`. Right-aligned numbers are B (3Arrows), C (3TrafficLights1) and D (3Symbols); left-aligned numbers are E (3Arrows) and F (3TrafficLights1).
+  - Classification: shifted key.
+  - Mechanism tests: anchor-constant and centred each discriminate; one separating column does not, two do.
+- **Production gate.** Every measured placement now also needs `icon:geometry-row-offset` evidence.
+- **Audit.** `audit --stage 4` stays `ok=true` but `stageComplete=false` until the new case is captured.
+- **Capture order (Excel):**
+  1. `bun scripts/cf-refs/build.ts --stage 4 --case stage4-icon-rows-bottom`
+  2. `bun scripts/cf-refs/capture.ts --stage 4 --case stage4-icon-rows-bottom`
+  3. `bun scripts/cf-refs/capture.ts --stage 4 --verify-only`
+  4. `bun scripts/cf-refs/audit.ts --stage 4`

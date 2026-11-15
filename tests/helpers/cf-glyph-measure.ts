@@ -14,7 +14,6 @@
  *   dominant colour in the crop is the per-channel median of the crop over the region.
  */
 import { createCanvas } from 'canvas'
-import { CF_ICON_RENDER_MODEL, layoutIcon } from '../../src/xlsx/cf/iconPaint'
 import { drawIconGlyph, type CfGlyphCache, type CfIconGlyph } from '../../src/xlsx/cf/iconGlyphs'
 import { ICON_CLASS_TOLERANCE, ICON_STRONG_DELTA, type DecodedPng } from '../../scripts/cf-refs/verify'
 
@@ -28,18 +27,19 @@ export const keyHost = (overrides: Record<string, unknown> = {}) => ({
   cell: { value: 10, style: { numFmtId: 0, fontSizePt: 11, fontName: 'Calibri' } }, ...overrides,
 })
 export const KEY_FONT = { sizePt: 11, vertical: 'bottom' as const, horizontal: 'left' as const }
-const ALL = (): boolean => true
+/** The frame at the glyph-key cell (`CF_ICON_RENDER_MODEL.keyFrame`: 13 × 12, 2 px in; the classes' ink rows 7..18 at
+ * 1 px/pt). The approximation check draws there directly: it measures the artwork, not where production admits it
+ * (S4-ROW-EXACT withholds the key's own 20 pt row, whose viewer px differ from Excel's). */
+export const KEY_BOX = Object.freeze({ x: 2, y: 7, w: 13, h: 12 })
 const admitAll = (glyph: CfIconGlyph): CfGlyphCache => ({ classes: new Set([glyph.glyphClass]), bytes: 0, release() {} })
 
-/** The glyph drawn into a white key cell (`KEY_CELL_W` × `KEY_CELL_H` device px) through `layoutIcon` + `drawIconGlyph`. */
+/** The glyph drawn into a white key cell (`KEY_CELL_W` × `KEY_CELL_H` device px) in the key frame (`drawIconGlyph`). */
 export function renderAtKey(glyph: CfIconGlyph, background = '#ffffff'): Uint8ClampedArray {
   const canvas = createCanvas(KEY_CELL_W, KEY_CELL_H)
   const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
   ctx.fillStyle = background
   ctx.fillRect(0, 0, KEY_CELL_W, KEY_CELL_H)
-  const laid = layoutIcon({ ruleId: 1, set: '3Arrows', iconId: 0, bucket: 0, buckets: 3, showValue: true }, keyHost(), KEY_FONT, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)
-  if (!laid) throw new Error('the production model lays out no icon at the key geometry')
-  drawIconGlyph(ctx, glyph, laid.box, AT_CAPTURE, admitAll(glyph))
+  drawIconGlyph(ctx, glyph, KEY_BOX, AT_CAPTURE, admitAll(glyph))
   return ctx.getImageData(0, 0, KEY_CELL_W, KEY_CELL_H).data
 }
 
@@ -47,8 +47,7 @@ export function renderAtKey(glyph: CfIconGlyph, background = '#ffffff'): Uint8Cl
 function coverageOf(glyph: CfIconGlyph, ops: CfIconGlyph['path']): Float64Array {
   const canvas = createCanvas(KEY_CELL_W, KEY_CELL_H)
   const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
-  const laid = layoutIcon({ ruleId: 1, set: '3Arrows', iconId: 0, bucket: 0, buckets: 3, showValue: true }, keyHost(), KEY_FONT, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)!
-  drawIconGlyph(ctx, { ...glyph, path: ops }, laid.box, AT_CAPTURE, admitAll(glyph))
+  drawIconGlyph(ctx, { ...glyph, path: ops }, KEY_BOX, AT_CAPTURE, admitAll(glyph))
   const data = ctx.getImageData(0, 0, KEY_CELL_W, KEY_CELL_H).data
   const out = new Float64Array(KEY_CELL_W * KEY_CELL_H)
   for (let i = 0; i < out.length; i++) out[i] = data[i * 4 + 3]! / 255

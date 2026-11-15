@@ -5344,6 +5344,29 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
       ],
     },
   ),
+  // 18a. stage4-icon-rows-bottom (Task 28 round 4, Ruling S4-BOTTOM-REPLICATE): bottom placement on styles that survive
+  // the resave, placed ahead of stage4-icon-rows so it owns icon:geometry-row-offset.
+  s4rect(
+    'stage4-icon-rows-bottom',
+    'S4-BOTTOM-REPLICATE: bottom placement across row heights, replicated. Excel 16.115 resaves its Normal style as vertical="center" and folds an xf whose only alignment is vertical="bottom" into it (stage4-icon-rows B..D were drawn centred), while an xf with an explicit horizontal keeps its own xf, whose missing vertical is bottom (stage4-icon-rows E, drawn bottom-anchored). So every cell here has an explicit horizontal with vertical="bottom": right-aligned numbers (B: 3Arrows, C: 3TrafficLights1, D: 3Symbols) and left-aligned numbers (E: 3Arrows, F: 3TrafficLights1), 11 pt Calibri on the stage4-icon-rows heights (15, 12.75, 16.5, 18, 20, 22.5, 25, 30 pt, rows 2..9). Every cell holds 10 under num 0/5/8 (bucket 2). icon:geometry-row-offset reads anchor-constant, centred or row-scaled; anchor-constant vs centred needs at least two separating columns (S4-REPLICATE), and all five columns separate them.',
+    {
+      n: 8,
+      rowHeights: { 2: 15, 3: 12.75, 4: 16.5, 5: 18, 6: 20, 7: 22.5, 8: 25, 9: 30 },
+      shiftedKey: true,
+      colStyles: {
+        B: { vertical: 'bottom', horizontal: 'right' }, C: { vertical: 'bottom', horizontal: 'right' }, D: { vertical: 'bottom', horizontal: 'right' },
+        E: { vertical: 'bottom', horizontal: 'left' }, F: { vertical: 'bottom', horizontal: 'left' },
+      },
+      cols: ['B', 'C', 'D', 'E', 'F'].map(c => s4col(c, `Bottom${c}`, [10, 10, 10, 10, 10, 10, 10, 10])),
+      rules: [
+        icon('icon:geometry-row-offset', 'B2:B9', 1, '3Arrows', nums(0, 5, 8)),
+        icon('icon:geometry-row-offset', 'C2:C9', 2, '3TrafficLights1', nums(0, 5, 8)),
+        icon('icon:geometry-row-offset', 'D2:D9', 3, '3Symbols', nums(0, 5, 8)),
+        icon('icon:geometry-row-offset', 'E2:E9', 4, '3Arrows', nums(0, 5, 8)),
+        icon('icon:geometry-row-offset', 'F2:F9', 5, '3TrafficLights1', nums(0, 5, 8)),
+      ],
+    },
+  ),
   // 18. stage4-icon-rows (Task 28 round 2, Ruling S4-ROWS-CAPTURE): the icon frame across row heights
   s4rect(
     'stage4-icon-rows',

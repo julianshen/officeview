@@ -5307,6 +5307,15 @@ export function evaluateIconGeometryCapability(cap: string, designated: readonly
       const short = replicationShortfall(decisive)
       if (short) return { status: 'non-discriminating', reason: `${winner} fits every designated cell, but ${short}`, geometry: table, ...extra }
     }
+    // Task 28 round 4 (Ruling S4-BOTTOM-REPLICATE): anchor-constant and centred agree on every centred cell, so the
+    // verdict between them rests on the columns whose values refute the other one; at least two must.
+    if (cap === 'icon:geometry-row-offset' && (winner === 'anchor-constant' || winner === 'centred')) {
+      const other = winner === 'anchor-constant' ? 'centred' : 'anchor-constant'
+      const groups = new Map<string, number[]>()
+      for (const t of Object.values(table)) { const p = t[other]!; if ('group' in p) groups.set(p.group, [...(groups.get(p.group) ?? []), p.value]) }
+      const separating = [...groups].filter(([, v]) => Math.max(...v) - Math.min(...v) >= 3).map(([g]) => g)
+      if (separating.length < 2) return { status: 'non-discriminating', reason: `${winner} fits every designated cell, but S4-REPLICATE: ${separating.length} column${separating.length === 1 ? '' : 's'} (${separating.join(', ') || 'none'}) refute ${other}, fewer than 2`, geometry: table, ...extra }
+    }
     return { status: 'discriminating', reason: `only ${winner} fits every designated cell; ${readings.filter(r => r !== winner).join(', ')} refuted`, matched: winner, geometry: table, ...extra }
   }
   if (consistent.length === 0 && undecided.length === 0) return { status: 'none', reason: 'the measured cells refute every reading', geometry: table, ...extra }

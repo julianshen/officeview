@@ -50110,6 +50110,1027 @@
       "resavedByExcel": false
     },
     {
+      "id": "stage4-icon-rows-bottom",
+      "stage": 4,
+      "question": "S4-BOTTOM-REPLICATE: bottom placement across row heights, replicated. Excel 16.115 resaves its Normal style as vertical=\"center\" and folds an xf whose only alignment is vertical=\"bottom\" into it (stage4-icon-rows B..D were drawn centred), while an xf with an explicit horizontal keeps its own xf, whose missing vertical is bottom (stage4-icon-rows E, drawn bottom-anchored). So every cell here has an explicit horizontal with vertical=\"bottom\": right-aligned numbers (B: 3Arrows, C: 3TrafficLights1, D: 3Symbols) and left-aligned numbers (E: 3Arrows, F: 3TrafficLights1), 11 pt Calibri on the stage4-icon-rows heights (15, 12.75, 16.5, 18, 20, 22.5, 25, 30 pt, rows 2..9). Every cell holds 10 under num 0/5/8 (bucket 2). icon:geometry-row-offset reads anchor-constant, centred or row-scaled; anchor-constant vs centred needs at least two separating columns (S4-REPLICATE), and all five columns separate them.",
+      "input": "tests/fixtures/xlsx-cf/inputs/stage4-icon-rows-bottom.xlsx",
+      "saved": "tests/fixtures/xlsx-cf/stage4-icon-rows-bottom.xlsx",
+      "sheet": "Sheet1",
+      "range": "A1:F18",
+      "requiredAppearances": [
+        "screen"
+      ],
+      "markers": [
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "icon:geometry-row-offset",
+          "sqref": "B2:B9",
+          "ruleType": "iconSet",
+          "priority": 1,
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "5"
+              },
+              {
+                "type": "num",
+                "val": "8"
+              }
+            ],
+            "attrs": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "icon:geometry-row-offset",
+          "sqref": "C2:C9",
+          "ruleType": "iconSet",
+          "priority": 2,
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3TrafficLights1",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "5"
+              },
+              {
+                "type": "num",
+                "val": "8"
+              }
+            ],
+            "attrs": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "icon:geometry-row-offset",
+          "sqref": "D2:D9",
+          "ruleType": "iconSet",
+          "priority": 3,
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Symbols",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "5"
+              },
+              {
+                "type": "num",
+                "val": "8"
+              }
+            ],
+            "attrs": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "icon:geometry-row-offset",
+          "sqref": "E2:E9",
+          "ruleType": "iconSet",
+          "priority": 4,
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "5"
+              },
+              {
+                "type": "num",
+                "val": "8"
+              }
+            ],
+            "attrs": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "icon:geometry-row-offset",
+          "sqref": "F2:F9",
+          "ruleType": "iconSet",
+          "priority": 5,
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3TrafficLights1",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "5"
+              },
+              {
+                "type": "num",
+                "val": "8"
+              }
+            ],
+            "attrs": {}
+          }
+        }
+      ],
+      "iconShiftedKey": true,
+      "expected": {
+        "inputSha256": "2be510ead9af93d6cace55a9fa948ba71adfe6502543f8669da6fd24a682974f",
+        "savedSha256": "2be510ead9af93d6cace55a9fa948ba71adfe6502543f8669da6fd24a682974f",
+        "provenance": "seed-hypothesis",
+        "positiveRefs": [
+          "B2",
+          "B3",
+          "B4",
+          "B5",
+          "B6",
+          "B7",
+          "B8",
+          "B9",
+          "C2",
+          "C3",
+          "C4",
+          "C5",
+          "C6",
+          "C7",
+          "C8",
+          "C9",
+          "D2",
+          "D3",
+          "D4",
+          "D5",
+          "D6",
+          "D7",
+          "D8",
+          "D9",
+          "E2",
+          "E3",
+          "E4",
+          "E5",
+          "E6",
+          "E7",
+          "E8",
+          "E9",
+          "F2",
+          "F3",
+          "F4",
+          "F5",
+          "F6",
+          "F7",
+          "F8",
+          "F9"
+        ],
+        "negativeRefs": [
+          "B11",
+          "B12",
+          "B13",
+          "B14",
+          "B15",
+          "B16",
+          "B17",
+          "B18",
+          "C11",
+          "C12",
+          "C13",
+          "C14",
+          "C15",
+          "C16",
+          "C17",
+          "C18",
+          "D11",
+          "D12",
+          "D13",
+          "D14",
+          "D15",
+          "D16",
+          "D17",
+          "D18",
+          "E11",
+          "E12",
+          "E13",
+          "E14",
+          "E15",
+          "E16",
+          "E17",
+          "E18",
+          "F11",
+          "F12",
+          "F13",
+          "F14",
+          "F15",
+          "F16",
+          "F17",
+          "F18"
+        ],
+        "cells": [
+          {
+            "ref": "B2",
+            "controlRef": "B11",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B3",
+            "controlRef": "B12",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B4",
+            "controlRef": "B13",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B5",
+            "controlRef": "B14",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B6",
+            "controlRef": "B15",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B7",
+            "controlRef": "B16",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B8",
+            "controlRef": "B17",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B9",
+            "controlRef": "B18",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C2",
+            "controlRef": "C11",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C3",
+            "controlRef": "C12",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C4",
+            "controlRef": "C13",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C5",
+            "controlRef": "C14",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C6",
+            "controlRef": "C15",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C7",
+            "controlRef": "C16",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C8",
+            "controlRef": "C17",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C9",
+            "controlRef": "C18",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D2",
+            "controlRef": "D11",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D3",
+            "controlRef": "D12",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D4",
+            "controlRef": "D13",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D5",
+            "controlRef": "D14",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D6",
+            "controlRef": "D15",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D7",
+            "controlRef": "D16",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D8",
+            "controlRef": "D17",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D9",
+            "controlRef": "D18",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E2",
+            "controlRef": "E11",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E3",
+            "controlRef": "E12",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E4",
+            "controlRef": "E13",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E5",
+            "controlRef": "E14",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E6",
+            "controlRef": "E15",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E7",
+            "controlRef": "E16",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E8",
+            "controlRef": "E17",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E9",
+            "controlRef": "E18",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "F2",
+            "controlRef": "F11",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "F3",
+            "controlRef": "F12",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "F4",
+            "controlRef": "F13",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "F5",
+            "controlRef": "F14",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "F6",
+            "controlRef": "F15",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "F7",
+            "controlRef": "F16",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "F8",
+            "controlRef": "F17",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "F9",
+            "controlRef": "F18",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B11",
+            "controlRef": "B2",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B12",
+            "controlRef": "B3",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B13",
+            "controlRef": "B4",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B14",
+            "controlRef": "B5",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B15",
+            "controlRef": "B6",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B16",
+            "controlRef": "B7",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B17",
+            "controlRef": "B8",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B18",
+            "controlRef": "B9",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C11",
+            "controlRef": "C2",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C12",
+            "controlRef": "C3",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C13",
+            "controlRef": "C4",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C14",
+            "controlRef": "C5",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C15",
+            "controlRef": "C6",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C16",
+            "controlRef": "C7",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C17",
+            "controlRef": "C8",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C18",
+            "controlRef": "C9",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D11",
+            "controlRef": "D2",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D12",
+            "controlRef": "D3",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D13",
+            "controlRef": "D4",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D14",
+            "controlRef": "D5",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D15",
+            "controlRef": "D6",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D16",
+            "controlRef": "D7",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D17",
+            "controlRef": "D8",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D18",
+            "controlRef": "D9",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E11",
+            "controlRef": "E2",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E12",
+            "controlRef": "E3",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E13",
+            "controlRef": "E4",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E14",
+            "controlRef": "E5",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E15",
+            "controlRef": "E6",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E16",
+            "controlRef": "E7",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E17",
+            "controlRef": "E8",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E18",
+            "controlRef": "E9",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F11",
+            "controlRef": "F2",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F12",
+            "controlRef": "F3",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F13",
+            "controlRef": "F4",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F14",
+            "controlRef": "F5",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F15",
+            "controlRef": "F6",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F16",
+            "controlRef": "F7",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F17",
+            "controlRef": "F8",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F18",
+            "controlRef": "F9",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          }
+        ]
+      },
+      "captures": [
+        {
+          "appearance": "screen",
+          "pngPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-rows-bottom.png",
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-rows-bottom.json"
+        }
+      ],
+      "status": "recipe-pending",
+      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
+      "tolerance": {
+        "meanAbs": 0.015,
+        "rowMax": 0.08,
+        "strong": 12
+      },
+      "resavedByExcel": false
+    },
+    {
       "id": "stage4-icon-rows",
       "stage": 4,
       "question": "S4-ROWS-CAPTURE: where the icon frame sits on rows other than the glyph key's 20 pt, so default 15 pt rows can paint. 11 pt Calibri regular (the Normal font) on rows of 15 (the default), 12.75, 16.5, 18, 20 (the key's, a replication), 22.5, 25 and 30 pt (rows 2..9). Bottom-aligned (B..E) and centred (F..I) cells, cell-align being verified; right-aligned numbers (general alignment: B..D, F..H) and left-aligned numbers (E, I). Every cell holds 10 under num 0/5/8, so 3Arrows (B, E, F, I), 3TrafficLights1 (C, G) and 3Symbols (D, H) all draw bucket 2, whose key crops (3Arrows:2, 3TrafficLights1:2, 3Symbols:2) the harness shifts vertically to classify and to align scanlines (iconShiftedKey). icon:geometry-row-offset reads how the offset follows the row: anchor-constant (a constant gap to the bottom gridline, or a centred frame), top-constant (a constant gap to the top) or row-scaled (the offset scales with the row); they differ by >= 3 px between the 12.75 and 30 pt rows. Whatever Excel draws, the frame offsets at each measured height are recorded per cell; production extends the frame only to those heights, never between them.",
@@ -50492,7 +51513,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50503,7 +51524,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50514,7 +51535,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50525,7 +51546,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50536,7 +51557,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50547,7 +51568,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50558,7 +51579,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50569,7 +51590,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50580,7 +51601,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50591,7 +51612,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50602,7 +51623,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50613,7 +51634,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50624,7 +51645,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50635,7 +51656,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50646,7 +51667,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50657,7 +51678,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50668,7 +51689,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50679,7 +51700,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50690,7 +51711,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50701,7 +51722,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50712,7 +51733,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50723,7 +51744,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50734,7 +51755,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50745,7 +51766,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50756,7 +51777,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50767,7 +51788,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50778,7 +51799,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50789,7 +51810,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50800,7 +51821,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50811,7 +51832,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50822,7 +51843,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50833,7 +51854,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50844,7 +51865,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50855,7 +51876,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50866,7 +51887,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50877,7 +51898,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50888,7 +51909,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50899,7 +51920,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50910,7 +51931,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50921,7 +51942,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50932,7 +51953,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50943,7 +51964,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50954,7 +51975,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50965,7 +51986,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50976,7 +51997,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50987,7 +52008,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -50998,7 +52019,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -51009,7 +52030,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -51020,7 +52041,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -51031,7 +52052,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -51042,7 +52063,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -51053,7 +52074,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -51064,7 +52085,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -51075,7 +52096,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -51086,7 +52107,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -51097,7 +52118,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -51108,7 +52129,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -51119,7 +52140,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -51130,7 +52151,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -51141,7 +52162,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -51152,7 +52173,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -51163,7 +52184,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -51174,7 +52195,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -51185,7 +52206,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "pixel-measured"
+              "geometry": "non-discriminating"
             }
           },
           {
