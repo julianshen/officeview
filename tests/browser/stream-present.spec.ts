@@ -246,8 +246,9 @@ test('presenter: Presenter View swaps in single-screen with a painted notes imag
   expect((await rec(page)).closes).toEqual([])
 })
 
-test('holding the arrow keys for 10 s keeps the socket open (no 4008) and the show on the slide stopped on', async ({ page }) => {
-  test.setTimeout(60_000)
+test('holding the arrow keys (300 key events, ~10 s) keeps the socket open (no 4008) and the show on the slide stopped on', async ({ page }) => {
+  // A fixed volume of input, not a wall-clock window: under CPU load each event takes longer, so the run does too.
+  test.setTimeout(120_000)
   const w = wire(page)
   await open(page, '')
   await ready(page)
@@ -255,10 +256,12 @@ test('holding the arrow keys for 10 s keeps the socket open (no 4008) and the sh
   await expect.poll(() => presentState(page)).toBe('started')
   await onSlide(page, 1)
   // Key-repeat cadence (~30 keydowns/s, `repeat` set while held). A held → past the last slide would
-  // end the show (no loop on this deck), so → is held to slide 6, then ← back to 1, for 10 s.
+  // end the show (no loop on this deck), so → is held to slide 6, then ← back to 1: 300 key events, about 10 s
+  // unloaded (PR #78 round 4: a 10 s window counted fewer events on a loaded machine, a false failure).
+  const HOLD_EVENTS = 300
   const t0 = Date.now()
   let at = 0, key: 'ArrowRight' | 'ArrowLeft' = 'ArrowRight', presses = 0
-  while (Date.now() - t0 < 10_000) {
+  while (presses < HOLD_EVENTS) {
     if (key === 'ArrowRight' && at === 5) { await page.keyboard.up(key); key = 'ArrowLeft' }
     else if (key === 'ArrowLeft' && at === 0) { await page.keyboard.up(key); key = 'ArrowRight' }
     await page.keyboard.down(key)
@@ -272,14 +275,13 @@ test('holding the arrow keys for 10 s keeps the socket open (no 4008) and the sh
   for (; at < 3; at++) await page.keyboard.press('ArrowRight')
   await onSlide(page, 4)
   await expect(surface(page)).toHaveAttribute('data-unit', '3')
-  expect(presses).toBeGreaterThan(200)
   expect(await presentState(page)).toBe('started')
   expect(await streamError(page)).toBeUndefined()
   expect((await rec(page)).closes).toEqual([])
   expect(w.refused.filter((r) => r.includes('rate-limited'))).toEqual([])
   // The server's unit window is 60/min per session; the show budgets 48/min of it.
   expect(w.peak('unit', 60_000)).toBeLessThanOrEqual(60)
-  console.log(`hold: ${presses} key events in 10 s; unit requests from page load ${w.count('unit')} (peak in any 60 s ${w.peak('unit', 60_000)}); rate refusals 0; close codes none`)
+  console.log(`hold: ${presses} key events in ${((Date.now() - t0) / 1000).toFixed(1)} s; unit requests from page load ${w.count('unit')} (peak in any 60 s ${w.peak('unit', 60_000)}); rate refusals 0; close codes none`)
   await page.keyboard.press('Escape')
   await expect.poll(() => presentState(page)).toBe('ended')
 })

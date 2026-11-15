@@ -164,17 +164,20 @@ for (const backend of BACKENDS) {
       }
     })
 
-    test('holding → for 10 s: socket stays open (no 4008)', async ({ page }) => {
-      test.setTimeout(60_000)
+    test('holding → (300 key events, ~10 s): socket stays open (no 4008)', async ({ page }) => {
+      // A fixed volume of input, not a wall-clock window (PR #78 round 4: under CPU load a 10 s window counted
+      // fewer presses, a false failure); a loaded run takes longer instead.
+      test.setTimeout(120_000)
       const w = wire(page)
       // The Morph deck: every revisit re-charges its bundle and its Morph pair (Task 11 ruling).
       await open(page, 'morph', backend)
       await ready(page, 'morph')
       await present(page)
       await expectBackend(page, backend)
+      const HOLD_EVENTS = 300
       const t0 = Date.now()
       let at = 0, presses = 0
-      while (Date.now() - t0 < 10_000) {
+      while (presses < HOLD_EVENTS) {
         const key = at === 0 ? 'ArrowRight' : 'ArrowLeft'
         await page.keyboard.down(key)
         await page.keyboard.up(key)
@@ -183,7 +186,6 @@ for (const backend of BACKENDS) {
         await page.waitForTimeout(33)
       }
       await page.waitForTimeout(500)
-      expect(presses).toBeGreaterThan(150)
       // The input was not ignored: the show navigated, re-asking the slide-2 Morph pair on its revisits.
       expect(w.count('show-morph')).toBeGreaterThanOrEqual(10)
       expect(await surface(page).getAttribute('data-slide')).toMatch(/^[01]$/)
@@ -194,7 +196,7 @@ for (const backend of BACKENDS) {
       const peaks = Object.fromEntries(['unit', 'show-plan', 'show-track', 'show-morph'].map((t) => [t, w.peak(t, 60_000)]))
       // The server's charged window is 60/min per session; the show budgets 48/min of it (Task 12).
       expect(peaks.unit! + peaks['show-plan']! + peaks['show-track']! + peaks['show-morph']!).toBeLessThanOrEqual(60)
-      console.log(`hold [${backend}]: ${presses} presses in 10 s; peaks per 60 s ${JSON.stringify(peaks)}; totals ${JSON.stringify(Object.fromEntries(['unit', 'show-plan', 'show-track', 'show-morph'].map((t) => [t, w.count(t)])))}; close codes none`)
+      console.log(`hold [${backend}]: ${presses} presses in ${((Date.now() - t0) / 1000).toFixed(1)} s; peaks per 60 s ${JSON.stringify(peaks)}; totals ${JSON.stringify(Object.fromEntries(['unit', 'show-plan', 'show-track', 'show-morph'].map((t) => [t, w.count(t)])))}; close codes none`)
       await page.keyboard.press('Escape')
       await expect.poll(() => presentState(page)).toBe('ended')
     })
