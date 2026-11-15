@@ -254,6 +254,11 @@ function manualClock() {
 
 let clock: ReturnType<typeof manualClock>
 let frame: (() => void) | undefined
+/**
+ * Which test owns `clock` and `frame`. A test body that outlives its test (a timeout) keeps running; it must not
+ * advance the next test's clock or stop its frame loop (PR #78 CI: a timed-out test made the pause test fail).
+ */
+let epoch = 0
 const bitmapOf = async (bytes: Uint8Array) => {
   const img = await loadImage(Buffer.from(bytes))
   const cv = document.createElement('canvas')
@@ -262,11 +267,13 @@ const bitmapOf = async (bytes: Uint8Array) => {
   return cv
 }
 beforeEach(() => {
+  epoch++
   clock = manualClock()
   frame = undefined
   vi.spyOn(remoteShowDeps, 'clock').mockImplementation(() => clock)
   vi.spyOn(remoteShowDeps, 'every').mockImplementation(() => () => {})
-  vi.spyOn(remoteShowDeps, 'frames').mockImplementation((_w, f) => { frame = f; return () => { frame = undefined } })
+  // The stop clears only its own loop: a show left over from an earlier test never stops this test's.
+  vi.spyOn(remoteShowDeps, 'frames').mockImplementation((_w, f) => { frame = f; return () => { if (frame === f) frame = undefined } })
   vi.spyOn(remoteShowDeps, 'decode').mockImplementation(bitmapOf)
   remoteShowDeps.backend = 'canvas2d'
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 960 })
@@ -280,7 +287,10 @@ afterEach(() => {
 
 /** Runs the show `ms` at ~60 fps: the clock, then one frame, letting decodes settle. */
 async function run(ms: number) {
+  const mine = epoch
   for (let t = 0; t < ms; t += 16) {
+    // A body left over from an ended test stops here instead of driving the current test's show.
+    if (epoch !== mine) throw new Error('run: the test that started this run has ended')
     clock.advance(16)
     frame?.()
     await flush()
