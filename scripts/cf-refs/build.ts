@@ -93,6 +93,14 @@ export function isDisplayLocked(run: () => string = readIoreg): boolean {
   }
 }
 
+/**
+ * Refuses a build on a locked (or unknown) display before any workbook is opened (review fix 3, Ruling S3-A step 1).
+ * The per-capture re-check in capture.ts stays; this only stops a build from opening Excel workbooks behind a lock.
+ */
+export function assertBuildDisplayUnlocked(isLocked: () => boolean = () => isDisplayLocked()): void {
+  if (isLocked()) throw new Error('display-locked: the macOS display is locked (or its state is unknown); refusing to open any workbook. Unlock it and rerun.')
+}
+
 /** Returns current `YYYY-MM-DD` in `Asia/Taipei` (`UTC+08:00`). */
 export function currentTaipeiDateIso(nowMs = Date.now()): string {
   return new Date(nowMs + 8 * 3_600_000).toISOString().slice(0, 10)
@@ -113,7 +121,9 @@ export function probeAndBuildCase(
   c: CfOracleCase,
   preExistingOpenWorkbooks: ReadonlySet<string>,
   displayLocked: boolean,
+  isLocked: () => boolean = () => isDisplayLocked(),
 ): LiveExcelProbeResult {
+  assertBuildDisplayUnlocked(isLocked)
   const inputAbs = resolve(REPO_ROOT, c.input)
   const savedAbs = resolve(REPO_ROOT, c.saved)
   const workName = `.work-${c.id}.xlsx`
@@ -242,6 +252,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       : undefined
 
   const manifest: CfManifest = await generateAllStage1({ stage, onlyCaseId: only, anchorLocalDate })
+  assertBuildDisplayUnlocked()
   execFileSync('open', ['-a', 'Microsoft Excel'])
   execFileSync('sleep', ['2'])
   const preExisting = new Set<string>(workbookNames() ?? [])

@@ -790,10 +790,22 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
 
     // Icon FINDINGS are withheld-only (extends the guard): an icon can never be recorded as painted.
     type IconFinding = { outcome: 'withheld'; reason: string }
-    const ICON_FINDINGS: Record<string, IconFinding> = {}
-    for (const [key, f] of Object.entries(ICON_FINDINGS)) expect(f.outcome, key).toBe('withheld')
+    const ICON_FINDINGS: Record<string, IconFinding> = {
+      // Ruling S4-M: on a rightToLeft sheet every icon is unresolved throughout Stage 4, whatever Excel draws there.
+      'stage4-icon-rtl:B2': { outcome: 'withheld', reason: 'S4-M: icons on an RTL sheet stay unresolved in Stage 4 (icon:placement-rtl-sheet is record only)' },
+    }
     const validateIconFinding = (f: IconFinding) => {
       if (f.outcome !== 'withheld') throw new Error(`Non-withheld icon outcome: ${(f as any).outcome}`)
+    }
+    // Non-vacuous (review fix 1): every recorded finding names a visited Stage 4 cell, passes the validator, and is a
+    // cell production actually withholds.
+    expect(Object.keys(ICON_FINDINGS).length).toBeGreaterThan(0)
+    for (const [key, f] of Object.entries(ICON_FINDINGS)) {
+      expect(f.outcome, key).toBe('withheld')
+      expect(() => validateIconFinding(f), key).not.toThrow()
+      const [caseId, ref] = key.split(':')
+      expect(stage4.find(c => c.id === caseId)?.expected.cells.some(e => e.ref === ref && e.iconApplied === true), key).toBe(true)
+      expect(painted, key).not.toContain(key)
     }
     expect(() => validateIconFinding({ outcome: 'painted' as any, reason: 'icon painted before evidence' })).toThrow(/Non-withheld icon outcome/)
     expect(() => validateIconFinding({ outcome: 'withheld', reason: 'valid' })).not.toThrow()

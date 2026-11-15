@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 const hasOsacompile = process.platform === 'darwin' && spawnSync('which', ['osacompile']).status === 0
 import { compareCfCase, stage3ObservedBars, stage4ObservedIcons } from '../scripts/cf-compare'
 import { auditStage3Manifest, auditStage4Manifest, renderVerifiedCapabilitiesSource } from '../scripts/cf-refs/audit'
-import { assertCanCloseWorkbook, filterCasesForStage, isDisplayLocked, parseScreenLockState, shouldSkipCaseOnResume } from '../scripts/cf-refs/build'
+import { assertBuildDisplayUnlocked, assertCanCloseWorkbook, filterCasesForStage, isDisplayLocked, parseScreenLockState, probeAndBuildCase, shouldSkipCaseOnResume } from '../scripts/cf-refs/build'
 import {
   CF_CAPABILITIES,
   CF_CASES,
@@ -1037,9 +1037,16 @@ describe('CF oracle verifier', () => {
     expect(chunks.flat()).toEqual(refs)
     expect(probeRefChunks(refs.slice(0, 88))).toEqual([refs.slice(0, 88)])
     expect(probeRefChunks([])).toEqual([[]])
-    // Every case before Task 22b fits one chunk, so its probes are byte-identical to the unchunked ones. (Stage 4 cases
-    // postdate the chunking and may span several chunks, as the 152-cell glyph key does.)
+    // Every Stage 1-3 case before Task 22b fits one chunk, so its probes are byte-identical to the unchunked ones.
     for (const c of CF_CASES.filter(x => x.id !== 'stage3-bar-lengths-default' && x.stage < 4)) expect(c.expected.cells.length, c.id).toBeLessThanOrEqual(PROBE_CHUNK_CELLS)
+    // Stage 4 postdates the chunking: exactly these cases span several chunks, and each still probes every cell in order.
+    const STAGE4_MULTI_CHUNK = ['stage4-icon-glyph-key', 'stage4-icon-families', 'stage4-icon-thresholds', 'stage4-icon-degenerate', 'stage4-icon-reverse-custom']
+    expect(CF_CASES.filter(x => x.stage === 4 && x.expected.cells.length > PROBE_CHUNK_CELLS).map(x => x.id)).toEqual(STAGE4_MULTI_CHUNK)
+    for (const c of CF_CASES.filter(x => x.stage === 4)) {
+      const refs = c.expected.cells.map(x => x.ref)
+      expect(probeRefChunks(refs).flat(), c.id).toEqual(refs)
+      expect(probeRefChunks(refs).every(chunk => chunk.length <= PROBE_CHUNK_CELLS), c.id).toBe(true)
+    }
   })
 
   it('correctly validates cell coordinates within range even with hidden rows (stage2-scale-scope)', () => {
@@ -4682,5 +4689,13 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     const authored = new Map([['xl/worksheets/sheet1.xml', new TextEncoder().encode(excelForm)]])
     const diffs = diffAuthoredIconTemplates(readZipPartsSync(await generateCaseArchive('stage4-icon-authored'))!, authored)
     expect(diffs.filter(d => d.startsWith('B2:B6'))).toEqual([])
+  })
+
+  it('build refuses on a locked display before it opens any workbook (review fix 3)', () => {
+    const c = CF_STAGE4_CASES.find(x => x.id === 'stage4-icon-om-reachability')!
+    expect(() => assertBuildDisplayUnlocked(() => true)).toThrow(/display-locked/)
+    expect(() => assertBuildDisplayUnlocked(() => false)).not.toThrow()
+    // probeAndBuildCase checks first: with a locked display it throws before copying or opening the input.
+    expect(() => probeAndBuildCase(c, new Set(), false, () => true)).toThrow(/display-locked/)
   })
 })
