@@ -223,11 +223,82 @@ describe('Task 28: the icon frame at the glyph key geometry', () => {
       layoutIcon(icon, host, { ...KEY_FONT, ...font }, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)
     expect(at(keyHost())).toBeDefined()
     for (const sizePt of [8, 10, 10.5, 12, 20]) expect(at(keyHost(), { sizePt }), `${sizePt} pt`).toBeUndefined()
-    for (const rowPt of [15, 19, 21, 30, 60]) expect(at(keyHost({ height: rowPt * 4 / 3 })), `${rowPt} pt row`).toBeUndefined()
-    for (const vertical of ['top', 'center'] as const) expect(at(keyHost(), { vertical }), vertical).toBeUndefined()
+    for (const rowPt of [12.75, 19, 21, 35, 60]) expect(at(keyHost({ height: rowPt * 4 / 3 })), `${rowPt} pt row`).toBeUndefined()
+    expect(at(keyHost(), { vertical: 'top' }), 'top').toBeUndefined()
     const style = { numFmtId: 0, fontSizePt: 11, fontName: 'Calibri' }
     for (const s of [{ ...style, fontName: 'Arial' }, { ...style, fontName: undefined }, { ...style, bold: true }, { ...style, italic: true }]) {
       expect(at(keyHost({ cell: { value: 10, style: s } })), JSON.stringify(s)).toBeUndefined()
     }
   })
 })
+
+/**
+ * Task 28 round 3: the frame at the heights `refs/stage4-icon-rows.json` measured (Excel 16.115, cd5ae569), which
+ * matched `anchor-constant`. Every offset is a measured px at 1 px/pt; nothing between the measured heights.
+ */
+describe('Task 28 round 3: the frame at the measured row heights (stage4-icon-rows)', () => {
+  const icon = { ruleId: 1, set: '3Arrows' as const, iconId: 2, bucket: 2, buckets: 3, showValue: true }
+  const ALL = (): boolean => true
+  const roundHalfUp = (x: number) => Math.floor(x + 0.5)
+  const ROWS = SIDECAR_ROWS()
+  const font = (vertical: 'bottom' | 'center', horizontal: 'left' | 'right' | 'center') => ({ sizePt: 11, vertical, horizontal })
+  const at = (rowPt: number, vertical: 'bottom' | 'center', horizontal: 'left' | 'right' | 'center', height = rowPt * 4 / 3) =>
+    layoutIcon(icon, keyHost({ height }), font(vertical, horizontal), AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)
+
+  it('the model carries exactly the sidecar\'s measured placements', () => {
+    expect(CF_ICON_RENDER_MODEL.keyFrame?.rows).toEqual({
+      15: { bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 2, horizontal: ['left', 'right'] } },
+      16.5: { bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 2, horizontal: ['left', 'right'] } },
+      18: { bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 3, horizontal: ['left', 'right'] } },
+      20: { bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left', 'right'] }, center: { anchor: 'top', offsetPt: 4, horizontal: ['left', 'right'] } },
+      22.5: { bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 5, horizontal: ['left', 'right'] } },
+      25: { bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 7, horizontal: ['left', 'right'] } },
+      30: { bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 9, horizontal: ['left', 'right'] } },
+    })
+  })
+
+  it('the placements are the sidecar\'s: frame top = ink top of 3Arrows:2, 3TrafficLights1:2 and 3Symbols:2 (each class\'s key ink top is the frame top)', () => {
+    // E (bottom, left numbers) and B..D, F..I (centre: Excel's resave gives the Normal style vertical="center").
+    for (const [rowPt, row] of Object.entries(ROWS)) {
+      const r = CF_ICON_RENDER_MODEL.keyFrame!.rows[Number(rowPt)]!
+      for (const top of row.centre) expect(top, `${rowPt} centre`).toBe(r.center!.offsetPt)
+      for (const [top, h] of row.bottom) expect(h - (top + 12), `${rowPt} bottom gap`).toBe(r.bottom!.offsetPt)
+    }
+  })
+
+  for (const rowPt of [15, 16.5, 18, 20, 22.5, 25, 30]) {
+    it(`a ${rowPt} pt row lays the frame out where Excel measured it`, () => {
+      const r = CF_ICON_RENDER_MODEL.keyFrame!.rows[rowPt]!
+      const Y1 = roundHalfUp(rowPt)
+      for (const h of r.bottom!.horizontal) expect(at(rowPt, 'bottom', h)?.box, `bottom ${h}`).toEqual({ x: 2, y: Y1 - 1 - 12, w: 13, h: 12 })
+      for (const h of r.center!.horizontal) expect(at(rowPt, 'center', h)?.box, `center ${h}`).toEqual({ x: 2, y: r.center!.offsetPt, w: 13, h: 12 })
+      // The viewer's whole-px row is the same row.
+      expect(at(rowPt, 'center', 'right', Math.round(rowPt * 4 / 3))).toBeDefined()
+      // An alignment the capture did not measure at this height withholds.
+      expect(at(rowPt, 'center', 'center'), 'center text').toBeUndefined()
+      if (rowPt !== 20) expect(at(rowPt, 'bottom', 'right'), 'bottom right').toBeUndefined()
+    })
+  }
+
+  it('unmeasured heights withhold: 12.75 pt (the icon shrinks) and every height between the measured ones', () => {
+    for (const rowPt of [12, 12.75, 14.25, 15.75, 17.25, 19.5, 21, 24, 27, 29.25, 33]) {
+      for (const v of ['bottom', 'center'] as const) expect(at(rowPt, v, 'left'), `${rowPt} ${v}`).toBeUndefined()
+    }
+  })
+})
+
+/** Per measured row (pt): the centre cells' ink tops and the bottom cells' (ink top, row px), from the sidecar. */
+function SIDECAR_ROWS(): Record<string, { centre: number[]; bottom: Array<[number, number]> }> {
+  const sc = JSON.parse(readFileSync(join(ROOT, 'tests/fixtures/xlsx-cf/refs/stage4-icon-rows.json'), 'utf8')) as typeof SIDECAR & { observedIcons: Array<{ ref: string; cellTopPx: number; cellHeightPx: number; icon: null | { topPx: number } }> }
+  const PT: Record<string, number> = { 2: 15, 3: 12.75, 4: 16.5, 5: 18, 6: 20, 7: 22.5, 8: 25, 9: 30 }
+  const out: Record<string, { centre: number[]; bottom: Array<[number, number]> }> = {}
+  for (const o of sc.observedIcons) {
+    const [, col, row] = /^([A-Z]+)(\d+)$/.exec(o.ref)!
+    const pt = PT[row!]!
+    if (pt === 12.75 || !o.icon) continue
+    out[pt] ??= { centre: [], bottom: [] }
+    if (col === 'E') out[pt]!.bottom.push([o.icon.topPx - o.cellTopPx, o.cellHeightPx])
+    else out[pt]!.centre.push(o.icon.topPx - o.cellTopPx)
+  }
+  return out
+}

@@ -1648,3 +1648,52 @@ After verify-only (38d3d872), production paints icons only behind `CF_ICON_PAINT
   2. `bun scripts/cf-refs/capture.ts --stage 4 --case stage4-icon-rows`
   3. `bun scripts/cf-refs/capture.ts --stage 4 --verify-only`
   4. `bun scripts/cf-refs/audit.ts --stage 4`
+
+### Task 28 round 3 (2026-11-15): what `stage4-icon-rows` shows (cd5ae569), and the frame at the measured heights
+
+**The resave changed the case's alignments.** Excel 16.115 resaves every Stage 4 workbook with the Normal style `<alignment vertical="center"/>`:
+- the cellStyleXf and xf 0 carry it in stage4-icon-rows, the glyph key, geometry-2 and inset;
+- the case's bottom-aligned xf (`vertical="bottom"` only) became xf 0 (B..D), so in the resaved file B..D are **centred**;
+- E keeps `horizontal="left"` with no vertical, which is bottom.
+
+So the case measured:
+- **bottom:** one column, E (left-aligned numbers, 3Arrows:2);
+- **centre:** seven columns, B..D and F..H (right-aligned numbers) and I (left-aligned numbers).
+
+`readIconCellFacts` reads the resaved xf, so the readings were judged on the alignments Excel actually drew.
+
+**Verdict: `anchor-constant` (verified).** The table gives, per reading, the spread of its group values in each column. A spread ≤ 1 px is consistent; ≥ 3 px is refuted.
+
+| Reading | B, C, D, F, G, H, I (centred) | E (bottom) |
+|---|---|---|
+| `anchor-constant` | ≤ 0.5 | 0 |
+| `centred` | ≤ 0.5 | **7.5 (refuted)** |
+| `row-scaled` (rows ≥ 20 pt) | 3.0 (refuted) | 6.5 (refuted) |
+
+- For a centred cell, `anchor-constant` and `centred` predict the same value, so B..D and F..I cannot tell those two readings apart.
+- **Only column E separates `anchor-constant` from `centred`.** The verdict between those two rests on E's seven rows (E2, E4..E9), one glyph class and one horizontal alignment.
+- Every column refutes `row-scaled`: E by 6.5 px, the others at exactly the 3 px threshold.
+
+**Measured offsets** (px at 1 px/pt). Each frame top is the ink top, since all three classes ink from the frame top.
+
+| Row (pt) | Excel px | Bottom (E): frame top / gap to next gridline | Centre (B..D, F..I): frame top |
+|---|---|---|---|
+| 15 | 15 | 2 / 1 | 2 |
+| 16.5 | 16 | 3 / 1 | 2 |
+| 18 | 18 | 5 / 1 | 3 |
+| 20 | 20 | 7 / 1 | 4 |
+| 22.5 | 22 | 9 / 1 | 5 |
+| 25 | 25 | 12 / 1 | 7 |
+| 30 | 30 | 17 / 1 | 9 |
+| 12.75 | 12 | ink 1..10 (shrinks; excluded) | ink 1..10 |
+
+**Production (`CF_ICON_RENDER_MODEL.keyFrame.rows`).**
+- The table above sets each row height's placements:
+  - bottom: 1 pt above the next gridline;
+  - centre: the measured top offset.
+- Horizontal alignments, as measured at each height:
+  - centre: left and right;
+  - bottom: left only, except at 20 pt, where the key and geometry-2 also measured right.
+  - Centred horizontal text is measured nowhere, so it withholds. This tightens round 1, which admitted it at the key geometry.
+- Any other height withholds (12.75 pt, 15.75 pt, and every height between the measured ones), as does top alignment.
+- A host's row matches a measured height by its exact px (pt × 4/3) or that rounded. A host that matches two measured heights matches none.

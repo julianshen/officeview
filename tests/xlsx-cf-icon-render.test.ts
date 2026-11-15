@@ -94,7 +94,7 @@ describe('CF_ICON_RENDER_MODEL equals the measured sidecars', () => {
     }
     // S4-PROD-ALIGN: the measured box variant and the 11 pt left inset; no box size or offsets (ink is not the box).
     // Task 28: the glyph-key frame, exact at the key geometry only (tests/xlsx-cf-icon-glyphs.test.ts).
-    expect(CF_ICON_RENDER_MODEL).toEqual({ box: { size: 'font', vertical: 'cell-align' }, leftInsetPt: { 11: 12 }, rightInsetPt: { 11: 0 }, keyFrame: { fontPt: 11, fontName: 'Calibri', rowPt: 20, vertical: 'bottom', widthPt: 13, heightPt: 12, leftPt: 2, bottomPt: 1 } })
+    expect(CF_ICON_RENDER_MODEL).toEqual({ box: { size: 'font', vertical: 'cell-align' }, leftInsetPt: { 11: 12 }, rightInsetPt: { 11: 0 }, keyFrame: { fontPt: 11, fontName: 'Calibri', widthPt: 13, heightPt: 12, leftPt: 2, rows: CF_ICON_RENDER_MODEL.keyFrame!.rows } })
     expect(Object.isFrozen(CF_ICON_RENDER_MODEL)).toBe(true)
     // Under every capability, the production model lays nothing out off the key geometry (a 10 pt font, a 15 px row).
     expect(layoutIcon(icon(), host(), { sizePt: 10, vertical: 'bottom', horizontal: 'right' }, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)).toBeUndefined()
@@ -606,6 +606,45 @@ describe('S4-RIGHTINSET-ZERO: right-aligned numbers at the key geometry', () => 
     resident.dispose(); paged.dispose()
     return { result, iconAt, metrics }
   }
+
+  it('Task 28 round 3: a default 15 pt row, centred (Excel 16.115\'s Normal style), paints identically in static, resident, worker, forced-paged and print', async () => {
+    const sheet = iconSheet([10, 50, 90], { style: { ...KEY_STYLE, vertical: 'center' } })
+    for (const row of sheet.rows) { row.heightPt = 15; row.customHeight = true }
+    expect(computeMetrics(sheet).rowHeightsPx[0]).toBe(20)
+    const run = async () => {
+      const metrics = computeMetrics(sheet)
+      const resident = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, layoutContext }))!
+      const worker = asBatch(await pagedScope(sheet, 3))
+      const host = createCellLayoutHost(layoutContext())
+      const forced = asBatch(await pagedScope(sheet, 3, 1, { cell: (row, col) => {
+        const cell = sheet.rows[row]!.cells[col]!
+        const body = host.layoutBody(cell, metrics.colWidthsPx[0]!, metrics.rowHeightsPx[row]!)
+        return { box: { x: 0, y: metrics.rowHeightsPx.slice(0, row).reduce((a, b) => a + b, 0), width: metrics.colWidthsPx[0]!, height: metrics.rowHeightsPx[row]! }, base: cell.style!, textWidth: body.text?.kind === 'plain' ? body.text.width : undefined, cell }
+      } }))
+      const out: Record<string, Array<{ x: number; y: number; w: number; h: number }>> = {}
+      { const r = recorder(metrics.widthPx, metrics.heightPx); renderSheet(sheet, r.ctx, metrics, undefined, { conditionalFormatting: resident }); out.static = r.ops.filter(o => o.op === 'icon') }
+      const geometry = buildSheetGeometry(sheet)
+      for (const [name, batch] of [['resident', resident], ['worker', worker], ['forced-paged', forced]] as const) {
+        const r = recorder(metrics.widthPx, metrics.heightPx)
+        renderSheetViewport(sheet, r.ctx, geometry, { box: { x: 0, y: 0, width: metrics.widthPx, height: metrics.heightPx }, zoom: 1, deviceScale: 1 }, { conditionalFormatting: batch }, { cache: new LayoutCache() })
+        out[name] = r.ops.filter(o => o.op === 'icon')
+      }
+      { const print = computePrintMetrics(sheet, metrics); const r = recorder(print.paperPx.width, print.paperPx.height); renderPrintPage(sheet, r.ctx, metrics, print, 0, 0, undefined, { conditionalFormatting: resident }); out.print = r.ops.filter(o => o.op === 'icon') }
+      resident.dispose(); worker.dispose(); forced.dispose()
+      return out
+    }
+    const got = await withIcons(run, { ...production, extra: GLYPH_CAPS })
+    for (const [name, ops] of Object.entries(got)) expect(ops.length, name).toBe(6)
+    // Same frame on every leg, relative to the first icon's origin (print adds a page offset).
+    const r6 = (v: number) => Math.round(v * 1e6) / 1e6
+    const rel = (ops: Array<{ x: number; y: number; w: number; h: number }>) => ops.map(o => ({ x: r6(o.x - ops[0]!.x), y: r6(o.y - ops[0]!.y), w: r6(o.w), h: r6(o.h) }))
+    for (const name of ['resident', 'worker', 'forced-paged', 'print']) expect(rel(got[name]!), name).toEqual(rel(got.static!))
+    expect(got.static![0]!.x).toBeCloseTo(0 + 2 * 4 / 3, 0)
+    // The control: an unmeasured 15.75 pt row withholds on every leg.
+    for (const row of sheet.rows) row.heightPt = 15.75
+    const none = await withIcons(run, { ...production, extra: GLYPH_CAPS })
+    for (const [name, ops] of Object.entries(none)) expect(ops.length, `15.75 pt: ${name}`).toBe(0)
+  })
 
   it('the production model reads rightInsetPt 0 at 11 pt', () => {
     expect(CF_ICON_RENDER_MODEL.rightInsetPt).toEqual({ 11: 0 })
