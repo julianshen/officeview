@@ -46,7 +46,9 @@ describe('S4-PROD-ALIGN: the production model and the readings it adopts', () =>
     expect(CF_ICON_RENDER_MODEL.box).toEqual({ size: 'font', vertical: 'cell-align' })
     expect(CF_ICON_RENDER_MODEL.leftInsetPt).toEqual({ 11: 12 })
     // Undetermined by the evidence (ink is not the box; Task 28's glyphs place the ink): withheld.
-    for (const key of ['sizePt', 'offsetsPt', 'rightInsetPt'] as const) expect(CF_ICON_RENDER_MODEL[key], key).toBeUndefined()
+    for (const key of ['sizePt', 'offsetsPt'] as const) expect(CF_ICON_RENDER_MODEL[key], key).toBeUndefined()
+    // Ruling S4-RIGHTINSET-ZERO (Task 28 round 2): right-aligned text is `unshifted`, so its inset is 0 where it fits.
+    expect(CF_ICON_RENDER_MODEL.rightInsetPt).toEqual({ 11: 0 })
     expect(Object.isFrozen(CF_ICON_RENDER_MODEL)).toBe(true)
     // So under every capability the production model still lays no icon out.
     expect(layoutIcon(icon(), host(), { sizePt: 11, vertical: 'bottom', horizontal: 'left' }, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)).toBeUndefined()

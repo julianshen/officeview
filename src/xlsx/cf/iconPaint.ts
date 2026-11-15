@@ -80,6 +80,11 @@ export type CfIconKeyFrame = Readonly<{
 export const CF_ICON_RENDER_MODEL: CfIconRenderModel = Object.freeze({
   box: Object.freeze({ size: 'font', vertical: 'cell-align' }),
   leftInsetPt: Object.freeze({ 11: 12 }),
+  // Ruling S4-RIGHTINSET-ZERO (Task 28 round 2): `icon:inset-right-aligned` reads `unshifted` (docs/validation/xlsx-cf.md
+  // §12; `refs/stage4-icon-inset.json`: a left inset does not move right-aligned text), so a right-aligned number's text
+  // box is unchanged (inset 0), but only where the text fits right of the icon frame and its measured gap, which is
+  // the left inset (`slotFit`); a number that reaches it takes the overflow path, unmeasured here: withheld.
+  rightInsetPt: Object.freeze({ 11: 0 }),
   keyFrame: Object.freeze({
     // The key case (scripts/cf-refs/cases.ts stage4-icon-glyph-key; generate.ts fontId 0 `<sz val="11"/>`
     // `<name val="Calibri"/>`, no alignment so bottom) on rows of 20 pt (sidecar `rowHeightsPt`).
@@ -248,11 +253,24 @@ function slotInsetPt(font: CfIconText, model: CfIconRenderModel, check: (cap: st
  * `icon-and-text`) it is a number, which Excel lays out in the inset box as its '#' fill beside the icon
  * (`stage4-icon-inset` E). A string that would not fit is unmeasured; an unknown width withholds.
  */
-function slotTextFits(host: CfBarHost, insetLeftPx: number, check: (cap: string) => boolean): boolean {
+function slotTextFits(host: CfBarHost, insetLeftPx: number, check: (cap: string) => boolean, overflow = true): boolean {
   const width = host.textWidth
   if (width === undefined || !Number.isFinite(width) || width < 0) return false
   if (width <= host.width - CF_ICON_TEXT_PADDING_PX - insetLeftPx) return true
-  return check('icon:inset-overflow') && typeof host.cell?.value === 'number' && host.cell.valueIsError !== true
+  return overflow && check('icon:inset-overflow') && typeof host.cell?.value === 'number' && host.cell.valueIsError !== true
+}
+
+/**
+ * The room the text must fit in beside the slot (logical px from the left) and whether it may overflow. Ruling
+ * S4-RIGHTINSET-ZERO: right-aligned text keeps its box (`unshifted`), so its inset says nothing about the room; it must
+ * clear the icon frame and gap, the measured left inset at its font size (none: withheld), and never overflows (the
+ * '#' fill beside an icon over right-aligned text is unmeasured).
+ */
+function slotFit(font: CfIconText, insetPx: number, model: CfIconRenderModel): { roomPx: number; overflow: boolean } | undefined {
+  if (font.horizontal !== 'right') return { roomPx: insetPx, overflow: true }
+  const gap = model.leftInsetPt?.[font.sizePt]
+  if (gap === undefined || !Number.isFinite(gap) || gap < 0) return undefined
+  return { roomPx: Math.max(insetPx, gap * PT_PX), overflow: false }
 }
 
 /**
@@ -269,7 +287,8 @@ export function iconWithheld(icon: CfIconDescriptor, host: CfBarHost | undefined
   if (!font) return true
   const laid = layoutIcon(icon, host, font, CAPTURE_SCALE, model, check)
   if (!laid) return true
-  return !slotTextFits(host, laid.inset.left + laid.inset.right, check)
+  const fit = slotFit(font, laid.inset.left + laid.inset.right, model)
+  return !fit || !slotTextFits(host, fit.roomPx, check, fit.overflow)
 }
 
 /**
@@ -282,8 +301,9 @@ export function noIconsInset(icon: CfIconDescriptor, host: CfBarHost | undefined
   if (icon.set !== 'NoIcons' || !host || !check('icon:noicons-inset')) return undefined
   const font = iconTextOf(host.cell)
   const insetPt = font && slotInsetPt(font, model, check)
-  if (insetPt === undefined) return undefined
-  return slotTextFits(host, insetPt * PT_PX, check) ? { left: insetPt * PT_PX, right: 0 } : undefined
+  if (!font || insetPt === undefined) return undefined
+  const fit = slotFit(font, insetPt * PT_PX, model)
+  return fit && slotTextFits(host, fit.roomPx, check, fit.overflow) ? { left: insetPt * PT_PX, right: 0 } : undefined
 }
 
 /** The glyph classes a batch admitted (Ruling S4-R): one charge per class, at preparation. */

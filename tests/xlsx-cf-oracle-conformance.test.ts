@@ -976,7 +976,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     // S4-PROD-ALIGN: the model carries the measured box variant and the 11 pt left inset, but no box size or offsets
     // (ink is not the box). Task 28 adds the glyph-key frame, exact only at the key geometry; production still publishes
     // no glyph capability (Task 30), so no icon paints and no icon cell is inset.
-    expect(CF_ICON_RENDER_MODEL, 'S4-PROD-ALIGN: only the evidence-determined values').toEqual({ box: { size: 'font', vertical: 'cell-align' }, leftInsetPt: { 11: 12 }, keyFrame: { fontPt: 11, fontName: 'Calibri', rowPt: 20, vertical: 'bottom', widthPt: 13, heightPt: 12, leftPt: 2, bottomPt: 1 } })
+    expect(CF_ICON_RENDER_MODEL, 'S4-PROD-ALIGN: only the evidence-determined values').toEqual({ box: { size: 'font', vertical: 'cell-align' }, leftInsetPt: { 11: 12 }, rightInsetPt: { 11: 0 }, keyFrame: { fontPt: 11, fontName: 'Calibri', rowPt: 20, vertical: 'bottom', widthPt: 13, heightPt: 12, leftPt: 2, bottomPt: 1 } })
     let checked = 0
     for (const c of stage4) {
       const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))

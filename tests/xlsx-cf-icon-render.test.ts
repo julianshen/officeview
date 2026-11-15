@@ -94,7 +94,7 @@ describe('CF_ICON_RENDER_MODEL equals the measured sidecars', () => {
     }
     // S4-PROD-ALIGN: the measured box variant and the 11 pt left inset; no box size or offsets (ink is not the box).
     // Task 28: the glyph-key frame, exact at the key geometry only (tests/xlsx-cf-icon-glyphs.test.ts).
-    expect(CF_ICON_RENDER_MODEL).toEqual({ box: { size: 'font', vertical: 'cell-align' }, leftInsetPt: { 11: 12 }, keyFrame: { fontPt: 11, fontName: 'Calibri', rowPt: 20, vertical: 'bottom', widthPt: 13, heightPt: 12, leftPt: 2, bottomPt: 1 } })
+    expect(CF_ICON_RENDER_MODEL).toEqual({ box: { size: 'font', vertical: 'cell-align' }, leftInsetPt: { 11: 12 }, rightInsetPt: { 11: 0 }, keyFrame: { fontPt: 11, fontName: 'Calibri', rowPt: 20, vertical: 'bottom', widthPt: 13, heightPt: 12, leftPt: 2, bottomPt: 1 } })
     expect(Object.isFrozen(CF_ICON_RENDER_MODEL)).toBe(true)
     // Under every capability, the production model lays nothing out off the key geometry (a 10 pt font, a 15 px row).
     expect(layoutIcon(icon(), host(), { sizePt: 10, vertical: 'bottom', horizontal: 'right' }, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)).toBeUndefined()
@@ -566,5 +566,80 @@ describe('the eager renderer reaches icon layout only through the batch (Task 29
     expect(text.text?.kind === 'plain' && text.text.tx).toBe(3)
     expect(num.text?.kind === 'plain' && num.text.tx + num.text.width).toBeCloseTo(97, 9)
     expect(CF_ICON_TEXT_PADDING_PX).toBe(6)
+  })
+})
+
+/**
+ * Task 28 round 2, Ruling S4-RIGHTINSET-ZERO: `icon:inset-right-aligned` reads `unshifted` (§12), so a right-aligned
+ * number keeps its text box (inset 0) wherever it fits right of the icon frame and its measured gap (the left inset);
+ * one that reaches the frame would take the overflow path, unmeasured for right-aligned text: withheld. Production
+ * model and production glyph table, at the key geometry (11 pt Calibri, 20 pt rows, bottom).
+ */
+describe('S4-RIGHTINSET-ZERO: right-aligned numbers at the key geometry', () => {
+  const KEY_STYLE: XlsxCellStyle = { numFmtId: 0, fontSizePt: 11, fontName: 'Calibri' }
+  const GLYPH_CAPS = ['icon:glyph-3Arrows-0', 'icon:glyph-3Arrows-1', 'icon:glyph-3Arrows-2']
+  const keySheet = (values: number[], widthChars?: number): XlsxSheet => {
+    const sheet = iconSheet(values, { style: KEY_STYLE, ...(widthChars !== undefined ? { widthChars } : {}) })
+    for (const row of sheet.rows) { row.heightPt = 20; row.customHeight = true }
+    return sheet
+  }
+  const production = { model: false as const, glyphs: false as const }
+  async function views(sheet: XlsxSheet) {
+    const metrics = computeMetrics(sheet)
+    const resident = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, layoutContext }))!
+    const paged = asBatch(await pagedScope(sheet, sheet.rows.length))
+    const out: Record<string, ReturnType<typeof recorder>> = {}
+    { const r = out.static = recorder(metrics.widthPx, metrics.heightPx); renderSheet(sheet, r.ctx, metrics, undefined, { conditionalFormatting: resident }) }
+    const geometry = buildSheetGeometry(sheet)
+    for (const [name, batch] of [['resident', resident], ['paged', paged]] as const) {
+      const r = out[name] = recorder(metrics.widthPx, metrics.heightPx)
+      renderSheetViewport(sheet, r.ctx, geometry, { box: { x: 0, y: 0, width: metrics.widthPx, height: metrics.heightPx }, zoom: 1, deviceScale: 1 }, { conditionalFormatting: batch }, { cache: new LayoutCache() })
+    }
+    { const print = computePrintMetrics(sheet, metrics); const r = out.print = recorder(print.paperPx.width, print.paperPx.height); renderPrintPage(sheet, r.ctx, metrics, print, 0, 0, undefined, { conditionalFormatting: resident }) }
+    const pages = await getPaintables({ sheets: [sheet] })
+    try { const r = out.export = recorder(pages[0]!.spec.widthPx, pages[0]!.spec.heightPx); pages[0]!.paint(r.ctx) } finally { pages.dispose() }
+    const result = Object.fromEntries(Object.entries(out).map(([name, r]) => [name, {
+      icons: r.ops.filter(o => o.op === 'icon').length,
+      texts: r.ops.filter(o => o.op === 'text' && /^\d+$/.test(o.text!)).map(o => ({ text: o.text!, x: o.x })),
+    }]))
+    const iconAt = [resident.iconAt(0, 0) !== undefined, paged.iconAt(0, 0) !== undefined]
+    resident.dispose(); paged.dispose()
+    return { result, iconAt, metrics }
+  }
+
+  it('the production model reads rightInsetPt 0 at 11 pt', () => {
+    expect(CF_ICON_RENDER_MODEL.rightInsetPt).toEqual({ 11: 0 })
+  })
+
+  it('a short right-aligned number paints its icon in all five views with its text exactly where it is without one', async () => {
+    const sheet = keySheet([10, 50, 90])
+    expect(computeMetrics(sheet).rowHeightsPx[0]).toBe(27)
+    const withIcon = await withIcons(() => views(sheet), { ...production, extra: GLYPH_CAPS })
+    const control = await withIcons(() => views(sheet), production)
+    for (const name of ['static', 'resident', 'paged', 'print', 'export']) {
+      // Each 3Arrows glyph is two fills: three icons, six fills; the control (no glyph evidence) paints none.
+      expect(withIcon.result[name]!.icons, `${name}: icons`).toBe(6)
+      expect(control.result[name]!.icons, `${name}: control`).toBe(0)
+      expect(withIcon.result[name]!.texts, `${name}: text unshifted`).toEqual(control.result[name]!.texts)
+      expect(withIcon.result[name]!.texts.map(t => t.text), name).toEqual(['10', '50', '90'])
+    }
+    expect(withIcon.iconAt).toEqual([true, true])
+  })
+
+  it('a right-aligned number that reaches the icon frame withholds on every view (overflow unmeasured)', async () => {
+    const probe = createCellLayoutHost(layoutContext())
+    const value = 1234567
+    const body = probe.layoutBody({ ref: 'A1', row: 0, col: 0, value, styleIndex: 0, style: KEY_STYLE }, 500, 27)
+    const width = body.text?.kind === 'plain' ? body.text.width : NaN
+    expect(width).toBeGreaterThan(20)
+    // Fits the cell (w - 6 >= width) but not right of the 12 pt (16 px) frame and gap.
+    const colPx = Math.ceil(width + CF_ICON_TEXT_PADDING_PX + 8)
+    for (const [name, px, want] of [['tight', colPx, 0], ['control', colPx + 16, 2]] as const) {
+      const sheet = keySheet([value], px / 7)
+      expect(computeMetrics(sheet).colWidthsPx[0], name).toBe(px)
+      const got = await withIcons(() => views(sheet), { ...production, extra: [...GLYPH_CAPS, 'icon:inset-overflow'] })
+      for (const view of ['static', 'resident', 'paged', 'print', 'export']) expect(got.result[view]!.icons, `${name}: ${view}`).toBe(want)
+      expect(got.iconAt, name).toEqual([want > 0, want > 0])
+    }
   })
 })
