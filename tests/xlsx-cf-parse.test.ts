@@ -439,6 +439,19 @@ describe('CF ranges, caps and invalid attributes', () => {
       `<conditionalFormatting sqref="A1"><cfRule type="colorScale" priority="1"><colorScale><cfvo val="1"/></colorScale></cfRule></conditionalFormatting>`,
     )
     expect(noType.value.rules[0]!.definition).toMatchObject({ kind: 'unresolved', reason: 'cf-invalid-cfvo' })
+    // Icon sets: the same caps apply, and the owner-visible `NoIcons` target is a legal cfIcon (S4-B), never an unknown set.
+    const icon = (host: string) => parse(
+      `<conditionalFormatting sqref="A1:A9"><cfRule type="iconSet" priority="1">${host}</cfRule></conditionalFormatting>`,
+    ).value.rules[0]!.definition
+    const cfIcon = (set: string, id: number) => `<cfIcon iconSet="${set}" iconId="${id}"/>`
+    expect(icon(`<iconSet iconSet="3Arrows">${'<cfvo type="num" val="1"/>'.repeat(6)}</iconSet>`))
+      .toMatchObject({ kind: 'unresolved', reason: 'cf-resource-limit' })
+    expect(icon(`<iconSet iconSet="3Arrows" custom="1">${cfIcon('3Arrows', 0).repeat(6)}</iconSet>`))
+      .toMatchObject({ kind: 'unresolved', reason: 'cf-resource-limit' })
+    expect(icon(`<iconSet iconSet="3Arrows" custom="1">${cfIcon('NoIcons', 0)}${cfIcon('3Arrows', 1)}${cfIcon('3Arrows', 2)}</iconSet>`))
+      .not.toMatchObject({ reason: 'cf-unsupported-icon' })
+    expect(icon(`<iconSet iconSet="3Arrows" custom="1">${cfIcon('NoIcons', 1)}${cfIcon('3Arrows', 1)}${cfIcon('3Arrows', 2)}</iconSet>`))
+      .toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-icon' })
   })
 
   it('refuses invalid priorities, operators, periods and boolean spellings without guessing', () => {

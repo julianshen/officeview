@@ -24,6 +24,7 @@ import { measureCfPayload } from './limits'
 import { parseCfDxf } from './dxf'
 import {
   CF_BAR_DEFINITION_BYTES,
+  CF_ICON_DEFINITION_BYTES,
   CF_LIMITS,
   createCfCaps,
   createCfDiagnostics,
@@ -34,9 +35,13 @@ import {
 import {
   COLOR_SCALE_WRITES,
   DATA_BAR_WRITES,
+  ICON_SET_WRITES,
   type CfBarBound,
   type CfCellState,
   type CfDefinition,
+  type CfIconRef,
+  type CfIconSetName,
+  type CfIconThreshold,
   type CfLease,
   type CfLiteral,
   type CfOperator,
@@ -148,7 +153,8 @@ const KNOWN_TYPES: ReadonlySet<string> = new Set([
   'iconSet',
   'expression',
 ])
-const ICON_SETS: ReadonlyMap<string, number> = new Map([
+/** The 20 built-in families and their icon counts. `NoIcons` is not a family: it exists only as a `cfIcon` target (S4-B). */
+export const ICON_SETS: ReadonlyMap<string, number> = new Map([
   ['3Arrows', 3], ['3ArrowsGray', 3], ['3Flags', 3], ['3TrafficLights1', 3], ['3TrafficLights2', 3],
   ['3Signs', 3], ['3Symbols', 3], ['3Symbols2', 3], ['4Arrows', 4], ['4ArrowsGray', 4],
   ['4RedToBlack', 4], ['4Rating', 4], ['4TrafficLights', 4], ['5Arrows', 5], ['5ArrowsGray', 5],
@@ -617,6 +623,8 @@ interface BodyInputs {
   cfvoMissingType: boolean
   customIcons: number
   iconProblem: 'cf-unsupported-icon' | undefined
+  /** The rule's own `<iconSet>` (base) or `<x14:iconSet>` (standalone x14). */
+  iconSetNode: XmlNode | undefined
   colorScaleNode: XmlNode | undefined
   /** The rule's own `<dataBar>` (base) or `<x14:dataBar>` (standalone x14). */
   dataBarNode: XmlNode | undefined
@@ -1162,6 +1170,153 @@ function parseDataBarRule(
   return finishResolved(definition, slot)
 }
 
+type CfIconDefinition = Extract<CfDefinition, { kind: 'iconSet' }>
+
+/** The x14-only families (spec §3): on a base `<cfRule>` Excel's handling is unrecorded (S4-B, `icon:dialect-base-x14-family`). */
+const X14_ONLY_ICON_SETS: ReadonlySet<string> = new Set(['3Triangles', '3Stars', '5Boxes'])
+
+/** One `cfIcon` target (S4-B): a built-in family with `0 <= iconId < size`, or `NoIcons` with `iconId` 0 only. */
+function iconRefOf(node: XmlNode): CfIconRef | undefined {
+  const a = attrs(node)
+  const name = a['iconSet'] ?? ''
+  if (!isIntText(a['iconId'])) return undefined
+  const id = Number(a['iconId'])
+  if (!Number.isSafeInteger(id)) return undefined
+  const iconId = id === 0 ? 0 : id // `-0` is zero
+  if (name === 'NoIcons') return iconId === 0 ? { set: 'NoIcons', iconId: 0 } : undefined
+  const size = ICON_SETS.get(name)
+  return size !== undefined && iconId >= 0 && iconId < size ? { set: name as CfIconSetName, iconId } : undefined
+}
+
+/**
+ * Computes the parse-level icon:* capability IDs required to authorize an icon-set rule (the pattern of
+ * `barRequiredCapabilities`). Fail-closed: the rule resolves iff every required capability has evidence. Never empty:
+ * every icon set needs the evidence of its dialect. Threshold types, `gte`, family order, `reverse`, participation,
+ * degenerate data and geometry are evaluation gates (Task 26), not parse gates (Ruling S4-D), except that a `min`/`max`
+ * cfvo, which no icon dialog authors, is visible without data. `defaultedAttributes` (default true, fail-closed) says a
+ * schema default stood in for an omitted attribute (S4-B, S4-F).
+ */
+export function iconRequiredCapabilities(def: CfIconDefinition, options: { readonly defaultedAttributes?: boolean } = {}): Set<string> {
+  const req = new Set<string>()
+  // S4-O dialect. An x14-only family on a base rule is a shape Excel was never measured to write.
+  if (def.dialect === 'x14') req.add('icon:dialect-standalone')
+  else {
+    req.add('icon:dialect-base')
+    if (X14_ONLY_ICON_SETS.has(def.set)) req.add('icon:dialect-base-x14-family')
+  }
+  // S4-B / S4-F: an omitted attribute, and `percent="1"` itself, rest on the schema defaults.
+  if (options.defaultedAttributes !== false || def.percentAttr) req.add('icon:settings-schema-defaults')
+  if (!def.percentAttr) req.add('icon:attr-percent-false')
+  if (def.custom !== undefined) {
+    req.add('icon:custom-mapping')
+    if (def.custom.some(ref => ref.set === 'NoIcons')) req.add('icon:custom-noicons')
+  }
+  if (def.thresholds.some(t => t.bound.type === 'min' || t.bound.type === 'max')) req.add('icon:thresholds-min-max')
+  return req
+}
+
+/** One icon cfvo (S4-C). Base cfvo carry `@val`; x14 cfvo carry one `<xm:f>` and never `@val`. `min`/`max` carry no value. */
+function iconThreshold(cfvo: XmlNode, x14: boolean): CfIconThreshold | 'cf-unsupported-rule' | 'cf-invalid-cfvo' {
+  const a = attrs(cfvo)
+  const fs = x14 ? kids(cfvo, 'f', XM_MAIN_NS) : []
+  if (x14 && (fs.length > 1 || a['val'] !== undefined)) return 'cf-invalid-cfvo'
+  const gte = parseBoolAttr(a['gte'], true)
+  if (gte === undefined) return 'cf-invalid-cfvo'
+  const text = x14 ? (fs[0] !== undefined ? textOf(fs[0]) : undefined) : a['val']
+  switch (a['type']) {
+    case 'formula':
+      return 'cf-unsupported-rule'
+    case 'min':
+    case 'max':
+      return { bound: { type: a['type'] }, gte }
+    case 'num':
+    case 'percent':
+    case 'percentile': {
+      if (text === undefined) return 'cf-invalid-cfvo'
+      const value = cfvoLiteral(text)
+      return typeof value === 'number' ? { bound: { type: a['type'], value }, gte } : value
+    }
+    default:
+      return 'cf-invalid-cfvo'
+  }
+}
+
+function parseIconSetRule(
+  fin: SheetFinalizer,
+  inputs: BodyInputs,
+  rule: { readonly active: boolean },
+  finishResolved: (definition: Record<string, unknown>, extraWrites?: CfWriteMask) => number,
+  finishUnresolved: (reason: string, writes: CfWriteMask) => number,
+): number {
+  const slot = ICON_SET_WRITES
+  // S4-P: activation predicates wait for Stage 5.
+  if (rule.active) return finishUnresolved('cf-unsupported-rule', slot)
+  const host = inputs.iconSetNode
+  if (!host) return finishUnresolved('cf-invalid-rule', slot)
+  if (inputs.cfvoMissingType) return finishUnresolved('cf-invalid-cfvo', slot)
+  // S4-B: an unknown family, a bad `cfIcon` or a mapping count that is not the bucket count refuses the whole set.
+  if (inputs.iconProblem) return finishUnresolved(inputs.iconProblem, slot)
+  const standalone = inputs.origin.dialect === 'x14'
+
+  // Every omitted attribute takes its schema default (spec §3 line 84); that is evidence-gated, never silent.
+  let defaulted = false
+  const a = attrs(host)
+  const pick = (key: string): string | undefined => {
+    const v = a[key]
+    if (v === undefined) defaulted = true
+    return v
+  }
+  const setName = pick('iconSet') ?? '3TrafficLights1'
+  const reverse = parseBoolAttr(pick('reverse'), false)
+  const showValue = parseBoolAttr(pick('showValue'), true)
+  const percentAttr = parseBoolAttr(pick('percent'), true)
+  // `custom` is an x14 attribute: its absence on a base `<iconSet>` is not a defaulted one.
+  const custom = parseBoolAttr(standalone ? pick('custom') : a['custom'], false)
+  const size = ICON_SETS.get(setName)
+  if (reverse === undefined || showValue === undefined || percentAttr === undefined || custom === undefined || size === undefined) {
+    return finishUnresolved('cf-invalid-rule', slot)
+  }
+
+  // S4-C: exactly one cfvo per bucket.
+  const cfvos = kids(host, 'cfvo', inputs.ns)
+  if (cfvos.length !== size) return finishUnresolved('cf-invalid-rule', slot)
+  const thresholds: CfIconThreshold[] = []
+  for (const cfvo of cfvos) {
+    const t = iconThreshold(cfvo, standalone)
+    if (typeof t === 'string') return finishUnresolved(t, slot)
+    thresholds.push(t)
+  }
+  // `custom` lives only on `<x14:iconSet>`; a base custom set is not a form Excel writes.
+  if (custom && !standalone) return finishUnresolved('cf-unsupported-rule', slot)
+  let refs: CfIconRef[] | undefined
+  if (custom) {
+    refs = []
+    for (const icon of kids(host, 'cfIcon', inputs.ns)) {
+      const ref = iconRefOf(icon)
+      if (ref === undefined) return finishUnresolved('cf-unsupported-icon', slot)
+      refs.push(ref)
+    }
+  }
+  // S4-M: the viewer lays out no RTL sheet, so an icon set there (or on a sheet of unknown order) is withheld outright.
+  const sheetRightToLeft = fin.meta.sheetRightToLeft
+  if (sheetRightToLeft !== false) return finishUnresolved('cf-unsupported-rule', slot)
+
+  const definition = {
+    kind: 'iconSet' as const,
+    set: setName as CfIconSetName,
+    thresholds,
+    reverse,
+    showValue,
+    percentAttr,
+    ...(refs !== undefined ? { custom: refs } : {}),
+    sheetRightToLeft,
+  }
+  for (const cap of iconRequiredCapabilities({ ...inputs.origin, ...definition }, { defaultedAttributes: defaulted })) {
+    if (!hasEvidence(cap)) return finishUnresolved('cf-unsupported-rule', slot)
+  }
+  return finishResolved(definition, slot)
+}
+
 function buildRuleBody(
   fin: SheetFinalizer,
   inputs: BodyInputs,
@@ -1171,7 +1326,8 @@ function buildRuleBody(
 ): number {
   // A bar's normalized fields are priced from the payload measurer, never a hand constant.
   let actual = 256 + inputs.formulas.reduce((n, f) => n + f.length * 2, 0) +
-    ((inputs.typeText ?? '').trim() === 'dataBar' ? CF_BAR_DEFINITION_BYTES : 0)
+    ((inputs.typeText ?? '').trim() === 'dataBar' ? CF_BAR_DEFINITION_BYTES : 0) +
+    ((inputs.typeText ?? '').trim() === 'iconSet' ? CF_ICON_DEFINITION_BYTES : 0)
   const pushUnresolved = (reason: string, priority: number, stop: boolean, writes: CfWriteMask): number => {
     fin.diag('unsupported', reason as `cf-${string}`, `rule priority=${priority} type=${inputs.typeText?.trim() ?? ''}: ${reason}`)
     fin.rules.push({
@@ -1365,10 +1521,7 @@ function buildRuleBody(
       return parseDataBarRule(fin, inputs, { active, hasDxf }, finishResolved, finishUnresolved)
     }
     case 'iconSet': {
-      const slot = new Set([type])
-      if (inputs.cfvoMissingType) return finishUnresolved('cf-invalid-cfvo', withDxf(slot))
-      if (inputs.iconProblem) return finishUnresolved(inputs.iconProblem, withDxf(slot))
-      return finishUnresolved('cf-unsupported-rule', withDxf(slot))
+      return parseIconSetRule(fin, inputs, { active }, finishResolved, finishUnresolved)
     }
     case 'expression': {
       return finishUnresolved('cf-unsupported-rule', withDxf())
@@ -1440,6 +1593,7 @@ interface VisualFacts {
   iconProblem: 'cf-unsupported-icon' | undefined
   colorScaleNode?: XmlNode
   dataBarNode?: XmlNode
+  iconSetNode?: XmlNode
 }
 
 /** Bounded `<xm:f>` text inside one `<x14:cfvo>` (the streamed path bounds it at capture). */
@@ -1478,28 +1632,30 @@ function scanRuleVisual(
   }
   let customIcons = 0
   let iconProblem: 'cf-unsupported-icon' | undefined
-  if (type === 'iconSet' && host) {
-    if (attrs(host)['custom'] === '1' || attrs(host)['custom'] === 'true') {
-      for (const icon of kids(host, 'cfIcon', ns)) {
-        customIcons++
-        if (customIcons > CF_LIMITS.customIcons) {
-          fin.diag('unsupported', 'cf-resource-limit', `iconSet carries more than ${CF_LIMITS.customIcons} custom icons`)
-          return undefined
-        }
-        const ia = attrs(icon)
-        const size = ICON_SETS.get(ia['iconSet'] ?? '')
-        if (size === undefined || !isIntText(ia['iconId']) || Number(ia['iconId']) < 0 || Number(ia['iconId']) >= size) {
-          iconProblem = 'cf-unsupported-icon'
-        }
+  if (type === 'iconSet') {
+    const hostAttrs = attrs(host)
+    const customFlag = parseBoolAttr(hostAttrs['custom'], false)
+    const setName = hostAttrs['iconSet']
+    // An unknown family refuses the whole contribution (S4-B); an omitted one is `3TrafficLights1` (schema default).
+    const size = ICON_SETS.get(setName ?? '3TrafficLights1')
+    if (size === undefined) iconProblem = 'cf-unsupported-icon'
+    for (const icon of kids(host, 'cfIcon', ns)) {
+      customIcons++
+      if (customIcons > CF_LIMITS.customIcons) {
+        fin.diag('unsupported', 'cf-resource-limit', `iconSet carries more than ${CF_LIMITS.customIcons} custom icons`)
+        return undefined
       }
+      // A malformed `custom` flag is the rule's own structural error (cf-invalid-rule), judged by the rule parser.
+      if (customFlag !== undefined && iconRefOf(icon) === undefined) iconProblem = 'cf-unsupported-icon'
     }
-    const setName = attrs(host)['iconSet']
-    if (setName !== undefined && ICON_SETS.get(setName) === undefined) iconProblem = 'cf-unsupported-icon'
+    if (customFlag === true && size !== undefined && customIcons !== size) iconProblem = 'cf-unsupported-icon'
+    if (customFlag === false && customIcons > 0) iconProblem = 'cf-unsupported-icon'
   }
   return {
     cfvoCount, cfvoMissingType, customIcons, iconProblem,
     ...(type === 'colorScale' ? { colorScaleNode: host } : {}),
     ...(type === 'dataBar' ? { dataBarNode: host } : {}),
+    ...(type === 'iconSet' ? { iconSetNode: host } : {}),
   }
 }
 
@@ -1527,6 +1683,7 @@ function readRuleInputs(
   let iconProblem: 'cf-unsupported-icon' | undefined
   let colorScaleNode: XmlNode | undefined
   let dataBarNode: XmlNode | undefined
+  let iconSetNode: XmlNode | undefined
   if (VISUAL_TYPES.has(type)) {
     const scan = scanRuleVisual(fin, ruleNode, dialect === 'base' ? ns : X14_MAIN_NS, type)
     if (!scan) return { ok: false, reason: 'cf-resource-limit' }
@@ -1536,6 +1693,7 @@ function readRuleInputs(
     iconProblem = scan.iconProblem
     colorScaleNode = scan.colorScaleNode
     dataBarNode = scan.dataBarNode
+    iconSetNode = scan.iconSetNode
   }
   const textAttr = a['text']
   if (textAttr !== undefined && textAttr.length > CF_LIMITS.textUnits) {
@@ -1572,6 +1730,7 @@ function readRuleInputs(
     (textAttr ? textAttr.length * 2 : 0) +
     dxfBudget * 2 +
     (type === 'dataBar' ? CF_BAR_DEFINITION_BYTES : 0) +
+    (type === 'iconSet' ? CF_ICON_DEFINITION_BYTES : 0) +
     256
   return {
     ok: true,
@@ -1589,6 +1748,7 @@ function readRuleInputs(
         cfvoMissingType,
         customIcons,
         iconProblem,
+        iconSetNode,
         colorScaleNode,
         dataBarNode,
         pairedBar: undefined,

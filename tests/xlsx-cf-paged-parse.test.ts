@@ -42,8 +42,16 @@ describe('paged CF capture', () => {
     const autoMinBase = '<conditionalFormatting sqref="J2:J6"><cfRule type="dataBar" priority="9"><dataBar><cfvo type="autoMin"/><cfvo type="max"/><color rgb="FF0000FF"/></dataBar></cfRule></conditionalFormatting>'
     const companion = `<x14:conditionalFormatting><x14:cfRule type="dataBar" id="${pairId}"><x14:dataBar minLength="0" maxLength="100" gradient="0" border="1" direction="leftToRight" axisPosition="middle" negativeBarBorderColorSameAsPositive="0"><x14:cfvo type="num"><xm:f>20</xm:f></x14:cfvo><x14:cfvo type="autoMax"/><x14:borderColor rgb="FF00B050"/><x14:negativeFillColor rgb="FFFF0000"/><x14:negativeBorderColor rgb="FFFFA500"/><x14:axisColor rgb="FF000000"/></x14:dataBar></x14:cfRule><xm:sqref>H2:H6</xm:sqref></x14:conditionalFormatting>`
     const standaloneBar = '<x14:conditionalFormatting><x14:cfRule type="dataBar" priority="10" id="{3B3B0019-0000-4000-8000-000000000002}"><x14:dataBar minLength="0" maxLength="100" gradient="0" negativeBarColorSameAsPositive="1" axisPosition="none"><x14:cfvo type="autoMin"/><x14:cfvo type="autoMax"/><x14:fillColor rgb="FF00B050"/></x14:dataBar></x14:cfRule><xm:sqref>K2:K6</xm:sqref></x14:conditionalFormatting>'
+    // Icon sets: a base 3Arrows set, a base x14-only family (3Stars) and a standalone x14 custom set carrying a NoIcons
+    // bucket, a `gte` flag and an `xm:f` threshold. Splits fall inside every <x14:cfIcon>, <x14:cfvo> and <xm:f> too.
+    const baseIconSet = '<conditionalFormatting sqref="L2:L6"><cfRule type="iconSet" priority="11"><iconSet iconSet="3Arrows"><cfvo type="percent" val="0"/><cfvo type="percent" val="33"/><cfvo type="percent" val="67"/></iconSet></cfRule></conditionalFormatting>'
+    const baseStars = '<conditionalFormatting sqref="M2:M6"><cfRule type="iconSet" priority="12"><iconSet iconSet="3Stars" reverse="1" showValue="0"><cfvo type="num" val="1"/><cfvo type="num" val="2" gte="0"/><cfvo type="num" val="3"/></iconSet></cfRule></conditionalFormatting>'
+    const customIconSet = '<x14:conditionalFormatting><x14:cfRule type="iconSet" priority="13" id="{3B3B0019-0000-4000-8000-000000000003}"><x14:iconSet iconSet="3Arrows" custom="1"><x14:cfvo type="num"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="num" gte="0"><xm:f>20</xm:f></x14:cfvo><x14:cfvo type="num"><xm:f>40</xm:f></x14:cfvo><x14:cfIcon iconSet="3Flags" iconId="0"/><x14:cfIcon iconSet="NoIcons" iconId="0"/><x14:cfIcon iconSet="3Stars" iconId="2"/></x14:iconSet></x14:cfRule><xm:sqref>N2:N6</xm:sqref></x14:conditionalFormatting>'
+    const standaloneStars = '<x14:conditionalFormatting><x14:cfRule type="iconSet" priority="14" id="{3B3B0019-0000-4000-8000-000000000004}"><x14:iconSet iconSet="3Stars" percent="0"><x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>33</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>67</xm:f></x14:cfvo></x14:iconSet></x14:cfRule><xm:sqref>O2:O6</xm:sqref></x14:conditionalFormatting>'
     const xml = wrap(
       base +
+        baseIconSet +
+        baseStars +
         twoColorScale +
         threeColorScale +
         themeScale +
@@ -54,13 +62,17 @@ describe('paged CF capture', () => {
         x14Scale +
         companion +
         standaloneBar +
+        customIconSet +
+        standaloneStars +
         '</x14:conditionalFormattings></ext></extLst>',
     )
     // Additive evidence: the scales keep production evidence, and the bars resolve, so a streamed bar that lost an
     // x14 attribute, colour or bound would differ from the resident one instead of both withholding alike.
     const meta: CfParseMeta = { sheetRightToLeft: false }
     await withInjectedCfEvidence(['bar:settings-schema-defaults', 'bar:settings-paired-precedence', 'bar:pairing-paired', 'bar:pairing-standalone',
-      'bar:pairing-base-only', 'bar:direction-ltr', 'bar:direction-context-ltr-sheet'], async () => {
+      'bar:pairing-base-only', 'bar:direction-ltr', 'bar:direction-context-ltr-sheet',
+      'icon:settings-schema-defaults', 'icon:dialect-base', 'icon:dialect-standalone', 'icon:dialect-base-x14-family', 'icon:custom-mapping',
+      'icon:custom-noicons', 'icon:attr-percent-false'], async () => {
       const expected = parseCfSheet(parseXml(xml), styles, createCfMemory(), meta).value
       const barOf = (priority: number) => expected.rules.find(r => r.priority === priority)!.definition
       expect(barOf(7)).toMatchObject({ kind: 'dataBar', bounds: [{ type: 'num', value: 20 }, { type: 'autoMax' }], showValue: false,
@@ -68,6 +80,14 @@ describe('paged CF capture', () => {
       expect(barOf(8)).toMatchObject({ kind: 'dataBar', bounds: [{ type: 'percentile', value: 10 }, { type: 'num', value: 90 }] })
       expect(barOf(9)).toMatchObject({ kind: 'unresolved', type: 'dataBar', reason: 'cf-unsupported-rule' })
       expect(barOf(10)).toMatchObject({ kind: 'dataBar', dialect: 'x14', bounds: [{ type: 'autoMin' }, { type: 'autoMax' }] })
+      const iconOf = (priority: number) => expected.rules.find(r => r.priority === priority)!.definition
+      expect(iconOf(11)).toMatchObject({ kind: 'iconSet', dialect: 'base', set: '3Arrows', showValue: true, percentAttr: true })
+      expect(iconOf(12)).toMatchObject({ kind: 'iconSet', dialect: 'base', set: '3Stars', reverse: true, showValue: false,
+        thresholds: [{ gte: true }, { bound: { type: 'num', value: 2 }, gte: false }, { gte: true }] })
+      expect(iconOf(13)).toMatchObject({ kind: 'iconSet', dialect: 'x14', set: '3Arrows',
+        custom: [{ set: '3Flags', iconId: 0 }, { set: 'NoIcons', iconId: 0 }, { set: '3Stars', iconId: 2 }],
+        thresholds: [{ bound: { type: 'num', value: 0 }, gte: true }, { bound: { type: 'num', value: 20 }, gte: false }, { bound: { type: 'num', value: 40 }, gte: true }] })
+      expect(iconOf(14)).toMatchObject({ kind: 'iconSet', dialect: 'x14', set: '3Stars', percentAttr: false })
       const bytes = new TextEncoder().encode(xml)
       // Every split point is exercised, so chunk boundaries fall inside each <x14:dataBar> too.
       for (let i = 0; i <= bytes.length; i++) {

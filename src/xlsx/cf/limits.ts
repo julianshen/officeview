@@ -24,6 +24,16 @@ export const CF_BAR_DEFINITION_BYTES: number = measurePayloadBytes({
   axisPosition: 'automatic', direction: 'rightToLeft', showValue: false, sheetRightToLeft: false, pairing: 'base-only', autoColors: ['negativeFill', 'axis'],
 })!
 
+/** Upper bound of one normalized icon-set definition's own fields (the rule origin is priced by the rule bound),
+ * DERIVED from the payload measurer for the largest shape: five thresholds with the longest bound spelling, five custom
+ * refs and the longest set names (Lesson 6). */
+export const CF_ICON_DEFINITION_BYTES: number = measurePayloadBytes({
+  kind: 'iconSet', set: '3TrafficLights1',
+  thresholds: Array.from({ length: 5 }, () => ({ bound: { type: 'percentile', value: 0 }, gte: false })),
+  reverse: false, showValue: false, percentAttr: false,
+  custom: Array.from({ length: 5 }, () => ({ set: '3TrafficLights1', iconId: 0 })), sheetRightToLeft: false,
+})!
+
 export const CF_LIMITS = Object.freeze({ rules: 4096, rangesPerRule: 256, rangesPerSheet: 16384,
   sheetMetadataBytes: 4 * 1024 ** 2, workbookMetadataBytes: 16 * 1024 ** 2,
   textUnits: 8192, formulaTokens: 4096, formulaChildren: 3, cfvo: 5, customIcons: 5,
