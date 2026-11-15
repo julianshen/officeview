@@ -18,8 +18,8 @@ import type { CfCellStateWire, SourceStore, CfReadResult } from '../view/contrac
 import { measureCfCellBytes, versionCfRules } from '../view/contracts'
 import type { SourceRect } from '../view/coordinates'
 import { describeCfUnavailable, describeCfWin, type CfDescriptor } from './describe'
-import { barHidesText, barPaintable, barWithheld, paintDataBars, type CfBarHost } from './dataBarPaint'
-import { admitBatchGlyphs, iconHidesText, iconPaintsOn, iconTextInset, paintIconCells, type CfAdmittedGlyphs, type CfIconGate } from './iconPaint'
+import { barPaintable, barWithheld, paintDataBars, type CfBarHost } from './dataBarPaint'
+import { admitBatchGlyphs, cfHidesText, iconPaintsOn, iconTextInset, paintIconCells, type CfAdmittedGlyphs, type CfIconGate } from './iconPaint'
 import { PackageError } from '../../core/package-error'
 
 const refused = (message: string): PackageError => new PackageError('resource-limit', message)
@@ -315,7 +315,7 @@ function assembleScope(
     // One predicate over both visuals (S4-L): a bar/icon showValue conflict (the 'showValue' token) keeps the text.
     hidesTextAt: (row, col, host, scale) => {
       if (disposed || !current() || states.get(row * 16384 + col)?.writes?.includes('showValue')) return false
-      return barHidesText(paintableAt(row, col), host, scale) || iconHidesText(iconCandidate(row, col), row, col, host, iconGate)
+      return cfHidesText(paintableAt(row, col), iconCandidate(row, col), row, col, host, scale, iconGate)
     },
     describe: (row, col) => {
       if (disposed || !current()) return undefined

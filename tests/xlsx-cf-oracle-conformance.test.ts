@@ -25,8 +25,8 @@ import { CF_LIMITS, createCfMemory } from '../src/xlsx/cf/limits'
 import { createCfService } from '../src/xlsx/cf/service'
 import type { CfBarDescriptor, CfCellState, CfOutcome } from '../src/xlsx/cf/model'
 import { cfRulesVersion } from '../src/xlsx/view/pagedSource'
-import { decodePngSync, isCellInSqref, loadBarScreenCapture, sampleBarGradients, type DecodedPng } from '../scripts/cf-refs/verify'
-import { CF_CASES, type CfManifest } from '../scripts/cf-refs/cases'
+import { decodePngSync, isCellInSqref, loadBarScreenCapture, sampleBarGradients, verifyCfCase, type DecodedPng } from '../scripts/cf-refs/verify'
+import { CF_CASES, CF_STAGE4_CAPABILITIES, type CfManifest } from '../scripts/cf-refs/cases'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const MANIFEST_PATH = join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json')
@@ -886,6 +886,31 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(checked).toBeGreaterThan(300)
   }, 60_000)
 
+  /**
+   * Ruling S4-PROD-ALIGN (Task 29 fix round 3), carried to Task 30's publication gate: for every geometry, inset and
+   * showValue capability, the reading production implements (`CF_ICON_PAINT_READINGS`, each pinned to behaviour in
+   * tests/xlsx-cf-icon-align.test.ts) equals the reading Excel matched, recomputed by `verifyCfCase` from the committed
+   * sidecar of the capability's owning case. Nothing is injected.
+   */
+  it('S4-PROD-ALIGN: production\'s icon readings equal the matched readings of the committed Stage 4 sidecars', async () => {
+    const { CF_ICON_PAINT_READINGS } = await import('../src/xlsx/cf/iconPaint')
+    const caps = Object.keys(CF_ICON_PAINT_READINGS)
+    expect(caps.length).toBe(12)
+    const byCase = new Map<string, ReturnType<typeof verifyCfCase>>()
+    for (const cap of caps) {
+      const owners = CF_STAGE4_CAPABILITIES.filter(e => e.capabilityId === cap)
+      expect(owners.length, `${cap}: one owning case`).toBe(1)
+      const caseId = owners[0]!.caseId
+      const c = manifest.cases.find(x => x.id === caseId)!
+      if (!byCase.has(caseId)) byCase.set(caseId, verifyCfCase(c, { rootDir: REPO_ROOT }))
+      const res = byCase.get(caseId)!
+      expect(res.kind, `${cap} (${caseId})`).toBe('verified')
+      const matched = res.kind === 'verified' ? res.matchedHypotheses?.[cap] : undefined
+      expect(matched, `${cap} (${caseId}): Excel's matched reading`).toBeDefined()
+      expect(CF_ICON_PAINT_READINGS[cap], `${cap} (${caseId}): production's reading`).toBe(matched)
+    }
+  }, 60_000)
+
   it('icon geometry conformance (Lesson 1): every Stage 4 cell has no icon and no inset until Task 29 measures the box', async () => {
     const { computeMetrics } = await import('../src/xlsx/render')
     const stage4 = manifest.cases.filter(c => c.stage === 4)
@@ -896,7 +921,9 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     // comparison (+-1 px box, exact text shift) replaces this for the pixel-measured cells.
     expect(verified.length).toBeGreaterThan(0)
     const { CF_ICON_RENDER_MODEL } = await import('../src/xlsx/cf/iconPaint')
-    expect(CF_ICON_RENDER_MODEL, 'Task 30 dependency: the measured icon model is not published').toEqual({})
+    // S4-PROD-ALIGN: the model carries the measured box variant and the 11 pt left inset, but no box size or offsets
+    // (ink is not the box: Task 28's glyphs place the ink), so no icon lays out and no icon cell is inset.
+    expect(CF_ICON_RENDER_MODEL, 'S4-PROD-ALIGN: only the evidence-determined values').toEqual({ box: { size: 'font', vertical: 'cell-align' }, leftInsetPt: { 11: 12 } })
     let checked = 0
     for (const c of stage4) {
       const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))

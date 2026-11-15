@@ -78,7 +78,7 @@ const paint = (sheet: XlsxSheet, batch: CfPaintBatch, view: 'static' | 'viewport
 }
 
 describe('CF_ICON_RENDER_MODEL equals the measured sidecars', () => {
-  it('the Stage 4 geometry and inset sidecars are captured, and the production model carries no measured value until Task 30 publishes it', () => {
+  it('the Stage 4 geometry and inset sidecars are captured, and the production model carries only the values they determine (S4-PROD-ALIGN)', () => {
     // The captures have landed (c63de53a) and record raw px, but no geometry capability can verify until the box
     // hypotheses exist (Task 29): every geometry claim is unverified. When one verifies, this fails and the comparison
     // against the sidecar is written here.
@@ -92,7 +92,8 @@ describe('CF_ICON_RENDER_MODEL equals the measured sidecars', () => {
       expect(cells.length, id).toBeGreaterThan(0)
       for (const e of cells) expect(['pixel-measured', 'non-discriminating', 'unverified'], id).toContain(e.iconEvidence!.geometry)
     }
-    expect(CF_ICON_RENDER_MODEL).toEqual({})
+    // S4-PROD-ALIGN: the measured box variant and the 11 pt left inset; no box size or offsets (ink is not the box).
+    expect(CF_ICON_RENDER_MODEL).toEqual({ box: { size: 'font', vertical: 'cell-align' }, leftInsetPt: { 11: 12 } })
     expect(Object.isFrozen(CF_ICON_RENDER_MODEL)).toBe(true)
     // Under every capability, the production model still lays nothing out (a default never ships as a measured fact).
     expect(layoutIcon(icon(), host(), { sizePt: 10, vertical: 'bottom', horizontal: 'right' }, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)).toBeUndefined()
@@ -111,14 +112,14 @@ describe('CF_ICON_RENDER_MODEL equals the measured sidecars', () => {
       expect(layoutIcon(icon(), host(), { ...font, horizontal }, AT_CAPTURE, STUB_MODEL, ALL), horizontal).toBeDefined()
       expect(layoutIcon(icon(), host(), { ...font, horizontal }, AT_CAPTURE, STUB_MODEL, c => c !== cap), horizontal).toBeUndefined()
     }
-    // A box the host cannot hold: narrow (8 px wide) and short (6 px tall) hosts need their clip measured.
+    // A box the host cannot hold: a narrow (8 px wide) host needs its clip measured; a short (6 px tall) row never
+    // clips, because Excel shrinks the box by an unmeasured law (S4-PROD-ALIGN, tests/xlsx-cf-icon-align.test.ts).
     const narrow = host({ width: 8 }), short = host({ height: 6 })
     expect(layoutIcon(icon(), narrow, font, AT_CAPTURE, STUB_MODEL, c => c !== 'icon:geometry-narrow-clip')).toBeUndefined()
     expect(layoutIcon(icon(), narrow, font, AT_CAPTURE, STUB_MODEL, ALL)).toBeDefined()
-    expect(layoutIcon(icon(), short, font, AT_CAPTURE, STUB_MODEL, c => c !== 'icon:geometry-short-row-clip')).toBeUndefined()
-    expect(layoutIcon(icon(), short, font, AT_CAPTURE, STUB_MODEL, ALL)).toBeDefined()
+    expect(layoutIcon(icon(), short, font, AT_CAPTURE, STUB_MODEL, ALL)).toBeUndefined()
     // Each model value the variant needs: absent, withheld.
-    for (const key of ['box', 'sizePt', 'offsetsPt', 'gapPt'] as const) {
+    for (const key of ['box', 'sizePt', 'offsetsPt', 'leftInsetPt'] as const) {
       const { [key]: _drop, ...partial } = STUB_MODEL
       expect(layoutIcon(icon(), host(), font, AT_CAPTURE, partial, ALL), key).toBeUndefined()
     }

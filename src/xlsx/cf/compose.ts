@@ -68,6 +68,8 @@ function* steps(
   let visualColorScale: { ruleId: number; argb: number } | undefined
   let visualDataBar: CfBarDescriptor | undefined
   let visualIconSet: CfIconDescriptor | undefined
+  /** Whether the icon won its slot ahead of the bar (priority order), for `icon:composition-bar-showvalue`. */
+  let iconAheadOfBar = false
   // Ruling S3-J: a bar carrying stopIfTrue is unresolved until its composition is measured (OD-1 analogue).
   const barStopMeasured = checkEvidence('bar:composition-bar-stopIfTrue')
   const scaleStopMeasured = checkEvidence('scale:composition-scale-stopIfTrue')
@@ -282,7 +284,7 @@ function* steps(
       if (!blocked && scaleFillPresent && !checkEvidence('icon:composition-with-scale')) blocked = true
       if (!blocked && (dxfFillPresent || fillUnknown) && !checkEvidence('icon:composition-dxf-fill')) blocked = true
       if (blocked || !value) tainted.add('iconSet')
-      else { visualIconSet = Object.freeze({ ruleId: rule.id, ...value }); won.add('iconSet') }
+      else { visualIconSet = Object.freeze({ ruleId: rule.id, ...value }); won.add('iconSet'); iconAheadOfBar = visualDataBar === undefined }
     } else if (isScale) {
       // Scale rule
       let blocked = fillsWithheld
@@ -322,9 +324,17 @@ function* steps(
   }
 
   // S4-I: a painted bar and a painted icon that disagree on showValue keep both descriptors, but whether the text is
-  // suppressed is unresolved (the text stays) until icon:composition-bar-showvalue.
-  if (visualDataBar && visualIconSet && visualDataBar.showValue !== visualIconSet.showValue && !checkEvidence('icon:composition-bar-showvalue')) {
-    tainted.add('showValue')
+  // suppressed is unresolved (the text stays) until icon:composition-bar-showvalue. Once measured, Ruling
+  // S4-PROD-ALIGN item 8: the reading is `priority-wins` (stage4-icon-geometry-2 H/I/J), so the higher-priority rule's
+  // showValue decides. Both descriptors carry that effective showValue, so the bar's and the icon's text hiding (the
+  // one predicate, `cfHidesText`) agree in every view, across the wire too.
+  if (visualDataBar && visualIconSet && visualDataBar.showValue !== visualIconSet.showValue) {
+    if (!checkEvidence('icon:composition-bar-showvalue')) tainted.add('showValue')
+    else {
+      const showValue = iconAheadOfBar ? visualIconSet.showValue : visualDataBar.showValue
+      visualDataBar = Object.freeze({ ...visualDataBar, showValue })
+      visualIconSet = Object.freeze({ ...visualIconSet, showValue })
+    }
   }
   const visual = visualColorScale || visualDataBar || visualIconSet ? Object.freeze({
     ...(visualColorScale ? { colorScale: Object.freeze(visualColorScale) } : {}),

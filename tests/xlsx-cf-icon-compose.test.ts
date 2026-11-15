@@ -131,6 +131,32 @@ describe('CF Stage 4 Task 26 — icon slot composition (S4-I, S4-J)', () => {
     })
   })
 
+  it('S4-PROD-ALIGN item 8: with icon:composition-bar-showvalue the higher-priority rule\'s showValue decides (priority-wins, stage4-icon-geometry-2 H/I/J)', () => {
+    // The matched reading of stage4-icon-geometry-2: H bar(0) ahead of icon(1) hides; I bar(1) ahead of icon(0) shows;
+    // J icon(1) ahead of bar(0) shows. Both descriptors carry the deciding showValue, so the bar's and the icon's text
+    // hiding (one predicate, `cfHidesText`) agree on every leg.
+    const cases = [
+      { name: 'H', rules: [barRule(1, 1), iconRule(2, 2)], outs: [ready({ ...bar, showValue: false }), iconOut], show: false },
+      { name: 'I', rules: [barRule(1, 1), iconRule(2, 2)], outs: [barOut, ready({ ...icon, showValue: false })], show: true },
+      { name: 'J', rules: [iconRule(1, 1), barRule(2, 2)], outs: [iconOut, ready({ ...bar, showValue: false })], show: true },
+      { name: 'icon(0) ahead of bar(1)', rules: [iconRule(1, 1), barRule(2, 2)], outs: [ready({ ...icon, showValue: false }), barOut], show: false },
+    ] as const
+    for (const c of cases) {
+      withExactCfEvidence(['icon:composition-with-bar', 'icon:composition-bar-showvalue'], () => {
+        const st = composeCell(c.rules as unknown as CfRule[], c.outs as unknown as CfOutcome<unknown>[])
+        expect(st.unresolvedWrites, c.name).toBeUndefined()
+        expect(st.visual?.dataBar?.showValue, `${c.name}: bar`).toBe(c.show)
+        expect(st.visual?.iconSet?.showValue, `${c.name}: icon`).toBe(c.show)
+      })
+      // Without the capability the conflict keeps its 'showValue' token (S4-SHOWVALUE-TOKEN), descriptors untouched.
+      withExactCfEvidence(['icon:composition-with-bar'], () => {
+        const st = composeCell(c.rules as unknown as CfRule[], c.outs as unknown as CfOutcome<unknown>[])
+        expect(st.unresolvedWrites?.has('showValue'), c.name).toBe(true)
+        expect(st.visual?.dataBar?.showValue === st.visual?.iconSet?.showValue, c.name).toBe(false)
+      })
+    }
+  })
+
   it('icon + scale / DXF fill → the fill paints, and the icon only with its capability', () => {
     for (const order of ['icon-first', 'fill-first'] as const) {
       for (const [fill, out, cap] of [[scaleRule, scaleOut, 'icon:composition-with-scale'], [(id: number, p: number) => dxfRule(id, p, RED_FILL), yes, 'icon:composition-dxf-fill']] as const) {

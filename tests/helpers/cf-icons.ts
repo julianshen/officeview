@@ -23,10 +23,12 @@ export const ICON_EVAL_EVIDENCE = [
 export const ICON_PAINT_EVIDENCE = [...CF_ICON_PAINT_CAPABILITIES, 'icon:inset-left', 'icon:inset-right-aligned', 'icon:inset-center']
 export const ICON_SHOWVALUE_EVIDENCE = 'icon:showvalue-canvas-suppression'
 
-/** A hypothetical model: a 9 pt box centred in the row, 2 pt in from the left gridline, the text 2 pt after it (13 pt
- * for every alignment). */
+/** Every font size a stub test uses gets the same hypothetical 13 pt inset. */
+const STUB_INSETS: Readonly<Record<number, number>> = Object.freeze(Object.fromEntries(Array.from({ length: 30 }, (_, i) => [i + 1, 13])))
+/** A hypothetical model: a 9 pt box centred in the row, 2 pt in from the left gridline, left and right-aligned text
+ * boxes 13 pt in (2 pt after the box); centred text keeps the whole cell (S4-PROD-ALIGN: `full-cell`). */
 export const STUB_MODEL: CfIconRenderModel = Object.freeze({
-  box: { size: 'fixed' as const, vertical: 'center' as const }, sizePt: 9, offsetsPt: { left: 2, top: 1, bottom: 1 }, gapPt: 2, alignedInsetPt: { right: 13, center: 13 },
+  box: { size: 'fixed' as const, vertical: 'center' as const }, sizePt: 9, offsetsPt: { left: 2, top: 1, bottom: 1 }, leftInsetPt: STUB_INSETS, rightInsetPt: STUB_INSETS,
 })
 /** 13 pt in logical px. */
 export const STUB_INSET_PX = 13 * 4 / 3

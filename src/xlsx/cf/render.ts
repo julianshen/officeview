@@ -5,8 +5,8 @@ import { cfRuntimeEvidence, type CfEvidenceGate } from './predicates'
 import { createCfService, type CfPaintStatistics } from './service'
 import { CF_LIMITS, createCfMemory, createCfWorkBudget, measureCfPayload, type CfMemory, type CfWorkBudget } from './limits'
 import { resolveCfCellStyle } from './dxf'
-import { barHidesText, barPaintable, barWithheld, CF_BAR_RENDER_MODEL, paintDataBars, type CfBarHost, type CfBarScale } from './dataBarPaint'
-import { admitBatchGlyphs, iconHidesText, iconPaintsOn, iconTextInset, paintIconCells, type CfAdmittedGlyphs, type CfIconGate } from './iconPaint'
+import { barPaintable, barWithheld, CF_BAR_RENDER_MODEL, paintDataBars, type CfBarHost, type CfBarScale } from './dataBarPaint'
+import { admitBatchGlyphs, cfHidesText, iconPaintsOn, iconTextInset, paintIconCells, type CfAdmittedGlyphs, type CfIconGate } from './iconPaint'
 import type { CfBarDescriptor, CfCellState, CfIconDescriptor, CfLiteral, CfPrepareRequest, CfStamp, CfValueSource, SourceRect } from './model'
 import type { XlsxSheet } from '../types'
 import type { RegionStyleLayer } from '../tableStyles/regionLayer'
@@ -520,7 +520,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
     const batchDecisions = {
       textInsetAt: (row: number, col: number, host: CfBarHost, scale: CfBarScale) => iconTextInset(iconCandidate(row, col), row, col, host, scale, gate),
       hidesTextAt: (row: number, col: number, host: CfBarHost, scale: CfBarScale) => !showValueConflict(row, col)
-        && (barHidesText(paintableAt(row, col), host, scale, allows) || iconHidesText(iconCandidate(row, col), row, col, host, gate)),
+        && cfHidesText(paintableAt(row, col), iconCandidate(row, col), row, col, host, scale, gate),
     }
     return { stamp, key: JSON.stringify([stamp.owner, stamp.sheetId, stamp.workbookValueGen, stamp.cfGen, stamp.viewGen, stamp.structureGen, stamp.clockGen]), layer,
       barAt,

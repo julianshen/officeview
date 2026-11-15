@@ -5,8 +5,10 @@
  *
  * - Exact or withheld (Lesson 2): an icon paints with Excel's measured box and inset, or not at all, with its text
  *   un-inset. The geometry lives in `CF_ICON_RENDER_MODEL`, whose values come from the Stage 4 sidecars
- *   (`refs/stage4-icon-geometry.json`, `refs/stage4-icon-inset.json`). None is captured yet (every Stage 4 case is
- *   recipe-pending), so the model carries no measured value and `layoutIcon` withholds every icon (S4-K, S4-L).
+ *   (`refs/stage4-icon-geometry{,-2}.json`, `refs/stage4-icon-inset.json`). Ruling S4-PROD-ALIGN (Task 29 fix round 3):
+ *   every geometry, inset and showValue capability behaves as the reading Excel matched (`CF_ICON_PAINT_READINGS`);
+ *   the model holds only the values the captures determine, and the box size and offsets are not among them (ink is
+ *   not the box), so `layoutIcon` still withholds every icon (S4-K, S4-L).
  * - One predicate on one host (S4-L, Lesson 11): `iconWithheld` decides, from the host the frame lays the cell out in,
  *   whether the icon paints; the inset, the paint and the text hiding all ask it, so no inset exists without an icon
  *   and no icon without its inset. It is decided at the capture scale (1 device px per pt), so every view and zoom
@@ -14,10 +16,10 @@
  *   and sparklines do (OD-8: fidelity unverified there, buckets exact).
  * - The glyphs are Task 28's (`iconGlyphs.ts`); with no glyph an icon is withheld.
  */
-import type { CfIconDescriptor } from './model'
+import type { CfBarDescriptor, CfIconDescriptor } from './model'
 import { hasEvidence as defaultHasEvidence } from './evidence'
 import { admitIconGlyphs, drawIconGlyph, iconGlyph, type CfGlyphCache, type CfIconGlyph, type CfIconRect } from './iconGlyphs'
-import type { CfBarHost, CfBarScale } from './dataBarPaint'
+import { barHidesText, type CfBarHost, type CfBarScale } from './dataBarPaint'
 import type { CfMemory, CfWorkBudget } from './limits'
 import type { XlsxCell } from '../types'
 
@@ -38,20 +40,63 @@ export interface CfIconRenderModel {
   readonly sizePt?: number
   /** The box's offsets from the host's left gridline, its top and its bottom (pt). */
   readonly offsetsPt?: Readonly<{ left: number; top: number; bottom: number }>
-  /** `icon:inset-left`: the gap between the box and a left-aligned text box (pt): the text box starts at
-   * `offsets.left + side + gap`. */
-  readonly gapPt?: number
-  /** `icon:inset-right-aligned` / `icon:inset-center`: the left inset of a right-aligned (general number) or centred text
-   * box (pt), measured separately; absent: unmeasured, withheld. */
-  readonly alignedInsetPt?: Readonly<{ right?: number; center?: number }>
+  /** `icon:inset-left`: the left inset of a left-aligned text box (pt), measured per font size (key: the font size in
+   * pt). It is the text's own measured shift, independent of the box; a font size without an entry withholds. */
+  readonly leftInsetPt?: Readonly<Record<number, number>>
+  /** `icon:inset-right-aligned`: the left inset of a right-aligned text box (pt) per font size. It decides only whether
+   * a number still fits (the text itself stays where it is: `unshifted`); a font size without an entry withholds. */
+  readonly rightInsetPt?: Readonly<Record<number, number>>
 }
 
-/** Values from the Stage 4 sidecars. None is captured yet, so the model is empty: every branch that needs a value
- * withholds (S4-K: a default never ships as a measured fact). */
-export const CF_ICON_RENDER_MODEL: CfIconRenderModel = Object.freeze({})
+/**
+ * Values from the Stage 4 sidecars (Ruling S4-PROD-ALIGN). Each value cites its source; everything the evidence does
+ * not determine is absent, so the branch that needs it withholds (S4-K: a default never ships as a measured fact).
+ *
+ * - `box`: `icon:geometry-box` matched `font` and `icon:geometry-vertical-align` matched `cell-align`
+ *   (`refs/stage4-icon-geometry-2.json`, B..D and E..G).
+ * - `leftInsetPt[11] = 12`: the text ink shift of left-aligned 11 pt text against its control is +12 px at 1 px/pt,
+ *   so 12 pt (`refs/stage4-icon-inset.json` B2..B4 and NoIcons F2..F4; `refs/stage4-icon-geometry-2.json` I2, I5, I6,
+ *   J2, J5, J6 at row heights 20 and 30 pt). No other font size was measured.
+ * - Absent: `sizePt` (§12 bounds the ink-width scale only to k ∈ [0.95, 1] for 5Boxes:2, and 3Arrows:2's ink is 11×12
+ *   at 11 pt, so the box side is not the ink and is not determined), `offsetsPt` (ink offsets differ by glyph: 3Arrows:2
+ *   2 px in, 5Boxes:2 3 px in, from the same gridline), and `rightInsetPt` (right-aligned text is `unshifted` whatever
+ *   the inset, so the captures cannot measure it; `stage4-icon-inset` E shows only that a '#' fill follows the icon).
+ */
+export const CF_ICON_RENDER_MODEL: CfIconRenderModel = Object.freeze({
+  box: Object.freeze({ size: 'font', vertical: 'cell-align' }),
+  leftInsetPt: Object.freeze({ 11: 12 }),
+})
 
-/** The cell-independent paint gates. `icon:geometry-snapping` covers the device-grid snapping as for bars. */
-export const CF_ICON_PAINT_CAPABILITIES: readonly string[] = Object.freeze(['icon:geometry-box', 'icon:geometry-vertical-align', 'icon:geometry-snapping'])
+/**
+ * The cell-independent paint gates. Ruling S4-SNAP-SHARED: `icon:geometry-snapping` cannot discriminate in Excel's
+ * captures (whole-pt column widths: every rounding agrees), so the gate is the verified `bar:geometry-snapping`. Icons
+ * are laid out on the same `roundHalfUp` sheet-global device grid as bars (`layoutIcon`, `layoutDataBar`); the cost if
+ * Excel snaps icons differently is at most 1 px of icon edge at a non-100 % zoom.
+ */
+export const CF_ICON_PAINT_CAPABILITIES: readonly string[] = Object.freeze(['icon:geometry-box', 'icon:geometry-vertical-align', 'bar:geometry-snapping'])
+
+/**
+ * Ruling S4-PROD-ALIGN: the reading production implements for each Stage 4 geometry, inset and showValue capability,
+ * named as `scripts/cf-refs/verify.ts` `ICON_GEOMETRY_READINGS` names it. Each equals the reading Excel 16.115 matched
+ * (tests/xlsx-cf-oracle-conformance.test.ts recomputes it from the committed sidecars), and each is pinned to behaviour
+ * in tests/xlsx-cf-icon-align.test.ts. Task 30 publishes a capability only while the two agree.
+ */
+export const CF_ICON_PAINT_READINGS: Readonly<Record<string, string>> = Object.freeze({
+  'icon:geometry-box': 'font',
+  'icon:geometry-vertical-align': 'cell-align',
+  'icon:geometry-narrow-clip': 'clip',
+  // A row shorter than the box is never clipped. Excel shrinks the box, by a law the captures do not determine (L5 and
+  // stage4-icon-geometry D2 shrink, C2 does not), so such a box withholds until that law is measured.
+  'icon:geometry-short-row-clip': 'shrink',
+  'icon:inset-left': 'inset',
+  'icon:inset-right-aligned': 'unshifted',
+  'icon:inset-center': 'full-cell',
+  'icon:inset-overflow': 'icon-and-text',
+  'icon:noicons-inset': 'inset',
+  'icon:noicons-showvalue': 'text-hidden',
+  'icon:showvalue-canvas-suppression': 'text-hidden',
+  'icon:composition-bar-showvalue': 'priority-wins',
+})
 
 let testModel: CfIconRenderModel | null = null
 /** Test hook: the model batches paint with (`null` restores `CF_ICON_RENDER_MODEL`). Task 30 publishes the measured one. */
@@ -113,12 +158,8 @@ export function layoutIcon(icon: CfIconDescriptor, host: CfBarHost, font: CfIcon
   if (!vertical) return undefined
   const sidePt = variant.size === 'fixed' ? model.sizePt! : variant.size === 'font' ? model.sizePt! * font.sizePt : host.height / PT_PX - off.top - off.bottom
   if (!(sidePt > 0) || !Number.isFinite(sidePt)) return undefined
-  // The text-box inset for this alignment: each alignment is its own measured capability (S4-L).
-  let insetPt: number | undefined
-  if (font.horizontal === 'left') insetPt = check('icon:inset-left') && model.gapPt !== undefined ? off.left + sidePt + model.gapPt : undefined
-  else if (font.horizontal === 'right') insetPt = check('icon:inset-right-aligned') ? model.alignedInsetPt?.right : undefined
-  else if (font.horizontal === 'center') insetPt = check('icon:inset-center') ? model.alignedInsetPt?.center : undefined
-  if (insetPt === undefined || !Number.isFinite(insetPt) || insetPt < 0) return undefined
+  const insetPt = slotInsetPt(font, model, check)
+  if (insetPt === undefined) return undefined
   const dev = (pt: number): number => roundHalfUp(pt * devPerPt)
   const X0 = roundHalfUp(host.x * devPerPx), X1 = roundHalfUp((host.x + host.width) * devPerPx)
   const Y0 = roundHalfUp(host.y * devPerPx), Y1 = roundHalfUp((host.y + host.height) * devPerPx)
@@ -127,19 +168,46 @@ export function layoutIcon(icon: CfIconDescriptor, host: CfBarHost, font: CfIcon
   const L = X0 + dev(off.left), R = L + side
   const T = vertical === 'top' ? Y0 + dev(off.top) : vertical === 'bottom' ? Y1 - dev(off.bottom) - side : Y0 + roundHalfUp((Y1 - Y0 - side) / 2)
   const B = T + side
-  // A box the host cannot hold is clipped only where that clip was measured (S4-K edge cases).
+  // A box the host cannot hold: a narrow host clips it where that clip was measured (`icon:geometry-narrow-clip`
+  // reads `clip`). A short row never clips: Excel shrinks the box (`icon:geometry-short-row-clip` reads `shrink`) by a
+  // law the captures do not determine, so the box withholds (S4-PROD-ALIGN).
   if (atCapture && R > X1 && !check('icon:geometry-narrow-clip')) return undefined
-  if (atCapture && (T < Y0 || B > Y1) && !check('icon:geometry-short-row-clip')) return undefined
+  if (atCapture && (T < Y0 || B > Y1)) return undefined
   const out = scale.output === 'device' ? (v: number) => v : (v: number) => v / devPerPx
   return { box: { x: out(L), y: out(T), w: out(side), h: out(side) }, inset: { left: insetPt * PT_PX, right: 0 } }
 }
 
 /**
+ * The left inset (pt) of the text box beside the icon slot, for this text placement, or undefined when it is
+ * unmeasured. Each alignment is its own capability (S4-L), read as Excel matched it (S4-PROD-ALIGN): left text is
+ * inset by the measured inset; a right-aligned number keeps its position (`unshifted`), its box narrowed by the
+ * right-aligned inset; centred text is laid out over the whole cell (`full-cell`: no inset).
+ */
+function slotInsetPt(font: CfIconText, model: CfIconRenderModel, check: (cap: string) => boolean): number | undefined {
+  const v = font.horizontal === 'left' ? (check('icon:inset-left') ? model.leftInsetPt?.[font.sizePt] : undefined)
+    : font.horizontal === 'right' ? (check('icon:inset-right-aligned') ? model.rightInsetPt?.[font.sizePt] : undefined)
+      : font.horizontal === 'center' ? (check('icon:inset-center') ? 0 : undefined) : undefined
+  return v !== undefined && Number.isFinite(v) && v >= 0 ? v : undefined
+}
+
+/**
+ * Whether the host's text may be laid out beside the slot inset: it fits, or (`icon:inset-overflow` reads
+ * `icon-and-text`) it is a number, which Excel lays out in the inset box as its '#' fill beside the icon
+ * (`stage4-icon-inset` E). A string that would not fit is unmeasured; an unknown width withholds.
+ */
+function slotTextFits(host: CfBarHost, insetLeftPx: number, check: (cap: string) => boolean): boolean {
+  const width = host.textWidth
+  if (width === undefined || !Number.isFinite(width) || width < 0) return false
+  if (width <= host.width - CF_ICON_TEXT_PADDING_PX - insetLeftPx) return true
+  return check('icon:inset-overflow') && typeof host.cell?.value === 'number' && host.cell.valueIsError !== true
+}
+
+/**
  * The exact predicate painting withholds by (S4-L): the icon does not paint on this host. It is decided before layout
  * from the placement box and everything known there: evidence, the host rect, the glyph, the host's text style and the
- * un-inset `textWidth` the `icon:inset-overflow` fallback needs. Until that overflow outcome is measured, a host whose
- * inset text would not fit (or whose width is unknown) withholds its icon and keeps its text un-inset. An unknown host
- * withholds (fail closed). `NoIcons` never paints, insets or hides (S4-L).
+ * un-inset `textWidth`. A host whose inset text would not fit keeps its icon only under `icon:inset-overflow`
+ * (`icon-and-text`, numbers only); an unknown width withholds. An unknown host withholds (fail closed). `NoIcons` never
+ * paints; its inset and text hiding are `noIconsInset` and `iconHidesText` (S4-PROD-ALIGN).
  */
 export function iconWithheld(icon: CfIconDescriptor, host: CfBarHost | undefined, check: (cap: string) => boolean = defaultHasEvidence,
   model: CfIconRenderModel = iconRenderModel()): boolean {
@@ -148,9 +216,21 @@ export function iconWithheld(icon: CfIconDescriptor, host: CfBarHost | undefined
   if (!font) return true
   const laid = layoutIcon(icon, host, font, CAPTURE_SCALE, model, check)
   if (!laid) return true
-  const width = host.textWidth
-  if (width === undefined || !Number.isFinite(width) || width < 0) return true
-  return width > host.width - CF_ICON_TEXT_PADDING_PX - laid.inset.left - laid.inset.right
+  return !slotTextFits(host, laid.inset.left + laid.inset.right, check)
+}
+
+/**
+ * `icon:noicons-inset` reads `inset` (S4-PROD-ALIGN, a ledgered deviation from the spec §6 wording "not NoIcons"): a
+ * NoIcons cell's text is inset as if an icon were present, by the same alignment inset and under the same fit rule.
+ * It needs no box or glyph, so it is decided on the host alone. Undefined: no inset (unmeasured, or the capability).
+ */
+export function noIconsInset(icon: CfIconDescriptor, host: CfBarHost | undefined, check: (cap: string) => boolean = defaultHasEvidence,
+  model: CfIconRenderModel = iconRenderModel()): { left: number; right: number } | undefined {
+  if (icon.set !== 'NoIcons' || !host || !check('icon:noicons-inset')) return undefined
+  const font = iconTextOf(host.cell)
+  const insetPt = font && slotInsetPt(font, model, check)
+  if (insetPt === undefined) return undefined
+  return slotTextFits(host, insetPt * PT_PX, check) ? { left: insetPt * PT_PX, right: 0 } : undefined
 }
 
 /** The glyph classes a batch admitted (Ruling S4-R): one charge per class, at preparation. */
@@ -198,16 +278,32 @@ export function iconPaintsOn(icon: CfIconDescriptor | undefined, row: number, co
   return !gate.hasBar(row, col) || check('icon:composition-with-bar')
 }
 
-/** The text inset of a host whose icon paints, else undefined (no icon, no inset). */
+/** The text inset of a host whose icon paints (or of a NoIcons cell, `noIconsInset`), else undefined (no icon, no inset). */
 export function iconTextInset(icon: CfIconDescriptor | undefined, row: number, col: number, host: CfBarHost, scale: CfBarScale, gate: CfIconGate): { left: number; right: number } | undefined {
+  if (icon?.set === 'NoIcons') return noIconsInset(icon, host, gate.check ?? defaultHasEvidence)
   if (!iconPaintsOn(icon, row, col, host, gate)) return undefined
   return layoutIcon(icon, host, iconTextOf(host.cell)!, scale, iconRenderModel(), gate.check ?? defaultHasEvidence)?.inset
 }
 
-/** S4-L: the canvas hides the value only under an icon that paints here, whose `showValue` is false, with evidence. */
+/**
+ * S4-L: the canvas hides the value only under an icon that paints here, whose `showValue` is false, with evidence. A
+ * NoIcons cell paints nothing, yet `icon:noicons-showvalue` reads `text-hidden`: its `showValue="0"` hides the value.
+ */
 export function iconHidesText(icon: CfIconDescriptor | undefined, row: number, col: number, host: CfBarHost, gate: CfIconGate): boolean {
   const check = gate.check ?? defaultHasEvidence
-  return icon?.showValue === false && check('icon:showvalue-canvas-suppression') && iconPaintsOn(icon, row, col, host, gate)
+  if (icon?.showValue !== false) return false
+  if (icon.set === 'NoIcons') return check('icon:noicons-showvalue')
+  return check('icon:showvalue-canvas-suppression') && iconPaintsOn(icon, row, col, host, gate)
+}
+
+/**
+ * The one text-hiding predicate every view asks (S4-L, S4-PROD-ALIGN item 8): the bar's (S3-O) or the icon's. Where a
+ * bar and an icon both win, composition has already given both descriptors the higher-priority rule's `showValue`
+ * (`icon:composition-bar-showvalue` reads `priority-wins`), so the two painters agree; an unmeasured conflict carries
+ * the 'showValue' token and the caller keeps the text.
+ */
+export function cfHidesText(bar: CfBarDescriptor | undefined, icon: CfIconDescriptor | undefined, row: number, col: number, host: CfBarHost, scale: CfBarScale, gate: CfIconGate): boolean {
+  return barHidesText(bar, host, scale, gate.check ?? defaultHasEvidence) || iconHidesText(icon, row, col, host, gate)
 }
 
 /**
