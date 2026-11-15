@@ -436,7 +436,10 @@ describe('showValue=0 hides canvas text only where an icon paints (S4-L)', () =>
   it('a bar and an icon with conflicting showValue keep the text until icon:composition-bar-showvalue is verified', async () => {
     const sheet = () => iconSheet([10, 50, 90], { def: { showValue: false }, extraRules: [{ ...barRule({ firstRow: 0, lastRow: 2, firstCol: 0, lastCol: 0 }, { axisArgb: 0xffffffff, showValue: true }, 2), priority: 2, documentOrder: 1 }] })
     const got = await run({ extra: [ICON_SHOWVALUE_EVIDENCE, 'bar:showvalue-canvas-suppression'] }, sheet)
-    for (const view of ['static', 'viewport'] as const) expect(got[view].texts.map(t => t.text), view).toEqual(['10', '50', '90'])
+    for (const view of ['static', 'viewport'] as const) {
+      expect(got[view].icons.length, `${view}: the icons do paint`).toBe(3)
+      expect(got[view].texts.map(t => t.text), view).toEqual(['10', '50', '90'])
+    }
   })
 })
 

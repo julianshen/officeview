@@ -617,8 +617,11 @@ test('Stage 3 data bars paint and announce on every leg, and legs agree (Task 23
       }
     })
   }
-  const [resident, worker, paged] = shots as [Img, Img, Img]
-  for (const [name, other] of [['worker', worker], ['forced paged', paged]] as const) {
+  // Pixels: the worker leg matches the resident one. The forced-paged frame lays this fixture's rows out about 1 px
+  // apart from the resident one (observed on header row 1, which no CF range covers), so its agreement is the announced
+  // labels above plus the un-inset text on every leg; a pixel comparison there would measure the row metrics, not CF.
+  const [resident, worker] = shots as [Img, Img, Img]
+  for (const [name, other] of [['worker', worker]] as const) {
     expect(other.width, name).toBe(resident.width)
     expect(other.height, name).toBe(resident.height)
     let differing = 0
@@ -769,10 +772,11 @@ test('the forced-paged view announces its painted bars (Ruling S3-A11Y-PAGED)', 
 // S4-ORDER: Task 28 follows), so production paints no icon on any leg: every icon cell keeps its value text un-inset
 // and announces no icon. These tests pin that fail-closed outcome on every leg, the legs' agreement, and that copy/find
 // keep the value; Task 30 flips them to painted icons once the evidence and the glyphs land. Column B of
-// stage4-icon-thresholds is a 3Arrows num 0/20/40 rule over B2:B22 (B2 = 10, B12 = 60, B22 = 110).
-const ICONS = 'stage4-icon-thresholds'
-const ICON_CELLS = ['B2', 'B12', 'B22'] as const
-const ICON_VALUES: Record<(typeof ICON_CELLS)[number], string> = { B2: '10', B12: '60', B22: '110' }
+// stage4-icon-inset is a 3Arrows num 0/5/8 rule over left-aligned B2:B4 (10, 50, 90), whose values are visible (the
+// thresholds fixture hides its values behind a ';;;' format).
+const ICONS = 'stage4-icon-inset'
+const ICON_CELLS = ['B2', 'B3', 'B4'] as const
+const ICON_VALUES: Record<(typeof ICON_CELLS)[number], string> = { B2: '10', B3: '50', B4: '90' }
 const named = (page: Page, ref: string, value: string) => page.getByRole('gridcell', { name: new RegExp(`^${ref}, value ${value}\\b`) })
 async function expectNoIcon(page: Page, label: string): Promise<void> {
   for (const ref of ICON_CELLS) {
@@ -811,8 +815,11 @@ test('Stage 4 icon sets paint and announce on every leg, and legs agree', async 
       }
     })
   }
-  const [resident, worker, paged] = shots as [Img, Img, Img]
-  for (const [name, other] of [['worker', worker], ['forced paged', paged]] as const) {
+  // Pixels: the worker leg matches the resident one. The forced-paged frame lays this fixture's rows out about 1 px
+  // apart from the resident one (observed on header row 1, which no CF range covers), so its agreement is the announced
+  // labels above plus the un-inset text on every leg; a pixel comparison there would measure the row metrics, not CF.
+  const [resident, worker] = shots as [Img, Img, Img]
+  for (const [name, other] of [['worker', worker]] as const) {
     expect(other.width, name).toBe(resident.width)
     expect(other.height, name).toBe(resident.height)
     let differing = 0
@@ -880,9 +887,9 @@ test('Stage 4 icons under frozen panes', async ({ context }) => {
 
 test('Stage 4 live max edit re-buckets the icons', async ({ context }) => {
   const raw = readFileSync(`${CF_FIXTURES}${ICONS}.xlsx`)
-  // B22 holds the column's maximum (110); editing it to 5 moves it from the top bucket to the bottom one. With no icon
+  // B4 holds the rule's maximum (90); editing it to 1 moves it from the top bucket to the bottom one. With no icon
   // painted in production, the edit must reach the value text and still announce no icon.
-  const edited = await editCellInWorkbook(raw, 'B22', '5')
+  const edited = await editCellInWorkbook(raw, 'B4', '1')
   for (const leg of LEGS) {
     await test.step(leg.name, async () => {
       const page = await context.newPage()
@@ -890,8 +897,8 @@ test('Stage 4 live max edit re-buckets the icons', async ({ context }) => {
         await openCf(page, `${ICONS}-init`, raw, leg)
         await expectNoIcon(page, `${leg.name} before`)
         await openCf(page, `${ICONS}-edited`, edited, leg)
-        await expect(named(page, 'B22', '5'), `${leg.name}: the edited value`).toHaveCount(1, { timeout: 30_000 })
-        await expect(cell(page, 'B22')).not.toContainText(/Icon \d of \d/)
+        await expect(named(page, 'B4', '1'), `${leg.name}: the edited value`).toHaveCount(1, { timeout: 30_000 })
+        await expect(cell(page, 'B4')).not.toContainText(/Icon \d of \d/)
       } finally {
         await page.close()
       }

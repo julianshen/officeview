@@ -819,7 +819,15 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
    * loops are recorded as vacuous; the checked half is that every pending, refused or non-discriminating cell has no
    * painted icon and no inset under production evidence, in the paint batch every view uses.
    */
-  it('icon geometry and bucket conformance (Lesson 1): every unmeasured Stage 4 cell has no icon and no inset', async () => {
+  it('icon bucket conformance (Lesson 1): no pixel-classified cell exists yet; the CF_ICON_GLYPH_CLASSES mapping waits on Task 28', () => {
+    // When a case verifies, every pixel-classified cell's production visual.iconSet must map, through Task 28's
+    // CF_ICON_GLYPH_CLASSES (from the glyph-key sidecar), to the sidecar's glyph class. Recorded as vacuous until then.
+    const classified = manifest.cases.filter(c => c.stage === 4).flatMap(c => c.expected.cells.filter(e => e.iconEvidence?.bucket === 'pixel-classified').map(e => `${c.id}:${e.ref}`))
+    expect(classified).toEqual([])
+    expect(existsSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/refs/stage4-icon-glyph-key.json'))).toBe(false)
+  })
+
+  it('icon geometry conformance (Lesson 1): every unmeasured Stage 4 cell has no icon and no inset', async () => {
     const { computeMetrics } = await import('../src/xlsx/render')
     const stage4 = manifest.cases.filter(c => c.stage === 4)
     const verified = stage4.filter(c => c.status === 'measured')
