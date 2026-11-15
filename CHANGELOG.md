@@ -19,9 +19,9 @@ in git history.
   own oracle workbooks production's icon equals Excel's glyph class on 549 cells and disagrees on none. The icons are
   original vector glyphs (no Microsoft artwork), drawn to Excel's measured frame and colours; 39 of the 54 glyph
   classes pass the approximation check and the other 15 (stars, ratings, flags and a few redrawn classes) stay
-  withheld. An icon paints only on the measured geometry: Calibri 11 regular, centred, on 15, 18 or 30 pt rows
-  (including the sheet default height), with left text or short right-aligned numbers; everything else, bottom-aligned
-  cells included, keeps its base formatting with no icon. A painted icon announces 「圖示 b/k」 / "Icon b of k";
+  withheld. An icon paints only on the measured geometry: Calibri 11 regular on 15, 18 or 30 pt rows (including the
+  sheet default height), centred, or bottom-aligned on a row whose every cell is Calibri 11 regular, with left text or
+  short right-aligned numbers; everything else keeps its base formatting with no icon. A painted icon announces 「圖示 b/k」 / "Icon b of k";
   a withheld one announces "Conditional formatting unavailable". Details are in `docs/validation/xlsx-cf.md` §12–§13.
 
 - **Excel data bars (view-only).** Conditional formatting data bars now paint in resident, worker-backed and paged

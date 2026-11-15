@@ -27,7 +27,8 @@ import type { XlsxDocument } from '../src/xlsx/types'
 import { parseRangeA1, parseA1, type CfObservedBar, type CfObservedIcon } from './cf-refs/verify'
 import type { CfManifest, CfOracleCase } from './cf-refs/cases'
 import { CF_MANIFEST_PATH } from './cf-refs/generate'
-import { verifyCfCase } from './cf-refs/verify'
+import { ICON_NO_ICON_MEMBER, iconTwinSetMembers, isCellInSqref, observedIconClass, verifyCfCase } from './cf-refs/verify'
+import { CF_ICON_SET_NAMES } from '../src/xlsx/cf/model'
 import {
   COMPARE_SCALE,
   CSS_PX_PER_PT,
@@ -102,6 +103,11 @@ function sha256Hex(lines: string[]): string {
  */
 export interface ActualCellOutcome {
   applied: boolean
+  /** Task 30 fix round: an icon-set rule covers the cell. Then `icon` is production's claim (the family and id it
+   * evaluated, or null for no icon) and `iconWithheld` marks a tainted or unresolved icon slot. */
+  iconCell?: boolean
+  icon?: { set: string; iconId: number } | null
+  iconWithheld?: boolean
   unresolved?: boolean
   style?: {
     fillColor?: string
@@ -116,11 +122,29 @@ export interface ActualCellOutcome {
 export function verifyCellExpectations(
   c: CfOracleCase,
   actualAt: (row: number, col: number) => ActualCellOutcome,
+  /** Task 30 fix round: Excel's observed icon class per ref (`observedIconClass`: a class, a twin set, or null). */
+  iconObserved?: ReadonlyMap<string, string | null>,
 ): string | undefined {
   for (const exp of c.expected.cells) {
     const pos = parseA1(exp.ref)
     if (!pos) return `Invalid cell reference: ${exp.ref}`
     const actual = actualAt(pos.row, pos.col)
+    // An icon is no cell style (S4-I): an icon cell is compared on whether an icon is drawn (Excel's `iconApplied`), and
+    // on its style expectations only when it has some. A withheld icon slot is allowed (fail closed); the glyph class
+    // itself is compared in tests/xlsx-cf-oracle-conformance.test.ts.
+    if (actual.iconCell) {
+      if (actual.unresolved || actual.iconWithheld) continue
+      const drawn = actual.icon !== undefined && actual.icon !== null && actual.icon.set !== 'NoIcons'
+      // Excel's evidence is the sidecar's observed class (the `iconApplied` labels are seeds, unreliable on faint and
+      // text-only cells): an icon, no icon (null, only on a classified cell), or a twin set that may hold no icon.
+      const obs = iconObserved?.get(exp.ref.toUpperCase())
+      const twins = iconTwinSetMembers(obs)
+      const decided = obs !== undefined && obs !== 'icon-class-none' && obs !== 'icon-class-ambiguous' && obs !== 'unclassified'
+        && !(obs === null && exp.iconEvidence?.bucket !== 'pixel-classified') && !(twins && twins.includes(ICON_NO_ICON_MEMBER))
+      if (decided && drawn !== (obs !== null)) return `Cell ${exp.ref}: Excel ${obs === null ? 'draws no icon' : `draws ${obs}`}, but production ${drawn ? 'draws an icon' : 'draws no icon'}`
+      const styled = exp.fillRgb !== undefined || exp.fontRgb !== undefined || exp.bold !== undefined || exp.underline !== undefined || exp.strikethrough !== undefined || exp.borderTop !== undefined || exp.borderBottom !== undefined
+      if (!styled) continue
+    }
     if (exp.matched) {
       if (actual.unresolved) continue
       if (!actual.applied) {
@@ -263,7 +287,9 @@ export function verifyCaseCells(
     if (!observed) return `Stage 2 case ${c.id}: Excel observation sidecar${cap?.sidecarPath ? ` ${cap.sidecarPath}` : ''} is missing; nothing to verify against`
     if (observed.size === 0) return `Stage 2 case ${c.id}: sidecar has no trusted excel-display-format fills; nothing to verify against`
   }
-  if (!observed) return verifyCellExpectations(c, actualAt)
+  const icons = c.stage === 4 ? stage4ObservedIcons(c, rootDir) : undefined
+  const iconObserved = icons ? new Map([...icons].map(([ref, o]) => [ref.toUpperCase(), observedIconClass(o)] as const)) : undefined
+  if (!observed) return verifyCellExpectations(c, actualAt, iconObserved)
   const contradicted = new Set(
     c.expected.cells.filter(e => e.matched && e.scaleApplied && observed.get(e.ref) === 'FFFFFFFF').map(e => e.ref),
   )
@@ -336,7 +362,7 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
     release: () => { for (const l of leases) l.release() },
   }
   const lines: string[] = []
-  const outcomes = new Map<string, { kind: string; properties: Record<string, unknown>; writes: string[] }>()
+  const outcomes = new Map<string, { kind: string; properties: Record<string, unknown>; writes: string[]; icon?: { set: string; iconId: number } | null }>()
   try {
     for (let row = rect.minRow; row <= rect.maxRow; row++) {
       for (let col = rect.minCol; col <= rect.maxCol; col++) {
@@ -348,7 +374,8 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
           const writes = outcome.value.unresolvedWrites ? [...outcome.value.unresolvedWrites].sort().join('+') : ''
           const cs = outcome.value.visual?.colorScale
           lines.push(`${row},${col}:ready:${values}|${writes}${cs ? `|scale:${cs.ruleId}:${(cs.argb >>> 0).toString(16)}:${cs.fraction ?? ''}` : ''}`)
-          outcomes.set(`${row},${col}`, { kind: 'ready', properties: props, writes: outcome.value.unresolvedWrites ? [...outcome.value.unresolvedWrites] : [] })
+          const ic = outcome.value.visual?.iconSet
+          outcomes.set(`${row},${col}`, { kind: 'ready', properties: props, writes: outcome.value.unresolvedWrites ? [...outcome.value.unresolvedWrites] : [], icon: ic ? { set: ic.set, iconId: ic.iconId } : null })
         } else {
           lines.push(`${row},${col}:${outcome.kind}:${outcome.kind === 'unresolved' ? outcome.reason : ''}`)
           outcomes.set(`${row},${col}`, { kind: outcome.kind, properties: {}, writes: [] })
@@ -400,7 +427,9 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
       || outcome.kind === 'unresolved'
       || (outcome.writes && outcome.writes.length > 0)
       || desc?.key === 'cf-unavailable'
-    return { applied, unresolved, style: hasStyle ? style : undefined }
+    const iconCell = c.markers.some(m => m.ruleType === 'iconSet' && isCellInSqref(`${String.fromCharCode(65 + col)}${row + 1}`, m.sqref))
+    const iconWithheld = outcome?.kind !== 'ready' && outcome?.kind !== 'no-match' || (outcome?.writes?.length ?? 0) > 0
+    return { applied, unresolved, style: hasStyle ? style : undefined, ...(iconCell ? { iconCell, icon: outcome?.icon ?? null, iconWithheld } : {}) }
   })
   scope?.dispose()
   if (net() !== 0) return fail(`resident viewport leaked ${net()} bytes`)
@@ -495,18 +524,21 @@ export async function comparePagedViewport(c: CfOracleCase, rootDir: string): Pr
     for (const s of result.states) stateMap.set(`${s.row},${s.col}`, s)
     const mismatch = verifyCaseCells(c, rootDir, (row, col) => {
       const s = stateMap.get(`${row},${col}`)
-      if (!s) return { applied: false, unresolved: true }
+      const iconCell = c.markers.some(m => m.ruleType === 'iconSet' && isCellInSqref(`${String.fromCharCode(65 + col)}${row + 1}`, m.sqref))
+      // A cell with no state is a no-match: for an icon cell, production claims no icon.
+      if (!s) return iconCell ? { applied: false, iconCell, icon: null } : { applied: false, unresolved: true }
+      const iconState = iconCell ? { iconCell, icon: s.icon ? { set: CF_ICON_SET_NAMES[s.icon.set] ?? `#${s.icon.set}`, iconId: s.icon.iconId } : null, iconWithheld: s.unresolvedReason !== undefined || (s.unresolvedWrites?.length ?? 0) > 0 } : {}
       const unresolved = s.unresolvedReason !== undefined || (s.unresolvedWrites !== undefined && s.unresolvedWrites.length > 0)
       const hasProps = s.properties !== undefined && Object.keys(s.properties).length > 0
       const hasScale = s.scale?.argb !== undefined
       // A wire bar descriptor is an applied outcome (Task 23): the bar paints, though it writes no style property.
       const hasBar = s.bar !== undefined
-      if (!hasProps && !hasScale) return { applied: hasBar, unresolved }
+      if (!hasProps && !hasScale) return { applied: hasBar, unresolved, ...iconState }
       const style = resolveCfCellStyle(base as never, {
         properties: s.properties,
         ...(hasScale ? { visual: { colorScale: { ruleId: s.scale!.ruleId, argb: s.scale!.argb, ...(s.scale!.fraction !== undefined ? { fraction: s.scale!.fraction } : {}) } } } : {}),
       }, colors)
-      return { applied: true, unresolved, style }
+      return { applied: true, unresolved, style, ...iconState }
     })
     const outputHash = sha256Hex(lines)
     if (mismatch) {
