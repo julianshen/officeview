@@ -1854,3 +1854,137 @@ So the case measured:
 - `cfDecodeCalls` counts every decoder call, separately from live entries.
 - **Tests:** a refused admission causes no decode. A successful one has decoded nothing when it reserves memory, and decodes exactly once per class after.
 - **Mutation check:** a mutant that decodes before admission fails the test.
+
+## 13. Stage 4 Validation, Publication, Resource Audit and PR 4 Evidence (Task 30)
+
+**Excel builds.** The object-model probe ran on Excel 16.114 (it crashed: recorded, lifts nothing). Every other Stage 4 capture is Excel 16.115.
+
+### 13.1 Publication gate and result
+
+`bun scripts/cf-refs/audit.ts --stage 4 --write --publish-stage4` publishes through `stage4Publication` (`scripts/cf-refs/audit.ts`). A capability publishes only when all of these hold:
+- it is `verified` by its owning capture and the cross-case gates;
+- no ruling withholds it (`CF_STAGE4_NEVER_PUBLISH`): `icon:scope-merged-cell` (S4-MERGED-UNPUBLISHED), `icon:geometry-short-row-clip` (S4-SHORTROW-WITHHELD), `icon:inset-overflow` (the `#` layout is unmeasured);
+- the reading Excel matched equals production's (`CF_STAGE4_PRODUCTION_READINGS` = `CF_ICON_PAINT_READINGS` plus the evaluator and composer readings). A list-valued entry is a selection, published in `VERIFIED_STAGE4_ICON_SELECTIONS`;
+- for a glyph pair, its class passed the OD-9(b) approximation check (not in `CF_ICON_GLYPH_WITHHELD`), so publishing a key capability can never un-withhold a failing glyph.
+
+**Result.** 98 of 145 `icon:*` ids published (54 of 75 glyph pairs, 39 of 54 glyph classes); 47 withheld: 21 glyph pairs (approximation check), 3 by ruling, 7 non-discriminating, 16 refused-unsupported. Six selections: percentile `inc`, floor `below-floor-no-icon`, `as-model` for equal values, a single cell, non-monotonic thresholds and out-of-domain bounds. `icon:inset-right-aligned` publishes (S4-RIGHTINSET-ZERO, matched `unshifted`); `icon:geometry-snapping` stays withheld, the paint gate using `bar:geometry-snapping` (S4-SNAP-SHARED).
+
+**Dual gate.** `audit --stage 4`: ok, `stageComplete=true`, 0 blocked, every disposition in {verified, unverified-nondiscriminating, refused-unsupported}. `tests/xlsx-cf-oracle-conformance.test.ts` green with no injection. The second `--write --publish-stage4` run leaves `src/xlsx/cf/verifiedCapabilities.ts` byte-identical (`git diff --exit-code`). Against `bdc2b217` the file gains only `VERIFIED_STAGE4_CAPABILITIES`, `VERIFIED_STAGE4_ICON_SELECTIONS` and the `icon:*` ids of `VERIFIED_CAPABILITIES`; Stage 1–3 sets are byte-unchanged (audits 1–3 ok). Deviation from the plan text: the selections export rides beside the Stage 4 set (the context file allows it; without it the selection shapes stay unresolved).
+
+**Conformance on Excel's own workbooks (no injection).** Production's evaluated `(set, iconId)`, mapped through `CF_ICON_GLYPH_CLASSES`, against the sidecars' classes on all 1,506 Stage 4 cells: 549 agree on an icon, 12 agree on no icon, 0 disagree; 838 withheld, 86 unclassifiable crops, 21 unobserved. Every icon production paints (`iconAt`) is Excel's class, and its frame plus the class's key ink offset lies within ±1 px of Excel's ink box in its cell; the measured inset equals Excel's text shift.
+
+### 13.2 Product fixes found by the gate
+
+- **S4-ROW-BASELINE (implementer ruling, `0c1387a5`).** The px conformance found every bottom-anchored icon in a row that also holds a 20 pt cell (`x14ac:dyDescent="0.3"`) 2 px above the measured frame: `stage4-icon-geometry` C3, M3..O3 and `stage4-icon-geometry-2` C2, G2, I2, J2. The all-Calibri-11 rows of `stage4-icon-rows-bottom` match. Excel lifts a bottom-aligned icon onto the row's shared baseline, which other cells' fonts move, and no leg knows a row's other fonts. So bottom placement withholds everywhere; centred icons do not follow the baseline (I3 and F2 in the same rows land on the centre frame) and paint. Cost: Excel's default alignment is bottom, so most real cells withhold until a capture measures the baseline rule (capture design in the Task 30 report).
+- **S4-DPR-FLOOR (`4d80ee30`).** Below device scale 0.25 the paint rechecks the snapped right-aligned clearance and skips an intruding icon; the description is unchanged (known limit). A sweep finds no admitted production frame that intrudes.
+
+### 13.3 Carried decisions
+
+- **Grant omission order:** icons, then bars, then scales (`tests/xlsx-cf-icon-worker.test.ts`, three families).
+- **NoIcons with `showValue="0"`:** the canvas hides the value; nothing is announced as an icon and nothing as unavailable (the outcome is evidenced); the value stays in the accessible name and copy text, as for a Stage 3 bar with `showValue="0"` (S3-O).
+- **Caches and zoom:** the six zoom/DPR pairs paint and announce the same icon on every leg (browser); cfGen and icon state are in the layout keys (Task 29 tests).
+
+### 13.4 Resource audit (`audit --stage 4`)
+
+| Scenario | Result |
+|---|---|
+| 1M-row declared `A:A`, 100 icon sets + 100 bars + 100 scales | one 100-cell scan; first icon on 40/40 cells (and 40/40 without bars and scales); net 0 |
+| refused percentile icon set beside a `num` set | num: 10 icons; percentile (sorted copy refused at 400 KB): 10 withheld; control at 4 MB: 10 icons; net 0 |
+| whole-column icon extents | 10 stored cells, metrics not extended |
+| glyph admission, every class in one batch | 54 classes, 39 admitted and decoded once, 0 withheld decoded, refused admission decodes 0, net 0 |
+| distinct ranges | 300 rects refuse before enumeration (0 reads); the shared scan refuses at the 1,000,000-unit cap (`cf-resource-limit`), net 0 |
+| 20 open/read/cancel/close cycles (thresholds B2:B12) | 220 icon states, final net 0 |
+| no-CF baseline | 0 reserves, 0 reads, no scope, 0 glyph decodes |
+
+### 13.5 Gates and sizes
+
+- `npx vitest run tests/xlsx-cf*`: 71 files, 1,122 passed, 2 skipped (two load-time flakes pass alone). Full `npx vitest run`: every failure is a missing `corpus/` file (environmental).
+- `npx tsc --noEmit -p .`: the 3 known `@napi-rs/canvas` errors only; `-p tsconfig.scripts.json`: clean.
+- Browser `tests/browser/xlsx-cf.spec.ts`: Chromium 28/28, WebKit 28/28.
+- Eager gzip 36,519 B (PR 3 base 36,517; limit 38,720). `check-eager` ok (157 modules). `core-gates`: core closure ok; index closure 421,541 B and its module set FAIL environmentally, as on main `bdc2b217` (421,386 B, absolute `node_modules` paths). `scripts/eager-baseline.json` unchanged (record only if Linux CI flags it).
+- CF lazy chunks: 57,081 B gzip at `bdc2b217` → 72,074 B (+14,993). The glyph table (`iconGlyphs.ts`) is 5,417 B gzip of it (36 %).
+- `bun scripts/cf-compare.ts --stage 4`: static, print and export whole-frame pixel diffs fail for every stage, Stage 3 included (cross-renderer frames: a pre-existing limit; all off-capture fidelity is *unverified*, and the OD-9(b) artwork is `pixel-approximated`, never measured). Paged 32 pass; interactive 38 pass. Their Stage 4 fails are the harness's "matched means a style" check, which does not count icon states (NoIcons, no-icon and icon-only cells), and `stage4-icon-glyph-key`'s text scope (76 rules × 462 cells) refusing at the byte estimate.
+
+### 13.6 Known limits
+
+- 15 withheld glyph classes; whole sets withheld: 3Stars, 4Rating, 5Rating, 3Flags.
+- Admitted geometry only: Calibri 11 regular; rows of 15, 18 or 30 pt (by `ht` or `defaultRowHeight`); centred; left text or right-aligned numbers clearing the frame by 10 px. Withheld: other fonts, other row heights (20, 25, 16.5, 22.5 included), bottom and top alignment (S4-ROW-BASELINE), centred text, merged hosts, short rows.
+- Text scopes over many icon rules refuse at the byte estimate (O(rules × cells)), as Stage 3 bars do.
+- The OM probe crash on Excel 16.114; Excel strips `stopIfTrue` from icon rules; min/max cfvo unsupported; the dialect shapes unsupported.
+- The bar-extent heuristic caveat; twin-set strict order; `iconApplied` labelling on faint cells; the search scope carries no row heights; S4-DPR-FLOOR (description unchanged below device scale 0.25).
+
+### 13.7 Capability rows
+
+| Capability | Ruling | Evidence kind | Matched reading | Status | Refusal still in force |
+|---|---|---|---|---|---|
+| `icon:om-reachability-probe` | S4-A | record only | — | withheld | unverified-nondiscriminating |
+| `icon:dialect-standalone` | S4-O | pixel-classified | as-modelled | published | — |
+| `icon:dialect-base` | S4-O | pixel-classified | as-modelled | published | — |
+| `icon:dialect-base-x14-family` | S4-B | pixel-classified | — | withheld | refused-unsupported |
+| `icon:dialect-paired` | S4-O | pixel-classified | — | withheld | refused-unsupported |
+| `icon:pixel-calibration` | S4-A | pixel-measured | — | published | — |
+| `icon:glyph-key` | S4-A | pixel-classified | — | published | — |
+| `icon:families-base` | S4-E | pixel-classified | bucket-order | published | — |
+| `icon:families-x14` | S4-E | pixel-classified | bucket-order | published | — |
+| `icon:settings-schema-defaults` | S4-B | pixel-classified | as-modelled | published | — |
+| `icon:scope-whole-column` | S4-H | pixel-classified | whole-column | published | — |
+| `icon:thresholds-num` | S4-D | pixel-classified | literal | published | — |
+| `icon:thresholds-gte-true` | S4-D | pixel-classified | as-written | published | — |
+| `icon:thresholds-gte-false` | S4-D | pixel-classified | as-written | published | — |
+| `icon:thresholds-percent` | S4-D | pixel-classified | percent-of-range | published | — |
+| `icon:thresholds-percentile-inc-exc` | S4-D | pixel-classified | inc | published | — |
+| `icon:thresholds-mixed` | S4-D | pixel-classified | per-type | published | — |
+| `icon:degenerate-equal-values` | S4-D | pixel-classified | as-model | published | — |
+| `icon:degenerate-single-cell` | S4-D | pixel-classified | as-model | published | — |
+| `icon:degenerate-non-monotonic` | S4-D | pixel-classified | as-model | published | — |
+| `icon:bounds-out-of-domain` | S4-D | pixel-classified | as-model | published | — |
+| `icon:thresholds-floor` | S4-C | pixel-classified | below-floor-no-icon | published | — |
+| `icon:thresholds-min-max` | S4-C | pixel-classified | — | withheld | refused-unsupported |
+| `icon:reverse` | S4-E | pixel-classified | reversed | published | — |
+| `icon:custom-mapping` | S4-E | pixel-classified | custom-order | published | — |
+| `icon:custom-noicons` | S4-B | pixel-classified | no-icon | published | — |
+| `icon:geometry-box` | S4-K | pixel-measured | font | published | — |
+| `icon:geometry-vertical-align` | S4-K | pixel-measured | cell-align | published | — |
+| `icon:composition-bar-showvalue` | S4-I | pixel-measured | priority-wins | published | — |
+| `icon:geometry-narrow-clip` | S4-K | pixel-measured | clip | published | — |
+| `icon:geometry-short-row-clip` | S4-K | pixel-measured | shrink | withheld | Ruling S4-SHORTROW-WITHHELD: Excel shrinks the box in a short row (matched `shrink`) by a law the captures do not determine; production does not implement shrin |
+| `icon:geometry-snapping` | S4-K | pixel-measured | — | withheld | unverified-nondiscriminating |
+| `icon:inset-left` | S4-L | pixel-measured | inset | published | — |
+| `icon:inset-right-aligned` | S4-L | pixel-measured | unshifted | published | — |
+| `icon:inset-center` | S4-L | pixel-measured | full-cell | published | — |
+| `icon:inset-overflow` | S4-L | pixel-measured | icon-and-text | withheld | Excel draws the icon and a `#` fill (matched `icon-and-text`), whose layout is unmeasured; production withholds every overflowing host. |
+| `icon:noicons-inset` | S4-L | pixel-measured | inset | published | — |
+| `icon:noicons-showvalue` | S4-L | pixel-measured | text-hidden | published | — |
+| `icon:showvalue-canvas-suppression` | S4-L | pixel-measured | text-hidden | published | — |
+| `icon:showvalue-copy-text` | S4-N | pixel-measured | — | withheld | unverified-nondiscriminating |
+| `icon:participation-types` | S4-G | pixel-classified | no-icon-for-non-numbers | published | — |
+| `icon:participation-dateserial` | S4-G | pixel-classified | evaluated | published | — |
+| `icon:participation-error-presence` | S4-G | pixel-classified | error-ignored | published | — |
+| `icon:scope-disjoint` | S4-H | pixel-classified | union | published | — |
+| `icon:scope-duplicate-blocks` | S4-H | pixel-classified | first-paints | published | — |
+| `icon:scope-hidden-row` | S4-H | pixel-classified | include-hidden | published | — |
+| `icon:scope-autofilter-hidden-row` | S4-H | pixel-classified | include-hidden | published | — |
+| `icon:scope-merged-cell` | S4-H | pixel-classified | all-stored | withheld | Ruling S4-MERGED-UNPUBLISHED: the worker and forced-paged scopes carry no merge knowledge, so publishing would make the resident view paint icons the paged view |
+| `icon:composition-overlapping-icons` | S4-I | pixel-classified | first-paints | published | — |
+| `icon:composition-with-bar` | S4-I | pixel-classified | both-paint | published | — |
+| `icon:composition-with-scale` | S4-I | pixel-classified | — | withheld | unverified-nondiscriminating |
+| `icon:composition-dxf-fill` | S4-I | pixel-classified | — | withheld | unverified-nondiscriminating |
+| `icon:composition-matching-stopIfTrue-ahead` | S4-I | pixel-classified | halted | published | — |
+| `icon:composition-noicons-slot` | S4-I | pixel-classified | — | withheld | unverified-nondiscriminating |
+| `icon:composition-unresolved-stub` | S4-I | pixel-classified | halted | published | — |
+| `icon:placement-rtl-sheet` | S4-M | record only | — | withheld | unverified-nondiscriminating |
+| `icon:unresolved-unknown-set` | S4-B | pixel-classified | — | withheld | refused-unsupported |
+| `icon:unresolved-iconid-range` | S4-B | pixel-classified | — | withheld | refused-unsupported |
+| `icon:unresolved-noicons-id` | S4-B | pixel-classified | — | withheld | refused-unsupported |
+| `icon:unresolved-custom-count` | S4-B | pixel-classified | — | withheld | refused-unsupported |
+| `icon:unresolved-base-x14-set` | S4-B | pixel-classified | — | withheld | refused-unsupported |
+| `icon:unresolved-formula-cfvo` | S4-B | pixel-classified | — | withheld | refused-unsupported |
+| `icon:unresolved-xmf-reference` | S4-B | pixel-classified | — | withheld | refused-unsupported |
+| `icon:unresolved-active-present` | S4-B | pixel-classified | — | withheld | refused-unsupported |
+| `icon:unresolved-cfvo-count` | S4-B | pixel-classified | — | withheld | refused-unsupported |
+| `icon:unresolved-cfvo-no-type` | S4-B | pixel-classified | — | withheld | refused-unsupported |
+| `icon:attr-percent-false` | S4-F | pixel-classified | — | withheld | refused-unsupported |
+| `icon:reverse-custom` | S4-E | pixel-classified | — | withheld | refused-unsupported |
+| `icon:composition-icon-stopIfTrue` | S4-J | pixel-classified | — | withheld | refused-unsupported |
+| `icon:geometry-row-offset` | S4-K | pixel-measured | anchor-constant | published | — |
+| `icon:glyph-<set>-<id>` (75 pairs) | S4-A, OD-9(b) | pixel-approximated (*unverified* artwork) | — | 54 published, 21 withheld | the 15 classes in `CF_ICON_GLYPH_WITHHELD` failed the approximation check; their pairs: 3ArrowsGray-2, 3Flags-0, 3Flags-1, 3Flags-2, 3Signs-1, 3Symbols2-1, 4ArrowsGray-3, 4Rating-0, 4Rating-1, 4Rating-2, 4Rating-3, 5ArrowsGray-4, 5Rating-0, 5Rating-1, 5Rating-2, 5Rating-3, 5Rating-4, 3Stars-0, 3Stars-1, 3Stars-2, 3Triangles-0 |

@@ -320,11 +320,21 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
   const gen = cfRulesVersion(sheet.conditionalFormatting)
   const stamp = { owner: 'compare', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: gen, viewGen: 0, structureGen: 0, clockGen: 0 }
   const source = residentSource(sheet, stamp, memory, 'engine')
-  const lease = await oracle.prepareCf(
-    { stamp, sourceRects: [{ firstRow: rect.minRow, lastRow: rect.maxRow, firstCol: rect.minCol, lastCol: rect.maxCol }], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes },
-    source,
-    memory,
-  )
+  // Task 30: the range in 8-row batches, as a viewport asks for it. One batch over a whole case range of 76 icon rules
+  // (stage4-icon-glyph-key A1:K42) exceeds one paint batch's grant and refuses atomically (cf-resource-limit).
+  const BATCH_ROWS = 8
+  const leases: Awaited<ReturnType<typeof oracle.prepareCf>>[] = []
+  for (let r0 = rect.minRow; r0 <= rect.maxRow; r0 += BATCH_ROWS) {
+    leases.push(await oracle.prepareCf(
+      { stamp, sourceRects: [{ firstRow: r0, lastRow: Math.min(rect.maxRow, r0 + BATCH_ROWS - 1), firstCol: rect.minCol, lastCol: rect.maxCol }], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes },
+      source,
+      memory,
+    ))
+  }
+  const lease = {
+    value: { at: (row: number, col: number) => leases[Math.floor((row - rect.minRow) / BATCH_ROWS)]!.value.at(row, col) },
+    release: () => { for (const l of leases) l.release() },
+  }
   const lines: string[] = []
   const outcomes = new Map<string, { kind: string; properties: Record<string, unknown>; writes: string[] }>()
   try {
