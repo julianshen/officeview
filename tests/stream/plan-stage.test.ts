@@ -184,7 +184,7 @@ afterEach(() => {
   gl.made.length = 0
 })
 
-function rig(opts: { slides?: Array<{ plan: ShowPlanRecord; assets: Map<number, ImageBitmapLike> }>; ws?: SlideShowWorkspace; reduced?: boolean; morph?: PlanStageDeps['morph']; force?: 'canvas2d' | 'none'; stills?: Map<number, ImageBitmapLike> } = {}): Rig {
+function rig(opts: { slides?: Array<{ plan: ShowPlanRecord; assets: Map<number, ImageBitmapLike> }>; ws?: SlideShowWorkspace; reduced?: boolean; morph?: PlanStageDeps['morph']; force?: 'canvas2d' | 'none'; stills?: Map<number, ImageBitmapLike>; pressured?: (i: number) => void } = {}): Rig {
   const root = document.createElement('div')
   document.body.appendChild(root)
   root.getBoundingClientRect = () => ({ left: 0, top: 0, width: OW, height: OH, right: OW, bottom: OH, x: 0, y: 0, toJSON: () => ({}) })
@@ -206,6 +206,7 @@ function rig(opts: { slides?: Array<{ plan: ShowPlanRecord; assets: Map<number, 
     data: (i) => slides.get(i),
     still: (i) => opts.stills?.get(i),
     morph: opts.morph ?? (async () => undefined),
+    ...(opts.pressured ? { pressured: opts.pressured } : {}),
     ...(opts.force === 'none' ? {} : { force: 'canvas2d' as const }),
   })
   const timelines = new Map<number, SlideTimeline>()
@@ -608,6 +609,34 @@ describe('PlanStage', () => {
     expect(r.stage.inspect().lastDraws).toEqual(['layer:0', 'layer:1', 'layer:2'])
     expectPx(r.pixel(48, 36), BOX)
     expectPx(r.pixel(48, 63), FOOT)
+  })
+
+  it('pressure on an autoplayed slide: the arrival frame is never its static picture; the piece-3 still once here (round 8)', async () => {
+    // codex r7-pressure: the autoplayTransitionDeck timing over the fixture's `sp:3` box, rendered settled at 5 s.
+    const { autoplayTransitionDeck } = await import('../../src/testdata/show-decks')
+    const meta = await (await loadShowDeck(await autoplayTransitionDeck())).meta(1)
+    const stills = new Map<number, ImageBitmapLike>()
+    const asked: number[] = []
+    // Room for the entry texture and a little more: the layers do not fit.
+    const r = rig({ slides: [flyIn({ show: { timing: meta.timing, builds: [] }, steps: [] })], ws: workspaceOf(OW * OH * 4 + 1000), stills, pressured: (i) => asked.push(i) })
+    await r.enter(0)
+    const tl = r.timelines.get(0)!
+    r.stage.frame(tl.initial(), 5000)
+    expect(r.sink.list().map((d) => d.code)).toContain('plan-stage-pressure')
+    // The arrival frame has the auto-faded box hidden: it is not the settled slide, so it is not drawn as one.
+    expect(asked).toEqual([0])
+    expect(r.stage.awaitingStill(0)).toBe(true)
+    expect(r.stage.inspect().lastDraws).not.toEqual(['entry'])
+    // The piece-3 still (the settled static slide) arrives: it is drawn, the box with it.
+    stills.set(0, solid(OW, OH, WHITE, [{ x: 38, y: 26, w: 20, h: 20, c: BOX }]))
+    r.stage.frame(tl.initial(), 5100)
+    expect(r.stage.awaitingStill(0)).toBe(false)
+    expectPx(r.pixel(48, 36), BOX)
+    // With room, the layers draw the autoplayed box as before (no still asked for).
+    const ok = rig({ slides: [flyIn({ show: { timing: meta.timing, builds: [] }, steps: [] })], pressured: () => { throw new Error('no pressure') } })
+    await ok.enter(0)
+    ok.stage.frame(ok.timelines.get(0)!.initial(), 5000)
+    expectPx(ok.pixel(48, 36), BOX)
   })
 
   it('workspace refusal holds the entry frame with plan-stage-pressure', async () => {

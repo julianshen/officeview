@@ -76,12 +76,22 @@ export interface PlanStageDeps {
   data(index: number): PlanSlideData | undefined
   still(index: number): ImageBitmapLike | undefined
   morph(from: number, to: number, fromStep: number): Promise<{ record: MorphPlanRecord; assets: PlanAssets; track?: PlanTrack } | undefined>
+  /**
+   * Additive (PR #78 round 8): slide `index` went under workspace pressure and its entry frame is its arrival, not
+   * its settled state (autoplay), so it cannot stand as the slide's static picture: the caller makes `still(index)`
+   * available (the piece-3 still path). Until it is, `awaitingStill(index)` is true and nothing settled is drawn.
+   * Called once the slide's own pictures start (after its transition): from then on the stage draws nothing of the
+   * plan's assets, so the caller may release them.
+   */
+  pressured?(index: number): void
   seed?: number
   /** Additive: start on the Canvas 2D compositor (tests, the forced path). */
   force?: 'canvas2d'
 }
 export interface PlanStage extends DriverStage {
   composeAt(index: number, cursor: SlideCursor, canvas: HTMLCanvasElement): boolean
+  /** Round 8: the slide on screen is under pressure and waits for its piece-3 still (`deps.pressured`). */
+  awaitingStill(index: number): boolean
   resize(css: { w: number; h: number }, dpr: number): void
   dispose(): void
   /** @internal Additive: what the last frame drew, the running transition and the backend (tests, the debug harness). */
@@ -252,6 +262,10 @@ interface Slide {
   /** Uploaded sources by key, at an epoch. */
   ups: Map<string, Up>
   pressure: boolean
+  /** Round 8: under pressure, the entry frame is the arrival (autoplay): the static picture is the piece-3 still. */
+  needStill: boolean
+  /** Round 8: `deps.pressured` was called (once, from the first settled picture, after any transition). */
+  stillAsked: boolean
   /** Track activations (`step|t0`) that began without their track: cuts to their end frame. */
   deferred: Set<string>
   /** The last picture drawn (held while a track frame is missing; the outgoing frame's content). */
@@ -421,7 +435,7 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
       triggerKeys: triggerTargets(tree, text?.items),
       // The server's unit index seeds the rng, as its tracks do (`0x5eed + unit`).
       rng: createRng((deps.seed ?? 0x5eed) + (plan?.slide.index ?? index)),
-      ups: new Map(), pressure: false, deferred: new Set(), held: [], timeline: undefined, zOf, cutNoted: false,
+      ups: new Map(), pressure: false, needStill: false, stillAsked: false, deferred: new Set(), held: [], timeline: undefined, zOf, cutNoted: false,
     }
   }
 
@@ -499,16 +513,37 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
   function load(p: Slide): void {
     const entry = entrySrc(p)
     if (entry && !handleOf(p, entry)) { p.pressure = true; pressure(p, 'The entry frame does not fit the slideshow workspace') }
-    if (!p.data || p.pressure) return
-    for (const l of p.data.plan.layers) {
-      if (isContainer(l)) continue
-      const src = layerSrc(p, l)
-      if (src && handleOf(p, src)) continue
-      for (const key of [...p.ups.keys()]) if (key.startsWith('a:')) releaseUp(p, key)
-      p.pressure = true
-      pressure(p, src ? 'The layers do not fit the slideshow workspace' : `Layer asset ${l.assetId} is missing`)
-      return
+    if (p.data && !p.pressure) {
+      for (const l of p.data.plan.layers) {
+        if (isContainer(l)) continue
+        const src = layerSrc(p, l)
+        if (src && handleOf(p, src)) continue
+        for (const key of [...p.ups.keys()]) if (key.startsWith('a:')) releaseUp(p, key)
+        p.pressure = true
+        pressure(p, src ? 'The layers do not fit the slideshow workspace' : `Layer asset ${l.assetId} is missing`)
+        break
+      }
     }
+    // Round 8: an autoplayed slide's entry frame is its arrival (round 7), not what it settles to: under pressure the
+    // static picture is the piece-3 still instead (the transition still plays to the arrival frame).
+    if (p.data && p.pressure && !p.needStill && arrivesUnsettled(p.timeline)) p.needStill = true
+  }
+
+  /** The slide's autoplay runs from arrival (the server's own test, `assemble`): its arrival differs from checkpoint 0. */
+  function arrivesUnsettled(tl: SlideTimeline | undefined): boolean {
+    if (!tl) return false
+    try {
+      const init = tl.initial(), s0 = tl.stateAt(init, 0)
+      return tl.busyUntil(init) > 0 || tl.keyTimes(init, 0, Number.POSITIVE_INFINITY).length > 0 || s0.active.length > 0 || s0.frozen.length > 0
+    } catch { return true }
+  }
+
+  /** The piece-3 still as the slide's static picture (round 8); the entry's upload goes for it. `[]`: not here yet. */
+  function stillPics(p: Slide): Pic[] {
+    const bmp = deps.still(p.index)
+    if (!bmp) return []
+    releaseUp(p, 'entry')
+    return [{ src: { key: `still:${bmp.width}x${bmp.height}`, bmp, bounds: { x: 0, y: 0, w: p.W, h: p.H }, scale: bmp.width / p.W }, state: PLAIN, kind: 'still' }]
   }
 
   function stateOf(p: Slide, cursor: SlideCursor | undefined, slideT: number, timeline: SlideTimeline | undefined): RenderState {
@@ -610,6 +645,13 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
    */
   function picture(p: Slide, cursor: SlideCursor | undefined, slideT: number, timeline: SlideTimeline | undefined, state: RenderState, live: boolean): Pic[] | undefined {
     const entryPic = entryPics(p)
+    // Round 8: nothing settled is drawn until the still is here (the caller shows its loading frame meanwhile).
+    if (p.data && p.pressure && p.needStill) {
+      // Asked here, not on entry: no transition draws the arrival frame any more, so the plan's resources may go.
+      if (!p.stillAsked) { p.stillAsked = true; deps.pressured?.(p.index) }
+      const st = stillPics(p)
+      return st.length ? st : undefined
+    }
     if (!p.data || p.pressure) return entryPic
     const k = cursor?.step ?? 0
     const step = k >= 1 ? p.data.plan.steps[k - 1] : undefined
@@ -1081,6 +1123,8 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
       const slideT = t - origin
       const state = liveState(p, cursor, slideT, p.timeline)
       const pics = picture(p, cursor, slideT, p.timeline, state, true)
+      // Round 8: waiting for the still under pressure, nothing is drawn (never the arrival frame as the slide).
+      if (!pics && p.pressure && p.needStill) { c.frame([]); kinds = []; p.held = []; return state }
       // Undefined (a missing track frame): hold the previous picture; nothing yet, the entry frame.
       const held = pics ?? (p.held.length ? p.held : entryPics(p))
       if (!draw(p, held)) {
@@ -1135,6 +1179,11 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
         return { kind: 'link', link: { spid: '', action: a.kind === 'slide' ? { kind: 'slide', index: a.index } : { kind: 'jump', verb: a.verb as 'nextslide' } } } satisfies HitResult
       }
       return undefined
+    },
+
+    awaitingStill(index) {
+      const p = current
+      return !disposed && !!p && p.index === index && p.needStill && !deps.still(index)
     },
 
     composeAt(index, cursor, canvas) {

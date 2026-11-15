@@ -403,7 +403,14 @@ Evidence:
   without autoplay is unchanged (the two states are equal). `autoplayTransitionDeck` (a fade into a slide whose box
   fades in with it) is in the parity harness and `server/test/stream-show-parity.test.ts`. Before the fix its
   mid-transition sample failed (`2-0-50`, meanAbs 0.040 > 0.020): the box showed during the transition, vanished,
-  then faded in again. Under workspace pressure a slide holds its entry frame, which now shows the arrival state.
+  then faded in again.
+- **Workspace pressure on an autoplayed slide plays its piece-3 still (PR #78 round 8).** Its entry frame is its
+  arrival, not its settled state, so it cannot stand as the slide's static picture. The transition still plays to
+  the arrival frame. Then PlanStage asks for the still (`pressured`): the unit goes onto the existing still path
+  (`ShowFetcher.demote`, a unit request through `paint`, no new wire), the visit's bundle is released for room,
+  and a loading frame shows until the still lands. The still is the same piece-3 unit image a refused slide plays,
+  under the same owner-review exemption (Owner-review items below). A slide without autoplay keeps the existing
+  pressure behaviour (its entry is its settled checkpoint 0).
 - **Run links cover their run only (PR #78 round 6).** A link on a text run ships one rect per laid-out line segment
   of that run (`runRegionsOf`, `src/slideshow/prepare/slide.ts`, laid out as the local stage's `runAt`); a shape's own
   link ships before its runs', so a run wins over its shape. A run that cannot be located gets no region (local mode

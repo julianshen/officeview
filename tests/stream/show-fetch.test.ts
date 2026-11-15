@@ -486,6 +486,26 @@ describe('show bundles (piece 4 Task 11)', () => {
     return { clock, io, bundles, f, ready, errors }
   }
 
+  it('demote: a bundled unit becomes a piece-3 still — its bundle is released and the unit is asked for through paint (PR #78 round 8)', async () => {
+    const { clock, io, bundles, f, ready } = bundleSetup({ animated: [0] })
+    f.want([0])
+    const b = bundles[0]!.resolve()
+    await flush()
+    expect(f.bundle(0)).toBe(b)
+    f.demote(0)
+    expect(b.release).toHaveBeenCalledTimes(1)
+    expect(f.bundle(0)).toBeUndefined()
+    await clock.advance(1_000)
+    expect(io.calls.map((c) => c.unit)).toEqual([0])
+    io.calls[0]!.resolve()
+    await flush()
+    expect(f.cached(0)).toBeDefined()
+    expect(ready).toEqual([0, 0])
+    // A still for the rest of the show: no bundle is asked for again.
+    f.want([0]); await clock.advance(5_000)
+    expect(bundles).toHaveLength(1)
+  })
+
   it('an animated unit is fetched as a bundle (with the show motion), an unanimated one as a unit', async () => {
     const { clock, io, bundles, f, ready } = bundleSetup({ animated: [0], motion: 'reduced' })
     f.want([0, 1])

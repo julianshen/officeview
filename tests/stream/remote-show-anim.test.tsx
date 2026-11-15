@@ -794,6 +794,32 @@ describe('remote show on the driver (piece 4 Task 11)', () => {
     s.exit()
   }, 60_000)
 
+  it('workspace pressure on an autoplayed slide: a loading frame, then its piece-3 still, never the arrival frame as the slide (round 8)', async () => {
+    // The fly slide with its one click group autoplayed (start at 0): no click steps; its entry is the arrival.
+    const auto = { messages: (u: number) => bundleOf(FLY, u, (p) => {
+      const timing = structuredClone(p.show.timing!) as Extract<NonNullable<Plan['show']['timing']>, { root: unknown }>
+      const click = ((timing.root as TimeNode & { children: TimeNode[] }).children[0] as TimeNode & { children: TimeNode[] }).children[0]!
+      ;(click.ctn as { start: unknown }).start = [{ delayMs: 0 }]
+      return { ...p, show: { ...p.show, timing }, steps: [] }
+    }) }
+    const ws = createSlideShowWorkspace('desktop', { limit: 12_000_000, scratch: 0 })
+    vi.spyOn(remoteShowDeps, 'workspace').mockReturnValue(ws)
+    const fd = animDoc([auto])
+    const { s, root, canvas, log } = await show(fd)
+    await run(100)
+    expect(log).toContain('diag:plan-stage-pressure')
+    // The unit's piece-3 still is asked for (the existing still path, no new wire); until it is here, a loading frame.
+    expect(frameKind(root)).not.toBe('image')
+    await run(600)
+    expect(sent(fd, 'paint:')).toEqual(['paint:0'])
+    expect(frameKind(root)).toBe('image')
+    // The still (the unit image, #123456 in this fake) is what is drawn.
+    expect(px(canvas, canvas.width >> 1, canvas.height >> 1)).toEqual([0x12, 0x34, 0x56])
+    s.exit()
+    // The bundle given back under pressure is released once: nothing is left held.
+    expect(ws.used()).toBe(0)
+  })
+
   it('a refused slide plays its piece-3 still through the unit path', async () => {
     const fd = animDoc(['fly', 'fly'])
     fd.rules.set('plan:0', 'still')

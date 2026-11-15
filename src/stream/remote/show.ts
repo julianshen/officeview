@@ -355,6 +355,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
   }
   /** Streamed index → the bundle the slide's live lease pins (what the stage draws). */
   const held = new Map<number, ShowBundle>()
+  /** Streamed index → each live acquire's release of its pinned bundle (round 8: `pressured` gives them back). */
+  const holds = new Map<number, Set<() => void>>()
   const bundleFor = (i: number): ShowBundle | undefined => held.get(i) ?? (unitOf[i] !== undefined && animated(unitOf[i]!) ? fetcher.bundle(unitOf[i]!) : undefined)
   /** Animated units refused a bundle with a still code: they play their piece-3 still. */
   const stillOnly = new Set<number>()
@@ -686,6 +688,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
       const stuck = planStage && !code ? (budgetStuck === `${slide}:${build}` ? 'show-budget' : trackGap()) : undefined
       if (stuck) { kind = 'error'; text = `Slide ${slide + 1} could not be shown (${stuck})` }
       // The still stage draws the bitmap here (piece 3); PlanStage draws on its tick.
+      // Round 8: under pressure an autoplayed slide waits for its still: a loading frame, never the arrival frame.
+      else if (planStage?.awaitingStill(slide)) { kind = code ? 'error' : 'loading'; text = code ? `Slide ${slide + 1} could not be shown (${code})` : `Loading slide ${slide + 1}` }
       else if (planStage ? !!held.get(slide) || !!fetcher.cached(unit) : !!bmp && fitInto(canvas, bmp)) kind = 'image'
       else {
         kind = code ? 'error' : 'loading'
@@ -1220,7 +1224,16 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
         // The bundle is pinned before the source reads it, for as long as the slide holds its lease.
         const b = animated(unit) && !stillOnly.has(unit) ? fetcher.bundle(unit) : undefined
         if (b) { pin(b); held.set(i, b) }
-        const unhold = () => { if (b) { if (held.get(i) === b) held.delete(i); unpin(b) } }
+        // Idempotent, and registered per slide: a slide that goes to its still under pressure gives its bundle back
+        // at once (`pressured`, round 8), and the visit's release then has nothing left to do.
+        let unheld = false
+        const unhold = () => {
+          if (unheld) return
+          unheld = true
+          holds.get(i)?.delete(unhold)
+          if (b) { if (held.get(i) === b) held.delete(i); unpin(b) }
+        }
+        if (b) { let set = holds.get(i); if (!set) holds.set(i, set = new Set()); set.add(unhold) }
         let h: Awaited<ReturnType<SlideSource['acquire']>>
         try { h = await planSource.acquire(i, sig) } catch (e) { unhold(); throw e }
         // The text fan (S2-8, D22) is charged to the show workspace for the visit's life.
@@ -1252,6 +1265,16 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
         data: planData,
         still: (i) => (unitOf[i] === undefined ? undefined : fetcher.cached(unitOf[i]!)),
         morph: morphFor,
+        // Round 8: an autoplayed slide under workspace pressure plays its piece-3 still (the refused-slide path).
+        pressured(i) {
+          const unit = unitOf[i]
+          if (exited || unit === undefined || stillOnly.has(unit)) return
+          stillOnly.add(unit)
+          sink.add({ code: 'plan-stage-pressure', slideIndex: i, message: `Slide ${i + 1} plays as its still image (its autoplay cannot be shown under workspace pressure)` })
+          fetcher.demote(unit)
+          // The plan's resources go now (the stage draws none of them again), so the still has room.
+          for (const f of [...(holds.get(i) ?? [])]) f()
+        },
         ...(remoteShowDeps.backend ? { force: remoteShowDeps.backend } : {}),
       })
     }

@@ -76,6 +76,11 @@ export interface ShowFetcher {
    */
   makeRoom(bytes: number): boolean
   /**
+   * PR #78 round 8: `unit` plays its piece-3 still for the rest of the show (as after a still refusal): its bundle
+   * is released and the unit is asked for through `paint` (no new wire).
+   */
+  demote(unit: number): void
+  /**
    * A charged request besides the fetcher's own (the current slide's `track`, a Morph pair) may go now: no rate pause,
    * no target waiting to go out, and more budget left than that kind's reserve (strict order: target bundle > track >
    * Morph pair > prefetch). Default `track`.
@@ -331,6 +336,14 @@ export function createShowFetcher(io: ShowFetchIo, clock: ShowFetchClock, opts: 
     bundle(unit) { return lookup(unit, (e) => !!e.bundle, (e) => e.bundle!.decodedBytes)?.bundle },
     bundleBytes: heldBytes,
     makeRoom: (bytes) => !disposed && trim(bytes),
+    demote(unit) {
+      if (disposed || stills.has(unit) || !asBundle(unit)) return
+      stills.add(unit)
+      const req = inflight.get(unit)
+      if (req) { inflight.delete(unit); req.ctl.abort() }
+      for (const [id, e] of [...cache]) if (e.unit === unit) remove(id, e)
+      pump()
+    },
     room(kind = 'track') {
       if (disposed || clock.now() < pausedUntil || targetWaiting()) return false
       return shared.room(unsentCount()) > (kind === 'morph' ? MORPH_RESERVE : TRACK_RESERVE)
