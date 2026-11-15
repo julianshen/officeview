@@ -221,37 +221,69 @@ for (const backend of BACKENDS) {
       // after the hold test's renders (observed: slide 3's reply ~6 s late), hence the long poll.
       await expect.poll(() => w.received.filter((t) => t === 'show-plan-start').length, { timeout: 30_000 }).toBeGreaterThanOrEqual(2)
       await page.waitForTimeout(1000)
-      type Sample = { slide: string | null; kind: string | null; black: number; control: boolean }
-      // Each animation frame: the share of what the audience sees that is black — the surface's visible canvases
-      // composited in DOM order (the 2-D output, then the compositor's WebGL2 or 2-D canvas).
-      await page.evaluate(() => {
+      type Sample = { slide: string | null; kind: string | null; black: number; control?: 'opaque' | 'clear' }
+      // Each animation frame: the share of what the audience sees that is black. The probe starts from the show
+      // host's own opaque backdrop (its computed background, black here: the letterbox), then draws each visible
+      // canvas of the surface in DOM order where it is displayed (its box, object-fit honoured), so a transparent
+      // or cleared canvas shows the backdrop through it, as on screen.
+      const geometry = await page.evaluate(() => {
         const layers = () => [...document.querySelectorAll<HTMLCanvasElement>('[data-officeview-show-surface=""] canvas')]
           .filter((c) => c.width > 0 && c.height > 0 && getComputedStyle(c).display !== 'none' && getComputedStyle(c).visibility !== 'hidden' && !c.closest('[hidden]'))
+        const surfaceEl = document.querySelector<HTMLElement>('[data-officeview-show-surface=""]')!
+        /** The nearest element at or above the surface with an opaque background: what shows through transparency. */
+        let back: HTMLElement | null = surfaceEl
+        while (back && !/^rgb\(|rgba\(.*,\s*1\)$/.test(getComputedStyle(back).backgroundColor)) back = back.parentElement
+        if (!back) throw new Error('no opaque backdrop above the show surface')
+        const backdrop = getComputedStyle(back).backgroundColor
+        const host = back.getBoundingClientRect()
+        const PW = 64, PH = Math.max(1, Math.round(64 * host.height / host.width))
         const probe = document.createElement('canvas')
-        probe.width = 64; probe.height = 36
+        probe.width = PW; probe.height = PH
         const ctx = probe.getContext('2d', { willReadFrequently: true })!
-        const st = { samples: [] as Array<{ slide: string | null; kind: string | null; black: number; control: boolean }>, on: true, control: false }
+        /** Where `c`'s pixels are displayed, in probe px (object-fit contain / cover / fill). */
+        const placed = (c: HTMLCanvasElement) => {
+          const r = c.getBoundingClientRect()
+          const fit = getComputedStyle(c).objectFit
+          let w = r.width, h = r.height
+          if (fit === 'contain' || fit === 'cover') {
+            const k = (fit === 'contain' ? Math.min : Math.max)(r.width / c.width, r.height / c.height)
+            w = c.width * k; h = c.height * k
+          }
+          const x = r.left + (r.width - w) / 2 - host.left, y = r.top + (r.height - h) / 2 - host.top
+          const sx = PW / host.width, sy = PH / host.height
+          return [x * sx, y * sy, w * sx, h * sy] as const
+        }
+        /** The black share of the frame: as shown, or a control (the top canvas opaque black; no canvas drawn at all). */
+        const measure = (mode?: 'opaque' | 'clear') => {
+          ctx.globalCompositeOperation = 'copy'
+          ctx.fillStyle = backdrop
+          ctx.fillRect(0, 0, PW, PH)
+          ctx.globalCompositeOperation = 'source-over'
+          const ls = mode === 'clear' ? [] : layers()
+          for (const c of ls) ctx.drawImage(c, ...placed(c))
+          const top = ls.at(-1)
+          if (mode === 'opaque' && top) { ctx.fillStyle = '#000'; ctx.fillRect(...placed(top)) }
+          const d = ctx.getImageData(0, 0, PW, PH).data
+          let black = 0
+          for (let i = 0; i < d.length; i += 4) if (Math.max(d[i]!, d[i + 1]!, d[i + 2]!) < 32) black++
+          return black / (PW * PH)
+        }
+        const st = { samples: [] as Sample[], on: true, control: false }
         ;(window as unknown as { __ovBlack: typeof st }).__ovBlack = st
         const tick = () => {
           if (!st.on) return
-          const top = layers().at(-1)
-          const control = st.control && !!top
-          if (control) {
-            // The control: the top canvas made black for this one frame proves the probe sees a black frame.
-            st.control = false
-            const gl = top!.getContext('webgl2')
-            if (gl) { gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT) } else { const c2 = top!.getContext('2d')!; c2.fillStyle = '#000'; c2.fillRect(0, 0, top!.width, top!.height) }
-          }
-          ctx.clearRect(0, 0, 64, 36)
-          for (const c of layers()) ctx.drawImage(c, 0, 0, 64, 36)
-          const d = ctx.getImageData(0, 0, 64, 36).data
-          let black = 0
-          for (let i = 0; i < d.length; i += 4) if (d[i + 3]! > 200 && Math.max(d[i]!, d[i + 1]!, d[i + 2]!) < 32) black++
           const root = document.querySelector('[data-officeview-show-surface=""]')
-          st.samples.push({ slide: root?.getAttribute('data-slide') ?? null, kind: root?.getAttribute('data-officeview-show-frame') ?? null, black: black / (64 * 36), control })
+          const at = { slide: root?.getAttribute('data-slide') ?? null, kind: root?.getAttribute('data-officeview-show-frame') ?? null }
+          st.samples.push({ ...at, black: measure() })
+          if (st.control) {
+            // The controls, on the same frame: what the oracle scores if the stage drew opaque black, or drew nothing.
+            st.control = false
+            st.samples.push({ ...at, black: measure('opaque'), control: 'opaque' }, { ...at, black: measure('clear'), control: 'clear' })
+          }
           requestAnimationFrame(tick)
         }
         requestAnimationFrame(tick)
+        return { backdrop, w: host.width, h: host.height }
       })
       // → through the fly-in, the cut to slide 2 and the fly-in on slide 3, then ← back to the first slide.
       for (const key of ['ArrowRight', 'ArrowRight', 'ArrowRight', 'ArrowRight', 'ArrowLeft', 'ArrowLeft', 'ArrowLeft', 'ArrowLeft']) {
@@ -260,23 +292,33 @@ for (const backend of BACKENDS) {
       }
       await page.evaluate(() => { (window as unknown as { __ovBlack: { control: boolean } }).__ovBlack.control = true })
       await page.waitForTimeout(300)
-      const samples = await page.evaluate(() => {
+      const all = await page.evaluate(() => {
         const st = (window as unknown as { __ovBlack: { on: boolean; samples: Sample[] } }).__ovBlack
         st.on = false
         return st.samples
       })
-      // Non-vacuous: every frame for ~7 s, across all three slides, and the probe flags the one black control frame.
+      const samples = all.filter((x) => !x.control)
+      // The deck's slides are 4:3 (buildPptxDeck's 9144000 × 6858000 EMU), letterboxed in the host: the backdrop's bars
+      // are this share of the frame. A frame is "mostly black" when, besides the bars, over half the slide is black.
+      const bars = 1 - Math.min(geometry.w / geometry.h, 4 / 3) / Math.max(geometry.w / geometry.h, 4 / 3)
+      const mostly = bars + (1 - bars) / 2
+      // Non-vacuous: every frame for ~7 s, across all three slides; the backdrop is the host's (opaque black);
+      // both controls score as mostly black.
+      expect(geometry.backdrop).toBe('rgb(0, 0, 0)')
       expect(samples.length).toBeGreaterThan(200)
       expect(new Set(samples.map((x) => x.slide))).toEqual(new Set(['0', '1', '2']))
-      const controls = samples.filter((x) => x.control)
-      expect(controls.length).toBe(1)
-      expect(controls[0]!.black).toBeGreaterThan(0.9)
-      // A 4:3 slide in the 16:9 surface is pillarboxed: its black bars are 25% of the frame. "Mostly black" is over half.
+      const controls = Object.fromEntries(all.filter((x) => x.control).map((x) => [x.control!, x.black]))
+      expect(Object.keys(controls).sort()).toEqual(['clear', 'opaque'])
+      expect(controls.opaque).toBeGreaterThan(mostly)
+      expect(controls.clear).toBeGreaterThan(mostly)
       // Prefetched: every frame is a slide's picture, never the loading or error frame.
       expect([...new Set(samples.map((x) => x.kind))], 'frame kinds').toEqual(['image'])
-      const dark = samples.map((x, i) => ({ i, ...x })).filter((x) => !x.control && x.black > 0.5)
+      const max = Math.max(...samples.map((x) => x.black))
+      console.log(`no-black [${backend}]: ${samples.length} frames; host ${geometry.w}×${geometry.h}, bars ${bars.toFixed(3)}; max black share ${max.toFixed(3)}; controls opaque ${controls.opaque!.toFixed(3)} clear ${controls.clear!.toFixed(3)}`)
+      // The bars are seen (the backdrop is in the measure), and no frame is mostly black.
+      expect(max).toBeGreaterThanOrEqual(bars - 0.03)
+      const dark = samples.map((x, i) => ({ i, ...x })).filter((x) => x.black > mostly)
       expect(dark, `mostly black frames [${backend}]`).toEqual([])
-      console.log(`no-black [${backend}]: ${samples.length} frames; max black share ${Math.max(...samples.filter((x) => !x.control).map((x) => x.black)).toFixed(3)}`)
       expect(w.refused).toEqual([])
       await page.keyboard.press('Escape')
       await expect.poll(() => presentState(page)).toBe('ended')
