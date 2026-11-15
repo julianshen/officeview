@@ -4467,26 +4467,23 @@ export function buildIconClassHypotheses(
 /**
  * Lesson 3 for icon classes: exactly one hypothesis must agree with the observed class at every designated cell. Two or
  * more agreeing (no designated cell separates them, for example `gte` off the boundary or `reverse` on the middle
- * bucket) is `non-discriminating`; none agreeing is `none` (a finding, `icon-hypothesis-none`).
+ * bucket) is `non-discriminating`; none agreeing is `none` (a finding, `icon-hypothesis-none`). Ruling
+ * S4-TWINSET-CONSISTENCY: "agree" means the prediction lies in the observed set (a twin set, or a singleton).
  */
-export function discriminateIcon(hyps: Readonly<Record<string, readonly IconClassHypothesis[]>>, rawObserved: Readonly<Record<string, string | null>>): IconDiscrimination {
+export function discriminateIcon(hyps: Readonly<Record<string, readonly IconClassHypothesis[]>>, observed: Readonly<Record<string, string | null>>): IconDiscrimination {
   const refs = Object.keys(hyps)
   const ids = [...new Set(refs.flatMap(r => hyps[r]!.map(h => h.id)))]
   if (refs.length === 0 || ids.length < 2) return { status: 'non-discriminating', reason: 'fewer than two hypotheses or no designated cell' }
-  // Ruling S4-NEARTWIN: a twin-set observation stands for the one class the competing hypotheses predict inside it; two
-  // predicted classes inside one set make the cell, and so the capability, non-discriminating (withheld, not refused).
-  const observed: Record<string, string | null> = { ...rawObserved }
-  for (const ref of refs) {
-    const members = iconTwinSetMembers(rawObserved[ref])
-    if (!members) continue
-    // Ruling S4-FAINT: a null prediction (no icon) is an outcome too, the `ICON_NO_ICON_MEMBER` of a faint set.
-    const inSet = [...new Set(hyps[ref]!.map(h => h.glyphClass ?? ICON_NO_ICON_MEMBER).filter(g => g !== 'unresolved' && members.includes(g)))]
-    if (inSet.length > 1) return { status: 'non-discriminating', reason: `Ruling S4-NEARTWIN/S4-FAINT: designated cell ${ref} shows the twin set {${members.join(', ')}}, which holds the predicted outcomes ${inSet.join(', ')}` }
-    if (inSet.length === 1) observed[ref] = inSet[0] === ICON_NO_ICON_MEMBER ? null : inSet[0]!
+  // Ruling S4-TWINSET-CONSISTENCY: every observation is a set (a singleton for a plain class or no icon, or a
+  // S4-NEARTWIN / S4-FAINT twin set, where no icon is `ICON_NO_ICON_MEMBER`); a hypothesis is consistent iff its predicted
+  // outcome lies in the observed set at every designated cell. With singletons only this is plain equality.
+  const inObserved = (ref: string, predicted: string | null): boolean => {
+    const members = iconTwinSetMembers(observed[ref])
+    return members ? members.includes(predicted ?? ICON_NO_ICON_MEMBER) : predicted === observed[ref]
   }
   const consistent = ids.filter(id => refs.every(ref => {
     const h = hyps[ref]!.find(x => x.id === id)
-    return h !== undefined && h.glyphClass !== 'unresolved' && ref in observed && h.glyphClass === observed[ref]
+    return h !== undefined && h.glyphClass !== 'unresolved' && ref in observed && inObserved(ref, h.glyphClass)
   }))
   if (consistent.length === 0) return { status: 'none', reason: 'the observed classes match no hypothesis' }
   if (consistent.length > 1) return { status: 'non-discriminating', reason: `hypotheses ${consistent.join(', ')} all agree with every designated cell` }

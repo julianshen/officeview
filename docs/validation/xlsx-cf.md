@@ -1397,3 +1397,21 @@ On the stored capture, computed in memory without writing to the committed refs:
 - **`stage4-icon-families` capabilities:** `icon:families-x14` discriminates `bucket-order`, and `icon:families-base`, `icon:settings-schema-defaults` and `icon:scope-whole-column` discriminate too.
 
 These results become committed evidence only after the orchestrator runs `capture --stage 4 --verify-only`.
+
+**Ruling S4-TWINSET-CONSISTENCY (fix round 5).** This replaces the round-3 rule under which an ambiguous cell withheld the whole capability.
+- Every observation is a set: a singleton for a plain class or for no icon, or a twin set.
+- A hypothesis is consistent iff its predicted outcome (null counts as `no-icon`) lies in the observed set at every designated cell.
+- Exactly one consistent hypothesis means discriminating. None gives `icon-hypothesis-none`. Two or more give non-discriminating.
+- With singletons only, this is exactly the earlier equality rule, and the pre-twin tests pass unchanged.
+
+On the stored captures (in memory, as before), only three capabilities have a twin-set designated cell, and one changed relative to round 4:
+- `icon:dialect-standalone` (authored, twin cell D2) is now **discriminating `as-modelled`**. Clean cells such as D6 = 5Boxes:4 refute the `no-icon` and `reversed-order` readings. It was non-discriminating in round 4.
+- `icon:dialect-base` (authored) is discriminating `as-modelled`, unchanged.
+- `icon:families-base` (twin cells L2, L3, R6) is discriminating `bucket-order`, unchanged.
+- `icon:families-x14` (twin cell U2) is discriminating `bucket-order`, unchanged.
+
+**Known caveat: `iconApplied` on faint and twin-set cells.** A capture writes `iconApplied = (icon !== null)`, which is the ink at the S4-A threshold.
+- A faint cell (`faintGlyphClass`, for example authored D2 or families U2) is labelled `iconApplied: false`, although Excel draws a faint glyph there.
+- A twin-set cell with ink is labelled `true` whichever member it is.
+
+This is a label only. Bucket evidence comes from the set-consistency recomputation, and no geometry claim rests on a faint cell, so there is no code change.

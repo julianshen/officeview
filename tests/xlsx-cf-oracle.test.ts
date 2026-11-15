@@ -4811,11 +4811,31 @@ describe('Stage 4 icon oracle (Task 24)', () => {
 
     it('a twin-set observation is non-discriminating when both twins are predicted', () => {
       const tw = iconTwinSetClass(['A', 'B'])
-      const hyps = { B2: [{ id: 'h1', glyphClass: 'A' }, { id: 'h2', glyphClass: 'B' }], B3: [{ id: 'h1', glyphClass: 'C' }, { id: 'h2', glyphClass: 'D' }] }
-      // B3 alone would separate them, but B2's observation cannot tell h1 from h2: the capability is withheld.
-      const d = discriminateIcon(hyps, { B2: tw, B3: 'C' })
-      expect(d.status).toBe('non-discriminating')
-      expect((d as { reason: string }).reason).toMatch(/S4-NEARTWIN/)
+      // Ruling S4-TWINSET-CONSISTENCY: two hypotheses that differ only at the ambiguous cell, both inside its set, are
+      // both consistent: non-discriminating.
+      const only = { B2: [{ id: 'h1', glyphClass: 'A' }, { id: 'h2', glyphClass: 'B' }], B3: [{ id: 'h1', glyphClass: 'C' }, { id: 'h2', glyphClass: 'C' }] }
+      expect(discriminateIcon(only, { B2: tw, B3: 'C' }).status).toBe('non-discriminating')
+    })
+
+    describe('Ruling S4-TWINSET-CONSISTENCY (fix round 5): discrimination by set consistency', () => {
+      const tw = iconTwinSetClass(['A', 'B'])
+      it('two hypotheses that differ only at an ambiguous cell, both inside its set, are non-discriminating', () => {
+        const hyps = { B2: [{ id: 'h1', glyphClass: 'A' }, { id: 'h2', glyphClass: 'B' }], B3: [{ id: 'h1', glyphClass: 'C' }, { id: 'h2', glyphClass: 'C' }] }
+        expect(discriminateIcon(hyps, { B2: tw, B3: 'C' })).toMatchObject({ status: 'non-discriminating' })
+      })
+      it('a clean separating cell beside the ambiguous one discriminates for the right hypothesis', () => {
+        const hyps = { B2: [{ id: 'h1', glyphClass: 'A' }, { id: 'h2', glyphClass: 'B' }], B3: [{ id: 'h1', glyphClass: 'C' }, { id: 'h2', glyphClass: 'D' }] }
+        expect(discriminateIcon(hyps, { B2: tw, B3: 'C' })).toEqual({ status: 'discriminating', matched: 'h1' })
+        expect(discriminateIcon(hyps, { B2: tw, B3: 'D' })).toEqual({ status: 'discriminating', matched: 'h2' })
+      })
+      it('a hypothesis whose prediction lies outside the observed set at any cell is inconsistent', () => {
+        const hyps = { B2: [{ id: 'h1', glyphClass: 'A' }, { id: 'h2', glyphClass: 'E' }], B3: [{ id: 'h1', glyphClass: 'C' }, { id: 'h2', glyphClass: 'C' }] }
+        expect(discriminateIcon(hyps, { B2: tw, B3: 'C' })).toEqual({ status: 'discriminating', matched: 'h1' })
+        // Both outside: none consistent (icon-hypothesis-none upstream).
+        expect(discriminateIcon({ B2: [{ id: 'h1', glyphClass: 'E' }, { id: 'h2', glyphClass: 'F' }] }, { B2: tw })).toMatchObject({ status: 'none' })
+        // A null prediction is outside a set without no-icon.
+        expect(discriminateIcon({ B2: [{ id: 'h1', glyphClass: null }, { id: 'h2', glyphClass: 'A' }] }, { B2: tw })).toEqual({ status: 'discriminating', matched: 'h2' })
+      })
     })
 
     it('a twin-set observation does not refuse the case', () => {
@@ -4843,11 +4863,14 @@ describe('Stage 4 icon oracle (Task 24)', () => {
       const got = evaluateIconCapabilities(c, parts, twinObserved, key)[cap]!
       expect(got.status).toBe('discriminating')
       expect(got.matched).toBe(baseline.matched)
-      // A twin set holding two predicted classes withholds the capability (non-discriminating), never refuses the case.
+      // A twin set holding two predicted classes never refuses the case; the clean cells still decide (Ruling
+      // S4-TWINSET-CONSISTENCY), so the same hypothesis wins.
       const other = hyps[at]!.find(h => h.glyphClass !== null && h.glyphClass !== p)?.glyphClass
       expect(other).toBeDefined()
       twinObserved.set(at, obs(at, iconTwinSetClass([p, other!])))
-      expect(evaluateIconCapabilities(c, parts, twinObserved, key)[cap]!.status).toBe('non-discriminating')
+      const both = evaluateIconCapabilities(c, parts, twinObserved, key)[cap]!
+      expect(both.status).toBe('discriminating')
+      expect(both.matched).toBe(baseline.matched)
     })
 
     it('S4-FAINT: a faint key glyph (d = 34 against its control) is admitted as a class twinned with no icon', () => {
@@ -4880,9 +4903,10 @@ describe('Stage 4 icon oracle (Task 24)', () => {
       const tw = iconTwinSetClass(['5Boxes:0', ICON_NO_ICON_MEMBER])
       // Authored-style: D2 predicts 5Boxes:0 (as modelled) against 3Arrows:0 (another reading); D3 agrees for both.
       expect(discriminateIcon({ D2: [{ id: 'as-modelled', glyphClass: '5Boxes:0' }, { id: 'other', glyphClass: '3Arrows:0' }], D3: [{ id: 'as-modelled', glyphClass: '5Boxes:1' }, { id: 'other', glyphClass: '5Boxes:1' }] }, { D2: tw, D3: '5Boxes:1' })).toEqual({ status: 'discriminating', matched: 'as-modelled' })
-      // Against a reading that predicts no icon at D2, the faint set holds both outcomes: withheld, never refused.
-      const d = discriminateIcon({ D2: [{ id: 'as-modelled', glyphClass: '5Boxes:0' }, { id: 'no-icon', glyphClass: null }], D3: [{ id: 'as-modelled', glyphClass: '5Boxes:1' }, { id: 'no-icon', glyphClass: null }] }, { D2: tw, D3: '5Boxes:1' })
-      expect(d.status).toBe('non-discriminating')
+      // Against a reading that predicts no icon at D2, the faint set holds both outcomes: on D2 alone, withheld, never
+      // refused; a clean D3 that refutes the no-icon reading decides it (Ruling S4-TWINSET-CONSISTENCY).
+      expect(discriminateIcon({ D2: [{ id: 'as-modelled', glyphClass: '5Boxes:0' }, { id: 'no-icon', glyphClass: null }] }, { D2: tw }).status).toBe('non-discriminating')
+      expect(discriminateIcon({ D2: [{ id: 'as-modelled', glyphClass: '5Boxes:0' }, { id: 'no-icon', glyphClass: null }], D3: [{ id: 'as-modelled', glyphClass: '5Boxes:1' }, { id: 'no-icon', glyphClass: null }] }, { D2: tw, D3: '5Boxes:1' })).toEqual({ status: 'discriminating', matched: 'as-modelled' })
       // A null prediction alone inside the set resolves to no icon.
       expect(discriminateIcon({ D2: [{ id: 'a', glyphClass: null }, { id: 'b', glyphClass: '3Arrows:0' }] }, { D2: tw })).toEqual({ status: 'discriminating', matched: 'a' })
     })
