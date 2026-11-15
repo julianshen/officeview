@@ -85,6 +85,31 @@ export const runLinkDeck = () => buildPptxDeck({
   ],
 })
 
+/**
+ * Two slides. Slide 0: a narrow box (id 2, 80,80 220×300) whose one run, a long sentence, links to slide 2 and wraps
+ * over several lines; and a box (id 3, 400,80 400×200) with its own link (an external URL, withheld) whose first run
+ * "Jump" links to slide 2. Click 1 makes shape 5 appear.
+ */
+export const runLinkWrapDeck = () => buildPptxDeck({
+  slides: [
+    {
+      bg: { solid: 'FFFFFF' },
+      shapes: [
+        rect(2, 'Wrap', 80, 80, 220, 300, 'FFFFFF', { paragraphs: [{ runs: [{ text: 'one two three four five six seven eight nine ten', sz: '2400' }] }] }),
+        rect(3, 'Both', 400, 80, 400, 200, 'FFFFFF', { paragraphs: [{ runs: [{ text: 'Jump', sz: '2800' }, { text: ' and the rest', sz: '2800' }] }] }),
+        rect(5, 'Late', 400, 360, 240, 120, '70AD47'),
+      ],
+      links: [
+        { shapeId: 2, target: 'slide2.xml', action: 'ppaction://hlinksldjump', onRun: 0 },
+        { shapeId: 3, target: 'slide2.xml', action: 'ppaction://hlinksldjump', onRun: 0 },
+        { shapeId: 3, target: 'https://example.com/', external: true },
+      ],
+      timingXml: oneStep(id => [appear(id, 5)]),
+    },
+    { bg: { solid: 'FFFFFF' }, shapes: [rect(2, 'Two', 300, 300, 200, 120, 'C00000')] },
+  ],
+})
+
 /** One slide: click 1 makes the shape (id 2, `w` × `h` at x, y) appear and grows it by `by` (`p:animScale`). */
 export const growthDeck = (by: number, box: { x: number; y: number; w: number; h: number } = { x: 380, y: 260, w: 200, h: 200 }) => buildPptxDeck({
   slides: [{

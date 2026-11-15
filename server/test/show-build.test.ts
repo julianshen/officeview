@@ -20,7 +20,7 @@ import { inkPixels } from './show-classify-helper'
 import { decodePng } from '../src/mark/png'
 import { SHOW_BUNDLE_BUDGET, type BuiltShowPlan, type ShowPlanJob } from '../src/show/build'
 import { showPlanL1Key, showPlanL2Key } from '../src/cache'
-import { cmdDeck, groupDeck, growthDeck, hiddenLinkDeck, masterTargetDeck, openDeck, runLinkDeck, transitionOnlyDeck } from './show-fixtures'
+import { cmdDeck, groupDeck, growthDeck, hiddenLinkDeck, masterTargetDeck, openDeck, runLinkDeck, runLinkWrapDeck, transitionOnlyDeck } from './show-fixtures'
 
 const job = (over: Partial<ShowPlanJob> = {}): ShowPlanJob => ({ unitIndex: 0, scale: 1, motion: 'full', mark: { kind: 'fixed' }, strictMarks: false, ...over })
 const built = (r: Awaited<ReturnType<import('../src/render').DocumentHost['showPlan']>>): BuiltShowPlan => {
@@ -373,6 +373,27 @@ describe('buildShowPlan', () => {
     expect(hit((jump[0]!.x + jump[0]!.w + web[0]!.x) / 2, centre(jump[0]!)[1])).toBeUndefined()
     expect(hit(380, 260)).toBeUndefined()
     expect(b.plan.diagnostics.map(d => d.code)).toContain('link-withheld')
+    roundTrip(b)
+  })
+
+  it('run links: a wrapped run has one rect per line; a run wins over its shape\'s own link (PR #78 round 6)', async () => {
+    const { host, docKey } = await openDeck(await runLinkWrapDeck())
+    const b = built(await host.showPlan(docKey, job()))
+    const regions = b.plan.linkRegions
+    const hit = (x: number, y: number) => { for (let i = regions.length - 1; i >= 0; i--) { const r = regions[i]!.rect; if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return regions[i]!.action } return undefined }
+    const inBox = (x0: number, x1: number) => regions.filter(r => r.rect.x >= x0 - 8 && r.rect.x + r.rect.w <= x1 + 8)
+    // The wrapped sentence: several lines, one rect each (distinct rows), every one the slide link.
+    const wrap = inBox(80, 300)
+    expect(wrap.length).toBeGreaterThan(1)
+    expect(new Set(wrap.map(r => Math.round(r.rect.y))).size).toBe(wrap.length)
+    expect(wrap.every(r => r.action.kind === 'slide')).toBe(true)
+    // Box 3: its own link covers the box; its "Jump" run takes the clicks over that run.
+    const both = inBox(400, 800)
+    const jump = both.filter(r => r.action.kind === 'slide')
+    expect(jump.length).toBe(1)
+    const j = jump[0]!.rect
+    expect(hit(j.x + j.w / 2, j.y + j.h / 2)).toEqual({ kind: 'slide', index: 1 })
+    expect(hit(780, 260)).toEqual({ kind: 'withheld' })
     roundTrip(b)
   })
 

@@ -401,8 +401,9 @@ Evidence:
   of that run (`runRegionsOf`, `src/slideshow/prepare/slide.ts`, laid out as the local stage's `runAt`); a shape's own
   link ships before its runs', so a run wins over its shape. A run that cannot be located gets no region (local mode
   gives it the first run's link instead), so it never takes another run's clicks: vertical or warped text, a
-  transformed segment, or a rotated or skewed shape, where an axis-aligned box would cover its neighbours. A link
-  whose rects do not all fit the 64-region cap is dropped whole. Like every region, run rects are static.
+  transformed segment, or a rotated or skewed shape, where an axis-aligned box would cover its neighbours. A wrapped
+  run has one rect per line (tested). At the 64-region cap a run link whose rects do not all fit is dropped whole,
+  and a shape's link keeps the rects that fit, as before. Like every region, run rects are static.
 - **Morph starts from a settled checkpoint (D11).** The server re-plans the from-slide at `checkpoint(fromStep)`.
   Local Morph starts from the live state (mid-step, or with trigger history). The harness samples Morph only
   from settled states.

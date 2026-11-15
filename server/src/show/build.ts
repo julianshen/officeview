@@ -358,9 +358,11 @@ function prepareL1(show: ShowDoc, job: ShowPlanJob): L1Entry {
     } else if (a.kind === 'jump') action = { kind: 'jump', verb: a.verb }
     else action = { kind: 'withheld' }
     if (action.kind === 'withheld') withheld = true
-    // A link whose rects do not all fit the cap is dropped whole, never cut to part of its text.
+    // At the cap a shape's link keeps the rects that fit (as before); a run link is dropped whole, never cut to part
+    // of its text.
     const rects = linkRectsOf(link)
-    if (linkRegions.length + rects.length <= SHOW_PLAN_LIMITS.links) for (const rect of rects) linkRegions.push({ rect, action })
+    if (link.run && linkRegions.length + rects.length > SHOW_PLAN_LIMITS.links) continue
+    for (const rect of rects) if (linkRegions.length < SHOW_PLAN_LIMITS.links) linkRegions.push({ rect, action })
   }
 
   const base = [...ps.base].filter(([k]) => ps.animated.has(k)).map(([k, g]): [string, typeof g] => [k, { x: g.x, y: g.y, w: g.w, h: g.h, rot: g.rot }])
