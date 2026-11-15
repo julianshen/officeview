@@ -360,6 +360,12 @@ describe('icon participation and scope gates', () => {
       const lifted = await serviceRun(shape.rules(), values(), [...EVAL, ...overlap, ...extra, shape.cap], shape.options)
       expect(iconOf(lifted.at(9))?.bucket, shape.cap).toBe(2)
     }
+    // A hidden row needs both hidden-row ids (an autofilter writes ordinary hidden-row records): either alone blocks.
+    for (const only of ['icon:scope-hidden-row', 'icon:scope-autofilter-hidden-row']) {
+      const half = await serviceRun([iconRule(1, iconDef())], values(), [...EVAL, only], { hiddenRows: [R(4, 4)] })
+      expect(iconOf(half.at(9)), only).toBeUndefined()
+      expect(taintsIcon(half.at(9)), only).toBe(true)
+    }
   })
 
   it('an icon rule carrying a DXF is withheld whole: icon and DXF writes tainted (fail closed)', async () => {
