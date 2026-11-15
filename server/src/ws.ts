@@ -117,6 +117,8 @@ interface Conn {
   missingFaces: string[]
   /** Print jobs waiting for this socket to drain. */
   drainWaiters: Set<() => void>
+  /** Aborted when the socket closes: its queued show builds and Layer-1 encodes never start (PR #78 round 4). */
+  gone: AbortController
 }
 type WS = ServerWebSocket<Conn>
 
@@ -160,6 +162,7 @@ export function createStreamServer(o: StreamServerOptions) {
     if (ws.data.phase === 'closed') return
     const code = name === 'superseded' ? 4409 : CLOSE[name]
     ws.data.phase = 'closed'
+    ws.data.gone.abort()
     wakeDrain(ws)
     for (const t of ws.data.timers) clearTimeout(t)
     ws.close(code, name)
@@ -779,7 +782,7 @@ export function createStreamServer(o: StreamServerOptions) {
     const start: Record<string, unknown> = { reqId, type: `show-${kind}-start`, unit }
     try {
       if (kind === 'plan') {
-        const built = await o.pool.showPlan(s.sid, { ...base, unitIndex: unit }, estimate)
+        const built = await o.pool.showPlan(s.sid, { ...base, unitIndex: unit }, estimate, ws.data.gone.signal)
         if (!alive()) return
         if ('refused' in built) return deny(reqId, built.refused)
         head = { tag: 1, plan: built.plan }
@@ -789,7 +792,7 @@ export function createStreamServer(o: StreamServerOptions) {
         page = { w: entry.w, h: entry.h }
         decoded = built.decodedBytes
       } else if (kind === 'track') {
-        const frames = await o.pool.showTrack(s.sid, { ...base, unitIndex: unit, step: msg.step as number }, estimate)
+        const frames = await o.pool.showTrack(s.sid, { ...base, unitIndex: unit, step: msg.step as number }, estimate, ws.data.gone.signal)
         if (!alive()) return
         if (!frames.length) return deny(reqId, 'invalid-unit')
         assets = frames.map((f) => ({ tag: 4, ...f, rest: { x: 0, y: 0, scale: 1 } }))
@@ -797,7 +800,7 @@ export function createStreamServer(o: StreamServerOptions) {
         decoded = trackWindowBytes(frames)
         start.step = msg.step
       } else {
-        const built = await o.pool.showMorph(s.sid, { ...base, from: msg.from as number, to: unit, fromStep: msg.fromStep as number }, estimate)
+        const built = await o.pool.showMorph(s.sid, { ...base, from: msg.from as number, to: unit, fromStep: msg.fromStep as number }, estimate, ws.data.gone.signal)
         if (!alive()) return
         if ('refused' in built) return deny(reqId, built.refused)
         head = { tag: 5, morph: built.record }
@@ -811,7 +814,7 @@ export function createStreamServer(o: StreamServerOptions) {
     } catch (e) { return alive() ? deny(reqId, showFailure(e)) : undefined }
 
     // 7. Layer-1 per asset, in order (the scratch lease holds two at most).
-    const marked = await markShow(alive, s.sid, sd, unit, scale, page, assets)
+    const marked = await markShow(alive, s.sid, sd, unit, scale, page, assets, ws.data.gone.signal)
     if (marked === undefined) return
     if (typeof marked === 'string') return deny(reqId, marked)
 
@@ -845,7 +848,7 @@ export function createStreamServer(o: StreamServerOptions) {
    * session without Layer-1 (policy, or `testOnly.forensicOff`) lists every asset (`forensic-off`). `undefined`: the
    * session died meanwhile (send nothing).
    */
-  async function markShow(alive: () => boolean, sid: string, sd: { doc: DocState; forensic?: Issued }, unit: number, scale: number, page: { w: number; h: number }, assets: OutAsset[]): Promise<{ assets: OutAsset[]; unmarked: number[]; reason: 'layer-capacity' | 'forensic-off' } | ShowErrorCode | undefined> {
+  async function markShow(alive: () => boolean, sid: string, sd: { doc: DocState; forensic?: Issued }, unit: number, scale: number, page: { w: number; h: number }, assets: OutAsset[], signal?: AbortSignal): Promise<{ assets: OutAsset[]; unmarked: number[]; reason: 'layer-capacity' | 'forensic-off' } | ShowErrorCode | undefined> {
     if (!sd.forensic || o.testOnly?.forensicOff === true) return { assets, unmarked: assets.map((x) => x.assetId), reason: 'forensic-off' }
     const kBasis = deriveBasisKey(o.keys.kBasisRoot, sd.doc.docRef, `${unit}@${scale}`)
     const out: OutAsset[] = [], unmarked: number[] = []
@@ -854,7 +857,7 @@ export function createStreamServer(o: StreamServerOptions) {
       try { release = await leaseFor(sid).acquire() } catch (e) { return e instanceof LeaseFull ? 'rate-limited' : 'policy-refused' }
       let r
       try {
-        r = await o.pool.markLayer(sid, { png: x.png, w: x.w, h: x.h, kBasis, code: sd.forensic.code, crop: { x: x.rest.x, y: x.rest.y, pageW: page.w, pageH: page.h, scale: x.rest.scale }, ...(o.encodeHangMs ? { hangMs: o.encodeHangMs } : {}) }, encodeEstimate(x.w, x.h, x.png.length))
+        r = await o.pool.markLayer(sid, { png: x.png, w: x.w, h: x.h, kBasis, code: sd.forensic.code, crop: { x: x.rest.x, y: x.rest.y, pageW: page.w, pageH: page.h, scale: x.rest.scale }, ...(o.encodeHangMs ? { hangMs: o.encodeHangMs } : {}) }, encodeEstimate(x.w, x.h, x.png.length), signal)
       } catch (e) { return alive() ? (e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined } finally { release() }
       if (!alive()) return undefined
       if ('unmarked' in r) { forensicStats.unmarked++; unmarked.push(x.assetId); out.push(x) } else { forensicStats.marked++; out.push({ ...x, png: r.png }) }
@@ -976,7 +979,7 @@ export function createStreamServer(o: StreamServerOptions) {
       const ip = srv.requestIP(req)?.address ?? 'unknown'
       const gate = ipRates.admit(ip, now())
       if (gate !== 'ok') return new Response('Too Many Requests', { status: 429 })
-      const data: Conn = { ip, origin, url: req.url, headers: req.headers, phase: 'hello', rates: new SessionRates(), timers: new Set(), missingFaces: [], drainWaiters: new Set() }
+      const data: Conn = { ip, origin, url: req.url, headers: req.headers, phase: 'hello', rates: new SessionRates(), timers: new Set(), missingFaces: [], drainWaiters: new Set(), gone: new AbortController() }
       if (srv.upgrade(req, { data })) return undefined
       ipRates.release(ip)
       return new Response('Upgrade failed', { status: 400 })
@@ -1002,6 +1005,7 @@ export function createStreamServer(o: StreamServerOptions) {
       close(ws: WS, code: number) {
         sockets.delete(ws)
         ipRates.release(ws.data.ip)
+        ws.data.gone.abort()
         wakeDrain(ws)
         for (const t of ws.data.timers) clearTimeout(t)
         const sid = ws.data.sid

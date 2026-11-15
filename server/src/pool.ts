@@ -21,6 +21,8 @@ import { prepareWorkspace, TEXT_PREPARE_ALLOWANCE, type TextJob, type TextReply 
 export class AdmissionRefused extends Error { constructor(readonly reason: 'session-queue' | 'process-queue' | 'too-large') { super(`admission refused: ${reason}`); this.name = 'AdmissionRefused' } }
 export class RenderTimeout extends Error { constructor() { super('render deadline exceeded'); this.name = 'RenderTimeout' } }
 export class RenderFailed extends Error { constructor(m: string, readonly refusal?: string) { super(m); this.name = 'RenderFailed' } }
+/** A show job whose socket closed before it reached a worker: nothing was run (PR #78 round 4). */
+export class ShowCancelled extends RenderFailed { constructor() { super('cancelled: the requesting socket closed'); this.name = 'ShowCancelled' } }
 /** A text op whose units do not all fit the worker's served-index cache at once (Task 5 maps it to copy-too-large). */
 export class TextTooLarge extends Error { constructor(readonly missing: number[]) { super(`text range exceeds the served-index cache (${missing.length} units missing)`); this.name = 'TextTooLarge' } }
 
@@ -281,14 +283,14 @@ export class Pool {
    * `render`, under `SHOW_PLAN_DEADLINE_MS` (10 s, against 2 s for units). A bundle past the deadline retires
    * its worker and plays its still: `{ refused: 'show-plan-timeout' }`.
    */
-  async showPlan(sessionId: string, job: PoolShowJob, bytesEstimate: number): Promise<BuiltShowPlan | ShowRefusal> {
+  async showPlan(sessionId: string, job: PoolShowJob, bytesEstimate: number, signal?: AbortSignal): Promise<BuiltShowPlan | ShowRefusal> {
     const { docRef, contentPolicy, hangMs, crash, ...show } = job
     const key = [docRef, contentPolicy, show.unitIndex, show.scale, show.motion, show.strictMarks].join('|')
     const known = this.showRefusals.get(key)
     if (known) return known
     let r: BuiltShowPlan | ShowRefusal
     try {
-      r = await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-plan', id: this.nextId++, docKey, job: show, ...this.hooks(hangMs, crash) })) as BuiltShowPlan | ShowRefusal
+      r = await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-plan', id: this.nextId++, docKey, job: show, ...this.hooks(hangMs, crash) }), signal) as BuiltShowPlan | ShowRefusal
     } catch (e) {
       if (!(e instanceof RenderTimeout)) throw e
       r = { refused: 'show-plan-timeout', diagnostics: [{ code: 'show-plan-timeout' }] }
@@ -298,34 +300,31 @@ export class Pool {
   }
 
   /** Piece 4: the keyframe track of one composited step (affinity, admission, `SHOW_PLAN_DEADLINE_MS`; a timeout throws `RenderTimeout`). */
-  async showTrack(sessionId: string, job: PoolShowJob & { step: number }, bytesEstimate: number): Promise<Array<{ assetId: number; w: number; h: number; png: Uint8Array }>> {
+  async showTrack(sessionId: string, job: PoolShowJob & { step: number }, bytesEstimate: number, signal?: AbortSignal): Promise<Array<{ assetId: number; w: number; h: number; png: Uint8Array }>> {
     const { docRef, contentPolicy, hangMs, crash, ...show } = job
     const plan = [docRef, contentPolicy, show.unitIndex, show.scale, show.motion, show.strictMarks].join('|')
     // A slide whose bundle is refused has no track.
     if (this.showRefusals.has(plan)) return []
-    return await this.remembered(docRef, `${plan}|track|${show.step}`, async () => await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-track', id: this.nextId++, docKey, job: show, ...this.hooks(hangMs, crash) })) as Array<{ assetId: number; w: number; h: number; png: Uint8Array }>)
+    return await this.remembered(docRef, `${plan}|track|${show.step}`, async () => await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-track', id: this.nextId++, docKey, job: show, ...this.hooks(hangMs, crash) }), signal) as Array<{ assetId: number; w: number; h: number; png: Uint8Array }>)
   }
 
   /** Piece 4 Task 7: one Morph pair (affinity, admission, `SHOW_PLAN_DEADLINE_MS`; a timeout throws `RenderTimeout`). */
-  async showMorph(sessionId: string, job: PoolMorphJob, bytesEstimate: number): Promise<BuiltMorph> {
+  async showMorph(sessionId: string, job: PoolMorphJob, bytesEstimate: number, signal?: AbortSignal): Promise<BuiltMorph> {
     const { docRef, contentPolicy, hangMs, crash, ...morph } = job
     const key = [docRef, contentPolicy, 'morph', morph.from, morph.to, morph.fromStep, morph.scale, morph.motion, morph.strictMarks === true].join('|')
-    return await this.remembered(docRef, key, async () => await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-morph', id: this.nextId++, docKey, job: morph, ...this.hooks(hangMs, crash) })) as BuiltMorph)
+    return await this.remembered(docRef, key, async () => await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-morph', id: this.nextId++, docKey, job: morph, ...this.hooks(hangMs, crash) }), signal) as BuiltMorph)
   }
 
   /**
    * Piece 4 D7: a layer's per-session Layer-1 encode. It reads no document, so it runs on the least-loaded
    * worker as `encode` does, with the same admission, under `SHOW_PLAN_DEADLINE_MS`.
    */
-  async markLayer(sessionId: string, job: MarkLayerJob, bytesEstimate: number): Promise<MarkLayerResult> {
-    if (this.disposed) throw new RenderFailed('pool disposed')
-    const res = this.admission.request(sessionId, bytesEstimate, this.now())
-    if (res.status === 'refused') throw new AdmissionRefused(res.reason)
-    const admitted = res.job
-    if (res.status === 'queued' && !(await new Promise<boolean>((r) => this.waiters.set(admitted.id, r)))) throw new RenderFailed('pool disposed')
+  async markLayer(sessionId: string, job: MarkLayerJob, bytesEstimate: number, signal?: AbortSignal): Promise<MarkLayerResult> {
+    const admitted = await this.admit(sessionId, bytesEstimate, signal)
     const slot = [...this.slots].sort((a, b) => (Number(a.busy) - Number(b.busy)) || (a.queue.length - b.queue.length) || a.index - b.index)[0]!
     try {
       return await this.exclusive(slot, () => {
+        if (signal?.aborted) throw new ShowCancelled()
         const msg: WorkerRequest = { type: 'mark-layer', id: this.nextId++, png: job.png, w: job.w, h: job.h, kBasis: job.kBasis, code: job.code, crop: job.crop, ...this.hooks(job.hangMs, job.crash) }
         return this.runJob(slot, admitted, msg, this.showDeadlineMs) as Promise<MarkLayerResult>
       })
@@ -337,15 +336,36 @@ export class Pool {
   private hooks(hangMs?: number, crash?: boolean) { return { ...(this.testHooks && hangMs ? { hangMs } : {}), ...(this.testHooks && crash ? { crash: true } : {}) } }
 
   /** A show job on the docRef's worker: admission, affinity, the show deadline, the recycle check. */
-  private async showJob(sessionId: string, docRef: string, contentPolicy: 'visible-only' | 'full', bytesEstimate: number, msg: (docKey: string) => WorkerRequest): Promise<unknown> {
+  /**
+   * Admission for one job of `sessionId`: refused, started, or queued until it starts. `signal` (the requesting
+   * socket's): aborted while queued, the job leaves the queue unstarted (nothing charged) and `ShowCancelled` is
+   * thrown; aborted before the call, nothing is requested (PR #78 round 4: a closed page's backlog never runs).
+   */
+  private async admit(sessionId: string, bytesEstimate: number, signal?: AbortSignal): Promise<Job> {
     if (this.disposed) throw new RenderFailed('pool disposed')
+    if (signal?.aborted) throw new ShowCancelled()
     const res = this.admission.request(sessionId, bytesEstimate, this.now())
     if (res.status === 'refused') throw new AdmissionRefused(res.reason)
     const admitted = res.job
-    if (res.status === 'queued' && !(await new Promise<boolean>((r) => this.waiters.set(admitted.id, r)))) throw new RenderFailed('pool disposed')
+    if (res.status === 'admitted') return admitted
+    let onAbort: (() => void) | undefined
+    const started = await new Promise<boolean>((r) => {
+      this.waiters.set(admitted.id, r)
+      onAbort = () => { if (this.waiters.get(admitted.id) === r && this.admission.cancel(admitted.id)) { this.waiters.delete(admitted.id); r(false) } }
+      signal?.addEventListener('abort', onAbort, { once: true })
+    })
+    if (onAbort) signal?.removeEventListener('abort', onAbort)
+    if (!started) throw this.disposed ? new RenderFailed('pool disposed') : new ShowCancelled()
+    return admitted
+  }
+
+  private async showJob(sessionId: string, docRef: string, contentPolicy: 'visible-only' | 'full', bytesEstimate: number, msg: (docKey: string) => WorkerRequest, signal?: AbortSignal): Promise<unknown> {
+    const admitted = await this.admit(sessionId, bytesEstimate, signal)
     const slot = this.pick(docRef)
     try {
       return await this.exclusive(slot, async () => {
+        // Admitted, then waited for the worker: a socket that closed meanwhile has no use for the build.
+        if (signal?.aborted) throw new ShowCancelled()
         const { docKey } = await this.ensureOpen(slot, docRef, contentPolicy)
         const r = await this.runJob(slot, admitted, msg(docKey), this.showDeadlineMs)
         if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
