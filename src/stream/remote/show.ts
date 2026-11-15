@@ -435,7 +435,7 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     if (budgetStuck !== `${i}:${build}`) { budgetStuck = `${i}:${build}`; render(false) }
     if (refusedAt.has(build)) return
     refusedAt.add(build)
-    sink.add({ code: 'show-budget', slideIndex: i, effect: `step:${k}`, message: `A keyframe frame of step ${k + 1} does not fit the show budget; the step holds its previous picture` })
+    sink.add({ code: 'show-budget', slideIndex: i, effect: `step:${k}`, message: `A keyframe frame of step ${k + 1} does not fit the show budget; the step shows the typed error frame` })
   }
   function extraBytes(): number {
     let n = frameBytes + pinnedBytes
