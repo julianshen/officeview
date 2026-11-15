@@ -387,6 +387,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
       while (!fetcher.makeRoom(bytes)) if (!yieldTrack(except)) return undefined
       const l = workspace.lease(bytes, tag)
       if (!l) return undefined
+      // The playing track's frame is in: its build draws again (round 6 ruling).
+      if (budgetStuck !== undefined && slide !== 'end' && except === `${slide}:${build - 1}`) budgetStuck = undefined
       frameBytes += bytes
       let held = bytes
       return {
@@ -423,8 +425,15 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
   /** The builds of this visit whose playing track's frame was refused, so far (round 6: reported once each, never silent). */
   const refusedAt = new Set<number>()
   /** The window of slide `i`'s step `k` could not admit the frame asked for: told only for the step playing on screen. */
+  /**
+   * Round 6 ruling: the build whose playing frame the budget refused, `${slide}:${build}`. That build shows the typed
+   * error frame (as a failed bundle does), never a held earlier picture, until a frame of its track is admitted.
+   */
+  let budgetStuck: string | undefined
   function frameRefused(i: number, k: number): void {
-    if (exited || slide !== i || k !== build - 1 || refusedAt.has(build)) return
+    if (exited || slide !== i || k !== build - 1) return
+    if (budgetStuck !== `${i}:${build}`) { budgetStuck = `${i}:${build}`; render(false) }
+    if (refusedAt.has(build)) return
     refusedAt.add(build)
     sink.add({ code: 'show-budget', slideIndex: i, effect: `step:${k}`, message: `A keyframe frame of step ${k + 1} does not fit the show budget; the step holds its previous picture` })
   }
@@ -650,9 +659,11 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     if (slide !== 'end') {
       const unit = unitOf[slide]!
       bmp = planStage ? undefined : fetcher.cached(unit)
-      const code = failed.get(unit)
+      // Round 6 ruling: a build whose playing frame the show budget refused shows the typed error frame.
+      const code = failed.get(unit) ?? (budgetStuck === `${slide}:${build}` ? 'show-budget' : undefined)
       // The still stage draws the bitmap here (piece 3); PlanStage draws on its tick.
-      if (planStage ? !!held.get(slide) || !!fetcher.cached(unit) : !!bmp && fitInto(canvas, bmp)) kind = 'image'
+      if (code === 'show-budget' && planStage) kind = 'error'
+      else if (planStage ? !!held.get(slide) || !!fetcher.cached(unit) : !!bmp && fitInto(canvas, bmp)) kind = 'image'
       else {
         kind = code ? 'error' : 'loading'
         text = code ? `Slide ${slide + 1} could not be shown (${code})` : `Loading slide ${slide + 1}`
@@ -670,6 +681,7 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
       const box = stageBox()
       if (box) box.hidden = kind === 'loading' || kind === 'error'
     }
+    if (kind === 'error' && !text && slide !== 'end') text = `Slide ${slide + 1} could not be shown (show-budget)`
     if (kind === 'loading' || kind === 'error') { textFrame(canvas, text); textShown = true }
     surface.root.setAttribute('data-officeview-show-frame', kind)
     if (frameText && frameText.textContent !== text) frameText.textContent = text

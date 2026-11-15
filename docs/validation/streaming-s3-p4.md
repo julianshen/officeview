@@ -444,11 +444,12 @@ Evidence:
   The working set is not a floor: under budget pressure, a frame lease or an arriving track first evicts bundles,
   then drops the slide's tracks farthest from the playing step (behind before ahead), never the playing one. A
   20 MiB budget (bundle plus about two 1080p frames) plays eight steps with no report.
-- **A track frame the budget cannot admit holds the previous picture, reported.** When the frame the playing step
-  asks for finds no room, even after those evictions, `show-budget` is emitted once per build of the visit.
-  Read-ahead refusals, Presenter Next's window and Morph windows are not reported. The picture still holds, rather
-  than cutting to the entry frame (the `pressure` path) or the slide's piece-3 still: both show an earlier state of
-  the slide than the step reached. This is an open owner question.
+- **A track frame the budget cannot admit shows the typed error frame (round 6 owner ruling).** When the frame the
+  playing step asks for finds no room, even after those evictions, that build shows the error frame a failed bundle
+  shows ("Slide N could not be shown (show-budget)"), never a held earlier picture, and `show-budget` is emitted
+  once per build of the visit. Next and Previous move as usual; a build that draws (or a later admitted frame of the
+  track) shows the slide again. Read-ahead refusals, Presenter Next's window and Morph windows are not reported.
+  This replaces Task 8's held picture for a frame the budget refuses.
 - **Presenter View "Next".** It reads "Next build" while builds remain. `preview-reduced` is emitted for any
   `composeAt` refusal (Task 13).
 

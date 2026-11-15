@@ -733,6 +733,41 @@ describe('remote show on the driver (piece 4 Task 11)', () => {
     s.exit()
   })
 
+  it('a playing track frame too large for the show budget shows the typed error frame, not the previous picture; next() and previous() still move (round 6 ruling)', async () => {
+    // The bundle fits; one 1080p frame (≈ 7.9 MiB) does not fit beside it, even with nothing else held.
+    vi.spyOn(remoteShowDeps, 'showBytes', 'get').mockReturnValue(7.5 * 1024 * 1024)
+    const two = { messages: (u: number) => bundleOf(FLY, u, compositedFly(2)) }
+    // Slide 2 is a still unit (the paint path), so leaving is not held up by this budget.
+    const fd = animDoc([two, 'still'], { tracks: hdTrack })
+    const { s, root, log } = await show(fd)
+    await run(300)
+    expect(frameKind(root)).toBe('image')
+    s.next()
+    await run(400)
+    expect(s.state.build).toBe(1)
+    expect(frameKind(root)).toBe('error')
+    expect(root.querySelector('[data-officeview-show-frame-text]')?.textContent).toBe('Slide 1 could not be shown (show-budget)')
+    expect(log).toContain('diag:show-budget')
+    // Previous retreats to the slide's entry, which draws again.
+    s.previous()
+    await run(400)
+    expect(s.state.build).toBe(0)
+    expect(frameKind(root)).toBe('image')
+    // Next advances through both refused steps and leaves the slide.
+    s.next(); await run(400)
+    expect(s.state.build).toBe(1)
+    expect(frameKind(root)).toBe('error')
+    // Step 2 settles (a click mid-animation would only finish it), then Next leaves the slide.
+    s.next(); await run(1_200)
+    expect(s.state.build).toBe(2)
+    expect(frameKind(root)).toBe('error')
+    s.next()
+    await run(1_200)
+    expect(s.state.slide).toBe(1)
+    expect(frameKind(root)).toBe('image')
+    s.exit()
+  }, 60_000)
+
   it('a refused slide plays its piece-3 still through the unit path', async () => {
     const fd = animDoc(['fly', 'fly'])
     fd.rules.set('plan:0', 'still')
@@ -973,17 +1008,17 @@ describe('fix round 1: decoded track frames are admitted against the show budget
     expect(peak).toBeLessThanOrEqual(SHOW_PLAN_LIMITS.showDecoded)
   })
 
-  it('a frame with no room holds the previous picture (D23)', async () => {
+  it('a frame with no room shows the typed error frame, never a held picture (D23, round 6 ruling)', async () => {
     const B = bundleBytes(bundleOf(FLY, 0, compositedFly(1)), 0)
     vi.spyOn(remoteShowDeps, 'showBytes', 'get').mockReturnValue(B + encoded(0) + F - 1)
     const fd = animDoc([one], { tracks: rainbow })
-    const { s, canvas } = await show(fd)
+    const { s, root } = await show(fd)
     await run(300)
-    const before = mid(canvas)
     s.next()
     await run(600)
-    // No keyframe fits: the step holds what was on screen.
-    expect(mid(canvas)).toEqual(before)
+    // No keyframe fits: the step shows the error frame, as a failed bundle does.
+    expect(frameKind(root)).toBe('error')
+    expect(root.querySelector('[data-officeview-show-frame-text]')?.textContent).toBe('Slide 1 could not be shown (show-budget)')
     s.exit()
   })
 
@@ -1005,17 +1040,17 @@ describe('fix round 1: decoded track frames are admitted against the show budget
     // no frame fits.
     vi.spyOn(remoteShowDeps, 'showBytes', 'get').mockReturnValue(2 * B + encoded(0) + F - 1)
     const fd = animDoc([one], { tracks: rainbow })
-    const { s, canvas } = await show(fd)
+    const { s, root } = await show(fd)
     await run(300)
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1920 })
     Object.defineProperty(window, 'innerHeight', { configurable: true, value: 1080 })
     window.dispatchEvent(new Event('resize'))
     await run(600)
     expect(fd.log.filter((l) => l.startsWith('motion:'))).toEqual(['motion:full@1', 'motion:full@2'])
-    const before = mid(canvas)
     s.next()
     await run(600)
-    expect(mid(canvas)).toEqual(before)
+    // Counting the pinned copy, no frame fits: the error frame (round 6 ruling), not a keyframe.
+    expect(frameKind(root)).toBe('error')
     s.exit()
   })
 
