@@ -1588,3 +1588,34 @@ After verify-only (38d3d872), production paints icons only behind `CF_ICON_PAINT
 **Test labels (finding 2).** Tests that use Excel's stored numbers are labelled regression tests, and the band tests are labelled mechanism tests. Neither is independent evidence.
 
 **Rules version 3.** `iconGeometryRulesVersion` is now 3, because the derived readings changed. Version-2 sidecars leave their geometry capabilities unverified until `capture --stage 4 --verify-only` re-derives them.
+
+### Task 28 (2026-11-15): original icon glyphs (OD-9(b)) and the glyph-key frame
+
+**Glyph provenance.**
+- **Artwork:** original. Every glyph in `src/xlsx/cf/iconGlyphs.ts` is our own vector drawing (polygons, rects, circles, pie sectors), hand-authored for this project by the Task 28 implementer (Claude, Anthropic) on 2026-11-15. Owner decision OD-9(b) (2026-11-14): no Microsoft pixels. No crop, bitmap or traced artwork is in the source or the package; the key crops stay test fixtures. `tests/xlsx-cf-icon-glyphs.test.ts` checks that the source has no `data:` URI, no base64 run over 64 characters, no bitmap construction and no import from `tests/fixtures/` or `scripts/`.
+- **What is matched to Excel, and how:** only the measured box and the dominant colours.
+  - Box: each glyph's drawn ink box (max channel delta ≥ 64 from white, the S4-A rule) at the key geometry equals the sidecar's measured box within ±1 px per edge. For the faint `5Boxes:0` (S4-FAINT), both boxes are read at delta > 8, and the glyph must draw no ink at 64.
+  - Colours: each fill's colour equals the per-channel median of the class's key crop over the pixels that fill owns (coverage ≥ 1/2 of its own path, < 1/2 of every later fill's), within ±8 per channel. The table's colours are those medians. They are computed by `tests/helpers/cf-glyph-measure.ts` from the shapes and the crops; no pixel is copied.
+- **Label:** every entry is `source: 'original'`, `fidelity: 'pixel-approximated'`, never `pixel-measured`.
+- **Classes:** 54 entries over 75 pairs, exactly the sidecar's `glyphClasses`. The twins `4RedToBlack:0`/`5Quarters:4` and `4RedToBlack:1`/`5Boxes:0` are separate entries (S4-NEARTWIN).
+- **Withheld:** `3Stars:0` (`CF_ICON_GLYPH_WITHHELD`). Excel's empty star is a speckle of greys. The median over any outline region we draw is about 190, so after anti-aliasing our outline draws no ink at delta 64, against a measured box of 3..12 × 9..17. Its one pair, `3Stars:0`, never paints. The other 53 classes pass both checks.
+- **Gates:** a pair paints only with its own `icon:glyph-<set>-<iconId>` evidence. None is published before Task 30, so production still paints no icon.
+- **Size:** the `iconGlyphs.ts` module (encoded table, class map and decoder) renders 12,682 B, or 3,740 B gzip, inside the lazy `cf` chunk (`render-*.js`). Measured with `OV_MODULE_MAP=1 npx vite build`; `scripts/vite-module-map.ts` now records each module's `moduleBytes`. The test asserts ≤ 16 KiB and ≤ 3,740 B + 10 % (Ruling S4-GLYPHCAP). No CF module is in the eager closure.
+
+**The key frame (`CF_ICON_RENDER_MODEL.keyFrame`).**
+- The frame is the union of the 54 classes' ink boxes in the key's `observedIcons`, which are cell-relative, inclusive and at 1 px/pt:
+  - x 2..14: left from, for example, B2; right from the 4Rating cells B13..E13;
+  - y 7..18 (B2).
+- So the frame is 13 × 12 pt, 2 pt in from the left gridline and 1 pt above the next row's gridline. The faint `5Boxes:0` lies inside it (2..11 × 7..16 at delta > 8).
+- It is not Excel's box, which is not measurable. It is the frame our glyphs are drawn in, and at the key geometry it is exact.
+- It applies only when every layout input the key fixes equals the key's:
+  - 11 pt font;
+  - the Calibri face, regular (not bold or italic);
+  - 20 pt row (80/3 px, or the viewer's whole-px 27);
+  - bottom vertical alignment.
+- Every other host withholds:
+  - **Font size.** The box scales with the font by a k bounded only to [0.95, 1]; no k is interpolated or picked.
+  - **Row height.** The bottom offset moves with the row. 5Boxes:2 ink is 3 px above the bottom gridline at 20 pt (key D21) and 5 px at 30 and 60 pt (geometry-2 C2, C3, G2, G3).
+  - **Top and centred alignment.** These are measured only at 30 and 60 pt rows (geometry-2 E, F), never at 20 pt.
+- The column width and the horizontal alignment do not move the frame. Geometry-2 I5, I6, J5 and J6 have 180 pt columns and left-aligned text on 20 pt rows, and measure ink at 2..12 × 7..18, as the key's right-aligned 3Arrows:0 does at 72 pt.
+- Right-aligned numbers still withhold, because `rightInsetPt` is unmeasured (`unshifted`). At the key geometry, only left-aligned text and centred text can paint an icon, once Task 30 publishes the glyph and paint capabilities.

@@ -93,9 +93,10 @@ describe('CF_ICON_RENDER_MODEL equals the measured sidecars', () => {
       for (const e of cells) expect(['pixel-measured', 'non-discriminating', 'unverified'], id).toContain(e.iconEvidence!.geometry)
     }
     // S4-PROD-ALIGN: the measured box variant and the 11 pt left inset; no box size or offsets (ink is not the box).
-    expect(CF_ICON_RENDER_MODEL).toEqual({ box: { size: 'font', vertical: 'cell-align' }, leftInsetPt: { 11: 12 } })
+    // Task 28: the glyph-key frame, exact at the key geometry only (tests/xlsx-cf-icon-glyphs.test.ts).
+    expect(CF_ICON_RENDER_MODEL).toEqual({ box: { size: 'font', vertical: 'cell-align' }, leftInsetPt: { 11: 12 }, keyFrame: { fontPt: 11, fontName: 'Calibri', rowPt: 20, vertical: 'bottom', widthPt: 13, heightPt: 12, leftPt: 2, bottomPt: 1 } })
     expect(Object.isFrozen(CF_ICON_RENDER_MODEL)).toBe(true)
-    // Under every capability, the production model still lays nothing out (a default never ships as a measured fact).
+    // Under every capability, the production model lays nothing out off the key geometry (a 10 pt font, a 15 px row).
     expect(layoutIcon(icon(), host(), { sizePt: 10, vertical: 'bottom', horizontal: 'right' }, AT_CAPTURE, CF_ICON_RENDER_MODEL, ALL)).toBeUndefined()
   })
 

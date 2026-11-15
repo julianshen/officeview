@@ -7,8 +7,9 @@
  *   un-inset. The geometry lives in `CF_ICON_RENDER_MODEL`, whose values come from the Stage 4 sidecars
  *   (`refs/stage4-icon-geometry{,-2}.json`, `refs/stage4-icon-inset.json`). Ruling S4-PROD-ALIGN (Task 29 fix round 3):
  *   every geometry, inset and showValue capability behaves as the reading Excel matched (`CF_ICON_PAINT_READINGS`);
- *   the model holds only the values the captures determine, and the box size and offsets are not among them (ink is
- *   not the box), so `layoutIcon` still withholds every icon (S4-K, S4-L).
+ *   the model holds only the values the captures determine. Excel's box size and offsets are not among them (ink is
+ *   not the box); Task 28's glyph-key frame (`keyFrame`) is exact only at the key's own geometry, so `layoutIcon`
+ *   lays an icon out only there and withholds every other host (S4-K, S4-L).
  * - One predicate on one host (S4-L, Lesson 11): `iconWithheld` decides, from the host the frame lays the cell out in,
  *   whether the icon paints; the inset, the paint and the text hiding all ask it, so no inset exists without an icon
  *   and no icon without its inset. It is decided at the capture scale (1 device px per pt), so every view and zoom
@@ -46,7 +47,21 @@ export interface CfIconRenderModel {
   /** `icon:inset-right-aligned`: the left inset of a right-aligned text box (pt) per font size. It decides only whether
    * a number still fits (the text itself stays where it is: `unshifted`); a font size without an entry withholds. */
   readonly rightInsetPt?: Readonly<Record<number, number>>
+  /**
+   * Task 28: the icon frame at the glyph key's own geometry, where it is exact. The frame is the common box that holds
+   * the ink of every glyph class (not Excel's box, which is not measurable: ink is not the box); our glyphs are drawn
+   * in it. It applies only to a host whose every layout input the key fixes equals the key's: font size and face
+   * (regular), row height and vertical alignment. Any other host withholds: the box scales with the font by a k the
+   * captures bound only to [0.95, 1], and the bottom offset changes with the row (S4-PROD-ALIGN follow-up ruling).
+   */
+  readonly keyFrame?: CfIconKeyFrame
 }
+
+/** The glyph key's geometry and the frame measured there (pt; 1 px = 1 pt at the capture). */
+export type CfIconKeyFrame = Readonly<{
+  fontPt: number; fontName: string; rowPt: number; vertical: 'top' | 'center' | 'bottom'
+  widthPt: number; heightPt: number; leftPt: number; bottomPt: number
+}>
 
 /**
  * Values from the Stage 4 sidecars (Ruling S4-PROD-ALIGN). Each value cites its source; everything the evidence does
@@ -65,6 +80,18 @@ export interface CfIconRenderModel {
 export const CF_ICON_RENDER_MODEL: CfIconRenderModel = Object.freeze({
   box: Object.freeze({ size: 'font', vertical: 'cell-align' }),
   leftInsetPt: Object.freeze({ 11: 12 }),
+  keyFrame: Object.freeze({
+    // The key case (scripts/cf-refs/cases.ts stage4-icon-glyph-key; generate.ts fontId 0 `<sz val="11"/>`
+    // `<name val="Calibri"/>`, no alignment so bottom) on rows of 20 pt (sidecar `rowHeightsPt`).
+    fontPt: 11, fontName: 'Calibri', rowPt: 20, vertical: 'bottom',
+    // The union of the 54 classes' ink boxes in `refs/stage4-icon-glyph-key.json` `observedIcons` (cell-relative,
+    // inclusive, at `pxPerPt` 1): x 2..14 (left 2: e.g. B2 3Arrows:0; right 14: B13..E13 4Rating), y 7..18 (top 7:
+    // B2; bottom 18: B2). So 13 × 12, 2 pt in from the left gridline and 20 - 19 = 1 pt above the next one. The
+    // faint 5Boxes:0 crop (no ink at 64) lies inside it at delta > 8 (x 2..11, y 7..16). The column width does not
+    // move it: `refs/stage4-icon-geometry-2.json` I5, I6, J5, J6 (180 pt columns, left-aligned text, 20 pt rows)
+    // measure ink 2..12 × 7..18, as the key's 3Arrows:0 (72 pt columns, right-aligned numbers) does.
+    widthPt: 13, heightPt: 12, leftPt: 2, bottomPt: 1,
+  }),
 })
 
 /**
@@ -147,8 +174,9 @@ export function layoutIcon(icon: CfIconDescriptor, host: CfBarHost, font: CfIcon
   { box: CfIconRect; inset: { left: number; right: number } } | undefined {
   if (!inFamily(icon)) return undefined
   for (const cap of CF_ICON_PAINT_CAPABILITIES) if (!check(cap)) return undefined
-  const variant = model.box, off = model.offsetsPt
-  if (!variant || !off || (variant.size !== 'row' && model.sizePt === undefined)) return undefined
+  const variant = model.box, off = model.offsetsPt, frame = model.keyFrame
+  if (!variant) return undefined
+  if (frame ? !atKeyGeometry(frame, variant, host, font) : (!off || (variant.size !== 'row' && model.sizePt === undefined))) return undefined
   const zoom = scale.zoom > 0 && Number.isFinite(scale.zoom) ? scale.zoom : 1
   const dpr = scale.dpr > 0 && Number.isFinite(scale.dpr) ? scale.dpr : 1
   const devPerPx = zoom * dpr, devPerPt = devPerPx * PT_PX
@@ -156,25 +184,50 @@ export function layoutIcon(icon: CfIconDescriptor, host: CfBarHost, font: CfIcon
   if (!atCapture && layoutIcon(icon, host, font, CAPTURE_SCALE, model, check) === undefined) return undefined
   const vertical = variant.vertical === 'cell-align' ? font.vertical : variant.vertical
   if (!vertical) return undefined
-  const sidePt = variant.size === 'fixed' ? model.sizePt! : variant.size === 'font' ? model.sizePt! * font.sizePt : host.height / PT_PX - off.top - off.bottom
-  if (!(sidePt > 0) || !Number.isFinite(sidePt)) return undefined
   const insetPt = slotInsetPt(font, model, check)
   if (insetPt === undefined) return undefined
   const dev = (pt: number): number => roundHalfUp(pt * devPerPt)
   const X0 = roundHalfUp(host.x * devPerPx), X1 = roundHalfUp((host.x + host.width) * devPerPx)
   const Y0 = roundHalfUp(host.y * devPerPx), Y1 = roundHalfUp((host.y + host.height) * devPerPx)
-  const side = dev(sidePt)
-  if (!(side > 0) || !(X1 > X0) || !(Y1 > Y0)) return undefined
-  const L = X0 + dev(off.left), R = L + side
-  const T = vertical === 'top' ? Y0 + dev(off.top) : vertical === 'bottom' ? Y1 - dev(off.bottom) - side : Y0 + roundHalfUp((Y1 - Y0 - side) / 2)
-  const B = T + side
+  if (!(X1 > X0) || !(Y1 > Y0)) return undefined
+  let L: number, T: number, w: number, h: number
+  if (frame) {
+    // The key frame: bottom-anchored (the only alignment it admits), its own width and height.
+    w = dev(frame.widthPt); h = dev(frame.heightPt)
+    if (!(w > 0) || !(h > 0)) return undefined
+    L = X0 + dev(frame.leftPt); T = Y1 - dev(frame.bottomPt) - h
+  } else {
+    const o = off!
+    const sidePt = variant.size === 'fixed' ? model.sizePt! : variant.size === 'font' ? model.sizePt! * font.sizePt : host.height / PT_PX - o.top - o.bottom
+    if (!(sidePt > 0) || !Number.isFinite(sidePt)) return undefined
+    const side = dev(sidePt)
+    if (!(side > 0)) return undefined
+    w = h = side
+    L = X0 + dev(o.left)
+    T = vertical === 'top' ? Y0 + dev(o.top) : vertical === 'bottom' ? Y1 - dev(o.bottom) - side : Y0 + roundHalfUp((Y1 - Y0 - side) / 2)
+  }
+  const R = L + w, B = T + h
   // A box the host cannot hold: a narrow host clips it where that clip was measured (`icon:geometry-narrow-clip`
   // reads `clip`). A short row never clips: Excel shrinks the box (`icon:geometry-short-row-clip` reads `shrink`) by a
   // law the captures do not determine, so the box withholds (S4-PROD-ALIGN).
   if (atCapture && R > X1 && !check('icon:geometry-narrow-clip')) return undefined
   if (atCapture && (T < Y0 || B > Y1)) return undefined
   const out = scale.output === 'device' ? (v: number) => v : (v: number) => v / devPerPx
-  return { box: { x: out(L), y: out(T), w: out(side), h: out(side) }, inset: { left: insetPt * PT_PX, right: 0 } }
+  return { box: { x: out(L), y: out(T), w: out(w), h: out(h) }, inset: { left: insetPt * PT_PX, right: 0 } }
+}
+
+/**
+ * Whether a host's layout inputs equal the glyph key's, every one the key fixes: the font size, face and style
+ * (regular), the row height and the vertical alignment (`cell-align` reads the cell's). The host carries the row in
+ * logical px, which the viewer rounds to whole px (`computeMetrics`, `viewport.cssSize`), so a 20 pt row is 80/3 px
+ * or 27 px. The horizontal alignment and the column width are not among them (`keyFrame` cites the evidence).
+ */
+function atKeyGeometry(frame: CfIconKeyFrame, variant: CfIconBoxVariant, host: CfBarHost, font: CfIconText): boolean {
+  const style = host.cell?.style
+  const vertical = variant.vertical === 'cell-align' ? font.vertical : variant.vertical
+  const rowPx = frame.rowPt * PT_PX
+  return font.sizePt === frame.fontPt && vertical === frame.vertical && style?.fontName === frame.fontName && style.bold !== true && style.italic !== true &&
+    (Math.abs(host.height - rowPx) < 1e-9 || host.height === Math.round(rowPx))
 }
 
 /**
