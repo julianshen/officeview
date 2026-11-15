@@ -19,7 +19,7 @@ import { VERIFIED_CAPABILITIES, injectCfAutoBarColours, injectCfBarGradient, inj
 import * as verifiedExports from '../src/xlsx/cf/verifiedCapabilities'
 import { CF_BAR_RENDER_MODEL, layoutDataBar, paintDataBars } from '../src/xlsx/cf/dataBarPaint'
 import { createCanvas } from 'canvas'
-import { auditStage3Manifest, barGradientsAcrossCases } from '../scripts/cf-refs/audit'
+import { auditStage3Manifest, auditStage4Manifest, barGradientsAcrossCases } from '../scripts/cf-refs/audit'
 import { stage3ObservedBars } from '../scripts/cf-compare'
 import { CF_LIMITS, createCfMemory } from '../src/xlsx/cf/limits'
 import { createCfService } from '../src/xlsx/cf/service'
@@ -910,6 +910,58 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       expect(CF_ICON_PAINT_READINGS[cap], `${cap} (${caseId}): production's reading`).toBe(matched)
     }
   }, 60_000)
+
+  /**
+   * S4-PROD-ALIGN, behaviour: the pieces production can decide without a box or a glyph, run on Excel's own saved
+   * workbooks under the audit's own verified Stage 4 set (on top of production's published Stage 1–3 set, as the Stage 3
+   * Lesson 1 test injects its audit result), against the committed sidecars' measured text:
+   * - `stage4-icon-inset` F2..F4 (NoIcons, left 11 pt): the text inset equals the measured shift (+12 px at 1 px/pt);
+   * - `stage4-icon-inset` G2..G4 (NoIcons, showValue 0): the text is hidden (no text ink);
+   * - `stage4-icon-geometry-2` H/I/J rows 2, 5, 6 (zero-length bars at the range minimum beside 3Arrows): hidden,
+   *   shown, shown, as the sidecar's text shift says (priority-wins; any-hides would hide J).
+   */
+  it('S4-PROD-ALIGN: NoIcons inset and hiding and the bar/icon showValue decision reproduce the sidecars on Excel\'s workbooks', async () => {
+    const audit = auditStage4Manifest(manifest, { rootDir: REPO_ROOT })
+    expect(audit.ok).toBe(true)
+    const verified = audit.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId)
+    for (const cap of ['icon:noicons-inset', 'icon:noicons-showvalue', 'icon:composition-bar-showvalue', 'icon:composition-with-bar']) expect(verified, cap).toContain(cap)
+    const { createCellLayoutHost } = await import('../src/xlsx/view/renderViewport')
+    const { computeMetrics } = await import('../src/xlsx/render')
+    const ctx = createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D
+    type Obs = { ref: string; textShiftPx?: number; textInkLeftPx?: number }
+    let checked = 0
+    await withExactCfEvidence([...VERIFIED_CAPABILITIES, ...verified], async () => {
+      for (const [caseId, refs] of [['stage4-icon-inset', ['F2', 'F3', 'F4', 'G2', 'G3', 'G4']], ['stage4-icon-geometry-2', ['H2', 'H5', 'H6', 'I2', 'I5', 'I6', 'J2', 'J5', 'J6']]] as const) {
+        const c = manifest.cases.find(x => x.id === caseId)!
+        const observed = (JSON.parse(readFileSync(join(REPO_ROOT, c.captures[0]!.sidecarPath), 'utf8')) as { observedIcons: Obs[] }).observedIcons
+        const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))), parseOptionsFor(c))
+        const sheet = doc.sheets.find(x => x.name === c.sheet) ?? doc.sheets[0]!
+        const batch = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, layoutContext: () => ctx }))!
+        const m = computeMetrics(sheet)
+        try {
+          for (const ref of refs) {
+            const { row, col } = refToRowCol(ref)
+            const cell = sheet.rows.find(r => r.index === row)!.cells.find(x => x.col === col)!
+            const width = m.colWidthsPx[col]!, height = m.rowHeightsPx[row]!
+            const body = createCellLayoutHost(ctx).layoutBody(cell, width, height)
+            const textWidth = body.text?.kind === 'layout' ? body.text.layout.lines[0]!.segments.reduce((n, sg) => n + sg.width, 0) : undefined
+            const host = { x: m.colWidthsPx.slice(0, col).reduce((a, b) => a + b, 0), y: m.rowHeightsPx.slice(0, row).reduce((a, b) => a + b, 0), width, height, textWidth, cell }
+            const o = observed.find(x => x.ref === ref)!
+            const hidden = batch.hidesTextAt(row, col, host, { zoom: 1, dpr: 1 })
+            // Shown text sits at the inset (+12); hidden text leaves no ink or only the icon (shift <= 1).
+            const excelHides = o.textShiftPx === undefined || o.textShiftPx <= 1
+            expect(hidden, `${caseId}:${ref} hidden (sidecar shift ${o.textShiftPx})`).toBe(excelHides)
+            if (caseId === 'stage4-icon-inset' && ref.startsWith('F')) {
+              // The sidecar's shift is in px at 1 px/pt, so in pt; production's inset is logical px (4/3 per pt).
+              expect(batch.textInsetAt(row, col, host, { zoom: 1, dpr: 1 })?.left, `${caseId}:${ref} inset`).toBeCloseTo(o.textShiftPx! * 4 / 3, 9)
+            }
+            checked++
+          }
+        } finally { batch.dispose() }
+      }
+    })
+    expect(checked).toBe(15)
+  }, 120_000)
 
   it('icon geometry conformance (Lesson 1): every Stage 4 cell has no icon and no inset until Task 29 measures the box', async () => {
     const { computeMetrics } = await import('../src/xlsx/render')

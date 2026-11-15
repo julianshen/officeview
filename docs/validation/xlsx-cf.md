@@ -1249,6 +1249,7 @@ Icons paint through one lazy painter (`src/xlsx/cf/iconPaint.ts`). No Stage 4 ca
 - **Label order.** One bounded label per cell: bar+icon, then bar, then icon, then colour scale, then the DXF aspects.
 - **Inset overflow.** A host whose un-inset text would not fit beside the inset withholds its icon. This holds even
   once `icon:inset-overflow` verifies, until a measured overflow variant exists. An unknown text width withholds.
+  *Superseded by S4-PROD-ALIGN (fix round 3, below): a number keeps its icon under `icon:inset-overflow`.*
 - **Icon on a bar cell.** No icon paints on a cell holding a paintable bar without `icon:composition-with-bar` (the
   painter's own gate, beyond the evaluator's).
 - **Merged hosts.** The paint batch withholds icons on merged hosts, as it does bars.
@@ -1262,6 +1263,25 @@ Known limit (recorded, not fixed):
   forced-paged screenshot of the grid differs on 14.429 % of pixels, identically at base 93cadb26 and after Task 29.
   `stage3-bar-lengths` shows no difference (0 %). It is a paged row-metrics difference unrelated to CF, so the Stage
   4 browser leg test compares resident and worker pixels only, and checks the forced-paged leg by its labels.
+
+**Fix round 3: Ruling S4-PROD-ALIGN.** Production adopts the reading Excel 16.115 matched for each geometry, inset
+and showValue capability (`CF_ICON_PAINT_READINGS`). The conformance suite compares these readings with the readings
+recomputed from the committed sidecars.
+
+- **Readings adopted.**
+  - box `font`, vertical `cell-align`;
+  - narrow host `clip`;
+  - short row `shrink`: never clipped, and withheld while the shrink law is unmeasured;
+  - left text `inset`, right-aligned `unshifted`, centred `full-cell` (no inset);
+  - overflow `icon-and-text`, for numbers only;
+  - NoIcons text inset as if an icon were present. This deviates from the spec §6 wording "not NoIcons";
+  - NoIcons with `showValue="0"` hides the text;
+  - a bar/icon showValue conflict is `priority-wins`, decided in composition; one `cfHidesText` predicate serves both
+    painters.
+- **Snapping (S4-SNAP-SHARED).** The paint gate uses `bar:geometry-snapping`.
+- **The model** holds only the box variant and the 11 pt left inset of 12 pt.
+- **Withheld.** The box size and offsets are absent (ink is not the box), as is the right-aligned inset. So production
+  still paints no icon; Task 28 and Task 30 fill those values.
 
 ---
 

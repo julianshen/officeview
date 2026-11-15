@@ -163,7 +163,11 @@ async function pagedScope(sheet: XlsxSheet, rows: number, hosts?: CfFrameHostSou
   const st: CfStamp = { owner: 'paged', sheetId, workbookValueGen: 1, cfGen: cfRulesVersion(rules), viewGen: 1, structureGen: 1, clockGen: 1 }
   const memory = createCfMemory({})
   const rects = [{ r0: 0, r1: rows - 1, c0: 0, c1: 0 }]
-  const wire = await prepareCfRemote({ rects, stamp: { ...st }, grantBytes: 1 << 22 }, sheetId, residentSource(sheet, st, memory, 'engine'), rules, memory, { budget: () => createCfWorkBudget({ now: () => 0 }) })
+  const wire = await prepareCfRemote({ rects, stamp: { ...st }, grantBytes: 1 << 22 }, sheetId, residentSource(sheet, st, memory, 'engine'), rules, memory, {
+    budget: () => createCfWorkBudget({ now: () => 0 }),
+    // As PagedSheetSource passes them (pagedSource.ts `merges`).
+    merges: (sheet.mergeRanges ?? []).map(m => ({ firstRow: m.minRow, lastRow: m.maxRow, firstCol: m.minCol, lastCol: m.maxCol })),
+  })
   expect(wire.kind, JSON.stringify(wire.reason)).toBe('ready')
   return (await prepareCfWireScope(async () => ({ result: structuredClone(wire), release() {} }), rects, { budget: { reserve() {}, release() {} }, locale: 'en-US', ...(hosts ? { hosts } : {}) }))!
 }
@@ -218,7 +222,7 @@ describe('S4-PROD-ALIGN: every view agrees', () => {
   const custom = [{ set: 'NoIcons' as const, iconId: 0 }, { set: 'NoIcons' as const, iconId: 0 }, { set: 'NoIcons' as const, iconId: 0 }]
   it('item 6: a NoIcons cell is inset by the left inset in the static, resident, worker, forced-paged and print views', async () => {
     const plain = async () => everyView(iconSheet([10, 50, 90], { style: LEFT, def: { custom } }), 3)
-    const on = await withIcons(plain, { extra: ['icon:noicons-inset'] })
+    const on = await withIcons(plain, { extra: ['icon:noicons-inset', 'icon:scope-merged-cell'] })
     const off = await withIcons(plain)
     for (const [view, got] of Object.entries(on)) {
       expect(got.icons, view).toEqual([])
