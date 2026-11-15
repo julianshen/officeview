@@ -568,7 +568,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     // D13: under reduced motion a Morph plays as a fade; nothing is asked (and nothing charged).
     if (exited || !show?.showMorph || motion === 'reduced' || !fetcher.room('morph')) return undefined
     const uf = unitOf[from], ut = unitOf[to]
-    if (uf === undefined || ut === undefined) return undefined
+    // Round 10: a still-only target (refused, or demoted under pressure) plays no Morph into it.
+    if (uf === undefined || ut === undefined || stillOnly.has(ut)) return undefined
     const target = bundleFor(to)
     const scale = (target && scaleOf.get(target)) ?? 1
     const slot = { key, from, to, fromStep, ctl: new AbortController() } as PairSlot
@@ -1285,6 +1286,10 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
           // Round 9: every track of the slide goes first (`dropTrack`: a pending request is aborted, its send stays
           // charged, and its late reply fails `live()` and is released; a resident track is disposed once).
           for (const [k, t] of [...tracks]) if (t.index === i) dropTrack(k)
+          // Round 10: so does every Morph pair into it, pending or resident (`dropPair`: aborted, its send charged, a
+          // late reply released). Pairs out of it stay: a Morph from a still source still plays (the server builds
+          // the pair from both units' plans), so the prefetched one is usable at its next transition.
+          for (const q of [...pairs.values()]) if (q.to === i) dropPair(q)
           fetcher.demote(unit)
           // The plan's resources go now (the stage draws none of them again), so the still has room.
           for (const f of [...(holds.get(i) ?? [])]) f()

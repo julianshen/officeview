@@ -415,6 +415,14 @@ Evidence:
     charged. Its late reply is released, never resident. A resident track is disposed, releasing its decoded window
     and encoded reply once, before the still is fetched. A still-only slide never asks for a track again. This is
     tested with a small and a large (700×700 noise) late reply, and with a resident track.
+  - Round 10: demotion also drops every Morph pair into the slide (`dropPair`). Pending pairs are covered: one
+    whose reply lands after the Morph deadline is aborted, and its late composited reply (five 700×700 keyframes)
+    is released, never resident. Resident pairs are covered too: one a completed transition still held is
+    released. Sends stay charged. A still-only target is asked for no Morph again (`requestPair`).
+  - **Decision (round 10):** Morph pairs out of the demoted slide are kept. A Morph from a still source still plays:
+    the server builds the pair from both units' plans, and the client draws its own outgoing frame. So the
+    prefetched pair stays usable at the slide's next transition, and is released at the slide change after it as
+    before.
   - **Ruling (PR #78 round 8 review):** the still's hidden-ink exemption applies. It is the Task 9 piece-3 unit
     image the viewer already receives in streamed viewing, so an autoplayed exit's ink in it is within that
     exemption. It is not a new show asset.

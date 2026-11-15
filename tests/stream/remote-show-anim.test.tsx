@@ -945,6 +945,70 @@ describe('remote show on the driver (piece 4 Task 11)', () => {
     expect(ws.used()).toBe(0)
   })
 
+  /** `autoThenTrack` entered with a Morph (500 ms). */
+  const autoMorph = { messages: (u: number) => autoThenTrack.messages(u).map((bytes) => {
+    const m = decodeShowMessage(bytes, { unit: u, maxDecoded: SHOW_PLAN_LIMITS.showDecoded })
+    return m.tag === 1 ? encodeShowMessage({ tag: 1, plan: { ...m.plan, show: { ...m.plan.show, transition: { element: 'morph', ns: 'p159', attrs: { option: 'byObject' }, durationMs: 500, advClick: true } } } }) : bytes
+  }) }
+
+  it('demotion drops a pending Morph pair into the slide: its late reply (after the deadline) is released and the still paints (round 10)', async () => {
+    // codex r9-probe "probe Morph into pressured slide".
+    const ws = createSlideShowWorkspace('desktop', { limit: 16_000_000, scratch: 0 })
+    vi.spyOn(remoteShowDeps, 'workspace').mockReturnValue(ws)
+    const fd = animDoc(['still', autoMorph])
+    fd.rules.set('morph:0>1@0', 'hold')
+    let blocked = false
+    Object.assign(fd.doc, { unitBudget: { room: () => (blocked ? 0 : 60), waitMs: () => 2000 } })
+    const { s, root } = await show(fd)
+    await run(700)
+    s.next()
+    await run(16)
+    // The send budget runs out after the pair went out: the still's paint must wait. The Morph deadline passes.
+    blocked = true
+    for (let j = 0; j < 150 && !fd.signals.get('track:1:0')?.aborted; j++) await run(16)
+    expect(fd.signals.get('track:1:0')?.aborted, 'the target demoted').toBe(true)
+    expect(fd.signals.get('morph:0>1@0')?.aborted, 'its incoming pair is dropped').toBe(true)
+    // A valid composited pair of five 700×700 noise keyframes arrives late: it is not kept.
+    const rec = (PAIR[0] as Extract<ShowMessage, { tag: 5 }>).morph
+    noiseTrack(1)
+    fd.rules.set('morph:0>1@0', () => [encodeShowMessage({ tag: 5, morph: { ...rec, items: [], over: [], composited: { fps: 15, count: 5 } } }), ...Array.from({ length: 5 }, (_, i) => encodeShowMessage({ tag: 4, unit: 1, assetId: i, w: 700, h: 700, png: noise! }))])
+    const before = ws.used()
+    fd.release('morph:0>1@0')
+    await flush()
+    expect(fd.held('morph:')).toEqual([])
+    expect(ws.used()).toBeLessThanOrEqual(before)
+    // Room returns: the still is painted and shown.
+    blocked = false
+    await run(3000)
+    expect(sent(fd, 'paint:1')).toEqual(['paint:1'])
+    expect(frameKind(root)).toBe('image')
+    s.exit()
+    expect(ws.used()).toBe(0)
+  }, 60_000)
+
+  it('demotion releases the Morph pair a completed transition into the slide still held (round 10)', async () => {
+    const ws = createSlideShowWorkspace('desktop', { limit: 16_000_000, scratch: 0 })
+    vi.spyOn(remoteShowDeps, 'workspace').mockReturnValue(ws)
+    const fd = animDoc(['still', autoMorph])
+    // A small composited pair (five 96×72 keyframes): it fits beside the pressured target, so the Morph plays.
+    const rec = (PAIR[0] as Extract<ShowMessage, { tag: 5 }>).morph
+    fd.rules.set('morph:0>1@0', () => [encodeShowMessage({ tag: 5, morph: { ...rec, items: [], over: [], composited: { fps: 15, count: 5 } } }), ...[0, 1, 2, 3, 4].map((i) => encodeShowMessage({ tag: 4, unit: 1, assetId: i, w: FRAME_W, h: FRAME_H, png: png(COLORS[i % 3]!) }))])
+    const { s, root, log } = await show(fd)
+    await run(700)
+    s.next()
+    // The pair arrives in time and the Morph plays; then the target's first settled picture demotes it.
+    await run(1_500)
+    expect(sent(fd, 'morph:')).toEqual(['morph:0>1@0'])
+    expect(log).not.toContain('diag:morph-late')
+    expect(fd.signals.get('track:1:0')?.aborted, 'the target demoted').toBe(true)
+    // The pair the transition used is released with it (its send stays charged).
+    expect(fd.held('morph:')).toEqual([])
+    expect(sent(fd, 'paint:1')).toEqual(['paint:1'])
+    expect(frameKind(root)).toBe('image')
+    s.exit()
+    expect(ws.used()).toBe(0)
+  }, 60_000)
+
   it('a refused slide plays its piece-3 still through the unit path', async () => {
     const fd = animDoc(['fly', 'fly'])
     fd.rules.set('plan:0', 'still')
