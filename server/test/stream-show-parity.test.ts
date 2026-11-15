@@ -122,6 +122,14 @@ describe('streamed show parity (synthetic decks)', () => {
     expect(r.outcomes.filter((o) => o.status === 'fail' || o.status === 'unmatched').map((o) => o.detail)).toEqual([])
   }, 120_000)
 
+  test('mediaEndDeck: a slide holding media plays its still, which matches local after its synthetic media end (PR #78 round 12)', async () => {
+    const r = await compareStreamDeck('mediaEndDeck', { marks: { kind: 'off' }, widening: { meanAbs: 0.01, rowMax: 0.05 }, family: 'latin' })
+    expect(r.outcomes.map((o) => o.status)).toEqual(['unit-still'])
+    expect(r.outcomes[0]!.unitStill).toMatchObject({ pass: true })
+    expect(r.outcomes[0]!.detail).toContain('refused:still')
+    expect(r.outcomes.filter((o) => o.status === 'fail' || o.status === 'unmatched')).toEqual([])
+  }, 120_000)
+
   test('autoplayTransitionDeck: the incoming transition shows the slide as it arrives, as local (PR #78 round 7)', async () => {
     const r = await compareStreamDeck('autoplayTransitionDeck', { marks: { kind: 'off' }, widening: { meanAbs: 0.01, rowMax: 0.05 }, family: 'latin' })
     expect(r.structure.equal).toBe(true)

@@ -8,13 +8,15 @@ import { installCanvasBackend, type CanvasBackend } from '../../src/core/canvas-
 import { createSlideTimeline } from '../../src/slideshow/engine/steps'
 import type { PreparedSlide } from '../../src/slideshow/prepare'
 import {
-  MOVER_REVEAL, adversaryDeck, autoplayRevealDeck, triggerFadeDeck, triggerPulseDeck, triggerPulseMainDeck, triggerRevealDeck, twinDeck, flashColourDeck, flyInDeck, loadShowDeck, longStepDeck, manyLayersDeck, moveTwiceDeck, spinStepsDeck, triggerColourDeck, triggerDartDeck, triggerDeck,
+  MEDIA_END_REVEAL, MOVER_REVEAL, adversaryDeck, mediaEndRevealDeck, autoplayRevealDeck, triggerFadeDeck, triggerPulseDeck, triggerPulseMainDeck, triggerRevealDeck, twinDeck, flashColourDeck, flyInDeck, loadShowDeck, longStepDeck, manyLayersDeck, moveTwiceDeck, spinStepsDeck, triggerColourDeck, triggerDartDeck, triggerDeck,
 } from '../../src/testdata/show-decks'
 import { serverBackend } from '../src/backend'
 import {
   CLASSIFY_BUDGET, SAMPLES_PER_INTERVAL, TRACK_FPS, TRACK_MAX_FRAMES, allocateFrames, sampleTimes, sweptHull,
 } from '../src/show/eligibility'
-import { classifiedRasters } from '../src/show/compose'
+import { classifiedRasters, drawsAt, slideStateAt } from '../src/show/compose'
+import { createDiagnosticSink } from '../../src/slideshow/diagnostics'
+import { createRng } from '../../src/slideshow/rng'
 import { classify, inkPixels, reconstruct } from './show-classify-helper'
 
 let backend: CanvasBackend
@@ -202,6 +204,25 @@ describe('show eligibility', () => {
   })
 
   describe('the classification reconstructs the show (fix round 1)', () => {
+    // PR #78 round 12: the client ends every audio/video node at once (`syntheticEnds`); the server's histories
+    // carry no media end, so a slide whose timing holds media is unproven and plays its still.
+    for (const kind of ['onEnd', 'afterPrevious'] as const) {
+      it(`a media end reveals ink (${kind}): the slide plays its still`, async () => {
+        const run = await classify(await mediaEndRevealDeck(kind))
+        const { ps, timeline: tl } = run
+        const ink = targetLayer(ps, 'sp:2')
+        const drawsInk = (cursor: ReturnType<typeof tl.initial>, t: number) =>
+          drawsAt(ps, slideStateAt(ps, tl, cursor, t, createRng(1), createDiagnosticSink())).some(d => d.layer === ink && d.state.visible && d.state.opacity > 0)
+        // The fixture: no media end, no ink; the client's synthetic end (at the first frame) shows it.
+        expect(drawsInk(tl.initial(), 100)).toBe(false)
+        expect(drawsInk(tl.mediaEnd(tl.initial(), MEDIA_END_REVEAL.videoId, 16, true), 100)).toBe(true)
+        expect(run.c.fallback).toBe('still')
+        expect(run.c.steps.every(s => s.eligibility === 'composited' && s.reason === 'media')).toBe(true)
+        expect(run.c.drop.size + run.c.masks.size).toBe(0)
+        expect(() => reconstruct(run, tl.mediaEnd(tl.initial(), MEDIA_END_REVEAL.videoId, 16, true), 100)).toThrow()
+      })
+    }
+
     it('unproven autoplay before the first click falls back to the still', async () => {
       const run = await classify(await autoplayRevealDeck())
       expect(run.timeline.steps).toBe(0)

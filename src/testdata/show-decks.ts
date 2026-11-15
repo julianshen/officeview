@@ -153,6 +153,8 @@ export interface MorphDeckOptions {
   option?: 'byObject' | 'byWord' | 'byChar'
   /** Words in the box's text (default 2); `byWord` / `byChar` split it into units. */
   words?: number
+  /** PR #78 round 12: the second slide also holds a video (id 3, `cTn` 3) that begins with it. */
+  media?: boolean
 }
 
 /**
@@ -228,7 +230,12 @@ export function morphDeck(options: MorphDeckOptions = {}): Promise<Uint8Array> {
     rect(2, 'Box', x, y, w, h, fill, text ? { paragraphs: [{ runs: [{ text, sz: '1200' }] }] } : {})
   return deck([
     { bg: { solid: 'FFFFFF' }, shapes: [box(80, 80, 240, 160, 'D06040')] },
-    { bg: { solid: 'FFFFFF' }, shapes: [box(520, 360, 360, 240, 'D06040')], transition: morphTransition(options.option ?? 'byObject') },
+    {
+      bg: { solid: 'FFFFFF' },
+      shapes: [box(520, 360, 360, 240, 'D06040'), ...(options.media ? [rect(3, 'Media', 80, 560, 160, 80, 'F4B183')] : [])],
+      transition: morphTransition(options.option ?? 'byObject'),
+      ...(options.media ? { timingXml: timingXmlOf(`<p:video><p:cMediaNode><p:cTn id="3" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn>${tgt(3)}</p:cMediaNode></p:video>`) } : {}),
+    },
   ])
 }
 
@@ -350,6 +357,35 @@ export function autoplayRevealDeck(): Promise<Uint8Array> {
     bg: { solid: 'FFFFFF' },
     shapes: [rect(2, 'Ink', 400, 300, 160, 120, HIDDEN_INK), rect(3, 'Cover', 360, 260, 240, 200, '336699')],
     timingXml: timingXmlOf(mainSeqXml([clickStep(id, [dartEffect()], '0')])),
+  }])
+}
+
+/** The video node's `cTn` id in `mediaEndRevealDeck` (PR #78 round 12). */
+export const MEDIA_END_REVEAL = Object.freeze({ videoId: 3, finiteMs: 5000 })
+
+/**
+ * One slide (PR #78 round 12): a video (id 3) begins with the slide, and the ink box (id 2) appears when it ends.
+ * A streamed show plays no media, so the client ends it at once (`syntheticEnds`) and the ink shows; with no media
+ * end the server's histories never show it.
+ *
+ * - `onEnd`: the video is indefinite, and the box's entrance starts on its `onEnd`.
+ * - `afterPrevious`: the video lasts `finiteMs`, and the entrance follows it in a `p:seq` (no condition names it).
+ */
+export function mediaEndRevealDeck(kind: 'onEnd' | 'afterPrevious' = 'onEnd'): Promise<Uint8Array> {
+  const v = MEDIA_END_REVEAL.videoId
+  const id = ids(v + 1)
+  const dur = kind === 'onEnd' ? '' : ` dur="${MEDIA_END_REVEAL.finiteMs}"`
+  const video = `<p:video><p:cMediaNode vol="80000"><p:cTn id="${v}"${dur} fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn>${tgt(3)}</p:cMediaNode></p:video>`
+  const own = id()
+  const start = kind === 'onEnd' ? `<p:cond evt="onEnd" delay="0"><p:tn val="${v}"/></p:cond>` : '<p:cond delay="0"/>'
+  const entrance = `<p:par><p:cTn id="${own}" presetID="1" presetClass="entr" presetSubtype="0" fill="hold" nodeType="afterEffect"><p:stCondLst>${start}</p:stCondLst><p:childTnLst>${setVisibility(id, 2, 'visible')}</p:childTnLst></p:cTn></p:par>`
+  const nodes = kind === 'onEnd'
+    ? video + entrance
+    : `<p:seq><p:cTn id="${id()}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${video}${entrance}</p:childTnLst></p:cTn></p:seq>`
+  return deck([{
+    bg: { solid: 'FFFFFF' },
+    shapes: [rect(2, 'Ink', 400, 300, 160, 120, HIDDEN_INK), rect(3, 'Media', 80, 560, 160, 80, 'F4B183')],
+    timingXml: timingXmlOf(nodes),
   }])
 }
 

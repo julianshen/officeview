@@ -5,7 +5,7 @@
  */
 import { afterAll, describe, expect, test } from 'bun:test'
 import { decodeShowMessage, SHOW_PLAN_LIMITS, isRasterLayer, type MorphPlanRecord, type ShowMessage, type ShowPlanRecord } from '../../src/stream/show-plan'
-import { flyInDeck, morphDeck } from '../../src/testdata/show-decks'
+import { flyInDeck, mediaEndRevealDeck, morphDeck } from '../../src/testdata/show-decks'
 import { Pool, RenderTimeout } from '../src/pool'
 import { canvasBackend } from '../../src/core/canvas-backend'
 import { morphFrame, type MorphFrameItem } from '../../src/slideshow/morph/render'
@@ -269,6 +269,20 @@ describe('show wire', () => {
     expect(r.messages).toEqual([])
     expect(s.store.showDeliveries(s.sid)).toEqual([])
     s.stop()
+  }, 60_000)
+
+  test('a slide holding media → error still (so no track), and no Morph pair into it (PR #78 round 12)', async () => {
+    // The client ends every media node at once (no media plays in a streamed show); no server history does.
+    const s = await session(await mediaEndRevealDeck('onEnd'))
+    const r = await s.c.showPlan(0, 1, 'full')
+    expect(r.end).toEqual(error(r.reqId, 'still'))
+    expect(r.messages).toEqual([])
+    s.stop()
+    const m = await session(await morphDeck({ media: true }))
+    const pair = await m.c.showMorph(0, 1, 0, 1, 'full', { ms: 60_000 })
+    expect(pair.end).toEqual(error(pair.reqId, 'morph-fallback'))
+    expect(m.store.showDeliveries(m.sid)).toEqual([])
+    m.stop()
   }, 60_000)
 
   test("show-plan Layer-1 attributes to the session's code on the page basis `unit@scale`", async () => {

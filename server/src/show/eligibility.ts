@@ -64,7 +64,7 @@ export interface ClassifyInput {
   /** Additive to the brief: the font resolver the rasters used (it measures a paragraph range's mask box). Default: identity. */
   resolveFont?: FontResolver
 }
-export interface StepClass { eligibility: 'layers' | 'composited'; reason?: 'colour' | 'mask' | 'emphasis' | 'budget' | 'swept' | 'strict-marks' | 'mark-rest' | 'limits'; frames?: number }
+export interface StepClass { eligibility: 'layers' | 'composited'; reason?: 'colour' | 'mask' | 'emphasis' | 'budget' | 'swept' | 'strict-marks' | 'mark-rest' | 'limits' | 'media'; frames?: number }
 export interface Classification {
   drop: Set<PlanLayer>
   masks: Map<PlanLayer, Uint8Array /* layer-local alpha mask */>
@@ -463,6 +463,10 @@ export function classifySlide(input: ClassifyInput): Classification {
   try {
     // A raster the compositor refuses cannot be composed, so nothing about the slide can be proven.
     if (composer.refused.length) throw new Still('limits')
+    // PR #78 round 12: a streamed show plays no media, so the client ends every audio/video node on the first frame
+    // it is active (`syntheticEnds` in the shared driver), at a frame-dependent time and only on a live cursor.
+    // Every history built here has no media end, so what that end starts or cuts short is unproven: the still.
+    if (holdsMedia(ps)) throw new Still('media')
 
     // ---- Plan every state, before any composition -------------------------------------------------------
     const boundaries = Array.from({ length: n + 1 }, (_, k) => draws(stateAt(timeline.checkpoint(k), 0)))
@@ -663,6 +667,17 @@ interface TimedEffects {
   colour: boolean
   /** A filter other than a plain fade runs (a mask). */
   mask: boolean
+}
+
+/**
+ * PR #78 round 12: the slide's scheduled timing holds an audio or video node. A streamed show plays no media, so the
+ * client ends each one on its first active frame (`syntheticEnds`), which no server history carries: such a slide
+ * plays its still, and no Morph pair starts or ends on it. A superset of the driver's own walk (`mediaNodes`, bounded
+ * at depth 64): a deeper node the client never ends is refused here too.
+ */
+export function holdsMedia(ps: PreparedSlide): boolean {
+  for (const n of behavioursById(ps).values()) if (n.kind === 'audio' || n.kind === 'video') return true
+  return false
 }
 
 /** Every behaviour node of the slide's timing tree (the scheduled one, text builds fanned out), by `cTn` id. */

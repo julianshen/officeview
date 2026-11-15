@@ -131,6 +131,8 @@ export const SYNTHETIC: Record<string, () => Promise<Uint8Array>> = {
   cmdHoldDeck: async () => (await import('../src/testdata/show-decks')).cmdHoldDeck(),
   /** A fade transition into a slide whose box fades in with it: the incoming frame is the arrival state (round 7). */
   autoplayTransitionDeck: async () => (await import('../src/testdata/show-decks')).autoplayTransitionDeck(),
+  /** A video with the slide, and an entrance on its `onEnd`: the streamed slide plays its still (round 12). */
+  mediaEndDeck: async () => (await import('../src/testdata/show-decks')).mediaEndRevealDeck('onEnd'),
 }
 
 export function deckFile(deck: string): string {

@@ -50,7 +50,7 @@ import { decodePng, encodePng } from '../mark/png'
 import type { MarkSpec } from '../mark/visible'
 import { markFrame, prepareShowSlide, SHOW_BUNDLE_BUDGET, VALIDATION_MESSAGE_KEY, type ShowHost } from './build'
 import { slideStateAt } from './compose'
-import { CLASSIFY_BUDGET, proveItems, SAMPLES_PER_INTERVAL, TRACK_FPS, TRACK_MAX_FRAMES, type ProofItem } from './eligibility'
+import { CLASSIFY_BUDGET, holdsMedia, proveItems, SAMPLES_PER_INTERVAL, TRACK_FPS, TRACK_MAX_FRAMES, type ProofItem } from './eligibility'
 import { burnVisibleMark, validateMarks } from './marks'
 import { trackTimes } from './tracks'
 
@@ -143,6 +143,9 @@ function pairInputs(doc: ShowHost, job: MorphJob): PairInputs | { refused: 'morp
   const spec = to.ps.meta.transition
   if (!spec || spec.element !== 'morph') throw new MorphInvalid('the slide does not enter by Morph')
   if (!Number.isInteger(job.fromStep) || job.fromStep < 0 || job.fromStep > from.timeline.steps) throw new MorphInvalid('fromStep is past the slide')
+  // PR #78 round 12: a slide holding media plays its still (`holdsMedia`); its pair would rest on a history without
+  // the client's synthetic media ends, so the captured-frame fade plays.
+  if (holdsMedia(from.ps) || holdsMedia(to.ps)) return { refused: 'morph-fallback' }
   const scale = job.scale
   const sink = createDiagnosticSink()
   const fromState = slideStateAt(from.ps, from.timeline, from.timeline.checkpoint(job.fromStep), 0, createRng(0x5eed + job.from), sink)
