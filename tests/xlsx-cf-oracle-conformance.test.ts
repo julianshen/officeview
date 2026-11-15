@@ -812,6 +812,45 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
   }, 60_000)
 
   /**
+   * Task 29, Lesson 1: icon geometry and bucket conformance. For every `pixel-measured` cell of every verified Stage 4
+   * case, `layoutIcon` at the capture scale must reproduce the sidecar's box within +-1 px and the text ink shift
+   * exactly; for every `pixel-classified` cell, production's bucket must map through `CF_ICON_GLYPH_CLASSES` (Task 28)
+   * to the sidecar's glyph class. No Stage 4 case is captured yet (all recipe-pending), so both sets are empty and these
+   * loops are recorded as vacuous; the checked half is that every pending, refused or non-discriminating cell has no
+   * painted icon and no inset under production evidence, in the paint batch every view uses.
+   */
+  it('icon geometry and bucket conformance (Lesson 1): every unmeasured Stage 4 cell has no icon and no inset', async () => {
+    const { computeMetrics } = await import('../src/xlsx/render')
+    const stage4 = manifest.cases.filter(c => c.stage === 4)
+    const verified = stage4.filter(c => c.status === 'measured')
+    const measuredCells = verified.flatMap(c => c.expected.cells.filter(e => e.iconEvidence?.geometry === 'pixel-measured' || e.iconEvidence?.bucket === 'pixel-classified'))
+    // Recorded as vacuous until the Task 24 recipes run: when a case verifies, this fails and the comparisons are written.
+    expect(verified.map(c => c.id)).toEqual([])
+    expect(measuredCells).toEqual([])
+    let checked = 0
+    for (const c of stage4) {
+      const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
+      const doc = await parseXlsx(await OfficePackage.load(bytes), parseOptionsFor(c))
+      const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+      const batch = sheet.conditionalFormatting ? await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence }) : undefined
+      const m = computeMetrics(sheet)
+      try {
+        for (const exp of c.expected.cells) {
+          const { row, col } = refToRowCol(exp.ref)
+          if (exp.iconEvidence?.geometry === 'pixel-measured' && c.status === 'measured') continue
+          const cell = sheet.rows.find(r => r.index === row)?.cells.find(x => x.col === col)
+          const host = { x: m.colWidthsPx.slice(0, col).reduce((a, b) => a + b, 0), y: m.rowHeightsPx.slice(0, row).reduce((a, b) => a + b, 0), width: m.colWidthsPx[col] ?? 64, height: m.rowHeightsPx[row] ?? 20, textWidth: 0, ...(cell ? { cell } : {}) }
+          expect(batch?.iconAt(row, col), `${c.id}:${exp.ref}`).toBeUndefined()
+          expect(batch?.textInsetAt(row, col, host, { zoom: 1, dpr: 1 }), `${c.id}:${exp.ref}`).toBeUndefined()
+          checked++
+        }
+      } finally { batch?.dispose() }
+    }
+    expect(checked).toBe(stage4.reduce((n, c) => n + c.expected.cells.length, 0))
+    expect(checked).toBeGreaterThan(400)
+  }, 60_000)
+
+  /**
    * Lesson 1: every bar production paints reproduces Excel's measured px, and every bar it cannot reproduce is withheld.
    *
    * Evidence is the audit's OWN result (auditStage3Manifest: the verified set, the selected layout and the measured

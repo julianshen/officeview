@@ -135,8 +135,11 @@ export function isWhiteFill(fill: string | undefined): boolean {
   return m !== null && parseInt(m[1]!, 16) === 0xffffff
 }
 
-/** A bar's host: its logical rect, and the fill painted under it (CSS `#RRGGBB`) when the renderer knows one. */
-export type CfBarHost = Rect & { readonly fill?: string }
+/** A bar's host: its logical rect, and the fill painted under it (CSS `#RRGGBB`) when the renderer knows one. An icon
+ * host also carries (Ruling S4-L) the un-inset width of the text the frame lays out there (`textWidth`: from the paint
+ * legs' own layout, the resident semantic leg's measurer, or the paged frame's laid-out record; unknown withholds) and
+ * the cell as laid out (its value kind and effective style: alignment, font size, vertical alignment). */
+export type CfBarHost = Rect & { readonly fill?: string; readonly textWidth?: number; readonly cell?: Pick<import('../types').XlsxCell, 'value' | 'valueIsError' | 'style'> }
 
 /** One axis-aligned rect in output units; colours stay ARGB. `gradientEnd`, when present, makes the rect a left-to-right
  * linear gradient from `argb` to `gradientEnd` over [`gradientFrom`, `gradientTo`] (default: the rect's own left and

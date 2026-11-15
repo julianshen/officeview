@@ -848,7 +848,7 @@ export function renderSheet(
   const extent = { width: m.widthPx, height: m.heightPx }
   const laidOut: CellBodyLayout[] = []
   const cf = prepared?.conditionalFormatting, barScale = { zoom: sparklineScale, dpr: 1 }
-  const barHosts = new Map<number, { x: number; y: number; width: number; height: number; fill?: string }>()
+  const barHosts = new Map<number, { x: number; y: number; width: number; height: number; fill?: string; textWidth?: number; cell?: XlsxCell }>()
   let paintRows: readonly XlsxRow[] = sheet.rows
   // Styled empty table cells are real paint surfaces. Add them only where no
   // source cell exists, and only where this request paints (see syntheticRegionRows).
@@ -908,9 +908,16 @@ export function renderSheet(
       // Fills go down now; text after every fill, so overflow into an empty
       // formatted neighbour stays visible (Excel draws it over the fill).
       // A bar's host carries the fill painted under it (its axis dash needs it) and decides S3-O text suppression.
-      const host = cf && { x, y, width: w, height: hh, ...(styledCell.style?.fillColor ? { fill: spreadsheetColor(styledCell.style.fillColor) } : {}) }
-      if (host) barHosts.set(cell.row * MAX_COLS + cell.col, host)
-      const layout = layoutCellBody(ctx, sheet, styledCell, x, y, w, hh, measured, rng ? NO_OVERFLOW : overflowFor(styledCell, source), undefined, undefined, host ? cf.hidesTextAt(cell.row, cell.col, host, barScale) : undefined)
+      // One host per cell (Ruling S4-L): the un-inset layout gives its text width, and the inset, the text hiding, the
+      // bar and the icon all decide on that same host.
+      const overflow = rng ? NO_OVERFLOW : overflowFor(styledCell, source)
+      let layout = layoutCellBody(ctx, sheet, styledCell, x, y, w, hh, measured, overflow)
+      if (cf) {
+        const host = { x, y, width: w, height: hh, ...(styledCell.style?.fillColor ? { fill: spreadsheetColor(styledCell.style.fillColor) } : {}), textWidth: cellTextWidth(layout), cell: styledCell }
+        barHosts.set(cell.row * MAX_COLS + cell.col, host)
+        const inset = cf.textInsetAt(cell.row, cell.col, host, barScale), hide = cf.hidesTextAt(cell.row, cell.col, host, barScale)
+        if (inset || hide) layout = layoutCellBody(ctx, sheet, styledCell, x, y, w, hh, measured, overflow, undefined, undefined, hide, inset)
+      }
       paintCellLayout(ctx, layout, extent, 'fill')
       laidOut.push(layout)
     }
@@ -926,6 +933,8 @@ export function renderSheet(
   const grid = { r0: 0, c0: 0, r1: rowHeightsPx.length - 1, c1: colWidthsPx.length - 1 }
   // Data bars paint over the fills and under the text (Task 22), through the lazy painter the batch carries.
   cf?.paintBars(ctx, (row, col) => cellBox(row, col) && barHosts.get(row * MAX_COLS + col), grid, barScale)
+  // Icons over the bars, under the text (Task 29), on the same hosts.
+  cf?.paintIcons(ctx, (row, col) => cellBox(row, col) && barHosts.get(row * MAX_COLS + col), grid, barScale)
   if (sheet.resolvedSparklines?.size) {
     const painted = paintSparklinesIn(ctx, sheet, cellBox, grid, { zoom: sparklineScale, dpr: 1 })
     if (!painted) {
@@ -1277,9 +1286,13 @@ export function layoutCellBody(
   allocation?: FormatAllocation,
   /** Ruling S3-O: lay the value out (formattedText stays) but draw no text, under a painted showValue="0" bar. */
   suppressText?: boolean,
+  /** Ruling S4-L: narrow the text box (fitting, '#' width, alignment) where an icon paints; the fill and borders keep
+   * the cell's own box. */
+  inset?: { left: number; right: number },
 ): CellBodyLayout {
   const out: CellBodyLayout = { x, y, w, h: hh, formattedText: '' }
   if (cell.style?.fillColor) out.fill = spreadsheetColor(cell.style.fillColor)
+  if (inset) { x += inset.left; w = Math.max(0, w - inset.left - inset.right) }
   // text (right-align numbers, left-align strings; alignment spans the merge)
   const fontAt = (sizePt: number) => cellFontString(cell.style, sizePt)
   const baseSize = cell.style?.fontSizePt ?? 10
@@ -1369,6 +1382,18 @@ export function layoutCellBody(
   if (cell.style?.borders) out.borders = cell.style.borders
   if (cell.style?.borderColors) out.borderColors = cell.style.borderColors
   return out
+}
+
+/** @internal Ruling S4-L: the width of the text a body lays out on one unrotated, unwrapped line (an icon host's
+ * `textWidth`); 0 without text, undefined for any other layout (withheld). */
+export function cellTextWidth(body: CellBodyLayout): number | undefined {
+  const t = body.text
+  if (!t) return 0
+  if (t.kind === 'plain') return t.width
+  if (t.rotation || t.stacked || t.wrap || t.layout.lines.length !== 1) return undefined
+  let width = 0
+  for (const segment of t.layout.lines[0]!.segments) width += segment.width
+  return width
 }
 
 /** SpreadsheetML colours (styles.xml fills, fonts, borders) are ARGB whose alpha
@@ -1737,5 +1762,5 @@ function visibleSegments(
   return segs
 }
 
-const PADDING_L = 3
-const PADDING_R = 3
+export const PADDING_L = 3
+export const PADDING_R = 3

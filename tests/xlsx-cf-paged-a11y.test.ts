@@ -164,6 +164,9 @@ describe('the semantic host fill is the frame painter\'s host fill (fix round 1)
           return paint.paintBars?.(ctx, cellRect, visible, scale) ?? true
         },
         hidesTextAt: (r: number, c: number, host: { x: number; y: number; width: number; height: number; fill?: string }, scale: { zoom: number; dpr: number; output?: 'logical' | 'device' }) => paint.hidesTextAt?.(r, c, host, scale) ?? false,
+        iconAt: (r: number, c: number) => paint.iconAt?.(r, c),
+        paintIcons: () => true,
+        textInsetAt: () => undefined,
         dispose: () => {},
       }
       const ctx = createCanvas(400, 200).getContext('2d') as unknown as CanvasRenderingContext2D
@@ -175,7 +178,9 @@ describe('the semantic host fill is the frame painter\'s host fill (fix round 1)
       const semantic = (await scopeOver(wire, 3, 'en-US', source))!
       const hostAt = frameBarHosts(source, semantic.effectiveStyle)
       for (const row of [0, 1, 2]) {
-        expect(hostAt(row, 0), `row ${row}: the semantic host is the frame's host`).toEqual(painted.get(row))
+        // The bar's host fields (Task 29 widened the frame host with the icon's text width and cell; bars ignore them).
+        const barHost = (h: { x: number; y: number; width: number; height: number; fill?: string } | undefined) => h && { x: h.x, y: h.y, width: h.width, height: h.height, ...(h.fill ? { fill: h.fill } : {}) }
+        expect(barHost(hostAt(row, 0)), `row ${row}: the semantic host is the frame's host`).toEqual(barHost(painted.get(row)))
         expect(semantic.describe(row, 0), `row ${row}: announces what the frame painted`).toEqual(paint.describe(row, 0))
       }
       expect(semantic.describe(1, 0)).toEqual(UNAVAILABLE)
@@ -205,5 +210,63 @@ describe('the worker leg keeps the resident scope for the Stage 3 fixture (fix r
       const admission = await admitSpreadsheet(blobRangeSource(new Blob([bytes as BlobPart])), profile, importLimitsFor(profile), new AbortController().signal)
       expect(admission.mode, profile).toBe('object')
     }
+  })
+})
+
+/**
+ * Task 29 (S4-N, Lesson 10): the forced-paged semantic scope announces an icon exactly where the frame painter paints
+ * it. It decides through `frameBarHosts` + `iconWithheld` on the frame's own host: the box, the CF-effective style, and
+ * the `textWidth` of the frame's laid-out record. A source without `textWidth` withholds. Icons paint under injected
+ * stubs only (tests/helpers/cf-icons.ts).
+ */
+describe('the forced-paged semantic scope announces an icon exactly where the frame paints it (S4-N)', () => {
+  const ICON_ROWS = 3
+  const iconFrameHosts = async (sheet: XlsxSheet, options: { width?: boolean } = {}): Promise<CfFrameHostSource> => {
+    const { createCanvas } = await import('canvas')
+    const { createCellLayoutHost } = await import('../src/xlsx/view/renderViewport')
+    const { computeMetrics } = await import('../src/xlsx/render')
+    const metrics = computeMetrics(sheet)
+    const layout = createCellLayoutHost(createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D)
+    return {
+      cell: (row, col) => {
+        const cell = sheet.rows[row]?.cells.find(c => c.col === col)
+        if (!cell) return undefined
+        const box = { x: 0, y: metrics.rowHeightsPx.slice(0, row).reduce((a, b) => a + b, 0), width: metrics.colWidthsPx[col]!, height: metrics.rowHeightsPx[row]! }
+        // The frame's laid-out record of this cell (un-inset): its text width.
+        const body = layout.layoutBody(cell, box.width, box.height)
+        const textWidth = body.text?.kind === 'plain' ? body.text.width : undefined
+        return { box, base: cell.style, cell, ...(options.width === false || textWidth === undefined ? {} : { textWidth }) }
+      },
+    }
+  }
+  it('resident, worker and forced-paged legs announce the same labels for the same cells', async () => {
+    const { iconSheet, withIcons } = await import('./helpers/cf-icons')
+    const { prepareCfTextScope } = await import('../src/xlsx/cf/text')
+    const { createCanvas } = await import('canvas')
+    await withIcons(async () => {
+      for (const [name, sheet] of [['plain', iconSheet([10, 50, 90])], ['narrow', iconSheet([1, 5, 9], { widthChars: 10 / 7 })]] as const) {
+        const wire = await wireOf(sheet, ICON_ROWS)
+        const semantic = (await scopeOver(wire, ICON_ROWS, 'zh-TW', await iconFrameHosts(sheet)))!
+        const blind = (await scopeOver(wire, ICON_ROWS, 'zh-TW', await iconFrameHosts(sheet, { width: false })))!
+        const resident = (await prepareCfTextScope(sheet, { rects: [{ r0: 0, r1: ICON_ROWS - 1, c0: 0, c1: 0 }], signal: new AbortController().signal, locale: 'zh-TW', budget: { reserve() {}, release() {} },
+          layoutContext: () => createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D }))!
+        // The worker leg (the host-less paged paint scope) after painting the frame's hosts.
+        const painted = (await scopeOver(wire, ICON_ROWS, 'zh-TW'))!
+        const hosts = await iconFrameHosts(sheet)
+        const ctx = createCanvas(400, 100).getContext('2d') as unknown as CanvasRenderingContext2D
+        painted.paintIcons?.(ctx, (row, col) => { const at = hosts.cell(row, col); return at ? { ...at.box, textWidth: at.textWidth, cell: at.cell } : undefined }, { r0: 0, c0: 0, r1: ICON_ROWS - 1, c1: 0 }, { zoom: 1, dpr: 1 })
+        for (const row of [0, 1, 2]) {
+          const want = resident.describe(row, 0)
+          expect(semantic.describe(row, 0), `${name} row ${row}: forced-paged = resident`).toEqual(want)
+          expect(painted.describe(row, 0), `${name} row ${row}: worker = resident`).toEqual(want)
+          expect(semantic.iconAt?.(row, 0), `${name} row ${row}`).toEqual(painted.iconAt?.(row, 0))
+          expect(blind.iconAt?.(row, 0), `${name} row ${row}: a source without textWidth withholds`).toBeUndefined()
+          expect(blind.describe(row, 0)?.key, `${name} row ${row}`).toBe('cf-unavailable')
+        }
+        if (name === 'plain') expect(semantic.describe(1, 0)).toEqual({ key: 'cf:iconSet', text: '圖示 2/3' })
+        else expect(semantic.describe(1, 0)?.key).toBe('cf-unavailable')
+        for (const s of [semantic, blind, resident, painted]) s.dispose()
+      }
+    })
   })
 })

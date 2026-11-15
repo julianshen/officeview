@@ -41,7 +41,8 @@ export interface CellBodyLayout {
 
 /** The host owns measurement and formatting (spec §11.2: no second text model). */
 export interface CellLayoutHost {
-  layoutBody(cell: XlsxCell, width: number, height: number, overflow?: { left: number; right: number }, preformatted?: string, allocation?: FormatAllocation): CellBodyLayout
+  layoutBody(cell: XlsxCell, width: number, height: number, overflow?: { left: number; right: number }, preformatted?: string, allocation?: FormatAllocation,
+    /** Ruling S4-L: the text box's reduction where an icon paints (absent: none). */ inset?: { left: number; right: number }): CellBodyLayout
   /** Opt-in proof that this exact body remains valid under the given allowance.
    * Only certified bodies share a key across allowances; other hosts retain
    * their complete allowance-dependent formatting/layout identity. */
@@ -88,7 +89,9 @@ export interface CellLayout {
 export interface PlacedCell { cfKey?: string; cell: XlsxCell; source: SourceCell; x: number; y: number; width: number; height: number; merge?: XlsxMergeRange
   /** Room the text may use past the box into empty neighbours (S13); a layout
    * key unless the host certifies an identical body under another allowance. */
-  overflow?: { left: number; right: number } }
+  overflow?: { left: number; right: number }
+  /** Ruling S4-L: the text inset of a host whose icon this frame paints; a layout key (no stale un-inset hit). */
+  textInset?: { left: number; right: number } }
 
 export function cellIdOf(source: SourceCell): CellId {
   return source.row * MAX_COLS + source.col
@@ -214,7 +217,7 @@ export class LayoutCache {
       catch (error) { painted?.release(); throw error }
     }
     let built: CellBodyLayout
-    try { built = host.layoutBody(placed.cell, placed.width, placed.height, placed.overflow, painted?.text, painted?.allocation) }
+    try { built = host.layoutBody(placed.cell, placed.width, placed.height, placed.overflow, painted?.text, painted?.allocation, placed.textInset) }
     catch (error) { if (batch) batch.admission.release(upper); throw error }
     finally { painted?.release() }
     this.stats.built++
@@ -285,9 +288,9 @@ function styleKey(style: XlsxCellStyle | undefined): string {
   if (key === undefined) styleKeys.set(style, key = JSON.stringify(style))
   return key
 }
-function layoutKey({ cell, source, width, height, cfKey }: PlacedCell): string {
+function layoutKey({ cell, source, width, height, cfKey, textInset }: PlacedCell): string {
   const value = cell.value === null ? 'n' : `${typeof cell.value}:${String(cell.value)}`
-  return `${cfKey ?? ''}|${source.row},${source.col}|${width}|${height}|${cell.valueIsError === undefined ? '' : cell.valueIsError ? 1 : 0}${cell.formula === undefined ? '' : 'f'}|${styleKey(cell.style)}|${value}`
+  return `${cfKey ?? ''}|${source.row},${source.col}|${width}|${height}|${cell.valueIsError === undefined ? '' : cell.valueIsError ? 1 : 0}${cell.formula === undefined ? '' : 'f'}|${styleKey(cell.style)}|${value}${textInset ? `|i${textInset.left},${textInset.right}` : ''}`
 }
 
 /** Raw logical text of a value: what search/copy see before display formatting. */

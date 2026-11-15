@@ -186,6 +186,9 @@ async function pagedBatch(sheet: XlsxSheet, rows: number, cols: number): Promise
     barAt: (r, c) => scope.barAt?.(r, c),
     paintBars: (ctx, cellRect, visible, scale) => scope.paintBars?.(ctx, cellRect, visible, scale) ?? true,
     hidesTextAt: (r, c, host, scale) => scope.hidesTextAt?.(r, c, host, scale) ?? false,
+    iconAt: (r, c) => scope.iconAt?.(r, c),
+    paintIcons: (ctx, cellRect, visible, scale) => scope.paintIcons?.(ctx, cellRect, visible, scale) ?? true,
+    textInsetAt: (r, c, host, scale) => scope.textInsetAt?.(r, c, host, scale),
     dispose: () => scope.dispose(),
   }
 }

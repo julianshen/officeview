@@ -192,3 +192,26 @@ it('print output at screen and PRINT_SCALE = 2 carries the prepared bar (injecte
     } finally { batch.dispose() }
   })
 })
+it('print output at screen and PRINT_SCALE = 2 carries the prepared icons (injected stubs)', async () => {
+  const { iconSheet, withIcons, ICON_COLOURS } = await import('./helpers/cf-icons')
+  const { prepareCfPaint } = await import('../src/xlsx/cf/render')
+  const { cfRuntimeEvidence } = await import('../src/xlsx/cf/predicates')
+  const { computeMetrics, computePrintMetrics, renderPrintPage } = await import('../src/xlsx/render')
+  const hex = (c: string) => [parseInt(c.slice(1, 3), 16), parseInt(c.slice(3, 5), 16), parseInt(c.slice(5, 7), 16), 255]
+  await withIcons(async () => {
+    const sheet = iconSheet([10, 50, 90])
+    const batch = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence }))!
+    const m = computeMetrics(sheet), print = computePrintMetrics(sheet, m)
+    const rowMid = (r: number) => m.rowHeightsPx.slice(0, r).reduce((a, b) => a + b, 0) + m.rowHeightsPx[r]! / 2
+    try {
+      for (const scale of [1, 2]) {
+        const canvas = createCanvas(print.paperPx.width * scale, print.paperPx.height * scale), ctx = canvas.getContext('2d')
+        ctx.scale(scale, scale)
+        renderPrintPage(sheet, ctx as unknown as CanvasRenderingContext2D, m, print, 0, 0, undefined, { conditionalFormatting: batch })
+        const at = (x: number, y: number) => [...ctx.getImageData(Math.round((print.printable.x + x * print.scale) * scale), Math.round((print.printable.y + y * print.scale) * scale), 1, 1).data]
+        for (const r of [0, 1, 2]) expect(at(8, rowMid(r)), `icon ${r} at scale ${scale}`).toEqual(hex(ICON_COLOURS[r]!))
+        expect(at(40, rowMid(1)), `past the box at scale ${scale}`).toEqual([255, 255, 255, 255])
+      }
+    } finally { batch.dispose() }
+  })
+})

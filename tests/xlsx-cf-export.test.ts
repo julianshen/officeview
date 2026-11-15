@@ -91,3 +91,24 @@ it('PNG encoder retains the prepared CF bar (injected evidence)', async () => {
     } finally { pages.dispose() }
   })
 })
+it('PNG encoder retains the prepared CF icons (injected stubs); with no glyph table none paints', async () => {
+  const { iconSheet, withIcons } = await import('./helpers/cf-icons')
+  const { computeMetrics } = await import('../src/xlsx/render')
+  const sample = async (sheet: import('../src/xlsx/types').XlsxSheet) => {
+    const m = computeMetrics(sheet)
+    const rowMid = (r: number) => Math.round(m.rowHeightsPx.slice(0, r).reduce((a, b) => a + b, 0) + m.rowHeightsPx[r]! / 2)
+    const pages = await getPaintables({ sheets: [sheet] })
+    try {
+      const c = createCanvas(pages[0].spec.widthPx, pages[0].spec.heightPx)
+      pages[0].paint(c.getContext('2d') as unknown as CanvasRenderingContext2D)
+      const png = c.toBuffer('image/png'), decoded = await loadImage(png), copy = createCanvas(decoded.width, decoded.height)
+      copy.getContext('2d').drawImage(decoded, 0, 0)
+      // The stub box: 2 pt in, 9 pt wide (2.7 px to 14.7 px), centred in the row.
+      return [0, 1, 2].map(r => [...copy.getContext('2d').getImageData(8, rowMid(r), 1, 1).data])
+    } finally { pages.dispose() }
+  }
+  const painted = await withIcons(() => sample(iconSheet([10, 50, 90])))
+  expect(painted).toEqual([[0x11, 0xaa, 0x11, 255], [0xcc, 0x88, 0x00, 255], [0xcc, 0x00, 0x11, 255]])
+  const withheld = await withIcons(() => sample(iconSheet([10, 50, 90])), { glyphs: () => undefined })
+  for (const px of withheld) expect(px).toEqual([255, 255, 255, 255])
+})
