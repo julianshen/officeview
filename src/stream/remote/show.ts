@@ -470,7 +470,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
   /** The keyframe track of composited step `k` of streamed slide `i` (on screen), when the budget has room (else `step-deferred`). */
   function requestTrack(i: number, k: number): void {
     const key = `${i}:${k}`
-    if (exited || tracks.has(key) || !show?.showTrack) return
+    // Round 9: a still-only slide (refused, or demoted under pressure) never asks for a track.
+    if (exited || tracks.has(key) || !show?.showTrack || (unitOf[i] !== undefined && stillOnly.has(unitOf[i]!))) return
     const b = held.get(i)
     const step = b?.plan.steps[k]
     if (!b || !step || step.eligibility !== 'composited' || !step.track || !fetcher.room('track')) return
@@ -1281,6 +1282,9 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
           if (exited || unit === undefined || stillOnly.has(unit)) return
           stillOnly.add(unit)
           sink.add({ code: 'plan-stage-pressure', slideIndex: i, message: `Slide ${i + 1} plays as its still image (its autoplay cannot be shown under workspace pressure)` })
+          // Round 9: every track of the slide goes first (`dropTrack`: a pending request is aborted, its send stays
+          // charged, and its late reply fails `live()` and is released; a resident track is disposed once).
+          for (const [k, t] of [...tracks]) if (t.index === i) dropTrack(k)
           fetcher.demote(unit)
           // The plan's resources go now (the stage draws none of them again), so the still has room.
           for (const f of [...(holds.get(i) ?? [])]) f()

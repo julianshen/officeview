@@ -860,6 +860,91 @@ describe('remote show on the driver (piece 4 Task 11)', () => {
     expect(ws.used()).toBe(0)
   })
 
+  /** The fly slide with an autoplayed group, then one composited click step with a 3-frame track (codex r8 probes). */
+  const autoThenTrack = { messages: (u: number) => bundleOf(FLY, u, (p) => {
+    const timing = structuredClone(flyTiming(2)) as Extract<NonNullable<Plan['show']['timing']>, { root: unknown }>
+    const click = ((timing.root as TimeNode & { children: TimeNode[] }).children[0] as TimeNode & { children: TimeNode[] }).children[0]!
+    ;(click.ctn as { start: unknown }).start = [{ delayMs: 0 }]
+    return { ...p, show: { ...p.show, timing }, steps: [{ trigger: 'click' as const, eligibility: 'composited' as const, track: { fps: 15 as const, count: 3 } }] }
+  }) }
+  /** Three valid 700×700 noise keyframes (incompressible: ≈ 1.5 MB encoded each), encoded once. */
+  let noise: Uint8Array | undefined
+  const noiseTrack = (u: number) => [0, 1, 2].map((i) => {
+    if (!noise) {
+      const c = createCanvas(700, 700), cx = c.getContext('2d'), im = cx.createImageData(700, 700)
+      let q = 12345
+      for (let j = 0; j < im.data.length; j++) { q ^= q << 13; q ^= q >>> 17; q ^= q << 5; im.data[j] = q & 255 }
+      cx.putImageData(im, 0, 0)
+      noise = new Uint8Array(c.toBuffer('image/png'))
+    }
+    return encodeShowMessage({ tag: 4, unit: u, assetId: i, w: 700, h: 700, png: noise })
+  })
+  const pressureShow = async (tracks?: (unit: number, step: number) => Uint8Array[]) => {
+    const ws = createSlideShowWorkspace('desktop', { limit: 12_000_000, scratch: 0 })
+    vi.spyOn(remoteShowDeps, 'workspace').mockReturnValue(ws)
+    const fd = animDoc([autoThenTrack, 'still'], tracks ? { tracks } : {})
+    return { ws, fd }
+  }
+
+  it('demotion under pressure aborts a pending track: its late reply is released, never resident; no track is asked again (round 9)', async () => {
+    const { ws, fd } = await pressureShow()
+    fd.rules.set('track:0:0', 'hold')
+    const { s, root, canvas, log } = await show(fd)
+    await run(700)
+    expect(log).toContain('diag:plan-stage-pressure')
+    expect(sent(fd, 'paint:')).toEqual(['paint:0'])
+    expect(frameKind(root)).toBe('image')
+    // The request was aborted on demotion (its send stays charged); the late reply is not kept.
+    expect(fd.signals.get('track:0:0')?.aborted).toBe(true)
+    fd.rules.delete('track:0:0'); fd.release('track:0:0')
+    await run(100)
+    expect(fd.held('track:')).toEqual([])
+    // A still-only slide asks for no track again, on Next to its step or on a revisit.
+    s.next(); await run(700)
+    s.previous(); await run(700)
+    expect(s.state.slide).toBe(0)
+    expect(sent(fd, 'track:')).toEqual(['track:0:0'])
+    expect(px(canvas, canvas.width >> 1, canvas.height >> 1)).toEqual([0x12, 0x34, 0x56])
+    s.exit()
+    expect(ws.used()).toBe(0)
+  })
+
+  it('demotion under pressure: a large late track reply never takes the still\'s room (round 9)', async () => {
+    const { ws, fd } = await pressureShow(noiseTrack)
+    fd.rules.set('track:0:0', 'hold')
+    const { s, root, log } = await show(fd)
+    await run(100)
+    expect(log).toContain('diag:plan-stage-pressure')
+    const before = ws.used()
+    // codex r8-track-large: the reply lands before the still is fetched.
+    fd.rules.delete('track:0:0'); fd.release('track:0:0')
+    await flush()
+    expect(ws.used()).toBeLessThanOrEqual(before)
+    expect(fd.held('track:')).toEqual([])
+    await run(600)
+    expect(sent(fd, 'paint:')).toEqual(['paint:0'])
+    expect(frameKind(root)).toBe('image')
+    s.exit()
+    expect(ws.used()).toBe(0)
+  })
+
+  it('demotion under pressure disposes a resident track and releases its reply (round 9)', async () => {
+    // Small keyframes: the track fits beside the bundle, so it is resident (its encoded reply held) at demotion.
+    const { ws, fd } = await pressureShow()
+    const { s, root } = await show(fd)
+    expect(fd.held('track:')).toEqual(['track:0:0'])
+    const resident = ws.used()
+    await run(100)
+    // The first settled picture demotes the slide: the track is disposed and its reply released, before the still paints.
+    expect(fd.held('track:')).toEqual([])
+    expect(ws.used()).toBeLessThan(resident)
+    await run(600)
+    expect(sent(fd, 'paint:')).toEqual(['paint:0'])
+    expect(frameKind(root)).toBe('image')
+    s.exit()
+    expect(ws.used()).toBe(0)
+  })
+
   it('a refused slide plays its piece-3 still through the unit path', async () => {
     const fd = animDoc(['fly', 'fly'])
     fd.rules.set('plan:0', 'still')

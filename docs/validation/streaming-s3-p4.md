@@ -411,6 +411,16 @@ Evidence:
   and a loading frame shows until the still lands. The still is the same piece-3 unit image a refused slide plays,
   under the same owner-review exemption (Owner-review items below). A slide without autoplay keeps the existing
   pressure behaviour (its entry is its settled checkpoint 0).
+  - Round 9: demotion first drops every track of the slide. A pending request is aborted, and its send stays
+    charged. Its late reply is released, never resident. A resident track is disposed, releasing its decoded window
+    and encoded reply once, before the still is fetched. A still-only slide never asks for a track again. This is
+    tested with a small and a large (700×700 noise) late reply, and with a resident track.
+  - **Ruling (PR #78 round 8 review):** the still's hidden-ink exemption applies. It is the Task 9 piece-3 unit
+    image the viewer already receives in streamed viewing, so an autoplayed exit's ink in it is within that
+    exemption. It is not a new show asset.
+  - **Ruling (PR #78 round 8 review):** demotion is permanent for the show session, as a still refusal is. There is
+    no re-promotion when room returns: that would repeat admission attempts and charges under unstable pressure. A
+    new show tries again.
 - **Run links cover their run only (PR #78 round 6).** A link on a text run ships one rect per laid-out line segment
   of that run (`runRegionsOf`, `src/slideshow/prepare/slide.ts`, laid out as the local stage's `runAt`); a shape's own
   link ships before its runs', so a run wins over its shape. A run that cannot be located gets no region (local mode
