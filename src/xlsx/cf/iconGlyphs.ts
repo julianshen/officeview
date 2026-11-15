@@ -167,11 +167,14 @@ type Shape = readonly ['p' | 'r' | 'c' | 's', number, ...number[]]
 const DOWN: readonly Shape[] = [['p', 0, 3, 0, 8, 0, 8, 6, 11, 6, 5.5, 12, 0, 6, 3, 6], ['p', 1, 4, 1, 7, 1, 7, 7, 5.5, 8.5, 4, 7]]
 const UP: readonly Shape[] = [['p', 0, 5.5, 0, 11, 6, 8, 6, 8, 12, 3, 12, 3, 6, 0, 6], ['p', 1, 4, 11, 7, 11, 7, 5, 5.5, 3.5, 4, 5]]
 const RIGHT: readonly Shape[] = [['p', 0, 0, 3, 6, 3, 6, 0, 12, 5.5, 6, 11, 6, 8, 0, 8], ['p', 1, 1, 4, 7, 4, 7, 2.5, 10, 5.5, 7, 8.5, 7, 7, 1, 7]]
+/** An outlined diagonal arrow: shaft (colour 0) and head (colour 2) outlines, then their cores (colours 1 and 3). */
 const DOWN_RIGHT: readonly Shape[] = [
-  ['p', 0, 0, 2.5, 2.5, 0, 9.5, 7, 7, 9.5], ['p', 2, 12, 3.5, 12, 12, 3.5, 12], ['p', 1, 1.2, 2.5, 2.5, 1.2, 7.6, 6.3, 6.3, 7.6],
+  ['p', 0, 0, 2.5, 2.5, 0, 9.5, 7, 7, 9.5], ['p', 2, 12, 3.5, 12, 12, 3.5, 12],
+  ['p', 1, 1.4, 2.5, 2.5, 1.4, 8.5, 7.4, 7.4, 8.5], ['p', 3, 11, 6, 11, 11, 6, 11],
 ]
 const UP_RIGHT: readonly Shape[] = [
-  ['p', 0, 0, 9.5, 2.5, 12, 9.5, 5, 7, 2.5], ['p', 2, 12, 8.5, 12, 0, 3.5, 0], ['p', 1, 1.2, 9.5, 2.5, 10.8, 7.6, 5.7, 6.3, 4.4],
+  ['p', 0, 0, 9.5, 2.5, 12, 9.5, 5, 7, 2.5], ['p', 2, 12, 8.5, 12, 0, 3.5, 0],
+  ['p', 1, 1.4, 9.5, 2.5, 10.6, 8.5, 4.6, 7.4, 3.5], ['p', 3, 11, 6, 11, 1, 6, 1],
 ]
 const FLAG: readonly Shape[] = [['p', 0, 1.6, 0, 2.6, 0, 5, 12, 4, 12], ['p', 1, 1, 0, 6, 0, 10, 3, 10, 6, 2, 6]]
 const DISC: readonly Shape[] = [['c', 0, 5.5, 5.5, 5.5]]
@@ -183,18 +186,19 @@ const LAMP: readonly Shape[] = [['r', 0, 1, 1, 11, 11], ['c', 1, 6.5, 6.5, 4]]
 const DIAMOND: readonly Shape[] = [['p', 0, 6.5, 0, 12, 6, 6.5, 12, 1, 6], ['p', 1, 6.5, 1.5, 10.5, 6, 6.5, 10.5, 2.5, 6]]
 const TRIANGLE: readonly Shape[] = [['p', 0, 6.5, 0, 12, 11, 1, 11], ['p', 1, 6.5, 2.5, 10.3, 10, 2.7, 10]]
 const RING: readonly Shape[] = [['c', 0, 5.5, 5.5, 5.5], ['c', 1, 5.5, 5.5, 4.5]]
-const quarters = (n: number): readonly Shape[] => [...RING, ['s', 2, 5.5, 5.5, 4.5, 0, n]]
+/** A ring holding `n` quarters of a pie (colour 2) about (cx, cy), whose straight edges lie on whole points. */
+const quarters = (n: number, cx: number, cy: number): readonly Shape[] => [...RING, ['s', 2, cx, cy, 5, 0, n]]
 /** Four bars (x, y, w, h), each with the one column an empty bar draws darker. */
-const BARS: ReadonlyArray<readonly [number, number, number, number, number]> = [[0, 8, 3, 4, 0], [3, 5, 3, 7, 4], [6, 2, 4, 10, 7], [10, 0, 3, 12, 12]]
-/** The first `filled` bars filled, bar i in colour i; the rest empty: a light body (colour 4) with a darker column
- * (colour 5 + i). */
+const BARS: ReadonlyArray<readonly [number, number, number, number, number]> = [[0, 8, 2.5, 4, 0], [4, 5, 2, 7, 4], [7, 2, 2.5, 10, 7], [10.5, 0, 2.5, 12, 12]]
+/** The first `filled` bars filled, bar i in colour i; the rest empty: a light body (colour 4 + i) with a darker
+ * column (colour 8 + i). */
 const rating = (filled: number): readonly Shape[] => BARS.flatMap(([x, y, w, h, edge], i): Shape[] =>
-  i < filled ? [['r', i, x, y, w, h]] : [['r', 4, x, y, w, h], ['r', 5 + i, edge, y, 1, h]])
+  i < filled ? [['r', i, x, y, w, h]] : [['r', 4 + i, x, y, w, h], ['r', 8 + i, edge, y, 1, h]])
 const STAR = [6.5, 2, 8, 5.5, 12, 6, 9, 8.5, 10, 12, 6.5, 10, 3, 12, 4, 8.5, 1, 6, 5, 5.5] as const
 const STAR_CORE = [6.5, 4.5, 7.3, 6.4, 9.5, 6.7, 7.9, 8, 8.4, 10.2, 6.5, 9, 4.6, 10.2, 5.1, 8, 3.5, 6.7, 5.7, 6.4] as const
 const STAR_LEFT = [6.5, 2, 5, 5.5, 1, 6, 4, 8.5, 3, 12, 6.5, 10] as const
 /** Boxes top-left, top-right, bottom-left, bottom-right; `filled` lists which take colour 0 (the rest colour 1). */
-const boxes = (...filled: number[]): readonly Shape[] => [[1, 1], [6, 1], [1, 6], [6, 6]].map(([x, y], i): Shape => ['r', filled.includes(i) ? 0 : 1, x!, y!, 5, 5])
+const boxes = (...filled: number[]): readonly Shape[] => [[1, 1], [6.5, 1], [1, 6.5], [6.5, 6.5]].map(([x, y], i): Shape => ['r', filled.includes(i) ? 0 : 1, x!, y!, 4.5, 4.5])
 
 const GEOMETRY: Readonly<Record<string, readonly Shape[]>> = {
   '3Arrows:0': DOWN, '3Arrows:1': RIGHT, '3Arrows:2': UP,
@@ -211,7 +215,7 @@ const GEOMETRY: Readonly<Record<string, readonly Shape[]>> = {
   '4RedToBlack:0': DISC, '4RedToBlack:1': DISC, '4RedToBlack:2': DISC, '4RedToBlack:3': DISC,
   '4Rating:0': rating(1), '4Rating:1': rating(2), '4Rating:2': rating(3), '4Rating:3': rating(4),
   '4TrafficLights:0': RIMMED, '5Rating:0': rating(0),
-  '5Quarters:0': RING, '5Quarters:1': quarters(1), '5Quarters:2': quarters(2), '5Quarters:3': quarters(3), '5Quarters:4': DISC,
+  '5Quarters:0': RING, '5Quarters:1': quarters(1, 5, 6), '5Quarters:2': quarters(2, 5, 6), '5Quarters:3': quarters(3, 5, 5), '5Quarters:4': DISC,
   '3Stars:0': [['p', 0, ...STAR], ['p', 1, ...STAR_CORE]],
   '3Stars:1': [['p', 0, ...STAR], ['p', 1, ...STAR_CORE], ['p', 2, ...STAR_LEFT]],
   '3Stars:2': [['p', 0, ...STAR]],
@@ -251,24 +255,24 @@ const COLOURS: Readonly<Record<string, readonly number[]>> = {
   '3Symbols2:0': [0xffb8564f],
   '3Symbols2:1': [0xffe18d2d, 0xffde8817],
   '3Symbols2:2': [0xff549b63],
-  '4Arrows:1': [0xffe8a13d, 0xfffee691, 0xffd87103],
-  '4Arrows:2': [0xffe8a13d, 0xfffee17d, 0xffd87103],
-  '4ArrowsGray:1': [0xff6e6e6e, 0xffafafaf, 0xff404040],
-  '4ArrowsGray:2': [0xff6e6e6e, 0xffa6a6a6, 0xff404040],
+  '4Arrows:1': [0xffe8a039, 0xfffee691, 0xffd87103, 0xfffdd23a],
+  '4Arrows:2': [0xffe8a13d, 0xfffee17d, 0xffd87103, 0xfffee17d],
+  '4ArrowsGray:1': [0xff6c6c6c, 0xffafafaf, 0xff404040, 0xff8c8c8c],
+  '4ArrowsGray:2': [0xff6d6d6d, 0xffa7a7a7, 0xff404040, 0xffa1a1a1],
   '4RedToBlack:0': [0xff000000],
   '4RedToBlack:1': [0xffbfbfbf],
   '4RedToBlack:2': [0xffff8d89],
   '4RedToBlack:3': [0xffff0000],
-  '4Rating:0': [0xff576b8f, 0, 0, 0, 0xffd1d1d2, 0, 0xffd0d1d1, 0xffaeaeae, 0xffa7a7a7],
-  '4Rating:1': [0xff4f7093, 0xff4b739d, 0, 0, 0xffd1d1d2, 0, 0, 0xffaeaeae, 0xffa7a7a7],
-  '4Rating:2': [0xff4f7093, 0xff4b739d, 0xff72809f, 0, 0xffcecdcc, 0, 0, 0, 0xffa7a7a7],
-  '4Rating:3': [0xff4f7093, 0xff4b739d, 0xff7286a2, 0xff4d7095],
+  '4Rating:0': [0xff576b8f, 0, 0, 0, 0, 0xffadaeae, 0xffd0d1d1, 0xffc9c9ca, 0, 0xffd0d1d1, 0xffaeaeae, 0xffa7a7a7],
+  '4Rating:1': [0xff4f7093, 0xff345e88, 0, 0, 0, 0, 0xffd0d1d1, 0xffc9c9ca, 0, 0, 0xffaeaeae, 0xffa7a7a7],
+  '4Rating:2': [0xff4f7093, 0xff345e88, 0xff4d739b, 0, 0, 0, 0, 0xffcecdcc, 0, 0, 0, 0xffa7a7a7],
+  '4Rating:3': [0xff4f7093, 0xff345e88, 0xff4d739d, 0xff4d7095],
   '4TrafficLights:0': [0xff2f2f2f, 0xff393939],
-  '5Rating:0': [0, 0, 0, 0, 0xffd1d1d2, 0xffb1b1b1, 0xffd0d1d1, 0xffaeaeae, 0xffa7a7a7],
+  '5Rating:0': [0, 0, 0, 0, 0xffc9c9ca, 0xffadaeae, 0xffd0d1d1, 0xffc9c9ca, 0xffb1b1b1, 0xffd0d1d1, 0xffaeaeae, 0xffa7a7a7],
   '5Quarters:0': [0xff313131, 0xffffffff],
   '5Quarters:1': [0xff404040, 0xffffffff, 0xff000000],
   '5Quarters:2': [0xff3b3b3b, 0xffffffff, 0xff000000],
-  '5Quarters:3': [0xff383838, 0xff7b7b7b, 0xff000000],
+  '5Quarters:3': [0xff3b3b3b, 0xffe3e3e3, 0xff000000],
   '5Quarters:4': [0xff000000],
   '3Stars:0': [0xffc0c0c0, 0xffdbdbdb],
   '3Stars:1': [0xffb8bbb6, 0xffdbdce7, 0xffe1cc4d],
@@ -276,11 +280,11 @@ const COLOURS: Readonly<Record<string, readonly number[]>> = {
   '3Triangles:0': [0xffc86d67],
   '3Triangles:1': [0xffedac4b],
   '3Triangles:2': [0xff5a9a5c],
-  '5Boxes:0': [0, 0xffebebeb],
-  '5Boxes:1': [0xff6d8fb2, 0xffebeaea],
-  '5Boxes:2': [0xff6e90b3, 0xffeaeae9],
-  '5Boxes:3': [0xff6d90b1, 0xffeaeaea],
-  '5Boxes:4': [0xff6d8fb1],
+  '5Boxes:0': [0, 0xffeaeaea],
+  '5Boxes:1': [0xff6588ac, 0xffeaeaea],
+  '5Boxes:2': [0xff688baf, 0xffe9e9e9],
+  '5Boxes:3': [0xff698bae, 0xffe9e9ea],
+  '5Boxes:4': [0xff698baf],
 }
 // COLOURS:END
 

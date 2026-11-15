@@ -3,9 +3,11 @@
  * geometry, with the harness's own ink rule. The key crops are comparison fixtures only: nothing here feeds pixels back
  * into the source.
  *
- * - The key cell: 72 pt wide, 20 pt tall, 11 pt Calibri, bottom-aligned, a right-aligned number under `;;;`
- *   (`scripts/cf-refs/cases.ts` stage4-icon-glyph-key; sidecar `colWidthsPt`/`rowHeightsPt`), laid out at the capture
- *   scale (1 device px per pt, as the sidecar's `pxPerPt` 1).
+ * - The key geometry: 72 pt wide, 20 pt tall, 11 pt Calibri, bottom-aligned (`scripts/cf-refs/cases.ts`
+ *   stage4-icon-glyph-key; sidecar `colWidthsPt`/`rowHeightsPt`), laid out at the capture scale (1 device px per pt, as
+ *   the sidecar's `pxPerPt` 1). The key's own cells are right-aligned numbers under `;;;`, which production still
+ *   withholds (`rightInsetPt` is unmeasured); `KEY_FONT` lays the glyph out as left-aligned text, which the frame
+ *   admits and which does not move the icon (geometry-2 I5/J5).
  * - Ink: a pixel whose max channel delta from the cell's own background (white) reaches 64 (`ICON_STRONG_DELTA`,
  *   S4-A), inside the cell's inner box (gridlines excluded), as `measureIconGeometry` reads it.
  * - A region: the pixels one fill owns (coverage >= 1/2 of its own path, < 1/2 of every later fill's path). Its

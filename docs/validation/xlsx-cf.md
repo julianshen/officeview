@@ -1600,7 +1600,7 @@ After verify-only (38d3d872), production paints icons only behind `CF_ICON_PAINT
 - **Classes:** 54 entries over 75 pairs, exactly the sidecar's `glyphClasses`. The twins `4RedToBlack:0`/`5Quarters:4` and `4RedToBlack:1`/`5Boxes:0` are separate entries (S4-NEARTWIN).
 - **Withheld:** `3Stars:0` (`CF_ICON_GLYPH_WITHHELD`). Excel's empty star is a speckle of greys. The median over any outline region we draw is about 190, so after anti-aliasing our outline draws no ink at delta 64, against a measured box of 3..12 × 9..17. Its one pair, `3Stars:0`, never paints. The other 53 classes pass both checks.
 - **Gates:** a pair paints only with its own `icon:glyph-<set>-<iconId>` evidence. None is published before Task 30, so production still paints no icon.
-- **Size:** the `iconGlyphs.ts` module (encoded table, class map and decoder) renders 12,682 B, or 3,740 B gzip, inside the lazy `cf` chunk (`render-*.js`). Measured with `OV_MODULE_MAP=1 npx vite build`; `scripts/vite-module-map.ts` now records each module's `moduleBytes`. The test asserts ≤ 16 KiB and ≤ 3,740 B + 10 % (Ruling S4-GLYPHCAP). No CF module is in the eager closure.
+- **Size:** the `iconGlyphs.ts` module (encoded table, class map and decoder) renders 12,932 B, or 3,786 B gzip, inside the lazy `cf` chunk (`render-*.js`). Measured with `OV_MODULE_MAP=1 npx vite build`; `scripts/vite-module-map.ts` now records each module's `moduleBytes`. The test asserts ≤ 16 KiB and ≤ 3,786 B + 10 % (Ruling S4-GLYPHCAP). No CF module is in the eager closure.
 
 **The key frame (`CF_ICON_RENDER_MODEL.keyFrame`).**
 - The frame is the union of the 54 classes' ink boxes in the key's `observedIcons`, which are cell-relative, inclusive and at 1 px/pt:

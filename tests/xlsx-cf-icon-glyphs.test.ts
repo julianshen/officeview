@@ -180,8 +180,8 @@ describe('Task 28: the glyph table', () => {
 })
 
 /** Measured 2026-11-15 by `OV_MODULE_MAP=1 npx vite build` (dist/.module-map.json `moduleBytes`): the iconGlyphs.ts
- * module (encoded table, class map and decoder) renders 12,682 B, 3,740 B gzip, inside the lazy cf chunk. */
-const CF_GLYPH_TABLE_GZIP_BYTES = 3740
+ * module (encoded table, class map and decoder) renders 12,932 B, 3,786 B gzip, inside the lazy cf chunk. */
+const CF_GLYPH_TABLE_GZIP_BYTES = 3786
 
 describe('Task 28: the icon frame at the glyph key geometry', () => {
   const icon = { ruleId: 1, set: '3Arrows' as const, iconId: 0, bucket: 0, buckets: 3, showValue: true }
