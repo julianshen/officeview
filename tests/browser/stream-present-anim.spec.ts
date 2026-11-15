@@ -201,25 +201,36 @@ for (const backend of BACKENDS) {
 
     test('slide changes (cut and fly-in, bundles prefetched) never show a mostly black frame (PR #78 round 2)', async ({ page }) => {
       test.setTimeout(60_000)
+      // A WebGL2 canvas read outside the task that drew it is its cleared buffer (transparent, so the black 2-D
+      // output under it shows): with the buffer preserved, a read at any time is the last presented frame, which
+      // is what the screen holds. Only the probe's read changes; the show draws as it does.
+      await page.addInitScript(() => {
+        const get = HTMLCanvasElement.prototype.getContext as (this: HTMLCanvasElement, id: string, o?: object) => RenderingContext | null
+        ;(HTMLCanvasElement.prototype as unknown as { getContext: typeof get }).getContext = function (id, o) {
+          return get.call(this, id, id === 'webgl2' ? { ...o, preserveDrawingBuffer: true } : o)
+        }
+      })
       const w = wire(page)
       await open(page, 'nav', backend)
       await ready(page, 'nav')
       await present(page)
       await expectBackend(page, backend)
-      // Every slide's bundle is in before the first press (target, then +1/+2): what is measured is the change itself.
-      await expect.poll(() => w.count('show-plan')).toBeGreaterThanOrEqual(2)
-      await page.waitForTimeout(1500)
-      type Sample = { slide: string | null; black: number; control: boolean }
-      // Each animation frame, after the show's own frame callback (registered later, so it runs later): the share of
-      // what the audience sees that is black — the surface's visible canvases composited in DOM order (the 2-D
-      // output, then the compositor's WebGL2 or 2-D canvas), read before the frame is presented.
+      // Both animated slides' bundles have arrived before the first press (slide 1's, then slide 3's as the +2
+      // prefetch): what is measured is the change itself. A slide whose bundle is still out shows the piece-3
+      // loading frame (black, with its text), which is not the flash this pins. The server can be slow here
+      // after the hold test's renders (observed: slide 3's reply ~6 s late), hence the long poll.
+      await expect.poll(() => w.received.filter((t) => t === 'show-plan-start').length, { timeout: 30_000 }).toBeGreaterThanOrEqual(2)
+      await page.waitForTimeout(1000)
+      type Sample = { slide: string | null; kind: string | null; black: number; control: boolean }
+      // Each animation frame: the share of what the audience sees that is black — the surface's visible canvases
+      // composited in DOM order (the 2-D output, then the compositor's WebGL2 or 2-D canvas).
       await page.evaluate(() => {
         const layers = () => [...document.querySelectorAll<HTMLCanvasElement>('[data-officeview-show-surface=""] canvas')]
           .filter((c) => c.width > 0 && c.height > 0 && getComputedStyle(c).display !== 'none' && getComputedStyle(c).visibility !== 'hidden' && !c.closest('[hidden]'))
         const probe = document.createElement('canvas')
         probe.width = 64; probe.height = 36
         const ctx = probe.getContext('2d', { willReadFrequently: true })!
-        const st = { samples: [] as Array<{ slide: string | null; black: number; control: boolean }>, on: true, control: false }
+        const st = { samples: [] as Array<{ slide: string | null; kind: string | null; black: number; control: boolean }>, on: true, control: false }
         ;(window as unknown as { __ovBlack: typeof st }).__ovBlack = st
         const tick = () => {
           if (!st.on) return
@@ -236,7 +247,8 @@ for (const backend of BACKENDS) {
           const d = ctx.getImageData(0, 0, 64, 36).data
           let black = 0
           for (let i = 0; i < d.length; i += 4) if (d[i + 3]! > 200 && Math.max(d[i]!, d[i + 1]!, d[i + 2]!) < 32) black++
-          st.samples.push({ slide: document.querySelector('[data-officeview-show-surface=""]')?.getAttribute('data-slide') ?? null, black: black / (64 * 36), control })
+          const root = document.querySelector('[data-officeview-show-surface=""]')
+          st.samples.push({ slide: root?.getAttribute('data-slide') ?? null, kind: root?.getAttribute('data-officeview-show-frame') ?? null, black: black / (64 * 36), control })
           requestAnimationFrame(tick)
         }
         requestAnimationFrame(tick)
@@ -260,6 +272,8 @@ for (const backend of BACKENDS) {
       expect(controls.length).toBe(1)
       expect(controls[0]!.black).toBeGreaterThan(0.9)
       // A 4:3 slide in the 16:9 surface is pillarboxed: its black bars are 25% of the frame. "Mostly black" is over half.
+      // Prefetched: every frame is a slide's picture, never the loading or error frame.
+      expect([...new Set(samples.map((x) => x.kind))], 'frame kinds').toEqual(['image'])
       const dark = samples.map((x, i) => ({ i, ...x })).filter((x) => !x.control && x.black > 0.5)
       expect(dark, `mostly black frames [${backend}]`).toEqual([])
       console.log(`no-black [${backend}]: ${samples.length} frames; max black share ${Math.max(...samples.filter((x) => !x.control).map((x) => x.black)).toFixed(3)}`)
