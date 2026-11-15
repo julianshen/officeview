@@ -77,6 +77,8 @@ import { estimateCfPrepareBytes } from '../../src/xlsx/cf/service'
 import { residentSource } from '../../src/xlsx/cf/render'
 import { createCfStatistics } from '../../src/xlsx/cf/statistics'
 import { computeMetrics } from '../../src/xlsx/render'
+import { CF_ICON_PAINT_READINGS } from '../../src/xlsx/cf/iconPaint'
+import { CF_ICON_GLYPH_CLASSES, CF_ICON_GLYPH_WITHHELD } from '../../src/xlsx/cf/iconGlyphs'
 import type { FormatBudget } from '../../src/xlsx/view/formatWorkspace'
 import type { XlsxCell, XlsxSheet } from '../../src/xlsx/types'
 import type { CfLease, CfStamp, CfValuePage, CfValueSource } from '../../src/xlsx/cf/model'
@@ -650,6 +652,8 @@ export type Stage4CapabilityAudit = Stage1CapabilityAudit
 export interface Stage4AuditReport extends Stage1AuditReport {
   /** The `stage4-icon-om-reachability` sidecar's recorded rows (Ruling S4-A, record only), when captured. */
   iconOmReachability?: unknown
+  /** The reading Excel matched for each capability whose owning case verified it with a named hypothesis. */
+  matchedReadings: Readonly<Record<string, string>>
 }
 
 /**
@@ -686,6 +690,12 @@ export function auditStage4Manifest(manifest: CfManifest, options: { rootDir?: s
     }
     return { capabilityId: entry.capabilityId, caseId: entry.caseId, disposition }
   })
+  const matchedReadings: Record<string, string> = {}
+  for (const p of perCapability) {
+    const res = evidence.get(p.caseId)
+    const matched = p.disposition === 'verified' && res?.kind === 'verified' ? res.matchedHypotheses?.[p.capabilityId] : undefined
+    if (typeof matched === 'string') matchedReadings[p.capabilityId] = matched
+  }
   const ids = new Set(CF_STAGE4_CAPABILITIES.map(e => e.capabilityId))
   const unknownNonDiscriminating = Object.keys(CF_STAGE4_NONDISCRIMINATING).filter(id => !ids.has(id) || !CF_STAGE4_NONDISCRIMINATING[id]!.trim())
   const caseOk = (p: Stage4CaseAudit): boolean => (p.status === 'measured' ? p.structuralValid && p.code === undefined : p.structuralValid)
@@ -710,6 +720,7 @@ export function auditStage4Manifest(manifest: CfManifest, options: { rootDir?: s
     stageComplete: ok && gate.complete,
     blockedCapabilities: gate.blocked,
     ...(iconOmReachability !== undefined ? { iconOmReachability } : {}),
+    matchedReadings,
     summary: {
       cases: perCase.length,
       structuralValid: perCase.filter(p => p.structuralValid).length,
@@ -722,6 +733,135 @@ export function auditStage4Manifest(manifest: CfManifest, options: { rootDir?: s
       unverifiedCapabilities: perCapability.filter(p => p.disposition === 'unverified-nondiscriminating').length,
     },
   }
+}
+
+/* ---------------- Stage 4 publication gate (Task 30) ---------------- */
+
+/**
+ * Verified Stage 4 capabilities that are never published, each by its ruling: production does not implement Excel's
+ * matched reading, or the views would disagree. Publishing one would claim a behaviour production lacks.
+ */
+export const CF_STAGE4_NEVER_PUBLISH: Readonly<Record<string, string>> = {
+  'icon:scope-merged-cell':
+    'Ruling S4-MERGED-UNPUBLISHED: the worker and forced-paged scopes carry no merge knowledge, so publishing would make the resident view paint icons the paged views withhold; merged scopes keep withholding.',
+  'icon:geometry-short-row-clip':
+    'Ruling S4-SHORTROW-WITHHELD: Excel shrinks the box in a short row (matched `shrink`) by a law the captures do not determine; production does not implement shrink, so short rows withhold.',
+  'icon:inset-overflow':
+    'Excel draws the icon and a `#` fill (matched `icon-and-text`), whose layout is unmeasured; production withholds every overflowing host.',
+}
+
+/**
+ * The reading production implements for each Stage 4 capability whose owning case verifies a named hypothesis: the
+ * geometry, inset and showValue readings are `CF_ICON_PAINT_READINGS` (`src/xlsx/cf/iconPaint.ts`, pinned to behaviour in
+ * tests/xlsx-cf-icon-align.test.ts); the rest are the evaluator's and composer's (`iconSet.ts`, `compose.ts`,
+ * `service.ts`, `parse.ts`), checked against Excel's own workbooks by the no-injection bucket conformance in
+ * tests/xlsx-cf-oracle-conformance.test.ts. A list is a selection: production reads the matched hypothesis from
+ * `VERIFIED_STAGE4_ICON_SELECTIONS` and implements exactly the listed ones (tests/xlsx-cf-stage4.test.ts pins each).
+ * A capability with a matched reading but no entry here is withheld (fail closed).
+ */
+export const CF_STAGE4_PRODUCTION_READINGS: Readonly<Record<string, string | readonly string[]>> = {
+  ...CF_ICON_PAINT_READINGS,
+  // parse.ts: the base and x14 dialects parse to one model (`as-modelled`), with the schema defaults applied.
+  'icon:dialect-standalone': 'as-modelled',
+  'icon:dialect-base': 'as-modelled',
+  'icon:settings-schema-defaults': 'as-modelled',
+  // iconSet.ts `evaluateIconSet`: bucket i shows iconId i (k-1-i under reverse); a custom list maps bucket i to entry i;
+  // a NoIcons entry draws nothing.
+  'icon:families-base': 'bucket-order',
+  'icon:families-x14': 'bucket-order',
+  'icon:reverse': 'reversed',
+  'icon:custom-mapping': 'custom-order',
+  'icon:custom-noicons': 'no-icon',
+  // iconSet.ts `resolveIconThresholds`: num literal, percent of [min, max], per-type mixing, gte as written.
+  'icon:thresholds-num': 'literal',
+  'icon:thresholds-percent': 'percent-of-range',
+  'icon:thresholds-mixed': 'per-type',
+  'icon:thresholds-gte-true': 'as-written',
+  'icon:thresholds-gte-false': 'as-written',
+  // Selections (`iconSelectionEvidence`): each branch production implements.
+  'icon:thresholds-percentile-inc-exc': ['inc', 'exc'],
+  'icon:thresholds-floor': ['below-floor-no-icon', 'below-floor-bucket0'],
+  'icon:degenerate-equal-values': ['as-model'],
+  'icon:degenerate-single-cell': ['as-model'],
+  'icon:degenerate-non-monotonic': ['as-model'],
+  'icon:bounds-out-of-domain': ['as-model'],
+  'icon:composition-noicons-slot': ['first-paints', 'second-paints'],
+  'icon:reverse-custom': ['reverse-then-map', 'map-then-mirror', 'ignored'],
+  // iconSet.ts / service.ts participation: non-numbers draw no icon, date serials evaluate, error cells are ignored by
+  // the statistics (as for bars, bar:participation-error-presence).
+  'icon:participation-types': 'no-icon-for-non-numbers',
+  'icon:participation-dateserial': 'evaluated',
+  'icon:participation-error-presence': 'error-ignored',
+  // service.ts `blockScope` and the shared statistics (as for bars): a multi-range rule is one union scope, hidden and
+  // autofilter-hidden rows stay in it, a whole-column rule scopes its stored cells.
+  'icon:scope-whole-column': 'whole-column',
+  'icon:scope-disjoint': 'union',
+  'icon:scope-hidden-row': 'include-hidden',
+  'icon:scope-autofilter-hidden-row': 'include-hidden',
+  // compose.ts: of two matching icons (or duplicate icon blocks) the first in priority order paints; an icon and a bar
+  // both paint; a matching stopIfTrue rule ahead halts the icon, and an unresolved stopping stub ahead halts
+  // composition there (the icon is never drawn).
+  'icon:scope-duplicate-blocks': 'first-paints',
+  'icon:composition-overlapping-icons': 'first-paints',
+  'icon:composition-with-bar': 'both-paint',
+  'icon:composition-matching-stopIfTrue-ahead': 'halted',
+  'icon:composition-unresolved-stub': 'halted',
+}
+
+export interface Stage4Publication {
+  /** The ids `--publish-stage4` writes to `VERIFIED_STAGE4_CAPABILITIES` (sorted). */
+  published: string[]
+  /** Every other Stage 4 id, with the reason it stays withheld. */
+  withheld: Record<string, string>
+  /** `VERIFIED_STAGE4_ICON_SELECTIONS`: the matched reading of each published selection capability. */
+  selections: Record<string, string>
+}
+
+/**
+ * The Stage 4 publication gate (Task 30; carried from the Task 25/26 review and Ruling S4-PROD-ALIGN): a capability
+ * publishes only when it is verified, no ruling withholds it, the reading Excel matched is the one production
+ * implements, and (a glyph capability) its glyph class passed the OD-9(b) approximation check. Pure in the report.
+ */
+export function stage4Publication(report: Stage4AuditReport): Stage4Publication {
+  const published: string[] = []
+  const withheld: Record<string, string> = {}
+  const selections: Record<string, string> = {}
+  for (const p of report.perCapability) {
+    const id = p.capabilityId
+    if (p.disposition !== 'verified') { withheld[id] = p.disposition; continue }
+    if (CF_STAGE4_NEVER_PUBLISH[id] !== undefined) { withheld[id] = `never-publish: ${CF_STAGE4_NEVER_PUBLISH[id]}`; continue }
+    const glyph = /^icon:glyph-(\d[A-Za-z0-9]+)-(\d)$/.exec(id)
+    if (glyph) {
+      const cls = Object.prototype.hasOwnProperty.call(CF_ICON_GLYPH_CLASSES, `${glyph[1]}:${glyph[2]}`) ? CF_ICON_GLYPH_CLASSES[`${glyph[1]}:${glyph[2]}`] : undefined
+      if (cls === undefined) { withheld[id] = 'glyph-unknown-pair'; continue }
+      if (CF_ICON_GLYPH_WITHHELD.has(cls)) { withheld[id] = `glyph-approximation-failed: class ${cls} is in CF_ICON_GLYPH_WITHHELD`; continue }
+    }
+    const matched = report.matchedReadings[id]
+    if (matched !== undefined) {
+      const prod = Object.prototype.hasOwnProperty.call(CF_STAGE4_PRODUCTION_READINGS, id) ? CF_STAGE4_PRODUCTION_READINGS[id] : undefined
+      if (prod === undefined) { withheld[id] = `reading-unimplemented: Excel matched ${matched}, production names no reading`; continue }
+      if (typeof prod === 'string') {
+        if (prod !== matched) { withheld[id] = `reading-mismatch: Excel matched ${matched}, production implements ${prod}`; continue }
+      } else {
+        if (!prod.includes(matched)) { withheld[id] = `reading-unimplemented: Excel matched ${matched}, production implements ${prod.join(' | ')}`; continue }
+        selections[id] = matched
+      }
+    }
+    published.push(id)
+  }
+  published.sort()
+  return { published, withheld, selections }
+}
+
+/** `VERIFIED_STAGE4_ICON_SELECTIONS` as `--publish-stage4` renders it (keys sorted, so the write is idempotent). */
+export function renderIconSelectionsBlock(selections: Readonly<Record<string, string>>): string {
+  const keys = Object.keys(selections).sort()
+  return `export const VERIFIED_STAGE4_ICON_SELECTIONS: Readonly<Record<string, string>> = {\n${keys.map(k => `  '${k}': '${selections[k]}',`).join('\n')}\n}\n`
+}
+
+const exportedSelections = (text: string | undefined): string | undefined => {
+  const m = text === undefined ? null : /export const VERIFIED_STAGE4_ICON_SELECTIONS: [^\n]* = \{\n[\s\S]*?\n?\}\n/.exec(text)
+  return m ? m[0] : undefined
 }
 
 /**
@@ -798,9 +938,10 @@ export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: 
   const lengthsBlock = stage3Report ? renderBarLengthsBlock(stage3Report.barLengths) : exportedLengths(options.committedSource)
   const borderBlock = stage3Report ? renderBarGradientBorderBlock(stage3Report.barGradientBorder) : exportedGradientBorder(options.committedSource)
   const autoBoundsBlock = stage3Report ? renderBarAutoBoundsBlock(stage3Report.barAutoBounds) : exportedAutoBounds(options.committedSource)
-  const stage4Verified = options.publishStage4
-    ? verifiedOf(auditStage4Manifest(manifest, { rootDir }))
-    : exportedSet(options.committedSource, 'VERIFIED_STAGE4_CAPABILITIES')
+  // Task 30: only the gated set publishes (`stage4Publication`), with the selections production reads beside it.
+  const stage4Gate = options.publishStage4 ? stage4Publication(auditStage4Manifest(manifest, { rootDir })) : undefined
+  const stage4Verified = stage4Gate ? stage4Gate.published : exportedSet(options.committedSource, 'VERIFIED_STAGE4_CAPABILITIES')
+  const selectionsBlock = stage4Gate ? renderIconSelectionsBlock(stage4Gate.selections) : exportedSelections(options.committedSource)
   const list = (ids: readonly string[]): string => ids.map(id => `  '${id}',`).join('\n')
   const allVerified = [...new Set([...stage1Verified, ...stage2Verified, ...(stage3Verified ?? []), ...(stage4Verified ?? [])])].sort()
   const block = (name: string, ids: readonly string[]): string => `export const ${name}: ReadonlySet<string> = new Set([\n${list(ids)}\n])\n`
@@ -811,7 +952,7 @@ export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: 
  */
 ${block('VERIFIED_STAGE1_CAPABILITIES', stage1Verified)}
 ${block('VERIFIED_STAGE2_CAPABILITIES', stage2Verified)}
-${stage3Verified !== undefined ? `${block('VERIFIED_STAGE3_CAPABILITIES', stage3Verified)}\n` : ''}${stage3Verified !== undefined && autoColoursBlock !== undefined ? `${autoColoursBlock}\n` : ''}${stage3Verified !== undefined && layoutBlock !== undefined ? `${layoutBlock}\n` : ''}${stage3Verified !== undefined && gradientBlock !== undefined ? `${gradientBlock}\n` : ''}${stage3Verified !== undefined && lengthsBlock !== undefined ? `${lengthsBlock}\n` : ''}${stage3Verified !== undefined && borderBlock !== undefined ? `${borderBlock}\n` : ''}${stage3Verified !== undefined && autoBoundsBlock !== undefined ? `${autoBoundsBlock}\n` : ''}${stage4Verified !== undefined ? `${block('VERIFIED_STAGE4_CAPABILITIES', stage4Verified)}\n` : ''}${block('VERIFIED_CAPABILITIES', allVerified)}`
+${stage3Verified !== undefined ? `${block('VERIFIED_STAGE3_CAPABILITIES', stage3Verified)}\n` : ''}${stage3Verified !== undefined && autoColoursBlock !== undefined ? `${autoColoursBlock}\n` : ''}${stage3Verified !== undefined && layoutBlock !== undefined ? `${layoutBlock}\n` : ''}${stage3Verified !== undefined && gradientBlock !== undefined ? `${gradientBlock}\n` : ''}${stage3Verified !== undefined && lengthsBlock !== undefined ? `${lengthsBlock}\n` : ''}${stage3Verified !== undefined && borderBlock !== undefined ? `${borderBlock}\n` : ''}${stage3Verified !== undefined && autoBoundsBlock !== undefined ? `${autoBoundsBlock}\n` : ''}${stage4Verified !== undefined ? `${block('VERIFIED_STAGE4_CAPABILITIES', stage4Verified)}\n` : ''}${stage4Verified !== undefined && selectionsBlock !== undefined ? `${selectionsBlock}\n` : ''}${block('VERIFIED_CAPABILITIES', allVerified)}`
 }
 
 /* ---------------- pressure + lifecycle scenarios ---------------- */

@@ -118,13 +118,16 @@ describe('every enabled bar capability has verified evidence', () => {
     expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE3_BAR_AUTO_BOUNDS')).toEqual(audit.barAutoBounds)
   })
 
-  it('the Stage 1/2 sets are their own audits and the combined set is exactly the three stages', () => {
+  it('the Stage 1/2 sets are their own audits and the combined set is exactly the published stages', () => {
     const verifiedOf = (r: { perCapability: readonly { capabilityId: string; disposition: string }[] }) => r.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
     expect([...VERIFIED_STAGE1_CAPABILITIES].sort()).toEqual(verifiedOf(auditStage1Manifest(manifest(), { rootDir: REPO_ROOT })))
     expect([...VERIFIED_STAGE2_CAPABILITIES].sort()).toEqual(verifiedOf(auditStage2Manifest(manifest(), { rootDir: REPO_ROOT })))
     const s3 = Reflect.get(verifiedExports, 'VERIFIED_STAGE3_CAPABILITIES') as ReadonlySet<string>
     expect([...s3].every(id => id.startsWith('bar:'))).toBe(true)
-    expect([...VERIFIED_CAPABILITIES].sort()).toEqual([...new Set([...VERIFIED_STAGE1_CAPABILITIES, ...VERIFIED_STAGE2_CAPABILITIES, ...s3])].sort())
+    // Task 30 publishes Stage 4 (tests/xlsx-cf-stage4.test.ts pins it to the publication gate); it adds only icon:* ids.
+    const s4 = (Reflect.get(verifiedExports, 'VERIFIED_STAGE4_CAPABILITIES') as ReadonlySet<string> | undefined) ?? new Set<string>()
+    expect([...s4].every(id => id.startsWith('icon:'))).toBe(true)
+    expect([...VERIFIED_CAPABILITIES].sort()).toEqual([...new Set([...VERIFIED_STAGE1_CAPABILITIES, ...VERIFIED_STAGE2_CAPABILITIES, ...s3, ...s4])].sort())
   })
 })
 

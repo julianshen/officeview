@@ -542,9 +542,10 @@ describe('CF icons never expand static, print or export extents', () => {
   })
 })
 
-describe('production withholds every icon (S4-ORDER)', () => {
-  it('with no glyph table, even under every capability and the stub model, nothing paints and nothing is inset', async () => {
-    expect(iconGlyph('3Arrows', 0)).toBeUndefined()
+describe('production withholds every icon off the admitted geometry (S4-ORDER, Task 30)', () => {
+  it('with the published glyph table and every capability, a host without the key font or a measured row paints nothing and is not inset', async () => {
+    // Task 30 published the glyph (OD-9(b)); the host (no font name, no row height) is not the admitted geometry.
+    expect(iconGlyph('3Arrows', 0)).toBeDefined()
     await withIcons(async () => {
       const sheet = iconSheet([10, 50, 90], { style: LEFT })
       const batch = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, layoutContext }))!

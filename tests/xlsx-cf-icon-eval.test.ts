@@ -126,6 +126,8 @@ describe('bucket boundaries under the S4-D hypothesis', () => {
       expect(bucketOf(evaluateIconSet(num(5), def, [10, 20, 40]))).toBe('cf-unmeasured-capability')
     })
     withExactCfEvidence([...EVAL, 'icon:thresholds-floor'], () => {
+      // No selection (Task 30 publishes one; cleared here so the bare-id branch is exercised).
+      injectCfIconSelections({})
       expect(bucketOf(evaluateIconSet(num(5), def, [10, 20, 40]))).toBe('cf-unmeasured-capability')
       injectCfIconSelections({ 'icon:thresholds-floor': 'below-floor-bucket0' })
       expect(bucketOf(evaluateIconSet(num(5), def, [10, 20, 40]))).toBe(0)
@@ -153,7 +155,9 @@ describe('percent and percentile thresholds reuse the shared primitives', () => 
     const def = iconDef({ thresholds: [th('percentile', 0), th('percentile', 33), th('percentile', 67)] })
     const data = [1, 2, 3, 4, 10]
     withExactCfEvidence(EVAL, () => {
-      // The bare capability names two readings (inc, exc): without a selection nothing resolves.
+      // The bare capability names two readings (inc, exc): without a selection nothing resolves (Task 30 publishes one;
+      // cleared here).
+      injectCfIconSelections({})
       expect(resolveIconThresholds(def, statsOf(data))).toEqual({ kind: 'unresolved', reason: 'cf-unmeasured-capability' })
       injectCfIconSelections({ 'icon:thresholds-percentile-inc-exc': 'inc' })
       const out = resolveIconThresholds(def, statsOf(data))
@@ -255,6 +259,7 @@ describe('icon evaluation stays finite at ±1e308 (Lesson 6)', () => {
     })
     // A capability alone never picks a degenerate reading; with its selection 'as-model' the hypothesis resolves.
     withExactCfEvidence([...EVAL, 'icon:degenerate-equal-values', 'icon:degenerate-non-monotonic'], () => {
+      injectCfIconSelections({})
       expect(resolveIconThresholds(iconDef(), statsOf([7, 7, 7])).kind).toBe('unresolved')
       injectCfIconSelections({ 'icon:degenerate-equal-values': 'as-model', 'icon:degenerate-non-monotonic': 'as-model' })
       expect(resolveIconThresholds(iconDef(), statsOf([7, 7, 7]))).toEqual({ kind: 'ready', value: [7, 7, 7] })

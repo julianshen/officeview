@@ -92,8 +92,14 @@ describe('Task 28: the glyph table', () => {
       expect(iconGlyph('3Arrows', 0)).toBeUndefined()
       expect(iconGlyph('4Arrows', 0)?.glyphClass).toBe('3Arrows:0')
     }, glyphCaps().filter(c => c !== 'icon:glyph-3Arrows-0'))
-    // Production publishes no glyph capability before Task 30: every pair withholds.
-    for (const pair of PAIRS) expect(iconGlyph(...split(pair)), pair).toBeUndefined()
+    // Task 30 publishes exactly the pairs whose class passed the approximation check: those paint, the rest withhold.
+    let admitted = 0
+    for (const pair of PAIRS) {
+      const ok = !CF_ICON_GLYPH_WITHHELD.has(CF_ICON_GLYPH_CLASSES[pair]!)
+      if (ok) admitted++
+      expect(iconGlyph(...split(pair))?.glyphClass, pair).toBe(ok ? CF_ICON_GLYPH_CLASSES[pair] : undefined)
+    }
+    expect(admitted).toBe(54)
   })
 
   it('glyph decode is charged and bounded', () => {

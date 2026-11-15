@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 const hasOsacompile = process.platform === 'darwin' && spawnSync('which', ['osacompile']).status === 0
 import { compareCfCase, stage3ObservedBars, stage4ObservedIcons } from '../scripts/cf-compare'
-import { auditStage3Manifest, auditStage4Manifest, renderVerifiedCapabilitiesSource } from '../scripts/cf-refs/audit'
+import { auditStage3Manifest, auditStage4Manifest, CF_STAGE4_NEVER_PUBLISH, renderIconSelectionsBlock, renderVerifiedCapabilitiesSource, stage4Publication } from '../scripts/cf-refs/audit'
 import { assertBuildDisplayUnlocked, assertCanCloseWorkbook, filterCasesForStage, isDisplayLocked, parseScreenLockState, probeAndBuildCase, shouldSkipCaseOnResume } from '../scripts/cf-refs/build'
 import {
   CF_CAPABILITIES,
@@ -4188,12 +4188,14 @@ describe('Stage 4 icon oracle (Task 24)', () => {
         expect(c.status).toBe('measured')
       }
     }
-    // Every Stage 4 capability is an icon:* id citing the S4 ruling it lifts, and production holds none of them.
+    // Every Stage 4 capability is an icon:* id citing the S4 ruling it lifts, and production holds exactly the ones the
+    // Task 30 publication gate publishes (none before it).
+    const gated = new Set(stage4Publication(auditStage4Manifest(manifest, { rootDir: REPO_ROOT })).published)
     for (const entry of CF_STAGE4_CAPABILITIES) {
       expect(entry.capabilityId.startsWith('icon:')).toBe(true)
       expect(entry.failClosedDisposition, entry.capabilityId).toMatch(/S4-[A-R]|Always unsupported/)
-      expect(hasEvidence(entry.capabilityId), entry.capabilityId).toBe(false)
-      expect(VERIFIED_CAPABILITIES.has(entry.capabilityId), entry.capabilityId).toBe(false)
+      expect(hasEvidence(entry.capabilityId), entry.capabilityId).toBe(gated.has(entry.capabilityId))
+      expect(VERIFIED_CAPABILITIES.has(entry.capabilityId), entry.capabilityId).toBe(gated.has(entry.capabilityId))
     }
     for (const id of Object.keys(CF_STAGE4_NONDISCRIMINATING)) expect(CF_STAGE4_CAPABILITIES.some(e => e.capabilityId === id), id).toBe(true)
     expect(CF_STAGE4_CAPABILITIES.filter(e => iconCapabilityKind(e.capabilityId) === 'record').map(e => e.capabilityId).sort()).toEqual(
@@ -4404,13 +4406,21 @@ describe('Stage 4 icon oracle (Task 24)', () => {
   })
 
   it('non-discriminating icon variant keeps its gate closed (Lesson 3)', () => {
+    // Production evidence for an id exists only because its owning Excel capture discriminates it (Task 30 publishes the
+    // gated audit result); these synthetic non-discriminating runs never lift a gate on their own.
+    const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
+    const ownDiscriminates = (id: string): boolean => {
+      const owner = CF_STAGE4_CAPABILITIES.find(e => e.capabilityId === id)!.caseId
+      const res = verifyCfCase(manifest.cases.find(c => c.id === owner)!, { rootDir: REPO_ROOT })
+      return res.kind === 'verified' && res.verifiedCapabilities.includes(id) && !(res.nonDiscriminatingCapabilities ?? []).includes(id) && res.matchedHypotheses?.[id] !== undefined
+    }
     const classOf = (set: string, iconId: number): string | null => (set === 'NoIcons' ? null : `${set}:${iconId}`)
     // gte: num 0/20/40 over off-boundary values only. "gte" and "gt" predict the same bucket everywhere.
     const gteRule = { set: '3Arrows', cfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '20', gte: true }, { type: 'num', val: '40', gte: true }], attrs: {} }
     const offBoundary = new Map([['B2', 5], ['B3', 30], ['B4', 75]])
     const gteHyps = buildIconClassHypotheses('icon:thresholds-gte-true', gteRule, offBoundary, classOf)!
     expect(discriminateIcon(gteHyps, { B2: '3Arrows:0', B3: '3Arrows:1', B4: '3Arrows:2' })).toMatchObject({ status: 'non-discriminating' })
-    expect(hasEvidence('icon:thresholds-gte-true')).toBe(false)
+    expect(hasEvidence('icon:thresholds-gte-true')).toBe(ownDiscriminates('icon:thresholds-gte-true'))
     // The exact-boundary cell 20 discriminates gte from gt.
     const boundary = new Map([...offBoundary, ['B5', 20]])
     expect(discriminateIcon(buildIconClassHypotheses('icon:thresholds-gte-true', gteRule, boundary, classOf)!, { B2: '3Arrows:0', B3: '3Arrows:1', B4: '3Arrows:2', B5: '3Arrows:1' })).toEqual({ status: 'discriminating', matched: 'as-written' })
@@ -4422,7 +4432,7 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     const middleOnly = buildIconClassHypotheses('icon:reverse', revRule, scope, classOf, ['C3'])!
     expect(Object.keys(middleOnly)).toEqual(['C3'])
     expect(discriminateIcon(middleOnly, { C3: '3Arrows:1' })).toMatchObject({ status: 'non-discriminating' })
-    expect(hasEvidence('icon:reverse')).toBe(false)
+    expect(hasEvidence('icon:reverse')).toBe(ownDiscriminates('icon:reverse'))
     // The end buckets discriminate.
     expect(discriminateIcon(buildIconClassHypotheses('icon:reverse', revRule, scope, classOf, ['C2', 'C4'])!, { C2: '3Arrows:2', C4: '3Arrows:0' })).toEqual({ status: 'discriminating', matched: 'reversed' })
     // A custom set whose end icons are one glyph class is non-discriminating for reverse-custom.
@@ -4433,7 +4443,7 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     const measured = { B2: { leftPx: 3, rightPx: 18, topPx: 2, bottomPx: 17 } }
     const close = { B2: [{ id: 'fixed', leftPx: 3, rightPx: 18, topPx: 2, bottomPx: 17 }, { id: 'font', leftPx: 3, rightPx: 20, topPx: 2, bottomPx: 17 }] }
     expect(discriminateIconBox(close, measured, 1)).toMatchObject({ status: 'non-discriminating' })
-    expect(hasEvidence('icon:geometry-box')).toBe(false)
+    expect(hasEvidence('icon:geometry-box')).toBe(ownDiscriminates('icon:geometry-box'))
     // 3 px apart with exactly one hypothesis matching: the capability is verified.
     const apart = { B2: [{ id: 'fixed', leftPx: 3, rightPx: 18, topPx: 2, bottomPx: 17 }, { id: 'font', leftPx: 3, rightPx: 21, topPx: 2, bottomPx: 17 }] }
     expect(discriminateIconBox(apart, measured, 1)).toEqual({ status: 'discriminating', matched: 'fixed' })
@@ -4447,17 +4457,21 @@ describe('Stage 4 icon oracle (Task 24)', () => {
       const m = new RegExp(`export const ${name}: ReadonlySet<string> = new Set\\(\\[([\\s\\S]*?)\\]\\)`).exec(text)
       return m ? [...m[1]!.matchAll(/'([^']+)'/g)].map(x => x[1]!) : undefined
     }
-    // Two runs, byte-identical; without --publish-stage4 the Stage 4 export is carried over verbatim (absent today), so
-    // the write reproduces the committed file and the Stage 1-3 sets are unchanged.
+    // Two runs, byte-identical; without --publish-stage4 the Stage 4 export is carried over verbatim (published by
+    // Task 30), so the write reproduces the committed file and the Stage 1-4 sets are unchanged.
     const first = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: committed })
     expect(renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: committed })).toBe(first)
     expect(first).toBe(committed)
-    expect(listed(first, 'VERIFIED_STAGE4_CAPABILITIES')).toBeUndefined()
-    for (const name of ['VERIFIED_STAGE1_CAPABILITIES', 'VERIFIED_STAGE2_CAPABILITIES', 'VERIFIED_STAGE3_CAPABILITIES', 'VERIFIED_CAPABILITIES']) {
+    for (const name of ['VERIFIED_STAGE1_CAPABILITIES', 'VERIFIED_STAGE2_CAPABILITIES', 'VERIFIED_STAGE3_CAPABILITIES', 'VERIFIED_STAGE4_CAPABILITIES', 'VERIFIED_CAPABILITIES']) {
       expect(listed(first, name), name).toEqual(listed(committed, name))
     }
     // A committed Stage 4 export is carried over verbatim, never re-derived.
-    const withS4 = committed.replace(/(export const VERIFIED_CAPABILITIES)/, "export const VERIFIED_STAGE4_CAPABILITIES: ReadonlySet<string> = new Set([\n  'icon:pixel-calibration',\n])\n\n$1")
+    const unpublished = committed
+      .replace(/export const VERIFIED_STAGE4_CAPABILITIES: [^\n]*\n[\s\S]*?\n\]\)\n\n/, '')
+      .replace(/export const VERIFIED_STAGE4_ICON_SELECTIONS: [^\n]*\n[\s\S]*?\n\}\n\n/, '')
+    expect(listed(unpublished, 'VERIFIED_STAGE4_CAPABILITIES')).toBeUndefined()
+    expect(unpublished).not.toContain('VERIFIED_STAGE4_ICON_SELECTIONS')
+    const withS4 = unpublished.replace(/(export const VERIFIED_CAPABILITIES)/, "export const VERIFIED_STAGE4_CAPABILITIES: ReadonlySet<string> = new Set([\n  'icon:pixel-calibration',\n])\n\n$1")
     const kept = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: withS4 })
     expect(listed(kept, 'VERIFIED_STAGE4_CAPABILITIES')).toEqual(['icon:pixel-calibration'])
     expect(renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: kept })).toBe(kept)
@@ -4487,12 +4501,23 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     if (keyMeasured) expect(verified).toEqual(expect.arrayContaining(['icon:pixel-calibration', 'icon:glyph-key']))
     else expect(verified).toEqual([])
     expect(verified.length + report.blockedCapabilities.length).toBeGreaterThan(50)
+    // Task 30: --publish-stage4 publishes the gated subset (`stage4Publication`) and its selections, idempotently; the
+    // ruling deny-list is verified yet absent.
+    const gate = stage4Publication(report)
     const published = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: committed, publishStage4: true })
-    expect(listed(published, 'VERIFIED_STAGE4_CAPABILITIES')).toEqual([...verified].sort())
+    expect(listed(published, 'VERIFIED_STAGE4_CAPABILITIES')).toEqual(gate.published)
+    for (const id of Object.keys(CF_STAGE4_NEVER_PUBLISH)) {
+      expect(verified, id).toContain(id)
+      expect(listed(published, 'VERIFIED_STAGE4_CAPABILITIES'), id).not.toContain(id)
+    }
+    expect(published).toContain(renderIconSelectionsBlock(gate.selections))
     expect(renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: published, publishStage4: true })).toBe(published)
+    // Without the flag a committed publication (set and selections) is carried over verbatim.
+    expect(renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: published })).toBe(published)
     expect(listed(published, 'VERIFIED_STAGE3_CAPABILITIES')).toEqual(listed(committed, 'VERIFIED_STAGE3_CAPABILITIES'))
-    // The union gains exactly the published Stage 4 set.
-    expect(listed(published, 'VERIFIED_CAPABILITIES')).toEqual([...new Set([...listed(committed, 'VERIFIED_CAPABILITIES')!, ...verified])].sort())
+    // The union is the Stage 1-3 sets plus exactly the published Stage 4 set.
+    const s123 = ['VERIFIED_STAGE1_CAPABILITIES', 'VERIFIED_STAGE2_CAPABILITIES', 'VERIFIED_STAGE3_CAPABILITIES'].flatMap(n => listed(committed, n) ?? [])
+    expect(listed(published, 'VERIFIED_CAPABILITIES')).toEqual([...new Set([...s123, ...gate.published])].sort())
   }, 120_000)
 
   it('builds the icon object-model reachability probe with every read guarded', () => {
