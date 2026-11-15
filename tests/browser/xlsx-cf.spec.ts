@@ -617,11 +617,8 @@ test('Stage 3 data bars paint and announce on every leg, and legs agree (Task 23
       }
     })
   }
-  // Pixels: the worker leg matches the resident one. The forced-paged frame lays this fixture's rows out about 1 px
-  // apart from the resident one (observed on header row 1, which no CF range covers), so its agreement is the announced
-  // labels above plus the un-inset text on every leg; a pixel comparison there would measure the row metrics, not CF.
-  const [resident, worker] = shots as [Img, Img, Img]
-  for (const [name, other] of [['worker', worker]] as const) {
+  const [resident, worker, paged] = shots as [Img, Img, Img]
+  for (const [name, other] of [['worker', worker], ['forced paged', paged]] as const) {
     expect(other.width, name).toBe(resident.width)
     expect(other.height, name).toBe(resident.height)
     let differing = 0
@@ -817,7 +814,8 @@ test('Stage 4 icon sets paint and announce on every leg, and legs agree', async 
   }
   // Pixels: the worker leg matches the resident one. The forced-paged frame lays this fixture's rows out about 1 px
   // apart from the resident one (observed on header row 1, which no CF range covers), so its agreement is the announced
-  // labels above plus the un-inset text on every leg; a pixel comparison there would measure the row metrics, not CF.
+  // labels above plus the un-inset text on every leg; a pixel comparison there would measure the row metrics, not CF
+  // (a known limit of this fixture only, docs/validation/xlsx-cf.md §11; the Stage 3 test keeps all three legs).
   const [resident, worker] = shots as [Img, Img, Img]
   for (const [name, other] of [['worker', worker]] as const) {
     expect(other.width, name).toBe(resident.width)
