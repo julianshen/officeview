@@ -672,12 +672,20 @@ interface TimedEffects {
 /**
  * PR #78 round 12: the slide's scheduled timing holds an audio or video node. A streamed show plays no media, so the
  * client ends each one on its first active frame (`syntheticEnds`), which no server history carries: such a slide
- * plays its still, and no Morph pair starts or ends on it. A superset of the driver's own walk (`mediaNodes`, bounded
- * at depth 64): a deeper node the client never ends is refused here too.
+ * plays its still, and no Morph pair starts or ends on it. A superset of the driver's own walk (`mediaNodes`, by kind,
+ * bounded at depth 64): a deeper node the client never ends is refused here too.
  */
 export function holdsMedia(ps: PreparedSlide): boolean {
-  for (const n of behavioursById(ps).values()) if (n.kind === 'audio' || n.kind === 'video') return true
-  return false
+  const timing = ps.meta.timing
+  // By kind, not by id (a duplicate `cTn` id must not hide a media node), over the tree the client walks (the
+  // streamed timing) and the scheduled one (text builds fanned out).
+  const roots = [timing && !('refused' in timing) ? timing.root : undefined, ps.textTiming?.tree.root]
+  const media = (n: TimeNode, depth: number): boolean => {
+    if (depth > 256) return false
+    if ('children' in n) return n.children.some(c => media(c, depth + 1))
+    return n.kind === 'audio' || n.kind === 'video'
+  }
+  return roots.some(r => !!r && media(r, 0))
 }
 
 /** Every behaviour node of the slide's timing tree (the scheduled one, text builds fanned out), by `cTn` id. */

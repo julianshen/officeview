@@ -72,6 +72,9 @@ fix them:
    - **Result:** `lo-bnc591147` is equal except its slide-1 still: the trigger-slide `still` refusal, a ruled
      difference covered by `equalExceptStills`. `cmdHoldDeck`, the synthetic copy of the pattern, is equal,
      with 2 clicks on each side.
+   - **Since PR #78 round 12:** `lo-bnc591147` slide 2 also holds media, so it plays its still (the media ruling
+     under Known differences). The deck is now equal except both stills, and only `cmdHoldDeck` still
+     exercises the inert-`cmd` path through the show.
 
 **Follow-up (Stage 1–3, not this piece; ruled): pack-only fonts for units, print and notes, and a re-baselined combining-marks test.** Units, print and notes still reach host fonts. They use
 `serverBackend`, which pins aliases only, so an unknown family on a unit, print page or notes image still
@@ -114,6 +117,7 @@ These are piece-3 unit images: unanimated slides (D5), and the stills of refused
 | morphDeck | 1 | unanimated | pass | 0.0000 / 0.0045 | 0.0200 / 0.1045 |
 | cubeDeck | 1 | unanimated | pass | 0.0000 / 0.0003 | 0.0200 / 0.1004 |
 | morphCompositedDeck | 1 | unanimated | pass | 0.0000 / 0.0004 | 0.0200 / 0.1004 |
+| autoplayTransitionDeck | 1 | unanimated | pass | 0.0000 / 0.0004 | 0.0200 / 0.1007 |
 | mediaEndDeck | 1 | refused:still | pass | 0.0000 / 0.0004 | 0.0200 / 0.1004 |
 | lo-bnc591147.pptx | 1 | refused:still | pass | 0.0000 / 0.0000 | 0.0200 / 0.1000 |
 | lo-bnc591147.pptx | 2 | refused:still (media) | pass | 0.0000 / 0.0005 | 0.0200 / 0.1000 |
@@ -252,6 +256,7 @@ plus 8 synthetic decks (`cmdHoldDeck` added with the `cmd` ruling, `autoplayTran
 | morphCompositedDeck | 5 pass, 1 unit-still | 5 pass, 1 unit-still | equal | 0.0000 / 0.0004 | 0.0000 / 0.0004 (2-0-50) |
 | longStepDeck | 6 pass | 3 pass, 3 skipped-mark | equal | 0.0000 / 0.0004 | 0.0001 / 0.0039 (1-1-25) |
 | cmdHoldDeck | 2 pass | 2 pass | equal | 0.0000 / 0.0004 | 0.0000 / 0.0004 (1-0-100) |
+| autoplayTransitionDeck | 5 pass, 1 unit-still | 5 pass, 1 unit-still | equal | 0.0000 / 0.0007 | 0.0000 / 0.0007 (2-0-75) |
 | mediaEndDeck | 1 unit-still | 1 unit-still | equal | 0.0000 / 0.0004 | — |
 | lo-airplane-transition.pptx | 5 pass | 5 pass | equal | 0.0000 / 0.0000 | 0.0000 / 0.0000 (1-0-0) |
 | lo-bnc591147.pptx | 2 unit-still | 2 unit-still | equal except stills | 0.0000 / 0.0000 | — |
@@ -290,6 +295,7 @@ plus 8 synthetic decks (`cmdHoldDeck` added with the `cmd` ruling, `autoplayTran
 | morphCompositedDeck | 2 | 0 | 0 | — | — |
 | longStepDeck | 1 | 1 | 1 | 1 | — |
 | cmdHoldDeck | 1 | 0 | 0 | — | — |
+| autoplayTransitionDeck | 2 | 0 | 0 | — | — |
 | mediaEndDeck | 1 | 0 | 0 | — | slide 1 `still` (media) |
 | lo-airplane-transition.pptx | 1 | 0 | 0 | — | — |
 | lo-bnc591147.pptx | 2 | 2 | 2 | 1 | slide 1 `still`; slide 2 `still` (media) |
@@ -435,8 +441,9 @@ Evidence:
     - a trigger;
     - `mediaEnd`.
 
-    The classifier enumerates all but `mediaEnd`, which is now refused. Mid-step `next` is the ruled
-    settled-start difference (D11).
+    The classifier enumerates entry, the triggers and a `next` from each settled checkpoint (`stepInterval`),
+    and now refuses `mediaEnd`. A `next` on a live cursor (a click before the step settles) is not something
+    the driver synthesises; this round did not re-audit how the classifier covers it.
 - **Hit regions are static rectangles** (§5.1). Link and trigger regions do not follow animated geometry.
 - **The entry frame is the slide as it arrives (PR #78 round 7).** For a slide with autoplay, the entry frame (what
   the incoming transition shows) is composed from `timeline.initial()` at time 0, the state the local stage draws its

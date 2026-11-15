@@ -153,8 +153,8 @@ export interface MorphDeckOptions {
   option?: 'byObject' | 'byWord' | 'byChar'
   /** Words in the box's text (default 2); `byWord` / `byChar` split it into units. */
   words?: number
-  /** PR #78 round 12: the second slide also holds a video (id 3, `cTn` 3) that begins with it. */
-  media?: boolean
+  /** PR #78 round 12: the first (`from`) or second (`to`) slide also holds a video (id 3, `cTn` 3) that begins with it. */
+  media?: 'from' | 'to'
 }
 
 /**
@@ -228,14 +228,13 @@ export function morphDeck(options: MorphDeckOptions = {}): Promise<Uint8Array> {
   const text = Array.from({ length: words }, (_, i) => `w${i}`).join(' ')
   const box = (x: number, y: number, w: number, h: number, fill: string) =>
     rect(2, 'Box', x, y, w, h, fill, text ? { paragraphs: [{ runs: [{ text, sz: '1200' }] }] } : {})
+  const media = (side: 'from' | 'to') => (options.media === side ? [rect(3, 'Media', 80, 560, 160, 80, 'F4B183')] : [])
+  const video = (side: 'from' | 'to') => (options.media === side
+    ? { timingXml: timingXmlOf(`<p:video><p:cMediaNode><p:cTn id="3" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn>${tgt(3)}</p:cMediaNode></p:video>`) }
+    : {})
   return deck([
-    { bg: { solid: 'FFFFFF' }, shapes: [box(80, 80, 240, 160, 'D06040')] },
-    {
-      bg: { solid: 'FFFFFF' },
-      shapes: [box(520, 360, 360, 240, 'D06040'), ...(options.media ? [rect(3, 'Media', 80, 560, 160, 80, 'F4B183')] : [])],
-      transition: morphTransition(options.option ?? 'byObject'),
-      ...(options.media ? { timingXml: timingXmlOf(`<p:video><p:cMediaNode><p:cTn id="3" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn>${tgt(3)}</p:cMediaNode></p:video>`) } : {}),
-    },
+    { bg: { solid: 'FFFFFF' }, shapes: [box(80, 80, 240, 160, 'D06040'), ...media('from')], ...video('from') },
+    { bg: { solid: 'FFFFFF' }, shapes: [box(520, 360, 360, 240, 'D06040'), ...media('to')], transition: morphTransition(options.option ?? 'byObject'), ...video('to') },
   ])
 }
 
