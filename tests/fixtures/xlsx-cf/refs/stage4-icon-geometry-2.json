@@ -522,16 +522,16 @@
       },
       "H3": {
         "any-hides": {
-          "verdict": "fail"
+          "verdict": "excluded"
         },
         "priority-wins": {
-          "verdict": "fail"
+          "verdict": "excluded"
         },
         "bar-wins": {
-          "verdict": "fail"
+          "verdict": "excluded"
         },
         "icon-wins": {
-          "verdict": "pass"
+          "verdict": "excluded"
         }
       },
       "I2": {
@@ -550,16 +550,16 @@
       },
       "I3": {
         "any-hides": {
-          "verdict": "fail"
+          "verdict": "excluded"
         },
         "priority-wins": {
-          "verdict": "pass"
+          "verdict": "excluded"
         },
         "bar-wins": {
-          "verdict": "pass"
+          "verdict": "excluded"
         },
         "icon-wins": {
-          "verdict": "fail"
+          "verdict": "excluded"
         }
       },
       "J2": {
@@ -578,18 +578,19 @@
       },
       "J3": {
         "any-hides": {
-          "verdict": "fail"
+          "verdict": "excluded"
         },
         "priority-wins": {
-          "verdict": "pass"
+          "verdict": "excluded"
         },
         "bar-wins": {
-          "verdict": "fail"
+          "verdict": "excluded"
         },
         "icon-wins": {
-          "verdict": "pass"
+          "verdict": "excluded"
         }
       }
     }
-  }
+  },
+  "iconGeometryRulesVersion": 2
 }
