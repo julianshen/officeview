@@ -73,7 +73,9 @@ npx tsx scripts/cf-refs/audit.ts --stage 4 --case stage4-icon-glyph-key
 The case must come back `measured` with `icon:pixel-calibration`, `icon:glyph-key` and the 75 `icon:glyph-<set>-<id>` verified. The audit line for the case reads `ok stage4-icon-glyph-key [measured]`; the overall audit still prints `BLOCKED` and exits 1 (every other case is pending). The ways it fails, each of which **stops the run** (every classification depends on the key):
 - `bar-calibration-failed`: a calibration column (H/I/J, 10/30/60 characters) is more than 1 px off the computed width, or `K2` does not sample `FFC6EFCE` within ±8;
 - `icon-key-mismatch`: a key rule did not round-trip in the resaved XML, or a key cell shows no icon against its `;;;` control;
-- `icon-class-ambiguous`: two key crops are neither identical (±8) nor separated by a pixel of delta ≥ 64.
+- `icon-class-ambiguous`: a key crop is identical (±8) to two classes. Since fix round 3 (Ruling S4-NEARTWIN), a crop that is neither identical to nor separated by a pixel of delta ≥ 64 from a class no longer refuses. It becomes its own class with a recorded twin (`glyphTwins` in the sidecar), and cells showing either twin classify to the twin set.
+
+Run 1 (c63de53a): the stored key now stops at `icon-key-mismatch` on `5Boxes:0` (B21). Its faint glyph peaks at a delta of 34 from the control, below the ink threshold of 64. That needs a ruling (see `docs/validation/xlsx-cf.md` §12, "Stage 4 capture run 1"). After the ruling lands, `bun scripts/cf-refs/capture.ts --stage 4 --verify-only` re-derives the key sidecar first and then every dependent sidecar, from the stored PNGs, with no Excel run.
 
 Record the failure in `docs/validation/xlsx-cf.md` §12 and stop. Never retouch or synthesize a PNG.
 
@@ -96,6 +98,11 @@ npx tsx scripts/cf-refs/audit.ts --stage 4
 - `stage4-icon-dialect` (Ruling S4-DIALECT-CASE) records Excel's outcome for an x14-only family (3Stars) on a base rule and for a paired base 3Arrows + x14 3Triangles rule. Both outcomes are hypotheses (drawn as modelled, not drawn, drawn as another family; companion, base, neither) and the capture decides. If `build.ts` reports the resave stripped or repaired a rule, the `stage4-icon-dialect.rejected.xlsx` it keeps IS the recorded outcome: note it in §12 and do not retry.
 - A dialect capture (`stage4-icon-authored`, or the schema-defaults column V of `stage4-icon-families`) in which every marked cell shows no icon refuses the case (Ruling S4-DIALECT-EVIDENCE): stop and report it, as with the Stage 3 ext-URI bug.
 - `stage4-icon-rtl` is record only (`icon:placement-rtl-sheet` stays unverified, Ruling S4-M).
+- Fix round 3: Excel 16.114/16.115 canonicalises two shapes on resave, so they moved to `stage4-icon-unresolved-shapes`:
+  - it drops `percent="0"` (formerly `stage4-icon-degenerate` H), now column M;
+  - it drops `reverse="1"` on an x14 `custom="1"` rule (formerly `stage4-icon-reverse-custom` F), now column N.
+
+  Rebuild and recapture `degenerate` and `reverse-custom` with the loop above. Rebuild `unresolved-shapes` only (it is never captured). Until then, `--verify-only` skips their stale captures.
 
 What to expect from the audit (`npx tsx scripts/cf-refs/audit.ts --stage 4`): `summary: ok=true ... stageComplete=false`, a `BLOCKED: Stage 4 semantic evidence incomplete` line and exit 1. That is the correct result for Task 24. The bucket capabilities (families, thresholds, gte, reverse, custom) verify only when the capture discriminates their hypotheses and the cross-case gates hold (calibration, glyph key, and `icon:families-base` for every reading through the family order). Geometry, inset and canvas-suppression capabilities report `no hypotheses` and stay `supported-structural` until Task 29's box candidates exist; they re-verify later from the stored captures with `bun scripts/cf-refs/capture.ts --stage 4 --verify-only`, with no new Excel run (see `docs/validation/xlsx-cf.md` §12, known limits). `npx tsx scripts/cf-refs/audit.ts --stage 3` must still print `ok=true ... stageComplete=true`.
 

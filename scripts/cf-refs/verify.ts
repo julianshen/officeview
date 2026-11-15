@@ -4203,18 +4203,33 @@ function cropDelta(a: DecodedPng, b: DecodedPng): { max: number } {
   return { max }
 }
 
+/** Ruling S4-NEARTWIN: the observed glyph class of a crop that cannot be told apart from its class's near twins. */
+const ICON_TWIN_SET_PREFIX = 'twin-set:'
+
+/** The canonical (sorted, de-duplicated) observed class of a twin set: sidecars compare it by `JSON.stringify`. */
+export function iconTwinSetClass(members: readonly string[]): string {
+  return ICON_TWIN_SET_PREFIX + [...new Set(members)].sort().join('|')
+}
+
+/** The members of a twin-set observation (sorted), or undefined for any other observed class. */
+export function iconTwinSetMembers(glyphClass: string | null | undefined): string[] | undefined {
+  return typeof glyphClass === 'string' && glyphClass.startsWith(ICON_TWIN_SET_PREFIX) ? glyphClass.slice(ICON_TWIN_SET_PREFIX.length).split('|') : undefined
+}
+
 /**
  * Ruling S4-A classification. A crop is class P when it equals P's key crop within `tolerance` per channel at zero offset
  * AND differs from every other class's key crop by at least one pixel of max-channel delta >= `ICON_STRONG_DELTA`.
  * Matching none refuses `icon-class-none`; matching two, or a second class it is not strongly separated from, refuses
- * `icon-class-ambiguous` (never a pick).
+ * `icon-class-ambiguous` (never a pick). Ruling S4-NEARTWIN: when every class the crop is not strongly separated from is
+ * a recorded twin of P (`opts.twins`), the crop classifies to the twin set (`iconTwinSetClass`), never to P alone;
+ * `referenceClass` names P's key crop for geometry alignment only.
  */
 export function classifyIconCrop(
   png: DecodedPng,
   crop: { x: number; y: number; width: number; height: number },
   key: ReadonlyMap<string, DecodedPng>,
-  opts: { tolerance: number },
-): { glyphClass: string } | Refusal {
+  opts: { tolerance: number; twins?: ReadonlyMap<string, ReadonlySet<string>> },
+): { glyphClass: string; referenceClass?: string } | Refusal {
   const sample = cropPng(png, crop)
   if (!sample) return iconRefusal('icon-class-none', `Crop ${crop.x},${crop.y} ${crop.width}x${crop.height} lies outside the ${png.width}x${png.height} capture`)
   const sameSize = [...key].filter(([, k]) => k.width === sample.width && k.height === sample.height)
@@ -4223,6 +4238,10 @@ export function classifyIconCrop(
   if (matches.length === 0) return iconRefusal('icon-class-none', `The crop matches no glyph-key class within +-${opts.tolerance} per channel`)
   if (matches.length > 1) return iconRefusal('icon-class-ambiguous', `The crop matches ${matches.length} glyph classes (${matches.map(m => m.cls).join(', ')})`)
   const unseparated = deltas.filter(d => d.cls !== matches[0]!.cls && d.max < ICON_STRONG_DELTA)
+  const twins = opts.twins?.get(matches[0]!.cls)
+  if (unseparated.length > 0 && twins && unseparated.every(d => twins.has(d.cls))) {
+    return { glyphClass: iconTwinSetClass([matches[0]!.cls, ...unseparated.map(d => d.cls)]), referenceClass: matches[0]!.cls }
+  }
   if (unseparated.length > 0) return iconRefusal('icon-class-ambiguous', `The crop matches ${matches[0]!.cls} but is not separated from ${unseparated.map(d => d.cls).join(', ')} by a pixel of delta >= ${ICON_STRONG_DELTA}`)
   return { glyphClass: matches[0]!.cls }
 }
@@ -4235,6 +4254,16 @@ export interface IconGlyphKey {
   classOfPair: ReadonlyMap<string, string>
   /** glyph class -> its reference crop (the first pair's). */
   classes: ReadonlyMap<string, DecodedPng>
+  /**
+   * Ruling S4-NEARTWIN: glyph class -> the classes whose key crops it is neither identical to (within tolerance) nor
+   * strongly separated from (symmetric). A crop of such a class classifies to the twin set, never to a pick.
+   */
+  twins: ReadonlyMap<string, ReadonlySet<string>>
+}
+
+/** The twin relation as the glyph-key sidecar records it (`glyphTwins`): classes in key order, members sorted. */
+export function iconGlyphTwinsRecord(key: IconGlyphKey): Record<string, string[]> {
+  return Object.fromEntries([...key.classes.keys()].filter(cls => key.twins.get(cls)?.size).map(cls => [cls, [...key.twins.get(cls)!].sort()]))
 }
 
 /**
@@ -4253,8 +4282,9 @@ export function iconCropRect(png: DecodedPng, geom: WorksheetRangeGeometry, ref:
 /**
  * Builds the glyph key from the `stage4-icon-glyph-key` capture (Ruling S4-A). Every key marker's single-pair rule must
  * round-trip in the resaved XML and every key cell must show ink against its same-format control, else
- * `icon-key-mismatch`; identical crops (within tolerance) form one class, and a crop that is neither identical to nor
- * strongly separated from an existing class refuses `icon-class-ambiguous`.
+ * `icon-key-mismatch`; identical crops (within tolerance) form one class, and a crop identical to two classes refuses
+ * `icon-class-ambiguous`. Ruling S4-NEARTWIN: a crop that is neither identical to nor strongly separated from an existing
+ * class is admitted as its own class (or joins the one class it is identical to) and recorded as that class's twin.
  */
 export function buildIconGlyphKey(c: CfOracleCase, parts: Map<string, Uint8Array>, png: DecodedPng, geom: WorksheetRangeGeometry, tolerance = ICON_CLASS_TOLERANCE): IconGlyphKey | Refusal {
   const keyMarkers = c.markers.filter(m => m.capabilityId.startsWith('icon:glyph-') && m.icon?.custom?.length)
@@ -4262,6 +4292,14 @@ export function buildIconGlyphKey(c: CfOracleCase, parts: Map<string, Uint8Array
   const crops = new Map<string, DecodedPng>()
   const classOfPair = new Map<string, string>()
   const classes = new Map<string, DecodedPng>()
+  const twins = new Map<string, Set<string>>()
+  const twin = (a: string, b: string): void => {
+    if (a === b) return
+    if (!twins.has(a)) twins.set(a, new Set())
+    if (!twins.has(b)) twins.set(b, new Set())
+    twins.get(a)!.add(b)
+    twins.get(b)!.add(a)
+  }
   for (const m of keyMarkers) {
     const pair = `${m.icon!.custom![0]!.set}:${m.icon!.custom![0]!.iconId}`
     const check = verifyMarkerInArchive(parts, m)
@@ -4276,14 +4314,13 @@ export function buildIconGlyphKey(c: CfOracleCase, parts: Map<string, Uint8Array
     crops.set(pair, crop)
     const same = [...classes].filter(([, k]) => cropDelta(crop, k).max <= tolerance)
     const unseparated = [...classes].filter(([, k]) => { const d = cropDelta(crop, k).max; return d > tolerance && d < ICON_STRONG_DELTA })
-    if (same.length > 1 || unseparated.length > 0) return iconRefusal('icon-class-ambiguous', `Glyph-key crop ${pair} is ambiguous against ${[...same, ...unseparated].map(([k]) => k).join(', ')}`)
-    if (same.length === 1) classOfPair.set(pair, same[0]![0])
-    else {
-      classes.set(pair, crop)
-      classOfPair.set(pair, pair)
-    }
+    if (same.length > 1) return iconRefusal('icon-class-ambiguous', `Glyph-key crop ${pair} is identical (within +-${tolerance}) to ${same.map(([k]) => k).join(', ')}`)
+    const cls = same.length === 1 ? same[0]![0] : pair
+    if (same.length === 0) classes.set(pair, crop)
+    classOfPair.set(pair, cls)
+    for (const [other] of unseparated) twin(cls, other)
   }
-  return { crops, classOfPair, classes }
+  return { crops, classOfPair, classes, twins }
 }
 
 /** One class hypothesis at one designated cell: the glyph class it predicts (`null` for no icon). */
@@ -4403,10 +4440,20 @@ export function buildIconClassHypotheses(
  * more agreeing (no designated cell separates them, for example `gte` off the boundary or `reverse` on the middle
  * bucket) is `non-discriminating`; none agreeing is `none` (a finding, `icon-hypothesis-none`).
  */
-export function discriminateIcon(hyps: Readonly<Record<string, readonly IconClassHypothesis[]>>, observed: Readonly<Record<string, string | null>>): IconDiscrimination {
+export function discriminateIcon(hyps: Readonly<Record<string, readonly IconClassHypothesis[]>>, rawObserved: Readonly<Record<string, string | null>>): IconDiscrimination {
   const refs = Object.keys(hyps)
   const ids = [...new Set(refs.flatMap(r => hyps[r]!.map(h => h.id)))]
   if (refs.length === 0 || ids.length < 2) return { status: 'non-discriminating', reason: 'fewer than two hypotheses or no designated cell' }
+  // Ruling S4-NEARTWIN: a twin-set observation stands for the one class the competing hypotheses predict inside it; two
+  // predicted classes inside one set make the cell, and so the capability, non-discriminating (withheld, not refused).
+  const observed: Record<string, string | null> = { ...rawObserved }
+  for (const ref of refs) {
+    const members = iconTwinSetMembers(rawObserved[ref])
+    if (!members) continue
+    const inSet = [...new Set(hyps[ref]!.map(h => h.glyphClass).filter((g): g is string => g !== null && members.includes(g)))]
+    if (inSet.length > 1) return { status: 'non-discriminating', reason: `Ruling S4-NEARTWIN: designated cell ${ref} shows the twin set {${members.join(', ')}}, which holds the predicted classes ${inSet.join(', ')}` }
+    if (inSet.length === 1) observed[ref] = inSet[0]!
+  }
   const consistent = ids.filter(id => refs.every(ref => {
     const h = hyps[ref]!.find(x => x.id === id)
     return h !== undefined && h.glyphClass !== 'unresolved' && ref in observed && h.glyphClass === observed[ref]
@@ -4677,7 +4724,14 @@ export function buildIconScenarioHypotheses(
 /** Per-path cache of the committed glyph key (decoding the key capture dominates the cost of verifying a case). */
 const iconKeyCache = new Map<string, IconGlyphKey | Refusal | undefined>()
 
-/** The glyph key of the committed `stage4-icon-glyph-key` capture under `rootDir`, if that capture exists and builds. */
+/**
+ * The glyph key of the committed `stage4-icon-glyph-key` capture under `rootDir`, if that capture exists and builds, and
+ * only when the key sidecar records exactly the classes (`glyphClasses`) and the twin relation (`glyphTwins`, Ruling
+ * S4-NEARTWIN) the PNG recomputes: the key is restored from what the sidecar persisted, and a key sidecar that predates
+ * the current key build (for example one written while the key refused) restores no key (`sidecar-mismatch`). Every
+ * dependent case is then classified against the key its own sidecar was derived with, until `capture --verify-only`
+ * re-derives the key sidecar first and the dependents after it.
+ */
 export function loadIconGlyphKey(rootDir: string): IconGlyphKey | Refusal | undefined {
   const manifestAbs = resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json')
   if (!existsSync(manifestAbs)) return undefined
@@ -4685,10 +4739,25 @@ export function loadIconGlyphKey(rootDir: string): IconGlyphKey | Refusal | unde
   const keyCase = manifest.cases.find(c => c.id === 'stage4-icon-glyph-key')
   const cap = keyCase?.captures.find(x => x.appearance === 'screen')
   if (!keyCase || !cap?.pngSha256) return undefined
-  const cacheKey = `${rootDir}\u0000${cap.pngSha256}\u0000${keyCase.expected.savedSha256}`
+  const sidecarAbs = resolve(rootDir, cap.sidecarPath)
+  const sidecarText = existsSync(sidecarAbs) ? readFileSync(sidecarAbs, 'utf8') : ''
+  const sidecarSha = createHash('sha256').update(sidecarText).digest('hex')
+  const cacheKey = `${rootDir}\u0000${cap.pngSha256}\u0000${keyCase.expected.savedSha256}\u0000${sidecarSha}`
   if (iconKeyCache.has(cacheKey)) return iconKeyCache.get(cacheKey)
   const capture = loadBarScreenCapture(keyCase, rootDir)
-  const key = capture ? buildIconGlyphKey(keyCase, capture.parts, capture.png, capture.geom) : undefined
+  const built = capture ? buildIconGlyphKey(keyCase, capture.parts, capture.png, capture.geom) : undefined
+  let key: IconGlyphKey | Refusal | undefined = built
+  if (built && !('kind' in built)) {
+    let sidecar: Record<string, unknown> = {}
+    try {
+      sidecar = sidecarText ? (JSON.parse(sidecarText) as Record<string, unknown>) : {}
+    } catch {
+      sidecar = {}
+    }
+    const classesOk = JSON.stringify(sidecar.glyphClasses ?? null) === JSON.stringify(Object.fromEntries(built.classOfPair))
+    const twinsOk = JSON.stringify(sidecar.glyphTwins ?? null) === JSON.stringify(iconGlyphTwinsRecord(built))
+    if (!classesOk || !twinsOk) key = iconRefusal('sidecar-mismatch', `The glyph-key sidecar ${cap.sidecarPath} does not record the ${classesOk ? 'twin relation (glyphTwins)' : 'classes (glyphClasses)'} the key capture recomputes; re-derive it (capture --stage 4 --verify-only)`)
+  }
   iconKeyCache.set(cacheKey, key)
   return key
 }
@@ -4712,17 +4781,19 @@ const iconCellsOf = (c: CfOracleCase, cap: string) =>
 export function measureCaseIcons(c: CfOracleCase, png: DecodedPng, geom: WorksheetRangeGeometry, key?: IconGlyphKey): ReadonlyMap<string, CfObservedIcon> | Refusal {
   const cells = c.expected.cells.filter(x => x.matched && x.iconApplied !== undefined && c.markers.some(m => m.ruleType === 'iconSet' && isCellInSqref(x.ref, m.sqref)))
   const controlOf = (ref: string): string => cells.find(x => x.ref === ref)!.controlRef
-  const classify = (ref: string): string | undefined => {
+  const classify = (ref: string): { cls: string; reference?: string } | undefined => {
     if (!key) return undefined
     const rect = iconCropRect(png, geom, ref)
-    if (!rect) return 'icon-class-none'
-    const res = classifyIconCrop(png, rect, key.classes, { tolerance: ICON_CLASS_TOLERANCE })
-    return 'glyphClass' in res ? res.glyphClass : res.code
+    if (!rect) return { cls: 'icon-class-none' }
+    const res = classifyIconCrop(png, rect, key.classes, { tolerance: ICON_CLASS_TOLERANCE, twins: key.twins })
+    return 'glyphClass' in res ? { cls: res.glyphClass, reference: res.referenceClass ?? res.glyphClass } : { cls: res.code }
   }
   const out = new Map<string, CfObservedIcon>()
   for (const cell of cells) {
-    const cls = classify(cell.ref)
-    const reference = cls !== undefined && key?.classes.has(cls) ? key.classes.get(cls) : undefined
+    const got = classify(cell.ref)
+    const cls = got?.cls
+    // A twin-set observation aligns its scanlines on the key crop of the class it matched within tolerance.
+    const reference = got?.reference !== undefined && key?.classes.has(got.reference) ? key.classes.get(got.reference) : undefined
     // The reference is the key cell's full inner-box crop; its ink box is what the scanlines are aligned to.
     // An unclassified cell (no reference) or an unstable edge is a per-cell finding (`edgeStable: false`), never a
     // whole-case refusal: geometry and inset cells cannot classify by design, and no geometry claim rests on them.
@@ -4831,6 +4902,7 @@ function verifyIconCapture(
     outcome.verified.push('icon:glyph-key', ...c.markers.filter(m => m.capabilityId.startsWith('icon:glyph-')).map(m => m.capabilityId))
     const recordedClasses = sidecar.glyphClasses as Record<string, string> | undefined
     if (JSON.stringify(recordedClasses ?? null) !== JSON.stringify(Object.fromEntries(key.classOfPair))) return fail('sidecar-mismatch', 'Sidecar glyphClasses differ from the classes recomputed from the key capture')
+    if (JSON.stringify(sidecar.glyphTwins ?? null) !== JSON.stringify(iconGlyphTwinsRecord(key))) return fail('sidecar-mismatch', 'Sidecar glyphTwins differ from the twin relation recomputed from the key capture (Ruling S4-NEARTWIN)')
   } else {
     const loaded = loadIconGlyphKey(rootDir)
     key = loaded && !('kind' in loaded) ? loaded : undefined

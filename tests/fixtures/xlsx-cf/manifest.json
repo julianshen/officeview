@@ -40913,11 +40913,11 @@
     {
       "id": "stage4-icon-degenerate",
       "stage": 4,
-      "question": "S4-C/S4-D/S4-F degenerate shapes: all values equal (B); a single numeric cell (C); non-monotonic num 60/30 (D); percent -10 and 150 (E); a cfvo[0] floor of num 50 with values below it (F); min/max cfvo types (G); <iconSet percent=\"0\"> (H).",
+      "question": "S4-C/S4-D degenerate shapes: all values equal (B); a single numeric cell (C); non-monotonic num 60/30 (D); percent -10 and 150 (E); a cfvo[0] floor of num 50 with values below it (F); min/max cfvo types (G). (<iconSet percent=\"0\"> moved to stage4-icon-unresolved-shapes in fix round 3: Excel 16.114 drops the attribute on resave.)",
       "input": "tests/fixtures/xlsx-cf/inputs/stage4-icon-degenerate.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage4-icon-degenerate.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:H24",
+      "range": "A1:G24",
       "requiredAppearances": [
         "screen"
       ],
@@ -41087,41 +41087,11 @@
             ],
             "attrs": {}
           }
-        },
-        {
-          "part": "xl/worksheets/sheet1.xml",
-          "extension": "legacy",
-          "capabilityId": "icon:attr-percent-false",
-          "sqref": "H2:H12",
-          "ruleType": "iconSet",
-          "priority": 7,
-          "formulas": [],
-          "icon": {
-            "dialect": "base",
-            "set": "3Arrows",
-            "cfvo": [
-              {
-                "type": "percent",
-                "val": "0"
-              },
-              {
-                "type": "percent",
-                "val": "33"
-              },
-              {
-                "type": "percent",
-                "val": "67"
-              }
-            ],
-            "attrs": {
-              "percent": "0"
-            }
-          }
         }
       ],
       "expected": {
-        "inputSha256": "38eeb105653be724a661802736f7e7a773c5b1317406d143fdb501e335f24766",
-        "savedSha256": "38eeb105653be724a661802736f7e7a773c5b1317406d143fdb501e335f24766",
+        "inputSha256": "4d6f9f8265ebae3cf80fb7589f447556071f56aeaa2b6058fd165247e34caa57",
+        "savedSha256": "4d6f9f8265ebae3cf80fb7589f447556071f56aeaa2b6058fd165247e34caa57",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -41173,18 +41143,7 @@
           "G9",
           "G10",
           "G11",
-          "G12",
-          "H2",
-          "H3",
-          "H4",
-          "H5",
-          "H6",
-          "H7",
-          "H8",
-          "H9",
-          "H10",
-          "H11",
-          "H12"
+          "G12"
         ],
         "negativeRefs": [
           "B14",
@@ -41236,18 +41195,7 @@
           "G21",
           "G22",
           "G23",
-          "G24",
-          "H14",
-          "H15",
-          "H16",
-          "H17",
-          "H18",
-          "H19",
-          "H20",
-          "H21",
-          "H22",
-          "H23",
-          "H24"
+          "G24"
         ],
         "cells": [
           {
@@ -41562,7 +41510,7 @@
             "ref": "F2",
             "controlRef": "F14",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -41573,7 +41521,7 @@
             "ref": "F3",
             "controlRef": "F15",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -41584,7 +41532,7 @@
             "ref": "F4",
             "controlRef": "F16",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -41595,7 +41543,7 @@
             "ref": "F5",
             "controlRef": "F17",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -41606,7 +41554,7 @@
             "ref": "F6",
             "controlRef": "F18",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -41792,127 +41740,6 @@
           {
             "ref": "G12",
             "controlRef": "G24",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "H2",
-            "controlRef": "H14",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "H3",
-            "controlRef": "H15",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "H4",
-            "controlRef": "H16",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "H5",
-            "controlRef": "H17",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "H6",
-            "controlRef": "H18",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "H7",
-            "controlRef": "H19",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "H8",
-            "controlRef": "H20",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "H9",
-            "controlRef": "H21",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "H10",
-            "controlRef": "H22",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "H11",
-            "controlRef": "H23",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "H12",
-            "controlRef": "H24",
             "matched": true,
             "iconApplied": true,
             "fillSource": "unverified",
@@ -42320,94 +42147,6 @@
             "iconApplied": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
-          },
-          {
-            "ref": "H14",
-            "controlRef": "H2",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "H15",
-            "controlRef": "H3",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "H16",
-            "controlRef": "H4",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "H17",
-            "controlRef": "H5",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "H18",
-            "controlRef": "H6",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "H19",
-            "controlRef": "H7",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "H20",
-            "controlRef": "H8",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "H21",
-            "controlRef": "H9",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "H22",
-            "controlRef": "H10",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "H23",
-            "controlRef": "H11",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "H24",
-            "controlRef": "H12",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
           }
         ]
       },
@@ -42420,7 +42159,7 @@
         }
       ],
       "status": "recipe-pending",
-      "reason": "Capture verification failed (semantic-evidence-pending): Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured",
+      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -42431,7 +42170,7 @@
     {
       "id": "stage4-icon-reverse-custom",
       "stage": 4,
-      "question": "S4-E reverse and custom order: reverse on 3-, 4- and 5-icon sets with only the end buckets designated (the middle bucket of an odd set maps to itself); a custom mapping across families (E); custom + reverse (F); NoIcons in the first (G), middle (H) and last (I) bucket of a custom set.",
+      "question": "S4-E reverse and custom order: reverse on 3-, 4- and 5-icon sets with only the end buckets designated (the middle bucket of an odd set maps to itself); a custom mapping across families (E); NoIcons in the first (G), middle (H) and last (I) bucket of a custom set. (Custom + reverse, formerly F, moved to stage4-icon-unresolved-shapes in fix round 3: Excel 16.114 drops reverse=\"1\" from an x14 custom=\"1\" rule on resave.)",
       "input": "tests/fixtures/xlsx-cf/inputs/stage4-icon-reverse-custom.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage4-icon-reverse-custom.xlsx",
       "sheet": "Sheet1",
@@ -42587,54 +42326,10 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "x14",
-          "capabilityId": "icon:reverse-custom",
-          "sqref": "F2:F12",
-          "ruleType": "iconSet",
-          "priority": 5,
-          "formulas": [],
-          "icon": {
-            "dialect": "x14",
-            "set": "3Arrows",
-            "custom": [
-              {
-                "set": "3Stars",
-                "iconId": 2
-              },
-              {
-                "set": "3Flags",
-                "iconId": 0
-              },
-              {
-                "set": "5Boxes",
-                "iconId": 4
-              }
-            ],
-            "cfvo": [
-              {
-                "type": "percent",
-                "f": "0"
-              },
-              {
-                "type": "percent",
-                "f": "33"
-              },
-              {
-                "type": "percent",
-                "f": "67"
-              }
-            ],
-            "attrs": {
-              "reverse": "1"
-            }
-          }
-        },
-        {
-          "part": "xl/worksheets/sheet1.xml",
-          "extension": "x14",
           "capabilityId": "icon:custom-noicons",
           "sqref": "G2:G12",
           "ruleType": "iconSet",
-          "priority": 6,
+          "priority": 5,
           "formulas": [],
           "icon": {
             "dialect": "x14",
@@ -42676,7 +42371,7 @@
           "capabilityId": "icon:custom-noicons",
           "sqref": "H2:H12",
           "ruleType": "iconSet",
-          "priority": 7,
+          "priority": 6,
           "formulas": [],
           "icon": {
             "dialect": "x14",
@@ -42718,7 +42413,7 @@
           "capabilityId": "icon:custom-noicons",
           "sqref": "I2:I12",
           "ruleType": "iconSet",
-          "priority": 8,
+          "priority": 7,
           "formulas": [],
           "icon": {
             "dialect": "x14",
@@ -42756,8 +42451,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "b67f26ff69ebcff0be711a4dcb21950c590c97c46a854b7d45180d72fde9ce3e",
-        "savedSha256": "b67f26ff69ebcff0be711a4dcb21950c590c97c46a854b7d45180d72fde9ce3e",
+        "inputSha256": "46720fb2b6623b334da8b8416464c3289c68b1489b13ce6fb082fb0f844f1ffc",
+        "savedSha256": "46720fb2b6623b334da8b8416464c3289c68b1489b13ce6fb082fb0f844f1ffc",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -42790,14 +42485,6 @@
           "E10",
           "E11",
           "E12",
-          "F2",
-          "F3",
-          "F4",
-          "F5",
-          "F9",
-          "F10",
-          "F11",
-          "F12",
           "G2",
           "G3",
           "G4",
@@ -42863,14 +42550,6 @@
           "E22",
           "E23",
           "E24",
-          "F14",
-          "F15",
-          "F16",
-          "F17",
-          "F21",
-          "F22",
-          "F23",
-          "F24",
           "G14",
           "G15",
           "G16",
@@ -43237,98 +42916,10 @@
             }
           },
           {
-            "ref": "F2",
-            "controlRef": "F14",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "F3",
-            "controlRef": "F15",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "F4",
-            "controlRef": "F16",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "F5",
-            "controlRef": "F17",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "F9",
-            "controlRef": "F21",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "F10",
-            "controlRef": "F22",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "F11",
-            "controlRef": "F23",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "F12",
-            "controlRef": "F24",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
             "ref": "G2",
             "controlRef": "G14",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -43339,7 +42930,7 @@
             "ref": "G3",
             "controlRef": "G15",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -43350,7 +42941,7 @@
             "ref": "G4",
             "controlRef": "G16",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -43361,7 +42952,7 @@
             "ref": "G5",
             "controlRef": "G17",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -43493,7 +43084,7 @@
             "ref": "H6",
             "controlRef": "H18",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -43504,7 +43095,7 @@
             "ref": "H7",
             "controlRef": "H19",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -43515,7 +43106,7 @@
             "ref": "H8",
             "controlRef": "H20",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -43647,7 +43238,7 @@
             "ref": "I9",
             "controlRef": "I21",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -43658,7 +43249,7 @@
             "ref": "I10",
             "controlRef": "I22",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -43669,7 +43260,7 @@
             "ref": "I11",
             "controlRef": "I23",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -43680,7 +43271,7 @@
             "ref": "I12",
             "controlRef": "I24",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -43922,70 +43513,6 @@
           {
             "ref": "E24",
             "controlRef": "E12",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "F14",
-            "controlRef": "F2",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "F15",
-            "controlRef": "F3",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "F16",
-            "controlRef": "F4",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "F17",
-            "controlRef": "F5",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "F21",
-            "controlRef": "F9",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "F22",
-            "controlRef": "F10",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "F23",
-            "controlRef": "F11",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "F24",
-            "controlRef": "F12",
             "matched": false,
             "iconApplied": false,
             "fillSource": "unverified",
@@ -44266,7 +43793,7 @@
         }
       ],
       "status": "recipe-pending",
-      "reason": "Capture verification failed (semantic-evidence-pending): Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured",
+      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -49118,11 +48645,11 @@
     {
       "id": "stage4-icon-unresolved-shapes",
       "stage": 4,
-      "question": "Excel open/repair/strip outcome for shapes the viewer refuses either way (S4-B, S4-C, S4-O, S4-P): an unknown iconSet; an iconId out of range; NoIcons iconId=\"1\"; a custom set with fewer cfIcon than buckets; a base rule naming 3Stars; type=\"formula\"; xm:f $A$1; activePresent=\"1\"; 2 and 6 cfvo; a cfvo without type. Lifts no capability.",
+      "question": "Excel open/repair/strip outcome for shapes the viewer refuses either way (S4-B, S4-C, S4-O, S4-P): an unknown iconSet; an iconId out of range; NoIcons iconId=\"1\"; a custom set with fewer cfIcon than buckets; a base rule naming 3Stars; type=\"formula\"; xm:f $A$1; activePresent=\"1\"; 2 and 6 cfvo; a cfvo without type. Fix round 3 adds two shapes Excel 16.114 canonicalises on resave (c63de53a), so neither can be authored repair-free: <iconSet percent=\"0\"> (M; Excel drops percent) and an x14 custom=\"1\" rule with reverse=\"1\" (N; Excel drops reverse). Lifts no capability.",
       "input": "tests/fixtures/xlsx-cf/inputs/stage4-icon-unresolved-shapes.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage4-icon-unresolved-shapes.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:L12",
+      "range": "A1:N12",
       "requiredAppearances": [
         "screen"
       ],
@@ -49225,11 +48752,85 @@
           "ruleType": "iconSet",
           "formulas": [],
           "priority": 11
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "icon:attr-percent-false",
+          "sqref": "M2:M6",
+          "ruleType": "iconSet",
+          "priority": 12,
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "percent",
+                "val": "33"
+              },
+              {
+                "type": "percent",
+                "val": "67"
+              }
+            ],
+            "attrs": {
+              "percent": "0"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:reverse-custom",
+          "sqref": "N2:N6",
+          "ruleType": "iconSet",
+          "priority": 13,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Arrows",
+            "custom": [
+              {
+                "set": "3Stars",
+                "iconId": 2
+              },
+              {
+                "set": "3Flags",
+                "iconId": 0
+              },
+              {
+                "set": "5Boxes",
+                "iconId": 4
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "percent",
+                "f": "0"
+              },
+              {
+                "type": "percent",
+                "f": "33"
+              },
+              {
+                "type": "percent",
+                "f": "67"
+              }
+            ],
+            "attrs": {
+              "reverse": "1"
+            }
+          }
         }
       ],
       "expected": {
-        "inputSha256": "1ecf7c3e256ce93d106432eb6b780184f3801d4453e2b3358dd0695bc6ea6128",
-        "savedSha256": "1ecf7c3e256ce93d106432eb6b780184f3801d4453e2b3358dd0695bc6ea6128",
+        "inputSha256": "c33cb3d32fe91d3fde2d0e537cc42816ba01816541888394163e0079df5cb2e1",
+        "savedSha256": "c33cb3d32fe91d3fde2d0e537cc42816ba01816541888394163e0079df5cb2e1",
         "provenance": "seed-hypothesis",
         "positiveRefs": [],
         "negativeRefs": [],
@@ -49673,12 +49274,92 @@
             "iconApplied": false,
             "fillSource": "unverified",
             "note": "unresolved shape fails closed (no icon)"
+          },
+          {
+            "ref": "M2",
+            "controlRef": "M8",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
+          },
+          {
+            "ref": "M3",
+            "controlRef": "M9",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
+          },
+          {
+            "ref": "M4",
+            "controlRef": "M10",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
+          },
+          {
+            "ref": "M5",
+            "controlRef": "M11",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
+          },
+          {
+            "ref": "M6",
+            "controlRef": "M12",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
+          },
+          {
+            "ref": "N2",
+            "controlRef": "N8",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
+          },
+          {
+            "ref": "N3",
+            "controlRef": "N9",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
+          },
+          {
+            "ref": "N4",
+            "controlRef": "N10",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
+          },
+          {
+            "ref": "N5",
+            "controlRef": "N11",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
+          },
+          {
+            "ref": "N6",
+            "controlRef": "N12",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
           }
         ]
       },
       "captures": [],
       "status": "unsupported",
-      "reason": "Preserved rejected Excel output at /Users/julianshen/prj/officeview/.worktrees/cf-s4/tests/fixtures/xlsx-cf/stage4-icon-unresolved-shapes.rejected.xlsx: Rule icon:unresolved-unknown-set (iconSet) on sqref B2:B6 with formulas [] missing from xl/worksheets/sheet1.xml",
+      "reason": "Unresolved icon shapes fail closed per Rulings S4-B, S4-C, S4-O and S4-P; recorded for Excel's open/repair/strip outcome and lift no capability",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,

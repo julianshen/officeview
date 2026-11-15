@@ -5032,10 +5032,10 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
   // 6. stage4-icon-degenerate
   s4rect(
     'stage4-icon-degenerate',
-    'S4-C/S4-D/S4-F degenerate shapes: all values equal (B); a single numeric cell (C); non-monotonic num 60/30 (D); percent -10 and 150 (E); a cfvo[0] floor of num 50 with values below it (F); min/max cfvo types (G); <iconSet percent="0"> (H).',
+    'S4-C/S4-D degenerate shapes: all values equal (B); a single numeric cell (C); non-monotonic num 60/30 (D); percent -10 and 150 (E); a cfvo[0] floor of num 50 with values below it (F); min/max cfvo types (G). (<iconSet percent="0"> moved to stage4-icon-unresolved-shapes in fix round 3: Excel 16.114 drops the attribute on resave.)',
     {
       n: 11,
-      colStyles: s4keyStyles(['B', 'C', 'D', 'E', 'F', 'G', 'H']),
+      colStyles: s4keyStyles(['B', 'C', 'D', 'E', 'F', 'G']),
       cols: [
         s4col('B', 'Equal', [50, 50, 50, 50, 50]),
         s4col('C', 'Single', [50]),
@@ -5043,7 +5043,6 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
         s4col('E', 'OutOfDomain', VALUES_0_100_BY10),
         s4col('F', 'Floor', VALUES_0_100_BY10),
         s4col('G', 'MinMax', VALUES_0_100_BY10),
-        s4col('H', 'PercentAttr0', range(11, 10, 10)),
       ],
       rules: [
         icon('icon:degenerate-equal-values', 'B2:B6', 1, '3Arrows', pct(3)),
@@ -5052,27 +5051,25 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
         icon('icon:bounds-out-of-domain', 'E2:E12', 4, '3Arrows', [{ type: 'percent', val: '0' }, { type: 'percent', val: '-10' }, { type: 'percent', val: '150' }]),
         icon('icon:thresholds-floor', 'F2:F12', 5, '3Arrows', nums(50, 60, 80)),
         icon('icon:thresholds-min-max', 'G2:G12', 6, '3Arrows', [{ type: 'min' }, { type: 'num', val: '40' }, { type: 'max' }]),
-        icon('icon:attr-percent-false', 'H2:H12', 7, '3Arrows', pct(3), { attrs: { percent: '0' } }),
       ],
     },
   ),
   // 7. stage4-icon-reverse-custom
   s4rect(
     'stage4-icon-reverse-custom',
-    'S4-E reverse and custom order: reverse on 3-, 4- and 5-icon sets with only the end buckets designated (the middle bucket of an odd set maps to itself); a custom mapping across families (E); custom + reverse (F); NoIcons in the first (G), middle (H) and last (I) bucket of a custom set.',
+    'S4-E reverse and custom order: reverse on 3-, 4- and 5-icon sets with only the end buckets designated (the middle bucket of an odd set maps to itself); a custom mapping across families (E); NoIcons in the first (G), middle (H) and last (I) bucket of a custom set. (Custom + reverse, formerly F, moved to stage4-icon-unresolved-shapes in fix round 3: Excel 16.114 drops reverse="1" from an x14 custom="1" rule on resave.)',
     {
       n: 11,
-      colStyles: s4keyStyles(['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']),
-      cols: ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'].map((c, i) => s4col(c, ['Reverse3', 'Reverse4', 'Reverse5', 'Custom', 'CustomReverse', 'NoIconsFirst', 'NoIconsMiddle', 'NoIconsLast'][i]!, VALUES_0_100_BY10)),
+      colStyles: s4keyStyles(['B', 'C', 'D', 'E', 'G', 'H', 'I']),
+      cols: ['B', 'C', 'D', 'E', 'G', 'H', 'I'].map((c, i) => s4col(c, ['Reverse3', 'Reverse4', 'Reverse5', 'Custom', 'NoIconsFirst', 'NoIconsMiddle', 'NoIconsLast'][i]!, VALUES_0_100_BY10)),
       rules: [
         icon('icon:reverse', 'B2:B12', 1, '3Arrows', pct(3), { attrs: { reverse: '1' }, cells: ['B2', 'B3', 'B4', 'B5', 'B9', 'B10', 'B11', 'B12'] }),
         icon('icon:reverse', 'C2:C12', 2, '4Arrows', pct(4), { attrs: { reverse: '1' }, cells: ['C2', 'C3', 'C4', 'C10', 'C11', 'C12'] }),
         icon('icon:reverse', 'D2:D12', 3, '5Arrows', pct(5), { attrs: { reverse: '1' }, cells: ['D2', 'D3', 'D10', 'D11', 'D12'] }),
         icon('icon:custom-mapping', 'E2:E12', 4, '3Arrows', pct(3), { dialect: 'x14', custom: [{ set: '3Stars', iconId: 2 }, { set: '3Flags', iconId: 0 }, { set: '5Boxes', iconId: 4 }] }),
-        icon('icon:reverse-custom', 'F2:F12', 5, '3Arrows', pct(3), { dialect: 'x14', attrs: { reverse: '1' }, custom: [{ set: '3Stars', iconId: 2 }, { set: '3Flags', iconId: 0 }, { set: '5Boxes', iconId: 4 }], cells: ['F2', 'F3', 'F4', 'F5', 'F9', 'F10', 'F11', 'F12'] }),
-        icon('icon:custom-noicons', 'G2:G12', 6, '3Arrows', pct(3), { dialect: 'x14', custom: [{ set: 'NoIcons', iconId: 0 }, { set: '3Symbols', iconId: 1 }, { set: '3Flags', iconId: 2 }] }),
-        icon('icon:custom-noicons', 'H2:H12', 7, '3Arrows', pct(3), { dialect: 'x14', custom: [{ set: '3Symbols', iconId: 0 }, { set: 'NoIcons', iconId: 0 }, { set: '3Flags', iconId: 2 }] }),
-        icon('icon:custom-noicons', 'I2:I12', 8, '3Arrows', pct(3), { dialect: 'x14', custom: [{ set: '3Symbols', iconId: 0 }, { set: '3Flags', iconId: 1 }, { set: 'NoIcons', iconId: 0 }] }),
+        icon('icon:custom-noicons', 'G2:G12', 5, '3Arrows', pct(3), { dialect: 'x14', custom: [{ set: 'NoIcons', iconId: 0 }, { set: '3Symbols', iconId: 1 }, { set: '3Flags', iconId: 2 }] }),
+        icon('icon:custom-noicons', 'H2:H12', 6, '3Arrows', pct(3), { dialect: 'x14', custom: [{ set: '3Symbols', iconId: 0 }, { set: 'NoIcons', iconId: 0 }, { set: '3Flags', iconId: 2 }] }),
+        icon('icon:custom-noicons', 'I2:I12', 7, '3Arrows', pct(3), { dialect: 'x14', custom: [{ set: '3Symbols', iconId: 0 }, { set: '3Flags', iconId: 1 }, { set: 'NoIcons', iconId: 0 }] }),
       ],
     },
   ),
@@ -5275,13 +5272,13 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
   // 15. stage4-icon-unresolved-shapes
   s4rect(
     'stage4-icon-unresolved-shapes',
-    'Excel open/repair/strip outcome for shapes the viewer refuses either way (S4-B, S4-C, S4-O, S4-P): an unknown iconSet; an iconId out of range; NoIcons iconId="1"; a custom set with fewer cfIcon than buckets; a base rule naming 3Stars; type="formula"; xm:f $A$1; activePresent="1"; 2 and 6 cfvo; a cfvo without type. Lifts no capability.',
+    'Excel open/repair/strip outcome for shapes the viewer refuses either way (S4-B, S4-C, S4-O, S4-P): an unknown iconSet; an iconId out of range; NoIcons iconId="1"; a custom set with fewer cfIcon than buckets; a base rule naming 3Stars; type="formula"; xm:f $A$1; activePresent="1"; 2 and 6 cfvo; a cfvo without type. Fix round 3 adds two shapes Excel 16.114 canonicalises on resave (c63de53a), so neither can be authored repair-free: <iconSet percent="0"> (M; Excel drops percent) and an x14 custom="1" rule with reverse="1" (N; Excel drops reverse). Lifts no capability.',
     {
       n: 5,
       status: 'unsupported',
       reason: 'Unresolved icon shapes fail closed per Rulings S4-B, S4-C, S4-O and S4-P; recorded for Excel\'s open/repair/strip outcome and lift no capability',
-      cols: ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'].map((c, i) =>
-        s4col(c, ['UnknownSet', 'IconIdRange', 'NoIconsId', 'CustomCount', 'BaseStars', 'FormulaCfvo', 'XmfRef', 'ActivePresent', 'TwoCfvo', 'SixCfvo', 'NoType'][i]!, [10, 30, 50, 70, 90]),
+      cols: ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N'].map((c, i) =>
+        s4col(c, ['UnknownSet', 'IconIdRange', 'NoIconsId', 'CustomCount', 'BaseStars', 'FormulaCfvo', 'XmfRef', 'ActivePresent', 'TwoCfvo', 'SixCfvo', 'NoType', 'PercentAttr0', 'CustomReverse'][i]!, [10, 30, 50, 70, 90]),
       ),
       rules: [
         iconShape('icon:unresolved-unknown-set', 'B2:B6', 1, '<cfRule type="iconSet" priority="1"><iconSet iconSet="3Bogus"><cfvo type="percent" val="0"/><cfvo type="percent" val="33"/><cfvo type="percent" val="67"/></iconSet></cfRule>', 'legacy'),
@@ -5295,6 +5292,9 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
         iconShape('icon:unresolved-cfvo-count', 'J2:J6', 9, '<cfRule type="iconSet" priority="9"><iconSet iconSet="3Arrows"><cfvo type="percent" val="0"/><cfvo type="percent" val="50"/></iconSet></cfRule>', 'legacy'),
         iconShape('icon:unresolved-cfvo-count', 'K2:K6', 10, '<cfRule type="iconSet" priority="10"><iconSet iconSet="5Arrows"><cfvo type="percent" val="0"/><cfvo type="percent" val="20"/><cfvo type="percent" val="40"/><cfvo type="percent" val="60"/><cfvo type="percent" val="80"/><cfvo type="percent" val="90"/></iconSet></cfRule>', 'legacy'),
         iconShape('icon:unresolved-cfvo-no-type', 'L2:L6', 11, '<cfRule type="iconSet" priority="11"><iconSet iconSet="3Arrows"><cfvo type="percent" val="0"/><cfvo val="33"/><cfvo type="percent" val="67"/></iconSet></cfRule>', 'legacy'),
+        // Fix round 3 (item 8): Excel canonicalises these two on resave, so their capabilities are recorded here only.
+        icon('icon:attr-percent-false', 'M2:M6', 12, '3Arrows', pct(3), { attrs: { percent: '0' } }),
+        icon('icon:reverse-custom', 'N2:N6', 13, '3Arrows', pct(3), { dialect: 'x14', attrs: { reverse: '1' }, custom: [{ set: '3Stars', iconId: 2 }, { set: '3Flags', iconId: 0 }, { set: '5Boxes', iconId: 4 }] }),
       ],
     },
   ),
@@ -5423,13 +5423,16 @@ function s4Ruling(cap: string): string {
     [/^icon:pixel-calibration$/, 'S4-A (calibration: every pixel-classified and pixel-measured icon capability stays unverified until gridline widths and one solid DXF cell calibrate in the key workbook)'],
     [/^icon:glyph-key$/, 'S4-A (the glyph key: every classification stays unverified until all 75 key cells classify into distinct, stable classes and the resaved XML round-trips the 75 single-pair rules)'],
     [/^icon:glyph-/, 'S4-A and OD-9(b) (glyph artwork: original vectors compared with this key crop for box and dominant colour only, labelled pixel-approximated, never relabelled measured)'],
+    [/^icon:dialect-base-x14-family$/, 'S4-B, S4-O and S4-DIALECT-CASE (recorded answer, c63de53a: Excel 16.114 drops the x14-only iconSet name from a base <cfRule> on resave, leaving <iconSet> to its schema default 3TrafficLights1; production withholds a base rule naming an x14-only family outright, whatever the evidence)'],
+    [/^icon:dialect-paired$/, 'S4-O and S4-DIALECT-CASE (recorded answer, c63de53a: Excel 16.114 strips a priority-less x14 companion linked by <x14:id> on resave and keeps the base rule alone; production withholds the paired shape until a repair-free capture evidences it)'],
     [/^icon:dialect-/, 'S4-O (base and standalone x14 icon sets need their own dialect capability; the x14 XML shape comes from excel-authored-iconsets.xlsx)'],
     [/^icon:families-/, 'S4-E (which icon id bucket b shows is measured per family group; until then every built-in, non-custom icon is unresolved)'],
     [/^icon:settings-schema-defaults$/, 'S4-B and S4-F (an omitted iconSet means 3TrafficLights1, and percent="1"/omitted resolves, only with this capability)'],
     [/^icon:thresholds-(floor|min-max)$/, 'S4-C (the cfvo[0] floor and min/max cfvo types are unresolved until measured)'],
     [/^icon:thresholds-/, 'S4-D (each threshold type and gte value needs its own capability; gte is judged only on exact-boundary cells)'],
     [/^icon:(degenerate-|bounds-out-of-domain)/, 'S4-D (degenerate data is unresolved until measured, never clamped)'],
-    [/^icon:attr-percent-false$/, 'S4-F (<iconSet percent="0"> is unresolved until Excel\'s outcome is recorded)'],
+    [/^icon:attr-percent-false$/, 'S4-F (recorded outcome, c63de53a: Excel 16.114 drops percent="0" on resave, so the shape cannot be authored repair-free; it is recorded in stage4-icon-unresolved-shapes, refused-unsupported, and production keeps withholding <iconSet percent="0">)'],
+    [/^icon:reverse-custom$/, 'S4-E (recorded outcome, c63de53a: Excel 16.114 drops reverse="1" from an x14 custom="1" rule on resave, so custom + reverse cannot be authored repair-free; it is recorded in stage4-icon-unresolved-shapes, refused-unsupported, and production keeps withholding custom + reverse)'],
     [/^icon:(reverse|custom-mapping)/, 'S4-E (reverse and custom order: the middle bucket of an odd set is non-discriminating; only end buckets are designated)'],
     [/^icon:custom-noicons$/, 'S4-B and S4-L (NoIcons is admitted only as a cfIcon target with iconId 0; it insets and hides nothing without evidence)'],
     [/^icon:geometry-/, 'S4-K (the icon box follows exactly one evidenced CfIconBoxVariant; narrow or short hosts withhold their icon until clipping is measured)'],

@@ -8,7 +8,7 @@
  * render model and a stub glyph table. Each "withholds" test carries a painted control under the same stubs, so it
  * cannot pass vacuously.
  */
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { createCanvas } from 'canvas'
 import { describe, expect, it } from 'vitest'
@@ -78,9 +78,19 @@ const paint = (sheet: XlsxSheet, batch: CfPaintBatch, view: 'static' | 'viewport
 }
 
 describe('CF_ICON_RENDER_MODEL equals the measured sidecars', () => {
-  it('no Stage 4 geometry or inset sidecar is captured yet, so the production model carries no measured value', () => {
-    // When the captures land (Task 24 recipes), this guard fails and the comparison against them is written here.
-    for (const id of ['stage4-icon-geometry', 'stage4-icon-inset']) expect(existsSync(join(REFS, `${id}.json`)), id).toBe(false)
+  it('the Stage 4 geometry and inset sidecars carry no verified geometry yet, so the production model carries no measured value', () => {
+    // The captures have landed (c63de53a) and record raw px, but no geometry capability can verify until the box
+    // hypotheses exist (Task 29): every geometry claim is unverified. When one verifies, this fails and the comparison
+    // against the sidecar is written here.
+    const manifest = JSON.parse(readFileSync(join(REFS, '..', 'manifest.json'), 'utf8')) as { cases: Array<{ id: string; expected: { cells: Array<{ iconEvidence?: { geometry: string } }> } }> }
+    for (const id of ['stage4-icon-geometry', 'stage4-icon-inset']) {
+      expect(existsSync(join(REFS, `${id}.json`)), id).toBe(true)
+      const sidecar = JSON.parse(readFileSync(join(REFS, `${id}.json`), 'utf8')) as { observedIcons?: Array<{ icon: unknown }> }
+      expect(sidecar.observedIcons?.some(o => o.icon !== null), `${id} records measured icons`).toBe(true)
+      const cells = manifest.cases.find(c => c.id === id)!.expected.cells.filter(e => e.iconEvidence !== undefined)
+      expect(cells.length, id).toBeGreaterThan(0)
+      for (const e of cells) expect(e.iconEvidence!.geometry, id).toBe('unverified')
+    }
     expect(CF_ICON_RENDER_MODEL).toEqual({})
     expect(Object.isFrozen(CF_ICON_RENDER_MODEL)).toBe(true)
     // Under every capability, the production model still lays nothing out (a default never ships as a measured fact).

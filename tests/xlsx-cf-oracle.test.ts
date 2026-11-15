@@ -55,6 +55,7 @@ import {
   parseDataBarSettingsReadback,
   parseExcelColorToArgb,
   verifyOnlyCaptureState,
+  verifyOnlyCaseOrder,
 } from '../scripts/cf-refs/capture'
 import { hasEvidence, VERIFIED_CAPABILITIES, VERIFIED_STAGE1_CAPABILITIES, VERIFIED_STAGE2_CAPABILITIES } from '../src/xlsx/cf/evidence'
 import { CF_MANIFEST_PATH, EXCEL_AUTHORED_ICONSETS_PATH, diffAuthoredIconTemplates, generateAllStage1, generateCaseArchive } from '../scripts/cf-refs/generate'
@@ -69,6 +70,12 @@ import {
   type IconClassHypothesis,
   classifyIconCrop,
   discriminateIcon,
+  evaluateIconCapabilities,
+  iconCropRect,
+  iconTwinSetClass,
+  iconTwinSetMembers,
+  type IconGlyphKey,
+  loadIconGlyphKey,
   discriminateIconBox,
   measureIconGeometry,
   type ComputeGeometryOptions,
@@ -79,6 +86,7 @@ import {
   discriminateBar,
   evaluateBarPixelProbe,
   isCapabilityVerified,
+  isCellInSqref,
   isCellWithinRange,
   isSupportedExcelVersion,
   measureBarGeometry,
@@ -1040,7 +1048,8 @@ describe('CF oracle verifier', () => {
     // Every Stage 1-3 case before Task 22b fits one chunk, so its probes are byte-identical to the unchunked ones.
     for (const c of CF_CASES.filter(x => x.id !== 'stage3-bar-lengths-default' && x.stage < 4)) expect(c.expected.cells.length, c.id).toBeLessThanOrEqual(PROBE_CHUNK_CELLS)
     // Stage 4 postdates the chunking: exactly these cases span several chunks, and each still probes every cell in order.
-    const STAGE4_MULTI_CHUNK = ['stage4-icon-glyph-key', 'stage4-icon-families', 'stage4-icon-thresholds', 'stage4-icon-degenerate', 'stage4-icon-reverse-custom']
+    // (fix round 3: stage4-icon-degenerate lost its H column and now fits one chunk.)
+    const STAGE4_MULTI_CHUNK = ['stage4-icon-glyph-key', 'stage4-icon-families', 'stage4-icon-thresholds', 'stage4-icon-reverse-custom']
     expect(CF_CASES.filter(x => x.stage === 4 && x.expected.cells.length > PROBE_CHUNK_CELLS).map(x => x.id)).toEqual(STAGE4_MULTI_CHUNK)
     for (const c of CF_CASES.filter(x => x.stage === 4)) {
       const refs = c.expected.cells.map(x => x.ref)
@@ -4113,8 +4122,8 @@ describe('Stage 4 icon oracle (Task 24)', () => {
       'stage4-icon-glyph-key': ['icon:glyph-key', 'icon:pixel-calibration', ...glyphCaps],
       'stage4-icon-families': ['icon:families-base', 'icon:families-x14', 'icon:scope-whole-column', 'icon:settings-schema-defaults'],
       'stage4-icon-thresholds': ['icon:thresholds-gte-false', 'icon:thresholds-gte-true', 'icon:thresholds-mixed', 'icon:thresholds-num', 'icon:thresholds-percent', 'icon:thresholds-percentile-inc-exc'],
-      'stage4-icon-degenerate': ['icon:attr-percent-false', 'icon:bounds-out-of-domain', 'icon:degenerate-equal-values', 'icon:degenerate-non-monotonic', 'icon:degenerate-single-cell', 'icon:thresholds-floor', 'icon:thresholds-min-max'],
-      'stage4-icon-reverse-custom': ['icon:custom-mapping', 'icon:custom-noicons', 'icon:reverse', 'icon:reverse-custom'],
+      'stage4-icon-degenerate': ['icon:bounds-out-of-domain', 'icon:degenerate-equal-values', 'icon:degenerate-non-monotonic', 'icon:degenerate-single-cell', 'icon:thresholds-floor', 'icon:thresholds-min-max'],
+      'stage4-icon-reverse-custom': ['icon:custom-mapping', 'icon:custom-noicons', 'icon:reverse'],
       'stage4-icon-geometry': ['icon:geometry-box', 'icon:geometry-narrow-clip', 'icon:geometry-short-row-clip', 'icon:geometry-snapping', 'icon:geometry-vertical-align'],
       'stage4-icon-inset': ['icon:inset-center', 'icon:inset-left', 'icon:inset-overflow', 'icon:inset-right-aligned', 'icon:noicons-inset', 'icon:noicons-showvalue'],
       'stage4-icon-showvalue': ['icon:showvalue-canvas-suppression', 'icon:showvalue-copy-text'],
@@ -4122,7 +4131,7 @@ describe('Stage 4 icon oracle (Task 24)', () => {
       'stage4-icon-scope': ['icon:scope-autofilter-hidden-row', 'icon:scope-disjoint', 'icon:scope-duplicate-blocks', 'icon:scope-hidden-row', 'icon:scope-merged-cell'],
       'stage4-icon-composition': ['icon:composition-bar-showvalue', 'icon:composition-dxf-fill', 'icon:composition-icon-stopIfTrue', 'icon:composition-matching-stopIfTrue-ahead', 'icon:composition-noicons-slot', 'icon:composition-overlapping-icons', 'icon:composition-unresolved-stub', 'icon:composition-with-bar', 'icon:composition-with-scale'],
       'stage4-icon-rtl': ['icon:placement-rtl-sheet'],
-      'stage4-icon-unresolved-shapes': ['icon:unresolved-active-present', 'icon:unresolved-base-x14-set', 'icon:unresolved-cfvo-count', 'icon:unresolved-cfvo-no-type', 'icon:unresolved-custom-count', 'icon:unresolved-formula-cfvo', 'icon:unresolved-iconid-range', 'icon:unresolved-noicons-id', 'icon:unresolved-unknown-set', 'icon:unresolved-xmf-reference'],
+      'stage4-icon-unresolved-shapes': ['icon:unresolved-active-present', 'icon:unresolved-base-x14-set', 'icon:unresolved-cfvo-count', 'icon:unresolved-cfvo-no-type', 'icon:unresolved-custom-count', 'icon:unresolved-formula-cfvo', 'icon:unresolved-iconid-range', 'icon:unresolved-noicons-id', 'icon:unresolved-unknown-set', 'icon:unresolved-xmf-reference', 'icon:attr-percent-false', 'icon:reverse-custom'],
     }
     expect(CF_STAGE4_CASES.map(c => c.id)).toEqual(Object.keys(expected))
     for (const [id, caps] of Object.entries(expected)) {
@@ -4170,7 +4179,7 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     }
     for (const id of Object.keys(CF_STAGE4_NONDISCRIMINATING)) expect(CF_STAGE4_CAPABILITIES.some(e => e.capabilityId === id), id).toBe(true)
     expect(CF_STAGE4_CAPABILITIES.filter(e => iconCapabilityKind(e.capabilityId) === 'record').map(e => e.capabilityId).sort()).toEqual(
-      [...Object.keys(CF_STAGE4_NONDISCRIMINATING).filter(id => !id.startsWith('icon:composition-')), ...expected['stage4-icon-unresolved-shapes']!].sort(),
+      [...Object.keys(CF_STAGE4_NONDISCRIMINATING).filter(id => !id.startsWith('icon:composition-')), ...expected['stage4-icon-unresolved-shapes']!.filter(id => id.startsWith('icon:unresolved-'))].sort(),
     )
   }, 60_000)
 
@@ -4442,7 +4451,8 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     expect(report.summary.capabilities).toBe(CF_STAGE4_CAPABILITIES.length)
     expect(report.perCapability.filter(p => p.disposition === 'verified')).toEqual([])
     expect(report.perCapability.filter(p => p.disposition === 'unaccounted')).toEqual([])
-    expect(report.perCapability.filter(p => p.disposition === 'refused-unsupported').every(p => p.capabilityId.startsWith('icon:unresolved-'))).toBe(true)
+    // Refused-unsupported is exactly the unresolved-shapes case: its ten shapes, plus the two Excel canonicalises (fix round 3).
+    expect(report.perCapability.filter(p => p.disposition === 'refused-unsupported').map(p => p.capabilityId).sort()).toEqual(CF_STAGE4_CAPABILITIES.filter(e => e.caseId === 'stage4-icon-unresolved-shapes').map(e => e.capabilityId).sort())
     expect(report.blockedCapabilities.length).toBeGreaterThan(50)
     const published = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: committed, publishStage4: true })
     expect(listed(published, 'VERIFIED_STAGE4_CAPABILITIES')).toEqual([])
@@ -4570,7 +4580,6 @@ describe('Stage 4 icon oracle (Task 24)', () => {
       ['stage4-icon-degenerate', 'icon:bounds-out-of-domain', 'as-model', 'clamped'],
       ['stage4-icon-degenerate', 'icon:thresholds-floor', 'below-floor-bucket0', 'below-floor-no-icon'],
       ['stage4-icon-degenerate', 'icon:thresholds-min-max', 'max-reached', 'max-unreachable'],
-      ['stage4-icon-degenerate', 'icon:attr-percent-false', 'cfvo-as-percent', 'cfvo-as-num'],
       ['stage4-icon-composition', 'icon:composition-overlapping-icons', 'first-paints', 'second-paints'],
       ['stage4-icon-composition', 'icon:composition-with-bar', 'both-paint', 'icon-withheld'],
       ['stage4-icon-composition', 'icon:composition-matching-stopIfTrue-ahead', 'halted', 'not-halted'],
@@ -4681,6 +4690,222 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     writeFileSync(join(root, cap.sidecarPath), JSON.stringify(tampered))
     expect(verifyCfCase(measured, { rootDir: root })).toMatchObject({ kind: 'refusal', code: 'sidecar-mismatch' })
   }, 60_000)
+
+  it('fix round 3 (item 8): shapes Excel canonicalises on resave leave the capturable cases, which then author only rules Excel kept', () => {
+    const sheetOf = (path: string) => new TextDecoder().decode(readZipPartsSync(new Uint8Array(readFileSync(resolve(REPO_ROOT, path))))!.get('xl/worksheets/sheet1.xml')!)
+    // Every icon rule (base or x14), with priority and GUIDs dropped: the semantic shape Excel either kept or rewrote.
+    const rulesOf = (xml: string) => [
+      ...[...xml.matchAll(/<conditionalFormatting sqref="([^"]+)">([\s\S]*?)<\/conditionalFormatting>/g)].map(m => `${m[1]} ${m[2]!.replace(/<extLst>[\s\S]*?<\/extLst>/g, '')}`),
+      ...[...xml.matchAll(/<x14:conditionalFormatting [^>]*>([\s\S]*?)<xm:sqref>([^<]+)<\/xm:sqref>/g)].map(m => `${m[2]} ${m[1]}`),
+    ].map(r => r.replace(/ priority="\d+"/g, '').replace(/ id="\{[^}]+\}"/g, ''))
+    for (const id of ['stage4-icon-degenerate', 'stage4-icon-reverse-custom']) {
+      const c = CF_STAGE4_CASES.find(x => x.id === id)!
+      const authored = rulesOf(sheetOf(c.input))
+      const excelKept = new Set(rulesOf(sheetOf(`tests/fixtures/xlsx-cf/${id}.rejected.xlsx`)))
+      expect(authored.length, id).toBeGreaterThan(5)
+      for (const r of authored) expect(excelKept.has(r), `${id}: Excel rewrote ${r}`).toBe(true)
+      // Priorities stay contiguous (no gap for Excel to renumber).
+      expect(c.markers.filter(m => m.priority !== undefined).map(m => m.priority).sort((a, b) => a! - b!), id).toEqual(c.markers.filter(m => m.priority !== undefined).map((_, i) => i + 1))
+    }
+    const unresolved = CF_STAGE4_CASES.find(x => x.id === 'stage4-icon-unresolved-shapes')!
+    const xml = sheetOf(unresolved.input)
+    expect(xml).toMatch(/<conditionalFormatting sqref="M2:M6"><cfRule type="iconSet" priority="12"><iconSet iconSet="3Arrows" percent="0">/)
+    expect(xml).toMatch(/<x14:iconSet iconSet="3Arrows" custom="1" reverse="1">[\s\S]*?<xm:sqref>N2:N6<\/xm:sqref>/)
+    for (const cap of ['icon:attr-percent-false', 'icon:reverse-custom', 'icon:dialect-base-x14-family', 'icon:dialect-paired']) {
+      expect(CF_STAGE4_CAPABILITIES.find(e => e.capabilityId === cap)!.failClosedDisposition, cap).toMatch(/c63de53a/)
+    }
+  })
+
+  describe('Ruling S4-NEARTWIN (fix round 3): near-twin glyph classes', () => {
+    const PAIRS = S4_ICON_FAMILIES.flatMap(f => Array.from({ length: f.size }, (_, id) => `${f.name}:${id}`))
+    const keyCase = () => CF_STAGE4_CASES.find(x => x.id === 'stage4-icon-glyph-key')!
+    /** A pixel colour `delta` below white on every channel. */
+    const grey = (delta: number) => { const v = (255 - delta).toString(16).padStart(2, '0'); return `#${v}${v}${v}` }
+    type Variant = { as: string; faint?: { delta: number; dx?: number } }
+    /** Cell boxes of a geometry (gridline at x0/y0). */
+    const boxIn = (geom: WorksheetRangeGeometry, ref: string) => { const p = parseA1(ref)!; return { x0: Math.round(geom.colWidthsPt.slice(0, p.col - geom.minCol).reduce((a, b) => a + b, 0)), y0: Math.round(geom.rowHeightsPt.slice(0, p.row - geom.minRow).reduce((a, b) => a + b, 0)), w: Math.round(geom.colWidthsPt[p.col - geom.minCol]!), h: Math.round(geom.rowHeightsPt[p.row - geom.minRow]!) } }
+    /** White page with gridlines; `cells` draws each glyph cell (its box, and the pair index whose square it shows). */
+    const drawSheet = (geom: WorksheetRangeGeometry, paint: (ctx: ReturnType<ReturnType<typeof createCanvas>['getContext']>) => void): Uint8Array => {
+      const W = geom.expectedWidthPt, H = geom.expectedHeightPt
+      const canvas = createCanvas(W + 1, H + 1)
+      const ctx = canvas.getContext('2d')
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W + 1, H + 1)
+      ctx.fillStyle = '#d4d4d4'
+      let x = 0; for (const w of geom.colWidthsPt) { ctx.fillRect(Math.round(x), 0, 1, H + 1); x += w } ctx.fillRect(Math.round(x), 0, 1, H + 1)
+      let y = 0; for (const h of geom.rowHeightsPt) { ctx.fillRect(0, Math.round(y), W + 1, 1); y += h } ctx.fillRect(0, Math.round(y), W + 1, 1)
+      paint(ctx)
+      return new Uint8Array(canvas.toBuffer('image/png'))
+    }
+    const glyph = (ctx: ReturnType<ReturnType<typeof createCanvas>['getContext']>, b: { x0: number; y0: number }, i: number) => {
+      ctx.fillStyle = '#202080'
+      ctx.fillRect(b.x0 + 3 + (i % 10) * 2, b.y0 + 3 + Math.floor(i / 10), 6, 6)
+    }
+    /** The synthetic key capture: one distinct glyph per pair; a `variants` pair copies another pair's glyph plus a faint pixel. */
+    const keyCapture = (variants: Record<string, Variant> = {}) => {
+      const c0 = keyCase()
+      const parts = readZipPartsSync(new Uint8Array(readFileSync(resolve(REPO_ROOT, c0.saved))))!
+      const geom = computeWorksheetRangeGeometry(parts, c0.range)!
+      const png = drawSheet(geom, ctx => {
+        const k2 = boxIn(geom, 'K2'); ctx.fillStyle = '#c6efce'; ctx.fillRect(k2.x0 + 1, k2.y0 + 1, k2.w - 1, k2.h - 1)
+        for (const m of c0.markers.filter(mm => mm.capabilityId.startsWith('icon:glyph-'))) {
+          const pair = `${m.icon!.custom![0]!.set}:${m.icon!.custom![0]!.iconId}`
+          const v = variants[pair]
+          const b = boxIn(geom, m.sqref)
+          glyph(ctx, b, PAIRS.indexOf(v?.as ?? pair))
+          if (v?.faint) { ctx.fillStyle = grey(v.faint.delta); ctx.fillRect(b.x0 + 24 + (v.faint.dx ?? 0), b.y0 + 15, 1, 1) }
+        }
+      })
+      return { c0, parts, geom, png, decoded: decodePngSync(png)! }
+    }
+
+    it('glyph key admits a near-twin pair as two classes with a twin relation', () => {
+      // 5Quarters:4 draws 4RedToBlack:0's glyph plus one pixel of max delta 32: unseparated (8 < 32 < 64), not identical.
+      const { c0, parts, geom, decoded } = keyCapture({ '5Quarters:4': { as: '4RedToBlack:0', faint: { delta: 32 } } })
+      const key = buildIconGlyphKey(c0, parts, decoded, geom)
+      expect('kind' in key ? `${key.code}: ${key.reason}` : 'built').toBe('built')
+      const k = key as IconGlyphKey
+      expect(k.classes.has('4RedToBlack:0')).toBe(true)
+      expect(k.classes.has('5Quarters:4')).toBe(true)
+      expect(k.classOfPair.get('5Quarters:4')).toBe('5Quarters:4')
+      expect([...(k.twins.get('4RedToBlack:0') ?? [])]).toEqual(['5Quarters:4'])
+      expect([...(k.twins.get('5Quarters:4') ?? [])]).toEqual(['4RedToBlack:0'])
+      expect(k.twins.size).toBe(2)
+      // A crop of either twin classifies to the twin set, never to a pick; a third, separated class still classifies alone.
+      const rect = (ref: string) => iconCropRect(decoded, geom, ref)!
+      const refOf = (pair: string) => c0.markers.find(m => m.icon?.custom?.[0] && `${m.icon.custom[0].set}:${m.icon.custom[0].iconId}` === pair)!.sqref
+      const twinSet = iconTwinSetClass(['4RedToBlack:0', '5Quarters:4'])
+      expect(twinSet).toBe(iconTwinSetClass(['5Quarters:4', '4RedToBlack:0']))
+      expect(iconTwinSetMembers(twinSet)).toEqual(['4RedToBlack:0', '5Quarters:4'])
+      expect(classifyIconCrop(decoded, rect(refOf('4RedToBlack:0')), k.classes, { tolerance: 8, twins: k.twins })).toMatchObject({ glyphClass: twinSet })
+      expect(classifyIconCrop(decoded, rect(refOf('5Quarters:4')), k.classes, { tolerance: 8, twins: k.twins })).toMatchObject({ glyphClass: twinSet })
+      expect(classifyIconCrop(decoded, rect(refOf('3Flags:1')), k.classes, { tolerance: 8, twins: k.twins })).toEqual({ glyphClass: '3Flags:1' })
+      // Without the twin relation the same crop stays ambiguous (unchanged behaviour).
+      expect(classifyIconCrop(decoded, rect(refOf('4RedToBlack:0')), k.classes, { tolerance: 8 })).toMatchObject({ kind: 'refusal', code: 'icon-class-ambiguous' })
+      // Unseparated from a non-twin class still refuses: drop the relation for one direction only.
+      const oneWay = new Map([['5Quarters:4', new Set(['4RedToBlack:0'])]])
+      expect(classifyIconCrop(decoded, rect(refOf('4RedToBlack:0')), k.classes, { tolerance: 8, twins: oneWay })).toMatchObject({ kind: 'refusal', code: 'icon-class-ambiguous' })
+    }, 60_000)
+
+    it('glyph key still refuses a crop identical to two classes', () => {
+      // 3Flags:1 = 3Flags:0 + a pixel of delta 12 (a twin); 3Flags:2 = 3Flags:0 + a pixel of delta 6 at the same spot:
+      // within +-8 of both, so it is the same as two classes.
+      const { c0, parts, geom, decoded } = keyCapture({ '3Flags:1': { as: '3Flags:0', faint: { delta: 12 } }, '3Flags:2': { as: '3Flags:0', faint: { delta: 6 } } })
+      expect(buildIconGlyphKey(c0, parts, decoded, geom)).toMatchObject({ kind: 'refusal', code: 'icon-class-ambiguous' })
+    }, 60_000)
+
+    it('a twin-set observation verifies when exactly one predicted class is in the set', () => {
+      const tw = iconTwinSetClass(['A', 'B'])
+      const hyps = { B2: [{ id: 'h1', glyphClass: 'A' }, { id: 'h2', glyphClass: 'C' }], B3: [{ id: 'h1', glyphClass: 'C' }, { id: 'h2', glyphClass: 'C' }] }
+      expect(discriminateIcon(hyps, { B2: tw, B3: 'C' })).toEqual({ status: 'discriminating', matched: 'h1' })
+      // A twin set holding no predicted class matches no hypothesis (a finding, never a pick).
+      expect(discriminateIcon(hyps, { B2: iconTwinSetClass(['B', 'D']), B3: 'C' })).toMatchObject({ status: 'none' })
+    })
+
+    it('a twin-set observation is non-discriminating when both twins are predicted', () => {
+      const tw = iconTwinSetClass(['A', 'B'])
+      const hyps = { B2: [{ id: 'h1', glyphClass: 'A' }, { id: 'h2', glyphClass: 'B' }], B3: [{ id: 'h1', glyphClass: 'C' }, { id: 'h2', glyphClass: 'D' }] }
+      // B3 alone would separate them, but B2's observation cannot tell h1 from h2: the capability is withheld.
+      const d = discriminateIcon(hyps, { B2: tw, B3: 'C' })
+      expect(d.status).toBe('non-discriminating')
+      expect((d as { reason: string }).reason).toMatch(/S4-NEARTWIN/)
+    })
+
+    it('a twin-set observation does not refuse the case', () => {
+      const c = CF_STAGE4_CASES.find(x => x.id === 'stage4-icon-thresholds')!
+      const parts = readZipPartsSync(new Uint8Array(readFileSync(resolve(REPO_ROOT, c.input))))!
+      const empty = new Map<string, DecodedPng>()
+      const key: IconGlyphKey = { crops: empty, classes: empty, classOfPair: new Map(PAIRS.map(x => [x, x])), twins: new Map() }
+      const obs = (ref: string, glyphClass: string | null): CfObservedIcon => ({ ref, cellLeftPx: 0, cellTopPx: 0, cellWidthPx: 60, cellHeightPx: 20, icon: glyphClass === null ? null : { leftPx: 3, topPx: 2, rightPx: 18, bottomPx: 17, glyphClass } })
+      const cap = 'icon:thresholds-num'
+      const probe = evaluateIconCapabilities(c, parts, new Map(), key)[cap]!
+      expect(probe.hypotheses).toBeDefined()
+      const hyps = probe.hypotheses!
+      const winner = hyps[Object.keys(hyps)[0]!]![0]!.id
+      const predictedBy = (ref: string) => hyps[ref]!.find(h => h.id === winner)!.glyphClass
+      const asModelled = new Map(Object.keys(hyps).map(ref => [ref, obs(ref, predictedBy(ref))]))
+      const baseline = evaluateIconCapabilities(c, parts, asModelled, key)[cap]!
+      expect(baseline.status).toBe('discriminating')
+      // One separating designated cell observed as the twin set {its predicted class, an unpredicted twin}: same outcome,
+      // no refusal.
+      const at = Object.keys(hyps).find(ref => predictedBy(ref) !== null && hyps[ref]!.some(h => h.glyphClass !== null && h.glyphClass !== predictedBy(ref)))!
+      expect(at).toBeDefined()
+      const p = predictedBy(at)!
+      const twinObserved = new Map(asModelled)
+      twinObserved.set(at, obs(at, iconTwinSetClass([p, 'Z:twin'])))
+      const got = evaluateIconCapabilities(c, parts, twinObserved, key)[cap]!
+      expect(got.status).toBe('discriminating')
+      expect(got.matched).toBe(baseline.matched)
+      // A twin set holding two predicted classes withholds the capability (non-discriminating), never refuses the case.
+      const other = hyps[at]!.find(h => h.glyphClass !== null && h.glyphClass !== p)?.glyphClass
+      expect(other).toBeDefined()
+      twinObserved.set(at, obs(at, iconTwinSetClass([p, other!])))
+      expect(evaluateIconCapabilities(c, parts, twinObserved, key)[cap]!.status).toBe('non-discriminating')
+    })
+
+    it('verify-only re-derives dependent Stage 4 sidecars when the glyph key changes', () => {
+      const root = mkdtempSync(join(tmpdir(), 'ov-cf-icon-twin-'))
+      s4dirs.push(root)
+      mkdirSync(join(root, 'tests/fixtures/xlsx-cf/inputs'), { recursive: true })
+      mkdirSync(join(root, 'tests/fixtures/xlsx-cf/refs'), { recursive: true })
+      const { c0, parts, geom, png, decoded } = keyCapture({ '5Quarters:4': { as: '4RedToBlack:0', faint: { delta: 32 } } })
+      const dep = CF_STAGE4_CASES.find(x => x.id === 'stage4-icon-authored')!
+      for (const f of [c0.input, c0.saved, dep.input, dep.saved]) cpSync(resolve(REPO_ROOT, f), join(root, f))
+      const depParts = readZipPartsSync(new Uint8Array(readFileSync(join(root, dep.saved))))!
+      const depGeom = computeWorksheetRangeGeometry(depParts, dep.range)!
+      // The dependent capture shows 3Arrows:0's synthetic glyph in every designated icon cell (controls stay blank).
+      const ruled = (ref: string) => dep.markers.some(m => isCellInSqref(ref, m.sqref))
+      const depPng = drawSheet(depGeom, ctx => { for (const e of dep.expected.cells.filter(x => x.iconApplied === true && ruled(x.ref))) glyph(ctx, boxIn(depGeom, e.ref), PAIRS.indexOf('3Arrows:0')) })
+      const depDecoded = decodePngSync(depPng)!
+      const measuredCase = (c: CfOracleCase, pngBytes: Uint8Array): CfOracleCase => {
+        const savedSha256 = sha256(new Uint8Array(readFileSync(join(root, c.saved))))
+        const inputSha256 = sha256(new Uint8Array(readFileSync(join(root, c.input))))
+        return { ...c, status: 'measured', resavedByExcel: true, resaveReceipt: { resavedAt: '2026-11-15T00:00:00Z', excelVersion: '16.114', inputSha256, savedSha256, openedRepairFree: true }, captures: [{ ...c.captures[0]!, pngSha256: sha256(pngBytes) }], expected: { ...c.expected, inputSha256, savedSha256, provenance: 'excel-observed' } }
+      }
+      const writeSidecar = (c: CfOracleCase, p: Map<string, Uint8Array>, d: DecodedPng, g: WorksheetRangeGeometry, pngBytes: Uint8Array, withExtras: boolean) => {
+        const extra = buildIconSidecarExtras(c, p, d, g, { lockBefore: 'unlocked', lockAfter: 'unlocked', rootDir: root })
+        const savedSha256 = sha256(new Uint8Array(readFileSync(join(root, c.saved))))
+        writeFileSync(join(root, c.captures[0]!.sidecarPath), JSON.stringify({
+          excelVersion: '16.114', route: 'copy-picture', appearance: 'screen', scale: 1, pxPerPt: 1, width: d.width, height: d.height,
+          colWidthsPt: g.colWidthsPt, rowHeightsPt: g.rowHeightsPt, geometrySource: 'excel-measured', resavedByExcel: true, resaveSavedSha256: savedSha256,
+          sheet: c.sheet, range: c.range, hostTimeZone: 'Asia/Taipei', savedSha256, pngSha256: sha256(pngBytes), capturedAt: '2026-11-15T00:00:00Z',
+          ...(withExtras ? extra.extras : { zoom: 100, dpr: 1, lockBefore: 'unlocked', lockAfter: 'unlocked' }),
+        }, null, 2) + '\n')
+        return extra
+      }
+      writeFileSync(join(root, c0.captures[0]!.pngPath), png)
+      writeFileSync(join(root, dep.captures[0]!.pngPath), depPng)
+      const keyEntry = { ...measuredCase(c0, png), status: 'recipe-pending' as const }
+      const depEntry = measuredCase(dep, depPng)
+      // Manifest order as committed: the dependent precedes the key.
+      const manifest: CfManifest = { version: 1, excelBuild: '16.114', locale: 'zh-TW', dateSystem: '1900', hostTimeZone: 'Asia/Taipei', generatedAt: '2026-11-06T00:00:00Z', cases: [depEntry, keyEntry] }
+      writeFileSync(join(root, 'tests/fixtures/xlsx-cf/manifest.json'), JSON.stringify(manifest))
+
+      // Today's state: the key sidecar was written by a refused key build (no glyphClasses / glyphTwins), so no key is
+      // restored and the dependent was derived keyless.
+      writeSidecar(c0, parts, decoded, geom, png, false)
+      expect(loadIconGlyphKey(root)).toMatchObject({ kind: 'refusal', code: 'sidecar-mismatch' })
+      writeSidecar(depEntry, depParts, depDecoded, depGeom, depPng, true)
+      const keyless = JSON.parse(readFileSync(join(root, dep.captures[0]!.sidecarPath), 'utf8')) as { observedIcons: CfObservedIcon[] }
+      expect(keyless.observedIcons.map(o => o.icon?.glyphClass ?? null)).toContain('unclassified')
+      expect(verifyCfCase(depEntry, { rootDir: root })).toMatchObject({ kind: 'verified' })
+
+      // verify-only processes the glyph key first, whatever the manifest order.
+      expect(verifyOnlyCaseOrder(manifest.cases, 4).map(i => manifest.cases[i]!.id)).toEqual(['stage4-icon-glyph-key', 'stage4-icon-authored'])
+      // Re-deriving the key sidecar persists the twin relation; the key is then restored from it, twins included.
+      writeSidecar(c0, parts, decoded, geom, png, true)
+      const keySidecar = JSON.parse(readFileSync(join(root, c0.captures[0]!.sidecarPath), 'utf8')) as { glyphTwins?: Record<string, string[]> }
+      expect(keySidecar.glyphTwins).toEqual({ '4RedToBlack:0': ['5Quarters:4'], '5Quarters:4': ['4RedToBlack:0'] })
+      const restored = loadIconGlyphKey(root)
+      expect(restored && !('kind' in restored) ? [...restored.twins.get('4RedToBlack:0')!] : restored).toEqual(['5Quarters:4'])
+      // The key change invalidates the keyless dependent sidecar; re-deriving it (no Excel) classifies and verifies.
+      expect(verifyCfCase(depEntry, { rootDir: root })).toMatchObject({ kind: 'refusal', code: 'sidecar-mismatch' })
+      writeSidecar(depEntry, depParts, depDecoded, depGeom, depPng, true)
+      const keyed = JSON.parse(readFileSync(join(root, dep.captures[0]!.sidecarPath), 'utf8')) as { observedIcons: CfObservedIcon[] }
+      expect(keyed.observedIcons.some(o => o.icon?.glyphClass === '3Arrows:0')).toBe(true)
+      expect(keyed.observedIcons.every(o => o.icon?.glyphClass !== 'unclassified')).toBe(true)
+      expect(verifyCfCase(depEntry, { rootDir: root })).toMatchObject({ kind: 'verified' })
+    }, 120_000)
+  })
 
   it('the icon template diff catches a template that departs from an independently written Excel form', async () => {
     // The 3Stars rule of stage4-icon-authored as Excel's x14 form is expected to be written, typed here by hand (not

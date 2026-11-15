@@ -1267,7 +1267,7 @@ Known limit (recorded, not fixed):
 
 ## 12. Stage 4 Icon Set Oracle Cases (Task 24: glyph key, icon cases, classification, conformance)
 
-Task 24 prepares the Stage 4 oracle. **Nothing below has been run against Excel**: every case is `recipe-pending` (one `unsupported`), every `iconEvidence` is `unverified`, no capture, sidecar or PNG exists, and production withholds every icon (the conformance guard `stage 4 icon cells are withheld until their evidence lands`). The capture sequence is `docs/validation/xlsx-cf-recipes-stage4.md`.
+Task 24 prepares the Stage 4 oracle. The first Excel capture run (c63de53a) and what fix round 3 changed are recorded in **Stage 4 capture run 1** at the end of this section. Before that run: every case is `recipe-pending` (one `unsupported`), every `iconEvidence` is `unverified`, no capture, sidecar or PNG exists, and production withholds every icon (the conformance guard `stage 4 icon cells are withheld until their evidence lands`). The capture sequence is `docs/validation/xlsx-cf-recipes-stage4.md`.
 
 ### Harness additions
 
@@ -1310,11 +1310,11 @@ Task 24 prepares the Stage 4 oracle. **Nothing below has been run against Excel*
 | `stage4-icon-om-reachability` | `icon:om-reachability-probe` (record only) | S4-A | recipe-pending |
 | `stage4-icon-authored` | `icon:dialect-base`, `icon:dialect-standalone` | S4-O | recipe-pending (authored fixture pending) |
 | `stage4-icon-dialect` | `icon:dialect-base-x14-family`, `icon:dialect-paired` (outcomes recorded as competing hypotheses) | S4-B, S4-O (S4-DIALECT-CASE) | recipe-pending |
-| `stage4-icon-glyph-key` | `icon:pixel-calibration`, `icon:glyph-key`, 75 × `icon:glyph-<set>-<id>` | S4-A, OD-9(b) | recipe-pending |
+| `stage4-icon-glyph-key` | `icon:pixel-calibration`, `icon:glyph-key`, 75 × `icon:glyph-<set>-<id>` | S4-A, OD-9(b), S4-NEARTWIN | recipe-pending (run 1: key refused, see below) |
 | `stage4-icon-families` | `icon:families-base`, `icon:families-x14`, `icon:settings-schema-defaults`, `icon:scope-whole-column` | S4-E, S4-B, S4-F, S4-H | recipe-pending |
 | `stage4-icon-thresholds` | `icon:thresholds-num`, `-percent`, `-percentile-inc-exc`, `-gte-true`, `-gte-false`, `-mixed` | S4-D | recipe-pending |
-| `stage4-icon-degenerate` | `icon:thresholds-floor`, `-min-max`, `icon:degenerate-equal-values`, `-single-cell`, `-non-monotonic`, `icon:bounds-out-of-domain`, `icon:attr-percent-false` | S4-C, S4-D, S4-F | recipe-pending |
-| `stage4-icon-reverse-custom` | `icon:reverse`, `icon:reverse-custom`, `icon:custom-mapping`, `icon:custom-noicons` | S4-E, S4-B | recipe-pending |
+| `stage4-icon-degenerate` | `icon:thresholds-floor`, `-min-max`, `icon:degenerate-equal-values`, `-single-cell`, `-non-monotonic`, `icon:bounds-out-of-domain` (`icon:attr-percent-false` moved to unresolved-shapes in fix round 3) | S4-C, S4-D, S4-F | recipe-pending |
+| `stage4-icon-reverse-custom` | `icon:reverse`, `icon:custom-mapping`, `icon:custom-noicons` (`icon:reverse-custom` moved to unresolved-shapes in fix round 3) | S4-E, S4-B | recipe-pending |
 | `stage4-icon-geometry` | `icon:geometry-box`, `-vertical-align`, `-snapping`, `-narrow-clip`, `-short-row-clip` | S4-K | recipe-pending |
 | `stage4-icon-inset` | `icon:inset-left`, `-right-aligned`, `-center`, `-overflow`, `icon:noicons-inset`, `icon:noicons-showvalue` | S4-L | recipe-pending |
 | `stage4-icon-showvalue` | `icon:showvalue-canvas-suppression`, `icon:showvalue-copy-text` (record only) | S4-L, S4-N | recipe-pending |
@@ -1322,6 +1322,57 @@ Task 24 prepares the Stage 4 oracle. **Nothing below has been run against Excel*
 | `stage4-icon-scope` | `icon:scope-disjoint`, `-duplicate-blocks`, `-hidden-row`, `-autofilter-hidden-row`, `-merged-cell` | S4-H | recipe-pending |
 | `stage4-icon-composition` | `icon:composition-overlapping-icons`, `-with-bar`, `-bar-showvalue`, `-with-scale`, `-dxf-fill`, `-matching-stopIfTrue-ahead`, `-icon-stopIfTrue`, `-noicons-slot`, `-unresolved-stub` | S4-I, S4-J | recipe-pending |
 | `stage4-icon-rtl` | `icon:placement-rtl-sheet` (record only, stays unverified) | S4-M | recipe-pending |
-| `stage4-icon-unresolved-shapes` | 10 × `icon:unresolved-*` (lift nothing) | S4-B, S4-C, S4-O, S4-P | unsupported |
+| `stage4-icon-unresolved-shapes` | 10 × `icon:unresolved-*`, plus `icon:attr-percent-false` (M) and `icon:reverse-custom` (N), the two shapes Excel canonicalises on resave (lift nothing) | S4-B, S4-C, S4-E, S4-F, S4-O, S4-P | unsupported |
 
 Expected non-discriminating candidates, decided per capture by `discriminateIcon`/`discriminateIconBox` (not pre-registered): `icon:thresholds-gte-*` on off-boundary cells, `icon:reverse` on the middle bucket (the fixture designates only end buckets), `icon:inset-left` on right-aligned numbers, `icon:geometry-snapping` if no edge lands at a fractional point, and `icon:composition-noicons-slot` if the lower rule's icon would be withheld anyway.
+
+### Stage 4 capture run 1 (2026-11-15, c63de53a) and fix round 3 (Ruling S4-NEARTWIN)
+
+**Excel builds.** The resave receipts and sidecars record two builds. `stage4-icon-om-reachability` was resaved on Excel 16.114; every later build and capture (from 05:06, glyph key and every other case) records Excel **16.115**. No case was rerun on one build.
+
+**Per-case outcomes of c63de53a** (as committed):
+
+| Case | Outcome |
+|---|---|
+| `stage4-icon-om-reachability` | Excel crashed while reading the icon set format condition, so there is no readback. Recorded outcome: unreachable (record only, lifts nothing). |
+| `stage4-icon-authored` | `measured`. Classified keyless (`unclassified`), because the key refused. |
+| `stage4-icon-glyph-key` | All 75 cells captured. The key refused `icon-class-ambiguous: Glyph-key crop 5Quarters:4 is ambiguous against 4RedToBlack:0`, so the case is `recipe-pending` and the capture is kept. |
+| `stage4-icon-families`, `-thresholds`, `-geometry`, `-inset`, `-showvalue`, `-participation`, `-scope`, `-composition`, `-rtl` | `measured` structurally. With no key every observed icon is `unclassified` and every bucket capability reports `no hypotheses`. No icon capability verified. |
+| `stage4-icon-dialect` | Excel repaired the workbook; `stage4-icon-dialect.rejected.xlsx` is kept. The case stays `recipe-pending`. See the dialect answer below. |
+| `stage4-icon-degenerate` | Excel's resave dropped `percent="0"` from the H2:H12 `<iconSet>` and changed nothing else. `.rejected.xlsx` is kept and the case stays `recipe-pending`. |
+| `stage4-icon-reverse-custom` | Excel's resave dropped `reverse="1"` from the x14 `custom="1"` rule at priority 5 (F2:F12) and changed nothing else; the base `reverse="1"` rules on B, C and D survive. `.rejected.xlsx` is kept and the case stays `recipe-pending`. |
+| `stage4-icon-unresolved-shapes` | `unsupported`. Excel stripped the shapes (the first missing rule is `icon:unresolved-unknown-set` on B2:B6) and `.rejected.xlsx` is kept. |
+
+Compared with `inputs/`, the three rejected resaves change no other conditional-formatting XML. Their only other sheet differences are Excel's usual resave output: cached `<v>` values on formula cells, and the rewritten file layout. Cell formulas are unchanged.
+
+**The dialect answer (S4-DIALECT-CASE, recorded).**
+- B, a base `<cfRule>` naming the x14-only 3Stars: Excel drops the `iconSet` attribute, so the `<iconSet>` reads as the schema default 3TrafficLights1. This is the `family:3TrafficLights1` reading.
+- C, a base 3Arrows rule linked by `<x14:id>` to a priority-less x14 3Triangles companion: Excel strips the companion (both the x14 rule and the base rule's `<extLst>` link) and keeps the base 3Arrows rule. This is the `base` reading.
+
+Both answers come from the rejected resave, not from a capture of an Excel-saved workbook. Production already withholds both shapes: a base rule naming an x14-only family is withheld outright (518a13b5), and the paired shape is withheld because nothing evidences it. The `failClosedDisposition` of `icon:dialect-base-x14-family` and `icon:dialect-paired` now cites this outcome. No ruling change is needed for production. Excel's canonical form is the one production refuses, so withholding cannot paint a wrong icon. Whether the dialect case should still be captured is an owner question: Excel cannot save its shapes repair-free.
+
+**Item 8 case-data change (fix round 3).** The two shapes Excel canonicalises cannot be authored repair-free, so they moved to `stage4-icon-unresolved-shapes`, keeping their capability ids:
+- `<iconSet percent="0">` is now column M (priority 12);
+- the x14 custom + `reverse="1"` rule is now column N (priority 13).
+
+Their disposition is `refused-unsupported`, which does not block the stage gate, and production keeps withholding both shapes (`icon:attr-percent-false` and `icon:reverse-custom` are never published). `stage4-icon-degenerate` keeps columns B–G, priorities 1–6. `stage4-icon-reverse-custom` keeps B–E and G–I, with G, H and I renumbered to priorities 5–7 so no gap remains. A test pins that every remaining rule of both inputs is one Excel kept unchanged in its rejected resave. Inputs were regenerated with `generate.ts --stage 4 --case <id>`, one case at a time, so no other manifest entry moved. **Rebuild and recapture: `stage4-icon-degenerate` and `stage4-icon-reverse-custom`; rebuild only: `stage4-icon-unresolved-shapes`.** `capture --verify-only` skips the two stale captures (`staleCaptureSidecar`: their sidecars record the old saved workbook).
+
+**Ruling S4-NEARTWIN (fix round 3).**
+- **Key build.** The harness's 75×75 matrix over the stored key capture holds 25 shared-artwork pairs at delta 0 and exactly two pairs inside the band 8 < d < 64:
+  - `4RedToBlack:0 ~ 5Quarters:4` (32);
+  - `4RedToBlack:1 ~ 5Boxes:0` (62).
+
+  `buildIconGlyphKey` now admits such a crop as its own class with a symmetric twin relation. It still refuses `icon-class-ambiguous` for a crop identical (within 8) to two classes.
+- **Classification.** A crop that matches a class but is unseparated only from that class's twins classifies to the twin set (`twin-set:A|B`, sorted), never to a pick. `discriminateIcon` reads a twin set as the one class the competing hypotheses predict inside it. If two predicted classes lie inside the set, the capability is non-discriminating (withheld); the case is not refused.
+- **Persistence.** The key sidecar persists `glyphTwins`. `loadIconGlyphKey` restores a key only when the key sidecar's `glyphClasses` and `glyphTwins` equal the PNG recomputation; a key sidecar written by a refused build restores none. `capture --verify-only` now visits the glyph key first (`verifyOnlyCaseOrder`) and re-derives every dependent sidecar after it.
+- **Item 5 check.** No marker's hypothesis set in `CF_CASES` predicts both members of one twin pair at the same cell. This was computed with the twin relation of the stored capture.
+
+**What the real key does now: still refused, on a new gate.** With S4-NEARTWIN the stored key gets past `5Quarters:4` and then refuses `icon-key-mismatch: Glyph-key cell B21 (5Boxes:0) shows no icon against its control B42`. The 5Boxes:0 glyph is a faint grey empty grid: its strongest pixel is 34 from the white control, below the S4-A ink threshold of 64. `4RedToBlack:1` sits at exactly 64, with no margin.
+
+The same threshold makes 5Boxes:0 invisible to `measureIconGeometry`'s ink mask: a stored 5Boxes:0 cell measures as `icon: null`. Concretely, `stage4-icon-authored` D2 (the as-modelled lowest bucket of 5 Boxes) is recorded as no icon.
+
+Hypotheses predict 5Boxes:0 at four cells: authored D2 and D6 (`icon:dialect-standalone`), and families U2 and U6 (`icon:families-x14`).
+
+This needs a ruling on low-contrast glyph presence. S4-NEARTWIN keeps `icon-key-mismatch` as it was. Until that ruling, the key and every dependent classification stay blocked. `capture --verify-only` will report the key case `recipe-pending` with `icon-key-mismatch`, and the dependents stay keyless.
+
+A diagnostic build without the presence check (scratch only, never committed) yields 54 classes over 75 pairs, with exactly the two twin pairs above.

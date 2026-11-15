@@ -187,6 +187,8 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     let stage3BarEvidenced = 0
     let stage3NonBarChecked = 0
     let stage3NonBarWithheld = 0
+    let stage4Unverified = 0
+    let stage4IconOnlyWithheld = 0
 
     for (const c of manifest.cases) {
       if (c.status !== 'measured' || c.stage === 2) continue
@@ -257,6 +259,22 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
               continue
             }
           }
+          if (c.stage === 4) {
+            // Stage 4 (fix round 3, item 7): a cell is compared only on capabilities the guard counts as verified. Every
+            // icon:* capability is unverified in production (none is published), so withholding is the expected result:
+            // a cell covered only by icon rules paints no style, and a cell whose non-icon rule (composition DXF, scale,
+            // expression) carries an unverified icon:composition-* capability is not compared at all. Controls (no rule)
+            // take the normal path below.
+            const caps = c.markers.filter(m => isCellInSqref(exp.ref, m.sqref)).map(m => m.capabilityId)
+            if (caps.length > 0 && !caps.every(id => VERIFIED_CAPABILITIES.has(id))) {
+              stage4Unverified++
+              if (c.markers.every(m => m.ruleType === 'iconSet' || !isCellInSqref(exp.ref, m.sqref))) {
+                expect(gotMatched, `${cellKey}: only unverified icon rules cover it (${caps.join(', ')}), so no style may paint`).toBe(false)
+                stage4IconOnlyWithheld++
+              }
+              continue
+            }
+          }
           if (cellKey === 'stage1-priority-composition:F2') {
             // Stage 3 dataBar blue fill is withheld, but Stage 1 bold font matches
             expect(st?.bold, `${cellKey} bold`).toBe(true)
@@ -317,6 +335,17 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     // Non-vacuous (Task 18b review): the non-bar outcomes on bar cells were compared with Excel's background.
     expect(stage3NonBarChecked).toBeGreaterThan(10)
     expect(stage3NonBarWithheld).toBe(Object.keys(STAGE3_NONBAR_WITHHELD).length)
+    // Stage 4 (non-vacuous, derived from the manifest): every ruled cell of a measured Stage 4 case is unverified, and
+    // most of them are covered by icon rules only.
+    const expectedStage4Unverified = manifest.cases
+      .filter(c => c.stage === 4 && c.status === 'measured')
+      .flatMap(c => c.expected.cells.filter(exp => {
+        const caps = c.markers.filter(m => isCellInSqref(exp.ref, m.sqref)).map(m => m.capabilityId)
+        return caps.length > 0 && !caps.every(id => VERIFIED_CAPABILITIES.has(id))
+      })).length
+    expect(expectedStage4Unverified).toBeGreaterThan(200)
+    expect(stage4Unverified).toBe(expectedStage4Unverified)
+    expect(stage4IconOnlyWithheld).toBeGreaterThan(200)
   })
 
   it('proves all 53 previously withheld cells now paint under production evidence (C1)', async () => {
@@ -819,21 +848,53 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
    * loops are recorded as vacuous; the checked half is that every pending, refused or non-discriminating cell has no
    * painted icon and no inset under production evidence, in the paint batch every view uses.
    */
-  it('icon bucket conformance (Lesson 1): no pixel-classified cell exists yet; the CF_ICON_GLYPH_CLASSES mapping waits on Task 28', () => {
-    // When a case verifies, every pixel-classified cell's production visual.iconSet must map, through Task 28's
-    // CF_ICON_GLYPH_CLASSES (from the glyph-key sidecar), to the sidecar's glyph class. Recorded as vacuous until then.
-    const classified = manifest.cases.filter(c => c.stage === 4).flatMap(c => c.expected.cells.filter(e => e.iconEvidence?.bucket === 'pixel-classified').map(e => `${c.id}:${e.ref}`))
-    expect(classified).toEqual([])
-    expect(existsSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/refs/stage4-icon-glyph-key.json'))).toBe(false)
-  })
+  it('icon bucket conformance (Lesson 1): every captured or classified icon cell stays withheld until Task 28 maps CF_ICON_GLYPH_CLASSES', async () => {
+    // The Stage 4 captures have landed (c63de53a): the stored sidecars record where Excel drew an icon. Bucket conformance
+    // compares production's bucket, mapped through Task 28's CF_ICON_GLYPH_CLASSES (from the glyph-key sidecar), with the
+    // sidecar's glyph class; until Task 28/30 publish that mapping and the icon capabilities, every such cell (captured
+    // with an icon, or labelled pixel-classified) must be withheld by production.
+    const stage4 = manifest.cases.filter(c => c.stage === 4)
+    expect(existsSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/refs/stage4-icon-glyph-key.json'))).toBe(true)
+    expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE4_CAPABILITIES'), 'Task 28/30 dependency: no icon capability is published').toBeUndefined()
+    const targets = new Map<string, Set<string>>()
+    let shown = 0
+    for (const c of stage4) {
+      const sidecarPath = c.captures[0] ? join(REPO_ROOT, c.captures[0].sidecarPath) : undefined
+      const observed = sidecarPath && existsSync(sidecarPath) ? ((JSON.parse(readFileSync(sidecarPath, 'utf8')) as { observedIcons?: Array<{ ref: string; icon: unknown }> }).observedIcons ?? []) : []
+      const refs = new Set<string>()
+      for (const o of observed) if (o.icon !== null) { refs.add(o.ref.toUpperCase()); shown++ }
+      for (const e of c.expected.cells) if (e.iconEvidence?.bucket === 'pixel-classified') refs.add(e.ref.toUpperCase())
+      if (refs.size > 0) targets.set(c.id, refs)
+    }
+    // Non-vacuous in every state of the tree (before and after `capture --verify-only` re-derives the sidecars).
+    expect(shown).toBeGreaterThan(300)
+    let checked = 0
+    for (const c of stage4.filter(x => targets.has(x.id))) {
+      const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
+      const doc = await parseXlsx(await OfficePackage.load(bytes), parseOptionsFor(c))
+      const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+      const batch = sheet.conditionalFormatting ? await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence }) : undefined
+      try {
+        for (const ref of targets.get(c.id)!) {
+          const { row, col } = refToRowCol(ref)
+          expect(batch?.iconAt(row, col), `${c.id}:${ref} is withheld until Task 28/30`).toBeUndefined()
+          checked++
+        }
+      } finally { batch?.dispose() }
+    }
+    expect(checked).toBe([...targets.values()].reduce((n, r) => n + r.size, 0))
+    expect(checked).toBeGreaterThan(300)
+  }, 60_000)
 
-  it('icon geometry conformance (Lesson 1): every unmeasured Stage 4 cell has no icon and no inset', async () => {
+  it('icon geometry conformance (Lesson 1): every Stage 4 cell has no icon and no inset until Task 29 measures the box', async () => {
     const { computeMetrics } = await import('../src/xlsx/render')
     const stage4 = manifest.cases.filter(c => c.stage === 4)
     const verified = stage4.filter(c => c.status === 'measured')
-    const measuredCells = verified.flatMap(c => c.expected.cells.filter(e => e.iconEvidence?.geometry === 'pixel-measured' || e.iconEvidence?.bucket === 'pixel-classified'))
-    // Recorded as vacuous until the Task 24 recipes run: when a case verifies, this fails and the comparisons are written.
-    expect(verified.map(c => c.id)).toEqual([])
+    // The captures have landed (c63de53a): measured Stage 4 cases exist. No geometry claim can exist yet, because the icon
+    // box hypotheses arrive with Task 29's CF_ICON_RENDER_MODEL; when one lands, this fails and the layoutIcon comparison
+    // (+-1 px box, exact text shift) is written for its pixel-measured cells.
+    expect(verified.length).toBeGreaterThan(0)
+    const measuredCells = verified.flatMap(c => c.expected.cells.filter(e => e.iconEvidence?.geometry === 'pixel-measured').map(e => `${c.id}:${e.ref}`))
     expect(measuredCells).toEqual([])
     let checked = 0
     for (const c of stage4) {

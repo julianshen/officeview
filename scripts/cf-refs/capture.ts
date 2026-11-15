@@ -22,6 +22,7 @@ import {
   type IconCapabilityEvaluation,
   type IconGlyphKey,
   buildIconGlyphKey,
+  iconGlyphTwinsRecord,
   classifyIconCapture,
   evaluateIconCapabilities,
   loadIconGlyphKey,
@@ -378,6 +379,7 @@ export function buildIconSidecarExtras(
     if ('kind' in built) return { extras: base, observed: undefined, refusal: `${built.code}: ${built.reason}` }
     key = built
     base.glyphClasses = Object.fromEntries(built.classOfPair)
+    base.glyphTwins = iconGlyphTwinsRecord(built)
   } else {
     const loaded = loadIconGlyphKey(opts.rootDir)
     key = loaded && !('kind' in loaded) ? loaded : undefined
@@ -444,6 +446,19 @@ export function captureAndCloseOwned(
   } finally {
     if (!preExisting.has(name)) close(name, preExisting)
   }
+}
+
+/**
+ * The order the capture loop visits the manifest's cases in (indices into `cases`): manifest order, except that the
+ * Stage 4 glyph key comes first. Every other Stage 4 case is classified with the key its sidecar restores
+ * (`loadIconGlyphKey`), so `--verify-only` must re-derive the key sidecar before any dependent case (Ruling
+ * S4-NEARTWIN); the dependents are then re-derived unconditionally from their stored PNGs.
+ */
+export function verifyOnlyCaseOrder(cases: readonly CfOracleCase[], stage: number): number[] {
+  const idx = cases.map((_, i) => i)
+  if (stage !== 4) return idx
+  const isKey = (i: number): boolean => cases[i]!.id === 'stage4-icon-glyph-key'
+  return [...idx.filter(isKey), ...idx.filter(i => !isKey(i))]
 }
 
 /** `--verify-only`: whether the case's kept sidecar records a different saved workbook than the one on disk. */
@@ -731,7 +746,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
 
   let capturedCount = 0
-  for (let i = 0; i < manifest.cases.length; i++) {
+  for (const i of verifyOnlyCaseOrder(manifest.cases, stage)) {
     const c = manifest.cases[i]
     if (c.stage !== stage || (only && c.id !== only) || c.status === 'unsupported') continue
     if (verifyOnly && verifyOnlyCaptureState(c, REPO_ROOT) === 'skip') {
