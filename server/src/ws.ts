@@ -406,21 +406,21 @@ export function createStreamServer(o: StreamServerOptions) {
     const missing = p.projection === 'commands' ? [...ws.data.missingFaces].sort() : undefined
     const alive = () => owns(ws, s.sid) && ws.data.phase === 'stream'
     const ui = unitIndex as number, sc = scale as number
-    const first = await obtainUnit(s.sid, sd, ui, sc, p.projection, missing)
+    const first = await obtainUnit(s.sid, sd, ui, sc, p.projection, missing, ws.data.gone.signal)
     if (!alive()) return
     if (typeof first === 'string') return refuse(ws, reqId, first)
     let unit: RenderedUnit = first
     let messages = unit.kind === 'commands' ? prepareUnit(reqId, ui, unit) : undefined
     if (!messages && unit.kind === 'commands') {
       // Assets too large for ASSET_DEFINE's caps: ship the unit as a raster (Task 7).
-      const raster = await obtainUnit(s.sid, sd, ui, sc, 'final-raster', missing)
+      const raster = await obtainUnit(s.sid, sd, ui, sc, 'final-raster', missing, ws.data.gone.signal)
       if (!alive()) return
       if (typeof raster === 'string') return refuse(ws, reqId, raster)
       unit = raster
     }
     let unmarked: string | undefined
     if (unit.kind === 'raster') {
-      const d = await deliverRaster(alive, s.sid, sd, ui, sc, unit, (u) => prepareUnit(reqId, ui, u))
+      const d = await deliverRaster(alive, s.sid, sd, ui, sc, unit, (u) => prepareUnit(reqId, ui, u), ws.data.gone.signal)
       if (d === undefined) return
       if (typeof d === 'string') return refuse(ws, reqId, d)
       messages = d.messages; unmarked = d.unmarked
@@ -432,14 +432,14 @@ export function createStreamServer(o: StreamServerOptions) {
   }
 
   /** The canonical unit for a session: the render cache, else the pool (then cached). */
-  async function obtainUnit(sid: string, sd: { doc: DocState; policy: EffectivePolicy; decision: AuthDecision }, unitIndex: number, scale: number, projection: 'final-raster' | 'commands', missing?: string[]): Promise<RenderedUnit | RefusalCode> {
+  async function obtainUnit(sid: string, sd: { doc: DocState; policy: EffectivePolicy; decision: AuthDecision }, unitIndex: number, scale: number, projection: 'final-raster' | 'commands', missing?: string[], signal?: AbortSignal): Promise<RenderedUnit | RefusalCode> {
     const p = sd.policy, mark = markOf(p, sd.decision)
     const key = renderKey(keyFields(sd.doc, mark, unitIndex, scale, projection, missing))
     const hit = renderCache.get(key)
     if (hit) return hit
     const size = sd.doc.units[unitIndex]!, estimate = size.w * size.h * 4 * scale ** 2 * 2
     try {
-      const unit = await o.pool.render(sid, { docRef: sd.doc.docRef, contentPolicy: p.contentPolicy, unitIndex, scale, mark, projection, ...(projection === 'commands' && missing ? { missingFaces: missing } : {}) }, estimate)
+      const unit = await o.pool.render(sid, { docRef: sd.doc.docRef, contentPolicy: p.contentPolicy, unitIndex, scale, mark, projection, ...(projection === 'commands' && missing ? { missingFaces: missing } : {}) }, estimate, signal)
       renderCache.put(key, unit, unit.kind === 'raster' ? unit.png.length : unit.ops.length + unit.assets.reduce((n, a) => n + (a.type === 'bitmap' ? a.rgba.length : 256), 0))
       return unit
     } catch (e) { return e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused' }
@@ -449,12 +449,12 @@ export function createStreamServer(o: StreamServerOptions) {
    * raster, frame it with `pack`, then the durable delivery record — in that
    * order, so a unit over its frame cap leaves no delivery row, and nothing
    * goes out unrecorded. `undefined`: the caller died meanwhile (send nothing). */
-  async function deliverRaster(alive: () => boolean, sid: string, sd: { doc: DocState; forensic?: Issued }, unitIndex: number, scale: number, unit: RenderedUnit & { kind: 'raster' }, pack: (u: RenderedUnit & { kind: 'raster' }) => Uint8Array[][] | undefined): Promise<{ messages: Uint8Array[][]; unmarked?: string } | RefusalCode | undefined> {
+  async function deliverRaster(alive: () => boolean, sid: string, sd: { doc: DocState; forensic?: Issued }, unitIndex: number, scale: number, unit: RenderedUnit & { kind: 'raster' }, pack: (u: RenderedUnit & { kind: 'raster' }) => Uint8Array[][] | undefined, signal?: AbortSignal): Promise<{ messages: Uint8Array[][]; unmarked?: string } | RefusalCode | undefined> {
     // Every raster this session receives — fallbacks included — carries its Layer-1 mark.
     let unmarked: string | undefined
     const canonical = sd.forensic ? unit.png : undefined
     if (sd.forensic) {
-      const m = await markUnit(sid, sd, `${unitIndex}@${scale}`, unit)
+      const m = await markUnit(sid, sd, `${unitIndex}@${scale}`, unit, signal)
       if (!alive()) return undefined
       if (typeof m === 'string') return m
       unit = m.unit; unmarked = m.unmarked
@@ -505,7 +505,7 @@ export function createStreamServer(o: StreamServerOptions) {
       batch: (job) => {
         // A long walk can outlive the parse: every job re-charges it.
         if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return Promise.reject(new Error('document cache full'))
-        return o.pool.text(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, ...job })
+        return o.pool.text(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, ...job }, undefined, ws.data.gone.signal)
       },
       alive: textAlive(ws, s.sid, sd),
       send: (m) => send(ws, m),
@@ -526,7 +526,7 @@ export function createStreamServer(o: StreamServerOptions) {
     if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return refuse(ws, reqId, 'policy-refused')
     await runSelect({
       slot: sd, reqId, range,
-      job: (job) => o.pool.text(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, ...job }),
+      job: (job) => o.pool.text(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, ...job }, undefined, ws.data.gone.signal),
       alive: textAlive(ws, s.sid, sd),
       send: (m) => send(ws, m),
       refuse: (code) => refuse(ws, reqId, code),
@@ -550,7 +550,7 @@ export function createStreamServer(o: StreamServerOptions) {
       job: (job) => {
         // A queued copy can outlive the parse: charge it when it runs.
         if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return Promise.reject(new Error('document cache full'))
-        return o.pool.text(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, ...job })
+        return o.pool.text(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, ...job }, undefined, ws.data.gone.signal)
       },
       record: (r) => audit.recordCopy({ sid: s.sid, kind: 'copy', ...r }),
       alive: textAlive(ws, s.sid, sd),
@@ -578,7 +578,7 @@ export function createStreamServer(o: StreamServerOptions) {
       caps: () => sd.policy.copy,
       job: (job) => {
         if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return Promise.reject(new Error('document cache full'))
-        return o.pool.text(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, ...job })
+        return o.pool.text(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, ...job }, undefined, ws.data.gone.signal)
       },
       record: (r) => audit.recordCopy({ sid: s.sid, kind: 'a11y', paragraphs: r.paragraphs, fromUnit: args.unit, toUnit: args.unit }),
       alive: textAlive(ws, s.sid, sd),
@@ -683,7 +683,7 @@ export function createStreamServer(o: StreamServerOptions) {
     const run = async <T extends NotesPlan | NotesRaster>(draw: boolean, estimate: number): Promise<T | 'rate-limited' | 'policy-refused' | undefined> => {
       if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return 'policy-refused'
       let r: NotesPlan | NotesRaster
-      try { r = await o.pool.notes(s.sid, { ...job, draw }, estimate) } catch (e) { return alive() ? (e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined }
+      try { r = await o.pool.notes(s.sid, { ...job, draw }, estimate, ws.data.gone.signal) } catch (e) { return alive() ? (e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined }
       return alive() ? r as T : undefined
     }
     const plan = await run<NotesPlan>(false, NOTES_PLAN_BYTES)
@@ -698,7 +698,7 @@ export function createStreamServer(o: StreamServerOptions) {
     if (drawn.kind !== 'raster' || drawn.w !== plan.w || drawn.h !== plan.h || drawn.chars !== plan.chars) return deny(reqId, 'policy-refused')
     let img: NotesRaster = drawn
     if (sd.forensic) {
-      const m = await markUnit(s.sid, sd, notesBasisLabel(ui, sc), drawn)
+      const m = await markUnit(s.sid, sd, notesBasisLabel(ui, sc), drawn, ws.data.gone.signal)
       if (!alive()) return
       if (typeof m === 'string') return deny(reqId, m === 'rate-limited' ? m : 'policy-refused')
       // Both marks on every notes image (§13.1): one that cannot carry Layer-1 is not sent.
@@ -887,12 +887,12 @@ export function createStreamServer(o: StreamServerOptions) {
   /** §9.4 steps 4–5 for one session: Layer-1 over the canonical raster under
    * the scratch lease, on the basis keyed by `label` (a unit's `${i}@${scale}`,
    * or `notesBasisLabel`). Unmarkable units ship canonical bytes with a reason. */
-  async function markUnit<U extends RenderedUnit & { kind: 'raster' }>(sid: string, sd: { doc: DocState; forensic?: Issued }, label: string, unit: U): Promise<{ unit: U; unmarked?: string } | RefusalCode> {
+  async function markUnit<U extends RenderedUnit & { kind: 'raster' }>(sid: string, sd: { doc: DocState; forensic?: Issued }, label: string, unit: U, signal?: AbortSignal): Promise<{ unit: U; unmarked?: string } | RefusalCode> {
     let release: () => void
     try { release = await leaseFor(sid).acquire() } catch (e) { return e instanceof LeaseFull ? 'rate-limited' : 'policy-refused' }
     try {
       const kBasis = deriveBasisKey(o.keys.kBasisRoot, sd.doc.docRef, label)
-      const r = await o.pool.encode(sid, { png: unit.png, w: unit.w, h: unit.h, kBasis, code: sd.forensic!.code, ...(o.encodeHangMs ? { hangMs: o.encodeHangMs } : {}) }, encodeEstimate(unit.w, unit.h, unit.png.length))
+      const r = await o.pool.encode(sid, { png: unit.png, w: unit.w, h: unit.h, kBasis, code: sd.forensic!.code, ...(o.encodeHangMs ? { hangMs: o.encodeHangMs } : {}) }, encodeEstimate(unit.w, unit.h, unit.png.length), signal)
       if ('unmarked' in r) { forensicStats.unmarked++; return { unit, unmarked: r.unmarked } }
       forensicStats.marked++
       forensicStats.carriers.push(r.carriers); if (forensicStats.carriers.length > 256) forensicStats.carriers.shift()

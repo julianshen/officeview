@@ -21,7 +21,7 @@ import { prepareWorkspace, TEXT_PREPARE_ALLOWANCE, type TextJob, type TextReply 
 export class AdmissionRefused extends Error { constructor(readonly reason: 'session-queue' | 'process-queue' | 'too-large') { super(`admission refused: ${reason}`); this.name = 'AdmissionRefused' } }
 export class RenderTimeout extends Error { constructor() { super('render deadline exceeded'); this.name = 'RenderTimeout' } }
 export class RenderFailed extends Error { constructor(m: string, readonly refusal?: string) { super(m); this.name = 'RenderFailed' } }
-/** A show job whose socket closed before it reached a worker: nothing was run (PR #78 round 4). */
+/** A job whose socket closed before it reached a worker: nothing was run (PR #78 rounds 4–5: show, unit, notes, text). */
 export class ShowCancelled extends RenderFailed { constructor() { super('cancelled: the requesting socket closed'); this.name = 'ShowCancelled' } }
 /** A text op whose units do not all fit the worker's served-index cache at once (Task 5 maps it to copy-too-large). */
 export class TextTooLarge extends Error { constructor(readonly missing: number[]) { super(`text range exceeds the served-index cache (${missing.length} units missing)`); this.name = 'TextTooLarge' } }
@@ -222,30 +222,27 @@ export class Pool {
    * path refunds exactly once: here for normal ends, in `renderOn` (after the
    * worker is gone) for a retired job, in `admission.cancel` for a queued job
    * that never started. */
-  async render(sessionId: string, job: RenderJob, bytesEstimate: number): Promise<RenderedUnit> {
-    if (this.disposed) throw new RenderFailed('pool disposed')
-    const res = this.admission.request(sessionId, bytesEstimate, this.now())
-    if (res.status === 'refused') throw new AdmissionRefused(res.reason)
-    const admitted = res.job
-    if (res.status === 'queued' && !(await new Promise<boolean>((r) => this.waiters.set(admitted.id, r)))) throw new RenderFailed('pool disposed')
+  async render(sessionId: string, job: RenderJob, bytesEstimate: number, signal?: AbortSignal): Promise<RenderedUnit> {
+    const admitted = await this.admit(sessionId, bytesEstimate, signal)
     const slot = this.pick(job.docRef)
     try {
-      return await this.exclusive(slot, () => this.renderOn(slot, admitted, job))
+      return await this.exclusive(slot, () => {
+        // Admitted, then waited for the worker: a socket that closed meanwhile has no use for the render.
+        if (signal?.aborted) throw new ShowCancelled()
+        return this.renderOn(slot, admitted, job)
+      })
     } finally {
       if (admitted.state === 'running') this.finish(admitted)
     }
   }
 
   /** A notes job (Stage 3c): the same affinity, admission, deadline and recycle paths as `render`. */
-  async notes(sessionId: string, job: PoolNotesJob, bytesEstimate: number): Promise<NotesPlan | NotesRaster> {
-    if (this.disposed) throw new RenderFailed('pool disposed')
-    const res = this.admission.request(sessionId, bytesEstimate, this.now())
-    if (res.status === 'refused') throw new AdmissionRefused(res.reason)
-    const admitted = res.job
-    if (res.status === 'queued' && !(await new Promise<boolean>((r) => this.waiters.set(admitted.id, r)))) throw new RenderFailed('pool disposed')
+  async notes(sessionId: string, job: PoolNotesJob, bytesEstimate: number, signal?: AbortSignal): Promise<NotesPlan | NotesRaster> {
+    const admitted = await this.admit(sessionId, bytesEstimate, signal)
     const slot = this.pick(job.docRef)
     try {
       return await this.exclusive(slot, async () => {
+        if (signal?.aborted) throw new ShowCancelled()
         const { docKey } = await this.ensureOpen(slot, job.docRef, job.contentPolicy)
         const r = await this.runJob(slot, admitted, { type: 'notes', id: this.nextId++, docKey, unitIndex: job.unitIndex, scale: job.scale, mark: job.mark, draw: job.draw })
         if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
@@ -260,15 +257,12 @@ export class Pool {
    * least-loaded worker. `bytesEstimate` = w·h·4·3 (decode + marked copy +
    * encode buffers). The PNG is copied to the worker, never transferred: the
    * caller's bytes are the shared canonical cache entry. */
-  async encode(sessionId: string, job: EncodeJob, bytesEstimate: number): Promise<MarkRasterResult> {
-    if (this.disposed) throw new RenderFailed('pool disposed')
-    const res = this.admission.request(sessionId, bytesEstimate, this.now())
-    if (res.status === 'refused') throw new AdmissionRefused(res.reason)
-    const admitted = res.job
-    if (res.status === 'queued' && !(await new Promise<boolean>((r) => this.waiters.set(admitted.id, r)))) throw new RenderFailed('pool disposed')
+  async encode(sessionId: string, job: EncodeJob, bytesEstimate: number, signal?: AbortSignal): Promise<MarkRasterResult> {
+    const admitted = await this.admit(sessionId, bytesEstimate, signal)
     const slot = [...this.slots].sort((a, b) => (Number(a.busy) - Number(b.busy)) || (a.queue.length - b.queue.length) || a.index - b.index)[0]!
     try {
       return await this.exclusive(slot, () => {
+        if (signal?.aborted) throw new ShowCancelled()
         const msg: WorkerRequest = { type: 'encode', id: this.nextId++, png: job.png, w: job.w, h: job.h, kBasis: job.kBasis, code: job.code, ...(this.testHooks && job.hangMs ? { hangMs: job.hangMs } : {}), ...(this.testHooks && job.crash ? { crash: true } : {}) }
         this.encodes++
         return this.runJob(slot, admitted, msg) as Promise<MarkRasterResult>
@@ -339,7 +333,7 @@ export class Pool {
   /**
    * Admission for one job of `sessionId`: refused, started, or queued until it starts. `signal` (the requesting
    * socket's): aborted while queued, the job leaves the queue unstarted (nothing charged) and `ShowCancelled` is
-   * thrown; aborted before the call, nothing is requested (PR #78 round 4: a closed page's backlog never runs).
+   * thrown; aborted before the call, nothing is requested (PR #78 rounds 4–5: a closed page's backlog never runs).
    */
   private async admit(sessionId: string, bytesEstimate: number, signal?: AbortSignal): Promise<Job> {
     if (this.disposed) throw new RenderFailed('pool disposed')
@@ -384,18 +378,15 @@ export class Pool {
    * job each, render deadline) and retries once; still missing ⇒
    * TextTooLarge. Everything runs in one exclusive turn of the slot, and the
    * recycle threshold is checked on every exit, success or not. */
-  async text(sessionId: string, job: PoolTextJob, bytesEstimate = TEXT_JOB_BYTES): Promise<TextReply> {
-    if (this.disposed) throw new RenderFailed('pool disposed')
-    const res = this.admission.request(sessionId, bytesEstimate, this.now())
-    if (res.status === 'refused') throw new AdmissionRefused(res.reason)
-    const admitted = res.job
-    if (res.status === 'queued' && !(await new Promise<boolean>((r) => this.waiters.set(admitted.id, r)))) throw new RenderFailed('pool disposed')
+  async text(sessionId: string, job: PoolTextJob, bytesEstimate = TEXT_JOB_BYTES, signal?: AbortSignal): Promise<TextReply> {
+    const admitted = await this.admit(sessionId, bytesEstimate, signal)
     const slot = this.pick(job.docRef)
     const { docRef: _d, contentPolicy: _c, ...rest } = job
     const op = rest as TextJob
     const k = `${job.docRef}|${job.contentPolicy}`
     try {
       return await this.exclusive(slot, async () => {
+        if (signal?.aborted) throw new ShowCancelled()
         const generation = slot.generation
         try {
           const { docKey } = await this.ensureOpen(slot, job.docRef, job.contentPolicy)

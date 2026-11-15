@@ -25,6 +25,12 @@ function spy(p: Pool) {
   return { posts, close() { closed = true } }
 }
 
+/** Until the server has processed the socket's close (its socket table is empty). */
+const serverSaw = async (h: { stream: { stats(): { sockets: number } } }) => {
+  for (let i = 0; i < 2000 && h.stream.stats().sockets > 0; i++) await Bun.sleep(5)
+  expect(h.stream.stats().sockets).toBe(0)
+}
+
 const idle = async (p: Pool) => {
   for (let i = 0; i < 4800; i++) {
     const st = p.stats()
@@ -48,11 +54,14 @@ test("a dropped socket's queued show builds and Layer-1 encodes are cancelled; n
   for (let i = 0; i < 12; i++) c.send({ reqId: 2000 + i, token: m.session.token, type: 'show-morph', from: 0, to: 1, fromStep: 0, scale: 1, motion: 'full' })
   for (let i = 0; i < 200 && !s.posts.some((x) => x.type === 'show-morph'); i++) await Bun.sleep(5)
   expect(s.posts.some((x) => x.type === 'show-morph')).toBe(true)
-  s.close()
   // A page that goes away drops its socket without a close frame (the server sees 1006, as for a browser's
   // 1001): the session is detached for a resume, so its document stays registered and the backlog could run.
   ;(c.ws as unknown as { terminate(): void }).terminate()
   await c.closed
+  // From the moment the server has seen the drop (a job it had already handed to the worker meanwhile is work
+  // already running, which finishes).
+  await serverSaw(h)
+  s.close()
   await idle(pool)
   // What was on a worker when the socket closed finishes; no show build or Layer-1 encode starts for the closed
   // socket (the document's own release, `drop`, is not show work).
