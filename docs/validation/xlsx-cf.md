@@ -1898,7 +1898,7 @@ So the case measured:
 
 ### 13.5 Gates and sizes
 
-- `npx vitest run tests/xlsx-cf*`: 71 files, 1,122 passed, 2 skipped (two load-time flakes pass alone). Full `npx vitest run`: every failure is a missing `corpus/` file (environmental).
+- Full `npx vitest run` at `fbd4fcbb`: 705 files (689 passed, 8 failed, 8 skipped); 13,701 tests passed, 15 failed, 131 skipped, 1 todo. The failures: 12 missing `corpus/` files (slideshow-morph, stream/local-unchanged, stream/recorder, pivots-parse, pivots-records); `tests/build/core-entry.test.ts` (needs the full `bun run build` d.ts step); `tests/fc-t2-drawing-reply-grant.test.ts` (load flake, passes alone); `tests/xlsx-cf-paged-parse.test.ts` "deep equal at every chunk boundary" (5 s timeout, fails identically at `86170f19`, pre-existing). The corpus iconSet test is skipped in this worktree (no `corpus/`); the main checkout's 9 corpus `.xlsx` hold 0 icon sets, matching §4.
 - `npx tsc --noEmit -p .`: the 3 known `@napi-rs/canvas` errors only; `-p tsconfig.scripts.json`: clean.
 - Browser `tests/browser/xlsx-cf.spec.ts`: Chromium 28/28, WebKit 28/28.
 - Eager gzip 36,519 B (PR 3 base 36,517; limit 38,720). `check-eager` ok (157 modules). `core-gates`: core closure ok; index closure 421,541 B and its module set FAIL environmentally, as on main `bdc2b217` (421,386 B, absolute `node_modules` paths). `scripts/eager-baseline.json` unchanged (record only if Linux CI flags it).
