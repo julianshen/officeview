@@ -672,3 +672,57 @@ describe('resident and paged semantics follow live resizes identically (final re
     expect(r).toMatchObject({ icon: false })
   }, 120000)
 })
+
+/**
+ * Residual (codex re-review of 8f85309c): an unknown table inventory withholds every row on the resident paths too,
+ * exactly as on the paged one. Reproduction: an unresolved table reference added to stage4-icon-rows-bottom.
+ */
+describe('an unknown table inventory withholds every bottom icon on both paths (residual I1)', () => {
+  it('resident and paged agree on paint and on the announcement', async () => {
+    const JSZip = (await import('jszip')).default
+    const zip = await JSZip.loadAsync(readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/stage4-icon-rows-bottom.xlsx')))
+    const xml = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+    const part = '<tableParts count="1"><tablePart r:id="rId99"/></tableParts>'
+    const edited = xml.includes('<extLst>') ? xml.replace('<extLst>', `${part}<extLst>`) : xml.replace('</worksheet>', `${part}</worksheet>`)
+    expect(edited).not.toBe(xml)
+    zip.file('xl/worksheets/sheet1.xml', edited)
+    const bytes = new Uint8Array(await zip.generateAsync({ type: 'uint8array' }))
+    const { prepareCfPaint, cfRowPtOfSheet, cfRowUniformOfSheet } = await import('../src/xlsx/cf/render')
+    const { cfRowUniformOfLayout } = await import('../src/xlsx/rowFont')
+    const { openImportSession } = await import('../src/xlsx/storage/pagedImport')
+    const { createPagedWorkbookSource, prepareCfRemote } = await import('../src/xlsx/view/pagedSource')
+    const { createCfWorkBudget } = await import('../src/xlsx/cf/limits')
+    const { createCanvas } = await import('canvas')
+    const ctx = createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D
+    const sheet = (await parseXlsx(await OfficePackage.load(bytes))).sheets[0]! as unknown as XlsxSheet
+    // Resident paint and resident a11y.
+    const batch = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, layoutContext: () => ctx }))!
+    const residentPaint = batch.iconAt(1, 1) !== undefined
+    batch.dispose()
+    const { budget } = trackingBudget()
+    const rects = [{ r0: 1, r1: 1, c0: 1, c1: 1 }]
+    const residentScope = (await prepareCfTextScope(sheet, { rects, signal: new AbortController().signal, locale: 'en-US', budget, layoutContext: () => ctx }))!
+    const residentText = residentScope.describe(1, 1)?.text
+    residentScope.dispose()
+    // Paged: the worker's layout rows, on the same wire states.
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([bytes.slice().buffer as ArrayBuffer]) }, { docId: 'residual-i1', profile: 'D' })
+    let pagedRows: unknown
+    try {
+      await session.done
+      const src = createPagedWorkbookSource(session)
+      pagedRows = src.geometry(src.sheets[0]!.sheetId).nonUniformFontRows
+    } finally { await session.release() }
+    expect(pagedRows).toEqual([{ start: 0, end: 1_048_575 }])
+    const rules = sheet.conditionalFormatting!, sheetId = sheet.sheetId ?? sheet.name
+    const st = { owner: 'paged', sheetId, workbookValueGen: 1, cfGen: cfRulesVersion(rules), viewGen: 1, structureGen: 1, clockGen: 1 }
+    const memory = createCfMemory({})
+    const wire = await prepareCfRemote({ rects, stamp: { ...st }, grantBytes: 1 << 22 }, sheetId, residentSource(sheet, st, memory, 'engine'), rules, memory, { budget: () => createCfWorkBudget({ now: () => 0 }) })
+    const paged = (await prepareCfWireScope(async () => ({ result: structuredClone(wire), release() {} }), rects, { budget: { reserve() {}, release() {} }, locale: 'en-US', rowPtOf: cfRowPtOfSheet(sheet), rowUniformOf: cfRowUniformOfLayout(pagedRows as never) }))!
+    const pagedText = paged.describe(1, 1)?.text
+    paged.dispose()
+    expect(cfRowUniformOfSheet(sheet)(1), 'resident row 2').toBe(false)
+    expect(residentPaint, 'resident paint').toBe(false)
+    expect(residentText).toBe(pagedText)
+    expect(residentText ?? '').not.toContain('Icon 3 of 3')
+  }, 120000)
+})

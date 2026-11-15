@@ -437,3 +437,44 @@ describe('rich shared-string flags are charged construction memory (final review
     expect(pool.stats().totalBytes).toBe(0)
   })
 })
+
+/** Residual (codex re-review): while the bitset grows, the old buffer is still live, so the charge covers both. */
+describe('rich-flag bitset growth charges the old and new buffers together (residual I2)', () => {
+  const RICH = 'r</t><r><t>run</t></r><t>'
+  const strings = (n: number) => Array.from({ length: n }, (_, i) => `${RICH}${i}`)
+  function spy(store: SourcePageStore, refuseAt?: number) {
+    const needs: number[] = []
+    const real = store.construction.share.bind(store.construction)
+    vi.spyOn(store.construction, 'share').mockImplementation((what, options) => {
+      const inner = real(what, options)
+      if (what !== 'rich shared-string flags') return inner
+      return { get bytes() { return inner.bytes }, need: (b: number) => { needs.push(b); inner.need(refuseAt !== undefined && b === refuseAt ? 2 ** 40 : b) }, release: () => inner.release() }
+    })
+    return needs
+  }
+  it('each growth reserves old + new before allocating, then shrinks to the new size', async () => {
+    const pool = new MemoryPool({ limitBytes: 256 * MiB })
+    const store = new SourcePageStore({ docId: 'd', backend: memoryPageBackend() })
+    store.bindMemory(pool)
+    const needs = spy(store)
+    const session = await openImportSession(blobOf(xlsxBytes({ sheetData: rowsXml(3), sharedStrings: strings(2000) })), { docId: 'd', profile: 'D', store })
+    expect(await session.done).toMatchObject({ kind: 'complete' })
+    // 2,000 flags need 250 bytes: buffers of 64, 128 and 256 bytes; each growth peaks at old + new.
+    expect(needs).toEqual([64, 64, 192, 128, 384, 256])
+    expect(pool.stats().transientBytes).toBe(0)
+    await session.release()
+    expect(pool.stats().totalBytes).toBe(0)
+  })
+  it('a refusal exactly at a growth peak fails the import typed, the ledger back at baseline', async () => {
+    const pool = new MemoryPool({ limitBytes: 256 * MiB })
+    const store = new SourcePageStore({ docId: 'd', backend: memoryPageBackend() })
+    store.bindMemory(pool)
+    spy(store, 384)
+    const session = await openImportSession(blobOf(xlsxBytes({ sheetData: rowsXml(3), sharedStrings: strings(2000) })), { docId: 'd', profile: 'D', store })
+    expect(await session.done).toMatchObject({ kind: 'incomplete', failure: { code: 'resource-limit' } })
+    expect(session.diagnostics.map(d => d.code)).toContain('import-memory-budget')
+    expect(pool.stats().transientBytes).toBe(0)
+    await session.release()
+    expect(pool.stats().totalBytes).toBe(0)
+  })
+})

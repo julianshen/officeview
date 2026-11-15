@@ -370,7 +370,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
       // inventory — unless it is a non-worksheet part, which never declares
       // tableParts. The readable no-tableParts worksheet below stays [].
       if (!wsRoot) {
-        if (identity.kind === 'worksheet') tableInventoryComplete = false
+        if (identity.kind === 'worksheet') { tableInventoryComplete = false; sheets[i]!.tablesUnknown = true }
         continue
       }
       const wsData = getChildren(wsRoot, 'worksheet')[0] ?? wsRoot
@@ -446,11 +446,11 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
         continue
       }
       declaredTableParts += tablePartDecls.length
-      if (wsRelsUnreadable) tableInventoryComplete = false
+      if (wsRelsUnreadable) { tableInventoryComplete = false; sheets[i]!.tablesUnknown = true }
       for (const rid of tablePartDecls) {
         // A declaration without a required relationship id cannot resolve.
         if (rid === undefined) {
-          tableInventoryComplete = false
+          { tableInventoryComplete = false; sheets[i]!.tablesUnknown = true }
           continue
         }
         const rel = wsRelTargets.get(rid)
@@ -458,7 +458,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
         // ownership: missing rels, unresolved r:ids, external targets and
         // wrong relationship types all leave the inventory unavailable.
         if (!rel || !rel.type.endsWith('/table')) {
-          tableInventoryComplete = false
+          { tableInventoryComplete = false; sheets[i]!.tablesUnknown = true }
           continue
         }
         const partPath = resolvePartTarget(sheetPath, rel.target)
@@ -471,7 +471,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
             tableSourceChecks.set(partPath, sourceOk)
           }
           if (!sourceOk) {
-            tableInventoryComplete = false
+            { tableInventoryComplete = false; sheets[i]!.tablesUnknown = true }
             continue
           }
           const tableRoot = await pkg.xml(partPath)
@@ -482,7 +482,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
           if (tableNode) collectDeclaredTable(sheetDeclared, tableNode, partPath)
           const meta = parseTableMetadata(tableNode, identity.sheetId, partPath)
           if (!meta) {
-            tableInventoryComplete = false
+            { tableInventoryComplete = false; sheets[i]!.tablesUnknown = true }
             continue
           }
           resolvedTables.push(meta)
@@ -490,7 +490,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
         } catch {
           // An unreadable table part leaves the inventory unavailable;
           // usable cells are preserved below.
-          tableInventoryComplete = false
+          { tableInventoryComplete = false; sheets[i]!.tablesUnknown = true }
         }
       }
       if (hasDeclaredFiltering(sheetEntry)) declaredFilters.push(sheetEntry)
@@ -498,7 +498,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
       // Worksheet-level discovery failure with declared parts is unavailable,
       // never a false complete registry. Worksheet declarations already read
       // survive independently of the table failure.
-      tableInventoryComplete = false
+      { tableInventoryComplete = false; sheets[i]!.tablesUnknown = true }
       if (hasDeclaredFiltering(sheetEntry)) declaredFilters.push(sheetEntry)
     }
   }

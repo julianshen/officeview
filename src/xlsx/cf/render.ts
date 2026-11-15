@@ -195,10 +195,11 @@ export function cfRowPtOfSheet(sheet: Pick<XlsxSheet, 'rows' | 'defaultRowHeight
 
 /** Ruling S4-ROW-UNIFORM: each row's font uniformity from the resident sheet (`rowFont.ts`); rows the sheet does not
  * store hold no cell, so they are uniform (their icons have no cell to sit on). */
-export function cfRowUniformOfSheet(sheet: Pick<XlsxSheet, 'rows' | 'rowFontsBlocked' | 'conditionalFormatting' | 'tables'>): (row: number) => boolean | undefined {
+export function cfRowUniformOfSheet(sheet: Pick<XlsxSheet, 'rows' | 'rowFontsBlocked' | 'conditionalFormatting' | 'tables' | 'tablesUnknown'>): (row: number) => boolean | undefined {
   let of: ((row: number) => boolean | undefined) | undefined
-  // S4-ROW-EFFECTIVE: CF font rules and tables too. A resident sheet without tables has `tables` absent (none).
-  return row => (of ??= cfRowUniformOfLayout(cfSheetNonUniformFontRows({ ...sheet, tables: sheet.tables ?? [] })))(row)
+  // S4-ROW-EFFECTIVE: CF font rules and tables too. A resident sheet without tables has `tables` absent (none); an
+  // unknown inventory (`tablesUnknown`) withholds every row, as the paged path does.
+  return row => (of ??= cfRowUniformOfLayout(cfSheetNonUniformFontRows({ ...sheet, tables: sheet.tablesUnknown ? undefined : sheet.tables ?? [] })))(row)
 }
 
 export function residentBarHosts(sheet: XlsxSheet, styleAt: (row: number, col: number, own: XlsxCellStyle | undefined) => XlsxCellStyle | undefined,

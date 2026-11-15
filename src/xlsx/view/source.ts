@@ -892,7 +892,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
 }
 
 function sheetGeometry(sheet: XlsxSheet): SheetGeometry {
-  return withFrozen(buildGeometry([...sheet.rows].sort((a, b) => a.index - b.index), sheet.cols, [], { hiddenCols: true, ...(sheet.columnMetrics ? { columns: sheet.columnMetrics } : {}), ...(sheet.defaultRowHeightPt !== undefined ? { defaultRowPt: sheet.defaultRowHeightPt } : {}), nonUniformFontRows: cfSheetNonUniformFontRows({ ...sheet, tables: sheet.tables ?? [] }) }), sheet.frozen)
+  return withFrozen(buildGeometry([...sheet.rows].sort((a, b) => a.index - b.index), sheet.cols, [], { hiddenCols: true, ...(sheet.columnMetrics ? { columns: sheet.columnMetrics } : {}), ...(sheet.defaultRowHeightPt !== undefined ? { defaultRowPt: sheet.defaultRowHeightPt } : {}), nonUniformFontRows: cfSheetNonUniformFontRows({ ...sheet, tables: sheet.tablesUnknown ? undefined : sheet.tables ?? [] }) }), sheet.frozen)
 }
 /** Geometry carrying the sheet's authored frozen panes (copied, frozen). */
 export function withFrozen(geometry: SheetGeometry, frozen: SheetGeometry['frozen']): SheetGeometry {

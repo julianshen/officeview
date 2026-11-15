@@ -302,13 +302,15 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
     const markRich = (index: number): void => {
       const byte = index >> 3
       if (byte >= richBits.length) {
-        // Grow geometrically, charging the new size before allocating it.
+        // Grow geometrically. The old buffer stays live during the copy, so the charge covers old + new before the
+        // allocation (residual I2), then shrinks to the new buffer once the old one is dropped.
         const size = Math.max(byte + 1, Math.min(richBits.length * 2 || 64, (limits.paged.uniqueStrings >> 3) + 1))
         richHold ??= store.construction.share('rich shared-string flags', { untilReleased: true })
-        richHold.need(size)
+        richHold.need(richBits.length + size)
         const grown = new Uint8Array(size)
         grown.set(richBits)
         richBits = grown
+        richHold.need(size)
       }
       richBits[byte] = richBits[byte]! | (1 << (index & 7))
     }

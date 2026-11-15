@@ -168,6 +168,9 @@ export interface XlsxSheet {
   /** Ruling S4-ROW-UNIFORM (fix round 2): the default cell style (xf 0) or a `<cols>` style is not, or not known to
    * be, Calibri 11 regular, so no row of the sheet is uniformly the default font. */
   rowFontsBlocked?: boolean
+  /** This sheet's table inventory could not be established (an unresolved, unreadable or invalid table part): unknown,
+   * distinct from known-empty (`tables` absent). Rulings S4-ROW-EFFECTIVE: every row withholds bottom placement. */
+  tablesUnknown?: boolean
   name: string
   sourcePartPath?: string
   /** Resolved workbook semantics (date system/locale/zone/clock) so the
