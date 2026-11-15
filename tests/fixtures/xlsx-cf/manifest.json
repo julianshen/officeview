@@ -47557,8 +47557,8 @@
       ],
       "expected": {
         "inputSha256": "9793f25a3994e54876bd5cf9b1447e55f880fb743bf70b38393660ff1d35d64e",
-        "savedSha256": "9793f25a3994e54876bd5cf9b1447e55f880fb743bf70b38393660ff1d35d64e",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "d0ae1762902d1e7904d2996811dc9b7da3459efba61963fbf52ef85b5884dca5",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -47647,7 +47647,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "pixel-classified",
               "geometry": "unverified"
             }
           },
@@ -47658,7 +47658,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "pixel-classified",
               "geometry": "unverified"
             }
           },
@@ -47669,7 +47669,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "pixel-classified",
               "geometry": "unverified"
             }
           },
@@ -47680,7 +47680,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "pixel-classified",
               "geometry": "unverified"
             }
           },
@@ -47691,7 +47691,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "pixel-classified",
               "geometry": "unverified"
             }
           },
@@ -47702,7 +47702,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "pixel-classified",
               "geometry": "unverified"
             }
           },
@@ -47713,7 +47713,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "pixel-classified",
               "geometry": "unverified"
             }
           },
@@ -47724,7 +47724,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "pixel-classified",
               "geometry": "unverified"
             }
           },
@@ -47735,7 +47735,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "pixel-classified",
               "geometry": "unverified"
             }
           },
@@ -47746,7 +47746,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "pixel-classified",
               "geometry": "unverified"
             }
           },
@@ -47886,10 +47886,10 @@
             "ref": "H2",
             "controlRef": "H7",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "pixel-classified",
               "geometry": "unverified"
             }
           },
@@ -47897,10 +47897,10 @@
             "ref": "H3",
             "controlRef": "H8",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "pixel-classified",
               "geometry": "unverified"
             }
           },
@@ -47911,7 +47911,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "pixel-classified",
               "geometry": "unverified"
             }
           },
@@ -47922,7 +47922,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "pixel-classified",
               "geometry": "unverified"
             }
           },
@@ -47933,7 +47933,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "pixel-classified",
               "geometry": "unverified"
             }
           },
@@ -47944,7 +47944,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "pixel-classified",
               "geometry": "unverified"
             }
           },
@@ -47955,7 +47955,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "pixel-classified",
               "geometry": "unverified"
             }
           },
@@ -47966,7 +47966,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "pixel-classified",
               "geometry": "unverified"
             }
           },
@@ -47974,10 +47974,10 @@
             "ref": "K2",
             "controlRef": "K7",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "non-discriminating",
               "geometry": "unverified"
             }
           },
@@ -47985,10 +47985,10 @@
             "ref": "K3",
             "controlRef": "K8",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "non-discriminating",
               "geometry": "unverified"
             }
           },
@@ -47996,10 +47996,10 @@
             "ref": "K4",
             "controlRef": "K9",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "non-discriminating",
               "geometry": "unverified"
             }
           },
@@ -48007,10 +48007,10 @@
             "ref": "K5",
             "controlRef": "K10",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "non-discriminating",
               "geometry": "unverified"
             }
           },
@@ -48018,10 +48018,10 @@
             "ref": "L2",
             "controlRef": "L7",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "pixel-classified",
               "geometry": "unverified"
             }
           },
@@ -48029,10 +48029,10 @@
             "ref": "L3",
             "controlRef": "L8",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "pixel-classified",
               "geometry": "unverified"
             }
           },
@@ -48040,10 +48040,10 @@
             "ref": "L4",
             "controlRef": "L9",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "pixel-classified",
               "geometry": "unverified"
             }
           },
@@ -48054,7 +48054,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "unverified",
+              "bucket": "pixel-classified",
               "geometry": "unverified"
             }
           },
@@ -48369,17 +48369,23 @@
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-composition.png",
           "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-composition.json",
-          "pngSha256": "883d79ecdd7da73ca773e50e9467a1306b6fe8b99ff1e246c11b758a549d3f83"
+          "pngSha256": "00fe8452984cc20f2d122822a4fa73edc98bbfcf48b1ee337c6d0338d44f028c"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-15T06:56:18.632Z",
+        "excelVersion": "16.115",
+        "inputSha256": "9793f25a3994e54876bd5cf9b1447e55f880fb743bf70b38393660ff1d35d64e",
+        "savedSha256": "d0ae1762902d1e7904d2996811dc9b7da3459efba61963fbf52ef85b5884dca5",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage4-icon-rtl",
@@ -49320,7 +49326,7 @@
       },
       "captures": [],
       "status": "unsupported",
-      "reason": "Unresolved icon shapes fail closed per Rulings S4-B, S4-C, S4-O and S4-P; recorded for Excel's open/repair/strip outcome and lift no capability",
+      "reason": "Preserved rejected Excel output at /Users/julianshen/prj/officeview/.worktrees/cf-s4/tests/fixtures/xlsx-cf/stage4-icon-unresolved-shapes.rejected.xlsx: Rule icon:unresolved-unknown-set (iconSet) on sqref B2:B6 with formulas [] missing from xl/worksheets/sheet1.xml",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,

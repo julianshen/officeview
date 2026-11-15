@@ -4,7 +4,7 @@
   "appearance": "screen",
   "scale": 1,
   "pxPerPt": 1,
-  "width": 1405,
+  "width": 1369,
   "height": 201,
   "colWidthsPt": [
     84,
@@ -16,7 +16,7 @@
     120,
     120,
     120,
-    120,
+    84,
     120,
     120
   ],
@@ -34,13 +34,13 @@
   ],
   "geometrySource": "excel-measured",
   "resavedByExcel": true,
-  "resaveSavedSha256": "174fc2515810447826e844efa7ec04ee275b8ca873d2b5c84dffaaaa682b1392",
+  "resaveSavedSha256": "d0ae1762902d1e7904d2996811dc9b7da3459efba61963fbf52ef85b5884dca5",
   "sheet": "Sheet1",
   "range": "A1:L10",
   "hostTimeZone": "Asia/Taipei",
-  "savedSha256": "174fc2515810447826e844efa7ec04ee275b8ca873d2b5c84dffaaaa682b1392",
-  "pngSha256": "883d79ecdd7da73ca773e50e9467a1306b6fe8b99ff1e246c11b758a549d3f83",
-  "capturedAt": "2026-11-15T05:18:07.577Z",
+  "savedSha256": "d0ae1762902d1e7904d2996811dc9b7da3459efba61963fbf52ef85b5884dca5",
+  "pngSha256": "00fe8452984cc20f2d122822a4fa73edc98bbfcf48b1ee337c6d0338d44f028c",
+  "capturedAt": "2026-11-15T06:56:19.006Z",
   "zoom": 100,
   "dpr": 1,
   "lockBefore": "unlocked",
@@ -463,66 +463,8 @@
       }
     },
     {
-      "ref": "J2",
-      "cellLeftPx": 1044,
-      "cellTopPx": 20,
-      "cellWidthPx": 120,
-      "cellHeightPx": 20,
-      "icon": {
-        "leftPx": 1046,
-        "topPx": 27,
-        "rightPx": 1056,
-        "bottomPx": 38,
-        "glyphClass": "icon-class-none"
-      }
-    },
-    {
-      "ref": "J3",
-      "cellLeftPx": 1044,
-      "cellTopPx": 40,
-      "cellWidthPx": 120,
-      "cellHeightPx": 20,
-      "icon": {
-        "leftPx": 1046,
-        "topPx": 47,
-        "rightPx": 1057,
-        "bottomPx": 57,
-        "glyphClass": "icon-class-none"
-      },
-      "edgeStable": false
-    },
-    {
-      "ref": "J4",
-      "cellLeftPx": 1044,
-      "cellTopPx": 60,
-      "cellWidthPx": 120,
-      "cellHeightPx": 20,
-      "icon": {
-        "leftPx": 1046,
-        "topPx": 67,
-        "rightPx": 1056,
-        "bottomPx": 78,
-        "glyphClass": "icon-class-none"
-      },
-      "edgeStable": false
-    },
-    {
-      "ref": "J5",
-      "cellLeftPx": 1044,
-      "cellTopPx": 80,
-      "cellWidthPx": 120,
-      "cellHeightPx": 20,
-      "icon": {
-        "leftPx": 1046,
-        "topPx": 87,
-        "rightPx": 1056,
-        "bottomPx": 98,
-        "glyphClass": "3Arrows:0"
-      }
-    },
-    {
       "ref": "K2",
-      "cellLeftPx": 1164,
+      "cellLeftPx": 1128,
       "cellTopPx": 20,
       "cellWidthPx": 120,
       "cellHeightPx": 20,
@@ -530,7 +472,7 @@
     },
     {
       "ref": "K3",
-      "cellLeftPx": 1164,
+      "cellLeftPx": 1128,
       "cellTopPx": 40,
       "cellWidthPx": 120,
       "cellHeightPx": 20,
@@ -538,7 +480,7 @@
     },
     {
       "ref": "K4",
-      "cellLeftPx": 1164,
+      "cellLeftPx": 1128,
       "cellTopPx": 60,
       "cellWidthPx": 120,
       "cellHeightPx": 20,
@@ -546,7 +488,7 @@
     },
     {
       "ref": "K5",
-      "cellLeftPx": 1164,
+      "cellLeftPx": 1128,
       "cellTopPx": 80,
       "cellWidthPx": 120,
       "cellHeightPx": 20,
@@ -554,7 +496,7 @@
     },
     {
       "ref": "L2",
-      "cellLeftPx": 1284,
+      "cellLeftPx": 1248,
       "cellTopPx": 20,
       "cellWidthPx": 120,
       "cellHeightPx": 20,
@@ -562,7 +504,7 @@
     },
     {
       "ref": "L3",
-      "cellLeftPx": 1284,
+      "cellLeftPx": 1248,
       "cellTopPx": 40,
       "cellWidthPx": 120,
       "cellHeightPx": 20,
@@ -570,7 +512,7 @@
     },
     {
       "ref": "L4",
-      "cellLeftPx": 1284,
+      "cellLeftPx": 1248,
       "cellTopPx": 60,
       "cellWidthPx": 120,
       "cellHeightPx": 20,
@@ -578,14 +520,14 @@
     },
     {
       "ref": "L5",
-      "cellLeftPx": 1284,
+      "cellLeftPx": 1248,
       "cellTopPx": 80,
       "cellWidthPx": 120,
       "cellHeightPx": 20,
       "icon": {
-        "leftPx": 1286,
+        "leftPx": 1250,
         "topPx": 87,
-        "rightPx": 1296,
+        "rightPx": 1260,
         "bottomPx": 98,
         "glyphClass": "3Arrows:0"
       }
@@ -790,48 +732,6 @@
         },
         {
           "id": "not-halted",
-          "glyphClass": "3Arrows:0"
-        }
-      ]
-    },
-    "icon:composition-icon-stopIfTrue": {
-      "J2": [
-        {
-          "id": "later-withheld",
-          "glyphClass": "3Arrows:2"
-        },
-        {
-          "id": "later-applies",
-          "glyphClass": "icon-class-none"
-        }
-      ],
-      "J3": [
-        {
-          "id": "later-withheld",
-          "glyphClass": "3Arrows:1"
-        },
-        {
-          "id": "later-applies",
-          "glyphClass": "icon-class-none"
-        }
-      ],
-      "J4": [
-        {
-          "id": "later-withheld",
-          "glyphClass": "3Arrows:0"
-        },
-        {
-          "id": "later-applies",
-          "glyphClass": "icon-class-none"
-        }
-      ],
-      "J5": [
-        {
-          "id": "later-withheld",
-          "glyphClass": "3Arrows:0"
-        },
-        {
-          "id": "later-applies",
           "glyphClass": "3Arrows:0"
         }
       ]
