@@ -152,7 +152,7 @@ Machine: Apple-silicon Mac (darwin), bun 1.3.10. Branch `feature/streaming-s3-p4
 | `npx tsc --noEmit -p .` | clean |
 | `npm run -s typecheck:server` | clean |
 | `bun run gates:core` | **FAIL, red as before this piece**: index closure 421,385 B |
-| `bun scripts/stream-show-compare.ts --deck all` | **exit 0**, both mark passes. 26 corpus decks plus 6 synthetic decks. Every show-path frame passes. Unit stills are reported separately: 32 of 36 pass, and the 2 failing frames per pass are on the pre-existing unit path |
+| `bun scripts/stream-show-compare.ts --deck all` | **exit 0**, both mark passes. 26 corpus decks plus 7 synthetic decks (`autoplayTransitionDeck` added in PR #78 round 7). Every show-path frame passes. Unit stills are reported separately: 32 of 36 pass, and the 2 failing frames per pass are on the pre-existing unit path |
 
 The first run of these gates (at `833719b2`) differed in three places. The server run had 1016 pass and 1
 fail (the print-wire flake). vitest had 2 flakes (the heap probe and fc-t2). The parity run had the 2 findings.

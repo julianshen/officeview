@@ -9,7 +9,7 @@
       "family": "latin",
       "meanAbs": 0.003265,
       "rowMax": 0.154171,
-      "slides": 52,
+      "slides": 54,
       "over": false
     }
   ],
@@ -85,6 +85,22 @@
       "layers": 2,
       "meanAbs": 0.0000020708514887436455,
       "rowMax": 0.0004003267973856209
+    },
+    {
+      "deck": "autoplayTransitionDeck",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.0000010779774872912127,
+      "rowMax": 0.0003921568627450981
+    },
+    {
+      "deck": "autoplayTransitionDeck",
+      "slide": 2,
+      "family": "latin",
+      "layers": 2,
+      "meanAbs": 0.0000027913943355119827,
+      "rowMax": 0.00065359477124183
     },
     {
       "deck": "lo-airplane-transition.pptx",
@@ -508,6 +524,32 @@
       "tol": {
         "meanAbs": 0.020002689270152505,
         "rowMax": 0.10039215686274511
+      }
+    },
+    {
+      "deck": "autoplayTransitionDeck",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0000010779774872912127,
+      "rowMax": 0.0003921568627450981,
+      "tol": {
+        "meanAbs": 0.02000279139433551,
+        "rowMax": 0.10065359477124183
+      }
+    },
+    {
+      "deck": "autoplayTransitionDeck",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0038690143881626726,
+      "rowMax": 0.006870915032679739,
+      "tol": {
+        "meanAbs": 0.02000279139433551,
+        "rowMax": 0.10065359477124183
       }
     },
     {
@@ -2049,6 +2091,212 @@
       },
       "failures": [],
       "stillFrames": []
+    },
+    {
+      "deck": "autoplayTransitionDeck",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0000027913943355119827,
+        "rowMax": 0.00065359477124183
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p:fade"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p:fade"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1,
+        "pass": 5
+      },
+      "gate": [],
+      "worst": {
+        "slide": 2,
+        "step": 0,
+        "pct": 75,
+        "ms": 1125,
+        "streamedMs": 1125,
+        "kind": "transition",
+        "rows": [
+          "transition:p:fade",
+          "preset:entr:10"
+        ],
+        "tol": {
+          "meanAbs": 0.02000279139433551,
+          "rowMax": 0.10065359477124183
+        },
+        "hash": {
+          "local": "b2aa8f58",
+          "streamed": "b64fa871"
+        },
+        "status": "pass",
+        "meanAbs": 0.0000020424836601307187,
+        "rowMax": 0.00065359477124183,
+        "detail": "meanAbs 0.0000 rowMax 0.0007 (row 140)"
+      },
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.02000279139433551,
+            "rowMax": 0.10065359477124183
+          },
+          "hash": {
+            "local": "a377993e",
+            "streamed": "891b769c"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0000010779774872912127,
+          "rowMax": 0.0003921568627450981,
+          "detail": "unit still (unanimated): meanAbs 0.0000 rowMax 0.0004 (row 320)"
+        }
+      ]
+    },
+    {
+      "deck": "autoplayTransitionDeck",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0000027913943355119827,
+        "rowMax": 0.00065359477124183
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p:fade"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p:fade"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1,
+        "pass": 5
+      },
+      "gate": [],
+      "worst": {
+        "slide": 2,
+        "step": 0,
+        "pct": 0,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "transition",
+        "rows": [
+          "transition:p:fade",
+          "preset:entr:10"
+        ],
+        "tol": {
+          "meanAbs": 0.02000279139433551,
+          "rowMax": 0.10065359477124183
+        },
+        "hash": {
+          "local": "1bc380ea",
+          "streamed": "4b563503"
+        },
+        "status": "pass",
+        "meanAbs": 0.0038690143881626726,
+        "rowMax": 0.006870915032679739,
+        "detail": "meanAbs 0.0039 rowMax 0.0069 (row 397)"
+      },
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.02000279139433551,
+            "rowMax": 0.10065359477124183
+          },
+          "hash": {
+            "local": "1bc380ea",
+            "streamed": "4b563503"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0038690143881626726,
+          "rowMax": 0.006870915032679739,
+          "detail": "unit still (unanimated): meanAbs 0.0039 rowMax 0.0069 (row 397)"
+        }
+      ]
     },
     {
       "deck": "lo-airplane-transition.pptx",
