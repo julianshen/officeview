@@ -71,7 +71,7 @@ describe('paged CF capture', () => {
     const meta: CfParseMeta = { sheetRightToLeft: false }
     await withInjectedCfEvidence(['bar:settings-schema-defaults', 'bar:settings-paired-precedence', 'bar:pairing-paired', 'bar:pairing-standalone',
       'bar:pairing-base-only', 'bar:direction-ltr', 'bar:direction-context-ltr-sheet',
-      'icon:settings-schema-defaults', 'icon:dialect-base', 'icon:dialect-standalone', 'icon:dialect-base-x14-family', 'icon:custom-mapping',
+      'icon:settings-schema-defaults', 'icon:dialect-base', 'icon:dialect-standalone', 'icon:dialect-base-x14-family', 'icon:dialect-paired', 'icon:custom-mapping',
       'icon:custom-noicons', 'icon:attr-percent-false'], async () => {
       const expected = parseCfSheet(parseXml(xml), styles, createCfMemory(), meta).value
       const barOf = (priority: number) => expected.rules.find(r => r.priority === priority)!.definition
@@ -82,8 +82,8 @@ describe('paged CF capture', () => {
       expect(barOf(10)).toMatchObject({ kind: 'dataBar', dialect: 'x14', bounds: [{ type: 'autoMin' }, { type: 'autoMax' }] })
       const iconOf = (priority: number) => expected.rules.find(r => r.priority === priority)!.definition
       expect(iconOf(11)).toMatchObject({ kind: 'iconSet', dialect: 'base', set: '3Arrows', showValue: true, percentAttr: true })
-      expect(iconOf(12)).toMatchObject({ kind: 'iconSet', dialect: 'base', set: '3Stars', reverse: true, showValue: false,
-        thresholds: [{ gte: true }, { bound: { type: 'num', value: 2 }, gte: false }, { gte: true }] })
+      // A base x14-only family is a recorded dialect outcome, so it is withheld whatever the evidence.
+      expect(iconOf(12)).toMatchObject({ kind: 'unresolved', type: 'iconSet', reason: 'cf-unsupported-rule' })
       expect(iconOf(13)).toMatchObject({ kind: 'iconSet', dialect: 'x14', set: '3Arrows',
         custom: [{ set: '3Flags', iconId: 0 }, { set: 'NoIcons', iconId: 0 }, { set: '3Stars', iconId: 2 }],
         thresholds: [{ bound: { type: 'num', value: 0 }, gte: true }, { bound: { type: 'num', value: 20 }, gte: false }, { bound: { type: 'num', value: 40 }, gte: true }] })

@@ -22,7 +22,7 @@ const LTR: CfParseMeta = { sheetRightToLeft: false }
 /** Every parse-layer capability (the S4-DIALECT-EVIDENCE gates and the S4-B/C/F ones): with all of them injected only
  * structure decides. */
 const ICON_PARSE_CAPS = [
-  'icon:settings-schema-defaults', 'icon:dialect-base', 'icon:dialect-standalone', 'icon:dialect-base-x14-family',
+  'icon:settings-schema-defaults', 'icon:dialect-base', 'icon:dialect-standalone',
   'icon:custom-mapping', 'icon:custom-noicons', 'icon:attr-percent-false', 'icon:thresholds-min-max',
 ]
 const BASE_CAPS = ['icon:settings-schema-defaults', 'icon:dialect-base']
@@ -245,7 +245,11 @@ describe('CF Stage 4 icon-set model and parsing (Task 25)', () => {
       ['malformed custom', x14Icons(x14Icon('B2:B6', 1, ' iconSet="3Arrows" custom="yes"', NUM3 + GOOD_ICONS)), 'cf-invalid-rule'],
       // Evidence-gated shapes: unresolved (cf-unsupported-rule) unless their capability is present.
       ['min/max cfvo without icon:thresholds-min-max', withCfvo('<cfvo type="min"/>', '<cfvo type="percent" val="50"/>', '<cfvo type="max"/>'), 'cf-unsupported-rule', ICON_PARSE_CAPS.filter(c => c !== 'icon:thresholds-min-max')],
-      ['base 3Stars without the dialect evidence', baseIcon('B2:B6', 1, ' iconSet="3Stars"', PCT3), 'cf-unsupported-rule', ICON_PARSE_CAPS.filter(c => c !== 'icon:dialect-base-x14-family')],
+      // Record-only (S4-DIALECT-CASE): `icon:dialect-base-x14-family` records Excel's outcome (it may be no icon or another
+      // family), so even with it injected an x14-only family on a base rule stays withheld.
+      ['base 3Stars', baseIcon('B2:B6', 1, ' iconSet="3Stars"', PCT3), 'cf-unsupported-rule'],
+      ['base 3Triangles with every id incl. the recorded dialect', baseIcon('B2:B6', 1, ' iconSet="3Triangles"', PCT3), 'cf-unsupported-rule', [...ICON_PARSE_CAPS, 'icon:dialect-base-x14-family', 'icon:dialect-paired']],
+      ['base 5Boxes', baseIcon('B2:B6', 1, ' iconSet="5Boxes"', '<cfvo type="num" val="0"/>'.repeat(5)), 'cf-unsupported-rule', [...ICON_PARSE_CAPS, 'icon:dialect-base-x14-family']],
       ['<iconSet percent="0"> (S4-F)', baseIcon('B2:B6', 1, ' iconSet="3Arrows" percent="0"', PCT3), 'cf-unsupported-rule', ICON_PARSE_CAPS.filter(c => c !== 'icon:attr-percent-false')],
       ['base custom set (not an Excel form)', baseIcon('B2:B6', 1, ' iconSet="3Arrows" custom="1"', PCT3 + '<cfIcon iconSet="3Flags" iconId="0"/><cfIcon iconSet="3Arrows" iconId="1"/><cfIcon iconSet="3Stars" iconId="2"/>'), 'cf-unsupported-rule'],
     ]
@@ -260,10 +264,9 @@ describe('CF Stage 4 icon-set model and parsing (Task 25)', () => {
     // min/max resolve with their capability (an unresolved-without row above is the gate, this is the pass).
     const minMax = icon(reasonOf(withCfvo('<cfvo type="min"/>', '<cfvo type="percent" val="50"/>', '<cfvo type="max" val="5"/>')).definition)
     expect(minMax.thresholds.map(t => t.bound)).toEqual([{ type: 'min' }, { type: 'percent', value: 50 }, { type: 'max' }])
-    // The existing x14-only families resolve on the x14 dialect without the base-family evidence.
+    // The x14-only families resolve on their own (standalone x14) dialect.
     for (const set of ['3Triangles', '3Stars']) {
-      const caps = ICON_PARSE_CAPS.filter(c => c !== 'icon:dialect-base-x14-family')
-      expect(icon(reasonOf(x14Icons(x14Icon('B2:B6', 1, ` iconSet="${set}"`, NUM3)), caps).definition).set).toBe(set)
+      expect(icon(reasonOf(x14Icons(x14Icon('B2:B6', 1, ` iconSet="${set}"`, NUM3))).definition).set).toBe(set)
     }
     // 6 cfvo is over the cap: refused before any definition is built, on both paths.
     for (const xml of [baseIcon('B2:B6', 1, ' iconSet="3Arrows"', cfvo6), x14Icons(x14Icon('B2:B6', 1, ' iconSet="3Arrows"', x14Num('0', '1', '2', '3', '4', '5')))]) {
@@ -339,9 +342,11 @@ describe('CF Stage 4 icon-set model and parsing (Task 25)', () => {
     expect(iconRequiredCapabilities(noIcons).has('icon:custom-mapping')).toBe(true)
     expect(iconRequiredCapabilities(noIcons).has('icon:custom-noicons')).toBe(true)
 
-    // A base x14-only family needs the family-dialect evidence.
-    expect(iconRequiredCapabilities(defOf(baseIcon('B2:B6', 1, ' iconSet="3Stars"', PCT3))).has('icon:dialect-base-x14-family')).toBe(true)
-    expect(iconRequiredCapabilities(base).has('icon:dialect-base-x14-family')).toBe(false)
+    // No record-only id is ever a parse gate (a base x14-only family is withheld outright, see the structure refusals).
+    for (const def of [base, standalone, custom]) {
+      expect(iconRequiredCapabilities(def).has('icon:dialect-base-x14-family')).toBe(false)
+      expect(iconRequiredCapabilities(def).has('icon:dialect-paired')).toBe(false)
+    }
 
     expect(iconRequiredCapabilities(defOf(baseIcon('B2:B6', 1, ' iconSet="3Arrows" percent="0"', PCT3))).has('icon:attr-percent-false')).toBe(true)
     expect(iconRequiredCapabilities(base).has('icon:attr-percent-false')).toBe(false)

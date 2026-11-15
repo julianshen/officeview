@@ -1172,7 +1172,9 @@ function parseDataBarRule(
 
 type CfIconDefinition = Extract<CfDefinition, { kind: 'iconSet' }>
 
-/** The x14-only families (spec §3): on a base `<cfRule>` Excel's handling is unrecorded (S4-B, `icon:dialect-base-x14-family`). */
+/** The x14-only families (spec §3). On a base `<cfRule>` Excel's outcome is only RECORDED by `stage4-icon-dialect`
+ * (`icon:dialect-base-x14-family`: the winning reading may be "no icon" or another family, never assumed to be the
+ * modelled one), so such a rule is withheld outright whatever the evidence (S4-B, S4-O, S4-DIALECT-CASE). */
 const X14_ONLY_ICON_SETS: ReadonlySet<string> = new Set(['3Triangles', '3Stars', '5Boxes'])
 
 /** One `cfIcon` target (S4-B): a built-in family with `0 <= iconId < size`, or `NoIcons` with `iconId` 0 only. */
@@ -1198,12 +1200,8 @@ function iconRefOf(node: XmlNode): CfIconRef | undefined {
  */
 export function iconRequiredCapabilities(def: CfIconDefinition, options: { readonly defaultedAttributes?: boolean } = {}): Set<string> {
   const req = new Set<string>()
-  // S4-O dialect. An x14-only family on a base rule is a shape Excel was never measured to write.
-  if (def.dialect === 'x14') req.add('icon:dialect-standalone')
-  else {
-    req.add('icon:dialect-base')
-    if (X14_ONLY_ICON_SETS.has(def.set)) req.add('icon:dialect-base-x14-family')
-  }
+  // S4-O dialect. (A base rule naming an x14-only family never reaches here: it is a record-only outcome.)
+  req.add(def.dialect === 'x14' ? 'icon:dialect-standalone' : 'icon:dialect-base')
   // S4-B / S4-F: an omitted attribute, and `percent="1"` itself, rest on the schema defaults.
   if (options.defaultedAttributes !== false || def.percentAttr) req.add('icon:settings-schema-defaults')
   if (!def.percentAttr) req.add('icon:attr-percent-false')
@@ -1297,6 +1295,8 @@ function parseIconSetRule(
       refs.push(ref)
     }
   }
+  // S4-B / S4-O: an x14-only family on a base rule is a recorded outcome, not a lift (see X14_ONLY_ICON_SETS).
+  if (!standalone && X14_ONLY_ICON_SETS.has(setName)) return finishUnresolved('cf-unsupported-rule', slot)
   // S4-M: the viewer lays out no RTL sheet, so an icon set there (or on a sheet of unknown order) is withheld outright.
   const sheetRightToLeft = fin.meta.sheetRightToLeft
   if (sheetRightToLeft !== false) return finishUnresolved('cf-unsupported-rule', slot)

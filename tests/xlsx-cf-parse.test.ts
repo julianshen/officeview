@@ -448,9 +448,11 @@ describe('CF ranges, caps and invalid attributes', () => {
       .toMatchObject({ kind: 'unresolved', reason: 'cf-resource-limit' })
     expect(icon(`<iconSet iconSet="3Arrows" custom="1">${cfIcon('3Arrows', 0).repeat(6)}</iconSet>`))
       .toMatchObject({ kind: 'unresolved', reason: 'cf-resource-limit' })
-    expect(icon(`<iconSet iconSet="3Arrows" custom="1">${cfIcon('NoIcons', 0)}${cfIcon('3Arrows', 1)}${cfIcon('3Arrows', 2)}</iconSet>`))
-      .not.toMatchObject({ reason: 'cf-unsupported-icon' })
-    expect(icon(`<iconSet iconSet="3Arrows" custom="1">${cfIcon('NoIcons', 1)}${cfIcon('3Arrows', 1)}${cfIcon('3Arrows', 2)}</iconSet>`))
+    // A well-formed NoIcons mapping reaches the evidence gate: unresolved on production evidence (none is verified yet).
+    const three = '<cfvo type="num" val="0"/><cfvo type="num" val="1"/><cfvo type="num" val="2"/>'
+    expect(icon(`<iconSet iconSet="3Arrows" custom="1">${three}${cfIcon('NoIcons', 0)}${cfIcon('3Arrows', 1)}${cfIcon('3Arrows', 2)}</iconSet>`))
+      .toMatchObject({ kind: 'unresolved', type: 'iconSet', reason: 'cf-unsupported-rule' })
+    expect(icon(`<iconSet iconSet="3Arrows" custom="1">${three}${cfIcon('NoIcons', 1)}${cfIcon('3Arrows', 1)}${cfIcon('3Arrows', 2)}</iconSet>`))
       .toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-icon' })
   })
 
