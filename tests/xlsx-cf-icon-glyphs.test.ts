@@ -180,9 +180,9 @@ describe('Task 28: the glyph table', () => {
 })
 
 /** Measured 2026-11-15 by `OV_MODULE_MAP=1 npx vite build` (dist/.module-map.json `moduleBytes`): the iconGlyphs.ts
- * module (encoded table, class map, headers, admission-owned decoder) renders 15,870 B, 4,614 B gzip, inside the lazy
- * cf chunk (fix round: bounds from the encoded table, prepared fill styles). */
-const CF_GLYPH_TABLE_GZIP_BYTES = 4614
+ * module (encoded table, class map, headers, admission-owned decoder) renders 18,192 B, 5,462 B gzip, inside the lazy
+ * cf chunk (round 7: the redrawn classes). */
+const CF_GLYPH_TABLE_GZIP_BYTES = 5462
 
 describe('Task 28: the icon frame at the glyph key geometry', () => {
   const icon = { ruleId: 1, set: '3Arrows' as const, iconId: 0, bucket: 0, buckets: 3, showValue: true }
@@ -383,5 +383,21 @@ describe('Task 28 fix round', () => {
       expect(toString).not.toHaveBeenCalled()
       expect(padStart).not.toHaveBeenCalled()
     } finally { toString.mockRestore(); padStart.mockRestore(); cache.release() }
+  })
+})
+
+/**
+ * Round 7 (S4-REDRAW) tracing guard: every glyph is built from a few geometric primitives. A pixel trace of these
+ * glyphs (60-130 ink pixels each, four vertices a pixel) would need hundreds of vertices and dozens of fills.
+ * Measured maxima at round 7: 8 fills (3Symbols2:1, 5Rating:0) and 32 vertices (3Symbols2:1, 5Rating:0).
+ */
+describe('S4-REDRAW: glyphs stay primitive', () => {
+  const MAX_FILLS = 12, MAX_VERTICES = 48
+  it(`every glyph has at most ${MAX_FILLS} fills and ${MAX_VERTICES} path vertices (M, L, A)`, () => {
+    for (const cls of CLASSES) {
+      const g = cfIconGlyphClass(cls)!
+      expect(g.path.filter(o => o[0] === 'F').length, cls).toBeLessThanOrEqual(MAX_FILLS)
+      expect(g.path.filter(o => o[0] === 'M' || o[0] === 'L' || o[0] === 'A').length, cls).toBeLessThanOrEqual(MAX_VERTICES)
+    }
   })
 })

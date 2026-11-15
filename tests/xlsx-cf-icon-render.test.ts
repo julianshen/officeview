@@ -22,7 +22,7 @@ import { buildGeometry } from '../src/xlsx/view/source'
 import { cfRulesVersion, prepareCfRemote } from '../src/xlsx/view/pagedSource'
 import { createCfMemory, createCfWorkBudget } from '../src/xlsx/cf/limits'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
-import { CF_ICON_PAINT_CAPABILITIES, CF_ICON_RENDER_MODEL, CF_ICON_TEXT_PADDING_PX, iconWithheld, layoutIcon } from '../src/xlsx/cf/iconPaint'
+import { CF_ICON_PAINT_CAPABILITIES, CF_ICON_RENDER_MODEL, CF_ICON_SCALES, CF_ICON_TEXT_PADDING_PX, iconWithheld, layoutIcon } from '../src/xlsx/cf/iconPaint'
 import { admitIconGlyphs, cfIconGlyphHeader, iconGlyph, injectCfIconGlyphs, type CfGlyphOp } from '../src/xlsx/cf/iconGlyphs'
 import { getPaintables } from '../src/render/paint'
 import type { CfIconDescriptor, CfStamp } from '../src/xlsx/cf/model'
@@ -701,6 +701,34 @@ describe('S4-RIGHTINSET-ZERO: right-aligned numbers at the key geometry', () => 
     try {
       expect(iconWithheld(desc, host(78), c => caps.has(c), CF_ICON_RENDER_MODEL)).toBe(true)
       expect(iconWithheld(desc, host(77), c => caps.has(c), CF_ICON_RENDER_MODEL)).toBe(false)
+    } finally { injectCfIconGlyphs(null) }
+  })
+
+  it('round 7 (S4-CLEAR-SNAP): text that clears the frame at the capture scale but meets its snapped edge at one zoom/DPR pair withholds', () => {
+    const desc: CfIconDescriptor = { ruleId: 1, set: '3Arrows', iconId: 2, bucket: 2, buckets: 3, showValue: true }
+    const host = (x: number) => ({ x, y: 0, width: 100, height: 20, textWidth: 77, rowPt: 15, cell: { value: 1234, style: { ...KEY_STYLE, vertical: 'center' as const } } })
+    const caps = new Set([...ICON_PAINT_EVIDENCE, 'icon:geometry-row-offset'])
+    injectCfIconGlyphs((set, id) => cfIconGlyphHeader(`${set}:${id}`))
+    try {
+      // At x = 0 the text starts at 20 px, the frame's edge at every scale: paints.
+      expect(iconWithheld(desc, host(0), c => caps.has(c), CF_ICON_RENDER_MODEL)).toBe(false)
+      // At x = 0.5 the text starts at 20.5 logical px (clear at the capture scale: 15.375 device px against an edge at
+      // 15), but at zoom 1 / DPR 1 the cell's left gridline snaps to 1, the frame's edge to 21 and the text's first
+      // device column is 20: it would meet the frame, so the icon withholds at every scale (one decision for all).
+      expect(iconWithheld(desc, host(0.5), c => caps.has(c), CF_ICON_RENDER_MODEL)).toBe(true)
+      // Property: wherever the predicate admits, no supported scale lays the frame over the text's first device column.
+      const roundHalfUp = (v: number) => Math.floor(v + 0.5)
+      for (let i = 0; i < 400; i++) {
+        const x = (i * 7.31) % 50, tw = 60 + (i * 3.17) % 20
+        const h = { ...host(x), textWidth: tw }
+        if (iconWithheld(desc, h, c => caps.has(c), CF_ICON_RENDER_MODEL)) continue
+        for (const [zoom, dpr] of CF_ICON_SCALES) {
+          const laid = layoutIcon(desc, h, { sizePt: 11, vertical: 'center', horizontal: 'right' }, { zoom, dpr, output: 'device' }, CF_ICON_RENDER_MODEL, c => caps.has(c))!
+          const textStart = Math.floor((x + 100 - 3 - tw) * zoom * dpr)
+          expect(laid.box.x + laid.box.w, `x=${x} tw=${tw} ${zoom}/${dpr}`).toBeLessThanOrEqual(textStart)
+          void roundHalfUp
+        }
+      }
     } finally { injectCfIconGlyphs(null) }
   })
 

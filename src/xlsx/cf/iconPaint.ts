@@ -345,7 +345,30 @@ export function iconWithheld(icon: CfIconDescriptor, host: CfBarHost | undefined
   const laid = layoutIcon(icon, host, font, CAPTURE_SCALE, model, check)
   if (!laid) return true
   const fit = slotFit(font, laid.inset.left + laid.inset.right, model)
-  return !fit || !slotTextFits(host, fit.roomPx, check, fit.overflow)
+  if (!fit || !slotTextFits(host, fit.roomPx, check, fit.overflow)) return true
+  return font.horizontal === 'right' && model.keyFrame !== undefined && !rightTextClearsAtEveryScale(host, model.keyFrame)
+}
+
+/** The zoom/DPR pairs the viewer paints at (the views' supported scales; tests paint at each). */
+export const CF_ICON_SCALES: ReadonlyArray<readonly [number, number]> = Object.freeze([[0.5, 1], [0.75, 1], [1, 1], [1, 2], [1.5, 2], [2, 3]] as const)
+
+/**
+ * Ruling S4-CLEAR-SNAP (round 7): at every supported scale, the right-aligned text's first device column (the text box
+ * start, `host.x + host.width - PADDING_R - textWidth`, floored on the device grid) lies at or after the frame's
+ * snapped right edge (`layoutIcon`'s grid: the host's left gridline and the frame's left inset and width each rounded
+ * half up). One decision for every scale (the conservative one: withheld if it would meet the text at any), so the
+ * description and the paint never change with zoom.
+ */
+function rightTextClearsAtEveryScale(host: CfBarHost, frame: CfIconKeyFrame): boolean {
+  const width = host.textWidth
+  if (width === undefined || !Number.isFinite(width)) return false
+  const textStart = host.x + host.width - CF_ICON_TEXT_PADDING_PX / 2 - width
+  for (const [zoom, dpr] of CF_ICON_SCALES) {
+    const devPerPx = zoom * dpr, devPerPt = devPerPx * PT_PX
+    const edge = roundHalfUp(host.x * devPerPx) + roundHalfUp(frame.leftPt * devPerPt) + roundHalfUp(frame.widthPt * devPerPt)
+    if (Math.floor(textStart * devPerPx + 1e-9) < edge) return false
+  }
+  return true
 }
 
 /**

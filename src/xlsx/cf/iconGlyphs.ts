@@ -220,14 +220,10 @@ export const CF_ICON_GLYPH_WITHHELD: ReadonlySet<string> = new Set<string>([
   // Excel's empty star is a speckle of greys whose median over any outline we draw stays below the ink threshold (it
   // measures 3..12 × 9..17 from scattered pixels at delta >= 64): our outline draws no ink, so its box fails.
   '3Stars:0',
-  // Fix round (review P1): the reference-region check (each colour region of the key crop drawn in its own colour on
-  // at least half its pixels, ±48) and the ink-mask IoU >= 0.85, thresholds fixed from negative controls before any
-  // real glyph was measured (tests/helpers/cf-glyph-measure.ts). Our simplified artwork misses a shading or detail
-  // region, or the shape, of these; they are withheld until redrawn as original artwork.
-  '3ArrowsGray:2', '3Flags:0', '3Flags:1', '3Flags:2', '3TrafficLights1:1', '3TrafficLights2:0', '3TrafficLights2:1',
-  '3TrafficLights2:2', '3Signs:0', '3Signs:1', '3Symbols2:0', '3Symbols2:1', '3Symbols2:2', '4Arrows:2', '4ArrowsGray:1',
-  '4ArrowsGray:2', '4Rating:0', '4Rating:1', '4Rating:2', '4Rating:3', '5Rating:0', '3Stars:1', '3Stars:2',
-  '3Triangles:0', '3Triangles:1',
+  // Fix round / round 7 (S4-REDRAW): these fail the frozen reference-region check (each colour region of the key crop
+  // drawn in its own colour on at least half its pixels, ±48) or the ink IoU >= 0.85 even after an honest redraw from
+  // primitives: the stars' and rating bars' shading and the green pennant's fold. Withheld.
+  '3Stars:1', '3Stars:2', '3Flags:2', '4Rating:0', '4Rating:1', '4Rating:2', '4Rating:3', '5Rating:0',
 ])
 
 /** The key frame every glyph is drawn in (pt): `CF_ICON_RENDER_MODEL.keyFrame` `widthPt`/`heightPt`. */
@@ -249,19 +245,40 @@ const DOWN_RIGHT: readonly Shape[] = [
   ['p', 0, 0, 2.5, 2.5, 0, 9.5, 7, 7, 9.5], ['p', 2, 12, 3.5, 12, 12, 3.5, 12],
   ['p', 1, 1.4, 2.5, 2.5, 1.4, 8.5, 7.4, 7.4, 8.5], ['p', 3, 11, 6, 11, 11, 6, 11],
 ]
-const UP_RIGHT: readonly Shape[] = [
-  ['p', 0, 0, 9.5, 2.5, 12, 9.5, 5, 7, 2.5], ['p', 2, 12, 8.5, 12, 0, 3.5, 0],
-  ['p', 1, 1.4, 9.5, 2.5, 10.6, 8.5, 4.6, 7.4, 3.5], ['p', 3, 11, 6, 11, 1, 6, 1],
+/** Round 7 (S4-REDRAW): an outlined diagonal arrow, head in the top-right corner: the outline (colour 0) is the head
+ * triangle and the shaft band; the core (colour 1) is the head's inner triangle and the band's middle. */
+const UP_RIGHT_2: readonly Shape[] = [
+  ['p', 0, 4, 0, 12, 0, 12, 8], ['p', 0, 0, 8.5, 7, 1.5, 10.5, 5, 3.5, 12],
+  ['p', 1, 6.5, 1, 11, 1, 11, 5.5], ['p', 1, 1.5, 8.5, 8.5, 1.5, 10, 3, 3, 10],
 ]
-const FLAG: readonly Shape[] = [['p', 0, 1.6, 0, 2.6, 0, 5, 12, 4, 12], ['p', 1, 1, 0, 6, 0, 10, 3, 10, 6, 2, 6]]
+/** The same arrow pointing down-right (head in the bottom-right corner). */
+const DOWN_RIGHT_2: readonly Shape[] = [
+  ['p', 0, 3.5, 12, 12, 12, 12, 3.5], ['p', 0, -0.5, 3, 3, -0.5, 11, 7.5, 7.5, 11],
+  ['p', 1, 6.5, 11, 11, 11, 11, 6.5], ['p', 2, 1.25, 2.75, 2.75, 1.25, 9.5, 8, 8, 9.5],
+]
+/** Round 7 (S4-REDRAW): a lamp housing with clipped corners (colour 0), lit from the top left (colour 4), a black
+ * bezel (colour 1), the lamp (colour 2) and its highlight (colour 3). */
+const LAMP_2: readonly Shape[] = [
+  ['p', 0, 2.6, 1, 10.4, 1, 12, 2.6, 12, 10.4, 10.4, 12, 2.6, 12, 1, 10.4, 1, 2.6],
+  ['p', 4, 2.6, 1, 10.4, 1, 11, 2, 2, 2, 2, 11, 1, 10.4, 1, 2.6],
+  ['p', 1, 2.6, 2, 10.4, 2, 11, 2.6, 11, 10.4, 10.4, 11, 2.6, 11, 2, 10.4, 2, 2.6],
+  ['c', 2, 6.5, 6.5, 3.9], ['c', 5, 5.3, 5.3, 1.9], ['c', 3, 5, 5, 1.1],
+]
+/** Round 7 (S4-REDRAW): a pennant on a slanted pole: a soft grey halo round the pole (colour 0) and under the cloth's
+ * tip (colour 4), the cloth's lighter edge (colour 5), the cloth (colour 2), a darker fold at the hoist (colour 3), the
+ * pole (colour 1) and its dark core (colour 6). */
+const FLAG_2: readonly Shape[] = [
+  ['p', 0, -0.6, 0, 2.6, 0, 6.6, 12, 3.4, 12], ['p', 4, 7.6, 2.6, 11, 4.4, 9.6, 6.8, 4.6, 6.8],
+  ['p', 5, 2.1, -0.2, 6.4, 0.2, 10.6, 4, 10.4, 5.8, 3.3, 6.3],
+  ['p', 2, 2.4, 0.6, 5.9, 1, 9.8, 4.4, 9.4, 5.4, 3.4, 5.6],
+  ['p', 3, 2, 0, 4.2, 0, 3, 1.2, 3, 3, 2.4, 3],
+  ['p', 1, 0.2, 0, 1.8, 0, 5.8, 12, 4.2, 12], ['p', 6, 0.5, 0, 1.5, 0, 5.5, 12, 4.5, 12],
+]
 const DISC: readonly Shape[] = [['c', 0, 5.5, 5.5, 5.5]]
 const RIMMED: readonly Shape[] = [['c', 0, 5.5, 5.5, 5.5], ['c', 1, 5.5, 5.5, 4.5]]
 const CROSS_MARK: readonly Shape[] = [['p', 2, 3, 3.8, 3.8, 3, 8, 7.2, 7.2, 8], ['p', 2, 7.2, 3, 8, 3.8, 3.8, 8, 3, 7.2]]
 const BANG_MARK: readonly Shape[] = [['r', 2, 5, 2, 1, 5], ['r', 2, 5, 8, 1, 1]]
 const TICK_MARK: readonly Shape[] = [['p', 2, 2, 6.5, 3, 5.5, 4.5, 7, 8, 3.5, 9, 4.5, 4.5, 9]]
-const LAMP: readonly Shape[] = [['r', 0, 1, 1, 11, 11], ['c', 1, 6.5, 6.5, 4]]
-const DIAMOND: readonly Shape[] = [['p', 0, 6.5, 0, 12, 6, 6.5, 12, 1, 6], ['p', 1, 6.5, 1.5, 10.5, 6, 6.5, 10.5, 2.5, 6]]
-const TRIANGLE: readonly Shape[] = [['p', 0, 6.5, 0, 12, 11, 1, 11], ['p', 1, 6.5, 2.5, 10.3, 10, 2.7, 10]]
 const RING: readonly Shape[] = [['c', 0, 5.5, 5.5, 5.5], ['c', 1, 5.5, 5.5, 4.5]]
 /** A ring holding `n` quarters of a pie (colour 2) about (cx, cy), whose straight edges lie on whole points. */
 const quarters = (n: number, cx: number, cy: number): readonly Shape[] => [...RING, ['s', 2, cx, cy, 5, 0, n]]
@@ -279,16 +296,36 @@ const boxes = (...filled: number[]): readonly Shape[] => [[1, 1], [6.5, 1], [1, 
 
 const GEOMETRY: Readonly<Record<string, readonly Shape[]>> = {
   '3Arrows:0': DOWN, '3Arrows:1': RIGHT, '3Arrows:2': UP,
-  '3ArrowsGray:0': DOWN, '3ArrowsGray:1': RIGHT, '3ArrowsGray:2': UP,
-  '3Flags:0': FLAG, '3Flags:1': FLAG, '3Flags:2': FLAG,
-  '3TrafficLights1:0': RIMMED, '3TrafficLights1:1': RIMMED, '3TrafficLights1:2': RIMMED,
-  '3TrafficLights2:0': LAMP, '3TrafficLights2:1': LAMP, '3TrafficLights2:2': LAMP,
-  '3Signs:0': DIAMOND, '3Signs:1': TRIANGLE, '3Signs:2': [['c', 0, 6.5, 6.5, 5.5], ['c', 1, 6.5, 6.5, 4.5]],
+  '3ArrowsGray:0': DOWN, '3ArrowsGray:1': RIGHT, '3ArrowsGray:2': [...UP, ['p', 2, 4.8, 1, 6, 1, 3.2, 4.8, 2, 4.8], ['p', 3, 6, 9, 7, 9, 7, 11, 5, 11, 5, 10, 6, 10]],
+  '3Flags:0': FLAG_2, '3Flags:1': FLAG_2, '3Flags:2': FLAG_2,
+  '3TrafficLights1:0': RIMMED, '3TrafficLights1:1': [...RIMMED, ['p', 2, 1.5, 6, 1.5, 4, 3, 2.5, 5, 1.5, 6.5, 1.5, 6.5, 2.5, 4.5, 3, 3, 4.5, 2.5, 6]], '3TrafficLights1:2': RIMMED,
+  '3TrafficLights2:0': LAMP_2, '3TrafficLights2:1': LAMP_2, '3TrafficLights2:2': LAMP_2,
+  // Round 7 (S4-REDRAW): a diamond with a light outer edge, a dark rim, and an interior lit from the upper left.
+  '3Signs:0': [
+    ['p', 0, 5, 0, 8, 0, 12, 4, 12, 8, 8, 12, 5, 12, 1, 8, 1, 4],
+    ['p', 1, 5.4, 1, 7.6, 1, 11, 4.4, 11, 7.6, 7.6, 11, 5.4, 11, 2, 7.6, 2, 4.4],
+    ['p', 2, 5.8, 2, 7.2, 2, 10, 4.8, 10, 7.2, 7.2, 10, 5.8, 10, 3, 7.2, 3, 4.8],
+    ['p', 3, 5.6, 3, 7.4, 3, 8.8, 4.6, 4.6, 8.8, 3.6, 7.2, 3.6, 5],
+  ],
+  // A warning triangle: dark rim, light interior, a saturated band low on the right.
+  '3Signs:1': [['p', 0, 6.5, -0.3, 12.3, 11, 0.7, 11], ['p', 3, 5.6, 1.6, 6.4, 1.6, 1.8, 10.2, 0.9, 10.2], ['p', 1, 6.5, 1.8, 10.6, 9.9, 2.4, 9.9], ['p', 2, 8.6, 6.5, 10.6, 9.9, 8, 9.9]], '3Signs:2': [['c', 0, 6.5, 6.5, 5.5], ['c', 1, 6.5, 6.5, 4.5]],
   '3Symbols:0': [...RIMMED, ...CROSS_MARK], '3Symbols:1': [...RIMMED, ...BANG_MARK], '3Symbols:2': [...RIMMED, ...TICK_MARK],
-  '3Symbols2:0': [['p', 0, 1, 2.4, 2.4, 1, 11, 9.6, 9.6, 11], ['p', 0, 9.6, 1, 11, 2.4, 2.4, 11, 1, 9.6]],
-  '3Symbols2:1': [['p', 0, 5, 1, 8, 1, 7, 8, 6, 8], ['r', 1, 5, 9, 3, 2]],
-  '3Symbols2:2': [['p', 0, 0, 5, 1.5, 4, 5, 7.5, 10.5, 0, 12, 2, 5, 11]],
-  '4Arrows:1': DOWN_RIGHT, '4Arrows:2': UP_RIGHT, '4ArrowsGray:1': DOWN_RIGHT, '4ArrowsGray:2': UP_RIGHT,
+  // Round 7 (S4-REDRAW): a broad cross with a soft edge and a darker core.
+  '3Symbols2:0': [
+    ['p', 0, 3.6, 1, 11, 8.4, 8.4, 11, 1, 3.6], ['p', 0, 8.4, 1, 1, 8.4, 3.6, 11, 11, 3.6],
+    ['p', 1, 2.9, 1.6, 10.4, 9.1, 9.1, 10.4, 1.6, 2.9], ['p', 1, 9.1, 1.6, 1.6, 9.1, 2.9, 10.4, 10.4, 2.9],
+  ],
+  // An exclamation mark: an orange stroke narrowing to a stem, a light core, a light cap and a dot.
+  '3Symbols2:1': [
+    ['r', 0, 5, 0, 3, 1], ['r', 4, 5, 5, 3, 1], ['r', 1, 5, 1, 3, 4], ['r', 6, 6, 5, 1, 2], ['r', 2, 6, 2, 1, 2], ['r', 5, 5, 4, 2, 1], ['r', 7, 6, 7, 1, 1.5], ['r', 3, 5, 9, 3, 2],
+  ],
+  // A check mark: a light edge, a mid-green body and a dark core along the long stroke.
+  '3Symbols2:2': [
+    ['p', 0, 0, 4.6, 2.4, 4.4, 5.2, 6.3, 9, 0, 11.2, 0, 12.1, 1.8, 5.6, 11, 4.2, 11, 0, 7.9],
+    ['p', 1, 0.8, 5.3, 2.3, 5.2, 5.2, 7.4, 9.5, 0.8, 11, 0.9, 11.3, 1.9, 5.3, 10.2, 4.5, 10.2, 0.8, 7.4],
+    ['p', 2, 5.4, 8.6, 10.4, 1.2, 11, 1.7, 5.5, 9.6],
+  ],
+  '4Arrows:1': DOWN_RIGHT, '4Arrows:2': UP_RIGHT_2, '4ArrowsGray:1': DOWN_RIGHT_2, '4ArrowsGray:2': UP_RIGHT_2,
   '4RedToBlack:0': DISC, '4RedToBlack:1': DISC, '4RedToBlack:2': DISC, '4RedToBlack:3': DISC,
   '4Rating:0': rating(1), '4Rating:1': rating(2), '4Rating:2': rating(3), '4Rating:3': rating(4),
   '4TrafficLights:0': RIMMED, '5Rating:0': rating(0),
@@ -296,7 +333,7 @@ const GEOMETRY: Readonly<Record<string, readonly Shape[]>> = {
   '3Stars:0': [['p', 0, ...STAR], ['p', 1, ...STAR_CORE]],
   '3Stars:1': [['p', 0, ...STAR], ['p', 1, ...STAR_CORE], ['p', 2, ...STAR_LEFT]],
   '3Stars:2': [['p', 0, ...STAR]],
-  '3Triangles:0': [['p', 0, 1, 5, 11, 5, 6.5, 11]], '3Triangles:1': [['r', 0, 0, 5, 11, 3]], '3Triangles:2': [['p', 0, 6, 2.5, 11, 8, 1, 8]],
+  '3Triangles:0': [['p', 0, 1, 5, 11, 5, 6.5, 11], ['p', 1, 4.5, 7, 8.5, 7, 6.5, 9.5]], '3Triangles:1': [['r', 0, 0, 5, 11, 1], ['r', 1, 0, 6, 8, 2], ['r', 2, 8, 6, 3, 2]], '3Triangles:2': [['p', 0, 6, 2.5, 11, 8, 1, 8]],
   '5Boxes:0': boxes(), '5Boxes:1': boxes(2), '5Boxes:2': boxes(2, 3), '5Boxes:3': boxes(0, 2, 3), '5Boxes:4': boxes(0, 1, 2, 3),
 }
 
@@ -313,29 +350,29 @@ const COLOURS: Readonly<Record<string, readonly number[]>> = {
   '3Arrows:2': [0xff255e1b, 0xff5bbb76],
   '3ArrowsGray:0': [0xff404040, 0xffadadad],
   '3ArrowsGray:1': [0xff404040, 0xffa8a8a8],
-  '3ArrowsGray:2': [0xff404040, 0xffa0a0a0],
-  '3Flags:0': [0xff606060, 0xffcc5d5b],
-  '3Flags:1': [0xff606060, 0xffcfb244],
-  '3Flags:2': [0xff606060, 0xff6aad52],
+  '3ArrowsGray:2': [0xff404040, 0xffa3a3a3, 0xff717171, 0xff949494],
+  '3Flags:0': [0xffffffff, 0xffafafaf, 0xfff56563, 0xffbc2a20, 0xffefefef, 0xffbfb8b8, 0xff504848],
+  '3Flags:1': [0xffffffff, 0xffafafaf, 0xfffdbb46, 0xffbf930f, 0xffefefef, 0xffbfbfb6, 0xff504848],
+  '3Flags:2': [0xffffffff, 0xffafafaf, 0xff72b357, 0xff358d29, 0xffefefef, 0xffb9bcb7, 0xff484a48],
   '3TrafficLights1:0': [0xffa44f45, 0xfff58284],
-  '3TrafficLights1:1': [0xffdf8b31, 0xfffedd73],
+  '3TrafficLights1:1': [0xffdf8b31, 0xfffedc68, 0xffffeba7],
   '3TrafficLights1:2': [0xff4d7c45, 0xff61bb7a],
-  '3TrafficLights2:0': [0xff444040, 0xfff0554e],
-  '3TrafficLights2:1': [0xff404040, 0xfff5ac39],
-  '3TrafficLights2:2': [0xff404040, 0xff59b148],
-  '3Signs:0': [0xffa6443b, 0xfff68688],
-  '3Signs:1': [0xffe89e35, 0xfffedc64],
+  '3TrafficLights2:0': [0xff404040, 0xff131110, 0xffef4b45, 0xfffabebb, 0xff777777, 0xfff4827b],
+  '3TrafficLights2:1': [0xff404040, 0xff131111, 0xfff5a92c, 0xfffee2b3, 0xff777777, 0xfffac469],
+  '3TrafficLights2:2': [0xff404040, 0xff101110, 0xff54a948, 0xffc0e0bb, 0xff777878, 0xff7ec175],
+  '3Signs:0': [0xffc48d86, 0xffa64037, 0xfff47475, 0xfff79294],
+  '3Signs:1': [0xffe49219, 0xfffedf73, 0xfffdcf2e, 0xffe39638],
   '3Signs:2': [0xff4d7c45, 0xff61bb7a],
   '3Symbols:0': [0xffa44f45, 0xffe37a75, 0xfffae9e8],
   '3Symbols:1': [0xffdf8b2f, 0xffeeb352, 0xffffffff],
   '3Symbols:2': [0xff4d7c45, 0xff6db377, 0xffddebdf],
-  '3Symbols2:0': [0xffb8564f],
-  '3Symbols2:1': [0xffe18d2d, 0xffde8817],
-  '3Symbols2:2': [0xff549b63],
+  '3Symbols2:0': [0xffd5aea9, 0xffb74f49],
+  '3Symbols2:1': [0xfffaeddf, 0xffdd8323, 0xfff9e1b3, 0xffde8817, 0xfff4d7b8, 0xffe8a85b, 0xffdd8119, 0xffeab47a],
+  '3Symbols2:2': [0xff85a57f, 0xff519a5e, 0xff3a833f],
   '4Arrows:1': [0xffe8a039, 0xfffee691, 0xffd87103, 0xfffdd23a],
-  '4Arrows:2': [0xffe8a13d, 0xfffee17d, 0xffd87103, 0xfffee17d],
-  '4ArrowsGray:1': [0xff6c6c6c, 0xffafafaf, 0xff404040, 0xff8c8c8c],
-  '4ArrowsGray:2': [0xff6d6d6d, 0xffa7a7a7, 0xff404040, 0xffa1a1a1],
+  '4Arrows:2': [0xffd87103, 0xfffee17d],
+  '4ArrowsGray:1': [0xff404040, 0xff8c8c8c, 0xffababab],
+  '4ArrowsGray:2': [0xff404040, 0xffa6a6a6],
   '4RedToBlack:0': [0xff000000],
   '4RedToBlack:1': [0xffbfbfbf],
   '4RedToBlack:2': [0xffff8d89],
@@ -354,8 +391,8 @@ const COLOURS: Readonly<Record<string, readonly number[]>> = {
   '3Stars:0': [0xffc0c0c0, 0xffdbdbdb],
   '3Stars:1': [0xffb8bbb6, 0xffdbdce7, 0xffe1cc4d],
   '3Stars:2': [0xffe2c957],
-  '3Triangles:0': [0xffc86d67],
-  '3Triangles:1': [0xffedac4b],
+  '3Triangles:0': [0xffc06b66, 0xfffc7577],
+  '3Triangles:1': [0xffe6a352, 0xffedb042, 0xffeca51d],
   '3Triangles:2': [0xff5a9a5c],
   '5Boxes:0': [0, 0xffeaeaea],
   '5Boxes:1': [0xff6588ac, 0xffeaeaea],

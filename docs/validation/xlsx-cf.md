@@ -1600,7 +1600,7 @@ After verify-only (38d3d872), production paints icons only behind `CF_ICON_PAINT
 - **Classes:** 54 entries over 75 pairs, exactly the sidecar's `glyphClasses`. The twins `4RedToBlack:0`/`5Quarters:4` and `4RedToBlack:1`/`5Boxes:0` are separate entries (S4-NEARTWIN).
 - **Withheld:** `3Stars:0` (`CF_ICON_GLYPH_WITHHELD`). Excel's empty star is a speckle of greys. The median over any outline region we draw is about 190, so after anti-aliasing our outline draws no ink at delta 64, against a measured box of 3..12 × 9..17. Its one pair, `3Stars:0`, never paints. The other 53 classes pass both checks.
 - **Gates:** a pair paints only with its own `icon:glyph-<set>-<iconId>` evidence. None is published before Task 30, so production still paints no icon.
-- **Size:** the `iconGlyphs.ts` module (encoded table, class map and decoder) renders 15,870 B, or 4,614 B gzip (fix round), inside the lazy `cf` chunk (`render-*.js`). Measured with `OV_MODULE_MAP=1 npx vite build`; `scripts/vite-module-map.ts` now records each module's `moduleBytes`. The test asserts ≤ 16 KiB and ≤ 4,614 B + 10 % (Ruling S4-GLYPHCAP). No CF module is in the eager closure.
+- **Size:** the `iconGlyphs.ts` module (encoded table, class map and decoder) renders 18,192 B, or 5,462 B gzip (round 7), inside the lazy `cf` chunk (`render-*.js`). Measured with `OV_MODULE_MAP=1 npx vite build`; `scripts/vite-module-map.ts` now records each module's `moduleBytes`. The test asserts ≤ 16 KiB and ≤ 5,462 B + 10 % (Ruling S4-GLYPHCAP). No CF module is in the eager closure.
 
 **The key frame (`CF_ICON_RENDER_MODEL.keyFrame`).**
 - The frame is the union of the 54 classes' ink boxes in the key's `observedIcons`, which are cell-relative, inclusive and at 1 px/pt:
@@ -1796,3 +1796,27 @@ So the case measured:
 - Drawing reuses the prepared strings. A test spies on `Number.prototype.toString` and `String.prototype.padStart` across two draws of every admitted class and sees neither called.
 
 **Size.** The `iconGlyphs.ts` module is now 15,870 B, or 4,614 B gzip, in the lazy `cf` chunk.
+
+### Task 28 round 7 (2026-11-15): S4-REDRAW and S4-CLEAR-SNAP
+
+**S4-REDRAW.** The 26 withheld classes were redrawn as original artwork, built only from geometric primitives (polygons with few vertices, rects and circles). The frozen check is unchanged: IoU ≥ 0.85, and each reference region within ±48 on ≥ 50 % of its pixels.
+- **17 classes now pass:**
+  - 3ArrowsGray:2, which gains a mid-grey shading strip along the head and the shaft foot;
+  - 4Arrows:2, 4ArrowsGray:1 and 4ArrowsGray:2, outlined diagonal arrows with the head in the corner;
+  - 3TrafficLights1:1, which gains an upper-left highlight band;
+  - 3TrafficLights2:0, 3TrafficLights2:1 and 3TrafficLights2:2: a clipped-corner housing lit from the top left, a black bezel, the lamp, a halo and a highlight;
+  - 3Signs:0, an octagonal diamond with a light edge, a dark rim and an interior lit from the upper left;
+  - 3Signs:1, a rimmed triangle with a saturated lower-right band and a lighter left edge;
+  - 3Symbols2:0, 3Symbols2:1 and 3Symbols2:2: a broad cross with a soft edge, an exclamation mark with a light core and cap, and a check with an edge, body and core;
+  - 3Triangles:0 and 3Triangles:1, which gain inner saturated shapes;
+  - 3Flags:0 and 3Flags:1, a pennant on a slanted pole with a grey halo and a dark core.
+- **Still withheld (9):** 3Stars:0, 3Stars:1, 3Stars:2, 3Flags:2, 4Rating:0, 4Rating:1, 4Rating:2, 4Rating:3 and 5Rating:0. Their shading (the stars, the rating bars' highlights and caps, the green pennant's fold) did not reach the thresholds with simple shapes.
+- **Tracing guard.** Every glyph has at most 12 fills and 48 path vertices, which is pinned. A pixel trace would need hundreds of vertices. The measured maxima are 8 fills and 32 vertices (3Symbols2:1 and 5Rating:0).
+
+**S4-CLEAR-SNAP.**
+- Right-aligned clearance is also checked at each supported zoom/DPR pair (`CF_ICON_SCALES`: 0.5/1, 0.75/1, 1/1, 1/2, 1.5/2, 2/3). At each pair, the text's first device column must lie at or after the frame's snapped right edge, computed on the same grid as `layoutIcon`: the host's left gridline, the left inset and the width, each rounded half up.
+- **The decision is conservative and the same for every scale:** the icon is withheld if the text would meet the frame at any pair. So the description and the paint never change with zoom.
+- **Pinned case:** a 100 px cell with 77 px of text at x = 0.5. It clears at the capture scale, but at zoom 1 / DPR 1 the frame edge snaps to 21 while the text starts at device column 20, so it withholds.
+- **Property test:** wherever the predicate admits, no scale lays the frame over the text.
+
+**Size.** `iconGlyphs.ts` is 18,192 B, or 5,462 B gzip, in the lazy `cf` chunk.
