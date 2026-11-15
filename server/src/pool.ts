@@ -229,7 +229,7 @@ export class Pool {
       return await this.exclusive(slot, () => {
         // Admitted, then waited for the worker: a socket that closed meanwhile has no use for the render.
         if (signal?.aborted) throw new ShowCancelled()
-        return this.renderOn(slot, admitted, job)
+        return this.renderOn(slot, admitted, job, signal)
       })
     } finally {
       if (admitted.state === 'running') this.finish(admitted)
@@ -244,6 +244,7 @@ export class Pool {
       return await this.exclusive(slot, async () => {
         if (signal?.aborted) throw new ShowCancelled()
         const { docKey } = await this.ensureOpen(slot, job.docRef, job.contentPolicy)
+        if (signal?.aborted) throw new ShowCancelled()
         const r = await this.runJob(slot, admitted, { type: 'notes', id: this.nextId++, docKey, unitIndex: job.unitIndex, scale: job.scale, mark: job.mark, draw: job.draw })
         if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
         return r as NotesPlan | NotesRaster
@@ -361,6 +362,8 @@ export class Pool {
         // Admitted, then waited for the worker: a socket that closed meanwhile has no use for the build.
         if (signal?.aborted) throw new ShowCancelled()
         const { docKey } = await this.ensureOpen(slot, docRef, contentPolicy)
+        // Again after the (re)open: a socket that closed while the document was parsed gets no build.
+        if (signal?.aborted) throw new ShowCancelled()
         const r = await this.runJob(slot, admitted, msg(docKey), this.showDeadlineMs)
         if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
         return r
@@ -390,7 +393,12 @@ export class Pool {
         const generation = slot.generation
         try {
           const { docKey } = await this.ensureOpen(slot, job.docRef, job.contentPolicy)
-          const post = (j: TextJob, owner: Job, grant?: number) => this.runJob(slot, owner, { type: 'text', id: this.nextId++, docKey, job: j, ...(grant !== undefined ? { grant } : {}) }) as Promise<TextReply>
+          // Checked before every post (after the reopen, and between a prepare and its retry): a closed socket's
+          // text op stops at the next await.
+          const post = (j: TextJob, owner: Job, grant?: number) => {
+            if (signal?.aborted) return Promise.reject(new ShowCancelled())
+            return this.runJob(slot, owner, { type: 'text', id: this.nextId++, docKey, job: j, ...(grant !== undefined ? { grant } : {}) }) as Promise<TextReply>
+          }
           const prepare = (unit: number) => this.prepareOn(sessionId, k, unit, (owner, grant) => post({ op: 'prepare', unit }, owner, grant))
           if (op.op === 'prepare') return await prepare(op.unit)
           let r = await post(op, admitted)
@@ -433,8 +441,10 @@ export class Pool {
     for (const j of started) { this.waiters.get(j.id)?.(true); this.waiters.delete(j.id) }
   }
 
-  private async renderOn(slot: Slot, admitted: Job, job: RenderJob): Promise<RenderedUnit> {
+  private async renderOn(slot: Slot, admitted: Job, job: RenderJob, signal?: AbortSignal): Promise<RenderedUnit> {
     const { docKey } = await this.ensureOpen(slot, job.docRef, job.contentPolicy)
+    // Again after the (re)open: a socket that closed while the document was parsed gets no render.
+    if (signal?.aborted) throw new ShowCancelled()
     const msg: WorkerRequest = { type: 'render', id: this.nextId++, docKey, unitIndex: job.unitIndex, scale: job.scale, projection: job.projection, mark: job.mark, ...(job.missingFaces ? { missingFaces: job.missingFaces } : {}), ...(this.testHooks && job.hangMs ? { hangMs: job.hangMs } : {}), ...(this.testHooks && job.crash ? { crash: true } : {}) }
     const r = await this.runJob(slot, admitted, msg)
     if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
