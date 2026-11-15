@@ -118,9 +118,10 @@ export function planIterations(tree: TimingTree, iterate: ShowPlanRecord['iterat
  * D23: a keyframe track decoded on a rolling window of `TRACK_WINDOW` frames.
  * Each decoded frame is charged `frameBytes` to `workspace` before it is
  * decoded and released when it leaves the window (its bitmap closed). The
- * encoded frames are the caller's (`decode(i)`).
+ * encoded frames are the caller's (`decode(i)`). `refused(i)`: the frame asked
+ * for (`want(i)`) found no room (a read-ahead frame refused is not told).
  */
-export function createTrackWindow(o: { count: number; frameBytes: number; workspace: SlideShowWorkspace; decode(i: number): Promise<ImageBitmapLike | undefined> }): PlanTrack & { dispose(): void } {
+export function createTrackWindow(o: { count: number; frameBytes: number; workspace: SlideShowWorkspace; decode(i: number): Promise<ImageBitmapLike | undefined>; refused?(i: number): void }): PlanTrack & { dispose(): void } {
   const held = new Map<number, { lease: Lease; bmp?: ImageBitmapLike }>()
   let lo = 0
   let disposed = false
@@ -137,7 +138,8 @@ export function createTrackWindow(o: { count: number; frameBytes: number; worksp
       for (let k = lo; k < Math.min(o.count, lo + TRACK_WINDOW); k++) {
         if (held.has(k)) continue
         const lease = o.workspace.lease(o.frameBytes, 'plan:track-frame')
-        if (!lease) break
+        // Only the frame asked for is a refusal worth telling (read-ahead frames come later, as the window moves).
+        if (!lease) { if (k === lo && !held.has(lo)) o.refused?.(lo); break }
         const slot: { lease: Lease; bmp?: ImageBitmapLike } = { lease }
         held.set(k, slot)
         o.decode(k).then(

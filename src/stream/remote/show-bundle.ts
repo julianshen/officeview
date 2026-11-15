@@ -164,7 +164,7 @@ const refuse = (what: string, why: string): never => { throw new StreamSessionEr
  * exactly `count` of them (1..90). The PNGs stay encoded (the reply's leases keep them charged); the window decodes
  * at most 8 at a time, each charged `w·h·4` before it is decoded, and checks each decoded size.
  */
-function trackOf(what: string, unit: number, messages: readonly Uint8Array[], from: number, count: number, workspace: SlideShowWorkspace, decode: (png: Uint8Array) => Promise<ImageBitmapLike>): { track: PlanTrack & { dispose(): void }; bytes: number } {
+function trackOf(what: string, unit: number, messages: readonly Uint8Array[], from: number, count: number, workspace: SlideShowWorkspace, decode: (png: Uint8Array) => Promise<ImageBitmapLike>, refused?: (i: number) => void): { track: PlanTrack & { dispose(): void }; bytes: number } {
   if (!Number.isInteger(count) || count < 1 || count > SHOW_PLAN_LIMITS.trackFrames) refuse(what, `a track of ${count} frames`)
   if (messages.length - from !== count) refuse(what, `${messages.length - from} frames for a track of ${count}`)
   const frames: Frame[] = []
@@ -181,6 +181,7 @@ function trackOf(what: string, unit: number, messages: readonly Uint8Array[], fr
   const { w, h } = frames[0]!
   const track = createTrackWindow({
     count, frameBytes: w * h * 4, workspace,
+    ...(refused ? { refused } : {}),
     async decode(i) {
       const f = frames[i]
       if (!f) return undefined
@@ -196,11 +197,11 @@ function trackOf(what: string, unit: number, messages: readonly Uint8Array[], fr
 /**
  * One `show-track` reply of `unit` (D4): `count` tag-4 frames (the plan step's `track.count`). Given a `ShowReply`,
  * its encoded leases are held until `dispose()` (D23: the encoded PNGs stay charged); on a rejection they are
- * released at once.
+ * released at once. `opts.refused(i)`: the window could not admit the frame asked for.
  */
-export function decodeTrack(unit: number, count: number, reply: readonly Uint8Array[] | ShowReply, workspace: SlideShowWorkspace, decode: (png: Uint8Array) => Promise<ImageBitmapLike>): ShowTrack {
+export function decodeTrack(unit: number, count: number, reply: readonly Uint8Array[] | ShowReply, workspace: SlideShowWorkspace, decode: (png: Uint8Array) => Promise<ImageBitmapLike>, opts: { refused?: (i: number) => void } = {}): ShowTrack {
   let t: ReturnType<typeof trackOf>
-  try { t = trackOf('show track', unit, messagesOf(reply), 0, count, workspace, decode) } catch (e) { releaseReply(reply); throw e }
+  try { t = trackOf('show track', unit, messagesOf(reply), 0, count, workspace, decode, opts.refused) } catch (e) { releaseReply(reply); throw e }
   let disposed = false
   return {
     fps: 15, count: t.track.count, bytes: t.bytes,

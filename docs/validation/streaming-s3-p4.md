@@ -438,11 +438,16 @@ Evidence:
   two composited steps D4 asks for from b − 1 stay resident. Every other track releases its decoded window and its
   encoded reply as the build moves, so finished steps never fill the show budget (twenty 1080p steps play through,
   `tests/stream/remote-show-anim.test.tsx`). Previous asks for step b − 1's track ahead of need. A track evicted and
-  reached again is asked again, one charged send, as every revisit is. ←/→ across one build boundary costs nothing.
-  Refused (`'failed'`) tracks hold nothing, so they stay and are not re-asked within the visit.
-- **A track frame the budget cannot admit holds the previous picture, reported.** The window's refused frame lease
-  (no room even after evicting bundles) emits `show-budget` once per build of the visit. The picture still holds:
-  a composited step ships no layers for its interval, and no show-safe frame exists to cut to.
+  reached again is asked again, one charged send, as every revisit is. ←/→ across one build boundary asks for no
+  track again (tested). Refused (`'failed'`) tracks hold nothing, so they stay and are not re-asked within the visit.
+  The working set is not a floor: under budget pressure, a frame lease or an arriving track first evicts bundles,
+  then drops the slide's tracks farthest from the playing step (behind before ahead), never the playing one. A
+  20 MiB budget (bundle plus about two 1080p frames) plays eight steps with no report.
+- **A track frame the budget cannot admit holds the previous picture, reported.** When the frame the playing step
+  asks for finds no room, even after those evictions, `show-budget` is emitted once per build of the visit.
+  Read-ahead refusals, Presenter Next's window and Morph windows are not reported. The picture still holds, rather
+  than cutting to the entry frame (the `pressure` path) or the slide's piece-3 still: both show an earlier state of
+  the slide than the step reached. This is an open owner question.
 - **Presenter View "Next".** It reads "Next build" while builds remain. `preview-reduced` is emitted for any
   `composeAt` refusal (Task 13).
 

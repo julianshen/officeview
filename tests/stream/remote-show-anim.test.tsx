@@ -467,6 +467,36 @@ describe('remote show on the driver (piece 4 Task 11)', () => {
     s.exit()
   }, 60_000)
 
+  it('a tight show budget: the working set gives way, so each step still shows its own end frame and nothing is reported (round 6)', async () => {
+    // Room for the bundle and about two 1080p frames (≈ 7.9 MiB each): not for the end frames b − 3 … b + 1 keeps.
+    vi.spyOn(remoteShowDeps, 'showBytes', 'get').mockReturnValue(20 * 1024 * 1024)
+    const eight = { messages: (u: number) => bundleOf(FLY, u, compositedFly(8)) }
+    const fd = animDoc([eight], { tracks: hdTrack })
+    const { s, canvas, log } = await show(fd)
+    await run(300)
+    for (let k = 1; k <= 8; k++) {
+      s.next()
+      await run(400)
+      expect(px(canvas, canvas.width >> 1, canvas.height >> 1), `step ${k}`).toEqual(RGB[(k - 1) % 3])
+    }
+    expect(log).not.toContain('diag:show-budget')
+    expect(log).not.toContain('diag:still')
+    s.exit()
+  }, 60_000)
+
+  it('← / → across one build boundary asks for no track again (round 6)', async () => {
+    const ten = { messages: (u: number) => bundleOf(FLY, u, compositedFly(10)) }
+    const fd = animDoc([ten], { tracks: hdTrack })
+    const { s } = await show(fd)
+    await run(300)
+    for (let k = 1; k <= 6; k++) { s.next(); await run(400) }
+    const before = sent(fd, 'track:').length
+    for (let n = 0; n < 4; n++) { s.previous(); await run(200); s.next(); await run(200) }
+    expect(s.state.build).toBe(6)
+    expect(sent(fd, 'track:').length).toBe(before)
+    s.exit()
+  }, 60_000)
+
   it('Previous across an evicted track asks for it again and shows its end frame (round 6)', async () => {
     const ten = { messages: (u: number) => bundleOf(FLY, u, compositedFly(10)) }
     const fd = animDoc([ten], { tracks: hdTrack })

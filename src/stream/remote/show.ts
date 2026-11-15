@@ -373,17 +373,20 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
   /**
    * The show's byte owner for decoded track frames (fix round 1): each frame entering a window is admitted against
    * the show budget — records, assets, encoded tracks, Morph pairs and every frame held — after the least recently
-   * used non-current bundles are evicted for it; no room refuses the frame (the window holds the previous picture,
-   * D23). Leases of any other kind go to the workspace as they are.
+   * used non-current bundles are evicted for it, then (round 6) the tracks of the slide farthest from the playing
+   * step, never the one asking (`except`) nor the playing one. No room even then refuses the frame (the window holds
+   * the previous picture, D23). Leases of any other kind go to the workspace as they are.
    */
-  const frameOwner: SlideShowWorkspace = {
+  const ownerFor = (except: string | undefined): SlideShowWorkspace => ({
     get limit() { return workspace.limit },
     used: () => workspace.used(),
     reserveTerminal: (bytes) => workspace.reserveTerminal(bytes),
     lease(bytes, tag) {
       if (tag !== 'plan:track-frame') return workspace.lease(bytes, tag)
-      const l = exited || !fetcher.makeRoom(bytes) ? undefined : workspace.lease(bytes, tag)
-      if (!l) { frameRefused(); return undefined }
+      if (exited) return undefined
+      while (!fetcher.makeRoom(bytes)) if (!yieldTrack(except)) return undefined
+      const l = workspace.lease(bytes, tag)
+      if (!l) return undefined
       frameBytes += bytes
       let held = bytes
       return {
@@ -395,13 +398,35 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
         release() { frameBytes -= held; held = 0; l.release() },
       }
     },
+  })
+  const frameOwner = ownerFor(undefined)
+  /**
+   * Round 6: under budget pressure the working set gives way. One resident track of the slide on screen is dropped,
+   * the farthest from the playing step (behind before ahead at equal distance), never `except` nor the playing one;
+   * `false` when none is left to drop. Reached again, a dropped track is asked for again.
+   */
+  function yieldTrack(except: string | undefined): boolean {
+    if (slide === 'end') return false
+    const playing = build - 1
+    let best: { key: string; d: number } | undefined
+    for (const [key, t] of tracks) {
+      if (key === except || t.index !== slide || typeof t.state !== 'object') continue
+      const k = Number(key.slice(key.indexOf(':') + 1))
+      if (k === playing) continue
+      const d = Math.abs(k - playing) * 2 + (k > playing ? 0 : 1)
+      if (!best || d > best.d) best = { key, d }
+    }
+    if (!best) return false
+    dropTrack(best.key)
+    return true
   }
-  /** The builds of this visit whose track frame was refused, so far (round 6: reported once each, never silent). */
+  /** The builds of this visit whose playing track's frame was refused, so far (round 6: reported once each, never silent). */
   const refusedAt = new Set<number>()
-  function frameRefused(): void {
-    if (exited || slide === 'end' || refusedAt.has(build)) return
+  /** The window of slide `i`'s step `k` could not admit the frame asked for: told only for the step playing on screen. */
+  function frameRefused(i: number, k: number): void {
+    if (exited || slide !== i || k !== build - 1 || refusedAt.has(build)) return
     refusedAt.add(build)
-    sink.add({ code: 'show-budget', slideIndex: slide, effect: `step:${Math.max(0, build - 1)}`, message: `A keyframe frame of step ${build} does not fit the show budget; the step holds its previous picture` })
+    sink.add({ code: 'show-budget', slideIndex: i, effect: `step:${k}`, message: `A keyframe frame of step ${k + 1} does not fit the show budget; the step holds its previous picture` })
   }
   function extraBytes(): number {
     let n = frameBytes + pinnedBytes
@@ -445,9 +470,11 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     show.showTrack(unit, k, scaleOf.get(b) ?? 1, motion, slot.ctl.signal, { workspace }).then((reply) => {
       if (!live()) { reply.release(); return }
       try {
-        const t = decodeTrack(unit, count, reply, frameOwner, remoteShowDeps.decode)
+        const t = decodeTrack(unit, count, reply, ownerFor(key), remoteShowDeps.decode, { refused: () => frameRefused(i, k) })
         if (!live()) { t.dispose(); return }
         slot.state = t
+        // Round 6: tracks farther from the playing step give way before this one is refused.
+        while (overBudget() && yieldTrack(key)) { /* one dropped */ }
         if (overBudget()) {
           t.dispose()
           slot.state = 'failed'
