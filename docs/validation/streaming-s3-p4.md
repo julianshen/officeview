@@ -438,10 +438,16 @@ Evidence:
   misplacement of a mover's mark is caught only through rowMax.
 - **Tinted colour-split layers** whose raw ink is never observed composite their tinted steps (Task 5,
   fail closed).
-- **A denied track is not re-asked within the visit** (Task 12). Its step plays as a cut (`step-deferred`).
+- **A track the send budget cannot request yet is asked again once there is room (PR #78 round 7; was Task 12's
+  "not re-asked within the visit").** While the playing composited step's track cannot be requested (the budget at
+  the track reserve), or after a rate refusal, every frame asks again; the step shows the typed error frame
+  ("Slide N could not be shown (rate-limited)") with `step-deferred`, never the previous picture. When the track
+  arrives, the step cuts to its end frame (the spec's cut to the step end): a composited step ships no layers for
+  its interval, so nothing already resident draws that end state sooner. A track refused for another reason
+  (policy, decode, the show budget) is not re-asked; its step shows the error frame with that code.
 - **Over budget on a bucket change.** A bundle over about 64 MiB whose bucket changes (a double copy over the
   budget) plays its still (`show-budget`). A paused Morph wait stays frozen (Task 11).
-- **A held picture for a missing track; Morph `over` ignored while empty** (Task 8).
+- **Morph `over` ignored while empty** (Task 8). A missing track no longer holds the picture (rounds 6 and 7); a track still in flight when its step starts holds it until it lands, then cuts to its end.
 - **Track working set (PR #78 round 6).** On a slide, only the tracks of steps b − 3 … b + 1 (b the build) and the
   two composited steps D4 asks for from b − 1 stay resident. Every other track releases its decoded window and its
   encoded reply as the build moves, so finished steps never fill the show budget (twenty 1080p steps play through,

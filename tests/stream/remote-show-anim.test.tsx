@@ -546,6 +546,32 @@ describe('remote show on the driver (piece 4 Task 11)', () => {
     s.exit()
   })
 
+  it('a track the send budget cannot request yet: the step shows the typed error frame, then cuts to its end once room returns (round 7)', async () => {
+    const one = { messages: (u: number) => bundleOf(FLY, u, compositedFly(1)) }
+    const fd = animDoc([one])
+    let room = false
+    // After the bundle, the session's unit budget sits at the track reserve until `room` turns on again.
+    Object.assign(fd.doc, { unitBudget: { room: () => (!fd.log.includes('plan:0') || room ? 60 : 0), waitMs: () => 60_000 } })
+    const { s, root, canvas, log } = await show(fd)
+    await run(300)
+    expect(frameKind(root)).toBe('image')
+    s.next()
+    await run(600)
+    expect(s.state.build).toBe(1)
+    expect(sent(fd, 'track:')).toEqual([])
+    // Never the previous picture: the typed error frame, as a failed bundle shows.
+    expect(frameKind(root)).toBe('error')
+    expect(root.querySelector('[data-officeview-show-frame-text]')?.textContent).toBe('Slide 1 could not be shown (rate-limited)')
+    expect(log).toContain('diag:step-deferred')
+    // Room returns: the track is asked for, and the step cuts to its end frame (red).
+    room = true
+    await run(300)
+    expect(sent(fd, 'track:')).toEqual(['track:0:0'])
+    expect(frameKind(root)).toBe('image')
+    expect(px(canvas, canvas.width >> 1, canvas.height >> 1)).toEqual([255, 0, 0])
+    s.exit()
+  })
+
   it('budget at the Morph reserve: the target bundle still goes out, the Morph pair is not asked and fades (Task 12)', async () => {
     const fd = animDoc(['fly', 'morphTo', 'fly'])
     // 3 sends of room: over a track's reserve, under a Morph pair's, over a target's need.

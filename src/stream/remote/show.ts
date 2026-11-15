@@ -364,7 +364,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
   // show budget (the fetcher evicts bundles for them). Each is one charged send, asked only with budget room.
   // ---------------------------------------------------------------------
 
-  interface TrackSlot { index: number; ctl: AbortController; state: 'pending' | ShowTrack | 'failed' }
+  /** `why`: a failed track's typed code (what its step's error frame names, round 7). */
+  interface TrackSlot { index: number; ctl: AbortController; state: 'pending' | ShowTrack | 'failed'; why?: RemoteErrorCode }
   const tracks = new Map<string, TrackSlot>()
   interface PairSlot { key: string; from: number; to: number; fromStep: number; ctl: AbortController; result?: ShowMorph; promise: Promise<ShowMorph | undefined> }
   const pairs = new Map<string, PairSlot>()
@@ -487,17 +488,37 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
         if (overBudget()) {
           t.dispose()
           slot.state = 'failed'
+          slot.why = 'show-budget'
           sink.add({ code: 'show-budget', slideIndex: i, effect: `step:${k}`, message: `The keyframe track of step ${k + 1} does not fit the show budget; the step cuts to its end` })
         }
       } catch (e) {
         slot.state = 'failed'
+        slot.why = codeOf(e) ?? 'policy-refused'
         sink.add({ code: 'show-track-refused', slideIndex: i, effect: `step:${k}`, message: `The keyframe track of step ${k + 1} was refused (${codeOf(e) ?? (e as Error).message})` })
       }
     }, (e: unknown) => {
       if (!live()) return
+      // Round 7: a rate refusal is transient: the slot goes, so the track is asked again once there is room.
+      if (codeOf(e) === 'rate-limited') { tracks.delete(key); fetcher.paused(); return }
       slot.state = 'failed'
-      if (codeOf(e) === 'rate-limited') fetcher.paused()
+      slot.why = codeOf(e) ?? 'closed'
     })
+  }
+  /**
+   * Round 7: the playing composited step's track is not to be had: `rate-limited` while it cannot be requested (the
+   * send budget at the track reserve), the failure's code once it was refused; `undefined` while it is here or on
+   * its way. Each call (every frame) asks again for the playing step's track and the next one's, so a skipped
+   * request goes out as soon as there is room; arriving, the step cuts to its end (the activation was deferred).
+   */
+  function trackGap(): RemoteErrorCode | undefined {
+    if (exited || slide === 'end' || build < 1 || driver?.visit?.index !== slide) return undefined
+    const step = held.get(slide)?.plan.steps[build - 1]
+    if (!step || step.eligibility !== 'composited' || !step.track) return undefined
+    requestTrack(slide, build - 1)
+    requestTrack(slide, build)
+    const t = tracks.get(`${slide}:${build - 1}`)
+    if (!t) return show?.showTrack ? 'rate-limited' : 'policy-refused'
+    return t.state === 'failed' ? t.why ?? 'closed' : undefined
   }
   /** D4: the first two composited steps of slide `i` from step `from` (the tracks asked on entering at `from + 1`). */
   function nextComposited(i: number, from: number): number[] {
@@ -659,10 +680,12 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     if (slide !== 'end') {
       const unit = unitOf[slide]!
       bmp = planStage ? undefined : fetcher.cached(unit)
-      // Round 6 ruling: a build whose playing frame the show budget refused shows the typed error frame.
-      const code = failed.get(unit) ?? (budgetStuck === `${slide}:${build}` ? 'show-budget' : undefined)
+      const code = failed.get(unit)
+      // Round 6 ruling: a build whose playing frame the show budget refused shows the typed error frame; round 7: so
+      // does a composited step whose track is not to be had (not requestable yet, or refused). Never a held picture.
+      const stuck = planStage && !code ? (budgetStuck === `${slide}:${build}` ? 'show-budget' : trackGap()) : undefined
+      if (stuck) { kind = 'error'; text = `Slide ${slide + 1} could not be shown (${stuck})` }
       // The still stage draws the bitmap here (piece 3); PlanStage draws on its tick.
-      if (code === 'show-budget' && planStage) kind = 'error'
       else if (planStage ? !!held.get(slide) || !!fetcher.cached(unit) : !!bmp && fitInto(canvas, bmp)) kind = 'image'
       else {
         kind = code ? 'error' : 'loading'
@@ -681,7 +704,6 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
       const box = stageBox()
       if (box) box.hidden = kind === 'loading' || kind === 'error'
     }
-    if (kind === 'error' && !text && slide !== 'end') text = `Slide ${slide + 1} could not be shown (show-budget)`
     if (kind === 'loading' || kind === 'error') { textFrame(canvas, text); textShown = true }
     surface.root.setAttribute('data-officeview-show-frame', kind)
     if (frameText && frameText.textContent !== text) frameText.textContent = text
