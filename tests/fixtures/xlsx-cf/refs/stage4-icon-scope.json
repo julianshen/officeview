@@ -60,9 +60,8 @@
         "topPx": 27,
         "rightPx": 96,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "B3",
@@ -75,9 +74,8 @@
         "topPx": 47,
         "rightPx": 96,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "B4",
@@ -90,9 +88,8 @@
         "topPx": 67,
         "rightPx": 96,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "D2",
@@ -105,7 +102,7 @@
         "topPx": 27,
         "rightPx": 240,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       }
     },
     {
@@ -119,7 +116,7 @@
         "topPx": 47,
         "rightPx": 240,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       }
     },
     {
@@ -133,7 +130,7 @@
         "topPx": 67,
         "rightPx": 240,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       }
     },
     {
@@ -147,9 +144,8 @@
         "topPx": 27,
         "rightPx": 312,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "E3",
@@ -162,9 +158,8 @@
         "topPx": 47,
         "rightPx": 313,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:1"
+      }
     },
     {
       "ref": "E4",
@@ -177,7 +172,7 @@
         "topPx": 67,
         "rightPx": 312,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       }
     },
     {
@@ -191,9 +186,8 @@
         "topPx": 27,
         "rightPx": 384,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "F3",
@@ -206,9 +200,8 @@
         "topPx": 47,
         "rightPx": 384,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "F4",
@@ -221,9 +214,8 @@
         "topPx": 67,
         "rightPx": 384,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "G2",
@@ -236,9 +228,8 @@
         "topPx": 27,
         "rightPx": 456,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "G3",
@@ -251,9 +242,8 @@
         "topPx": 47,
         "rightPx": 456,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "G4",
@@ -266,9 +256,8 @@
         "topPx": 67,
         "rightPx": 456,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "B8",
@@ -281,7 +270,7 @@
         "topPx": 107,
         "rightPx": 96,
         "bottomPx": 118,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       }
     },
     {
@@ -295,9 +284,8 @@
         "topPx": 127,
         "rightPx": 97,
         "bottomPx": 137,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:1"
+      }
     },
     {
       "ref": "C9",
@@ -310,10 +298,212 @@
         "topPx": 127,
         "rightPx": 169,
         "bottomPx": 137,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:1"
+      }
     }
   ],
-  "iconHypotheses": {}
+  "iconHypotheses": {
+    "icon:scope-disjoint": {
+      "B2": [
+        {
+          "id": "union",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "per-range",
+          "glyphClass": "3Arrows:0"
+        }
+      ],
+      "B3": [
+        {
+          "id": "union",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "per-range",
+          "glyphClass": "3Arrows:1"
+        }
+      ],
+      "B4": [
+        {
+          "id": "union",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "per-range",
+          "glyphClass": "3Arrows:2"
+        }
+      ],
+      "D2": [
+        {
+          "id": "union",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "per-range",
+          "glyphClass": "3Arrows:0"
+        }
+      ],
+      "D3": [
+        {
+          "id": "union",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "per-range",
+          "glyphClass": "3Arrows:1"
+        }
+      ],
+      "D4": [
+        {
+          "id": "union",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "per-range",
+          "glyphClass": "3Arrows:2"
+        }
+      ]
+    },
+    "icon:scope-duplicate-blocks": {
+      "E2": [
+        {
+          "id": "first-paints",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "second-paints",
+          "glyphClass": "3Flags:0"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        }
+      ],
+      "E3": [
+        {
+          "id": "first-paints",
+          "glyphClass": "3Arrows:1"
+        },
+        {
+          "id": "second-paints",
+          "glyphClass": "3Flags:1"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        }
+      ],
+      "E4": [
+        {
+          "id": "first-paints",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "second-paints",
+          "glyphClass": "3Flags:2"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        }
+      ]
+    },
+    "icon:scope-hidden-row": {
+      "F2": [
+        {
+          "id": "exclude-hidden",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "include-hidden",
+          "glyphClass": "3Arrows:0"
+        }
+      ],
+      "F3": [
+        {
+          "id": "exclude-hidden",
+          "glyphClass": "3Arrows:1"
+        },
+        {
+          "id": "include-hidden",
+          "glyphClass": "3Arrows:0"
+        }
+      ],
+      "F4": [
+        {
+          "id": "exclude-hidden",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "include-hidden",
+          "glyphClass": "3Arrows:0"
+        }
+      ]
+    },
+    "icon:scope-autofilter-hidden-row": {
+      "G2": [
+        {
+          "id": "exclude-hidden",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "include-hidden",
+          "glyphClass": "3Arrows:0"
+        }
+      ],
+      "G3": [
+        {
+          "id": "exclude-hidden",
+          "glyphClass": "3Arrows:1"
+        },
+        {
+          "id": "include-hidden",
+          "glyphClass": "3Arrows:0"
+        }
+      ],
+      "G4": [
+        {
+          "id": "exclude-hidden",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "include-hidden",
+          "glyphClass": "3Arrows:0"
+        }
+      ]
+    },
+    "icon:scope-merged-cell": {
+      "B8": [
+        {
+          "id": "all-stored",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "merged-excluded",
+          "glyphClass": "3Arrows:2"
+        }
+      ],
+      "B9": [
+        {
+          "id": "all-stored",
+          "glyphClass": "3Arrows:1"
+        },
+        {
+          "id": "merged-excluded",
+          "glyphClass": "3Arrows:0"
+        }
+      ],
+      "C9": [
+        {
+          "id": "all-stored",
+          "glyphClass": "3Arrows:1"
+        },
+        {
+          "id": "merged-excluded",
+          "glyphClass": "3Arrows:0"
+        }
+      ]
+    }
+  }
 }

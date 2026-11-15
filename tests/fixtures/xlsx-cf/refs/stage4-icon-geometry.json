@@ -60,7 +60,7 @@
         "topPx": 21,
         "rightPx": 92,
         "bottomPx": 27,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -75,7 +75,7 @@
         "topPx": 21,
         "rightPx": 168,
         "bottomPx": 28,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -89,7 +89,7 @@
         "topPx": 21,
         "rightPx": 245,
         "bottomPx": 30,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -103,7 +103,7 @@
         "topPx": 49,
         "rightPx": 92,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -118,7 +118,7 @@
         "topPx": 47,
         "rightPx": 168,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -132,7 +132,7 @@
         "topPx": 40,
         "rightPx": 250,
         "bottomPx": 60,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -147,7 +147,7 @@
         "topPx": 109,
         "rightPx": 92,
         "bottomPx": 117,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -162,7 +162,7 @@
         "topPx": 107,
         "rightPx": 168,
         "bottomPx": 118,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -176,7 +176,7 @@
         "topPx": 100,
         "rightPx": 250,
         "bottomPx": 120,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -191,7 +191,7 @@
         "topPx": 21,
         "rightPx": 308,
         "bottomPx": 29,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -206,7 +206,7 @@
         "topPx": 22,
         "rightPx": 384,
         "bottomPx": 30,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -221,7 +221,7 @@
         "topPx": 24,
         "rightPx": 463,
         "bottomPx": 30,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -236,7 +236,7 @@
         "topPx": 21,
         "rightPx": 524,
         "bottomPx": 29,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -251,7 +251,7 @@
         "topPx": 21,
         "rightPx": 600,
         "bottomPx": 30,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -265,7 +265,7 @@
         "topPx": 21,
         "rightPx": 682,
         "bottomPx": 30,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -280,7 +280,7 @@
         "topPx": 33,
         "rightPx": 308,
         "bottomPx": 41,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -295,7 +295,7 @@
         "topPx": 33,
         "rightPx": 384,
         "bottomPx": 45,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -310,7 +310,7 @@
         "topPx": 33,
         "rightPx": 466,
         "bottomPx": 56,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -325,7 +325,7 @@
         "topPx": 42,
         "rightPx": 524,
         "bottomPx": 50,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -340,7 +340,7 @@
         "topPx": 41,
         "rightPx": 600,
         "bottomPx": 52,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -354,7 +354,7 @@
         "topPx": 33,
         "rightPx": 682,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -369,7 +369,7 @@
         "topPx": 63,
         "rightPx": 308,
         "bottomPx": 71,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -384,7 +384,7 @@
         "topPx": 64,
         "rightPx": 384,
         "bottomPx": 75,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -398,7 +398,7 @@
         "topPx": 66,
         "rightPx": 466,
         "bottomPx": 86,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -413,7 +413,7 @@
         "topPx": 87,
         "rightPx": 524,
         "bottomPx": 95,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -428,7 +428,7 @@
         "topPx": 86,
         "rightPx": 600,
         "bottomPx": 97,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -442,7 +442,7 @@
         "topPx": 83,
         "rightPx": 682,
         "bottomPx": 103,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -457,7 +457,7 @@
         "topPx": 21,
         "rightPx": 742,
         "bottomPx": 28,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -471,7 +471,7 @@
         "topPx": 47,
         "rightPx": 742,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -485,7 +485,7 @@
         "topPx": 107,
         "rightPx": 742,
         "bottomPx": 118,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -499,7 +499,7 @@
         "topPx": 123,
         "rightPx": 753,
         "bottomPx": 126,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -513,7 +513,7 @@
         "topPx": 21,
         "rightPx": 828,
         "bottomPx": 28,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -527,7 +527,7 @@
         "topPx": 21,
         "rightPx": 1016,
         "bottomPx": 28,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -541,7 +541,7 @@
         "topPx": 21,
         "rightPx": 1211,
         "bottomPx": 28,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -555,7 +555,7 @@
         "topPx": 47,
         "rightPx": 828,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -569,7 +569,7 @@
         "topPx": 47,
         "rightPx": 1016,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -583,7 +583,7 @@
         "topPx": 47,
         "rightPx": 1211,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -597,7 +597,7 @@
         "topPx": 107,
         "rightPx": 828,
         "bottomPx": 118,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -611,7 +611,7 @@
         "topPx": 107,
         "rightPx": 1016,
         "bottomPx": 118,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -625,7 +625,7 @@
         "topPx": 107,
         "rightPx": 1211,
         "bottomPx": 118,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     }
   ],

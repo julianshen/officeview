@@ -50,7 +50,7 @@
         "topPx": 27,
         "rightPx": 96,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "textInkLeftPx": 100,
       "textInkRightPx": 109,
@@ -67,7 +67,7 @@
         "topPx": 47,
         "rightPx": 96,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "textInkLeftPx": 99,
       "textInkRightPx": 109,
@@ -84,7 +84,7 @@
         "topPx": 67,
         "rightPx": 96,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "textInkLeftPx": 99,
       "textInkRightPx": 109,
@@ -101,7 +101,7 @@
         "topPx": 24,
         "rightPx": 276,
         "bottomPx": 35,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "textInkLeftPx": 431,
       "textInkRightPx": 440,
@@ -118,7 +118,7 @@
         "topPx": 44,
         "rightPx": 276,
         "bottomPx": 55,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "textInkLeftPx": 430,
       "textInkRightPx": 440,
@@ -135,7 +135,7 @@
         "topPx": 64,
         "rightPx": 276,
         "bottomPx": 75,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "textInkLeftPx": 430,
       "textInkRightPx": 440,
@@ -152,7 +152,7 @@
         "topPx": 27,
         "rightPx": 456,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       },
       "textInkLeftPx": 530,
       "textInkRightPx": 539,
@@ -169,7 +169,7 @@
         "topPx": 47,
         "rightPx": 456,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       },
       "textInkLeftPx": 529,
       "textInkRightPx": 539,
@@ -186,7 +186,7 @@
         "topPx": 67,
         "rightPx": 456,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       },
       "textInkLeftPx": 529,
       "textInkRightPx": 539,
@@ -203,7 +203,7 @@
         "topPx": 24,
         "rightPx": 649,
         "bottomPx": 35,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -217,7 +217,7 @@
         "topPx": 44,
         "rightPx": 649,
         "bottomPx": 55,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -231,7 +231,7 @@
         "topPx": 64,
         "rightPx": 649,
         "bottomPx": 75,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {

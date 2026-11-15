@@ -57,7 +57,7 @@
         "topPx": 27,
         "rightPx": 96,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       }
     },
     {
@@ -71,9 +71,8 @@
         "topPx": 47,
         "rightPx": 97,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:1"
+      }
     },
     {
       "ref": "B4",
@@ -86,9 +85,8 @@
         "topPx": 67,
         "rightPx": 96,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "B5",
@@ -101,9 +99,8 @@
         "topPx": 87,
         "rightPx": 96,
         "bottomPx": 98,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "C3",
@@ -116,7 +113,7 @@
         "topPx": 42,
         "rightPx": 322,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:1"
       },
       "edgeStable": false
     },
@@ -131,7 +128,7 @@
         "topPx": 62,
         "rightPx": 322,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:0"
       },
       "edgeStable": false
     },
@@ -146,9 +143,8 @@
         "topPx": 87,
         "rightPx": 216,
         "bottomPx": 98,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "D3",
@@ -161,7 +157,7 @@
         "topPx": 42,
         "rightPx": 442,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:1"
       },
       "edgeStable": false
     },
@@ -176,7 +172,7 @@
         "topPx": 62,
         "rightPx": 442,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:0"
       },
       "edgeStable": false
     },
@@ -191,9 +187,8 @@
         "topPx": 87,
         "rightPx": 336,
         "bottomPx": 98,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "E2",
@@ -206,7 +201,7 @@
         "topPx": 22,
         "rightPx": 562,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -220,7 +215,7 @@
         "topPx": 42,
         "rightPx": 515,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -234,7 +229,7 @@
         "topPx": 62,
         "rightPx": 468,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -248,9 +243,8 @@
         "topPx": 87,
         "rightPx": 456,
         "bottomPx": 98,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "F2",
@@ -263,7 +257,7 @@
         "topPx": 27,
         "rightPx": 576,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -277,7 +271,7 @@
         "topPx": 47,
         "rightPx": 577,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -292,7 +286,7 @@
         "topPx": 67,
         "rightPx": 576,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -307,7 +301,7 @@
         "topPx": 87,
         "rightPx": 576,
         "bottomPx": 98,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -322,7 +316,7 @@
         "topPx": 27,
         "rightPx": 696,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -336,7 +330,7 @@
         "topPx": 47,
         "rightPx": 697,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -351,9 +345,8 @@
         "topPx": 67,
         "rightPx": 696,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "G5",
@@ -366,9 +359,8 @@
         "topPx": 87,
         "rightPx": 696,
         "bottomPx": 98,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "H2",
@@ -397,9 +389,8 @@
         "topPx": 67,
         "rightPx": 816,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "H5",
@@ -412,9 +403,8 @@
         "topPx": 87,
         "rightPx": 816,
         "bottomPx": 98,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "I2",
@@ -427,7 +417,7 @@
         "topPx": 27,
         "rightPx": 936,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       }
     },
     {
@@ -441,9 +431,8 @@
         "topPx": 47,
         "rightPx": 937,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:1"
+      }
     },
     {
       "ref": "I4",
@@ -456,9 +445,8 @@
         "topPx": 67,
         "rightPx": 936,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "I5",
@@ -471,9 +459,8 @@
         "topPx": 87,
         "rightPx": 936,
         "bottomPx": 98,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "J2",
@@ -486,7 +473,7 @@
         "topPx": 27,
         "rightPx": 1056,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       }
     },
     {
@@ -500,7 +487,7 @@
         "topPx": 47,
         "rightPx": 1057,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -515,7 +502,7 @@
         "topPx": 67,
         "rightPx": 1056,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -530,9 +517,8 @@
         "topPx": 87,
         "rightPx": 1056,
         "bottomPx": 98,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "K2",
@@ -601,10 +587,354 @@
         "topPx": 87,
         "rightPx": 1296,
         "bottomPx": 98,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     }
   ],
-  "iconHypotheses": {}
+  "iconHypotheses": {
+    "icon:composition-overlapping-icons": {
+      "B2": [
+        {
+          "id": "first-paints",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "second-paints",
+          "glyphClass": "3Flags:2"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        }
+      ],
+      "B3": [
+        {
+          "id": "first-paints",
+          "glyphClass": "3Arrows:1"
+        },
+        {
+          "id": "second-paints",
+          "glyphClass": "3Flags:1"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        }
+      ],
+      "B4": [
+        {
+          "id": "first-paints",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "second-paints",
+          "glyphClass": "3Flags:0"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        }
+      ],
+      "B5": [
+        {
+          "id": "first-paints",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "second-paints",
+          "glyphClass": "3Flags:0"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        }
+      ]
+    },
+    "icon:composition-with-bar": {
+      "C3": [
+        {
+          "id": "both-paint",
+          "glyphClass": "3Arrows:1"
+        },
+        {
+          "id": "icon-withheld",
+          "glyphClass": null
+        }
+      ],
+      "C4": [
+        {
+          "id": "both-paint",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "icon-withheld",
+          "glyphClass": null
+        }
+      ],
+      "C5": [
+        {
+          "id": "both-paint",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "icon-withheld",
+          "glyphClass": null
+        }
+      ],
+      "D3": [
+        {
+          "id": "both-paint",
+          "glyphClass": "3Arrows:1"
+        },
+        {
+          "id": "icon-withheld",
+          "glyphClass": null
+        }
+      ],
+      "D4": [
+        {
+          "id": "both-paint",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "icon-withheld",
+          "glyphClass": null
+        }
+      ],
+      "D5": [
+        {
+          "id": "both-paint",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "icon-withheld",
+          "glyphClass": null
+        }
+      ]
+    },
+    "icon:composition-matching-stopIfTrue-ahead": {
+      "H2": [
+        {
+          "id": "halted",
+          "glyphClass": null
+        },
+        {
+          "id": "not-halted",
+          "glyphClass": "3Arrows:2"
+        }
+      ],
+      "H3": [
+        {
+          "id": "halted",
+          "glyphClass": null
+        },
+        {
+          "id": "not-halted",
+          "glyphClass": "3Arrows:1"
+        }
+      ],
+      "H4": [
+        {
+          "id": "halted",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "not-halted",
+          "glyphClass": "3Arrows:0"
+        }
+      ],
+      "H5": [
+        {
+          "id": "halted",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "not-halted",
+          "glyphClass": "3Arrows:0"
+        }
+      ],
+      "I2": [
+        {
+          "id": "halted",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "not-halted",
+          "glyphClass": "3Arrows:2"
+        }
+      ],
+      "I3": [
+        {
+          "id": "halted",
+          "glyphClass": "3Arrows:1"
+        },
+        {
+          "id": "not-halted",
+          "glyphClass": "3Arrows:1"
+        }
+      ],
+      "I4": [
+        {
+          "id": "halted",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "not-halted",
+          "glyphClass": "3Arrows:0"
+        }
+      ],
+      "I5": [
+        {
+          "id": "halted",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "not-halted",
+          "glyphClass": "3Arrows:0"
+        }
+      ]
+    },
+    "icon:composition-icon-stopIfTrue": {
+      "J2": [
+        {
+          "id": "later-withheld",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "later-applies",
+          "glyphClass": "icon-class-none"
+        }
+      ],
+      "J3": [
+        {
+          "id": "later-withheld",
+          "glyphClass": "3Arrows:1"
+        },
+        {
+          "id": "later-applies",
+          "glyphClass": "icon-class-none"
+        }
+      ],
+      "J4": [
+        {
+          "id": "later-withheld",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "later-applies",
+          "glyphClass": "icon-class-none"
+        }
+      ],
+      "J5": [
+        {
+          "id": "later-withheld",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "later-applies",
+          "glyphClass": "3Arrows:0"
+        }
+      ]
+    },
+    "icon:composition-noicons-slot": {
+      "K2": [
+        {
+          "id": "first-paints",
+          "glyphClass": null
+        },
+        {
+          "id": "second-paints",
+          "glyphClass": "3Flags:2"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        }
+      ],
+      "K3": [
+        {
+          "id": "first-paints",
+          "glyphClass": null
+        },
+        {
+          "id": "second-paints",
+          "glyphClass": "3Flags:1"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        }
+      ],
+      "K4": [
+        {
+          "id": "first-paints",
+          "glyphClass": null
+        },
+        {
+          "id": "second-paints",
+          "glyphClass": "3Flags:0"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        }
+      ],
+      "K5": [
+        {
+          "id": "first-paints",
+          "glyphClass": null
+        },
+        {
+          "id": "second-paints",
+          "glyphClass": "3Flags:0"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        }
+      ]
+    },
+    "icon:composition-unresolved-stub": {
+      "L2": [
+        {
+          "id": "halted",
+          "glyphClass": null
+        },
+        {
+          "id": "not-halted",
+          "glyphClass": "icon-class-none"
+        }
+      ],
+      "L3": [
+        {
+          "id": "halted",
+          "glyphClass": null
+        },
+        {
+          "id": "not-halted",
+          "glyphClass": "icon-class-none"
+        }
+      ],
+      "L4": [
+        {
+          "id": "halted",
+          "glyphClass": null
+        },
+        {
+          "id": "not-halted",
+          "glyphClass": "icon-class-none"
+        }
+      ],
+      "L5": [
+        {
+          "id": "halted",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "not-halted",
+          "glyphClass": "3Arrows:0"
+        }
+      ]
+    }
+  }
 }

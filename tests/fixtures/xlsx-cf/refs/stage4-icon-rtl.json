@@ -45,7 +45,7 @@
         "topPx": 27,
         "rightPx": 191,
         "bottomPx": 33,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -60,7 +60,7 @@
         "topPx": 47,
         "rightPx": 191,
         "bottomPx": 53,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     },
@@ -75,7 +75,7 @@
         "topPx": 67,
         "rightPx": 191,
         "bottomPx": 73,
-        "glyphClass": "unclassified"
+        "glyphClass": "icon-class-none"
       },
       "edgeStable": false
     }

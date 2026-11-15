@@ -58,9 +58,8 @@
         "topPx": 27,
         "rightPx": 97,
         "bottomPx": 37,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:1"
+      }
     },
     {
       "ref": "B3",
@@ -73,7 +72,7 @@
         "topPx": 47,
         "rightPx": 96,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       }
     },
     {
@@ -125,9 +124,8 @@
         "topPx": 167,
         "rightPx": 97,
         "bottomPx": 177,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:1"
+      }
     },
     {
       "ref": "C2",
@@ -140,12 +138,11 @@
         "topPx": 27,
         "rightPx": 168,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:0"
       },
       "textInkLeftPx": 284,
       "textInkRightPx": 332,
-      "textShiftPx": 0,
-      "edgeStable": false
+      "textShiftPx": 0
     },
     {
       "ref": "C3",
@@ -158,12 +155,11 @@
         "topPx": 47,
         "rightPx": 169,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:1"
       },
       "textInkLeftPx": 284,
       "textInkRightPx": 332,
-      "textShiftPx": 0,
-      "edgeStable": false
+      "textShiftPx": 0
     },
     {
       "ref": "C4",
@@ -176,7 +172,7 @@
         "topPx": 67,
         "rightPx": 168,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       },
       "textInkLeftPx": 284,
       "textInkRightPx": 332,
@@ -193,9 +189,8 @@
         "topPx": 27,
         "rightPx": 348,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "D3",
@@ -208,9 +203,8 @@
         "topPx": 47,
         "rightPx": 348,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "D4",
@@ -234,7 +228,7 @@
         "topPx": 87,
         "rightPx": 348,
         "bottomPx": 98,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       }
     },
     {
@@ -248,7 +242,7 @@
         "topPx": 107,
         "rightPx": 348,
         "bottomPx": 118,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       }
     },
     {
@@ -262,9 +256,8 @@
         "topPx": 27,
         "rightPx": 420,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "E3",
@@ -277,9 +270,8 @@
         "topPx": 47,
         "rightPx": 420,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "E4",
@@ -303,7 +295,7 @@
         "topPx": 87,
         "rightPx": 420,
         "bottomPx": 98,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       }
     },
     {
@@ -317,9 +309,216 @@
         "topPx": 107,
         "rightPx": 420,
         "bottomPx": 118,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       }
     }
   ],
-  "iconHypotheses": {}
+  "iconHypotheses": {
+    "icon:participation-types": {
+      "B2": [
+        {
+          "id": "no-icon-for-non-numbers",
+          "glyphClass": "3Arrows:1"
+        },
+        {
+          "id": "coerce-booleans",
+          "glyphClass": "3Arrows:1"
+        }
+      ],
+      "B3": [
+        {
+          "id": "no-icon-for-non-numbers",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "coerce-booleans",
+          "glyphClass": "3Arrows:2"
+        }
+      ],
+      "B4": [
+        {
+          "id": "no-icon-for-non-numbers",
+          "glyphClass": null
+        },
+        {
+          "id": "coerce-booleans",
+          "glyphClass": "3Arrows:0"
+        }
+      ],
+      "B5": [
+        {
+          "id": "no-icon-for-non-numbers",
+          "glyphClass": null
+        },
+        {
+          "id": "coerce-booleans",
+          "glyphClass": null
+        }
+      ],
+      "B6": [
+        {
+          "id": "no-icon-for-non-numbers",
+          "glyphClass": null
+        },
+        {
+          "id": "coerce-booleans",
+          "glyphClass": null
+        }
+      ],
+      "B7": [
+        {
+          "id": "no-icon-for-non-numbers",
+          "glyphClass": null
+        },
+        {
+          "id": "coerce-booleans",
+          "glyphClass": null
+        }
+      ],
+      "B9": [
+        {
+          "id": "no-icon-for-non-numbers",
+          "glyphClass": "3Arrows:1"
+        },
+        {
+          "id": "coerce-booleans",
+          "glyphClass": "3Arrows:1"
+        }
+      ]
+    },
+    "icon:participation-dateserial": {
+      "C2": [
+        {
+          "id": "evaluated",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        }
+      ],
+      "C3": [
+        {
+          "id": "evaluated",
+          "glyphClass": "3Arrows:1"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        }
+      ],
+      "C4": [
+        {
+          "id": "evaluated",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        }
+      ]
+    },
+    "icon:participation-error-presence": {
+      "D2": [
+        {
+          "id": "error-ignored",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "rule-suppressed",
+          "glyphClass": null
+        }
+      ],
+      "D3": [
+        {
+          "id": "error-ignored",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "rule-suppressed",
+          "glyphClass": null
+        }
+      ],
+      "D4": [
+        {
+          "id": "error-ignored",
+          "glyphClass": null
+        },
+        {
+          "id": "rule-suppressed",
+          "glyphClass": null
+        }
+      ],
+      "D5": [
+        {
+          "id": "error-ignored",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "rule-suppressed",
+          "glyphClass": null
+        }
+      ],
+      "D6": [
+        {
+          "id": "error-ignored",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "rule-suppressed",
+          "glyphClass": null
+        }
+      ],
+      "E2": [
+        {
+          "id": "error-ignored",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "rule-suppressed",
+          "glyphClass": null
+        }
+      ],
+      "E3": [
+        {
+          "id": "error-ignored",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "rule-suppressed",
+          "glyphClass": null
+        }
+      ],
+      "E4": [
+        {
+          "id": "error-ignored",
+          "glyphClass": null
+        },
+        {
+          "id": "rule-suppressed",
+          "glyphClass": null
+        }
+      ],
+      "E5": [
+        {
+          "id": "error-ignored",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "rule-suppressed",
+          "glyphClass": null
+        }
+      ],
+      "E6": [
+        {
+          "id": "error-ignored",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "rule-suppressed",
+          "glyphClass": null
+        }
+      ]
+    }
+  }
 }

@@ -55,9 +55,8 @@
         "topPx": 29,
         "rightPx": 96,
         "bottomPx": 37,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Stars:0"
+      }
     },
     {
       "ref": "B3",
@@ -70,9 +69,8 @@
         "topPx": 49,
         "rightPx": 96,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Stars:0"
+      }
     },
     {
       "ref": "B4",
@@ -85,9 +83,8 @@
         "topPx": 69,
         "rightPx": 96,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Stars:1"
+      }
     },
     {
       "ref": "B5",
@@ -100,9 +97,8 @@
         "topPx": 89,
         "rightPx": 97,
         "bottomPx": 98,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Stars:2"
+      }
     },
     {
       "ref": "B6",
@@ -115,9 +111,8 @@
         "topPx": 109,
         "rightPx": 97,
         "bottomPx": 118,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Stars:2"
+      }
     },
     {
       "ref": "C2",
@@ -130,9 +125,8 @@
         "topPx": 32,
         "rightPx": 168,
         "bottomPx": 37,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Triangles:0"
+      }
     },
     {
       "ref": "C3",
@@ -145,9 +139,8 @@
         "topPx": 52,
         "rightPx": 168,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Triangles:0"
+      }
     },
     {
       "ref": "C4",
@@ -160,7 +153,7 @@
         "topPx": 72,
         "rightPx": 168,
         "bottomPx": 74,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Triangles:1"
       }
     },
     {
@@ -174,9 +167,8 @@
         "topPx": 90,
         "rightPx": 168,
         "bottomPx": 94,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Triangles:2"
+      }
     },
     {
       "ref": "C6",
@@ -189,9 +181,8 @@
         "topPx": 110,
         "rightPx": 168,
         "bottomPx": 114,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Triangles:2"
+      }
     },
     {
       "ref": "D2",
@@ -199,7 +190,8 @@
       "cellTopPx": 20,
       "cellWidthPx": 72,
       "cellHeightPx": 20,
-      "icon": null
+      "icon": null,
+      "faintGlyphClass": "twin-set:4RedToBlack:1|5Boxes:0|no-icon"
     },
     {
       "ref": "D3",
@@ -212,7 +204,7 @@
         "topPx": 53,
         "rightPx": 235,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
+        "glyphClass": "5Boxes:1"
       }
     },
     {
@@ -226,7 +218,7 @@
         "topPx": 73,
         "rightPx": 240,
         "bottomPx": 77,
-        "glyphClass": "unclassified"
+        "glyphClass": "5Boxes:2"
       }
     },
     {
@@ -240,9 +232,8 @@
         "topPx": 88,
         "rightPx": 240,
         "bottomPx": 97,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "5Boxes:3"
+      }
     },
     {
       "ref": "D6",
@@ -255,7 +246,7 @@
         "topPx": 108,
         "rightPx": 240,
         "bottomPx": 117,
-        "glyphClass": "unclassified"
+        "glyphClass": "5Boxes:4"
       }
     },
     {
@@ -269,9 +260,8 @@
         "topPx": 27,
         "rightPx": 312,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "E3",
@@ -284,9 +274,8 @@
         "topPx": 47,
         "rightPx": 312,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "E4",
@@ -307,7 +296,7 @@
         "topPx": 87,
         "rightPx": 312,
         "bottomPx": 98,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       }
     },
     {
@@ -321,7 +310,7 @@
         "topPx": 107,
         "rightPx": 312,
         "bottomPx": 118,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       }
     },
     {
@@ -335,7 +324,7 @@
         "topPx": 27,
         "rightPx": 384,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       }
     },
     {
@@ -349,7 +338,7 @@
         "topPx": 47,
         "rightPx": 384,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       }
     },
     {
@@ -363,9 +352,8 @@
         "topPx": 67,
         "rightPx": 385,
         "bottomPx": 77,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:1"
+      }
     },
     {
       "ref": "F5",
@@ -378,9 +366,8 @@
         "topPx": 87,
         "rightPx": 384,
         "bottomPx": 98,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "F6",
@@ -393,9 +380,8 @@
         "topPx": 107,
         "rightPx": 384,
         "bottomPx": 118,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "G2",
@@ -408,9 +394,8 @@
         "topPx": 27,
         "rightPx": 456,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "G3",
@@ -423,9 +408,8 @@
         "topPx": 47,
         "rightPx": 456,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "G4",
@@ -438,9 +422,8 @@
         "topPx": 67,
         "rightPx": 457,
         "bottomPx": 77,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:1"
+      }
     },
     {
       "ref": "G5",
@@ -453,7 +436,7 @@
         "topPx": 87,
         "rightPx": 456,
         "bottomPx": 98,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       }
     },
     {
@@ -467,7 +450,7 @@
         "topPx": 107,
         "rightPx": 456,
         "bottomPx": 118,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       }
     },
     {
@@ -481,9 +464,8 @@
         "topPx": 27,
         "rightPx": 528,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "H3",
@@ -496,9 +478,8 @@
         "topPx": 47,
         "rightPx": 528,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "H4",
@@ -511,9 +492,8 @@
         "topPx": 67,
         "rightPx": 529,
         "bottomPx": 77,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:1"
+      }
     },
     {
       "ref": "H5",
@@ -526,7 +506,7 @@
         "topPx": 87,
         "rightPx": 528,
         "bottomPx": 98,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       }
     },
     {
@@ -540,9 +520,504 @@
         "topPx": 107,
         "rightPx": 528,
         "bottomPx": 118,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       }
     }
   ],
-  "iconHypotheses": {}
+  "iconHypotheses": {
+    "icon:dialect-standalone": {
+      "B2": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Stars:0"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Stars:2"
+        }
+      ],
+      "B3": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Stars:0"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Stars:2"
+        }
+      ],
+      "B4": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Stars:1"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Stars:1"
+        }
+      ],
+      "B5": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Stars:2"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Stars:0"
+        }
+      ],
+      "B6": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Stars:2"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Stars:0"
+        }
+      ],
+      "C2": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Triangles:0"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Triangles:2"
+        }
+      ],
+      "C3": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Triangles:0"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Triangles:2"
+        }
+      ],
+      "C4": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Triangles:1"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Triangles:1"
+        }
+      ],
+      "C5": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Triangles:2"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Triangles:0"
+        }
+      ],
+      "C6": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Triangles:2"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Triangles:0"
+        }
+      ],
+      "D2": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "5Boxes:0"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "5Boxes:4"
+        }
+      ],
+      "D3": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "5Boxes:1"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "5Boxes:3"
+        }
+      ],
+      "D4": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "5Boxes:2"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "5Boxes:2"
+        }
+      ],
+      "D5": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "5Boxes:3"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "5Boxes:1"
+        }
+      ],
+      "D6": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "5Boxes:4"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "5Boxes:0"
+        }
+      ],
+      "E2": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:2"
+        }
+      ],
+      "E3": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:2"
+        }
+      ],
+      "E4": [
+        {
+          "id": "as-modelled",
+          "glyphClass": null
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": null
+        }
+      ],
+      "E5": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:0"
+        }
+      ],
+      "E6": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:0"
+        }
+      ]
+    },
+    "icon:dialect-base": {
+      "F2": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:0"
+        }
+      ],
+      "F3": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:0"
+        }
+      ],
+      "F4": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Arrows:1"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:1"
+        }
+      ],
+      "F5": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:2"
+        }
+      ],
+      "F6": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:2"
+        }
+      ],
+      "G2": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:2"
+        }
+      ],
+      "G3": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:2"
+        }
+      ],
+      "G4": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Arrows:1"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:1"
+        }
+      ],
+      "G5": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:0"
+        }
+      ],
+      "G6": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:0"
+        }
+      ],
+      "H2": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:2"
+        }
+      ],
+      "H3": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:2"
+        }
+      ],
+      "H4": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Arrows:1"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:1"
+        }
+      ],
+      "H5": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:0"
+        }
+      ],
+      "H6": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:0"
+        }
+      ]
+    }
+  }
 }

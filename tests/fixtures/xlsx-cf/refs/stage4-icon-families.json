@@ -83,9 +83,8 @@
         "topPx": 27,
         "rightPx": 96,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "B3",
@@ -98,9 +97,8 @@
         "topPx": 47,
         "rightPx": 97,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:1"
+      }
     },
     {
       "ref": "B4",
@@ -113,7 +111,7 @@
         "topPx": 67,
         "rightPx": 96,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       }
     },
     {
@@ -127,9 +125,8 @@
         "topPx": 27,
         "rightPx": 168,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3ArrowsGray:0"
+      }
     },
     {
       "ref": "C3",
@@ -142,9 +139,8 @@
         "topPx": 47,
         "rightPx": 169,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3ArrowsGray:1"
+      }
     },
     {
       "ref": "C4",
@@ -157,7 +153,7 @@
         "topPx": 67,
         "rightPx": 168,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
+        "glyphClass": "3ArrowsGray:2"
       }
     },
     {
@@ -171,9 +167,8 @@
         "topPx": 27,
         "rightPx": 239,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Flags:0"
+      }
     },
     {
       "ref": "D3",
@@ -186,9 +181,8 @@
         "topPx": 47,
         "rightPx": 239,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Flags:1"
+      }
     },
     {
       "ref": "D4",
@@ -201,9 +195,8 @@
         "topPx": 67,
         "rightPx": 239,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Flags:2"
+      }
     },
     {
       "ref": "E2",
@@ -216,7 +209,7 @@
         "topPx": 27,
         "rightPx": 312,
         "bottomPx": 37,
-        "glyphClass": "unclassified"
+        "glyphClass": "3TrafficLights1:0"
       }
     },
     {
@@ -230,7 +223,7 @@
         "topPx": 47,
         "rightPx": 312,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
+        "glyphClass": "3TrafficLights1:1"
       }
     },
     {
@@ -244,7 +237,7 @@
         "topPx": 67,
         "rightPx": 312,
         "bottomPx": 77,
-        "glyphClass": "unclassified"
+        "glyphClass": "3TrafficLights1:2"
       }
     },
     {
@@ -258,7 +251,7 @@
         "topPx": 28,
         "rightPx": 385,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
+        "glyphClass": "3TrafficLights2:0"
       }
     },
     {
@@ -272,7 +265,7 @@
         "topPx": 48,
         "rightPx": 385,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
+        "glyphClass": "3TrafficLights2:1"
       }
     },
     {
@@ -286,7 +279,7 @@
         "topPx": 68,
         "rightPx": 385,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
+        "glyphClass": "3TrafficLights2:2"
       }
     },
     {
@@ -300,7 +293,7 @@
         "topPx": 27,
         "rightPx": 457,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Signs:0"
       }
     },
     {
@@ -314,9 +307,8 @@
         "topPx": 47,
         "rightPx": 457,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Signs:1"
+      }
     },
     {
       "ref": "G4",
@@ -329,7 +321,7 @@
         "topPx": 68,
         "rightPx": 457,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Signs:2"
       }
     },
     {
@@ -343,7 +335,7 @@
         "topPx": 27,
         "rightPx": 528,
         "bottomPx": 37,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Symbols:0"
       }
     },
     {
@@ -357,7 +349,7 @@
         "topPx": 47,
         "rightPx": 528,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Symbols:1"
       }
     },
     {
@@ -371,7 +363,7 @@
         "topPx": 67,
         "rightPx": 528,
         "bottomPx": 77,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Symbols:2"
       }
     },
     {
@@ -385,9 +377,8 @@
         "topPx": 28,
         "rightPx": 600,
         "bottomPx": 37,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Symbols2:0"
+      }
     },
     {
       "ref": "I3",
@@ -400,7 +391,7 @@
         "topPx": 48,
         "rightPx": 597,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Symbols2:1"
       }
     },
     {
@@ -414,9 +405,8 @@
         "topPx": 67,
         "rightPx": 601,
         "bottomPx": 77,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Symbols2:2"
+      }
     },
     {
       "ref": "J2",
@@ -429,9 +419,8 @@
         "topPx": 27,
         "rightPx": 672,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "J3",
@@ -444,9 +433,8 @@
         "topPx": 47,
         "rightPx": 673,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "4Arrows:1"
+      }
     },
     {
       "ref": "J4",
@@ -459,9 +447,8 @@
         "topPx": 67,
         "rightPx": 673,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "4Arrows:2"
+      }
     },
     {
       "ref": "J5",
@@ -474,7 +461,7 @@
         "topPx": 87,
         "rightPx": 672,
         "bottomPx": 98,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       }
     },
     {
@@ -488,9 +475,8 @@
         "topPx": 27,
         "rightPx": 744,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3ArrowsGray:0"
+      }
     },
     {
       "ref": "K3",
@@ -503,9 +489,8 @@
         "topPx": 47,
         "rightPx": 745,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "4ArrowsGray:1"
+      }
     },
     {
       "ref": "K4",
@@ -518,9 +503,8 @@
         "topPx": 67,
         "rightPx": 745,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "4ArrowsGray:2"
+      }
     },
     {
       "ref": "K5",
@@ -533,7 +517,7 @@
         "topPx": 87,
         "rightPx": 744,
         "bottomPx": 98,
-        "glyphClass": "unclassified"
+        "glyphClass": "3ArrowsGray:2"
       }
     },
     {
@@ -547,7 +531,7 @@
         "topPx": 27,
         "rightPx": 816,
         "bottomPx": 37,
-        "glyphClass": "unclassified"
+        "glyphClass": "twin-set:4RedToBlack:0|5Quarters:4"
       }
     },
     {
@@ -561,7 +545,7 @@
         "topPx": 48,
         "rightPx": 815,
         "bottomPx": 56,
-        "glyphClass": "unclassified"
+        "glyphClass": "twin-set:4RedToBlack:1|5Boxes:0"
       }
     },
     {
@@ -575,7 +559,7 @@
         "topPx": 67,
         "rightPx": 816,
         "bottomPx": 77,
-        "glyphClass": "unclassified"
+        "glyphClass": "4RedToBlack:2"
       }
     },
     {
@@ -589,7 +573,7 @@
         "topPx": 87,
         "rightPx": 816,
         "bottomPx": 97,
-        "glyphClass": "unclassified"
+        "glyphClass": "4RedToBlack:3"
       }
     },
     {
@@ -603,9 +587,8 @@
         "topPx": 27,
         "rightPx": 890,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "4Rating:0"
+      }
     },
     {
       "ref": "M3",
@@ -618,9 +601,8 @@
         "topPx": 47,
         "rightPx": 890,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "4Rating:1"
+      }
     },
     {
       "ref": "M4",
@@ -633,9 +615,8 @@
         "topPx": 67,
         "rightPx": 890,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "4Rating:2"
+      }
     },
     {
       "ref": "M5",
@@ -648,9 +629,8 @@
         "topPx": 87,
         "rightPx": 890,
         "bottomPx": 98,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "4Rating:3"
+      }
     },
     {
       "ref": "N2",
@@ -663,7 +643,7 @@
         "topPx": 27,
         "rightPx": 960,
         "bottomPx": 37,
-        "glyphClass": "unclassified"
+        "glyphClass": "4TrafficLights:0"
       }
     },
     {
@@ -677,7 +657,7 @@
         "topPx": 47,
         "rightPx": 960,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
+        "glyphClass": "3TrafficLights1:0"
       }
     },
     {
@@ -691,7 +671,7 @@
         "topPx": 67,
         "rightPx": 960,
         "bottomPx": 77,
-        "glyphClass": "unclassified"
+        "glyphClass": "3TrafficLights1:1"
       }
     },
     {
@@ -705,7 +685,7 @@
         "topPx": 87,
         "rightPx": 960,
         "bottomPx": 97,
-        "glyphClass": "unclassified"
+        "glyphClass": "3TrafficLights1:2"
       }
     },
     {
@@ -719,9 +699,8 @@
         "topPx": 27,
         "rightPx": 1032,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "O3",
@@ -734,9 +713,8 @@
         "topPx": 47,
         "rightPx": 1033,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "4Arrows:1"
+      }
     },
     {
       "ref": "O4",
@@ -749,9 +727,8 @@
         "topPx": 67,
         "rightPx": 1033,
         "bottomPx": 77,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:1"
+      }
     },
     {
       "ref": "O5",
@@ -764,9 +741,8 @@
         "topPx": 87,
         "rightPx": 1033,
         "bottomPx": 98,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "4Arrows:2"
+      }
     },
     {
       "ref": "O6",
@@ -779,7 +755,7 @@
         "topPx": 107,
         "rightPx": 1032,
         "bottomPx": 118,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Arrows:2"
       }
     },
     {
@@ -793,9 +769,8 @@
         "topPx": 27,
         "rightPx": 1104,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3ArrowsGray:0"
+      }
     },
     {
       "ref": "P3",
@@ -808,9 +783,8 @@
         "topPx": 47,
         "rightPx": 1105,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "4ArrowsGray:1"
+      }
     },
     {
       "ref": "P4",
@@ -823,9 +797,8 @@
         "topPx": 67,
         "rightPx": 1105,
         "bottomPx": 77,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3ArrowsGray:1"
+      }
     },
     {
       "ref": "P5",
@@ -838,9 +811,8 @@
         "topPx": 87,
         "rightPx": 1105,
         "bottomPx": 98,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "4ArrowsGray:2"
+      }
     },
     {
       "ref": "P6",
@@ -853,7 +825,7 @@
         "topPx": 107,
         "rightPx": 1104,
         "bottomPx": 118,
-        "glyphClass": "unclassified"
+        "glyphClass": "3ArrowsGray:2"
       }
     },
     {
@@ -867,9 +839,8 @@
         "topPx": 27,
         "rightPx": 1178,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "5Rating:0"
+      }
     },
     {
       "ref": "Q3",
@@ -882,9 +853,8 @@
         "topPx": 47,
         "rightPx": 1178,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "4Rating:0"
+      }
     },
     {
       "ref": "Q4",
@@ -897,9 +867,8 @@
         "topPx": 67,
         "rightPx": 1178,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "4Rating:1"
+      }
     },
     {
       "ref": "Q5",
@@ -912,9 +881,8 @@
         "topPx": 87,
         "rightPx": 1178,
         "bottomPx": 98,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "4Rating:2"
+      }
     },
     {
       "ref": "Q6",
@@ -927,9 +895,8 @@
         "topPx": 107,
         "rightPx": 1178,
         "bottomPx": 118,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "4Rating:3"
+      }
     },
     {
       "ref": "R2",
@@ -942,7 +909,7 @@
         "topPx": 27,
         "rightPx": 1248,
         "bottomPx": 37,
-        "glyphClass": "unclassified"
+        "glyphClass": "5Quarters:0"
       }
     },
     {
@@ -956,7 +923,7 @@
         "topPx": 47,
         "rightPx": 1248,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
+        "glyphClass": "5Quarters:1"
       }
     },
     {
@@ -970,7 +937,7 @@
         "topPx": 67,
         "rightPx": 1248,
         "bottomPx": 77,
-        "glyphClass": "unclassified"
+        "glyphClass": "5Quarters:2"
       }
     },
     {
@@ -984,7 +951,7 @@
         "topPx": 87,
         "rightPx": 1248,
         "bottomPx": 97,
-        "glyphClass": "unclassified"
+        "glyphClass": "5Quarters:3"
       }
     },
     {
@@ -998,7 +965,7 @@
         "topPx": 107,
         "rightPx": 1248,
         "bottomPx": 117,
-        "glyphClass": "unclassified"
+        "glyphClass": "twin-set:4RedToBlack:0|5Quarters:4"
       }
     },
     {
@@ -1012,9 +979,8 @@
         "topPx": 29,
         "rightPx": 1320,
         "bottomPx": 37,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Stars:0"
+      }
     },
     {
       "ref": "S3",
@@ -1027,9 +993,8 @@
         "topPx": 49,
         "rightPx": 1320,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Stars:1"
+      }
     },
     {
       "ref": "S4",
@@ -1042,9 +1007,8 @@
         "topPx": 69,
         "rightPx": 1321,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Stars:2"
+      }
     },
     {
       "ref": "T2",
@@ -1057,9 +1021,8 @@
         "topPx": 32,
         "rightPx": 1392,
         "bottomPx": 37,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Triangles:0"
+      }
     },
     {
       "ref": "T3",
@@ -1072,7 +1035,7 @@
         "topPx": 52,
         "rightPx": 1392,
         "bottomPx": 54,
-        "glyphClass": "unclassified"
+        "glyphClass": "3Triangles:1"
       }
     },
     {
@@ -1086,9 +1049,8 @@
         "topPx": 70,
         "rightPx": 1392,
         "bottomPx": 74,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Triangles:2"
+      }
     },
     {
       "ref": "U2",
@@ -1096,7 +1058,8 @@
       "cellTopPx": 20,
       "cellWidthPx": 72,
       "cellHeightPx": 20,
-      "icon": null
+      "icon": null,
+      "faintGlyphClass": "twin-set:4RedToBlack:1|5Boxes:0|no-icon"
     },
     {
       "ref": "U3",
@@ -1109,7 +1072,7 @@
         "topPx": 53,
         "rightPx": 1459,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
+        "glyphClass": "5Boxes:1"
       }
     },
     {
@@ -1123,7 +1086,7 @@
         "topPx": 73,
         "rightPx": 1464,
         "bottomPx": 77,
-        "glyphClass": "unclassified"
+        "glyphClass": "5Boxes:2"
       }
     },
     {
@@ -1137,9 +1100,8 @@
         "topPx": 88,
         "rightPx": 1464,
         "bottomPx": 97,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "5Boxes:3"
+      }
     },
     {
       "ref": "U6",
@@ -1152,7 +1114,7 @@
         "topPx": 108,
         "rightPx": 1464,
         "bottomPx": 117,
-        "glyphClass": "unclassified"
+        "glyphClass": "5Boxes:4"
       }
     },
     {
@@ -1166,7 +1128,7 @@
         "topPx": 27,
         "rightPx": 1536,
         "bottomPx": 37,
-        "glyphClass": "unclassified"
+        "glyphClass": "3TrafficLights1:0"
       }
     },
     {
@@ -1180,7 +1142,7 @@
         "topPx": 47,
         "rightPx": 1536,
         "bottomPx": 57,
-        "glyphClass": "unclassified"
+        "glyphClass": "3TrafficLights1:1"
       }
     },
     {
@@ -1194,7 +1156,7 @@
         "topPx": 67,
         "rightPx": 1536,
         "bottomPx": 77,
-        "glyphClass": "unclassified"
+        "glyphClass": "3TrafficLights1:2"
       }
     },
     {
@@ -1208,9 +1170,8 @@
         "topPx": 27,
         "rightPx": 1608,
         "bottomPx": 38,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "W3",
@@ -1223,9 +1184,8 @@
         "topPx": 47,
         "rightPx": 1608,
         "bottomPx": 58,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     },
     {
       "ref": "W4",
@@ -1238,10 +1198,960 @@
         "topPx": 67,
         "rightPx": 1608,
         "bottomPx": 78,
-        "glyphClass": "unclassified"
-      },
-      "edgeStable": false
+        "glyphClass": "3Arrows:0"
+      }
     }
   ],
-  "iconHypotheses": {}
+  "iconHypotheses": {
+    "icon:families-base": {
+      "B2": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:2"
+        }
+      ],
+      "B3": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Arrows:1"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:1"
+        }
+      ],
+      "B4": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:0"
+        }
+      ],
+      "C2": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3ArrowsGray:0"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3ArrowsGray:2"
+        }
+      ],
+      "C3": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3ArrowsGray:1"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3ArrowsGray:1"
+        }
+      ],
+      "C4": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3ArrowsGray:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3ArrowsGray:0"
+        }
+      ],
+      "D2": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Flags:0"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Flags:2"
+        }
+      ],
+      "D3": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Flags:1"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Flags:1"
+        }
+      ],
+      "D4": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Flags:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Flags:0"
+        }
+      ],
+      "E2": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3TrafficLights1:0"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3TrafficLights1:2"
+        }
+      ],
+      "E3": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3TrafficLights1:1"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3TrafficLights1:1"
+        }
+      ],
+      "E4": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3TrafficLights1:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3TrafficLights1:0"
+        }
+      ],
+      "F2": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3TrafficLights2:0"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3TrafficLights2:2"
+        }
+      ],
+      "F3": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3TrafficLights2:1"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3TrafficLights2:1"
+        }
+      ],
+      "F4": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3TrafficLights2:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3TrafficLights2:0"
+        }
+      ],
+      "G2": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Signs:0"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Signs:2"
+        }
+      ],
+      "G3": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Signs:1"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Signs:1"
+        }
+      ],
+      "G4": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Signs:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Signs:0"
+        }
+      ],
+      "H2": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Symbols:0"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Symbols:2"
+        }
+      ],
+      "H3": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Symbols:1"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Symbols:1"
+        }
+      ],
+      "H4": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Symbols:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Symbols:0"
+        }
+      ],
+      "I2": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Symbols2:0"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Symbols2:2"
+        }
+      ],
+      "I3": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Symbols2:1"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Symbols2:1"
+        }
+      ],
+      "I4": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Symbols2:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Symbols2:0"
+        }
+      ],
+      "J2": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:2"
+        }
+      ],
+      "J3": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "4Arrows:1"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "4Arrows:2"
+        }
+      ],
+      "J4": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "4Arrows:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "4Arrows:1"
+        }
+      ],
+      "J5": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:0"
+        }
+      ],
+      "K2": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3ArrowsGray:0"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3ArrowsGray:2"
+        }
+      ],
+      "K3": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "4ArrowsGray:1"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "4ArrowsGray:2"
+        }
+      ],
+      "K4": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "4ArrowsGray:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "4ArrowsGray:1"
+        }
+      ],
+      "K5": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3ArrowsGray:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3ArrowsGray:0"
+        }
+      ],
+      "L2": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "4RedToBlack:0"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "4RedToBlack:3"
+        }
+      ],
+      "L3": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "4RedToBlack:1"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "4RedToBlack:2"
+        }
+      ],
+      "L4": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "4RedToBlack:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "4RedToBlack:1"
+        }
+      ],
+      "L5": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "4RedToBlack:3"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "4RedToBlack:0"
+        }
+      ],
+      "M2": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "4Rating:0"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "4Rating:3"
+        }
+      ],
+      "M3": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "4Rating:1"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "4Rating:2"
+        }
+      ],
+      "M4": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "4Rating:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "4Rating:1"
+        }
+      ],
+      "M5": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "4Rating:3"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "4Rating:0"
+        }
+      ],
+      "N2": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "4TrafficLights:0"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3TrafficLights1:2"
+        }
+      ],
+      "N3": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3TrafficLights1:0"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3TrafficLights1:1"
+        }
+      ],
+      "N4": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3TrafficLights1:1"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3TrafficLights1:0"
+        }
+      ],
+      "N5": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3TrafficLights1:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "4TrafficLights:0"
+        }
+      ],
+      "O2": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:2"
+        }
+      ],
+      "O3": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "4Arrows:1"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "4Arrows:2"
+        }
+      ],
+      "O4": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Arrows:1"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:1"
+        }
+      ],
+      "O5": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "4Arrows:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "4Arrows:1"
+        }
+      ],
+      "O6": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Arrows:0"
+        }
+      ],
+      "P2": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3ArrowsGray:0"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3ArrowsGray:2"
+        }
+      ],
+      "P3": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "4ArrowsGray:1"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "4ArrowsGray:2"
+        }
+      ],
+      "P4": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3ArrowsGray:1"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3ArrowsGray:1"
+        }
+      ],
+      "P5": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "4ArrowsGray:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "4ArrowsGray:1"
+        }
+      ],
+      "P6": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3ArrowsGray:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3ArrowsGray:0"
+        }
+      ],
+      "Q2": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "5Rating:0"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "4Rating:3"
+        }
+      ],
+      "Q3": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "4Rating:0"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "4Rating:2"
+        }
+      ],
+      "Q4": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "4Rating:1"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "4Rating:1"
+        }
+      ],
+      "Q5": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "4Rating:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "4Rating:0"
+        }
+      ],
+      "Q6": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "4Rating:3"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "5Rating:0"
+        }
+      ],
+      "R2": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "5Quarters:0"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "5Quarters:4"
+        }
+      ],
+      "R3": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "5Quarters:1"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "5Quarters:3"
+        }
+      ],
+      "R4": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "5Quarters:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "5Quarters:2"
+        }
+      ],
+      "R5": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "5Quarters:3"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "5Quarters:1"
+        }
+      ],
+      "R6": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "5Quarters:4"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "5Quarters:0"
+        }
+      ]
+    },
+    "icon:families-x14": {
+      "S2": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Stars:0"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Stars:2"
+        }
+      ],
+      "S3": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Stars:1"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Stars:1"
+        }
+      ],
+      "S4": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Stars:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Stars:0"
+        }
+      ],
+      "T2": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Triangles:0"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Triangles:2"
+        }
+      ],
+      "T3": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Triangles:1"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Triangles:1"
+        }
+      ],
+      "T4": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "3Triangles:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3Triangles:0"
+        }
+      ],
+      "U2": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "5Boxes:0"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "5Boxes:4"
+        }
+      ],
+      "U3": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "5Boxes:1"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "5Boxes:3"
+        }
+      ],
+      "U4": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "5Boxes:2"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "5Boxes:2"
+        }
+      ],
+      "U5": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "5Boxes:3"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "5Boxes:1"
+        }
+      ],
+      "U6": [
+        {
+          "id": "bucket-order",
+          "glyphClass": "5Boxes:4"
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "5Boxes:0"
+        }
+      ]
+    },
+    "icon:settings-schema-defaults": {
+      "V2": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3TrafficLights1:0"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3TrafficLights1:2"
+        },
+        {
+          "id": "family:3Arrows",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "family:3ArrowsGray",
+          "glyphClass": "3ArrowsGray:0"
+        },
+        {
+          "id": "family:3Flags",
+          "glyphClass": "3Flags:0"
+        },
+        {
+          "id": "family:3TrafficLights2",
+          "glyphClass": "3TrafficLights2:0"
+        },
+        {
+          "id": "family:3Signs",
+          "glyphClass": "3Signs:0"
+        },
+        {
+          "id": "family:3Symbols",
+          "glyphClass": "3Symbols:0"
+        },
+        {
+          "id": "family:3Symbols2",
+          "glyphClass": "3Symbols2:0"
+        },
+        {
+          "id": "family:3Stars",
+          "glyphClass": "3Stars:0"
+        },
+        {
+          "id": "family:3Triangles",
+          "glyphClass": "3Triangles:0"
+        }
+      ],
+      "V3": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3TrafficLights1:1"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3TrafficLights1:1"
+        },
+        {
+          "id": "family:3Arrows",
+          "glyphClass": "3Arrows:1"
+        },
+        {
+          "id": "family:3ArrowsGray",
+          "glyphClass": "3ArrowsGray:1"
+        },
+        {
+          "id": "family:3Flags",
+          "glyphClass": "3Flags:1"
+        },
+        {
+          "id": "family:3TrafficLights2",
+          "glyphClass": "3TrafficLights2:1"
+        },
+        {
+          "id": "family:3Signs",
+          "glyphClass": "3Signs:1"
+        },
+        {
+          "id": "family:3Symbols",
+          "glyphClass": "3Symbols:1"
+        },
+        {
+          "id": "family:3Symbols2",
+          "glyphClass": "3Symbols2:1"
+        },
+        {
+          "id": "family:3Stars",
+          "glyphClass": "3Stars:1"
+        },
+        {
+          "id": "family:3Triangles",
+          "glyphClass": "3Triangles:1"
+        }
+      ],
+      "V4": [
+        {
+          "id": "as-modelled",
+          "glyphClass": "3TrafficLights1:2"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        },
+        {
+          "id": "reversed-order",
+          "glyphClass": "3TrafficLights1:0"
+        },
+        {
+          "id": "family:3Arrows",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "family:3ArrowsGray",
+          "glyphClass": "3ArrowsGray:2"
+        },
+        {
+          "id": "family:3Flags",
+          "glyphClass": "3Flags:2"
+        },
+        {
+          "id": "family:3TrafficLights2",
+          "glyphClass": "3TrafficLights2:2"
+        },
+        {
+          "id": "family:3Signs",
+          "glyphClass": "3Signs:2"
+        },
+        {
+          "id": "family:3Symbols",
+          "glyphClass": "3Symbols:2"
+        },
+        {
+          "id": "family:3Symbols2",
+          "glyphClass": "3Symbols2:2"
+        },
+        {
+          "id": "family:3Stars",
+          "glyphClass": "3Stars:2"
+        },
+        {
+          "id": "family:3Triangles",
+          "glyphClass": "3Triangles:2"
+        }
+      ]
+    },
+    "icon:scope-whole-column": {
+      "W2": [
+        {
+          "id": "whole-column",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "data-block-only",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        }
+      ],
+      "W3": [
+        {
+          "id": "whole-column",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "data-block-only",
+          "glyphClass": "3Arrows:1"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        }
+      ],
+      "W4": [
+        {
+          "id": "whole-column",
+          "glyphClass": "3Arrows:0"
+        },
+        {
+          "id": "data-block-only",
+          "glyphClass": "3Arrows:2"
+        },
+        {
+          "id": "no-icon",
+          "glyphClass": null
+        }
+      ]
+    }
+  }
 }
