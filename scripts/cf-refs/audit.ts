@@ -799,13 +799,13 @@ export const CF_STAGE4_PRODUCTION_READINGS: Readonly<Record<string, string | rea
   'icon:scope-hidden-row': 'include-hidden',
   'icon:scope-autofilter-hidden-row': 'include-hidden',
   // compose.ts: of two matching icons (or duplicate icon blocks) the first in priority order paints; an icon and a bar
-  // both paint; a matching stopIfTrue rule ahead halts the icon, and an unresolved stopping stub ahead halts
-  // composition there (the icon is never drawn).
+  // both paint; a matching stopIfTrue rule ahead halts the icon. (`icon:composition-unresolved-stub` matched `halted`,
+  // but production cannot evaluate the Stage 5 expression stub and withholds every cell below it: no entry, so the
+  // gate withholds it, as Stage 3 did for bar:composition-unresolved-stub.)
   'icon:scope-duplicate-blocks': 'first-paints',
   'icon:composition-overlapping-icons': 'first-paints',
   'icon:composition-with-bar': 'both-paint',
   'icon:composition-matching-stopIfTrue-ahead': 'halted',
-  'icon:composition-unresolved-stub': 'halted',
 }
 
 export interface Stage4Publication {

@@ -280,14 +280,14 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
                 stage4IconOnlyWithheld++
                 continue
               }
-              if (!caps.every(id => VERIFIED_CAPABILITIES.has(id))) continue
-              // The Stage 5 expression stub (L) is unresolved, so it paints no fill; any other evidenced writer (the
-              // glyph key's calibration cellIs fill) takes the normal path below.
+              // The Stage 5 expression stub (L, its capability withheld) is unresolved, so it paints no fill.
               if (writers.some(m => m.ruleType === 'expression')) {
                 expect(gotMatched, `${cellKey}: the Stage 5 expression stub is withheld`).toBe(false)
                 stage4StubWithheld++
                 continue
               }
+              if (!caps.every(id => VERIFIED_CAPABILITIES.has(id))) continue
+              // Any other evidenced writer (the glyph key's calibration cellIs fill) takes the normal path below.
             }
           }
           if (cellKey === 'stage1-priority-composition:F2') {
@@ -810,7 +810,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     const stage4 = manifest.cases.filter(c => c.stage === 4)
     expect(stage4.map(c => c.id)).toEqual(CF_CASES.filter(c => c.stage === 4).map(c => c.id))
     expect(stage4).toHaveLength(19)
-    let checked = 0, iconCells = 0, preparedSheets = 0, agreedIcon = 0, agreedNone = 0, withheld = 0, unclassified = 0, unobserved = 0
+    let checked = 0, iconCells = 0, preparedSheets = 0, agreedIcon = 0, agreedNone = 0, withheld = 0, unclassified = 0, unobserved = 0, controls = 0
     const violations: string[] = []
     const shownBy = new Map<string, number>()
     for (const c of stage4) {
@@ -841,7 +841,16 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
           const outcome = lease.value.at(row, col)
           const key = `${c.id}:${exp.ref}`
           const obs = observed.get(exp.ref.toUpperCase())
-          const produced = outcome.kind === 'no-match' ? null : outcome.kind === 'ready' && outcome.value.visual?.iconSet ? producedClass(outcome.value.visual.iconSet) : undefined
+          // Production's claim: an icon class; no icon (no-match, or a ready outcome whose icon slot is neither filled nor
+          // tainted, e.g. halted by a stopIfTrue rule ahead); or withheld (tainted or unresolved). A cell no icon rule
+          // covers is a control: production's "no icon" there is not evidence.
+          const covered = c.markers.some(m => m.ruleType === 'iconSet' && isCellInSqref(exp.ref, m.sqref))
+          // Any unresolved write makes the cell's composition unknown (an unresolved stopping rule ahead halts it, and the
+          // cell announces unavailable): withheld, not a claim of no icon.
+          const tainted = outcome.kind === 'ready' && ((outcome.value.unresolvedWrites?.size ?? 0) > 0)
+          const produced = outcome.kind === 'no-match' || (outcome.kind === 'ready' && !outcome.value.visual?.iconSet && !tainted) ? null
+            : outcome.kind === 'ready' && outcome.value.visual?.iconSet ? producedClass(outcome.value.visual.iconSet) : undefined
+          if (!covered) { controls++; if (produced !== null && produced !== undefined) violations.push(`${c.id}:${exp.ref}: production draws ${produced} on a control`); continue }
           if (produced === undefined) { withheld++; continue }
           // Only a captured case is evidence (the OM probe crashed before any capture), and a null observation means "no
           // icon" only on a cell whose bucket was classified (geometry and text cases record text ink, not icons).
@@ -870,7 +879,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(violations).toEqual([])
     // The publication is not vacuous: production evaluates Excel's icon on most icon cells, across the bucket cases.
     // Pinned at publication (Task 30): any change in what production evaluates moves these.
-    expect({ checked, agreedIcon, agreedNone, withheld, unclassified, unobserved }).toEqual({ checked: 1506, agreedIcon: 549, agreedNone: 12, withheld: 838, unclassified: 86, unobserved: 21 })
+    expect({ checked, agreedIcon, agreedNone, withheld, unclassified, unobserved, controls }).toEqual({ checked: 1506, agreedIcon: 549, agreedNone: 25, withheld: 111, unclassified: 86, unobserved: 21, controls: 714 })
     for (const id of ['stage4-icon-families', 'stage4-icon-thresholds', 'stage4-icon-degenerate', 'stage4-icon-reverse-custom', 'stage4-icon-participation', 'stage4-icon-scope', 'stage4-icon-composition', 'stage4-icon-glyph-key', 'stage4-icon-rows-bottom', 'stage4-icon-authored']) {
       expect(shownBy.get(id) ?? 0, id).toBeGreaterThan(0)
     }

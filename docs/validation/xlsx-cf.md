@@ -1867,11 +1867,11 @@ So the case measured:
 - the reading Excel matched equals production's (`CF_STAGE4_PRODUCTION_READINGS` = `CF_ICON_PAINT_READINGS` plus the evaluator and composer readings). A list-valued entry is a selection, published in `VERIFIED_STAGE4_ICON_SELECTIONS`;
 - for a glyph pair, its class passed the OD-9(b) approximation check (not in `CF_ICON_GLYPH_WITHHELD`), so publishing a key capability can never un-withhold a failing glyph.
 
-**Result.** 98 of 145 `icon:*` ids published (54 of 75 glyph pairs, 39 of 54 glyph classes); 47 withheld: 21 glyph pairs (approximation check), 3 by ruling, 7 non-discriminating, 16 refused-unsupported. Six selections: percentile `inc`, floor `below-floor-no-icon`, `as-model` for equal values, a single cell, non-monotonic thresholds and out-of-domain bounds. `icon:inset-right-aligned` publishes (S4-RIGHTINSET-ZERO, matched `unshifted`); `icon:geometry-snapping` stays withheld, the paint gate using `bar:geometry-snapping` (S4-SNAP-SHARED).
+**Result.** 97 of 145 `icon:*` ids published (54 of 75 glyph pairs, 39 of 54 glyph classes); 48 withheld: 21 glyph pairs (approximation check), 3 by ruling, 7 non-discriminating, 16 refused-unsupported, and `icon:composition-unresolved-stub` (Excel matched `halted`, but production cannot evaluate the Stage 5 expression stub and withholds every cell below it, so it implements no reading; as Stage 3 did for `bar:composition-unresolved-stub`). Six selections: percentile `inc`, floor `below-floor-no-icon`, `as-model` for equal values, a single cell, non-monotonic thresholds and out-of-domain bounds. `icon:inset-right-aligned` publishes (S4-RIGHTINSET-ZERO, matched `unshifted`); `icon:geometry-snapping` stays withheld, the paint gate using `bar:geometry-snapping` (S4-SNAP-SHARED).
 
 **Dual gate.** `audit --stage 4`: ok, `stageComplete=true`, 0 blocked, every disposition in {verified, unverified-nondiscriminating, refused-unsupported}. `tests/xlsx-cf-oracle-conformance.test.ts` green with no injection. The second `--write --publish-stage4` run leaves `src/xlsx/cf/verifiedCapabilities.ts` byte-identical (`git diff --exit-code`). Against `bdc2b217` the file gains only `VERIFIED_STAGE4_CAPABILITIES`, `VERIFIED_STAGE4_ICON_SELECTIONS` and the `icon:*` ids of `VERIFIED_CAPABILITIES`; Stage 1–3 sets are byte-unchanged (audits 1–3 ok). Deviation from the plan text: the selections export rides beside the Stage 4 set (the context file allows it; without it the selection shapes stay unresolved).
 
-**Conformance on Excel's own workbooks (no injection).** Production's evaluated `(set, iconId)`, mapped through `CF_ICON_GLYPH_CLASSES`, against the sidecars' classes on all 1,506 Stage 4 cells: 549 agree on an icon, 12 agree on no icon, 0 disagree; 838 withheld, 86 unclassifiable crops, 21 unobserved. Every icon production paints (`iconAt`) is Excel's class, and its frame plus the class's key ink offset lies within ±1 px of Excel's ink box in its cell; the measured inset equals Excel's text shift.
+**Conformance on Excel's own workbooks (no injection).** Production's evaluated `(set, iconId)`, mapped through `CF_ICON_GLYPH_CLASSES`, against the sidecars' classes on all 1,506 Stage 4 cells: 714 are controls (no icon rule covers them; production draws nothing there). On the 792 covered cells, 549 agree on an icon and 25 on no icon (no-match, or halted by a stopIfTrue rule ahead); 0 disagree; 111 are withheld (tainted, or under an unresolved write); 86 are unclassifiable crops and 21 unobserved (an uncaptured case, or a text/geometry cell whose bucket was not classified). Every icon production paints (`iconAt`) is Excel's class, and its frame plus the class's key ink offset lies within ±1 px of Excel's ink box in its cell; the measured inset equals Excel's text shift.
 
 ### 13.2 Product fixes found by the gate
 
@@ -1903,7 +1903,7 @@ So the case measured:
 - Browser `tests/browser/xlsx-cf.spec.ts`: Chromium 28/28, WebKit 28/28.
 - Eager gzip 36,519 B (PR 3 base 36,517; limit 38,720). `check-eager` ok (157 modules). `core-gates`: core closure ok; index closure 421,541 B and its module set FAIL environmentally, as on main `bdc2b217` (421,386 B, absolute `node_modules` paths). `scripts/eager-baseline.json` unchanged (record only if Linux CI flags it).
 - CF lazy chunks: 57,081 B gzip at `bdc2b217` → 72,074 B (+14,993). The glyph table (`iconGlyphs.ts`) is 5,417 B gzip of it (36 %).
-- `bun scripts/cf-compare.ts --stage 4`: static, print and export whole-frame pixel diffs fail for every stage, Stage 3 included (cross-renderer frames: a pre-existing limit; all off-capture fidelity is *unverified*, and the OD-9(b) artwork is `pixel-approximated`, never measured). Paged 32 pass; interactive 38 pass. Their Stage 4 fails are the harness's "matched means a style" check, which does not count icon states (NoIcons, no-icon and icon-only cells), and `stage4-icon-glyph-key`'s text scope (76 rules × 462 cells) refusing at the byte estimate.
+- `bun scripts/cf-compare.ts --stage 4`: static, print and export whole-frame pixel diffs fail for every stage, Stage 3 included (cross-renderer frames: a pre-existing limit; all off-capture fidelity is *unverified*, and the OD-9(b) artwork is `pixel-approximated`, never measured). Paged 32 pass; interactive 38 pass. Against the pre-publication tree (`86170f19`, same command) every Stage 1–3 case's outcome is unchanged; only Stage 4 rows moved (interactive 6, paged 14 pass→fail). Before publication the harness expected those icon cells withheld; after it, its "matched means a style or bar" check does not count icon states (icon-only, NoIcons and no-icon cells), and `stage4-icon-glyph-key`'s text scope (76 rules × 462 cells) refuses at the byte estimate. The harness does not model icon states; the icon evidence is the conformance and browser tests.
 
 ### 13.6 Known limits
 
@@ -1915,15 +1915,17 @@ So the case measured:
 
 ### 13.7 Capability rows
 
+Evidence kind is read from the owning case's per-cell `iconEvidence` labels (verified rows only).
+
 | Capability | Ruling | Evidence kind | Matched reading | Status | Refusal still in force |
 |---|---|---|---|---|---|
-| `icon:om-reachability-probe` | S4-A | record only | — | withheld | unverified-nondiscriminating |
+| `icon:om-reachability-probe` | S4-A | — | — | withheld | unverified-nondiscriminating |
 | `icon:dialect-standalone` | S4-O | pixel-classified | as-modelled | published | — |
 | `icon:dialect-base` | S4-O | pixel-classified | as-modelled | published | — |
-| `icon:dialect-base-x14-family` | S4-B | pixel-classified | — | withheld | refused-unsupported |
-| `icon:dialect-paired` | S4-O | pixel-classified | — | withheld | refused-unsupported |
-| `icon:pixel-calibration` | S4-A | pixel-measured | — | published | — |
-| `icon:glyph-key` | S4-A | pixel-classified | — | published | — |
+| `icon:dialect-base-x14-family` | S4-B | — | — | withheld | refused-unsupported |
+| `icon:dialect-paired` | S4-O | — | — | withheld | refused-unsupported |
+| `icon:pixel-calibration` | S4-A | pixel-classified (glyph key) | — | published | — |
+| `icon:glyph-key` | S4-A | pixel-classified (glyph key) | — | published | — |
 | `icon:families-base` | S4-E | pixel-classified | bucket-order | published | — |
 | `icon:families-x14` | S4-E | pixel-classified | bucket-order | published | — |
 | `icon:settings-schema-defaults` | S4-B | pixel-classified | as-modelled | published | — |
@@ -1939,7 +1941,7 @@ So the case measured:
 | `icon:degenerate-non-monotonic` | S4-D | pixel-classified | as-model | published | — |
 | `icon:bounds-out-of-domain` | S4-D | pixel-classified | as-model | published | — |
 | `icon:thresholds-floor` | S4-C | pixel-classified | below-floor-no-icon | published | — |
-| `icon:thresholds-min-max` | S4-C | pixel-classified | — | withheld | refused-unsupported |
+| `icon:thresholds-min-max` | S4-C | — | — | withheld | refused-unsupported |
 | `icon:reverse` | S4-E | pixel-classified | reversed | published | — |
 | `icon:custom-mapping` | S4-E | pixel-classified | custom-order | published | — |
 | `icon:custom-noicons` | S4-B | pixel-classified | no-icon | published | — |
@@ -1948,7 +1950,7 @@ So the case measured:
 | `icon:composition-bar-showvalue` | S4-I | pixel-measured | priority-wins | published | — |
 | `icon:geometry-narrow-clip` | S4-K | pixel-measured | clip | published | — |
 | `icon:geometry-short-row-clip` | S4-K | pixel-measured | shrink | withheld | Ruling S4-SHORTROW-WITHHELD: Excel shrinks the box in a short row (matched `shrink`) by a law the captures do not determine; production does not implement shrin |
-| `icon:geometry-snapping` | S4-K | pixel-measured | — | withheld | unverified-nondiscriminating |
+| `icon:geometry-snapping` | S4-K | — | — | withheld | unverified-nondiscriminating |
 | `icon:inset-left` | S4-L | pixel-measured | inset | published | — |
 | `icon:inset-right-aligned` | S4-L | pixel-measured | unshifted | published | — |
 | `icon:inset-center` | S4-L | pixel-measured | full-cell | published | — |
@@ -1956,7 +1958,7 @@ So the case measured:
 | `icon:noicons-inset` | S4-L | pixel-measured | inset | published | — |
 | `icon:noicons-showvalue` | S4-L | pixel-measured | text-hidden | published | — |
 | `icon:showvalue-canvas-suppression` | S4-L | pixel-measured | text-hidden | published | — |
-| `icon:showvalue-copy-text` | S4-N | pixel-measured | — | withheld | unverified-nondiscriminating |
+| `icon:showvalue-copy-text` | S4-N | — | — | withheld | unverified-nondiscriminating |
 | `icon:participation-types` | S4-G | pixel-classified | no-icon-for-non-numbers | published | — |
 | `icon:participation-dateserial` | S4-G | pixel-classified | evaluated | published | — |
 | `icon:participation-error-presence` | S4-G | pixel-classified | error-ignored | published | — |
@@ -1967,24 +1969,24 @@ So the case measured:
 | `icon:scope-merged-cell` | S4-H | pixel-classified | all-stored | withheld | Ruling S4-MERGED-UNPUBLISHED: the worker and forced-paged scopes carry no merge knowledge, so publishing would make the resident view paint icons the paged view |
 | `icon:composition-overlapping-icons` | S4-I | pixel-classified | first-paints | published | — |
 | `icon:composition-with-bar` | S4-I | pixel-classified | both-paint | published | — |
-| `icon:composition-with-scale` | S4-I | pixel-classified | — | withheld | unverified-nondiscriminating |
-| `icon:composition-dxf-fill` | S4-I | pixel-classified | — | withheld | unverified-nondiscriminating |
+| `icon:composition-with-scale` | S4-I | — | — | withheld | unverified-nondiscriminating |
+| `icon:composition-dxf-fill` | S4-I | — | — | withheld | unverified-nondiscriminating |
 | `icon:composition-matching-stopIfTrue-ahead` | S4-I | pixel-classified | halted | published | — |
-| `icon:composition-noicons-slot` | S4-I | pixel-classified | — | withheld | unverified-nondiscriminating |
-| `icon:composition-unresolved-stub` | S4-I | pixel-classified | halted | published | — |
-| `icon:placement-rtl-sheet` | S4-M | record only | — | withheld | unverified-nondiscriminating |
-| `icon:unresolved-unknown-set` | S4-B | pixel-classified | — | withheld | refused-unsupported |
-| `icon:unresolved-iconid-range` | S4-B | pixel-classified | — | withheld | refused-unsupported |
-| `icon:unresolved-noicons-id` | S4-B | pixel-classified | — | withheld | refused-unsupported |
-| `icon:unresolved-custom-count` | S4-B | pixel-classified | — | withheld | refused-unsupported |
-| `icon:unresolved-base-x14-set` | S4-B | pixel-classified | — | withheld | refused-unsupported |
-| `icon:unresolved-formula-cfvo` | S4-B | pixel-classified | — | withheld | refused-unsupported |
-| `icon:unresolved-xmf-reference` | S4-B | pixel-classified | — | withheld | refused-unsupported |
-| `icon:unresolved-active-present` | S4-B | pixel-classified | — | withheld | refused-unsupported |
-| `icon:unresolved-cfvo-count` | S4-B | pixel-classified | — | withheld | refused-unsupported |
-| `icon:unresolved-cfvo-no-type` | S4-B | pixel-classified | — | withheld | refused-unsupported |
-| `icon:attr-percent-false` | S4-F | pixel-classified | — | withheld | refused-unsupported |
-| `icon:reverse-custom` | S4-E | pixel-classified | — | withheld | refused-unsupported |
-| `icon:composition-icon-stopIfTrue` | S4-J | pixel-classified | — | withheld | refused-unsupported |
+| `icon:composition-noicons-slot` | S4-I | — | — | withheld | unverified-nondiscriminating |
+| `icon:composition-unresolved-stub` | S4-I | pixel-classified | halted | withheld | reading-unimplemented: Excel matched halted, production names no reading |
+| `icon:placement-rtl-sheet` | S4-M | — | — | withheld | unverified-nondiscriminating |
+| `icon:unresolved-unknown-set` | S4-B | — | — | withheld | refused-unsupported |
+| `icon:unresolved-iconid-range` | S4-B | — | — | withheld | refused-unsupported |
+| `icon:unresolved-noicons-id` | S4-B | — | — | withheld | refused-unsupported |
+| `icon:unresolved-custom-count` | S4-B | — | — | withheld | refused-unsupported |
+| `icon:unresolved-base-x14-set` | S4-B | — | — | withheld | refused-unsupported |
+| `icon:unresolved-formula-cfvo` | S4-B | — | — | withheld | refused-unsupported |
+| `icon:unresolved-xmf-reference` | S4-B | — | — | withheld | refused-unsupported |
+| `icon:unresolved-active-present` | S4-B | — | — | withheld | refused-unsupported |
+| `icon:unresolved-cfvo-count` | S4-B | — | — | withheld | refused-unsupported |
+| `icon:unresolved-cfvo-no-type` | S4-B | — | — | withheld | refused-unsupported |
+| `icon:attr-percent-false` | S4-F | — | — | withheld | refused-unsupported |
+| `icon:reverse-custom` | S4-E | — | — | withheld | refused-unsupported |
+| `icon:composition-icon-stopIfTrue` | S4-J | — | — | withheld | refused-unsupported |
 | `icon:geometry-row-offset` | S4-K | pixel-measured | anchor-constant | published | — |
 | `icon:glyph-<set>-<id>` (75 pairs) | S4-A, OD-9(b) | pixel-approximated (*unverified* artwork) | — | 54 published, 21 withheld | the 15 classes in `CF_ICON_GLYPH_WITHHELD` failed the approximation check; their pairs: 3ArrowsGray-2, 3Flags-0, 3Flags-1, 3Flags-2, 3Signs-1, 3Symbols2-1, 4ArrowsGray-3, 4Rating-0, 4Rating-1, 4Rating-2, 4Rating-3, 5ArrowsGray-4, 5Rating-0, 5Rating-1, 5Rating-2, 5Rating-3, 5Rating-4, 3Stars-0, 3Stars-1, 3Stars-2, 3Triangles-0 |

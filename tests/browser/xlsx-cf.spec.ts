@@ -982,10 +982,11 @@ test('Stage 4 icons paint on the admitted geometry, announce on every leg, and t
       }
     })
   }
-  // The worker leg matches the resident one pixel for pixel. The forced-paged frame lays the value text of this
-  // fixture's fractional rows (12.75, 16.5, 22.5 pt) about 1 px apart from the resident one, as it did before Stage 4
-  // (docs/validation/xlsx-cf.md §11: the forced-paged row offset exists at base), so its agreement on CF is the icon
-  // pixels: every pixel only an icon draws (the glyphs' green) is the same pixel, with the same colour, on every leg.
+  // The worker leg matches the resident one pixel for pixel. The forced-paged frame differs from the resident one from
+  // the header row down (text and gridlines, about 1 px; the forced-paged frame offset that exists at base,
+  // docs/validation/xlsx-cf.md §11), so its agreement on CF is the icon pixels: every pixel only an icon draws (the
+  // glyphs' green) is the same pixel on every leg, its colour within 4 (anti-aliased edges). The left-text inset is not
+  // pixel-compared on the forced-paged leg (uncovered there; its announced icon and the unit tests cover it).
   const [resident, worker, forced] = shots as [Img, Img, Img]
   const greenMask = (img: Img): string[] => {
     const out: string[] = []
