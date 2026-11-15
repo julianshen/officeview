@@ -1,0 +1,142 @@
+{
+  "excelVersion": "16.115",
+  "route": "copy-picture",
+  "appearance": "screen",
+  "scale": 1,
+  "pxPerPt": 1,
+  "width": 625,
+  "height": 161,
+  "colWidthsPt": [
+    84,
+    180,
+    180,
+    180
+  ],
+  "rowHeightsPt": [
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20
+  ],
+  "geometrySource": "excel-measured",
+  "resavedByExcel": true,
+  "resaveSavedSha256": "a70e20b92d1dd80f8f8f337baa837d5760ca7421002c345f363c08d7d943cf48",
+  "sheet": "Sheet1",
+  "range": "A1:D8",
+  "hostTimeZone": "Asia/Taipei",
+  "savedSha256": "a70e20b92d1dd80f8f8f337baa837d5760ca7421002c345f363c08d7d943cf48",
+  "pngSha256": "d92767852cfff014f3874830660496801b9788d0de1aff25e146bd5e1e0fd86e",
+  "capturedAt": "2026-11-15T05:16:41.586Z",
+  "zoom": 100,
+  "dpr": 1,
+  "lockBefore": "unlocked",
+  "lockAfter": "unlocked",
+  "iconCopyText": "10\r\n50\r\n90",
+  "accessibilityTree": "not observable from the sdef (Ruling S4-N)",
+  "observedIcons": [
+    {
+      "ref": "B2",
+      "cellLeftPx": 84,
+      "cellTopPx": 20,
+      "cellWidthPx": 180,
+      "cellHeightPx": 20,
+      "icon": null,
+      "textInkLeftPx": 87,
+      "textInkRightPx": 96,
+      "textShiftPx": -164
+    },
+    {
+      "ref": "B3",
+      "cellLeftPx": 84,
+      "cellTopPx": 40,
+      "cellWidthPx": 180,
+      "cellHeightPx": 20,
+      "icon": null,
+      "textInkLeftPx": 86,
+      "textInkRightPx": 96,
+      "textShiftPx": -164
+    },
+    {
+      "ref": "B4",
+      "cellLeftPx": 84,
+      "cellTopPx": 60,
+      "cellWidthPx": 180,
+      "cellHeightPx": 20,
+      "icon": null,
+      "textInkLeftPx": 86,
+      "textInkRightPx": 96,
+      "textShiftPx": -164
+    },
+    {
+      "ref": "C2",
+      "cellLeftPx": 264,
+      "cellTopPx": 20,
+      "cellWidthPx": 180,
+      "cellHeightPx": 20,
+      "icon": null,
+      "textInkLeftPx": 349,
+      "textInkRightPx": 358,
+      "textShiftPx": -1
+    },
+    {
+      "ref": "C3",
+      "cellLeftPx": 264,
+      "cellTopPx": 40,
+      "cellWidthPx": 180,
+      "cellHeightPx": 20,
+      "icon": null,
+      "textInkLeftPx": 348,
+      "textInkRightPx": 358,
+      "textShiftPx": -1
+    },
+    {
+      "ref": "C4",
+      "cellLeftPx": 264,
+      "cellTopPx": 60,
+      "cellWidthPx": 180,
+      "cellHeightPx": 20,
+      "icon": null,
+      "textInkLeftPx": 348,
+      "textInkRightPx": 358,
+      "textShiftPx": -1
+    },
+    {
+      "ref": "D2",
+      "cellLeftPx": 444,
+      "cellTopPx": 20,
+      "cellWidthPx": 180,
+      "cellHeightPx": 20,
+      "icon": null,
+      "textInkLeftPx": 447,
+      "textInkRightPx": 456,
+      "textShiftPx": -164
+    },
+    {
+      "ref": "D3",
+      "cellLeftPx": 444,
+      "cellTopPx": 40,
+      "cellWidthPx": 180,
+      "cellHeightPx": 20,
+      "icon": null,
+      "textInkLeftPx": 446,
+      "textInkRightPx": 456,
+      "textShiftPx": -164
+    },
+    {
+      "ref": "D4",
+      "cellLeftPx": 444,
+      "cellTopPx": 60,
+      "cellWidthPx": 180,
+      "cellHeightPx": 20,
+      "icon": null,
+      "textInkLeftPx": 446,
+      "textInkRightPx": 456,
+      "textShiftPx": -164
+    }
+  ],
+  "iconHypotheses": {}
+}

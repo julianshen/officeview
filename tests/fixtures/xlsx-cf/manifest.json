@@ -28560,7 +28560,7 @@
       ],
       "expected": {
         "inputSha256": "ad5eaca99e48f115d4127ce1e1d10782d62b42d138c8365c048df477c83047b1",
-        "savedSha256": "ad5eaca99e48f115d4127ce1e1d10782d62b42d138c8365c048df477c83047b1",
+        "savedSha256": "2163b2c99119e30ef8ae3558325ec5ea82df16980abcc0a2dfdc3b5bc5431249",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -28646,7 +28646,14 @@
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-15T04:52:51.542Z",
+        "excelVersion": "16.114",
+        "inputSha256": "ad5eaca99e48f115d4127ce1e1d10782d62b42d138c8365c048df477c83047b1",
+        "savedSha256": "2163b2c99119e30ef8ae3558325ec5ea82df16980abcc0a2dfdc3b5bc5431249",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage4-icon-authored",
@@ -28887,8 +28894,8 @@
       ],
       "expected": {
         "inputSha256": "d9588085d5f2f8595e3402b8edfe3d68464915c56c4efe028d74797c500cd243",
-        "savedSha256": "d9588085d5f2f8595e3402b8edfe3d68464915c56c4efe028d74797c500cd243",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "1bcd560565397a082493adbfc47c954edc13c392b15c57d404ddda6b05a9dfa2",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -29078,7 +29085,7 @@
             "ref": "D2",
             "controlRef": "D8",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -29155,7 +29162,7 @@
             "ref": "E4",
             "controlRef": "E10",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -29635,17 +29642,24 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-authored.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-authored.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-authored.json",
+          "pngSha256": "3fbdaec384abb12a14bf2690800906f1e066ae7b2224567652e4c615b01b0e5c"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-15T05:06:30.120Z",
+        "excelVersion": "16.115",
+        "inputSha256": "d9588085d5f2f8595e3402b8edfe3d68464915c56c4efe028d74797c500cd243",
+        "savedSha256": "1bcd560565397a082493adbfc47c954edc13c392b15c57d404ddda6b05a9dfa2",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage4-icon-dialect",
@@ -29776,70 +29790,70 @@
             "ref": "B2",
             "controlRef": "B8",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified"
           },
           {
             "ref": "B3",
             "controlRef": "B9",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified"
           },
           {
             "ref": "B4",
             "controlRef": "B10",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified"
           },
           {
             "ref": "B5",
             "controlRef": "B11",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified"
           },
           {
             "ref": "B6",
             "controlRef": "B12",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified"
           },
           {
             "ref": "C2",
             "controlRef": "C8",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified"
           },
           {
             "ref": "C3",
             "controlRef": "C9",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified"
           },
           {
             "ref": "C4",
             "controlRef": "C10",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified"
           },
           {
             "ref": "C5",
             "controlRef": "C11",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified"
           },
           {
             "ref": "C6",
             "controlRef": "C12",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified"
           },
           {
@@ -29928,11 +29942,12 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-dialect.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-dialect.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-dialect.json",
+          "pngSha256": "8f3478b046fa57ce5460d60b1597732988e4f9de8797ed2de3553c79d20ca23b"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
+      "reason": "Capture verification failed (semantic-evidence-pending): Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -33840,7 +33855,7 @@
       },
       "expected": {
         "inputSha256": "341453b42f26a35e66146a09860ef73431d6ac2b725deea1a6da90cda561851e",
-        "savedSha256": "341453b42f26a35e66146a09860ef73431d6ac2b725deea1a6da90cda561851e",
+        "savedSha256": "55086f97e4e034e7b0229837dea6a9eed9c4e30d4b723b4ae62ac3a10bf5e0b5",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -35445,17 +35460,25 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-glyph-key.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-glyph-key.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-glyph-key.json",
+          "pngSha256": "ec76220a4ab526a6b8ee3e4c5b77ea00187f3487ff8c2b120c8aba34802369cf"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
+      "reason": "Capture kept but not promoted: icon measurement refused (icon-class-ambiguous: Glyph-key crop 5Quarters:4 is ambiguous against 4RedToBlack:0)",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-15T05:07:09.687Z",
+        "excelVersion": "16.115",
+        "inputSha256": "341453b42f26a35e66146a09860ef73431d6ac2b725deea1a6da90cda561851e",
+        "savedSha256": "55086f97e4e034e7b0229837dea6a9eed9c4e30d4b723b4ae62ac3a10bf5e0b5",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage4-icon-families",
@@ -36148,8 +36171,8 @@
       ],
       "expected": {
         "inputSha256": "6c31d94a844722ad7d1aaa6e2c1f6a2792de4117afc257f32766f0e1bc1a5c77",
-        "savedSha256": "6c31d94a844722ad7d1aaa6e2c1f6a2792de4117afc257f32766f0e1bc1a5c77",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "7a9aa83284d3dcae6aca50a017622131e3ea2532fb76f5069330bd37bd127dd3",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -37091,7 +37114,7 @@
             "ref": "U2",
             "controlRef": "U14",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -37862,17 +37885,24 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-families.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-families.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-families.json",
+          "pngSha256": "bec667a95a9a54b580dd635d2a654813f5790c11f05d12ebe90fa69df50330ff"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-15T05:11:59.455Z",
+        "excelVersion": "16.115",
+        "inputSha256": "6c31d94a844722ad7d1aaa6e2c1f6a2792de4117afc257f32766f0e1bc1a5c77",
+        "savedSha256": "7a9aa83284d3dcae6aca50a017622131e3ea2532fb76f5069330bd37bd127dd3",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage4-icon-thresholds",
@@ -38097,8 +38127,8 @@
       ],
       "expected": {
         "inputSha256": "3ebc855d75a8815a5a153c731d406d7ccc80e43288514fc847a1bc7d980ca848",
-        "savedSha256": "3ebc855d75a8815a5a153c731d406d7ccc80e43288514fc847a1bc7d980ca848",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "cb08f9481557530bdf30a6e8f2377122d6ee408cb9c2207690ee919496bca1b8",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -40861,17 +40891,24 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-thresholds.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-thresholds.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-thresholds.json",
+          "pngSha256": "0ff642d3925672085e7463ae3b1af904ebab38f951f45acf0c7bd1d089312da8"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-15T05:12:51.689Z",
+        "excelVersion": "16.115",
+        "inputSha256": "3ebc855d75a8815a5a153c731d406d7ccc80e43288514fc847a1bc7d980ca848",
+        "savedSha256": "cb08f9481557530bdf30a6e8f2377122d6ee408cb9c2207690ee919496bca1b8",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage4-icon-degenerate",
@@ -41525,7 +41562,7 @@
             "ref": "F2",
             "controlRef": "F14",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -41536,7 +41573,7 @@
             "ref": "F3",
             "controlRef": "F15",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -41547,7 +41584,7 @@
             "ref": "F4",
             "controlRef": "F16",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -41558,7 +41595,7 @@
             "ref": "F5",
             "controlRef": "F17",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -41569,7 +41606,7 @@
             "ref": "F6",
             "controlRef": "F18",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -42378,11 +42415,12 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-degenerate.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-degenerate.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-degenerate.json",
+          "pngSha256": "87f392d2f5310194e1ca8c58cf5039739bcda227811543fffad1036469dc00dc"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
+      "reason": "Capture verification failed (semantic-evidence-pending): Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -43290,7 +43328,7 @@
             "ref": "G2",
             "controlRef": "G14",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -43301,7 +43339,7 @@
             "ref": "G3",
             "controlRef": "G15",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -43312,7 +43350,7 @@
             "ref": "G4",
             "controlRef": "G16",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -43323,7 +43361,7 @@
             "ref": "G5",
             "controlRef": "G17",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -43455,7 +43493,7 @@
             "ref": "H6",
             "controlRef": "H18",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -43466,7 +43504,7 @@
             "ref": "H7",
             "controlRef": "H19",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -43477,7 +43515,7 @@
             "ref": "H8",
             "controlRef": "H20",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -43609,7 +43647,7 @@
             "ref": "I9",
             "controlRef": "I21",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -43620,7 +43658,7 @@
             "ref": "I10",
             "controlRef": "I22",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -43631,7 +43669,7 @@
             "ref": "I11",
             "controlRef": "I23",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -43642,7 +43680,7 @@
             "ref": "I12",
             "controlRef": "I24",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -44223,11 +44261,12 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-reverse-custom.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-reverse-custom.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-reverse-custom.json",
+          "pngSha256": "edb0c3332aa3be8bfc30a95be775d205b663a090917e5dafaf87846b46a6e5ca"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
+      "reason": "Capture verification failed (semantic-evidence-pending): Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -44390,8 +44429,8 @@
       ],
       "expected": {
         "inputSha256": "e9ebb77e008c49db8b6c97061ed7aaf184738b923adf0789cf4b494a8886c7a4",
-        "savedSha256": "e9ebb77e008c49db8b6c97061ed7aaf184738b923adf0789cf4b494a8886c7a4",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "cf444161c8391aa6c695798eae9bc1f63a2f62cde5990c5c8cf3e91e3b36e826",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "C2",
@@ -45243,17 +45282,24 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-geometry.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-geometry.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-geometry.json",
+          "pngSha256": "90fb98d1c7e3e0898d3a6ccb362a44148e43b69888bdcc6f3e3877beb46cb3bf"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-15T05:15:34.253Z",
+        "excelVersion": "16.115",
+        "inputSha256": "e9ebb77e008c49db8b6c97061ed7aaf184738b923adf0789cf4b494a8886c7a4",
+        "savedSha256": "cf444161c8391aa6c695798eae9bc1f63a2f62cde5990c5c8cf3e91e3b36e826",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage4-icon-inset",
@@ -45468,8 +45514,8 @@
       ],
       "expected": {
         "inputSha256": "d0df14e7a5d7049531fb807f7f7c40616a00b497599bfdd60e47a1fd1214c676",
-        "savedSha256": "d0df14e7a5d7049531fb807f7f7c40616a00b497599bfdd60e47a1fd1214c676",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "fe0888a48e0ce2a97e299a934aace02cf80d50cb6a16e4bfd2ebe040479255ae",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -45647,7 +45693,7 @@
             "ref": "F2",
             "controlRef": "F6",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -45658,7 +45704,7 @@
             "ref": "F3",
             "controlRef": "F7",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -45669,7 +45715,7 @@
             "ref": "F4",
             "controlRef": "F8",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -45680,7 +45726,7 @@
             "ref": "G2",
             "controlRef": "G6",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -45691,7 +45737,7 @@
             "ref": "G3",
             "controlRef": "G7",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -45702,7 +45748,7 @@
             "ref": "G4",
             "controlRef": "G8",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -45859,17 +45905,24 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-inset.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-inset.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-inset.json",
+          "pngSha256": "2826ffdd23aaebcc19f3108445c7c45e624cb85ae264225c0dea3198dc2c1be6"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-15T05:16:10.566Z",
+        "excelVersion": "16.115",
+        "inputSha256": "d0df14e7a5d7049531fb807f7f7c40616a00b497599bfdd60e47a1fd1214c676",
+        "savedSha256": "fe0888a48e0ce2a97e299a934aace02cf80d50cb6a16e4bfd2ebe040479255ae",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage4-icon-showvalue",
@@ -45976,8 +46029,8 @@
       ],
       "expected": {
         "inputSha256": "cd974032ef4d5f3f3a9ae8f0a38af9ee764b96c7549cb6b64b84298ce0fb1919",
-        "savedSha256": "cd974032ef4d5f3f3a9ae8f0a38af9ee764b96c7549cb6b64b84298ce0fb1919",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "a70e20b92d1dd80f8f8f337baa837d5760ca7421002c345f363c08d7d943cf48",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -46005,7 +46058,7 @@
             "ref": "B2",
             "controlRef": "B6",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -46016,7 +46069,7 @@
             "ref": "B3",
             "controlRef": "B7",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -46027,7 +46080,7 @@
             "ref": "B4",
             "controlRef": "B8",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -46038,7 +46091,7 @@
             "ref": "C2",
             "controlRef": "C6",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -46049,7 +46102,7 @@
             "ref": "C3",
             "controlRef": "C7",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -46060,7 +46113,7 @@
             "ref": "C4",
             "controlRef": "C8",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -46071,7 +46124,7 @@
             "ref": "D2",
             "controlRef": "D6",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -46082,7 +46135,7 @@
             "ref": "D3",
             "controlRef": "D7",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -46093,7 +46146,7 @@
             "ref": "D4",
             "controlRef": "D8",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -46178,17 +46231,24 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-showvalue.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-showvalue.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-showvalue.json",
+          "pngSha256": "d92767852cfff014f3874830660496801b9788d0de1aff25e146bd5e1e0fd86e"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-15T05:16:41.152Z",
+        "excelVersion": "16.115",
+        "inputSha256": "cd974032ef4d5f3f3a9ae8f0a38af9ee764b96c7549cb6b64b84298ce0fb1919",
+        "savedSha256": "a70e20b92d1dd80f8f8f337baa837d5760ca7421002c345f363c08d7d943cf48",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage4-icon-participation",
@@ -46317,8 +46377,8 @@
       ],
       "expected": {
         "inputSha256": "056062973b7748d89d90357dff51f79b719c68b7525b7044e46e9c6693d10b54",
-        "savedSha256": "056062973b7748d89d90357dff51f79b719c68b7525b7044e46e9c6693d10b54",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "c8272fff57b6bce350a0f46d1e53c9c23837dacc6cc832298362633d922c2a36",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -46390,7 +46450,7 @@
             "ref": "B4",
             "controlRef": "B13",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -46401,7 +46461,7 @@
             "ref": "B5",
             "controlRef": "B14",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -46412,7 +46472,7 @@
             "ref": "B6",
             "controlRef": "B15",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -46423,7 +46483,7 @@
             "ref": "B7",
             "controlRef": "B16",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -46500,7 +46560,7 @@
             "ref": "D4",
             "controlRef": "D13",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -46555,7 +46615,7 @@
             "ref": "E4",
             "controlRef": "E13",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -46750,17 +46810,24 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-participation.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-participation.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-participation.json",
+          "pngSha256": "5ee85d25c6ea991ab99f21bc3a642dc37b9adf00a9a711500d10fbb9d2c890dd"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-15T05:17:08.777Z",
+        "excelVersion": "16.115",
+        "inputSha256": "056062973b7748d89d90357dff51f79b719c68b7525b7044e46e9c6693d10b54",
+        "savedSha256": "c8272fff57b6bce350a0f46d1e53c9c23837dacc6cc832298362633d922c2a36",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage4-icon-scope",
@@ -46945,8 +47012,8 @@
       ],
       "expected": {
         "inputSha256": "539297e556824c942c4d553299502e3ef74c69899de51917b4a89030bba07b25",
-        "savedSha256": "539297e556824c942c4d553299502e3ef74c69899de51917b4a89030bba07b25",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "155429449d3419433c3e65ccaebc927108859267304d95de5ec712e0aa329150",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -47336,17 +47403,24 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-scope.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-scope.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-scope.json",
+          "pngSha256": "cdeae75b9696f2cad743ef68f5a6934135bbcb7fdf45fe2dc513ffe08bcc2ff8"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-15T05:17:38.361Z",
+        "excelVersion": "16.115",
+        "inputSha256": "539297e556824c942c4d553299502e3ef74c69899de51917b4a89030bba07b25",
+        "savedSha256": "155429449d3419433c3e65ccaebc927108859267304d95de5ec712e0aa329150",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage4-icon-composition",
@@ -47989,8 +48063,8 @@
       ],
       "expected": {
         "inputSha256": "fb9ae26f4b32f21163a48432caaabe3359241ad5dfb556b546cf86bdb77da99a",
-        "savedSha256": "fb9ae26f4b32f21163a48432caaabe3359241ad5dfb556b546cf86bdb77da99a",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "174fc2515810447826e844efa7ec04ee275b8ca873d2b5c84dffaaaa682b1392",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -48326,7 +48400,7 @@
             "ref": "H2",
             "controlRef": "H7",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -48337,7 +48411,7 @@
             "ref": "H3",
             "controlRef": "H8",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -48458,7 +48532,7 @@
             "ref": "K2",
             "controlRef": "K7",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -48469,7 +48543,7 @@
             "ref": "K3",
             "controlRef": "K8",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -48480,7 +48554,7 @@
             "ref": "K4",
             "controlRef": "K9",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -48491,7 +48565,7 @@
             "ref": "K5",
             "controlRef": "K10",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -48502,7 +48576,7 @@
             "ref": "L2",
             "controlRef": "L7",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -48513,7 +48587,7 @@
             "ref": "L3",
             "controlRef": "L8",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -48524,7 +48598,7 @@
             "ref": "L4",
             "controlRef": "L9",
             "matched": true,
-            "iconApplied": true,
+            "iconApplied": false,
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
@@ -48884,17 +48958,24 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-composition.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-composition.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-composition.json",
+          "pngSha256": "883d79ecdd7da73ca773e50e9467a1306b6fe8b99ff1e246c11b758a549d3f83"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-15T05:18:07.251Z",
+        "excelVersion": "16.115",
+        "inputSha256": "fb9ae26f4b32f21163a48432caaabe3359241ad5dfb556b546cf86bdb77da99a",
+        "savedSha256": "174fc2515810447826e844efa7ec04ee275b8ca873d2b5c84dffaaaa682b1392",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage4-icon-rtl",
@@ -48939,8 +49020,8 @@
       ],
       "expected": {
         "inputSha256": "e72dafbb67474ae62a94f6cbc66b4383a3128cd6e3df93a09f08734161ed43f2",
-        "savedSha256": "e72dafbb67474ae62a94f6cbc66b4383a3128cd6e3df93a09f08734161ed43f2",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "b99dbb3e709bc52a9654bed98c4ba7511eeee9abab138c424476fff80c8de81d",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -49015,17 +49096,24 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-rtl.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-rtl.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-rtl.json",
+          "pngSha256": "db8037d41a2629d20c210c3662dd5388372e38036135d7148f90fd5f5574a9f6"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-15T05:18:44.372Z",
+        "excelVersion": "16.115",
+        "inputSha256": "e72dafbb67474ae62a94f6cbc66b4383a3128cd6e3df93a09f08734161ed43f2",
+        "savedSha256": "b99dbb3e709bc52a9654bed98c4ba7511eeee9abab138c424476fff80c8de81d",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage4-icon-unresolved-shapes",
@@ -49590,7 +49678,7 @@
       },
       "captures": [],
       "status": "unsupported",
-      "reason": "Unresolved icon shapes fail closed per Rulings S4-B, S4-C, S4-O and S4-P; recorded for Excel's open/repair/strip outcome and lift no capability",
+      "reason": "Preserved rejected Excel output at /Users/julianshen/prj/officeview/.worktrees/cf-s4/tests/fixtures/xlsx-cf/stage4-icon-unresolved-shapes.rejected.xlsx: Rule icon:unresolved-unknown-set (iconSet) on sqref B2:B6 with formulas [] missing from xl/worksheets/sheet1.xml",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,

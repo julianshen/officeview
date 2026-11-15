@@ -1,0 +1,84 @@
+{
+  "excelVersion": "16.115",
+  "route": "copy-picture",
+  "appearance": "screen",
+  "scale": 1,
+  "pxPerPt": 1,
+  "width": 265,
+  "height": 161,
+  "colWidthsPt": [
+    84,
+    180
+  ],
+  "rowHeightsPt": [
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20
+  ],
+  "geometrySource": "excel-measured",
+  "resavedByExcel": true,
+  "resaveSavedSha256": "b99dbb3e709bc52a9654bed98c4ba7511eeee9abab138c424476fff80c8de81d",
+  "sheet": "Sheet1",
+  "range": "A1:B8",
+  "hostTimeZone": "Asia/Taipei",
+  "savedSha256": "b99dbb3e709bc52a9654bed98c4ba7511eeee9abab138c424476fff80c8de81d",
+  "pngSha256": "db8037d41a2629d20c210c3662dd5388372e38036135d7148f90fd5f5574a9f6",
+  "capturedAt": "2026-11-15T05:18:44.686Z",
+  "zoom": 100,
+  "dpr": 1,
+  "lockBefore": "unlocked",
+  "lockAfter": "unlocked",
+  "observedIcons": [
+    {
+      "ref": "B2",
+      "cellLeftPx": 84,
+      "cellTopPx": 20,
+      "cellWidthPx": 180,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 167,
+        "topPx": 27,
+        "rightPx": 191,
+        "bottomPx": 33,
+        "glyphClass": "unclassified"
+      },
+      "edgeStable": false
+    },
+    {
+      "ref": "B3",
+      "cellLeftPx": 84,
+      "cellTopPx": 40,
+      "cellWidthPx": 180,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 166,
+        "topPx": 47,
+        "rightPx": 191,
+        "bottomPx": 53,
+        "glyphClass": "unclassified"
+      },
+      "edgeStable": false
+    },
+    {
+      "ref": "B4",
+      "cellLeftPx": 84,
+      "cellTopPx": 60,
+      "cellWidthPx": 180,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 166,
+        "topPx": 67,
+        "rightPx": 191,
+        "bottomPx": 73,
+        "glyphClass": "unclassified"
+      },
+      "edgeStable": false
+    }
+  ],
+  "iconHypotheses": {}
+}
