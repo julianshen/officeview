@@ -1009,6 +1009,72 @@ describe('remote show on the driver (piece 4 Task 11)', () => {
     expect(ws.used()).toBe(0)
   }, 60_000)
 
+  /** A 40 MB workspace that refuses the layer uploads of streamed slide `i` only: that slide goes under pressure. */
+  const pressureOn = (i: number) => {
+    const ws = createSlideShowWorkspace('desktop', { limit: 40_000_000, scratch: 0 })
+    vi.spyOn(remoteShowDeps, 'workspace').mockReturnValue(ws)
+    const lease = ws.lease.bind(ws)
+    ws.lease = (n, tag) => (tag.startsWith(`plan:${i}:a:`) ? undefined : lease(n, tag))
+    return ws
+  }
+
+  it('demotion drops the slide\'s outgoing Morph pair: a large late reply never starves its still (round 11)', async () => {
+    // codex r10-probe "probe outgoing pair blocks demoted source still".
+    const ws = pressureOn(1)
+    const fd = animDoc(['still', autoThenTrack, 'morphTo'])
+    ;(fd.doc.manifest.recorder as { scalesBuckets: number[] }).scalesBuckets = [1]
+    let blocked = false
+    Object.assign(fd.doc, { unitBudget: { room: () => (blocked ? 0 : 60), waitMs: () => 2000 } })
+    fd.rules.set('morph:1>2@1', 'hold')
+    const original = fd.session.showMorph.getMockImplementation()!
+    // The prefetched pair out of slide 1 takes the last send: the still's paint must wait.
+    fd.session.showMorph.mockImplementation((...args) => { const r = original(...args); if (args[0] === 1) blocked = true; return r })
+    const { s, root } = await show(fd)
+    await run(2000)
+    s.next()
+    for (let j = 0; j < 150 && !fd.signals.get('track:1:0')?.aborted; j++) await run(16)
+    expect(fd.signals.get('track:1:0')?.aborted, 'slide 1 demoted').toBe(true)
+    // Whether or not the prefetch went out before the demotion, nothing of it is kept.
+    if (fd.log.includes('morph:1>2@1')) expect(fd.signals.get('morph:1>2@1')?.aborted, 'its outgoing pair is dropped').toBe(true)
+    const rec = (PAIR[0] as Extract<ShowMessage, { tag: 5 }>).morph
+    noiseTrack(2)
+    fd.rules.set('morph:1>2@1', () => [encodeShowMessage({ tag: 5, morph: { ...rec, from: 1, to: 2, fromStep: 1, items: [], over: [], composited: { fps: 15, count: 15 } } }), ...Array.from({ length: 15 }, (_, i) => encodeShowMessage({ tag: 4, unit: 2, assetId: i, w: 700, h: 700, png: noise! }))])
+    const before = ws.used()
+    fd.release('morph:1>2@1')
+    await flush()
+    expect(fd.held('morph:')).toEqual([])
+    expect(ws.used()).toBeLessThanOrEqual(before)
+    blocked = false
+    await run(3000)
+    expect(sent(fd, 'paint:1')).toEqual(['paint:1'])
+    expect(frameKind(root)).toBe('image')
+    s.exit()
+    expect(ws.used()).toBe(0)
+  }, 60_000)
+
+  it('leaving a demoted slide into a Morph target asks for no pair and plays the fade from the captured still (round 11)', async () => {
+    pressureOn(0)
+    const fd = animDoc([autoThenTrack, 'morphTo'])
+    const { s, root, log } = await show(fd)
+    await run(1_200)
+    expect(fd.signals.get('track:0:0')?.aborted, 'slide 0 demoted').toBe(true)
+    expect(sent(fd, 'paint:0')).toEqual(['paint:0'])
+    // A pair prefetched before the demotion went out (and stays charged); it was dropped with the slide's tracks.
+    const early = sent(fd, 'morph:')
+    for (const k of early) expect(fd.signals.get(k)?.aborted, k).toBe(true)
+    s.goTo(1)
+    await run(1_500)
+    expect(s.state.slide).toBe(1)
+    // The pair would start from checkpoint(fromStep), not the still the viewer saw: none is asked for after it.
+    expect(sent(fd, 'morph:')).toEqual(early)
+    expect(fd.held('morph:')).toEqual([])
+    // The captured-frame fade plays at once, never after the Morph deadline.
+    expect(log).toContain('diag:transition-approximate')
+    expect(log).not.toContain('diag:morph-late')
+    expect(frameKind(root)).toBe('image')
+    s.exit()
+  }, 60_000)
+
   it('a refused slide plays its piece-3 still through the unit path', async () => {
     const fd = animDoc(['fly', 'fly'])
     fd.rules.set('plan:0', 'still')

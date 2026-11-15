@@ -419,10 +419,17 @@ Evidence:
     whose reply lands after the Morph deadline is aborted, and its late composited reply (five 700×700 keyframes)
     is released, never resident. Resident pairs are covered too: one a completed transition still held is
     released. Sends stay charged. A still-only target is asked for no Morph again (`requestPair`).
-  - **Decision (round 10):** Morph pairs out of the demoted slide are kept. A Morph from a still source still plays:
-    the server builds the pair from both units' plans, and the client draws its own outgoing frame. So the
-    prefetched pair stays usable at the slide's next transition, and is released at the slide change after it as
-    before.
+  - **Outgoing pairs (round 11; replaces round 10's decision to keep them).** Demotion also drops every pair out of
+    the slide, pending or resident, through `dropPair`, and sends stay charged. No pair is asked for from a
+    still-only source (`requestPair`, `morphFor`). Two reasons:
+    - Memory: a retained outgoing pair could starve the still. Codex's probe went from 10.4 MB to 39.8 MB, with no
+      `paint`.
+    - Correctness: the server builds a pair's start at `checkpoint(fromStep)` (`server/src/show/morph.ts`), but a
+      demoted or refused slide shows its piece-3 unit image, which can differ (an autoplayed exit, say).
+      PlanStage draws a Morph from the pair's assets or track, not from the captured frame.
+
+    Leaving such a slide into a Morph target plays the captured-frame fade at once (`transition-approximate`,
+    `morph-fallback`), never after the Morph deadline. Both cases are tested.
   - **Ruling (PR #78 round 8 review):** the still's hidden-ink exemption applies. It is the Task 9 piece-3 unit
     image the viewer already receives in streamed viewing, so an autoplayed exit's ink in it is within that
     exemption. It is not a new show asset.
