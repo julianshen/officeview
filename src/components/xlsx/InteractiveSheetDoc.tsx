@@ -1206,7 +1206,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       },
       rects,
       // Ruling S4-ROW-EXACT: the authored row heights the paged layout holds (pt), for the icon frame.
-      { locale, budget, current: live, base, onEmpty, ...(hosts ? { hosts } : {}), rowPtOf: text.cfRowPtOfOverrides(remote.layout(sheetId).rowOverrides, remote.layout(sheetId).defaultRowPt), colors: remote.formatting().colors ?? { theme: doc.sheets[sheetIds.indexOf(sheetId)]?.drawingTheme?.palette }},
+      { locale, budget, current: live, base, onEmpty, ...(hosts ? { hosts } : {}), rowPtOf: text.cfRowPtOfOverrides(remote.layout(sheetId).rowOverrides, remote.layout(sheetId).defaultRowPt), rowUniformOf: text.cfRowUniformOfLayout(remote.layout(sheetId).nonUniformFontRows), colors: remote.formatting().colors ?? { theme: doc.sheets[sheetIds.indexOf(sheetId)]?.drawingTheme?.palette }},
     )
   }
   const residentBatch = currentViewportCf?.batch ?? (assets?.cfLiveKey === cfLiveKey ? assets?.lease.assets.conditionalFormatting : undefined)

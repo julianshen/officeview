@@ -4,7 +4,7 @@ import { CF_LIMITS, createCfMemory, createCfWorkBudget, type CfMemory } from './
 import { createCfService, estimateCfPrepareBytes, type CfPaintStatistics } from './service'
 import { createCfStatistics } from './statistics'
 import { resolveCfCellStyle } from './dxf'
-import { cfRowPtOfSheet, frameBarHosts, layoutCfCell, residentBarHosts, residentSource, storeCfSource, type CfFrameHostSource } from './render'
+import { cfRowPtOfSheet, cfRowUniformOfSheet, frameBarHosts, layoutCfCell, residentBarHosts, residentSource, storeCfSource, type CfFrameHostSource } from './render'
 export type { CfFrameHostSource } from './render'
 import { regionStylesFor } from '../tableStyleLoader'
 import type { XlsxCellStyle } from '../types'
@@ -249,6 +249,7 @@ function assembleScope(
   glyphMemory?: CfMemory,
   /** Ruling S4-ROW-EXACT: each row's authored height in pt; absent, every icon frame withholds. */
   rowPtOf?: (row: number) => number | undefined,
+  rowUniformOf?: (row: number) => boolean | undefined,
 ): EffectiveFormatScope {
   const cache = new Map<string, CfDescriptor>()
   let disposed = false
@@ -264,7 +265,7 @@ function assembleScope(
   }
   // Ruling S4-R: the icons' glyph classes, decoded and charged once for the scope's life.
   const glyphs: CfAdmittedGlyphs = icons.size && glyphMemory ? admitBatchGlyphs(icons.values(), glyphMemory, () => createCfWorkBudget({})) : { cacheFor: () => undefined, release() {} }
-  const iconGate: CfIconGate = { admitted: glyphs, hasBar: (row, col) => paintableAt(row, col) !== undefined, ...(rowPtOf ? { rowPtOf } : {}) }
+  const iconGate: CfIconGate = { admitted: glyphs, hasBar: (row, col) => paintableAt(row, col) !== undefined, ...(rowPtOf ? { rowPtOf } : {}), ...(rowUniformOf ? { rowUniformOf } : {}) }
   const iconCandidate = (row: number, col: number): CfIconDescriptor | undefined => (disposed || !current() ? undefined : icons.get(row * 16384 + col))
   let iconHostAt: ((row: number, col: number) => CfBarHost | undefined) | undefined
   const iconLaidOut = new Map<number, boolean>()
@@ -500,7 +501,7 @@ export async function prepareCfTextScope(
     }, () => source.stamp(stamp.sheetId).workbookValueGen === stamp.workbookValueGen && source.stamp(stamp.sheetId).structureGen === stamp.structureGen,
     undefined, styleAt => residentBarHosts(sheet, (row, col, own) => styleAt(row, col, base?.styleAt(row, col, own) ?? own), admitHosts),
     styleAt => residentBarHosts(sheet, (row, col, own) => styleAt(row, col, base?.styleAt(row, col, own) ?? own), admitHosts, { layoutContext: request.layoutContext }),
-    createCfMemory({ limitBytes: CF_LIMITS.scratchBytes, context: budgetAllocationContext(request.budget) }), cfRowPtOfSheet(sheet))
+    createCfMemory({ limitBytes: CF_LIMITS.scratchBytes, context: budgetAllocationContext(request.budget) }), cfRowPtOfSheet(sheet), cfRowUniformOfSheet(sheet))
     if (request.signal.aborted) {
       scope.dispose()
       return undefined
@@ -592,6 +593,7 @@ export async function awaitSettled(
  * overrides (`view/source.ts` `buildGeometry`: one interval per row with `ht`, `sizeCss` = pt × 96/72 unrounded).
  * Rows without an override take `defaultRowPt` (the layout's, S4-DEFAULT-ROW), else are unknown (undefined).
  */
+export { cfRowUniformOfLayout } from '../rowFont'
 export function cfRowPtOfOverrides(overrides: ReadonlyArray<{ start: number; end: number; sizeCss: number }>, defaultRowPt?: number): (row: number) => number | undefined {
   return row => {
     let lo = 0, hi = overrides.length - 1
@@ -622,6 +624,9 @@ export async function prepareCfWireScope(
     /** Ruling S4-ROW-EXACT: each row's authored height in pt (`cfRowPtOfOverrides` of the paged layout's row
      * overrides); absent, every icon frame withholds. */
     rowPtOf?: (row: number) => number | undefined
+    /** Ruling S4-ROW-UNIFORM: each row's font uniformity (`cfRowUniformOfLayout` of the paged layout's
+     * `nonUniformFontRows`); absent, every bottom-anchored icon frame withholds. */
+    rowUniformOf?: (row: number) => boolean | undefined
   },
 ): Promise<EffectiveFormatScope | undefined> {
   if (!rects.length) return undefined
@@ -711,7 +716,7 @@ export async function prepareCfWireScope(
       }
     }, options.current, regions, options.hosts ? styleAt => frameBarHosts(options.hosts!, styleAt) : undefined,
     options.hosts ? styleAt => frameBarHosts(options.hosts!, styleAt) : undefined,
-    createCfMemory({ limitBytes: CF_LIMITS.scratchBytes, context: budgetAllocationContext(options.budget) }), options.rowPtOf)
+    createCfMemory({ limitBytes: CF_LIMITS.scratchBytes, context: budgetAllocationContext(options.budget) }), options.rowPtOf, options.rowUniformOf)
     const paintLayer: import('../tableStyles/regionLayer').RegionStyleLayer = {
       rects: [...options.base?.rects ?? [], ...regions], retainedBytes: 0,
       styleAt: (row,col,own,mode) => scope.effectiveStyle(row,col,options.base?.styleAt(row,col,own,mode) ?? own),

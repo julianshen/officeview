@@ -4,6 +4,7 @@ import { cfExplicitBounds } from '../cfLoader'
  * eager bundle (which imports the limits and ImportRefusal from there) never
  * pulls in the ZIP/XML readers: only the lazy large-source chunk loads this.
  */
+import { cfKeyFontStyle } from '../rowFont'
 import type { WorkbookFormatting } from '../view/contracts'
 import { DEFAULT_FORMATTING, pagedCfStyles, pagedCfStylesBytes, workbookFormattingWithColorContext } from './pagedFormatting'
 import type { Completeness, ProfileId, SourceFailure, SourceHandle, SourceStamp, WorkerDiagnostic } from '../view/contracts'
@@ -439,6 +440,8 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
           workbook.diagnostics.push({ code: diagnostic.feature, message: diagnostic.message, partId: sheet.partPath })
         },
         declared: container,
+        // Ruling S4-ROW-UNIFORM: the rows whose font is not uniformly Calibri 11 regular (icon frames).
+        keyFontStyle: index => cfKeyFontStyle(workbook.formatting.styles[index]),
         onCell(record) {
           // Charged before the builder retains the record's text and formula metadata.
           account(builder.costOf(record.text, record.meta))

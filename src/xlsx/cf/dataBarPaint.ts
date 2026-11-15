@@ -142,7 +142,10 @@ export function isWhiteFill(fill: string | undefined): boolean {
 export type CfBarHost = Rect & { readonly fill?: string; readonly textWidth?: number; readonly cell?: Pick<import('../types').XlsxCell, 'value' | 'valueIsError' | 'style'>
   /** Ruling S4-ROW-EXACT (Task 28 round 4): the host row's authored height in pt (its `ht`), set by the icon painter
    * from the batch's own row table (`CfIconGate.rowPtOf`); absent: not known, and the icon frame withholds. */
-  readonly rowPt?: number }
+  readonly rowPt?: number
+  /** Ruling S4-ROW-UNIFORM: true when every cell of the host's row is Calibri 11 regular (`CfIconGate.rowUniformOf`);
+   * absent: not known, and a bottom-anchored frame withholds. */
+  readonly rowUniform?: boolean }
 
 /** One axis-aligned rect in output units; colours stay ARGB. `gradientEnd`, when present, makes the rect a left-to-right
  * linear gradient from `argb` to `gradientEnd` over [`gradientFrom`, `gradientTo`] (default: the rect's own left and

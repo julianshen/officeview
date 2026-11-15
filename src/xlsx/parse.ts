@@ -731,6 +731,7 @@ async function parseSheet(
       heightPt: ra.ht !== undefined ? parseFloat(ra.ht as string) : undefined,
       customHeight: ra.customHeight === '1',
       hidden: ra.hidden === '1' || ra.hidden === 'true',
+      ...(ra.customFormat === '1' || ra.customFormat === 'true' ? { styled: true } : {}),
       cells: [],
     }
     for (const cNode of getChildren(rowNode, 'c')) {

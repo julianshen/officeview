@@ -169,16 +169,16 @@ describe('S4-ROW-EXACT: production on the resaved stage4-icon-rows workbook', ()
         return { x: left(col), y: top(row), width: metrics.colWidthsPx[col]!, height: metrics.rowHeightsPx[row]!, cell, ...(textWidth !== undefined ? { textWidth } : {}) }
       }
       const ADMITTED = new Set([1, 4, 8]) // rows 2, 5, 9: 15, 18 and 30 pt
-      // Task 30 (S4-ROW-BASELINE): column E (bottom-aligned) withholds on every row; the centred columns paint.
+      // Task 30 fix round (S4-ROW-UNIFORM): every row here is Calibri 11 regular, so column E (bottom-aligned) paints too.
       for (let row = 1; row <= 8; row++) for (let col = 1; col <= 8; col++) {
-        expect(Boolean(batch.iconAt(row, col)), `${String.fromCharCode(65 + col)}${row + 1}`).toBe(ADMITTED.has(row) && col !== 4)
+        expect(Boolean(batch.iconAt(row, col)), `${String.fromCharCode(65 + col)}${row + 1}`).toBe(ADMITTED.has(row))
       }
       // Where the 3Arrows frames paint (B, E, F, I): the frame top (the first fill's top, the outline's apex) against the
       // cell's top gridline, at the capture scale, equals the sidecar's ink top (3Arrows:2 inks from the frame top).
       const rec = iconRecorder(800, 400, createCanvas as never)
       batch.paintIcons(rec.ctx, hostAt, { r0: 1, c0: 1, r1: 8, c1: 8 }, AT_CAPTURE)
       const roundHalfUp = (x: number) => Math.floor(x + 0.5)
-      for (const row of ADMITTED) for (const col of [1, 5, 8]) {
+      for (const row of ADMITTED) for (const col of [1, 4, 5, 8]) {
         const ref = `${String.fromCharCode(65 + col)}${row + 1}`
         const X0 = roundHalfUp(left(col) * 0.75), X1 = roundHalfUp((left(col) + metrics.colWidthsPx[col]!) * 0.75)
         const Y0 = roundHalfUp(top(row) * 0.75)

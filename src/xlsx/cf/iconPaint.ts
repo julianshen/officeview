@@ -274,12 +274,13 @@ function framePlacement(frame: CfIconKeyFrame, variant: CfIconBoxVariant, host: 
   if (font.sizePt !== frame.fontPt || style?.fontName !== frame.fontName || style.bold === true || style.italic === true) return undefined
   const vertical = variant.vertical === 'cell-align' ? font.vertical : variant.vertical
   if (!vertical || !font.horizontal) return undefined
-  // Ruling S4-ROW-BASELINE (Task 30): Excel lifts a bottom-aligned icon onto its row's shared baseline, which a larger
-  // font anywhere in the row moves (stage4-icon-geometry C3, M3..O3 and stage4-icon-geometry-2 C2, G2, I2, J2 sit 2 px
-  // above the `bottom` frame in rows that hold a 20 pt cell). No view knows a row's other fonts on every leg, so the
-  // measured `bottom` placements withhold; centred icons do not follow the baseline (I3 and F2 in those rows land on
-  // the `center` frame).
-  if (vertical === 'bottom') return undefined
+  // Ruling S4-ROW-UNIFORM (Task 30 fix round, replacing S4-ROW-BASELINE): Excel lifts a bottom-aligned icon onto its
+  // row's shared baseline, which a larger font anywhere in the row moves (stage4-icon-geometry C3, M3..O3 and
+  // stage4-icon-geometry-2 C2, G2, I2, J2 sit 2 px above the `bottom` frame in rows that hold a 20 pt cell). The
+  // measured `bottom` placements stand only on rows whose every cell is Calibri 11 regular, as stage4-icon-rows-bottom's
+  // are (`src/xlsx/rowFont.ts`); any other or unknown row withholds. Centred icons do not follow the baseline (I3 and F2 land on
+  // the `center` frame in those rows).
+  if (vertical === 'bottom' && host.rowUniform !== true) return undefined
   // Ruling S4-ROW-EXACT: the host's row must be known to be a measured height (its authored pt, never inferred from
   // px, which many heights share), drawn at Excel's px in every view: the viewer's px (pt × 4/3 unrounded, or rounded)
   // at the capture scale must both be Excel's `excelPx`, so the row px is whole and the host has exactly it (a
@@ -445,6 +446,9 @@ export interface CfIconGate {
   /** Ruling S4-ROW-EXACT: a row's authored height in pt (its `ht`), or undefined when the batch does not know it (no
    * `ht`, or no row table): its icons withhold. */
   rowPtOf?(row: number): number | undefined
+  /** Ruling S4-ROW-UNIFORM: whether every cell of a row is Calibri 11 regular (`src/xlsx/rowFont.ts`), from the same source as
+   * `rowPtOf`; undefined: not known (bottom placement withholds). */
+  rowUniformOf?(row: number): boolean | undefined
   /** Whether the cell also carries a bar that paints: until `icon:composition-with-bar` settles z-order, no icon paints
    * on a bar cell. */
   hasBar(row: number, col: number): boolean
@@ -455,9 +459,10 @@ export interface CfIconGate {
 function withRowPt<H extends CfBarHost | undefined>(host: H, row: number, gate: CfIconGate): H {
   if (!host) return host
   const rowPt = gate.rowPtOf?.(row)
-  if (rowPt === host.rowPt) return host
-  const { rowPt: _drop, ...rest } = host
-  return (rowPt === undefined ? rest : { ...rest, rowPt }) as H
+  const rowUniform = gate.rowUniformOf?.(row)
+  if (rowPt === host.rowPt && rowUniform === host.rowUniform) return host
+  const { rowPt: _drop, rowUniform: _dropU, ...rest } = host
+  return { ...rest, ...(rowPt !== undefined ? { rowPt } : {}), ...(rowUniform !== undefined ? { rowUniform } : {}) } as H
 }
 
 /** The batch-level predicate: the icon paints on this host (cell predicate, admitted glyph class, bar z-order gate). */

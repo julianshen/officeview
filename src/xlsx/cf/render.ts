@@ -1,4 +1,5 @@
 /** Async CF preparation; painters only consume admitted source-space snapshots. */
+import { cfNonUniformFontRows, cfRowUniformOfLayout } from '../rowFont'
 import { createCfStatistics } from './statistics'
 import { sameCfStamp } from './cache'
 import { cfRuntimeEvidence, type CfEvidenceGate } from './predicates'
@@ -190,6 +191,13 @@ export function cfRowPtOfSheet(sheet: Pick<XlsxSheet, 'rows' | 'defaultRowHeight
     // Ruling S4-DEFAULT-ROW: a row without `ht` takes the sheet's default (`sheetFormatPr defaultRowHeight`).
     return table.get(row) ?? sheet.defaultRowHeightPt
   }
+}
+
+/** Ruling S4-ROW-UNIFORM: each row's font uniformity from the resident sheet (`rowFont.ts`); rows the sheet does not
+ * store hold no cell, so they are uniform (their icons have no cell to sit on). */
+export function cfRowUniformOfSheet(sheet: Pick<XlsxSheet, 'rows'>): (row: number) => boolean | undefined {
+  let of: ((row: number) => boolean | undefined) | undefined
+  return row => (of ??= cfRowUniformOfLayout(cfNonUniformFontRows(sheet.rows)))(row)
 }
 
 export function residentBarHosts(sheet: XlsxSheet, styleAt: (row: number, col: number, own: XlsxCellStyle | undefined) => XlsxCellStyle | undefined,
@@ -516,7 +524,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
       const icon = icons.get(row * 16384 + col)
       return icon && !merged(row, col) ? icon : undefined
     }
-    const gate: CfIconGate = { admitted: glyphs, hasBar: (row, col) => paintableAt(row, col) !== undefined, check: allows, rowPtOf: cfRowPtOfSheet(sheet) }
+    const gate: CfIconGate = { admitted: glyphs, hasBar: (row, col) => paintableAt(row, col) !== undefined, check: allows, rowPtOf: cfRowPtOfSheet(sheet), rowUniformOf: cfRowUniformOfSheet(sheet) }
     const showValueConflict = (row: number, col: number): boolean => states.get(row * 16384 + col)?.unresolvedWrites?.has('showValue') === true
     const iconHostAt = icons.size ? residentBarHosts(sheet, (row, col, own) => layer.styleAt(row, col, own), n => hold.grow(hold.bytes + n), { layoutContext: options.layoutContext }) : () => undefined
     const iconAt = (row: number, col: number): CfIconDescriptor | undefined => {

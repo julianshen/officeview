@@ -945,11 +945,11 @@ test('Stage 4 print capture paints no withheld icon', async ({ context }) => {
 
 // Task 30: painted icons. stage4-icon-rows is Excel's own resave (Excel 16.115): 11 pt Calibri, every cell 10 under num
 // 0/5/8 (bucket 2: "Icon 3 of 3"), rows 2..9 at 15, 12.75, 16.5, 18, 20, 22.5, 25 and 30 pt. Its Normal style is centred,
-// so B..D and F..I are centred; column E keeps its own xf, bottom-aligned. Admitted: the centred cells of rows 2, 5 and 9
-// (15, 18, 30 pt). Withheld: every other row, and column E (S4-ROW-BASELINE).
+// so B..D and F..I are centred; column E keeps its own xf, bottom-aligned. Every cell is Calibri 11 regular, so bottom
+// placement is admitted too (S4-ROW-UNIFORM). Admitted: rows 2, 5 and 9 (15, 18, 30 pt). Withheld: every other row.
 const ROWS = 'stage4-icon-rows'
-const PAINTED = ['B2', 'F2', 'I2', 'B5', 'F5', 'B9', 'H9'] as const
-const WITHHELD = ['B3', 'F4', 'F6', 'B7', 'F8', 'E2', 'E5', 'E9'] as const
+const PAINTED = ['B2', 'F2', 'I2', 'E2', 'B5', 'F5', 'E5', 'B9', 'H9', 'E9'] as const
+const WITHHELD = ['B3', 'F4', 'F6', 'B7', 'F8', 'E3', 'E7'] as const
 /** Pixels of the 3Arrows:2 / 3TrafficLights1:2 / 3Symbols:2 light green (0x5bbb76 and kin, +-40): only an icon draws it. */
 function greenPixels(img: Img): number {
   let n = 0
@@ -1032,7 +1032,7 @@ test('Stage 4 painted icons at the six zoom/DPR pairs: painted and announced at 
               await page.getByTestId('officeview-sheet-scroller').evaluate(node => { node.scrollTop = 0; node.scrollLeft = 0 })
               // The description is decided at the capture scale: the same at every zoom and DPR.
               await expect(cell(page, 'F2'), `dpr=${dpr} zoom=${zoom}`).toContainText('Icon 3 of 3', { timeout: 30_000 })
-              await expect(cell(page, 'E2'), `dpr=${dpr} zoom=${zoom}`).not.toContainText(/Icon \d of \d/)
+              await expect(cell(page, 'E3'), `dpr=${dpr} zoom=${zoom}`).not.toContainText(/Icon \d of \d/)
               expect(greenPixels(await settledGrid(page)), `dpr=${dpr} zoom=${zoom}: icons painted`).toBeGreaterThan(20)
               await expect(page.getByRole('alert'), `dpr=${dpr} zoom=${zoom}: no error alert`).toHaveCount(0)
             }

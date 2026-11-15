@@ -19,6 +19,7 @@ import { LayoutCache, withTextInset, type CellLayoutHost, type PlacedCell } from
 import { prepareCfPaint, residentSource, type CfPaintBatch } from '../src/xlsx/cf/render'
 import { cfRowPtOfOverrides, prepareCfTextScope, prepareCfWireScope, type CfFrameHostSource } from '../src/xlsx/cf/text'
 import { buildGeometry } from '../src/xlsx/view/source'
+import { cfNonUniformFontRows, cfRowUniformOfLayout } from '../src/xlsx/rowFont'
 import { SHEET_ZOOM_STEPS } from '../src/xlsx/view/sheetZoom'
 import { cfRulesVersion, prepareCfRemote } from '../src/xlsx/view/pagedSource'
 import { createCfMemory, createCfWorkBudget } from '../src/xlsx/cf/limits'
@@ -54,9 +55,11 @@ async function pagedScope(sheet: XlsxSheet, rows: number, cols = 1, hosts?: CfFr
   expect(wire.kind, JSON.stringify(wire.reason)).toBe('ready')
   // S4-ROW-EXACT: the row heights the paged main thread holds, as InteractiveSheetDoc passes them: the worker's authored
   // row overrides (view/source.ts `buildGeometry`), read back as pt.
-  const geometry = buildGeometry(sheet.rows, sheet.cols ?? [], [], { defaultRowPt: sheet.defaultRowHeightPt })
+  const geometry = buildGeometry(sheet.rows, sheet.cols ?? [], [], { defaultRowPt: sheet.defaultRowHeightPt, nonUniformFontRows: cfNonUniformFontRows(sheet.rows) })
   const rowPtOf = cfRowPtOfOverrides(geometry.rowOverrides, geometry.defaultRowPt)
-  return (await prepareCfWireScope(async () => ({ result: structuredClone(wire), release() {} }), rects, { budget: { reserve() {}, release() {} }, locale, rowPtOf, ...(hosts ? { hosts } : {}) }))!
+  // S4-ROW-UNIFORM: the rows' font uniformity travels with the layout, as the row heights do.
+  const rowUniformOf = cfRowUniformOfLayout(geometry.nonUniformFontRows)
+  return (await prepareCfWireScope(async () => ({ result: structuredClone(wire), release() {} }), rects, { budget: { reserve() {}, release() {} }, locale, rowPtOf, rowUniformOf, ...(hosts ? { hosts } : {}) }))!
 }
 const asBatch = (scope: EffectiveFormatScope): CfPaintBatch => ({
   stamp: { owner: 'paged', sheetId: 'x', workbookValueGen: 1, cfGen: scope.gen, viewGen: 1, structureGen: 1, clockGen: 1 }, key: 'paged', layer: scope.paintLayer!,
@@ -693,14 +696,16 @@ describe('S4-RIGHTINSET-ZERO: right-aligned numbers at the key geometry', () => 
     expect(none.describedIcons).toBe(0)
   })
 
-  it('Task 30 (S4-ROW-BASELINE): a bottom-aligned icon withholds on every leg at every measured row height; the same cells centred paint', async () => {
+  it('Task 30 fix round (S4-ROW-UNIFORM): a bottom-aligned icon paints in every view on a row whose every cell is Calibri 11 regular, and withholds in every view when one cell of the row is 20 pt', async () => {
     // Excel lifts a bottom-aligned icon onto its row's shared baseline, which a larger font anywhere in the row moves
     // (stage4-icon-geometry C3/M3..O3 and stage4-icon-geometry-2 C2/G2/I2/J2: 2 px above the measured frame in rows that
-    // hold a 20 pt cell). No leg knows the row's other fonts, so bottom placement withholds; centre placement does not
-    // follow the baseline (I3, F2 in those rows land exactly on the centre frame).
-    const count = async (vertical: 'bottom' | 'center', rowPt: number) => {
+    // hold a 20 pt cell). The measured bottom frame stands only on rows like stage4-icon-rows-bottom's, where every cell
+    // is the default Calibri 11 regular; every other row withholds bottom placement. Centred placement is unaffected.
+    const count = async (vertical: 'bottom' | 'center', rowPt: number, big = false) => {
       const sheet = iconSheet([10, 50, 90], { style: { ...KEY_STYLE, horizontal: 'left', vertical } })
       for (const row of sheet.rows) { row.heightPt = rowPt; row.customHeight = true }
+      // One 20 pt cell beside the icon (column C, outside the rule and the requested rect) in every row.
+      if (big) for (const row of sheet.rows) row.cells.push({ ref: `C${row.index + 1}`, row: row.index, col: 2, value: 'x', styleIndex: 0, style: { ...KEY_STYLE, fontSizePt: 20 } })
       return withIcons(async () => {
         const metrics = computeMetrics(sheet)
         const resident = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, layoutContext }))!
@@ -727,11 +732,15 @@ describe('S4-RIGHTINSET-ZERO: right-aligned numbers at the key geometry', () => 
       }, { ...production, extra: [...GLYPH_CAPS, 'icon:inset-left'] })
     }
     for (const rowPt of [15, 18, 30]) {
-      const centre = await count('center', rowPt)
-      for (const name of ['static', 'resident', 'worker', 'forced-paged', 'print']) expect(centre[name], `centre ${rowPt} pt: ${name}`).toBeGreaterThan(0)
-      expect(centre.described, `centre ${rowPt} pt`).toBe(3)
-      const bottom = await count('bottom', rowPt)
-      expect(bottom, `bottom ${rowPt} pt`).toEqual({ static: 0, resident: 0, worker: 0, 'forced-paged': 0, print: 0, described: 0, inset: 0 })
+      for (const vertical of ['center', 'bottom'] as const) {
+        const uniform = await count(vertical, rowPt)
+        for (const name of ['static', 'resident', 'worker', 'forced-paged', 'print']) expect(uniform[name], `${vertical} ${rowPt} pt uniform: ${name}`).toBe(6)
+        expect(uniform.described, `${vertical} ${rowPt} pt uniform`).toBe(3)
+        expect(uniform.inset, `${vertical} ${rowPt} pt uniform`).toBe(3)
+      }
+      // A 20 pt cell in the row: bottom withholds in every view; centred still paints.
+      expect(await count('bottom', rowPt, true), `bottom ${rowPt} pt with a 20 pt cell`).toEqual({ static: 0, resident: 0, worker: 0, 'forced-paged': 0, print: 0, described: 0, inset: 0 })
+      expect((await count('center', rowPt, true)).worker, `centre ${rowPt} pt with a 20 pt cell`).toBe(6)
     }
   })
 

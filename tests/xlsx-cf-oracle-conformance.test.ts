@@ -947,18 +947,23 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     }
     expect(observedIcons).toBeGreaterThan(300)
     expect(violations).toEqual([])
-    // Ruling S4-ROW-BASELINE (Task 30): no bottom-aligned icon paints (stage4-icon-rows-bottom, and column E of
-    // stage4-icon-rows). The centred columns of stage4-icon-rows (B..D right-aligned, F..I) paint on the admitted rows,
-    // 15, 18 and 30 pt (rows 2, 5 and 9); 12.75, 16.5, 20, 22.5 and 25 pt (rows 3, 4, 6, 7 and 8) withhold.
-    expect(paintedRefs.filter(k => k.startsWith('stage4-icon-rows-bottom:'))).toEqual([])
-    const centred = paintedRefs.filter(k => k.startsWith('stage4-icon-rows:')).map(k => k.split(':')[1]!).sort()
-    expect(centred).toEqual(['B', 'C', 'D', 'F', 'G', 'H', 'I'].flatMap(col => [2, 5, 9].map(row => `${col}${row}`)).sort())
+    // Ruling S4-ROW-UNIFORM (Task 30 fix round): bottom-aligned icons paint only on rows whose every cell is Calibri 11
+    // regular. Every row of stage4-icon-rows-bottom and stage4-icon-rows is, so on the admitted heights, 15, 18 and 30 pt
+    // (rows 2, 5 and 9), all five columns of the one and all eight of the other paint; 12.75, 16.5, 20, 22.5 and 25 pt
+    // withhold.
+    const at = (id: string) => paintedRefs.filter(k => k.startsWith(`${id}:`)).map(k => k.split(':')[1]!).sort()
+    expect(at('stage4-icon-rows-bottom')).toEqual(['B', 'C', 'D', 'E', 'F'].flatMap(col => [2, 5, 9].map(row => `${col}${row}`)).sort())
+    expect(at('stage4-icon-rows')).toEqual(['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'].flatMap(col => [2, 5, 9].map(row => `${col}${row}`)).sort())
+    // Conformance evidence for the ruling: the bottom-anchored cells Excel lifted 2 px (their rows hold a 20 pt cell)
+    // withhold; the centred ones in the same rows (stage4-icon-geometry I3, stage4-icon-geometry-2 F2) still paint.
+    for (const k of ['stage4-icon-geometry:C3', 'stage4-icon-geometry:M3', 'stage4-icon-geometry:N3', 'stage4-icon-geometry:O3', 'stage4-icon-geometry-2:C2', 'stage4-icon-geometry-2:G2', 'stage4-icon-geometry-2:I2', 'stage4-icon-geometry-2:J2']) expect(paintedRefs, k).not.toContain(k)
+    for (const k of ['stage4-icon-geometry:I3', 'stage4-icon-geometry-2:F2']) expect(paintedRefs, k).toContain(k)
     // Outside stage4-icon-rows only centred 30 pt cells of the geometry cases can paint (their px are compared below).
-    for (const k of paintedRefs.filter(x => !x.startsWith('stage4-icon-rows:'))) expect(k, k).toMatch(/^stage4-icon-geometry(-2)?:/)
+    for (const k of paintedRefs.filter(x => !x.startsWith('stage4-icon-rows'))) expect(k, k).toMatch(/^stage4-icon-geometry(-2)?:/)
     // Nothing paints on a 20 pt row (the glyph key's own row height is not an admitted placement): every other painted
     // cell is on a 15, 18 or 30 pt row (geometry conformance compares each one's px with Excel's).
     expect(painted).toBe(paintedRefs.length)
-    expect(painted).toBeGreaterThanOrEqual(21)
+    expect(painted).toBeGreaterThanOrEqual(39)
   }, 120_000)
 
   /**
@@ -1042,7 +1047,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     const { computeMetrics } = await import('../src/xlsx/render')
     const { createCellLayoutHost } = await import('../src/xlsx/view/renderViewport')
     const { CF_ICON_RENDER_MODEL, iconTextOf, layoutIcon } = await import('../src/xlsx/cf/iconPaint')
-    const { cfRowPtOfSheet } = await import('../src/xlsx/cf/render')
+    const { cfRowPtOfSheet, cfRowUniformOfSheet } = await import('../src/xlsx/cf/render')
     const ctx = createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D
     expect(CF_ICON_RENDER_MODEL, 'S4-PROD-ALIGN: only the evidence-determined values').toEqual({ box: { size: 'font', vertical: 'cell-align' }, leftInsetPt: { 11: 12 }, rightInsetPt: { 11: 0 }, keyFrame: { fontPt: 11, fontName: 'Calibri', widthPt: 13, heightPt: 12, leftPt: 2, rows: CF_ICON_RENDER_MODEL.keyFrame!.rows } })
     // Each class's ink offset inside the frame, from the glyph key itself (20 px rows: frame 2 px in, 1 px above the
@@ -1066,7 +1071,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       const batch = sheet.conditionalFormatting ? await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, layoutContext: () => ctx }) : undefined
       const observed = new Map(((c.captures[0] && existsSync(join(REPO_ROOT, c.captures[0].sidecarPath)) ? (JSON.parse(readFileSync(join(REPO_ROOT, c.captures[0].sidecarPath), 'utf8')) as { observedIcons?: CfObservedIcon[] }).observedIcons : undefined) ?? []).map(o => [o.ref.toUpperCase(), o] as const))
       const m = computeMetrics(sheet)
-      const rowPtOf = cfRowPtOfSheet(sheet)
+      const rowPtOf = cfRowPtOfSheet(sheet), rowUniformOf = cfRowUniformOfSheet(sheet)
       try {
         for (const exp of c.expected.cells) {
           checked++
@@ -1076,7 +1081,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
           const body = cell ? createCellLayoutHost(ctx).layoutBody(cell, width, height) : undefined
           const textWidth = body?.text?.kind === 'layout' ? body.text.layout.lines[0]!.segments.reduce((n, sg) => n + sg.width, 0) : 0
           const rowPt = rowPtOf(row)
-          const host = { x: m.colWidthsPx.slice(0, col).reduce((a, b) => a + b, 0), y: m.rowHeightsPx.slice(0, row).reduce((a, b) => a + b, 0), width, height, textWidth, ...(cell ? { cell } : {}), ...(rowPt !== undefined ? { rowPt } : {}) }
+          const host = { x: m.colWidthsPx.slice(0, col).reduce((a, b) => a + b, 0), y: m.rowHeightsPx.slice(0, row).reduce((a, b) => a + b, 0), width, height, textWidth, ...(cell ? { cell } : {}), ...(rowPt !== undefined ? { rowPt } : {}), ...(rowUniformOf(row) !== undefined ? { rowUniform: rowUniformOf(row) } : {}) }
           const icon = batch?.iconAt(row, col)
           const o = observed.get(exp.ref.toUpperCase())
           const where = `${c.id}:${exp.ref}`
@@ -1114,7 +1119,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     }
     expect(checked).toBe(stage4.reduce((n, c) => n + c.expected.cells.length, 0))
     expect(violations).toEqual([])
-    expect(compared).toBeGreaterThanOrEqual(21)
+    expect(compared).toBeGreaterThanOrEqual(39)
     expect(insetCompared).toBeGreaterThan(0)
   }, 120_000)
 

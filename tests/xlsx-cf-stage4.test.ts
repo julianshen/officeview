@@ -463,3 +463,27 @@ describe('Stage 4 pressure scenarios and resource bounds', () => {
     expect(baseline).toEqual({ paintReserves: 0, sourceReads: 0, scopeBuilt: false, glyphDecodes: 0 })
   })
 })
+
+describe('S4-ROW-UNIFORM: the resident sheet and the worker reader agree on each row\'s font uniformity', () => {
+  it.each([
+    ['stage4-icon-rows-bottom', [] as { start: number; end: number }[]],
+    // Rows 2..4 hold the 8 and 20 pt cells of columns B, D, E, G, H, J; row 5 holds the 6 pt short-row case's 11 pt cells only.
+    ['stage4-icon-geometry', null],
+  ])('%s', async (id, expected) => {
+    const { openImportSession } = await import('../src/xlsx/storage/pagedImport')
+    const { cfNonUniformFontRows } = await import('../src/xlsx/rowFont')
+    const path = `tests/fixtures/xlsx-cf/${id}.xlsx`
+    const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, path)))
+    const resident = cfNonUniformFontRows((await savedSheet(path)).rows)
+    if (expected) expect(resident).toEqual(expected)
+    else expect(resident.some(r => r.start <= 2 && r.end >= 2), 'row 3 (C3, M3..O3) holds a 20 pt cell').toBe(true)
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([bytes.slice().buffer as ArrayBuffer]) }, { docId: `row-uniform-${id}`, profile: 'D' })
+    try {
+      await session.done
+      const paged = session.workbook.sheets.find(s => s.kind === 'worksheet') as unknown as { metadata: { nonUniformFontRows?: unknown } }
+      expect(paged.metadata.nonUniformFontRows).toEqual(resident)
+    } finally {
+      await session.release()
+    }
+  }, 120000)
+})

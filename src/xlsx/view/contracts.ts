@@ -879,6 +879,9 @@ export interface SheetLayout {
   frozen?: { rows: number; cols: number; topRow?: number; leftCol?: number }
   /** Ruling S4-DEFAULT-ROW: the authored height (pt) of rows without `ht`, for the icon frame. */
   defaultRowPt?: number
+  /** Ruling S4-ROW-UNIFORM: rows whose cells are not all Calibri 11 regular (bottom-anchored icons withhold there);
+   * absent: unknown, every bottom-anchored icon withholds. */
+  nonUniformFontRows?: readonly { start: number; end: number }[]
 }
 /** Control selection is a separate workbook-scoped revision; it is not a page-field or item-filter delta. */
 export type LinkedControlSelection =

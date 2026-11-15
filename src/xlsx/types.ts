@@ -100,6 +100,8 @@ export interface XlsxRow {
   heightPt?: number
   customHeight?: boolean
   hidden?: boolean
+  /** `customFormat="1"`: the row carries a row style, which its empty cells take (Ruling S4-ROW-UNIFORM). */
+  styled?: boolean
   cells: XlsxCell[]
 }
 

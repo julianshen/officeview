@@ -337,6 +337,8 @@ export interface SheetMetadata {
   /** The first sheet view's reading order, as the resident parser reads it: absent until a right-to-left sheet view is
    * seen (no sheet view is left-to-right, Ruling S3-K as amended), `null` for a malformed `rightToLeft` (unknown). */
   sheetRightToLeft?: boolean | null
+  /** Ruling S4-ROW-UNIFORM: rows (inclusive intervals) whose cells or row style are not Calibri 11 regular. */
+  nonUniformFontRows?: { start: number; end: number }[]
   /** Metadata-only rows arrived out of order: rowHeights/hiddenRows need normalizeRowMetadata. */
   unorderedRows?: boolean
   /** Bounded sparkline records parsed from worksheet extension parts. */
@@ -369,6 +371,9 @@ export interface SheetRecordOptions {
   onCell(record: CellRecord): void
   /** Called after every complete row; the importer cuts pages at row boundaries. */
   onRowEnd(row: number): void
+  /** Ruling S4-ROW-UNIFORM: whether a cell style index is Calibri 11 regular. Given, the reader records
+   * `meta.nonUniformFontRows`; absent, it records nothing (unknown). */
+  keyFontStyle?(styleIndex: number): boolean
   declared?: {
     autoFilter(attrs: Record<string, string>): { addColumn(input: { attrs: Record<string, string>; ruleCount: number; firstRule?: { tag: string; attrs: Record<string, string>; filterCount: number; dateGroupItemCount: number; customFilters: Record<string, string>[]; customFilterCount: number } }): void } | undefined
     sortState(attrs: Record<string, string>, placement: 'direct' | 'nested'): { addCondition(attrs: Record<string, string>): void } | undefined
@@ -471,6 +476,16 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
   // cell state
   let inCell = false
   let cRow = 0, cCol = 0, cT: string | undefined, cS = 0, cCm: string | undefined, cCa = false
+  // S4-ROW-UNIFORM: the open row's font uniformity, recorded at its end.
+  let rowUniform = true
+  if (options.keyFontStyle) meta.nonUniformFontRows ??= []
+  const endRowFont = (r: number): void => {
+    const out = meta.nonUniformFontRows
+    if (!out || rowUniform) return
+    const last = out[out.length - 1]
+    if (last && last.end + 1 === r) last.end = r
+    else if (!last || last.end < r) out.push({ start: r, end: r })
+  }
   let fSeen = false, fText = '', fAttrs: Record<string, string> = {}
   let vSeen = false, vText = ''
   let isSeen = false, isText = '', isTDirectSeen = false, runTSeen = false
@@ -680,7 +695,8 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
           }
         }
         rowOpen = !selfClosing
-        if (selfClosing && !rowBehind) options.onRowEnd(r)
+        rowUniform = !(a.customFormat === '1' || a.customFormat === 'true')
+        if (selfClosing && !rowBehind) { endRowFont(r); options.onRowEnd(r) }
       } else if (rowOpen && local === 'c' && stack[stack.length - 1] === 'row') {
         const a = attrMap(names, values, count)
         const ref = a.r === undefined ? undefined : refOf(a.r)
@@ -695,6 +711,7 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
         cT = a.t
         const s = parseInt(a.s ?? '0', 10)
         cS = Number.isFinite(s) ? s : 0
+        if (options.keyFontStyle && !cellSkipped && !options.keyFontStyle(cS)) rowUniform = false
         cCm = a.cm
         cCa = a.ca === '1' || a.ca === 'true'
         fSeen = false; fText = ''; fAttrs = {}
@@ -847,7 +864,7 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
       if (mcDepth > 0) return
       const depth = stack.length
       if (local === 'sheetData' && depth === 1) inSheetData = false
-      else if (local === 'row' && rowOpen) { rowOpen = false; if (!rowBehind) options.onRowEnd(rowIndex) }
+      else if (local === 'row' && rowOpen) { rowOpen = false; if (!rowBehind) { endRowFont(rowIndex); options.onRowEnd(rowIndex) } }
       else if (inCell && local === 'c' && depth === stack.length && stack[stack.length - 1] === 'row') finishCell()
       else if (inCell) {
         if (local === 'f' && collect === 'f') collect = undefined

@@ -751,7 +751,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   private drawings(): DrawingAnchor[] {
     const meta = this.sheet.metadata
     this.drawingCache ??= resolveDrawingAnchors(this.sheet.drawingAnchors.records,
-      buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true, columns: pagedColumns(this.workbook, meta) }))
+      buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true, columns: pagedColumns(this.workbook, meta), ...(meta.nonUniformFontRows ? { nonUniformFontRows: meta.nonUniformFontRows } : {}) }))
     return this.drawingCache
   }
 
@@ -779,7 +779,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     if (options.signal.aborted || this.workbook.parts.signal.aborted) abort()
     try {
       const { loadPagedSheetDrawings, pagedDrawingLimits } = await import('../storage/pagedDrawings')
-      const geometry = buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true, columns: pagedColumns(this.workbook, meta) })
+      const geometry = buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true, columns: pagedColumns(this.workbook, meta), ...(meta.nonUniformFontRows ? { nonUniformFontRows: meta.nonUniformFontRows } : {}) })
       const nodes = this.drawingState.nodes, sheetId = this.sheet.sheetId
       const parsed = await loadPagedSheetDrawings(this.workbook.parts, { name: this.sheet.name, partPath: this.sheet.partPath, drawingIds: meta.drawingIds, legacyDrawingIds: meta.legacyDrawingIds, slicerIds: meta.slicerRelationshipIds, timelineIds: meta.timelineRelationshipIds, stylesExtras: this.workbook.tableStyleExtras },
         geometry, pagedDrawingLimits(profile, this.drawingState.payloadBytes, this.workbook.pivotPartBytes), controller.signal, { memory, profile, chartDocument: this.drawingState.charts ??= {}, startNodes: nodes.start(sheetId), fillCharts: (drawings, owner, names, admit, workspace) => this.fillCharts(drawings, owner, controller.signal, names, admit, workspace as ChartWorkspace | undefined) })
@@ -2734,9 +2734,10 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
 }
 
 /** Ruling S4-DEFAULT-ROW: the authored height (pt) of the paged sheet's rows without `ht`, from its sheetFormatPr. */
-function pagedDefaultRow(meta: { format?: import('../columnWidth').SheetFormat }): { defaultRowPt?: number } {
+function pagedDefaultRow(meta: { format?: import('../columnWidth').SheetFormat; nonUniformFontRows?: readonly { start: number; end: number }[] }): { defaultRowPt?: number; nonUniformFontRows?: readonly { start: number; end: number }[] } {
   const pt = defaultRowPtOf(meta.format)
-  return pt !== undefined ? { defaultRowPt: pt } : {}
+  // Ruling S4-ROW-UNIFORM: the reader's row font uniformity travels beside the default row height.
+  return { ...(pt !== undefined ? { defaultRowPt: pt } : {}), ...(meta.nonUniformFontRows ? { nonUniformFontRows: meta.nonUniformFontRows } : {}) }
 }
 /** Excel column pixel model of a paged sheet: workbook MDW and its sheetFormatPr. */
 function pagedColumns(workbook: PagedWorkbook, meta: { format?: { baseColWidth?: number; defaultColWidth?: number } }) {
