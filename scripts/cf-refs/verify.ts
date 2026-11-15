@@ -4224,9 +4224,48 @@ export function iconTwinSetClass(members: readonly string[]): string {
   return ICON_TWIN_SET_PREFIX + [...new Set(members)].sort().join('|')
 }
 
-/** The members of a twin-set observation (sorted), or undefined for any other observed class. */
+/**
+ * The members of a twin-set observation (sorted), or undefined for any other observed class. A twin-set string with an
+ * empty or repeated member, or fewer than two members, is malformed and is no set (review fix, fix round 6).
+ */
 export function iconTwinSetMembers(glyphClass: string | null | undefined): string[] | undefined {
-  return typeof glyphClass === 'string' && glyphClass.startsWith(ICON_TWIN_SET_PREFIX) ? glyphClass.slice(ICON_TWIN_SET_PREFIX.length).split('|') : undefined
+  if (typeof glyphClass !== 'string' || !glyphClass.startsWith(ICON_TWIN_SET_PREFIX)) return undefined
+  const members = glyphClass.slice(ICON_TWIN_SET_PREFIX.length).split('|')
+  return members.length >= 2 && members.every(m => m.length > 0) && new Set(members).size === members.length ? members : undefined
+}
+
+/**
+ * Structural validation of the icon class fields a Stage 4 sidecar records (review fix, fix round 6): `glyphTwins` must
+ * be a symmetric map of non-empty class names to non-empty lists of other non-empty class names, `glyphFaint` a list of
+ * non-empty names, and every twin-set `glyphClass` / `faintGlyphClass` in `observedIcons` a well-formed set. Returns the
+ * first defect, or undefined.
+ */
+export function iconSidecarMalformed(sidecar: Record<string, unknown>): string | undefined {
+  const twins = sidecar.glyphTwins
+  if (twins !== undefined) {
+    if (typeof twins !== 'object' || twins === null || Array.isArray(twins)) return 'glyphTwins is not an object'
+    const rec = twins as Record<string, unknown>
+    for (const [cls, list] of Object.entries(rec)) {
+      if (!cls) return 'glyphTwins has an empty class name'
+      if (!Array.isArray(list) || list.length === 0) return `glyphTwins[${cls}] is not a non-empty list`
+      for (const other of list) {
+        if (typeof other !== 'string' || !other || other === cls) return `glyphTwins[${cls}] holds an invalid twin ${JSON.stringify(other)}`
+        const back = rec[other]
+        if (!Array.isArray(back) || !back.includes(cls)) return `glyphTwins is not symmetric: ${cls} -> ${other}`
+      }
+      if (new Set(list).size !== list.length) return `glyphTwins[${cls}] repeats a twin`
+    }
+  }
+  const faint = sidecar.glyphFaint
+  if (faint !== undefined && (!Array.isArray(faint) || faint.some(f => typeof f !== 'string' || !f))) return 'glyphFaint is not a list of class names'
+  if (Array.isArray(sidecar.observedIcons)) {
+    for (const o of sidecar.observedIcons as Array<Partial<CfObservedIcon> | null>) {
+      for (const cls of [o?.icon?.glyphClass, o?.faintGlyphClass]) {
+        if (typeof cls === 'string' && cls.startsWith(ICON_TWIN_SET_PREFIX) && !iconTwinSetMembers(cls)) return `observedIcons ${String(o?.ref)} holds the twin set ${JSON.stringify(cls)}`
+      }
+    }
+  }
+  return undefined
 }
 
 /**
@@ -4781,10 +4820,12 @@ export function loadIconGlyphKey(rootDir: string): IconGlyphKey | Refusal | unde
     } catch {
       sidecar = {}
     }
+    const malformed = iconSidecarMalformed(sidecar)
     const classesOk = JSON.stringify(sidecar.glyphClasses ?? null) === JSON.stringify(Object.fromEntries(built.classOfPair))
     const twinsOk = JSON.stringify(sidecar.glyphTwins ?? null) === JSON.stringify(iconGlyphTwinsRecord(built))
     const faintOk = JSON.stringify(sidecar.glyphFaint ?? null) === JSON.stringify(iconGlyphFaintRecord(built))
-    if (!classesOk || !twinsOk || !faintOk) key = iconRefusal('sidecar-mismatch', `The glyph-key sidecar ${cap.sidecarPath} does not record the ${!classesOk ? 'classes (glyphClasses)' : !twinsOk ? 'twin relation (glyphTwins)' : 'faint classes (glyphFaint, Ruling S4-FAINT)'} the key capture recomputes; re-derive it (capture --stage 4 --verify-only)`)
+    if (malformed) key = iconRefusal('sidecar-mismatch', `The glyph-key sidecar ${cap.sidecarPath} is malformed: ${malformed}`)
+    else if (!classesOk || !twinsOk || !faintOk) key = iconRefusal('sidecar-mismatch', `The glyph-key sidecar ${cap.sidecarPath} does not record the ${!classesOk ? 'classes (glyphClasses)' : !twinsOk ? 'twin relation (glyphTwins)' : 'faint classes (glyphFaint, Ruling S4-FAINT)'} the key capture recomputes; re-derive it (capture --stage 4 --verify-only)`)
   }
   iconKeyCache.set(cacheKey, key)
   return key
@@ -4918,6 +4959,8 @@ function verifyIconCapture(
   if (sidecar.lockBefore !== 'unlocked' || sidecar.lockAfter !== 'unlocked') {
     return fail('display-locked', `Capture lock state before="${String(sidecar.lockBefore)}" after="${String(sidecar.lockAfter)}": a capture is valid only when the display was unlocked before and after it`)
   }
+  const malformed = iconSidecarMalformed(sidecar)
+  if (malformed) return fail('sidecar-mismatch', `Icon sidecar is malformed: ${malformed}`)
   if (sidecar.zoom !== 100 || sidecar.dpr !== 1) return fail('sidecar-mismatch', `Icon capture must be recorded at zoom 100 and dpr 1 (got zoom=${String(sidecar.zoom)}, dpr=${String(sidecar.dpr)})`)
   const outcome: IconCaptureOutcome = { verified: [], nonDiscriminating: [], refused: [], notes: {}, matched: {} }
   const isKeyCase = c.markers.some(m => m.capabilityId.startsWith('icon:glyph-'))

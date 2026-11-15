@@ -46963,7 +46963,7 @@
     {
       "id": "stage4-icon-composition",
       "stage": 4,
-      "question": "S4-I/S4-J composition: two overlapping icon rules (B); an icon with a data bar in both priority orders (C, D) and with conflicting showValue (E); an icon over a colour scale (F) and over a DXF fill (G); a matching (H) and a non-matching (I) DXF stopIfTrue ahead of an icon; an icon carrying stopIfTrue=\"1\" ahead of a DXF fill (J); a NoIcons win over a lower icon rule (K); an unresolved expression stub at a higher priority (L).",
+      "question": "S4-I/S4-J composition: two overlapping icon rules (B); an icon with a data bar in both priority orders (C, D) and with conflicting showValue (E); an icon over a colour scale (F) and over a DXF fill (G); a matching (H) and a non-matching (I) DXF stopIfTrue ahead of an icon; a NoIcons win over a lower icon rule (K); an unresolved expression stub at a higher priority (L). (The icon carrying stopIfTrue=\"1\", formerly J, moved to stage4-icon-unresolved-shapes in fix round 6: Excel strips stopIfTrue from icon-set rules on resave, Ruling S4-ICON-STOPIFTRUE.)",
       "input": "tests/fixtures/xlsx-cf/inputs/stage4-icon-composition.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage4-icon-composition.xlsx",
       "sheet": "Sheet1",
@@ -47443,55 +47443,11 @@
         },
         {
           "part": "xl/worksheets/sheet1.xml",
-          "extension": "legacy",
-          "capabilityId": "icon:composition-icon-stopIfTrue",
-          "sqref": "J2:J5",
-          "ruleType": "iconSet",
-          "priority": 17,
-          "stopIfTrue": true,
-          "formulas": [],
-          "icon": {
-            "dialect": "base",
-            "set": "3Arrows",
-            "cfvo": [
-              {
-                "type": "percent",
-                "val": "0"
-              },
-              {
-                "type": "percent",
-                "val": "33"
-              },
-              {
-                "type": "percent",
-                "val": "67"
-              }
-            ],
-            "attrs": {}
-          }
-        },
-        {
-          "part": "xl/worksheets/sheet1.xml",
-          "extension": "legacy",
-          "sqref": "J2:J5",
-          "capabilityId": "icon:composition-icon-stopIfTrue",
-          "ruleType": "cellIs",
-          "operator": "greaterThan",
-          "priority": 18,
-          "formulas": [
-            "0"
-          ],
-          "dxf": {
-            "fillRgb": "FFFFC7CE"
-          }
-        },
-        {
-          "part": "xl/worksheets/sheet1.xml",
           "extension": "x14",
           "capabilityId": "icon:composition-noicons-slot",
           "sqref": "K2:K5",
           "ruleType": "iconSet",
-          "priority": 19,
+          "priority": 17,
           "formulas": [],
           "icon": {
             "dialect": "x14",
@@ -47533,7 +47489,7 @@
           "capabilityId": "icon:composition-noicons-slot",
           "sqref": "K2:K5",
           "ruleType": "iconSet",
-          "priority": 20,
+          "priority": 18,
           "formulas": [],
           "icon": {
             "dialect": "base",
@@ -47561,7 +47517,7 @@
           "sqref": "L2:L5",
           "capabilityId": "icon:composition-unresolved-stub",
           "ruleType": "expression",
-          "priority": 21,
+          "priority": 19,
           "stopIfTrue": true,
           "formulas": [
             "MOD(L2,2)=1"
@@ -47576,7 +47532,7 @@
           "capabilityId": "icon:composition-unresolved-stub",
           "sqref": "L2:L5",
           "ruleType": "iconSet",
-          "priority": 22,
+          "priority": 20,
           "formulas": [],
           "icon": {
             "dialect": "base",
@@ -47600,8 +47556,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "fb9ae26f4b32f21163a48432caaabe3359241ad5dfb556b546cf86bdb77da99a",
-        "savedSha256": "174fc2515810447826e844efa7ec04ee275b8ca873d2b5c84dffaaaa682b1392",
+        "inputSha256": "9793f25a3994e54876bd5cf9b1447e55f880fb743bf70b38393660ff1d35d64e",
+        "savedSha256": "9793f25a3994e54876bd5cf9b1447e55f880fb743bf70b38393660ff1d35d64e",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -47634,10 +47590,6 @@
           "I3",
           "I4",
           "I5",
-          "J2",
-          "J3",
-          "J4",
-          "J5",
           "K2",
           "K3",
           "K4",
@@ -47678,10 +47630,6 @@
           "I8",
           "I9",
           "I10",
-          "J7",
-          "J8",
-          "J9",
-          "J10",
           "K7",
           "K8",
           "K9",
@@ -47699,7 +47647,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "pixel-classified",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -47710,7 +47658,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "pixel-classified",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -47721,7 +47669,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "pixel-classified",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -47732,7 +47680,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "pixel-classified",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -47743,7 +47691,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "pixel-classified",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -47754,7 +47702,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "pixel-classified",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -47765,7 +47713,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "pixel-classified",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -47776,7 +47724,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "pixel-classified",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -47787,7 +47735,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "pixel-classified",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -47798,7 +47746,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "pixel-classified",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -47938,10 +47886,10 @@
             "ref": "H2",
             "controlRef": "H7",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "pixel-classified",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -47949,10 +47897,10 @@
             "ref": "H3",
             "controlRef": "H8",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "pixel-classified",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -47963,7 +47911,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "pixel-classified",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -47974,7 +47922,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "pixel-classified",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -47985,7 +47933,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "pixel-classified",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -47996,7 +47944,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "pixel-classified",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -48007,7 +47955,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "pixel-classified",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -48018,51 +47966,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "pixel-classified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "J2",
-            "controlRef": "J7",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "pixel-classified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "J3",
-            "controlRef": "J8",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "pixel-classified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "J4",
-            "controlRef": "J9",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "pixel-classified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "J5",
-            "controlRef": "J10",
-            "matched": true,
-            "iconApplied": true,
-            "fillSource": "unverified",
-            "iconEvidence": {
-              "bucket": "pixel-classified",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -48070,10 +47974,10 @@
             "ref": "K2",
             "controlRef": "K7",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "non-discriminating",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -48081,10 +47985,10 @@
             "ref": "K3",
             "controlRef": "K8",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "non-discriminating",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -48092,10 +47996,10 @@
             "ref": "K4",
             "controlRef": "K9",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "non-discriminating",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -48103,10 +48007,10 @@
             "ref": "K5",
             "controlRef": "K10",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "non-discriminating",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -48114,10 +48018,10 @@
             "ref": "L2",
             "controlRef": "L7",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "pixel-classified",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -48125,10 +48029,10 @@
             "ref": "L3",
             "controlRef": "L8",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "pixel-classified",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -48136,10 +48040,10 @@
             "ref": "L4",
             "controlRef": "L9",
             "matched": true,
-            "iconApplied": false,
+            "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "pixel-classified",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -48150,7 +48054,7 @@
             "iconApplied": true,
             "fillSource": "unverified",
             "iconEvidence": {
-              "bucket": "pixel-classified",
+              "bucket": "unverified",
               "geometry": "unverified"
             }
           },
@@ -48395,38 +48299,6 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "J7",
-            "controlRef": "J2",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "J8",
-            "controlRef": "J3",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "J9",
-            "controlRef": "J4",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "J10",
-            "controlRef": "J5",
-            "matched": false,
-            "iconApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
             "ref": "K7",
             "controlRef": "K2",
             "matched": false,
@@ -48501,20 +48373,13 @@
         }
       ],
       "status": "recipe-pending",
+      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": true,
-      "resaveReceipt": {
-        "resavedAt": "2026-11-15T05:18:07.251Z",
-        "excelVersion": "16.115",
-        "inputSha256": "fb9ae26f4b32f21163a48432caaabe3359241ad5dfb556b546cf86bdb77da99a",
-        "savedSha256": "174fc2515810447826e844efa7ec04ee275b8ca873d2b5c84dffaaaa682b1392",
-        "openedRepairFree": true
-      },
-      "reason": "Capture verification failed (unobserved-expectation): icon:composition-icon-stopIfTrue claims evidence although the saved rule carries no stopIfTrue"
+      "resavedByExcel": false
     },
     {
       "id": "stage4-icon-rtl",
@@ -48657,11 +48522,11 @@
     {
       "id": "stage4-icon-unresolved-shapes",
       "stage": 4,
-      "question": "Excel open/repair/strip outcome for shapes the viewer refuses either way (S4-B, S4-C, S4-O, S4-P): an unknown iconSet; an iconId out of range; NoIcons iconId=\"1\"; a custom set with fewer cfIcon than buckets; a base rule naming 3Stars; type=\"formula\"; xm:f $A$1; activePresent=\"1\"; 2 and 6 cfvo; a cfvo without type. Fix round 3 adds two shapes Excel 16.114 canonicalises on resave (c63de53a), so neither can be authored repair-free: <iconSet percent=\"0\"> (M; Excel drops percent) and an x14 custom=\"1\" rule with reverse=\"1\" (N; Excel drops reverse). Lifts no capability.",
+      "question": "Excel open/repair/strip outcome for shapes the viewer refuses either way (S4-B, S4-C, S4-O, S4-P): an unknown iconSet; an iconId out of range; NoIcons iconId=\"1\"; a custom set with fewer cfIcon than buckets; a base rule naming 3Stars; type=\"formula\"; xm:f $A$1; activePresent=\"1\"; 2 and 6 cfvo; a cfvo without type. Fix round 3 adds two shapes Excel 16.114 canonicalises on resave (c63de53a), so neither can be authored repair-free: <iconSet percent=\"0\"> (M; Excel drops percent) and an x14 custom=\"1\" rule with reverse=\"1\" (N; Excel drops reverse). Fix round 6 adds an icon rule carrying stopIfTrue=\"1\" ahead of a DXF fill (O; Excel strips stopIfTrue from icon-set rules, Ruling S4-ICON-STOPIFTRUE). Lifts no capability.",
       "input": "tests/fixtures/xlsx-cf/inputs/stage4-icon-unresolved-shapes.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage4-icon-unresolved-shapes.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:N12",
+      "range": "A1:O12",
       "requiredAppearances": [
         "screen"
       ],
@@ -48838,11 +48703,55 @@
               "reverse": "1"
             }
           }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "icon:composition-icon-stopIfTrue",
+          "sqref": "O2:O6",
+          "ruleType": "iconSet",
+          "priority": 14,
+          "stopIfTrue": true,
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "percent",
+                "val": "33"
+              },
+              {
+                "type": "percent",
+                "val": "67"
+              }
+            ],
+            "attrs": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "O2:O6",
+          "capabilityId": "icon:composition-icon-stopIfTrue",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 15,
+          "formulas": [
+            "0"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE"
+          }
         }
       ],
       "expected": {
-        "inputSha256": "c33cb3d32fe91d3fde2d0e537cc42816ba01816541888394163e0079df5cb2e1",
-        "savedSha256": "c33cb3d32fe91d3fde2d0e537cc42816ba01816541888394163e0079df5cb2e1",
+        "inputSha256": "f05e79f549302876f3495cba5708e7f67963db0088103891d0d9568692cc262b",
+        "savedSha256": "f05e79f549302876f3495cba5708e7f67963db0088103891d0d9568692cc262b",
         "provenance": "seed-hypothesis",
         "positiveRefs": [],
         "negativeRefs": [],
@@ -49366,12 +49275,52 @@
             "iconApplied": false,
             "fillSource": "unverified",
             "note": "unresolved shape fails closed (no icon)"
+          },
+          {
+            "ref": "O2",
+            "controlRef": "O8",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
+          },
+          {
+            "ref": "O3",
+            "controlRef": "O9",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
+          },
+          {
+            "ref": "O4",
+            "controlRef": "O10",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
+          },
+          {
+            "ref": "O5",
+            "controlRef": "O11",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
+          },
+          {
+            "ref": "O6",
+            "controlRef": "O12",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "unresolved shape fails closed (no icon)"
           }
         ]
       },
       "captures": [],
       "status": "unsupported",
-      "reason": "Preserved rejected Excel output at /Users/julianshen/prj/officeview/.worktrees/cf-s4/tests/fixtures/xlsx-cf/stage4-icon-unresolved-shapes.rejected.xlsx: Rule icon:unresolved-unknown-set (iconSet) on sqref B2:B6 with formulas [] missing from xl/worksheets/sheet1.xml",
+      "reason": "Unresolved icon shapes fail closed per Rulings S4-B, S4-C, S4-O and S4-P; recorded for Excel's open/repair/strip outcome and lift no capability",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,

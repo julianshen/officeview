@@ -4133,9 +4133,9 @@ describe('Stage 4 icon oracle (Task 24)', () => {
       'stage4-icon-showvalue': ['icon:showvalue-canvas-suppression', 'icon:showvalue-copy-text'],
       'stage4-icon-participation': ['icon:participation-dateserial', 'icon:participation-error-presence', 'icon:participation-types'],
       'stage4-icon-scope': ['icon:scope-autofilter-hidden-row', 'icon:scope-disjoint', 'icon:scope-duplicate-blocks', 'icon:scope-hidden-row', 'icon:scope-merged-cell'],
-      'stage4-icon-composition': ['icon:composition-bar-showvalue', 'icon:composition-dxf-fill', 'icon:composition-icon-stopIfTrue', 'icon:composition-matching-stopIfTrue-ahead', 'icon:composition-noicons-slot', 'icon:composition-overlapping-icons', 'icon:composition-unresolved-stub', 'icon:composition-with-bar', 'icon:composition-with-scale'],
+      'stage4-icon-composition': ['icon:composition-bar-showvalue', 'icon:composition-dxf-fill', 'icon:composition-matching-stopIfTrue-ahead', 'icon:composition-noicons-slot', 'icon:composition-overlapping-icons', 'icon:composition-unresolved-stub', 'icon:composition-with-bar', 'icon:composition-with-scale'],
       'stage4-icon-rtl': ['icon:placement-rtl-sheet'],
-      'stage4-icon-unresolved-shapes': ['icon:unresolved-active-present', 'icon:unresolved-base-x14-set', 'icon:unresolved-cfvo-count', 'icon:unresolved-cfvo-no-type', 'icon:unresolved-custom-count', 'icon:unresolved-formula-cfvo', 'icon:unresolved-iconid-range', 'icon:unresolved-noicons-id', 'icon:unresolved-unknown-set', 'icon:unresolved-xmf-reference', 'icon:attr-percent-false', 'icon:reverse-custom'],
+      'stage4-icon-unresolved-shapes': ['icon:unresolved-active-present', 'icon:unresolved-base-x14-set', 'icon:unresolved-cfvo-count', 'icon:unresolved-cfvo-no-type', 'icon:unresolved-custom-count', 'icon:unresolved-formula-cfvo', 'icon:unresolved-iconid-range', 'icon:unresolved-noicons-id', 'icon:unresolved-unknown-set', 'icon:unresolved-xmf-reference', 'icon:attr-percent-false', 'icon:reverse-custom', 'icon:composition-icon-stopIfTrue'],
     }
     expect(CF_STAGE4_CASES.map(c => c.id)).toEqual(Object.keys(expected))
     for (const [id, caps] of Object.entries(expected)) {
@@ -4447,22 +4447,37 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     const kept = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: withS4 })
     expect(listed(kept, 'VERIFIED_STAGE4_CAPABILITIES')).toEqual(['icon:pixel-calibration'])
     expect(renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: kept })).toBe(kept)
-    // --publish-stage4 publishes the audit's own verified set (empty: every case is recipe-pending), idempotently.
+    // --publish-stage4 publishes the audit's own verified set, idempotently (fix round 6: evidence-driven, so it holds for
+    // whatever the committed captures verify; publishing itself is Task 30 and is only rendered in memory here).
     const report = auditStage4Manifest(manifest, { rootDir: REPO_ROOT })
     expect(report.ok).toBe(true)
-    expect(report.stageComplete).toBe(false)
     expect(report.summary.cases).toBe(16)
     expect(report.summary.capabilities).toBe(CF_STAGE4_CAPABILITIES.length)
-    expect(report.perCapability.filter(p => p.disposition === 'verified')).toEqual([])
     expect(report.perCapability.filter(p => p.disposition === 'unaccounted')).toEqual([])
-    // Refused-unsupported is exactly the unresolved-shapes case: its ten shapes, plus the two Excel canonicalises (fix round 3).
+    expect(report.stageComplete).toBe(report.blockedCapabilities.length === 0)
+    // Refused-unsupported is exactly the unresolved-shapes case (its own shapes plus those Excel canonicalises).
     expect(report.perCapability.filter(p => p.disposition === 'refused-unsupported').map(p => p.capabilityId).sort()).toEqual(CF_STAGE4_CAPABILITIES.filter(e => e.caseId === 'stage4-icon-unresolved-shapes').map(e => e.capabilityId).sort())
-    expect(report.blockedCapabilities.length).toBeGreaterThan(50)
+    const verified = report.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId)
+    // Every verified id is backed by its owning case's own verification and the cross-case gates.
+    const byCase = new Map<string, ReturnType<typeof verifyCfCase>>()
+    for (const id of verified) {
+      const owner = CF_STAGE4_CAPABILITIES.find(e => e.capabilityId === id)!.caseId
+      if (!byCase.has(owner)) byCase.set(owner, verifyCfCase(manifest.cases.find(c => c.id === owner)!, { rootDir: REPO_ROOT }))
+      const res = byCase.get(owner)!
+      expect(res.kind === 'verified' && res.verifiedCapabilities.includes(id), id).toBe(true)
+      expect(isCapabilityVerified(id, manifest, { rootDir: REPO_ROOT }), id).toBe(true)
+    }
+    // Non-vacuous in both directions: the glyph-key gate decides whether anything can verify at all.
+    const keyMeasured = manifest.cases.find(c => c.id === 'stage4-icon-glyph-key')!.status === 'measured'
+    if (keyMeasured) expect(verified).toEqual(expect.arrayContaining(['icon:pixel-calibration', 'icon:glyph-key']))
+    else expect(verified).toEqual([])
+    expect(verified.length + report.blockedCapabilities.length).toBeGreaterThan(50)
     const published = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: committed, publishStage4: true })
-    expect(listed(published, 'VERIFIED_STAGE4_CAPABILITIES')).toEqual([])
+    expect(listed(published, 'VERIFIED_STAGE4_CAPABILITIES')).toEqual([...verified].sort())
     expect(renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: published, publishStage4: true })).toBe(published)
     expect(listed(published, 'VERIFIED_STAGE3_CAPABILITIES')).toEqual(listed(committed, 'VERIFIED_STAGE3_CAPABILITIES'))
-    expect(listed(published, 'VERIFIED_CAPABILITIES')).toEqual(listed(committed, 'VERIFIED_CAPABILITIES'))
+    // The union gains exactly the published Stage 4 set.
+    expect(listed(published, 'VERIFIED_CAPABILITIES')).toEqual([...new Set([...listed(committed, 'VERIFIED_CAPABILITIES')!, ...verified])].sort())
   }, 120_000)
 
   it('builds the icon object-model reachability probe with every read guarded', () => {
@@ -4587,7 +4602,6 @@ describe('Stage 4 icon oracle (Task 24)', () => {
       ['stage4-icon-composition', 'icon:composition-overlapping-icons', 'first-paints', 'second-paints'],
       ['stage4-icon-composition', 'icon:composition-with-bar', 'both-paint', 'icon-withheld'],
       ['stage4-icon-composition', 'icon:composition-matching-stopIfTrue-ahead', 'halted', 'not-halted'],
-      ['stage4-icon-composition', 'icon:composition-icon-stopIfTrue', 'later-withheld', 'later-applies'],
       ['stage4-icon-composition', 'icon:composition-noicons-slot', 'first-paints', 'second-paints'],
       ['stage4-icon-composition', 'icon:composition-unresolved-stub', 'halted', 'not-halted'],
     ]
@@ -4718,6 +4732,19 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     for (const cap of ['icon:attr-percent-false', 'icon:reverse-custom', 'icon:dialect-base-x14-family', 'icon:dialect-paired']) {
       expect(CF_STAGE4_CAPABILITIES.find(e => e.capabilityId === cap)!.failClosedDisposition, cap).toMatch(/c63de53a/)
     }
+  })
+
+  it('Ruling S4-ICON-STOPIFTRUE (fix round 6): an icon rule with stopIfTrue is unauthorable and is recorded with the unresolved shapes', () => {
+    const sheetOf = (path: string) => new TextDecoder().decode(readZipPartsSync(new Uint8Array(readFileSync(resolve(REPO_ROOT, path))))!.get('xl/worksheets/sheet1.xml')!)
+    const comp = CF_STAGE4_CASES.find(x => x.id === 'stage4-icon-composition')!
+    expect(comp.markers.some(m => m.ruleType === 'iconSet' && m.stopIfTrue)).toBe(false)
+    expect(sheetOf(comp.input)).not.toMatch(/<cfRule type="iconSet"[^>]*stopIfTrue/)
+    // Priorities stay contiguous after the move.
+    expect(comp.markers.filter(m => m.priority !== undefined).map(m => m.priority!).sort((a, b) => a - b)).toEqual(comp.markers.filter(m => m.priority !== undefined).map((_, i) => i + 1))
+    const un = CF_STAGE4_CASES.find(x => x.id === 'stage4-icon-unresolved-shapes')!
+    expect(un.markers.filter(m => m.capabilityId === 'icon:composition-icon-stopIfTrue').map(m => [m.ruleType, m.stopIfTrue === true])).toEqual([['iconSet', true], ['cellIs', false]])
+    expect(sheetOf(un.input)).toMatch(/<conditionalFormatting sqref="O2:O6"><cfRule type="iconSet" priority="14" stopIfTrue="1">/)
+    expect(CF_STAGE4_CAPABILITIES.find(e => e.capabilityId === 'icon:composition-icon-stopIfTrue')!.failClosedDisposition).toMatch(/S4-ICON-STOPIFTRUE/)
   })
 
   describe('Ruling S4-NEARTWIN (fix round 3): near-twin glyph classes', () => {
@@ -4973,7 +5000,40 @@ describe('Stage 4 icon oracle (Task 24)', () => {
       expect(keyed.observedIcons.some(o => o.icon?.glyphClass === '3Arrows:0')).toBe(true)
       expect(keyed.observedIcons.every(o => o.icon?.glyphClass !== 'unclassified')).toBe(true)
       expect(verifyCfCase(depEntry, { rootDir: root })).toMatchObject({ kind: 'verified' })
+
+      // Fix round 6 (review minor): a malformed twin relation or twin-set string in a sidecar refuses sidecar-mismatch,
+      // named as malformed, before any comparison.
+      const keyPath = join(root, c0.captures[0]!.sidecarPath)
+      const goodKey = readFileSync(keyPath, 'utf8')
+      for (const bad of [{ '4RedToBlack:0': [] }, { '4RedToBlack:0': [''] }, { '4RedToBlack:0': ['5Quarters:4'] }, { '': ['x'] }]) {
+        writeFileSync(keyPath, JSON.stringify({ ...JSON.parse(goodKey), glyphTwins: bad }))
+        const got = loadIconGlyphKey(root)
+        expect(got, JSON.stringify(bad)).toMatchObject({ kind: 'refusal', code: 'sidecar-mismatch' })
+        expect((got as { reason: string }).reason, JSON.stringify(bad)).toMatch(/malformed/)
+      }
+      writeFileSync(keyPath, goodKey)
+      const depPath = join(root, dep.captures[0]!.sidecarPath)
+      const goodDep = readFileSync(depPath, 'utf8')
+      for (const bad of ['twin-set:', 'twin-set:3Arrows:0', 'twin-set:3Arrows:0|']) {
+        const tampered = JSON.parse(goodDep) as { observedIcons: CfObservedIcon[] }
+        tampered.observedIcons.find(o => o.icon)!.icon!.glyphClass = bad
+        writeFileSync(depPath, JSON.stringify(tampered))
+        const got = verifyCfCase(depEntry, { rootDir: root })
+        expect(got, bad).toMatchObject({ kind: 'refusal', code: 'sidecar-mismatch' })
+        expect((got as { reason: string }).reason, bad).toMatch(/malformed/)
+      }
+      writeFileSync(depPath, goodDep)
+      expect(verifyCfCase(depEntry, { rootDir: root })).toMatchObject({ kind: 'verified' })
     }, 120_000)
+
+    it('iconTwinSetMembers refuses a twin-set string with fewer than two non-empty members (review minor)', () => {
+      expect(iconTwinSetMembers(iconTwinSetClass(['A', 'B']))).toEqual(['A', 'B'])
+      for (const bad of ['twin-set:', 'twin-set:A', 'twin-set:A|', 'twin-set:|B', 'twin-set:A|A', 'twin-set:||']) expect(iconTwinSetMembers(bad), bad).toBeUndefined()
+      expect(iconTwinSetMembers('3Arrows:0')).toBeUndefined()
+      expect(iconTwinSetMembers(null)).toBeUndefined()
+      // A malformed observation is no set at all: it matches no hypothesis (not even one predicting '').
+      expect(discriminateIcon({ B2: [{ id: 'h1', glyphClass: '' }, { id: 'h2', glyphClass: 'A' }] }, { B2: 'twin-set:' })).toMatchObject({ status: 'none' })
+    })
   })
 
   it('the icon template diff catches a template that departs from an independently written Excel form', async () => {

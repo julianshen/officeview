@@ -5216,13 +5216,13 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
   // 13. stage4-icon-composition
   s4rect(
     'stage4-icon-composition',
-    'S4-I/S4-J composition: two overlapping icon rules (B); an icon with a data bar in both priority orders (C, D) and with conflicting showValue (E); an icon over a colour scale (F) and over a DXF fill (G); a matching (H) and a non-matching (I) DXF stopIfTrue ahead of an icon; an icon carrying stopIfTrue="1" ahead of a DXF fill (J); a NoIcons win over a lower icon rule (K); an unresolved expression stub at a higher priority (L).',
+    'S4-I/S4-J composition: two overlapping icon rules (B); an icon with a data bar in both priority orders (C, D) and with conflicting showValue (E); an icon over a colour scale (F) and over a DXF fill (G); a matching (H) and a non-matching (I) DXF stopIfTrue ahead of an icon; a NoIcons win over a lower icon rule (K); an unresolved expression stub at a higher priority (L). (The icon carrying stopIfTrue="1", formerly J, moved to stage4-icon-unresolved-shapes in fix round 6: Excel strips stopIfTrue from icon-set rules on resave, Ruling S4-ICON-STOPIFTRUE.)',
     {
       n: 4,
       dxfsXml: DXF_FILLS_XML,
-      colStyles: s4keyStyles(['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L']),
-      cols: ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'].map((c, i) =>
-        s4col(c, ['Overlapping', 'IconThenBar', 'BarThenIcon', 'BarShowValue', 'WithScale', 'DxfFill', 'MatchStop', 'NonMatchStop', 'IconStop', 'NoIconsWin', 'Stub'][i]!, [25, 15, 5, 0], 20),
+      colStyles: s4keyStyles(['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L']),
+      cols: ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L'].map((c, i) =>
+        s4col(c, ['Overlapping', 'IconThenBar', 'BarThenIcon', 'BarShowValue', 'WithScale', 'DxfFill', 'MatchStop', 'NonMatchStop', 'NoIconsWin', 'Stub'][i]!, [25, 15, 5, 0], 20),
       ),
       rules: [
         icon('icon:composition-overlapping-icons', 'B2:B5', 1, '3Arrows', pct(3), { separateBlock: true }),
@@ -5243,18 +5243,16 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
         icon('icon:composition-matching-stopIfTrue-ahead', 'H2:H5', 14, '3Arrows', pct(3)),
         cellIsRaw('icon:composition-matching-stopIfTrue-ahead', 'I2:I5', 15, '100', { stop: true }),
         icon('icon:composition-matching-stopIfTrue-ahead', 'I2:I5', 16, '3Arrows', pct(3)),
-        icon('icon:composition-icon-stopIfTrue', 'J2:J5', 17, '3Arrows', pct(3), { stopIfTrue: true }),
-        cellIsRaw('icon:composition-icon-stopIfTrue', 'J2:J5', 18, '0', { dxfId: 0 }),
-        icon('icon:composition-noicons-slot', 'K2:K5', 19, '3Arrows', pct(3), { dialect: 'x14', custom: [0, 1, 2].map(() => ({ set: 'NoIcons', iconId: 0 })) }),
-        icon('icon:composition-noicons-slot', 'K2:K5', 20, '3Flags', pct(3)),
+        icon('icon:composition-noicons-slot', 'K2:K5', 17, '3Arrows', pct(3), { dialect: 'x14', custom: [0, 1, 2].map(() => ({ set: 'NoIcons', iconId: 0 })) }),
+        icon('icon:composition-noicons-slot', 'K2:K5', 18, '3Flags', pct(3)),
         {
           kind: 'raw',
           where: 'legacy',
           sqref: 'L2:L5',
-          xml: '<cfRule type="expression" dxfId="0" priority="21" stopIfTrue="1"><formula>MOD(L2,2)=1</formula></cfRule>',
-          marker: { capabilityId: 'icon:composition-unresolved-stub', ruleType: 'expression', priority: 21, stopIfTrue: true, formulas: ['MOD(L2,2)=1'], dxf: S3_DXF_RED },
+          xml: '<cfRule type="expression" dxfId="0" priority="19" stopIfTrue="1"><formula>MOD(L2,2)=1</formula></cfRule>',
+          marker: { capabilityId: 'icon:composition-unresolved-stub', ruleType: 'expression', priority: 19, stopIfTrue: true, formulas: ['MOD(L2,2)=1'], dxf: S3_DXF_RED },
         },
-        icon('icon:composition-unresolved-stub', 'L2:L5', 22, '3Arrows', pct(3)),
+        icon('icon:composition-unresolved-stub', 'L2:L5', 20, '3Arrows', pct(3)),
       ],
     },
   ),
@@ -5272,13 +5270,14 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
   // 15. stage4-icon-unresolved-shapes
   s4rect(
     'stage4-icon-unresolved-shapes',
-    'Excel open/repair/strip outcome for shapes the viewer refuses either way (S4-B, S4-C, S4-O, S4-P): an unknown iconSet; an iconId out of range; NoIcons iconId="1"; a custom set with fewer cfIcon than buckets; a base rule naming 3Stars; type="formula"; xm:f $A$1; activePresent="1"; 2 and 6 cfvo; a cfvo without type. Fix round 3 adds two shapes Excel 16.114 canonicalises on resave (c63de53a), so neither can be authored repair-free: <iconSet percent="0"> (M; Excel drops percent) and an x14 custom="1" rule with reverse="1" (N; Excel drops reverse). Lifts no capability.',
+    'Excel open/repair/strip outcome for shapes the viewer refuses either way (S4-B, S4-C, S4-O, S4-P): an unknown iconSet; an iconId out of range; NoIcons iconId="1"; a custom set with fewer cfIcon than buckets; a base rule naming 3Stars; type="formula"; xm:f $A$1; activePresent="1"; 2 and 6 cfvo; a cfvo without type. Fix round 3 adds two shapes Excel 16.114 canonicalises on resave (c63de53a), so neither can be authored repair-free: <iconSet percent="0"> (M; Excel drops percent) and an x14 custom="1" rule with reverse="1" (N; Excel drops reverse). Fix round 6 adds an icon rule carrying stopIfTrue="1" ahead of a DXF fill (O; Excel strips stopIfTrue from icon-set rules, Ruling S4-ICON-STOPIFTRUE). Lifts no capability.',
     {
       n: 5,
       status: 'unsupported',
       reason: 'Unresolved icon shapes fail closed per Rulings S4-B, S4-C, S4-O and S4-P; recorded for Excel\'s open/repair/strip outcome and lift no capability',
-      cols: ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N'].map((c, i) =>
-        s4col(c, ['UnknownSet', 'IconIdRange', 'NoIconsId', 'CustomCount', 'BaseStars', 'FormulaCfvo', 'XmfRef', 'ActivePresent', 'TwoCfvo', 'SixCfvo', 'NoType', 'PercentAttr0', 'CustomReverse'][i]!, [10, 30, 50, 70, 90]),
+      dxfsXml: DXF_FILLS_XML,
+      cols: ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O'].map((c, i) =>
+        s4col(c, ['UnknownSet', 'IconIdRange', 'NoIconsId', 'CustomCount', 'BaseStars', 'FormulaCfvo', 'XmfRef', 'ActivePresent', 'TwoCfvo', 'SixCfvo', 'NoType', 'PercentAttr0', 'CustomReverse', 'IconStop'][i]!, [10, 30, 50, 70, 90]),
       ),
       rules: [
         iconShape('icon:unresolved-unknown-set', 'B2:B6', 1, '<cfRule type="iconSet" priority="1"><iconSet iconSet="3Bogus"><cfvo type="percent" val="0"/><cfvo type="percent" val="33"/><cfvo type="percent" val="67"/></iconSet></cfRule>', 'legacy'),
@@ -5295,6 +5294,9 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
         // Fix round 3 (item 8): Excel canonicalises these two on resave, so their capabilities are recorded here only.
         icon('icon:attr-percent-false', 'M2:M6', 12, '3Arrows', pct(3), { attrs: { percent: '0' } }),
         icon('icon:reverse-custom', 'N2:N6', 13, '3Arrows', pct(3), { dialect: 'x14', attrs: { reverse: '1' }, custom: [{ set: '3Stars', iconId: 2 }, { set: '3Flags', iconId: 0 }, { set: '5Boxes', iconId: 4 }] }),
+        // Fix round 6 (Ruling S4-ICON-STOPIFTRUE): Excel strips stopIfTrue from icon-set rules on resave.
+        icon('icon:composition-icon-stopIfTrue', 'O2:O6', 14, '3Arrows', pct(3), { stopIfTrue: true }),
+        cellIsRaw('icon:composition-icon-stopIfTrue', 'O2:O6', 15, '0', { dxfId: 0 }),
       ],
     },
   ),
@@ -5441,7 +5443,7 @@ function s4Ruling(cap: string): string {
     [/^icon:showvalue-copy-text$/, 'S4-N (copy and find keep the value; Excel\'s clipboard text is recorded, a disagreement is a finding)'],
     [/^icon:participation-/, 'S4-G (text, boolean, error and blank cells draw no icon, date serials evaluate, and a scope error blocks a statistic-bearing rule, each only with this capability)'],
     [/^icon:scope-/, 'S4-H (each scope shape is measured for icons, never inherited from bar:scope-* or scale:scope-*)'],
-    [/^icon:composition-icon-stopIfTrue$/, 'S4-J (an icon rule carrying stopIfTrue="1" is unresolved and taints every later rule on its cells)'],
+    [/^icon:composition-icon-stopIfTrue$/, 'S4-J and S4-ICON-STOPIFTRUE (recorded outcome, 6cb13bdf: Excel strips stopIfTrue from icon-set rules on resave and its dialog disables the option for icon sets, so the shape cannot be authored repair-free; it is recorded in stage4-icon-unresolved-shapes, refused-unsupported, and production keeps an icon rule carrying stopIfTrue="1" unresolved, tainting every later rule on its cells)'],
     [/^icon:composition-/, 'S4-I (the iconSet slot is independent; overlapping icons, bars, fills, stopIfTrue ahead and a NoIcons win withhold as ruled until measured)'],
     [/^icon:placement-rtl-sheet$/, 'S4-M (icons on an RTL or unknown-direction sheet are unresolved throughout Stage 4; placement is recorded only)'],
   ]

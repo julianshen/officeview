@@ -1320,7 +1320,7 @@ Task 24 prepares the Stage 4 oracle. The first Excel capture run (c63de53a) and 
 | `stage4-icon-showvalue` | `icon:showvalue-canvas-suppression`, `icon:showvalue-copy-text` (record only) | S4-L, S4-N | recipe-pending |
 | `stage4-icon-participation` | `icon:participation-types`, `-dateserial`, `-error-presence` | S4-G | recipe-pending |
 | `stage4-icon-scope` | `icon:scope-disjoint`, `-duplicate-blocks`, `-hidden-row`, `-autofilter-hidden-row`, `-merged-cell` | S4-H | recipe-pending |
-| `stage4-icon-composition` | `icon:composition-overlapping-icons`, `-with-bar`, `-bar-showvalue`, `-with-scale`, `-dxf-fill`, `-matching-stopIfTrue-ahead`, `-icon-stopIfTrue`, `-noicons-slot`, `-unresolved-stub` | S4-I, S4-J | recipe-pending |
+| `stage4-icon-composition` | `icon:composition-overlapping-icons`, `-with-bar`, `-bar-showvalue`, `-with-scale`, `-dxf-fill`, `-matching-stopIfTrue-ahead`, `-noicons-slot`, `-unresolved-stub` (`-icon-stopIfTrue` moved to unresolved-shapes in fix round 6) | S4-I, S4-J | recipe-pending |
 | `stage4-icon-rtl` | `icon:placement-rtl-sheet` (record only, stays unverified) | S4-M | recipe-pending |
 | `stage4-icon-unresolved-shapes` | 10 × `icon:unresolved-*`, plus `icon:attr-percent-false` (M) and `icon:reverse-custom` (N), the two shapes Excel canonicalises on resave (lift nothing) | S4-B, S4-C, S4-E, S4-F, S4-O, S4-P | unsupported |
 
@@ -1415,3 +1415,24 @@ On the stored captures (in memory, as before), only three capabilities have a tw
 - A twin-set cell with ink is labelled `true` whichever member it is.
 
 This is a label only. Bucket evidence comes from the set-consistency recomputation, and no geometry claim rests on a faint cell, so there is no code change.
+
+### Stage 4 recapture and verify-only (6cb13bdf) and fix round 6
+
+**Outcomes of 6cb13bdf.**
+- **Recaptures.** `stage4-icon-degenerate` and `stage4-icon-reverse-custom` were recaptured on Excel 16.115, and both now resave repair-free. `stage4-icon-unresolved-shapes` was rebuilt, with its rejected outcome recorded.
+- **verify-only.** `capture --verify-only` re-derived every sidecar from the stored PNGs.
+  - The glyph key is now `measured`: 54 classes over 75 pairs, two twin pairs, and `5Boxes:0` faint.
+  - `measured` cases: authored, glyph-key, families, thresholds, degenerate, reverse-custom, geometry, inset, showvalue, participation, scope and rtl.
+  - `recipe-pending`: om-reachability (record only), dialect (its rejected outcome, S4-DIALECT-REJECTED), and composition (held, see below).
+- **Audit.** `audit --stage 4` reports `ok=true`, 105 verified capabilities, and 22 blocked (was 129).
+
+**Ruling S4-ICON-STOPIFTRUE (fix round 6).** Verify-only held `stage4-icon-composition` with "icon:composition-icon-stopIfTrue claims evidence although the saved rule carries no stopIfTrue". Excel strips `stopIfTrue` from icon-set rules on resave, and its dialog disables the option for icon sets.
+- **Move.** The shape (an icon rule with `stopIfTrue="1"` ahead of a DXF fill, formerly composition J) moved to `stage4-icon-unresolved-shapes` as column O (priorities 14 and 15). The capability id is unchanged and the disposition is `refused-unsupported`.
+- **Renumbering.** Composition's K and L rules were renumbered to priorities 17–20, so no gap remains. Only these two cases' inputs and manifest entries were regenerated.
+- **Production already fails closed.** For a cell whose icon rule carries `stopIfTrue`, `composeCell` taints `ALL` until `icon:composition-icon-stopIfTrue` is evidenced, and it never will be. Every later contribution, and the icon itself, is withheld. The proof is `tests/xlsx-cf-icon-compose.test.ts`, "an icon with stopIfTrue=\"1\" → tainted contains ALL until icon:composition-icon-stopIfTrue": with no evidence, for every icon outcome, it expects `unresolvedWrites` ⊇ {ALL}, empty properties and no icon.
+- **Rebuild and recapture** `stage4-icon-composition`. **Rebuild only** `stage4-icon-unresolved-shapes`.
+
+**Review fixes (fix round 6).**
+- `iconTwinSetMembers` rejects a twin-set string with an empty or repeated member, or with fewer than two members.
+- `iconSidecarMalformed` validates `glyphTwins` (a symmetric map of non-empty names), `glyphFaint` and every observed twin-set string. A malformed sidecar refuses `sidecar-mismatch` in `loadIconGlyphKey` and in `verifyIconCapture`.
+- The `audit --stage 4` idempotence test is evidence-driven. The published Stage 4 set equals the audit's verified set; each verified id is backed by its own case's verification and the cross-case gates. Stage 4 is rendered in memory only; publication is Task 30.
