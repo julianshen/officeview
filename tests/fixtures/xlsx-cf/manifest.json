@@ -50349,8 +50349,8 @@
       "iconShiftedKey": true,
       "expected": {
         "inputSha256": "08f62bf5a17521d4e3e8e7ac9e2f1ce1425409a4e4c2b063ce360fca0433ad65",
-        "savedSha256": "08f62bf5a17521d4e3e8e7ac9e2f1ce1425409a4e4c2b063ce360fca0433ad65",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "aeb4ccf12347ba72b28d32195bb744f4f3c009169733d2c197e06414c42806ad",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -50492,7 +50492,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50503,7 +50503,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50514,7 +50514,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50525,7 +50525,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50536,7 +50536,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50547,7 +50547,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50558,7 +50558,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50569,7 +50569,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50580,7 +50580,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50591,7 +50591,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50602,7 +50602,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50613,7 +50613,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50624,7 +50624,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50635,7 +50635,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50646,7 +50646,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50657,7 +50657,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50668,7 +50668,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50679,7 +50679,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50690,7 +50690,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50701,7 +50701,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50712,7 +50712,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50723,7 +50723,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50734,7 +50734,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50745,7 +50745,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50756,7 +50756,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50767,7 +50767,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50778,7 +50778,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50789,7 +50789,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50800,7 +50800,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50811,7 +50811,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50822,7 +50822,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50833,7 +50833,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50844,7 +50844,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50855,7 +50855,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50866,7 +50866,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50877,7 +50877,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50888,7 +50888,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50899,7 +50899,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50910,7 +50910,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50921,7 +50921,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50932,7 +50932,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50943,7 +50943,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50954,7 +50954,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50965,7 +50965,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50976,7 +50976,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50987,7 +50987,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -50998,7 +50998,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -51009,7 +51009,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -51020,7 +51020,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -51031,7 +51031,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -51042,7 +51042,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -51053,7 +51053,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -51064,7 +51064,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -51075,7 +51075,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -51086,7 +51086,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -51097,7 +51097,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -51108,7 +51108,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -51119,7 +51119,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -51130,7 +51130,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -51141,7 +51141,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -51152,7 +51152,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -51163,7 +51163,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -51174,7 +51174,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -51185,7 +51185,7 @@
             "fillSource": "unverified",
             "iconEvidence": {
               "bucket": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -51706,17 +51706,24 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-rows.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-rows.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-rows.json",
+          "pngSha256": "d15c16c46752d46138d79fb3f24a3c07b4d7899f17518eabec73f31363408d59"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 4 case; every icon:* capability it settles stays unverified and production withholds the icon (Ruling S4-A)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-15T10:12:13.278Z",
+        "excelVersion": "16.115",
+        "inputSha256": "08f62bf5a17521d4e3e8e7ac9e2f1ce1425409a4e4c2b063ce360fca0433ad65",
+        "savedSha256": "aeb4ccf12347ba72b28d32195bb744f4f3c009169733d2c197e06414c42806ad",
+        "openedRepairFree": true
+      }
     }
   ]
 }
