@@ -877,6 +877,8 @@ export interface SheetLayout {
   pivotTableCount?: number
   /** Authored frozen panes. */
   frozen?: { rows: number; cols: number; topRow?: number; leftCol?: number }
+  /** Ruling S4-DEFAULT-ROW: the authored height (pt) of rows without `ht`, for the icon frame. */
+  defaultRowPt?: number
 }
 /** Control selection is a separate workbook-scoped revision; it is not a page-field or item-filter delta. */
 export type LinkedControlSelection =

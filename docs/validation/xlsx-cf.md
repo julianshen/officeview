@@ -1732,3 +1732,31 @@ So the case measured:
   2. `bun scripts/cf-refs/capture.ts --stage 4 --case stage4-icon-rows-bottom`
   3. `bun scripts/cf-refs/capture.ts --stage 4 --verify-only`
   4. `bun scripts/cf-refs/audit.ts --stage 4`
+
+### Task 28 round 5 (2026-11-15): bottom placement replicated (a6439519), S4-DEFAULT-ROW
+
+**What `stage4-icon-rows-bottom` shows.**
+- **The style survived.** The resave kept both explicit xfs, `<alignment horizontal="right"/>` and `<alignment horizontal="left"/>`. `vertical="bottom"` was dropped as the default, so every cell is bottom-aligned in the resaved file.
+- **Verdict: `anchor-constant`, verified.** All five columns refute `centred`, each with a spread of 7.5 px. They also refute `row-scaled` (6.5 px). `anchor-constant` spreads 0 px in every column.
+- **Offsets.** In every column, the ink top relative to the top gridline is 2, 3, 5, 7, 9, 12 and 17 px on rows of 15, 16, 18, 20, 22, 25 and 30 px. The frame top is that ink top, so the frame bottom sits 1 px above the next gridline.
+  - The 3Arrows ink is 12 rows tall, ending 1 px above the gridline. The 3TrafficLights1 and 3Symbols ink is 11 rows, ending 2 px above.
+  - These match stage4-icon-rows E exactly.
+- **12.75 pt** (12 px) shrinks, with ink rows 1..10. It is not admitted.
+
+**Production.**
+- `keyFrame.rows[*].bottom.horizontal` is now `['left', 'right']`. The bottom placement is unchanged, 1 pt above the next gridline.
+- `CF_ICON_PAINT_READINGS['icon:geometry-row-offset'] = 'anchor-constant'`. The no-injection conformance recomputes it from the owning case's committed sidecar.
+
+**Ruling S4-DEFAULT-ROW.**
+- **Parser.** `<sheetFormatPr>` is read by the one parser both adapters share, `columnWidth.ts` `sheetFormat`, which now also reads `defaultRowHeight`, `customHeight`, `zeroHeight`, `thickTop` and `thickBottom`.
+- **`defaultRowPtOf`** gives the authored height of a row without `ht`:
+  - `defaultRowHeight`, unless `zeroHeight` hides such rows or `thickTop`/`thickBottom` change their height (these withhold);
+  - `customHeight` only marks the value as set by hand.
+  - A correction to the ruling's premise: the viewer did not size such rows from `sheetFormatPr` before. It always draws them 20 px, which is 15 pt. So the S4-ROW-EXACT px check admits a default row only when `defaultRowHeight` is 15 (Calibri 11's default). A 16 pt default (Aptos) is drawn at 20 px and withholds.
+- **Where the value goes, as `rowPtOf` does:**
+  - resident: `XlsxSheet.defaultRowHeightPt`, used by `cfRowPtOfSheet`;
+  - both adapters' source geometry carry `defaultRowPt` (`view/source.ts` `buildGeometry`, and `pagedSource` from the sheet metadata's format);
+  - paged: the worker's `SheetLayout.defaultRowPt`, which `InteractiveSheetDoc` passes to `cfRowPtOfOverrides`.
+- A session-resized row still withholds, by the host-height check.
+
+**Search scope (round 4, concern 5).** Find and copy use their scope only for text (`effectiveStyle`/display text); neither calls `iconAt`, `describe` or `hidesTextAt`. The a11y description and the paint come from the scopes that carry `rowPtOf`: the resident batch and text scope, and the paged paint and semantic scopes via `prepareRemoteScope`. So a scope without row heights can change no description, visible text or paint.

@@ -26,7 +26,7 @@ import { initializeSavedSpills } from './formula/saved-spills'
 import { dynamicMetadataIndices } from './metadata'
 import { decodeXlsxString } from './strings'
 import { resolveSheetColor, type SheetColorContext } from './sheetColors'
-import { defaultColumnWidthPx, maxDigitWidthPx, sheetFormat } from './columnWidth'
+import { defaultColumnWidthPx, defaultRowPtOf, maxDigitWidthPx, sheetFormat } from './columnWidth'
 import { MAX_COLS, MAX_ROWS, formatA1 } from './view/coordinates'
 import { PackageError } from '../core/package-error'
 import { parseSparklineGroups, SPARKLINE_EXTENSION_URI, SPREADSHEETML_NS, X14_SPARKLINE_NS, MAX_POINTS_PER_SHEET, MAX_SPARKLINE_GROUPS_PER_SHEET } from './sparklines/parseGroups'
@@ -649,7 +649,11 @@ async function parseSheet(
     }
   }
   // Excel's column pixel model; set before drawings are placed against the grid.
-  const columns = { maxDigitWidthPx: digitWidth, defaultWidthPx: defaultColumnWidthPx(sheetFormat(attrs(getChildren(data, 'sheetFormatPr')[0])), digitWidth) }
+  const format = sheetFormat(attrs(getChildren(data, 'sheetFormatPr')[0]))
+  const columns = { maxDigitWidthPx: digitWidth, defaultWidthPx: defaultColumnWidthPx(format, digitWidth) }
+  // Ruling S4-DEFAULT-ROW: the authored height of rows without `ht`, for the icon frame only.
+  const defaultRowPt = defaultRowPtOf(format)
+  if (defaultRowPt !== undefined) sheet.defaultRowHeightPt = defaultRowPt
   if (columns.maxDigitWidthPx !== 7 || columns.defaultWidthPx !== 64) sheet.columnMetrics = columns
   const colsNode = getChildren(data, 'cols')[0]
   if (colsNode) {

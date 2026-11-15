@@ -158,6 +158,9 @@ export interface XlsxSheet {
   drawingCoverage?: DrawingCoverageEntry[]
   /** Authored frozen panes of the first sheet view (interactive viewer only). */
   frozen?: XlsxFrozenPane
+  /** Ruling S4-DEFAULT-ROW: the authored height (pt) of rows without `ht` (`sheetFormatPr defaultRowHeight`, absent
+   * under zeroHeight/thickTop/thickBottom). Used by the icon frame only; the grid keeps its own default. */
+  defaultRowHeightPt?: number
   name: string
   sourcePartPath?: string
   /** Resolved workbook semantics (date system/locale/zone/clock) so the

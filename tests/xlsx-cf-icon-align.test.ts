@@ -58,6 +58,8 @@ describe('S4-PROD-ALIGN: the production model and the readings it adopts', () =>
     expect(CF_ICON_PAINT_READINGS).toEqual({
       'icon:geometry-box': 'font',
       'icon:geometry-vertical-align': 'cell-align',
+      // Task 28 round 5: stage4-icon-rows-bottom (a6439519) matched anchor-constant on all five columns.
+      'icon:geometry-row-offset': 'anchor-constant',
       'icon:geometry-narrow-clip': 'clip',
       'icon:geometry-short-row-clip': 'shrink',
       'icon:inset-left': 'inset',

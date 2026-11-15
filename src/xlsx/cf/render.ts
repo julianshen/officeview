@@ -177,17 +177,18 @@ export function disposeSheetCfStatistics(sheet: object): void {
  */
 /**
  * Ruling S4-ROW-EXACT (Task 28 round 4): each row's authored height in pt (its `ht`) from the sheet, for the icon gate.
- * A row without `ht` is unknown (its height in Excel follows the sheet's default and fonts, which the viewer does not
- * model): undefined, and its icons withhold.
+ * A row without `ht` takes the sheet's `defaultRowHeightPt` (Ruling S4-DEFAULT-ROW, round 5); without one it is
+ * unknown: undefined, and its icons withhold.
  */
-export function cfRowPtOfSheet(sheet: Pick<XlsxSheet, 'rows'>): (row: number) => number | undefined {
+export function cfRowPtOfSheet(sheet: Pick<XlsxSheet, 'rows' | 'defaultRowHeightPt'>): (row: number) => number | undefined {
   let table: Map<number, number> | undefined
   return row => {
     if (!table) {
       table = new Map()
       for (const r of sheet.rows) if (r.heightPt !== undefined && Number.isFinite(r.heightPt) && r.heightPt >= 0) table.set(r.index, r.heightPt)
     }
-    return table.get(row)
+    // Ruling S4-DEFAULT-ROW: a row without `ht` takes the sheet's default (`sheetFormatPr defaultRowHeight`).
+    return table.get(row) ?? sheet.defaultRowHeightPt
   }
 }
 

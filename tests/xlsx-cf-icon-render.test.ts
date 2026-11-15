@@ -53,7 +53,8 @@ async function pagedScope(sheet: XlsxSheet, rows: number, cols = 1, hosts?: CfFr
   expect(wire.kind, JSON.stringify(wire.reason)).toBe('ready')
   // S4-ROW-EXACT: the row heights the paged main thread holds, as InteractiveSheetDoc passes them: the worker's authored
   // row overrides (view/source.ts `buildGeometry`), read back as pt.
-  const rowPtOf = cfRowPtOfOverrides(buildGeometry(sheet.rows, sheet.cols ?? []).rowOverrides)
+  const geometry = buildGeometry(sheet.rows, sheet.cols ?? [], [], { defaultRowPt: sheet.defaultRowHeightPt })
+  const rowPtOf = cfRowPtOfOverrides(geometry.rowOverrides, geometry.defaultRowPt)
   return (await prepareCfWireScope(async () => ({ result: structuredClone(wire), release() {} }), rects, { budget: { reserve() {}, release() {} }, locale, rowPtOf, ...(hosts ? { hosts } : {}) }))!
 }
 const asBatch = (scope: EffectiveFormatScope): CfPaintBatch => ({
@@ -652,6 +653,42 @@ describe('S4-RIGHTINSET-ZERO: right-aligned numbers at the key geometry', () => 
       const none = await withIcons(run, { ...production, extra: GLYPH_CAPS })
       for (const [name, ops] of Object.entries(none)) expect(ops.length, `${rowPt} pt: ${name}`).toBe(0)
     }
+  })
+
+  it('Task 28 round 5 (S4-DEFAULT-ROW): rows without ht on a defaultRowHeight="15" sheet paint in every view; without defaultRowHeight they withhold', async () => {
+    const sheet = iconSheet([10, 50, 90], { style: { ...KEY_STYLE, vertical: 'center' } })
+    for (const row of sheet.rows) { delete row.heightPt; delete row.customHeight }
+    const run = async () => {
+      const metrics = computeMetrics(sheet)
+      const resident = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, layoutContext }))!
+      const worker = asBatch(await pagedScope(sheet, 3))
+      const host = createCellLayoutHost(layoutContext())
+      const forced = asBatch(await pagedScope(sheet, 3, 1, { cell: (row, col) => {
+        const cell = sheet.rows[row]!.cells[col]!
+        const body = host.layoutBody(cell, metrics.colWidthsPx[0]!, metrics.rowHeightsPx[row]!)
+        return { box: { x: 0, y: metrics.rowHeightsPx.slice(0, row).reduce((a, b) => a + b, 0), width: metrics.colWidthsPx[0]!, height: metrics.rowHeightsPx[row]! }, base: cell.style!, textWidth: body.text?.kind === 'plain' ? body.text.width : undefined, cell }
+      } }))
+      const out: Record<string, number> = {}
+      { const r = recorder(metrics.widthPx, metrics.heightPx); renderSheet(sheet, r.ctx, metrics, undefined, { conditionalFormatting: resident }); out.static = r.ops.filter(o => o.op === 'icon').length }
+      const geometry = buildSheetGeometry(sheet)
+      for (const [name, batch] of [['resident', resident], ['worker', worker], ['forced-paged', forced]] as const) {
+        const r = recorder(metrics.widthPx, metrics.heightPx)
+        renderSheetViewport(sheet, r.ctx, geometry, { box: { x: 0, y: 0, width: metrics.widthPx, height: metrics.heightPx }, zoom: 1, deviceScale: 1 }, { conditionalFormatting: batch }, { cache: new LayoutCache() })
+        out[name] = r.ops.filter(o => o.op === 'icon').length
+      }
+      { const print = computePrintMetrics(sheet, metrics); const r = recorder(print.paperPx.width, print.paperPx.height); renderPrintPage(sheet, r.ctx, metrics, print, 0, 0, undefined, { conditionalFormatting: resident }); out.print = r.ops.filter(o => o.op === 'icon').length }
+      const describedIcons = [0, 1, 2].filter(row => resident.iconAt(row, 0) !== undefined).length
+      resident.dispose(); worker.dispose(); forced.dispose()
+      return { out, describedIcons }
+    }
+    sheet.defaultRowHeightPt = 15
+    const painted = await withIcons(run, { ...production, extra: GLYPH_CAPS })
+    for (const [name, n] of Object.entries(painted.out)) expect(n, name).toBe(6)
+    expect(painted.describedIcons).toBe(3)
+    delete sheet.defaultRowHeightPt
+    const none = await withIcons(run, { ...production, extra: GLYPH_CAPS })
+    for (const [name, n] of Object.entries(none.out)) expect(n, `no defaultRowHeight: ${name}`).toBe(0)
+    expect(none.describedIcons).toBe(0)
   })
 
   it('the production model reads rightInsetPt 0 at 11 pt', () => {

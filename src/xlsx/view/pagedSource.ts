@@ -11,7 +11,7 @@
  * same file parsed with valuePolicy 'cached' (adapter parity, §4.2).
  */
 import { isDateNumberStyle } from '../dateNumberFormat'
-import { defaultColumnWidthPx } from '../columnWidth'
+import { defaultColumnWidthPx, defaultRowPtOf } from '../columnWidth'
 import type {
   AuthoritativeCell, CellRead, ColumnEntry, ColumnQuery, DrawingAnchor, OverviewGroup, OverviewQuery, Page, PopulatedQuery, RangeCompletion,
   ReadOptions, RemotePivotDisplay, SheetSparklines, SingleCellPayload, SourceFailure, SourceRowInterval, SourceStamp, SourceStore,
@@ -2704,7 +2704,7 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
       let geometry = geometries.get(sheetId)
       if (!geometry) {
         // Row metadata arrives with the rows; cache only once the sheet is complete.
-        geometry = withFrozen(buildGeometry(sheet.metadata.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), sheet.metadata.cols, sheet.metadata.hiddenRows, { hiddenCols: true, columns: pagedColumns(workbook, sheet.metadata) }), sheet.metadata.frozen)
+        geometry = withFrozen(buildGeometry(sheet.metadata.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), sheet.metadata.cols, sheet.metadata.hiddenRows, { hiddenCols: true, columns: pagedColumns(workbook, sheet.metadata), ...pagedDefaultRow(sheet.metadata) }), sheet.metadata.frozen)
         if (sheet.state === 'complete') geometries.set(sheetId, geometry)
       }
       return geometry
@@ -2733,6 +2733,11 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
   }
 }
 
+/** Ruling S4-DEFAULT-ROW: the authored height (pt) of the paged sheet's rows without `ht`, from its sheetFormatPr. */
+function pagedDefaultRow(meta: { format?: import('../columnWidth').SheetFormat }): { defaultRowPt?: number } {
+  const pt = defaultRowPtOf(meta.format)
+  return pt !== undefined ? { defaultRowPt: pt } : {}
+}
 /** Excel column pixel model of a paged sheet: workbook MDW and its sheetFormatPr. */
 function pagedColumns(workbook: PagedWorkbook, meta: { format?: { baseColWidth?: number; defaultColWidth?: number } }) {
   const mdw = workbook.formatting.maxDigitWidthPx ?? 7

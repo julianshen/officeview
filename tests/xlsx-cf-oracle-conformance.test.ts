@@ -895,7 +895,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
   it('S4-PROD-ALIGN: production\'s icon readings equal the matched readings of the committed Stage 4 sidecars', async () => {
     const { CF_ICON_PAINT_READINGS } = await import('../src/xlsx/cf/iconPaint')
     const caps = Object.keys(CF_ICON_PAINT_READINGS)
-    expect(caps.length).toBe(12)
+    expect(caps.length).toBe(13)
     const byCase = new Map<string, ReturnType<typeof verifyCfCase>>()
     for (const cap of caps) {
       const owners = CF_STAGE4_CAPABILITIES.filter(e => e.capabilityId === cap)

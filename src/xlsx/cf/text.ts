@@ -590,9 +590,9 @@ export async function awaitSettled(
 /**
  * Ruling S4-ROW-EXACT: each row's authored height in pt on the paged main thread, read back from the paged layout's row
  * overrides (`view/source.ts` `buildGeometry`: one interval per row with `ht`, `sizeCss` = pt × 96/72 unrounded).
- * Rows without an override are unknown (undefined).
+ * Rows without an override take `defaultRowPt` (the layout's, S4-DEFAULT-ROW), else are unknown (undefined).
  */
-export function cfRowPtOfOverrides(overrides: ReadonlyArray<{ start: number; end: number; sizeCss: number }>): (row: number) => number | undefined {
+export function cfRowPtOfOverrides(overrides: ReadonlyArray<{ start: number; end: number; sizeCss: number }>, defaultRowPt?: number): (row: number) => number | undefined {
   return row => {
     let lo = 0, hi = overrides.length - 1
     while (lo <= hi) {
@@ -601,7 +601,8 @@ export function cfRowPtOfOverrides(overrides: ReadonlyArray<{ start: number; end
       else if (row > o.end) lo = mid + 1
       else return (o.sizeCss * 72) / 96
     }
-    return undefined
+    // Ruling S4-DEFAULT-ROW: a row without an override (no `ht`) takes the sheet's `defaultRowPt`, if known.
+    return defaultRowPt
   }
 }
 

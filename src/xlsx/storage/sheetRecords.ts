@@ -312,8 +312,8 @@ export interface SheetMetadata {
   rowHeights: { row: number; heightPt: number }[]
   hiddenRows: { r0: number; r1: number }[]
   cols: { min: number; max: number; widthChars?: number; hidden: boolean }[]
-  /** `<sheetFormatPr>` column defaults (Excel column-width model). */
-  format?: { baseColWidth?: number; defaultColWidth?: number }
+  /** `<sheetFormatPr>`: column defaults (Excel column-width model) and the default row height (S4-DEFAULT-ROW). */
+  format?: import('../columnWidth').SheetFormat
   merges: string[]
   tablePartIds: (string | undefined)[]
   slicerRelationshipIds: string[]
@@ -726,7 +726,7 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
         }
       } else if (depth === 1 && local === 'sheetFormatPr') {
         const format = sheetFormat(attrMap(names, values, count))
-        if (format.baseColWidth !== undefined || format.defaultColWidth !== undefined) meta.format = format
+        if (Object.keys(format).length > 0) meta.format = format
       } else if (depth === 1 && local === 'cols') {
         // columns are collected below
       } else if (depth === 2 && local === 'col' && stack[1] === 'cols') {

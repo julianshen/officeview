@@ -249,13 +249,13 @@ describe('Task 28 round 3: the frame at the measured row heights (stage4-icon-ro
 
   it('the model carries exactly the sidecar\'s measured placements', () => {
     expect(CF_ICON_RENDER_MODEL.keyFrame?.rows).toEqual({
-      15: { excelPx: 15, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 2, horizontal: ['left', 'right'] } },
-      16.5: { excelPx: 16, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 2, horizontal: ['left', 'right'] } },
-      18: { excelPx: 18, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 3, horizontal: ['left', 'right'] } },
+      15: { excelPx: 15, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left', 'right'] }, center: { anchor: 'top', offsetPt: 2, horizontal: ['left', 'right'] } },
+      16.5: { excelPx: 16, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left', 'right'] }, center: { anchor: 'top', offsetPt: 2, horizontal: ['left', 'right'] } },
+      18: { excelPx: 18, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left', 'right'] }, center: { anchor: 'top', offsetPt: 3, horizontal: ['left', 'right'] } },
       20: { excelPx: 20, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left', 'right'] }, center: { anchor: 'top', offsetPt: 4, horizontal: ['left', 'right'] } },
-      22.5: { excelPx: 22, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 5, horizontal: ['left', 'right'] } },
-      25: { excelPx: 25, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 7, horizontal: ['left', 'right'] } },
-      30: { excelPx: 30, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 9, horizontal: ['left', 'right'] } },
+      22.5: { excelPx: 22, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left', 'right'] }, center: { anchor: 'top', offsetPt: 5, horizontal: ['left', 'right'] } },
+      25: { excelPx: 25, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left', 'right'] }, center: { anchor: 'top', offsetPt: 7, horizontal: ['left', 'right'] } },
+      30: { excelPx: 30, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left', 'right'] }, center: { anchor: 'top', offsetPt: 9, horizontal: ['left', 'right'] } },
     })
   })
 
@@ -277,9 +277,10 @@ describe('Task 28 round 3: the frame at the measured row heights (stage4-icon-ro
       expect(r.excelPx).toBe(rowPt)
       for (const h of r.bottom!.horizontal) expect(at(rowPt, 'bottom', h)?.box, `bottom ${h}`).toEqual({ x: 2, y: rowPt - 1 - 12, w: 13, h: 12 })
       for (const h of r.center!.horizontal) expect(at(rowPt, 'center', h)?.box, `center ${h}`).toEqual({ x: 2, y: r.center!.offsetPt, w: 13, h: 12 })
+      expect(r.bottom!.horizontal, 'round 5: stage4-icon-rows-bottom measured right-aligned numbers too').toEqual(['left', 'right'])
       // An alignment the capture did not measure at this height withholds.
       expect(at(rowPt, 'center', 'center'), 'center text').toBeUndefined()
-      expect(at(rowPt, 'bottom', 'right'), 'bottom right').toBeUndefined()
+      expect(at(rowPt, 'bottom', 'center'), 'bottom center text').toBeUndefined()
       // A host whose row is not known to be this height withholds: no row pt, or another pt with the same px.
       expect(at(rowPt, 'center', 'right', rowPt * 4 / 3, null), 'no row pt').toBeUndefined()
       expect(at(rowPt, 'center', 'right', rowPt * 4 / 3, rowPt - 0.2), 'another pt, same px').toBeUndefined()

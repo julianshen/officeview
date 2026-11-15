@@ -105,9 +105,13 @@ export const CF_ICON_RENDER_MODEL: CfIconRenderModel = Object.freeze({
     // the frame top (key D2, D5, D8: ink top 7 = frame top), so each frame top below is the measured ink top.
     // - bottom: column E (bottom-aligned, left-aligned numbers; 3Arrows:2): ink top 2, 3, 5, 7, 9, 12, 17 in rows of
     //   15, 16, 18, 20, 22, 25, 30 px (E2, E4..E9; Excel draws 16.5 and 22.5 pt rows 16 and 22 px tall), so the frame
-    //   bottom (top + 12) is 1 px above the next gridline in every row. Right-aligned bottom cells were measured only
-    //   at 20 pt (the glyph key; geometry-2 I5/J5 for left), so other rows admit left-aligned text only. (Excel's
-    //   resave turned the case's bottom-aligned B..D into the Normal style, `vertical="center"`.)
+    //   bottom (top + 12) is 1 px above the next gridline in every row. (Excel's resave turned that case's
+    //   bottom-aligned B..D into the Normal style, `vertical="center"`.) Round 5 (S4-BOTTOM-REPLICATE):
+    //   `refs/stage4-icon-rows-bottom.json` (a6439519; explicit `horizontal="right"`/`"left"` xfs, which survived the
+    //   resave) replicates it on all five columns, right-aligned numbers B (3Arrows:2), C (3TrafficLights1:2),
+    //   D (3Symbols:2) and left-aligned E (3Arrows:2), F (3TrafficLights1:2): ink top 2, 3, 5, 7, 9, 12, 17 in the same
+    //   rows (B2, B4..B9 etc.), the frame bottom 1 px above the next gridline (the circles ink 11 rows: gap 2), and
+    //   `icon:geometry-row-offset` matched `anchor-constant` with every column refuting `centred` (spread 7..7.5 px).
     // - center: B..D, F..H (right-aligned numbers) and I (left-aligned numbers), all centred in the resaved file: ink
     //   top 2, 2, 3, 4, 5, 7, 9 px below the top gridline in the same rows (rows 2, 4..9; every column agrees).
     // - 12.75 pt (12 px) is not admitted: its inner box cannot hold the 12 px frame (the icon shrinks, B3..I3 ink 1..10).
@@ -117,14 +121,13 @@ export const CF_ICON_RENDER_MODEL: CfIconRenderModel = Object.freeze({
     //   capture scale in every view, and the static and resident views round rows to whole px while the paged ones do
     //   not, so only whole-px rows (excelPx × 4/3 whole: 15, 18, 30 pt) can agree (`framePlacement`).
     rows: Object.freeze<CfIconKeyFrame['rows']>({
-      15: { excelPx: 15, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 2, horizontal: ['left', 'right'] } },
-      16.5: { excelPx: 16, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 2, horizontal: ['left', 'right'] } },
-      18: { excelPx: 18, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 3, horizontal: ['left', 'right'] } },
-      // 20 pt bottom also: the glyph key (right-aligned numbers, frame bottom 19 of 20) and geometry-2 I5/J5 (left).
+      15: { excelPx: 15, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left', 'right'] }, center: { anchor: 'top', offsetPt: 2, horizontal: ['left', 'right'] } },
+      16.5: { excelPx: 16, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left', 'right'] }, center: { anchor: 'top', offsetPt: 2, horizontal: ['left', 'right'] } },
+      18: { excelPx: 18, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left', 'right'] }, center: { anchor: 'top', offsetPt: 3, horizontal: ['left', 'right'] } },
       20: { excelPx: 20, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left', 'right'] }, center: { anchor: 'top', offsetPt: 4, horizontal: ['left', 'right'] } },
-      22.5: { excelPx: 22, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 5, horizontal: ['left', 'right'] } },
-      25: { excelPx: 25, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 7, horizontal: ['left', 'right'] } },
-      30: { excelPx: 30, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left'] }, center: { anchor: 'top', offsetPt: 9, horizontal: ['left', 'right'] } },
+      22.5: { excelPx: 22, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left', 'right'] }, center: { anchor: 'top', offsetPt: 5, horizontal: ['left', 'right'] } },
+      25: { excelPx: 25, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left', 'right'] }, center: { anchor: 'top', offsetPt: 7, horizontal: ['left', 'right'] } },
+      30: { excelPx: 30, bottom: { anchor: 'bottom', offsetPt: 1, horizontal: ['left', 'right'] }, center: { anchor: 'top', offsetPt: 9, horizontal: ['left', 'right'] } },
     }),
   }),
 })
@@ -146,6 +149,9 @@ export const CF_ICON_PAINT_CAPABILITIES: readonly string[] = Object.freeze(['ico
 export const CF_ICON_PAINT_READINGS: Readonly<Record<string, string>> = Object.freeze({
   'icon:geometry-box': 'font',
   'icon:geometry-vertical-align': 'cell-align',
+  // Task 28 round 5: the frame keeps a constant gap to its alignment's anchor across row heights
+  // (`refs/stage4-icon-rows-bottom.json`, all five columns).
+  'icon:geometry-row-offset': 'anchor-constant',
   'icon:geometry-narrow-clip': 'clip',
   // A row shorter than the box is never clipped. Excel shrinks the box, by a law the captures do not determine (L5 and
   // stage4-icon-geometry D2 shrink, C2 does not), so such a box withholds until that law is measured.
