@@ -383,6 +383,22 @@ function rightTextClearsAtEveryScale(host: CfBarHost, frame: CfIconKeyFrame): bo
 }
 
 /**
+ * Ruling S4-DPR-FLOOR (Task 30): at a device scale below the smallest one `rightTextClearsAtEveryScale` covers
+ * (SHEET_MIN_ZOOM × DPR 1; a browser zoomed out past 100 % at sheet zoom 25 %), the paint rechecks the laid-out box
+ * against the text's first device column at the actual scale and withholds an icon that would intrude. Only the paint
+ * changes: the description stays the one decided at admission (a known limit).
+ */
+export function iconClearsRightTextAt(host: CfBarHost, box: CfIconRect, scale: CfBarScale): boolean {
+  if (iconTextOf(host.cell)?.horizontal !== 'right') return true
+  const s = (scale.zoom > 0 && Number.isFinite(scale.zoom) ? scale.zoom : 1) * (scale.dpr > 0 && Number.isFinite(scale.dpr) ? scale.dpr : 1)
+  const width = host.textWidth
+  if (width === undefined || !Number.isFinite(width)) return false
+  const textCol = Math.floor((host.x + host.width - CF_ICON_TEXT_PADDING_PX / 2 - width) * s + 1e-9)
+  const edge = scale.output === 'device' ? box.x + box.w : Math.round((box.x + box.w) * s)
+  return edge <= textCol
+}
+
+/**
  * `icon:noicons-inset` reads `inset` (S4-PROD-ALIGN, a ledgered deviation from the spec §6 wording "not NoIcons"): a
  * NoIcons cell's text is inset as if an icon were present, by the same alignment inset and under the same fit rule.
  * It needs no box or glyph, so it is decided on the host alone. Undefined: no inset (unmeasured, or the capability).
@@ -511,6 +527,8 @@ export function paintIconCells(
     const glyph = iconGlyph(icon.set as Exclude<CfIconDescriptor['set'], 'NoIcons'>, icon.iconId)
     const cache = glyph && gate.admitted.cacheFor(glyph)
     if (!laid || !glyph || !cache) return
+    // S4-DPR-FLOOR: below the covered device scale, recheck the clearance where it is drawn.
+    if (scale.zoom * scale.dpr < SHEET_MIN_ZOOM - 1e-9 && !iconClearsRightTextAt(host, laid.box, scale)) return
     const transform = scale.output === 'device' ? ctx.getTransform() : undefined
     ctx.save()
     try {

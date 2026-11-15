@@ -23,7 +23,7 @@ import { SHEET_ZOOM_STEPS } from '../src/xlsx/view/sheetZoom'
 import { cfRulesVersion, prepareCfRemote } from '../src/xlsx/view/pagedSource'
 import { createCfMemory, createCfWorkBudget } from '../src/xlsx/cf/limits'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
-import { CF_ICON_PAINT_CAPABILITIES, CF_ICON_RENDER_MODEL, CF_ICON_SCALES, CF_ICON_TEXT_PADDING_PX, iconWithheld, layoutIcon } from '../src/xlsx/cf/iconPaint'
+import { CF_ICON_PAINT_CAPABILITIES, CF_ICON_RENDER_MODEL, CF_ICON_SCALES, iconClearsRightTextAt, CF_ICON_TEXT_PADDING_PX, iconWithheld, layoutIcon } from '../src/xlsx/cf/iconPaint'
 import { admitIconGlyphs, cfIconGlyphHeader, iconGlyph, injectCfIconGlyphs, type CfGlyphOp } from '../src/xlsx/cf/iconGlyphs'
 import { getPaintables } from '../src/render/paint'
 import type { CfIconDescriptor, CfStamp } from '../src/xlsx/cf/model'
@@ -747,6 +747,32 @@ describe('S4-RIGHTINSET-ZERO: right-aligned numbers at the key geometry', () => 
       expect(iconWithheld(desc, host(77), c => caps.has(c), CF_ICON_RENDER_MODEL)).toBe(true)
       expect(iconWithheld(desc, host(67), c => caps.has(c), CF_ICON_RENDER_MODEL)).toBe(false)
     } finally { injectCfIconGlyphs(null) }
+  })
+
+  it('Task 30 (S4-DPR-FLOOR): below device scale 0.25 the paint rechecks the snapped clearance and withholds an intruding icon', () => {
+    // A right-aligned number whose text starts at x = 30 (logical) in a 100 px host: at device scale s its first column
+    // is floor(30 s). A frame whose snapped right edge passes it intrudes; at or after it, it clears.
+    const host = { x: 0, y: 0, width: 100, height: 20, textWidth: 67, rowPt: 15, cell: { value: 1234, style: { ...KEY_STYLE, vertical: 'center' as const } } }
+    const at = (zoom: number, dpr: number, right: number) => iconClearsRightTextAt(host, { x: 0, y: 0, w: right, h: 2 }, { zoom, dpr, output: 'device' })
+    expect(at(0.25, 0.5, 3)).toBe(true) // floor(30 x 0.125) = 3: the frame ends at the text's first column
+    expect(at(0.25, 0.5, 4)).toBe(false)
+    // Logical output: the box is in logical px, snapped to the device grid (edge 4 device px at s = 0.125 is 32 px).
+    expect(iconClearsRightTextAt(host, { x: 0, y: 0, w: 32, h: 2 }, { zoom: 0.25, dpr: 0.5 })).toBe(false)
+    expect(iconClearsRightTextAt(host, { x: 0, y: 0, w: 24, h: 2 }, { zoom: 0.25, dpr: 0.5 })).toBe(true)
+    // Left-aligned and centred text are not rechecked (their inset is laid out beside the frame).
+    expect(iconClearsRightTextAt({ ...host, cell: { value: 'a', style: { ...KEY_STYLE, horizontal: 'left' as const, vertical: 'center' as const } } }, { x: 0, y: 0, w: 99, h: 2 }, { zoom: 0.25, dpr: 0.5, output: 'device' })).toBe(true)
+    // The production frame at the tightest admitted clearance (10 px) clears at every scale from 0.05 to 4 (sweep).
+    const desc: CfIconDescriptor = { ruleId: 1, set: '3Arrows', iconId: 2, bucket: 2, buckets: 3, showValue: true }
+    const caps = new Set([...ICON_PAINT_EVIDENCE, 'icon:geometry-row-offset'])
+    let swept = 0
+    for (let x = 0; x < 8; x += 0.125) for (let s = 0.05; s <= 4; s += 0.01) {
+      const h = { ...host, x }
+      const laid = layoutIcon(desc, h, { sizePt: 11, vertical: 'center', horizontal: 'right' }, { zoom: s, dpr: 1, output: 'device' }, CF_ICON_RENDER_MODEL, c => caps.has(c))
+      if (!laid) continue
+      expect(iconClearsRightTextAt(h, laid.box, { zoom: s, dpr: 1, output: 'device' }), `x ${x} s ${s}`).toBe(true)
+      swept++
+    }
+    expect(swept).toBeGreaterThan(10000)
   })
 
   it('round 8 (S4-CLEAR-ALLZOOM): right-aligned clearance holds at every supported zoom (steps and continuous) and DPR', () => {
