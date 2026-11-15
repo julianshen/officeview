@@ -138,5 +138,57 @@
       "textShiftPx": -164
     }
   ],
-  "iconHypotheses": {}
+  "iconHypotheses": {},
+  "iconGeometryHypotheses": {
+    "icon:showvalue-canvas-suppression": {
+      "B2": {
+        "text-hidden": {
+          "verdict": "pass"
+        },
+        "text-shown": {
+          "verdict": "fail"
+        }
+      },
+      "B3": {
+        "text-hidden": {
+          "verdict": "pass"
+        },
+        "text-shown": {
+          "verdict": "fail"
+        }
+      },
+      "B4": {
+        "text-hidden": {
+          "verdict": "pass"
+        },
+        "text-shown": {
+          "verdict": "fail"
+        }
+      },
+      "C2": {
+        "text-hidden": {
+          "verdict": "excluded"
+        },
+        "text-shown": {
+          "verdict": "excluded"
+        }
+      },
+      "C3": {
+        "text-hidden": {
+          "verdict": "excluded"
+        },
+        "text-shown": {
+          "verdict": "excluded"
+        }
+      },
+      "C4": {
+        "text-hidden": {
+          "verdict": "excluded"
+        },
+        "text-shown": {
+          "verdict": "excluded"
+        }
+      }
+    }
+  }
 }

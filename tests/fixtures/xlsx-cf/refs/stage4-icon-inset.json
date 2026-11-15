@@ -292,5 +292,187 @@
       "icon": null
     }
   ],
-  "iconHypotheses": {}
+  "iconHypotheses": {},
+  "iconGeometryHypotheses": {
+    "icon:inset-left": {
+      "B2": {
+        "inset": {
+          "group": "shift",
+          "value": 12
+        },
+        "none": {
+          "verdict": "fail"
+        }
+      },
+      "B3": {
+        "inset": {
+          "group": "shift",
+          "value": 12
+        },
+        "none": {
+          "verdict": "fail"
+        }
+      },
+      "B4": {
+        "inset": {
+          "group": "shift",
+          "value": 12
+        },
+        "none": {
+          "verdict": "fail"
+        }
+      }
+    },
+    "icon:inset-right-aligned": {
+      "C2": {
+        "unshifted": {
+          "verdict": "pass"
+        },
+        "shifted-left": {
+          "verdict": "fail"
+        },
+        "shifted-right": {
+          "verdict": "fail"
+        }
+      },
+      "C3": {
+        "unshifted": {
+          "verdict": "pass"
+        },
+        "shifted-left": {
+          "verdict": "fail"
+        },
+        "shifted-right": {
+          "verdict": "fail"
+        }
+      },
+      "C4": {
+        "unshifted": {
+          "verdict": "pass"
+        },
+        "shifted-left": {
+          "verdict": "fail"
+        },
+        "shifted-right": {
+          "verdict": "fail"
+        }
+      }
+    },
+    "icon:inset-center": {
+      "D2": {
+        "full-cell": {
+          "verdict": "pass"
+        },
+        "inset-box": {
+          "verdict": "fail"
+        }
+      },
+      "D3": {
+        "full-cell": {
+          "verdict": "pass"
+        },
+        "inset-box": {
+          "verdict": "fail"
+        }
+      },
+      "D4": {
+        "full-cell": {
+          "verdict": "pass"
+        },
+        "inset-box": {
+          "verdict": "fail"
+        }
+      }
+    },
+    "icon:inset-overflow": {
+      "E2": {
+        "icon-withheld": {
+          "verdict": "fail"
+        },
+        "icon-only": {
+          "verdict": "fail"
+        },
+        "icon-and-text": {
+          "verdict": "pass"
+        }
+      },
+      "E3": {
+        "icon-withheld": {
+          "verdict": "fail"
+        },
+        "icon-only": {
+          "verdict": "fail"
+        },
+        "icon-and-text": {
+          "verdict": "pass"
+        }
+      },
+      "E4": {
+        "icon-withheld": {
+          "verdict": "fail"
+        },
+        "icon-only": {
+          "verdict": "fail"
+        },
+        "icon-and-text": {
+          "verdict": "pass"
+        }
+      }
+    },
+    "icon:noicons-inset": {
+      "F2": {
+        "no-inset": {
+          "verdict": "fail"
+        },
+        "inset": {
+          "group": "shift",
+          "value": 12
+        }
+      },
+      "F3": {
+        "no-inset": {
+          "verdict": "fail"
+        },
+        "inset": {
+          "group": "shift",
+          "value": 12
+        }
+      },
+      "F4": {
+        "no-inset": {
+          "verdict": "fail"
+        },
+        "inset": {
+          "group": "shift",
+          "value": 12
+        }
+      }
+    },
+    "icon:noicons-showvalue": {
+      "G2": {
+        "text-shown": {
+          "verdict": "fail"
+        },
+        "text-hidden": {
+          "verdict": "pass"
+        }
+      },
+      "G3": {
+        "text-shown": {
+          "verdict": "fail"
+        },
+        "text-hidden": {
+          "verdict": "pass"
+        }
+      },
+      "G4": {
+        "text-shown": {
+          "verdict": "fail"
+        },
+        "text-hidden": {
+          "verdict": "pass"
+        }
+      }
+    }
+  }
 }
