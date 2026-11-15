@@ -5075,6 +5075,40 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
       ],
     },
   ),
+  // 8a. stage4-icon-geometry-2 (fix round 8): the paint gates on a rectangular glyph, and the bar/icon showValue conflict
+  s4rect(
+    'stage4-icon-geometry-2',
+    'Fix round 8 (S4-K, S4-I): the paint gates on a rectangular glyph so every edge is stable. An x14 5Boxes rule under num 0/5/8/12/15 puts every value 10 in bucket 2 (5Boxes:2, two filled boxes). Box size: fonts 8/11/20 pt bottom-aligned (B..D) x rows 30/60 pt (rows 2, 3), so fixed, font-scaled and row-scaled boxes differ by >= 3 px. Vertical placement: top (E), centred (F) and bottom (G) cells at 11 pt over the same two rows, so top, centre, bottom and cell-align differ by >= 3 px. Bar/icon showValue conflict on left-aligned text with short right-to-left bars (only the 10 and 15 rows are designated): bar(showValue 0) ahead of icon(1) (H), bar(1) ahead of icon(0) (I), icon(1) ahead of bar(0) (J), which separates any-hides, priority-wins, bar-wins and icon-wins.',
+    {
+      n: 3,
+      rowHeights: { 2: 30, 3: 60 },
+      colStyles: {
+        B: { numFmt: 'hidden', fontPt: 8, vertical: 'bottom' },
+        C: { numFmt: 'hidden', fontPt: 11, vertical: 'bottom' },
+        D: { numFmt: 'hidden', fontPt: 20, vertical: 'bottom' },
+        E: { numFmt: 'hidden', vertical: 'top' },
+        F: { numFmt: 'hidden', vertical: 'center' },
+        G: { numFmt: 'hidden', vertical: 'bottom' },
+        H: { horizontal: 'left' },
+        I: { horizontal: 'left' },
+        J: { horizontal: 'left' },
+      },
+      cols: [
+        ...['B', 'C', 'D', 'E', 'F', 'G'].map(c => s4col(c, `Rect${c}`, [10, 10, null])),
+        ...['H', 'I', 'J'].map(c => s4col(c, `ShowValue${c}`, [10, 15, 100], 30)),
+      ],
+      rules: [
+        icon('icon:geometry-box', 'B2:D3', 1, '5Boxes', nums(0, 5, 8, 12, 15), { dialect: 'x14' }),
+        icon('icon:geometry-vertical-align', 'E2:G3', 2, '5Boxes', nums(0, 5, 8, 12, 15), { dialect: 'x14' }),
+        bar('icon:composition-bar-showvalue', 'H2:H4', 3, { baseAttrs: { showValue: '0' }, x14Attrs: { ...SOLID_0_100, direction: 'rightToLeft' }, colors: { fill: BLUE }, cells: ['H2', 'H3'] }),
+        icon('icon:composition-bar-showvalue', 'H2:H4', 4, '3Arrows', nums(0, 5, 8), { attrs: { showValue: '1' }, cells: ['H2', 'H3'] }),
+        bar('icon:composition-bar-showvalue', 'I2:I4', 5, { x14Attrs: { ...SOLID_0_100, direction: 'rightToLeft' }, colors: { fill: BLUE }, cells: ['I2', 'I3'] }),
+        icon('icon:composition-bar-showvalue', 'I2:I4', 6, '3Arrows', nums(0, 5, 8), { attrs: { showValue: '0' }, cells: ['I2', 'I3'] }),
+        icon('icon:composition-bar-showvalue', 'J2:J4', 7, '3Arrows', nums(0, 5, 8), { attrs: { showValue: '1' }, cells: ['J2', 'J3'] }),
+        bar('icon:composition-bar-showvalue', 'J2:J4', 8, { baseAttrs: { showValue: '0' }, x14Attrs: { ...SOLID_0_100, direction: 'rightToLeft' }, colors: { fill: BLUE }, cells: ['J2', 'J3'] }),
+      ],
+    },
+  ),
   // 8. stage4-icon-geometry
   s4rect(
     'stage4-icon-geometry',

@@ -4873,7 +4873,11 @@ function readIconCellFacts(parts: Map<string, Uint8Array>, c: CfOracleCase): (re
     const vertical = v === 'top' || v === 'center' || v === 'bottom' ? v : undefined
     if (!horizontal || !vertical || !Number.isFinite(fontPt)) return undefined
     const showValue = !c.markers.some(m => m.ruleType === 'iconSet' && isCellInSqref(ref, m.sqref) && ['0', 'false'].includes(String(m.icon?.attrs?.showValue ?? '1')))
-    return { fontPt, vertical, horizontal, showValue }
+    const barM = c.markers.find(m => m.ruleType === 'dataBar' && m.priority !== undefined && isCellInSqref(ref, m.sqref))
+    const iconM = c.markers.find(m => m.ruleType === 'iconSet' && m.priority !== undefined && isCellInSqref(ref, m.sqref))
+    const off = (v: unknown): boolean => ['0', 'false'].includes(String(v ?? '1'))
+    const conflict = barM && iconM ? { barShow: !off(barM.bar?.attrs?.showValue), iconShow: !off(iconM.icon?.attrs?.showValue), barFirst: barM.priority! < iconM.priority! } : undefined
+    return { fontPt, vertical, horizontal, showValue, ...(conflict ? { conflict } : {}) }
   }
 }
 
@@ -4944,7 +4948,11 @@ export type IconGeometryPrediction = { group: string; value: number } | { verdic
 /** One measured cell with the workbook facts the geometry readings need (fonts, alignment, showValue; 1 px per pt). */
 export interface IconGeometryCell {
   ref: string
-  facts: { fontPt: number; vertical: 'top' | 'center' | 'bottom'; horizontal: 'left' | 'right' | 'center'; rowPt: number; showValue: boolean }
+  facts: {
+    fontPt: number; vertical: 'top' | 'center' | 'bottom'; horizontal: 'left' | 'right' | 'center'; rowPt: number; showValue: boolean
+    /** Fix round 8: a bar and an icon rule both cover the cell: their showValue and which one has the higher priority. */
+    conflict?: { barShow: boolean; iconShow: boolean; barFirst: boolean }
+  }
   observed: CfObservedIcon
 }
 
@@ -4969,6 +4977,8 @@ export const ICON_GEOMETRY_READINGS: Readonly<Record<string, readonly string[]>>
   'icon:noicons-inset': ['no-inset', 'inset'],
   'icon:noicons-showvalue': ['text-shown', 'text-hidden'],
   'icon:showvalue-canvas-suppression': ['text-hidden', 'text-shown'],
+  // Fix round 8: production hides the value when either the bar or the icon hides it (each suppresses on its own).
+  'icon:composition-bar-showvalue': ['any-hides', 'priority-wins', 'bar-wins', 'icon-wins'],
 }
 
 const r3 = (v: number): number => Math.round(v * 1000) / 1000
@@ -5061,6 +5071,15 @@ export function evaluateIconGeometryCapability(cap: string, designated: readonly
         const wide = w >= ref + 3 || shift !== undefined
         if (reading === 'icon-and-text') return V(wide ? 'pass' : Math.abs(w - ref) <= 1 ? 'fail' : 'unknown')
         return V(!wide && Math.abs(w - ref) <= 1 ? 'pass' : wide ? 'fail' : 'unknown')
+      }
+      case 'icon:composition-bar-showvalue': {
+        const k = c.facts.conflict
+        if (!k) return V('excluded')
+        const hide = reading === 'any-hides' ? !(k.barShow && k.iconShow) : reading === 'bar-wins' ? !k.barShow : reading === 'icon-wins' ? !k.iconShow : !(k.barFirst ? k.barShow : k.iconShow)
+        // Left-aligned text sits after the icon's inset when shown; hidden text leaves at most the icon (shift <= 1) or nothing.
+        const shown = shift !== undefined && shift >= 3
+        const gone = shift === undefined || shift <= 1
+        return V(hide ? (gone ? 'pass' : shown ? 'fail' : 'unknown') : shown ? 'pass' : gone ? 'fail' : 'unknown')
       }
       case 'icon:noicons-showvalue':
       case 'icon:showvalue-canvas-suppression': {

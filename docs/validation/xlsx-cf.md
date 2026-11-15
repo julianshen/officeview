@@ -1315,7 +1315,8 @@ Task 24 prepares the Stage 4 oracle. The first Excel capture run (c63de53a) and 
 | `stage4-icon-thresholds` | `icon:thresholds-num`, `-percent`, `-percentile-inc-exc`, `-gte-true`, `-gte-false`, `-mixed` | S4-D | recipe-pending |
 | `stage4-icon-degenerate` | `icon:thresholds-floor`, `-min-max`, `icon:degenerate-equal-values`, `-single-cell`, `-non-monotonic`, `icon:bounds-out-of-domain` (`icon:attr-percent-false` moved to unresolved-shapes in fix round 3) | S4-C, S4-D, S4-F | recipe-pending |
 | `stage4-icon-reverse-custom` | `icon:reverse`, `icon:custom-mapping`, `icon:custom-noicons` (`icon:reverse-custom` moved to unresolved-shapes in fix round 3) | S4-E, S4-B | recipe-pending |
-| `stage4-icon-geometry` | `icon:geometry-box`, `-vertical-align`, `-snapping`, `-narrow-clip`, `-short-row-clip` | S4-K | recipe-pending |
+| `stage4-icon-geometry-2` | `icon:geometry-box`, `-vertical-align` (owned here since fix round 8), `icon:composition-bar-showvalue` | S4-K, S4-I | recipe-pending (fix round 8) |
+| `stage4-icon-geometry` | `-snapping`, `-narrow-clip`, `-short-row-clip` (plus the original box and placement cells, recorded only) | S4-K | recipe-pending |
 | `stage4-icon-inset` | `icon:inset-left`, `-right-aligned`, `-center`, `-overflow`, `icon:noicons-inset`, `icon:noicons-showvalue` | S4-L | recipe-pending |
 | `stage4-icon-showvalue` | `icon:showvalue-canvas-suppression`, `icon:showvalue-copy-text` (record only) | S4-L, S4-N | recipe-pending |
 | `stage4-icon-participation` | `icon:participation-types`, `-dateserial`, `-error-presence` | S4-G | recipe-pending |
@@ -1475,3 +1476,31 @@ This is a label only. Bucket evidence comes from the set-consistency recomputati
 | `icon:showvalue-canvas-suppression` | discriminating | `text-hidden` (B only; C excluded) | yes |
 
 A verified capability records the reading Excel showed (`matched`). Where that reading is not production's, publishing the capability as-is would enable production behaviour that Excel contradicts. Task 30 must publish only a capability whose matched reading equals production's, or production must change first (an owner decision). Production was not changed in this round.
+
+### Fix round 8: `stage4-icon-geometry-2`, the paint gates and the bar/icon showValue conflict
+
+After verify-only (38d3d872), production paints icons only behind `CF_ICON_PAINT_CAPABILITIES`: `icon:geometry-box`, `icon:geometry-vertical-align` and `icon:geometry-snapping`. All three were non-discriminating on the stored captures.
+
+**Why the old case could not decide.**
+- The arrow glyph at 8 pt and 20 pt is not rectangular, so its three scanlines disagree and the S4-A rule makes those cells no evidence.
+- A glyph-key reference cannot help. A key crop matches only at the key's own font (11 pt), row height (20 pt) and bottom alignment, which are exactly what these questions vary.
+- So the new case uses a rectangular glyph instead. A read-only check of the stored key capture with no reference shows `5Boxes:2` (two filled boxes, 10×5 at 11 pt) and `5Boxes:4` measure stably on their own.
+
+**`stage4-icon-geometry-2`** is placed ahead of `stage4-icon-geometry`, so it owns `icon:geometry-box` and `icon:geometry-vertical-align`. The old case's capture and its other evidence stay intact; it is not regenerated.
+- **Box size.** An x14 `5Boxes` rule under num 0/5/8/12/15, with every value 10, so every icon is `5Boxes:2`. Fonts 8/11/20 pt (B..D, bottom-aligned) over rows of 30 and 60 pt. The fixed, font-scaled and row-scaled readings differ by ≥ 3 px.
+- **Vertical placement.** Top (E), centred (F) and bottom (G) cells at 11 pt over the same rows. The top, centre, bottom and cell-align readings differ by ≥ 3 px.
+- **`icon:composition-bar-showvalue`** gets readings. Production's reading is `any-hides`: either suppressor hides the value on its own (`iconPaint.ts:207`, `dataBarPaint.ts:114`). The alternatives are `priority-wins`, `bar-wins` and `icon-wins`.
+  - The test cells hold left-aligned text with short right-to-left bars; only the 10 and 15 rows are designated.
+  - **H:** bar(showValue 0) ahead of icon(1). **I:** bar(1) ahead of icon(0). **J:** icon(1) ahead of bar(0).
+  - Hidden/shown patterns across H, I, J: `any-hides` HHH, `priority-wins` HSS, `bar-wins` HSH, `icon-wins` SHS.
+  - The existing composition column E (bar 0 ahead of icon 1) alone cannot separate `any-hides`, `priority-wins` and `bar-wins`.
+- **Proof.** Synthetic captures drawn as each reading predicts, run through `measureCaseIcons` and `evaluateIconCapabilities` on the new case's own workbook, give exactly that reading for every reading of all three capabilities.
+
+**Snapping is not designable to ≥ 3 px separation.** Excel lays out whole-pt column widths at 1 px/pt (6cb13bdf sidecars), so no cell edge is fractional.
+- The only fractional quantity left is the centring residual (H − side)/2. Its rounding moves the icon by 1 px, and only when the box side's parity is known. The box side is not measurable: ink is not the box.
+- Stage 3 verified `bar:geometry-snapping` from a solid bar's fractional length, compared exactly. An icon glyph has no such edge.
+- This needs an owner decision, either:
+  - `icon:geometry-snapping` is evidenced by the verified `bar:geometry-snapping`, because production lays icons out on the same `roundHalfUp` device grid as bars (`layoutIcon`, `dataBarPaint`); or
+  - S4-PROD-ALIGN drops snapping from `CF_ICON_PAINT_CAPABILITIES`.
+
+**Build and capture:** `stage4-icon-geometry-2` (build, then capture). Then run `capture --stage 4 --verify-only`. No other case changes.

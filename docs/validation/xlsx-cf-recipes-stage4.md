@@ -83,7 +83,7 @@ Record the failure in `docs/validation/xlsx-cf.md` §12 and stop. Never retouch 
 
 Run each case's build and capture, closing owned workbooks in between (the harness does it):
 ```
-for id in dialect families thresholds degenerate reverse-custom geometry inset showvalue participation scope composition rtl; do
+for id in dialect families thresholds degenerate reverse-custom geometry-2 geometry inset showvalue participation scope composition rtl; do
   bun scripts/cf-refs/build.ts --stage 4 --case stage4-icon-$id --refresh-clock-date
   bun scripts/cf-refs/capture.ts --stage 4 --case stage4-icon-$id
 done

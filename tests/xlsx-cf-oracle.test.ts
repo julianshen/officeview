@@ -4131,12 +4131,14 @@ describe('Stage 4 icon oracle (Task 24)', () => {
       'stage4-icon-thresholds': ['icon:thresholds-gte-false', 'icon:thresholds-gte-true', 'icon:thresholds-mixed', 'icon:thresholds-num', 'icon:thresholds-percent', 'icon:thresholds-percentile-inc-exc'],
       'stage4-icon-degenerate': ['icon:bounds-out-of-domain', 'icon:degenerate-equal-values', 'icon:degenerate-non-monotonic', 'icon:degenerate-single-cell', 'icon:thresholds-floor', 'icon:thresholds-min-max'],
       'stage4-icon-reverse-custom': ['icon:custom-mapping', 'icon:custom-noicons', 'icon:reverse'],
-      'stage4-icon-geometry': ['icon:geometry-box', 'icon:geometry-narrow-clip', 'icon:geometry-short-row-clip', 'icon:geometry-snapping', 'icon:geometry-vertical-align'],
+      // Fix round 8: stage4-icon-geometry-2 owns the box and placement gates and the bar/icon showValue conflict.
+      'stage4-icon-geometry-2': ['icon:composition-bar-showvalue', 'icon:geometry-box', 'icon:geometry-vertical-align'],
+      'stage4-icon-geometry': ['icon:geometry-narrow-clip', 'icon:geometry-short-row-clip', 'icon:geometry-snapping'],
       'stage4-icon-inset': ['icon:inset-center', 'icon:inset-left', 'icon:inset-overflow', 'icon:inset-right-aligned', 'icon:noicons-inset', 'icon:noicons-showvalue'],
       'stage4-icon-showvalue': ['icon:showvalue-canvas-suppression', 'icon:showvalue-copy-text'],
       'stage4-icon-participation': ['icon:participation-dateserial', 'icon:participation-error-presence', 'icon:participation-types'],
       'stage4-icon-scope': ['icon:scope-autofilter-hidden-row', 'icon:scope-disjoint', 'icon:scope-duplicate-blocks', 'icon:scope-hidden-row', 'icon:scope-merged-cell'],
-      'stage4-icon-composition': ['icon:composition-bar-showvalue', 'icon:composition-dxf-fill', 'icon:composition-matching-stopIfTrue-ahead', 'icon:composition-noicons-slot', 'icon:composition-overlapping-icons', 'icon:composition-unresolved-stub', 'icon:composition-with-bar', 'icon:composition-with-scale'],
+      'stage4-icon-composition': ['icon:composition-dxf-fill', 'icon:composition-matching-stopIfTrue-ahead', 'icon:composition-noicons-slot', 'icon:composition-overlapping-icons', 'icon:composition-unresolved-stub', 'icon:composition-with-bar', 'icon:composition-with-scale'],
       'stage4-icon-rtl': ['icon:placement-rtl-sheet'],
       'stage4-icon-unresolved-shapes': ['icon:unresolved-active-present', 'icon:unresolved-base-x14-set', 'icon:unresolved-cfvo-count', 'icon:unresolved-cfvo-no-type', 'icon:unresolved-custom-count', 'icon:unresolved-formula-cfvo', 'icon:unresolved-iconid-range', 'icon:unresolved-noicons-id', 'icon:unresolved-unknown-set', 'icon:unresolved-xmf-reference', 'icon:attr-percent-false', 'icon:reverse-custom', 'icon:composition-icon-stopIfTrue'],
     }
@@ -4454,7 +4456,7 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     // whatever the committed captures verify; publishing itself is Task 30 and is only rendered in memory here).
     const report = auditStage4Manifest(manifest, { rootDir: REPO_ROOT })
     expect(report.ok).toBe(true)
-    expect(report.summary.cases).toBe(16)
+    expect(report.summary.cases).toBe(17)
     expect(report.summary.capabilities).toBe(CF_STAGE4_CAPABILITIES.length)
     expect(report.perCapability.filter(p => p.disposition === 'unaccounted')).toEqual([])
     expect(report.stageComplete).toBe(report.blockedCapabilities.length === 0)
@@ -4767,6 +4769,86 @@ describe('Stage 4 icon oracle (Task 24)', () => {
       expect(isCapabilityVerified(cap, manifest, { rootDir: REPO_ROOT }), cap).toBe(false)
     }
   }, 120_000)
+
+  describe('fix round 8: stage4-icon-geometry-2 discriminates the paint gates and the bar/icon showValue conflict', () => {
+    const G2 = () => CF_STAGE4_CASES.find(x => x.id === 'stage4-icon-geometry-2')!
+    it('the new case owns geometry-box, vertical-align and composition-bar-showvalue, with a rectangular x14 glyph, ahead of stage4-icon-geometry', () => {
+      const c = G2()
+      expect(c).toBeDefined()
+      const ids = CF_STAGE4_CASES.map(x => x.id)
+      expect(ids.indexOf('stage4-icon-geometry-2')).toBe(ids.indexOf('stage4-icon-geometry') - 1)
+      for (const cap of ['icon:geometry-box', 'icon:geometry-vertical-align', 'icon:composition-bar-showvalue']) {
+        expect(CF_STAGE4_CAPABILITIES.find(e => e.capabilityId === cap)!.caseId, cap).toBe('stage4-icon-geometry-2')
+      }
+      // The box and placement cells draw 5Boxes:2 (two filled boxes: a rectangle whose three scanlines agree).
+      for (const m of c.markers.filter(x => x.capabilityId.startsWith('icon:geometry-'))) expect([m.icon?.set, m.icon?.dialect], m.sqref).toEqual(['5Boxes', 'x14'])
+    })
+
+    /** A synthetic Excel capture of the new case: rectangular glyphs per `box`, text patterns and short right-to-left bars. */
+    const capture = (o: { side: (fontPt: number, rowPt: number) => number; place: (cellV: 'top' | 'center' | 'bottom', rowPt: number, side: number) => number; hidden: (col: string) => boolean }) => {
+      const c = G2()
+      const parts = readZipPartsSync(new Uint8Array(readFileSync(resolve(REPO_ROOT, c.input))))!
+      const geom = computeWorksheetRangeGeometry(parts, c.range)!
+      const boxIn = (ref: string) => { const p = parseA1(ref)!; return { x0: Math.round(geom.colWidthsPt.slice(0, p.col - geom.minCol).reduce((a, b) => a + b, 0)), y0: Math.round(geom.rowHeightsPt.slice(0, p.row - geom.minRow).reduce((a, b) => a + b, 0)), w: Math.round(geom.colWidthsPt[p.col - geom.minCol]!), h: Math.round(geom.rowHeightsPt[p.row - geom.minRow]!) } }
+      const W = geom.expectedWidthPt, H = geom.expectedHeightPt
+      const canvas = createCanvas(W + 1, H + 1)
+      const ctx = canvas.getContext('2d')
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W + 1, H + 1)
+      const FONT: Record<string, number> = { B: 8, C: 11, D: 20 }
+      const VERT: Record<string, 'top' | 'center' | 'bottom'> = { E: 'top', F: 'center', G: 'bottom' }
+      for (const e of c.expected.cells.filter(x => x.matched)) {
+        const col = /^[A-Z]+/.exec(e.ref)![0]
+        const b = boxIn(e.ref)
+        if ('BCDEFG'.includes(col)) {
+          const side = o.side(FONT[col] ?? 11, b.h)
+          ctx.fillStyle = '#202080'
+          ctx.fillRect(b.x0 + 3, b.y0 + o.place(VERT[col] ?? 'bottom', b.h, side), side, side)
+        } else {
+          // H..J: icon at the left, text after its inset unless hidden, the control's text un-inset, a short bar at the right.
+          ctx.fillStyle = '#202080'; ctx.fillRect(b.x0 + 3, b.y0 + b.h - 13, 11, 11)
+          if (!o.hidden(col)) textAt(ctx, b.x0 + 4 + 12, b.y0 + b.h - 10)
+          const cb = boxIn(e.controlRef)
+          textAt(ctx, cb.x0 + 4, cb.y0 + cb.h - 10)
+          ctx.fillStyle = '#0000ff'; ctx.fillRect(b.x0 + b.w - 6, b.y0 + 2, 4, b.h - 3)
+        }
+      }
+      const decoded = decodePngSync(new Uint8Array(canvas.toBuffer('image/png')))!
+      const observed = measureCaseIcons(c, decoded, geom) as ReadonlyMap<string, CfObservedIcon>
+      return evaluateIconCapabilities(c, parts, observed, undefined)
+    }
+    const bottom = (_: string, rowPt: number, side: number) => rowPt - 2 - side
+
+    it('geometry-box discriminates fixed, font and row boxes on the new case', () => {
+      expect(capture({ side: () => 11, place: bottom, hidden: () => false })['icon:geometry-box']).toMatchObject({ status: 'discriminating', matched: 'fixed' })
+      expect(capture({ side: f => f, place: bottom, hidden: () => false })['icon:geometry-box']).toMatchObject({ status: 'discriminating', matched: 'font' })
+      expect(capture({ side: (_, r) => r - 6, place: bottom, hidden: () => false })['icon:geometry-box']).toMatchObject({ status: 'discriminating', matched: 'row' })
+    })
+
+    it('geometry-vertical-align discriminates top, centre, bottom and the cell alignment on the new case', () => {
+      const at = (v: 'top' | 'center' | 'bottom', rowPt: number, side: number) => (v === 'top' ? 1 : v === 'bottom' ? rowPt - 2 - side : Math.round((rowPt - side) / 2))
+      for (const [truth, place] of [
+        ['cell-align', (v: 'top' | 'center' | 'bottom', r: number, s: number) => at(v, r, s)],
+        ['top', (_: string, r: number, s: number) => at('top', r, s)],
+        ['center', (_: string, r: number, s: number) => at('center', r, s)],
+        ['bottom', (_: string, r: number, s: number) => at('bottom', r, s)],
+      ] as const) {
+        expect(capture({ side: () => 11, place: place as never, hidden: () => false })['icon:geometry-vertical-align'], truth).toMatchObject({ status: 'discriminating', matched: truth })
+      }
+    })
+
+    it('composition-bar-showvalue discriminates any-hides, priority-wins, bar-wins and icon-wins', () => {
+      // H: bar(showValue 0) ahead of icon(1); I: bar(1) ahead of icon(0); J: icon(1) ahead of bar(0).
+      const truths: Record<string, Record<string, boolean>> = {
+        'any-hides': { H: true, I: true, J: true },
+        'priority-wins': { H: true, I: false, J: false },
+        'bar-wins': { H: true, I: false, J: true },
+        'icon-wins': { H: false, I: true, J: false },
+      }
+      for (const [truth, hide] of Object.entries(truths)) {
+        expect(capture({ side: () => 11, place: bottom, hidden: col => hide[col]! })['icon:composition-bar-showvalue'], truth).toMatchObject({ status: 'discriminating', matched: truth })
+      }
+    })
+  })
 
   describe('fix round 7: icon geometry, inset and showValue hypotheses (S4-K/S4-L, S3-A style)', () => {
     type Facts = IconGeometryCell['facts']
