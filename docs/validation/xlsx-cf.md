@@ -1145,6 +1145,15 @@ time on this 14-core machine at a load average of about 3.5:
 | populated 100,000-row column, 1 bar (text-path maximum) | 1,000 | 8,001 | 31x | 35.6 / 3.4 | 2,334 |
 | populated 100,000-row column, 1 bar (paint-path maximum) | 256 | 2,049 | 122x | 33.0 / 0.9 | 2,242 |
 | populated 100,000-row column, 1 bar (not a production call size) | 5,000 | 40,001 | 6.2x | 48.2 / 16.5 | 2,427 |
+| populated 100,000-row column, 4 icon rules (text-path maximum; Task 26) | 1,000 | 27,007 | 9.3x | 36.7 / 5.7 | 4,725 |
+| populated 100,000-row column, 4 icon rules (paint-path maximum; Task 26) | 256 | 6,919 | 36x | 32.1 / 1.4 | 4,790 |
+
+Task 26 (Stage 4, 2026-11-15) adds the two icon rows (`npx tsx scripts/cf-refs/active-units.ts 3`): a percentile, a
+percent, a `num` and a custom `num` icon rule over the populated column. Under production evidence no icon capability
+is verified, so these calls take the unresolved path; with every gate open and the percentile reading injected (the
+full bucket path on every cell), `tests/xlsx-cf-active-units.test.ts` counts 23,007 units for 1,000 cells and 5,895
+for 256, and asserts both stay at or below `CF_LIMITS.activeUnits / 5` (50,000). The worst production call is still
+the 200-rule sparse scope at 48,579 units (5.1x).
 
 Every production call shape admits with at least 5.1x margin (the worst is the 200-rule sparse scope; the 4x floor
 would be 194,316 units). The warm rate, 2,242 to 6,894 units per ms, is the one to read: the cold populated rows spend

@@ -1983,3 +1983,146 @@ describe('CF statistics reuse by data bars (Task 20)', () => {
     refused.release(); again.release(); tightSession.dispose()
   }, 30_000)
 })
+
+describe('CF statistics reuse by icon sets (Task 26)', () => {
+  type IconDef = Extract<CfDefinition, { kind: 'iconSet' }>
+  const th = (type: 'num' | 'percent' | 'percentile', value: number) => ({ bound: { type, value }, gte: true })
+  const iconDef = (thresholds: IconDef['thresholds']): CfDefinition => ({
+    kind: 'iconSet', dialect: 'base', formulas: [], set: '3Arrows', thresholds, reverse: false, showValue: true, percentAttr: true, sheetRightToLeft: false,
+  })
+  const ruleOf = (id: number, definition: CfDefinition, ranges: readonly SourceRect[], writes: string[], dxf?: CfRule['dxf']): CfRule => ({
+    id, priority: id + 1, documentOrder: id, ranges, stopIfTrue: false, writes: new Set(writes), definition, ...(dxf ? { dxf } : {}),
+  })
+  const percentileIcon = (id: number, ranges: readonly SourceRect[]) => ruleOf(id, iconDef([th('percentile', 0), th('percentile', 33), th('percentile', 67)]), ranges, ['iconSet'])
+  const percentIcon = (id: number, ranges: readonly SourceRect[]) => ruleOf(id, iconDef([th('percent', 0), th('percent', 33), th('percent', 67)]), ranges, ['iconSet'])
+  const numIcon = (id: number, ranges: readonly SourceRect[]) => ruleOf(id, iconDef([th('num', 0), th('num', 20), th('num', 40)]), ranges, ['iconSet'])
+  // The counting sources below do not classify number formats, so date serials are lifted too (S4-G).
+  const EVAL = new Set(['icon:families-base', 'icon:thresholds-num', 'icon:thresholds-gte-true', 'icon:participation-types', 'icon:participation-dateserial', 'icon:scope-duplicate-blocks'])
+  const evidence = { allows: (cap: string) => EVAL.has(cap) }
+
+  function scanCounting(source: CfValueSource) {
+    const scanned = { cells: 0 }
+    const wrapped: CfValueSource = {
+      bounds: (id, b, s) => source.bounds(id, b, s),
+      stamp: id => source.stamp(id),
+      pages: async function* (id, rects, budget, signal) {
+        const evaluation = rects.length === 1 && rects[0]!.firstRow === 0 && rects[0]!.lastRow === 0
+        for await (const page of source.pages(id, rects, budget, signal)) {
+          if (!evaluation) scanned.cells += page.value.values.length
+          yield page
+        }
+      },
+    }
+    return { scanned, source: wrapped }
+  }
+  async function prepareWith(rules: CfRule[], source: CfValueSource, session: ReturnType<typeof createCfStatistics>, diagnostics?: CfDiagnostic[], statisticsBudget?: () => CfWorkBudget) {
+    const memory = createCfMemory({})
+    const results = new Map()
+    const service = createCfService({ rules, diagnostics: [] }, memory, {
+      evidence,
+      ...(statisticsBudget ? { statisticsBudget } : {}),
+      statistics: { session, stamp: stamp(1), results },
+      ...(diagnostics ? { statisticsOptions: { diagnostics } } : {}),
+    })
+    const lease = await service.prepareCf({ stamp: stamp(1), sourceRects: [rect(0, 0)], signal: new AbortController().signal, grantBytes: 8 * 1024 * 1024 }, source)
+    const first = lease.value.at(0, 0)
+    lease.release()
+    service.dispose()
+    const outcomes = new Map(rules.map(r => [r, results.get(r) as CfOutcome<CfLease<CfRangeStatistics>> | undefined]))
+    return {
+      first,
+      outcome: (r: CfRule) => outcomes.get(r),
+      release: () => { for (const o of outcomes.values()) if (o?.kind === 'ready') o.value.release(); expect(memory.currentBytes).toBe(0) },
+    }
+  }
+
+  it('icons share the statistics session: a percentile icon, a min/max scale, a percent bar and top10 on one 50-row A:A scope', async () => {
+    const cells: XlsxCell[] = []
+    for (let r = 0; r < 50; r++) cells.push(cell(r, 0, r + 1))
+    const scope = [rect(0, 1048575, 0, 0)] // A:A
+    const scale = { kind: 'colorScale', dialect: 'base', formulas: [], points: [{ bound: { type: 'min' }, argb: 0xfff8696b }, { bound: { type: 'max' }, argb: 0xff63be7b }] } as CfDefinition
+    const top10 = { kind: 'top10', dialect: 'base', formulas: [], rank: 10, bottom: false, percent: false } as CfDefinition
+    const percentBar = {
+      kind: 'dataBar', dialect: 'base', formulas: [], bounds: [{ type: 'percent', value: 10 }, { type: 'percent', value: 90 }], fillArgb: 0xff0000ff, minLength: 0, maxLength: 100,
+      gradient: false, border: false, negativeBarColorSameAsPositive: false, negativeBarBorderColorSameAsPositive: true, axisPosition: 'automatic', direction: 'leftToRight', showValue: true, sheetRightToLeft: false,
+    } as CfDefinition
+    const orders: Array<Array<(i: number) => CfRule>> = [
+      [i => percentileIcon(i, scope), i => ruleOf(i, scale, scope, ['colorScale', 'fill']), i => ruleOf(i, percentBar, scope, ['dataBar']), i => ruleOf(i, top10, scope, ['fill'], { 'fill.pattern': 'solid' })],
+      // Streaming rules prepare first: the scope is still scanned once.
+      [i => ruleOf(i, scale, scope, ['colorScale', 'fill']), i => ruleOf(i, percentBar, scope, ['dataBar']), i => percentileIcon(i, scope), i => ruleOf(i, top10, scope, ['fill'], { 'fill.pattern': 'solid' })],
+    ]
+    for (const order of orders) {
+      const probed = arraySource(cells)
+      const { scanned, source } = scanCounting(probed.source as unknown as CfValueSource)
+      const rules = order.map((make, i) => make(i))
+      const session = createCfStatistics(probed.memory)
+      const first = await prepareWith(rules, source, session)
+      for (const r of rules) expect(first.outcome(r)?.kind, `rule ${r.id}`).toBe('ready')
+      const icon = rules.find(r => r.definition.kind === 'iconSet')!
+      const iconStats = first.outcome(icon)
+      if (iconStats?.kind === 'ready') expect(iconStats.value.value.sortedAsc.length).toBe(50)
+      expect(scanned.cells).toBeLessThanOrEqual(50)
+      expect(scanned.cells).toBe(50)
+      const warm = await prepareWith(rules, source, session)
+      expect(warm.outcome(icon)?.kind).toBe('ready')
+      expect(scanned.cells).toBe(50) // a warm hit does zero loops
+      first.release(); warm.release()
+      session.dispose()
+    }
+  })
+
+  it('a num-only icon set requests no statistics', async () => {
+    const cells: XlsxCell[] = []
+    for (let r = 0; r < 50; r++) cells.push(cell(r, 0, r + 1))
+    const probed = arraySource(cells)
+    const { scanned, source } = scanCounting(probed.source as unknown as CfValueSource)
+    const n = numIcon(0, [rect(0, 49)])
+    const session = createCfStatistics(probed.memory)
+    const run = await prepareWith([n], source, session)
+    expect(run.outcome(n)).toBeUndefined()
+    expect(scanned.cells).toBe(0)
+    expect(run.first.kind === 'ready' && run.first.value.visual?.iconSet?.bucket).toBe(0)
+    run.release(); session.dispose()
+  })
+
+  it('icon percentile copy reserves before allocation, and the fallback gets a fresh budget (Lesson 9)', async () => {
+    const count = 100_000
+    const src = generatorSource(count, i => ({ kind: 'number', value: i + 1 }), makeCounter())
+    const { scanned, source } = scanCounting(src.source as unknown as CfValueSource)
+    const scope = [rect(0, count - 1)]
+    const requiredBytes = estimateStatisticsInitialBytes(count)
+    const tight = createCfMemory({ limitBytes: requiredBytes - 1 })
+    const session = createCfStatistics(tight)
+    const diagnostics: CfDiagnostic[] = []
+    const n = numIcon(0, scope), p = percentileIcon(1, scope)
+    const refused = await prepareWith([n, p], source, session, diagnostics)
+    expect(refused.outcome(p)).toMatchObject({ kind: 'unresolved', reason: 'cf-resource-limit' })
+    // The num-only icon set on the same scope needs no statistics and stays ready.
+    expect(refused.outcome(n)).toBeUndefined()
+    expect(refused.first.kind === 'ready' && refused.first.value.visual?.iconSet?.ruleId).toBe(0)
+    expect(diagnostics.filter(d => d.feature === 'cf-resource-limit')).toHaveLength(1)
+    expect(tight.currentBytes).toBe(0)
+    expect(scanned.cells).toBe(0) // reservation precedes allocation
+    // Cached per (scope, generation): no rescan; the cached refusal reports once per preparation, as for bars.
+    const again = await prepareWith([n, p], source, session, diagnostics)
+    expect(again.outcome(p)?.kind).toBe('unresolved')
+    expect(scanned.cells).toBe(0)
+    expect(diagnostics.filter(d => d.feature === 'cf-resource-limit')).toHaveLength(2)
+    refused.release(); again.release(); session.dispose()
+
+    // An upgraded-sorted refusal (a percent icon sharing the percentile icon's scope) retries unsorted under a NEW
+    // scan budget: the spy sees two distinct budgets for the percent icon (three in all).
+    for (const rules of [[percentileIcon(0, scope), percentIcon(1, scope)], [percentIcon(0, scope), percentileIcon(1, scope)]]) {
+      const budgets: CfWorkBudget[] = []
+      const shared = createCfStatistics(createCfMemory({ limitBytes: requiredBytes - 1 }))
+      const both = await prepareWith(rules, source, shared, [], () => { const b = createCfWorkBudget({ scan: true }); budgets.push(b); return b })
+      const pct = rules.find(r => r.definition.kind === 'iconSet' && r.definition.thresholds[1]!.bound.type === 'percent')!
+      const pcl = rules.find(r => r !== pct)!
+      expect(both.outcome(pct)?.kind).toBe('ready')
+      expect(both.outcome(pcl)).toMatchObject({ kind: 'unresolved', reason: 'cf-resource-limit' })
+      expect(budgets).toHaveLength(3)
+      expect(new Set(budgets).size).toBe(3)
+      both.release(); shared.dispose()
+    }
+  }, 30_000)
+})

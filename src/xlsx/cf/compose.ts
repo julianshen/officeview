@@ -1,5 +1,5 @@
-import type { CfBarDescriptor, CfCellState, CfOutcome, CfRule, CfWriteMask } from './model'
-import { hasEvidence as defaultHasEvidence } from './evidence'
+import type { CfBarDescriptor, CfCellState, CfIconDescriptor, CfOutcome, CfRule, CfWriteMask } from './model'
+import { hasEvidence as defaultHasEvidence, iconSelectionEvidence } from './evidence'
 
 /** Private backing set: Object.freeze(new Set()) alone does not prevent add/delete. */
 function readonlyMask(values: Set<string>): CfWriteMask {
@@ -20,12 +20,21 @@ const group = (path: string): string => path.startsWith('fill.') ? 'fill'
 const conflicts = (a: string, b: string): boolean =>
   a === 'ALL' || b === 'ALL' || a === b || a.startsWith(b + '.') || b.startsWith(a + '.')
 
+type VisualSlot = 'colorScale' | 'dataBar' | 'iconSet'
+
 /** The rule's visual slot: scales own `colorScale` (and arbitrate the fill slot), bars own the independent `dataBar`
- * slot (Ruling S3-I). Unresolved stubs keep their slot through the canonical write masks. */
-export function visualSlotOf(rule: CfRule): 'colorScale' | 'dataBar' | undefined {
+ * slot (Ruling S3-I), icon sets the independent `iconSet` slot (Ruling S4-I). Unresolved stubs keep their slot through
+ * the canonical write masks. */
+export function visualSlotOf(rule: CfRule): VisualSlot | undefined {
   if (rule.definition.kind === 'colorScale' || rule.writes.has('colorScale')) return 'colorScale'
   if (rule.definition.kind === 'dataBar' || rule.writes.has('dataBar')) return 'dataBar'
+  if (rule.definition.kind === 'iconSet' || rule.writes.has('iconSet')) return 'iconSet'
   return undefined
+}
+
+/** A ready icon outcome carries its evaluated descriptor (without the rule id composition adds). */
+function iconDescriptorOf(value: unknown): Omit<CfIconDescriptor, 'ruleId'> | undefined {
+  return typeof value === 'object' && value !== null && 'buckets' in value && 'iconId' in value ? value as Omit<CfIconDescriptor, 'ruleId'> : undefined
 }
 
 /** A ready bar outcome carries its evaluated descriptor (without the rule id composition adds). */
@@ -58,12 +67,15 @@ function* steps(
   const tainted = new Set<string>(), won = new Set<string>()
   let visualColorScale: { ruleId: number; argb: number } | undefined
   let visualDataBar: CfBarDescriptor | undefined
+  let visualIconSet: CfIconDescriptor | undefined
   // Ruling S3-J: a bar carrying stopIfTrue is unresolved until its composition is measured (OD-1 analogue).
   const barStopMeasured = checkEvidence('bar:composition-bar-stopIfTrue')
   const scaleStopMeasured = checkEvidence('scale:composition-scale-stopIfTrue')
+  // Ruling S4-J: likewise an icon set carrying stopIfTrue.
+  const iconStopMeasured = checkEvidence('icon:composition-icon-stopIfTrue')
   /** Whether a rule's stopIfTrue halts composition: visuals only once their flag's effect is measured as ignored. */
-  const halts = (rule: CfRule, slot: 'colorScale' | 'dataBar' | undefined): boolean =>
-    rule.stopIfTrue && (slot === 'colorScale' ? !scaleStopMeasured : slot === 'dataBar' ? !barStopMeasured : true)
+  const halts = (rule: CfRule, slot: VisualSlot | undefined): boolean =>
+    rule.stopIfTrue && (slot === 'colorScale' ? !scaleStopMeasured : slot === 'dataBar' ? !barStopMeasured : slot === 'iconSet' ? !iconStopMeasured : true)
 
   if (options?.isTextCellInScale) {
     if (!checkEvidence('scale:composition-text-cell-lower-dxf')) {
@@ -76,6 +88,8 @@ function* steps(
   let fillsWithheld = false
   // Resolved matching bars reachable on this cell (S3-I exclusivity is decided over all of them).
   let matchingBars = 0
+  // Resolved matching icons reachable on this cell, in priority order (S4-I exclusivity is decided over all of them).
+  const matchingIcons: { index: number; noIcons: boolean }[] = []
   for (let i = 0; i < orderedRules.length; i++) {
     yield
     const rule = orderedRules[i]!
@@ -94,6 +108,12 @@ function* steps(
     if (slot === 'dataBar') {
       // A bar never takes part in fill arbitration (S3-I); it only counts towards bar exclusivity.
       if (barDescriptorOf(outcome.value)) matchingBars++
+      continue
+    }
+    if (slot === 'iconSet') {
+      // Nor does an icon (S4-I); it only counts towards icon exclusivity.
+      const icon = iconDescriptorOf(outcome.value)
+      if (icon) matchingIcons.push({ index: i, noIcons: icon.set === 'NoIcons' })
       continue
     }
 
@@ -129,6 +149,18 @@ function* steps(
   // suppressed by the won slot (a known loser, so not reported as unresolved).
   const barsWithheld = matchingBars > 1 && !checkEvidence('bar:composition-overlapping-bars')
   if (barsWithheld) tainted.add('dataBar')
+  // S4-I: two matching icons withhold both and taint the icon slot until icon:composition-overlapping-icons; then the
+  // first in priority order paints. A NoIcons win over a lower matching icon withholds the lower icon (and the slot)
+  // until icon:composition-noicons-slot selects a reading: `first-paints` (NoIcons occupies the slot) or
+  // `second-paints` (the next matching icon paints).
+  let iconsWithheld = matchingIcons.length > 1 && !checkEvidence('icon:composition-overlapping-icons')
+  let iconWinnerIndex = matchingIcons[0]?.index
+  if (!iconsWithheld && matchingIcons.length > 1 && matchingIcons[0]!.noIcons) {
+    const reading = iconSelectionEvidence('icon:composition-noicons-slot', checkEvidence)
+    if (reading === 'second-paints') iconWinnerIndex = matchingIcons[1]!.index
+    else if (reading !== 'first-paints') iconsWithheld = true
+  }
+  if (iconsWithheld) tainted.add('iconSet')
   // S3-I coexistence: a bar never changes the fill slot, but paints over a scale or DXF fill only under evidence.
   const scaleFillPresent = matchingFills.some(f => f.isScale)
   const dxfFillPresent = matchingFills.some(f => !f.isScale)
@@ -192,6 +224,7 @@ function* steps(
     const slot = visualSlotOf(rule)
     const isScale = slot === 'colorScale'
     const isBar = slot === 'dataBar'
+    const isIcon = slot === 'iconSet'
 
     // Ruling S2-J (scale) and S3-J (bar): a visual carrying stopIfTrue="1" is unresolved until its composition variant
     // lands, whatever its outcome, so §5.7.1 withholds every later rule (the p2 DXF fill and font). Once measured, the
@@ -235,6 +268,21 @@ function* steps(
       if (!blocked && (dxfFillPresent || fillUnknown) && !checkEvidence('bar:composition-dxf-fill')) blocked = true
       if (blocked || !value) tainted.add('dataBar')
       else { visualDataBar = Object.freeze({ ruleId: rule.id, ...value }); won.add('dataBar') }
+    } else if (isIcon) {
+      // Icon rule (S4-I): its own slot, exclusive, and with a bar or over a fill only under evidence. Coexistence is
+      // decided from the pre-scan, so both priority orders behave the same; the bar keeps its own Stage 3 outcome.
+      const value = iconDescriptorOf(outcome.value)
+      if (won.has('iconSet') || (value && iconWinnerIndex !== undefined && i !== iconWinnerIndex && !iconsWithheld)) continue
+      let blocked = iconsWithheld || value === undefined
+      for (const mask of tainted) { yield; if (conflicts(mask, 'iconSet')) { blocked = true; break } }
+      // An earlier unresolved bar or fill writer leaves that slot unknown: treated as a possible bar or DXF fill.
+      let barUnknown = false, fillUnknown = false
+      for (const mask of tainted) { yield; if (conflicts(mask, 'dataBar')) barUnknown = true; if (conflicts(mask, 'fill')) fillUnknown = true }
+      if (!blocked && (matchingBars > 0 || barUnknown) && !checkEvidence('icon:composition-with-bar')) blocked = true
+      if (!blocked && scaleFillPresent && !checkEvidence('icon:composition-with-scale')) blocked = true
+      if (!blocked && (dxfFillPresent || fillUnknown) && !checkEvidence('icon:composition-dxf-fill')) blocked = true
+      if (blocked || !value) tainted.add('iconSet')
+      else { visualIconSet = Object.freeze({ ruleId: rule.id, ...value }); won.add('iconSet') }
     } else if (isScale) {
       // Scale rule
       let blocked = fillsWithheld
@@ -273,9 +321,15 @@ function* steps(
     if (halts(rule, slot)) break
   }
 
-  const visual = visualColorScale || visualDataBar ? Object.freeze({
+  // S4-I: a painted bar and a painted icon that disagree on showValue keep both descriptors, but whether the text is
+  // suppressed is unresolved (the text stays) until icon:composition-bar-showvalue.
+  if (visualDataBar && visualIconSet && visualDataBar.showValue !== visualIconSet.showValue && !checkEvidence('icon:composition-bar-showvalue')) {
+    tainted.add('showValue')
+  }
+  const visual = visualColorScale || visualDataBar || visualIconSet ? Object.freeze({
     ...(visualColorScale ? { colorScale: Object.freeze(visualColorScale) } : {}),
     ...(visualDataBar ? { dataBar: visualDataBar } : {}),
+    ...(visualIconSet ? { iconSet: visualIconSet } : {}),
   }) : undefined
   const result: CfCellState = Object.freeze({
     properties: Object.freeze(properties),

@@ -104,7 +104,8 @@ describe('CF Stage 4 icon-set model and parsing (Task 25)', () => {
       const rule = only(lease.value.rules)
       expect(rule.definition.kind === 'iconSet', String(caps)).toBe(caps.length > 0)
       expect(rule.writes.has('iconSet')).toBe(true)
-      expect([...rule.writes].filter(w => w !== 'iconSet').length).toBeGreaterThan(0)
+      // Exactly the DXF's own writes (a solid fill writes the `fill` slot), never more and never ALL.
+      expect(new Set(rule.writes)).toEqual(new Set(['iconSet', 'fill']))
       expect(rule.writes.has('ALL')).toBe(false)
     }
 

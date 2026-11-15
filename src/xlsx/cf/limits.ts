@@ -15,6 +15,12 @@ export const CF_BAR_CELL_BYTES: number = measureCfCellBytes({ properties: {}, ba
   isGradient: false, isNegative: false, showValue: false, rtl: false,
 } }) - measureCfCellBytes({ properties: {} })
 
+/** The wire bytes one icon descriptor adds to a cell state (Ruling S4-Q), DERIVED from the wire measurer so the grant
+ * estimate cannot drift from `measureCfCellBytes` (Lesson 6). The descriptor has no optional field. */
+export const CF_ICON_CELL_BYTES: number = measureCfCellBytes({ properties: {}, icon: {
+  ruleId: 0, set: 0, iconId: 0, bucket: 0, buckets: 0, showValue: false,
+} }) - measureCfCellBytes({ properties: {} })
+
 /** Upper bound of one normalized data-bar definition's own fields (the rule origin is priced by the rule bound),
  * DERIVED from the payload measurer with every optional field present and the longest enum spellings. */
 export const CF_BAR_DEFINITION_BYTES: number = measurePayloadBytes({
