@@ -147,7 +147,11 @@ const trackOf = (unit: number, step: number) => [0, 1, 2].map((i) => encodeShowM
 type Kind = 'still' | 'fly' | 'morphTo' | { messages: (unit: number) => Uint8Array[] }
 type Rule = 'hold' | StreamErrorCode | (() => Uint8Array[])
 
-const flush = async () => { for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0)) }
+/**
+ * Six macrotask turns. `setImmediate`, not `setTimeout(0)`: Node clamps a zero timeout to 1 ms, and `run` flushes
+ * every 16 ms tick, so the clamp alone was ~2.5 s of idle wait in the longest test (PR #78 CI timeouts).
+ */
+const flush = async () => { for (let i = 0; i < 6; i++) await new Promise((r) => setImmediate(r)) }
 
 function animDoc(deck: Kind[], o: { tracks?: (unit: number, step: number) => Uint8Array[] } = {}) {
   const list = deck.map((k) => (k === 'still' ? { w: 960, h: 720 } : { w: 960, h: 720, anim: true as const }))
@@ -332,6 +336,13 @@ const frameKind = (root: HTMLElement) => root.getAttribute('data-officeview-show
 const px = (c: HTMLCanvasElement, x: number, y: number) => [...c.getContext('2d')!.getImageData(x, y, 1, 1).data].slice(0, 3)
 const sent = (fd: ReturnType<typeof animDoc>, prefix: string) => fd.log.filter((l) => l.startsWith(prefix))
 
+/**
+ * The tests that drive a show for several simulated seconds: each 16 ms tick composites a 960×540 frame on
+ * node-canvas (render/canvas2d drawLayer + drawSum, ~65% of the CPU profile once the flush clamp was removed).
+ * Measured locally at 1.5–2.1 s each; the CI runner is ~1.7× slower, close to vitest's 5 s default.
+ */
+const DRIVES_SECONDS = 15_000
+
 describe('remote show on the driver (piece 4 Task 11)', () => {
   it('fly-in deck: step count and order equal the plan; clicks to end = steps + slides', async () => {
     const fd = animDoc(['fly', 'fly'])
@@ -349,7 +360,7 @@ describe('remote show on the driver (piece 4 Task 11)', () => {
     s.next()
     await s.ended
     expect(log).toContain('onEnd')
-  })
+  }, DRIVES_SECONDS)
 
   it('unanimated slide requests a unit, never a show-plan', async () => {
     const fd = animDoc(['still', 'fly'])
@@ -453,7 +464,7 @@ describe('remote show on the driver (piece 4 Task 11)', () => {
       expect(log).toContain('diag:morph-late')
       s.exit()
     }
-  })
+  }, DRIVES_SECONDS)
 
   it('goTo into a Morph slide sends fromStep = cursor.step of the slide left', async () => {
     const fd = animDoc(['fly', 'morphTo', 'fly'])
@@ -494,7 +505,7 @@ describe('remote show on the driver (piece 4 Task 11)', () => {
       expect(sent(fd, 'morph:')).toEqual(['morph:0>1@1', 'morph:0>1@0'])
       s.exit()
     }
-  })
+  }, DRIVES_SECONDS)
 
   it('revocation mid-Morph releases every lease and draws nothing after ended', async () => {
     const ws = createSlideShowWorkspace('desktop', { limit: 512 * 1024 * 1024, scratch: 0 })
@@ -518,7 +529,7 @@ describe('remote show on the driver (piece 4 Task 11)', () => {
     expect(ws.used()).toBe(0)
     await run(200)
     expect([...canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data]).toEqual(before)
-  })
+  }, DRIVES_SECONDS)
 
   it('a bucket change re-fetches the bundle at scale 2; the slide on screen keeps drawing the bundle it holds', async () => {
     const fd = animDoc(['fly'])
