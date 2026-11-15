@@ -22,7 +22,7 @@ import { RemoteCfCache, type CfReadHost } from '../src/worker/viewerRemoteCf'
 import { admitReply } from '../src/worker/viewerReplyLimit'
 import type { CommandOf } from '../src/worker/viewerProtocol'
 import { measurePayloadBytes } from '../src/xlsx/view/payloadBytes'
-import { injectCfBarLayout, injectCfIconSelections, withInjectedCfEvidence } from '../src/xlsx/cf/evidence'
+import { VERIFIED_CAPABILITIES, injectCfBarLayout, injectCfIconSelections, withInjectedCfEvidence } from '../src/xlsx/cf/evidence'
 import { createCfService } from '../src/xlsx/cf/service'
 import { residentSource } from '../src/xlsx/cf/render'
 import { descriptorOfIcon, prepareCfTextScope, prepareCfWireScope, wireIcon, type CfCopiedIconProbe } from '../src/xlsx/cf/text'
@@ -279,6 +279,38 @@ describe('CF Stage 4 Task 27 — icon wire under the receiver grant (S4-Q)', () 
       ])
       releaseSharedCfDefinitions(rules)
     })
+  })
+
+  it('Task 30 (carried from Task 27): with icons, bars and scales the grant omits icons, then bars, then scales', async () => {
+    const cellCount = 1000
+    const values = Array.from({ length: cellCount }, (_, i) => i)
+    const scale: CfRule = {
+      id: 5, priority: 3, documentOrder: 2, ranges: [{ firstRow: 0, lastRow: cellCount - 1, firstCol: 0, lastCol: 0 }], stopIfTrue: false, writes: new Set(['colorScale']),
+      definition: { kind: 'colorScale', points: [{ bound: { type: 'min' }, argb: 0xfff8696b }, { bound: { type: 'max' }, argb: 0xff63be7b }], dialect: 'base', formulas: [] } as CfDefinition,
+    }
+    const rules: CfSheetRules = { diagnostics: [], rules: [iconRule(0, cellCount - 1), barRule(0, cellCount - 1), scale] }
+    const st = stamp(1, { cfGen: cfRulesVersion(rules) })
+    const run = (grant: number) => prepareCfRemote(cfRequest([rect(0, cellCount - 1)], st, grant), SHEET, columnSource(values, { stamp: () => st }), rules, createCfMemory({}), { budget: frozenBudget })
+    const scales = (r: CfReadResult) => r.states.filter(x => x.scale !== undefined)
+    const grantMessages = (r: CfReadResult) => r.diagnostics.filter(d => d.feature === 'cf-grant-required').map(d => d.message)
+    const fits = (r: CfReadResult) => measurePayloadBytes({ ...r, diagnostics: [] }, () => true)! + CF_REPLY_ENVELOPE_BYTES
+    await withIcons(async () => {
+      const wide = ready(await run(1 << 24))
+      expect([icons(wide).length, bars(wide).length, scales(wide).length]).toEqual([cellCount, cellCount, cellCount])
+      const noIcons = ready(await run(fits(wide) - 1))
+      expect([icons(noIcons).length, bars(noIcons).length, scales(noIcons).length]).toEqual([0, cellCount, cellCount])
+      expect(grantMessages(noIcons)).toEqual(['Conditional formatting icon sets omitted due to receiver grant limit.'])
+      const noBars = ready(await run(fits(noIcons) - 1))
+      expect([icons(noBars).length, bars(noBars).length, scales(noBars).length]).toEqual([0, 0, cellCount])
+      expect(grantMessages(noBars)).toEqual([
+        'Conditional formatting icon sets omitted due to receiver grant limit.',
+        'Conditional formatting data bars omitted due to receiver grant limit.',
+      ])
+      const baseOnly = ready(await run(fits(noBars) - 1))
+      expect([icons(baseOnly).length, bars(baseOnly).length, scales(baseOnly).length]).toEqual([0, 0, 0])
+      expect(baseOnly.states).toHaveLength(cellCount)
+      releaseSharedCfDefinitions(rules)
+    }, ['scale:thresholds-min-max', ...[...VERIFIED_CAPABILITIES].filter(id => id.startsWith('scale:'))])
   })
 
   it('the advertised requiredBytes of a refused icon read carries every icon (retry at exactly that grant)', async () => {

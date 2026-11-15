@@ -1733,6 +1733,185 @@ export async function pressureBarUnitCap(): Promise<{ name: string; admittedCell
     refusedUnits: refused.units, refusedReason: refused.reason, netBytes: admitted.net + refused.net, wallMs: Date.now() - started }
 }
 
+/* ---------------- Stage 4 (icon sets) pressure scenarios (Task 30) ---------------- */
+
+/** An icon-set rule (3Arrows, base dialect) over `range`, with `thresholds` (default percent 0/33/67). */
+export const iconRuleOf = (priority: number, range: { firstRow: number; lastRow: number; firstCol: number; lastCol: number }, thresholds?: unknown[]) => ({
+  id: priority,
+  priority,
+  documentOrder: priority,
+  stopIfTrue: false,
+  ranges: [range],
+  writes: new Set(['iconSet']),
+  definition: {
+    kind: 'iconSet', dialect: 'base', formulas: [], set: '3Arrows',
+    thresholds: thresholds ?? [{ bound: { type: 'percent', value: 0 }, gte: true }, { bound: { type: 'percent', value: 33 }, gte: true }, { bound: { type: 'percent', value: 67 }, gte: true }],
+    reverse: false, showValue: true, percentAttr: true, sheetRightToLeft: false,
+  },
+})
+
+/** Counts the icon descriptors production's resident service evaluates over `rects` (one lease per rect, under the
+ * production evidence), with the bytes it held. */
+async function residentIcons(sheet: XlsxSheet, rects: ReadonlyArray<{ firstRow: number; lastRow: number; firstCol: number; lastCol: number }>, memory = createCfMemory()): Promise<{ icons: number; unresolved: number; byCol: Record<number, string[]>; peak: number; net: number }> {
+  const { createCfService } = await import('../../src/xlsx/cf/service')
+  const { CF_LIMITS } = await import('../../src/xlsx/cf/limits')
+  const service = createCfService(sheet.conditionalFormatting!, memory)
+  const stamp = { owner: 'audit', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: 1, viewGen: 0, structureGen: 0, clockGen: 0 }
+  const source = residentSource(sheet, stamp, memory, 'engine')
+  let icons = 0, unresolved = 0
+  const byCol: Record<number, string[]> = {}
+  for (const rect of rects) {
+    const lease = await service.prepareCf({ stamp, sourceRects: [rect], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, source)
+    for (let row = rect.firstRow; row <= rect.lastRow; row++) for (let col = rect.firstCol; col <= rect.lastCol; col++) {
+      const o = lease.value.at(row, col)
+      ;(byCol[col] ??= []).push(o.kind === 'ready' ? (o.value.visual?.iconSet ? 'icon' : `ready:${[...(o.value.unresolvedWrites ?? [])].join('+')}`) : o.kind === 'unresolved' ? o.reason : o.kind)
+      if (o.kind === 'ready' && o.value.visual?.iconSet) icons++
+      else if (o.kind === 'unresolved') unresolved++
+    }
+    lease.release()
+  }
+  service.dispose()
+  return { icons, unresolved, byCol, peak: memory.peakBytes, net: memory.currentBytes }
+}
+
+/**
+ * A 1M-row DECLARED `A:A` scope (100 stored cells) under 100 icon sets, 100 data bars and 100 colour scales. The 300
+ * rule scopes are one scope, so one sparse scan serves them all (`statisticsReads` = 100 stored cells); production's
+ * resident service then evaluates the first icon set on every requested cell (S4-I first-paints), with and without the
+ * bars and scales beside it. It is NOT a populated 1M-row scope.
+ */
+export async function pressureIcon1MRowSharedScan(): Promise<PressureSample & { statisticsReads: number; iconOnlyCells: number }> {
+  const started = Date.now()
+  const wholeCol = { firstRow: 0, lastRow: 1048575, firstCol: 0, lastCol: 0 }
+  const rules = [
+    ...Array.from({ length: 100 }, (_, i) => iconRuleOf(i, wholeCol)),
+    ...Array.from({ length: 100 }, (_, i) => barRule(100 + i, wholeCol)),
+    ...Array.from({ length: 100 }, (_, i) => scaleRule(200 + i, wholeCol)),
+  ]
+  const cells: XlsxCell[] = Array.from({ length: 100 }, (_, row) => ({ ref: `A${row + 1}`, row, col: 0, styleIndex: 0, value: (row % 2) * 10 + 5, hasCachedValue: true }))
+  const sheetOf = (r: unknown[]) => ({ name: 'P', sheetId: 'p', rows: [{ index: 0, cells }], cols: [], mergeRefs: [], mergeRanges: [], conditionalFormatting: { diagnostics: [], rules: r } } as unknown as XlsxSheet)
+  const inner = sheetOf(rules)
+  const memory = createCfMemory()
+  const stamp = { owner: 'audit', sheetId: 'p', workbookValueGen: 0, cfGen: 1, viewGen: 0, structureGen: 0, clockGen: 0 }
+  const session = createCfStatistics(memory, { retainEntries: true })
+  const outs = await session.prepareStatistics(rules.map(r => r.ranges), stamp, residentSource(inner, stamp, memory, 'engine'),
+    createCfWorkBudget({ scan: true, maxUnits: 10_000_000 }), { signal: new AbortController().signal })
+  const ready = outs.find(o => o.kind === 'ready')
+  if (!ready || ready.kind !== 'ready') throw new Error('icon statistics scan must admit')
+  const statisticsReads = ready.value.value.storedCells
+  for (const o of outs) if (o.kind === 'ready') o.value.release()
+  session.dispose()
+  if (memory.currentBytes !== 0) throw new Error(`icon statistics leaked ${memory.currentBytes} B`)
+  const rects = Array.from({ length: 5 }, (_, i) => ({ firstRow: i * 8, lastRow: i * 8 + 7, firstCol: 0, lastCol: 0 }))
+  const all = await residentIcons(inner, rects)
+  // The same 100 icon sets without the scales and bars: every requested cell carries the first icon.
+  const iconOnly = await residentIcons(sheetOf(rules.slice(0, 100)), rects)
+  return {
+    name: 'icon-sparse-1M-declared-shared-scan',
+    outcome: 'admitted',
+    peakBytes: Math.max(memory.peakBytes, all.peak, iconOnly.peak),
+    netBytes: memory.currentBytes + all.net + iconOnly.net,
+    sourceReads: statisticsReads,
+    cellsWithResults: all.icons,
+    statisticsReads,
+    iconOnlyCells: iconOnly.icons,
+    wallMs: Date.now() - started,
+  }
+}
+
+/** A refused percentile icon set (its sorted copy exceeds the admitted memory) withholds while a `num` icon set over
+ * another column still evaluates: the refusal is per rule, never the sheet's. Control: with room for the copy, the
+ * percentile set evaluates too. */
+export async function pressureRefusedPercentileIconWithNum(): Promise<PressureSample & { percentileWithheld: number; controlPercentileIcons: number }> {
+  const started = Date.now()
+  const rows = 5_000
+  const cells: XlsxCell[] = []
+  for (let row = 0; row < rows; row++) {
+    cells.push({ ref: `A${row + 1}`, row, col: 0, styleIndex: 0, value: row % 10, hasCachedValue: true })
+    cells.push({ ref: `B${row + 1}`, row, col: 1, styleIndex: 0, value: row, hasCachedValue: true })
+  }
+  const num = iconRuleOf(1, { firstRow: 0, lastRow: rows - 1, firstCol: 0, lastCol: 0 }, [{ bound: { type: 'num', value: 0 }, gte: true }, { bound: { type: 'num', value: 3 }, gte: true }, { bound: { type: 'num', value: 6 }, gte: true }])
+  const percentile = iconRuleOf(2, { firstRow: 0, lastRow: rows - 1, firstCol: 1, lastCol: 1 }, [{ bound: { type: 'percentile', value: 0 }, gte: true }, { bound: { type: 'percentile', value: 33 }, gte: true }, { bound: { type: 'percentile', value: 67 }, gte: true }])
+  const inner = { name: 'P', sheetId: 'p', rows: [{ index: 0, cells }], cols: [], mergeRefs: [], mergeRanges: [], conditionalFormatting: { diagnostics: [], rules: [num, percentile] } } as unknown as XlsxSheet
+  const rects = [{ firstRow: 0, lastRow: 9, firstCol: 0, lastCol: 1 }]
+  // 400,000 B admits the streaming num scope and the batch, not the 5,000-value sorted copy; 4,000,000 B admits both.
+  const got = await residentIcons(inner, rects, createCfMemory({ limitBytes: 400_000 }))
+  const control = await residentIcons(inner, rects, createCfMemory({ limitBytes: 4_000_000 }))
+  const a = got.byCol[0] ?? [], b = got.byCol[1] ?? []
+  if (a.filter(x => x === 'icon').length !== 10) throw new Error(`the num icon set must evaluate its 10 cells, got ${a.join(',')}`)
+  const percentileWithheld = b.filter(x => x.startsWith('ready:') && x.includes('iconSet')).length
+  if (percentileWithheld !== 10) throw new Error(`the refused percentile set must withhold its 10 cells, got ${b.join(',')}`)
+  const controlPercentileIcons = (control.byCol[1] ?? []).filter(x => x === 'icon').length
+  return { name: 'refused-percentile-icon-with-num-icon-rendering', outcome: 'admitted', peakBytes: Math.max(got.peak, control.peak), netBytes: got.net + control.net, sourceReads: rows, cellsWithResults: 10, percentileWithheld, controlPercentileIcons, wallMs: Date.now() - started }
+}
+
+/** A whole-column icon set does not extend the sheet's extents, and evaluates its stored cells only. */
+export async function pressureIconWholeColumnExtents(): Promise<PressureSample> {
+  const started = Date.now()
+  const dataRows = 10
+  const inner = {
+    name: 'WCIcon', sheetId: 'wcicon',
+    rows: Array.from({ length: dataRows }, (_, r) => ({ index: r, cells: [{ ref: `A${r + 1}`, row: r, col: 0, styleIndex: 0, value: (r + 1) * 10, hasCachedValue: true }] })),
+    cols: [], mergeRefs: [], mergeRanges: [],
+    conditionalFormatting: { diagnostics: [], rules: [iconRuleOf(1, { firstRow: 0, lastRow: 1048575, firstCol: 0, lastCol: 0 })] },
+  } as unknown as XlsxSheet
+  const m = computeMetrics(inner)
+  if (m.rowHeightsPx.length !== dataRows || m.heightPx > 1000) throw new Error(`CF icon set extended metrics extent: ${m.rowHeightsPx.length} rows, height ${m.heightPx}px`)
+  const { sheet, visits } = countingSheetCells(inner)
+  const got = await residentIcons(sheet, [{ firstRow: 0, lastRow: dataRows + 9, firstCol: 0, lastCol: 0 }])
+  return { name: 'icon-whole-column-extents', outcome: 'admitted', peakBytes: got.peak, netBytes: got.net, sourceReads: visits(), cellsWithResults: got.icons, wallMs: Date.now() - started }
+}
+
+/**
+ * Glyph-admission pressure (Ruling S4-R): one batch whose icons use every class the glyph-key sidecar records. Each
+ * admitted class is decoded once and charged; withheld classes are never decoded; a memory too small for any class
+ * refuses every admission and decodes nothing; release returns every byte.
+ */
+export async function pressureIconGlyphAdmission(): Promise<{ name: string; classes: number; admitted: number; decodes: number; withheldDecoded: number; refusedDecodes: number; peakBytes: number; netBytes: number; wallMs: number }> {
+  const started = Date.now()
+  const { admitBatchGlyphs } = await import('../../src/xlsx/cf/iconPaint')
+  const { CF_ICON_GLYPH_CLASSES: classes, CF_ICON_GLYPH_WITHHELD: withheld, cfDecodeCalls, cfDecodedGlyphCount } = await import('../../src/xlsx/cf/iconGlyphs')
+  const pairs = Object.keys(classes).map(k => { const [set, id] = k.split(':'); return { ruleId: 1, set: set as never, iconId: Number(id), bucket: 0, buckets: Number(set![0]), showValue: true } })
+  const admittedClasses = new Set(Object.values(classes).filter(c => !withheld.has(c)))
+  const memory = createCfMemory()
+  const before = cfDecodeCalls()
+  const batch = admitBatchGlyphs(pairs, memory, () => createCfWorkBudget({}))
+  const decodes = cfDecodeCalls() - before
+  const decoded = cfDecodedGlyphCount()
+  const peak = memory.peakBytes
+  batch.release()
+  const tiny = createCfMemory({ limitBytes: 64 })
+  const beforeRefused = cfDecodeCalls()
+  const refused = admitBatchGlyphs(pairs, tiny, () => createCfWorkBudget({}))
+  const refusedDecodes = cfDecodeCalls() - beforeRefused
+  refused.release()
+  return { name: 'icon-glyph-admission-every-class', classes: new Set(Object.values(classes)).size, admitted: decoded, decodes, withheldDecoded: decoded - admittedClasses.size, refusedDecodes, peakBytes: peak, netBytes: memory.currentBytes + tiny.currentBytes, wallMs: Date.now() - started }
+}
+
+/** Distinct-range icon pressure: 150 icon sets over distinct two-cell ranges; a 10-rect batch admits and evaluates; 300
+ * distinct rects exceed the per-call rect cap and refuse before enumeration with net zero. */
+export async function pressureIconDistinctRanges(): Promise<PressureSample> {
+  const started = Date.now()
+  const N = 300
+  const rules = Array.from({ length: N / 2 }, (_, i) => iconRuleOf(i, { firstRow: 2 * i, lastRow: 2 * i + 1, firstCol: 0, lastCol: 0 }))
+  const cells: XlsxCell[] = []
+  for (let row = 0; row < N; row++) cells.push({ ref: `A${row + 1}`, row, col: 0, styleIndex: 0, value: (row % 2) * 10 + 5, hasCachedValue: true })
+  const inner = { name: 'DI', sheetId: 'di', rows: [{ index: 0, cells }], cols: [], mergeRefs: [], mergeRanges: [], conditionalFormatting: { diagnostics: [], rules } } as unknown as XlsxSheet
+  const { sheet, visits } = countingSheetCells(inner)
+  const small = await residentIcons(sheet, Array.from({ length: 10 }, (_, i) => ({ firstRow: i, lastRow: i, firstCol: 0, lastCol: 0 })))
+  if (small.icons !== 10 || small.net !== 0) throw new Error(`small distinct icon batch evaluated ${small.icons}/10 with ${small.net} B left`)
+  const visitedBefore = visits()
+  const { budget, net, peak } = createTrackingBudget()
+  let scope: Awaited<ReturnType<typeof prepareCfTextScope>> | undefined
+  try {
+    scope = await prepareCfTextScope(sheet, { rects: Array.from({ length: N }, (_, i) => ({ r0: i, r1: i, c0: 0, c1: 0 })), signal: new AbortController().signal, locale: 'en-US', budget })
+  } catch (error) {
+    if (!(error instanceof PackageError) || error.code !== 'resource-limit') throw error
+  }
+  scope?.dispose()
+  return { name: 'icon-distinct-range-300', outcome: scope === undefined ? 'refused' : 'admitted', peakBytes: peak(), netBytes: net(), sourceReads: visits() - visitedBefore, cellsWithResults: 0, wallMs: Date.now() - started }
+}
+
 export interface CycleSample {
   cycles: number
   reads: number
@@ -1741,6 +1920,8 @@ export interface CycleSample {
   finalNetBytes: number
   /** Bar states the ready reads carried (Stage 3 cycles read a bar range). */
   barStates: number
+  /** Icon states the ready reads carried (Stage 4 cycles read an icon range). */
+  iconStates: number
   wallMs: number
 }
 
@@ -1750,13 +1931,14 @@ export interface CycleSample {
  * to a zero baseline — stability alone is not cleanup. Pre-aborted reads must
  * throw cancellation; a mid-flight abort must settle without charge and leave
  * the session usable. */
-export async function pressureCycles(rounds = 20, options: { fixture?: string; rect?: { r0: number; r1: number; c0: number; c1: number }; requireBars?: boolean } = {}): Promise<CycleSample> {
+export async function pressureCycles(rounds = 20, options: { fixture?: string; rect?: { r0: number; r1: number; c0: number; c1: number }; requireBars?: boolean; requireIcons?: boolean } = {}): Promise<CycleSample> {
   const started = Date.now()
   const { openImportSession } = await import('../../src/xlsx/storage/pagedImport')
   const { createPagedWorkbookSource } = await import('../../src/xlsx/view/pagedSource')
   const saved = readFileSync(join(REPO_ROOT, options.fixture ?? 'tests/fixtures/xlsx-cf/stage1-cellis-literals.xlsx'))
   const first = options.rect ?? { r0: 0, r1: 0, c0: 0, c1: 0 }
   let barStates = 0
+  let iconStates = 0
   let maxPeak = 0
   let maxNet = 0
   let finalNet = 0
@@ -1786,6 +1968,9 @@ export async function pressureCycles(rounds = 20, options: { fixture?: string; r
       const bars = ready.states.filter(s => s.bar !== undefined).length
       if (options.requireBars && bars === 0) throw new Error(`cycle ${i}: the ready read carried no bar state`)
       barStates += bars
+      const icons = ready.states.filter(s => s.icon !== undefined).length
+      if (options.requireIcons && icons === 0) throw new Error(`cycle ${i}: the ready read carried no icon state`)
+      iconStates += icons
       if (memory.peakBytes <= 0) throw new Error(`cycle ${i}: ready read observed no allocation`)
       maxPeak = Math.max(maxPeak, memory.peakBytes)
       maxNet = Math.max(maxNet, memory.currentBytes)
@@ -1848,13 +2033,15 @@ export async function pressureCycles(rounds = 20, options: { fixture?: string; r
     finalNet = memory.currentBytes
     if (finalNet !== 0) throw new Error(`cycle ${i}: net bytes ${finalNet} after release`)
   }
-  return { cycles: rounds, reads, maxPeakBytes: maxPeak, maxNetBytes: maxNet, finalNetBytes: finalNet, barStates, wallMs: Date.now() - started }
+  return { cycles: rounds, reads, maxPeakBytes: maxPeak, maxNetBytes: maxNet, finalNetBytes: finalNet, barStates, iconStates, wallMs: Date.now() - started }
 }
 
 export interface NoCfBaseline {
   paintReserves: number
   sourceReads: number
   scopeBuilt: boolean
+  /** Glyph decodes during the no-CF preparations (Stage 4: zero icon work). */
+  glyphDecodes?: number
 }
 
 /** No-CF baseline: same shapes without conditional formatting do zero CF work. */
@@ -1869,12 +2056,14 @@ export async function baselineNoCf(rule: Record<string, unknown> = cellIsRule(0,
   delete (sheet as { conditionalFormatting?: unknown }).conditionalFormatting
   const store = { get stamp(): never { throw new Error('no-CF stamp read') }, readRows: (...args: unknown[]) => { reads++; throw new Error(`no-CF read ${String(args)}`) } }
   let scopeBuilt = false
+  const { cfDecodeCalls } = await import('../../src/xlsx/cf/iconGlyphs')
+  const decodesBefore = cfDecodeCalls()
   for (let i = 0; i < 5; i++) {
     const batch = await prepareCfPaint(sheet, { memory, store: store as never })
     if (batch !== undefined) scopeBuilt = true
     batch?.dispose?.()
   }
-  return { paintReserves: reserves, sourceReads: reads, scopeBuilt }
+  return { paintReserves: reserves, sourceReads: reads, scopeBuilt, glyphDecodes: cfDecodeCalls() - decodesBefore }
 }
 
 export interface EagerBoundary {
@@ -1962,6 +2151,7 @@ async function main(): Promise<void> {
 
   let stage1Pressure: { whole: PressureSample; shared: PressureSample; bounds: ReturnType<typeof pressureRangeBoundaries>; refusedSheet: PressureSample; stats: PressureSample } | undefined
   let stage2Pressure: { scaleShared: PressureSample; percentile: PressureSample; extents: PressureSample } | undefined
+  let stage4Pressure: Record<string, unknown> | undefined
   let stage3Pressure: { barShared: Awaited<ReturnType<typeof pressureBar1MRowSharedScan>>; barPercentile: PressureSample; barExtents: PressureSample; barDistinct: PressureSample; barUnitCap: Awaited<ReturnType<typeof pressureBarUnitCap>> } | undefined
 
   if (stage === 1) {
@@ -2015,9 +2205,34 @@ async function main(): Promise<void> {
     if (barUnitCap.netBytes !== 0) throw new Error(`unit-cap scans leaked ${barUnitCap.netBytes} B`)
     stage3Pressure = { barShared, barPercentile, barExtents, barDistinct, barUnitCap }
   } else if (stage === 4) {
-    // Stage 4 icon pressure scenarios arrive with Task 30; the shared scenarios below still run.
+    const line = (p: PressureSample, extra = ''): void => {
+      // eslint-disable-next-line no-console
+      console.log(`${p.outcome} ${p.name}: peak=${p.peakBytes} net=${p.netBytes} reads=${p.sourceReads} cells=${p.cellsWithResults}${extra} (${p.wallMs}ms context only)`)
+    }
+    const iconShared = await pressureIcon1MRowSharedScan()
+    line(iconShared, ` statisticsReads=${iconShared.statisticsReads} iconOnlyCells=${iconShared.iconOnlyCells}`)
+    checkPressureSample(iconShared, { expectOutcome: 'admitted' })
+    if (iconShared.statisticsReads !== 100) throw new Error(`300 identical scopes must share one 100-cell scan, read ${iconShared.statisticsReads}`)
+    if (iconShared.cellsWithResults !== 40 || iconShared.iconOnlyCells !== 40) throw new Error(`the first icon set must evaluate all 40 requested cells, got ${iconShared.cellsWithResults}/${iconShared.iconOnlyCells}`)
+    const iconPercentile = await pressureRefusedPercentileIconWithNum()
+    line(iconPercentile, ` percentileWithheld=${iconPercentile.percentileWithheld} controlPercentileIcons=${iconPercentile.controlPercentileIcons}`)
+    checkPressureSample(iconPercentile, { expectOutcome: 'admitted' })
+    const iconExtents = await pressureIconWholeColumnExtents()
+    line(iconExtents)
+    checkPressureSample(iconExtents, { expectOutcome: 'admitted' })
+    if (iconExtents.cellsWithResults !== 10) throw new Error(`the whole-column icon set must evaluate its 10 stored cells, got ${iconExtents.cellsWithResults}`)
+    const glyphs = await pressureIconGlyphAdmission()
     // eslint-disable-next-line no-console
-    console.log('stage 4 icon pressure: deferred to Task 30')
+    console.log(`${glyphs.name}: classes=${glyphs.classes} admitted=${glyphs.admitted} decodes=${glyphs.decodes} withheldDecoded=${glyphs.withheldDecoded} refusedDecodes=${glyphs.refusedDecodes} peak=${glyphs.peakBytes} net=${glyphs.netBytes} (${glyphs.wallMs}ms context only)`)
+    if (glyphs.decodes !== glyphs.admitted || glyphs.withheldDecoded !== 0 || glyphs.refusedDecodes !== 0 || glyphs.netBytes !== 0) throw new Error('glyph admission decoded outside its admission or leaked')
+    const iconDistinct = await pressureIconDistinctRanges()
+    line(iconDistinct)
+    checkPressureSample(iconDistinct, { expectOutcome: 'refused' })
+    const unitCap = await pressureBarUnitCap()
+    // eslint-disable-next-line no-console
+    console.log(`statistics unit cap (family-agnostic scan, shared by icons): ${unitCap.admittedCells} cells admitted (units=${unitCap.admittedUnits}), ${unitCap.refusedCells} refused ${unitCap.refusedReason} (reads=${unitCap.refusedReads}) net=${unitCap.netBytes}`)
+    if (unitCap.netBytes !== 0) throw new Error(`unit-cap scans leaked ${unitCap.netBytes} B`)
+    stage4Pressure = { iconShared, iconPercentile, iconExtents, glyphs, iconDistinct, unitCap }
   } else {
     const scaleShared = await pressureScale1MRowSharedStatistics()
     // eslint-disable-next-line no-console
@@ -2043,16 +2258,20 @@ async function main(): Promise<void> {
   // carries bar states.
   const cycles = stage === 3
     ? await pressureCycles(20, { fixture: 'tests/fixtures/xlsx-cf/stage3-bar-lengths-default.xlsx', rect: { r0: 1, r1: 11, c0: 1, c1: 1 }, requireBars: true })
-    : await pressureCycles(20)
+    : stage === 4
+      // Stage 4 cycles read the thresholds case's icon range (B2:B12), so every ready read carries icon states.
+      ? await pressureCycles(20, { fixture: 'tests/fixtures/xlsx-cf/stage4-icon-thresholds.xlsx', rect: { r0: 1, r1: 11, c0: 1, c1: 1 }, requireIcons: true })
+      : await pressureCycles(20)
   // eslint-disable-next-line no-console
-  console.log(`cycles: ${cycles.cycles} open/read/cancel/close, reads=${cycles.reads} barStates=${cycles.barStates} maxPeak=${cycles.maxPeakBytes} maxNet=${cycles.maxNetBytes} finalNet=${cycles.finalNetBytes} (released baseline, ${cycles.wallMs}ms context only)`)
+  console.log(`cycles: ${cycles.cycles} open/read/cancel/close, reads=${cycles.reads} barStates=${cycles.barStates} iconStates=${cycles.iconStates} maxPeak=${cycles.maxPeakBytes} maxNet=${cycles.maxNetBytes} finalNet=${cycles.finalNetBytes} (released baseline, ${cycles.wallMs}ms context only)`)
   if (cycles.maxPeakBytes <= 0) throw new Error('cycles observed no allocation')
   if (cycles.reads < cycles.cycles * 4) throw new Error(`cycles issued ${cycles.reads} reads, expected at least ${cycles.cycles * 4} (ready + cancelled + mid-flight + retry per cycle)`)
 
-  const baseline = await baselineNoCf(stage === 3 ? barRule(0, { firstRow: 0, lastRow: 99, firstCol: 0, lastCol: 0 }) as unknown as Record<string, unknown> : undefined)
+  const baseline = await baselineNoCf(stage === 3 ? barRule(0, { firstRow: 0, lastRow: 99, firstCol: 0, lastCol: 0 }) as unknown as Record<string, unknown>
+    : stage === 4 ? iconRuleOf(0, { firstRow: 0, lastRow: 99, firstCol: 0, lastCol: 0 }) as unknown as Record<string, unknown> : undefined)
   // eslint-disable-next-line no-console
-  console.log(`no-cf baseline: reserves=${baseline.paintReserves} reads=${baseline.sourceReads} scopeBuilt=${baseline.scopeBuilt}`)
-  if (baseline.paintReserves !== 0 || baseline.sourceReads !== 0 || baseline.scopeBuilt) throw new Error('no-CF path did CF work')
+  console.log(`no-cf baseline: reserves=${baseline.paintReserves} reads=${baseline.sourceReads} scopeBuilt=${baseline.scopeBuilt} glyphDecodes=${baseline.glyphDecodes}`)
+  if (baseline.paintReserves !== 0 || baseline.sourceReads !== 0 || baseline.scopeBuilt || (baseline.glyphDecodes ?? 0) !== 0) throw new Error('no-CF path did CF work')
 
   const eager = auditEagerBoundary(REPO_ROOT)
   // eslint-disable-next-line no-console
@@ -2071,7 +2290,7 @@ async function main(): Promise<void> {
       : stage === 3
         ? { report, ...stage3Pressure, distinct, cycles, baseline, eager }
         : stage === 4
-          ? { report, distinct, cycles, baseline, eager }
+          ? { report, publication: stage4Publication(report as Stage4AuditReport), ...stage4Pressure, distinct, cycles, baseline, eager }
           : { report, ...stage2Pressure, distinct, cycles, baseline, eager }
     writeFileSync(join(outDir, `stage${stage}-audit.json`), JSON.stringify(outData, null, 2))
   }

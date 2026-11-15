@@ -18,6 +18,16 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
 import {
   auditStage4Manifest,
+  baselineNoCf,
+  checkPressureSample,
+  iconRuleOf,
+  pressureBarUnitCap,
+  pressureCycles,
+  pressureIcon1MRowSharedScan,
+  pressureIconDistinctRanges,
+  pressureIconGlyphAdmission,
+  pressureIconWholeColumnExtents,
+  pressureRefusedPercentileIconWithNum,
   CF_STAGE4_NEVER_PUBLISH,
   CF_STAGE4_PRODUCTION_READINGS,
   stage4Publication,
@@ -359,4 +369,97 @@ describe('Stage 4 oracle workbooks parse identically on both paths', () => {
       await session.release()
     }
   }, 120000)
+})
+
+/**
+ * Carried decision (Task 29 review, parked to Task 30): a NoIcons cell with showValue="0". The canvas hides its value
+ * (`icon:noicons-showvalue` reads `text-hidden`, published), nothing paints, so nothing is announced as an icon, and it
+ * is not "unavailable" (the outcome is evidenced, not withheld). The value stays in the accessible name and in copy
+ * text: the same as a Stage 3 bar with showValue="0" (S3-O), which hides canvas text only.
+ */
+describe('NoIcons with showValue="0" announces no icon and no unavailability; the value stays in copy text', () => {
+  it('stage4-icon-inset G2:G4 under production evidence', async () => {
+    const sheet = await savedSheet('tests/fixtures/xlsx-cf/stage4-icon-inset.xlsx')
+    const { budget, net } = trackingBudget()
+    const rects = [{ r0: 1, r1: 3, c0: 5, c1: 6 }]
+    const scope = (await prepareCfTextScope(sheet, { rects, signal: new AbortController().signal, locale: 'en-US', budget }))!
+    expect(scope).toBeDefined()
+    for (const row of [1, 2, 3]) for (const col of [5, 6]) {
+      const where = `${col === 5 ? 'F' : 'G'}${row + 1}`
+      expect(scope.iconAt?.(row, col), where).toBeUndefined()
+      const text = scope.describe(row, col)?.text
+      expect(text, where).not.toBe(UNAVAILABLE)
+      expect(text ?? '', where).not.toMatch(/Icon \d of \d|圖示/)
+    }
+    // The canvas hides G's value (showValue="0") and keeps F's.
+    const cell = (row: number, col: number) => sheet.rows.find(r => r.index === row)!.cells.find(c => c.col === col)!
+    const host = (row: number, col: number) => ({ x: 0, y: 0, width: 200, height: 20, textWidth: 10, cell: cell(row, col) })
+    for (const row of [1, 2, 3]) {
+      expect(scope.hidesTextAt?.(row, 6, host(row, 6), { zoom: 1, dpr: 1 }), `G${row + 1}`).toBe(true)
+      expect(scope.hidesTextAt?.(row, 5, host(row, 5), { zoom: 1, dpr: 1 }), `F${row + 1}`).toBe(false)
+      expect(cell(row, 6).value, `G${row + 1} keeps its value for copy and the accessible name`).toEqual(expect.anything())
+    }
+    scope.dispose()
+    expect(net()).toBe(0)
+  })
+})
+
+describe('Stage 4 pressure scenarios and resource bounds', () => {
+  it('a 1M-row DECLARED A:A scope with 100 icon sets, 100 bars and 100 scales shares one scan and evaluates the first icon', async () => {
+    const sample = await pressureIcon1MRowSharedScan()
+    checkPressureSample(sample, { expectOutcome: 'admitted' })
+    expect(sample.statisticsReads).toBe(100)
+    expect(sample.cellsWithResults).toBe(40)
+    expect(sample.iconOnlyCells).toBe(40)
+    expect(sample.netBytes).toBe(0)
+  })
+
+  it('a refused percentile icon set withholds while a num icon set still evaluates (control: with room it evaluates too)', async () => {
+    const sample = await pressureRefusedPercentileIconWithNum()
+    checkPressureSample(sample, { expectOutcome: 'admitted' })
+    expect(sample.cellsWithResults).toBe(10)
+    expect(sample.percentileWithheld).toBe(10)
+    expect(sample.controlPercentileIcons).toBe(10)
+    expect(sample.netBytes).toBe(0)
+  })
+
+  it('a whole-column icon set does not extend extents (isolation)', async () => {
+    const sample = await pressureIconWholeColumnExtents()
+    checkPressureSample(sample, { expectOutcome: 'admitted' })
+    expect(sample.cellsWithResults).toBe(10)
+  })
+
+  it('glyph admission with every class the sidecar records in one batch: admitted classes decode once, withheld never, refused nothing', async () => {
+    const g = await pressureIconGlyphAdmission()
+    expect(g.classes).toBe(54)
+    expect(g.admitted).toBe(CF_ICON_GLYPH_CLASSES && new Set(Object.values(CF_ICON_GLYPH_CLASSES).filter(c => !CF_ICON_GLYPH_WITHHELD.has(c))).size)
+    expect(g.admitted).toBe(39)
+    expect(g.decodes).toBe(39)
+    expect(g.withheldDecoded).toBe(0)
+    expect(g.refusedDecodes).toBe(0)
+    expect(g.peakBytes).toBeGreaterThan(0)
+    expect(g.netBytes).toBe(0)
+  })
+
+  it('distinct-range icon pressure refuses past the rect cap; the shared statistics scan refuses past the 1,000,000-unit cap', async () => {
+    checkPressureSample(await pressureIconDistinctRanges(), { expectOutcome: 'refused' })
+    const cap = await pressureBarUnitCap()
+    expect(CF_LIMITS.workUnits).toBe(1_000_000)
+    expect(cap.refusedReason).toBe('cf-resource-limit')
+    expect(cap.refusedReads).toBeLessThan(cap.refusedCells)
+    expect(cap.netBytes).toBe(0)
+  }, 120000)
+
+  it('20 open/read/cancel/close cycles over an icon range return to zero', async () => {
+    const cycles = await pressureCycles(20, { fixture: 'tests/fixtures/xlsx-cf/stage4-icon-thresholds.xlsx', rect: { r0: 1, r1: 11, c0: 1, c1: 1 }, requireIcons: true })
+    expect(cycles.cycles).toBe(20)
+    expect(cycles.iconStates).toBeGreaterThanOrEqual(20)
+    expect(cycles.finalNetBytes).toBe(0)
+    expect(cycles.maxPeakBytes).toBeGreaterThan(0)
+  }, 120000)
+
+  it('zero icon work, glyph decodes or reads on a no-CF baseline', async () => {
+    const baseline = await baselineNoCf(iconRuleOf(0, { firstRow: 0, lastRow: 99, firstCol: 0, lastCol: 0 }) as unknown as Record<string, unknown>)
+    expect(baseline).toEqual({ paintReserves: 0, sourceReads: 0, scopeBuilt: false, glyphDecodes: 0 })
+  })
 })

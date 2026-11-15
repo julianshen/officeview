@@ -415,6 +415,6 @@ describe('Stage 3 pressure scenarios and resource bounds', () => {
 
   it('zero bar work or reads on a no-CF baseline', async () => {
     const baseline = await baselineNoCf(barRule(0, { firstRow: 0, lastRow: 99, firstCol: 0, lastCol: 0 }) as unknown as Record<string, unknown>)
-    expect(baseline).toEqual({ paintReserves: 0, sourceReads: 0, scopeBuilt: false })
+    expect(baseline).toEqual({ paintReserves: 0, sourceReads: 0, scopeBuilt: false, glyphDecodes: 0 })
   })
 })
