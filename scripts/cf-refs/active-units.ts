@@ -20,6 +20,9 @@ import { residentSource } from '../../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../../src/xlsx/cf/predicates'
 import { cfRulesVersion } from '../../src/xlsx/view/pagedSource'
 import { barRule, scaleRule } from './audit'
+import { cfDocumentEvaluationOf, cfEvaluationContextFor, compileCfFormula, isCfFormulaRefusal } from '../../src/xlsx/cf/formula'
+import { prepareCfFormulaBatch } from '../../src/xlsx/cf/dependencies'
+import { createCfStatistics } from '../../src/xlsx/cf/statistics'
 import type { XlsxSheet } from '../../src/xlsx/types'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -45,11 +48,11 @@ function countingBudget(): CfWorkBudget & { activeMs(): number } {
 }
 
 type Source = ReturnType<typeof residentSource>
-async function prepare(sheet: XlsxSheet, rect: Rect, budget: () => CfWorkBudget, shared?: Source) {
+async function prepare(sheet: XlsxSheet, rect: Rect, budget: () => CfWorkBudget, shared?: Source, formulas = false) {
   const memory = createCfMemory()
   // The paint path's statistics budget (render.ts): a whole-scan budget, not the per-call one.
   const service = createCfService(sheet.conditionalFormatting!, memory, { evidence: cfRuntimeEvidence,
-    statisticsBudget: () => createCfWorkBudget({ scan: true, maxUnits: 10_000_000 }), budget })
+    statisticsBudget: () => createCfWorkBudget({ scan: true, maxUnits: 10_000_000 }), budget, ...(formulas ? { evaluation: EVALUATION } : {}) })
   const stamp = { owner: 'active-units', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(sheet.conditionalFormatting!), viewGen: 0, structureGen: 0, clockGen: 0 }
   const source = shared ?? residentSource(sheet, stamp, memory, 'engine')
   let outcome = 'ready', bars = 0
@@ -60,6 +63,19 @@ async function prepare(sheet: XlsxSheet, rect: Rect, budget: () => CfWorkBudget,
       if (o.kind === 'ready' && o.value.visual?.dataBar) bars++
     }
     lease.release()
+    if (formulas) {
+      // The per-cell formula calls, on the same per-call budget (the snapshot and hoist scans pay their own).
+      const perCall = budget()
+      const rules = sheet.conditionalFormatting!.rules
+      const batch = await prepareCfFormulaBatch(rules.map(rule => ({ rule, formula: (rule.definition as unknown as { formula: never }).formula })), {
+        source, sheetId: stamp.sheetId, sheetName: sheet.name, stamp, evaluation: EVALUATION, edge: 'ref-error', memory, signal: new AbortController().signal,
+        budget: perCall, statistics: createCfStatistics(memory), hoist: true, targets: [rect],
+      })
+      const cells: Array<{ row: number; col: number }> = []
+      for (let r = rect.firstRow; r <= rect.lastRow; r++) for (let c = rect.firstCol; c <= rect.lastCol; c++) cells.push({ row: r, col: c })
+      await batch.run(cells, (_t, _r, _c, o) => { if (o.kind === 'ready') bars++ })
+      batch.dispose()
+    }
   } catch (e) { outcome = `refused (${(e as { code?: string }).code ?? (e as Error).message})` }
   service.dispose()
   return { outcome, bars }
@@ -97,7 +113,24 @@ const populatedIcons = (n: number, k: number) => async () => {
   return { sheet, rect: { firstRow: 0, lastRow: k - 1, firstCol: 0, lastCol: 0 }, cells: k }
 }
 
-const scenarios: Array<{ name: string; build: () => Promise<{ sheet: XlsxSheet; rect: Rect; cells: number }> }> = [
+/** Task 34: four formula rules (one COUNTIF($A:$A,...)) over the populated column. The per-call budget pays the service
+ * and every per-cell formula call (Task 35 runs them inside prepareCf); snapshot and hoist scans pay their own budgets. */
+const FORMULA_TEXTS = ['COUNTIF($A:$A,A1)>1', 'A1>AVERAGE($A:$A)', 'MOD(A1,3)=0', 'AND(A1>10,A1<50)']
+const populatedFormulas = (n: number, k: number) => async () => {
+  const all = { firstRow: 0, lastRow: n - 1, firstCol: 0, lastCol: 0 }
+  const rules = FORMULA_TEXTS.map((text, i) => {
+    const out = compileCfFormula(text, { row: 0, col: 0 }, createCfMemory())
+    if (isCfFormulaRefusal(out)) throw new Error(text)
+    return { id: i, priority: i + 1, documentOrder: i, stopIfTrue: false, ranges: [all], writes: new Set(['fill']), dxf: { 'fill.pattern': 'solid', 'fill.bg': 'FFFF0000' },
+      definition: { kind: 'expression', formula: out.value, sourceType: 'expression', dialect: 'base', formulas: [text] } }
+  })
+  const rows = Array.from({ length: n }, (_, r) => ({ index: r, cells: [{ ref: `A${r + 1}`, row: r, col: 0, styleIndex: 0, value: (r * 37) % 97, hasCachedValue: true }] }))
+  const sheet = { name: 'P', sheetId: 'p', rows, cols: [], mergeRefs: [], mergeRanges: [], conditionalFormatting: { diagnostics: [], rules } } as unknown as XlsxSheet
+  return { sheet, rect: { firstRow: 1000, lastRow: 1000 + k - 1, firstCol: 0, lastCol: 0 }, cells: k, formulas: true }
+}
+const EVALUATION = cfEvaluationContextFor(cfDocumentEvaluationOf({ calc: undefined, valuePolicy: 'cached', semantics: { dateSystem: '1900', timeZone: 'UTC' } } as never), () => Date.UTC(2026, 10, 16))
+
+const scenarios: Array<{ name: string; build: () => Promise<{ sheet: XlsxSheet; rect: Rect; cells: number; formulas?: boolean }> }> = [
   { name: 'stage3-bar-lengths-default A1:V28 (largest fixture)', build: () => fixture('stage3-bar-lengths-default') },
   { name: 'stage3-bar-auto-bounds', build: () => fixture('stage3-bar-auto-bounds') },
   { name: 'sparse 1M-row declared A:A, 100 bars + 100 scales, 40-cell request', build: async () => {
@@ -111,27 +144,29 @@ const scenarios: Array<{ name: string; build: () => Promise<{ sheet: XlsxSheet; 
   { name: 'populated 100,000-row A:A, 1 bar, 5,000-cell call (not a production size)', build: populated(100_000, 5000) },
   { name: 'populated 100,000-row A:A, 4 icon rules, 1,000-cell call (text-path maximum)', build: populatedIcons(100_000, 1000) },
   { name: 'populated 100,000-row A:A, 4 icon rules, 256-cell call (paint-path maximum)', build: populatedIcons(100_000, 256) },
+  { name: 'populated 5,000-row A:A, 4 formula rules incl. COUNTIF($A:$A,...), 1,000-cell call (text-path maximum; Task 34)', build: populatedFormulas(5_000, 1000) },
+  { name: 'populated 5,000-row A:A, 4 formula rules incl. COUNTIF($A:$A,...), 256-cell call (paint-path maximum; Task 34)', build: populatedFormulas(5_000, 256) },
 ]
 
 const runs = Math.max(1, Number(process.argv[2] ?? 5))
 let worstUnits = 0
 for (const s of scenarios) {
-  const { sheet, rect, cells } = await s.build()
+  const { sheet, rect, cells, formulas } = await s.build()
   const samples: Array<{ units: number; ms: number; outcome: string; bars: number }> = []
   for (let i = 0; i < runs; i++) {
     const b = countingBudget()
-    const r = await prepare(sheet, rect, () => b)
+    const r = await prepare(sheet, rect, () => b, undefined, formulas)
     samples.push({ units: b.units, ms: b.activeMs(), ...r })
   }
   // Wall time of the per-call work alone: a source whose bounds are already cached, so the separately budgeted
   // whole-sheet bounds scan (its own CF_LIMITS.workUnits budget) does not land between two per-call spends.
   const stamp = { owner: 'active-units', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(sheet.conditionalFormatting!), viewGen: 0, structureGen: 0, clockGen: 0 }
   const warm = residentSource(sheet, stamp, createCfMemory(), 'engine')
-  await prepare(sheet, rect, () => countingBudget(), warm)
+  await prepare(sheet, rect, () => countingBudget(), warm, formulas)
   const warmMs: number[] = []
   for (let i = 0; i < runs; i++) {
     const b = countingBudget()
-    await prepare(sheet, rect, () => b, warm)
+    await prepare(sheet, rect, () => b, warm, formulas)
     if (b.units !== samples[0]!.units) throw new Error(`${s.name}: warm unit count differs`)
     warmMs.push(b.activeMs())
   }
@@ -141,7 +176,9 @@ for (const s of scenarios) {
   if (samples.some(x => x.units !== units)) throw new Error(`${s.name}: unit count is not deterministic`)
   const ms = samples.map(x => x.ms).sort((a, b) => a - b)
   const median = ms[Math.floor(ms.length / 2)]!
-  const real = await prepare(sheet, rect, () => createCfWorkBudget())
+  // One per-call budget for the whole call (service plus formula calls), as the production call holds one.
+  let shared: CfWorkBudget | undefined
+  const real = await prepare(sheet, rect, () => (shared ??= createCfWorkBudget()), undefined, formulas)
   if (!s.name.includes('not a production')) worstUnits = Math.max(worstUnits, units)
   console.log(`${s.name}: cells=${cells} units=${units} activeMs median=${median.toFixed(2)} max=${ms.at(-1)!.toFixed(2)} warm-bounds activeMs median=${warmMedian.toFixed(2)} units/ms(warm median)=${(units / warmMedian).toFixed(0)} cap=${CF_LIMITS.activeUnits} margin=${(CF_LIMITS.activeUnits / units).toFixed(1)}x default budget: ${real.outcome}, bars=${real.bars}`)
 }

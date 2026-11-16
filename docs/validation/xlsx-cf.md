@@ -1159,6 +1159,36 @@ full bucket path on every cell), `tests/xlsx-cf-active-units.test.ts` counts 23,
 for 256, and asserts both stay at or below `CF_LIMITS.activeUnits / 5` (50,000). The worst production call is still
 the 200-rule sparse scope at 48,579 units (5.1x).
 
+**Task 34 (Stage 5, 2026-11-16): recalibrated to `activeUnits = 300,000` for formula rules.** A production call with
+formula rules spends the service's own preparation plus every bounded per-cell formula call on the same per-call budget
+(Ruling S5-N; the dependency snapshot pays from its own attempt budget under the preparation ceiling, and the hoist
+scans from scan budgets, Ruling S5-HOIST "Budgets"). Four formula rules over a populated 5,000-row column
+(`COUNTIF($A:$A,A1)>1` and `A1>AVERAGE($A:$A)`, both hoisted, `MOD(A1,3)=0`, `AND(A1>10,A1<50)`) cost 28 units per
+cell in their static bounds (6 + 5 + 7 + 10) on top of the service's 27, so the 1,000-cell text-path call spends 55,011
+units, over the old `250,000 / 5` = 50,000. `activeUnits` is raised to 300,000 (5.5x that call), and the preparation
+ceiling `formulaCeilingUnits` = 2 x activeUnits follows (600,000). The Stage 1-4 shapes are unchanged in units; their
+margins grow by 1.2x. `tests/xlsx-cf-active-units.test.ts` asserts both formula calls at or below `activeUnits / 5`
+(60,000). Re-run (`npx tsx scripts/cf-refs/active-units.ts 3`, this machine, 2026-11-16):
+
+| Scope (one `prepareCf` call) | Cells | Units | Margin to 300,000 | Cold / warm median active ms | Units per ms (warm) |
+|---|---|---|---|---|---|
+| `stage3-bar-lengths-default` A1:V28 (largest fixture) | 616 | 28,490 | 10.5x | 8.6 / 5.2 | 5,506 |
+| `stage3-bar-auto-bounds` | 132 | 3,205 | 94x | 1.5 / 1.3 | 2,534 |
+| sparse 1M-row declared A:A, 100 bars + 100 scales, 40-cell request | 40 | 48,579 | 6.2x | 10.7 / 10.3 | 4,741 |
+| populated 100,000-row column, 1 bar (text-path maximum) | 1,000 | 8,001 | 37x | 37.8 / 4.4 | 1,812 |
+| populated 100,000-row column, 1 bar (paint-path maximum) | 256 | 2,049 | 146x | 32.6 / 1.3 | 1,532 |
+| populated 100,000-row column, 1 bar (not a production call size) | 5,000 | 40,001 | 7.5x | 50.5 / 17.2 | 2,324 |
+| populated 100,000-row column, 4 icon rules (text-path maximum) | 1,000 | 26,007 | 11.5x | 43.5 / 8.0 | 3,254 |
+| populated 100,000-row column, 4 icon rules (paint-path maximum) | 256 | 6,663 | 45x | 36.2 / 2.0 | 3,352 |
+| populated 5,000-row column, 4 formula rules incl. `COUNTIF($A:$A,...)` (text-path maximum; Task 34) | 1,000 | 55,011 | 5.5x | 56.1 / 47.6 | 1,155 |
+| populated 5,000-row column, 4 formula rules incl. `COUNTIF($A:$A,...)` (paint-path maximum; Task 34) | 256 | 14,091 | 21x | 18.3 / 16.0 | 881 |
+
+The icon rows read 26,007 / 6,663 units here against 27,007 / 6,919 recorded by Task 26; these shapes carry no formula
+rule, so the difference predates Task 34 (not investigated here). The formula rows' active time includes the snapshot
+build and the hoist scans, which run between two per-call spends on their own budgets, so their units-per-ms understates
+the per-call rate; at 881 units per ms a call at the new cap is about 340 ms on this machine, under the 10x (500 ms)
+ceiling of Ruling S3-I1-UNITS. The worst production call is now the formula text-path call at 55,011 units (5.5x).
+
 Every production call shape admits with at least 5.1x margin (the worst is the 200-rule sparse scope; the 4x floor
 would be 194,316 units). The warm rate, 2,242 to 6,894 units per ms, is the one to read: the cold populated rows spend
 about 32 ms in the whole-sheet bounds scan, which runs on its own whole-scan budget between two per-call spends, so

@@ -118,8 +118,10 @@ export function createCfUnitCeiling(limit: number = CF_LIMITS.formulaCeilingUnit
   }
 }
 
-/** Ruling S3-I1-UNITS: one preparation call's own work units (calibrated in docs/validation/xlsx-cf.md section 11). */
-const ACTIVE_UNITS = 250_000
+/** Ruling S3-I1-UNITS: one preparation call's own work units (calibrated in docs/validation/xlsx-cf.md section 11).
+ * Stage 5 Task 34 recalibration: 250,000 -> 300,000, so it stays >= 5x the largest production call with formula rules
+ * present (55,011 units: 1,000 cells, four formula rules, one COUNTIF($A:$A,...); 5.45x). */
+const ACTIVE_UNITS = 300_000
 export const CF_LIMITS = Object.freeze({ rules: 4096, rangesPerRule: 256, rangesPerSheet: 16384,
   sheetMetadataBytes: 4 * 1024 ** 2, workbookMetadataBytes: 16 * 1024 ** 2,
   textUnits: 8192, formulaTokens: 4096, formulaChildren: 3, cfvo: 5, customIcons: 5,

@@ -609,8 +609,9 @@ describe('formula definitions are priced and statistical-aware', () => {
     expect(estimateCfPrepareBytes(priced.lease.value, wider)! - estimateCfPrepareBytes(plain.lease.value, wider)!).toBe(CF_FORMULA_NODE_BYTES * formula.nodes)
     plain.lease.release(); priced.lease.release()
     const source = readFileSync(new URL('../src/xlsx/cf/service.ts', import.meta.url), 'utf8')
-    const arm = source.split('\n').filter(line => line.includes('cfDefinitionFormulas(rule.definition)'))
-    expect(arm).toHaveLength(2)
+    // The pricing arm is the one use that adds to `formulaBytes` (Task 34's hoist loop is another use, not a price).
+    const arm = source.split('\n').filter(line => line.includes('cfDefinitionFormulas(rule.definition)') && line.includes('formulaBytes'))
+    expect(arm).toHaveLength(1)
     expect(arm[0]).toMatch(/CF_FORMULA_NODE_BYTES \* formula\.nodes/)
     expect(arm[0]).not.toMatch(/\b\d{2,}\b/)
   })
