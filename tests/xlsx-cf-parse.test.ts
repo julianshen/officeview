@@ -9,7 +9,7 @@ import { parseXlsx } from '../src/xlsx/parse'
 import { createCfMemory } from '../src/xlsx/cf/limits'
 import { CF_LIMITS } from '../src/xlsx/cf/limits'
 import { createCfStreamEvents } from '../src/xlsx/cf/capture'
-import { withInjectedCfEvidence } from '../src/xlsx/cf/evidence'
+import { withExactCfEvidence, withInjectedCfEvidence } from '../src/xlsx/cf/evidence'
 import { attachCfSheetRules, parseCfSheet, type CfParseMeta, type CfStylesSource } from '../src/xlsx/cf/parse'
 import { measurePayloadBytes } from '../src/xlsx/view/payloadBytes'
 import type { CfLease, CfRule, CfSheetRules } from '../src/xlsx/cf/model'
@@ -51,8 +51,16 @@ function ruleByPriority(rules: readonly CfRule[], priority: number): CfRule {
   return found[0]!
 }
 
+
+/**
+ * Ruling S5-STUB (Task 35): a test that pins a formula shape as unresolved runs under exactly no evidence, so it asserts
+ * the same refusal now and cannot flip silently when Stage 5 publishes; its twin under the injected capabilities (the
+ * describe block at the end of this file) asserts the resolved shape.
+ */
+const itPinned = (name: string, fn: () => unknown, timeout?: number): void => { it(name, () => withExactCfEvidence([], fn) as never, timeout) }
+
 describe('CF rule parsing: all 18 types', () => {
-  it('parses the spec example: literal cellIs, rank-3 top10, unresolved colorScale; B2>100 is not a literal', () => {
+  itPinned('parses the spec example: literal cellIs, rank-3 top10, unresolved colorScale; B2>100 is not a literal', () => {
     const { value } = parse(
       `<conditionalFormatting sqref="B2:B20 D2:D20">` +
         `<cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>100</formula></cfRule>` +
@@ -152,7 +160,7 @@ describe('CF rule parsing: all 18 types', () => {
     })
   })
 
-  it('marks non-literal operands and wrong formula counts unresolved without guessing', () => {
+  itPinned('marks non-literal operands and wrong formula counts unresolved without guessing', () => {
     const { value } = parse(
       `<conditionalFormatting sqref="B2:B3">` +
         `<cfRule type="cellIs" priority="1" operator="greaterThan"><formula>$B$1</formula></cfRule>` +
@@ -169,7 +177,7 @@ describe('CF rule parsing: all 18 types', () => {
     expect(ruleByPriority(value.rules, 5).definition).toMatchObject({ type: 'expression' })
   })
 
-  it('evaluates text, blank and error predicates only for canonical formulas (refuses absent)', () => {
+  itPinned('evaluates text, blank and error predicates only for canonical formulas (refuses absent)', () => {
     // One element per rule, mirroring the measured fixtures: each canonical
     // formula references its own sqref anchor (top-left cell).
     const el = (sqref: string, inner: string) => `<conditionalFormatting sqref="${sqref}">${inner}</conditionalFormatting>`
@@ -204,7 +212,7 @@ describe('CF rule parsing: all 18 types', () => {
     expect(ruleByPriority(value.rules, 2).definition).toMatchObject({ kind: 'text', type: 'containsText', needle: 'a"b' })
   })
 
-  it('evaluates standalone x14 text/blank/error rules with canonical <xm:f> like their legacy twins (Task 18c) and refuses activePresent on top10', () => {
+  itPinned('evaluates standalone x14 text/blank/error rules with canonical <xm:f> like their legacy twins (Task 18c) and refuses activePresent on top10', () => {
     // Spec §3 (activation vs operand formulas): these rule types "whose <formula> or <xm:f> is absent or matches the
     // canonical pattern measured by oracle cases stage1-text-predicates, stage1-blanks-errors ... evaluate via their
     // Stage 1 type/attribute predicates". The Task 18c recapture (Excel reading the x14 block under the corrected URI)
@@ -669,7 +677,7 @@ describe('CF resident workbook integration', () => {
     expect(sheet.tableStyleSource).toBeUndefined()
   })
 
-  it('caps sheet.diagnostics at 64 per sheet (M4)', async () => {
+  itPinned('caps sheet.diagnostics at 64 per sheet (M4)', async () => {
     // Generate over 70 distinct rules to emit diagnostics
     const rules = Array.from({ length: 80 }, (_, i) => `<cfRule type="expression" priority="${i + 1}"><formula>A1</formula></cfRule>`).join('')
     const pkg = await OfficePackage.load(xlsxBytes({ afterSheetData: `<conditionalFormatting sqref="A1">${rules}</conditionalFormatting>` }))
@@ -815,7 +823,7 @@ describe('CF fix round 1: review-t3-r1 findings', () => {
     expect(memory.currentBytes).toBe(0)
   })
 
-  it('F4 publishes one admitted, deduplicated, capped diagnostic collection', () => {
+  itPinned('F4 publishes one admitted, deduplicated, capped diagnostic collection', () => {
     const identical = Array.from(
       { length: 100 },
       () => `<cfRule type="expression" priority="1"><formula>A1</formula></cfRule>`,
@@ -845,7 +853,7 @@ describe('CF fix round 1: review-t3-r1 findings', () => {
     expect(value.unresolvedSheet).toMatchObject({ writes: 'ALL', reason: 'cf-resource-limit' })
   })
 
-  it('F6 rejects non-literal string expressions instead of parsing quotes', () => {
+  itPinned('F6 rejects non-literal string expressions instead of parsing quotes', () => {
     const concat = parse(
       `<conditionalFormatting sqref="A1"><cfRule type="cellIs" priority="1" operator="equal"><formula>"a"&amp;"b"</formula></cfRule></conditionalFormatting>`,
     )
@@ -864,7 +872,7 @@ describe('CF fix round 1: review-t3-r1 findings', () => {
     expect(escaped.value.rules[0]!.definition).toMatchObject({ kind: 'cellIs', operands: [{ kind: 'string', value: 'a"b' }] })
   })
 
-  it('F7 only honours canonical formulas that reference the anchor cell', () => {
+  itPinned('F7 only honours canonical formulas that reference the anchor cell', () => {
     const offAnchor = parse(
       `<conditionalFormatting sqref="A1"><cfRule type="containsBlanks" priority="1"><formula>LEN(TRIM(Z99))=0</formula></cfRule></conditionalFormatting>`,
     )
@@ -1021,7 +1029,7 @@ describe('CF fix round 2: review-t3-r2 residuals', () => {
     expect(firstRectBytes).toBeGreaterThan(256)
   })
 
-  it('F4 rejects pinned absolute references in canonical formulas', () => {
+  itPinned('F4 rejects pinned absolute references in canonical formulas', () => {
     const pinnedFull = parse(
       `<conditionalFormatting sqref="A1:A2"><cfRule type="containsBlanks" priority="1"><formula>LEN(TRIM($A$1))=0</formula></cfRule></conditionalFormatting>`,
     )
@@ -1338,5 +1346,29 @@ describe('CF fix round 4: review-t3-r4 findings', () => {
     expect(lease.bytes).toBeLessThanOrEqual(CF_LIMITS.sheetMetadataBytes)
     lease.release()
     expect(memory.currentBytes).toBe(0)
+  })
+})
+
+describe('S5-STUB twins: the pinned formula shapes resolve under their injected parse capabilities (Task 35)', () => {
+  const PARSE = ['formula:dialect-base', 'formula:dialect-x14', 'formula:anchor-single', 'formula:anchor-mixed-abs']
+  const one = (xml: string) => withExactCfEvidence(PARSE, () => parse(xml).value.rules[0]!.definition)
+  it('B2>100 and the "a"&"b" operand are formula operands; an expression compiles', () => {
+    expect(one(`<conditionalFormatting sqref="A1"><cfRule type="cellIs" priority="1" operator="greaterThan"><formula>B2&gt;100</formula></cfRule></conditionalFormatting>`))
+      .toMatchObject({ kind: 'cellIs', operands: [{ formula: expect.anything() }] })
+    expect(one(`<conditionalFormatting sqref="A1"><cfRule type="cellIs" priority="1" operator="equal"><formula>"a"&amp;"b"</formula></cfRule></conditionalFormatting>`))
+      .toMatchObject({ kind: 'cellIs', operands: [{ formula: expect.anything() }] })
+    expect(one(`<conditionalFormatting sqref="A1"><cfRule type="expression" priority="1"><formula>A1</formula></cfRule></conditionalFormatting>`)).toMatchObject({ kind: 'expression', sourceType: 'expression' })
+  })
+  it('divergent ISBLANK(G2), ISNA(H2), off-anchor LEN(TRIM(Z99))=0 and pinned LEN(TRIM($A$1))=0 compile as expressions with their own type', () => {
+    expect(one(`<conditionalFormatting sqref="G2:G9"><cfRule type="containsBlanks" priority="1"><formula>ISBLANK(G2)</formula></cfRule></conditionalFormatting>`)).toMatchObject({ kind: 'expression', sourceType: 'containsBlanks' })
+    expect(one(`<conditionalFormatting sqref="H2:H9"><cfRule type="containsErrors" priority="1"><formula>ISNA(H2)</formula></cfRule></conditionalFormatting>`)).toMatchObject({ kind: 'expression', sourceType: 'containsErrors' })
+    const z99 = one(`<conditionalFormatting sqref="A1"><cfRule type="containsBlanks" priority="1"><formula>LEN(TRIM(Z99))=0</formula></cfRule></conditionalFormatting>`)
+    expect(z99).toMatchObject({ kind: 'expression', sourceType: 'containsBlanks', formula: { atoms: [{ firstRow: 98, firstCol: 25 }] } })
+    for (const f of ['LEN(TRIM($A$1))=0', 'LEN(TRIM(A$1))=0']) {
+      expect(one(`<conditionalFormatting sqref="A1:A4"><cfRule type="containsBlanks" priority="1"><formula>${f}</formula></cfRule></conditionalFormatting>`), f).toMatchObject({ kind: 'expression', sourceType: 'containsBlanks' })
+    }
+  })
+  it('a SEARCH-based divergent formula stays unresolved under every capability (SEARCH is unregistered, S5-B)', () => {
+    expect(one(`<conditionalFormatting sqref="J2:J9"><cfRule type="containsText" priority="1" text="ab"><formula>NOT(ISERROR(SEARCH("zz",J2)))</formula></cfRule></conditionalFormatting>`)).toMatchObject({ kind: 'unresolved' })
   })
 })

@@ -12,6 +12,7 @@ import { createCfMemory, createCfWorkBudget, type CfWorkBudget } from '../src/xl
 import { parseCfSheet } from '../src/xlsx/cf/parse'
 import { createCfStatistics, createResidentCfSource, type CfRangeStatistics } from '../src/xlsx/cf/statistics'
 import { evaluatePredicate, type CfEvidenceGate } from '../src/xlsx/cf/predicates'
+import { withExactCfEvidence } from '../src/xlsx/cf/evidence'
 
 const SHEET = 'sheet1'
 const stamp = (gen = 1): CfStamp => ({
@@ -181,7 +182,9 @@ describe('CF predicate evaluation', () => {
   })
 
   it('nonliteral B1 stays unresolved on both adapters', async () => {
-    const definition = parsedDefinition('<cfRule type="cellIs" operator="greaterThan" priority="1"><formula>B1</formula></cfRule>')
+    // Ruling S5-STUB: pinned under exactly no evidence, so it cannot flip at Stage 5 publication (the resolved twin is in
+    // tests/xlsx-cf-formula-rules.test.ts, "formula operands reuse the Stage 1 comparators").
+    const definition = withExactCfEvidence([], () => parsedDefinition('<cfRule type="cellIs" operator="greaterThan" priority="1"><formula>B1</formula></cfRule>'))
     expect(definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
     const r = rule(definition, [rect(0, 1, 1, 1)])
     // Resident-shaped delivery: one page per rect.

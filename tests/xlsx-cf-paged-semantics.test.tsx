@@ -71,11 +71,12 @@ describe('worker-backed semantic text follows CF', () => {
   }, 60_000)
 
   it('a paged unresolved rule announces unavailable, never raw internals', async () => {
-    const afterSheetData = '<conditionalFormatting sqref="A1:A1"><cfRule type="expression" dxfId="0" priority="1"><formula>LEN(A1)&gt;100000</formula></cfRule></conditionalFormatting>'
+    // Ruling S5-STUB: an unregistered function, so the rule stays unresolved under any published evidence.
+    const afterSheetData = '<conditionalFormatting sqref="A1:A1"><cfRule type="expression" dxfId="0" priority="1"><formula>ISEVEN(A1)</formula></cfRule></conditionalFormatting>'
     const ui = await mountCf({ afterSheetData })
     try {
       const cell = await ui.findByRole('gridcell', { name: /A1, value .*unavailable/i }, { timeout: 30_000 })
-      expect(cell.textContent).not.toContain('LEN(A1)')
+      expect(cell.textContent).not.toContain('ISEVEN(A1)')
       expect(cell.textContent).not.toContain('expression')
     } finally {
       ui.unmount()

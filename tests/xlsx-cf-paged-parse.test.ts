@@ -134,15 +134,16 @@ describe('paged CF capture', () => {
         result.lease.release(); expect(result.memory.currentBytes).toBe(0)
       }
     })
-    // Without evidence both paths stay unresolved, deep-equal.
-    const none = parseCfSheet(parseXml(xml), styles, createCfMemory()).value
+    // Without evidence both paths stay unresolved, deep-equal (pinned under exactly no evidence, Ruling S5-STUB).
+    const none = withExactCfEvidence([], () => parseCfSheet(parseXml(xml), styles, createCfMemory()).value)
     expect(none.rules.map(r => r.definition.kind)).toEqual(['unresolved', 'unresolved', 'unresolved', 'unresolved', 'unresolved', 'unresolved', 'timePeriod', 'unresolved'])
-    expect((await stream(xml, 100)).lease.value).toEqual(none)
+    expect((await withExactCfEvidence([], () => stream(xml, 100))).lease.value).toEqual(none)
   })
   it.each(['formula', 'color', 'dxf'])('ten thousand singleton duplicates do not build ten thousand nodes: %s', async tag => {
     const xml = wrap(`<conditionalFormatting sqref="A1"><cfRule type="expression" priority="1">${(`<${tag}>1</${tag}>`).repeat(10_000)}</cfRule></conditionalFormatting>`)
-    const expected = parseCfSheet(parseXml(xml), styles, createCfMemory()).value
-    const result = await stream(xml)
+    // Pinned under exactly no evidence (Ruling S5-STUB): the stub stays unresolved whatever Stage 5 publishes.
+    const expected = withExactCfEvidence([], () => parseCfSheet(parseXml(xml), styles, createCfMemory()).value)
+    const result = await withExactCfEvidence([], () => stream(xml))
     if (tag === 'formula') expect(result.lease.value.rules[0]?.definition.kind).toBe('unresolved')
     else expect(result.lease.value.unresolvedSheet).toBeDefined()
     expect(result.lease.value).toEqual(expected)
