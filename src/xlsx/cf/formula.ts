@@ -1248,7 +1248,8 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
   for (const node of subtrees) { const v = context.invariants.getNode(node); if (v !== undefined) memoised.set(node, v) }
   const shape = cfCallShape(f, plan, memoised)
   // Per-call meter: the dynamic spends (view build, reads, enumeration, sort) are refused past this call's own bound.
-  let limit = Math.min(CF_LIMITS.checkpointUnits, context.ceiling.remaining), used = 0
+  // Discovery (view build, index steps, criterion preflight) is bounded by every account it will be charged to.
+  let limit = Math.min(CF_LIMITS.checkpointUnits, context.ceiling.remaining, context.budget.remaining), used = 0, admitted = false
   const meter: CfWorkBudget = {
     get units() { return used },
     get remaining() { return limit - used },
@@ -1353,6 +1354,7 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
       if (spent === 'refused') return unresolved('cf-resource-limit')
       if (spent === 'yield' && context.pacing) context.pacing.yieldPending = true
       if (!context.ceiling.take(breakdown.total)) return unresolved('cf-resource-limit')
+      admitted = true // the bound charged covers the discovery already metered
       limit = breakdown.total
       context.onCall?.(breakdown)
       const outcome = invoke(f, tree.value.value, at, shape, areas, view.value, snapshot, context, values => {
@@ -1372,7 +1374,15 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
       return outcome
     } finally { tree.value.release() }
   }
-  } finally { hold.release() }
+  } finally {
+    hold.release()
+    // A call refused after discovery still pays for it (round 3, finding 1): the metered units go to the shared budget
+    // and the ceiling, and a yield they earn is honoured between cells.
+    if (!admitted && used > 0) {
+      if (context.budget.spend(used) === 'yield' && context.pacing) context.pacing.yieldPending = true
+      context.ceiling.take(Math.min(used, context.ceiling.remaining))
+    }
+  }
 }
 
 function invoke(f: CfFormula, tree: AstNode, at: Readonly<{ row: number; col: number }>, shape: CfCallShape, areas: readonly (SourceRect | 'ref')[],

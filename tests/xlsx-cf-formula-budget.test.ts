@@ -354,7 +354,7 @@ describe('the static bound covers the store work the engine actually performs (S
 void refOf
 
 describe('a refused call never poisons the shared production budget (Task 34 fix round 2, finding 6)', () => {
-  it('with 6 units left, the 7-unit A1+1>0 refuses and spends nothing; the 5-unit A1>0 that follows still evaluates', async () => {
+  it('with 6 units left, the 7-unit A1+1>0 refuses, paying only its discovery; the 5-unit A1>0 that follows still evaluates', async () => {
     const signal = new AbortController().signal
     const budget = createCfWorkBudget({ now: () => 0, signal }) // the production per-call budget (activeUnits)
     const calls: number[] = []
@@ -362,10 +362,11 @@ describe('a refused call never poisons the shared production budget (Task 34 fix
     expect(budget.spend(budget.remaining - 6)).not.toBe('refused')
     expect(budget.remaining).toBe(6)
     expect(batch.evaluate(0, 0, 1)).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
-    expect(budget.remaining).toBe(6) // the refusal took nothing and latched nothing
+    // The refusal latched nothing; it paid only its 1-unit view build (round 3, finding 1: discovery is charged).
+    expect(budget.remaining).toBe(5)
     expect(batch.evaluate(1, 0, 1)).toEqual({ kind: 'ready', value: { kind: 'boolean', value: true } })
     expect(calls).toEqual([5])
-    expect(budget.remaining).toBe(1)
+    expect(budget.remaining).toBe(0)
     batch.dispose()
   })
 })
@@ -527,5 +528,37 @@ describe('text work is bounded per operation, generated strings and criteria inc
     expect(b.text).toBeGreaterThanOrEqual(40 + 80)
     // The longest intermediate (what scratch is sized from, and what each later walk may meet) is the 80-unit output.
     expect(cfTextUnits(shape, { viewCells: 1, atoms: [{ cells: 1, stringUnits: 40, longestString: 40 }] }).intermediate).toBeGreaterThanOrEqual(80)
+  })
+})
+
+describe('a refused call\'s discovery work is charged to the preparation (Task 34 fix round 3, finding 1)', () => {
+  it('an index walk refused at the cap charges its steps to the production budget and ceiling, and asks for a yield', async () => {
+    const ref = (row: number, col: number) => refOf(row, col)
+    const others: Cells = { ...Object.fromEntries(Array.from({ length: 200 }, (_, r) => [ref(r, 200), 1])), ...Object.fromEntries(Array.from({ length: 200 }, (_, c) => [ref(200, c), 1])) }
+    const signal = new AbortController().signal
+    const budget = createCfWorkBudget({ now: frozen, signal })
+    const ceiling = createCfUnitCeiling()
+    const rule = formulaRule(`SUM(A1:${ref(199, 199)})>0`, 'HA1')
+    const cover = [formulaRule(`COUNTA(${ref(0, 200)}:${ref(199, 200)})>0`, 'HA1'), formulaRule(`COUNTA(A201:${ref(200, 199)})>0`, 'HA1')]
+    const batch = await batchOf([rule, ...cover], fakeSource(others), { hoist: false, budget, signal, ceiling })
+    const before = ceiling.used
+    for (let i = 0; i < 3; i++) expect(batch.evaluate(0, 0, a1('HA1').col)).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
+    expect(budget.units).toBe(3 * CF_LIMITS.checkpointUnits)
+    expect(ceiling.used - before).toBe(3 * CF_LIMITS.checkpointUnits)
+    // The pacing yield the charged work earns is honoured between cells.
+    hostTaskSpy.mockClear()
+    await batch.run([{ row: 0, col: a1('HA1').col }], () => {})
+    expect(hostTaskSpy).toHaveBeenCalled()
+    batch.dispose()
+  })
+  it('discovery is bounded by the budget\'s remaining units before it runs', async () => {
+    const signal = new AbortController().signal
+    const budget = createCfWorkBudget({ now: frozen, signal })
+    expect(budget.spend(budget.remaining - 3)).not.toBe('refused')
+    const batch = await batchOf([formulaRule('SUM(A1:A10)>0', 'B1')], fakeSource(Object.fromEntries(Array.from({ length: 10 }, (_, r) => [`A${r + 1}`, r]))), { budget, signal, hoist: false })
+    expect(batch.evaluate(0, 0, 1)).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
+    expect(budget.remaining).toBe(3) // the 10-cell view build was refused before it spent: nothing to charge
+    expect(budget.spend(0)).not.toBe('refused') // never latched
+    batch.dispose()
   })
 })
