@@ -334,6 +334,8 @@ export interface CfFormulaBatch {
   dispose(): void
 }
 
+const sameDataGeneration = (a: CfStamp, b: CfStamp): boolean => a.owner === b.owner && a.sheetId === b.sheetId && a.workbookValueGen === b.workbookValueGen
+  && a.structureGen === b.structureGen && a.cfGen === b.cfGen && (a.dependencyGen ?? 0) === (b.dependencyGen ?? 0)
 export async function prepareCfFormulaBatch(tasks: readonly CfFormulaTask[], options: CfFormulaBatchOptions): Promise<CfFormulaBatch> {
   const { signal, memory, evaluation } = options
   const ceiling = options.ceiling ?? createCfUnitCeiling()
@@ -433,7 +435,9 @@ export async function prepareCfFormulaBatch(tasks: readonly CfFormulaTask[], opt
     get snapshotEntries() { return owned.reduce((n, l) => n + l.value.entries, 0) },
     outcome: task => taskOutcome[task]!,
     evaluate(task, row, col) {
-      if (disposed) return unresolved('cf-stale-generation')
+      // A live batch outlives the session's cache entries (its hoist leases are refcounted), so it checks its own
+      // currency: a commit to the host sheet, a referenced sheet, the structure or the rules makes it stale.
+      if (disposed || !sameDataGeneration(options.source.stamp(options.sheetId), options.stamp)) return unresolved('cf-stale-generation')
       const out = taskOutcome[task]!
       if (out.kind !== 'ready') return out
       if (!covers(task, row, col)) return { kind: 'no-match' }

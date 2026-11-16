@@ -44,6 +44,8 @@ async function hoistOf(text: string, cells: Cells, options: { memory?: ReturnTyp
   const out = await session.prepareHoists(rule, plan, source.stamp('s1'), source, scan(options.signal), options.signal ? { signal: options.signal } : {})
   return { rule, plan, out, session, memory, source }
 }
+/** Releases a hoist outcome's lease (leases are refcounted: an unreleased one keeps its charge past dispose). */
+const released = <T extends { kind: string; value?: unknown }>(o: T): T => { if (o.kind === 'ready') (o.value as { release(): void }).release(); return o }
 const hoisted = (o: { kind: string; value?: unknown }): CfHoisted => { expect(o.kind).toBe('ready'); return (o as { value: { value: CfHoisted } }).value.value }
 
 describe('S5-HOIST: the engine limits the hoist mirrors are the engine\'s own named constants', () => {
@@ -300,7 +302,7 @@ describe('a cancelled or refused hoist leaves nothing charged (S5-HOIST)', () =>
     expect(memory.currentBytes).toBe(0)
     hostHooks.onHost = undefined
     const calls = source.pageCalls.length
-    const again = await session.prepareHoists(rule, plan, source.stamp('s1'), source, scan(), {})
+    const again = released(await session.prepareHoists(rule, plan, source.stamp('s1'), source, scan(), {}))
     expect(again.kind).toBe('ready')
     expect(source.pageCalls.length).toBe(calls + 1)
     session.dispose()
@@ -319,7 +321,7 @@ describe('a cancelled or refused hoist leaves nothing charged (S5-HOIST)', () =>
     const fits = await hoistOf('COUNTIF($A$1:$A$17,B1)', keys(17), { memory: createCfMemory({ limitBytes: atGrowth + 2 * 'kq'.length + 2 }) })
     expect(fits.out.kind).toBe('ready')
     expect(fits.memory.peakBytes).toBeGreaterThanOrEqual(atGrowth)
-    fits.session.dispose()
+    released(fits.out); fits.session.dispose()
     expect(fits.memory.currentBytes).toBe(0)
   })
   it('a host-sheet commit and a referenced-sheet commit each invalidate the cached hoist and every tile of the sheet', async () => {
@@ -329,7 +331,7 @@ describe('a cancelled or refused hoist leaves nothing charged (S5-HOIST)', () =>
     const session = createCfStatistics(memory)
     const rule = formulaRule('COUNTIF($A$1:$A$20,B1)', 'B1')
     const plan = planCfHoist(formulaOf(rule))
-    const hoistNow = () => session.prepareHoists(rule, plan, source.stamp('s1'), source, scan(), {})
+    const hoistNow = async () => released(await session.prepareHoists(rule, plan, source.stamp('s1'), source, scan(), {}))
     await hoistNow()
     const scans = () => source.pageCalls.length
     const first = scans()
@@ -364,10 +366,12 @@ describe('the service statistics loop runs hoists beside statistical rules only 
   async function run(evidence: (cap: string) => boolean, evaluation = true) {
     const source = fakeSource(cells)
     const rule = formulaRule('COUNTIF($A:$A,A2)>1', 'A2:A50')
-    const service = createCfService({ rules: [rule], diagnostics: [] }, createCfMemory(), { evidence: { allows: evidence }, ...(evaluation ? { evaluation: EVALUATION } : {}) })
+    const memory = createCfMemory()
+    const service = createCfService({ rules: [rule], diagnostics: [] }, memory, { evidence: { allows: evidence }, ...(evaluation ? { evaluation: EVALUATION } : {}) })
     const lease = await service.prepareCf({ stamp: source.stamp('s1'), sourceRects: [rectOf('A2:A50')], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, source)
     const out = lease.value.at(1, 0)
     lease.release(); service.dispose()
+    expect(memory.currentBytes).toBe(0) // the service's unconsumed hoist leases were released
     return { columnScans: source.pageCalls.filter(c => c.rects.length === 1 && c.rects[0]!.firstRow === 0 && c.rects[0]!.lastRow === 49).length, out }
   }
   it('scans the column once with the capability and a context; production (no capability) and a missing context scan nothing', async () => {
@@ -388,12 +392,12 @@ describe('the hoist cache keys by node and criterion, checks a hit, and never le
     const source = fakeSource(cells)
     const rule = formulaRule('COUNTIF($A$1:$A$10,"x")>1', 'B1')
     const plan = planCfHoist(formulaOf(rule))
-    expect((await session.prepareHoists(rule, plan, source.stamp('s1'), source, scan(), {})).kind).toBe('ready')
+    expect(released(await session.prepareHoists(rule, plan, source.stamp('s1'), source, scan(), {})).kind).toBe('ready')
     const one = memory.currentBytes
     expect(one).toBeGreaterThan(0)
     // The same key from a rebuilt rule object (same id, same compiled formula) misses on identity and overwrites the entry.
     const rebuilt: CfRule = { ...rule }
-    expect((await session.prepareHoists(rebuilt, plan, source.stamp('s1'), source, scan(), {})).kind).toBe('ready')
+    expect(released(await session.prepareHoists(rebuilt, plan, source.stamp('s1'), source, scan(), {})).kind).toBe('ready')
     expect(memory.currentBytes).toBe(one)
     session.dispose()
     expect(memory.currentBytes).toBe(0)
@@ -404,13 +408,14 @@ describe('the hoist cache keys by node and criterion, checks a hit, and never le
     const source = fakeSource(cells)
     const rule = formulaRule('COUNTIF($A$1:$A$10,"x")>1', 'B1')
     const plan = planCfHoist(formulaOf(rule))
-    await session.prepareHoists(rule, plan, source.stamp('s1'), source, scan(), {})
+    released(await session.prepareHoists(rule, plan, source.stamp('s1'), source, scan(), {}))
     const scans = source.pageCalls.length
     // The same rule recompiled: equal text, fresh nodes. The cached maps are keyed by the old nodes.
     const fresh = planCfHoist(compile('COUNTIF($A$1:$A$10,"x")>1', 'B1'))
     const out = await session.prepareHoists(rule, fresh, source.stamp('s1'), source, scan(), {})
     expect(source.pageCalls.length).toBeGreaterThan(scans)
     expect(hoisted(out).scalars.get(fresh[0]!.node)).toBe(4)
+    released(out)
     session.dispose()
     expect(memory.currentBytes).toBe(0)
   })
@@ -448,5 +453,92 @@ describe('the hoist cache keys by node and criterion, checks a hit, and never le
     batch.dispose()
     statistics.dispose()
     expect(memory.currentBytes).toBe(0)
+  })
+})
+
+describe('hoist leases are refcounted and the hoist cache is bounded (Task 34 fix round 2, findings 3 and 4)', () => {
+  const cells: Cells = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`A${i + 1}`, `k${i % 7}`]))
+  const TEXT = 'COUNTIF($A$1:$A$40,B1)>5'
+  /** A batch over one rule on a shared session; its memory holds the snapshot, the memo and the hoist. */
+  async function live(session: ReturnType<typeof createCfStatistics>, memory: ReturnType<typeof createCfMemory>, source: FakeSource, rule = formulaRule(TEXT, 'B1:B3')) {
+    const batch = await batchOf([rule], source, { statistics: session, memory })
+    return { batch, rule }
+  }
+  const evaluates = (batch: Awaited<ReturnType<typeof batchOf>>) => expect(batch.evaluate(0, 0, 1).kind).toBe('ready')
+  it('dispose of the session keeps a live batch\'s hoist charged until the batch releases it', async () => {
+    const memory = createCfMemory(), source = fakeSource({ ...cells, B1: 'k1' })
+    const session = createCfStatistics(memory)
+    const { batch } = await live(session, memory, source)
+    const held = memory.currentBytes
+    session.dispose()
+    expect(memory.currentBytes).toBe(held) // the batch still reads the maps: their bytes stay charged
+    evaluates(batch)
+    batch.dispose()
+    expect(memory.currentBytes).toBe(0)
+  })
+  it('a generation change, an overwrite and an LRU eviction each keep a live consumer\'s charge', async () => {
+    for (const path of ['generation', 'overwrite', 'evict'] as const) {
+      const memory = createCfMemory(), source = fakeSource({ ...cells, B1: 'k1' })
+      const session = createCfStatistics(memory, { maxEntries: 1 })
+      const { batch, rule } = await live(session, memory, source)
+      const held = memory.currentBytes
+      if (path === 'generation') source.valueGen++
+      const other = path === 'overwrite' ? { ...rule } : path === 'evict' ? formulaRule('COUNTIF($A$1:$A$40,B1)>2', 'B1:B3') : rule
+      const next = await live(session, memory, source, other)
+      next.batch.dispose()
+      session.dispose()
+      // Only the first batch is live: everything it holds, its hoist included, is still charged.
+      expect(memory.currentBytes, path).toBe(held)
+      // The batch still reads its maps (a generation change makes it stale on its own, never a released read).
+      if (path === 'generation') expect(batch.evaluate(0, 0, 1)).toEqual({ kind: 'unresolved', reason: 'cf-stale-generation' })
+      else evaluates(batch)
+      batch.dispose()
+      expect(memory.currentBytes, path).toBe(0)
+    }
+  })
+  it('a live batch goes stale at a commit to the host sheet or a referenced sheet, so a retained hoist is never served stale', async () => {
+    for (const commit of [(s: FakeSource) => { s.valueGen++ }, (s: FakeSource) => { s.dependencyGen++ }]) {
+      const memory = createCfMemory(), source = fakeSource({ ...cells, B1: 'k1' })
+      const session = createCfStatistics(memory)
+      const { batch } = await live(session, memory, source)
+      evaluates(batch)
+      commit(source)
+      expect(batch.evaluate(0, 0, 1)).toEqual({ kind: 'unresolved', reason: 'cf-stale-generation' })
+      batch.dispose(); session.dispose()
+      expect(memory.currentBytes).toBe(0)
+    }
+  })
+  it('recompiled rules never accumulate: a cfGen change drops the old entries, and maxEntries bounds hoists with statistics', async () => {
+    // Each pass compiles afresh (new rule object, new id, new AST nodes), as a rebuilt rule set does.
+    for (const config of [{ cfGenMoves: true, maxEntries: undefined }, { cfGenMoves: false, maxEntries: 1 }]) {
+      const memory = createCfMemory(), source = fakeSource(cells)
+      const session = createCfStatistics(memory, config.maxEntries ? { maxEntries: config.maxEntries } : {})
+      const retained: number[] = []
+      for (let pass = 1; pass <= 4; pass++) {
+        const rule = formulaRule(TEXT, 'B1')
+        const stamp = { ...source.stamp('s1'), cfGen: config.cfGenMoves ? pass : 1 }
+        expect(released(await session.prepareHoists(rule, planCfHoist(formulaOf(rule)), stamp, source, scan(), {})).kind).toBe('ready')
+        retained.push(memory.currentBytes)
+        expect(session.size, JSON.stringify(config)).toBe(1)
+      }
+      expect(new Set(retained).size, JSON.stringify(config)).toBe(1)
+      expect(retained[0]).toBeGreaterThan(0)
+      session.dispose()
+      expect(memory.currentBytes).toBe(0)
+    }
+  })
+  it('the same rule id recompiled under one cfGen retires its old entry (the rule object was replaced)', async () => {
+    const memory = createCfMemory(), source = fakeSource(cells)
+    const session = createCfStatistics(memory)
+    const first = formulaRule(TEXT, 'B1')
+    const a = await session.prepareHoists(first, planCfHoist(formulaOf(first)), source.stamp('s1'), source, scan(), {})
+    if (a.kind === 'ready') a.value.release()
+    const one = memory.currentBytes
+    const again: CfRule = { ...first, definition: { ...first.definition, formula: compile(TEXT, 'B1') } as CfRule['definition'] }
+    const b = await session.prepareHoists(again, planCfHoist(formulaOf(again)), source.stamp('s1'), source, scan(), {})
+    if (b.kind === 'ready') b.value.release()
+    expect(memory.currentBytes).toBe(one)
+    expect(session.size).toBe(1)
+    session.dispose()
   })
 })

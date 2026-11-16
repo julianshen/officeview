@@ -126,7 +126,7 @@ export interface CfStatisticsSession {
    * Ruling S5-HOIST: the rule's hoisted aggregates, scanned once per (rule, range, valueGen, dependencyGen) with
    * engine-ordered reducers on `budget` (a scan budget, never the per-cell ceiling), memoised in this session and
    * invalidated with the sheet's generation. A refused or cancelled scan publishes nothing and holds nothing. The lease
-   * is borrowed: the session owns the bytes until invalidation or dispose.
+   * is refcounted: its bytes stay charged until both the session has dropped the entry and every lease is released.
    */
   prepareHoists(rule: CfRule, hoists: readonly CfHoist[], stamp: CfStamp, source: CfValueSource, budget: CfWorkBudget,
     options?: CfStatisticsOptions): Promise<CfOutcome<CfLease<CfHoisted>>>
@@ -437,7 +437,7 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
   function evict(): void {
     // LRU: Map preserves insertion order; the first key is the least recently used.
     for (const [key, entry] of cache.entries()) {
-      if (cache.size <= maxEntries && retainedHeld <= sessionCap) break
+      if (cache.size + hoistCache.size <= maxEntries && retainedHeld <= sessionCap) break
       dropEntry(key, entry)
     }
   }
@@ -449,34 +449,70 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
     cache.clear()
     refusalCache.clear()
     boundsMemo.clear()
-    for (const entry of hoistCache.values()) entry.lease.release()
-    hoistCache.clear()
+    for (const [key, entry] of [...hoistCache]) dropHoist(key, entry)
   }
 
   // Hoisted aggregates (S5-HOIST): one entry per (sheet, generation, rule, hoists); a generation change drops the sheet's
-  // entries (whole-sheet invalidation, Lesson 5).
-  const hoistCache = new Map<string, { sheet: string; gen: string; rule: CfRule; lease: CfLease<CfHoisted> }>()
+  // entries (whole-sheet invalidation, Lesson 5). Ownership (fix round 2, findings 3-4): each entry adopts one charge
+  // and hands out refcounted leases; a drop (generation, overwrite, retirement, LRU eviction, dispose) removes only the
+  // key, and the charge is released when the last live lease is. Hoist entries count against `maxEntries` and the
+  // session byte cap with the statistics entries, and a replaced rule object retires its older entries.
+  interface HoistEntry { sheet: string; gen: string; rule: CfRule; lease: CfLease<CfHoisted>; bytes: number; refs: number; cached: boolean }
+  const hoistCache = new Map<string, HoistEntry>()
+  const settleHoist = (entry: HoistEntry): void => {
+    if (entry.cached || entry.refs > 0) return
+    try { entry.lease.release() } catch { /* release-only path */ }
+    trackRelease(entry.bytes)
+  }
+  const dropHoist = (key: string, entry: HoistEntry): void => {
+    if (hoistCache.get(key) === entry) hoistCache.delete(key)
+    entry.cached = false
+    settleHoist(entry)
+  }
+  const leaseHoist = (entry: HoistEntry): CfLease<CfHoisted> => {
+    entry.refs++
+    let settled = false
+    return {
+      value: entry.lease.value, bytes: entry.bytes,
+      release() { if (settled) return; settled = true; entry.refs--; settleHoist(entry) },
+      transfer: () => ({ kind: 'unresolved', reason: 'cf-borrowed-hoist' }),
+    }
+  }
+  function evictHoists(keep: string): void {
+    for (const [key, entry] of hoistCache) {
+      if (cache.size + hoistCache.size <= maxEntries && retainedHeld <= sessionCap) break
+      if (key !== keep) dropHoist(key, entry)
+    }
+  }
   async function prepareHoists(rule: CfRule, hoists: readonly CfHoist[], stamp: CfStamp, source: CfValueSource, budget: CfWorkBudget,
     options: CfStatisticsOptions = {}): Promise<CfOutcome<CfLease<CfHoisted>>> {
     const signal = options.signal ?? new AbortController().signal
     if (signal.aborted) throw cancelled()
     const sheet = `${stamp.owner}\u0000${stamp.sheetId}`
-    const gen = `${stamp.structureGen}:${stamp.workbookValueGen}:${stamp.dependencyGen ?? 0}`
-    for (const [key, entry] of hoistCache) if (entry.sheet === sheet && entry.gen !== gen) { entry.lease.release(); hoistCache.delete(key) }
+    // cfGen too: a rule set rebuilt from the document retires the old rule objects' entries.
+    const gen = `${stamp.structureGen}:${stamp.workbookValueGen}:${stamp.dependencyGen ?? 0}:${stamp.cfGen}`
+    for (const [key, entry] of hoistCache) if (entry.sheet === sheet && entry.gen !== gen) dropHoist(key, entry)
     // The key names each hoist's node and criterion, so two same-function, same-range hoists never share a slot.
     const key = `${sheet}\u0000${gen}\u0000${rule.id}\u0000${hoists.map(h => `${h.kind}:${h.fn}:${scopeKey([h.range.rect])}:${hoistNodeId(h.node)}:${h.criterion ? hoistNodeId(h.criterion) : ''}`).join('|')}`
     const hit = hoistCache.get(key)
     // A hit serves only when the cached record holds every planned node; otherwise it is a miss.
-    if (hit && hit.rule === rule && hoists.every(h => hoistedHas(hit.lease.value, h))) return { kind: 'ready', value: borrowedHoists(hit.lease.value) }
+    if (hit && hit.rule === rule && hoists.every(h => hoistedHas(hit.lease.value, h))) {
+      hoistCache.delete(key); hoistCache.set(key, hit) // LRU: most recently used last
+      return { kind: 'ready', value: leaseHoist(hit) }
+    }
     const built = await scanHoists(hoists, stamp, source, budget, signal, memory)
     if (built.kind !== 'ready') return built
     // Recheck the source generation after the scan, before adoption (S5-K): a commit during the scan cancels it.
     if (signal.aborted || !stampsMatch(source.stamp(stamp.sheetId), stamp)) { built.value.release(); throw cancelled() }
-    // An overwritten entry releases its lease (a displaced record is never leaked).
-    const displaced = hoistCache.get(key)
-    if (displaced) displaced.lease.release()
-    hoistCache.set(key, { sheet, gen, rule, lease: built.value })
-    return { kind: 'ready', value: borrowedHoists(built.value.value) }
+    // An overwritten entry, and every entry of an older object of the same rule, is dropped (never leaked).
+    for (const [k, entry] of hoistCache) if (k === key || (entry.sheet === sheet && entry.rule.id === rule.id && entry.rule !== rule)) dropHoist(k, entry)
+    const entry: HoistEntry = { sheet, gen, rule, lease: built.value, bytes: built.value.bytes, refs: 0, cached: true }
+    retainedHeld += entry.bytes
+    hoistCache.set(key, entry)
+    const out = leaseHoist(entry)
+    evictHoists(key)
+    evict()
+    return { kind: 'ready', value: out }
   }
 
   function dropEntry(key: string, entry: CacheEntry): void {
@@ -1178,7 +1214,7 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
     return out
   }
 
-  return { prepareStatistics, prepareHoists, get size() { return cache.size }, dispose }
+  return { prepareStatistics, prepareHoists, get size() { return cache.size + hoistCache.size }, dispose }
 }
 
 /** A per-session identity for AST nodes (the hoist cache key names nodes, not their spelling). */
@@ -1191,9 +1227,6 @@ const hoistNodeId = (node: object): number => {
 }
 const hoistedHas = (value: CfHoisted, h: CfHoist): boolean =>
   h.kind === 'countif-frequency' ? value.frequencies.has(h.node) && value.longest.has(h.node) : value.scalars.has(h.node)
-const borrowedHoists = (value: CfHoisted): CfLease<CfHoisted> => ({
-  value, bytes: 0, release() {}, transfer: () => ({ kind: 'unresolved', reason: 'cf-borrowed-hoist' }),
-})
 /** The empty hoist record's own bytes, DERIVED from the payload measurer. */
 const HOIST_BASE_BYTES: number = measurePayloadBytes({ scalars: new Map(), frequencies: new Map(), longest: new Map() })!
 /** One hoisted scalar or longest-string entry (a map slot holding the widest scalar: an error object). */

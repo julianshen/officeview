@@ -218,7 +218,9 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
             const scan = options.statisticsBudget?.() ?? createCfWorkBudget({ signal, scan: true })
             hoisted.set(formula, await statistics.prepareHoists(rule, plan, stamp, source, scan, { signal }))
           }
-          void hoisted
+          // Nothing consumes the hoists yet (Task 35): the leases are released now, leaving the session's cached entry
+          // as the only owner, so the charge never outlives the session.
+          for (const out of hoisted.values()) if (out.kind === 'ready') out.value.release()
           budget.resume()
           for (const rule of ordered) if (rule.definition.kind === 'colorScale' || rule.definition.kind === 'dataBar' || rule.definition.kind === 'iconSet') {
             const prepared = stats.get(rule)
