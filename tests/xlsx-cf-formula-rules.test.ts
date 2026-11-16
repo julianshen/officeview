@@ -26,6 +26,7 @@ import { decodePngSync, isCellInSqref } from '../scripts/cf-refs/verify'
 import { CF_STAGE5_CAPABILITIES, CF_STAGE5_FIXTURES, CF_STAGE5_REUSED_CAPTURES, type CfManifest } from '../scripts/cf-refs/cases'
 import { CF_STAGE5_PRODUCTION_READINGS } from '../scripts/cf-refs/audit'
 import type { CfCellState, CfOutcome, CfValueSource } from '../src/xlsx/cf/model'
+import type { XlsxSheet } from '../src/xlsx/types'
 import { FORMULA_CAPS, GREEN, RED, SELECTIONS, parseRules, prepare, rc, sheetOf, shown } from './helpers/cf-formula-rules'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -87,54 +88,88 @@ describe('expression rule paints exactly the DisplayFormat cells (Lesson 1)', ()
     expect(stage5CellVerdict({ key: 'a', verified: true, observed: { fill: 'none', strike: true } }, none, false)).toMatch(/\+strike/)
   })
 
+  type Observations = Readonly<Record<string, { displayFormatFill?: string; baseFill?: string; strikethrough?: boolean }>>
+  type Case = CfManifest['cases'][number]
+  const formulaMarkers = (c: Case, ref: string) => c.markers.filter(m => m.formula !== undefined && isCellInSqref(ref, m.sqref))
+  /** A case's Lesson 1 cells: DXF-slot cells under a formula rule (a visual's formula bound is compared by crop in Task 37). */
+  const designatedOf = (c: Case) => c.expected.cells.filter(e => { const ms = formulaMarkers(c, e.ref); return ms.length > 0 && ms.every(m => m.ruleType !== 'colorScale' && m.ruleType !== 'dataBar' && m.ruleType !== 'iconSet') })
+  const observationsOf = (c: Case): Observations => {
+    const capture = c.status === 'measured' ? c.captures.find(x => x.appearance === 'screen') ?? c.captures[0] : undefined
+    return capture ? (JSON.parse(readFileSync(join(REPO_ROOT, capture.sidecarPath), 'utf8')) as { formulaObservations?: Observations }).formulaObservations ?? {} : {}
+  }
+  const observedToken = (rec: Observations[string] | undefined): Token | undefined => rec && typeof rec.displayFormatFill === 'string'
+    ? { fill: rec.displayFormatFill.toUpperCase() === (rec.baseFill ?? 'FFFFFFFF').toUpperCase() ? 'none' : rec.displayFormatFill.toUpperCase(), strike: rec.strikethrough === true } : undefined
+  const cellVerified = (c: Case, ref: string, verified: (id: string) => boolean): boolean => c.status === 'measured' && formulaMarkers(c, ref).every(m => verified(m.capabilityId))
+  /** The cells that must be compared with Excel: verified and observed, from the manifest and sidecar alone. */
+  const eligibleOf = (c: Case, observations: Observations, verified: (id: string) => boolean): number =>
+    designatedOf(c).filter(e => cellVerified(c, e.ref, verified) && observedToken(observations[e.ref]) !== undefined).length
+  /**
+   * One case's Lesson 1 verdicts. A sheet whose CF production dropped (no `conditionalFormatting`) shows every cell
+   * unformatted, and is compared like any other: a dropped verified worksheet fails where Excel painted.
+   */
+  async function lesson1Case(c: Case, sheet: XlsxSheet, observations: Observations, verified: (id: string) => boolean, evaluation: ReturnType<typeof cfEvaluationContextFor>): Promise<{ violations: string[]; compared: number; prepared: boolean }> {
+    const designated = designatedOf(c)
+    const states = new Map<string, CfOutcome<CfCellState>>()
+    const prepared = sheet.conditionalFormatting !== undefined && designated.length > 0
+    if (prepared) {
+      const memory = createCfMemory()
+      const service = createCfService(sheet.conditionalFormatting!, memory, { evidence: cfRuntimeEvidence, evaluation, sheetName: sheet.name })
+      const stamp = { owner: 'lesson1', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(sheet.conditionalFormatting!), viewGen: 0, structureGen: 0, clockGen: 0 }
+      const lease = await service.prepareCf({ stamp, sourceRects: designated.map(e => { const { row, col } = rc(e.ref); return { firstRow: row, lastRow: row, firstCol: col, lastCol: col } }), signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, residentSource(sheet, stamp, memory, 'engine'))
+      for (const e of designated) { const { row, col } = rc(e.ref); states.set(e.ref, lease.value.at(row, col)) }
+      lease.release(); service.dispose()
+    }
+    const violations: string[] = []
+    let compared = 0
+    for (const e of designated) {
+      const outcome = states.get(e.ref) // undefined: the sheet's CF was dropped, so the cell shows unformatted
+      const got = shown(outcome && outcome.kind === 'ready' ? outcome : undefined)
+      const formulaSourced = outcome?.kind === 'ready' && Object.keys(outcome.value.properties).length > 0
+      const isVerified = cellVerified(c, e.ref, verified), observed = observedToken(observations[e.ref])
+      if (isVerified && observed) compared++
+      const v = stage5CellVerdict({ key: `${c.id}:${e.ref}`, verified: isVerified, ...(observed ? { observed } : {}) }, { fill: got.fill, strike: got.strike }, formulaSourced)
+      if (v) violations.push(v)
+    }
+    return { violations, compared, prepared }
+  }
+
+  it('a dropped verified worksheet\'s CF fails where Excel painted (fix round 1 #3)', async () => {
+    const c = manifest().cases.find(x => x.id === 'stage5-formula-truthiness')!
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
+    const sheet = { ...(doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!), conditionalFormatting: undefined }
+    const ref = designatedOf(c)[0]!.ref
+    // As if a capture had landed: the case measured, its capabilities verified, Excel's DisplayFormat red at one cell.
+    const measured = { ...c, status: 'measured' } as Case
+    const out = await lesson1Case(measured, sheet, { [ref]: { displayFormatFill: RED, baseFill: 'FFFFFFFF' } }, () => true, cfEvaluationContextFor(cfDocumentEvaluationOf(doc), Date.now))
+    expect(out.compared).toBe(1)
+    expect(out.violations).toEqual([`${c.id}:${ref}: production shows none, Excel's DisplayFormat ${RED}`])
+  })
+
   it('production (the real route, with the document\'s evaluation context) matches every verified cell and withholds the rest', async () => {
     const stage5 = manifest().cases.filter(c => c.stage === 5)
     expect(stage5.length).toBeGreaterThan(20)
-    let covered = 0, compared = 0, preparedSheets = 0, preparedCells = 0
+    let covered = 0, compared = 0, eligible = 0, preparedSheets = 0
     const violations: string[] = []
+    const verified = (id: string): boolean => VERIFIED_CAPABILITIES.has(id)
     for (const c of stage5) {
       const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
       const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
-      const formulaMarkers = (ref: string) => c.markers.filter(m => m.formula !== undefined && isCellInSqref(ref, m.sqref))
-      // DXF-slot cells only: a visual's formula bound is compared by crop in Task 37.
-      const designated = c.expected.cells.filter(e => { const ms = formulaMarkers(e.ref); return ms.length > 0 && ms.every(m => m.ruleType !== 'colorScale' && m.ruleType !== 'dataBar' && m.ruleType !== 'iconSet') })
-      if (!sheet.conditionalFormatting) { covered += designated.length; continue }
-      preparedSheets++
-      let observations: Record<string, { displayFormatFill?: string; baseFill?: string; strikethrough?: boolean }> = {}
-      const capture = c.status === 'measured' ? c.captures.find(x => x.appearance === 'screen') ?? c.captures[0] : undefined
-      if (capture) observations = (JSON.parse(readFileSync(join(REPO_ROOT, capture.sidecarPath), 'utf8')) as { formulaObservations?: typeof observations }).formulaObservations ?? {}
-      const memory = createCfMemory()
-      const evaluation = cfEvaluationContextFor(cfDocumentEvaluationOf(doc), Date.now)
-      const service = createCfService(sheet.conditionalFormatting, memory, { evidence: cfRuntimeEvidence, evaluation, sheetName: sheet.name })
-      const stamp = { owner: 'lesson1', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(sheet.conditionalFormatting), viewGen: 0, structureGen: 0, clockGen: 0 }
-      const rects = designated.map(e => { const { row, col } = rc(e.ref); return { firstRow: row, lastRow: row, firstCol: col, lastCol: col } })
-      if (rects.length === 0) { service.dispose(); continue }
-      const lease = await service.prepareCf({ stamp, sourceRects: rects, signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, residentSource(sheet, stamp, memory, 'engine'))
-      for (const e of designated) {
-        covered++; preparedCells++
-        const { row, col } = rc(e.ref)
-        const outcome = lease.value.at(row, col)
-        const got = shown(outcome)
-        const formulaSourced = outcome.kind === 'ready' && Object.keys(outcome.value.properties).length > 0
-        const verified = c.status === 'measured' && formulaMarkers(e.ref).every(m => VERIFIED_CAPABILITIES.has(m.capabilityId))
-        const rec = observations[e.ref]
-        const observed = rec && typeof rec.displayFormatFill === 'string'
-          ? { fill: rec.displayFormatFill.toUpperCase() === (rec.baseFill ?? 'FFFFFFFF').toUpperCase() ? 'none' : rec.displayFormatFill.toUpperCase(), strike: rec.strikethrough === true } : undefined
-        if (verified && observed) compared++
-        const v = stage5CellVerdict({ key: `${c.id}:${e.ref}`, verified, ...(observed ? { observed } : {}) }, got, formulaSourced)
-        if (v) violations.push(v)
-      }
-      lease.release(); service.dispose()
+      const observations = observationsOf(c)
+      eligible += eligibleOf(c, observations, verified)
+      covered += designatedOf(c).length
+      const out = await lesson1Case(c, sheet, observations, verified, cfEvaluationContextFor(cfDocumentEvaluationOf(doc), Date.now))
+      violations.push(...out.violations)
+      compared += out.compared
+      if (out.prepared) preparedSheets++
     }
     expect(violations).toEqual([])
+    // Every eligible (verified, observed) cell is compared: none is skipped, whatever production did with its sheet.
+    expect(compared).toBe(eligible)
     expect(covered).toBeGreaterThan(400)
-    // Non-vacuous: the service ran on (nearly) every Stage 5 sheet, not only the parse-refused branch.
     expect(preparedSheets).toBeGreaterThanOrEqual(25)
-    expect(preparedCells).toBeGreaterThan(400)
-    // No Stage 5 capture is published yet: nothing is compared, everything above asserted withheld. A published capture
-    // moves cells into `compared` with no edit here.
-    const anyPublished = [...VERIFIED_CAPABILITIES].some(id => id.startsWith('formula:'))
-    if (!anyPublished) expect(compared).toBe(0)
+    // No Stage 5 capture is published yet: nothing is eligible, everything above asserted withheld. A published capture
+    // makes cells eligible, and compared, with no edit here.
+    if (![...VERIFIED_CAPABILITIES].some(id => id.startsWith('formula:'))) expect(eligible).toBe(0)
   }, 180_000)
 
   it('under injected evidence a synthetic expression paints exactly where its formula is true', async () => {
