@@ -333,20 +333,34 @@ export type CfFormulaReserve = (absoluteBytes: number) => boolean
 const COPIES_PER_SOURCE_UNIT = 10
 /** Bytes a measuring walk may admit as workspace: one visited-set slot per distinct object, doubling in chunks. */
 const workspaceBound = (tokens: number): number => MEASURE_ENTRY_BYTES * (2 * (2 * tokens + 2 * CF_LIMITS.formulaAtoms + 16) + 16)
-/** What the formula itself may retain, from the input alone (tokens, text length): nodes, lexer tokens, string payloads,
- * atoms and the wrapper. `tokens` never undercounts the nodes (a node needs at least one token). */
-const retainedBound = (tokens: number, units: number): number =>
-  tokens * (CF_FORMULA_NODE_BYTES + CF_FORMULA_TOKEN_BYTES) + units * 2 * COPIES_PER_SOURCE_UNIT + CF_FORMULA_FIXED_BYTES + Math.min(tokens, CF_LIMITS.formulaAtoms) * CF_FORMULA_ATOM_BYTES
+/** An upper bound on the tokens the lexer builds, with no allocation and valid for every input, malformed ones included:
+ * every token consumes at least one non-whitespace character, and the stream ends in one `eof`. (`countFormulaTokens` is a
+ * lexical estimate for the policy cap only: `.1.1.1...` counts as one token but lexes as one token per number.) */
+function lexerTokenBound(source: string): number {
+  let n = 1
+  for (let i = 0; i < source.length; i++) {
+    const c = source.charCodeAt(i)
+    if (c !== 32 && c !== 9 && c !== 10 && c !== 13) n++
+  }
+  return n
+}
+/** What the compile may build, from the input alone: lexer tokens, the AST's nodes (a node needs at least one token),
+ * string payloads, atoms and the wrapper. */
+const retainedBound = (lexTokens: number, units: number): number =>
+  lexTokens * (CF_FORMULA_NODE_BYTES + CF_FORMULA_TOKEN_BYTES) + units * 2 * COPIES_PER_SOURCE_UNIT + CF_FORMULA_FIXED_BYTES + Math.min(lexTokens, CF_LIMITS.formulaAtoms) * CF_FORMULA_ATOM_BYTES
+/** The measuring walk only ever sees an admitted AST (at most `formulaTokens` nodes). */
+const measureWorkspace = (lexTokens: number): number => workspaceBound(Math.min(lexTokens, CF_LIMITS.formulaTokens))
 
 /**
  * The bytes reserved before `parseFormula` runs: a bound derived from the input alone that covers every allocation the
  * compile makes (lexer tokens, the AST with its string payloads, atoms, the wrapper) and the measuring workspace. Nothing
- * built may exceed it, so a refusal can never come after the allocation it was meant to prevent.
+ * built may exceed it, so a refusal can never come after the allocation it was meant to prevent. Text is capped at
+ * `CF_LIMITS.textUnits`, which keeps the bound finite for any input.
  */
 export function cfFormulaReserveBound(text: string): number {
   const source = text.trim().replace(/^=/, '').trim()
-  const tokens = Math.min(countFormulaTokens(source), CF_LIMITS.formulaTokens + 1)
-  return retainedBound(tokens, source.length) + workspaceBound(tokens)
+  const lexTokens = lexerTokenBound(source)
+  return retainedBound(lexTokens, source.length) + measureWorkspace(lexTokens)
 }
 
 /**
@@ -365,7 +379,8 @@ export function compileCfFormulaWith(text: string, anchor: { row: number; col: n
   }
   const tokens = countFormulaTokens(source)
   if (tokens > CF_LIMITS.formulaTokens) return limited(`formula exceeds ${CF_LIMITS.formulaTokens} tokens`)
-  const retainedCap = retainedBound(tokens, source.length), workspaceCap = workspaceBound(tokens)
+  const lexTokens = lexerTokenBound(source)
+  const retainedCap = retainedBound(lexTokens, source.length), workspaceCap = measureWorkspace(lexTokens)
   const reserved = retainedCap + workspaceCap
   if (!reserve(reserved)) return limited('compiled formula reservation refused')
   let ast: AstNode

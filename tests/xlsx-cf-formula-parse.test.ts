@@ -270,6 +270,33 @@ describe('compile reserves before parsing and releases with the rule (round-1 #3
       expect(reserved, 'no growth after construction').toBe(atParse)
       expect(out.retained).toBe(built)
     })
+    it('covers what the real lexer builds on rejected and malformed input, not only the compiled formula (round 2)', async () => {
+      const { tokenize } = await import('../src/xlsx/formula/lexer')
+      const reservedAtParse = (text: string): number | undefined => {
+        let reserved = 0, atParse: number | undefined
+        parseSpy.mockImplementationOnce((input: Parameters<typeof real>[0]) => { atParse = reserved; return real(input) })
+        compileCfFormulaWith(text, undefined, absolute => { reserved = Math.max(reserved, absolute); return true })
+        return atParse
+      }
+      const lexed = (text: string): number => measurePayloadBytes(tokenize(text))!
+      const fixed = ['.1'.repeat(4096), '.1'.repeat(10), '1.2.3.4.5.6.7.8.9'.repeat(400), '..'.repeat(3000), '1E+1E+1E+'.repeat(800), '0.0.0.'.repeat(1300), '$$$$$$$$'.repeat(900),
+        '"'.repeat(8000), '!'.repeat(8000), "'a'!".repeat(2000), '[1]'.repeat(2500), ':'.repeat(8000), 'A1:'.repeat(2700), '#N/A'.repeat(2000), ' 1'.repeat(4000), '1,'.repeat(4000), '(('.repeat(4000)]
+      for (const text of fixed) {
+        const atParse = reservedAtParse(text)
+        if (atParse === undefined) continue
+        expect(atParse, text.slice(0, 24)).toBeGreaterThanOrEqual(lexed(text))
+      }
+      // Seeded random strings over the characters the lexer treats specially.
+      let seed = 12345
+      const rand = (n: number): number => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n }
+      const alphabet = '.0123456789eE+-*/^&=<>%$!:\'"[](){},; #@AZaz_\\'
+      for (let i = 0; i < 400; i++) {
+        const text = Array.from({ length: 1 + rand(i < 40 ? 8000 : 300) }, () => alphabet[rand(alphabet.length)]).join('')
+        const atParse = reservedAtParse(text)
+        if (atParse === undefined) continue
+        expect(atParse, JSON.stringify(text.slice(0, 40))).toBeGreaterThanOrEqual(lexed(text))
+      }
+    })
     it('refuses first, building nothing, when even the bound does not fit; the bound is derived from the text', () => {
       for (const text of ['A1', `"${'x'.repeat(8000)}"`]) {
         parseSpy.mockClear()
