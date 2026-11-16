@@ -243,6 +243,14 @@ time).
   while different sessions still prepare in parallel. A job waiting for
   the session slot holds no worker slot and no grant, and leaves at once
   when its socket closes.
+- **Waiting show jobs hold no admission** (round 13d). A show job takes
+  its session's show slot first, then its general admission (a running
+  place and its request charge), then its worker's slot. Requests waiting
+  for the session slot sit in a per-session show queue that holds nothing,
+  so the session's unit renders are not held behind them. The queue is
+  bounded at 39 waiting plus the running job, the 40 requests a session
+  could have in flight before (8 running places and a 32-deep queue).
+  Past that bound a request is refused `session-queue`.
 - **The grant size** is 8 page surfaces at the bucket for a plan or track,
   and 8 pages of the larger slide for a Morph pair. Both are capped at
   128 MiB (the per-show decoded budget), so 8 pages of a 2560 × 1440

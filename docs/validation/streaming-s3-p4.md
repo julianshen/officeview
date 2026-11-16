@@ -464,8 +464,17 @@ Evidence:
     - Sessions still prepare in parallel on different workers.
     - A waiting job holds no worker slot and no grant. A socket that closes while the job waits removes it
       (`ShowCancelled`) without it ever taking the slot.
-    - The "holding →" browser test's throughput is unchanged: 300 presses in 12.7 s (webgl2) and 13.3 s (canvas2d)
-      before, with 40 `show-morph`, 1 `show-plan` and 3 `unit` requests on each backend.
+    - **Round 13d (codex):** a waiting job holds no general admission either. The session slot comes first, then
+      the running place and request charge, then the worker's slot. One slow show job and seven waiting ones
+      therefore no longer fill the session's 8 running places, so its unit renders still run. The show queue is
+      bounded at 39 waiting plus the running job (the 40 in flight that 8 places and a 32-deep queue allowed
+      before); past it a request is refused `session-queue`.
+    - The "holding →" browser test's throughput (300 presses; 40 `show-morph`, 1 `show-plan` and 3 `unit` requests
+      on each backend, both before and after):
+      - 758ae708, before the per-session slot: 12.7 s (webgl2), 13.3 s (canvas2d);
+      - c73010c2, with rounds 13c and 13d: 12.8 s (webgl2), 12.0 s (canvas2d).
+      
+      The differences are within run-to-run noise at a load of 10 to 30.
   - **Not in the ledger** (typed arrays, a bounded count per job):
     - pixel readbacks (a few pages per job; nothing is kept per boundary);
     - the classifier's alpha and seen arrays (2 bytes per raster px);
