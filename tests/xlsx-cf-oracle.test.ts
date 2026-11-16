@@ -6553,172 +6553,7 @@ describe('Stage 5 fix round 6: positive controls in every configuration, all-riv
   })
 
   it('S5-WITNESS adversarial (exhaustive): every evidence-bearing capability group x reading x retained order; every corruption refuses', async () => {
-    const { evaluateFormulaCapabilities: evalCaps, formulaControlsOf, resolveFormulaConfigurations, visualKindOf } = await import('../scripts/cf-refs/verify')
-    type Fill = { fill: string; strike: boolean }
-    type World = { fill: Record<string, Fill>; vis: Record<string, S5Visual> }
-    const NONE: Fill = { fill: 'none', strike: false }
-    const bare = (r: string): string => r.replace(/^(pre|calc|post):/, '')
-    const twinOf = (tok: string): string | undefined => /^twin:([A-Z]+\d+)/.exec(tok)?.[1]
-    const parse = (tok: string): Fill => ({ fill: tok.replace('+strike', ''), strike: tok.endsWith('+strike') })
-    const live = (x: S5Configuration): boolean => x.record === undefined
-    const evidenceOf = (x: S5Configuration): boolean => x.record === undefined && x.role !== 'negative-control'
-    const triples: string[] = []
-    const built: string[] = []
-    const unbuilt: string[] = []
-    const corruptions: Record<string, number> = { 'blank-twins': 0, 'required-empty-visuals': 0, 'blank-twin-controls': 0, 'blank-dxf-controls': 0, 'strike-blind': 0, 'tolerance-shift': 0, 'disjoint-rivals': 0 }
-    const kinds = new Set<string>()
-    const outcomes: Record<string, number> = {}
-    for (const c of CF_STAGE5_CASES) {
-      const controls = formulaControlsOf(c)
-      const kindOf = visualKindOf(c)
-      // Every retained order a case's ordered configurations can resolve to (one ordered capability per case).
-      const ordered = [...new Set((c.formulaConfigurations ?? []).flatMap(x => (x.orderedHypotheses ? [x.orderedHypotheses.capabilityId] : [])))]
-      expect(ordered.length, c.id).toBeLessThanOrEqual(1)
-      const orders: Array<Record<string, string>> = ordered.length === 0 ? [{}] : Object.keys(c.formulaConfigurations!.find(x => x.orderedHypotheses)!.orderedHypotheses!.tables).map(o => ({ [ordered[0]!]: o }))
-      for (const retained of orders) {
-        const order = Object.values(retained)[0] ?? '-'
-        const configs = resolveFormulaConfigurations({ ...c, retainedSqrefs: retained })
-        const byCap = new Map<string, S5Configuration[]>()
-        for (const x of configs) byCap.set(x.capabilityId, [...(byCap.get(x.capabilityId) ?? []), x])
-        for (const [cap, cfgs] of byCap) {
-          const evidence = cfgs.filter(evidenceOf)
-          if (evidence.length === 0) continue
-          for (const x of cfgs) kinds.add(`${x.observable}:${x.observable === 'crop' ? kindOf(x) : 'fill'}`)
-          const names = [...new Set(evidence.flatMap(x => Object.keys(x.hypotheses)))]
-          // Every twin the group names, with its expectation (a twin shared by configurations must agree).
-          const twinExp = new Map<string, { exp: 'visual' | 'empty' | 'either'; crop: boolean; kind: 'bar' | 'icon' }>()
-          for (const x of cfgs.filter(live)) for (const h of Object.values(x.hypotheses)) for (const tok of Object.values(h)) {
-            const t = twinOf(tok)
-            if (t) twinExp.set(t, { exp: x.twinExpect?.[t] ?? 'either', crop: x.observable === 'crop', kind: kindOf(x) })
-          }
-          const twins = [...twinExp.keys()].sort()
-          const shows = (t: string, i: number): { vis: S5Visual; fill: Fill } => {
-            const e = twinExp.get(t)!
-            const on = e.exp === 'visual' || (e.crop && e.exp === 'either')
-            if (!on) return { vis: { kind: 'none' }, fill: NONE }
-            if (!e.crop) return { vis: { kind: 'none' }, fill: { fill: `FF${(0x200000 + i * 0x10101).toString(16).toUpperCase().padStart(6, '0')}`, strike: false } }
-            return { vis: e.kind === 'icon' ? { kind: 'icon', cls: `cls-${i}`, left: 2, top: 2 } : { kind: 'bar', left: 2, right: 10 + 6 * i }, fill: NONE }
-          }
-          for (const winner of names) {
-            const key = `${c.id}|${cap}|${order}|${winner}`
-            triples.push(key)
-            // A world consistent with `winner` across the whole group: twins render their expected state (distinct
-            // visuals), targets what the winner predicts, literal positive controls their fixed token.
-            const w: World = { fill: {}, vis: {} }
-            let conflict: string | undefined
-            const setFill = (ref: string, f: Fill): void => { const p = w.fill[ref]; if (p && (p.fill !== f.fill || p.strike !== f.strike)) conflict ??= ref; w.fill[ref] = f }
-            const setVis = (ref: string, v: S5Visual): void => { const p = w.vis[ref]; if (p && JSON.stringify(p) !== JSON.stringify(v)) conflict ??= ref; w.vis[ref] = v }
-            twins.forEach((t, i) => { const s = shows(t, i); setVis(t, s.vis); setFill(t, s.fill) })
-            for (const x of cfgs.filter(live)) {
-              for (const [ref, tok] of Object.entries(x.positiveControls ?? {})) setFill(ref, parse(tok))
-              const preds = x.hypotheses[winner]
-              if (!preds) continue
-              for (const ref of x.refs) {
-                const tok = preds[ref]!
-                const t = twinOf(tok)
-                if (t) { setVis(bare(ref), w.vis[t]!); setFill(ref, { fill: w.fill[t]!.fill, strike: tok.endsWith('+strike') }) } else { setVis(bare(ref), { kind: 'none' }); setFill(ref, parse(tok)) }
-              }
-            }
-            const obsOf = (x: World): FormulaObservation => ({ fill: ref => x.fill[ref] ?? x.fill[bare(ref)] ?? NONE, visual: ref => x.vis[ref] ?? { kind: 'none' } })
-            const run = (x: World) => evalCaps(cfgs, controls, obsOf(x), { kindOf })[cap]!
-            if (conflict) { unbuilt.push(`${key}: world-conflict ${conflict}`); continue }
-            const base = run(w)
-            if (base.status !== 'discriminating' || base.matched !== winner) { unbuilt.push(`${key}: ${base.status}${base.code ? ` ${base.code}` : ''}`); continue }
-            built.push(key)
-            const clone = (): World => JSON.parse(JSON.stringify(w)) as World
-            const refused = (x: World, what: string): void => {
-              const r = run(x)
-              expect(r.status, `${key}: ${what} -> ${r.status} ${r.reason}`).not.toBe('discriminating')
-              corruptions[what]!++
-              const o = `${what} -> ${r.code ?? r.status}`
-              outcomes[o] = (outcomes[o] ?? 0) + 1
-            }
-            const visualFor = (x: S5Configuration): S5Visual => (kindOf(x) === 'icon' ? { kind: 'icon', cls: 'intruder', left: 2, top: 2 } : { kind: 'bar', left: 2, right: 7 })
-            // 1. every twin blank (applies when the group names a twin expected to render).
-            if (twins.some(t => twinExp.get(t)!.exp === 'visual')) { const x = clone(); for (const t of twins) { x.vis[t] = { kind: 'none' }; x.fill[t] = NONE }; refused(x, 'blank-twins') }
-            // 2. a visual in every cell the winner requires empty (a literal none, or a twin expected empty), target and twin.
-            {
-              const x = clone()
-              let touched = 0
-              for (const cfg of cfgs.filter(evidenceOf)) {
-                const preds = cfg.hypotheses[winner]
-                if (!preds) continue
-                for (const ref of cfg.refs) {
-                  const t = twinOf(preds[ref]!)
-                  if (!(t ? cfg.twinExpect?.[t] === 'empty' : preds[ref] === 'none')) continue
-                  touched++
-                  for (const r of [ref, ...(t ? [t] : [])]) { if (cfg.observable === 'crop') x.vis[bare(r)] = visualFor(cfg); else x.fill[r] = { fill: 'FF123456', strike: false } }
-                }
-              }
-              if (touched > 0) refused(x, 'required-empty-visuals')
-            }
-            // 3. every twin positive control blank.
-            const positives = twins.filter(t => twinExp.get(t)!.exp === 'visual')
-            if (positives.length > 0) { const x = clone(); for (const t of positives) { x.vis[t] = { kind: 'none' }; x.fill[t] = NONE }; refused(x, 'blank-twin-controls') }
-            // 4. every literal DXF positive control blank (its DisplayFormat shows no fill or font).
-            const dxf = cfgs.filter(live).flatMap(x => Object.keys(x.positiveControls ?? {}))
-            if (dxf.length > 0) { const x = clone(); for (const r of dxf) x.fill[r] = NONE; refused(x, 'blank-dxf-controls') }
-            // 4b. a strike-blind readback: fills read correctly but no strikethrough anywhere (applies when a live
-            // configuration of the group predicts a `+strike` token, literal or twin).
-            if (cfgs.filter(live).some(x => Object.values(x.hypotheses).some(h => Object.values(h).some(t => t.endsWith('+strike'))))) {
-              const x = clone()
-              for (const r of Object.keys(x.fill)) x.fill[r] = { ...x.fill[r]!, strike: false }
-              refused(x, 'strike-blind')
-            }
-            // 5. bars moved into the +-1 px band shared by the winner's and a rival's twin, so no cell decides.
-            {
-              const x = clone()
-              let banded = 0
-              for (const cfg of evidence.filter(e => e.observable === 'crop' && kindOf(e) === 'bar')) {
-                for (const rival of Object.keys(cfg.hypotheses).filter(n => n !== winner)) {
-                  for (const ref of cfg.refs) {
-                    const tw = twinOf(cfg.hypotheses[winner]?.[ref] ?? '')
-                    const tr = twinOf(cfg.hypotheses[rival]![ref]!)
-                    if (!tw || !tr || tw === tr) continue
-                    const vw = x.vis[tw]!
-                    const vr = x.vis[tr]!
-                    if (vw.kind !== 'bar' || vr.kind !== 'bar') continue
-                    x.vis[tr] = { ...vr, right: vw.right + 2 }
-                    x.vis[bare(ref)] = { ...vw, right: vw.right + 1 }
-                    banded++
-                  }
-                }
-              }
-              if (banded > 0) refused(x, 'tolerance-shift')
-            }
-            // 6. disjoint-rival witnesses: applies to an evidence configuration of twin tokens in which every cell that
-            // separates the winner from a rival separates it from >= 2 rivals by token. At each such cell all rivals but
-            // one render the winner's twin's rendering (only onto a twin whose fixed expectation admits it), so each cell
-            // rejects exactly one rival. Literal-token fill configurations are structurally immune: their predictions are
-            // the observables, so no rendering can make a rival's literal agree with the winner's.
-            for (const cfg of evidence) {
-              const a = cfg.hypotheses[winner]
-              if (!a) continue
-              const rivals = Object.keys(cfg.hypotheses).filter(n => n !== winner)
-              const designed = cfg.refs.filter(ref => rivals.some(r => cfg.hypotheses[r]![ref] !== a[ref]))
-              const exp = (t: string): string => cfg.twinExpect?.[t] ?? 'either'
-              let j = 0
-              const plan: Array<[string, string]> = []
-              const ok = designed.length > 0 && designed.every(ref => {
-                const tw = twinOf(a[ref]!)
-                const differing = rivals.filter(r => cfg.hypotheses[r]![ref] !== a[ref])
-                if (!tw || differing.length < 2 || differing.some(r => !twinOf(cfg.hypotheses[r]![ref]!))) return false
-                const copyable = (r: string): boolean => { const tr = twinOf(cfg.hypotheses[r]![ref]!)!; return exp(tr) === exp(tw) || exp(tr) === 'either' }
-                const stuck = differing.filter(r => !copyable(r))
-                if (stuck.length > 1) return false
-                const keep = stuck[0] ?? differing[j++ % differing.length]!
-                for (const r of differing) if (r !== keep) plan.push([twinOf(cfg.hypotheses[r]![ref]!)!, tw])
-                return true
-              })
-              if (!ok) continue
-              const x = clone()
-              for (const [tr, tw] of plan) { x.vis[tr] = x.vis[tw]!; x.fill[tr] = x.fill[tw]! }
-              refused(x, 'disjoint-rivals')
-            }
-          }
-        }
-      }
-    }
+    const s = s5WitnessSweep(await import('../scripts/cf-refs/verify'))
     // Coverage is explicit: every triple either builds a verifying baseline or is listed here with its refusal.
     // The triple set, derived independently from the raw catalogue (ordered tables read directly, not resolved).
     const derived = CF_STAGE5_CASES.flatMap(c => {
@@ -6726,18 +6561,398 @@ describe('Stage 5 fix round 6: positive controls in every configuration, all-riv
       const ord = cfgs.find(x => x.orderedHypotheses)?.orderedHypotheses
       return (ord ? Object.keys(ord.tables) : ['-']).flatMap(order => {
         const at = (x: S5Configuration): Record<string, unknown> => (x.orderedHypotheses && order !== '-' ? x.orderedHypotheses.tables[order]! : x.hypotheses)
-        const caps = [...new Set(cfgs.filter(evidenceOf).map(x => x.capabilityId))]
-        return caps.flatMap(cap => [...new Set(cfgs.filter(x => x.capabilityId === cap && evidenceOf(x)).flatMap(x => Object.keys(at(x))))].map(h => `${c.id}|${cap}|${order}|${h}`))
+        const caps = [...new Set(cfgs.filter(s5EvidenceOf).map(x => x.capabilityId))]
+        return caps.flatMap(cap => [...new Set(cfgs.filter(x => x.capabilityId === cap && s5EvidenceOf(x)).flatMap(x => Object.keys(at(x))))].map(h => `${c.id}|${cap}|${order}|${h}`))
       })
     })
-    expect([...triples].sort()).toEqual([...derived].sort())
-    expect([...built, ...unbuilt.map(u => u.slice(0, u.indexOf(': ')))].sort()).toEqual([...triples].sort())
-    expect(unbuilt).toEqual(EXPECTED_UNBUILT)
-    expect([...kinds].sort()).toEqual(['crop:bar', 'crop:icon', 'fill:fill'])
-    expect({ triples: triples.length, built: built.length, ...corruptions }).toEqual(EXPECTED_COVERAGE)
-    expect(outcomes).toEqual(EXPECTED_OUTCOMES)
+    expect([...s.triples].sort()).toEqual([...derived].sort())
+    expect([...s.built, ...s.unbuilt.map(u => u.slice(0, u.indexOf(': ')))].sort()).toEqual([...s.triples].sort())
+    expect(s.unbuilt).toEqual(EXPECTED_UNBUILT)
+    expect([...s.kinds].sort()).toEqual(['crop:bar', 'crop:icon', 'fill:fill'])
+    // Every corruption refuses (and every world the verifier does accept is checked against Ruling S5-WITNESS-R).
+    expect(s.accepted).toEqual([])
+    expect(s.violations).toEqual([])
+    expect(Object.fromEntries(Object.entries(s.disjointUnbuilt).map(([k, v]) => [k, [...v].sort()]))).toEqual(EXPECTED_DISJOINT_UNBUILT)
+    expect(s.singleUnbuilt).toEqual(EXPECTED_SINGLE_UNBUILT)
+    expect({ triples: s.triples.length, built: s.built.length, ...s.corruptions }).toEqual(EXPECTED_COVERAGE)
+    expect(s.outcomes).toEqual(EXPECTED_OUTCOMES)
+  })
+
+  it('Ruling S5-WITNESS-R invariant (fix round 7): every world the verifier accepts satisfies (a) and (b), recomputed independently', async () => {
+    const mod = await import('../scripts/cf-refs/verify')
+    const s = s5WitnessSweep(mod)
+    // Every verifying baseline was checked, mixed literal/twin configurations included (the codex P2 reproduction).
+    expect(s.checked.filter(k => !k.includes(': ')).sort()).toEqual([...s.built].sort())
+    expect(s.checked.filter(k => k.includes('|formula:composition-expression-vs-scale|'))).toEqual(expect.arrayContaining([expect.stringContaining('|priority-wins')]))
+    expect(s.violations).toEqual([])
+    expect(s5HandBuiltSingleRefuter(mod.evaluateFormulaCapabilities)).toEqual({ status: 'refused', code: 'formula-replication-shortfall', violations: [] })
+  })
+
+  it('Ruling S5-WITNESS-R invariant mutant: a verifier for which one refuting cell suffices fails the invariant', async () => {
+    const real = await import('../scripts/cf-refs/verify')
+    const src = readFileSync(resolve(REPO_ROOT, 'scripts/cf-refs/verify.ts'), 'utf8')
+    const needle = "if (n < 2) return refuse('formula-replication-shortfall'"
+    expect(src.split(needle).length - 1).toBe(1)
+    // The mutant is a transient sibling copy (relative imports must resolve); verify.ts itself is never edited.
+    const path = resolve(REPO_ROOT, `scripts/cf-refs/.verify-mutant-${process.pid}-${Date.now()}.ts`)
+    writeFileSync(path, src.replace(needle, "if (n < 1) return refuse('formula-replication-shortfall'"))
+    let mutant: typeof real
+    try {
+      mutant = (await import(/* @vite-ignore */ path)) as typeof real
+    } finally {
+      rmSync(path, { force: true })
+    }
+    const s = s5WitnessSweep({ ...real, evaluateFormulaCapabilities: mutant.evaluateFormulaCapabilities })
+    expect(s.violations.length, 'the mutant accepts catalogue worlds that violate (b)').toBeGreaterThan(0)
+    // Each is a world the real verifier refuses for a replication shortfall: a single refuter, or a bar band that leaves one.
+    expect(s.violations.every(v => /: (single-refuter|tolerance-shift): \(b\) /.test(v)), s.violations.slice(0, 3).join('\n')).toBe(true)
+    expect(s.violations.some(v => v.includes('|formula:composition-expression-vs-scale|') && v.includes(': single-refuter: '))).toBe(true)
+    const hand = s5HandBuiltSingleRefuter(mutant.evaluateFormulaCapabilities)
+    expect(hand.status).toBe('discriminating')
+    expect(hand.violations).toEqual(expect.arrayContaining([expect.stringMatching(/^\(b\) cfg\/cfg: no is refuted by 1 cell/)]))
   })
 })
+
+type S5Fill = { fill: string; strike: boolean }
+type S5World = { fill: Record<string, S5Fill>; vis: Record<string, S5Visual> }
+type S5Render = { vis: S5Visual; fill: S5Fill }
+type S5VerifyModule = typeof import('../scripts/cf-refs/verify')
+type S5Judgement = 'consistent' | 'refuted' | 'unresolvable'
+const S5_NONE: S5Fill = { fill: 'none', strike: false }
+const s5Bare = (r: string): string => r.replace(/^(pre|calc|post):/, '')
+const s5Prefix = (r: string): string => /^(pre|calc|post):/.exec(r)?.[0] ?? ''
+const s5TwinOf = (tok: string): string | undefined => /^twin:([A-Z]+\d+)/.exec(tok)?.[1]
+const s5Parse = (tok: string): S5Fill => ({ fill: tok.replace('+strike', ''), strike: tok.endsWith('+strike') })
+const s5Live = (x: S5Configuration): boolean => x.record === undefined
+const s5EvidenceOf = (x: S5Configuration): boolean => x.record === undefined && x.role !== 'negative-control'
+const s5ObsOf = (x: S5World): FormulaObservation => ({ fill: ref => x.fill[ref] ?? x.fill[s5Bare(ref)] ?? S5_NONE, visual: ref => x.vis[ref] ?? { kind: 'none' } })
+
+/**
+ * Fix round 7: a cell's judgement against a reading's token, recomputed from the synthetic world and the token grammar
+ * alone (no verifier helper). A literal names the cell's DisplayFormat fill/strike exactly; a fill twin names the twin's
+ * fill plus the token's own strike; a crop twin names the twin's visual (bars and icons within +-1 px, icons of the same
+ * class) and the twin's fill. Consistent within tolerance, refuted beyond it.
+ */
+function s5Judge(world: S5World): (cfg: S5Configuration, ref: string, tok: string) => S5Judgement {
+  const fillAt = (ref: string): S5Fill => world.fill[ref] ?? world.fill[s5Bare(ref)] ?? S5_NONE
+  const visAt = (ref: string): S5Visual => world.vis[ref] ?? { kind: 'none' }
+  const near = (a: number, b: number): boolean => Math.abs(a - b) <= 1
+  const sameVis = (a: S5Visual, b: S5Visual): boolean => {
+    if (a.kind === 'none' || b.kind === 'none') return a.kind === b.kind
+    if (a.kind === 'bar' && b.kind === 'bar') return near(a.left, b.left) && near(a.right, b.right)
+    if (a.kind === 'icon' && b.kind === 'icon') return a.cls === b.cls && near(a.left, b.left) && near(a.top, b.top)
+    return false
+  }
+  const sameFill = (a: S5Fill, b: S5Fill): boolean => a.fill === b.fill && a.strike === b.strike
+  return (cfg, ref, tok) => {
+    const t = s5TwinOf(tok)
+    const got = fillAt(ref)
+    if (cfg.observable === 'crop') {
+      if (!t) return 'unresolvable'
+      return sameVis(visAt(ref), visAt(t)) && sameFill(got, fillAt(`${s5Prefix(ref)}${t}`)) ? 'consistent' : 'refuted'
+    }
+    const want = t ? { fill: fillAt(`${s5Prefix(ref)}${t}`).fill, strike: tok.endsWith('+strike') } : s5Parse(tok)
+    return sameFill(got, want) ? 'consistent' : 'refuted'
+  }
+}
+
+/**
+ * Ruling S5-WITNESS-R, recomputed independently: (a) the winner is consistent with the observation at every designated
+ * cell of every live configuration (negative controls included); (b) every rival is refuted, beyond tolerance, by >= 2
+ * cells within each replication group (per column under `replicateBy: 'column'`, else the configuration) in which its
+ * tokens differ from the winner's, and every rival the group names is so refuted somewhere. A single cell need not refute
+ * every rival. Returns the violations.
+ */
+function s5WitnessInvariant(cfgs: readonly S5Configuration[], winner: string, world: S5World): string[] {
+  const judge = s5Judge(world)
+  const out: string[] = []
+  for (const cfg of cfgs.filter(s5Live)) {
+    const a = cfg.hypotheses[winner]
+    if (!a) continue
+    for (const ref of cfg.refs) {
+      const j = judge(cfg, ref, a[ref]!)
+      if (j !== 'consistent') out.push(`(a) ${cfg.id}: ${winner} is ${j} at ${ref}`)
+    }
+  }
+  const evidence = cfgs.filter(s5EvidenceOf)
+  const refutedSomewhere = new Set<string>()
+  for (const cfg of evidence) {
+    const a = cfg.hypotheses[winner]
+    if (!a) continue
+    const group = (ref: string): string => (cfg.replicateBy === 'column' ? /^[A-Z]+/.exec(s5Bare(ref))![0] : cfg.id)
+    for (const rival of Object.keys(cfg.hypotheses).filter(n => n !== winner)) {
+      const b = cfg.hypotheses[rival]!
+      const groups = new Map<string, number>()
+      for (const ref of cfg.refs) {
+        if (b[ref] === a[ref]) continue
+        groups.set(group(ref), (groups.get(group(ref)) ?? 0) + (judge(cfg, ref, b[ref]!) === 'refuted' ? 1 : 0))
+      }
+      for (const [g, n] of groups) {
+        if (n < 2) out.push(`(b) ${cfg.id}/${g}: ${rival} is refuted by ${n} cell${n === 1 ? '' : 's'}, fewer than 2`)
+        else refutedSomewhere.add(rival)
+      }
+    }
+  }
+  for (const rival of new Set(evidence.flatMap(x => (x.hypotheses[winner] ? Object.keys(x.hypotheses) : [])))) {
+    if (rival !== winner && !refutedSomewhere.has(rival)) out.push(`(b) ${rival} is refuted by >= 2 cells in no replication group`)
+  }
+  return out
+}
+
+/** A literal configuration whose rival differs at exactly one cell: refused by the verifier, accepted by the mutant. */
+function s5HandBuiltSingleRefuter(evalCaps: S5VerifyModule['evaluateFormulaCapabilities']): { status: string; code?: string; violations: string[] } {
+  const cfg: S5Configuration = { id: 'cfg', capabilityId: 'formula:truth-number', observable: 'fill', refs: ['B2', 'B3', 'B4'], positiveControls: { B9: 'FFFFC7CE' }, hypotheses: { yes: { B2: 'FFFFC7CE', B3: 'FFFFC7CE', B4: 'FFFFC7CE' }, no: { B2: 'FFFFC7CE', B3: 'FFFFC7CE', B4: 'none' } } }
+  const world: S5World = { fill: { B2: s5Parse('FFFFC7CE'), B3: s5Parse('FFFFC7CE'), B4: s5Parse('FFFFC7CE'), B9: s5Parse('FFFFC7CE') }, vis: {} }
+  const r = evalCaps([cfg], { B2: 'Z2', B3: 'Z3', B4: 'Z4', B9: 'Z9' }, s5ObsOf(world))['formula:truth-number']!
+  return { status: r.status, ...(r.code ? { code: r.code } : {}), violations: r.status === 'discriminating' ? s5WitnessInvariant([cfg], r.matched!, world) : [] }
+}
+
+interface S5Sweep {
+  triples: string[]
+  built: string[]
+  unbuilt: string[]
+  /** Labels of the accepted worlds the S5-WITNESS-R invariant was evaluated on (a baseline's label is its triple). */
+  checked: string[]
+  corruptions: Record<string, number>
+  outcomes: Record<string, number>
+  kinds: Set<string>
+  /** Corruption worlds the verifier accepted. */
+  accepted: string[]
+  /** Accepted worlds (baselines or corruptions) that violate the invariant. */
+  violations: string[]
+  /** Reason -> the (triple|configuration) tags for which no disjoint-rival rendering exists. */
+  disjointUnbuilt: Record<string, string[]>
+  /** (configuration, rival, group) whose refutations cannot be cut below 2, by reason. */
+  singleUnbuilt: Record<string, number>
+}
+
+/**
+ * The exhaustive S5-WITNESS sweep over every evidence-bearing capability group x reading x retained order: a world
+ * consistent with each reading, then corruptions of it. `evaluateFormulaCapabilities` is the verifier under test (the
+ * real one or a mutant); every world it accepts is checked against the independent S5-WITNESS-R invariant.
+ */
+function s5WitnessSweep(mod: Pick<S5VerifyModule, 'evaluateFormulaCapabilities' | 'formulaControlsOf' | 'resolveFormulaConfigurations' | 'visualKindOf'>): S5Sweep {
+  const { evaluateFormulaCapabilities: evalCaps, formulaControlsOf, resolveFormulaConfigurations, visualKindOf } = mod
+  const out: S5Sweep = {
+    triples: [], built: [], unbuilt: [], checked: [], kinds: new Set(), outcomes: {}, accepted: [], violations: [], disjointUnbuilt: {}, singleUnbuilt: {},
+    corruptions: { 'blank-twins': 0, 'required-empty-visuals': 0, 'blank-twin-controls': 0, 'blank-dxf-controls': 0, 'strike-blind': 0, 'tolerance-shift': 0, 'disjoint-rivals': 0, 'single-refuter': 0 },
+  }
+  for (const c of CF_STAGE5_CASES) {
+    const controls = formulaControlsOf(c)
+    const kindOf = visualKindOf(c)
+    // Every retained order a case's ordered configurations can resolve to (one ordered capability per case).
+    const ordered = [...new Set((c.formulaConfigurations ?? []).flatMap(x => (x.orderedHypotheses ? [x.orderedHypotheses.capabilityId] : [])))]
+    expect(ordered.length, c.id).toBeLessThanOrEqual(1)
+    const orders: Array<Record<string, string>> = ordered.length === 0 ? [{}] : Object.keys(c.formulaConfigurations!.find(x => x.orderedHypotheses)!.orderedHypotheses!.tables).map(o => ({ [ordered[0]!]: o }))
+    for (const retained of orders) {
+      const order = Object.values(retained)[0] ?? '-'
+      const configs = resolveFormulaConfigurations({ ...c, retainedSqrefs: retained })
+      const byCap = new Map<string, S5Configuration[]>()
+      for (const x of configs) byCap.set(x.capabilityId, [...(byCap.get(x.capabilityId) ?? []), x])
+      for (const [cap, cfgs] of byCap) {
+        const evidence = cfgs.filter(s5EvidenceOf)
+        if (evidence.length === 0) continue
+        for (const x of cfgs) out.kinds.add(`${x.observable}:${x.observable === 'crop' ? kindOf(x) : 'fill'}`)
+        const names = [...new Set(evidence.flatMap(x => Object.keys(x.hypotheses)))]
+        // Every twin the group names, with its expectation (a twin shared by configurations must agree).
+        const twinExp = new Map<string, { exp: 'visual' | 'empty' | 'either'; crop: boolean; kind: 'bar' | 'icon' }>()
+        for (const x of cfgs.filter(s5Live)) for (const h of Object.values(x.hypotheses)) for (const tok of Object.values(h)) {
+          const t = s5TwinOf(tok)
+          if (t) twinExp.set(t, { exp: x.twinExpect?.[t] ?? 'either', crop: x.observable === 'crop', kind: kindOf(x) })
+        }
+        const twins = [...twinExp.keys()].sort()
+        const shows = (t: string, i: number): S5Render => {
+          const e = twinExp.get(t)!
+          const on = e.exp === 'visual' || (e.crop && e.exp === 'either')
+          if (!on) return { vis: { kind: 'none' }, fill: S5_NONE }
+          if (!e.crop) return { vis: { kind: 'none' }, fill: { fill: `FF${(0x200000 + i * 0x10101).toString(16).toUpperCase().padStart(6, '0')}`, strike: false } }
+          return { vis: e.kind === 'icon' ? { kind: 'icon', cls: `cls-${i}`, left: 2, top: 2 } : { kind: 'bar', left: 2, right: 10 + 6 * i }, fill: S5_NONE }
+        }
+        const run = (x: S5World, label: string) => {
+          const r = evalCaps(cfgs, controls, s5ObsOf(x), { kindOf })[cap]!
+          if (r.status === 'discriminating') {
+            const v = s5WitnessInvariant(cfgs, r.matched!, x)
+            out.checked.push(label)
+            if (v.length > 0) out.violations.push(`${label}: ${v.join('; ')}`)
+          }
+          return r
+        }
+        for (const winner of names) {
+          const key = `${c.id}|${cap}|${order}|${winner}`
+          out.triples.push(key)
+          // A world consistent with `winner` across the whole group, derived from the twins' renderings: twins render
+          // them, targets what the winner predicts (through the twins), literal positive controls their fixed token.
+          const build = (renders: Readonly<Record<string, S5Render>>): { world: S5World; conflict?: string } => {
+            const w: S5World = { fill: {}, vis: {} }
+            let conflict: string | undefined
+            const setFill = (ref: string, f: S5Fill): void => { const p = w.fill[ref]; if (p && (p.fill !== f.fill || p.strike !== f.strike)) conflict ??= ref; w.fill[ref] = f }
+            const setVis = (ref: string, v: S5Visual): void => { const p = w.vis[ref]; if (p && JSON.stringify(p) !== JSON.stringify(v)) conflict ??= ref; w.vis[ref] = v }
+            for (const t of twins) { setVis(t, renders[t]!.vis); setFill(t, renders[t]!.fill) }
+            for (const x of cfgs.filter(s5Live)) {
+              for (const [ref, tok] of Object.entries(x.positiveControls ?? {})) setFill(ref, s5Parse(tok))
+              const preds = x.hypotheses[winner]
+              if (!preds) continue
+              for (const ref of x.refs) {
+                const tok = preds[ref]!
+                const t = s5TwinOf(tok)
+                if (t) { setVis(s5Bare(ref), w.vis[t]!); setFill(ref, { fill: w.fill[t]!.fill, strike: tok.endsWith('+strike') }) } else { setVis(s5Bare(ref), { kind: 'none' }); setFill(ref, s5Parse(tok)) }
+              }
+            }
+            return { world: JSON.parse(JSON.stringify(w)) as S5World, ...(conflict ? { conflict } : {}) }
+          }
+          const renders: Record<string, S5Render> = Object.fromEntries(twins.map((t, i) => [t, shows(t, i)]))
+          const baseline = build(renders)
+          if (baseline.conflict) { out.unbuilt.push(`${key}: world-conflict ${baseline.conflict}`); continue }
+          const w = baseline.world
+          const base = run(w, key)
+          if (base.status !== 'discriminating' || base.matched !== winner) { out.unbuilt.push(`${key}: ${base.status}${base.code ? ` ${base.code}` : ''}`); continue }
+          out.built.push(key)
+          const clone = (): S5World => JSON.parse(JSON.stringify(w)) as S5World
+          const refused = (x: S5World, what: string): void => {
+            const r = run(x, `${key}: ${what}`)
+            if (r.status === 'discriminating') out.accepted.push(`${key}: ${what}`)
+            out.corruptions[what]!++
+            const o = `${what} -> ${r.code ?? r.status}`
+            out.outcomes[o] = (out.outcomes[o] ?? 0) + 1
+          }
+          const visualFor = (x: S5Configuration): S5Visual => (kindOf(x) === 'icon' ? { kind: 'icon', cls: 'intruder', left: 2, top: 2 } : { kind: 'bar', left: 2, right: 7 })
+          // 1. every twin blank (applies when the group names a twin expected to render).
+          if (twins.some(t => twinExp.get(t)!.exp === 'visual')) { const x = clone(); for (const t of twins) { x.vis[t] = { kind: 'none' }; x.fill[t] = S5_NONE }; refused(x, 'blank-twins') }
+          // 2. a visual in every cell the winner requires empty (a literal none, or a twin expected empty), target and twin.
+          {
+            const x = clone()
+            let touched = 0
+            for (const cfg of evidence) {
+              const preds = cfg.hypotheses[winner]
+              if (!preds) continue
+              for (const ref of cfg.refs) {
+                const t = s5TwinOf(preds[ref]!)
+                if (!(t ? cfg.twinExpect?.[t] === 'empty' : preds[ref] === 'none')) continue
+                touched++
+                for (const r of [ref, ...(t ? [t] : [])]) { if (cfg.observable === 'crop') x.vis[s5Bare(r)] = visualFor(cfg); else x.fill[r] = { fill: 'FF123456', strike: false } }
+              }
+            }
+            if (touched > 0) refused(x, 'required-empty-visuals')
+          }
+          // 3. every twin positive control blank.
+          const positives = twins.filter(t => twinExp.get(t)!.exp === 'visual')
+          if (positives.length > 0) { const x = clone(); for (const t of positives) { x.vis[t] = { kind: 'none' }; x.fill[t] = S5_NONE }; refused(x, 'blank-twin-controls') }
+          // 4. every literal DXF positive control blank (its DisplayFormat shows no fill or font).
+          const dxf = cfgs.filter(s5Live).flatMap(x => Object.keys(x.positiveControls ?? {}))
+          if (dxf.length > 0) { const x = clone(); for (const r of dxf) x.fill[r] = S5_NONE; refused(x, 'blank-dxf-controls') }
+          // 4b. a strike-blind readback: fills read correctly but no strikethrough anywhere (applies when a live
+          // configuration of the group predicts a `+strike` token, literal or twin).
+          if (cfgs.filter(s5Live).some(x => Object.values(x.hypotheses).some(h => Object.values(h).some(t => t.endsWith('+strike'))))) {
+            const x = clone()
+            for (const r of Object.keys(x.fill)) x.fill[r] = { ...x.fill[r]!, strike: false }
+            refused(x, 'strike-blind')
+          }
+          // 5. bars moved into the +-1 px band shared by the winner's and a rival's twin, so no cell decides.
+          {
+            const x = clone()
+            let banded = 0
+            for (const cfg of evidence.filter(e => e.observable === 'crop' && kindOf(e) === 'bar')) {
+              for (const rival of Object.keys(cfg.hypotheses).filter(n => n !== winner)) {
+                for (const ref of cfg.refs) {
+                  const tw = s5TwinOf(cfg.hypotheses[winner]?.[ref] ?? '')
+                  const tr = s5TwinOf(cfg.hypotheses[rival]![ref]!)
+                  if (!tw || !tr || tw === tr) continue
+                  const vw = x.vis[tw]!
+                  const vr = x.vis[tr]!
+                  if (vw.kind !== 'bar' || vr.kind !== 'bar') continue
+                  x.vis[tr] = { ...vr, right: vw.right + 2 }
+                  x.vis[s5Bare(ref)] = { ...vw, right: vw.right + 1 }
+                  banded++
+                }
+              }
+            }
+            if (banded > 0) refused(x, 'tolerance-shift')
+          }
+          // Fix round 7: make a rival's token at a cell render what the winner's does, by re-rendering a twin (the
+          // rival's as the winner's, or the winner's as the rival's), only as the twin's fixed expectation admits. The
+          // world is then re-derived from the renderings, so it stays consistent with the winner. Literal against
+          // literal, or a strikethrough on one token only, can never agree: those cells are structurally immune.
+          const admits = (t: string, r: S5Render, crop: boolean): boolean => {
+            const e = twinExp.get(t)!.exp
+            const state = (crop ? r.vis.kind !== 'none' : r.fill.fill !== 'none' || r.fill.strike) ? 'visual' : 'empty'
+            return e === 'either' || e === state
+          }
+          const equate = (rs: Record<string, S5Render>, cfg: S5Configuration, wTok: string, rTok: string): string | undefined => {
+            const tw = s5TwinOf(wTok)
+            const tr = s5TwinOf(rTok)
+            const crop = cfg.observable === 'crop'
+            if (!tw && !tr) return 'literal-vs-literal'
+            if (wTok.endsWith('+strike') !== rTok.endsWith('+strike')) return 'strike-on-one-token'
+            if (tw && tr) {
+              if (admits(tr, rs[tw]!, crop)) { rs[tr] = rs[tw]!; return undefined }
+              if (admits(tw, rs[tr]!, crop)) { rs[tw] = rs[tr]!; return undefined }
+              return 'twin-expectation-locked'
+            }
+            if (crop) return 'literal-in-crop'
+            const lit: S5Render = { vis: { kind: 'none' }, fill: { fill: s5Parse(tw ? rTok : wTok).fill, strike: false } }
+            const t = (tw ?? tr)!
+            if (!admits(t, lit, crop)) return 'twin-expectation-locked'
+            rs[t] = lit
+            return undefined
+          }
+          const judgeBase = s5Judge(w)
+          // 6. disjoint-rival witnesses, for every evidence configuration (literal, twin, or mixed): at each cell that
+          // separates the winner from >= 2 rivals, all of them but one render the winner's rendering, so no cell refutes
+          // every rival that differs there. A configuration where no such rendering exists is listed with its reason.
+          for (const cfg of evidence) {
+            const a = cfg.hypotheses[winner]
+            if (!a) continue
+            const rivals = Object.keys(cfg.hypotheses).filter(n => n !== winner)
+            const differing = (ref: string): string[] => rivals.filter(r => cfg.hypotheses[r]![ref] !== a[ref])
+            const multi = cfg.refs.filter(ref => differing(ref).length >= 2)
+            const tag = `${key}|${cfg.id}`
+            const skip = (why: string): void => { (out.disjointUnbuilt[why] ??= []).push(tag) }
+            if (multi.length === 0) { skip(rivals.length < 2 ? 'one-rival' : 'no-cell-separates-two-rivals'); continue }
+            const rs: Record<string, S5Render> = { ...renders }
+            let j = 0
+            let why: string | undefined
+            for (const ref of multi) {
+              const d = differing(ref)
+              const stuck = d.map(r => [r, equate({ ...rs }, cfg, a[ref]!, cfg.hypotheses[r]![ref]!)] as const).filter(([, e]) => e !== undefined)
+              if (stuck.length > 1) { why ??= [...new Set(stuck.map(([, e]) => e!))].sort().join('+'); continue }
+              const keep = stuck[0]?.[0] ?? d[j++ % d.length]!
+              for (const r of d) if (r !== keep) equate(rs, cfg, a[ref]!, cfg.hypotheses[r]![ref]!)
+            }
+            if (why) { skip(why); continue }
+            const b = build(rs)
+            if (b.conflict) { skip('world-conflict'); continue }
+            const judge = s5Judge(b.world)
+            const full = multi.filter(ref => differing(ref).every(r => judge(cfg, ref, cfg.hypotheses[r]![ref]!) === 'refuted'))
+            if (full.length > 0) { skip('still-refutes-every-rival'); continue }
+            refused(b.world, 'disjoint-rivals')
+          }
+          // 7. single refuter: for each (configuration, rival, replication group), every refuting cell but one renders
+          // the rival's token as the winner's, so the rival is refuted by one cell only (a violation of (b)).
+          for (const cfg of evidence) {
+            const a = cfg.hypotheses[winner]
+            if (!a) continue
+            const group = (ref: string): string => (cfg.replicateBy === 'column' ? /^[A-Z]+/.exec(s5Bare(ref))![0] : cfg.id)
+            for (const rival of Object.keys(cfg.hypotheses).filter(n => n !== winner)) {
+              const b = cfg.hypotheses[rival]!
+              for (const g of new Set(cfg.refs.filter(ref => b[ref] !== a[ref]).map(group))) {
+                const refuting = cfg.refs.filter(ref => group(ref) === g && b[ref] !== a[ref] && judgeBase(cfg, ref, b[ref]!) === 'refuted')
+                const rs: Record<string, S5Render> = { ...renders }
+                const whys = refuting.slice(1).map(ref => equate(rs, cfg, a[ref]!, b[ref]!)).filter((e): e is string => e !== undefined)
+                const built = build(rs)
+                const judge = s5Judge(built.world)
+                const left = refuting.filter(ref => judge(cfg, ref, b[ref]!) === 'refuted').length
+                const reason = built.conflict ? 'world-conflict' : left >= 2 ? (whys[0] ?? 'still refuted at >= 2 cells') : undefined
+                if (reason) { out.singleUnbuilt[reason] = (out.singleUnbuilt[reason] ?? 0) + 1; continue }
+                refused(built.world, 'single-refuter')
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return out
+}
 
 /**
  * Fix round 6: the (case|capability|retained order|reading) baselines no consistent synthetic world verifies, and why.
@@ -6753,7 +6968,253 @@ const EXPECTED_UNBUILT: readonly string[] = [
   'stage5-cfvo-formulas|bar:bounds-formula|-|zero: refused formula-twin-blank',
   'stage5-cfvo-formulas|icon:thresholds-formula|-|ignored: refused formula-twin-blank',
 ]
-const EXPECTED_COVERAGE = { triples: 169, built: 165, 'blank-twins': 47, 'required-empty-visuals': 94, 'blank-twin-controls': 47, 'blank-dxf-controls': 126, 'strike-blind': 10, 'tolerance-shift': 4, 'disjoint-rivals': 28 }
+/**
+ * Fix round 7: the (triple|configuration) pairs for which the disjoint-rival corruption cannot be built, by reason. It is
+ * built for literal, twin and mixed configurations alike; it needs a cell that separates the winner from >= 2 rivals,
+ * and at each such cell every differing rival but one rendered as the winner's:
+ * - one-rival: the configuration names a single rival, so no cell can separate two;
+ * - no-cell-separates-two-rivals: every cell separates the winner from at most one rival, so the baseline already is the
+ *   disjoint case (e.g. composition-expression-vs-scale: M2:M7 against scale-wins, N2:N7 against dxf-wins). Under Ruling
+ *   S5-WITNESS-R it verifies, and the independent invariant asserts (a) and (b) for it;
+ * - literal-vs-literal: at some cell two or more differing rivals predict literal tokens against the winner's literal,
+ *   which no rendering can make agree;
+ * - strike-on-one-token / twin-expectation-locked: the rival's and the winner's tokens differ in strikethrough, or the
+ *   twin's fixed expectation forbids the re-rendering.
+ */
+const EXPECTED_DISJOINT_UNBUILT: Readonly<Record<string, readonly string[]>> = {
+  'one-rival': [
+    'stage5-active-present-bar|formula:active-present-bar|-|activation-gates|active-present-bar',
+    'stage5-active-present-bar|formula:active-present-bar|-|ignored|active-present-bar',
+    'stage5-active-present-icon|formula:active-present-icon|-|activation-gates|active-present-icon',
+    'stage5-active-present-icon|formula:active-present-icon|-|ignored|active-present-icon',
+    'stage5-active-present-scale|formula:active-present-scale|-|activation-gates|active-present-scale',
+    'stage5-active-present-scale|formula:active-present-scale|-|ignored|active-present-scale',
+    'stage5-calc-manual|formula:calc-manual-saved-values|-|recomputed|manual-saved',
+    'stage5-calc-manual|formula:calc-manual-saved-values|-|saved-values|manual-saved',
+    'stage5-calc-manual|formula:calc-manual-today|-|cf-today-live|manual-today',
+    'stage5-calc-manual|formula:calc-manual-today|-|cf-today-stale|manual-today',
+    'stage5-cellis-operands|formula:cellis-operand-blank|-|blank-empty-text|operand-blank',
+    'stage5-cellis-operands|formula:cellis-operand-blank|-|blank-zero|operand-blank',
+    'stage5-cellis-operands|formula:cellis-operand-error|-|error-as-zero|operand-error',
+    'stage5-cellis-operands|formula:cellis-operand-error|-|no-format|operand-error',
+    'stage5-cfvo-scope|formula:cfvo-scope-multi-range|-|per-range|scope-icon',
+    'stage5-cfvo-scope|formula:cfvo-scope-multi-range|-|per-range|scope-scale',
+    'stage5-cfvo-scope|formula:cfvo-scope-multi-range|-|rule-wide|scope-icon',
+    'stage5-cfvo-scope|formula:cfvo-scope-multi-range|-|rule-wide|scope-scale',
+    'stage5-composition|formula:composition-overlapping|-|first-wins|overlapping',
+    'stage5-composition|formula:composition-overlapping|-|last-wins|overlapping',
+    'stage5-composition|formula:composition-stop-bar|-|continues|stop-bar',
+    'stage5-composition|formula:composition-stop-bar|-|halts|stop-bar',
+    'stage5-composition|formula:composition-stop-dxf|-|continues|stop-dxf',
+    'stage5-composition|formula:composition-stop-dxf|-|halts|stop-dxf',
+    'stage5-composition|formula:composition-stop-icon|-|continues|stop-icon',
+    'stage5-composition|formula:composition-stop-icon|-|halts|stop-icon',
+    'stage5-composition|formula:composition-stop-scale|-|continues|stop-scale',
+    'stage5-composition|formula:composition-stop-scale|-|halts|stop-scale',
+    'stage5-cross-sheet-missing|formula:cross-sheet-missing|-|formats|cross-missing',
+    'stage5-cross-sheet-missing|formula:cross-sheet-missing|-|no-format|cross-missing',
+    'stage5-cross-sheet|formula:cellis-operand-cross-sheet|-|documented|cross-operand',
+    'stage5-cross-sheet|formula:cellis-operand-cross-sheet|-|never|cross-operand',
+    'stage5-formula-anchor|formula:anchor-mixed-abs|-|all-relative|mixed-both-pinned',
+    'stage5-formula-anchor|formula:anchor-mixed-abs|-|all-relative|mixed-col-pinned',
+    'stage5-formula-anchor|formula:anchor-mixed-abs|-|all-relative|mixed-row-pinned',
+    'stage5-formula-anchor|formula:anchor-mixed-abs|-|pinned|mixed-both-pinned',
+    'stage5-formula-anchor|formula:anchor-mixed-abs|-|pinned|mixed-col-pinned',
+    'stage5-formula-anchor|formula:anchor-mixed-abs|-|pinned|mixed-row-pinned',
+    'stage5-formula-anchor|formula:anchor-single|-|relative-top-left|anchor-single',
+    'stage5-formula-anchor|formula:anchor-single|-|unanchored|anchor-single',
+    'stage5-formula-authored|formula:dialect-base|-|applies|authored-cellis',
+    'stage5-formula-authored|formula:dialect-base|-|applies|authored-expression',
+    'stage5-formula-authored|formula:dialect-base|-|applies|authored-mod-row',
+    'stage5-formula-authored|formula:dialect-base|-|ignored|authored-cellis',
+    'stage5-formula-authored|formula:dialect-base|-|ignored|authored-expression',
+    'stage5-formula-authored|formula:dialect-base|-|ignored|authored-mod-row',
+    'stage5-formula-authored|formula:dialect-x14|-|applies|authored-cross-sheet',
+    'stage5-formula-authored|formula:dialect-x14|-|ignored|authored-cross-sheet',
+    'stage5-formula-functions|formula:fn-conditional-aggregate|-|documented|fn-conditional-aggregate',
+    'stage5-formula-functions|formula:fn-conditional-aggregate|-|never|fn-conditional-aggregate',
+    'stage5-formula-functions|formula:fn-date|-|documented|fn-date',
+    'stage5-formula-functions|formula:fn-date|-|never|fn-date',
+    'stage5-formula-functions|formula:fn-row-column|-|documented|fn-row-column',
+    'stage5-formula-functions|formula:fn-row-column|-|never|fn-row-column',
+    'stage5-formula-hoist|formula:hoist-aggregate-errors|-|error-propagates|hoist-average-errors',
+    'stage5-formula-hoist|formula:hoist-aggregate-errors|-|error-propagates|hoist-max-errors',
+    'stage5-formula-hoist|formula:hoist-aggregate-errors|-|errors-skipped|hoist-average-errors',
+    'stage5-formula-hoist|formula:hoist-aggregate-errors|-|errors-skipped|hoist-max-errors',
+    'stage5-predicate-formulas|formula:predicate-divergent|-|attribute|divergent-blanks',
+    'stage5-predicate-formulas|formula:predicate-divergent|-|attribute|divergent-errors',
+    'stage5-predicate-formulas|formula:predicate-divergent|-|formula|divergent-blanks',
+    'stage5-predicate-formulas|formula:predicate-divergent|-|formula|divergent-errors',
+    'stage5-predicate-timeperiod|formula:predicate-timeperiod-divergent|-|attribute|timeperiod-divergent',
+    'stage5-predicate-timeperiod|formula:predicate-timeperiod-divergent|-|formula|timeperiod-divergent',
+    'stage5-x14-scale|scale:dialect-standalone|-|ignored|x14-scale',
+    'stage5-x14-scale|scale:dialect-standalone|-|standalone-evaluated|x14-scale',
+  ],
+  'no-cell-separates-two-rivals': [
+    'stage5-cellis-operands|formula:cellis-operand-expression|-|documented|operand-expression',
+    'stage5-cellis-operands|formula:cellis-operand-reference|-|between-ordered|operand-absolute',
+    'stage5-cellis-operands|formula:cellis-operand-reference|-|between-ordered|operand-between-reversed',
+    'stage5-cellis-operands|formula:cellis-operand-reference|-|documented|operand-absolute',
+    'stage5-cellis-operands|formula:cellis-operand-reference|-|never|operand-between-reversed',
+    'stage5-cellis-operands|formula:cellis-operand-relative|-|documented|operand-relative',
+    'stage5-cfvo-formulas|formula:cfvo-reference|-|ignored|cfvo-scale-percent-ref',
+    'stage5-cfvo-formulas|formula:cfvo-reference|-|ignored|cfvo-scale-percentile-ref',
+    'stage5-cfvo-formulas|formula:cfvo-reference|-|zero|cfvo-scale-percent-ref',
+    'stage5-cfvo-formulas|formula:cfvo-reference|-|zero|cfvo-scale-percentile-ref',
+    'stage5-clock-today|formula:fn-today|-|local-today|today-exact',
+    'stage5-composition|formula:composition-expression-vs-scale|-|priority-wins|expression-vs-scale',
+    'stage5-cross-sheet|formula:cross-sheet-quoted-name|-|documented|cross-quoted',
+    'stage5-cross-sheet|formula:cross-sheet-reference|-|absolute-anchor|cross-absolute',
+    'stage5-cross-sheet|formula:cross-sheet-reference|-|documented|cross-absolute',
+    'stage5-cross-sheet|formula:cross-sheet-reference|-|documented|cross-relative',
+    'stage5-cross-sheet|formula:cross-sheet-reference|-|stale|cross-absolute',
+    'stage5-cross-sheet|formula:cross-sheet-reference|-|stale|cross-relative',
+    'stage5-formula-anchor-multi|formula:anchor-multi-range|D5:D8 B2:B4|per-range|anchor-multi',
+    'stage5-formula-functions|formula:fn-aggregate|-|numeric-only|fn-aggregate',
+    'stage5-formula-functions|formula:fn-information|-|blank-not-empty-text|fn-information-isblank',
+    'stage5-formula-functions|formula:fn-information|-|blank-not-empty-text|fn-information-isnumber',
+    'stage5-formula-functions|formula:fn-information|-|documented|fn-information-isblank',
+    'stage5-formula-functions|formula:fn-information|-|documented|fn-information-isnumber',
+    'stage5-formula-functions|formula:fn-information|-|empty-text-is-blank|fn-information-isnumber',
+    'stage5-formula-functions|formula:fn-logical|-|numeric-coercion|fn-logical',
+    'stage5-formula-functions|formula:fn-math|-|blank-skips|fn-math',
+    'stage5-formula-functions|formula:fn-text|-|text-only|fn-text',
+    'stage5-formula-hoist-aggregate|formula:hoist-aggregate|-|documented|hoist-max',
+    'stage5-formula-hoist-aggregate|formula:hoist-aggregate|-|numeric-only|hoist-average',
+    'stage5-formula-hoist-aggregate|formula:hoist-aggregate|-|numeric-only|hoist-max',
+    'stage5-formula-hoist|formula:hoist-countif-frequency|-|case-sensitive|hoist-countif',
+    'stage5-formula-hoist|formula:hoist-countif-frequency|-|case-sensitive|hoist-countif-literal',
+    'stage5-formula-hoist|formula:hoist-countif-frequency|-|documented|hoist-countif-literal',
+    'stage5-formula-truthiness|formula:truth-blank|-|blank-halts|formula:truth-blank-lower',
+    'stage5-formula-truthiness|formula:truth-blank|-|blank-no-match|formula:truth-blank-lower',
+    'stage5-formula-truthiness|formula:truth-boolean|-|boolean|formula:truth-boolean-lower',
+    'stage5-formula-truthiness|formula:truth-boolean|-|boolean|formula:truth-boolean-stop',
+    'stage5-formula-truthiness|formula:truth-error|-|error-halts|formula:truth-error-lower',
+    'stage5-formula-truthiness|formula:truth-error|-|error-no-match|formula:truth-error-lower',
+    'stage5-formula-truthiness|formula:truth-number|-|number-positive-true|formula:truth-number-lower',
+    'stage5-formula-truthiness|formula:truth-number|-|number-positive-true|formula:truth-number-stop',
+  ],
+  'literal-vs-literal': [
+    'stage5-cellis-operands|formula:cellis-operand-expression|-|never|operand-expression',
+    'stage5-cellis-operands|formula:cellis-operand-expression|-|reference-only|operand-expression',
+    'stage5-cellis-operands|formula:cellis-operand-reference|-|documented|operand-between-reversed',
+    'stage5-cellis-operands|formula:cellis-operand-reference|-|never|operand-absolute',
+    'stage5-cellis-operands|formula:cellis-operand-relative|-|never|operand-relative',
+    'stage5-cellis-operands|formula:cellis-operand-relative|-|unanchored|operand-relative',
+    'stage5-cellis-operands|formula:cellis-operand-text|-|never|operand-text',
+    'stage5-cellis-operands|formula:cellis-operand-text|-|numeric-coerce|operand-text',
+    'stage5-cellis-operands|formula:cellis-operand-text|-|text-compare|operand-text',
+    'stage5-clock-today|formula:fn-today|-|day-floor|today-exact',
+    'stage5-clock-today|formula:fn-today|-|utc-today|today-exact',
+    'stage5-composition|formula:composition-indirect-ahead-dxf|-|continues|indirect-dxf',
+    'stage5-composition|formula:composition-indirect-ahead-dxf|-|halts|indirect-dxf',
+    'stage5-composition|formula:composition-indirect-ahead-dxf|-|ignored|indirect-dxf',
+    'stage5-cross-sheet|formula:cross-sheet-quoted-name|-|absolute-anchor|cross-quoted',
+    'stage5-cross-sheet|formula:cross-sheet-quoted-name|-|never|cross-quoted',
+    'stage5-cross-sheet|formula:cross-sheet-reference|-|absolute-anchor|cross-dynamic-refresh',
+    'stage5-cross-sheet|formula:cross-sheet-reference|-|absolute-anchor|cross-relative',
+    'stage5-cross-sheet|formula:cross-sheet-reference|-|documented|cross-dynamic-refresh',
+    'stage5-cross-sheet|formula:cross-sheet-reference|-|never|cross-absolute',
+    'stage5-cross-sheet|formula:cross-sheet-reference|-|never|cross-dynamic-refresh',
+    'stage5-cross-sheet|formula:cross-sheet-reference|-|never|cross-relative',
+    'stage5-cross-sheet|formula:cross-sheet-reference|-|stale|cross-dynamic-refresh',
+    'stage5-formula-anchor-multi|formula:anchor-multi-range|B2:B4 D5:D8|per-range|anchor-multi',
+    'stage5-formula-anchor-multi|formula:anchor-multi-range|D5:D8 B2:B4|bounding-box|anchor-multi',
+    'stage5-formula-anchor-multi|formula:anchor-multi-range|D5:D8 B2:B4|first-listed|anchor-multi',
+    'stage5-formula-edge|formula:relative-wrap|-|ref-error|wrap-cols',
+    'stage5-formula-edge|formula:relative-wrap|-|ref-error|wrap-rows',
+    'stage5-formula-edge|formula:relative-wrap|-|rows-ref-error-cols-wrap|wrap-cols',
+    'stage5-formula-edge|formula:relative-wrap|-|rows-ref-error-cols-wrap|wrap-rows',
+    'stage5-formula-edge|formula:relative-wrap|-|rows-wrap-cols-ref-error|wrap-cols',
+    'stage5-formula-edge|formula:relative-wrap|-|rows-wrap-cols-ref-error|wrap-rows',
+    'stage5-formula-edge|formula:relative-wrap|-|wrap|wrap-cols',
+    'stage5-formula-edge|formula:relative-wrap|-|wrap|wrap-rows',
+    'stage5-formula-functions|formula:fn-aggregate|-|documented|fn-aggregate',
+    'stage5-formula-functions|formula:fn-aggregate|-|never|fn-aggregate',
+    'stage5-formula-functions|formula:fn-information|-|blank-not-empty-text|fn-information-equals-empty',
+    'stage5-formula-functions|formula:fn-information|-|documented|fn-information-equals-empty',
+    'stage5-formula-functions|formula:fn-information|-|empty-text-is-blank|fn-information-equals-empty',
+    'stage5-formula-functions|formula:fn-information|-|empty-text-is-blank|fn-information-isblank',
+    'stage5-formula-functions|formula:fn-information|-|never|fn-information-equals-empty',
+    'stage5-formula-functions|formula:fn-information|-|never|fn-information-isblank',
+    'stage5-formula-functions|formula:fn-information|-|never|fn-information-isnumber',
+    'stage5-formula-functions|formula:fn-logical|-|documented|fn-logical',
+    'stage5-formula-functions|formula:fn-logical|-|never|fn-logical',
+    'stage5-formula-functions|formula:fn-math|-|documented|fn-math',
+    'stage5-formula-functions|formula:fn-math|-|never|fn-math',
+    'stage5-formula-functions|formula:fn-text|-|documented|fn-text',
+    'stage5-formula-functions|formula:fn-text|-|never|fn-text',
+    'stage5-formula-hoist-aggregate|formula:hoist-aggregate|-|documented|hoist-average',
+    'stage5-formula-hoist-aggregate|formula:hoist-aggregate|-|never|hoist-average',
+    'stage5-formula-hoist-aggregate|formula:hoist-aggregate|-|never|hoist-max',
+    'stage5-formula-hoist|formula:hoist-countif-frequency|-|documented|hoist-countif',
+    'stage5-formula-hoist|formula:hoist-countif-frequency|-|never|hoist-countif',
+    'stage5-formula-hoist|formula:hoist-countif-frequency|-|never|hoist-countif-literal',
+    'stage5-formula-truthiness|formula:truth-blank|-|blank-halts|formula:truth-blank-stop',
+    'stage5-formula-truthiness|formula:truth-blank|-|blank-no-match|formula:truth-blank-stop',
+    'stage5-formula-truthiness|formula:truth-blank|-|blank-true|formula:truth-blank-lower',
+    'stage5-formula-truthiness|formula:truth-blank|-|blank-true|formula:truth-blank-stop',
+    'stage5-formula-truthiness|formula:truth-boolean|-|boolean-always|formula:truth-boolean-lower',
+    'stage5-formula-truthiness|formula:truth-boolean|-|boolean-always|formula:truth-boolean-stop',
+    'stage5-formula-truthiness|formula:truth-boolean|-|boolean-never|formula:truth-boolean-lower',
+    'stage5-formula-truthiness|formula:truth-boolean|-|boolean-never|formula:truth-boolean-stop',
+    'stage5-formula-truthiness|formula:truth-error|-|error-halts|formula:truth-error-stop',
+    'stage5-formula-truthiness|formula:truth-error|-|error-no-match|formula:truth-error-stop',
+    'stage5-formula-truthiness|formula:truth-error|-|error-true|formula:truth-error-lower',
+    'stage5-formula-truthiness|formula:truth-error|-|error-true|formula:truth-error-stop',
+    'stage5-formula-truthiness|formula:truth-number|-|number-never|formula:truth-number-lower',
+    'stage5-formula-truthiness|formula:truth-number|-|number-never|formula:truth-number-stop',
+    'stage5-formula-truthiness|formula:truth-number|-|number-nonzero-true|formula:truth-number-lower',
+    'stage5-formula-truthiness|formula:truth-number|-|number-nonzero-true|formula:truth-number-stop',
+    'stage5-formula-truthiness|formula:truth-range-nested|-|range-any-true|formula:truth-range-nested-lower',
+    'stage5-formula-truthiness|formula:truth-range-nested|-|range-any-true|formula:truth-range-nested-stop',
+    'stage5-formula-truthiness|formula:truth-range-nested|-|range-halts|formula:truth-range-nested-lower',
+    'stage5-formula-truthiness|formula:truth-range-nested|-|range-halts|formula:truth-range-nested-stop',
+    'stage5-formula-truthiness|formula:truth-range-nested|-|range-implicit|formula:truth-range-nested-lower',
+    'stage5-formula-truthiness|formula:truth-range-nested|-|range-implicit|formula:truth-range-nested-stop',
+    'stage5-formula-truthiness|formula:truth-range-nested|-|range-no-match|formula:truth-range-nested-lower',
+    'stage5-formula-truthiness|formula:truth-range-nested|-|range-no-match|formula:truth-range-nested-stop',
+    'stage5-formula-truthiness|formula:truth-range-nested|-|range-top-left|formula:truth-range-nested-lower',
+    'stage5-formula-truthiness|formula:truth-range-nested|-|range-top-left|formula:truth-range-nested-stop',
+    'stage5-formula-truthiness|formula:truth-range|-|range-any-true|formula:truth-range-lower',
+    'stage5-formula-truthiness|formula:truth-range|-|range-any-true|formula:truth-range-stop',
+    'stage5-formula-truthiness|formula:truth-range|-|range-halts|formula:truth-range-lower',
+    'stage5-formula-truthiness|formula:truth-range|-|range-halts|formula:truth-range-stop',
+    'stage5-formula-truthiness|formula:truth-range|-|range-implicit|formula:truth-range-lower',
+    'stage5-formula-truthiness|formula:truth-range|-|range-implicit|formula:truth-range-stop',
+    'stage5-formula-truthiness|formula:truth-range|-|range-no-match|formula:truth-range-lower',
+    'stage5-formula-truthiness|formula:truth-range|-|range-no-match|formula:truth-range-stop',
+    'stage5-formula-truthiness|formula:truth-range|-|range-top-left|formula:truth-range-lower',
+    'stage5-formula-truthiness|formula:truth-range|-|range-top-left|formula:truth-range-stop',
+    'stage5-formula-truthiness|formula:truth-text|-|text-boolean-parse|formula:truth-text-lower',
+    'stage5-formula-truthiness|formula:truth-text|-|text-boolean-parse|formula:truth-text-stop',
+    'stage5-formula-truthiness|formula:truth-text|-|text-halts|formula:truth-text-lower',
+    'stage5-formula-truthiness|formula:truth-text|-|text-halts|formula:truth-text-stop',
+    'stage5-formula-truthiness|formula:truth-text|-|text-no-match|formula:truth-text-lower',
+    'stage5-formula-truthiness|formula:truth-text|-|text-no-match|formula:truth-text-stop',
+    'stage5-formula-truthiness|formula:truth-text|-|text-nonempty-true|formula:truth-text-lower',
+    'stage5-formula-truthiness|formula:truth-text|-|text-nonempty-true|formula:truth-text-stop',
+    'stage5-formula-truthiness|formula:truth-text|-|text-true|formula:truth-text-lower',
+    'stage5-formula-truthiness|formula:truth-text|-|text-true|formula:truth-text-stop',
+  ],
+  'strike-on-one-token': [
+    'stage5-composition|formula:composition-indirect-ahead-scale|-|ignored|indirect-scale',
+  ],
+  'twin-expectation-locked': [
+    'stage5-cfvo-formulas|formula:cfvo-nonnumeric|-|withheld|cfvo-nonnumeric-L',
+    'stage5-cfvo-formulas|formula:cfvo-nonnumeric|-|withheld|cfvo-nonnumeric-M',
+    'stage5-cfvo-formulas|formula:cfvo-nonnumeric|-|withheld|cfvo-nonnumeric-N',
+    'stage5-composition|formula:composition-indirect-ahead-bar|-|halts|indirect-bar',
+    'stage5-composition|formula:composition-indirect-ahead-icon|-|halts|indirect-icon',
+  ],
+  'strike-on-one-token+twin-expectation-locked': [
+    'stage5-composition|formula:composition-indirect-ahead-scale|-|continues|indirect-scale',
+    'stage5-composition|formula:composition-indirect-ahead-scale|-|halts|indirect-scale',
+  ],
+}
+/** Fix round 7: (configuration, rival, replication group) triples whose refutations cannot be cut below 2, by reason. */
+const EXPECTED_SINGLE_UNBUILT: Readonly<Record<string, number>> = { 'literal-vs-literal': 370, 'twin-expectation-locked': 38, 'strike-on-one-token': 4 }
+const EXPECTED_COVERAGE = { triples: 169, built: 165, 'blank-twins': 47, 'required-empty-visuals': 94, 'blank-twin-controls': 47, 'blank-dxf-controls': 126, 'strike-blind': 10, 'tolerance-shift': 4, 'disjoint-rivals': 30, 'single-refuter': 62 }
 /** How each corruption refuses (a corruption can also eliminate the winner or leave two readings standing). */
 const EXPECTED_OUTCOMES: Readonly<Record<string, number>> = {
   'blank-twins -> formula-twin-missing': 47,
@@ -6764,7 +7225,8 @@ const EXPECTED_OUTCOMES: Readonly<Record<string, number>> = {
   'strike-blind -> formula-positive-control-failed': 10,
   'tolerance-shift -> formula-replication-shortfall': 2,
   'tolerance-shift -> non-discriminating': 2,
-  'disjoint-rivals -> formula-replication-shortfall': 15,
-  'disjoint-rivals -> non-discriminating': 12,
-  'disjoint-rivals -> formula-hypothesis-none': 1,
+  'disjoint-rivals -> formula-replication-shortfall': 16,
+  'disjoint-rivals -> non-discriminating': 14,
+  'single-refuter -> formula-replication-shortfall': 60,
+  'single-refuter -> non-discriminating': 2,
 }
