@@ -17,9 +17,10 @@ Piece 5 makes media play during a streamed show the way it plays in a local show
 
 A leaked screen recording of the video is then traceable to the viewer, like every other picture the server sends.
 
-**Owner decisions (2026-11-16):**
+**Owner decisions (2026-11-16 and 2026-11-17):**
 - **Per-viewer encodes:** (a), each viewer gets their own marked encode. The alternative was one shared encode with a generic mark.
 - **Encoder:** approach 1, ffmpeg as a separate process on the server. The alternative was ffmpeg compiled to WebAssembly inside the worker pool.
+- **When encoding happens:** (a), all of a viewer's media is encoded when their show starts, in slide order, and each file is delivered whole once it is ready. The alternatives were streaming while encoding (fragmented MP4), and encoding only when a media slide is next.
 
 ## 2. What exists
 
@@ -134,7 +135,15 @@ Media the server refuses (§6) ships as a record with `refused: <reason>`. The c
   - They reassemble the chunks into a Blob and charge the show workspace exactly as `openMediaLease` does, including the peak while chunks and Blob coexist.
   - They hand the result to the unchanged media player.
   - `canPlayType('video/mp4; codecs=…')` failing gives `media-codec`, as it does locally.
-- **Request timing.** The client requests a slide's media when that slide becomes the next or current slide, the same window the piece-4 track working set uses. Media held across slides follows the lease span rules. Under workspace pressure, carried media is dropped first, as it is locally.
+- **Encoding order** (owner decision (a)). When the show starts, the server queues encodes for every media record in the plan, in slide order beginning at the starting slide. Each viewer runs one encode at a time. Encoding runs ahead of the viewer; it is not driven by their requests.
+  - Finished encodes wait in the session's encode cache (§4.3).
+  - Once the cache reaches its 256 MiB cap, encoding pauses until the viewer moves on and earlier slides' encodes can be evicted. Each slide's encodes become evictable once the viewer has passed it.
+  - A jump (go to slide N) re-queues from N.
+  - When the show ends, the encodes still queued are cancelled and the running one is killed.
+- **Request timing.** The client *requests delivery* of a slide's media when that slide becomes the next or current slide, the same window the piece-4 track working set uses. The client's workspace holds only the media near the viewer's slide.
+  - If the encode is already in the cache, delivery starts at once.
+  - If not, that media moves to the front of the encode queue, and `media-start` follows when it is done.
+  - Media held across slides follows the lease span rules. Under workspace pressure, carried media is dropped first, as it is locally.
 - **Presenter View** mirrors frames as local Presenter View does. Audio plays only in the audience window.
 - All of this code loads lazily on the remote show path.
 
