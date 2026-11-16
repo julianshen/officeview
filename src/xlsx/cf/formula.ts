@@ -1187,6 +1187,7 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
   let limit = Math.min(CF_LIMITS.checkpointUnits, context.ceiling.remaining), used = 0
   const meter: CfWorkBudget = {
     get units() { return used },
+    get remaining() { return limit - used },
     spend(n) { if (!Number.isSafeInteger(n) || n < 0 || n > limit - used) return 'refused'; used += n; return 'continue' },
     resume() {},
   }
@@ -1245,7 +1246,10 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
     criterionLengths.push(t)
   }
   const breakdown = cfCallWorkBreakdown(shape, metrics, criterionLengths)
-  if (breakdown === 'unbounded' || breakdown.total > CF_LIMITS.checkpointUnits || breakdown.total > context.ceiling.remaining) return unresolved('cf-resource-limit')
+  // Preflight against every account the admission draws from: a call that does not fit refuses without spending, so a
+  // latching budget is never poisoned for the calls that follow.
+  if (breakdown === 'unbounded' || breakdown.total > CF_LIMITS.checkpointUnits || breakdown.total > context.ceiling.remaining
+    || breakdown.total > context.budget.remaining) return unresolved('cf-resource-limit')
   const scratch = cfEvaluatorScratchBytes(f, metrics, plan, criterionLengths)
   if (scratch > CF_LIMITS.formulaScratchBytes) return unresolved('cf-resource-limit')
   const hold = context.memory.reserve(scratch)

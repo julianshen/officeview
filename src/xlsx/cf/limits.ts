@@ -354,7 +354,12 @@ export function createCfCaps(workbook: CfMemory = createCfMemory()) {
     dispose() { if (!disposed) { disposed = true; metadataHold?.release(); metadataHold = undefined; metadata = 0 } },
   }
 }
-export interface CfWorkBudget { spend(units: number): 'continue' | 'yield' | 'refused'; resume(): void; readonly units: number }
+export interface CfWorkBudget {
+  spend(units: number): 'continue' | 'yield' | 'refused'; resume(): void; readonly units: number
+  /** Units a spend may still take without refusing (0 once refused or aborted). A caller that must not latch a refusal
+   * (one call's admission among many) checks this first and spends only what fits. */
+  readonly remaining: number
+}
 /** A per-call budget (the default) caps one preparation call's own work at `CF_LIMITS.activeUnits`; a `scan` budget
  * caps one whole-scan pass (statistics, bounds) at `maxUnits`, default `CF_LIMITS.workUnits`. Ruling S3-I1-UNITS:
  * refusal depends on the units spent alone, never on the clock; `now` only paces the cooperative yield (every
@@ -368,6 +373,7 @@ export function createCfWorkBudget(options: CfWorkBudgetOptions = {}): CfWorkBud
   let start = now(), units = 0, sliceUnits = 0, paused = false, refused = false
   return {
     get units() { return units },
+    get remaining() { return refused || options.signal?.aborted ? 0 : maxUnits - units },
     spend(n) {
       if (refused || options.signal?.aborted || !validBytes(n) || n > maxUnits - units) { refused = true; return 'refused' }
       units += n

@@ -133,7 +133,7 @@ describe('each synchronous call stays within one checkpoint and the loop yields 
     try {
       const signal = new AbortController().signal
       const base = bigBudget(signal)
-      const budget: CfWorkBudget = { get units() { return base.units }, spend: n => { const r = base.spend(n); if (r === 'yield') yields++; return r }, resume: () => base.resume() }
+      const budget: CfWorkBudget = { get units() { return base.units }, get remaining() { return base.remaining }, spend: n => { const r = base.spend(n); if (r === 'yield') yields++; return r }, resume: () => base.resume() }
       const batch = await batchOf([formulaRule('A1>0', 'B1:B1000')], fakeSource(cells), { budget, signal })
       hostTaskSpy.mockClear(); yields = 0
       hostHooks.onHost = () => { if (depth > 0) insideCall++ }
@@ -348,3 +348,20 @@ describe('the static bound covers the store work the engine actually performs (S
   })
 })
 void refOf
+
+describe('a refused call never poisons the shared production budget (Task 34 fix round 2, finding 6)', () => {
+  it('with 6 units left, the 7-unit A1+1>0 refuses and spends nothing; the 5-unit A1>0 that follows still evaluates', async () => {
+    const signal = new AbortController().signal
+    const budget = createCfWorkBudget({ now: () => 0, signal }) // the production per-call budget (activeUnits)
+    const calls: number[] = []
+    const batch = await batchOf([formulaRule('A1+1>0', 'B1'), formulaRule('A1>0', 'B1')], fakeSource({ A1: 3 }), { budget, signal, onCall: b => calls.push(b.total) })
+    expect(budget.spend(budget.remaining - 6)).not.toBe('refused')
+    expect(budget.remaining).toBe(6)
+    expect(batch.evaluate(0, 0, 1)).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
+    expect(budget.remaining).toBe(6) // the refusal took nothing and latched nothing
+    expect(batch.evaluate(1, 0, 1)).toEqual({ kind: 'ready', value: { kind: 'boolean', value: true } })
+    expect(calls).toEqual([5])
+    expect(budget.remaining).toBe(1)
+    batch.dispose()
+  })
+})

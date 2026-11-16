@@ -129,7 +129,7 @@ describe('Task 28: the glyph table', () => {
     const tiny = createCfMemory({ limitBytes: 16 })
     expect(admitIconGlyphs(all, tiny, createCfWorkBudget({ now: () => 0 }), cfIconGlyphHeader)).toBeUndefined()
     expect(tiny.currentBytes).toBe(0)
-    const refusing = { spend: () => 'refused' as const, resume() {}, units: 0 }
+    const refusing = { spend: () => 'refused' as const, resume() {}, units: 0, remaining: 0 }
     expect(admitIconGlyphs(all, memory, refusing, cfIconGlyphHeader)).toBeUndefined()
     expect(memory.currentBytes).toBe(baseline)
     const cls = [...all][0]!
@@ -373,7 +373,7 @@ describe('Task 28 fix round', () => {
     expect(admitIconGlyphs(all, tiny, createCfWorkBudget({ now: () => 0 }), cfIconGlyphHeader)).toBeUndefined()
     expect(cfDecodedGlyphCount()).toBe(0)
     expect(tiny.currentBytes).toBe(0)
-    const refusing = { spend: () => 'refused' as const, resume() {}, units: 0 }
+    const refusing = { spend: () => 'refused' as const, resume() {}, units: 0, remaining: 0 }
     expect(admitIconGlyphs(all, createCfMemory({}), refusing, cfIconGlyphHeader)).toBeUndefined()
     expect(cfDecodedGlyphCount()).toBe(0)
     const memory = createCfMemory({})
@@ -433,7 +433,7 @@ describe('Task 28 round 8', () => {
     // A refused admission (memory or budget) decodes nothing.
     let before = cfDecodeCalls()
     expect(admitIconGlyphs(all, createCfMemory({ limitBytes: 16 }), createCfWorkBudget({ now: () => 0 }), cfIconGlyphHeader)).toBeUndefined()
-    expect(admitIconGlyphs(all, createCfMemory({}), { spend: () => 'refused' as const, resume() {}, units: 0 }, cfIconGlyphHeader)).toBeUndefined()
+    expect(admitIconGlyphs(all, createCfMemory({}), { spend: () => 'refused' as const, resume() {}, units: 0, remaining: 0 }, cfIconGlyphHeader)).toBeUndefined()
     expect(cfDecodeCalls()).toBe(before)
     // A successful one decodes only after the reservation, once per class.
     const memory = createCfMemory({})
