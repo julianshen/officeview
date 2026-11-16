@@ -21,6 +21,7 @@ import { attrs, elementNamespaceUri, getChildren, iterateChildren, textOf, type 
 import { resolveSheetColor, type SheetColorContext } from '../sheetColors'
 import { autoBarColourEvidence, hasEvidence } from './evidence'
 import { measureCfPayload } from './limits'
+import { compileCfFormulaWith, countFormulaTokens, formulaRequiredCapabilities, isCfFormulaRefusal } from './formula'
 import { parseCfDxf } from './dxf'
 import {
   CF_BAR_DEFINITION_BYTES,
@@ -39,6 +40,8 @@ import {
   type CfBarBound,
   type CfCellState,
   type CfDefinition,
+  type CfFormula,
+  type CfFormulaOperand,
   type CfIconRef,
   type CfIconSetName,
   type CfIconThreshold,
@@ -447,52 +450,6 @@ function canonicalBlankFormula(type: string, formulas: readonly string[], anchor
   }
 }
 
-/** Crude lexical token count (no evaluation): identifiers, numbers, strings, operators. */
-function countFormulaTokens(text: string): number {
-  let tokens = 0
-  let i = 0
-  const push = () => {
-    tokens++
-    return tokens > CF_LIMITS.formulaTokens
-  }
-  while (i < text.length) {
-    const ch = text[i]!
-    if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') {
-      i++
-      continue
-    }
-    if (ch === '"') {
-      let j = i + 1
-      while (j < text.length) {
-        if (text[j] === '"') {
-          if (text[j + 1] === '"') j += 2
-          else break
-        } else j++
-      }
-      i = Math.min(text.length, j + 1)
-      if (push()) return tokens
-      continue
-    }
-    if (/[A-Za-z_]/.test(ch)) {
-      let j = i + 1
-      while (j < text.length && /[A-Za-z0-9_.]/.test(text[j]!)) j++
-      i = j
-      if (push()) return tokens
-      continue
-    }
-    if (/[0-9.]/.test(ch)) {
-      let j = i + 1
-      while (j < text.length && /[0-9.]/.test(text[j]!)) j++
-      i = j
-      if (push()) return tokens
-      continue
-    }
-    i++
-    if (push()) return tokens
-  }
-  return tokens
-}
-
 function parseTopRank(
   a: Record<string, string>,
 ): { rank: number; bottom: boolean; percent: boolean } | undefined | 'invalid' {
@@ -563,6 +520,8 @@ function boundedTextLength(node: XmlNode | undefined, budget: number): number | 
 class SheetFinalizer {
   charged = 0
   retained = 0
+  /** Retained bytes of the compiled formulas of resolved rules (priced beside `retained`, Ruling S5-B round-1 #3). */
+  formulaBytes = 0
   rules: CfRule[] = []
   sentinel: { reason: string } | undefined
   aborted = false
@@ -601,6 +560,31 @@ class SheetFinalizer {
 
   keep(delta: number): void {
     this.retained += delta
+  }
+
+  /** Grow the sheet hold by `delta` without throwing: a refusal is a per-rule `cf-resource-limit`, never a sheet failure. */
+  private tryAdmit(delta: number): boolean {
+    if (!Number.isSafeInteger(delta) || delta < 0) return false
+    const next = this.charged + delta
+    if (!this.hold.grow(next)) return false
+    this.charged = next
+    return true
+  }
+
+  /**
+   * Compile one formula against this sheet's hold: the worst-case reservation is admitted BEFORE `parseFormula` runs and
+   * lives in the sheet hold, so a parse failure, a cancelled streamed import and sheet disposal all return the ledger
+   * through the one release the sheet already owns. A formula the sheet cap cannot take refuses the rule only.
+   */
+  compileFormula(text: string, anchor: { row: number; col: number } | undefined): ReturnType<typeof compileCfFormulaWith> {
+    let held = 0
+    return compileCfFormulaWith(text, anchor, absolute => {
+      if (this.retained + this.formulaBytes + absolute > CF_LIMITS.sheetMetadataBytes) return false
+      const delta = absolute - held
+      if (delta > 0 && !this.tryAdmit(delta)) return false
+      held = Math.max(held, absolute)
+      return true
+    })
   }
 
   reserveMeta(bytes: number): boolean {
@@ -1432,6 +1416,45 @@ function buildRuleBody(
     return actual
   }
 
+  /**
+   * Stage 5: compile this rule's formulas behind their parse capabilities. The formula-independent gate (dialect and anchor
+   * reading) runs before anything is parsed or reserved, so without evidence the rule takes the exact pre-Stage-5 path.
+   * Every formula's own parse set (pinning, multi-range, cross-sheet) is checked after compile; any miss refuses the rule.
+   */
+  const compileFormulas = (texts: readonly string[], use: 'expression' | 'operand', sourceType: CfRuleType): { ok: true; formulas: CfFormula[] } | { ok: false; reason: string } => {
+    const dialect = inputs.origin.dialect
+    if (!hasEvidence(`formula:dialect-${dialect}`) || !hasEvidence('formula:anchor-single') || (ranges.length > 1 && !hasEvidence('formula:anchor-multi-range'))) {
+      return { ok: false, reason: 'cf-unsupported-rule' }
+    }
+    const anchorCell = ranges.length === 1 ? { row: ranges[0]!.firstRow, col: ranges[0]!.firstCol } : undefined
+    const formulas: CfFormula[] = []
+    let bytes = 0
+    for (const text of texts) {
+      const compiled = fin.compileFormula(text, anchorCell)
+      if (isCfFormulaRefusal(compiled)) return { ok: false, reason: compiled.refused }
+      formulas.push(compiled.formula); bytes += compiled.retained
+    }
+    for (const f of formulas) {
+      for (const capability of formulaRequiredCapabilities(f, use, { dialect, rangeCount: ranges.length, sourceType }).parse) {
+        if (!hasEvidence(capability)) return { ok: false, reason: 'cf-unsupported-rule' }
+      }
+    }
+    fin.formulaBytes += bytes
+    return { ok: true, formulas }
+  }
+  const dependenciesOf = (formulas: readonly CfFormula[]): Record<string, unknown> => {
+    const seen = new Set<string>(), names: string[] = []
+    for (const f of formulas) for (const name of f.dependencySheets) if (!seen.has(name.toLowerCase())) { seen.add(name.toLowerCase()); names.push(name) }
+    return names.length > 0 ? { dependencySheets: names } : {}
+  }
+  /** A divergent text, blank or error formula compiles as an expression carrying its own `@type` (Ruling S5-G). */
+  const divergentPredicate = (): number => {
+    if (inputs.formulas.length !== 1) return finishUnresolved('cf-unsupported-rule', withDxf())
+    const compiled = compileFormulas(inputs.formulas, 'expression', type as CfRuleType)
+    if (!compiled.ok) return finishUnresolved(compiled.reason, withDxf())
+    return finishResolved({ kind: 'expression', formula: compiled.formulas[0]!, sourceType: type, ...dependenciesOf(compiled.formulas) })
+  }
+
   switch (type) {
     case 'cellIs': {
       const operator = (inputs.operatorText ?? '').trim()
@@ -1445,13 +1468,15 @@ function buildRuleBody(
       if (inputs.formulas.length !== want) {
         return invalid(priority, true, `cellIs operator "${operator}" needs ${want} formula(s), found ${inputs.formulas.length}`)
       }
-      const operands: CfLiteral[] = []
-      for (const text of inputs.formulas) {
-        const lit = parseLiteral(text)
-        if (!lit) return finishUnresolved('cf-unsupported-rule', withDxf())
-        operands.push(lit)
-      }
-      return finishResolved({ kind: 'cellIs', operator: operator as CfOperator, operands })
+      const literalOperands = inputs.formulas.map(text => parseLiteral(text))
+      const pending = inputs.formulas.filter((_, i) => !literalOperands[i])
+      if (pending.length === 0) return finishResolved({ kind: 'cellIs', operator: operator as CfOperator, operands: literalOperands as CfLiteral[] })
+      // A reference, expression or call operand is a per-cell formula (Ruling S5-F); a literal beside it stays a literal.
+      const compiled = compileFormulas(pending, 'operand', 'cellIs')
+      if (!compiled.ok) return finishUnresolved(compiled.reason, withDxf())
+      let next = 0
+      const operands: (CfLiteral | CfFormulaOperand)[] = literalOperands.map(lit => lit ?? { formula: compiled.formulas[next++]! })
+      return finishResolved({ kind: 'cellIs', operator: operator as CfOperator, operands, ...dependenciesOf(compiled.formulas) })
     }
     case 'containsText':
     case 'notContainsText':
@@ -1467,7 +1492,7 @@ function buildRuleBody(
       if (canonicalTextFormula(type, needle, inputs.formulas, anchor)) {
         return finishResolved({ kind: 'text', type: type as (typeof TEXT_RULE_TYPES)[number], needle })
       }
-      return finishUnresolved('cf-unsupported-rule', withDxf())
+      return divergentPredicate()
     }
     case 'containsBlanks':
     case 'notContainsBlanks':
@@ -1479,7 +1504,7 @@ function buildRuleBody(
       if (canonicalBlankFormula(type, inputs.formulas, anchor)) {
         return finishResolved({ kind: 'predicate', type: type as (typeof BLANK_ERROR_TYPES)[number] })
       }
-      return finishUnresolved('cf-unsupported-rule', withDxf())
+      return divergentPredicate()
     }
     case 'timePeriod': {
       const period = (inputs.periodText ?? '').trim()
@@ -1524,7 +1549,10 @@ function buildRuleBody(
       return parseIconSetRule(fin, inputs, { active }, finishResolved, finishUnresolved)
     }
     case 'expression': {
-      return finishUnresolved('cf-unsupported-rule', withDxf())
+      if (inputs.hasForeignFormula || inputs.formulas.length !== 1) return finishUnresolved('cf-unsupported-rule', withDxf())
+      const compiled = compileFormulas(inputs.formulas, 'expression', 'expression')
+      if (!compiled.ok) return finishUnresolved(compiled.reason, withDxf())
+      return finishResolved({ kind: 'expression', formula: compiled.formulas[0]!, sourceType: 'expression', ...dependenciesOf(compiled.formulas) })
     }
     default: {
       return pushUnresolved('cf-unsupported-rule', priority, stop, new Set(['ALL']))
@@ -2190,7 +2218,7 @@ function finalizeCollected(
     // The retained-model counter prices the same normalized payload as the
     // sheet-cap reservation exactly once: construction peaks were admitted
     // during the build, and only the retained result below is adopted.
-    const computed = fin.retained + diagBytes + 256
+    const computed = fin.retained + fin.formulaBytes + diagBytes + 256
     const total = measured.kind === 'ready' ? Math.max(computed, measured.value) : computed
     // Adopt exactly the published result's footprint: a sentinel never retains
     // the discarded model's aborted workspace after it is no longer held.

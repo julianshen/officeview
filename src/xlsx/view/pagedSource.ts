@@ -996,8 +996,14 @@ export class PagedXlsxSheetAdapter implements SourceStore {
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC',
         epochNowMs: Date.now(),
       }
+      // The worker owns the workbook's calculation facts: the policy comes from the same `PagedWorkbook` the values do, so
+      // every worker route (paint, text, find) takes one authority. Only a sheet with a formula rule loads the module.
+      const carriesFormula = liveRules?.rules.some(rule => rule.definition.kind === 'expression'
+        || (rule.definition.kind === 'cellIs' && rule.definition.operands.some(operand => 'formula' in operand))) === true
+      const evaluation = carriesFormula ? (await import('../cf/formula')).cfDocumentEvaluationOfPaged(this.workbook) : undefined
       const remoteOptions: CfRemotePrepareOptions = {
         ...options,
+        ...(evaluation ? { evaluation } : {}),
         dateContext,
         hiddenRows: (this.sheet.metadata?.hiddenRows ?? []).map(run => ({ firstRow: run.r0, lastRow: run.r1, firstCol: 0, lastCol: 16383 })),
         merges: (this.sheet.mergeRects ?? []).map(m => ({ firstRow: m.r0, lastRow: m.r1, firstCol: m.c0, lastCol: m.c1 })),
@@ -1489,6 +1495,17 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     }
   }
 }
+/** Stage 5: a compiled formula is a pure function of the rule's own formula text (kept in `formulas`), its ranges and the
+ * code, so the content hash and its byte sizing carry the rule without the AST. This also keeps a deeply nested formula
+ * (a long `A1+A2+...` chain is as deep as it is long) inside the serializer's depth bound, so the paged view cannot refuse
+ * a sheet's rules that the resident view paints. Everything but the AST is unchanged. */
+function hashableDefinition(definition: CfSheetRules['rules'][number]['definition']): unknown {
+  if (definition.kind === 'expression') return { ...definition, formula: { nodes: definition.formula.nodes } }
+  if (definition.kind === 'cellIs' && definition.operands.some(operand => 'formula' in operand)) {
+    return { ...definition, operands: definition.operands.map(operand => 'formula' in operand ? { formula: { nodes: operand.formula.nodes } } : operand) }
+  }
+  return definition
+}
 /** Deterministic serialization of a rule set for shared-definition versioning:
  * identical rules share one charged copy; any change yields a new version. */
 function normalizeCfRules(rules: readonly CfSheetRules['rules'][number][]): string {
@@ -1500,7 +1517,7 @@ function normalizeCfRules(rules: readonly CfSheetRules['rules'][number][]): stri
     ranges: [...rule.ranges].map(r => [r.firstRow, r.lastRow, r.firstCol, r.lastCol]),
     writes: [...rule.writes].sort(),
     dxf: Object.fromEntries(Object.keys(rule.dxf ?? {}).sort().map(k => [k, (rule.dxf as Record<string, unknown>)[k]])),
-    definition: rule.definition,
+    definition: hashableDefinition(rule.definition),
   }))
   normalized.sort((a, b) => a.id - b.id || a.documentOrder - b.documentOrder)
   return JSON.stringify(normalized)
@@ -1622,7 +1639,7 @@ function cfNormalizedBytes(rules: readonly CfSheetRules['rules'][number][]): num
       units += jsonQuotedUnits(key) + 1 + item
       if (!Number.isSafeInteger(units)) return undefined
     }
-    const definition = jsonValueUnits(rule.definition, 0, seen)
+    const definition = jsonValueUnits(hashableDefinition(rule.definition), 0, seen)
     if (definition === undefined) return undefined
     units += definition
     units += 1 // closing }
@@ -1739,6 +1756,10 @@ export interface CfRemotePrepareOptions {
    * — and skips its own sizing and serialization when they verify. */
   readonly admittedRules?: { rules: CfSheetRules | undefined; normalized: string; version: number }
   readonly dateContext?: import('../cf/predicates').CfDateContext
+  /** Stage 5 (Ruling S5-L): the workbook's evaluation policy. Each preparation takes one clock snapshot from `now`
+   * (default: the wall clock). Absent: formula rules are unresolved (`cf-evaluation-context-missing`). */
+  readonly evaluation?: import('../cf/formula').CfDocumentEvaluation
+  readonly now?: () => number
   /** Sheet layout facts the scale scope gates need (hidden rows, merged regions), in CF rect naming. */
   readonly hiddenRows?: readonly { firstRow: number; lastRow: number; firstCol: number; lastCol: number }[]
   readonly merges?: readonly { firstRow: number; lastRow: number; firstCol: number; lastCol: number }[]
@@ -1809,6 +1830,9 @@ async function prepareCfRemoteOnce(
   const limitsModule = await import('../cf/limits')
   const serviceModule = await import('../cf/service')
   const modelModule = await import('../cf/model')
+  // One clock snapshot per preparation, from the injected `now` (Ruling S5-L). Taken before anything is reserved, and only a
+  // policy-carrying route loads the module.
+  const evaluation = options?.evaluation ? (await import('../cf/formula')).cfEvaluationContextFor(options.evaluation, options.now ?? Date.now) : undefined
   if (rules && rules.rules.length > limitsModule.CF_LIMITS.rules) {
     return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-scope-too-large', 'Conditional formatting exceeds the bounded rule count.'), requiredBytes: undefined }
   }
@@ -2040,7 +2064,7 @@ async function prepareCfRemoteOnce(
   // Service and its lease live inside the working hold: everything built
   // below is covered by the pre-admitted bound, and a single finally unwinds
   // in reverse order (lease, service, working hold) exactly once.
-  const service = serviceModule.createCfService(rules, memory, { budget: options?.budget, dateContext: options?.dateContext, merges: options?.merges, ...(options?.hiddenRows?.length ? { statisticsOptions: { hiddenRows: options.hiddenRows } } : {}) })
+  const service = serviceModule.createCfService(rules, memory, { budget: options?.budget, dateContext: options?.dateContext, merges: options?.merges, ...(evaluation ? { evaluation } : {}), ...(options?.hiddenRows?.length ? { statisticsOptions: { hiddenRows: options.hiddenRows } } : {}) })
   let prepared: CfLease<CfPrepared> | undefined
   try {
     if (signal?.aborted) throw cancelled()

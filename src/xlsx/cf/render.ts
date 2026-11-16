@@ -4,6 +4,8 @@ import { createCfStatistics } from './statistics'
 import { sameCfStamp } from './cache'
 import { cfRuntimeEvidence, type CfEvidenceGate } from './predicates'
 import { createCfService, type CfPaintStatistics } from './service'
+import { cfEvaluationContextFor, type CfDocumentEvaluation } from './formula'
+export { cfDocumentEvaluationOf, cfDocumentEvaluationOfPaged } from './formula'
 import { CF_LIMITS, createCfMemory, createCfWorkBudget, measureCfPayload, type CfMemory, type CfWorkBudget } from './limits'
 import { resolveCfCellStyle } from './dxf'
 import { barPaintable, barWithheld, CF_BAR_RENDER_MODEL, paintDataBars, type CfBarHost, type CfBarScale } from './dataBarPaint'
@@ -290,6 +292,9 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
   viewport?: { metrics: import('../view/contracts').SheetMetrics; boxes: readonly import('../view/contracts').LogicalCellBox[] };
   statisticsBudget?: () => CfWorkBudget;
   statisticsMaxUnits?: number;
+  /** Stage 5 (Ruling S5-L): the document's evaluation policy (`cfDocumentEvaluationOf(doc)`); this preparation takes one
+   * clock snapshot from `now` (default: the wall clock). Absent: formula rules are unresolved, Stage 1-4 rules unchanged. */
+  evaluation?: CfDocumentEvaluation; now?: () => number;
   /** The measuring context resident icon hosts use for `iconAt` (default: an offscreen canvas, or none: withheld). */
   layoutContext?: () => CanvasRenderingContext2D | null | undefined;
 } = {}): Promise<CfPaintBatch | undefined> {
@@ -309,6 +314,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
   const hold = memory.reserve(2048 + Math.max(rangeCount, requested?.length ?? 0) * 512)
   if (hold.kind !== 'reserved') return unavailable(sheet)
   const evidence = options.evidence ?? cfRuntimeEvidence
+  const evaluation = options.evaluation ? cfEvaluationContextFor(options.evaluation, options.now ?? Date.now) : undefined
   const stamp = options.request?.stamp ?? {
     owner: options.store?.stamp.docId ?? 'static',
     sheetId: sheet.sheetId ?? sheet.name,
@@ -467,7 +473,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
         // Ruling S3-I1-UNITS: the batch is capped at CF_LIMITS.activeUnits work units, not wall time.
         const batchBudget = createCfWorkBudget({ signal })
         const statsBudgetFactory = options.statisticsBudget ?? (() => createCfWorkBudget({ signal, scan: true, maxUnits: options.statisticsMaxUnits ?? 10_000_000 }))
-        const service = createCfService(rules, memory, { evidence, budget: () => batchBudget, statisticsBudget: statsBudgetFactory, statistics, statisticsOptions, dateContext, merges: sheetMerges })
+        const service = createCfService(rules, memory, { evidence, budget: () => batchBudget, statisticsBudget: statsBudgetFactory, statistics, statisticsOptions, dateContext, merges: sheetMerges, ...(evaluation ? { evaluation } : {}) })
         try {
           const lease = await service.prepareCf({ stamp, sourceRects: [rect], signal, grantBytes: options.request?.grantBytes ?? CF_LIMITS.scratchBytes }, source)
           try {

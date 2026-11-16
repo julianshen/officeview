@@ -1097,7 +1097,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     let cancelled=false
     const sheet=entry.sheet
     void ensureConditionalFormatting([sheet]).then(async cf=>{
-      const batch=await cf?.prepareCfPaint(sheet,{store:source.store(activeSheetId!),memory:cf.paintMemoryFor(doc,chartParent),valuePolicy:doc.valuePolicy??'engine',viewport:cfViewport})
+      const batch=await cf?.prepareCfPaint(sheet,{store:source.store(activeSheetId!),memory:cf.paintMemoryFor(doc,chartParent),valuePolicy:doc.valuePolicy??'engine',evaluation:cf.cfDocumentEvaluationOf(doc),viewport:cfViewport})
       if(cancelled){batch?.dispose();return}
       setViewportCf({key:cfViewportKey,generation:cfLiveKey,boxes:batch ? cfViewport?.boxes : undefined,batch})
     })
@@ -1123,6 +1123,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       signal: batchSignal,
       locale: sheet.semantics?.locale ?? 'en-US',
       budget,
+      evaluation: text.cfDocumentEvaluationOf(doc),
       ...(hosts ? { hosts } : {}),
     })
   }

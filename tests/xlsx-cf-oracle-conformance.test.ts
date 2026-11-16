@@ -13,7 +13,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx, type ParseXlsxOptions } from '../src/xlsx/parse'
-import { prepareCfPaint, residentSource } from '../src/xlsx/cf/render'
+import { cfDocumentEvaluationOf, prepareCfPaint, residentSource } from '../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
 import { VERIFIED_CAPABILITIES, injectCfAutoBarColours, injectCfBarGradient, injectCfBarLayout, injectCfBarAutoBounds, injectCfBarGradientBorder, injectCfBarLengths, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import * as verifiedExports from '../src/xlsx/cf/verifiedCapabilities'
@@ -208,7 +208,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
           dateSystem: c.clockRequirement.dateSystem,
         } : undefined
 
-        const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext })
+        const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext, evaluation: cfDocumentEvaluationOf(doc) })
         expect(paint, `prepareCfPaint should succeed for ${c.id}`).toBeDefined()
         if (!paint) continue
 
@@ -448,7 +448,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
           clockSerial: c.clockRequirement.anchorSerial,
           dateSystem: c.clockRequirement.dateSystem,
         } : undefined
-        const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext })
+        const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext, evaluation: cfDocumentEvaluationOf(doc) })
         expect(paint).toBeDefined()
 
         for (const targetKey of expectedWithheldRecovered.filter(k => k.startsWith(`${caseId}:`))) {

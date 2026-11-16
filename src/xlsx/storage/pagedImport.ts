@@ -75,6 +75,9 @@ export interface PagedWorkbook {
   readonly diagnostics: WorkerDiagnostic[]
   completeness: Completeness
   failure?: SourceFailure
+  /** `<calcPr calcMode>` beside `fullCalcOnLoad` (Stage 5, Ruling S5-L): absent means automatic calculation, exactly as the
+   * resident parser reads it. Feeds the CF formula evaluation context; nothing else reads it. */
+  readonly calcMode?: 'auto' | 'manual' | 'autoNoTable'
   /** Formulas the engine would have evaluated at load (values.ts `isLoadEvaluated`)
    * seen so far; final once `completeness` is 'complete'. Feeds the saved-values status. */
   loadEvaluatedFormulas: number
@@ -196,6 +199,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
   const calcPrNode = getChildren(workbookRoot, 'calcPr')[0]
   const calcPr = calcPrNode ? attrs(calcPrNode) : {}
   const fullCalcOnLoad = calcPr.fullCalcOnLoad === '1' || calcPr.fullCalcOnLoad === 'true'
+  const calcMode = calcPr.calcMode === 'manual' || calcPr.calcMode === 'autoNoTable' ? calcPr.calcMode : 'auto'
   let workbookIndex = 0
   for (const sheetNode of getChildren(getChildren(workbookRoot, 'sheets')[0], 'sheet')) {
     const a = attrs(sheetNode)
@@ -252,7 +256,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
   let changedPromise = new Promise<void>((resolve) => { notify = resolve })
   const pulse = () => { const fire = notify; changedPromise = new Promise<void>((resolve) => { notify = resolve }); fire() }
   const workbook: PagedWorkbook = {
-    docId: options.docId, store, sheets, diagnostics: [], completeness: 'loading', loadEvaluatedFormulas: 0,
+    docId: options.docId, store, sheets, diagnostics: [], completeness: 'loading', loadEvaluatedFormulas: 0, calcMode,
     changed: () => changedPromise, formatting: DEFAULT_FORMATTING,
     parts: { src, inventory, signal }, pivotPartBytes: limits.paged.pivotPartBytes,
   }

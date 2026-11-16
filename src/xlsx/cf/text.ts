@@ -2,6 +2,8 @@ import type { XlsxSheet } from '../types'
 import { CF_ICON_SET_NAMES, type CfBarDescriptor, type CfIconDescriptor, type CfLease, type CfPrepared, type CfStamp, type SourceRect as ModelRect } from './model'
 import { CF_LIMITS, createCfMemory, createCfWorkBudget, type CfMemory } from './limits'
 import { createCfService, estimateCfPrepareBytes, type CfPaintStatistics } from './service'
+import { cfEvaluationContextFor, type CfDocumentEvaluation } from './formula'
+export { cfDocumentEvaluationOf, cfDocumentEvaluationOfPaged } from './formula'
 import { createCfStatistics } from './statistics'
 import { resolveCfCellStyle } from './dxf'
 import { cfRowPtOfSheet, cfRowUniformOfSheet, frameBarHosts, layoutCfCell, residentBarHosts, residentSource, storeCfSource, type CfFrameHostSource } from './render'
@@ -36,6 +38,10 @@ export interface CfTextScopeRequest {
   readonly workbookValueGen?: number
   readonly store?: SourceStore
   readonly dateContext?: import('./predicates').CfDateContext
+  /** Stage 5 (Ruling S5-L): the document's evaluation policy; this scope takes one clock snapshot from `now` (default: the
+   * wall clock). Absent: formula rules are unresolved, Stage 1-4 rules unchanged. */
+  readonly evaluation?: CfDocumentEvaluation
+  readonly now?: () => number
   /** The measuring context resident icon hosts use (Ruling S4-L; default: an offscreen canvas, or none: withheld). */
   readonly layoutContext?: () => CanvasRenderingContext2D | null | undefined
   /** Final review I3: the frame's live hosts (`createFrameHostSource`). Given, the scope decides bars and icons on the
@@ -418,6 +424,7 @@ export async function prepareCfTextScope(
   for (const r of sheet.rows) if (r.hidden) hiddenRows.push({ firstRow: r.index, lastRow: r.index, firstCol: 0, lastCol: 16383 })
   const statisticsOptions = hiddenRows.length > 0 ? { hiddenRows } : undefined
   const sheetMerges: ModelRect[] = (sheet.mergeRanges ?? []).map(m => ({ firstRow: m.minRow, lastRow: m.maxRow, firstCol: m.minCol, lastCol: m.maxCol }))
+  const evaluation = request.evaluation ? cfEvaluationContextFor(request.evaluation, request.now ?? Date.now) : undefined
   const dateContext = request.dateContext ?? (sheet.semantics ? {
     dateSystem: sheet.semantics.dateSystem,
     timeZone: sheet.semantics.timeZone,
@@ -440,7 +447,7 @@ export async function prepareCfTextScope(
       const locale = request.locale ?? 'en-US'
       for (const chunk of modelChunks) {
         if (request.signal.aborted) { closeAccount(); return fail() }
-        const service = createCfService(rules, account, { evidence: cfRuntimeEvidence, dateContext, statistics, statisticsOptions, merges: sheetMerges })
+        const service = createCfService(rules, account, { evidence: cfRuntimeEvidence, dateContext, statistics, statisticsOptions, merges: sheetMerges, ...(evaluation ? { evaluation } : {}) })
         let lease: CfLease<CfPrepared>
         try {
           lease = await service.prepareCf(

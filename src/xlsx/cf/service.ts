@@ -7,8 +7,9 @@ import { evaluateDataBar, resolveBarThresholds } from './dataBar'
 import { evaluateIconSet, resolveIconThresholds } from './iconSet'
 import { barLayoutEvidence } from './evidence'
 import { resolveCfCellStyle } from './dxf'
-import { CF_BAR_CELL_BYTES, CF_ICON_CELL_BYTES, CF_LIMITS, createCfWorkBudget, type CfMemory, type CfWorkBudget } from './limits'
-import type { CfCellState, CfLease, CfLiteral, CfOutcome, CfPrepared, CfPrepareRequest, CfRule, CfSheetRules, CfValueSource, SourceRect } from './model'
+import { CF_BAR_CELL_BYTES, CF_FORMULA_NODE_BYTES, CF_ICON_CELL_BYTES, CF_LIMITS, createCfWorkBudget, type CfMemory, type CfWorkBudget } from './limits'
+import { cfDefinitionFormulas, type CfCellState, type CfLease, type CfLiteral, type CfOutcome, type CfPrepared, type CfPrepareRequest, type CfRule, type CfSheetRules, type CfValueSource, type SourceRect } from './model'
+import type { CfEvaluationContext } from './formula'
 import { cfRuntimeEvidence, evaluatePredicate, type CfEvidenceGate } from './predicates'
 import { createCfStatistics, type CfRangeStatistics, type CfStatisticsOptions, type CfStatisticsSession } from './statistics'
 const quota = () => new PackageError('resource-limit', 'CF preparation exceeds its admitted batch')
@@ -45,9 +46,11 @@ export function estimateCfPrepareBytes(rules: CfSheetRules, sourceRects: readonl
     cells += (rect.lastRow - rect.firstRow + 1) * (rect.lastCol - rect.firstCol + 1)
     if (cells > CF_LIMITS.preparedCells) return undefined
   }
-  let propertyBytes = 0, ranges = 0
+  let propertyBytes = 0, ranges = 0, formulaBytes = 0
   for (const rule of rules.rules) {
     ranges += rule.ranges.length
+    // A compiled formula is a per-rule structure, priced by its node count outside the per-cell product (Ruling S5-B).
+    for (const formula of cfDefinitionFormulas(rule.definition)) formulaBytes += CF_FORMULA_NODE_BYTES * formula.nodes
     if (rule.ranges.length > CF_LIMITS.rangesPerRule || ranges > CF_LIMITS.rangesPerSheet) return undefined
     if (rule.dxf) for (const key of Object.keys(rule.dxf)) {
       const v = (rule.dxf as Record<string, unknown>)[key]
@@ -63,7 +66,7 @@ export function estimateCfPrepareBytes(rules: CfSheetRules, sourceRects: readonl
     }
     for (const key of rule.writes) propertyBytes += 128 + String(key).length * 4
   }
-  const bound = 2048 + sourceRects.length * 160 + rules.rules.length * 640 + cells * (512 + propertyBytes)
+  const bound = 2048 + sourceRects.length * 160 + rules.rules.length * 640 + formulaBytes + cells * (512 + propertyBytes)
   return Number.isSafeInteger(bound) && bound <= CF_LIMITS.scratchBytes ? bound : undefined
 }
 /** Lazy per-sheet engine. Parser-owned rules must remain leased by the caller for
@@ -71,7 +74,10 @@ export function estimateCfPrepareBytes(rules: CfSheetRules, sourceRects: readonl
 export function createCfService(sheet: CfSheetRules, memory: CfMemory,
   options: { evidence?: CfEvidenceGate; budget?: () => CfWorkBudget; statisticsBudget?: () => CfWorkBudget; statistics?: CfPaintStatistics; statisticsOptions?: CfStatisticsOptions; dateContext?: import('./predicates').CfDateContext;
     /** Merged regions of the sheet (final review I5): a scale scope that intersects one is an unmeasured shape. */
-    merges?: readonly SourceRect[] } = {}) {
+    merges?: readonly SourceRect[];
+    /** Stage 5: this preparation's evaluation context (one clock snapshot). Absent: every formula rule is unresolved
+     * (`cf-evaluation-context-missing`); Stage 1-4 rules are unaffected. */
+    evaluation?: CfEvaluationContext } = {}) {
   const cache = createCfCache(memory)
   const evidence = options.evidence ?? cfRuntimeEvidence
   async function prepareCf(request: CfPrepareRequest, source: CfValueSource, account = memory): Promise<CfLease<CfPrepared>> {
@@ -292,6 +298,11 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                     iconThresholds.set(rule, thresh)
                   }
                   outcomes.push(thresh.kind !== 'ready' ? thresh : evaluateIconSet(value, rule.definition, thresh.value, gate))
+                } else if (cfDefinitionFormulas(rule.definition).length > 0) {
+                  // A formula rule never reaches the literal predicates: `evaluatePredicate` would read a formula operand
+                  // as a literal. Without a context it withholds by name; with one it is still withheld until the formula
+                  // evaluator lands (Task 35), whatever evidence is injected.
+                  outcomes.push({ kind: 'unresolved', reason: options.evaluation ? 'cf-formula-unevaluated' : 'cf-evaluation-context-missing' })
                 } else {
                   outcomes.push(preparedStats?.kind === 'unresolved' ? preparedStats
                     : evaluatePredicate(rule, { row, col }, value, preparedStats?.kind === 'ready' ? preparedStats.value.value : undefined, evidence, options.dateContext))

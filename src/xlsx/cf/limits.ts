@@ -40,9 +40,30 @@ export const CF_ICON_DEFINITION_BYTES: number = measurePayloadBytes({
   custom: Array.from({ length: 5 }, () => ({ set: '3TrafficLights1', iconId: 0 })), sheetRightToLeft: false,
 })!
 
+/** Upper bound of one compiled formula AST node's own fields (Ruling S5-B, round-1 #3), DERIVED from the payload measurer
+ * over the largest node shapes (a range qualified by a 31-character sheet name is the widest): the compile-time
+ * reservation is `tokens x CF_FORMULA_NODE_BYTES` and a token never yields more than one node's own fields. Children are
+ * priced as their own nodes, so each shape is measured with its child slots empty. */
+const CF_NODE_SAMPLE_SHEET = 'S'.repeat(31)
+const CF_NODE_SAMPLE_CELL = { sheet: CF_NODE_SAMPLE_SHEET, col: 16383, row: 1048575, absCol: true, absRow: true }
+export const CF_FORMULA_NODE_BYTES: number = Math.max(...[
+  { type: 'cell', ref: CF_NODE_SAMPLE_CELL },
+  { type: 'range', ref: { sheet: CF_NODE_SAMPLE_SHEET, from: CF_NODE_SAMPLE_CELL, to: CF_NODE_SAMPLE_CELL } },
+  { type: 'wholeCol', ref: { sheet: CF_NODE_SAMPLE_SHEET, from: { index: 16383, absolute: true }, to: { index: 16383, absolute: true } } },
+  { type: 'call', name: 'AVERAGEIFS', args: [null] },
+  { type: 'binary', op: '<=', left: null, right: null },
+  { type: 'unary', op: '-', expr: null },
+  { type: 'number', value: -1.7976931348623157e308 },
+  { type: 'string', value: '' },
+].map(node => measurePayloadBytes(node)!))
+/** One element of a character array the evaluator builds for a text function (`textChars`): a one-code-unit string slot. */
+export const CF_CHAR_SLOT_BYTES: number = measurePayloadBytes(['a'])! - measurePayloadBytes([])!
+
 export const CF_LIMITS = Object.freeze({ rules: 4096, rangesPerRule: 256, rangesPerSheet: 16384,
   sheetMetadataBytes: 4 * 1024 ** 2, workbookMetadataBytes: 16 * 1024 ** 2,
   textUnits: 8192, formulaTokens: 4096, formulaChildren: 3, cfvo: 5, customIcons: 5,
+  // Stage 5 (Ruling S5-B caps table): reference atoms per compiled formula and distinct sheets one rule may reference.
+  formulaAtoms: 64, referencedSheets: 16,
   statisticsBytes: 8 * 1024 ** 2, scratchBytes: 8 * 1024 ** 2, workUnits: 1_000_000,
   // Ruling S3-I1-UNITS: one preparation call's own work, in deterministic units (never wall time). Calibrated in
   // docs/validation/xlsx-cf.md section 11 (scripts/cf-refs/active-units.ts): >= 5x the largest production call.

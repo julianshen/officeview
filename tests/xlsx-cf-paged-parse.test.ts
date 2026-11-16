@@ -4,7 +4,7 @@ import { tokenizeBytes } from '../src/core/xml-stream'
 import { createCfMemory } from '../src/xlsx/cf/limits'
 import { createCfStreamEvents } from '../src/xlsx/cf/capture'
 import { parseCfSheet, type CfParseMeta } from '../src/xlsx/cf/parse'
-import { withInjectedCfEvidence } from '../src/xlsx/cf/evidence'
+import { withExactCfEvidence, withInjectedCfEvidence } from '../src/xlsx/cf/evidence'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
 import { xlsxBytes, xlsxEntries, SS_NS } from './helpers/xlsx-package'
 import { buildZip } from './helpers/zip-builder'
@@ -96,6 +96,33 @@ describe('paged CF capture', () => {
         result.lease.release(); expect(result.memory.currentBytes).toBe(0)
       }
     })
+  })
+  it('resident and streamed formula rules are deep equal at every chunk boundary', async () => {
+    // Stage 5 (Task 32): an expression, a formula operand, a divergent predicate, a quoted cross-sheet name and a standalone x14
+    // `<xm:f>`, with boundaries falling inside each `<formula>` and `<xm:f>`; unresolved shapes ride along unchanged.
+    const expression = '<conditionalFormatting sqref="B2:D9"><cfRule type="expression" priority="1"><formula>$B2&gt;$C2</formula></cfRule></conditionalFormatting>'
+    const operand = '<conditionalFormatting sqref="F2:F9"><cfRule type="cellIs" priority="2" operator="between"><formula>$H$1</formula><formula>$H$2*2</formula></cfRule></conditionalFormatting>'
+    const divergent = '<conditionalFormatting sqref="J2:J9"><cfRule type="containsBlanks" priority="3"><formula>ISBLANK(J2)</formula></cfRule></conditionalFormatting>'
+    const quoted = `<conditionalFormatting sqref="L2:L9"><cfRule type="expression" priority="4"><formula>'My Sheet'!$A$1&lt;L2</formula></cfRule></conditionalFormatting>`
+    const refused = '<conditionalFormatting sqref="N2:N9"><cfRule type="expression" priority="5"><formula>INDIRECT("A1")</formula></cfRule></conditionalFormatting>'
+    const x14 = '<x14:conditionalFormatting><x14:cfRule type="expression" priority="6" id="{01234567-89AB-CDEF-0123-456789ABCDEF}"><xm:f>$P2="茶"</xm:f></x14:cfRule><xm:sqref>P2:P9</xm:sqref></x14:conditionalFormatting>'
+    const xml = wrap(expression + operand + divergent + quoted + refused + `<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}"><x14:conditionalFormattings>${x14}</x14:conditionalFormattings></ext></extLst>`)
+    await withExactCfEvidence(['formula:dialect-base', 'formula:dialect-x14', 'formula:anchor-single', 'formula:anchor-mixed-abs', 'formula:cross-sheet-reference', 'formula:cross-sheet-quoted-name'], async () => {
+      const expected = parseCfSheet(parseXml(xml), styles, createCfMemory()).value
+      expect(expected.rules.map(r => r.definition.kind)).toEqual(['expression', 'cellIs', 'expression', 'expression', 'unresolved', 'expression'])
+      expect(expected.rules[3]!.definition).toMatchObject({ dependencySheets: ['My Sheet'] })
+      expect(expected.rules[1]!.definition).toMatchObject({ operands: [{ formula: { nodes: 1 } }, { formula: { nodes: 3 } }] })
+      const bytes = new TextEncoder().encode(xml)
+      for (let i = 0; i <= bytes.length; i++) {
+        const result = await stream(xml, i)
+        expect(result.lease.value).toEqual(expected)
+        result.lease.release(); expect(result.memory.currentBytes).toBe(0)
+      }
+    })
+    // Without evidence both paths stay unresolved, deep-equal.
+    const none = parseCfSheet(parseXml(xml), styles, createCfMemory()).value
+    expect(none.rules.map(r => r.definition.kind)).toEqual(['unresolved', 'unresolved', 'unresolved', 'unresolved', 'unresolved', 'unresolved'])
+    expect((await stream(xml, 100)).lease.value).toEqual(none)
   })
   it.each(['formula', 'color', 'dxf'])('ten thousand singleton duplicates do not build ten thousand nodes: %s', async tag => {
     const xml = wrap(`<conditionalFormatting sqref="A1"><cfRule type="expression" priority="1">${(`<${tag}>1</${tag}>`).repeat(10_000)}</cfRule></conditionalFormatting>`)

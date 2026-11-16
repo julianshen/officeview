@@ -1,5 +1,6 @@
 /** Data-only CF contracts. All consumers outside cf/ use type-only imports. */
 import type { XlsxCellStyle } from '../types'
+import type { AstNode } from '../formula/types'
 import type { CfMemory, CfWorkBudget } from './limits'
 export type SourceRect = Readonly<{ firstRow: number; lastRow: number; firstCol: number; lastCol: number }>
 export type CfStamp = Readonly<{ owner: string; sheetId: string; workbookValueGen: number; cfGen: number; viewGen: number; structureGen: number; clockGen: number }>
@@ -11,7 +12,32 @@ export type CfLiteral = { kind: 'number'; value: number; dateSerial?: true } | {
 export type CfRuleType = 'cellIs' | 'containsText' | 'notContainsText' | 'beginsWith' | 'endsWith' | 'containsBlanks' | 'notContainsBlanks' | 'containsErrors' | 'notContainsErrors' | 'timePeriod' | 'top10' | 'aboveAverage' | 'duplicateValues' | 'uniqueValues' | 'colorScale' | 'dataBar' | 'iconSet' | 'expression'
 export type CfOperator = 'equal' | 'notEqual' | 'greaterThan' | 'lessThan' | 'greaterThanOrEqual' | 'lessThanOrEqual' | 'between' | 'notBetween'
 export type CfTimePeriod = 'today' | 'yesterday' | 'tomorrow' | 'last7Days' | 'thisWeek' | 'lastWeek' | 'nextWeek' | 'thisMonth' | 'lastMonth' | 'nextMonth'
-export interface CfRuleOrigin { dialect: 'base' | 'x14'; guid?: string; activePresent?: boolean; formulas: readonly string[]; dxfId?: number }
+/** `dependencySheets` (Stage 5): the other sheets the rule's compiled formulas name, in first-appearance order. Data only:
+ * the resident live key reads it, nothing evaluates from it. Absent when no formula names another sheet. */
+export interface CfRuleOrigin { dialect: 'base' | 'x14'; guid?: string; activePresent?: boolean; formulas: readonly string[]; dxfId?: number; dependencySheets?: readonly string[] }
+/** One reference atom of a compiled formula (Ruling S5-B). `absRow`/`absCol` mean every endpoint is `$`-pinned on that axis;
+ * a range whose endpoints disagree is refused at compile, so the pair is always exact. A whole column or row carries its
+ * `axis` and pins the other axis by construction. */
+export type CfFormulaRef = Readonly<{ sheet?: string; firstRow: number; lastRow: number; firstCol: number; lastCol: number; absRow: boolean; absCol: boolean; axis?: 'col' | 'row' }>
+/** What a root value can be, from the formula's static shape; value-dependent outcomes (an error from any function) are gated per result. */
+export type CfTruthKind = 'number' | 'boolean' | 'text' | 'blank' | 'error' | 'range'
+/** A compiled, admitted CF formula (Ruling S5-B): plain data, no handlers, deep-equal across the resident and streamed parsers. */
+export type CfFormula = Readonly<{
+  ast: AstNode; nodes: number; atoms: readonly CfFormulaRef[]; invariant: boolean; usesClock: boolean; families: readonly string[]
+  /** Other sheets named by the atoms (case-insensitive distinct, first-appearance spelling). */
+  dependencySheets: readonly string[]
+  /** The rule anchor the relative references are written against; absent for a multi-range rule (Ruling S5-C). */
+  anchor?: Readonly<{ row: number; col: number }>
+  /** Any `$` pin on any axis of any atom (`formula:anchor-mixed-abs`). */
+  pinned: boolean
+  /** The root is a multi-cell reference: a range result (Ruling S5-D), the only place one is admitted. */
+  rootArea: boolean
+  /** Result kinds the root can take, from its static shape. */
+  truth: readonly CfTruthKind[]
+}>
+/** A `cellIs` operand that is a formula rather than a literal (it carries no `kind`, so no literal arm can mistake it for one). */
+export type CfFormulaOperand = Readonly<{ formula: CfFormula }>
+export const isCfFormulaOperand = (operand: CfLiteral | CfFormulaOperand): operand is CfFormulaOperand => 'formula' in operand
 export type CfScaleBound =
   | { type: 'min' }
   | { type: 'max' }
@@ -53,7 +79,10 @@ export type CfBarDescriptor = Readonly<{
   direction: 'leftToRight' | 'rightToLeft'
 }>
 export type CfDefinition = (CfRuleOrigin & (
-  | { kind: 'cellIs'; operator: CfOperator; operands: readonly CfLiteral[] }
+  | { kind: 'cellIs'; operator: CfOperator; operands: readonly (CfLiteral | CfFormulaOperand)[] }
+  /** Stage 5: a formula rule. `sourceType` keeps the authored `@type` for the write mask; a divergent text, blank or error
+   * predicate compiles here with its own type (Ruling S5-G). Never evaluated without its evidence and an evaluation context. */
+  | { kind: 'expression'; formula: CfFormula; sourceType: CfRuleType }
   | { kind: 'text'; type: 'containsText' | 'notContainsText' | 'beginsWith' | 'endsWith'; needle: string }
   | { kind: 'predicate'; type: 'containsBlanks' | 'notContainsBlanks' | 'containsErrors' | 'notContainsErrors' | 'duplicateValues' | 'uniqueValues' }
   | { kind: 'timePeriod'; period: CfTimePeriod }
@@ -113,4 +142,11 @@ export interface CfValueSource {
 export interface CfEngine {
   prepareCf(request: CfPrepareRequest, source: CfValueSource, memory: CfMemory): Promise<CfLease<CfPrepared>>
   resolveCfCellStyle(base: XlsxCellStyle | undefined, state: CfCellState): XlsxCellStyle
+}
+
+/** Every compiled formula one rule definition carries (an expression's, or a `cellIs` formula operand's). */
+export function cfDefinitionFormulas(definition: CfDefinition): readonly CfFormula[] {
+  if (definition.kind === 'expression') return [definition.formula]
+  if (definition.kind === 'cellIs') return definition.operands.flatMap(operand => isCfFormulaOperand(operand) ? [operand.formula] : [])
+  return []
 }
