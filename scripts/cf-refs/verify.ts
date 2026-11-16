@@ -513,8 +513,8 @@ function iconRuleMatches(rule: XmlNode, marker: CfPartMarker): boolean {
     const exp = spec.cfvo[i]!
     const node = cfvoNodes[i]!
     if ((attr(node, 'type') ?? '') !== exp.type) return false
-    if (!sameBarBound(attr(node, 'val'), exp.val)) return false
-    if (!sameBarBound(textOf(node.f), exp.f)) return false
+    if (!sameBound(marker, attr(node, 'val'), exp.val)) return false
+    if (!sameBound(marker, textOf(node.f), exp.f)) return false
     if (normIconBool(attr(node, 'gte'), '1') !== (exp.gte === false ? '0' : '1')) return false
   }
   return true
@@ -578,6 +578,12 @@ function sameBarBound(actual: string | undefined, want: string | undefined): boo
   return a !== '' && w !== '' && Number.isFinite(na) && Number.isFinite(nw) && na === nw
 }
 
+/** A cfvo bound: Stage 5 formula markers compare formula semantics (`normalizeCfFormula`), Stages 3-4 the literal value. */
+function sameBound(marker: CfPartMarker, actual: string | undefined, want: string | undefined): boolean {
+  if (sameBarBound(actual, want)) return true
+  return marker.formula !== undefined && actual !== undefined && want !== undefined && normalizeCfFormula(actual) === normalizeCfFormula(want)
+}
+
 export function barColorMatches(node: XmlNode | undefined, expected: string): boolean {
   if (!node) return false
   if (expected.startsWith('theme:')) {
@@ -611,9 +617,9 @@ function barRuleMatches(rule: XmlNode, marker: CfPartMarker): boolean {
     const actualVal = attr(actual, 'val')
     if (exp.val !== undefined) {
       // Excel drops val on min and max when canonicalizing (e.g. min val="0")
-      if (!sameBarBound(actualVal, exp.val) && !((exp.type === 'min' || exp.type === 'max') && actualVal === undefined)) return false
+      if (!sameBound(marker, actualVal, exp.val) && !((exp.type === 'min' || exp.type === 'max') && actualVal === undefined)) return false
     } else if (actualVal !== undefined) return false
-    if (!sameBarBound(textOf(actual.f), exp.f)) return false
+    if (!sameBound(marker, textOf(actual.f), exp.f)) return false
   }
   const elements = BAR_COLOR_ELEMENT[marker.extension]
   for (const [key, want] of Object.entries(spec.colors)) {
@@ -5608,6 +5614,8 @@ export interface FormulaObservation {
   fill(ref: string): { fill: string; strike: boolean } | undefined
   /** Whether two cells' capture crops are equal within the classification tolerance; undefined when unmeasurable. */
   same(a: string, b: string): boolean | undefined
+  /** Whether a cell shows a real visual: its crop differs from its unformatted control's by a strong delta (fix round 1 #4). */
+  present?(ref: string): boolean | undefined
 }
 
 export interface FormulaCapabilityEvaluation {
@@ -5637,6 +5645,7 @@ export function evaluateFormulaCapabilities(
   configs: readonly S5Configuration[],
   controls: Readonly<Record<string, string>>,
   obs: FormulaObservation,
+  options: { visualRefs?: ReadonlySet<string> } = {},
 ): Record<string, FormulaCapabilityEvaluation> {
   const byCap = new Map<string, S5Configuration[]>()
   for (const cfg of configs) byCap.set(cfg.capabilityId, [...(byCap.get(cfg.capabilityId) ?? []), cfg])
@@ -5648,7 +5657,7 @@ export function evaluateFormulaCapabilities(
     // concrete(cfg, ref, token): what the token predicts, resolved through the twin's observation.
     const concrete = (cfg: S5Configuration, ref: string, token: string): string | undefined => {
       const m = /^twin:([A-Z]+\d+)(\+strike)?$/.exec(token)
-      if (cfg.observable === 'crop') return m ? m[1]! : token
+      if (cfg.observable === 'crop') return m ? m[1]! : undefined
       if (!m) return token
       const twin = obs.fill(`${s5PrefixOf(ref)}${m[1]!}`)
       return twin ? `${twin.fill}${m[2] ?? ''}` : undefined
@@ -5656,14 +5665,19 @@ export function evaluateFormulaCapabilities(
     const matches = (cfg: S5Configuration, ref: string, token: string): boolean | undefined => {
       const want = concrete(cfg, ref, token)
       if (want === undefined) return undefined
-      if (cfg.observable === 'crop') return want === token && !token.startsWith('twin:') ? undefined : obs.same(ref, want)
+      if (cfg.observable === 'crop') return obs.same(ref, want)
       return observed[cfg.id]![ref] === want
     }
     const differs = (cfg: S5Configuration, ref: string, a: string, b: string): boolean | undefined => {
+      if (a === b) return false
       const x = concrete(cfg, ref, a)
       const y = concrete(cfg, ref, b)
       if (x === undefined || y === undefined) return undefined
-      if (cfg.observable === 'crop') return x === y ? false : (() => { const s = obs.same(x, y); return s === undefined ? undefined : !s })()
+      if (cfg.observable === 'crop') {
+        if (x === y) return false
+        const same = obs.same(x, y)
+        return same === undefined ? undefined : !same
+      }
       return x !== y
     }
     for (const cfg of cfgs) {
@@ -5678,9 +5692,11 @@ export function evaluateFormulaCapabilities(
       }
     }
     if (failure) { out[cap] = { ...failure, observed }; continue }
+    // Live configurations decide; a negative control must agree with the winner but never bears evidence (fix round 1 #3).
     const live = cfgs.filter(c => c.record === undefined)
-    if (live.length === 0) { out[cap] = { status: 'no-hypotheses', reason: `record only: ${cfgs.map(c => c.record).join('; ')}`, observed }; continue }
-    const names = [...new Set(live.flatMap(c => Object.keys(c.hypotheses)))]
+    const evidence = live.filter(c => c.role !== 'negative-control')
+    if (evidence.length === 0) { out[cap] = { status: 'no-hypotheses', reason: `record only: ${cfgs.map(c => c.record ?? c.role).join('; ')}`, observed }; continue }
+    const names = [...new Set(evidence.flatMap(c => Object.keys(c.hypotheses)))]
     const unmeasurable: string[] = []
     const fits = (h: string): boolean => live.every(cfg => {
       const preds = cfg.hypotheses[h]
@@ -5694,30 +5710,69 @@ export function evaluateFormulaCapabilities(
     const survivors = names.filter(fits)
     if (unmeasurable.length > 0) { out[cap] = refuse('missing-capture', `unmeasurable cells (crop or twin): ${[...new Set(unmeasurable)].slice(0, 6).join(', ')}`, observed); continue }
     if (survivors.length === 0) { out[cap] = { ...refuse('formula-hypothesis-none', `no hypothesis matches what Excel showed (${names.join(', ')}): a finding, never fitted`, observed), survivors }; continue }
+    // Fix round 1 #2: two readings that predict the same tokens in every evidence configuration cannot be told apart.
+    const coincide = (a: string, b: string): boolean => evidence.every(cfg => !cfg.hypotheses[a] || !cfg.hypotheses[b] || cfg.refs.every(r => cfg.hypotheses[a]![r] === cfg.hypotheses[b]![r]))
+    const twin = survivors.flatMap(h => names.filter(n => n !== h && coincide(h, n)).map(n => `${h} and ${n}`))
+    if (twin.length > 0) { out[cap] = { status: 'non-discriminating', reason: `readings ${twin[0]} coincide at every designated cell (indistinguishable readings are never published as distinct)`, survivors, observed }; continue }
     if (survivors.length > 1) { out[cap] = { status: 'non-discriminating', reason: `hypotheses ${survivors.join(', ')} all match every designated cell`, survivors, observed }; continue }
     const winner = survivors[0]!
+    // Fix round 1 #3: replication per evidence configuration (and per range where declared). Wherever a configuration
+    // was designed to separate the winner from a rival (their tokens differ), it must do so at >= 2 cells of each group;
+    // one configuration never covers for another.
     let shortfall: string | undefined
-    for (const rival of names.filter(n => n !== winner)) {
-      let best: { cfg: S5Configuration; refs: string[] } | undefined
-      for (const cfg of live) {
-        const a = cfg.hypotheses[winner]
-        const b = cfg.hypotheses[rival]
-        if (!a || !b) continue
-        const refs = cfg.refs.filter(ref => differs(cfg, ref, a[ref]!, b[ref]!) === true)
-        if (!best || refs.length > best.refs.length) best = { cfg, refs }
+    for (const cfg of evidence) {
+      const a = cfg.hypotheses[winner]
+      if (!a) continue
+      const keyOf = (ref: string): string => (cfg.replicateBy === 'column' ? /^[A-Z]+/.exec(s5Bare(ref))![0] : cfg.id)
+      for (const rival of Object.keys(cfg.hypotheses).filter(n => n !== winner)) {
+        const b = cfg.hypotheses[rival]!
+        const designed = cfg.refs.filter(ref => a[ref] !== b[ref])
+        for (const key of new Set(designed.map(keyOf))) {
+          const decisive = designed.filter(ref => keyOf(ref) === key && differs(cfg, ref, a[ref]!, b[ref]!) === true)
+          if (decisive.length < 2) {
+            shortfall = `S4-REPLICATE: configuration ${cfg.replicateBy === 'column' ? key : cfg.id} has ${decisive.length} decisive cell${decisive.length === 1 ? '' : 's'}, fewer than 2 (${winner} vs ${rival})`
+            break
+          }
+        }
+        if (shortfall) break
       }
-      if (!best || best.refs.length < 2) {
-        shortfall = `${replicationShortfall(best?.refs ?? [''], 2, () => best?.cfg.id ?? 'none') ?? 'S4-REPLICATE: no configuration separates them'} (${winner} vs ${rival})`
-        break
-      }
+      if (shortfall) break
     }
     if (shortfall) { out[cap] = { ...refuse('formula-replication-shortfall', shortfall, observed), survivors }; continue }
-    out[cap] = { status: 'discriminating', reason: `${winner} matches every designated cell; each rival is eliminated at >= 2 decisive cells of one configuration`, matched: winner, survivors, observed }
+    // Fix round 1 #4: a twin the winner names that sits under a bar or icon rule must show a real visual (independent of
+    // crop equality): its crop differs strongly from its unformatted control.
+    let blank: FormulaCapabilityEvaluation | undefined
+    for (const cfg of evidence.filter(c => c.observable === 'crop')) {
+      for (const ref of cfg.refs) {
+        const t = /^twin:([A-Z]+\d+)/.exec(cfg.hypotheses[winner]?.[ref] ?? '')?.[1]
+        if (!t || !options.visualRefs?.has(t)) continue
+        const shown = obs.present?.(t)
+        if (shown === undefined) { blank ??= refuse('missing-capture', `${cfg.id}: twin ${t} cannot be checked for a visual`, observed); continue }
+        if (!shown) blank ??= refuse('formula-twin-blank', `${cfg.id}: the twin ${t} the winning reading ${winner} names shows no bar or icon against its control, so crop equality proves nothing`, observed)
+      }
+    }
+    if (blank) { out[cap] = { ...blank, survivors }; continue }
+    out[cap] = { status: 'discriminating', reason: `${winner} matches every designated cell; each rival is eliminated at >= 2 decisive cells of every configuration designed to separate it`, matched: winner, survivors, observed }
   }
   return out
 }
 
 type S5FillRecord = Readonly<Record<string, { displayFormatFill?: string; baseFill?: string; strikethrough?: boolean }>>
+
+/**
+ * Two cells' inner crops over their common area: fractional column widths (73.5 pt) round neighbouring boxes to 73 or 74
+ * px, so the crops are aligned at the top-left and cut to the smaller box (the 1 px right/bottom edge is gridline-adjacent).
+ */
+function s5CropPair(png: DecodedPng, geom: WorksheetRangeGeometry, a: string, b: string): [DecodedPng, DecodedPng] | undefined {
+  const ra = iconInnerBox(png, geom, a)
+  const rb = iconInnerBox(png, geom, b)
+  if (!ra || !rb || Math.abs(ra.width - rb.width) > 1 || Math.abs(ra.height - rb.height) > 1) return undefined
+  const width = Math.min(ra.width, rb.width) - 1
+  const height = Math.min(ra.height, rb.height) - 1
+  const ca = cropPng(png, { x: ra.x, y: ra.y, width, height })
+  const cb = cropPng(png, { x: rb.x, y: rb.y, width, height })
+  return ca && cb ? [ca, cb] : undefined
+}
 
 /** The observation source of a measured Stage 5 case: its sidecar fills, the build-time manual observations and the PNG. */
 export function formulaObservationOf(
@@ -5741,15 +5796,76 @@ export function formulaObservationOf(
     },
     same(a, b) {
       if (!png || !geom) return undefined
-      const ra = iconInnerBox(png, geom, a)
-      const rb = iconInnerBox(png, geom, b)
-      if (!ra || !rb || ra.width !== rb.width || ra.height !== rb.height) return undefined
-      const ca = cropPng(png, ra)
-      const cb = cropPng(png, rb)
-      if (!ca || !cb) return undefined
-      return cropDelta(ca, cb).max <= ICON_CLASS_TOLERANCE
+      const pair = s5CropPair(png, geom, a, b)
+      return pair ? cropDelta(pair[0], pair[1]).max <= ICON_CLASS_TOLERANCE : undefined
+    },
+    present(ref) {
+      if (!png || !geom) return undefined
+      const ctrl = c.expected.cells.find(e => e.ref === ref)?.controlRef
+      const pair = ctrl ? s5CropPair(png, geom, ref, ctrl) : undefined
+      return pair ? cropDelta(pair[0], pair[1]).max >= BAR_STRONG_DELTA : undefined
     },
   }
+}
+
+/**
+ * Fix round 1 #2: the sqref order Excel retained for each marker whose order is unpinned (`sqrefOrder: 'any'`), read from
+ * the saved XML: the permutation of its ranges under which the rule matches exactly.
+ */
+export function s5RetainedSqrefs(c: CfOracleCase, parts: Map<string, Uint8Array>): Record<string, string> {
+  const out: Record<string, string> = {}
+  const raw = parts.get('xl/worksheets/sheet1.xml')
+  if (!raw) return out
+  const root = parseXml(new TextDecoder().decode(raw))
+  const perms = (xs: string[]): string[][] => (xs.length <= 1 ? [xs] : xs.flatMap((x, i) => perms([...xs.slice(0, i), ...xs.slice(i + 1)]).map(p => [x, ...p])))
+  for (const m of c.markers) {
+    if (m.sqrefOrder !== 'any') continue
+    for (const order of perms(m.sqref.trim().split(/\s+/))) {
+      const sq = order.join(' ')
+      const { sqrefOrder: _any, ...pinned } = m
+      if (findMatchedRuleInRoot(root, { ...pinned, sqref: sq })) { out[m.capabilityId] = sq; break }
+    }
+  }
+  return out
+}
+
+/** A case's configurations with order-dependent hypotheses resolved against the retained sqref order (fix round 1 #2). */
+export function resolveFormulaConfigurations(c: CfOracleCase, parts?: Map<string, Uint8Array>): S5Configuration[] {
+  const retained = c.retainedSqrefs ?? (parts ? s5RetainedSqrefs(c, parts) : {})
+  return (c.formulaConfigurations ?? []).map(cfg => {
+    if (!cfg.orderedHypotheses) return cfg
+    const order = retained[cfg.orderedHypotheses.capabilityId]
+    if (order === undefined) return cfg
+    const table = cfg.orderedHypotheses.tables[order]
+    return table ? { ...cfg, hypotheses: table } : { ...cfg, hypotheses: {}, record: `no hypotheses were fixed for the retained sqref order ${order}` }
+  })
+}
+
+/** Cells covered by a bar or icon rule (their crops must show a visual when a winning reading names them, fix round 1 #4). */
+function visualRefsOf(c: CfOracleCase): Set<string> {
+  const out = new Set<string>()
+  for (const e of c.expected.cells) if (c.markers.some(m => (m.ruleType === 'dataBar' || m.ruleType === 'iconSet') && isCellInSqref(e.ref, m.sqref))) out.add(e.ref)
+  return out
+}
+
+/**
+ * Fix round 1 #6: a pre-calculate observation is valid only when it was made on this input, with one workbook open in
+ * manual calculation, the stale sources still holding their saved values before the explicit calculation and their
+ * recomputed values after it. An input that already looks recalculated on open is refused, never reinterpreted.
+ */
+export function validateManualObservation(c: CfOracleCase, m: CfOracleCase['manualObservation'], inputSha256: string): string | undefined {
+  if (!m) return 'no build-time manual observation'
+  if (m.inputSha256 !== inputSha256) return `the manual observation was made on input ${m.inputSha256.slice(0, 12)}, not ${inputSha256.slice(0, 12)}`
+  if (m.workbookCount !== 1) return `${m.workbookCount} workbooks were open during the manual observation (exactly one required)`
+  if (!/manual/i.test(m.calculationMode)) return `the application calculation mode was ${m.calculationMode}, not manual`
+  const anchor = c.clockRequirement?.anchorSerial
+  const resolve = (v: string): number => (v === 'anchor' ? anchor ?? NaN : v === 'anchor-5' ? (anchor ?? NaN) - 5 : Number(v))
+  const same = (got: string | undefined, want: string): boolean => got !== undefined && got.trim() !== '' && Math.abs(Number(got) - resolve(want)) < 1e-9
+  for (const [ref, src] of Object.entries(c.calcObservationSources ?? {})) {
+    if (!same(m.pre[ref]?.value, src.saved)) return `source ${ref} read ${m.pre[ref]?.value ?? 'nothing'} before any calculation, not its saved ${src.saved}: the input was recalculated on open, so it cannot test saved values`
+    if (!same(m.calc[ref]?.value, src.recomputed)) return `source ${ref} read ${m.calc[ref]?.value ?? 'nothing'} after the explicit calculation, not the recomputed ${src.recomputed}`
+  }
+  return undefined
 }
 
 /** Designated ref -> its same-content control, from the case's expected cells. */
@@ -5759,8 +5875,8 @@ export function formulaControlsOf(c: CfOracleCase): Record<string, string> {
 }
 
 /** Evaluates a Stage 5 case's configurations against a sidecar and PNG (capture writes exactly this into the sidecar). */
-export function evaluateFormulaCase(c: CfOracleCase, sidecar: Record<string, unknown>, png?: DecodedPng, geom?: WorksheetRangeGeometry): Record<string, FormulaCapabilityEvaluation> {
-  return evaluateFormulaCapabilities(c.formulaConfigurations ?? [], formulaControlsOf(c), formulaObservationOf(c, sidecar, png, geom))
+export function evaluateFormulaCase(c: CfOracleCase, sidecar: Record<string, unknown>, png?: DecodedPng, geom?: WorksheetRangeGeometry, parts?: Map<string, Uint8Array>): Record<string, FormulaCapabilityEvaluation> {
+  return evaluateFormulaCapabilities(resolveFormulaConfigurations(c, parts), formulaControlsOf(c), formulaObservationOf(c, sidecar, png, geom), { visualRefs: visualRefsOf(c) })
 }
 
 interface FormulaCaptureOutcome {
@@ -5777,6 +5893,7 @@ function verifyFormulaCapture(
   decoded: DecodedPng,
   geom: WorksheetRangeGeometry,
   inputSha256: string,
+  parts: Map<string, Uint8Array>,
 ): { ok: true; outcome: FormulaCaptureOutcome } | { ok: false; code: CfRefusalCode; reason: string } {
   const fail = (code: CfRefusalCode, reason: string): { ok: false; code: CfRefusalCode; reason: string } => ({ ok: false, code, reason })
   if (sidecar.lockBefore !== 'unlocked' || sidecar.lockAfter !== 'unlocked') return fail('display-locked', `Capture lock state before="${String(sidecar.lockBefore)}" after="${String(sidecar.lockAfter)}": a capture is valid only when the display was unlocked before and after it`)
@@ -5785,13 +5902,15 @@ function verifyFormulaCapture(
   if (template && JSON.stringify(template.formulaConfigurations ?? []) !== JSON.stringify(c.formulaConfigurations ?? [])) return fail('unobserved-expectation', `Case ${c.id}'s configurations differ from the catalogue's: hypotheses are fixed before capture (Lesson 14)`)
   if (!sidecar.formulaObservations || typeof sidecar.formulaObservations !== 'object') return fail('fill-unobserved', `Stage 5 sidecar for ${c.id} records no formulaObservations (DisplayFormat readback)`)
   if (c.calcObservation === 'pre-calculate') {
-    const m = c.manualObservation
-    if (!m || m.inputSha256 !== inputSha256 || m.workbookCount !== 1 || !/manual/i.test(m.calculationMode)) {
-      return fail('formula-manual-observation-invalid', `Case ${c.id} needs the build-time manual observation bound to input ${inputSha256}, made with one workbook open in manual calculation (got ${m ? `${m.inputSha256.slice(0, 12)}, ${m.workbookCount} workbook(s), mode ${m.calculationMode}` : 'none'})`)
-    }
+    const why = validateManualObservation(c, c.manualObservation, inputSha256)
+    if (why) return fail('formula-manual-observation-invalid', `Case ${c.id}: ${why}`)
+  }
+  // Fix round 1 #2: an unpinned multi-range order must have been recorded from the resaved XML before the capture.
+  for (const m of c.markers) {
+    if (m.sqrefOrder === 'any' && c.retainedSqrefs?.[m.capabilityId] === undefined) return fail('unobserved-expectation', `Case ${c.id}: the retained sqref order of ${m.capabilityId} was not recorded at build`)
   }
   if (c.formulaDynamicRefresh && (!sidecar.formulaDynamicRefresh || typeof sidecar.formulaDynamicRefresh !== 'object')) return fail('fill-unobserved', `Case ${c.id} declares a dynamic refresh but its sidecar records no formulaDynamicRefresh observation`)
-  const evaluation = evaluateFormulaCase(c, sidecar, decoded, geom)
+  const evaluation = evaluateFormulaCase(c, sidecar, decoded, geom, parts)
   if (JSON.stringify(sidecar.formulaEvaluation ?? null) !== JSON.stringify(evaluation)) return fail('sidecar-mismatch', `Sidecar formulaEvaluation for ${c.id} differs from the evaluation the verifier recomputes`)
   // A cell's claimed DisplayFormat outcome must be what the sidecar recorded.
   const obs = formulaObservationOf(c, sidecar, decoded, geom)
@@ -5907,8 +6026,14 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     }
   }
 
-  for (const marker of c.markers) {
+  for (const authored of c.markers) {
+    // Fix round 1 #2: once build recorded the order Excel retained, that order is pinned.
+    const retained = authored.sqrefOrder === 'any' ? c.retainedSqrefs?.[authored.capabilityId] : undefined
+    const marker: CfPartMarker = retained !== undefined ? (({ sqrefOrder: _o, ...m }) => ({ ...m, sqref: retained }))(authored) : authored
     const check = verifyMarkerInArchive(parts, marker)
+    if (!check.ok && retained !== undefined) {
+      return { kind: 'refusal', id: c.id, status: c.status, code: check.code, reason: `${authored.capabilityId}: the saved XML no longer carries the retained sqref order ${retained} (${check.reason})`, structuralValid: false }
+    }
     if (!check.ok) {
       return {
         kind: 'refusal',
@@ -6413,7 +6538,7 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     }
 
     if (isFormulaCase) {
-      const res = verifyFormulaCapture(c, sidecar, decoded, activeGeom, inputSha256)
+      const res = verifyFormulaCapture(c, sidecar, decoded, activeGeom, inputSha256, parts)
       if (!res.ok) return { kind: 'refusal', id: c.id, status: c.status, code: res.code, reason: res.reason, structuralValid: true }
       formulaOutcome = res.outcome
       continue

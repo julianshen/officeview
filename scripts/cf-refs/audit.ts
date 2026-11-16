@@ -873,13 +873,38 @@ export interface Stage5AuditReport extends Stage1AuditReport {
   reused: Readonly<Record<string, 'evidenced' | 'pending'>>
 }
 
-/** Whether a reused Stage 1-4 case is verified and records trusted evidence at each named cell. */
-function reusedCaptureEvidenced(manifest: CfManifest, r: (typeof CF_STAGE5_REUSED_CAPTURES)[number], rootDir: string): boolean {
+/**
+ * Fix round 1 #7: whether a reused Stage 1-4 case is verified and its capture records evidence at each named cell, read in
+ * that stage's own representation (no Stage 1-4 fixture is rewritten):
+ * - Stage 1/2: the sidecar's `observedCells` row; an Excel DisplayFormat fill must equal the expected fill, otherwise the
+ *   Stage 1 pixel contrast against the control (>= 16, the verifier's own threshold) must hold for a matched cell;
+ * - Stage 3: the sidecar's `observedBars` row (a measured bar, or a measured absence);
+ * - Stage 4: the sidecar's `observedIcons` row, or a `pixel-classified` bucket on the cell.
+ */
+export function reusedCaptureEvidenced(manifest: CfManifest, r: (typeof CF_STAGE5_REUSED_CAPTURES)[number], rootDir: string): boolean {
   const c = manifest.cases.find(x => x.id === r.caseId)
   if (!c || c.status !== 'measured' || verifyCfCase(c, { rootDir }).kind !== 'verified') return false
+  const cap = c.captures.find(x => x.appearance === 'screen') ?? c.captures[0]
+  let sidecar: Record<string, unknown> = {}
+  try {
+    sidecar = cap ? (JSON.parse(readFileSync(resolve(rootDir, cap.sidecarPath), 'utf8')) as Record<string, unknown>) : {}
+  } catch {
+    return false
+  }
+  const rows = (key: string): Array<Record<string, unknown>> => (Array.isArray(sidecar[key]) ? (sidecar[key] as Array<Record<string, unknown>>) : [])
+  const rowOf = (key: string, ref: string): Record<string, unknown> | undefined => rows(key).find(o => typeof o?.ref === 'string' && o.ref.toUpperCase() === ref.toUpperCase())
   return r.refs.every(ref => {
     const e = c.expected.cells.find(x => x.ref === ref)
-    return e !== undefined && (e.fillSource === 'excel-display-format' || e.fillSource === 'pixel-matched' || e.barEvidence?.geometry === 'pixel-measured' || e.iconEvidence?.bucket === 'pixel-classified')
+    if (!e) return false
+    if (c.stage === 1 || c.stage === 2) {
+      const o = rowOf('observedCells', ref)
+      if (!o) return false
+      if (o.fillSource === 'excel-display-format') return e.fillRgb === undefined || String(o.fillRgb).toUpperCase() === e.fillRgb.toUpperCase()
+      return e.matched === true && typeof o.bgContrastDelta === 'number' && o.bgContrastDelta >= 16
+    }
+    if (c.stage === 3) return rowOf('observedBars', ref) !== undefined
+    if (c.stage === 4) return rowOf('observedIcons', ref) !== undefined || e.iconEvidence?.bucket === 'pixel-classified'
+    return false
   })
 }
 

@@ -52885,10 +52885,62 @@
           "ruleType": "dataBar",
           "priority": 6,
           "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "formula",
+                "val": "$F$1"
+              },
+              {
+                "type": "formula",
+                "val": "$F$2"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          },
           "formula": {
             "kind": "cfvo",
             "anchor": "J2",
             "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "J2:J9",
+          "extension": "x14",
+          "capabilityId": "formula:dialect-base",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "formula",
+                "f": "$F$1"
+              },
+              {
+                "type": "formula",
+                "f": "$F$2"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "J2",
+            "dialect": "x14"
           }
         },
         {
@@ -52899,6 +52951,25 @@
           "ruleType": "iconSet",
           "priority": 7,
           "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "formula",
+                "val": "$F$1"
+              },
+              {
+                "type": "formula",
+                "val": "$F$2"
+              }
+            ],
+            "attrs": {}
+          },
           "formula": {
             "kind": "cfvo",
             "anchor": "K2",
@@ -57177,7 +57248,7 @@
     {
       "id": "stage5-formula-anchor-multi",
       "stage": 5,
-      "question": "S5-C: which anchor does Excel use for a multi-range sqref listed with its first range not top-left (D5:D8 B2:B4, =$A5>0)? h1 the first listed range's top-left (D5), h2 the bounding box top-left (B2), h3 each range's own top-left. Excel's resaved sqref order is recorded (the marker accepts either order until it is).",
+      "question": "S5-C: which anchor does Excel use for a multi-range sqref authored with its first range not top-left (D5:D8 B2:B4, =$A5>0)? h1 the first listed range's top-left, h2 the bounding box top-left (B2), h3 each range's own top-left. The predictions are derived from the sqref order Excel retains on resave (read from the saved XML before capture and then pinned); if Excel re-sorts to B2:B4 D5:D8, h1 and h2 coincide and the case cannot discriminate them.",
       "input": "tests/fixtures/xlsx-cf/inputs/stage5-formula-anchor-multi.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage5-formula-anchor-multi.xlsx",
       "sheet": "Sheet1",
@@ -57320,6 +57391,7 @@
           "id": "anchor-multi",
           "capabilityId": "formula:anchor-multi-range",
           "observable": "fill",
+          "replicateBy": "column",
           "refs": [
             "D5",
             "D6",
@@ -57356,6 +57428,69 @@
               "B2": "FFFFC7CE",
               "B3": "FFFFC7CE",
               "B4": "FFFFC7CE"
+            }
+          },
+          "orderedHypotheses": {
+            "capabilityId": "formula:anchor-multi-range",
+            "tables": {
+              "D5:D8 B2:B4": {
+                "first-listed": {
+                  "D5": "FFFFC7CE",
+                  "D6": "FFFFC7CE",
+                  "D7": "FFFFC7CE",
+                  "D8": "FFFFC7CE",
+                  "B2": "none",
+                  "B3": "none",
+                  "B4": "none"
+                },
+                "bounding-box": {
+                  "D5": "FFFFC7CE",
+                  "D6": "none",
+                  "D7": "none",
+                  "D8": "none",
+                  "B2": "FFFFC7CE",
+                  "B3": "FFFFC7CE",
+                  "B4": "FFFFC7CE"
+                },
+                "per-range": {
+                  "D5": "FFFFC7CE",
+                  "D6": "FFFFC7CE",
+                  "D7": "FFFFC7CE",
+                  "D8": "FFFFC7CE",
+                  "B2": "FFFFC7CE",
+                  "B3": "FFFFC7CE",
+                  "B4": "FFFFC7CE"
+                }
+              },
+              "B2:B4 D5:D8": {
+                "first-listed": {
+                  "D5": "FFFFC7CE",
+                  "D6": "none",
+                  "D7": "none",
+                  "D8": "none",
+                  "B2": "FFFFC7CE",
+                  "B3": "FFFFC7CE",
+                  "B4": "FFFFC7CE"
+                },
+                "bounding-box": {
+                  "D5": "FFFFC7CE",
+                  "D6": "none",
+                  "D7": "none",
+                  "D8": "none",
+                  "B2": "FFFFC7CE",
+                  "B3": "FFFFC7CE",
+                  "B4": "FFFFC7CE"
+                },
+                "per-range": {
+                  "D5": "FFFFC7CE",
+                  "D6": "FFFFC7CE",
+                  "D7": "FFFFC7CE",
+                  "D8": "FFFFC7CE",
+                  "B2": "FFFFC7CE",
+                  "B3": "FFFFC7CE",
+                  "B4": "FFFFC7CE"
+                }
+              }
             }
           }
         }
@@ -60670,7 +60805,7 @@
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
           "sqref": "B2:B40",
-          "capabilityId": "formula:hoist-aggregate",
+          "capabilityId": "formula:hoist-aggregate-errors",
           "ruleType": "expression",
           "priority": 2,
           "formulas": [
@@ -60689,7 +60824,7 @@
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
           "sqref": "C2:C40",
-          "capabilityId": "formula:hoist-aggregate",
+          "capabilityId": "formula:hoist-aggregate-errors",
           "ruleType": "expression",
           "priority": 3,
           "formulas": [
@@ -62841,8 +62976,8 @@
           }
         },
         {
-          "id": "hoist-average",
-          "capabilityId": "formula:hoist-aggregate",
+          "id": "hoist-average-errors",
+          "capabilityId": "formula:hoist-aggregate-errors",
           "observable": "fill",
           "refs": [
             "B2",
@@ -62884,6 +63019,1489 @@
             "B40"
           ],
           "hypotheses": {
+            "error-propagates": {
+              "B2": "none",
+              "B3": "none",
+              "B4": "none",
+              "B5": "none",
+              "B6": "none",
+              "B7": "none",
+              "B8": "none",
+              "B9": "none",
+              "B10": "none",
+              "B11": "none",
+              "B12": "none",
+              "B13": "none",
+              "B14": "none",
+              "B15": "none",
+              "B16": "none",
+              "B17": "none",
+              "B18": "none",
+              "B19": "none",
+              "B20": "none",
+              "B23": "none",
+              "B24": "none",
+              "B25": "none",
+              "B26": "none",
+              "B27": "none",
+              "B28": "none",
+              "B29": "none",
+              "B30": "none",
+              "B31": "none",
+              "B32": "none",
+              "B33": "none",
+              "B34": "none",
+              "B35": "none",
+              "B36": "none",
+              "B37": "none",
+              "B38": "none",
+              "B39": "none",
+              "B40": "none"
+            },
+            "errors-skipped": {
+              "B2": "none",
+              "B3": "none",
+              "B4": "none",
+              "B5": "none",
+              "B6": "none",
+              "B7": "none",
+              "B8": "none",
+              "B9": "none",
+              "B10": "none",
+              "B11": "none",
+              "B12": "FFFFC7CE",
+              "B13": "FFFFC7CE",
+              "B14": "FFFFC7CE",
+              "B15": "FFFFC7CE",
+              "B16": "FFFFC7CE",
+              "B17": "FFFFC7CE",
+              "B18": "FFFFC7CE",
+              "B19": "none",
+              "B20": "none",
+              "B23": "none",
+              "B24": "FFFFC7CE",
+              "B25": "FFFFC7CE",
+              "B26": "FFFFC7CE",
+              "B27": "FFFFC7CE",
+              "B28": "FFFFC7CE",
+              "B29": "FFFFC7CE",
+              "B30": "FFFFC7CE",
+              "B31": "FFFFC7CE",
+              "B32": "FFFFC7CE",
+              "B33": "FFFFC7CE",
+              "B34": "FFFFC7CE",
+              "B35": "FFFFC7CE",
+              "B36": "FFFFC7CE",
+              "B37": "FFFFC7CE",
+              "B38": "FFFFC7CE",
+              "B39": "FFFFC7CE",
+              "B40": "FFFFC7CE"
+            }
+          }
+        },
+        {
+          "id": "hoist-max-errors",
+          "capabilityId": "formula:hoist-aggregate-errors",
+          "observable": "fill",
+          "refs": [
+            "C2",
+            "C3",
+            "C4",
+            "C5",
+            "C6",
+            "C7",
+            "C8",
+            "C9",
+            "C10",
+            "C11",
+            "C12",
+            "C13",
+            "C14",
+            "C15",
+            "C16",
+            "C17",
+            "C18",
+            "C23",
+            "C24",
+            "C25",
+            "C26",
+            "C27",
+            "C28",
+            "C29",
+            "C30",
+            "C31",
+            "C32",
+            "C33",
+            "C34",
+            "C35",
+            "C36",
+            "C37",
+            "C38",
+            "C39",
+            "C40"
+          ],
+          "hypotheses": {
+            "error-propagates": {
+              "C2": "none",
+              "C3": "none",
+              "C4": "none",
+              "C5": "none",
+              "C6": "none",
+              "C7": "none",
+              "C8": "none",
+              "C9": "none",
+              "C10": "none",
+              "C11": "none",
+              "C12": "none",
+              "C13": "none",
+              "C14": "none",
+              "C15": "none",
+              "C16": "none",
+              "C17": "none",
+              "C18": "none",
+              "C23": "none",
+              "C24": "none",
+              "C25": "none",
+              "C26": "none",
+              "C27": "none",
+              "C28": "none",
+              "C29": "none",
+              "C30": "none",
+              "C31": "none",
+              "C32": "none",
+              "C33": "none",
+              "C34": "none",
+              "C35": "none",
+              "C36": "none",
+              "C37": "none",
+              "C38": "none",
+              "C39": "none",
+              "C40": "none"
+            },
+            "errors-skipped": {
+              "C2": "none",
+              "C3": "none",
+              "C4": "none",
+              "C5": "none",
+              "C6": "none",
+              "C7": "none",
+              "C8": "none",
+              "C9": "none",
+              "C10": "none",
+              "C11": "none",
+              "C12": "none",
+              "C13": "none",
+              "C14": "none",
+              "C15": "none",
+              "C16": "none",
+              "C17": "none",
+              "C18": "none",
+              "C23": "none",
+              "C24": "none",
+              "C25": "none",
+              "C26": "none",
+              "C27": "none",
+              "C28": "none",
+              "C29": "none",
+              "C30": "none",
+              "C31": "none",
+              "C32": "none",
+              "C33": "none",
+              "C34": "none",
+              "C35": "none",
+              "C36": "none",
+              "C37": "none",
+              "C38": "none",
+              "C39": "FFFFC7CE",
+              "C40": "FFFFC7CE"
+            }
+          }
+        },
+        {
+          "id": "hoist-refused-numeric-text",
+          "capabilityId": "formula:hoist-countif-frequency",
+          "observable": "fill",
+          "refs": [
+            "F2",
+            "F3",
+            "F4",
+            "F5",
+            "F6"
+          ],
+          "hypotheses": {
+            "documented": {
+              "F2": "FFFFC7CE",
+              "F3": "FFFFC7CE",
+              "F4": "FFFFC7CE",
+              "F5": "FFFFC7CE",
+              "F6": "FFFFC7CE"
+            },
+            "never": {
+              "F2": "none",
+              "F3": "none",
+              "F4": "none",
+              "F5": "none",
+              "F6": "none"
+            }
+          },
+          "record": "S5-HOIST refused: a range holding numeric text (\"1\", \" 1 \") is refused by the hoist; recorded, never evidence"
+        },
+        {
+          "id": "hoist-refused-boolean",
+          "capabilityId": "formula:hoist-countif-frequency",
+          "observable": "fill",
+          "refs": [
+            "G2",
+            "G3",
+            "G4",
+            "G5"
+          ],
+          "hypotheses": {
+            "documented": {
+              "G2": "FFFFC7CE",
+              "G3": "FFFFC7CE",
+              "G4": "FFFFC7CE",
+              "G5": "FFFFC7CE"
+            },
+            "never": {
+              "G2": "none",
+              "G3": "none",
+              "G4": "none",
+              "G5": "none"
+            }
+          },
+          "record": "S5-HOIST refused: a range holding a boolean refuses the whole rule; recorded, never evidence"
+        },
+        {
+          "id": "hoist-refused-non-ascii",
+          "capabilityId": "formula:hoist-countif-frequency",
+          "observable": "fill",
+          "refs": [
+            "H2",
+            "H3",
+            "H4"
+          ],
+          "hypotheses": {
+            "documented": {
+              "H2": "FFFFC7CE",
+              "H3": "FFFFC7CE",
+              "H4": "FFFFC7CE"
+            },
+            "never": {
+              "H2": "none",
+              "H3": "none",
+              "H4": "none"
+            }
+          },
+          "record": "S5-HOIST refused: non-ASCII text refuses the whole rule; recorded, never evidence"
+        },
+        {
+          "id": "hoist-refused-wildcard",
+          "capabilityId": "formula:hoist-countif-frequency",
+          "observable": "fill",
+          "refs": [
+            "I2",
+            "I3",
+            "I4"
+          ],
+          "hypotheses": {
+            "documented": {
+              "I2": "FFFFC7CE",
+              "I3": "FFFFC7CE",
+              "I4": "FFFFC7CE"
+            },
+            "never": {
+              "I2": "none",
+              "I3": "none",
+              "I4": "none"
+            }
+          },
+          "record": "S5-HOIST refused: wildcard criteria are refused; recorded, never evidence"
+        },
+        {
+          "id": "hoist-refused-na-criterion",
+          "capabilityId": "formula:hoist-countif-frequency",
+          "observable": "fill",
+          "refs": [
+            "J2",
+            "J3",
+            "J4"
+          ],
+          "hypotheses": {
+            "documented": {
+              "J2": "FFFFC7CE",
+              "J3": "FFFFC7CE",
+              "J4": "FFFFC7CE"
+            },
+            "never": {
+              "J2": "none",
+              "J3": "none",
+              "J4": "none"
+            }
+          },
+          "record": "S5-HOIST refused: a \"#N/A\" criterion over a range holding #N/A (the engine counts 1, a string lookup 0); recorded, never evidence"
+        }
+      ],
+      "captures": [
+        {
+          "appearance": "screen",
+          "pngPath": "tests/fixtures/xlsx-cf/refs/stage5-formula-hoist.png",
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage5-formula-hoist.json"
+        }
+      ],
+      "status": "recipe-pending",
+      "reason": "Preparation only: no Excel capture has been run for this Stage 5 case; every formula:* capability it settles stays unverified and production withholds the formula rule (Ruling S5-A)",
+      "tolerance": {
+        "meanAbs": 0.015,
+        "rowMax": 0.08,
+        "strong": 12
+      },
+      "resavedByExcel": false
+    },
+    {
+      "id": "stage5-formula-hoist-aggregate",
+      "stage": 5,
+      "question": "S5-HOIST (fix round 1 #5): A2>AVERAGE($A:$A) and A2=MAX($A:$A) over column A with numbers, mixed-case text and blanks but no error (an error in the range propagates: see stage5-formula-hoist for that configuration).",
+      "input": "tests/fixtures/xlsx-cf/inputs/stage5-formula-hoist-aggregate.xlsx",
+      "saved": "tests/fixtures/xlsx-cf/stage5-formula-hoist-aggregate.xlsx",
+      "sheet": "Sheet1",
+      "range": "A1:G40",
+      "requiredAppearances": [
+        "screen"
+      ],
+      "markers": [
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B2:B40",
+          "capabilityId": "formula:hoist-aggregate",
+          "ruleType": "expression",
+          "priority": 1,
+          "formulas": [
+            "A2>AVERAGE($A:$A)"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE"
+          },
+          "formula": {
+            "kind": "expression",
+            "anchor": "B2",
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "C2:C40",
+          "capabilityId": "formula:hoist-aggregate",
+          "ruleType": "expression",
+          "priority": 2,
+          "formulas": [
+            "A2=MAX($A:$A)"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE"
+          },
+          "formula": {
+            "kind": "expression",
+            "anchor": "C2",
+            "dialect": "base"
+          }
+        }
+      ],
+      "expected": {
+        "inputSha256": "8c22c67808ae16914b1bd48a49aaced328f9d48d58dc1da87aaba911c961e014",
+        "savedSha256": "8c22c67808ae16914b1bd48a49aaced328f9d48d58dc1da87aaba911c961e014",
+        "provenance": "seed-hypothesis",
+        "positiveRefs": [],
+        "negativeRefs": [
+          "F2",
+          "F3",
+          "F4",
+          "F5",
+          "F6",
+          "F7",
+          "F8",
+          "F9",
+          "F10",
+          "F11",
+          "F12",
+          "F13",
+          "F14",
+          "F15",
+          "F16",
+          "F17",
+          "F18",
+          "F19",
+          "F20",
+          "F21",
+          "F22",
+          "F23",
+          "F24",
+          "F25",
+          "F26",
+          "F27",
+          "F28",
+          "F29",
+          "F30",
+          "F31",
+          "F32",
+          "F33",
+          "F34",
+          "F35",
+          "F36",
+          "F37",
+          "F38",
+          "F39",
+          "F40",
+          "G2",
+          "G3",
+          "G4",
+          "G5",
+          "G6",
+          "G7",
+          "G8",
+          "G9",
+          "G10",
+          "G11",
+          "G12",
+          "G13",
+          "G14",
+          "G15",
+          "G16",
+          "G17",
+          "G18",
+          "G23",
+          "G24",
+          "G25",
+          "G26",
+          "G27",
+          "G28",
+          "G29",
+          "G30",
+          "G31",
+          "G32",
+          "G33",
+          "G34",
+          "G35",
+          "G36",
+          "G37",
+          "G38",
+          "G39",
+          "G40"
+        ],
+        "cells": [
+          {
+            "ref": "B2",
+            "controlRef": "F2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B3",
+            "controlRef": "F3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B4",
+            "controlRef": "F4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B5",
+            "controlRef": "F5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B6",
+            "controlRef": "F6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B7",
+            "controlRef": "F7",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B8",
+            "controlRef": "F8",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B9",
+            "controlRef": "F9",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B10",
+            "controlRef": "F10",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B11",
+            "controlRef": "F11",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B12",
+            "controlRef": "F12",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B13",
+            "controlRef": "F13",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B14",
+            "controlRef": "F14",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B15",
+            "controlRef": "F15",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B16",
+            "controlRef": "F16",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B17",
+            "controlRef": "F17",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B18",
+            "controlRef": "F18",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B19",
+            "controlRef": "F19",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B20",
+            "controlRef": "F20",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B21",
+            "controlRef": "F21",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B22",
+            "controlRef": "F22",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B23",
+            "controlRef": "F23",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B24",
+            "controlRef": "F24",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B25",
+            "controlRef": "F25",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B26",
+            "controlRef": "F26",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B27",
+            "controlRef": "F27",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B28",
+            "controlRef": "F28",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B29",
+            "controlRef": "F29",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B30",
+            "controlRef": "F30",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B31",
+            "controlRef": "F31",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B32",
+            "controlRef": "F32",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B33",
+            "controlRef": "F33",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B34",
+            "controlRef": "F34",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B35",
+            "controlRef": "F35",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B36",
+            "controlRef": "F36",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B37",
+            "controlRef": "F37",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B38",
+            "controlRef": "F38",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B39",
+            "controlRef": "F39",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B40",
+            "controlRef": "F40",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C2",
+            "controlRef": "G2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C3",
+            "controlRef": "G3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C4",
+            "controlRef": "G4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C5",
+            "controlRef": "G5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C6",
+            "controlRef": "G6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C7",
+            "controlRef": "G7",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C8",
+            "controlRef": "G8",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C9",
+            "controlRef": "G9",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C10",
+            "controlRef": "G10",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C11",
+            "controlRef": "G11",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C12",
+            "controlRef": "G12",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C13",
+            "controlRef": "G13",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C14",
+            "controlRef": "G14",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C15",
+            "controlRef": "G15",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C16",
+            "controlRef": "G16",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C17",
+            "controlRef": "G17",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C18",
+            "controlRef": "G18",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C23",
+            "controlRef": "G23",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C24",
+            "controlRef": "G24",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C25",
+            "controlRef": "G25",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C26",
+            "controlRef": "G26",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C27",
+            "controlRef": "G27",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C28",
+            "controlRef": "G28",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C29",
+            "controlRef": "G29",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C30",
+            "controlRef": "G30",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C31",
+            "controlRef": "G31",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C32",
+            "controlRef": "G32",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C33",
+            "controlRef": "G33",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C34",
+            "controlRef": "G34",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C35",
+            "controlRef": "G35",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C36",
+            "controlRef": "G36",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C37",
+            "controlRef": "G37",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C38",
+            "controlRef": "G38",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C39",
+            "controlRef": "G39",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C40",
+            "controlRef": "G40",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F2",
+            "controlRef": "B2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F3",
+            "controlRef": "B3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F4",
+            "controlRef": "B4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F5",
+            "controlRef": "B5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F6",
+            "controlRef": "B6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F7",
+            "controlRef": "B7",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F8",
+            "controlRef": "B8",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F9",
+            "controlRef": "B9",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F10",
+            "controlRef": "B10",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F11",
+            "controlRef": "B11",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F12",
+            "controlRef": "B12",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F13",
+            "controlRef": "B13",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F14",
+            "controlRef": "B14",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F15",
+            "controlRef": "B15",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F16",
+            "controlRef": "B16",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F17",
+            "controlRef": "B17",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F18",
+            "controlRef": "B18",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F19",
+            "controlRef": "B19",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F20",
+            "controlRef": "B20",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F21",
+            "controlRef": "B21",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F22",
+            "controlRef": "B22",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F23",
+            "controlRef": "B23",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F24",
+            "controlRef": "B24",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F25",
+            "controlRef": "B25",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F26",
+            "controlRef": "B26",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F27",
+            "controlRef": "B27",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F28",
+            "controlRef": "B28",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F29",
+            "controlRef": "B29",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F30",
+            "controlRef": "B30",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F31",
+            "controlRef": "B31",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F32",
+            "controlRef": "B32",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F33",
+            "controlRef": "B33",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F34",
+            "controlRef": "B34",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F35",
+            "controlRef": "B35",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F36",
+            "controlRef": "B36",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F37",
+            "controlRef": "B37",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F38",
+            "controlRef": "B38",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F39",
+            "controlRef": "B39",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F40",
+            "controlRef": "B40",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G2",
+            "controlRef": "C2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G3",
+            "controlRef": "C3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G4",
+            "controlRef": "C4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G5",
+            "controlRef": "C5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G6",
+            "controlRef": "C6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G7",
+            "controlRef": "C7",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G8",
+            "controlRef": "C8",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G9",
+            "controlRef": "C9",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G10",
+            "controlRef": "C10",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G11",
+            "controlRef": "C11",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G12",
+            "controlRef": "C12",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G13",
+            "controlRef": "C13",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G14",
+            "controlRef": "C14",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G15",
+            "controlRef": "C15",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G16",
+            "controlRef": "C16",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G17",
+            "controlRef": "C17",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G18",
+            "controlRef": "C18",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G23",
+            "controlRef": "C23",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G24",
+            "controlRef": "C24",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G25",
+            "controlRef": "C25",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G26",
+            "controlRef": "C26",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G27",
+            "controlRef": "C27",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G28",
+            "controlRef": "C28",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G29",
+            "controlRef": "C29",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G30",
+            "controlRef": "C30",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G31",
+            "controlRef": "C31",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G32",
+            "controlRef": "C32",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G33",
+            "controlRef": "C33",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G34",
+            "controlRef": "C34",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G35",
+            "controlRef": "C35",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G36",
+            "controlRef": "C36",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G37",
+            "controlRef": "C37",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G38",
+            "controlRef": "C38",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G39",
+            "controlRef": "C39",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G40",
+            "controlRef": "C40",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          }
+        ]
+      },
+      "formulaConfigurations": [
+        {
+          "id": "hoist-average",
+          "capabilityId": "formula:hoist-aggregate",
+          "observable": "fill",
+          "refs": [
+            "B2",
+            "B3",
+            "B4",
+            "B5",
+            "B6",
+            "B7",
+            "B8",
+            "B9",
+            "B10",
+            "B11",
+            "B12",
+            "B13",
+            "B14",
+            "B15",
+            "B16",
+            "B17",
+            "B18",
+            "B19",
+            "B20",
+            "B21",
+            "B22",
+            "B23",
+            "B24",
+            "B25",
+            "B26",
+            "B27",
+            "B28",
+            "B29",
+            "B30",
+            "B31",
+            "B32",
+            "B33",
+            "B34",
+            "B35",
+            "B36",
+            "B37",
+            "B38",
+            "B39",
+            "B40"
+          ],
+          "hypotheses": {
             "documented": {
               "B2": "none",
               "B3": "none",
@@ -62904,6 +64522,8 @@
               "B18": "FFFFC7CE",
               "B19": "none",
               "B20": "none",
+              "B21": "none",
+              "B22": "none",
               "B23": "none",
               "B24": "FFFFC7CE",
               "B25": "FFFFC7CE",
@@ -62943,6 +64563,8 @@
               "B18": "none",
               "B19": "none",
               "B20": "none",
+              "B21": "none",
+              "B22": "none",
               "B23": "none",
               "B24": "FFFFC7CE",
               "B25": "FFFFC7CE",
@@ -62982,6 +64604,8 @@
               "B18": "none",
               "B19": "none",
               "B20": "none",
+              "B21": "none",
+              "B22": "none",
               "B23": "none",
               "B24": "none",
               "B25": "none",
@@ -63157,137 +64781,13 @@
               "C40": "none"
             }
           }
-        },
-        {
-          "id": "hoist-refused-numeric-text",
-          "capabilityId": "formula:hoist-countif-frequency",
-          "observable": "fill",
-          "refs": [
-            "F2",
-            "F3",
-            "F4",
-            "F5",
-            "F6"
-          ],
-          "hypotheses": {
-            "documented": {
-              "F2": "FFFFC7CE",
-              "F3": "FFFFC7CE",
-              "F4": "FFFFC7CE",
-              "F5": "FFFFC7CE",
-              "F6": "FFFFC7CE"
-            },
-            "never": {
-              "F2": "none",
-              "F3": "none",
-              "F4": "none",
-              "F5": "none",
-              "F6": "none"
-            }
-          },
-          "record": "S5-HOIST refused: a range holding numeric text (\"1\", \" 1 \") is refused by the hoist; recorded, never evidence"
-        },
-        {
-          "id": "hoist-refused-boolean",
-          "capabilityId": "formula:hoist-countif-frequency",
-          "observable": "fill",
-          "refs": [
-            "G2",
-            "G3",
-            "G4",
-            "G5"
-          ],
-          "hypotheses": {
-            "documented": {
-              "G2": "FFFFC7CE",
-              "G3": "FFFFC7CE",
-              "G4": "FFFFC7CE",
-              "G5": "FFFFC7CE"
-            },
-            "never": {
-              "G2": "none",
-              "G3": "none",
-              "G4": "none",
-              "G5": "none"
-            }
-          },
-          "record": "S5-HOIST refused: a range holding a boolean refuses the whole rule; recorded, never evidence"
-        },
-        {
-          "id": "hoist-refused-non-ascii",
-          "capabilityId": "formula:hoist-countif-frequency",
-          "observable": "fill",
-          "refs": [
-            "H2",
-            "H3",
-            "H4"
-          ],
-          "hypotheses": {
-            "documented": {
-              "H2": "FFFFC7CE",
-              "H3": "FFFFC7CE",
-              "H4": "FFFFC7CE"
-            },
-            "never": {
-              "H2": "none",
-              "H3": "none",
-              "H4": "none"
-            }
-          },
-          "record": "S5-HOIST refused: non-ASCII text refuses the whole rule; recorded, never evidence"
-        },
-        {
-          "id": "hoist-refused-wildcard",
-          "capabilityId": "formula:hoist-countif-frequency",
-          "observable": "fill",
-          "refs": [
-            "I2",
-            "I3",
-            "I4"
-          ],
-          "hypotheses": {
-            "documented": {
-              "I2": "FFFFC7CE",
-              "I3": "FFFFC7CE",
-              "I4": "FFFFC7CE"
-            },
-            "never": {
-              "I2": "none",
-              "I3": "none",
-              "I4": "none"
-            }
-          },
-          "record": "S5-HOIST refused: wildcard criteria are refused; recorded, never evidence"
-        },
-        {
-          "id": "hoist-refused-na-criterion",
-          "capabilityId": "formula:hoist-countif-frequency",
-          "observable": "fill",
-          "refs": [
-            "J2",
-            "J3",
-            "J4"
-          ],
-          "hypotheses": {
-            "documented": {
-              "J2": "FFFFC7CE",
-              "J3": "FFFFC7CE",
-              "J4": "FFFFC7CE"
-            },
-            "never": {
-              "J2": "none",
-              "J3": "none",
-              "J4": "none"
-            }
-          },
-          "record": "S5-HOIST refused: a \"#N/A\" criterion over a range holding #N/A (the engine counts 1, a string lookup 0); recorded, never evidence"
         }
       ],
       "captures": [
         {
           "appearance": "screen",
-          "pngPath": "tests/fixtures/xlsx-cf/refs/stage5-formula-hoist.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage5-formula-hoist.json"
+          "pngPath": "tests/fixtures/xlsx-cf/refs/stage5-formula-hoist-aggregate.png",
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage5-formula-hoist-aggregate.json"
         }
       ],
       "status": "recipe-pending",
@@ -65412,6 +66912,28 @@
         }
       ],
       "calcObservation": "pre-calculate",
+      "calcObservationSources": {
+        "A2": {
+          "saved": "999",
+          "recomputed": "10"
+        },
+        "A3": {
+          "saved": "0",
+          "recomputed": "8"
+        },
+        "A4": {
+          "saved": "50",
+          "recomputed": "2"
+        },
+        "A5": {
+          "saved": "1",
+          "recomputed": "61"
+        },
+        "E1": {
+          "saved": "anchor-5",
+          "recomputed": "anchor"
+        }
+      },
       "captures": [
         {
           "appearance": "screen",
@@ -65570,7 +67092,50 @@
           "capabilityId": "formula:composition-stop-bar",
           "ruleType": "dataBar",
           "priority": 7,
-          "formulas": []
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "E2:E5",
+          "extension": "x14",
+          "capabilityId": "formula:composition-stop-bar",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
         },
         {
           "part": "xl/worksheets/sheet1.xml",
@@ -65609,7 +67174,50 @@
           "capabilityId": "formula:composition-twin",
           "ruleType": "dataBar",
           "priority": 10,
-          "formulas": []
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "G2:G5",
+          "extension": "x14",
+          "capabilityId": "formula:composition-twin",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
         },
         {
           "part": "xl/worksheets/sheet1.xml",
@@ -65618,7 +67226,50 @@
           "capabilityId": "formula:composition-twin",
           "ruleType": "dataBar",
           "priority": 11,
-          "formulas": []
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "H2:H5",
+          "extension": "x14",
+          "capabilityId": "formula:composition-twin",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
         },
         {
           "part": "xl/worksheets/sheet1.xml",
@@ -65647,7 +67298,26 @@
           "capabilityId": "formula:composition-stop-icon",
           "ruleType": "iconSet",
           "priority": 13,
-          "formulas": []
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "percent",
+                "val": "33"
+              },
+              {
+                "type": "percent",
+                "val": "67"
+              }
+            ],
+            "attrs": {}
+          }
         },
         {
           "part": "xl/worksheets/sheet1.xml",
@@ -65686,7 +67356,26 @@
           "capabilityId": "formula:composition-twin",
           "ruleType": "iconSet",
           "priority": 16,
-          "formulas": []
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "percent",
+                "val": "33"
+              },
+              {
+                "type": "percent",
+                "val": "67"
+              }
+            ],
+            "attrs": {}
+          }
         },
         {
           "part": "xl/worksheets/sheet1.xml",
@@ -65695,7 +67384,26 @@
           "capabilityId": "formula:composition-twin",
           "ruleType": "iconSet",
           "priority": 17,
-          "formulas": []
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "percent",
+                "val": "33"
+              },
+              {
+                "type": "percent",
+                "val": "67"
+              }
+            ],
+            "attrs": {}
+          }
         },
         {
           "part": "xl/worksheets/sheet1.xml",
@@ -65951,7 +67659,50 @@
           "capabilityId": "formula:composition-indirect-ahead-bar",
           "ruleType": "dataBar",
           "priority": 30,
-          "formulas": []
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "S2:S5",
+          "extension": "x14",
+          "capabilityId": "formula:composition-indirect-ahead-bar",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
         },
         {
           "part": "xl/worksheets/sheet1.xml",
@@ -65980,7 +67731,26 @@
           "capabilityId": "formula:composition-indirect-ahead-icon",
           "ruleType": "iconSet",
           "priority": 32,
-          "formulas": []
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "percent",
+                "val": "33"
+              },
+              {
+                "type": "percent",
+                "val": "67"
+              }
+            ],
+            "attrs": {}
+          }
         }
       ],
       "expected": {
@@ -68073,10 +69843,62 @@
           "ruleType": "dataBar",
           "priority": 6,
           "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "formula",
+                "val": "$F$1"
+              },
+              {
+                "type": "formula",
+                "val": "$F$2"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          },
           "formula": {
             "kind": "cfvo",
             "anchor": "I2",
             "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "I2:I9",
+          "extension": "x14",
+          "capabilityId": "bar:bounds-formula",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "formula",
+                "f": "$F$1"
+              },
+              {
+                "type": "formula",
+                "f": "$F$2"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "I2",
+            "dialect": "x14"
           }
         },
         {
@@ -68087,6 +69909,25 @@
           "ruleType": "iconSet",
           "priority": 7,
           "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "formula",
+                "val": "$F$1"
+              },
+              {
+                "type": "num",
+                "val": "$F$2"
+              }
+            ],
+            "attrs": {}
+          },
           "formula": {
             "kind": "cfvo",
             "anchor": "J2",
@@ -68402,7 +70243,54 @@
           "capabilityId": "formula:cfvo-twin",
           "ruleType": "dataBar",
           "priority": 19,
-          "formulas": []
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "20"
+              },
+              {
+                "type": "num",
+                "val": "80"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "W2:W9",
+          "extension": "x14",
+          "capabilityId": "formula:cfvo-twin",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "20"
+              },
+              {
+                "type": "num",
+                "f": "80"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
         },
         {
           "part": "xl/worksheets/sheet1.xml",
@@ -68411,7 +70299,54 @@
           "capabilityId": "formula:cfvo-twin",
           "ruleType": "dataBar",
           "priority": 20,
-          "formulas": []
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "0"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "X2:X9",
+          "extension": "x14",
+          "capabilityId": "formula:cfvo-twin",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "0"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
         },
         {
           "part": "xl/worksheets/sheet1.xml",
@@ -68420,7 +70355,50 @@
           "capabilityId": "formula:cfvo-twin",
           "ruleType": "dataBar",
           "priority": 21,
-          "formulas": []
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "Y2:Y9",
+          "extension": "x14",
+          "capabilityId": "formula:cfvo-twin",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
         },
         {
           "part": "xl/worksheets/sheet1.xml",
@@ -68429,7 +70407,26 @@
           "capabilityId": "formula:cfvo-twin",
           "ruleType": "iconSet",
           "priority": 22,
-          "formulas": []
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "20"
+              },
+              {
+                "type": "num",
+                "val": "80"
+              }
+            ],
+            "attrs": {}
+          }
         },
         {
           "part": "xl/worksheets/sheet1.xml",
@@ -68438,7 +70435,26 @@
           "capabilityId": "formula:cfvo-twin",
           "ruleType": "iconSet",
           "priority": 23,
-          "formulas": []
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "0"
+              }
+            ],
+            "attrs": {}
+          }
         }
       ],
       "expected": {
@@ -71758,6 +73774,25 @@
           "ruleType": "iconSet",
           "priority": 3,
           "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "25"
+              },
+              {
+                "type": "formula",
+                "val": "MAX(B12:B15)"
+              }
+            ],
+            "attrs": {}
+          },
           "formula": {
             "kind": "cfvo",
             "anchor": "B12",
@@ -71979,7 +74014,26 @@
           "capabilityId": "formula:cfvo-scope-twin",
           "ruleType": "iconSet",
           "priority": 12,
-          "formulas": []
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "25"
+              },
+              {
+                "type": "num",
+                "val": "40"
+              }
+            ],
+            "attrs": {}
+          }
         },
         {
           "part": "xl/worksheets/sheet1.xml",
@@ -71988,7 +74042,26 @@
           "capabilityId": "formula:cfvo-scope-twin",
           "ruleType": "iconSet",
           "priority": 13,
-          "formulas": []
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "25"
+              },
+              {
+                "type": "num",
+                "val": "40"
+              }
+            ],
+            "attrs": {}
+          }
         },
         {
           "part": "xl/worksheets/sheet1.xml",
@@ -71997,7 +74070,26 @@
           "capabilityId": "formula:cfvo-scope-twin",
           "ruleType": "iconSet",
           "priority": 14,
-          "formulas": []
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "25"
+              },
+              {
+                "type": "num",
+                "val": "40"
+              }
+            ],
+            "attrs": {}
+          }
         },
         {
           "part": "xl/worksheets/sheet1.xml",
@@ -72006,7 +74098,26 @@
           "capabilityId": "formula:cfvo-scope-twin",
           "ruleType": "iconSet",
           "priority": 15,
-          "formulas": []
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "25"
+              },
+              {
+                "type": "num",
+                "val": "60"
+              }
+            ],
+            "attrs": {}
+          }
         },
         {
           "part": "xl/worksheets/sheet1.xml",
@@ -72015,7 +74126,26 @@
           "capabilityId": "formula:cfvo-scope-twin",
           "ruleType": "iconSet",
           "priority": 16,
-          "formulas": []
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "25"
+              },
+              {
+                "type": "num",
+                "val": "80"
+              }
+            ],
+            "attrs": {}
+          }
         }
       ],
       "expected": {
@@ -73308,7 +75438,8 @@
               "F4": "twin:T4",
               "F5": "twin:T5"
             }
-          }
+          },
+          "replicateBy": "column"
         },
         {
           "id": "scope-scale-absolute",
@@ -73358,7 +75489,8 @@
               "N5": "twin:W5"
             }
           },
-          "note": "Negative control: an absolute bound reads the same value under both readings"
+          "note": "Negative control: an absolute bound reads the same value under both readings",
+          "role": "negative-control"
         },
         {
           "id": "scope-icon",
@@ -73407,7 +75539,8 @@
               "F14": "twin:T14",
               "F15": "twin:T15"
             }
-          }
+          },
+          "replicateBy": "column"
         }
       ],
       "captures": [
@@ -74179,6 +76312,27 @@
           "formulas": [
             "$A2>0"
           ],
+          "bar": {
+            "pairing": "standalone",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "fill": "FF0000FF",
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          },
           "formula": {
             "kind": "activation",
             "anchor": "B2",
@@ -74193,7 +76347,28 @@
           "capabilityId": "formula:active-present-bar-twin",
           "ruleType": "dataBar",
           "priority": 2,
-          "formulas": []
+          "formulas": [],
+          "bar": {
+            "pairing": "standalone",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "fill": "FF0000FF",
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
         }
       ],
       "expected": {
@@ -74411,6 +76586,25 @@
           "formulas": [
             "$A2>0"
           ],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "f": "0"
+              },
+              {
+                "type": "percent",
+                "f": "33"
+              },
+              {
+                "type": "percent",
+                "f": "67"
+              }
+            ],
+            "attrs": {}
+          },
           "formula": {
             "kind": "activation",
             "anchor": "B2",
@@ -74425,7 +76619,26 @@
           "capabilityId": "formula:active-present-icon-twin",
           "ruleType": "iconSet",
           "priority": 2,
-          "formulas": []
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "f": "0"
+              },
+              {
+                "type": "percent",
+                "f": "33"
+              },
+              {
+                "type": "percent",
+                "f": "67"
+              }
+            ],
+            "attrs": {}
+          }
         }
       ],
       "expected": {

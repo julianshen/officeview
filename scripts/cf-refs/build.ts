@@ -18,7 +18,7 @@ import { openWorkbook, osa, q, runScript, waitFor, workbookNames } from '../xlsx
 import type { CfManifest, CfOracleCase, S5ManualObservation } from './cases'
 import { buildExplicitCalculationObservationScript, buildManualObservationScript, parseS5Observation } from './capture'
 import { CF_FIXTURE_DIR, CF_MANIFEST_PATH, generateAllStage1 } from './generate'
-import { readZipPartsSync, verifyCfCase } from './verify'
+import { readZipPartsSync, s5RetainedSqrefs, verifyCfCase } from './verify'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const sha256Hex = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex')
@@ -136,9 +136,9 @@ export function buildCaseBuildScripts(
   ]
 }
 
-/** The cells a `pre-calculate` case observes: every `pre:`/`calc:` ref of its configurations and their controls. */
+/** The cells a `pre-calculate` case observes: its stale sources, every `pre:`/`calc:` ref of its configurations and their controls. */
 export function manualObservationRefs(c: CfOracleCase): string[] {
-  const out = new Set<string>()
+  const out = new Set<string>(Object.keys(c.calcObservationSources ?? {}))
   for (const cfg of c.formulaConfigurations ?? []) {
     for (const ref of cfg.refs) {
       if (!/^(pre|calc):/.test(ref)) continue
@@ -153,6 +153,8 @@ export function manualObservationRefs(c: CfOracleCase): string[] {
 
 export interface LiveExcelProbeResult {
   id: string
+  /** Stage 5 (fix round 1 #2): the sqref order Excel retained per unpinned marker, read from the resaved XML. */
+  retainedSqrefs?: Record<string, string>
   /** Stage 5 `pre-calculate` cases: the observations made before (pre) and after one explicit calculation (calc). */
   manualObservation?: Omit<S5ManualObservation, 'inputSha256'>
   openedRepairFree: boolean
@@ -275,8 +277,10 @@ export function probeAndBuildCase(
     }
 
     renameSync(candidateAbs, savedAbs)
+    const retainedSqrefs = c.markers.some(m => m.sqrefOrder === 'any') && zipParts ? s5RetainedSqrefs(c, zipParts) : undefined
     return {
       id: c.id,
+      ...(retainedSqrefs ? { retainedSqrefs } : {}),
       ...(manualObservation ? { manualObservation } : {}),
       openedRepairFree: true,
       excelSavedFlag,
@@ -343,6 +347,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       ...c,
       // Stage 5 (round-1 #4): the pre-calculation observation is bound to the input it was made on.
       ...(probe.manualObservation ? { manualObservation: { inputSha256: currentInputSha256, ...probe.manualObservation } } : {}),
+      ...(probe.retainedSqrefs ? { retainedSqrefs: probe.retainedSqrefs } : {}),
       resavedByExcel: isResaved,
       ...(resaveReceipt ? { resaveReceipt } : {}),
       expected: {

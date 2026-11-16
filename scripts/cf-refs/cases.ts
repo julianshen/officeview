@@ -309,6 +309,13 @@ export interface CfOracleCase {
   calcObservation?: 'pre-calculate'
   /** Stage 5: the build-time observations of a `pre-calculate` case (written by build.ts, bound to the input hash). */
   manualObservation?: S5ManualObservation
+  /** Stage 5 (fix round 1 #2): the sqref order Excel retained per unpinned marker, read from the saved XML by build.ts. */
+  retainedSqrefs?: Readonly<Record<string, string>>
+  /**
+   * Stage 5 (fix round 1 #6): the stale formula sources of a `pre-calculate` case, with their saved and recomputed values;
+   * `anchor`/`anchor-5` resolve against the clock anchor serial.
+   */
+  calcObservationSources?: Readonly<Record<string, { saved: string; recomputed: string }>>
   /** Stage 5: a live edit of a referenced sheet without saving, observed through DisplayFormat (`post:` refs). */
   formulaDynamicRefresh?: { sheet: string; edits: readonly { ref: string; value: number }[]; refs: readonly string[] }
   status: CfOracleStatus
@@ -359,6 +366,7 @@ export type CfRefusalCode =
   | 'formula-hypothesis-none'
   | 'formula-replication-shortfall'
   | 'formula-manual-observation-invalid'
+  | 'formula-twin-blank'
 
 export interface VerifiedEvidence {
   kind: 'verified'
@@ -5672,6 +5680,16 @@ export interface S5Configuration {
   hypotheses: Readonly<Record<string, Readonly<Record<string, string>>>>
   /** Recorded only (a refused shape): evaluated and kept in the sidecar, never evidence for or against a capability. */
   record?: string
+  /** A negative control: its hypotheses agree by design; Excel must match them, but it is never evidence (fix round 1 #3). */
+  role?: 'negative-control'
+  /** Replication is checked per column inside the configuration too (each range of a multi-range rule, fix round 1 #3). */
+  replicateBy?: 'column'
+  /**
+   * Fix round 1 #2: hypotheses that depend on the sqref order Excel retains on resave. `tables` maps each possible order of
+   * the named rule's sqref to its hypotheses; the verifier reads the retained order from the saved XML and evaluates that
+   * table (`hypotheses` is the table of the authored order).
+   */
+  orderedHypotheses?: { capabilityId: string; tables: Readonly<Record<string, Readonly<Record<string, Readonly<Record<string, string>>>>>> }
   note?: string
 }
 
@@ -5681,6 +5699,8 @@ export interface S5Rule {
   xml: string
   /** A paired data bar's x14 companion (written in the x14 extension on the same sqref). */
   x14Companion?: string
+  /** Further markers the rule settles (a paired bar's x14 companion, pinned on its own). */
+  extraMarkers?: ReadonlyArray<Omit<CfPartMarker, 'part' | 'sqref'>>
   marker: Omit<CfPartMarker, 'part' | 'extension' | 'sqref'>
   separateBlock?: boolean
 }
@@ -5715,6 +5735,7 @@ export interface S5Fixture {
   tableXml?: string
   clock?: Pick<CfClockRequirement, 'staleCacheCellRef' | 'localTodayCellRef' | 'utcTodayCellRef'>
   dynamicRefresh?: CfOracleCase['formulaDynamicRefresh']
+  calcObservationSources?: CfOracleCase['calcObservationSources']
 }
 
 const S5_RED = 'FFFFC7CE'
@@ -5840,6 +5861,7 @@ function s5Scale(cap: string, sqref: string, priority: number, cfvo: readonly S5
 
 const S5_DB_EXT = (guid: string): string => `<extLst><ext uri="${DB_EXT_URI}" ${NS_X14_DECL}><x14:id>${guid}</x14:id></ext></extLst>`
 const S5_BAR_X14_ATTRS = 'minLength="0" maxLength="100" gradient="0"'
+const S5_BAR_X14_PINS: Readonly<Record<string, string>> = { minLength: '0', maxLength: '100', gradient: '0' }
 
 /** A paired data bar (the shape Excel resaves, Stage 3), solid; a non-numeric `val` is a formula bound. */
 function s5Bar(cap: string, sqref: string, priority: number, cfvo: readonly S5Cfvo[]): S5Rule {
@@ -5858,8 +5880,18 @@ function s5Bar(cap: string, sqref: string, priority: number, cfvo: readonly S5Cf
       ruleType: 'dataBar',
       priority,
       formulas: [],
+      // Fix round 1 #1: the base bounds and the link to the companion are pinned (Stage 3 pairing semantics).
+      bar: { pairing: 'paired', cfvo: cfvo.map(c => (c.val !== undefined ? { type: c.type, val: c.val } : { type: c.type })), attrs: {}, colors: { fill: BLUE } },
       ...(formulaBound ? { formula: { kind: 'cfvo' as const, anchor: topLeftOf(sqref), dialect: 'base' as const } } : {}),
     },
+    extraMarkers: [{
+      extension: 'x14',
+      capabilityId: cap,
+      ruleType: 'dataBar',
+      formulas: [],
+      bar: { pairing: 'paired', cfvo: cfvo.map(c => (c.val !== undefined ? { type: c.type, f: c.val } : { type: c.type })), attrs: S5_BAR_X14_PINS, colors: { negativeFill: RED, axis: BLACK } },
+      ...(formulaBound ? { formula: { kind: 'cfvo' as const, anchor: topLeftOf(sqref), dialect: 'x14' as const } } : {}),
+    }],
   }
 }
 
@@ -5876,6 +5908,7 @@ function s5BarX14(cap: string, sqref: string, priority: number, cfvo: readonly S
       ruleType: 'dataBar',
       priority,
       formulas: o.activation !== undefined ? [o.activation] : [],
+      bar: { pairing: 'standalone', cfvo: cfvo.map(c => (c.val !== undefined ? { type: c.type, f: c.val } : { type: c.type })), attrs: S5_BAR_X14_PINS, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } },
       ...(o.activation !== undefined ? { formula: { kind: 'activation' as const, anchor: topLeftOf(sqref), dialect: 'x14' as const } } : {}),
       ...(o.activePresent !== undefined ? { activePresent: o.activePresent } : {}),
     },
@@ -5901,6 +5934,8 @@ function s5Icon(cap: string, sqref: string, priority: number, cfvo: readonly S5C
       ruleType: 'iconSet',
       priority,
       formulas: o.activation !== undefined ? [o.activation] : [],
+      // Fix round 1 #1: the set and every threshold are pinned (Stage 4 icon semantics; `val` base, `f` x14).
+      icon: { dialect: dialectOf(where), set, cfvo: cfvo.map(c => (c.val === undefined ? { type: c.type } : where === 'x14' ? { type: c.type, f: c.val } : { type: c.type, val: c.val })), attrs: {} },
       ...(formulaBound || o.activation !== undefined ? { formula: { kind: o.activation !== undefined ? ('activation' as const) : ('cfvo' as const), anchor: topLeftOf(sqref), dialect: dialectOf(where) } } : {}),
       ...(o.activePresent !== undefined ? { activePresent: o.activePresent } : {}),
     },
@@ -6209,6 +6244,37 @@ const HOIST_A: readonly S5Value[] = [
   10, 11, 12, 12, 13, 14, 15, 15, 16, 17, 18, 19, 20, 'Mixed', 'mixed', 'MIXED', 21, 21,
 ]
 
+/** Fix round 1 #5: the same column with its errors left unstored, so AVERAGE/MAX over $A:$A can succeed. */
+const HOIST_A_NO_ERRORS: readonly S5Value[] = HOIST_A.map(v => (v !== null && typeof v === 'object' && 'err' in v ? null : v))
+
+/** Ruling S5-HOIST, the aggregates that must paint: AVERAGE($A:$A) and MAX($A:$A) over a column that holds no error. */
+function hoistAggregateFixture(): S5Fixture {
+  const a = (ref: string): XV => xv(HOIST_A_NO_ERRORS[rowOfRef(ref) - 2])
+  const nums = HOIST_A_NO_ERRORS.map(xv).filter(v => v.k === 'n') as Array<{ k: 'n'; v: number }>
+  const avg = nums.reduce((t, v) => t + v.v, 0) / nums.length
+  const max = Math.max(...nums.map(v => v.v))
+  const valued = (c: string, keepBlank = false): string[] => rowsOf(c, 2, 40).filter(r => a(r).k === 'n' || a(r).k === 's' || (keepBlank && a(r).k === 'blank'))
+  return s5rect({
+    id: 'stage5-formula-hoist-aggregate',
+    question:
+      'S5-HOIST (fix round 1 #5): A2>AVERAGE($A:$A) and A2=MAX($A:$A) over column A with numbers, mixed-case text and blanks but no error (an error in the range propagates: see stage5-formula-hoist for that configuration).',
+    cells: { ...colValues('A', HOIST_A_NO_ERRORS), ...colValues('B', Array(39).fill(1)), ...colValues('C', Array(39).fill(1)) },
+    rules: [s5Expr('formula:hoist-aggregate', 'B2:B40', 1, 'A2>AVERAGE($A:$A)'), s5Expr('formula:hoist-aggregate', 'C2:C40', 2, 'A2=MAX($A:$A)')],
+    configurations: [
+      s5Cfg('hoist-average', 'formula:hoist-aggregate', valued('B', true), {
+        documented: r => red(xGt(a(r), N(avg))),
+        'numeric-only': r => red(a(r).k === 'n' && xGt(a(r), N(avg)) === true),
+        never: always(NONE),
+      }),
+      s5Cfg('hoist-max', 'formula:hoist-aggregate', valued('C'), {
+        documented: r => red(xEq(a(r), N(max))),
+        'numeric-only': r => red(xEq(a(r), N(max))),
+        never: always(NONE),
+      }),
+    ],
+  })
+}
+
 function hoistFixture(): S5Fixture {
   const a = (ref: string): XV => xv(HOIST_A[rowOfRef(ref) - 2])
   const nums = HOIST_A.map(xv).filter(v => v.k === 'n') as Array<{ k: 'n'; v: number }>
@@ -6227,8 +6293,8 @@ function hoistFixture(): S5Fixture {
   }
   const rules: S5Rule[] = [
     s5Expr('formula:hoist-countif-frequency', 'A2:A40', p++, 'COUNTIF($A:$A,A2)>1'),
-    s5Expr('formula:hoist-aggregate', 'B2:B40', p++, 'A2>AVERAGE($A:$A)'),
-    s5Expr('formula:hoist-aggregate', 'C2:C40', p++, 'A2=MAX($A:$A)'),
+    s5Expr('formula:hoist-aggregate-errors', 'B2:B40', p++, 'A2>AVERAGE($A:$A)'),
+    s5Expr('formula:hoist-aggregate-errors', 'C2:C40', p++, 'A2=MAX($A:$A)'),
     s5Expr('formula:hoist-countif-frequency', 'D2:D40', p++, 'COUNTIF($A:$A,"x")>2'),
   ]
   const r1 = refused('hoist-refused-numeric-text', 'F', ['1', ' 1 ', 1, 1, 2], 'COUNTIF($F:$F,F2)>1', 'S5-HOIST refused: a range holding numeric text ("1", " 1 ") is refused by the hoist; recorded, never evidence')
@@ -6250,15 +6316,15 @@ function hoistFixture(): S5Fixture {
         never: always(NONE),
       }),
       s5Cfg('hoist-countif-literal', 'formula:hoist-countif-frequency', rowsOf('D', 2, 6), { documented: always(S5_RED), 'case-sensitive': always(S5_RED), never: always(NONE) }),
-      s5Cfg('hoist-average', 'formula:hoist-aggregate', valued('B', true), {
-        documented: r => red(xGt(a(r), N(avg))),
-        'numeric-only': r => red(a(r).k === 'n' && xGt(a(r), N(avg)) === true),
-        never: always(NONE),
+      // Fix round 1 #5: A21:A22 hold #DIV/0!, so AVERAGE($A:$A) and MAX($A:$A) are errors (Excel propagates a range
+      // error) and no cell formats; "errors-skipped" is the hoist mistake of aggregating numbers only.
+      s5Cfg('hoist-average-errors', 'formula:hoist-aggregate-errors', valued('B', true), {
+        'error-propagates': always(NONE),
+        'errors-skipped': r => red(xGt(a(r), N(avg))),
       }),
-      s5Cfg('hoist-max', 'formula:hoist-aggregate', valued('C'), {
-        documented: r => red(xEq(a(r), N(max))),
-        'numeric-only': r => red(xEq(a(r), N(max))),
-        never: always(NONE),
+      s5Cfg('hoist-max-errors', 'formula:hoist-aggregate-errors', valued('C'), {
+        'error-propagates': always(NONE),
+        'errors-skipped': r => red(xEq(a(r), N(max))),
       }),
       ...refusedAll.map(r => r.cfg),
     ],
@@ -6306,18 +6372,39 @@ function anchorFixture(): S5Fixture {
 function anchorMultiFixture(): S5Fixture {
   const A: Record<number, number> = { 2: 0, 3: 0, 4: 0, 5: 1, 6: 1, 7: 1, 8: 1, 9: 0, 10: 0, 11: 0 }
   const refs = [...rowsOf('D', 5, 8), ...rowsOf('B', 2, 4)]
+  const SQREF = 'D5:D8 B2:B4'
+  // The formula =$A5>0 is written for the anchor row 5. A reading anchors each target at some row; the target at row r
+  // then reads A(r - anchorRow + 5). The first listed range comes from the order Excel retains (fix round 1 #2).
+  const tableFor = (order: string): Record<string, Record<string, string>> => {
+    const ranges = order.split(' ')
+    const topRow = (rg: string): number => rowOfRef(rg.split(':')[0]!)
+    const first = topRow(ranges[0]!)
+    const box = Math.min(...ranges.map(topRow))
+    const own = (ref: string): number => topRow(ranges.find(rg => isCellInSqrefLocal(ref, rg))!)
+    const at = (ref: string, anchorRow: number): string => red((A[rowOfRef(ref) - anchorRow + 5] ?? 0) > 0)
+    return {
+      'first-listed': Object.fromEntries(refs.map(r => [r, at(r, first)])),
+      'bounding-box': Object.fromEntries(refs.map(r => [r, at(r, box)])),
+      'per-range': Object.fromEntries(refs.map(r => [r, at(r, own(r))])),
+    }
+  }
+  const rule = s5Expr('formula:anchor-multi-range', SQREF, 1, '$A5>0')
   return s5rect({
     id: 'stage5-formula-anchor-multi',
     question:
-      'S5-C: which anchor does Excel use for a multi-range sqref listed with its first range not top-left (D5:D8 B2:B4, =$A5>0)? h1 the first listed range\'s top-left (D5), h2 the bounding box top-left (B2), h3 each range\'s own top-left. Excel\'s resaved sqref order is recorded (the marker accepts either order until it is).',
+      'S5-C: which anchor does Excel use for a multi-range sqref authored with its first range not top-left (D5:D8 B2:B4, =$A5>0)? h1 the first listed range\'s top-left, h2 the bounding box top-left (B2), h3 each range\'s own top-left. The predictions are derived from the sqref order Excel retains on resave (read from the saved XML before capture and then pinned); if Excel re-sorts to B2:B4 D5:D8, h1 and h2 coincide and the case cannot discriminate them.',
     cells: { ...Object.fromEntries(Object.entries(A).map(([r, v]) => [`A${r}`, v])), ...colValues('D', [1, 1, 1, 1], 5), ...colValues('B', [1, 1, 1], 2) },
-    rules: [{ ...s5Expr('formula:anchor-multi-range', 'D5:D8 B2:B4', 1, '$A5>0'), marker: { ...s5Expr('formula:anchor-multi-range', 'D5:D8 B2:B4', 1, '$A5>0').marker, sqrefOrder: 'any' } }],
+    rules: [{ ...rule, marker: { ...rule.marker, sqrefOrder: 'any' } }],
     configurations: [
-      s5Cfg('anchor-multi', 'formula:anchor-multi-range', refs, {
-        'first-listed': r => red((A[rowOfRef(r)] ?? 0) > 0),
-        'bounding-box': r => red((A[rowOfRef(r) + 3] ?? 0) > 0),
-        'per-range': r => red((A[colOfRef(r) === 'D' ? rowOfRef(r) : rowOfRef(r) + 3] ?? 0) > 0),
-      }),
+      {
+        id: 'anchor-multi',
+        capabilityId: 'formula:anchor-multi-range',
+        observable: 'fill',
+        replicateBy: 'column',
+        refs,
+        hypotheses: tableFor(SQREF),
+        orderedHypotheses: { capabilityId: 'formula:anchor-multi-range', tables: { [SQREF]: tableFor(SQREF), 'B2:B4 D5:D8': tableFor('B2:B4 D5:D8') } },
+      },
     ],
   })
 }
@@ -6462,6 +6549,11 @@ function calcManualFixture(): S5Fixture {
     }),
     calcMode: 'manual',
     calcObservation: 'pre-calculate',
+    // Fix round 1 #6: the stale sources, observed before and after the explicit calculation (E1 is the workbook TODAY()).
+    calcObservationSources: {
+      A2: { saved: '999', recomputed: '10' }, A3: { saved: '0', recomputed: '8' }, A4: { saved: '50', recomputed: '2' }, A5: { saved: '1', recomputed: '61' },
+      E1: { saved: 'anchor-5', recomputed: 'anchor' },
+    },
     clock: S5_CLOCK('E1', 'E2', 'E3'),
     rules: [s5Expr('formula:calc-manual-saved-values', 'C2:C5', 1, 'A2>20'), s5Expr('formula:calc-manual-today', 'H2:H5', 2, 'G2=TODAY()')],
     configurations: [
@@ -6719,9 +6811,9 @@ function cfvoScopeFixture(): S5Fixture {
     },
     rules,
     configurations: [
-      s5Cfg('scope-scale', 'formula:cfvo-scope-multi-range', refs(['B', 'D', 'F'], 2), { 'rule-wide': twinFor(false), 'per-range': twinFor(true) }),
-      s5Cfg('scope-scale-absolute', 'formula:cfvo-scope-multi-range', refs(['J', 'L', 'N'], 2), { 'rule-wide': twinFor(false), 'per-range': twinFor(true) }, { note: 'Negative control: an absolute bound reads the same value under both readings' }),
-      s5Cfg('scope-icon', 'formula:cfvo-scope-multi-range', refs(['B', 'D', 'F'], 12), { 'rule-wide': twinFor(false), 'per-range': twinFor(true) }, { observable: 'crop' }),
+      { ...s5Cfg('scope-scale', 'formula:cfvo-scope-multi-range', refs(['B', 'D', 'F'], 2), { 'rule-wide': twinFor(false), 'per-range': twinFor(true) }), replicateBy: 'column' as const },
+      { ...s5Cfg('scope-scale-absolute', 'formula:cfvo-scope-multi-range', refs(['J', 'L', 'N'], 2), { 'rule-wide': twinFor(false), 'per-range': twinFor(true) }, { note: 'Negative control: an absolute bound reads the same value under both readings' }), role: 'negative-control' as const },
+      { ...s5Cfg('scope-icon', 'formula:cfvo-scope-multi-range', refs(['B', 'D', 'F'], 12), { 'rule-wide': twinFor(false), 'per-range': twinFor(true) }, { observable: 'crop' }), replicateBy: 'column' as const },
     ],
   })
 }
@@ -6829,6 +6921,7 @@ export const CF_STAGE5_FIXTURES: readonly S5Fixture[] = [
   edgeFixture(),
   functionsFixture(),
   hoistFixture(),
+  hoistAggregateFixture(),
   cellIsOperandsFixture(),
   predicateFixture(),
   timePeriodFixture(),
@@ -6853,7 +6946,7 @@ export const CF_STAGE5_GROUPS: Readonly<Record<string, readonly string[]>> = {
   'stage5-formula-anchor': ['stage5-formula-anchor', 'stage5-formula-anchor-multi'],
   'stage5-formula-edge': ['stage5-formula-edge'],
   'stage5-formula-functions': ['stage5-formula-functions'],
-  'stage5-formula-hoist': ['stage5-formula-hoist'],
+  'stage5-formula-hoist': ['stage5-formula-hoist', 'stage5-formula-hoist-aggregate'],
   'stage5-cellis-operands': ['stage5-cellis-operands'],
   'stage5-predicate-formulas': ['stage5-predicate-formulas', 'stage5-predicate-timeperiod'],
   'stage5-clock-today': ['stage5-clock-today'],
@@ -6969,7 +7062,7 @@ function s5Case(fx: S5Fixture): CfOracleCase {
           },
         }
       : {}),
-    markers: fx.rules.map(r => ({ part, extension: r.where, sqref: r.sqref, ...r.marker })),
+    markers: fx.rules.flatMap(r => [{ part, extension: r.where, sqref: r.sqref, ...r.marker }, ...(r.extraMarkers ?? []).map(x => ({ part, sqref: r.sqref, ...x }))]),
     expected: {
       inputSha256: '',
       savedSha256: '',
@@ -6981,6 +7074,7 @@ function s5Case(fx: S5Fixture): CfOracleCase {
     formulaConfigurations: fx.configurations,
     ...(fx.calcObservation ? { calcObservation: fx.calcObservation } : {}),
     ...(fx.dynamicRefresh ? { formulaDynamicRefresh: fx.dynamicRefresh } : {}),
+    ...(fx.calcObservationSources ? { calcObservationSources: fx.calcObservationSources } : {}),
     captures: unsupported ? [] : [{ appearance: 'screen', pngPath: `tests/fixtures/xlsx-cf/refs/${fx.id}.png`, sidecarPath: `tests/fixtures/xlsx-cf/refs/${fx.id}.json` }],
     status: fx.status,
     reason: fx.reason,
@@ -7000,6 +7094,7 @@ function s5Ruling(cap: string): string {
     [/^formula:relative-wrap$/, 'S5-C (a translated reference that leaves the sheet makes the cell unresolved until wrap or #REF! is measured)'],
     [/^formula:fn-today$/, 'S5-M (the CF clock reading of TODAY() is measured under the Stage 1 anchor; until then clock formulas are unresolved)'],
     [/^formula:fn-/, 'S5-E (each function family needs formula:fn-<family>; a family whose CF behaviour is unmeasured stays plain)'],
+    [/^formula:hoist-aggregate-errors$/, 'S5-HOIST (an error in a hoisted range propagates to every cell; a hoist that skips errors would paint where Excel does not)'],
     [/^formula:hoist-/, 'S5-HOIST (absolute-range aggregates are hoisted only under this evidence; refused inputs are recorded, never evidence)'],
     [/^formula:cellis-operand-/, 'S5-F (each operand kind needs its own capability; an operand error refuses the rule on that cell)'],
     [/^formula:predicate-timeperiod-divergent$/, 'S5-G round-1 #9 (an unevidenced divergent timePeriod formula never reaches the attribute predicate)'],
