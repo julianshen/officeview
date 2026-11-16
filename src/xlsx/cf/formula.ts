@@ -1055,6 +1055,39 @@ export function cfEvaluatorScratchBytes(f: CfFormula, payload: CfPayloadMetrics,
   return bytes
 }
 
+/**
+ * The view-engine tree guard (Task 34 fix 2): the translated per-call tree must read exactly the areas the call's view
+ * was built and priced from. Every reference node of `tree` (after hoist substitution) is resolved to its rect, and the
+ * set of those rects must equal the set of `expected`; a node kind the guard cannot resolve (a name, a union, a 3-D or
+ * table reference, an intersection, a spill or an implicit intersection) is a mismatch. Fail closed: on `false` the call
+ * never runs.
+ */
+export function cfTreeReadsMatchView(tree: AstNode, expected: readonly SourceRect[]): boolean {
+  const key = (sheet: string | undefined, r: SourceRect): string => `${(sheet ?? '').toLowerCase()}!${r.firstRow}:${r.lastRow}:${r.firstCol}:${r.lastCol}`
+  const read = new Set<string>()
+  const stack: AstNode[] = [tree]
+  while (stack.length) {
+    const node = stack.pop()!
+    switch (node.type) {
+      case 'cell': case 'range': case 'wholeCol': case 'wholeRow': {
+        const atom = atomOf(node)
+        if (isRefusal(atom)) return false
+        read.add(key(atom.sheet, atom))
+        break
+      }
+      case 'unary': stack.push(node.expr); break
+      case 'binary': stack.push(node.left, node.right); break
+      case 'call': stack.push(...node.args); break
+      case 'number': case 'string': case 'boolean': case 'empty': case 'error': case 'arrayConst': break
+      default: return false
+    }
+  }
+  const want = new Set(expected.map(r => key(undefined, r)))
+  if (want.size !== read.size) return false
+  for (const k of read) if (!want.has(k)) return false
+  return true
+}
+
 /* ------------------------------------------------------------------ */
 /* One bounded per-cell evaluation (Rulings S5-D, S5-E, S5-N).         */
 /* ------------------------------------------------------------------ */
@@ -1221,6 +1254,11 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
     const tree = translateCfFormula(f, dRow, dCol, context.edge, context.memory, node => substitutes.get(node))
     if (tree.kind !== 'ready') return tree.kind === 'unresolved' ? tree : unresolved('cf-resource-limit')
     try {
+      // The tree the engine walks must read exactly the view's areas, except the frequency criteria read above (their
+      // calls are already literal nodes). A mismatch never runs: the view would not cover, or not price, what it reads.
+      const lookupRefs = new Set(plan.filter(h => h.kind === 'countif-frequency').map(h => shape.refs.indexOf(h.criterion as RefNode)))
+      const engineAreas = areas.filter((a, i): a is SourceRect => a !== 'ref' && !lookupRefs.has(i))
+      if (!cfTreeReadsMatchView(tree.value.value, engineAreas)) return unresolved('cf-formula-dependency')
       // Admission: the whole static bound is charged before the call, from the pacing budget then the ceiling.
       const spent = context.budget.spend(breakdown.total)
       if (spent === 'refused') return unresolved('cf-resource-limit')

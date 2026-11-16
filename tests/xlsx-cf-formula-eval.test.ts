@@ -141,7 +141,8 @@ import { prepareCfDependencies } from '../src/xlsx/cf/dependencies'
 import { cfFormulaSemantics, compileCfFormula, createCfInvariantMemo, evaluateCfFormula, isCfFormulaRefusal } from '../src/xlsx/cf/formula'
 import { createCfUnitCeiling, createCfWorkBudget } from '../src/xlsx/cf/limits'
 import type { CfRule } from '../src/xlsx/cf/model'
-import { EVALUATION, cfEval, engineEval, fakeSource, formulaRule, batchOf, type Cells } from './helpers/cf-formula'
+import { EVALUATION, cfEval, engineEval, fakeSource, formulaOf, formulaRule, batchOf, type Cells } from './helpers/cf-formula'
+import { cfTreeReadsMatchView, planCfHoist } from '../src/xlsx/cf/formula'
 
 vi.mock('../src/xlsx/formula/evaluator', async importOriginal => {
   const actual = await importOriginal<typeof import('../src/xlsx/formula/evaluator')>()
@@ -329,5 +330,64 @@ describe('formula results stay finite near ±1e308 (Lesson 6)', () => {
     for (const readings of [all('boolean', 'number-nonzero-true'), all('boolean', 'error-no-match'), all('boolean', 'error-halts')]) {
       expect(cfTruth(result, a1('B2'), readings)).not.toEqual({ kind: 'ready', value: true })
     }
+  })
+})
+
+describe('the translated tree reads exactly the call\'s view areas (Task 34 fix 2: view-engine tree guard)', () => {
+  const resultOf = (v: unknown) => (typeof v === 'boolean' ? { kind: 'boolean', value: v } : typeof v === 'number' ? { kind: 'number', value: v } : { kind: 'error', value: v })
+  it('one end-to-end evaluation per edge mode equals the engine', async () => {
+    const cells: Cells = { A1: 5, A1048573: -1, A1048576: 2, A4: 3 }
+    // Past the last row: `=A1048576>0` anchored at B1048575, evaluated at B1048576, reads A1048577.
+    const past = a1('B1048576')
+    const wrap = await cfEval('A1048576>0', 'B1048575:B1048576', cells, 'B1048576', { edge: 'wrap' })
+    expect(wrap).toEqual({ kind: 'ready', value: resultOf(engineEval('A1>0', cells, past).value) })
+    const refError = await cfEval('A1048576>0', 'B1048575:B1048576', cells, 'B1048576', { edge: 'ref-error' })
+    expect(refError).toEqual({ kind: 'ready', value: resultOf(engineEval('#REF!>0', cells, past).value) })
+    // No edge evidence: inside the sheet the call needs none.
+    const inside = await cfEval('A2>0', 'B1:B3', cells, 'B3', { edge: undefined })
+    expect(inside).toEqual({ kind: 'ready', value: resultOf(engineEval('A4>0', cells, a1('B3')).value) })
+  })
+  it('=SUM(A2>AVERAGE($A:$A))>0 with the hoist substituted paints as the engine does', async () => {
+    const cells: Cells = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`A${i + 1}`, (i * 7) % 11]))
+    const text = 'SUM(A2>AVERAGE($A:$A))>0'
+    const rule = formulaRule(text, 'B2:B30')
+    expect(planCfHoist(formulaOf(rule))).toHaveLength(1)
+    const batch = await batchOf([rule], fakeSource(cells))
+    let marks = 0
+    for (let row = 1; row < 30; row++) {
+      const engine = engineEval(text.replace('A2', `A${row + 1}`), cells, { row, col: 1 })
+      expect(engine.features).toEqual([])
+      const o = batch.evaluate(0, row, 1)
+      expect(o, `B${row + 1}`).toEqual({ kind: 'ready', value: resultOf(engine.value) })
+      if (engine.value === true) marks++
+    }
+    expect(marks).toBeGreaterThan(0)
+    batch.dispose()
+  })
+  it('a view that holds every cell a shifted tree could read (no hoist, a pinned range around the target) paints as the engine', async () => {
+    // The pinned range puts A1:A10 in the view, so a tree misread by one row would still read a cell the view holds and
+    // would not taint: only the guard keeps such a call from painting the wrong value.
+    const cells: Cells = { A1: 1, A2: 9, A3: 2, A4: 8, A5: 3, A6: 7, A7: 4, A8: 6, A9: 5, A10: 5 }
+    const text = 'A2*10>SUM($A$1:$A$10)'
+    const batch = await batchOf([formulaRule(text, 'B2:B9')], fakeSource(cells), { hoist: false })
+    for (let row = 1; row < 9; row++) {
+      const engine = engineEval(text.replace('A2', `A${row + 1}`), cells, { row, col: 1 })
+      expect(batch.evaluate(0, row, 1), `B${row + 1}`).toEqual({ kind: 'ready', value: resultOf(engine.value) })
+    }
+    batch.dispose()
+  })
+  it('the guard bites: a tree that reads outside or beside the view areas is refused', () => {
+    const f = compile('A2>AVERAGE($A:$A)', 'B2')
+    const plan = planCfHoist(f)
+    const at = (dRow: number, substitute?: (n: AstNode) => AstNode | undefined) => ready<{ value: AstNode }>(translateCfFormula(f, dRow, 0, 'ref-error', createCfMemory(), substitute)).value
+    const hoisted = (n: AstNode): AstNode | undefined => (n === plan[0]!.node ? { type: 'number', value: 4 } : undefined)
+    const viewAreas = [rectOf('A5')] // the per-cell shape at B5: A5 only (the hoisted column is not in the view)
+    expect(cfTreeReadsMatchView(at(3, hoisted), viewAreas)).toBe(true)
+    // Mutant 1: the hoist not substituted, so the engine would traverse $A:$A outside the view.
+    expect(cfTreeReadsMatchView(at(3), viewAreas)).toBe(false)
+    // Mutant 2: an off-by-one translation reads A6, a cell the view may well hold: only the guard catches it.
+    expect(cfTreeReadsMatchView(at(4, hoisted), viewAreas)).toBe(false)
+    // Mutant 3: a view missing an area the tree reads.
+    expect(cfTreeReadsMatchView(at(3, hoisted), [])).toBe(false)
   })
 })
