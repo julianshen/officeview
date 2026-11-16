@@ -37,6 +37,9 @@ export type CfFormula = Readonly<{
   rootArea: boolean
   /** Result kinds the root can take, from its static shape. */
   truth: readonly CfTruthKind[]
+  /** Indexes, in the AST's left-to-right preorder of string literals, of those holding a non-ASCII code unit: measured
+   * once at compile (Task 34 round 4, finding 1) so the per-call text model never rescans literal text. */
+  nonAsciiLiterals: readonly number[]
 }>
 /** A `cellIs` operand that is a formula rather than a literal (it carries no `kind`, so no literal arm can mistake it for one). */
 export type CfFormulaOperand = Readonly<{ formula: CfFormula }>

@@ -333,8 +333,36 @@ function admit(ast: AstNode, anchor: { row: number; col: number } | undefined): 
     ast, nodes, atoms, invariant: !variant, usesClock, families: [...families].sort(), dependencySheets: sheets,
     ...(anchor ? { anchor: { row: anchor.row, col: anchor.col } } : {}),
     pinned, rootArea, truth: [...kinds].sort(),
+    // The literals' ASCII scan happens here, inside the compile's reservation, once (round 4, finding 1).
+    nonAsciiLiterals: stringLiteralsOf(ast).flatMap((node, i) => (isAscii(node.value) ? [] : [i])),
   }
   return formula
+}
+/** The AST's string literals in left-to-right preorder: the index space of `CfFormula.nonAsciiLiterals`. */
+function stringLiteralsOf(ast: AstNode): Array<AstNode & { type: 'string' }> {
+  const out: Array<AstNode & { type: 'string' }> = []
+  const stack: AstNode[] = [ast]
+  while (stack.length) {
+    const node = stack.pop()!
+    if (node.type === 'string') out.push(node)
+    else if (node.type === 'unary') stack.push(node.expr)
+    else if (node.type === 'binary') stack.push(node.right, node.left)
+    else if (node.type === 'call') for (let i = node.args.length - 1; i >= 0; i--) stack.push(node.args[i]!)
+  }
+  return out
+}
+/** The non-ASCII string literal nodes of a compiled formula, from its compile-time indexes (no text is read). */
+const nonAsciiCache = new WeakMap<CfFormula, ReadonlySet<AstNode>>()
+function nonAsciiLiteralsOf(f: CfFormula): ReadonlySet<AstNode> {
+  let set = nonAsciiCache.get(f)
+  if (!set) {
+    // A formula without the metadata (built by hand) reads every literal as non-ASCII: conservative, never a scan.
+    const literals = stringLiteralsOf(f.ast)
+    const wide = f.nonAsciiLiterals === undefined ? literals : f.nonAsciiLiterals.map(i => literals[i]).filter((n): n is AstNode & { type: 'string' } => n !== undefined)
+    set = new Set(wide)
+    nonAsciiCache.set(f, set)
+  }
+  return set
 }
 
 /** `compileCfFormulaWith`'s reservation hook: the absolute bytes the compile now needs held; false when it cannot be. */
@@ -843,12 +871,17 @@ export interface CfCallShape {
   readonly root: AstNode
   readonly hoisted: ReadonlyMap<AstNode, CfHoist>
   readonly memoised: ReadonlyMap<AstNode, ElementValue>
+  /** String literals holding a non-ASCII code unit (from the compile), and memoised nodes known to be ASCII (from the
+   * computing call's text model): the text model's ASCII flags, read without scanning any text (round 4, finding 1). */
+  readonly nonAsciiLiterals: ReadonlySet<AstNode>
+  readonly memoAscii: ReadonlySet<AstNode>
   /** A single-cell read's index in `refs`, by its node. */
   readonly cellRefs: ReadonlyMap<AstNode, number>
   /** Criterion text parsed per item, in shape order: a literal's length, or a cell read's index; with its pass count. */
   readonly criteria: readonly Readonly<{ literal?: number; ref?: number; passes: number }>[]
 }
-export function cfCallShape(f: CfFormula, hoisted: readonly CfHoist[] = [], memoised: ReadonlyMap<AstNode, ElementValue> = new Map()): CfCallShape {
+export function cfCallShape(f: CfFormula, hoisted: readonly CfHoist[] = [], memoised: ReadonlyMap<AstNode, ElementValue> = new Map(),
+  memoAscii: ReadonlySet<AstNode> = new Set()): CfCallShape {
   const hoists = new Map(hoisted.map(h => [h.node, h]))
   const refs: RefNode[] = [], reads: ReadKind[] = [], aggregates: number[] = [], conditionals: Conditional[] = []
   const cellRefs = new Map<AstNode, number>()
@@ -908,7 +941,7 @@ export function cfCallShape(f: CfFormula, hoisted: readonly CfHoist[] = [], memo
     }
   }
   visit(f.ast, true)
-  return { nodes, refs, reads, aggregates, conditionals, lookups, root: f.ast, hoisted: hoists, memoised, cellRefs, criteria }
+  return { nodes, refs, reads, aggregates, conditionals, lookups, root: f.ast, hoisted: hoists, memoised, nonAsciiLiterals: nonAsciiLiteralsOf(f), memoAscii, cellRefs, criteria }
 }
 
 /** Components of one call's static bound, each charged before the work happens (S5-N). */
@@ -925,7 +958,7 @@ const sortUnits = (v: number): number => (v <= 1 ? 0 : v * Math.ceil(Math.log2(v
  * one unit per range cell, plus the numeric-text check over string units). `criterionLengths` gives t per pair in shape
  * order; an undefined entry (the criterion is not a literal or a snapshot cell) makes the bound `'unbounded'`.
  */
-export function cfCallWorkBreakdown(shape: CfCallShape, payload: CfPayloadMetrics, criterionLengths: readonly (number | undefined)[]): CfCallWorkBreakdown | 'unbounded' {
+export function cfCallWorkBreakdown(shape: CfCallShape, payload: CfPayloadMetrics, criterionLengths: readonly (number | undefined)[], trace?: Map<AstNode, TextValue>): CfCallWorkBreakdown | 'unbounded' {
   const v = payload.viewCells
   const atom = (i: number) => payload.atoms[i] ?? { cells: 0, stringUnits: 0, longestString: 0 }
   let enumeration = 0, reads = 0, sort = 0, comparisons = 0, matcher = 0, text = 0
@@ -951,7 +984,7 @@ export function cfCallWorkBreakdown(shape: CfCallShape, payload: CfPayloadMetric
       else matcher += amount + (t + 1)
     }
   }
-  const textUnits = cfTextUnits(shape, payload)
+  const textUnits = cfTextUnits(shape, payload, trace)
   text = textUnits.text
   const criterion = textUnits.criterion
   const lookups = shape.lookups
@@ -1009,8 +1042,9 @@ const BLANK_VALUE: TextValue = { len: 0, text: false, ascii: true }
 const BLANK_READ: TextValue = { len: 0, text: false, ascii: true, blank: true }
 /** IF's selected-branch scalarization (functions.ts IF: a blank becomes 0, rendered "0"). */
 const ZERO_VALUE: TextValue = { len: 1, text: false, ascii: true }
-const literalValue = (v: ElementValue): TextValue => {
-  if (typeof v === 'string') return { len: v.length, text: true, ascii: isAscii(v) }
+/** A literal's or memoised value's text bound; a string's ASCII flag is supplied (compile or memo metadata), never scanned. */
+const literalValue = (v: ElementValue, ascii: boolean): TextValue => {
+  if (typeof v === 'string') return { len: v.length, text: true, ascii }
   if (v === null) return BLANK_VALUE
   return { len: Math.min(coerceToString(v).length, CF_TEXT_RENDER_UNITS), text: false, ascii: true }
 }
@@ -1062,10 +1096,10 @@ export function cfTextUnits(shape: CfCallShape, payload: CfPayloadMetrics, trace
   const walkNode = (node: AstNode): TextValue => {
     if (shape.hoisted.has(node)) return NUMBER_VALUE
     const memo = shape.memoised.get(node)
-    if (memo !== undefined) return out(literalValue(memo))
+    if (memo !== undefined) return out(literalValue(memo, shape.memoAscii.has(node)))
     switch (node.type) {
-      case 'string': return out(literalValue(node.value))
-      case 'number': return literalValue(node.value)
+      case 'string': return out(literalValue(node.value, !shape.nonAsciiLiterals.has(node)))
+      case 'number': return literalValue(node.value, true)
       case 'boolean': return BOOLEAN_VALUE
       case 'error': return { len: node.error.length, text: false, ascii: true }
       case 'empty': return NUMBER_VALUE // an omitted argument reads as 0 or blank depending on the handler: bounded as a number
@@ -1138,8 +1172,8 @@ export function cfCallWorkUnits(f: CfFormula, payload: CfPayloadMetrics, criteri
  * string units: S5-B round-2 #1) and the matcher's DP rows.
  */
 export function cfEvaluatorScratchBytes(f: CfFormula, payload: CfPayloadMetrics, hoisted: readonly CfHoist[] = planCfHoist(f), criterionLengths: readonly (number | undefined)[] = [],
-  memoised: ReadonlyMap<AstNode, ElementValue> = new Map()): number {
-  const shape = cfCallShape(f, hoisted, memoised)
+  memoised: ReadonlyMap<AstNode, ElementValue> = new Map(), memoAscii: ReadonlySet<AstNode> = new Set()): number {
+  const shape = cfCallShape(f, hoisted, memoised, memoAscii)
   const atom = (i: number) => payload.atoms[i] ?? { cells: 0, stringUnits: 0, longestString: 0 }
   let bytes = CF_FORMULA_CALL_BYTES + CF_VIEW_WORKSPACE_BYTES + shape.nodes * CF_SLOT_BYTES + payload.viewCells * CF_VIEW_KEY_BYTES
   shape.reads.forEach((kind, i) => {
@@ -1193,24 +1227,27 @@ export function cfTreeReadsMatchView(tree: AstNode, expected: readonly SourceRec
 /** A charged per-preparation memo of invariant formulas' results (S5-N caps table "Invariant results"). */
 export interface CfInvariantMemo {
   get(f: CfFormula): CfResult | undefined; set(f: CfFormula, result: CfResult): void
-  /** Invariant subtrees (finding 8): a node's scalar value, memoised after the first clean call that computed it. */
-  getNode(node: AstNode): ElementValue | undefined; setNode(node: AstNode, value: ElementValue): void
+  /** Invariant subtrees (finding 8): a node's scalar value, memoised after the first clean call that computed it, with
+   * whether its text is known ASCII (the computing call's text model; round 4, finding 1: never rescanned). */
+  getNode(node: AstNode): ElementValue | undefined; setNode(node: AstNode, value: ElementValue, ascii?: boolean): void
+  nodeAscii(node: AstNode): boolean
   dispose(): void
 }
 export function createCfInvariantMemo(memory: CfMemory): CfInvariantMemo {
   const entries = new Map<CfFormula, { result: CfResult; release(): void }>()
-  const nodes = new Map<AstNode, { value: ElementValue; release(): void }>()
+  const nodes = new Map<AstNode, { value: ElementValue; ascii: boolean; release(): void }>()
   return {
     get: f => entries.get(f)?.result,
     getNode: node => nodes.get(node)?.value,
-    setNode(node, value) {
+    nodeAscii: node => nodes.get(node)?.ascii ?? false,
+    setNode(node, value, ascii = false) {
       if (nodes.has(node)) return
       const bytes = measurePayloadBytes(value)
       if (bytes === undefined) return
       // Charged on the preparation's memory, owned by this memo (disposed with the preparation).
       const hold = memory.reserve(CF_SLOT_BYTES + bytes)
       if (hold.kind !== 'reserved') return // not memoised: later calls evaluate the subtree again, within their bound
-      nodes.set(node, { value, release: () => hold.release() })
+      nodes.set(node, { value, ascii, release: () => hold.release() })
     },
     set(f, result) {
       if (entries.has(f)) return
@@ -1350,9 +1387,14 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
   const plan = context.hoists?.plan ?? NO_HOISTS
   // Invariant subtrees already computed in this preparation enter as literals (finding 8).
   const subtrees = cfInvariantSubtrees(f, context.hoists?.plan ?? NO_HOISTS)
-  const memoised = new Map<AstNode, ElementValue>()
-  for (const node of subtrees) { const v = context.invariants.getNode(node); if (v !== undefined) memoised.set(node, v) }
-  const shape = cfCallShape(f, plan, memoised)
+  const memoised = new Map<AstNode, ElementValue>(), memoAscii = new Set<AstNode>()
+  for (const node of subtrees) {
+    const v = context.invariants.getNode(node)
+    if (v === undefined) continue
+    memoised.set(node, v)
+    if (context.invariants.nodeAscii(node)) memoAscii.add(node)
+  }
+  const shape = cfCallShape(f, plan, memoised, memoAscii)
   // Per-call meter: the dynamic spends (view build, reads, enumeration, sort) are refused past this call's own bound.
   // Discovery (view build, index steps, criterion preflight) is bounded by every account it will be charged to.
   let limit = Math.min(CF_LIMITS.checkpointUnits, context.ceiling.remaining, context.budget.remaining), used = 0, admitted = false
@@ -1430,12 +1472,14 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
     if (t === 'long') return unresolved('cf-formula-unsupported') // the engine records conditional-long-criterion-unverified
     criterionLengths.push(t)
   }
-  const breakdown = cfCallWorkBreakdown(shape, metrics, criterionLengths)
+  // The text model's per-node bounds, kept for the memo's ASCII flags (round 4, finding 1).
+  const textTrace = new Map<AstNode, TextValue>()
+  const breakdown = cfCallWorkBreakdown(shape, metrics, criterionLengths, textTrace)
   // Preflight against every account the admission draws from: a call that does not fit refuses without spending, so a
   // latching budget is never poisoned for the calls that follow.
   if (breakdown === 'unbounded' || breakdown.total > CF_LIMITS.checkpointUnits || breakdown.total > context.ceiling.remaining
     || breakdown.total > context.budget.remaining) return unresolved('cf-resource-limit')
-  const scratch = cfEvaluatorScratchBytes(f, metrics, plan, criterionLengths, memoised)
+  const scratch = cfEvaluatorScratchBytes(f, metrics, plan, criterionLengths, memoised, memoAscii)
   if (scratch > CF_LIMITS.formulaScratchBytes) return unresolved('cf-resource-limit')
   if (!hold.grow(scratch)) return unresolved('cf-resource-limit')
   {
@@ -1486,7 +1530,7 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
           const v = inScalar ? sv : av
           if (v === undefined || v === null || isMatrixValue(v) || (typeof v === 'number' && !Number.isFinite(v))) continue
           if (typeof v === 'object' && !isEvaluationError(v)) continue
-          context.invariants.setNode(node, v as ElementValue)
+          context.invariants.setNode(node, v as ElementValue, textTrace.get(node)?.ascii ?? false)
         }
       })
       context.onSettled?.(used, breakdown)

@@ -70,7 +70,7 @@ export const CF_FORMULA_FIXED_BYTES: number = measurePayloadBytes({
   ast: null, nodes: 4096, atoms: [], invariant: true, usesClock: true,
   families: ['aggregate', 'conditional-aggregate', 'date', 'information', 'logical', 'math', 'row-column', 'text', 'today'],
   dependencySheets: Array.from({ length: 16 }, () => ''), anchor: { row: 1048575, col: 16383 }, pinned: true, rootArea: true,
-  truth: ['blank', 'boolean', 'error', 'number', 'range', 'text'],
+  truth: ['blank', 'boolean', 'error', 'number', 'range', 'text'], nonAsciiLiterals: [],
 })!
 /** One element of a character array the evaluator builds for a text function (`textChars`): a one-code-unit string slot. */
 export const CF_CHAR_SLOT_BYTES: number = measurePayloadBytes(['a'])! - measurePayloadBytes([])!

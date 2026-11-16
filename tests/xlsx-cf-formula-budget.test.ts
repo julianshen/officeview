@@ -712,6 +712,8 @@ describe('the per-node text model: own passes per operation, ASCII from the snap
       const engine = engineEval(text, cells, a1('B1'))
       const rendered = evaluatorModule.coerceToString(engine.value as never).length
       expect(rendered, `${text} over ${JSON.stringify(cells)}`).toBeLessThanOrEqual(trace.get(f.ast)!.len)
+      // The ASCII flag the memo keeps (round 4, finding 1) is sound: a string the model calls ASCII is ASCII.
+      if (typeof engine.value === 'string' && trace.get(f.ast)!.ascii) expect(/^[\x00-\x7f]*$/.test(engine.value), text).toBe(true)
       checked++
     }
     expect(checked).toBe(400)
@@ -745,6 +747,52 @@ describe('Task 34 fix round 4 (codex round-3 findings 1, 2, 4, 5)', () => {
     expect(short.evaluate(0, 0, 2)).toEqual({ kind: 'ready', value: { kind: 'number', value: 0 } })
     expect(calls[0]!.matcher).toBe(4)
     short.dispose()
+  })
+  it('finding 1: the cost model never rescans literal or memoised text; ASCII metadata comes from the compile', async () => {
+    // Codex counterexample: ISNUMBER(IF(A1,"<8,000 a>",0)) over B1:B2 with A1 = 1, A2 = 2.
+    const literal = 'a'.repeat(8000)
+    const text = `ISNUMBER(IF(A1,"${literal}",0))`
+    const calls: CfCallWorkBreakdown[] = []
+    const batch = await batchOf([formulaRule(text, 'B1:B2')], fakeSource({ A1: 1, A2: 2 }), { onCall: b => calls.push(b) })
+    const charCodeAt = vi.spyOn(String.prototype, 'charCodeAt')
+    try {
+      for (const row of [0, 1]) {
+        charCodeAt.mockClear()
+        expect(batch.evaluate(0, row, 1)).toEqual({ kind: 'ready', value: { kind: 'boolean', value: false } })
+        // Before round 4 each evaluation read the literal's 8,000 characters in each of three cost-model walks.
+        expect(charCodeAt.mock.calls.length, `B${row + 1}`).toBeLessThan(literal.length)
+      }
+    } finally { charCodeAt.mockRestore() }
+    expect(calls.map(c => c.total)).toEqual([7, 7])
+    expect(calls.map(c => c.text)).toEqual([0, 0])
+    batch.dispose()
+    // The compile records which string literals are non-ASCII, and the model reads that, not the text.
+    const mixed = compile('UPPER("abc")&UPPER("é")', 'B1')
+    expect(mixed.nonAsciiLiterals).toEqual([1])
+    const trace = new Map<AstNode, TextValue>()
+    cfTextUnits(cfCallShape(mixed), { viewCells: 0, atoms: [] }, trace)
+    const [ascii, wide] = (mixed.ast as { left: { args: AstNode[] }; right: { args: AstNode[] } }).left.args.concat((mixed.ast as { right: { args: AstNode[] } }).right.args)
+    expect(trace.get(ascii!)!.ascii).toBe(true)
+    expect(trace.get(wide!)!.ascii).toBe(false)
+  })
+  it('finding 1: a memoised string keeps its ASCII flag from the computing call, and is never rescanned', async () => {
+    // UPPER($A$1) is an invariant subtree: the first call computes it, later calls read it as a 40-character literal.
+    const text = 'UPPER($A$1)=B1'
+    const cells: Cells = { A1: 'a'.repeat(40), B1: 'x', B2: 'x', B3: 'x' }
+    const calls: CfCallWorkBreakdown[] = []
+    const batch = await batchOf([formulaRule(text, 'C1:C3')], fakeSource(cells), { onCall: b => calls.push(b) })
+    const charCodeAt = vi.spyOn(String.prototype, 'charCodeAt')
+    try {
+      for (const row of [0, 1, 2]) {
+        charCodeAt.mockClear()
+        expect(batch.evaluate(0, row, 2)).toEqual({ kind: 'ready', value: { kind: 'boolean', value: false } })
+        if (row > 0) expect(charCodeAt.mock.calls.length, `C${row + 1}`).toBeLessThan(40)
+      }
+    } finally { charCodeAt.mockRestore() }
+    // Later calls: the memoised ASCII literal folds and compares once ((1 + 1) x 40), B1 likewise ((1 + 1) x 1): 82 chars.
+    expect(calls[1]!.text).toBe(Math.ceil(82 / CF_TEXT_UNIT_CHARS))
+    expect(calls[2]!.text).toBe(calls[1]!.text)
+    batch.dispose()
   })
   it('finding 2: IF converts a selected blank to 0, so the length it propagates covers "0"', async () => {
     // Codex counterexample: 120 nested UPPER over IF(TRUE,A1,"") with A1 blank renders "0" through every UPPER.
