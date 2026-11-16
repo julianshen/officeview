@@ -12,9 +12,9 @@ import { formulaSelectionEvidence } from './evidence'
 import type { CfEdgeMode, CfTruthReading } from './formula'
 
 export const CF_FORMULA_PRODUCTION_READINGS: Readonly<Record<string, string | readonly string[]>> = Object.freeze({
-  // parse.ts compiles both dialects to one model; the anchor is the sole range's top-left; `$` pins an axis.
+  // parse.ts: the base dialect compiles; the anchor is the sole range's top-left; `$` pins an axis. `dialect-x14` is not
+  // registered: its only configuration is cross-sheet (Task 36), so no fixture shows production reproducing it.
   'formula:dialect-base': 'applies',
-  'formula:dialect-x14': 'applies',
   'formula:anchor-single': 'relative-top-left',
   'formula:anchor-mixed-abs': 'pinned',
   // translate.ts: a uniform edge mode for both axes.
@@ -41,8 +41,9 @@ export const CF_FORMULA_PRODUCTION_READINGS: Readonly<Record<string, string | re
   'formula:cellis-operand-reference': 'documented',
   'formula:cellis-operand-relative': 'documented',
   'formula:cellis-operand-expression': 'documented',
-  'formula:cellis-operand-text': 'text-compare',
-  'formula:cellis-operand-blank': Object.freeze(['blank-zero', 'blank-empty-text']),
+  // A blank operand compares as 0. `blank-empty-text` and `formula:cellis-operand-text` are not registered: the Stage 1
+  // comparator decides no number against text, so their fixtures withhold (tests/xlsx-cf-formula-readings.test.ts).
+  'formula:cellis-operand-blank': Object.freeze(['blank-zero']),
   // parse.ts: a divergent formula compiles as an expression (Ruling S5-G); a divergent timePeriod follows the formula
   // (Ruling S5-TP-READING; the attribute reading stays test-only).
   'formula:predicate-divergent': 'formula',

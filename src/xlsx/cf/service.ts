@@ -271,7 +271,11 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
             if (formulas.length === 0) continue
             await work()
             formulaRules.add(rule)
-            const refused = options.evaluation ? formulaRuleRefusal(rule, formulas, check) : 'cf-evaluation-context-missing'
+            // Ruling S5-L: under manual calculation a formula rule is unresolved until formula:calc-manual-saved-values (not
+            // registered: Task 38) confirms that Excel evaluates CF against the saved values.
+            const refused = !options.evaluation ? 'cf-evaluation-context-missing'
+              : options.evaluation.calcMode === 'manual' && cfFormulaReading('formula:calc-manual-saved-values', check) === undefined ? 'cf-unmeasured-capability'
+              : formulaRuleRefusal(rule, formulas, check)
             if (refused) { formulaGate.set(rule, { kind: 'unresolved', reason: refused }); continue }
             for (const formula of formulas) { taskOf.set(formula, formulaTasks.length); formulaTasks.push({ rule, formula }) }
           }
