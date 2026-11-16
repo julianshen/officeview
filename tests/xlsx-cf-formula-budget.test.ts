@@ -194,8 +194,8 @@ describe('text work is bounded by measured payload before invocation (round-2 #1
     expect(textCharsSpy).not.toHaveBeenCalled()
     snapshot.dispose()
   })
-  it('arithmetic coercion and AND/OR/NOT charge the string they consume: over 32,767 characters, and just over the cap, each withholds (Task 34 fix 3)', async () => {
-    for (const text of ['A1+1>0', 'AND(A1)', 'OR(A1,TRUE)', 'NOT(A1)', '-A1<0', 'ABS(A1)>0']) {
+  it('every operator and every string-consuming call (AND/OR/NOT/IF, math, date, scalar aggregates over a scalar) charges the string it consumes: over 32,767 characters, and just over the cap, each withholds (Task 34 fix 3)', async () => {
+    for (const text of ['A1+1>0', 'AND(A1)', 'OR(A1,TRUE)', 'NOT(A1)', '-A1<0', 'ABS(A1)>0', 'MAX(IFERROR(A1,0))', 'SUM(IFNA(A1,0))', 'IF(A1,1,0)', 'YEAR(A1)>0', 'MOD(A1,2)']) {
       const f = compile(text, 'B1')
       for (const length of [32_767, 125]) {
         const snapshot = await snapshotOf({ A1: 'x'.repeat(length) }, ['A1'])

@@ -913,9 +913,13 @@ function conditionalRoles(name: string, count: number): Array<'t' | 'r' | 'c'> {
   if (name === 'COUNTIFS') return Array.from({ length: count }, (_, i) => (i % 2 === 0 ? 'r' : 'c'))
   return Array.from({ length: count }, (_, i) => (i === 0 ? 't' : i % 2 === 1 ? 'r' : 'c'))
 }
-/** Scalar functions that coerce a string operand (AND/OR/NOT/IF read it as a boolean, the math and date functions parse
- * it as a number): each walks the string, so its length is charged as text work (Task 34 fix 3). */
-const STRING_CONSUMERS: ReadonlySet<string> = new Set(['AND', 'OR', 'NOT', 'IF', 'ABS', 'INT', 'MOD', 'ROUND', 'DATE', 'YEAR', 'MONTH', 'DAY', 'WEEKDAY'])
+/** Calls that never walk a string operand's contents: pass-through (IFERROR/IFNA), type tests (IS*), position (ROW/COLUMN),
+ * the clock, and the conditional aggregates (whose criterion and range strings the comparison and matcher terms price).
+ * Every other call may coerce a string operand (AND/OR/NOT/IF read it as a boolean; the math, date and scalar aggregate
+ * functions parse a directly supplied string as a number), so it marks the call textual (Task 34 fix 3). A deny-list:
+ * a function added to the allow-list is charged unless it is named here. */
+const STRING_NEUTRAL: ReadonlySet<string> = new Set(['IFERROR', 'IFNA', 'ISBLANK', 'ISERROR', 'ISNA', 'ISNUMBER', 'ISTEXT', 'ISLOGICAL', 'ROW', 'COLUMN', 'TODAY',
+  'COUNTIF', 'COUNTIFS', 'SUMIF', 'SUMIFS', 'AVERAGEIF', 'AVERAGEIFS'])
 type ReadKind = 'cell' | 'traversal' | 'root-area'
 interface Conditional { refs: number[]; pairs: Array<{ range: number | undefined; criterion: AstNode }> }
 /** The shape one per-cell call evaluates: the compiled tree with hoisted calls replaced by one node each. `refs` is the
@@ -960,7 +964,7 @@ export function cfCallShape(f: CfFormula, hoisted: readonly CfHoist[] = []): CfC
       case 'call': {
         const name = node.name.toUpperCase()
         if (CF_FORMULA_FUNCTIONS.get(name)?.text) { textual = true; textOps++ }
-        if (STRING_CONSUMERS.has(name)) textual = true
+        if (!STRING_NEUTRAL.has(name)) textual = true
         if (CONDITIONAL.has(name)) {
           const roles = conditionalRoles(name, node.args.length)
           const c: Conditional = { refs: [], pairs: [] }
