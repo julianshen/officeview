@@ -18,6 +18,8 @@ import { decodePng } from '../src/mark/png'
 import { AuditStore } from '../src/audit-store'
 import type { AuthDecision } from '../src/hooks'
 import { fullSlideLayersDeck } from './show-fixtures'
+// Pool show jobs: the estimate is the build's grant (PR #78 round 13), so a refusal test must not refuse for room.
+import { SHOW_BUILD_BYTES } from '../src/show/grant'
 import { appearMoveDeck, hiddenLinkDeck, manyObjectsMorphDeck, morphLateDeck, morphSweepDeck, revealThenMoveDeck, tinyBoxDeck } from './show-fixtures'
 import { tauFor } from '../src/detect/tau'
 import { deriveKeys } from '../src/keys'
@@ -399,10 +401,10 @@ describe('show job refusal cache (controller ruling)', () => {
     try {
       await roomy.open('many', await manyObjectsMorphDeck(257), 'full')
       const many = { docRef: 'many', contentPolicy: 'full' as const, ...job, from: 0, to: 1, fromStep: 0 }
-      expect(await roomy.showMorph('s1', many, 1024)).toEqual({ refused: 'morph-fallback' })
+      expect(await roomy.showMorph('s1', many, SHOW_BUILD_BYTES)).toEqual({ refused: 'morph-fallback' })
       const pages = roomy.stats().workers[0]!.pages
       const t1 = performance.now()
-      expect(await roomy.showMorph('s1', many, 1024)).toEqual({ refused: 'morph-fallback' })
+      expect(await roomy.showMorph('s1', many, SHOW_BUILD_BYTES)).toEqual({ refused: 'morph-fallback' })
       expect(performance.now() - t1).toBeLessThan(100)
       expect(roomy.stats().workers[0]!.pages).toBe(pages)
     } finally { roomy.dispose() }

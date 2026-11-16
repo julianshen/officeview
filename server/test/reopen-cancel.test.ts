@@ -8,6 +8,8 @@
 import { afterEach, expect, test } from 'bun:test'
 import { morphDeck } from '../../src/testdata/show-decks'
 import { Pool } from '../src/pool'
+// The estimate is the build's grant on the worker (PR #78 round 13): a realistic one, so the build is not refused for room.
+import { SHOW_BUILD_BYTES } from '../src/show/grant'
 
 let pool: Pool | undefined
 afterEach(() => { pool?.dispose(); pool = undefined })
@@ -16,7 +18,7 @@ const DOC = 'reopen'
 const mark = { kind: 'off' } as const
 type Kind = 'show-plan' | 'render' | 'notes' | 'text'
 const run: Record<Kind, (p: Pool, signal?: AbortSignal) => Promise<unknown>> = {
-  'show-plan': (p, signal) => p.showPlan('sid', { docRef: DOC, contentPolicy: 'full', unitIndex: 1, scale: 1, motion: 'full', mark, strictMarks: false }, 1024, signal),
+  'show-plan': (p, signal) => p.showPlan('sid', { docRef: DOC, contentPolicy: 'full', unitIndex: 1, scale: 1, motion: 'full', mark, strictMarks: false }, SHOW_BUILD_BYTES, signal),
   render: (p, signal) => p.render('sid', { docRef: DOC, contentPolicy: 'full', unitIndex: 0, scale: 1, projection: 'final-raster', mark }, 1024, signal),
   notes: (p, signal) => p.notes('sid', { docRef: DOC, contentPolicy: 'full', unitIndex: 0, scale: 1, mark, draw: false }, 1024, signal),
   text: (p, signal) => p.text('sid', { docRef: DOC, contentPolicy: 'full', op: 'a11y', unit: 0 }, undefined, signal),

@@ -520,10 +520,10 @@ export function trackInputs(show: ShowDoc, job: ShowPlanJob, ws: SlideShowWorksp
   return { ps: e.ps, timeline: e.timeline, rasters: e.rasters }
 }
 
-function classificationOf(e: L1Entry, job: ShowPlanJob): Classification {
+function classificationOf(e: L1Entry, job: ShowPlanJob, ws: SlideShowWorkspace): Classification {
   const have = e.classes.get(job.strictMarks)
   if (have) return have
-  const c = classifySlide({ ps: e.ps!, timeline: e.timeline!, scale: job.scale, rasters: e.rasters!, strictMarks: job.strictMarks, triggers: e.timeline!.triggers(), resolveFont })
+  const c = classifySlide({ ps: e.ps!, timeline: e.timeline!, scale: job.scale, rasters: e.rasters!, strictMarks: job.strictMarks, triggers: e.timeline!.triggers(), resolveFont, workspace: ws })
   e.classes.set(job.strictMarks, c)
   return c
 }
@@ -573,7 +573,7 @@ function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOp
   if (timeline.triggers().length > 0 && triggersMoveGeometry(ps.meta.timing && !('refused' in ps.meta.timing) ? ps.meta.timing : undefined)) {
     return { refused: 'still', diagnostics: [{ code: 'step-composited' }, { code: 'trigger-cut' }, { code: 'mark-rest' }] }
   }
-  const c = classificationOf(e, job)
+  const c = classificationOf(e, job, ws)
   check()
   if (c.fallback === 'still') {
     const codes = new Set(c.diagnostics.map(d => d.code))
