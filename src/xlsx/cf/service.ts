@@ -217,6 +217,8 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
           const barLayout = barLayoutEvidence(cap => evidence.allows(cap))
           // Icon thresholds depend on the rule and its scope statistics only: resolved once per rule, not per cell.
           const iconThresholds = new Map<CfRule, CfOutcome<readonly number[]>>()
+          // Formula rules, decided once per preparation (never per cell: `cfDefinitionFormulas` allocates).
+          const formulaRules = new Set<CfRule>(ordered.filter(rule => cfDefinitionFormulas(rule.definition).length > 0))
           const evaluate = async (row: number, col: number, value: CfLiteral): Promise<CfOutcome<CfCellState>> => {
             const textBytes = value.kind === 'string' ? 256 + value.value.length * 8 : 0
             if (textBytes > CF_LIMITS.scratchBytes) return { kind: 'unresolved', reason: 'cf-resource-limit' }
@@ -298,7 +300,7 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                     iconThresholds.set(rule, thresh)
                   }
                   outcomes.push(thresh.kind !== 'ready' ? thresh : evaluateIconSet(value, rule.definition, thresh.value, gate))
-                } else if (cfDefinitionFormulas(rule.definition).length > 0) {
+                } else if (formulaRules.has(rule)) {
                   // A formula rule never reaches the literal predicates: `evaluatePredicate` would read a formula operand
                   // as a literal. Without a context it withholds by name; with one it is still withheld until the formula
                   // evaluator lands (Task 35), whatever evidence is injected.

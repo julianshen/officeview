@@ -178,16 +178,38 @@ describe('compiled formula records atoms, families, invariance and clock use', (
   })
 })
 
+/** `-1*1^1` then `+1*1^1` x681 then `+1+1`: exactly 4,096 tokens and 4,096 nodes, but a sum of products (about 700 deep),
+ * not one 4,096-operand chain (2,048 deep). */
+const WIDE_4096 = `-1*1^1${'+1*1^1'.repeat(681)}+1+1`
+
+describe('a deep formula survives structured clone', () => {
+  it('the at-limit 4,096-node formula compiles and its rules structured-clone; a pure operator chain that deep is refused first', () => {
+    expect(countFormulaTokens(WIDE_4096)).toBe(4096)
+    withExactCfEvidence(PARSE_SET, () => {
+      const { rules, lease } = parseSheet(rule('expression', WIDE_4096.replace(/\^/g, '^')))
+      expect(rules[0]!.definition).toMatchObject({ kind: 'expression', formula: { nodes: 4096 } })
+      const cloned = structuredClone(lease.value)
+      expect(cloned.rules[0]!.definition).toMatchObject({ kind: 'expression', formula: { nodes: 4096 } })
+      lease.release()
+      // The unstructurable one: a 4,096-operand chain is 2,048 levels deep and V8's clone throws on it.
+      const chain = `-${Array.from({ length: 2048 }, () => '1').join('+')}`
+      const refused = parseSheet(rule('expression', chain))
+      expect(refused.rules[0]!.definition).toMatchObject({ kind: 'unresolved', reason: 'cf-resource-limit' })
+      refused.lease.release()
+    })
+    expect(compile(`-${Array.from({ length: 2048 }, () => '1').join('+')}`)).toMatchObject({ refused: 'cf-resource-limit', reason: expect.stringMatching(/structured-clone/) })
+  })
+})
+
 describe('compile caps refuse before construction', () => {
   const sum = (n: number, ref: (i: number) => string) => Array.from({ length: n }, (_, i) => ref(i)).join('+')
   it('4,097 nodes refuse and 4,096 are admitted', () => {
     const body = (numbers: number) => `${Array.from({ length: numbers }, () => '1').join('+')}`
-    // 2,048 numbers + 2,047 sums + one unary minus = 4,096 nodes (and 4,096 tokens): the limit itself.
-    const atLimit = `-${body(2048)}`
-    expect(countFormulaTokens(atLimit)).toBe(4096)
-    expect(compile(atLimit)).toMatchObject({ value: { nodes: 4096 } })
+    // Exactly 4,096 tokens and 4,096 nodes: the limit itself is admitted.
+    expect(countFormulaTokens(WIDE_4096)).toBe(4096)
+    expect(compile(WIDE_4096)).toMatchObject({ value: { nodes: 4096 } })
+    expect(compile(`${WIDE_4096}+1`)).toMatchObject({ refused: 'cf-resource-limit' })
     expect(compile(`-${body(2049)}`)).toMatchObject({ refused: 'cf-resource-limit' })
-    expect(compile(`--${body(2048)}`)).toMatchObject({ refused: 'cf-resource-limit' })
   })
   it('65 atoms refuse and 64 are admitted', () => {
     expect(compile(sum(64, i => `A${i + 1}`))).toMatchObject({ value: { atoms: expect.arrayContaining([]) } })
@@ -261,10 +283,39 @@ describe('compile reserves before parsing and releases with the rule (round-1 #3
       expect(memory.currentBytes).toBe(0)
     })
   })
+  it('refused formulas leave nothing charged: hundreds of them never starve the sheet or the Stage 1-4 rules after them', () => {
+    // 300 rules x a 200-token refused formula would reserve about 26 MB at the worst case if each reservation stayed on the
+    // sheet hold (the workbook account is 16 MiB): the literal rules after them must still resolve.
+    const refused = `INDIRECT(${Array.from({ length: 99 }, () => '1').join('+')}+1)`
+    expect(countFormulaTokens(refused)).toBeGreaterThanOrEqual(200)
+    const many = Array.from({ length: 300 }, (_, i) => `<conditionalFormatting sqref="B${i + 2}"><cfRule type="expression" priority="${i + 1}" dxfId="0"><formula>${refused}</formula></cfRule></conditionalFormatting>`).join('')
+    const literals = Array.from({ length: 5 }, (_, i) => `<conditionalFormatting sqref="C${i + 2}"><cfRule type="cellIs" priority="${400 + i}" dxfId="0" operator="greaterThan"><formula>${i}</formula></cfRule></conditionalFormatting>`).join('')
+    withExactCfEvidence(PARSE_SET, () => {
+      const memory = createCfMemory()
+      const { rules, lease } = parseSheet(many + literals, memory)
+      expect(lease.value.unresolvedSheet).toBeUndefined()
+      expect(rules.slice(0, 300).every(r => r.definition.kind === 'unresolved' && r.definition.reason === 'cf-unsupported-rule')).toBe(true)
+      expect(rules.slice(300).map(r => r.definition.kind)).toEqual(['cellIs', 'cellIs', 'cellIs', 'cellIs', 'cellIs'])
+      // Nothing beyond the adopted lease is held: the compile reservations were all returned.
+      expect(memory.currentBytes).toBe(lease.bytes)
+      lease.release(); expect(memory.currentBytes).toBe(0)
+    })
+  })
+  it('a resolved formula holds only its measured bytes in the sheet', () => {
+    withExactCfEvidence(PARSE_SET, () => {
+      const memory = createCfMemory()
+      const { rules, lease } = parseSheet(rule('expression', '$B2&gt;$C2'), memory)
+      const f = (rules[0]!.definition as { formula: CfFormula }).formula
+      expect(memory.currentBytes).toBe(lease.bytes)
+      expect(lease.bytes).toBeLessThan(countFormulaTokens('$B2>$C2') * CF_FORMULA_NODE_BYTES * 2 + 4096)
+      expect(f.nodes).toBe(3)
+      lease.release()
+    })
+  })
   it('a formula the sheet cannot hold refuses its rule, not the sheet', () => {
     // Each holds about 0.5 MB, and its reservation (4,096 tokens x node bytes, about 1.8 MB) must also fit beside the others
     // under the 4 MiB sheet metadata cap: the later rules refuse by themselves.
-    const big = `-${Array.from({ length: 2048 }, () => '1').join('+')}`
+    const big = WIDE_4096
     const rules = Array.from({ length: 8 }, (_, i) => `<conditionalFormatting sqref="B${i + 2}"><cfRule type="expression" priority="${i + 1}" dxfId="0"><formula>${big}</formula></cfRule></conditionalFormatting>`).join('')
     withExactCfEvidence(PARSE_SET, () => {
       const { rules: parsed, lease } = parseSheet(rules)
@@ -358,6 +409,10 @@ describe('expression and operand rules parse to formula definitions behind evide
       expect(c).toMatchObject({ kind: 'cellIs', operator: 'between', operands: [{ kind: 'number', value: 1 }, { formula: { nodes: 3 } }] })
       expect(d).toMatchObject({ kind: 'cellIs', operands: [{ formula: expect.anything() }] })
       expect(e).toMatchObject({ kind: 'unresolved', type: 'cellIs', reason: 'cf-unsupported-rule' })
+      // An operand is one value per cell: a multi-cell root has no operand reading and never compiles as one.
+      const area = parseSheet(rule('cellIs', '$F$1:$F$3', 'B2', ' operator="greaterThan"'))
+      expect(area.rules[0]!.definition).toMatchObject({ kind: 'unresolved', type: 'cellIs', reason: 'cf-unsupported-rule' })
+      area.lease.release()
       expect(cfDefinitionFormulas(a!)).toHaveLength(1)
       r.lease.release()
     })
@@ -405,6 +460,9 @@ describe('formulaRequiredCapabilities splits parse and evaluation gates (round-1
     expect(caps('Sheet2!A1<A2').parse.has('formula:cross-sheet-quoted-name')).toBe(false)
     expect(caps('A2=TODAY()').evaluation.has('formula:fn-today')).toBe(true)
     expect(caps('A2:A4').evaluation).toEqual(new Set(['formula:truth-range']))
+    // A multi-cell root carries the range reading whatever the use, so a later cfvo use inherits the gate.
+    for (const use of ['operand', 'cfvo', 'activation'] as const) expect(caps('$F$1:$F$3', use, { sourceType: 'colorScale' }).evaluation.has('formula:truth-range'), use).toBe(true)
+    expect(caps('$F$1', 'cfvo', { sourceType: 'colorScale' }).evaluation.has('formula:truth-range')).toBe(false)
     expect(caps('B2>1', 'cfvo', { rangeCount: 2 }).evaluation.has('formula:cfvo-scope-multi-range')).toBe(true)
     expect(caps('B2>1', 'cfvo', { rangeCount: 1 }).evaluation.has('formula:cfvo-scope-multi-range')).toBe(false)
   })

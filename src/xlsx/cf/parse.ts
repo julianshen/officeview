@@ -577,14 +577,21 @@ class SheetFinalizer {
    * through the one release the sheet already owns. A formula the sheet cap cannot take refuses the rule only.
    */
   compileFormula(text: string, anchor: { row: number; col: number } | undefined): ReturnType<typeof compileCfFormulaWith> {
-    let held = 0
-    return compileCfFormulaWith(text, anchor, absolute => {
-      if (this.retained + this.formulaBytes + absolute > CF_LIMITS.sheetMetadataBytes) return false
-      const delta = absolute - held
-      if (delta > 0 && !this.tryAdmit(delta)) return false
-      held = Math.max(held, absolute)
-      return true
-    })
+    // The worst-case reservation (and the parse's transient workspace) lives on its own short-lived reservation, released on
+    // every exit; only the exact retained bytes of a formula that stays are admitted into the sheet hold. A refused or
+    // out-of-scope formula therefore leaves nothing charged, however many rules there are.
+    const temp = this.memory.reserve(0)
+    if (temp.kind !== 'reserved') return { refused: 'cf-resource-limit', reason: 'compiled formula reservation refused' }
+    let compiled: ReturnType<typeof compileCfFormulaWith>
+    try {
+      compiled = compileCfFormulaWith(text, anchor, absolute => this.retained + this.formulaBytes + absolute <= CF_LIMITS.sheetMetadataBytes && temp.grow(absolute))
+    } finally {
+      temp.release()
+    }
+    if (isCfFormulaRefusal(compiled)) return compiled
+    // Release-then-admit is safe: this code is synchronous, so nothing else claims the freed bytes in between.
+    if (!this.tryAdmit(compiled.retained)) return { refused: 'cf-resource-limit', reason: 'compiled formula does not fit the sheet hold' }
+    return compiled
   }
 
   reserveMeta(bytes: number): boolean {
@@ -1435,6 +1442,8 @@ function buildRuleBody(
       formulas.push(compiled.formula); bytes += compiled.retained
     }
     for (const f of formulas) {
+      // An operand is one value per cell (Ruling S5-F): a multi-cell result has no operand reading, so it never compiles here.
+      if (use === 'operand' && f.rootArea) return { ok: false, reason: 'cf-unsupported-rule' }
       for (const capability of formulaRequiredCapabilities(f, use, { dialect, rangeCount: ranges.length, sourceType }).parse) {
         if (!hasEvidence(capability)) return { ok: false, reason: 'cf-unsupported-rule' }
       }

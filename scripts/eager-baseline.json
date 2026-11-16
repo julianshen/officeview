@@ -184,10 +184,10 @@
       "gzipDelta": 2612
     },
     {
-      "reason": "xlsx CF Stage 5 Task 32 (Lesson 7, S5-L/S5-P): the evaluation-context call sites (paint.ts, sheetAssets.ts and the interactive paint and text scopes pass `evaluation: cf.cfDocumentEvaluationOf(doc)` through the module they already hold from the lazy loader) and the widened canRuleMatchBlanks arms. No module added; no eager module imports a CF value. Measured 422389 \u2192 422414 B (+25) on this checkout.",
+      "reason": "xlsx CF Stage 5 Task 32 (Lesson 7, S5-L/S5-P): the evaluation-context call sites (paint.ts, sheetAssets.ts and the interactive paint and text scopes pass `evaluation: cf.cfDocumentEvaluationOf(doc)` through the module they already hold from the lazy loader) and the widened canRuleMatchBlanks arms. No module added; no eager module imports a CF value. Measured 422389 \u2192 422419 B (+30; chunk-name hashes in the index chunk move it by a few bytes between builds) on this checkout.",
       "added": [],
       "removed": [],
-      "gzipDelta": 25
+      "gzipDelta": 30
     }
   ]
 }

@@ -141,6 +141,11 @@ const limited = (reason: string): CfFormulaRefusal => ({ refused: 'cf-resource-l
 /* ------------------------------------------------------------------ */
 
 const MAX_ROW = 1048576, MAX_COL = 16384
+/** Object nesting of the AST (a call's `args` array is a level of its own). A resident document is structured-cloned to
+ * workers, and the clone recurses per level: V8 throws past about 1,800 levels here, so the compile refuses at 1,024, well
+ * inside it. A 4,096-node formula is still admitted when it is not one operator chain (`1*1^1+1*1^1+...` is about 700 deep);
+ * a single 4,096-operand chain is not, and refuses as `cf-resource-limit` like any other cap. */
+const MAX_AST_DEPTH = 1024
 const COMPARISONS: ReadonlySet<string> = new Set(['=', '<>', '<', '<=', '>', '>='])
 const BOOLEAN_FUNCTIONS: ReadonlySet<string> = new Set(['AND', 'OR', 'NOT', 'ISBLANK', 'ISERROR', 'ISNA', 'ISNUMBER', 'ISTEXT', 'ISLOGICAL'])
 const TEXT_FUNCTIONS: ReadonlySet<string> = new Set(['TRIM', 'UPPER', 'LOWER', 'LEFT', 'RIGHT', 'MID', 'CONCAT'])
@@ -148,7 +153,7 @@ const ALL_VALUE_KINDS: readonly CfTruthKind[] = ['number', 'boolean', 'text', 'b
 
 type RefNode = Extract<AstNode, { type: 'cell' | 'range' | 'wholeCol' | 'wholeRow' }>
 const isRefNode = (node: AstNode): node is RefNode => node.type === 'cell' || node.type === 'range' || node.type === 'wholeCol' || node.type === 'wholeRow'
-type Frame = { node: AstNode; slot: 'root' | 'scalar' | 'range'; omittable: boolean }
+type Frame = { node: AstNode; slot: 'root' | 'scalar' | 'range'; omittable: boolean; depth: number }
 
 /** `[` in a sheet qualifier is an external workbook (`[1]Sheet1`). */
 const externalQualifier = (sheet: string | undefined): boolean => sheet !== undefined && sheet.includes('[')
@@ -232,10 +237,11 @@ function admit(ast: AstNode, anchor: { row: number; col: number } | undefined): 
   const families = new Set<string>()
   let nodes = 0, usesClock = false, variant = false, pinned = false
   const rootArea = isRefNode(ast) && ast.type !== 'cell'
-  const stack: Frame[] = [{ node: ast, slot: 'root', omittable: false }]
+  const stack: Frame[] = [{ node: ast, slot: 'root', omittable: false, depth: 1 }]
   while (stack.length > 0) {
-    const { node, slot, omittable } = stack.pop()!
+    const { node, slot, omittable, depth } = stack.pop()!
     if (++nodes > CF_LIMITS.formulaTokens) return limited(`formula has more than ${CF_LIMITS.formulaTokens} nodes`)
+    if (depth > MAX_AST_DEPTH) return limited('formula nesting exceeds the structured-clone depth bound')
     switch (node.type) {
       case 'number':
         if (!Number.isFinite(node.value)) return unsupported('non-finite number literal')
@@ -267,10 +273,10 @@ function admit(ast: AstNode, anchor: { row: number; col: number } | undefined): 
         }
         break
       }
-      case 'unary': stack.push({ node: node.expr, slot: 'scalar', omittable: false }); break
+      case 'unary': stack.push({ node: node.expr, slot: 'scalar', omittable: false, depth: depth + 1 }); break
       case 'binary':
         if (node.op === '&') families.add('text')
-        stack.push({ node: node.right, slot: 'scalar', omittable: false }, { node: node.left, slot: 'scalar', omittable: false })
+        stack.push({ node: node.right, slot: 'scalar', omittable: false, depth: depth + 1 }, { node: node.left, slot: 'scalar', omittable: false, depth: depth + 1 })
         break
       case 'call': {
         const name = node.name.toUpperCase()
@@ -299,7 +305,7 @@ function admit(ast: AstNode, anchor: { row: number; col: number } | undefined): 
         for (let i = node.args.length - 1; i >= 0; i--) {
           const arg = node.args[i]!
           const rangeSlot = slots[i] === 'range'
-          stack.push({ node: arg, slot: rangeSlot && isRefNode(arg) ? 'range' : 'scalar', omittable: !rangeSlot })
+          stack.push({ node: arg, slot: rangeSlot && isRefNode(arg) ? 'range' : 'scalar', omittable: !rangeSlot, depth: depth + 2 })
         }
         break
       }
@@ -396,6 +402,8 @@ export function formulaRequiredCapabilities(f: CfFormula, use: CfFormulaUse, rul
   for (const family of f.families) evaluation.add(`formula:fn-${family}`)
   const crossSheet = f.dependencySheets.length > 0
   const relative = !f.invariant
+  // A multi-cell result is only ever a range result (Ruling S5-D), whatever the use: its projection needs its own reading.
+  if (f.rootArea) evaluation.add('formula:truth-range')
   switch (use) {
     case 'expression':
     case 'activation':

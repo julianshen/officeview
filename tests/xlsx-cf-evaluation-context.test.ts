@@ -81,6 +81,7 @@ function fakeSource(stampValue: CfStamp): CfValueSource {
 }
 const budget = (): FormatBudget => ({ reserve: () => {}, release: () => {}, retain: (_targets: readonly object[], _bytes: number, commit: () => void) => commit(), settle: () => {} })
 
+describe('the evaluation context is built once per document and the clock once per preparation (round-2 #3)', () => {
 describe('the document policy is built once and resolves its defaults', () => {
   it('equal on repeated calls; frozen; an undefined valuePolicy is engine and an absent calc is auto', () => {
     const doc = { semantics: { dateSystem: '1904', timeZone: 'Asia/Taipei' } } as unknown as XlsxDocument
@@ -195,6 +196,8 @@ describe('every route forwards the policy and takes one clock snapshot per prepa
     expect(await open('')).toBe('auto')
     void xlsxBytes
   })
+})
+
 })
 
 describe('a deeply nested formula does not make the paged view refuse what the resident view holds', () => {
