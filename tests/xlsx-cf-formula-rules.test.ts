@@ -311,6 +311,56 @@ describe('stub successors repaint only where Excel did (S5-STUB)', () => {
   it('the inventory names exactly the reused captures', () => {
     for (const r of CF_STAGE5_REUSED_CAPTURES) expect(SUCCESSORS[r.caseId], r.caseId).toEqual(expect.arrayContaining([...r.refs]))
   })
+  /** The S5-STUB successor capabilities of each inventoried case (the conformance test's list). */
+  const STUB_DXF = ['formula:dialect-base', 'formula:anchor-single', 'formula:truth-boolean']
+  const STUB_CAPS: Readonly<Record<string, readonly string[]>> = {
+    'stage1-blanks-errors': [...STUB_DXF, 'formula:predicate-divergent', 'formula:fn-information', 'formula:fn-logical'],
+    'stage1-priority-composition': [...STUB_DXF, 'formula:fn-math', 'formula:composition-stop-dxf', 'formula:composition-stub-successor-dxf'],
+    'stage2-scale-composition': [...STUB_DXF, 'formula:fn-math', 'formula:composition-stop-scale', 'formula:composition-stub-successor-scale'],
+    'stage3-bar-composition': [...STUB_DXF, 'formula:fn-math', 'formula:composition-stop-bar', 'formula:composition-stub-successor-bar'],
+    'stage4-icon-composition': [...STUB_DXF, 'formula:fn-math', 'formula:composition-stop-icon', 'formula:composition-stub-successor-icon'],
+  }
+  type StubShown = Readonly<{ fill: string; strike: boolean; visual: string; properties: number }>
+  /** Each stub cell's state through the real service route (evaluation context, production evidence plus `inject`). */
+  async function stubStates(caseId: string, inject: readonly string[]): Promise<Map<string, StubShown>> {
+    return withInjectedCfEvidence(inject, async () => {
+      injectCfFormulaSelections(SELECTIONS)
+      try {
+        const c = manifest().cases.find(x => x.id === caseId)!
+        const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
+        const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+        const memory = createCfMemory()
+        const service = createCfService(sheet.conditionalFormatting!, memory, { evidence: cfRuntimeEvidence, evaluation: cfEvaluationContextFor(cfDocumentEvaluationOf(doc), Date.now), sheetName: sheet.name })
+        const stamp = { owner: 'stub', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(sheet.conditionalFormatting!), viewGen: 0, structureGen: 0, clockGen: 0 }
+        const refs = SUCCESSORS[caseId]!
+        const lease = await service.prepareCf({ stamp, sourceRects: refs.map(r => { const { row, col } = rc(r); return { firstRow: row, lastRow: row, firstCol: col, lastCol: col } }), signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, residentSource(sheet, stamp, memory, 'engine'))
+        const out = new Map<string, StubShown>()
+        for (const r of refs) {
+          const { row, col } = rc(r)
+          const o = lease.value.at(row, col), s = shown(o)
+          out.set(r, { fill: s.fill, strike: s.strike, visual: o.kind === 'ready' ? Object.keys(o.value.visual ?? {}).sort().join('&') : '', properties: o.kind === 'ready' ? Object.keys(o.value.properties).length : 0 })
+        }
+        lease.release(); service.dispose()
+        return out
+      } finally { injectCfFormulaSelections(null) }
+    })
+  }
+  const paints = (s: StubShown | undefined): boolean => s !== undefined && (s.properties > 0 || s.visual !== '')
+  it('each successor capability gates its stub cells: removed alone, the stub cells paint nothing (S5-STUB, Task 35 fix round 1 #1)', async () => {
+    // Codex counterexample: G2/G3 with dialect, anchor, boolean, math and stop-dxf injected but no successor-dxf.
+    const g = await stubStates('stage1-priority-composition', ['formula:dialect-base', 'formula:anchor-single', 'formula:truth-boolean', 'formula:fn-math', 'formula:composition-stop-dxf'])
+    expect(['G2', 'G3'].filter(r => paints(g.get(r)))).toEqual([])
+    for (const [caseId, caps] of Object.entries(STUB_CAPS)) {
+      const successor = caps.find(c => c.startsWith('formula:composition-stub-successor-'))
+      if (!successor) continue
+      const without = await stubStates(caseId, caps.filter(c => c !== successor))
+      expect(SUCCESSORS[caseId]!.filter(r => paints(without.get(r))), `${caseId} without ${successor}`).toEqual([])
+    }
+    // With the full list the stage 1 composition stub repaints (non-vacuous).
+    const full = await stubStates('stage1-priority-composition', STUB_CAPS['stage1-priority-composition']!)
+    expect(['G2', 'G3'].filter(r => paints(full.get(r)))).toEqual(['G2', 'G3'])
+  }, 120_000)
+
   it('every stub cell is Excel\'s recorded outcome or withheld, under production and under injected successors', async () => {
     const all = [...FORMULA_CAPS, 'formula:composition-stop-dxf', 'formula:composition-stop-scale', 'formula:composition-stop-bar', 'formula:composition-stop-icon',
       'formula:composition-stub-successor-dxf', 'formula:composition-stub-successor-scale', 'formula:composition-stub-successor-bar', 'formula:composition-stub-successor-icon']

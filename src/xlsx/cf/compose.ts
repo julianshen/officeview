@@ -68,10 +68,29 @@ interface MatchingFill {
  * Caller admits bounded matching-rule and output workspace before invoking this pure helper. */
 function* steps(
   orderedRules: readonly CfRule[],
-  outcomes: readonly (CfOutcome<unknown> | undefined)[],
+  givenOutcomes: readonly (CfOutcome<unknown> | undefined)[],
   options?: ComposeCellOptions,
 ): Generator<void, CfCellState> {
   const checkEvidence = options?.hasEvidence ?? defaultHasEvidence
+  // Ruling S5-STUB (Task 35 fix round 1 #1): a stopIfTrue formula rule ahead of a lower rule of kind K that contributes on
+  // this cell is the stub shape the Stage 1-4 captures recorded. It composes only with formula:composition-stub-successor-K;
+  // otherwise the formula rule is unresolved, so (as an unresolved stopIfTrue) it and everything after it are withheld.
+  let outcomes = givenOutcomes
+  for (let i = 0; i < orderedRules.length; i++) {
+    const rule = orderedRules[i]!
+    if (!rule.stopIfTrue || !isFormulaRule(rule) || outcomes[i]?.kind === 'unresolved') continue
+    for (let j = i + 1; j < orderedRules.length; j++) {
+      yield
+      const lower = outcomes[j]
+      if (lower?.kind === 'no-match' || (lower?.kind === 'ready' && !lower.value)) continue
+      const lowerSlot = visualSlotOf(orderedRules[j]!)
+      const kind = lowerSlot === 'colorScale' ? 'scale' : lowerSlot === 'dataBar' ? 'bar' : lowerSlot === 'iconSet' ? 'icon' : 'dxf'
+      if (checkEvidence(`formula:composition-stub-successor-${kind}`)) continue
+      if (outcomes === givenOutcomes) outcomes = [...givenOutcomes]
+      ;(outcomes as (CfOutcome<unknown> | undefined)[])[i] = { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
+      break
+    }
+  }
   const properties: Record<string, string | number | boolean | null> = Object.create(null)
   const tainted = new Set<string>(), won = new Set<string>()
   let visualColorScale: { ruleId: number; argb: number } | undefined

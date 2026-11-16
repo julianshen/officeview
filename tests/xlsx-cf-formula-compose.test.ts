@@ -30,7 +30,9 @@ const ready = (kind: Kind): CfOutcome<unknown> => kind === 'scale' ? { kind: 're
   : kind === 'icon' ? { kind: 'ready', value: { set: '3Arrows', iconId: 2, bucket: 2, buckets: 3, showValue: true } }
   : { kind: 'ready', value: true }
 /** The Stage 2-4 composition capabilities the lower visuals compose under (production has them verified). */
-const STAGE = ['scale:composition-matching-stopIfTrue-ahead', 'scale:composition-dxf-p1-scale-p2', 'scale:composition-scale-p1-dxf-p2',
+/** The S5-STUB successors (the stub shape: a stopIfTrue formula ahead of each kind), held for the stop tests below. */
+const SUCCESSORS = ['dxf', 'scale', 'bar', 'icon'].map(k => `formula:composition-stub-successor-${k}`)
+const STAGE = [...SUCCESSORS, 'scale:composition-matching-stopIfTrue-ahead', 'scale:composition-dxf-p1-scale-p2', 'scale:composition-scale-p1-dxf-p2',
   'bar:composition-dxf-fill', 'bar:composition-matching-stopIfTrue-ahead', 'icon:composition-dxf-fill', 'icon:composition-matching-stopIfTrue-ahead', 'scale:composition-font-only-dxf']
 const compose = (rules: CfRule[], outcomes: CfOutcome<unknown>[], caps: readonly string[]): CfCellState => composeCell(rules, outcomes, { hasEvidence: cap => caps.includes(cap) })
 const view = (s: CfCellState) => ({
@@ -54,6 +56,17 @@ describe('formula composition across kinds (S5-O)', () => {
         // Another kind's capability never stands in.
         const other = (['dxf', 'scale', 'bar', 'icon'] as const).filter(k => k !== lower).map(k => `formula:composition-stop-${k}`)
         expect(view(compose(rules, outcomes, [...STAGE, ...other])).tainted).toEqual([...rules[1]!.writes].sort())
+      })
+    }
+    for (const lower of ['dxf', 'scale', 'bar', 'icon'] as const) {
+      it(`without formula:composition-stub-successor-${lower} the whole stub ahead of a ${lower} is withheld, true or false (S5-STUB)`, () => {
+        const rules = [rule(1, 'expr', { stop: true, dxf: STRIKE }), rule(2, lower, lower === 'dxf' ? { dxf: { 'fill.pattern': 'solid', 'fill.bg': GREEN } } : {})]
+        const caps = [...STAGE.filter(c => c !== `formula:composition-stub-successor-${lower}`), `formula:composition-stop-${lower}`]
+        for (const head of [ready('expr'), { kind: 'no-match' } as CfOutcome<unknown>]) {
+          expect(view(compose(rules, [head, ready(lower)], caps))).toEqual({ properties: {}, tainted: ['ALL'], visual: [] })
+        }
+        // No contributing lower rule: no stub shape, the formula paints as usual.
+        expect(view(compose(rules, [ready('expr'), { kind: 'no-match' }], caps)).properties).toEqual(STRIKE)
       })
     }
     it('a lower rule that does not match is not withheld; a literal stopIfTrue ahead is unchanged (Stage 1)', () => {
