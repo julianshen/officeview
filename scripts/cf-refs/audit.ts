@@ -995,6 +995,17 @@ export function auditStage5Manifest(manifest: CfManifest, options: { rootDir?: s
  */
 export const CF_STAGE5_PRODUCTION_READINGS: Readonly<Record<string, string | readonly string[]>> = { ...CF_FORMULA_PRODUCTION_READINGS }
 
+/**
+ * Task 35 fix round 2 (ruling a): capabilities whose Stage 5 fixture production cannot confirm, with the only witnesses
+ * that may fail there. The publication gate refuses them whatever the audit verified (tests/xlsx-cf-formula-readings.test.ts).
+ */
+export const CF_STAGE5_UNCONFIRMABLE: Readonly<Record<string, Readonly<{ reason: string; witnesses: readonly string[] }>>> = {
+  'formula:composition-stop-icon': {
+    reason: "stage5-composition stop-icon: its continues witnesses K3/K5/K7 (a red fill plus an icon) are withheld in production while icon:composition-dxf-fill is unpublished, so production cannot confirm the fixture's reading (S5-WITNESS)",
+    witnesses: ['K3', 'K5', 'K7'],
+  },
+}
+
 export interface Stage5Publication {
   /** The ids `--publish-stage5` writes to `VERIFIED_STAGE5_CAPABILITIES` (sorted). */
   published: string[]
@@ -1015,6 +1026,8 @@ export function stage5Publication(report: Stage5AuditReport, readings: Readonly<
   for (const p of report.perCapability) {
     const id = p.capabilityId
     if (p.disposition !== 'verified') { withheld[id] = p.disposition; continue }
+    const unconfirmable = CF_STAGE5_UNCONFIRMABLE[id]
+    if (unconfirmable) { withheld[id] = `fixture-unconfirmable: ${unconfirmable.reason}`; continue }
     const matched = report.matchedReadings[id]
     const prod = Object.prototype.hasOwnProperty.call(readings, id) ? readings[id] : undefined
     if (matched === undefined) { withheld[id] = 'reading-unrecorded: a verified Stage 5 capability names the reading it matched'; continue }

@@ -22,6 +22,7 @@ import { injectCfFormulaSelections, withInjectedCfEvidence } from '../src/xlsx/c
 import { CF_FORMULA_PRODUCTION_READINGS } from '../src/xlsx/cf/formulaReadings'
 import { cfRulesVersion } from '../src/xlsx/view/pagedSource'
 import type { CfManifest } from '../scripts/cf-refs/cases'
+import { CF_STAGE5_UNCONFIRMABLE, stage5Publication, auditStage5Manifest, type Stage5AuditReport } from '../scripts/cf-refs/audit'
 import { rc, shown } from './helpers/cf-formula-rules'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -29,7 +30,6 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const UNREACHABLE: Readonly<Record<string, string>> = {
   'formula:predicate-timeperiod-divergent': 'the divergent timePeriod formulas use TODAY(), and formula:fn-today is Task 38',
   'formula:truth-error': 'each configuration holds an NA() row, and NA is not on the allow-list (S5-B): those cells withhold, the 1/0 rows show error-no-match',
-  'formula:composition-stop-icon': 'its continues witnesses K3/K5/K7 (a red fill plus an icon) are withheld in production, because icon:composition-dxf-fill is unpublished, so the configuration is unusable (S5-WITNESS); the compose gate is covered by tests/xlsx-cf-formula-compose.test.ts',
   'formula:fn-conditional-aggregate': 'its configuration\'s COUNTIF($A:$A,A2) column holds booleans and numeric text, a whole-rule hoist refusal (S5-HOIST); reproduced through the stage5-formula-hoist rows',
 }
 const REUSE_ONLY = /^formula:composition-stub-successor-/
@@ -81,6 +81,22 @@ export function configurationVerdict(cfg: Config, reading: string, got: Readonly
   return { violations, unusable, reproduced, discriminating }
 }
 
+/**
+ * Fix round 2 (ruling a): a capability whose fixture production cannot confirm (`CF_STAGE5_UNCONFIRMABLE`) is never
+ * reproduced, and the audit refuses to publish it. Its configuration is still checked: no violation, no designated cell
+ * withheld, and the only failing witnesses are exactly the documented ones. Returns the violations of that narrow check.
+ */
+export function unconfirmableViolations(cfg: Config, verdict: ReturnType<typeof configurationVerdict>, got: ReadonlyMap<string, Shown>): string[] {
+  const allowed = new Set(CF_STAGE5_UNCONFIRMABLE[cfg.capabilityId]?.witnesses ?? [])
+  const out = [...verdict.violations]
+  for (const reason of verdict.unusable) {
+    const ref = /witness (\S+):/.exec(reason)?.[1]
+    if (!ref || !allowed.has(ref)) out.push(`${reason} (not a documented unconfirmable witness)`)
+  }
+  for (const r of cfg.refs.filter(x => !x.includes(':'))) if (got.get(r)?.withheld !== false) out.push(`${cfg.id} ${r}: withheld`)
+  return out
+}
+
 describe('the configuration verdict validates declared witnesses (fix round 1 #4)', () => {
   it('suppressing stop-bar E4 and its required positive twin H4 fails', () => {
     const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest
@@ -105,6 +121,37 @@ describe('the configuration verdict validates declared witnesses (fix round 1 #4
     expect(v.discriminating).toBe(false)
     expect(v.unusable).toEqual(['stop-bar witness H4: declared visual, production shows none|'])
   })
+  it('stop-icon: only the documented K3/K5/K7 witnesses may fail; suppressing I4 and its positive twin L4 fails (fix round 2)', () => {
+    const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest
+    const cfg = manifest.cases.find(x => x.id === 'stage5-composition')!.formulaConfigurations!.find(x => x.id === 'stop-icon')!
+    expect(CF_STAGE5_UNCONFIRMABLE['formula:composition-stop-icon']?.witnesses).toEqual(['K3', 'K5', 'K7'])
+    const red: Shown = { fill: 'FFFFC7CE', strike: false, visual: '', withheld: false, drawn: false }, icon: Shown = { fill: 'none', strike: false, visual: 'iconSet', withheld: false, drawn: true }
+    const withheld: Shown = { fill: 'none', strike: false, visual: '', withheld: true, drawn: false }, empty: Shown = { fill: 'none', strike: false, visual: '', withheld: false, drawn: false }
+    // Production's world: halts everywhere, the red + icon twins K withheld (icon:composition-dxf-fill unpublished).
+    const world = new Map<string, Shown>()
+    for (const r of [2, 3, 4, 5, 6, 7]) { const on = r % 2 === 1; world.set(`I${r}`, on ? red : icon); world.set(`J${r}`, red); world.set(`K${r}`, withheld); world.set(`L${r}`, icon) }
+    const v = configurationVerdict(cfg, 'halts', world)
+    expect(v.reproduced).toBe(false)
+    expect(unconfirmableViolations(cfg, v, world)).toEqual([])
+    // Codex counterexample: I4 and its required positive twin L4 both suppressed.
+    const suppressed = new Map(world)
+    suppressed.set('I4', empty); suppressed.set('L4', empty)
+    const sv = configurationVerdict(cfg, 'halts', suppressed)
+    expect(sv.reproduced).toBe(false)
+    expect(unconfirmableViolations(cfg, sv, suppressed)).toEqual([expect.stringMatching(/witness L4: declared visual.*not a documented unconfirmable witness/)])
+  })
+})
+
+describe('an unconfirmable capability is never published (fix round 2)', () => {
+  it('a verified halts report for formula:composition-stop-icon still does not publish it', () => {
+    const base = auditStage5Manifest({ cases: [] } as never, { rootDir: REPO_ROOT })
+    const report: Stage5AuditReport = { ...base, ok: true, stageComplete: true, blocked: [], blockedCapabilities: [],
+      perCapability: [{ capabilityId: 'formula:composition-stop-icon', caseId: 'stage5-composition', disposition: 'verified' }, { capabilityId: 'formula:composition-stop-bar', caseId: 'stage5-composition', disposition: 'verified' }],
+      matchedReadings: { 'formula:composition-stop-icon': 'halts', 'formula:composition-stop-bar': 'halts' } }
+    const pub = stage5Publication(report)
+    expect(pub.published).toEqual(['formula:composition-stop-bar'])
+    expect(pub.withheld['formula:composition-stop-icon']).toMatch(/fixture-unconfirmable/)
+  })
 })
 
 describe('every registered formula reading is the reading production implements, on the Stage 5 fixtures', () => {
@@ -112,7 +159,7 @@ describe('every registered formula reading is the reading production implements,
     const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest
     const registry = CF_FORMULA_PRODUCTION_READINGS
     const lists = Object.entries(registry).filter((e): e is [string, readonly string[]] => typeof e[1] !== 'string')
-    const reproduced = new Set<string>(), violations: string[] = []
+    const reproduced = new Set<string>(), unconfirmableChecked = new Set<string>(), violations: string[] = []
     let discriminating = 0
     for (const c of manifest.cases.filter(x => x.stage === 5)) {
       for (const cfg of c.formulaConfigurations ?? []) {
@@ -149,6 +196,12 @@ describe('every registered formula reading is the reading production implements,
             } finally { injectCfFormulaSelections(null) }
           })
           const verdict = configurationVerdict(cfg, reading, got)
+          if (CF_STAGE5_UNCONFIRMABLE[cfg.capabilityId]) {
+            // Never reproduced; checked narrowly (only its documented witnesses may fail) and refused publication by the audit.
+            for (const v of unconfirmableViolations(cfg, verdict, got)) violations.push(`${cfg.capabilityId} ${c.id}/${v}`)
+            unconfirmableChecked.add(cfg.capabilityId)
+            continue
+          }
           for (const v of verdict.violations) violations.push(`${cfg.capabilityId} ${c.id}/${v}`)
           if (verdict.reproduced) reproduced.add(cfg.capabilityId)
           if (verdict.discriminating) discriminating++
@@ -156,7 +209,8 @@ describe('every registered formula reading is the reading production implements,
       }
     }
     expect(violations).toEqual([])
-    const unreproduced = Object.keys(registry).filter(id => !reproduced.has(id) && !REUSE_ONLY.test(id) && UNREACHABLE[id] === undefined)
+    const unreproduced = Object.keys(registry).filter(id => !reproduced.has(id) && !REUSE_ONLY.test(id) && UNREACHABLE[id] === undefined && !unconfirmableChecked.has(id))
+    expect([...unconfirmableChecked].sort()).toEqual(Object.keys(CF_STAGE5_UNCONFIRMABLE).sort())
     expect(unreproduced).toEqual([])
     for (const id of Object.keys(UNREACHABLE)) expect(reproduced.has(id), `${id} is now reachable: drop it from UNREACHABLE`).toBe(false)
     expect(discriminating).toBeGreaterThan(30)
