@@ -35,6 +35,8 @@ The formula XML shape comes from Excel's own dialog, not from the generator.
    | `L2:L5` | Use a formula | `=Sheet2!$A$1>0` |
    | `M2:M9` | 2-Color Scale | Minimum: Number `=Sheet2!$A$1`. Maximum: Highest Value |
 
+   Do not author the literal positive controls `B10` and `B11` (Cell Value greater than 0, fix round 6). The generator adds them to prove the DisplayFormat readback, and the diff ignores them, so clearing them in step 2 is fine.
+
 4. File ▸ Save As… ▸ `tests/fixtures/xlsx-cf/excel-authored-formulas.xlsx`, as an "Excel Workbook (.xlsx)". Close it.
 5. Diff the templates against it:
    ```
@@ -93,7 +95,7 @@ done
 ```
 
 `stage5-calc-manual` is `calcObservation: 'pre-calculate'` (round-1 #4), so its build differs:
-1. It opens the input copy and runs `buildManualObservationScript` before anything else, with no `calculate`. That script records the application calculation mode, the open workbook count, and each cell's value and DisplayFormat (`pre:`). The cells include the stale sources `A2:A5` and the workbook `TODAY()` cell `E1`.
+1. It opens the input copy and runs `buildManualObservationScript` before anything else, with no `calculate`. That script records the application calculation mode, the open workbook count, and each cell's value and DisplayFormat (`pre:`). The cells include the stale sources `A2:A5`, the workbook `TODAY()` cell `E1`, and the literal positive control `B6` with its control (fix round 6).
 2. It then runs a separate `buildExplicitCalculationObservationScript`, which contains exactly one `calculate` (`calc:`).
 3. It resaves without the unconditional `calculate`.
 

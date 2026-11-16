@@ -2089,3 +2089,16 @@ Every Stage 5 configuration, whether fill, scale, bar or icon, goes through one 
 - **Decisive cells:** a cell is decisive only when its observation matches the winner and contradicts the rival beyond tolerance. A cell within tolerance of both decides nothing. Every replication group needs at least 2 such cells, and a bar or icon configuration also needs at least 2 required-visual witnesses.
 - **Adversarial test:** a generic test applies four corruptions to every configuration and every reading that can win: blank twins, visuals in required-empty cells, blank positive controls, and shifts into the shared tolerance band. Each must refuse.
 - **Fixture:** `stage5-composition` now has six rows (p1 true on rows 3, 5 and 7), so `stop-bar` and `indirect-bar` each have two non-empty unstopped witnesses and two decisive stopped cells.
+
+### Fix round 6: positive controls everywhere, all-rival decisive cells
+
+- **Positive controls:** every live configuration needs at least one functioning positive control. It is validated before any reading is judged, even when the winning reading predicts only empty cells.
+  - **Twins:** a twin expected to render (`twinExpect: 'visual'`) counts as a control.
+  - **Literal controls:** a configuration without such a twin carries `positiveControls`. Each is a cell holding 1 under a literal `cellIs greaterThan 0` rule (`formula:positive-control`, unverified-nondiscriminating) on each dxf its readings predict. Its DisplayFormat must show exactly that token in the configuration's own `pre:`/`calc:`/`post:` table, and its same-content control must show nothing.
+  - **Refusals:** a missing control is `formula-positive-control-missing`; a failed one is `formula-positive-control-failed`.
+  - **Which cases changed:** the controls sit in column B below every used row, so no existing control moves. Sixteen DisplayFormat cases gained them. An all-white `stage5-formula-functions` capture now verifies nothing.
+- **Decisive cells:** a cell is decisive only when it matches the winner and contradicts, beyond tolerance, every rival whose prediction differs there. Each rival the configuration separates needs at least 2 decisive cells per replication group. Cells that each reject a different rival no longer add up.
+- **Adversarial test:** every evidence-bearing capability group × reading × retained order is enumerated, with icons measured as icons. The coverage set and the count of each corruption are pinned. Two corruptions were added: blank DXF controls and disjoint-rival witnesses. Four baselines refuse by design, and the test lists each one:
+  - anchor-multi under `B2:B4 D5:D8`: first-listed and bounding-box coincide;
+  - `bar:bounds-formula` / zero: only degenerate twins, so no witness;
+  - `icon:thresholds-formula` / ignored: only empty twins.
