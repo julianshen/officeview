@@ -1,18 +1,34 @@
 /**
- * PR #78 round 13: what one show job (plan, track or Morph) is admitted for, and so the preparation grant its
- * build holds on the worker. Dependency-free, so the socket layer (`ws.ts`) and the build share one formula.
+ * What one show job (plan, track or Morph pair) is admitted for, and the preparation grant its build holds on the
+ * worker. Dependency-free, so the socket layer (`ws.ts`), the pool and the build share one formula.
+ *
+ * Owner ruling (PR #78 round 13b, "reserve per worker"):
+ * - at request time a show job is admitted for `showRequestBytes(grant)` against the session aggregate (96 MiB):
+ *   its place in the queue and its encoded reply, never its preparation workspace;
+ * - when the job holds its worker's slot (one job per worker at a time), the pool reserves the full grant against
+ *   that worker's preparation reservation, released when the job ends. Server preparation memory is therefore at
+ *   most workers × `SHOW_BUILD_BYTES`, and every canvas the build makes is charged to the grant as it is made.
  */
 
-/** The most one show job is admitted for. */
-export const SHOW_BUILD_BYTES = 64 * 1024 * 1024
+/** Page surfaces a job's preparation may hold at once (measured peaks: plans ≤ 6.3, a layered Morph pair ≤ 5.8). */
+export const SHOW_GRANT_PAGES = 8
 
 /**
- * Four page surfaces at the bucket (`w·h·4·scale²·4`), at most `SHOW_BUILD_BYTES`: the bytes `onShow` admits
- * for a job on a slide of `size` (slide px). The build leases every layer raster (a growth re-raster included)
- * and every masked copy of one against a ledger of this size before allocating it; a lease that does not fit
- * refuses the slide to its still (`show-budget`), and a Morph pair to its fallback.
+ * The most one show job is granted, and so each worker's preparation bound: 128 MiB, the per-show decoded budget
+ * (`SHOW_PLAN_LIMITS.showDecoded`). Eight page surfaces at a 2560 × 1440 bucket (a 16:9 slide at scale 2, 14.7 MB
+ * each) are 118 MB, under it; a 3840 × 2160 bucket (the client's backing maximum) gets 4 pages.
  */
-export const showBuildGrant = (size: { w: number; h: number }, scale: number) => Math.min(SHOW_BUILD_BYTES, size.w * size.h * 4 * scale ** 2 * 4)
+export const SHOW_BUILD_BYTES = 128 * 1024 * 1024
 
-/** A Morph pair prepares both slides (each one's layers, and their masked copies): both slides' grants, at most `SHOW_BUILD_BYTES`. */
-export const showMorphGrant = (from: { w: number; h: number }, to: { w: number; h: number }, scale: number) => Math.min(SHOW_BUILD_BYTES, showBuildGrant(from, scale) + showBuildGrant(to, scale))
+/** The request-time admission of a show job: one encoded kind-6 message (8 MiB), or the grant when smaller. */
+export const SHOW_REQUEST_BYTES = 8 * 1024 * 1024
+export const showRequestBytes = (grant: number) => Math.min(SHOW_REQUEST_BYTES, grant)
+
+const page = (size: { w: number; h: number }, scale: number) => size.w * size.h * 4 * scale ** 2
+
+/** A plan or track job on a slide of `size` (slide px) at `scale`: `SHOW_GRANT_PAGES` pages, at most `SHOW_BUILD_BYTES`. */
+export const showBuildGrant = (size: { w: number; h: number }, scale: number) => Math.min(SHOW_BUILD_BYTES, SHOW_GRANT_PAGES * page(size, scale))
+
+/** A Morph pair: `SHOW_GRANT_PAGES` pages of its larger slide (both slides' layers share them), at most `SHOW_BUILD_BYTES`. */
+export const showMorphGrant = (from: { w: number; h: number }, to: { w: number; h: number }, scale: number) =>
+  Math.min(SHOW_BUILD_BYTES, SHOW_GRANT_PAGES * Math.max(page(from, scale), page(to, scale)))

@@ -12,6 +12,7 @@ import { availableParallelism } from 'node:os'
 import { resolve } from 'node:path'
 import { AdmissionModel, DEFAULT_CAPS, type Caps, type Job } from './admission'
 import type { LayerCrop, MarkLayerResult, MarkRasterResult } from './mark/mark-raster'
+import { SHOW_BUILD_BYTES, showRequestBytes } from './show/grant'
 import { SHOW_PLAN_DEADLINE_MS, type BuiltShowPlan, type ShowPlanJob, type ShowRefusal } from './show/build'
 import type { BuiltMorph, MorphJob } from './show/morph'
 import type { MarkSpec, NotesJob, NotesPlan, NotesRaster, OpenResult, Projection, RenderedUnit } from './render'
@@ -63,6 +64,8 @@ interface Slot {
   pages: number
   parses: number
   generation: number
+  /** The preparation grant of the show job holding this slot (0: none). */
+  prep: number
 }
 
 export class Pool {
@@ -112,6 +115,8 @@ export class Pool {
   private disposed = false
   /** Queued admission jobs waiting to start: resolve(true) = started, resolve(false) = cancelled. */
   private waiters = new Map<number, (started: boolean) => void>()
+  /** Worker-time preparation reservations (owner ruling, round 13b). */
+  private prep = { reserved: 0, peak: 0, peakPerWorker: 0 }
 
   constructor(opts: PoolOptions = {}) {
     this.admission = new AdmissionModel(opts.caps ?? DEFAULT_CAPS)
@@ -122,7 +127,7 @@ export class Pool {
     this.servedCacheBytes = opts.servedCacheBytes
     this.showDeadlineMs = opts.showDeadlineMs ?? SHOW_PLAN_DEADLINE_MS
     for (let i = 0; i < (opts.workers ?? defaultWorkers()); i++) {
-      const slot = { index: i, busy: false, queue: [], pending: new Map(), docs: new Map(), pages: 0, parses: 0, generation: 0, closed: false } as unknown as Slot
+      const slot = { index: i, busy: false, queue: [], pending: new Map(), docs: new Map(), pages: 0, parses: 0, generation: 0, closed: false, prep: 0 } as unknown as Slot
       this.attach(slot)
       this.slots.push(slot)
     }
@@ -354,24 +359,49 @@ export class Pool {
     return admitted
   }
 
-  private async showJob(sessionId: string, docRef: string, contentPolicy: 'visible-only' | 'full', bytesEstimate: number, msg: (docKey: string) => WorkerRequest, signal?: AbortSignal): Promise<unknown> {
-    const admitted = await this.admit(sessionId, bytesEstimate, signal)
+  /**
+   * Owner ruling (PR #78 round 13b, reserve per worker): `grant` is the job's preparation grant. The session is
+   * admitted only for `showRequestBytes(grant)` (its queue entry and encoded reply); the grant itself is reserved
+   * when the job holds its worker's slot (`exclusive`: one job per worker) and released when it ends, so preparation
+   * never holds more than workers × `SHOW_BUILD_BYTES` (`stats().prep`).
+   */
+  private async showJob(sessionId: string, docRef: string, contentPolicy: 'visible-only' | 'full', grant: number, msg: (docKey: string) => WorkerRequest, signal?: AbortSignal): Promise<unknown> {
+    const admitted = await this.admit(sessionId, showRequestBytes(grant), signal)
     const slot = this.pick(docRef)
     try {
       return await this.exclusive(slot, async () => {
         // Admitted, then waited for the worker: a socket that closed meanwhile has no use for the build.
         if (signal?.aborted) throw new ShowCancelled()
-        const { docKey } = await this.ensureOpen(slot, docRef, contentPolicy)
-        // Again after the (re)open: a socket that closed while the document was parsed gets no build.
-        if (signal?.aborted) throw new ShowCancelled()
-        const r = await this.runJob(slot, admitted, msg(docKey), this.showDeadlineMs)
-        if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
-        return r
+        const held = this.reservePrep(slot, grant)
+        try { return await this.showOnSlot(slot, admitted, docRef, contentPolicy, msg, signal) } finally { this.releasePrep(slot, held) }
       })
     } finally {
       if (admitted.state === 'running') this.finish(admitted)
     }
   }
+
+  /** The worker's preparation reservation for the job on its slot (at most `SHOW_BUILD_BYTES`; one per worker). */
+  private reservePrep(slot: Slot, grant: number): number {
+    const bytes = Math.max(0, Math.min(SHOW_BUILD_BYTES, Number.isFinite(grant) ? grant : SHOW_BUILD_BYTES))
+    if (slot.prep !== 0) throw new Error('pool: a worker holds two preparation grants')
+    slot.prep = bytes
+    this.prep.reserved += bytes
+    if (this.prep.reserved > this.slots.length * SHOW_BUILD_BYTES) throw new Error('pool: preparation past workers × SHOW_BUILD_BYTES')
+    this.prep.peak = Math.max(this.prep.peak, this.prep.reserved)
+    this.prep.peakPerWorker = Math.max(this.prep.peakPerWorker, bytes)
+    return bytes
+  }
+  private releasePrep(slot: Slot, bytes: number): void { slot.prep = 0; this.prep.reserved -= bytes }
+
+  private async showOnSlot(slot: Slot, admitted: Job, docRef: string, contentPolicy: 'visible-only' | 'full', msg: (docKey: string) => WorkerRequest, signal?: AbortSignal): Promise<unknown> {
+    const { docKey } = await this.ensureOpen(slot, docRef, contentPolicy)
+    // Again after the (re)open: a socket that closed while the document was parsed gets no build.
+    if (signal?.aborted) throw new ShowCancelled()
+    const r = await this.runJob(slot, admitted, msg(docKey), this.showDeadlineMs)
+    if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
+    return r
+  }
+
 
   /** A text op on the docRef's worker (affinity, admission, deadline as
    * `render`). The op is charged `bytesEstimate`; every prepare (explicit or
@@ -523,6 +553,7 @@ export class Pool {
     return {
       workers: this.slots.map((s) => ({ index: s.index, generation: s.generation, pages: s.pages, parses: s.parses, docs: s.docs.size, busy: s.busy, closed: s.closed })),
       reserved: this.admission.reserved, running: this.admission.runningCount, queued: this.admission.queued,
+      prep: { ...this.prep, bound: this.slots.length * SHOW_BUILD_BYTES },
       retired: this.retired, recycled: this.recycled, encodes: this.encodes, affinity: Object.fromEntries(this.affinity), unitSizes: this.unitSizes.size,
     }
   }
