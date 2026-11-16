@@ -136,11 +136,14 @@ export function buildCaseBuildScripts(
   ]
 }
 
-/** The cells a `pre-calculate` case observes: its stale sources, every `pre:`/`calc:` ref of its configurations and their controls. */
+/**
+ * The cells a `pre-calculate` case observes: its stale sources, every `pre:`/`calc:` ref and literal positive control
+ * (fix round 6) of its configurations, and their controls.
+ */
 export function manualObservationRefs(c: CfOracleCase): string[] {
   const out = new Set<string>(Object.keys(c.calcObservationSources ?? {}))
   for (const cfg of c.formulaConfigurations ?? []) {
-    for (const ref of cfg.refs) {
+    for (const ref of [...cfg.refs, ...Object.keys(cfg.positiveControls ?? {})]) {
       if (!/^(pre|calc):/.test(ref)) continue
       const bare = ref.replace(/^(pre|calc):/, '')
       out.add(bare)

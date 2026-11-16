@@ -1549,7 +1549,10 @@ export function readWrittenFormulaRules(parts: Map<string, Uint8Array>): Written
  * companion is matched by its sqref and type like any other rule.
  */
 export function diffAuthoredFormulaTemplates(generated: Map<string, Uint8Array>, authored: Map<string, Uint8Array>): string[] {
-  const gen = readWrittenFormulaRules(generated)
+  // Fix round 6: the literal positive controls (`formula:positive-control`) are Stage 1 cellIs rules the generator adds
+  // to prove the readback; Excel's dialog authors no such rule, so they are no template question.
+  const controls = new Set((CF_STAGE5_FIXTURES.find(f => f.id === 'stage5-formula-authored')?.rules ?? []).filter(r => r.marker.capabilityId === 'formula:positive-control').map(r => r.sqref.toUpperCase()))
+  const gen = readWrittenFormulaRules(generated).filter(g => !controls.has(g.sqref))
   const exc = readWrittenFormulaRules(authored)
   const diffs: string[] = []
   const fix = 'update the Stage 5 rule builders (scripts/cf-refs/cases.ts) or S5_CROSS_SHEET_DIALECT'

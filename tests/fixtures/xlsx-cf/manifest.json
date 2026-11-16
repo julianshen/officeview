@@ -52760,7 +52760,7 @@
       "input": "tests/fixtures/xlsx-cf/inputs/stage5-formula-authored.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage5-formula-authored.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:AA9",
+      "range": "A1:AA11",
       "requiredAppearances": [
         "screen"
       ],
@@ -53024,11 +53024,41 @@
             "anchor": "M2",
             "dialect": "x14"
           }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B10",
+          "capabilityId": "formula:positive-control",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 10,
+          "formulas": [
+            "0"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B11",
+          "capabilityId": "formula:positive-control",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 11,
+          "formulas": [
+            "0"
+          ],
+          "dxf": {
+            "fillRgb": "FFC6EFCE"
+          }
         }
       ],
       "expected": {
-        "inputSha256": "ea8791f02fbc90d86a063555d51302902254d20a934f828578109e24f463e304",
-        "savedSha256": "ea8791f02fbc90d86a063555d51302902254d20a934f828578109e24f463e304",
+        "inputSha256": "3c936174d0ccbcde4ebf84f48539f67fbc200b04f51a1d15305124ba976584a8",
+        "savedSha256": "3c936174d0ccbcde4ebf84f48539f67fbc200b04f51a1d15305124ba976584a8",
         "provenance": "seed-hypothesis",
         "positiveRefs": [],
         "negativeRefs": [
@@ -53040,6 +53070,7 @@
           "P7",
           "P8",
           "P9",
+          "P10",
           "S2",
           "S3",
           "S4",
@@ -53048,6 +53079,7 @@
           "S7",
           "S8",
           "S9",
+          "P11",
           "U2",
           "U3",
           "U4",
@@ -53116,6 +53148,12 @@
             "fillSource": "unverified"
           },
           {
+            "ref": "B10",
+            "controlRef": "P10",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
             "ref": "E2",
             "controlRef": "S2",
             "matched": false,
@@ -53160,6 +53198,12 @@
           {
             "ref": "E9",
             "controlRef": "S9",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B11",
+            "controlRef": "P11",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -53322,6 +53366,13 @@
             "note": "same-content unformatted control"
           },
           {
+            "ref": "P10",
+            "controlRef": "B10",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
             "ref": "S2",
             "controlRef": "E2",
             "matched": false,
@@ -53373,6 +53424,13 @@
           {
             "ref": "S9",
             "controlRef": "E9",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "P11",
+            "controlRef": "B11",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -53534,6 +53592,9 @@
               "B8": "none",
               "B9": "none"
             }
+          },
+          "positiveControls": {
+            "B10": "FFFFC7CE"
           }
         },
         {
@@ -53571,6 +53632,9 @@
               "E8": "none",
               "E9": "none"
             }
+          },
+          "positiveControls": {
+            "B11": "FFC6EFCE"
           }
         },
         {
@@ -53608,6 +53672,9 @@
               "G8": "none",
               "G9": "none"
             }
+          },
+          "positiveControls": {
+            "B10": "FFFFC7CE"
           }
         },
         {
@@ -53633,6 +53700,9 @@
               "L4": "none",
               "L5": "none"
             }
+          },
+          "positiveControls": {
+            "B10": "FFFFC7CE"
           }
         }
       ],
@@ -53659,7 +53729,7 @@
       "input": "tests/fixtures/xlsx-cf/inputs/stage5-formula-truthiness.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage5-formula-truthiness.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:BM13",
+      "range": "A1:BM15",
       "requiredAppearances": [
         "screen"
       ],
@@ -54836,11 +54906,41 @@
           "dxf": {
             "fillRgb": "FFC6EFCE"
           }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B14",
+          "capabilityId": "formula:positive-control",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 69,
+          "formulas": [
+            "0"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B15",
+          "capabilityId": "formula:positive-control",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 70,
+          "formulas": [
+            "0"
+          ],
+          "dxf": {
+            "fillRgb": "FFC6EFCE"
+          }
         }
       ],
       "expected": {
-        "inputSha256": "fd2ee9b29be8c06d4b2f8aa388f64f7bdb0057f9566c6528dd6f5c238757b44a",
-        "savedSha256": "fd2ee9b29be8c06d4b2f8aa388f64f7bdb0057f9566c6528dd6f5c238757b44a",
+        "inputSha256": "2f3844f2d33c87c99bd73b0ed2e92b07f41a36a021c531447d6ff1d9fc21f412",
+        "savedSha256": "2f3844f2d33c87c99bd73b0ed2e92b07f41a36a021c531447d6ff1d9fc21f412",
         "provenance": "seed-hypothesis",
         "positiveRefs": [],
         "negativeRefs": [
@@ -54850,6 +54950,8 @@
           "AK4",
           "AJ5",
           "AK5",
+          "AI14",
+          "AI15",
           "AM3",
           "AN3",
           "AM4",
@@ -54947,6 +55049,18 @@
           {
             "ref": "D5",
             "controlRef": "AK5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B14",
+            "controlRef": "AI14",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B15",
+            "controlRef": "AI15",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -55360,6 +55474,20 @@
           {
             "ref": "AK5",
             "controlRef": "D5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AI14",
+            "controlRef": "B14",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AI15",
+            "controlRef": "B15",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -55838,6 +55966,10 @@
               "C5": "FFC6EFCE",
               "D5": "FFC6EFCE"
             }
+          },
+          "positiveControls": {
+            "B14": "FFFFC7CE",
+            "B15": "FFC6EFCE"
           }
         },
         {
@@ -55877,6 +56009,10 @@
               "F5": "FFC6EFCE",
               "G5": "FFC6EFCE"
             }
+          },
+          "positiveControls": {
+            "B14": "FFFFC7CE",
+            "B15": "FFC6EFCE"
           }
         },
         {
@@ -55908,6 +56044,10 @@
               "C7": "FFFFC7CE",
               "D7": "FFFFC7CE"
             }
+          },
+          "positiveControls": {
+            "B14": "FFFFC7CE",
+            "B15": "FFC6EFCE"
           }
         },
         {
@@ -55939,6 +56079,10 @@
               "F7": "FFFFC7CE",
               "G7": "FFFFC7CE"
             }
+          },
+          "positiveControls": {
+            "B14": "FFFFC7CE",
+            "B15": "FFC6EFCE"
           }
         },
         {
@@ -55994,6 +56138,10 @@
               "C10": "FFC6EFCE",
               "D10": "FFC6EFCE"
             }
+          },
+          "positiveControls": {
+            "B14": "FFFFC7CE",
+            "B15": "FFC6EFCE"
           }
         },
         {
@@ -56049,6 +56197,10 @@
               "F10": "none",
               "G10": "none"
             }
+          },
+          "positiveControls": {
+            "B14": "FFFFC7CE",
+            "B15": "FFC6EFCE"
           }
         },
         {
@@ -56072,6 +56224,10 @@
               "C11": "FFC6EFCE",
               "D11": "FFC6EFCE"
             }
+          },
+          "positiveControls": {
+            "B14": "FFFFC7CE",
+            "B15": "FFC6EFCE"
           }
         },
         {
@@ -56095,6 +56251,10 @@
               "F11": "none",
               "G11": "none"
             }
+          },
+          "positiveControls": {
+            "B14": "FFFFC7CE",
+            "B15": "FFC6EFCE"
           }
         },
         {
@@ -56126,6 +56286,10 @@
               "C13": "FFFFC7CE",
               "D13": "FFFFC7CE"
             }
+          },
+          "positiveControls": {
+            "B14": "FFFFC7CE",
+            "B15": "FFC6EFCE"
           }
         },
         {
@@ -56157,6 +56321,10 @@
               "F13": "FFFFC7CE",
               "G13": "FFFFC7CE"
             }
+          },
+          "positiveControls": {
+            "B14": "FFFFC7CE",
+            "B15": "FFC6EFCE"
           }
         },
         {
@@ -56200,6 +56368,10 @@
               "M3": "FFC6EFCE",
               "N3": "FFC6EFCE"
             }
+          },
+          "positiveControls": {
+            "B14": "FFFFC7CE",
+            "B15": "FFC6EFCE"
           }
         },
         {
@@ -56243,6 +56415,10 @@
               "O3": "none",
               "P3": "none"
             }
+          },
+          "positiveControls": {
+            "B14": "FFFFC7CE",
+            "B15": "FFC6EFCE"
           }
         },
         {
@@ -56310,6 +56486,10 @@
               "AC3": "FFC6EFCE",
               "AD3": "FFC6EFCE"
             }
+          },
+          "positiveControls": {
+            "B14": "FFFFC7CE",
+            "B15": "FFC6EFCE"
           }
         },
         {
@@ -56377,6 +56557,10 @@
               "AE3": "none",
               "AF3": "none"
             }
+          },
+          "positiveControls": {
+            "B14": "FFFFC7CE",
+            "B15": "FFC6EFCE"
           }
         }
       ],
@@ -56403,7 +56587,7 @@
       "input": "tests/fixtures/xlsx-cf/inputs/stage5-formula-anchor.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage5-formula-anchor.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:O9",
+      "range": "A1:O10",
       "requiredAppearances": [
         "screen"
       ],
@@ -56483,11 +56667,26 @@
             "anchor": "G2",
             "dialect": "base"
           }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B10",
+          "capabilityId": "formula:positive-control",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 5,
+          "formulas": [
+            "0"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE"
+          }
         }
       ],
       "expected": {
-        "inputSha256": "a927c113e5d686c3b164f27e7f9cbe524089d1503675b318f2c9d818fa8f0ff3",
-        "savedSha256": "a927c113e5d686c3b164f27e7f9cbe524089d1503675b318f2c9d818fa8f0ff3",
+        "inputSha256": "eea8ac446ab93cb48bbad1c4bb69f9ebc643c2c89213dc188b01f6baa18d035a",
+        "savedSha256": "eea8ac446ab93cb48bbad1c4bb69f9ebc643c2c89213dc188b01f6baa18d035a",
         "provenance": "seed-hypothesis",
         "positiveRefs": [],
         "negativeRefs": [
@@ -56499,6 +56698,7 @@
           "J7",
           "J8",
           "J9",
+          "J10",
           "K2",
           "K3",
           "K4",
@@ -56578,6 +56778,12 @@
           {
             "ref": "B9",
             "controlRef": "J9",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B10",
+            "controlRef": "J10",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -56825,6 +57031,13 @@
           {
             "ref": "J9",
             "controlRef": "B9",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "J10",
+            "controlRef": "B10",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -57091,6 +57304,9 @@
               "B8": "FFFFC7CE",
               "B9": "FFFFC7CE"
             }
+          },
+          "positiveControls": {
+            "B10": "FFFFC7CE"
           }
         },
         {
@@ -57152,6 +57368,9 @@
               "D8": "none",
               "D9": "FFFFC7CE"
             }
+          },
+          "positiveControls": {
+            "B10": "FFFFC7CE"
           }
         },
         {
@@ -57189,6 +57408,9 @@
               "F5": "none",
               "F6": "FFFFC7CE"
             }
+          },
+          "positiveControls": {
+            "B10": "FFFFC7CE"
           }
         },
         {
@@ -57226,6 +57448,9 @@
               "G8": "FFFFC7CE",
               "G9": "none"
             }
+          },
+          "positiveControls": {
+            "B10": "FFFFC7CE"
           }
         }
       ],
@@ -57252,7 +57477,7 @@
       "input": "tests/fixtures/xlsx-cf/inputs/stage5-formula-anchor-multi.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage5-formula-anchor-multi.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:I8",
+      "range": "A1:I12",
       "requiredAppearances": [
         "screen"
       ],
@@ -57276,11 +57501,26 @@
             "dialect": "base"
           },
           "sqrefOrder": "any"
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B12",
+          "capabilityId": "formula:positive-control",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 2,
+          "formulas": [
+            "0"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE"
+          }
         }
       ],
       "expected": {
-        "inputSha256": "534733706f882cdead1c68d696deb58e3f88ec01b568268427d6ca347d12bee4",
-        "savedSha256": "534733706f882cdead1c68d696deb58e3f88ec01b568268427d6ca347d12bee4",
+        "inputSha256": "89ca0d23c5a1fe264351ba8e0cf6a7c9893f166e55e353f35f30eb21d2b62de8",
+        "savedSha256": "89ca0d23c5a1fe264351ba8e0cf6a7c9893f166e55e353f35f30eb21d2b62de8",
         "provenance": "seed-hypothesis",
         "positiveRefs": [],
         "negativeRefs": [
@@ -57290,7 +57530,8 @@
           "I8",
           "G2",
           "G3",
-          "G4"
+          "G4",
+          "G12"
         ],
         "cells": [
           {
@@ -57332,6 +57573,12 @@
           {
             "ref": "B4",
             "controlRef": "G4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B12",
+            "controlRef": "G12",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -57380,6 +57627,13 @@
           {
             "ref": "G4",
             "controlRef": "B4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G12",
+            "controlRef": "B12",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -57492,6 +57746,9 @@
                 }
               }
             }
+          },
+          "positiveControls": {
+            "B12": "FFFFC7CE"
           }
         }
       ],
@@ -57518,7 +57775,7 @@
       "input": "tests/fixtures/xlsx-cf/inputs/stage5-formula-edge.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage5-formula-edge.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:I4",
+      "range": "A1:I6",
       "requiredAppearances": [
         "screen"
       ],
@@ -57560,18 +57817,50 @@
             "anchor": "A1",
             "dialect": "base"
           }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B5",
+          "capabilityId": "formula:positive-control",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 3,
+          "formulas": [
+            "0"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B6",
+          "capabilityId": "formula:positive-control",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 4,
+          "formulas": [
+            "0"
+          ],
+          "dxf": {
+            "fillRgb": "FFC6EFCE"
+          }
         }
       ],
       "expected": {
-        "inputSha256": "0d768a5a4ed48f4b56baf327766ae559af2d291bdbcf5a9748eb7f7cba5b2b74",
-        "savedSha256": "0d768a5a4ed48f4b56baf327766ae559af2d291bdbcf5a9748eb7f7cba5b2b74",
+        "inputSha256": "ee3ecd271bde235c6221986586c4b6ac8a99d54f201c30f61c3a69d34a44dee3",
+        "savedSha256": "ee3ecd271bde235c6221986586c4b6ac8a99d54f201c30f61c3a69d34a44dee3",
         "provenance": "seed-hypothesis",
         "positiveRefs": [],
         "negativeRefs": [
           "F3",
           "F4",
+          "G5",
           "H1",
-          "I1"
+          "I1",
+          "G6"
         ],
         "cells": [
           {
@@ -57587,6 +57876,12 @@
             "fillSource": "unverified"
           },
           {
+            "ref": "B5",
+            "controlRef": "G5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
             "ref": "C1",
             "controlRef": "H1",
             "matched": false,
@@ -57595,6 +57890,12 @@
           {
             "ref": "D1",
             "controlRef": "I1",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B6",
+            "controlRef": "G6",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -57613,6 +57914,13 @@
             "note": "same-content unformatted control"
           },
           {
+            "ref": "G5",
+            "controlRef": "B5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
             "ref": "H1",
             "controlRef": "C1",
             "matched": false,
@@ -57622,6 +57930,13 @@
           {
             "ref": "I1",
             "controlRef": "D1",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G6",
+            "controlRef": "B6",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -57654,6 +57969,9 @@
               "A3": "none",
               "A4": "none"
             }
+          },
+          "positiveControls": {
+            "B5": "FFFFC7CE"
           }
         },
         {
@@ -57681,6 +57999,9 @@
               "C1": "FFC6EFCE",
               "D1": "FFC6EFCE"
             }
+          },
+          "positiveControls": {
+            "B6": "FFC6EFCE"
           }
         }
       ],
@@ -57707,7 +58028,7 @@
       "input": "tests/fixtures/xlsx-cf/inputs/stage5-formula-functions.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage5-formula-functions.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:AA19",
+      "range": "A1:AA20",
       "requiredAppearances": [
         "screen"
       ],
@@ -57901,11 +58222,26 @@
             "anchor": "M2",
             "dialect": "base"
           }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B20",
+          "capabilityId": "formula:positive-control",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 11,
+          "formulas": [
+            "0"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE"
+          }
         }
       ],
       "expected": {
-        "inputSha256": "754508b7e6195dd4038da8027179919ded7282ad86306c5829fdc8e635a3afc7",
-        "savedSha256": "754508b7e6195dd4038da8027179919ded7282ad86306c5829fdc8e635a3afc7",
+        "inputSha256": "ea694c2cc11bc96a4501d15ae8f3c93156a0d30b4990d615972ea5092d3e3f6c",
+        "savedSha256": "ea694c2cc11bc96a4501d15ae8f3c93156a0d30b4990d615972ea5092d3e3f6c",
         "provenance": "seed-hypothesis",
         "positiveRefs": [],
         "negativeRefs": [
@@ -57927,6 +58263,7 @@
           "Q17",
           "Q18",
           "Q19",
+          "P20",
           "R2",
           "R3",
           "R4",
@@ -58164,6 +58501,12 @@
           {
             "ref": "C19",
             "controlRef": "Q19",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B20",
+            "controlRef": "P20",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -59069,6 +59412,13 @@
           {
             "ref": "Q19",
             "controlRef": "C19",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "P20",
+            "controlRef": "B20",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -60071,6 +60421,9 @@
               "C18": "none",
               "C19": "none"
             }
+          },
+          "positiveControls": {
+            "B20": "FFFFC7CE"
           }
         },
         {
@@ -60178,6 +60531,9 @@
               "D18": "none",
               "D19": "none"
             }
+          },
+          "positiveControls": {
+            "B20": "FFFFC7CE"
           }
         },
         {
@@ -60285,6 +60641,9 @@
               "L18": "none",
               "L19": "none"
             }
+          },
+          "positiveControls": {
+            "B20": "FFFFC7CE"
           }
         },
         {
@@ -60392,6 +60751,9 @@
               "M18": "none",
               "M19": "none"
             }
+          },
+          "positiveControls": {
+            "B20": "FFFFC7CE"
           }
         },
         {
@@ -60479,6 +60841,9 @@
               "E18": "none",
               "E19": "none"
             }
+          },
+          "positiveControls": {
+            "B20": "FFFFC7CE"
           }
         },
         {
@@ -60542,6 +60907,9 @@
               "F16": "none",
               "F17": "none"
             }
+          },
+          "positiveControls": {
+            "B20": "FFFFC7CE"
           }
         },
         {
@@ -60625,6 +60993,9 @@
               "G18": "none",
               "G19": "none"
             }
+          },
+          "positiveControls": {
+            "B20": "FFFFC7CE"
           }
         },
         {
@@ -60671,6 +61042,9 @@
               "H15": "none",
               "H19": "none"
             }
+          },
+          "positiveControls": {
+            "B20": "FFFFC7CE"
           }
         },
         {
@@ -60708,6 +61082,9 @@
               "I14": "none",
               "I15": "none"
             }
+          },
+          "positiveControls": {
+            "B20": "FFFFC7CE"
           }
         },
         {
@@ -60751,6 +61128,9 @@
               "K12": "none",
               "K13": "none"
             }
+          },
+          "positiveControls": {
+            "B20": "FFFFC7CE"
           }
         }
       ],
@@ -60777,7 +61157,7 @@
       "input": "tests/fixtures/xlsx-cf/inputs/stage5-formula-hoist.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage5-formula-hoist.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:U40",
+      "range": "A1:U41",
       "requiredAppearances": [
         "screen"
       ],
@@ -60952,11 +61332,26 @@
             "anchor": "J2",
             "dialect": "base"
           }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B41",
+          "capabilityId": "formula:positive-control",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 10,
+          "formulas": [
+            "0"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE"
+          }
         }
       ],
       "expected": {
-        "inputSha256": "f28bf178dcfae3776eefb88ef32173702fd3a38463890c51a3962a265e17a5c9",
-        "savedSha256": "f28bf178dcfae3776eefb88ef32173702fd3a38463890c51a3962a265e17a5c9",
+        "inputSha256": "304278936c29d13179297055f25d7d3b91e95f37aa7a9b83143a33692f787751",
+        "savedSha256": "304278936c29d13179297055f25d7d3b91e95f37aa7a9b83143a33692f787751",
         "provenance": "seed-hypothesis",
         "positiveRefs": [],
         "negativeRefs": [
@@ -60995,6 +61390,7 @@
           "L38",
           "L39",
           "L40",
+          "M41",
           "O2",
           "O3",
           "O4",
@@ -61299,6 +61695,12 @@
           {
             "ref": "A40",
             "controlRef": "L40",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B41",
+            "controlRef": "M41",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -62113,6 +62515,13 @@
           {
             "ref": "L40",
             "controlRef": "A40",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "M41",
+            "controlRef": "B41",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -62938,6 +63347,9 @@
               "A39": "none",
               "A40": "none"
             }
+          },
+          "positiveControls": {
+            "B41": "FFFFC7CE"
           }
         },
         {
@@ -62973,6 +63385,9 @@
               "D5": "none",
               "D6": "none"
             }
+          },
+          "positiveControls": {
+            "B41": "FFFFC7CE"
           }
         },
         {
@@ -63097,6 +63512,9 @@
               "B39": "FFFFC7CE",
               "B40": "FFFFC7CE"
             }
+          },
+          "positiveControls": {
+            "B41": "FFFFC7CE"
           }
         },
         {
@@ -63215,6 +63633,9 @@
               "C39": "FFFFC7CE",
               "C40": "FFFFC7CE"
             }
+          },
+          "positiveControls": {
+            "B41": "FFFFC7CE"
           }
         },
         {
@@ -63365,7 +63786,7 @@
       "input": "tests/fixtures/xlsx-cf/inputs/stage5-formula-hoist-aggregate.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage5-formula-hoist-aggregate.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:G40",
+      "range": "A1:G41",
       "requiredAppearances": [
         "screen"
       ],
@@ -63407,11 +63828,26 @@
             "anchor": "C2",
             "dialect": "base"
           }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B41",
+          "capabilityId": "formula:positive-control",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 3,
+          "formulas": [
+            "0"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE"
+          }
         }
       ],
       "expected": {
-        "inputSha256": "8c22c67808ae16914b1bd48a49aaced328f9d48d58dc1da87aaba911c961e014",
-        "savedSha256": "8c22c67808ae16914b1bd48a49aaced328f9d48d58dc1da87aaba911c961e014",
+        "inputSha256": "3973a11b48bff40ff4d042d41b5e1169aa36b12e4770c167fc4d69aef959925a",
+        "savedSha256": "3973a11b48bff40ff4d042d41b5e1169aa36b12e4770c167fc4d69aef959925a",
         "provenance": "seed-hypothesis",
         "positiveRefs": [],
         "negativeRefs": [
@@ -63454,6 +63890,7 @@
           "F38",
           "F39",
           "F40",
+          "F41",
           "G2",
           "G3",
           "G4",
@@ -63722,6 +64159,12 @@
           {
             "ref": "B40",
             "controlRef": "F40",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B41",
+            "controlRef": "F41",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -64209,6 +64652,13 @@
             "note": "same-content unformatted control"
           },
           {
+            "ref": "F41",
+            "controlRef": "B41",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
             "ref": "G2",
             "controlRef": "C2",
             "matched": false,
@@ -64625,6 +65075,9 @@
               "B39": "none",
               "B40": "none"
             }
+          },
+          "positiveControls": {
+            "B41": "FFFFC7CE"
           }
         },
         {
@@ -64780,6 +65233,9 @@
               "C39": "none",
               "C40": "none"
             }
+          },
+          "positiveControls": {
+            "B41": "FFFFC7CE"
           }
         }
       ],
@@ -64806,7 +65262,7 @@
       "input": "tests/fixtures/xlsx-cf/inputs/stage5-cellis-operands.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage5-cellis-operands.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:Y7",
+      "range": "A1:Y8",
       "requiredAppearances": [
         "screen"
       ],
@@ -64971,11 +65427,26 @@
             "anchor": "L2",
             "dialect": "base"
           }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B8",
+          "capabilityId": "formula:positive-control",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 9,
+          "formulas": [
+            "0"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE"
+          }
         }
       ],
       "expected": {
-        "inputSha256": "e3bd5c613c8c0df7abb59b26aa122eac5d504a272084801a1de6d94372bf45d1",
-        "savedSha256": "e3bd5c613c8c0df7abb59b26aa122eac5d504a272084801a1de6d94372bf45d1",
+        "inputSha256": "f45455e9eaa6ed2aac7da4cca99b8f58a1c061a8ff03ff103b7e576bb1463125",
+        "savedSha256": "f45455e9eaa6ed2aac7da4cca99b8f58a1c061a8ff03ff103b7e576bb1463125",
         "provenance": "seed-hypothesis",
         "positiveRefs": [],
         "negativeRefs": [
@@ -64985,6 +65456,7 @@
           "O5",
           "O6",
           "O7",
+          "O8",
           "R2",
           "R3",
           "R4",
@@ -65053,6 +65525,12 @@
           {
             "ref": "B7",
             "controlRef": "O7",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B8",
+            "controlRef": "O8",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -65292,6 +65770,13 @@
           {
             "ref": "O7",
             "controlRef": "B7",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "O8",
+            "controlRef": "B8",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -65567,6 +66052,9 @@
               "B6": "none",
               "B7": "none"
             }
+          },
+          "positiveControls": {
+            "B8": "FFFFC7CE"
           }
         },
         {
@@ -65606,6 +66094,9 @@
               "E6": "none",
               "E7": "none"
             }
+          },
+          "positiveControls": {
+            "B8": "FFFFC7CE"
           }
         },
         {
@@ -65645,6 +66136,9 @@
               "C6": "none",
               "C7": "none"
             }
+          },
+          "positiveControls": {
+            "B8": "FFFFC7CE"
           }
         },
         {
@@ -65684,6 +66178,9 @@
               "D6": "none",
               "D7": "none"
             }
+          },
+          "positiveControls": {
+            "B8": "FFFFC7CE"
           }
         },
         {
@@ -65715,6 +66212,9 @@
               "I4": "none",
               "I5": "none"
             }
+          },
+          "positiveControls": {
+            "B8": "FFFFC7CE"
           }
         },
         {
@@ -65772,6 +66272,9 @@
               "J4": "none",
               "J5": "none"
             }
+          },
+          "positiveControls": {
+            "B8": "FFFFC7CE"
           }
         },
         {
@@ -65794,6 +66297,9 @@
               "K3": "FFFFC7CE",
               "K4": "FFFFC7CE"
             }
+          },
+          "positiveControls": {
+            "B8": "FFFFC7CE"
           }
         }
       ],
@@ -65820,7 +66326,7 @@
       "input": "tests/fixtures/xlsx-cf/inputs/stage5-predicate-formulas.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage5-predicate-formulas.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:I5",
+      "range": "A1:I6",
       "requiredAppearances": [
         "screen"
       ],
@@ -65862,11 +66368,26 @@
             "anchor": "C2",
             "dialect": "base"
           }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B6",
+          "capabilityId": "formula:positive-control",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 3,
+          "formulas": [
+            "0"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE"
+          }
         }
       ],
       "expected": {
-        "inputSha256": "acab0d244ff9d31ba22adca39e143a06784f25f860c2ff121b8426bb7bc7a4db",
-        "savedSha256": "acab0d244ff9d31ba22adca39e143a06784f25f860c2ff121b8426bb7bc7a4db",
+        "inputSha256": "5e8a65bdcff60217e5331a4f5cc94a81f9389915d372c769cf2abace73e06dee",
+        "savedSha256": "5e8a65bdcff60217e5331a4f5cc94a81f9389915d372c769cf2abace73e06dee",
         "provenance": "seed-hypothesis",
         "positiveRefs": [],
         "negativeRefs": [
@@ -65874,6 +66395,7 @@
           "H3",
           "H4",
           "H5",
+          "H6",
           "I2",
           "I3",
           "I4",
@@ -65901,6 +66423,12 @@
           {
             "ref": "B5",
             "controlRef": "H5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B6",
+            "controlRef": "H6",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -65952,6 +66480,13 @@
           {
             "ref": "H5",
             "controlRef": "B5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "H6",
+            "controlRef": "B6",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -66010,6 +66545,9 @@
               "B4": "FFFFC7CE",
               "B5": "none"
             }
+          },
+          "positiveControls": {
+            "B6": "FFFFC7CE"
           }
         },
         {
@@ -66035,6 +66573,9 @@
               "C4": "none",
               "C5": "FFFFC7CE"
             }
+          },
+          "positiveControls": {
+            "B6": "FFFFC7CE"
           }
         }
       ],
@@ -66061,7 +66602,7 @@
       "input": "tests/fixtures/xlsx-cf/inputs/stage5-predicate-timeperiod.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage5-predicate-timeperiod.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:E5",
+      "range": "A1:F10",
       "requiredAppearances": [
         "screen"
       ],
@@ -66095,18 +66636,34 @@
             "anchor": "A2",
             "dialect": "base"
           }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B10",
+          "capabilityId": "formula:positive-control",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 2,
+          "formulas": [
+            "0"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE"
+          }
         }
       ],
       "expected": {
-        "inputSha256": "3eb4f53bf5e7e4c26dfff27aff1d45b79a27ea43323f535ed32a62a6d81f95bc",
-        "savedSha256": "3eb4f53bf5e7e4c26dfff27aff1d45b79a27ea43323f535ed32a62a6d81f95bc",
+        "inputSha256": "2fc87900d901996c48e04b85312745b0521686b415459d10346bf8b354bdc0c0",
+        "savedSha256": "2fc87900d901996c48e04b85312745b0521686b415459d10346bf8b354bdc0c0",
         "provenance": "seed-hypothesis",
         "positiveRefs": [],
         "negativeRefs": [
           "E2",
           "E3",
           "E4",
-          "E5"
+          "E5",
+          "F10"
         ],
         "cells": [
           {
@@ -66130,6 +66687,12 @@
           {
             "ref": "A5",
             "controlRef": "E5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B10",
+            "controlRef": "F10",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -66160,6 +66723,13 @@
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F10",
+            "controlRef": "B10",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
           }
         ]
       },
@@ -66187,6 +66757,9 @@
               "A4": "FFFFC7CE",
               "A5": "FFFFC7CE"
             }
+          },
+          "positiveControls": {
+            "B10": "FFFFC7CE"
           }
         }
       ],
@@ -66213,7 +66786,7 @@
       "input": "tests/fixtures/xlsx-cf/inputs/stage5-clock-today.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage5-clock-today.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:I10",
+      "range": "A1:I11",
       "requiredAppearances": [
         "screen"
       ],
@@ -66265,11 +66838,26 @@
             "anchor": "C2",
             "dialect": "base"
           }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B11",
+          "capabilityId": "formula:positive-control",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 3,
+          "formulas": [
+            "0"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE"
+          }
         }
       ],
       "expected": {
-        "inputSha256": "ebd7d9635728dd9485f935d37df64cb78cb44326604b71029f41a639cbd15d6a",
-        "savedSha256": "ebd7d9635728dd9485f935d37df64cb78cb44326604b71029f41a639cbd15d6a",
+        "inputSha256": "7d483364a562a749688e1062e4f90ffcb57bf87484644272773f98f34434c7ae",
+        "savedSha256": "7d483364a562a749688e1062e4f90ffcb57bf87484644272773f98f34434c7ae",
         "provenance": "seed-hypothesis",
         "positiveRefs": [],
         "negativeRefs": [
@@ -66282,6 +66870,7 @@
           "H8",
           "H9",
           "H10",
+          "H11",
           "I2",
           "I3",
           "I4",
@@ -66344,6 +66933,12 @@
           {
             "ref": "B10",
             "controlRef": "H10",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B11",
+            "controlRef": "H11",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -66465,6 +67060,13 @@
             "note": "same-content unformatted control"
           },
           {
+            "ref": "H11",
+            "controlRef": "B11",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
             "ref": "I2",
             "controlRef": "C2",
             "matched": false,
@@ -66579,6 +67181,9 @@
               "B9": "FFFFC7CE",
               "B10": "none"
             }
+          },
+          "positiveControls": {
+            "B11": "FFFFC7CE"
           }
         },
         {
@@ -66657,7 +67262,7 @@
       "input": "tests/fixtures/xlsx-cf/inputs/stage5-calc-manual.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage5-calc-manual.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:Q5",
+      "range": "A1:Q6",
       "requiredAppearances": [
         "screen"
       ],
@@ -66709,11 +67314,26 @@
             "anchor": "H2",
             "dialect": "base"
           }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B6",
+          "capabilityId": "formula:positive-control",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 3,
+          "formulas": [
+            "0"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE"
+          }
         }
       ],
       "expected": {
-        "inputSha256": "085b7df3a3e3d07d8883caf84c4700ba77cc76404446cb059ee8bf63b8cd404a",
-        "savedSha256": "085b7df3a3e3d07d8883caf84c4700ba77cc76404446cb059ee8bf63b8cd404a",
+        "inputSha256": "280a993154f40c606af646c4abf1e87aeb2cb788dcf3bf0031b8f9907ee5a90b",
+        "savedSha256": "280a993154f40c606af646c4abf1e87aeb2cb788dcf3bf0031b8f9907ee5a90b",
         "provenance": "seed-hypothesis",
         "positiveRefs": [],
         "negativeRefs": [
@@ -66721,6 +67341,7 @@
           "L3",
           "L4",
           "L5",
+          "K6",
           "Q2",
           "Q3",
           "Q4",
@@ -66748,6 +67369,12 @@
           {
             "ref": "C5",
             "controlRef": "L5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B6",
+            "controlRef": "K6",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -66799,6 +67426,13 @@
           {
             "ref": "L5",
             "controlRef": "C5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "K6",
+            "controlRef": "B6",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -66857,6 +67491,9 @@
               "pre:C4": "none",
               "pre:C5": "FFFFC7CE"
             }
+          },
+          "positiveControls": {
+            "pre:B6": "FFFFC7CE"
           }
         },
         {
@@ -66882,6 +67519,9 @@
               "pre:H4": "FFFFC7CE",
               "pre:H5": "FFFFC7CE"
             }
+          },
+          "positiveControls": {
+            "pre:B6": "FFFFC7CE"
           }
         },
         {
@@ -66957,7 +67597,7 @@
       "input": "tests/fixtures/xlsx-cf/inputs/stage5-composition.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage5-composition.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:AO7",
+      "range": "A1:AO10",
       "requiredAppearances": [
         "screen"
       ],
@@ -67751,11 +68391,56 @@
             ],
             "attrs": {}
           }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B8",
+          "capabilityId": "formula:positive-control",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 33,
+          "formulas": [
+            "0"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B9",
+          "capabilityId": "formula:positive-control",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 34,
+          "formulas": [
+            "0"
+          ],
+          "dxf": {
+            "fillRgb": "FFC6EFCE"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B10",
+          "capabilityId": "formula:positive-control",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 35,
+          "formulas": [
+            "0"
+          ],
+          "dxf": {
+            "strikethrough": true
+          }
         }
       ],
       "expected": {
-        "inputSha256": "075647ec02667b38595a172c10504728ec79db8b071a60a5b3daff8a4eb41adc",
-        "savedSha256": "075647ec02667b38595a172c10504728ec79db8b071a60a5b3daff8a4eb41adc",
+        "inputSha256": "8c1d565810b3bb89e327d15553c7762f2299f9085a1b1914e34c032fc54ff8bb",
+        "savedSha256": "8c1d565810b3bb89e327d15553c7762f2299f9085a1b1914e34c032fc54ff8bb",
         "provenance": "seed-hypothesis",
         "positiveRefs": [],
         "negativeRefs": [
@@ -67765,6 +68450,8 @@
           "W5",
           "W6",
           "W7",
+          "W9",
+          "W10",
           "X2",
           "X3",
           "X4",
@@ -67831,6 +68518,7 @@
           "AK5",
           "AK6",
           "AK7",
+          "W8",
           "AL2",
           "AL3",
           "AL4",
@@ -67896,6 +68584,18 @@
           {
             "ref": "B7",
             "controlRef": "W7",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B9",
+            "controlRef": "W9",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B10",
+            "controlRef": "W10",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -68296,6 +68996,12 @@
             "fillSource": "unverified"
           },
           {
+            "ref": "B8",
+            "controlRef": "W8",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
             "ref": "Q2",
             "controlRef": "AL2",
             "matched": false,
@@ -68513,6 +69219,20 @@
           {
             "ref": "W7",
             "controlRef": "B7",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "W9",
+            "controlRef": "B9",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "W10",
+            "controlRef": "B10",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -68980,6 +69700,13 @@
             "note": "same-content unformatted control"
           },
           {
+            "ref": "W8",
+            "controlRef": "B8",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
             "ref": "AL2",
             "controlRef": "Q2",
             "matched": false,
@@ -69221,6 +69948,10 @@
               "B6": "FFC6EFCE",
               "B7": "FFC6EFCE+strike"
             }
+          },
+          "positiveControls": {
+            "B9": "FFC6EFCE",
+            "B10": "none+strike"
           }
         },
         {
@@ -69446,6 +70177,10 @@
               "P6": "FFC6EFCE",
               "P7": "FFC6EFCE"
             }
+          },
+          "positiveControls": {
+            "B8": "FFFFC7CE",
+            "B9": "FFC6EFCE"
           }
         },
         {
@@ -69485,6 +70220,10 @@
               "Q6": "FFC6EFCE",
               "Q7": "FFC6EFCE"
             }
+          },
+          "positiveControls": {
+            "B9": "FFC6EFCE",
+            "B10": "none+strike"
           }
         },
         {
@@ -69664,7 +70403,7 @@
       "input": "tests/fixtures/xlsx-cf/inputs/stage5-cross-sheet.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage5-cross-sheet.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:K5",
+      "range": "A1:K6",
       "requiredAppearances": [
         "screen"
       ],
@@ -69745,11 +70484,26 @@
             "anchor": "E2",
             "dialect": "x14"
           }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B6",
+          "capabilityId": "formula:positive-control",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 5,
+          "formulas": [
+            "0"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE"
+          }
         }
       ],
       "expected": {
-        "inputSha256": "d94d4ffe3d1347205db307a216bdd881fde5e0ede535ec3b22b713552e0a17d2",
-        "savedSha256": "d94d4ffe3d1347205db307a216bdd881fde5e0ede535ec3b22b713552e0a17d2",
+        "inputSha256": "7d20c807a6f695df728867c61a228b6892affae6ba5436da05f376260bf44baa",
+        "savedSha256": "7d20c807a6f695df728867c61a228b6892affae6ba5436da05f376260bf44baa",
         "provenance": "seed-hypothesis",
         "positiveRefs": [],
         "negativeRefs": [
@@ -69757,6 +70511,7 @@
           "H3",
           "H4",
           "H5",
+          "H6",
           "I2",
           "I3",
           "I4",
@@ -69792,6 +70547,12 @@
           {
             "ref": "B5",
             "controlRef": "H5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B6",
+            "controlRef": "H6",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -69891,6 +70652,13 @@
           {
             "ref": "H5",
             "controlRef": "B5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "H6",
+            "controlRef": "B6",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -70017,6 +70785,9 @@
               "B4": "none",
               "B5": "none"
             }
+          },
+          "positiveControls": {
+            "B6": "FFFFC7CE"
           }
         },
         {
@@ -70054,6 +70825,9 @@
               "C4": "none",
               "C5": "none"
             }
+          },
+          "positiveControls": {
+            "B6": "FFFFC7CE"
           }
         },
         {
@@ -70081,6 +70855,9 @@
               "post:B3": "none",
               "post:B5": "none"
             }
+          },
+          "positiveControls": {
+            "post:B6": "FFFFC7CE"
           }
         },
         {
@@ -70106,6 +70883,9 @@
               "D4": "none",
               "D5": "none"
             }
+          },
+          "positiveControls": {
+            "B6": "FFFFC7CE"
           }
         },
         {
@@ -70137,6 +70917,9 @@
               "E4": "none",
               "E5": "none"
             }
+          },
+          "positiveControls": {
+            "B6": "FFFFC7CE"
           }
         }
       ],
@@ -70180,7 +70963,7 @@
       "input": "tests/fixtures/xlsx-cf/inputs/stage5-cross-sheet-missing.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage5-cross-sheet-missing.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:E4",
+      "range": "A1:E5",
       "requiredAppearances": [
         "screen"
       ],
@@ -70203,17 +70986,33 @@
             "anchor": "B2",
             "dialect": "base"
           }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B5",
+          "capabilityId": "formula:positive-control",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 2,
+          "formulas": [
+            "0"
+          ],
+          "dxf": {
+            "fillRgb": "FFFFC7CE"
+          }
         }
       ],
       "expected": {
-        "inputSha256": "d6591016a745a0c1cb797e91cb67874ce3b061bf3d904b336478024118336bbc",
-        "savedSha256": "d6591016a745a0c1cb797e91cb67874ce3b061bf3d904b336478024118336bbc",
+        "inputSha256": "5e956c1a2c3bebff6ebee44574f05acf6431ad5256af01acc478843403c92305",
+        "savedSha256": "5e956c1a2c3bebff6ebee44574f05acf6431ad5256af01acc478843403c92305",
         "provenance": "seed-hypothesis",
         "positiveRefs": [],
         "negativeRefs": [
           "E2",
           "E3",
-          "E4"
+          "E4",
+          "E5"
         ],
         "cells": [
           {
@@ -70235,6 +71034,12 @@
             "fillSource": "unverified"
           },
           {
+            "ref": "B5",
+            "controlRef": "E5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
             "ref": "E2",
             "controlRef": "B2",
             "matched": false,
@@ -70251,6 +71056,13 @@
           {
             "ref": "E4",
             "controlRef": "B4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E5",
+            "controlRef": "B5",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -70278,6 +71090,9 @@
               "B3": "FFFFC7CE",
               "B4": "FFFFC7CE"
             }
+          },
+          "positiveControls": {
+            "B5": "FFFFC7CE"
           }
         }
       ],

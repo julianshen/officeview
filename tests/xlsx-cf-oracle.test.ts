@@ -5609,11 +5609,13 @@ describe('Stage 5 formula oracle (Task 31)', () => {
   describe('semantic DisplayFormat evidence needs two decisive cells and a control (Lesson 3)', () => {
     const RED = 'FFFFC7CE'
     const GREEN = 'FFC6EFCE'
+    // Fix round 6: every configuration carries a literal positive control (B9, red; its control P9 unformatted).
+    const CONTROL = { B9: RED, P9: 'none' } as Record<string, string>
     const obs = (fills: Record<string, string>): FormulaObservation => ({
-      fill: ref => (fills[ref] === undefined ? undefined : { fill: fills[ref]!, strike: false }),
+      fill: ref => { const v = fills[ref] ?? CONTROL[ref]; return v === undefined ? undefined : { fill: v, strike: false } },
     })
-    const cfg = (refs: string[], hypotheses: Record<string, Record<string, string>>, extra: Partial<S5Configuration> = {}): S5Configuration => ({ id: 'cfg', capabilityId: 'formula:truth-number', observable: 'fill', refs, hypotheses, ...extra })
-    const controls = { B2: 'P2', B3: 'P3', B4: 'P4', B5: 'P5' }
+    const cfg = (refs: string[], hypotheses: Record<string, Record<string, string>>, extra: Partial<S5Configuration> = {}): S5Configuration => ({ id: 'cfg', capabilityId: 'formula:truth-number', observable: 'fill', refs, hypotheses, positiveControls: { [`${/^(pre|calc|post):/.exec(refs[0]!)?.[0] ?? ''}B9`]: RED }, ...extra })
+    const controls = { B2: 'P2', B3: 'P3', B4: 'P4', B5: 'P5', B9: 'P9' }
     const unformatted = { P2: 'none', P3: 'none', P4: 'none', P5: 'none' }
 
     it('hypotheses that agree at every designated cell are unverified-nondiscriminating', () => {
@@ -5651,7 +5653,7 @@ describe('Stage 5 formula oracle (Task 31)', () => {
     })
     it('prefixed refs read their own observation set, and their controls under the same prefix', () => {
       // post: (live edit) and pre: (manual calculation) refs and their controls come from their own tables.
-      const tables: Record<string, Record<string, string>> = { 'post:': { B3: RED, B5: RED, P3: 'none', P5: 'none' }, 'pre:': { B2: RED, B4: RED, P2: 'none', P4: 'none' } }
+      const tables: Record<string, Record<string, string>> = { 'post:': { B3: RED, B5: RED, P3: 'none', P5: 'none', B9: RED, P9: 'none' }, 'pre:': { B2: RED, B4: RED, P2: 'none', P4: 'none', B9: RED, P9: 'none' } }
       const prefixed: FormulaObservation = {
         fill: ref => { const m = /^(post:|pre:)?(.*)$/.exec(ref)!; const v = tables[m[1] ?? '']?.[m[2]!]; return v === undefined ? undefined : { fill: v, strike: false } },
         }
@@ -5668,13 +5670,14 @@ describe('Stage 5 formula oracle (Task 31)', () => {
       const { manualObservationRefs } = await import('../scripts/cf-refs/build')
       const cross = CF_STAGE5_CASES.find(x => x.id === 'stage5-cross-sheet')!
       const ctrl = (c: CfOracleCase, ref: string): string => c.expected.cells.find(e => e.ref === ref)!.controlRef
-      expect(dynamicRefreshRefs(cross)).toEqual(['B3', ctrl(cross, 'B3'), 'B5', ctrl(cross, 'B5')])
+      // Fix round 6: the post: literal positive control B6 and its control too.
+      expect(dynamicRefreshRefs(cross)).toEqual(['B3', ctrl(cross, 'B3'), 'B5', ctrl(cross, 'B5'), 'B6', ctrl(cross, 'B6')])
       const script = buildStage5CaptureScripts(cross, 'x.xlsx').dynamicRefresh[0]!.join('\n')
       for (const ref of dynamicRefreshRefs(cross)) expect(script).toContain(`range "${ref}" of ws`)
       expect(script).not.toMatch(/\bsave\b|^\s*calculate\b/m)
       const manual = CF_STAGE5_CASES.find(x => x.id === 'stage5-calc-manual')!
       const refs = manualObservationRefs(manual)
-      for (const r of ['C2', 'C5', 'H2', 'H5']) expect(refs, r).toEqual(expect.arrayContaining([r, ctrl(manual, r)]))
+      for (const r of ['C2', 'C5', 'H2', 'H5', 'B6']) expect(refs, r).toEqual(expect.arrayContaining([r, ctrl(manual, r)]))
     })
     it('replicationShortfall groups by an explicit configuration key when given one', () => {
       expect(replicationShortfall(['C1', 'D1'])).toMatch(/configuration C has 1/)
@@ -5700,7 +5703,8 @@ describe('Stage 5 formula oracle (Task 31)', () => {
     const png = new Uint8Array(canvas.toBuffer('image/png'))
     writeFileSync(join(root, t.captures[0]!.pngPath), png)
     // Excel "shows" the wrap reading: the overflowing targets format, the controls stay white.
-    const fills: Record<string, string> = { A3: 'FFFFC7CE', A4: 'FFFFC7CE', C1: 'FFC6EFCE', D1: 'FFC6EFCE' }
+    // Fix round 6: the literal positive controls B5 (red) and B6 (green) show their formats.
+    const fills: Record<string, string> = { A3: 'FFFFC7CE', A4: 'FFFFC7CE', C1: 'FFC6EFCE', D1: 'FFC6EFCE', B5: 'FFFFC7CE', B6: 'FFC6EFCE' }
     const formulaObservations = Object.fromEntries(t.expected.cells.map(e => [e.ref, { displayFormatFill: fills[e.ref] ?? 'FFFFFFFF', baseFill: 'FFFFFFFF', strikethrough: false }]))
     const h = sha256(bytes)
     const c: CfOracleCase = {
@@ -5954,7 +5958,8 @@ describe('Stage 5 fix round 1 (codex review)', () => {
     expect(h['first-listed']).toEqual(h['bounding-box'])
     // Excel behaving as "first listed" under the retained order is not classified bounding-box: the readings coincide.
     const controls = Object.fromEntries(c.expected.cells.map(e => [e.ref, e.controlRef]))
-    const obs: FormulaObservation = { fill: ref => (controls[ref] === undefined ? { fill: 'none', strike: false } : { fill: h['first-listed']![ref] === RED ? RED : 'none', strike: false }) }
+    const pc = cfgs[0]!.positiveControls ?? {}
+    const obs: FormulaObservation = { fill: ref => (pc[ref] !== undefined ? { fill: pc[ref]!, strike: false } : controls[ref] === undefined ? { fill: 'none', strike: false } : { fill: h['first-listed']![ref] === RED ? RED : 'none', strike: false }) }
     const ev = evalCaps(cfgs, controls, obs)['formula:anchor-multi-range']!
     expect(ev.status).toBe('non-discriminating')
     expect(ev.reason).toMatch(/coincide/)
@@ -5967,21 +5972,23 @@ describe('Stage 5 fix round 1 (codex review)', () => {
 
   it('#3 replication is per evidence-bearing configuration (and per range where declared); one configuration cannot cover another', async () => {
     const { evaluateFormulaCapabilities: evalCaps } = await import('../scripts/cf-refs/verify')
-    const controls = { B2: 'P2', B3: 'P3', D2: 'Q2', D3: 'Q3', F2: 'R2', F3: 'R3' }
-    const none = { P2: 'none', P3: 'none', Q2: 'none', Q3: 'none', R2: 'none', R3: 'none' }
+    // Fix round 6: the fill configurations carry the literal positive control B9 (red, its control P9 unformatted).
+    const controls = { B2: 'P2', B3: 'P3', D2: 'Q2', D3: 'Q3', F2: 'R2', F3: 'R3', B9: 'P9' }
+    const none = { P2: 'none', P3: 'none', Q2: 'none', Q3: 'none', R2: 'none', R3: 'none', B9: RED }
+    const positiveControls = { B9: RED }
     const fills = (f: Record<string, string>): FormulaObservation => ({ fill: r => ({ fill: f[r] ?? 'none', strike: false }), visual: () => ({ kind: 'icon', cls: '3Arrows:0', left: 2, top: 3 }) })
-    const scale: S5Configuration = { id: 'scale', capabilityId: 'formula:cfvo-scope-multi-range', observable: 'fill', refs: ['B2', 'B3'], hypotheses: { a: { B2: RED, B3: RED }, b: { B2: 'none', B3: 'none' } } }
+    const scale: S5Configuration = { id: 'scale', capabilityId: 'formula:cfvo-scope-multi-range', observable: 'fill', refs: ['B2', 'B3'], positiveControls, hypotheses: { a: { B2: RED, B3: RED }, b: { B2: 'none', B3: 'none' } } }
     // Icon crops all identical: the configuration is designed to separate a/b (different twins) but cannot.
     const icon: S5Configuration = { id: 'icon', capabilityId: 'formula:cfvo-scope-multi-range', observable: 'crop', refs: ['D2', 'D3'], twinExpect: { D7: 'visual', D8: 'visual', D9: 'visual', D10: 'visual' }, hypotheses: { a: { D2: 'twin:D7', D3: 'twin:D8' }, b: { D2: 'twin:D9', D3: 'twin:D10' } } }
     const ev = evalCaps([scale, icon], controls, fills({ B2: RED, B3: RED, ...none }), { kindOf: () => 'icon' })['formula:cfvo-scope-multi-range']!
     expect(ev).toMatchObject({ status: 'refused', code: 'formula-replication-shortfall' })
     // Per range: D separates at two cells, F at one.
-    const ranges: S5Configuration = { id: 'ranges', capabilityId: 'formula:cfvo-scope-multi-range', observable: 'fill', replicateBy: 'column', refs: ['D2', 'D3', 'F2', 'F3'], hypotheses: { a: { D2: RED, D3: RED, F2: RED, F3: 'none' }, b: { D2: 'none', D3: 'none', F2: 'none', F3: 'none' } } }
+    const ranges: S5Configuration = { id: 'ranges', capabilityId: 'formula:cfvo-scope-multi-range', observable: 'fill', replicateBy: 'column', refs: ['D2', 'D3', 'F2', 'F3'], positiveControls, hypotheses: { a: { D2: RED, D3: RED, F2: RED, F3: 'none' }, b: { D2: 'none', D3: 'none', F2: 'none', F3: 'none' } } }
     const perRange = evalCaps([ranges], controls, fills({ D2: RED, D3: RED, F2: RED, ...none }))['formula:cfvo-scope-multi-range']!
     expect(perRange).toMatchObject({ status: 'refused', code: 'formula-replication-shortfall' })
     expect(perRange.reason).toMatch(/configuration F/)
     // A negative control is a consistency check: agreeing readings that Excel matches pass; a mismatch refuses.
-    const control: S5Configuration = { id: 'neg', capabilityId: 'formula:cfvo-scope-multi-range', observable: 'fill', role: 'negative-control', refs: ['F2', 'F3'], hypotheses: { a: { F2: RED, F3: RED }, b: { F2: RED, F3: RED } } }
+    const control: S5Configuration = { id: 'neg', capabilityId: 'formula:cfvo-scope-multi-range', observable: 'fill', role: 'negative-control', refs: ['F2', 'F3'], positiveControls, hypotheses: { a: { F2: RED, F3: RED }, b: { F2: RED, F3: RED } } }
     expect(evalCaps([scale, control], controls, fills({ B2: RED, B3: RED, F2: RED, F3: RED, ...none }))['formula:cfvo-scope-multi-range']).toMatchObject({ status: 'discriminating', matched: 'a' })
     expect(evalCaps([scale, control], controls, fills({ B2: RED, B3: RED, ...none }))['formula:cfvo-scope-multi-range']).toMatchObject({ status: 'refused', code: 'formula-hypothesis-none' })
     // The catalogue marks its negative control explicitly.
@@ -6415,92 +6422,323 @@ describe('Stage 5 fix round 4: Ruling S5-WITNESS (one witness rule for every con
       expect(decisive.length, `${id} decisive stopped cells`).toBeGreaterThanOrEqual(2)
     }
   })
+})
 
-  it('S5-WITNESS adversarial: for every configuration, blank twins, visuals in required-empty cells, blank positive controls and tolerance-band shifts all refuse', async () => {
-    const { evaluateFormulaCapabilities: evalCaps } = await import('../scripts/cf-refs/verify')
-    type World = { fill: Record<string, { fill: string; strike: boolean }>; vis: Record<string, S5Visual> }
-    let exercised = 0
-    const corruptions: Record<string, number> = { blank: 0, empty: 0, controls: 0, shift: 0 }
+describe('Stage 5 fix round 6: positive controls in every configuration, all-rival decisive cells, exhaustive adversarial coverage', () => {
+  type Ctx = ReturnType<ReturnType<typeof createCanvas>['getContext']>
+  type Box = { x0: number; y0: number; x1: number; y1: number }
+  async function evaluateWith(id: string, configIds: readonly string[], paint: (ctx: Ctx, box: (ref: string) => Box) => void) {
+    const { evaluateFormulaCase } = await import('../scripts/cf-refs/verify')
+    const t = CF_STAGE5_CASES.find(c => c.id === id)!
+    const c: CfOracleCase = { ...t, formulaConfigurations: t.formulaConfigurations!.filter(x => configIds.includes(x.id)) }
+    const parts = readZipPartsSync(await generateCaseArchive(t.id))!
+    const geom = computeWorksheetRangeGeometry(parts, t.range)!
+    const canvas = createCanvas(geom.expectedWidthPt, geom.expectedHeightPt)
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, geom.expectedWidthPt, geom.expectedHeightPt)
+    const box = (ref: string): Box => {
+      const p = parseA1(ref)!
+      const before = geom.colWidthsPt.slice(0, p.col - geom.minCol).reduce((a, b) => a + b, 0)
+      const top = geom.rowHeightsPt.slice(0, p.row - geom.minRow).reduce((a, b) => a + b, 0)
+      return { x0: Math.round(before), x1: Math.round(before + geom.colWidthsPt[p.col - geom.minCol]!), y0: Math.round(top), y1: Math.round(top + geom.rowHeightsPt[p.row - geom.minRow]!) }
+    }
+    paint(ctx, box)
+    const png = decodePngSync(new Uint8Array(canvas.toBuffer('image/png')))!
+    const formulaObservations = Object.fromEntries(t.expected.cells.map(e => [e.ref, { displayFormatFill: 'FFFFFFFF', baseFill: 'FFFFFFFF', strikethrough: false }]))
+    return evaluateFormulaCase(c, { formulaObservations }, png, geom, parts)
+  }
+  const barTo = (ctx: Ctx, b: Box, px: number): void => { ctx.fillStyle = '#638ec6'; ctx.fillRect(b.x0 + 2, b.y0 + 2, px - 1, b.y1 - b.y0 - 4) }
+  const frac = (ctx: Ctx, b: Box, f: number): void => { if (f > 0) barTo(ctx, b, Math.max(3, Math.round((b.x1 - b.x0 - 5) * f) + 1)) }
+  /** Every observation of a case white except `fills` (ref -> ARGB, strike with a `+strike` suffix). */
+  const sidecarOf = (c: CfOracleCase, fills: Record<string, string> = {}) => ({
+    formulaObservations: Object.fromEntries(c.expected.cells.map(e => {
+      const f = fills[e.ref]
+      return [e.ref, { displayFormatFill: f ? f.replace('+strike', '').replace(/^none$/, 'FFFFFFFF') : 'FFFFFFFF', baseFill: 'FFFFFFFF', strikethrough: f?.endsWith('+strike') ?? false }]
+    })),
+  })
+
+  it('codex P1 #1: an entirely white stage5-formula-functions capture verifies nothing (blank DXF evidence never verifies `never`)', async () => {
+    const { evaluateFormulaCase } = await import('../scripts/cf-refs/verify')
+    const c = CF_STAGE5_CASES.find(x => x.id === 'stage5-formula-functions')!
+    const ev = evaluateFormulaCase(c, sidecarOf(c))
+    for (const [cap, r] of Object.entries(ev)) expect(r.status, `${cap}: ${r.matched ?? ''} ${r.reason}`).not.toBe('discriminating')
+    expect(ev['formula:fn-logical']).toMatchObject({ status: 'refused', code: 'formula-positive-control-failed' })
+  })
+
+  it('codex P1 #2: bar:bounds-formula / evaluated with I3/I4 rejecting only ignored and I5-I9 only zero is refused', async () => {
+    const ev = await evaluateWith('stage5-cfvo-formulas', ['cfvo-bar-formula'], (ctx, box) => {
+      // W2, W3 and Y2 are required-empty (at or below their lower bound); X is the degenerate twin (either).
+      barTo(ctx, box('Y3'), 12)
+      for (const r of ['I4', 'W4', 'X4']) barTo(ctx, box(r), 20)
+      barTo(ctx, box('Y4'), 40)
+      for (let r = 5; r <= 9; r++) { for (const col of ['I', 'W', 'Y']) frac(ctx, box(`${col}${r}`), 0.5); frac(ctx, box(`X${r}`), 1) }
+    })
+    expect(ev['bar:bounds-formula'], JSON.stringify(ev['bar:bounds-formula']).slice(0, 400)).toMatchObject({ status: 'refused', code: 'formula-replication-shortfall' })
+  })
+
+  it('#1 every live configuration carries a positive control fixed before capture, read in its own observation table', async () => {
+    const { manualObservationRefs } = await import('../scripts/cf-refs/build')
+    const { dynamicRefreshRefs } = await import('../scripts/cf-refs/capture')
+    let declared = 0
     for (const c of CF_STAGE5_CASES) {
-      const controls = Object.fromEntries(c.expected.cells.filter(e => !c.expected.negativeRefs.includes(e.ref)).map(e => [e.ref, e.controlRef]))
+      const cells = new Map(c.expected.cells.map(e => [e.ref, e]))
       for (const cfg of c.formulaConfigurations ?? []) {
-        if (cfg.record !== undefined || cfg.role === 'negative-control' || cfg.orderedHypotheses) continue
-        const names = Object.keys(cfg.hypotheses)
-        const bare = (r: string): string => r.replace(/^(pre|calc|post):/, '')
-        const twinOf = (tok: string): string | undefined => /^twin:([A-Z]+\d+)/.exec(tok)?.[1]
-        const crop = cfg.observable === 'crop'
-        for (const winner of names) {
-          // A world consistent with `winner`: each twin renders its expected state (a distinct visual), each target what
-          // the winner predicts there.
-          const twins = [...new Set(Object.values(cfg.hypotheses).flatMap(h => Object.values(h).map(twinOf).filter((t): t is string => !!t)))]
-          const w: World = { fill: {}, vis: {} }
-          twins.forEach((t, i) => {
-            const exp = cfg.twinExpect?.[t]
-            const shows = exp === 'visual'
-            w.vis[t] = shows && crop ? { kind: 'bar', left: 2, right: 10 + 6 * i } : { kind: 'none' }
-            w.fill[t] = { fill: shows && !crop ? `FF${(0x200000 + i * 0x10101).toString(16).toUpperCase().padStart(6, '0')}` : 'none', strike: false }
-          })
-          for (const ref of cfg.refs) {
-            const tok = cfg.hypotheses[winner]![ref]!
+        if (cfg.record !== undefined) continue
+        const twins = Object.entries(cfg.twinExpect ?? {}).filter(([, e]) => e === 'visual')
+        const literal = Object.entries(cfg.positiveControls ?? {})
+        expect(twins.length + literal.length, `${c.id} ${cfg.id}: no positive control`).toBeGreaterThan(0)
+        const prefix = /^(pre|calc|post):/.exec(cfg.refs[0]!)?.[0] ?? ''
+        for (const [ref, tok] of literal) {
+          declared++
+          expect(ref.startsWith(prefix) && /^(pre|calc|post):/.exec(ref)?.[0] === (prefix || undefined), `${c.id} ${cfg.id} ${ref} prefix`).toBe(true)
+          expect(tok, `${c.id} ${cfg.id} ${ref}`).not.toBe('none')
+          const bare = ref.replace(/^(pre|calc|post):/, '')
+          // A designated cell with its same-content unformatted control, both observed.
+          expect(cells.get(bare)?.controlRef, `${c.id} ${bare} designated`).toBeDefined()
+          expect(c.expected.negativeRefs).toContain(cells.get(bare)!.controlRef)
+          // Under a literal cellIs rule (no formula marker) that covers nothing else.
+          const covering = c.markers.filter(m => isCellInSqref(bare, m.sqref))
+          expect(covering.map(m => [m.capabilityId, m.ruleType, m.sqref, m.formula === undefined]), `${c.id} ${bare}`).toEqual([['formula:positive-control', 'cellIs', bare, true]])
+          if (prefix === 'pre:' || prefix === 'calc:') expect(manualObservationRefs(c)).toEqual(expect.arrayContaining([bare, cells.get(bare)!.controlRef]))
+          if (prefix === 'post:') expect(dynamicRefreshRefs(c)).toEqual(expect.arrayContaining([bare, cells.get(bare)!.controlRef]))
+        }
+      }
+    }
+    expect(declared).toBeGreaterThan(50)
+    expect(CF_STAGE5_NONDISCRIMINATING['formula:positive-control']).toBeDefined()
+  })
+
+  it('#1 a correct formula-functions rendering with functioning controls still discriminates; a wrong or unisolated control refuses', async () => {
+    const { evaluateFormulaCase } = await import('../scripts/cf-refs/verify')
+    const c = CF_STAGE5_CASES.find(x => x.id === 'stage5-formula-functions')!
+    const cfg = c.formulaConfigurations!.find(x => x.id === 'fn-date')!
+    const fills: Record<string, string> = {}
+    for (const x of c.formulaConfigurations!) {
+      for (const [ref, tok] of Object.entries(x.hypotheses.documented!)) if (tok !== 'none') fills[ref] = tok
+      for (const [ref, tok] of Object.entries(x.positiveControls ?? {})) fills[ref] = tok
+    }
+    expect(evaluateFormulaCase(c, sidecarOf(c, fills))['formula:fn-date']).toMatchObject({ status: 'discriminating', matched: 'documented' })
+    const [ctl, tok] = Object.entries(cfg.positiveControls!)[0]!
+    expect(evaluateFormulaCase(c, sidecarOf(c, { ...fills, [ctl]: tok === 'FFFFC7CE' ? 'FFC6EFCE' : 'FFFFC7CE' }))['formula:fn-date']).toMatchObject({ status: 'refused', code: 'formula-positive-control-failed' })
+    const own = c.expected.cells.find(e => e.ref === ctl)!.controlRef
+    expect(evaluateFormulaCase(c, sidecarOf(c, { ...fills, [own]: tok }))['formula:fn-date']).toMatchObject({ status: 'refused', code: 'formula-control-formatted' })
+  })
+
+  it('#1 a live configuration without any positive control refuses (formula-positive-control-missing)', () => {
+    const cfg: S5Configuration = { id: 'cfg', capabilityId: 'formula:truth-number', observable: 'fill', refs: ['B2', 'B3', 'B4'], hypotheses: { yes: { B2: 'FFFFC7CE', B3: 'FFFFC7CE', B4: 'FFFFC7CE' }, no: { B2: 'none', B3: 'none', B4: 'none' } } }
+    const obs: FormulaObservation = { fill: () => ({ fill: 'none', strike: false }) }
+    expect(evaluateFormulaCapabilities([cfg], { B2: 'Z2', B3: 'Z3', B4: 'Z4' }, obs)['formula:truth-number']).toMatchObject({ status: 'refused', code: 'formula-positive-control-missing' })
+  })
+  it('#1 the authored-template diff ignores the literal positive controls Excel\'s dialog does not author', async () => {
+    const { diffAuthoredFormulaTemplates } = await import('../scripts/cf-refs/generate')
+    const generated = readZipPartsSync(await generateCaseArchive('stage5-formula-authored'))!
+    const xml = new TextDecoder().decode(generated.get('xl/worksheets/sheet1.xml')!)
+    const stripped = xml.replace(/<conditionalFormatting sqref="B1[01]">.*?<\/conditionalFormatting>/g, '')
+    expect(stripped).not.toBe(xml)
+    const authored = new Map(generated)
+    authored.set('xl/worksheets/sheet1.xml', new TextEncoder().encode(stripped))
+    expect(diffAuthoredFormulaTemplates(generated, authored)).toEqual([])
+    // Any other missing rule is still a difference.
+    const other = new Map(generated)
+    other.set('xl/worksheets/sheet1.xml', new TextEncoder().encode(stripped.replace(/<conditionalFormatting sqref="E2:E9">.*?<\/conditionalFormatting>/, '')))
+    expect(diffAuthoredFormulaTemplates(generated, other).length).toBeGreaterThan(0)
+  })
+
+  it('S5-WITNESS adversarial (exhaustive): every evidence-bearing capability group x reading x retained order; every corruption refuses', async () => {
+    const { evaluateFormulaCapabilities: evalCaps, formulaControlsOf, resolveFormulaConfigurations, visualKindOf } = await import('../scripts/cf-refs/verify')
+    type Fill = { fill: string; strike: boolean }
+    type World = { fill: Record<string, Fill>; vis: Record<string, S5Visual> }
+    const NONE: Fill = { fill: 'none', strike: false }
+    const bare = (r: string): string => r.replace(/^(pre|calc|post):/, '')
+    const twinOf = (tok: string): string | undefined => /^twin:([A-Z]+\d+)/.exec(tok)?.[1]
+    const parse = (tok: string): Fill => ({ fill: tok.replace('+strike', ''), strike: tok.endsWith('+strike') })
+    const live = (x: S5Configuration): boolean => x.record === undefined
+    const evidenceOf = (x: S5Configuration): boolean => x.record === undefined && x.role !== 'negative-control'
+    const triples: string[] = []
+    const built: string[] = []
+    const unbuilt: string[] = []
+    const corruptions: Record<string, number> = { 'blank-twins': 0, 'required-empty-visuals': 0, 'blank-twin-controls': 0, 'blank-dxf-controls': 0, 'tolerance-shift': 0, 'disjoint-rivals': 0 }
+    const kinds = new Set<string>()
+    const outcomes: Record<string, number> = {}
+    for (const c of CF_STAGE5_CASES) {
+      const controls = formulaControlsOf(c)
+      const kindOf = visualKindOf(c)
+      // Every retained order a case's ordered configurations can resolve to (one ordered capability per case).
+      const ordered = [...new Set((c.formulaConfigurations ?? []).flatMap(x => (x.orderedHypotheses ? [x.orderedHypotheses.capabilityId] : [])))]
+      expect(ordered.length, c.id).toBeLessThanOrEqual(1)
+      const orders: Array<Record<string, string>> = ordered.length === 0 ? [{}] : Object.keys(c.formulaConfigurations!.find(x => x.orderedHypotheses)!.orderedHypotheses!.tables).map(o => ({ [ordered[0]!]: o }))
+      for (const retained of orders) {
+        const order = Object.values(retained)[0] ?? '-'
+        const configs = resolveFormulaConfigurations({ ...c, retainedSqrefs: retained })
+        const byCap = new Map<string, S5Configuration[]>()
+        for (const x of configs) byCap.set(x.capabilityId, [...(byCap.get(x.capabilityId) ?? []), x])
+        for (const [cap, cfgs] of byCap) {
+          const evidence = cfgs.filter(evidenceOf)
+          if (evidence.length === 0) continue
+          for (const x of cfgs) kinds.add(`${x.observable}:${x.observable === 'crop' ? kindOf(x) : 'fill'}`)
+          const names = [...new Set(evidence.flatMap(x => Object.keys(x.hypotheses)))]
+          // Every twin the group names, with its expectation (a twin shared by configurations must agree).
+          const twinExp = new Map<string, { exp: 'visual' | 'empty' | 'either'; crop: boolean; kind: 'bar' | 'icon' }>()
+          for (const x of cfgs.filter(live)) for (const h of Object.values(x.hypotheses)) for (const tok of Object.values(h)) {
             const t = twinOf(tok)
-            const strike = tok.endsWith('+strike')
-            if (t) { w.vis[bare(ref)] = w.vis[t]!; w.fill[ref] = { fill: w.fill[t]!.fill, strike } }
-            else { w.vis[bare(ref)] = { kind: 'none' }; w.fill[ref] = { fill: tok.replace('+strike', ''), strike } }
+            if (t) twinExp.set(t, { exp: x.twinExpect?.[t] ?? 'either', crop: x.observable === 'crop', kind: kindOf(x) })
           }
-          const obsOf = (x: World): FormulaObservation => ({
-            fill: ref => (controls[bare(ref)] === undefined && !Object.values(controls).includes(bare(ref)) && x.fill[ref] === undefined ? { fill: 'none', strike: false } : x.fill[ref] ?? x.fill[bare(ref)] ?? { fill: 'none', strike: false }),
-            visual: ref => x.vis[ref] ?? { kind: 'none' },
-          })
-          const run = (x: World) => evalCaps([cfg], controls, obsOf(x), { kindOf: () => 'bar' })[cfg.capabilityId]!
-          const base = run(w)
-          if (base.status !== 'discriminating' || base.matched !== winner) continue
-          exercised++
-          const clone = (): World => JSON.parse(JSON.stringify(w)) as World
-          const refused = (x: World, what: string): void => { const r = run(x); expect(r.status, `${c.id} ${cfg.id} winner ${winner}: ${what} -> ${r.status} ${r.reason}`).not.toBe('discriminating') }
-          // 1. every twin blank.
-          const blank = clone()
-          for (const t of twins) { blank.vis[t] = { kind: 'none' }; blank.fill[t] = { fill: 'none', strike: false } }
-          if (twins.some(t => cfg.twinExpect?.[t] === 'visual')) { refused(blank, 'blank twins'); corruptions.blank!++ }
-          // 2. a visual in every required-empty cell (the winner predicts nothing there), target and twin alike.
-          const empty = clone()
-          let touched = 0
-          for (const ref of cfg.refs) {
-            const tok = cfg.hypotheses[winner]![ref]!
-            const t = twinOf(tok)
-            const predictsNothing = t ? cfg.twinExpect?.[t] === 'empty' : tok === 'none'
-            if (!predictsNothing) continue
-            touched++
-            for (const r of [bare(ref), ...(t ? [t] : [])]) { if (crop) empty.vis[r] = { kind: 'bar', left: 2, right: 7 }; else empty.fill[r === bare(ref) ? ref : r] = { fill: 'FF123456', strike: false } }
+          const twins = [...twinExp.keys()].sort()
+          const shows = (t: string, i: number): { vis: S5Visual; fill: Fill } => {
+            const e = twinExp.get(t)!
+            const on = e.exp === 'visual' || (e.crop && e.exp === 'either')
+            if (!on) return { vis: { kind: 'none' }, fill: NONE }
+            if (!e.crop) return { vis: { kind: 'none' }, fill: { fill: `FF${(0x200000 + i * 0x10101).toString(16).toUpperCase().padStart(6, '0')}`, strike: false } }
+            return { vis: e.kind === 'icon' ? { kind: 'icon', cls: `cls-${i}`, left: 2, top: 2 } : { kind: 'bar', left: 2, right: 10 + 6 * i }, fill: NONE }
           }
-          if (touched > 0) { refused(empty, 'visuals in required-empty cells'); corruptions.empty!++ }
-          // 3. every positive control blank.
-          const ctl = clone()
-          const positives = twins.filter(t => cfg.twinExpect?.[t] === 'visual')
-          for (const t of positives) { ctl.vis[t] = { kind: 'none' }; ctl.fill[t] = { fill: 'none', strike: false } }
-          if (positives.length > 0) { refused(ctl, 'blank positive controls'); corruptions.controls!++ }
-          // 4. shift toward the rival into the shared tolerance band (bars: +-1 px of both twins), so no cell decides.
-          if (crop) {
-            const shift = clone()
-            let banded = 0
-            for (const rival of names.filter(n => n !== winner)) {
-              for (const ref of cfg.refs) {
-                const tw = twinOf(cfg.hypotheses[winner]![ref]!)
-                const tr = twinOf(cfg.hypotheses[rival]![ref]!)
-                if (!tw || !tr || tw === tr) continue
-                const vw = shift.vis[tw]!
-                const vr = shift.vis[tr]!
-                if (vw.kind !== 'bar' || vr.kind !== 'bar') continue
-                shift.vis[tr] = { ...vr, right: vw.right + 2 }
-                shift.vis[bare(ref)] = { ...vw, right: vw.right + 1 }
-                banded++
+          for (const winner of names) {
+            const key = `${c.id}|${cap}|${order}|${winner}`
+            triples.push(key)
+            // A world consistent with `winner` across the whole group: twins render their expected state (distinct
+            // visuals), targets what the winner predicts, literal positive controls their fixed token.
+            const w: World = { fill: {}, vis: {} }
+            let conflict: string | undefined
+            const setFill = (ref: string, f: Fill): void => { const p = w.fill[ref]; if (p && (p.fill !== f.fill || p.strike !== f.strike)) conflict ??= ref; w.fill[ref] = f }
+            const setVis = (ref: string, v: S5Visual): void => { const p = w.vis[ref]; if (p && JSON.stringify(p) !== JSON.stringify(v)) conflict ??= ref; w.vis[ref] = v }
+            twins.forEach((t, i) => { const s = shows(t, i); setVis(t, s.vis); setFill(t, s.fill) })
+            for (const x of cfgs.filter(live)) {
+              for (const [ref, tok] of Object.entries(x.positiveControls ?? {})) setFill(ref, parse(tok))
+              const preds = x.hypotheses[winner]
+              if (!preds) continue
+              for (const ref of x.refs) {
+                const tok = preds[ref]!
+                const t = twinOf(tok)
+                if (t) { setVis(bare(ref), w.vis[t]!); setFill(ref, { fill: w.fill[t]!.fill, strike: tok.endsWith('+strike') }) } else { setVis(bare(ref), { kind: 'none' }); setFill(ref, parse(tok)) }
               }
             }
-            if (banded > 0) { refused(shift, 'tolerance-band shift'); corruptions.shift!++ }
+            const obsOf = (x: World): FormulaObservation => ({ fill: ref => x.fill[ref] ?? x.fill[bare(ref)] ?? NONE, visual: ref => x.vis[ref] ?? { kind: 'none' } })
+            const run = (x: World) => evalCaps(cfgs, controls, obsOf(x), { kindOf })[cap]!
+            if (conflict) { unbuilt.push(`${key}: world-conflict ${conflict}`); continue }
+            const base = run(w)
+            if (base.status !== 'discriminating' || base.matched !== winner) { unbuilt.push(`${key}: ${base.status}${base.code ? ` ${base.code}` : ''}`); continue }
+            built.push(key)
+            const clone = (): World => JSON.parse(JSON.stringify(w)) as World
+            const refused = (x: World, what: string): void => {
+              const r = run(x)
+              expect(r.status, `${key}: ${what} -> ${r.status} ${r.reason}`).not.toBe('discriminating')
+              corruptions[what]!++
+              const o = `${what} -> ${r.code ?? r.status}`
+              outcomes[o] = (outcomes[o] ?? 0) + 1
+            }
+            const visualFor = (x: S5Configuration): S5Visual => (kindOf(x) === 'icon' ? { kind: 'icon', cls: 'intruder', left: 2, top: 2 } : { kind: 'bar', left: 2, right: 7 })
+            // 1. every twin blank (applies when the group names a twin expected to render).
+            if (twins.some(t => twinExp.get(t)!.exp === 'visual')) { const x = clone(); for (const t of twins) { x.vis[t] = { kind: 'none' }; x.fill[t] = NONE }; refused(x, 'blank-twins') }
+            // 2. a visual in every cell the winner requires empty (a literal none, or a twin expected empty), target and twin.
+            {
+              const x = clone()
+              let touched = 0
+              for (const cfg of cfgs.filter(evidenceOf)) {
+                const preds = cfg.hypotheses[winner]
+                if (!preds) continue
+                for (const ref of cfg.refs) {
+                  const t = twinOf(preds[ref]!)
+                  if (!(t ? cfg.twinExpect?.[t] === 'empty' : preds[ref] === 'none')) continue
+                  touched++
+                  for (const r of [ref, ...(t ? [t] : [])]) { if (cfg.observable === 'crop') x.vis[bare(r)] = visualFor(cfg); else x.fill[r] = { fill: 'FF123456', strike: false } }
+                }
+              }
+              if (touched > 0) refused(x, 'required-empty-visuals')
+            }
+            // 3. every twin positive control blank.
+            const positives = twins.filter(t => twinExp.get(t)!.exp === 'visual')
+            if (positives.length > 0) { const x = clone(); for (const t of positives) { x.vis[t] = { kind: 'none' }; x.fill[t] = NONE }; refused(x, 'blank-twin-controls') }
+            // 4. every literal DXF positive control blank (its DisplayFormat shows no fill or font).
+            const dxf = cfgs.filter(live).flatMap(x => Object.keys(x.positiveControls ?? {}))
+            if (dxf.length > 0) { const x = clone(); for (const r of dxf) x.fill[r] = NONE; refused(x, 'blank-dxf-controls') }
+            // 5. bars moved into the +-1 px band shared by the winner's and a rival's twin, so no cell decides.
+            {
+              const x = clone()
+              let banded = 0
+              for (const cfg of evidence.filter(e => e.observable === 'crop' && kindOf(e) === 'bar')) {
+                for (const rival of Object.keys(cfg.hypotheses).filter(n => n !== winner)) {
+                  for (const ref of cfg.refs) {
+                    const tw = twinOf(cfg.hypotheses[winner]?.[ref] ?? '')
+                    const tr = twinOf(cfg.hypotheses[rival]![ref]!)
+                    if (!tw || !tr || tw === tr) continue
+                    const vw = x.vis[tw]!
+                    const vr = x.vis[tr]!
+                    if (vw.kind !== 'bar' || vr.kind !== 'bar') continue
+                    x.vis[tr] = { ...vr, right: vw.right + 2 }
+                    x.vis[bare(ref)] = { ...vw, right: vw.right + 1 }
+                    banded++
+                  }
+                }
+              }
+              if (banded > 0) refused(x, 'tolerance-shift')
+            }
+            // 6. disjoint-rival witnesses: applies to an evidence configuration of twin tokens in which every cell that
+            // separates the winner from a rival separates it from >= 2 rivals by token. At each such cell all rivals but
+            // one render the winner's twin's rendering (only onto a twin whose fixed expectation admits it), so each cell
+            // rejects exactly one rival. Literal-token fill configurations are structurally immune: their predictions are
+            // the observables, so no rendering can make a rival's literal agree with the winner's.
+            for (const cfg of evidence) {
+              const a = cfg.hypotheses[winner]
+              if (!a) continue
+              const rivals = Object.keys(cfg.hypotheses).filter(n => n !== winner)
+              const designed = cfg.refs.filter(ref => rivals.some(r => cfg.hypotheses[r]![ref] !== a[ref]))
+              const exp = (t: string): string => cfg.twinExpect?.[t] ?? 'either'
+              let j = 0
+              const plan: Array<[string, string]> = []
+              const ok = designed.length > 0 && designed.every(ref => {
+                const tw = twinOf(a[ref]!)
+                const differing = rivals.filter(r => cfg.hypotheses[r]![ref] !== a[ref])
+                if (!tw || differing.length < 2 || differing.some(r => !twinOf(cfg.hypotheses[r]![ref]!))) return false
+                const copyable = (r: string): boolean => { const tr = twinOf(cfg.hypotheses[r]![ref]!)!; return exp(tr) === exp(tw) || exp(tr) === 'either' }
+                const stuck = differing.filter(r => !copyable(r))
+                if (stuck.length > 1) return false
+                const keep = stuck[0] ?? differing[j++ % differing.length]!
+                for (const r of differing) if (r !== keep) plan.push([twinOf(cfg.hypotheses[r]![ref]!)!, tw])
+                return true
+              })
+              if (!ok) continue
+              const x = clone()
+              for (const [tr, tw] of plan) { x.vis[tr] = x.vis[tw]!; x.fill[tr] = x.fill[tw]! }
+              refused(x, 'disjoint-rivals')
+            }
           }
         }
       }
     }
-    expect(exercised).toBeGreaterThan(20)
-    for (const [k, n] of Object.entries(corruptions)) expect(n, `${k} corruptions exercised`).toBeGreaterThan(0)
+    // Coverage is explicit: every triple either builds a verifying baseline or is listed here with its refusal.
+    expect([...built, ...unbuilt.map(u => u.slice(0, u.indexOf(': ')))].sort()).toEqual([...triples].sort())
+    expect(unbuilt).toEqual(EXPECTED_UNBUILT)
+    expect([...kinds].sort()).toEqual(['crop:bar', 'crop:icon', 'fill:fill'])
+    expect({ triples: triples.length, built: built.length, ...corruptions }).toEqual(EXPECTED_COVERAGE)
+    expect(outcomes).toEqual(EXPECTED_OUTCOMES)
   })
 })
+
+/**
+ * Fix round 6: the (case|capability|retained order|reading) baselines no consistent synthetic world verifies, and why.
+ * Each is a refusal by design, never a skip:
+ * - under the retained order B2:B4 D5:D8, first-listed and bounding-box predict the same tokens at every cell
+ *   (indistinguishable readings are never published as distinct);
+ * - bar:bounds-formula / zero names only the degenerate [0, 0] twins (`either`), so it has no validated non-empty witness;
+ * - icon:thresholds-formula / ignored names only the V twins, under no icon rule (`empty`): empty cells alone prove nothing.
+ */
+const EXPECTED_UNBUILT: readonly string[] = [
+  'stage5-formula-anchor-multi|formula:anchor-multi-range|B2:B4 D5:D8|first-listed: non-discriminating',
+  'stage5-formula-anchor-multi|formula:anchor-multi-range|B2:B4 D5:D8|bounding-box: non-discriminating',
+  'stage5-cfvo-formulas|bar:bounds-formula|-|zero: refused formula-twin-blank',
+  'stage5-cfvo-formulas|icon:thresholds-formula|-|ignored: refused formula-twin-blank',
+]
+const EXPECTED_COVERAGE = { triples: 169, built: 165, 'blank-twins': 47, 'required-empty-visuals': 94, 'blank-twin-controls': 47, 'blank-dxf-controls': 118, 'tolerance-shift': 4, 'disjoint-rivals': 28 }
+/** How each corruption refuses (a corruption can also eliminate the winner or leave two readings standing). */
+const EXPECTED_OUTCOMES: Readonly<Record<string, number>> = {
+  'blank-twins -> formula-twin-missing': 47,
+  'required-empty-visuals -> formula-hypothesis-none': 79,
+  'required-empty-visuals -> formula-unexpected-visual': 15,
+  'blank-twin-controls -> formula-twin-missing': 47,
+  'blank-dxf-controls -> formula-positive-control-failed': 118,
+  'tolerance-shift -> formula-replication-shortfall': 2,
+  'tolerance-shift -> non-discriminating': 2,
+  'disjoint-rivals -> formula-replication-shortfall': 15,
+  'disjoint-rivals -> non-discriminating': 12,
+  'disjoint-rivals -> formula-hypothesis-none': 1,
+}

@@ -503,10 +503,14 @@ export function buildClockProbeScript(c: CfOracleCase, workbookName: string): st
   ]
 }
 
-/** The cells a dynamic refresh reads: every `post:` ref and its same-content control (the evaluator checks both). */
+/**
+ * The cells a dynamic refresh reads: every `post:` ref, every `post:` literal positive control (fix round 6) and their
+ * same-content controls (the evaluator checks all of them).
+ */
 export function dynamicRefreshRefs(c: CfOracleCase): string[] {
   const out = new Set<string>()
-  for (const ref of c.formulaDynamicRefresh?.refs ?? []) {
+  const controls = (c.formulaConfigurations ?? []).flatMap(cfg => Object.keys(cfg.positiveControls ?? {}).filter(r => r.startsWith('post:')).map(r => r.slice(5)))
+  for (const ref of [...(c.formulaDynamicRefresh?.refs ?? []), ...controls]) {
     out.add(ref)
     const ctrl = c.expected.cells.find(e => e.ref === ref)?.controlRef
     if (ctrl) out.add(ctrl)

@@ -5649,9 +5649,11 @@ const fillToken = (o: { fill: string; strike: boolean }): string => `${o.fill}${
  * - required-visual: the cell must render a validated visual (a Stage 3 bar, a Stage 4 icon class, or a fill checked
  *   against its unformatted control), else `formula-twin-missing`;
  * - required-empty: the cell must be validated empty by the same measurement, else `formula-unexpected-visual`.
- * A cell is decisive against a rival only when its observation matches the winner and contradicts the rival's prediction
- * beyond tolerance (a cell within tolerance of both decides nothing); every replication group a configuration designs to
- * separate the pair needs >= 2 such cells. A bar or icon configuration also needs >= 2 required-visual witnesses.
+ * A cell is decisive only when its observation matches the winner and contradicts, beyond tolerance, every rival whose
+ * prediction there differs from the winner's (fix round 6: a cell within tolerance of any of them decides nothing, so
+ * cells that each reject a different rival never add up); every replication group a configuration designs to separate a
+ * rival needs >= 2 decisive cells. A bar or icon configuration also needs >= 2 required-visual witnesses. Before any of
+ * this, every live configuration's positive controls (twins expected to render, literal `positiveControls`) are validated.
  */
 function s5Witness(
   evidence: readonly S5Configuration[],
@@ -5685,12 +5687,21 @@ function s5Witness(
     }
     if (cfg.observable === 'crop' && witnesses < 2) return refuse('formula-twin-blank', `${cfg.id}: ${witnesses} validated non-empty ${ctx.kindOf(cfg)} witness${witnesses === 1 ? '' : 'es'} for ${winner}, fewer than 2 (S4-REPLICATE): empty cells alone prove nothing`, observed)
     const keyOf = (ref: string): string => (cfg.replicateBy === 'column' ? /^[A-Z]+/.exec(s5Bare(ref))![0] : cfg.id)
-    for (const rival of Object.keys(cfg.hypotheses).filter(n => n !== winner)) {
-      const b = cfg.hypotheses[rival]!
-      const designed = cfg.refs.filter(ref => a[ref] !== b[ref])
+    // Fix round 6 (codex P1 #2): a cell is decisive only when it matches the winner and contradicts, beyond tolerance,
+    // every rival whose prediction there differs from the winner's (a rival predicting the winner's own token at a cell
+    // cannot be contradicted there by any rendering). The predicate is computed once per cell, then each rival the
+    // configuration separates needs >= 2 decisive cells in each replication group where it differs.
+    const rivals = Object.keys(cfg.hypotheses).filter(n => n !== winner)
+    const differing = (ref: string): string[] => rivals.filter(r => cfg.hypotheses[r]![ref] !== a[ref])
+    const decisive = new Set(cfg.refs.filter(ref => {
+      const d = differing(ref)
+      return d.length > 0 && matches(cfg, ref, a[ref]!) === true && d.every(r => matches(cfg, ref, cfg.hypotheses[r]![ref]!) === false)
+    }))
+    for (const rival of rivals) {
+      const designed = cfg.refs.filter(ref => differing(ref).includes(rival))
       for (const key of new Set(designed.map(keyOf))) {
-        const decisive = designed.filter(ref => keyOf(ref) === key && matches(cfg, ref, a[ref]!) === true && matches(cfg, ref, b[ref]!) === false)
-        if (decisive.length < 2) return refuse('formula-replication-shortfall', `S4-REPLICATE: configuration ${cfg.replicateBy === 'column' ? key : cfg.id} has ${decisive.length} decisive cell${decisive.length === 1 ? '' : 's'}, fewer than 2 (${winner} vs ${rival}: a cell within tolerance of both decides nothing)`, observed)
+        const n = designed.filter(ref => keyOf(ref) === key && decisive.has(ref)).length
+        if (n < 2) return refuse('formula-replication-shortfall', `S4-REPLICATE: configuration ${cfg.replicateBy === 'column' ? key : cfg.id} has ${n} decisive cell${n === 1 ? '' : 's'} against ${rival}, fewer than 2 (${winner}: a decisive cell contradicts every rival that differs there, beyond tolerance; a cell rejecting one rival while another matches it decides nothing)`, observed)
       }
     }
   }
@@ -5771,6 +5782,24 @@ export function evaluateFormulaCapabilities(
         if (got === undefined) control ??= refuse('missing-capture', `${cfg.id}: twin ${t} cannot be measured`, observed)
         else if (want === 'visual' && got !== 'visual') control ??= refuse('formula-twin-missing', `${cfg.id}: the positive control ${t} renders nothing against its unformatted control, so it predicts nothing`, observed)
         else if (want === 'empty' && got !== 'empty') control ??= refuse('formula-unexpected-visual', `${cfg.id}: twin ${t} should render nothing but shows a visual`, observed)
+      }
+    }
+    // Fix round 6 (codex P1 #1): every live configuration holds at least one functioning positive control, validated
+    // here before any reading is judged, even when the winning reading predicts only empty cells. A twin expected to
+    // render (validated above) is one; a literal control must show exactly its fixed DisplayFormat token in the
+    // configuration's own observation table, and its same-content control nothing.
+    for (const cfg of cfgs.filter(c => c.record === undefined)) {
+      if (control) break
+      const twins = Object.entries(cfg.twinExpect ?? {}).filter(([, e]) => e === 'visual').length
+      const literal = Object.entries(cfg.positiveControls ?? {})
+      if (twins + literal.length === 0) { control = refuse('formula-positive-control-missing', `${cfg.id}: no positive control (a twin expected to render or a literal-rule control) was fixed before capture, so blank evidence cannot be told from a failed readback`, observed); break }
+      for (const [ref, want] of literal) {
+        const o = obs.fill(ref)
+        const ctrl = controls[s5Bare(ref)]
+        const co = ctrl !== undefined ? obs.fill(`${s5PrefixOf(ref)}${ctrl}`) : undefined
+        if (!o || !co) { control = refuse('fill-unobserved', `${cfg.id}: positive control ${ref}${o ? ` (its control ${ctrl ?? '(none)'})` : ''} has no DisplayFormat observation`, observed); break }
+        if (fillToken(o) !== want) { control = refuse('formula-positive-control-failed', `${cfg.id}: the literal positive control ${ref} shows ${fillToken(o)}, not ${want}: the readback does not show the rule's format, so no reading is judged`, observed); break }
+        if (co.fill !== 'none' || co.strike) { control = refuse('formula-control-formatted', `${cfg.id}: the same-content control ${ctrl} of positive control ${ref} shows ${fillToken(co)}`, observed); break }
       }
     }
     if (control) { out[cap] = control; continue }
@@ -5967,7 +5996,7 @@ export function resolveFormulaConfigurations(c: CfOracleCase, parts?: Map<string
 }
 
 /** Whether a crop configuration measures bars or icons: the visual rule covering its first designated cell. */
-function visualKindOf(c: CfOracleCase): (cfg: S5Configuration) => 'bar' | 'icon' {
+export function visualKindOf(c: CfOracleCase): (cfg: S5Configuration) => 'bar' | 'icon' {
   return cfg => (c.markers.some(m => m.ruleType === 'iconSet' && cfg.refs.some(r => isCellInSqref(s5Bare(r), m.sqref))) ? 'icon' : 'bar')
 }
 

@@ -369,6 +369,8 @@ export type CfRefusalCode =
   | 'formula-twin-blank'
   | 'formula-twin-missing'
   | 'formula-unexpected-visual'
+  | 'formula-positive-control-missing'
+  | 'formula-positive-control-failed'
 
 export interface VerifiedEvidence {
   kind: 'verified'
@@ -5699,6 +5701,14 @@ export interface S5Configuration {
    * table (`hypotheses` is the table of the authored order).
    */
   orderedHypotheses?: { capabilityId: string; tables: Readonly<Record<string, Readonly<Record<string, Readonly<Record<string, string>>>>>> }
+  /**
+   * Fix round 6 (blank DXF evidence): literal positive controls, ref (with the configuration's own `pre:`/`calc:`/`post:`
+   * prefix) -> the exact DisplayFormat token (fill, `+strike`) fixed before capture. Each is a cell under a literal `cellIs`
+   * rule (`formula:positive-control`) on the dxf the configuration's readings predict; its DisplayFormat must show that
+   * token, and its same-content control nothing, before any reading is judged. A configuration whose twins hold no
+   * `visual` expectation carries these; one with neither refuses (`formula-positive-control-missing`).
+   */
+  positiveControls?: Readonly<Record<string, string>>
   note?: string
 }
 
@@ -6982,6 +6992,53 @@ function authoredFixture(): S5Fixture {
   })
 }
 
+/** The literal positive-control rules (fix round 6): one per dxf, the token its DisplayFormat shows, and the readings' tokens it vouches for. */
+const S5_POSITIVE_CONTROLS: ReadonlyArray<{ dxf: 0 | 1 | 2; token: string; vouches: (tok: string) => boolean }> = [
+  { dxf: 0, token: S5_RED, vouches: t => t.startsWith(S5_RED) },
+  { dxf: 1, token: S5_GREEN, vouches: t => t.startsWith(S5_GREEN) },
+  { dxf: 2, token: `${NONE}+strike`, vouches: t => t.endsWith('+strike') },
+]
+
+/**
+ * Fix round 6 (codex P1 #1, blank DXF evidence): every live configuration needs a functioning positive control. A
+ * configuration whose twins hold no `visual` expectation (a DisplayFormat configuration of literal tokens) gains literal
+ * controls: a cell holding 1 under `cellIs greaterThan 0` on each dxf its readings predict, in column B below every row
+ * the fixture uses (inside the existing columns, so no same-content control moves; outside every sqref and every
+ * whole-column reference, which name columns A and F..J only). The cells are designated, so each has its own
+ * same-content control, and are read in the configuration's own observation table (its ref prefix).
+ */
+function withPositiveControls(fx: S5Fixture): S5Fixture {
+  if (fx.status === 'unsupported') return fx
+  const lacking = fx.configurations.filter(cfg => cfg.record === undefined && !Object.values(cfg.twinExpect ?? {}).includes('visual'))
+  if (lacking.length === 0) return fx
+  const literals = (cfg: S5Configuration): string[] => Object.values(cfg.hypotheses).flatMap(h => Object.values(h)).filter(t => !t.startsWith('twin:'))
+  const needed = S5_POSITIVE_CONTROLS.filter(d => lacking.some(cfg => literals(cfg).some(d.vouches)))
+  const base = s5CellsAt(fx)
+  const rows = [...Object.keys(base), ...fx.configurations.flatMap(cfg => cfg.refs.map(r => r.replace(/^(pre|calc|post):/, ''))), ...fx.rules.flatMap(r => r.sqref.split(/[\s:]+/))].map(rowOfRef).filter(r => r <= 1000)
+  const top = Math.max(...rows, 1)
+  const at = (needed.length > 0 ? needed : [S5_POSITIVE_CONTROLS[0]!]).map((d, i) => ({ ...d, ref: `B${top + 1 + i}` }))
+  for (const p of at) {
+    if (fx.rules.some(r => isCellInSqrefLocal(p.ref, r.sqref)) || base[p.ref] !== undefined) throw new Error(`${fx.id}: positive control ${p.ref} is not a free cell`)
+    if (fx.rules.some(r => r.marker.formulas.some(f => /\$?B:\$?B/.test(f)))) throw new Error(`${fx.id}: a rule reads all of column B`)
+  }
+  const priority = Math.max(0, ...fx.rules.map(r => r.marker.priority ?? 0)) + 1
+  const added = Object.fromEntries(at.map(p => [p.ref, 1 as S5Value]))
+  const cells = fx.cells
+  return {
+    ...fx,
+    cells: typeof cells === 'function' ? (anchor: number) => ({ ...cells(anchor), ...added }) : { ...cells, ...added },
+    rules: [...fx.rules, ...at.map((p, i) => s5CellIs('formula:positive-control', p.ref, priority + i, 'greaterThan', ['0'], { dxf: p.dxf, literal: true }))],
+    configurations: fx.configurations.map(cfg => {
+      if (!lacking.includes(cfg)) return cfg
+      const prefixes = new Set(cfg.refs.map(r => /^(pre|calc|post):/.exec(r)?.[0] ?? ''))
+      if (prefixes.size !== 1) throw new Error(`${fx.id} ${cfg.id}: mixed observation tables`)
+      const prefix = [...prefixes][0]!
+      const mine = at.filter(p => literals(cfg).some(p.vouches))
+      return { ...cfg, positiveControls: Object.fromEntries((mine.length > 0 ? mine : [at[0]!]).map(p => [`${prefix}${p.ref}`, p.token])) }
+    }),
+  }
+}
+
 /** Attaches the expected twin renderings to every configuration that names a twin (Ruling S5-WITNESS). */
 const withEmptyTwins = (fx: S5Fixture): S5Fixture => ({
   ...fx,
@@ -7015,7 +7072,7 @@ export const CF_STAGE5_FIXTURES: readonly S5Fixture[] = ([
   activePresentFixture('bar'),
   activePresentFixture('icon'),
   ...S5_UNRESOLVED.map(unresolvedFixture),
-] as const satisfies readonly S5Fixture[]).map(withEmptyTwins)
+] as const satisfies readonly S5Fixture[]).map(withEmptyTwins).map(withPositiveControls)
 
 /** The brief's matrix rows -> the workbooks that answer them ("one workbook each" rows and clock splits have several). */
 export const CF_STAGE5_GROUPS: Readonly<Record<string, readonly string[]>> = {
@@ -7065,6 +7122,7 @@ export function s5DesignatedRefs(fx: S5Fixture): string[] {
   const out = new Set<string>()
   for (const cfg of fx.configurations) {
     for (const ref of cfg.refs) out.add(stripPrefix(ref))
+    for (const ref of Object.keys(cfg.positiveControls ?? {})) out.add(stripPrefix(ref))
     for (const preds of Object.values(cfg.hypotheses)) for (const tok of Object.values(preds)) {
       const m = /^twin:([A-Z]+\d+)/.exec(tok)
       if (m) out.add(m[1]!)
@@ -7207,6 +7265,7 @@ export const CF_STAGE5_NONDISCRIMINATING: Readonly<Record<string, string>> = {
   'formula:active-present-scale-twin': 'The non-activated twin of stage5-active-present-scale: a comparison reference.',
   'formula:active-present-bar-twin': 'The non-activated twin of stage5-active-present-bar: a comparison reference.',
   'formula:active-present-icon-twin': 'The non-activated twin of stage5-active-present-icon: a comparison reference.',
+  'formula:positive-control': 'Literal positive controls (fix round 6): a cellIs rule on each predicted dxf, proving the DisplayFormat readback shows a format before any reading is judged; never a question itself.',
 }
 
 /** Complete capability registry for every Stage 5 marker, configuration and reused capture (one entry per id). */
