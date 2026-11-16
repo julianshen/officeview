@@ -116,7 +116,10 @@ export class Pool {
   /** Queued admission jobs waiting to start: resolve(true) = started, resolve(false) = cancelled. */
   private waiters = new Map<number, (started: boolean) => void>()
   /** Worker-time preparation reservations (owner ruling, round 13b). */
-  private prep = { reserved: 0, peak: 0, peakPerWorker: 0 }
+  private prep = { reserved: 0, peak: 0, peakPerWorker: 0, peakPerSession: 0 }
+  private prepBySession = new Map<string, number>()
+  /** Round 13c: each session's show slot (one running show job) and its waiters, in order. */
+  private showSessions = new Map<string, { busy: boolean; waiters: Array<() => void> }>()
 
   constructor(opts: PoolOptions = {}) {
     this.admission = new AdmissionModel(opts.caps ?? DEFAULT_CAPS)
@@ -367,21 +370,58 @@ export class Pool {
    */
   private async showJob(sessionId: string, docRef: string, contentPolicy: 'visible-only' | 'full', grant: number, msg: (docKey: string) => WorkerRequest, signal?: AbortSignal): Promise<unknown> {
     const admitted = await this.admit(sessionId, showRequestBytes(grant), signal)
-    const slot = this.pick(docRef)
     try {
-      return await this.exclusive(slot, async () => {
-        // Admitted, then waited for the worker: a socket that closed meanwhile has no use for the build.
-        if (signal?.aborted) throw new ShowCancelled()
-        const held = this.reservePrep(slot, grant)
-        try { return await this.showOnSlot(slot, admitted, docRef, contentPolicy, msg, signal) } finally { this.releasePrep(slot, held) }
-      })
+      // Round 13c: one running show job per session (its session slot first, then its worker's), so a viewer holds
+      // one grant at most whatever the worker count; a job waiting here holds no worker slot and no grant.
+      const leave = await this.sessionShowSlot(sessionId, signal)
+      try {
+        const slot = this.pick(docRef)
+        return await this.exclusive(slot, async () => {
+          // Admitted, then waited for the worker: a socket that closed meanwhile has no use for the build.
+          if (signal?.aborted) throw new ShowCancelled()
+          const held = this.reservePrep(slot, grant, sessionId)
+          try { return await this.showOnSlot(slot, admitted, docRef, contentPolicy, msg, signal) } finally { this.releasePrep(slot, held, sessionId) }
+        })
+      } finally { leave() }
     } finally {
       if (admitted.state === 'running') this.finish(admitted)
     }
   }
 
+  /**
+   * Round 13c: the session's show slot (one running show job per session). Resolves with its release, which hands
+   * the slot to the session's next waiter in order. `signal` aborted while waiting: the waiter leaves at once and
+   * `ShowCancelled` is thrown (it never took the slot).
+   */
+  private async sessionShowSlot(sessionId: string, signal?: AbortSignal): Promise<() => void> {
+    if (signal?.aborted) throw new ShowCancelled()
+    let q = this.showSessions.get(sessionId)
+    if (!q) this.showSessions.set(sessionId, q = { busy: false, waiters: [] })
+    const s = q
+    let released = false
+    const release = () => {
+      if (released) return
+      released = true
+      const next = s.waiters.shift()
+      if (next) next()
+      else { s.busy = false; this.showSessions.delete(sessionId) }
+    }
+    if (!s.busy) { s.busy = true; return release }
+    await new Promise<void>((ok, fail) => {
+      const onAbort = () => {
+        const i = s.waiters.indexOf(wake)
+        if (i >= 0) s.waiters.splice(i, 1)
+        fail(new ShowCancelled())
+      }
+      const wake = () => { signal?.removeEventListener('abort', onAbort); ok() }
+      s.waiters.push(wake)
+      signal?.addEventListener('abort', onAbort, { once: true })
+    })
+    return release
+  }
+
   /** The worker's preparation reservation for the job on its slot (at most `SHOW_BUILD_BYTES`; one per worker). */
-  private reservePrep(slot: Slot, grant: number): number {
+  private reservePrep(slot: Slot, grant: number, sessionId: string): number {
     const bytes = Math.max(0, Math.min(SHOW_BUILD_BYTES, Number.isFinite(grant) ? grant : SHOW_BUILD_BYTES))
     if (slot.prep !== 0) throw new Error('pool: a worker holds two preparation grants')
     slot.prep = bytes
@@ -389,9 +429,18 @@ export class Pool {
     if (this.prep.reserved > this.slots.length * SHOW_BUILD_BYTES) throw new Error('pool: preparation past workers × SHOW_BUILD_BYTES')
     this.prep.peak = Math.max(this.prep.peak, this.prep.reserved)
     this.prep.peakPerWorker = Math.max(this.prep.peakPerWorker, bytes)
+    const mine = (this.prepBySession.get(sessionId) ?? 0) + bytes
+    if (mine > SHOW_BUILD_BYTES) throw new Error('pool: a session past one preparation grant')
+    this.prepBySession.set(sessionId, mine)
+    this.prep.peakPerSession = Math.max(this.prep.peakPerSession, mine)
     return bytes
   }
-  private releasePrep(slot: Slot, bytes: number): void { slot.prep = 0; this.prep.reserved -= bytes }
+  private releasePrep(slot: Slot, bytes: number, sessionId: string): void {
+    slot.prep = 0
+    this.prep.reserved -= bytes
+    const mine = (this.prepBySession.get(sessionId) ?? 0) - bytes
+    if (mine > 0) this.prepBySession.set(sessionId, mine); else this.prepBySession.delete(sessionId)
+  }
 
   private async showOnSlot(slot: Slot, admitted: Job, docRef: string, contentPolicy: 'visible-only' | 'full', msg: (docKey: string) => WorkerRequest, signal?: AbortSignal): Promise<unknown> {
     const { docKey } = await this.ensureOpen(slot, docRef, contentPolicy)

@@ -60,4 +60,60 @@ describe('show admission: request charge at request time, the grant at slot time
       expect(pool.admission.peakSessionQueued).toBeLessThanOrEqual(DEFAULT_CAPS.perSessionQueue)
     } finally { pool.dispose() }
   }, 120_000)
+
+  it('one session, two documents on two workers: one show job runs at a time, so the session holds one grant at most', async () => {
+    const pool = new Pool({ workers: 2, testHooks: true })
+    try {
+      await pool.open('a', await flyInDeck(), 'full')
+      await pool.open('b', await flyInDeck(), 'full')
+      expect(pool.stats().affinity).toEqual({ a: 0, b: 1 })
+      const t0 = performance.now()
+      await Promise.all([
+        pool.showPlan('s1', { docRef: 'a', ...job, hangMs: 800 }, grant),
+        pool.showPlan('s1', { docRef: 'b', ...job, hangMs: 800 }, grant),
+      ])
+      const st = pool.stats()
+      expect(st.prep.peakPerSession).toBe(grant)
+      expect(st.prep.peak).toBe(grant)
+      expect(performance.now() - t0).toBeGreaterThan(1600)
+      expect(st.prep.reserved).toBe(0)
+    } finally { pool.dispose() }
+  }, 60_000)
+
+  it('two sessions still prepare in parallel on different workers', async () => {
+    const pool = new Pool({ workers: 2, testHooks: true })
+    try {
+      await pool.open('a', await flyInDeck(), 'full')
+      await pool.open('b', await flyInDeck(), 'full')
+      const t0 = performance.now()
+      await Promise.all([
+        pool.showPlan('s1', { docRef: 'a', ...job, hangMs: 1500 }, grant),
+        pool.showPlan('s2', { docRef: 'b', ...job, hangMs: 1500 }, grant),
+      ])
+      expect(performance.now() - t0).toBeLessThan(2900)
+      expect(pool.stats().prep).toMatchObject({ peak: 2 * grant, peakPerSession: grant, reserved: 0 })
+    } finally { pool.dispose() }
+  }, 60_000)
+
+  it("a job waiting for its session's running show job is cancelled cleanly when its socket closes", async () => {
+    const pool = new Pool({ workers: 2, testHooks: true })
+    try {
+      await pool.open('a', await flyInDeck(), 'full')
+      await pool.open('b', await flyInDeck(), 'full')
+      const first = pool.showPlan('s1', { docRef: 'a', ...job, hangMs: 800 }, grant)
+      await until(() => pool.stats().prep.reserved > 0)
+      const ac = new AbortController()
+      const waiting = pool.showPlan('s1', { docRef: 'b', ...job }, grant, ac.signal).then(() => 'built', (e: Error) => e.name)
+      await new Promise(r => setTimeout(r, 100))
+      // It waits for the session's running job, holding no worker slot and no grant.
+      expect(pool.stats().prep.reserved).toBe(grant)
+      expect(pool.stats().workers[1]!.busy).toBe(false)
+      ac.abort()
+      expect(await waiting).toBe('ShowCancelled')
+      await first
+      expect(pool.stats()).toMatchObject({ reserved: 0, running: 0, queued: 0, prep: { reserved: 0 } })
+      // The session's slot is free again.
+      expect('refused' in await pool.showPlan('s1', { docRef: 'b', ...job }, grant)).toBe(false)
+    } finally { pool.dispose() }
+  }, 60_000)
 })
