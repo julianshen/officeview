@@ -114,6 +114,21 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     'stage1-priority-composition:G2', // MOD(25,2)=1 expression rule (Stage 5)
     'stage1-priority-composition:G3', // MOD(14,2)=0 expression rule (Stage 5)
   ])
+  // Ruling S5-STUB (Task 35): each stub cell above, and the Stage 2-4 stub cells below, follows its successor
+  // capabilities. Once every one is verified the cell must be Excel's recorded outcome; until then it is withheld or Excel's
+  // recorded outcome, never anything else. The lists are the ruling's inventory plus what production itself gates the stub on
+  // (the dialect, the anchor and the formula:composition-stop-<kind> ahead of the lower rule).
+  const S5_STUB_DXF = ['formula:dialect-base', 'formula:anchor-single', 'formula:truth-boolean']
+  const S5_STUB_SUCCESSORS: Readonly<Record<string, readonly string[]>> = {
+    'stage1-blanks-errors': [...S5_STUB_DXF, 'formula:predicate-divergent', 'formula:fn-information', 'formula:fn-logical'],
+    'stage1-priority-composition': [...S5_STUB_DXF, 'formula:fn-math', 'formula:composition-stop-dxf', 'formula:composition-stub-successor-dxf'],
+    'stage2-scale-composition': [...S5_STUB_DXF, 'formula:fn-math', 'formula:composition-stop-scale', 'formula:composition-stub-successor-scale'],
+    'stage3-bar-composition': [...S5_STUB_DXF, 'formula:fn-math', 'formula:composition-stop-bar', 'formula:composition-stub-successor-bar'],
+    'stage4-icon-composition': [...S5_STUB_DXF, 'formula:fn-math', 'formula:composition-stop-icon', 'formula:composition-stub-successor-icon'],
+  }
+  /** `'withheld'`: the stub cell paints nothing and its successors are not all verified. `'compare'`: it must be Excel's. */
+  const stubOutcome = (cellKey: string, gotMatched: boolean): 'withheld' | 'compare' =>
+    !gotMatched && !S5_STUB_SUCCESSORS[cellKey.split(':')[0]!]!.every(id => VERIFIED_CAPABILITIES.has(id)) ? 'withheld' : 'compare'
 
   type Finding = { outcome: 'withheld'; reason: string }
 
@@ -192,6 +207,8 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     let stage4IconOnlyWithheld = 0
     let stage4Evidenced = 0
     let stage4StubWithheld = 0
+    let stage3StubCompared = 0
+    let stage4StubCompared = 0
 
     for (const c of manifest.cases) {
       if (c.status !== 'measured' || c.stage === 2) continue
@@ -222,10 +239,8 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
 
           // Ruling M3: Withheld Stage 5 expressions or Stage 2/3 visuals must be asserted
           // as withheld rather than skipped silently:
-          if (STAGE5_OR_DEFERRED_WITHHELD.has(cellKey)) {
-            expect(gotMatched, `${cellKey} should be withheld in Stage 1`).toBe(false)
-            continue
-          }
+          // S5-STUB: withheld until its successors are verified, otherwise compared with Excel below.
+          if (STAGE5_OR_DEFERRED_WITHHELD.has(cellKey) && stubOutcome(cellKey, gotMatched) === 'withheld') continue
           if (c.stage === 3) {
             stage3Checked++
             // Ruling S3-A / OD-7: a bar cell whose bar:* capabilities are not verified in production is WITHHELD,
@@ -252,9 +267,9 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
               const excelFilled = argbDelta(excel, 'FFFFFFFF') > 8
               if (STAGE3_NONBAR_WITHHELD[cellKey]) {
                 expect(STAGE3_NONBAR_WITHHELD[cellKey]!.outcome).toBe('withheld')
-                expect(gotMatched, `${cellKey} is withheld (${STAGE3_NONBAR_WITHHELD[cellKey]!.reason})`).toBe(false)
-                stage3NonBarWithheld++
-                continue
+                // S5-STUB: withheld until its successors are verified, otherwise compared with Excel's background below.
+                if (stubOutcome(cellKey, gotMatched) === 'withheld') { stage3NonBarWithheld++; continue }
+                stage3StubCompared++
               }
               expect(gotMatched, `${cellKey}: non-bar rules match where Excel paints a fill (Excel ${excel})`).toBe(excelFilled)
               if (excelFilled) expect(argbDelta(st!.fillColor!, excel), `${cellKey} fill ${st?.fillColor} vs Excel ${excel}`).toBeLessThanOrEqual(8)
@@ -281,9 +296,20 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
                 continue
               }
               // The Stage 5 expression stub (L, its capability withheld) is unresolved, so it paints no fill.
-              if (writers.some(m => m.ruleType === 'expression')) {
-                expect(gotMatched, `${cellKey}: the Stage 5 expression stub is withheld`).toBe(false)
+              // S5-STUB: withheld until its successors are verified, otherwise compared with Excel below.
+              const stub = writers.some(m => m.ruleType === 'expression')
+              if (stub && stubOutcome(cellKey, gotMatched) === 'withheld') {
                 stage4StubWithheld++
+                continue
+              }
+              if (stub) {
+                // Excel's recorded outcome: the stub's own fill where its expression matched. An icon-only match
+                // (iconApplied, the expression false) paints no style, since an icon never reaches the cell style.
+                const stubFill = writers.find(m => m.ruleType === 'expression')!.dxf?.fillRgb
+                const filled = exp.matched === true && exp.iconApplied !== true
+                expect(gotMatched, `${cellKey}: the stub paints exactly where Excel shows its fill`).toBe(filled)
+                if (filled && stubFill) expect(st?.fillColor, `${cellKey} fill`).toBe(stubFill)
+                stage4StubCompared++
                 continue
               }
               if (!caps.every(id => VERIFIED_CAPABILITIES.has(id))) continue
@@ -349,7 +375,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(stage3BarWithheld + stage3BarEvidenced).toBeLessThanOrEqual(stage3Checked)
     // Non-vacuous (Task 18b review): the non-bar outcomes on bar cells were compared with Excel's background.
     expect(stage3NonBarChecked).toBeGreaterThan(10)
-    expect(stage3NonBarWithheld).toBe(Object.keys(STAGE3_NONBAR_WITHHELD).length)
+    expect(stage3NonBarWithheld + stage3StubCompared).toBe(Object.keys(STAGE3_NONBAR_WITHHELD).length)
     // Stage 4 (non-vacuous, derived from the manifest): every ruled cell of a measured Stage 4 case is unverified, and
     // most of them are covered by icon rules only.
     const expectedStage4Unverified = manifest.cases
@@ -363,7 +389,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(stage4Unverified).toBe(expectedStage4Unverified)
     expect(stage4Evidenced).toBeGreaterThan(200)
     expect(stage4IconOnlyWithheld).toBeGreaterThan(200)
-    expect(stage4StubWithheld).toBe(4)
+    expect(stage4StubWithheld + stage4StubCompared).toBe(4)
   })
 
   it('proves all 53 previously withheld cells now paint under production evidence (C1)', async () => {
@@ -547,6 +573,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     let grandTotalChecked = 0
     let exactCount = 0
     let withheldCount = 0
+    let stubComparedCount = 0
     const caseCounts: Record<string, number> = {}
 
     for (const caseId of STAGE2_MEASURED_CASES) {
@@ -558,7 +585,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       const bytes = new Uint8Array(readFileSync(savedPath))
       const doc = await parseXlsx(await OfficePackage.load(bytes))
       const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
-      const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence })
+      const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, evaluation: cfDocumentEvaluationOf(doc) })
       expect(paint, `prepareCfPaint should succeed for ${caseId}`).toBeDefined()
       if (!paint) continue
 
@@ -583,7 +610,10 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
         const actualFill = st?.fillColor ?? 'FFFFFFFF'
 
         const finding = FINDINGS[cellKey]
-        if (finding) {
+        // S5-STUB: the stub's finding (L2:L5) holds until its successors are verified, then the cell is Excel's ARGB.
+        const stubCompared = finding !== undefined && /^stage2-scale-composition:L[2-5]$/.test(cellKey) && stubOutcome(cellKey, actualFill !== 'FFFFFFFF') === 'compare'
+        if (stubCompared) stubComparedCount++
+        if (finding && !stubCompared) {
           expect(finding.outcome).toBe('withheld')
           expect(actualFill, `${cellKey} finding: ${finding.reason}`).toBe('FFFFFFFF')
           withheldCount++
@@ -603,8 +633,8 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     }
     expect(grandTotalChecked).toBe(398)
     // Ruling F-2: cells that lost paint moved into typed withheld-only FINDINGS; none is an allowlisted wrong colour.
-    expect(exactCount).toBe(364)
-    expect(withheldCount).toBe(34)
+    expect(exactCount).toBe(364 + stubComparedCount)
+    expect(withheldCount).toBe(34 - stubComparedCount)
     expect(exactCount + withheldCount).toBe(grandTotalChecked)
   })
 
