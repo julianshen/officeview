@@ -1392,6 +1392,66 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(solidFails).toBe(255)
   }, 60_000)
 
+  it('stage 5 formula cells are withheld until their evidence lands', async () => {
+    // Withheld-only findings, as the guard below requires of every finding map (Lesson 1): empty until a capture lands.
+    const STAGE5_FINDINGS: Record<string, Finding> = {}
+    for (const [key, f] of Object.entries(STAGE5_FINDINGS)) expect(f.outcome, key).toBe('withheld')
+    const stage5 = manifest.cases.filter(c => c.stage === 5)
+    expect(stage5.map(c => c.id)).toEqual(CF_CASES.filter(c => c.stage === 5).map(c => c.id))
+    expect(stage5.length).toBeGreaterThan(20)
+    // The slot a formula-bearing rule writes: a DXF rule writes properties, a visual its own visual slot.
+    type Marker = (typeof stage5)[number]['markers'][number]
+    const slotOf = (m: Marker): 'properties' | 'colorScale' | 'dataBar' | 'iconSet' =>
+      m.ruleType === 'colorScale' ? 'colorScale' : m.ruleType === 'dataBar' ? 'dataBar' : m.ruleType === 'iconSet' ? 'iconSet' : 'properties'
+    const formulaSourced = (outcome: CfOutcome<CfCellState>, slots: ReadonlySet<string>): boolean =>
+      outcome.kind === 'ready' &&
+      ((slots.has('properties') && Object.keys(outcome.value.properties).length > 0) ||
+        [...slots].some(s => s !== 'properties' && (outcome.value.visual as Record<string, unknown> | undefined)?.[s] !== undefined))
+    // Teeth: a ready cell carrying the formula rule's fill, or its visual, is formula-sourced; refusals and empty cells are not.
+    expect(formulaSourced({ kind: 'ready', value: { properties: { fillColor: 'FFFFC7CE' } } }, new Set(['properties']))).toBe(true)
+    expect(formulaSourced({ kind: 'ready', value: { properties: {}, visual: { colorScale: { ruleId: 1, argb: 0 } } } } as unknown as CfOutcome<CfCellState>, new Set(['colorScale']))).toBe(true)
+    expect(formulaSourced({ kind: 'ready', value: { properties: {} } }, new Set(['properties']))).toBe(false)
+    expect(formulaSourced({ kind: 'no-match' }, new Set(['properties']))).toBe(false)
+    expect(formulaSourced({ kind: 'unresolved', reason: 'cf-unsupported-rule' }, new Set(['properties']))).toBe(false)
+    let covered = 0, withheld = 0, preparedSheets = 0, refusedSheets = 0
+    const violations: string[] = []
+    for (const c of stage5) {
+      const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))), parseOptionsFor(c))
+      const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+      const slotsAt = (ref: string): Set<string> => new Set(c.markers.filter(m => m.formula !== undefined && isCellInSqref(ref, m.sqref)).map(slotOf))
+      const designated = c.expected.cells.filter(e => slotsAt(e.ref).size > 0)
+      if (!sheet.conditionalFormatting) {
+        // Production refused every rule of the sheet at parse: nothing paints.
+        refusedSheets++
+        covered += designated.length
+        withheld += designated.length
+        continue
+      }
+      preparedSheets++
+      const memory = createCfMemory()
+      const service = createCfService(sheet.conditionalFormatting, memory, { evidence: cfRuntimeEvidence })
+      const stamp = { owner: 'conformance', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(sheet.conditionalFormatting), viewGen: 0, structureGen: 0, clockGen: 0 }
+      const source = residentSource(sheet, stamp, memory, 'engine')
+      for (const exp of designated) {
+        const { row, col } = refToRowCol(exp.ref)
+        const lease = await service.prepareCf({ stamp, sourceRects: [{ firstRow: row, lastRow: row, firstCol: col, lastCol: col }], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, source)
+        try {
+          covered++
+          const key = `${c.id}:${exp.ref}`
+          const outcome = lease.value.at(row, col)
+          if (formulaSourced(outcome, slotsAt(exp.ref)) && STAGE5_FINDINGS[key] === undefined) violations.push(`${key}: production paints a formula-sourced ${[...slotsAt(exp.ref)].join('/')} (${JSON.stringify(outcome.kind === 'ready' ? outcome.value : outcome)})`)
+          else withheld++
+        } finally {
+          lease.release()
+        }
+      }
+    }
+    expect(violations).toEqual([])
+    expect(covered).toBeGreaterThan(200)
+    expect(withheld).toBe(covered)
+    expect(preparedSheets + refusedSheets).toBe(stage5.length)
+  }, 120_000)
+
   it('guard: FINDINGS structure strictly disallows non-withheld outcomes', () => {
     // Type definition allows only { outcome: 'withheld', reason: string }
     type ConformanceFinding = { outcome: 'withheld'; reason: string }

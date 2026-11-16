@@ -108,6 +108,21 @@ import {
   verifyCfCase,
 } from '../scripts/cf-refs/verify'
 
+import {
+  CF_STAGE5_CAPABILITIES,
+  CF_STAGE5_CASES,
+  CF_STAGE5_FIXTURES,
+  CF_STAGE5_GROUPS,
+  CF_STAGE5_NONDISCRIMINATING,
+  CF_STAGE5_REUSED_CAPTURES,
+  CF_STAGE5_UNSUPPORTED,
+  type S5Configuration,
+} from '../scripts/cf-refs/cases'
+import { auditStage5Manifest, CF_STAGE5_PRODUCTION_READINGS, stage5Publication, type Stage5AuditReport } from '../scripts/cf-refs/audit'
+import { buildExplicitCalculationObservationScript, buildManualObservationScript, buildStage5CaptureScripts } from '../scripts/cf-refs/capture'
+import { buildCaseBuildScripts } from '../scripts/cf-refs/build'
+import { evaluateFormulaCapabilities, normalizeCfFormula, verifyMarkerInArchive, type FormulaObservation } from '../scripts/cf-refs/verify'
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const XML_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
 const NS_MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
@@ -3240,7 +3255,7 @@ describe('CF oracle verifier', () => {
     expect(CF_STAGE1_CASES).toHaveLength(13)
     expect(CF_STAGE2_CASES).toHaveLength(8)
     // Stage 4 (Task 24) appends its own registry after Stage 3's.
-    expect(CF_CAPABILITIES.length).toBe(CF_STAGE1_CAPABILITIES.length + CF_STAGE2_CAPABILITIES.length + CF_STAGE3_CAPABILITIES.length + CF_STAGE4_CAPABILITIES.length)
+    expect(CF_CAPABILITIES.length).toBe(CF_STAGE1_CAPABILITIES.length + CF_STAGE2_CAPABILITIES.length + CF_STAGE3_CAPABILITIES.length + CF_STAGE4_CAPABILITIES.length + CF_STAGE5_CAPABILITIES.length)
     expect(new Set(CF_CAPABILITIES.map(c => c.capabilityId)).size).toBe(CF_CAPABILITIES.length)
     expect(CF_CASES.slice(0, 21).map(c => c.stage)).toEqual([...Array(13).fill(1), ...Array(8).fill(2)])
 
@@ -4120,7 +4135,7 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     expect(CF_STAGE2_CASES).toHaveLength(8)
     expect(CF_STAGE3_CASES).toHaveLength(15)
     expect(CF_CASES.slice(0, 36).map(c => c.id)).toEqual([...CF_STAGE1_CASES, ...CF_STAGE2_CASES, ...CF_STAGE3_CASES].map(c => c.id))
-    expect(CF_CAPABILITIES.length).toBe(CF_STAGE1_CAPABILITIES.length + CF_STAGE2_CAPABILITIES.length + CF_STAGE3_CAPABILITIES.length + CF_STAGE4_CAPABILITIES.length)
+    expect(CF_CAPABILITIES.length).toBe(CF_STAGE1_CAPABILITIES.length + CF_STAGE2_CAPABILITIES.length + CF_STAGE3_CAPABILITIES.length + CF_STAGE4_CAPABILITIES.length + CF_STAGE5_CAPABILITIES.length)
     expect(new Set(CF_CAPABILITIES.map(c => c.capabilityId)).size).toBe(CF_CAPABILITIES.length)
     for (const c of manifest.cases.filter(x => x.stage !== 4)) expect(c.markers.some(m => m.icon !== undefined), c.id).toBe(false)
 
@@ -5408,5 +5423,330 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     expect(() => assertBuildDisplayUnlocked(() => false)).not.toThrow()
     // probeAndBuildCase checks first: with a locked display it throws before copying or opening the input.
     expect(() => probeAndBuildCase(c, new Set(), false, () => true)).toThrow(/display-locked/)
+  })
+})
+
+describe('Stage 5 formula oracle (Task 31)', () => {
+  const s5dirs: string[] = []
+  afterEach(() => {
+    for (const d of s5dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+  const loadManifest = (): CfManifest => JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
+
+  it('stage 5 cases join the manifest and stage 1–4 cases are unchanged', async () => {
+    const manifest = loadManifest()
+    expect(manifest.cases.map(c => c.id)).toEqual(CF_CASES.map(c => c.id))
+    // Stage 1-4 catalogues and capability ids are exactly what Stage 4 shipped.
+    expect([CF_STAGE1_CAPABILITIES.length, CF_STAGE2_CAPABILITIES.length, CF_STAGE3_CAPABILITIES.length, CF_STAGE4_CAPABILITIES.length]).toEqual([115, 46, 73, 145])
+    expect([CF_STAGE1_CASES.length, CF_STAGE2_CASES.length, CF_STAGE3_CASES.length, CF_STAGE4_CASES.length]).toEqual([13, 8, 15, 19])
+    expect(CF_CASES.slice(0, 55).map(c => c.id)).toEqual([...CF_STAGE1_CASES, ...CF_STAGE2_CASES, ...CF_STAGE3_CASES, ...CF_STAGE4_CASES].map(c => c.id))
+    expect(CF_CASES.slice(55).map(c => c.id)).toEqual(CF_STAGE5_CASES.map(c => c.id))
+    expect(CF_CAPABILITIES.length).toBe(CF_STAGE1_CAPABILITIES.length + CF_STAGE2_CAPABILITIES.length + CF_STAGE3_CAPABILITIES.length + CF_STAGE4_CAPABILITIES.length + CF_STAGE5_CAPABILITIES.length)
+    expect(new Set(CF_CAPABILITIES.map(c => c.capabilityId)).size).toBe(CF_CAPABILITIES.length)
+    // Stage 1-4 generated inputs are byte-identical to fc61c6c6's generator (digest of every case's archive hash).
+    const all = createHash('sha256')
+    for (const c of CF_CASES.filter(x => x.stage < 5)) all.update(`${c.id}:${sha256(await generateCaseArchive(c.id))}\n`)
+    expect(all.digest('hex')).toBe('c1daae80753c0dea2a10f782ac118a221f2df7fe1de83156e1a4bc08bcd89b36')
+
+    // The brief's matrix, row by row (CF_STAGE5_GROUPS maps a row to its workbooks).
+    const required: Record<string, string[]> = {
+      'stage5-formula-authored': ['formula:dialect-base', 'formula:dialect-x14'],
+      'stage5-formula-truthiness': ['formula:truth-number', 'formula:truth-boolean', 'formula:truth-text', 'formula:truth-blank', 'formula:truth-error', 'formula:truth-range', 'formula:truth-range-nested'],
+      'stage5-formula-anchor': ['formula:anchor-single', 'formula:anchor-mixed-abs', 'formula:anchor-multi-range'],
+      'stage5-formula-edge': ['formula:relative-wrap'],
+      'stage5-formula-functions': ['formula:fn-logical', 'formula:fn-information', 'formula:fn-text', 'formula:fn-math', 'formula:fn-aggregate', 'formula:fn-conditional-aggregate', 'formula:fn-date', 'formula:fn-row-column'],
+      'stage5-formula-hoist': ['formula:hoist-aggregate', 'formula:hoist-countif-frequency'],
+      'stage5-cellis-operands': ['formula:cellis-operand-reference', 'formula:cellis-operand-relative', 'formula:cellis-operand-expression', 'formula:cellis-operand-text', 'formula:cellis-operand-blank', 'formula:cellis-operand-error'],
+      'stage5-predicate-formulas': ['formula:predicate-divergent', 'formula:predicate-timeperiod-divergent'],
+      'stage5-clock-today': ['formula:fn-today'],
+      'stage5-calc-manual': ['formula:calc-manual-saved-values', 'formula:calc-manual-today'],
+      'stage5-composition': ['formula:composition-stub-successor-dxf', 'formula:composition-stub-successor-scale', 'formula:composition-stub-successor-bar', 'formula:composition-stub-successor-icon'],
+      'stage5-cross-sheet': ['formula:cross-sheet-reference', 'formula:cross-sheet-quoted-name', 'formula:cross-sheet-missing', 'formula:cellis-operand-cross-sheet'],
+      'stage5-cfvo-formulas': ['scale:thresholds-formula', 'bar:bounds-formula', 'icon:thresholds-formula', 'formula:cfvo-reference', 'formula:cfvo-expression', 'formula:cfvo-relative', 'formula:cfvo-nonnumeric'],
+      'stage5-cfvo-scope': ['formula:cfvo-scope-multi-range'],
+      'stage5-x14-scale': ['scale:dialect-standalone'],
+      'stage5-active-present': ['formula:active-present-scale', 'formula:active-present-bar', 'formula:active-present-icon'],
+      'stage5-unresolved-shapes': [],
+    }
+    expect(Object.keys(CF_STAGE5_GROUPS).sort()).toEqual(Object.keys(required).sort())
+    const grouped = Object.values(CF_STAGE5_GROUPS).flat()
+    expect([...grouped].sort()).toEqual(CF_STAGE5_CASES.map(c => c.id).sort())
+    for (const [row, caps] of Object.entries(required)) {
+      const owned = new Set(CF_STAGE5_CAPABILITIES.filter(e => CF_STAGE5_GROUPS[row]!.includes(e.caseId) || CF_STAGE5_REUSED_CAPTURES.some(r => r.capabilityId === e.capabilityId && row === 'stage5-composition')).map(e => e.capabilityId))
+      for (const cap of caps) expect(owned.has(cap), `${row} registers ${cap}`).toBe(true)
+    }
+    // At least one composition-* capability of its own beside the reused stub successors.
+    expect(CF_STAGE5_CAPABILITIES.filter(e => e.caseId === 'stage5-composition' && /^formula:composition-(?!stub)/.test(e.capabilityId)).length).toBeGreaterThan(3)
+    // The unresolved shapes lift nothing: one workbook per shape, every capability refused-unsupported.
+    for (const id of CF_STAGE5_GROUPS['stage5-unresolved-shapes']!) {
+      const c = CF_STAGE5_CASES.find(x => x.id === id)!
+      expect(c.status, id).toBe('unsupported')
+      expect(c.markers, id).toHaveLength(1)
+    }
+    for (const id of [...CF_STAGE5_GROUPS['stage5-active-present']!]) expect(CF_STAGE5_CASES.find(x => x.id === id)!.markers.filter(m => m.activePresent === true), id).toHaveLength(1)
+    // Reused Stage 1-4 captures name existing cases and cells.
+    for (const r of CF_STAGE5_REUSED_CAPTURES) {
+      const c = CF_CASES.find(x => x.id === r.caseId)
+      expect(c?.stage, r.caseId).toBeLessThan(5)
+      for (const ref of r.refs) expect(c!.expected.cells.some(e => e.ref === ref), `${r.caseId}:${ref}`).toBe(true)
+    }
+    // Every Stage 5 case is preparation only: nothing is claimed.
+    for (const c of manifest.cases.filter(x => x.stage === 5)) {
+      expect(['recipe-pending', 'unsupported'], c.id).toContain(c.status)
+      expect(c.expected.provenance, c.id).toBe('seed-hypothesis')
+      expect(c.expected.cells.every(e => e.fillSource === 'unverified' && e.matched === false), c.id).toBe(true)
+      expect(c.captures.every(cap => cap.pngSha256 === undefined), c.id).toBe(true)
+      expect(c.markers.every(m => m.part === 'xl/worksheets/sheet1.xml'), c.id).toBe(true)
+      const res = verifyCfCase(c, { rootDir: REPO_ROOT })
+      expect(res.kind, c.id).toBe('refusal')
+      expect(res.kind === 'refusal' && res.structuralValid, `${c.id}: ${res.kind === 'refusal' ? res.reason : ''}`).toBe(true)
+    }
+    for (const id of Object.keys({ ...CF_STAGE5_UNSUPPORTED, ...CF_STAGE5_NONDISCRIMINATING })) expect(CF_STAGE5_CAPABILITIES.some(e => e.capabilityId === id), id).toBe(true)
+  }, 120_000)
+
+  it('stage 5 hypotheses are fixed before capture and pairwise discriminating by design (Lessons 3, 14)', () => {
+    for (const fx of CF_STAGE5_FIXTURES) {
+      const c = CF_STAGE5_CASES.find(x => x.id === fx.id)!
+      expect(c.formulaConfigurations, fx.id).toEqual(fx.configurations)
+      const byCap = new Map<string, S5Configuration[]>()
+      for (const cfg of fx.configurations) byCap.set(cfg.capabilityId, [...(byCap.get(cfg.capabilityId) ?? []), cfg])
+      for (const [cap, cfgs] of byCap) {
+        const live = cfgs.filter(x => x.record === undefined)
+        if (live.length === 0) continue
+        const names = Object.keys(live[0]!.hypotheses).sort()
+        expect(names.length, `${fx.id} ${cap}`).toBeGreaterThanOrEqual(2)
+        for (const cfg of live) expect(Object.keys(cfg.hypotheses).sort(), `${fx.id} ${cfg.id} names`).toEqual(names)
+        for (const cfg of cfgs) {
+          for (const preds of Object.values(cfg.hypotheses)) expect(Object.keys(preds).sort(), `${fx.id} ${cfg.id} predicts every ref`).toEqual([...cfg.refs].sort())
+        }
+        // Every pair of hypotheses predicts different tokens at >= 2 refs of one configuration (twin tokens differ by twin
+        // cell, which the capture then decides; S4-REPLICATE).
+        for (let i = 0; i < names.length; i++) {
+          for (let j = i + 1; j < names.length; j++) {
+            const separated = live.some(cfg => cfg.refs.filter(ref => cfg.hypotheses[names[i]!]![ref] !== cfg.hypotheses[names[j]!]![ref]).length >= 2)
+            expect(separated, `${fx.id} ${cap}: ${names[i]} vs ${names[j]} separated at >= 2 cells of one configuration`).toBe(true)
+          }
+        }
+      }
+      // Each designated ref has a same-content control no rule covers, inside the capture range.
+      const cellRefs = new Set(c.expected.cells.map(e => e.ref))
+      for (const cfg of fx.configurations) {
+        for (const raw of cfg.refs) {
+          const ref = raw.replace(/^(pre|calc|post):/, '')
+          expect(cellRefs.has(ref), `${fx.id} ${cfg.id} ${ref} is an expected cell`).toBe(true)
+          const exp = c.expected.cells.find(e => e.ref === ref)!
+          expect(c.markers.some(m => isCellInSqref(exp.controlRef, m.sqref)), `${fx.id}: control ${exp.controlRef} of ${ref} is uncovered`).toBe(false)
+        }
+      }
+    }
+  })
+
+  it('formula marker pins rule formula, operands, cfvo f, dialect and activePresent exactly', () => {
+    const X14NS = 'xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"'
+    const sheet = (legacy: string, x14 = ''): string =>
+      `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ${X14NS}><sheetData/>${legacy}${x14 ? `<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}"><x14:conditionalFormattings>${x14}</x14:conditionalFormattings></ext></extLst>` : ''}</worksheet>`
+    const styles = '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dxfs count="1"><dxf><fill><patternFill patternType="solid"><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf></dxfs></styleSheet>'
+    const parts = (legacy: string, x14 = '', part = 'xl/worksheets/sheet1.xml'): Map<string, Uint8Array> =>
+      new Map([[part, new TextEncoder().encode(sheet(legacy, x14))], ['xl/styles.xml', new TextEncoder().encode(styles)]])
+    const expr = (f: string, sqref = 'B2:D9'): string => `<conditionalFormatting sqref="${sqref}"><cfRule type="expression" dxfId="0" priority="1"><formula>${f}</formula></cfRule></conditionalFormatting>`
+    const between = (a: string, b: string): string => `<conditionalFormatting sqref="H2:H9"><cfRule type="cellIs" dxfId="0" priority="1" operator="between"><formula>${a}</formula><formula>${b}</formula></cfRule></conditionalFormatting>`
+    const exprMarker: CfPartMarker = { part: 'xl/worksheets/sheet1.xml', extension: 'legacy', capabilityId: 'formula:dialect-base', sqref: 'B2:D9', ruleType: 'expression', priority: 1, formulas: ['$B2>$C2'], dxf: { fillRgb: 'FFFFC7CE' }, formula: { kind: 'expression', anchor: 'B2', dialect: 'base' } }
+    const ok = (p: Map<string, Uint8Array>, m: CfPartMarker): boolean => verifyMarkerInArchive(p, m).ok
+    expect(ok(parts(expr('$B2&gt;$C2')), exprMarker)).toBe(true)
+    // Semantics, not raw strings: Excel's canonical spelling (case, spaces, unneeded sheet quotes) still matches.
+    expect(ok(parts(expr('$b2 &gt; $c2')), exprMarker)).toBe(true)
+    expect(normalizeCfFormula("='Sheet2'!$a$1 > 0")).toBe(normalizeCfFormula('Sheet2!$A$1>0'))
+    expect(normalizeCfFormula("'My Sheet'!A1>0")).toBe("'MY SHEET'!A1>0")
+    expect(normalizeCfFormula('"a b"=A1')).toBe('"a b"=A1')
+    // Each mutation is refused.
+    expect(ok(parts(expr('B2&gt;$C2')), exprMarker), '$B2 -> B2').toBe(false)
+    expect(ok(parts(expr('$B2&gt;=$C2')), exprMarker), '> -> >=').toBe(false)
+    const betweenMarker: CfPartMarker = { ...exprMarker, capabilityId: 'formula:cellis-operand-reference', sqref: 'H2:H9', ruleType: 'cellIs', operator: 'between', formulas: ['$F$1', '$F$2'], formula: { kind: 'operand', dialect: 'base' } }
+    expect(ok(parts(between('$F$1', '$F$2')), betweenMarker)).toBe(true)
+    expect(ok(parts(between('$F$2', '$F$1')), betweenMarker), 'operand order swapped').toBe(false)
+    const scaleXml = (f: string): string => `<conditionalFormatting sqref="I2:I9"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="num" val="${f}"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>`
+    const scaleMarker: CfPartMarker = { part: 'xl/worksheets/sheet1.xml', extension: 'legacy', capabilityId: 'formula:cfvo-reference', sqref: 'I2:I9', ruleType: 'colorScale', priority: 1, formulas: [], scale: { cfvo: [{ type: 'num', f: '$F$1' }, { type: 'max' }], colors: ['FFF8696B', 'FF63BE7B'], dialect: 'base' }, formula: { kind: 'cfvo', dialect: 'base' } }
+    expect(ok(parts(scaleXml('$F$1')), scaleMarker)).toBe(true)
+    expect(ok(parts(scaleXml('$F$2')), scaleMarker), 'cfvo.f $F$1 -> $F$2').toBe(false)
+    const x14Scale = (attrs = ''): string => `<x14:conditionalFormatting><x14:cfRule type="colorScale" priority="1" id="{00000000-0000-4000-8000-000000000001}"${attrs}><x14:colorScale><x14:cfvo type="num"><xm:f>Sheet2!$A$1</xm:f></x14:cfvo><x14:cfvo type="max"/><x14:color rgb="FFF8696B"/><x14:color rgb="FF63BE7B"/></x14:colorScale></x14:cfRule><xm:sqref>M2:M9</xm:sqref></x14:conditionalFormatting>`
+    const x14Marker: CfPartMarker = { part: 'xl/worksheets/sheet1.xml', extension: 'x14', capabilityId: 'scale:dialect-standalone', sqref: 'M2:M9', ruleType: 'colorScale', priority: 1, formulas: [], scale: { cfvo: [{ type: 'num', f: 'Sheet2!$A$1' }, { type: 'max' }], colors: ['FFF8696B', 'FF63BE7B'], dialect: 'x14' }, formula: { kind: 'cfvo', dialect: 'x14' } }
+    expect(ok(parts('', x14Scale()), x14Marker)).toBe(true)
+    const baseTwin = `<conditionalFormatting sqref="M2:M9"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="num" val="Sheet2!$A$1"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>`
+    expect(ok(parts(baseTwin), x14Marker), 'x14 scale moved to base').toBe(false)
+    const activeMarker: CfPartMarker = { ...x14Marker, capabilityId: 'formula:active-present-scale', activePresent: true, formulas: ['$A2>0'], formula: { kind: 'activation', dialect: 'x14' } }
+    const activeXml = (attrs: string): string => x14Scale(attrs).replace('<x14:colorScale>', '<xm:f>$A2&gt;0</xm:f><x14:colorScale>')
+    expect(ok(parts('', activeXml(' activePresent="1"')), activeMarker)).toBe(true)
+    expect(ok(parts('', activeXml('')), activeMarker), 'activePresent dropped').toBe(false)
+    // sqref order is pinned once the marker pins Excel's resaved order; an unpinned marker accepts either order.
+    const multi = (sqref: string): string => expr('$A5&gt;0', sqref)
+    const pinned: CfPartMarker = { ...exprMarker, capabilityId: 'formula:anchor-multi-range', sqref: 'D5:D8 B2:B4', formulas: ['$A5>0'] }
+    expect(ok(parts(multi('D5:D8 B2:B4')), pinned)).toBe(true)
+    expect(ok(parts(multi('B2:B4 D5:D8')), pinned), 'sqref order changed').toBe(false)
+    expect(ok(parts(multi('B2:B4 D5:D8')), { ...pinned, sqrefOrder: 'any' })).toBe(true)
+    // A formula moved to another part is refused as such.
+    const moved = verifyMarkerInArchive(parts(expr('$B2&gt;$C2'), '', 'xl/worksheets/sheet2.xml'), exprMarker)
+    expect(moved.ok === false && moved.code).toBe('missing-part')
+    const both = new Map([...parts(''), ['xl/worksheets/sheet2.xml', new TextEncoder().encode(sheet(expr('$B2&gt;$C2')))]])
+    const wrong = verifyMarkerInArchive(both, exprMarker)
+    expect(wrong.ok === false && wrong.code).toBe('wrong-part-marker')
+    // The marker's own dialect must agree with where it lives.
+    expect(ok(parts(expr('$B2&gt;$C2')), { ...exprMarker, formula: { kind: 'expression', anchor: 'B2', dialect: 'x14' } })).toBe(false)
+  })
+
+  describe('semantic DisplayFormat evidence needs two decisive cells and a control (Lesson 3)', () => {
+    const RED = 'FFFFC7CE'
+    const GREEN = 'FFC6EFCE'
+    const obs = (fills: Record<string, string>): FormulaObservation => ({
+      fill: ref => (fills[ref] === undefined ? undefined : { fill: fills[ref]!, strike: false }),
+      same: () => undefined,
+    })
+    const cfg = (refs: string[], hypotheses: Record<string, Record<string, string>>, extra: Partial<S5Configuration> = {}): S5Configuration => ({ id: 'cfg', capabilityId: 'formula:truth-number', observable: 'fill', refs, hypotheses, ...extra })
+    const controls = { B2: 'P2', B3: 'P3', B4: 'P4', B5: 'P5' }
+    const unformatted = { P2: 'none', P3: 'none', P4: 'none', P5: 'none' }
+
+    it('hypotheses that agree at every designated cell are unverified-nondiscriminating', () => {
+      const ev = evaluateFormulaCapabilities([cfg(['B2', 'B3'], { a: { B2: RED, B3: 'none' }, b: { B2: RED, B3: 'none' } })], controls, obs({ B2: RED, B3: 'none', ...unformatted }))
+      expect(ev['formula:truth-number']!.status).toBe('non-discriminating')
+    })
+    it('one decisive cell is a replicationShortfall refusal', () => {
+      const ev = evaluateFormulaCapabilities([cfg(['B2', 'B3'], { a: { B2: RED, B3: 'none' }, b: { B2: RED, B3: RED } })], controls, obs({ B2: RED, B3: 'none', ...unformatted }))
+      expect(ev['formula:truth-number']!.status).toBe('refused')
+      expect(ev['formula:truth-number']!.reason).toMatch(/S4-REPLICATE/)
+    })
+    it('two agreeing decisive cells with one hypothesis matching verify it', () => {
+      const ev = evaluateFormulaCapabilities([cfg(['B2', 'B3', 'B4'], { a: { B2: RED, B3: RED, B4: 'none' }, b: { B2: 'none', B3: 'none', B4: 'none' } })], controls, obs({ B2: RED, B3: RED, B4: 'none', ...unformatted }))
+      expect(ev['formula:truth-number']).toMatchObject({ status: 'discriminating', matched: 'a' })
+    })
+    it('a positive whose control is also formatted is refused', () => {
+      const ev = evaluateFormulaCapabilities([cfg(['B2', 'B3'], { a: { B2: RED, B3: RED }, b: { B2: 'none', B3: 'none' } })], controls, obs({ B2: RED, B3: RED, P2: RED, P3: 'none' }))
+      expect(ev['formula:truth-number']).toMatchObject({ status: 'refused', code: 'formula-control-formatted' })
+    })
+    it('no matching hypothesis is a finding, record configurations never decide, and an unobserved cell refuses', () => {
+      const none = evaluateFormulaCapabilities([cfg(['B2', 'B3'], { a: { B2: RED, B3: RED }, b: { B2: 'none', B3: 'none' } })], controls, obs({ B2: GREEN, B3: RED, ...unformatted }))
+      expect(none['formula:truth-number']).toMatchObject({ status: 'refused', code: 'formula-hypothesis-none' })
+      const rec = evaluateFormulaCapabilities([cfg(['B2', 'B3'], { a: { B2: RED, B3: RED }, b: { B2: 'none', B3: 'none' } }, { record: 'refused configuration' })], controls, obs({ B2: RED, B3: RED, ...unformatted }))
+      expect(rec['formula:truth-number']!.status).toBe('no-hypotheses')
+      const unobserved = evaluateFormulaCapabilities([cfg(['B2', 'B3'], { a: { B2: RED, B3: RED }, b: { B2: 'none', B3: 'none' } })], controls, obs({ B2: RED, ...unformatted }))
+      expect(unobserved['formula:truth-number']).toMatchObject({ status: 'refused', code: 'fill-unobserved' })
+    })
+    it('twin tokens decide by the observed twin, and agreeing twins do not discriminate', () => {
+      const twin = (fills: Record<string, string>): FormulaObservation => obs(fills)
+      const c1 = cfg(['B2', 'B3'], { evaluated: { B2: 'twin:C2', B3: 'twin:C3' }, ignored: { B2: 'twin:D2', B3: 'twin:D3' } })
+      const ok = evaluateFormulaCapabilities([c1], controls, twin({ B2: 'FF111111', B3: 'FF222222', C2: 'FF111111', C3: 'FF222222', D2: 'FF999999', D3: 'FF888888', ...unformatted }))
+      expect(ok['formula:truth-number']).toMatchObject({ status: 'discriminating', matched: 'evaluated' })
+      const flat = evaluateFormulaCapabilities([c1], controls, twin({ B2: 'FF111111', B3: 'FF222222', C2: 'FF111111', C3: 'FF222222', D2: 'FF111111', D3: 'FF222222', ...unformatted }))
+      expect(flat['formula:truth-number']!.status).toBe('non-discriminating')
+    })
+    it('replicationShortfall groups by an explicit configuration key when given one', () => {
+      expect(replicationShortfall(['C1', 'D1'])).toMatch(/configuration C has 1/)
+      expect(replicationShortfall(['C1', 'D1'], 2, () => 'cols')).toBeUndefined()
+    })
+  })
+
+  it('audit --stage 5 --write is idempotent (Lesson 4)', () => {
+    const manifest = loadManifest()
+    const committed = readFileSync(resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts'), 'utf8')
+    const listed = (text: string, name: string): string[] | undefined => {
+      const m = new RegExp(`export const ${name}: ReadonlySet<string> = new Set\\(\\[([\\s\\S]*?)\\]\\)`).exec(text)
+      return m ? [...m[1]!.matchAll(/'([^']+)'/g)].map(x => x[1]!) : undefined
+    }
+    const first = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: committed })
+    expect(renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: committed })).toBe(first)
+    // Without --publish-stage5 the Stage 5 export is carried over verbatim: absent at first, so the file is unchanged.
+    expect(first).toBe(committed)
+    expect(listed(first, 'VERIFIED_STAGE5_CAPABILITIES')).toBeUndefined()
+    const withS5 = committed.replace(/(export const VERIFIED_CAPABILITIES)/, "export const VERIFIED_STAGE5_CAPABILITIES: ReadonlySet<string> = new Set([\n  'formula:truth-boolean',\n])\n\n$1")
+    const kept = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: withS5 })
+    expect(listed(kept, 'VERIFIED_STAGE5_CAPABILITIES')).toEqual(['formula:truth-boolean'])
+    expect(renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: kept })).toBe(kept)
+    for (const name of ['VERIFIED_STAGE1_CAPABILITIES', 'VERIFIED_STAGE2_CAPABILITIES', 'VERIFIED_STAGE3_CAPABILITIES', 'VERIFIED_STAGE4_CAPABILITIES']) expect(listed(kept, name), name).toEqual(listed(committed, name))
+    // --publish-stage5 writes the export only when the stage is complete; today nothing is captured, so it changes nothing.
+    const report = auditStage5Manifest(manifest, { rootDir: REPO_ROOT })
+    expect(report.ok, JSON.stringify(report.perCase.filter(p => !p.structuralValid))).toBe(true)
+    expect(report.summary.cases).toBe(CF_STAGE5_CASES.length)
+    expect(report.summary.capabilities).toBe(CF_STAGE5_CAPABILITIES.length)
+    expect(report.perCapability.filter(p => p.disposition === 'unaccounted')).toEqual([])
+    expect(report.perCapability.filter(p => p.disposition === 'verified')).toEqual([])
+    expect(report.stageComplete).toBe(false)
+    expect(report.blocked).toEqual(report.blockedCapabilities)
+    expect(report.blocked.length).toBeGreaterThan(40)
+    const unsupportedCases = new Set(CF_STAGE5_CASES.filter(c => c.status === 'unsupported').map(c => c.id))
+    expect(report.perCapability.filter(p => p.disposition === 'refused-unsupported').map(p => p.capabilityId).sort()).toEqual(CF_STAGE5_CAPABILITIES.filter(e => unsupportedCases.has(e.caseId) || CF_STAGE5_UNSUPPORTED[e.capabilityId] !== undefined).map(e => e.capabilityId).sort())
+    const published = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: committed, publishStage5: true })
+    expect(published).toBe(committed)
+    expect(renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: kept, publishStage5: true })).toBe(kept)
+    // Stage 1-4 exports unchanged by any Stage 5 option.
+    for (const name of ['VERIFIED_STAGE1_CAPABILITIES', 'VERIFIED_STAGE2_CAPABILITIES', 'VERIFIED_STAGE3_CAPABILITIES', 'VERIFIED_STAGE4_CAPABILITIES', 'VERIFIED_CAPABILITIES']) expect(listed(published, name), name).toEqual(listed(committed, name))
+    // A complete synthetic report publishes exactly its gated set, sorted.
+    const complete: Stage5AuditReport = { ...report, ok: true, stageComplete: true, blocked: [], blockedCapabilities: [], perCapability: [{ capabilityId: 'formula:truth-range', caseId: 'stage5-formula-truthiness', disposition: 'verified' }], matchedReadings: { 'formula:truth-range': 'range-implicit' } }
+    expect(stage5Publication(complete, { 'formula:truth-range': 'range-implicit' }).published).toEqual(['formula:truth-range'])
+  }, 120_000)
+
+  it('a publication requires production\'s reading to equal Excel\'s matched reading', () => {
+    const base: Stage5AuditReport = { ...auditStage5Manifest({ ...loadManifest(), cases: [] }, { rootDir: REPO_ROOT }), ok: true, stageComplete: true, blocked: [], blockedCapabilities: [] }
+    const report = (matched: string): Stage5AuditReport => ({ ...base, perCapability: [{ capabilityId: 'formula:truth-range', caseId: 'stage5-formula-truthiness', disposition: 'verified' }], matchedReadings: { 'formula:truth-range': matched } })
+    const prod = { 'formula:truth-range': 'range-implicit' }
+    expect(stage5Publication(report('range-implicit'), prod)).toMatchObject({ published: ['formula:truth-range'] })
+    const mismatch = stage5Publication(report('range-top-left'), prod)
+    expect(mismatch.published).toEqual([])
+    expect(mismatch.withheld['formula:truth-range']).toMatch(/reading-mismatch: Excel matched range-top-left, production implements range-implicit/)
+    // Production implements no Stage 5 reading yet (Tasks 32-38 add them): every matched reading is withheld.
+    expect(stage5Publication(report('range-implicit')).withheld['formula:truth-range']).toMatch(/reading-unimplemented/)
+    expect(Object.keys(CF_STAGE5_PRODUCTION_READINGS)).toEqual([])
+    // An unverified capability never publishes, whatever its reading.
+    const unverified = stage5Publication({ ...report('range-implicit'), perCapability: [{ capabilityId: 'formula:truth-range', caseId: 'stage5-formula-truthiness', disposition: 'supported-structural' }] }, prod)
+    expect(unverified.published).toEqual([])
+  })
+
+  it('the manual-calculation route emits no premature calculate (round-1 #4)', () => {
+    const c = CF_STAGE5_CASES.find(x => x.id === 'stage5-calc-manual')!
+    expect(c.calcObservation).toBe('pre-calculate')
+    const refs = ['A2', 'C2']
+    const manual = buildManualObservationScript('stage5-calc-manual.xlsx', 'Sheet1', refs)
+    const firstObservation = manual.findIndex(l => /display format|value of range/.test(l))
+    expect(firstObservation).toBeGreaterThan(0)
+    expect(manual.slice(0, firstObservation).some(l => /^\s*calculate\b/.test(l))).toBe(false)
+    expect(manual.some(l => /^\s*calculate\b/.test(l))).toBe(false)
+    expect(manual.join('\n')).toMatch(/calculation/)
+    expect(manual.join('\n')).toMatch(/count of workbooks/)
+    const explicit = buildExplicitCalculationObservationScript('stage5-calc-manual.xlsx', 'Sheet1', refs)
+    expect(explicit.filter(l => /^\s*calculate\b/.test(l))).toHaveLength(1)
+    // Build: the observations come first, each its own script, and the resave carries no calculate.
+    const scripts = buildCaseBuildScripts(c, '.work-stage5-calc-manual.xlsx', '/tmp/x.candidate.xlsx', refs)
+    expect(scripts.map(s => s.kind)).toEqual(['manual-observation', 'explicit-calculation', 'resave'])
+    expect(scripts[0]!.lines).toEqual(buildManualObservationScript('.work-stage5-calc-manual.xlsx', 'Sheet1', refs))
+    expect(scripts[2]!.lines.some(l => /^\s*calculate\b/.test(l)), 'resave keeps build.ts:180').toBe(false)
+    // Mutant: an ordinary case keeps the unconditional calculate, so the check has teeth.
+    const ordinary = buildCaseBuildScripts(CF_STAGE5_CASES.find(x => x.id === 'stage5-formula-anchor')!, 'w.xlsx', '/tmp/y.xlsx', refs)
+    expect(ordinary.map(s => s.kind)).toEqual(['resave'])
+    expect(ordinary[0]!.lines.some(l => /^\s*calculate\b/.test(l))).toBe(true)
+    // Capture: the clock probe skips its calculate for a pre-calculate case only.
+    const cap = buildStage5CaptureScripts(c, 'stage5-calc-manual.xlsx')
+    expect(cap.clock.some(l => /^\s*calculate\b/.test(l))).toBe(false)
+    const clockCase = CF_STAGE5_CASES.find(x => x.id === 'stage5-clock-today')!
+    expect(buildStage5CaptureScripts(clockCase, 'stage5-clock-today.xlsx').clock.some(l => /^\s*calculate\b/.test(l))).toBe(true)
+  })
+
+  it.skipIf(!hasOsacompile)('compiles the Stage 5 probe scripts under osacompile (Lesson 8)', () => {
+    const scripts: string[][] = []
+    for (const c of CF_STAGE5_CASES) {
+      const refs = c.expected.cells.map(e => e.ref)
+      const s = buildStage5CaptureScripts(c, `${c.id}.xlsx`)
+      scripts.push(s.clock, ...s.dynamicRefresh)
+      scripts.push(...buildCaseBuildScripts(c, `.work-${c.id}.xlsx`, `/tmp/${c.id}.candidate.xlsx`, refs.slice(0, 50)).map(x => x.lines))
+    }
+    for (const lines of scripts) {
+      if (lines.length === 0) continue
+      const full = ['tell application "Microsoft Excel"', ...lines, 'end tell'].join('\n')
+      const res = spawnSync('osacompile', ['-o', '/dev/null'], { input: full, encoding: 'utf8' })
+      expect(res.status, res.stderr).toBe(0)
+    }
+  }, 120_000)
+
+  it.skipIf(!existsSync(resolve(REPO_ROOT, 'tests/fixtures/xlsx-cf/excel-authored-formulas.xlsx')))('formula templates write what Excel\'s dialog writes (excel-authored-formulas.xlsx)', async () => {
+    const { diffAuthoredFormulaTemplates, EXCEL_AUTHORED_FORMULAS_PATH } = await import('../scripts/cf-refs/generate')
+    const authored = readZipPartsSync(new Uint8Array(readFileSync(EXCEL_AUTHORED_FORMULAS_PATH)))!
+    const generated = readZipPartsSync(await generateCaseArchive('stage5-formula-authored'))!
+    expect(diffAuthoredFormulaTemplates(generated, authored)).toEqual([])
   })
 })

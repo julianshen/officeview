@@ -213,6 +213,33 @@ export function stage2ObservedFills(c: CfOracleCase, rootDir: string): Map<strin
 }
 
 /**
+ * Stage 5 observed fills (Ruling S5-A): Excel's DisplayFormat interior colour per designated cell, twin and control, from the
+ * sidecar's `formulaObservations`; a cell whose DisplayFormat fill equals its base fill observes FFFFFFFF (no CF fill), as
+ * Stage 2 does. Only a Stage 5 case with a readable screen sidecar yields a map. Production's withheld cells are reported by
+ * `verifyCaseCells`, never counted as matches.
+ */
+export function stage5ObservedFills(c: CfOracleCase, rootDir: string): Map<string, string> | undefined {
+  if (c.stage !== 5) return undefined
+  const cap = c.captures.find(x => x.appearance === 'screen') ?? c.captures[0]
+  if (!cap?.sidecarPath) return undefined
+  const path = resolve(rootDir, cap.sidecarPath)
+  if (!existsSync(path)) return undefined
+  let sidecar: { formulaObservations?: Record<string, { displayFormatFill?: unknown; baseFill?: unknown }> }
+  try {
+    sidecar = JSON.parse(readFileSync(path, 'utf8')) as typeof sidecar
+  } catch {
+    return undefined
+  }
+  const out = new Map<string, string>()
+  for (const [ref, o] of Object.entries(sidecar.formulaObservations ?? {})) {
+    if (typeof o?.displayFormatFill !== 'string') continue
+    const base = typeof o.baseFill === 'string' ? o.baseFill : 'FFFFFFFF'
+    out.set(ref.toUpperCase(), o.displayFormatFill.toUpperCase() === base.toUpperCase() ? 'FFFFFFFF' : o.displayFormatFill.toUpperCase())
+  }
+  return out
+}
+
+/**
  * Stage 3 observed bars: the raw px (`observedBars`) the Excel capture recorded per designated cell, never fractions
  * (Ruling S3-A step 5), so conformance compares production layout px at the same scale and no expected value is ever
  * computed by the code under test. Only a Stage 3 case with a readable screen sidecar yields a map; entries with a
@@ -277,7 +304,7 @@ export function verifyCaseCells(
   rootDir: string,
   actualAt: (row: number, col: number) => ActualCellOutcome,
 ): string | undefined {
-  const observed = stage2ObservedFills(c, rootDir)
+  const observed = stage2ObservedFills(c, rootDir) ?? (c.status === 'measured' ? stage5ObservedFills(c, rootDir) : undefined)
   // Fail closed (final review I4): a measured Stage 2 case is verified against Excel-observed fills only. A missing
   // sidecar, a sidecar with no trusted fills, or a run that compared zero non-withheld cells verified NOTHING and
   // must refuse, never fall through to seed expectations (which carry no fillRgb) or pass vacuously.
