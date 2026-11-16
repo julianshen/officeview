@@ -2045,3 +2045,17 @@ Evidence kind is read from the owning case's per-cell `iconEvidence` labels (ver
 - **The marker does not pin bar and icon cfvo formulas**; `--diff-authored-formulas` and the saved XML do.
 - **The multi-range anchor hypotheses** are written for the authored order `D5:D8 B2:B4`. If Excel re-sorts the sqref on resave, "first listed" must be read against the recorded order (Ruling S5-C).
 - **`stage5-formula-functions`** states the `documented` hypothesis from Excel's comparison order (numbers < text < booleans) through a small independent model in `cases.ts`, never through the viewer's evaluator. A disagreement is `formula-hypothesis-none`, never a refit.
+
+### Fix round 1 (codex review, before any Excel run)
+
+- **Bar and icon markers** pin their cfvo bounds by formula semantics, the paired x14 companion (`bar.pairing: 'paired'`) and every literal twin. A bound changed from `$F$1` to `$F$2` refuses.
+- **Multi-range anchor:** build reads the sqref order Excel retained from the resaved XML (`retainedSqrefs`), and that order is then pinned. The anchor hypotheses come from the table fixed for that order. Readings that coincide are reported `non-discriminating`, never as one of them.
+- **Replication:**
+  - it is checked per evidence-bearing configuration, and per range where the configuration declares `replicateBy: 'column'` (the D and F ranges of `stage5-cfvo-scope`);
+  - one configuration no longer covers for another;
+  - negative controls are explicit (`role: 'negative-control'`): Excel must match them, and they are never evidence.
+- **Twins:** a winning twin under a bar or icon rule must show a visual against its unformatted control (`formula-twin-blank`). Crops are compared over the common box, because 73.5 pt columns round to 73 or 74 px.
+- **AVERAGE/MAX:** the aggregates that must paint now read an error-free column (`stage5-formula-hoist-aggregate`). In `stage5-formula-hoist`, Excel's propagation of `#DIV/0!` from `$A:$A` is its own capability, `formula:hoist-aggregate-errors` (Excel documents this for AVERAGE and MAX).
+- **Manual calculation:** the observation reads the stale sources `A2:A5` and `E1` before and after the explicit calculation. An input that already looks recalculated on open is refused.
+- **S5-STUB reuse** reads each Stage 1–4 capture in its own representation: Stage 1/2 `observedCells`, Stage 3 `observedBars`, Stage 4 `observedIcons`. All five reused captures are now evidenced.
+- **The post-capture suite is runnable:** the preparation invariants are checked on the freshly generated catalogue, and committed cases go through the verifier.

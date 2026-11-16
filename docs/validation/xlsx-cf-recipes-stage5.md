@@ -1,6 +1,6 @@
 # Stage 5 (general formulas): Excel capture recipes for the orchestrator
 
-Task 31 prepared the Stage 5 oracle. **None of it has been run against Excel.** This page is the exact sequence the orchestrator runs on the host Mac (Excel for Mac 16.114 or later, zh-TW, `Asia/Taipei`) to turn the 30 prepared workbooks into evidence. Preparing scripts is not evidence. A case without captures stays `recipe-pending` and refused, and production withholds every formula rule until a later task publishes the audited set (`--publish-stage5`, which writes only when the Stage 5 audit is `stageComplete`).
+Task 31 prepared the Stage 5 oracle. **None of it has been run against Excel.** This page is the exact sequence the orchestrator runs on the host Mac (Excel for Mac 16.114 or later, zh-TW, `Asia/Taipei`) to turn the 31 prepared workbooks into evidence. Preparing scripts is not evidence. A case without captures stays `recipe-pending` and refused, and production withholds every formula rule until a later task publishes the audited set (`--publish-stage5`, which writes only when the Stage 5 audit is `stageComplete`).
 
 All commands run from the Stage 5 worktree root (`.worktrees/cf-s5`). **Always pass `--stage 5` and `--case <id>`**: `generate.ts`, `build.ts` and `capture.ts` without `--stage` act on Stage 1. Never pass `--write` to the audit.
 
@@ -50,7 +50,7 @@ The formula XML shape comes from Excel's own dialog, not from the generator.
 
 Build and capture each case. The harness closes the workbooks it owns.
 ```
-for id in formula-authored formula-truthiness formula-anchor formula-anchor-multi formula-edge formula-functions formula-hoist cellis-operands predicate-formulas composition cross-sheet cross-sheet-missing cfvo-formulas cfvo-scope x14-scale active-present-scale active-present-bar active-present-icon; do
+for id in formula-authored formula-truthiness formula-anchor formula-anchor-multi formula-edge formula-functions formula-hoist formula-hoist-aggregate cellis-operands predicate-formulas composition cross-sheet cross-sheet-missing cfvo-formulas cfvo-scope x14-scale active-present-scale active-present-bar active-present-icon; do
   bun scripts/cf-refs/build.ts --stage 5 --case stage5-$id
   bun scripts/cf-refs/capture.ts --stage 5 --case stage5-$id
 done
@@ -65,7 +65,7 @@ done
 - **Strips and repairs:** if `build.ts` reports a stripped, repaired or rejected resave, keep the `<id>.rejected.xlsx` it writes: that is the recorded outcome. Record it in `docs/validation/xlsx-cf.md` §14 and **never retry**. The expected candidates are:
   - the `activePresent` workbooks (Ruling S5-J);
   - `stage5-cross-sheet-missing` (`=Gone!A1>0`);
-  - the multi-range `D5:D8 B2:B4`, if Excel re-sorts it. The marker accepts either order, and the resaved order is recorded from the saved XML.
+  - the multi-range `D5:D8 B2:B4`, if Excel re-sorts it. The marker accepts either order at build. The build then records the order Excel retained (`retainedSqrefs` in the manifest), and from then on that order is pinned. The anchor hypotheses are the table fixed for that order. If Excel re-sorts to `B2:B4 D5:D8`, "first listed" and "bounding box" coincide, and the case reports `non-discriminating` for them by design.
 
   The implementer then lists the affected capabilities in `CF_STAGE5_UNSUPPORTED` with that reason.
 - **`stage5-x14-scale`:** if Excel writes the cross-sheet scale in the base dialect, the build rejects it and `scale:dialect-standalone` becomes `refused-unsupported` (Ruling S5-I).
@@ -93,14 +93,17 @@ done
 ```
 
 `stage5-calc-manual` is `calcObservation: 'pre-calculate'` (round-1 #4), so its build differs:
-1. It opens the input copy and runs `buildManualObservationScript` before anything else, with no `calculate`. That script records the application calculation mode, the open workbook count, and each cell's value and DisplayFormat (`pre:`).
+1. It opens the input copy and runs `buildManualObservationScript` before anything else, with no `calculate`. That script records the application calculation mode, the open workbook count, and each cell's value and DisplayFormat (`pre:`). The cells include the stale sources `A2:A5` and the workbook `TODAY()` cell `E1`.
 2. It then runs a separate `buildExplicitCalculationObservationScript`, which contains exactly one `calculate` (`calc:`).
 3. It resaves without the unconditional `calculate`.
 
 Both observations land in the manifest as `manualObservation`, bound to the input hash. The capture's clock probe also skips its `calculate` for this case.
 
-- **Expected:** `calculationMode` reads `calculation manual`, and `workbookCount` is 1.
-- **Otherwise:** the case refuses `formula-manual-observation-invalid`. Close every other workbook and rebuild.
+- **Expected:**
+  - `calculationMode` reads `calculation manual`, and `workbookCount` is 1.
+  - Before the calculation, the sources still hold their saved values: `A2:A5` = 999, 0, 50, 1, and `E1` = anchor − 5.
+  - After it, they hold the recomputed values: 10, 8, 2, 61, and the anchor.
+- **Otherwise:** the case refuses `formula-manual-observation-invalid`, and the reason names the failure. Two reasons mean you should close every other workbook and rebuild: a second workbook was open, or the mode was not manual. A third, "recalculated on open", is a recorded outcome: Excel recalculated the manual-mode file when it opened it, so saved values cannot be tested on that build. Record it in §14 and do not retry.
 - **Afterwards,** set Excel back to *Automatically* calculation, or quit Excel. The manual mode stays on the application.
 
 ## 5. Audit and after the run
