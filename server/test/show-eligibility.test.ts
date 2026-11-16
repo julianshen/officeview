@@ -15,7 +15,8 @@ import { serverBackend } from '../src/backend'
 import {
   CLASSIFY_BUDGET, SAMPLES_PER_INTERVAL, TRACK_FPS, TRACK_MAX_FRAMES, allocateFrames, mediaEndAffectsDrawing, sampleTimes, sweptHull,
 } from '../src/show/eligibility'
-import { classifiedRasters, drawsAt, slideStateAt } from '../src/show/compose'
+import { classifiedRasters, createSlideComposer, drawsAt, slideStateAt } from '../src/show/compose'
+import JSZip from 'jszip'
 import { createDiagnosticSink } from '../../src/slideshow/diagnostics'
 import { createRng } from '../../src/slideshow/rng'
 import { classify, inkPixels, reconstruct } from './show-classify-helper'
@@ -296,6 +297,62 @@ describe('show eligibility', () => {
         expect({ t, diff: r.diff }).toEqual({ t, diff: 0 })
       }
       expect(reconstruct(run, two, 2000).inkOriginal).toBeGreaterThan(0)
+    })
+
+    // Round 12d (codex): `accel`/`decel` on a container whose implicit duration follows the sound. Until the sound
+    // ends its duration is infinite and its time passes through; after the end it is finite and eased, so its
+    // fixed-offset children change progress. A wipe makes both steps composited (frames baked without the end).
+    const easedDeck = async (attr: string, on: 5 | 4) => {
+      const z = await JSZip.loadAsync(await mediaEndRevealDeck('effectSound'))
+      let xml = await z.file('ppt/slides/slide1.xml')!.async('string')
+      xml = xml.replace(`<p:cTn id="${on}"`, `<p:cTn${attr} id="${on}"`).replaceAll('filter="fade"', 'filter="wipe(right)"')
+      z.file('ppt/slides/slide1.xml', xml)
+      return z.generateAsync({ type: 'uint8array' })
+    }
+    const pixelsDiffer = (run: Awaited<ReturnType<typeof classify>>, a: ReturnType<typeof run.timeline.initial>, b: typeof a, t: number) => {
+      const composer = createSlideComposer(run.ps, run.rasters, run.scale)
+      try {
+        const px = (cursor: typeof a) => new Uint8ClampedArray(composer.compose(drawsAt(run.ps, slideStateAt(run.ps, run.timeline, cursor, t, createRng(1), createDiagnosticSink()))))
+        const x = px(a), y = px(b)
+        let diff = 0
+        for (let i = 0; i < x.length; i += 4) if (x[i] !== y[i] || x[i + 1] !== y[i + 1] || x[i + 2] !== y[i + 2] || x[i + 3] !== y[i + 3]) diff++
+        return diff
+      } finally { composer.dispose() }
+    }
+    for (const [attr, on] of [[' accel="50000"', 5], [' decel="50000"', 5], [' accel="50000"', 4], [' decel="50000"', 4]] as const) {
+      it(`easing (${attr.trim()}) on ${on === 5 ? 'the sound\'s parent' : 'a higher ancestor'} whose duration follows the sound: the still (round 12d)`, async () => {
+        const run = await classify(await easedDeck(attr, on))
+        const tl = run.timeline
+        const one = tl.next(tl.initial(), 100)
+        const ended = tl.mediaEnd(one, MEDIA_END_REVEAL.soundId, 116, true)
+        // The fixture: the synthetic end changes the composed picture mid-step.
+        expect(pixelsDiffer(run, one, ended, 200) + pixelsDiffer(run, one, ended, 400)).toBeGreaterThan(0)
+        expect(run.c.fallback).toBe('still')
+      })
+    }
+    it('the linear control (no easing, the same wipes): eligible, and the sound end changes no pixel (round 12d)', async () => {
+      const run = await classify(await easedDeck('', 5))
+      const tl = run.timeline
+      const one = tl.next(tl.initial(), 100)
+      const ended = tl.mediaEnd(one, MEDIA_END_REVEAL.soundId, 116, true)
+      expect(run.c.fallback).toBeUndefined()
+      for (const t of [200, 400, 600]) expect({ t, diff: pixelsDiffer(run, one, ended, t) }).toEqual({ t, diff: 0 })
+    })
+
+    it('a timing attribute the model does not handle, on a media-dependent node, refuses (allowlist, round 12d)', () => {
+      const ctn = (id: number, o: Record<string, unknown> = {}) => ({ id, durMs: undefined, accel: 0, decel: 0, autoRev: false, fill: 'hold' as const, start: [{ delayMs: 0 }], end: [], ...o }) as TimeNode['ctn']
+      const leaf = (kind: string, id: number, o: Record<string, unknown> = {}) => ({ kind, ctn: ctn(id, o), target: { spid: '4' }, attrNames: [], additive: 'base', accumulate: 'none' }) as unknown as TimeNode
+      const tree = (o: Record<string, unknown>, kind: 'par' | 'seq' | 'excl' = 'par'): TimeNode => ({
+        kind: 'par', ctn: ctn(1, { durMs: 'indefinite', fill: undefined, start: [] }),
+        children: [{ kind, ctn: ctn(5, o), children: [leaf('anim', 7, { durMs: 500 }), leaf('audio', 9)] } as TimeNode],
+      })
+      expect(mediaEndAffectsDrawing(tree({}))).toBe(false)
+      for (const o of [{ speed: 2 }, { accel: 0.5 }, { decel: 0.5 }, { autoRev: true }, { repeatCount: 2 }, { repeatDurMs: 1000 }, { iterate: { type: 'wd', backwards: false, tmPct: 0.1 } }]) {
+        expect({ o, refused: mediaEndAffectsDrawing(tree(o)) }).toEqual({ o, refused: true })
+      }
+      // Attributes the scheduler ignores stay allowed.
+      expect(mediaEndAffectsDrawing(tree({ syncBehavior: 'locked', masterRel: 'sameClick', afterEffect: true, grpId: 0, presetClass: 'entr', presetId: 10, presetSubtype: 0, nodeType: 'clickEffect' }))).toBe(false)
+      expect(mediaEndAffectsDrawing(tree({}, 'excl'))).toBe(true)
     })
 
     it('an effect sound inside a click effect (the lo-tdf44223 shape): the slide stays eligible (round 12c)', () => {

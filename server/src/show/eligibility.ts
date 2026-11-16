@@ -712,7 +712,7 @@ export function holdsMedia(ps: PreparedSlide): boolean {
  * client's end of the container while the server still has it active).
  *
  * Fail closed (true): a reference to a node not in the tree, a cycle among the references, a tree deeper than 256
- * or over 20,000 nodes.
+ * or over 20,000 nodes, and (round 12d) any timing on a dependent node outside the allowlist (`timingModelled`).
  */
 export function mediaEndAffectsDrawing(root: TimeNode): boolean {
   const nodes: TimeNode[] = []
@@ -771,6 +771,8 @@ export function mediaEndAffectsDrawing(root: TimeNode): boolean {
       if (add(E, n, e)) changed = true
     }
   }
+  // Round 12d: a media-dependent node carries only timing the model handles (`timingModelled`).
+  for (const n of nodes) if ((B.has(n) || C.has(n) || E.has(n)) && !timingModelled(n)) return true
   const drawn = (n: TimeNode) => !('children' in n) && !isMedia(n) && n.kind !== 'cmd'
   const drawnBelow = (n: TimeNode): boolean => 'children' in n ? n.children.some(o => drawn(o) || drawnBelow(o)) : false
   // A begin that is not a fixed offset into its parent: it may come after the container's client-side end.
@@ -784,6 +786,46 @@ export function mediaEndAffectsDrawing(root: TimeNode): boolean {
     if (lateBelow(n)) return true
   }
   return false
+}
+
+/**
+ * PR #78 round 12d: the `p:cTn` timing attributes, from what the scheduler (`src/slideshow/engine/scheduler.ts`,
+ * `steps.ts`, `behaviours.ts`) reads. On a media-dependent node (`B`, `C` or `E` in `mediaEndAffectsDrawing`) only
+ * these are accepted; any other key, or a non-default value of a `TIMING_DEFAULT_ONLY` one, refuses the slide.
+ *
+ * - `TIMING_MODELLED`, any value: the analysis models them. `id`, `start`, `end`, `endSync` (the references and
+ *   their propagation), `durMs` (an explicit one blocks propagation), `fill` and `restart` (the final checks),
+ *   and the role and preset fields the scheduler matches on but that set no local time (`nodeType`, `presetClass`,
+ *   `presetId`, `presetSubtype`, `grpId`).
+ * - `TIMING_DEFAULT_ONLY`: they change a node's local time or activity in ways the analysis does not model, so
+ *   they must hold their defaults. `accel`, `decel` (0: once a dependent duration turns finite, easing reshapes the
+ *   children's progress, codex round 12d), `autoRev` (false), `repeatCount`, `repeatDurMs` and `iterate` (absent).
+ * - `TIMING_IGNORED`: the reader carries them, and nothing in the engine acts on them: `syncBehavior`,
+ *   `masterRel`, `afterEffect`.
+ *
+ * A dependent container must be a `par`, or a `seq` with the reader's default options (not concurrent, no
+ * `nextAc`/`prevAc`): `excl` and the seek and concurrency rules of a dependent sequence are not modelled.
+ */
+export const TIMING_MODELLED: ReadonlySet<string> = new Set(['id', 'start', 'end', 'endSync', 'durMs', 'fill', 'restart', 'nodeType', 'presetClass', 'presetId', 'presetSubtype', 'grpId'])
+export const TIMING_DEFAULT_ONLY: Readonly<Record<string, (v: unknown) => boolean>> = {
+  accel: v => v === undefined || v === 0,
+  decel: v => v === undefined || v === 0,
+  autoRev: v => v === undefined || v === false,
+  repeatCount: v => v === undefined,
+  repeatDurMs: v => v === undefined,
+  iterate: v => v === undefined,
+}
+export const TIMING_IGNORED: ReadonlySet<string> = new Set(['syncBehavior', 'masterRel', 'afterEffect'])
+
+function timingModelled(n: TimeNode): boolean {
+  for (const [k, v] of Object.entries(n.ctn)) {
+    if (TIMING_MODELLED.has(k) || TIMING_IGNORED.has(k)) continue
+    const ok = TIMING_DEFAULT_ONLY[k]
+    if (!ok || !ok(v)) return false
+  }
+  if (n.kind === 'excl') return false
+  if (n.kind === 'seq' && n.seq && (n.seq.concurrent || n.seq.nextAc !== 'none' || n.seq.prevAc !== 'none')) return false
+  return true
 }
 
 /**
