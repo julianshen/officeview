@@ -14,6 +14,7 @@ import { cfCountifDpRefused, cfCountifKey, cfTruth, planCfHoist, type CfCallWork
 import { createCfMemory, createCfUnitCeiling, createCfWorkBudget, CF_FREQUENCY_ENTRY_BYTES, CF_LIMITS, type CfWorkBudget } from '../src/xlsx/cf/limits'
 import { createCfStatistics } from '../src/xlsx/cf/statistics'
 import { createCfService } from '../src/xlsx/cf/service'
+import { prepareCfFormulaBatch } from '../src/xlsx/cf/dependencies'
 import type { CfLiteral, CfRule } from '../src/xlsx/cf/model'
 import {
   EVALUATION, a1, batchOf, compile, engineEval, engineOf, fakeSource, formulaOf, formulaRule, literalOf, rectOf, refOf, type CellInput, type Cells, type FakeSource,
@@ -428,6 +429,18 @@ describe('the hoist cache keys by node and criterion, checks a hit, and never le
       expect(o).toEqual({ kind: 'ready', value: { kind: 'boolean', value: engineEval(text, cells, a1('B1')).value } })
       batch.dispose()
     }
+    // Two formulas of ONE rule (a rule's definition can carry several, and the service hoists per formula): each plan is
+    // one same-function, same-range hoist, differing only in its criterion. The old key collided here.
+    const xs = compile('COUNTIF($A$1:$A$10,"x")>3', 'B1'), ys = compile('COUNTIF($A$1:$A$10,"y")>2', 'B1')
+    const shared = formulaRule('COUNTIF($A$1:$A$10,"x")>3', 'B1')
+    const signal = new AbortController().signal
+    const two = await prepareCfFormulaBatch([{ rule: shared, formula: xs }, { rule: shared, formula: ys }], {
+      sheetName: 'Sheet1', evaluation: EVALUATION, edge: 'ref-error', memory, signal, budget: createCfWorkBudget({ signal, scan: true, maxUnits: 10_000_000 }),
+      statistics, hoist: true, source, sheetId: 's1', stamp: source.stamp('s1'),
+    })
+    expect(two.evaluate(0, 0, 1)).toEqual({ kind: 'ready', value: { kind: 'boolean', value: engineEval('COUNTIF($A$1:$A$10,"x")>3', cells, a1('B1')).value } })
+    expect(two.evaluate(1, 0, 1)).toEqual({ kind: 'ready', value: { kind: 'boolean', value: engineEval('COUNTIF($A$1:$A$10,"y")>2', cells, a1('B1')).value } })
+    two.dispose()
     const swapped = 'COUNTIF($A$1:$A$10,"y")>COUNTIF($A$1:$A$10,"x")'
     const other = formulaRule(swapped, 'B1')
     const batch = await batchOf([other], source, { statistics, memory })
