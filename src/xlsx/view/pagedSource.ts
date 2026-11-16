@@ -1002,7 +1002,8 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       // The worker owns the workbook's calculation facts: the policy comes from the same `PagedWorkbook` the values do, so
       // every worker route (paint, text, find) takes one authority. Only a sheet with a formula rule loads the module.
       const carriesFormula = liveRules?.rules.some(rule => rule.definition.kind === 'expression'
-        || (rule.definition.kind === 'cellIs' && rule.definition.operands.some(operand => 'formula' in operand))) === true
+        || (rule.definition.kind === 'cellIs' && rule.definition.operands.some(operand => 'formula' in operand))
+        || visualFormulaShape(rule.definition) !== undefined) === true
       const evaluation = carriesFormula ? (await import('../cf/formula')).cfDocumentEvaluationOfPaged(this.workbook) : undefined
       // Ruling S5-K: only a sheet whose rules name another sheet gets the workbook seam (no cross-sheet work otherwise).
       const crossSheet = carriesFormula && liveRules?.rules.some(rule => rule.definition.kind !== 'unresolved' && (rule.definition.dependencySheets?.length ?? 0) > 0) === true
@@ -1547,12 +1548,26 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     }
   }
 }
+/** Task 37: a scale, bar or icon set carrying formula bounds or an activation, with every compiled formula reduced to its
+ * node count (as `hashableDefinition` does for expressions); undefined for any other definition. */
+function visualFormulaShape(definition: CfSheetRules['rules'][number]['definition']): unknown {
+  type Bound = { type: string; formula?: { nodes: number } }
+  const strip = <T extends Bound>(b: T): T => (b.type === 'formula' && b.formula ? { ...b, formula: { nodes: b.formula.nodes } } : b)
+  const has = (bounds: readonly Bound[], activation: unknown): boolean => activation !== undefined || bounds.some(b => b.type === 'formula')
+  const activation = (d: { activation?: { nodes: number } }) => (d.activation ? { activation: { nodes: d.activation.nodes } } : {})
+  if (definition.kind === 'colorScale') return has(definition.points.map(p => p.bound), definition.activation) ? { ...definition, points: definition.points.map(p => ({ ...p, bound: strip(p.bound) })), ...activation(definition) } : undefined
+  if (definition.kind === 'dataBar') return has(definition.bounds, definition.activation) ? { ...definition, bounds: definition.bounds.map(strip), ...activation(definition) } : undefined
+  if (definition.kind === 'iconSet') return has(definition.thresholds.map(t => t.bound), definition.activation) ? { ...definition, thresholds: definition.thresholds.map(t => ({ ...t, bound: strip(t.bound) })), ...activation(definition) } : undefined
+  return undefined
+}
 /** Stage 5: a compiled formula is a pure function of the rule's own formula text (kept in `formulas`), its ranges and the
  * code, so the content hash and its byte sizing carry the rule without the AST. This also keeps a deeply nested formula
  * (a long `A1+A2+...` chain is as deep as it is long) inside the serializer's depth bound, so the paged view cannot refuse
  * a sheet's rules that the resident view paints. Everything but the AST is unchanged. */
 function hashableDefinition(definition: CfSheetRules['rules'][number]['definition']): unknown {
   if (definition.kind === 'expression') return { ...definition, formula: { nodes: definition.formula.nodes } }
+  const visual = visualFormulaShape(definition)
+  if (visual !== undefined) return visual
   if (definition.kind === 'cellIs' && definition.operands.some(operand => 'formula' in operand)) {
     return { ...definition, operands: definition.operands.map(operand => 'formula' in operand ? { formula: { nodes: operand.formula.nodes } } : operand) }
   }

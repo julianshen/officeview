@@ -651,6 +651,14 @@ describe('Stage 5 formula bounds, x14 scales and activation (Task 37)', () => {
     const lit = withExactCfEvidence(FX, () => parse(scale('<cfvo type="num" val="5"/><cfvo type="max"/>')).value.rules[0]!.definition)
     expect(lit).toMatchObject({ kind: 'colorScale', points: [{ bound: { type: 'num', value: 5 } }, { bound: { type: 'max' } }] })
   })
+  it('without formula evidence a value main called invalid stays cf-invalid-cfvo; with it, an expression compiles', () => {
+    for (const val of ['Sheet2!$A$1', 'A1:A3', 'F1*2']) {
+      const def = withExactCfEvidence(['scale:thresholds-num-bounds', 'scale:thresholds-min-max'], () => parse(scale(`<cfvo type="num" val="${val}"/><cfvo type="max"/>`)).value.rules[0]!.definition)
+      expect(def, val).toMatchObject({ kind: 'unresolved', reason: 'cf-invalid-cfvo' })
+    }
+    const def = withExactCfEvidence([...FX, 'formula:fn-math'], () => parse(scale('<cfvo type="num" val="F1*2"/><cfvo type="max"/>')).value.rules[0]!.definition)
+    expect(def).toMatchObject({ kind: 'colorScale', points: [{ bound: { type: 'formula', cfvo: 'num' } }, { bound: { type: 'max' } }] })
+  })
   it('a base activePresent scale stays cf-unsupported-rule even with the activation capability', () => {
     const def = withExactCfEvidence([...FX, 'formula:active-present-scale'], () => parse(scale('<cfvo type="min"/><cfvo type="max"/>', ' activePresent="1"')).value.rules[0]!.definition)
     expect(def).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })

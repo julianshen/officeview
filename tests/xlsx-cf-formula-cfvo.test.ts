@@ -27,6 +27,10 @@ import { CF_STAGE5_CAPABILITIES, CF_STAGE5_UNSUPPORTED, type CfManifest } from '
 import { resolveScaleThresholds } from '../src/xlsx/cf/colorScale'
 import { resolveBarThresholds } from '../src/xlsx/cf/dataBar'
 import { resolveIconThresholds } from '../src/xlsx/cf/iconSet'
+import { buildZip } from './helpers/zip-builder'
+import { createPagedWorkbookSource, type PagedXlsxSheetAdapter } from '../src/xlsx/view/pagedSource'
+import { openImportSession } from '../src/xlsx/storage/pagedImport'
+import type { CfReadResult } from '../src/xlsx/view/contracts'
 import type { CfCellState, CfDefinition, CfOutcome, CfSheetRules, CfStamp } from '../src/xlsx/cf/model'
 import type { CfWorkbookSheet, CfWorkbookSource } from '../src/xlsx/cf/dependencies'
 import type { XlsxSheet } from '../src/xlsx/types'
@@ -567,6 +571,57 @@ describe('a formula bound never reaches a resolver unsubstituted', () => {
     expect(ic.kind === 'iconSet' && resolveIconThresholds(ic, stats, all)).toEqual({ kind: 'unresolved', reason: 'cf-formula-unevaluated' })
     const f = sc.kind === 'colorScale' ? sc.points[0]!.bound : undefined
     expect(resolveBarThresholds({ bounds: [{ type: 'min' }, f] } as never, stats, all)).toEqual({ kind: 'unresolved', reason: 'cf-formula-unevaluated' })
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* Every view agrees: the resident leg and the paged worker leg.        */
+/* ------------------------------------------------------------------ */
+
+describe('the resident and paged worker legs agree on formula bounds (Lesson 13)', () => {
+  const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+  const rowsXml = (cells: Readonly<Record<string, number>>): string => {
+    const byRow = new Map<number, string[]>()
+    for (const [ref, v] of Object.entries(cells)) { const { row } = rc(ref); byRow.set(row, [...(byRow.get(row) ?? []), `<c r="${ref}"><v>${v}</v></c>`]) }
+    return [...byRow].sort((a, b) => a[0] - b[0]).map(([r, cs]) => `<row r="${r + 1}">${cs.join('')}</row>`).join('')
+  }
+  const book = (sheets: ReadonlyArray<{ name: string; cells: Readonly<Record<string, number>>; cf?: string }>): Uint8Array => buildZip([
+    { name: '[Content_Types].xml', data: `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>` },
+    { name: '_rels/.rels', data: `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${R}/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
+    { name: 'xl/workbook.xml', data: `<?xml version="1.0"?><workbook xmlns="${NS}" xmlns:r="${R}"><sheets>${sheets.map((x, i) => `<sheet name="${x.name}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets></workbook>` },
+    { name: 'xl/_rels/workbook.xml.rels', data: `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="${R}/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rIdS" Type="${R}/styles" Target="styles.xml"/></Relationships>` },
+    { name: 'xl/styles.xml', data: `<?xml version="1.0"?><styleSheet xmlns="${NS}"><cellXfs count="1"><xf numFmtId="0"/></cellXfs></styleSheet>` },
+    ...sheets.map((x, i) => ({ name: `xl/worksheets/sheet${i + 1}.xml`, data: `<?xml version="1.0"?><worksheet xmlns="${NS}" xmlns:x14="${X14}" xmlns:xm="${XM}"><sheetData>${rowsXml(x.cells)}</sheetData>${x.cf ?? ''}</worksheet>` })),
+  ]).bytes
+  it('a formula-bounded scale and an x14 scale bounded by a never-activated Sheet2 paint the same on both legs', async () => {
+    const caps = X14_SCALE_CAPS
+    const x14 = `<x14:conditionalFormatting><x14:cfRule type="colorScale" priority="2" id="{00000000-0000-4000-8000-0000000000E1}"><x14:colorScale><x14:cfvo type="num"><xm:f>Sheet2!$A$1</xm:f></x14:cfvo><x14:cfvo type="max"/><x14:color rgb="FFF8696B"/><x14:color rgb="FF63BE7B"/></x14:colorScale></x14:cfRule><xm:sqref>C2:C12</xm:sqref></x14:conditionalFormatting>`
+    const cf = scale('B2:B12', 1, '<cfvo type="formula" val="$F$1"/><cfvo type="max"/>') + ext(x14)
+    const bytes = book([{ name: 'Sheet1', cells: { F1: 50, ...(col('B', DATA) as Record<string, number>), ...(col('C', DATA) as Record<string, number>) }, cf }, { name: 'Sheet2', cells: { A1: 30 } }])
+    const refs = [...rows('B', 2, 12), ...rows('C', 2, 12)]
+    // Resident leg.
+    const doc = await withExactCfEvidence(caps, async () => parseXlsx(await OfficePackage.load(bytes)))
+    const host = doc.sheets.find(x => x.name === 'Sheet1')!
+    const resident = await prepareSheet(host, refs, caps, { workbook: cfWorkbookOfDocument(doc.sheets, createCfMemory(), 'engine') })
+    // Paged worker leg (Sheet2 is never activated: its store is created by the same path a cross-sheet read uses).
+    const session = await withExactCfEvidence(caps, async () => { const x = await openImportSession({ kind: 'blob', blob: new Blob([bytes.buffer as ArrayBuffer]) }, { docId: 'cfvo-legs', profile: 'D' }); await x.done; return x })
+    const source = createPagedWorkbookSource(session)
+    const adapter = source.store(source.sheets[0]!.sheetId) as PagedXlsxSheetAdapter
+    const read: CfReadResult = await withExactCfEvidence(caps, () => adapter.readConditionalFormatting({
+      rects: refs.map(ref => { const { row, col: c } = rc(ref); return { r0: row, r1: row, c0: c, c1: c } }),
+      stamp: { owner: adapter.stamp.docId, sheetId: adapter.stamp.sheetId, workbookValueGen: adapter.stamp.valueGen, cfGen: 0, viewGen: 0, structureGen: adapter.structureGen, clockGen: 0 },
+      grantBytes: 1 << 22,
+    }))
+    expect(read.kind).toBe("ready")
+    for (const ref of refs) {
+      const { row, col: c } = rc(ref)
+      const wire = read.states.find(x => x.row === row && x.col === c)
+      const o = resident.out.get(ref)!
+      const mine = o.kind === 'ready' ? o.value.visual?.colorScale : undefined
+      expect(mine, `${ref} resident paints`).toBeDefined()
+      expect(wire?.unresolvedReason, ref).toBeUndefined()
+      expect({ argb: wire?.scale?.argb, fraction: wire?.scale?.fraction }, ref).toEqual({ argb: mine!.argb, fraction: mine!.fraction })
+    }
   })
 })
 

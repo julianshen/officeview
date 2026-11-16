@@ -677,7 +677,7 @@ interface VisualFormulas {
 }
 /** Whether a cfvo value is a reference or expression (Stage 5) rather than an invalid literal. */
 function isFormulaCfvoText(clean: string): boolean {
-  return /^\$?[A-Za-z]{1,3}\$?\d+$/.test(clean) || /[A-Za-z_][A-Za-z0-9_]*\(/.test(clean) || clean.startsWith('$') || clean.startsWith('=') || /[:!]/.test(clean)
+  return /^\$?[A-Za-z]{1,3}\$?\d+$/.test(clean) || /[A-Za-z_][A-Za-z0-9_]*\(/.test(clean) || clean.startsWith('$') || clean.startsWith('=') || /[:!*/+\-^&<>]/.test(clean)
 }
 /** The family gate of a `type="formula"` cfvo (Ruling S5-H): checked before anything compiles. */
 const CFVO_FORMULA_CAPABILITY = { colorScale: 'scale:thresholds-formula', dataBar: 'bar:bounds-formula', iconSet: 'icon:thresholds-formula' } as const
@@ -916,14 +916,16 @@ function parseColorScaleRule(
       if (!isNumericLiteral) {
         // A reference or expression val="$A$1": Stage 5 compiles it (S5-H); a num reference also needs Stage 2's
         // scale:thresholds-num-val-reference (scaleRequiredCapabilities, below). Without them, main's cf-unsupported-rule.
-        if (isFormulaCfvoText(cleanVal) || cleanVal === '$A$1') {
-          if (!hasEvidence(`formula:dialect-${inputs.origin.dialect}`)) return finishUnresolved('cf-unsupported-rule', slot)
+        // Without formula evidence the reason is main's exactly (its own reference heuristic); with it, any reference or
+        // expression waits for compile.
+        if (hasEvidence(`formula:dialect-${inputs.origin.dialect}`) && isFormulaCfvoText(cleanVal)) {
           pending.set(i, { cfvo: cfvoType, text: val })
           bounds.push(undefined)
           boundsInput.push({ type: cfvoType, reference: true })
           continue
         }
-        return finishUnresolved('cf-invalid-cfvo', slot)
+        const mainReference = /^\$?[A-Za-z]{1,3}\$?\d+$/.test(cleanVal) || /[A-Za-z_][A-Za-z0-9_]*\(/.test(cleanVal) || cleanVal.startsWith('$') || cleanVal.startsWith('=')
+        return finishUnresolved(mainReference ? 'cf-unsupported-rule' : 'cf-invalid-cfvo', slot)
       }
 
       const numVal = Number(cleanVal)
@@ -1102,7 +1104,7 @@ function barBound(
     case 'percentile': {
       if (text === undefined) return 'cf-invalid-cfvo'
       const value = cfvoLiteral(text)
-      if (value === 'cf-unsupported-rule' && admitted(type)) return { pending: { cfvo: type, text } }
+      if (typeof value !== 'number' && isFormulaCfvoText(text.trim().replace(/^=/, '').trim()) && admitted(type)) return { pending: { cfvo: type, text } }
       return typeof value === 'number' ? { bound: { type, value }, legacy: false } : value
     }
     default:
@@ -1365,7 +1367,7 @@ function iconThreshold(cfvo: XmlNode, x14: boolean, admitted: (cfvoType: string)
     case 'percentile': {
       if (text === undefined) return 'cf-invalid-cfvo'
       const value = cfvoLiteral(text)
-      if (value === 'cf-unsupported-rule' && admitted(a['type'])) return { pending: { cfvo: a['type'], text }, gte }
+      if (typeof value !== 'number' && isFormulaCfvoText(text.trim().replace(/^=/, '').trim()) && admitted(a['type'])) return { pending: { cfvo: a['type'], text }, gte }
       return typeof value === 'number' ? { bound: { type: a['type'], value }, gte } : value
     }
     default:
@@ -1605,6 +1607,7 @@ function buildRuleBody(
   const compileFormulaItems = (items: readonly { text: string; use: CfFormulaUse }[], sourceType: CfRuleType): CompiledFormulas => {
     const dialect = inputs.origin.dialect
     const multi = ranges.length > 1
+    if (ranges.length === 0) return { ok: false, reason: 'cf-invalid-rule' }
     if (!hasEvidence(`formula:dialect-${dialect}`) || !hasEvidence('formula:anchor-single')) return { ok: false, reason: 'cf-unsupported-rule' }
     for (const item of items) {
       if (multi && !hasEvidence(item.use === 'cfvo' ? 'formula:cfvo-scope-multi-range' : 'formula:anchor-multi-range')) return { ok: false, reason: 'cf-unsupported-rule' }
