@@ -4,7 +4,7 @@ import { createCfStatistics } from './statistics'
 import { sameCfStamp } from './cache'
 import { cfRuntimeEvidence, type CfEvidenceGate } from './predicates'
 import { createCfService, type CfPaintStatistics } from './service'
-import { cfEvaluationContextFor, type CfDocumentEvaluation } from './formula'
+import { cfEvaluationContextFor, cfRoutePolicy, type CfDocumentEvaluation } from './formula'
 export { cfDocumentEvaluationOf, cfDocumentEvaluationOfPaged } from './formula'
 import { CF_LIMITS, createCfMemory, createCfWorkBudget, measureCfPayload, type CfMemory, type CfWorkBudget } from './limits'
 import { resolveCfCellStyle } from './dxf'
@@ -396,8 +396,9 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
   const hold = memory.reserve(2048 + Math.max(rangeCount, requested?.length ?? 0) * 512)
   if (hold.kind !== 'reserved') return unavailable(sheet)
   const evidence = options.evidence ?? cfRuntimeEvidence
-  const evaluation = options.evaluation ? cfEvaluationContextFor(options.evaluation, options.now ?? Date.now) : undefined
-  const workbook = cfWorkbookFor(rules, sheet.name, options.store, options.workbook, options.documentSheets, memory, options.valuePolicy ?? 'cached')
+  // Ruling S5-L: one value policy per preparation, the document's when the route is given its context.
+  const { policy: valuePolicy, evaluation } = cfRoutePolicy(options.evaluation ? cfEvaluationContextFor(options.evaluation, options.now ?? Date.now) : undefined, options.valuePolicy ?? options.store?.valuePolicy, 'cached')
+  const workbook = cfWorkbookFor(rules, sheet.name, options.store, options.workbook, options.documentSheets, memory, valuePolicy)
   const dependencyGen = cfDependencyGenOf(rules, sheet.name, workbook)
   const stamp = options.request?.stamp ?? {
     owner: options.store?.stamp.docId ?? 'static',
@@ -412,7 +413,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
   const signal = options.request?.signal ?? new AbortController().signal
   // The batch's own liveness checks (`styleAt`, bars, icons) read the live `dependencyGen` too (S5-K): a referenced sheet's
   // commit stops this batch painting synchronously, as a host commit does.
-  const source = withCfDependencyGen(options.source ?? (options.store ? storeCfSource(options.store, stamp, memory) : residentSource(sheet, stamp, memory, options.valuePolicy ?? 'cached')), rules, sheet.name, workbook)
+  const source = withCfDependencyGen(options.source ?? (options.store ? storeCfSource(options.store, stamp, memory) : residentSource(sheet, stamp, memory, valuePolicy)), rules, sheet.name, workbook)
   const hiddenRows: SourceRect[] = []
   for (const r of sheet.rows) {
     if (r.hidden) hiddenRows.push({ firstRow: r.index, lastRow: r.index, firstCol: 0, lastCol: 16383 })

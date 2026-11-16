@@ -555,6 +555,18 @@ export function cfDocumentEvaluationOfPaged(workbook: Readonly<{ calcMode?: 'aut
     return Object.freeze({ calcMode: workbook.calcMode ?? 'auto', valuePolicy: 'cached' as const, dateSystem: workbook.formatting?.dateSystem ?? '1900', timeZone })
   })
 }
+/**
+ * One route's value policy and evaluation context (Ruling S5-L). The policy a route reads values under is its explicit
+ * one, else the store's own, else the document's (`evaluation.valuePolicy`), else the route's historical default (which
+ * only a route with no context keeps, so no Stage 1-4 outcome moves). A route whose policy disagrees with the document's
+ * has no single value for a formula to read: its context is dropped and every formula rule is
+ * `cf-evaluation-context-missing`, as on a route handed none.
+ */
+export function cfRoutePolicy(evaluation: CfEvaluationContext | undefined, explicit: ValuePolicy | undefined, routeDefault: ValuePolicy): Readonly<{ policy: ValuePolicy; evaluation: CfEvaluationContext | undefined }> {
+  if (!evaluation) return { policy: explicit ?? routeDefault, evaluation: undefined }
+  const policy = explicit ?? evaluation.valuePolicy
+  return { policy, evaluation: policy === evaluation.valuePolicy ? evaluation : undefined }
+}
 /** One clock snapshot from the injected `now`; `clockGen` is the local day serial of that sample (the interactive
  * midnight tick keys on it). A zone the engine cannot resolve falls back to the UTC day so the generation still advances. */
 export function cfEvaluationContextFor(policy: CfDocumentEvaluation, now: () => number): CfEvaluationContext {

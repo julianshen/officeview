@@ -2,7 +2,7 @@ import type { XlsxSheet } from '../types'
 import { CF_ICON_SET_NAMES, type CfBarDescriptor, type CfIconDescriptor, type CfLease, type CfPrepared, type CfStamp, type SourceRect as ModelRect } from './model'
 import { CF_LIMITS, createCfMemory, createCfWorkBudget, type CfMemory } from './limits'
 import { createCfService, estimateCfPrepareBytes, type CfPaintStatistics } from './service'
-import { cfEvaluationContextFor, type CfDocumentEvaluation } from './formula'
+import { cfEvaluationContextFor, cfRoutePolicy, type CfDocumentEvaluation } from './formula'
 export { cfDocumentEvaluationOf, cfDocumentEvaluationOfPaged } from './formula'
 import { createCfStatistics } from './statistics'
 import { resolveCfCellStyle } from './dxf'
@@ -428,7 +428,8 @@ export async function prepareCfTextScope(
   for (const r of sheet.rows) if (r.hidden) hiddenRows.push({ firstRow: r.index, lastRow: r.index, firstCol: 0, lastCol: 16383 })
   const statisticsOptions = hiddenRows.length > 0 ? { hiddenRows } : undefined
   const sheetMerges: ModelRect[] = (sheet.mergeRanges ?? []).map(m => ({ firstRow: m.minRow, lastRow: m.maxRow, firstCol: m.minCol, lastCol: m.maxCol }))
-  const evaluation = request.evaluation ? cfEvaluationContextFor(request.evaluation, request.now ?? Date.now) : undefined
+  // Ruling S5-L: one value policy per preparation, the document's when the route is given its context.
+  const { policy: valuePolicy, evaluation } = cfRoutePolicy(request.evaluation ? cfEvaluationContextFor(request.evaluation, request.now ?? Date.now) : undefined, request.valuePolicy ?? request.store?.valuePolicy, 'engine')
   const dateContext = request.dateContext ?? (sheet.semantics ? {
     dateSystem: sheet.semantics.dateSystem,
     timeZone: sheet.semantics.timeZone,
@@ -436,7 +437,7 @@ export async function prepareCfTextScope(
   } : undefined)
     try {
       const gen = cfRulesVersion(rules)
-      const workbook = cfWorkbookFor(rules, sheet.name, request.store, request.workbook, request.documentSheets, account, request.valuePolicy ?? 'engine')
+      const workbook = cfWorkbookFor(rules, sheet.name, request.store, request.workbook, request.documentSheets, account, valuePolicy)
       const dependencyGen = cfDependencyGenOf(rules, sheet.name, workbook)
       const stamp: CfStamp = {
         owner: request.store?.stamp.docId ?? 'cf-text',
@@ -450,7 +451,7 @@ export async function prepareCfTextScope(
       }
       statistics.stamp = stamp
       // The scope's liveness reads the live `dependencyGen` too (S5-K).
-      const source = withCfDependencyGen(request.store ? storeCfSource(request.store, stamp, account) : residentSource(sheet, stamp, account, request.valuePolicy ?? 'engine'), rules, sheet.name, workbook)
+      const source = withCfDependencyGen(request.store ? storeCfSource(request.store, stamp, account) : residentSource(sheet, stamp, account, valuePolicy), rules, sheet.name, workbook)
       const colors = request.colors ?? { theme: sheet.drawingTheme?.palette ?? sheet.tableStyleSource?.colors.theme, indexed: sheet.tableStyleSource?.colors.indexed }
       const locale = request.locale ?? 'en-US'
       for (const chunk of modelChunks) {
