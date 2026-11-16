@@ -572,7 +572,10 @@ function composeSnapshots(host: CfDependencySnapshot, hostName: string | undefin
 /* The batch driver: one snapshot, hoists, bounded calls, yields.      */
 /* ------------------------------------------------------------------ */
 
-export interface CfFormulaTask { readonly rule: CfRule; readonly formula: CfFormula }
+/** `targets` (Task 37): the cells this task is evaluated at, overriding the rule's ranges and the batch's targets. A cfvo
+ * bound is evaluated only at its scope anchors (Ruling S5-H), wherever the preparation's rects lie, so every view
+ * snapshots the same footprint. */
+export interface CfFormulaTask { readonly rule: CfRule; readonly formula: CfFormula; readonly targets?: readonly SourceRect[] }
 export interface CfFormulaBatchOptions {
   /** `sheetName`: the host's name, the formula context's `currentSheet`. Absent (the sheet-id fallback), a formula naming
    * any sheet withholds: the host cannot be told apart from another sheet. */
@@ -739,7 +742,7 @@ export async function prepareCfFormulaBatch(tasks: readonly CfFormulaTask[], opt
           if (refusedHoist) { taskOutcome[i] = refusedHoist; continue }
           if (routed.length > 0) hoists[i] = { plan: routed, values: only ?? { scalars, frequencies, longest } }
         }
-        const targets = options.targets ? rule.ranges.flatMap(r => options.targets!.map(t => clampTo(r, t)).filter((x): x is SourceRect => x !== undefined)) : rule.ranges
+        const targets = tasks[i]!.targets ? tasks[i]!.targets! : options.targets ? rule.ranges.flatMap(r => options.targets!.map(t => clampTo(r, t)).filter((x): x is SourceRect => x !== undefined)) : rule.ranges
         // The cap counts the populated clamp; the snapshot declares the geometry as written (S5-SUMIF-SHAPE: a whole
         // column stays a whole column, so `countAbsent` and coverage see the true area).
         const boundsOf = (sheet: string | undefined): SourceRect | undefined => (sheet === undefined || sheet.toLowerCase() === hostKey ? bounds : depBounds.get(sheet.toLowerCase()))

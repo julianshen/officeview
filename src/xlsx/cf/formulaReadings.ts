@@ -5,8 +5,10 @@
  * matched hypothesis is read from `formulaSelectionEvidence`, and only a listed one is honoured.
  *
  * A capability with no entry here is never honoured, whatever evidence holds it (`cfFormulaReading` returns undefined):
- * a rule that needs it stays unresolved. That is how `formula:truth-range`, `formula:fn-today`, the cross-sheet, cfvo,
- * activation, multi-range anchor and manual-calculation capabilities stay withheld until their own tasks implement them.
+ * a rule that needs it stays unresolved. That is how `formula:truth-range`, `formula:fn-today`, `formula:cross-sheet-missing`,
+ * the multi-range anchor and manual-calculation capabilities stay withheld until their own tasks implement them. Task 37
+ * registered the cfvo, x14-scale and activation readings; the family ids (`scale:`/`bar:`/`icon:`) are listed here too, so the
+ * Stage 5 publication gate sees one table.
  */
 import { formulaSelectionEvidence } from './evidence'
 import type { CfEdgeMode, CfTruthReading } from './formula'
@@ -63,6 +65,25 @@ export const CF_FORMULA_PRODUCTION_READINGS: Readonly<Record<string, string | re
   'formula:cross-sheet-reference': 'documented',
   'formula:cross-sheet-quoted-name': 'documented',
   'formula:cellis-operand-cross-sheet': 'documented',
+  // service.ts visual arm (Task 37, Ruling S5-H): a cfvo formula evaluates once per measured scope, at the scope's anchor,
+  // and its number feeds the Stage 2-4 resolvers (`formula`/`num` as a num bound, `percent`/`percentile` as p). A relative
+  // bound is evaluated as written at the anchor. A text, blank or error result follows the selected reading (colour
+  // scales only: the one family stage5-cfvo-formulas measures); a boolean result has no reading and stays unresolved.
+  'scale:thresholds-formula': 'evaluated',
+  'bar:bounds-formula': 'evaluated',
+  'icon:thresholds-formula': 'evaluated',
+  'formula:cfvo-reference': 'evaluated',
+  'formula:cfvo-expression': 'evaluated',
+  'formula:cfvo-relative': 'anchor-top-left',
+  'formula:cfvo-nonnumeric': Object.freeze(['withheld', 'zero', 'skipped']),
+  'formula:cfvo-scope-multi-range': Object.freeze(['rule-wide', 'per-range']),
+  // parse.ts (Ruling S5-I): a standalone <x14:colorScale> resolves through the Stage 2 point model. Its parse gate is the
+  // bare evidence; this entry is what lets the audit publish it only for the reading production implements.
+  'scale:dialect-standalone': 'standalone-evaluated',
+  // service.ts (Ruling S5-J): the rule-level <xm:f> of an activePresent="1" x14 visual gates each cell ahead of the visual.
+  'formula:active-present-scale': 'activation-gates',
+  'formula:active-present-bar': 'activation-gates',
+  'formula:active-present-icon': 'activation-gates',
   // Reuse-only capabilities (Ruling S5-STUB): the Stage 1-4 capture is the recorded outcome.
   'formula:composition-stub-successor-dxf': 'recorded',
   'formula:composition-stub-successor-scale': 'recorded',

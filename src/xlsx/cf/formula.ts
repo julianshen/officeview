@@ -472,7 +472,9 @@ export interface CfFormulaRuleContext { readonly dialect: 'base' | 'x14'; readon
  */
 export function formulaRequiredCapabilities(f: CfFormula, use: CfFormulaUse, rule: CfFormulaRuleContext): Readonly<{ parse: ReadonlySet<string>; evaluation: ReadonlySet<string> }> {
   const parse = new Set<string>([`formula:dialect-${rule.dialect}`, 'formula:anchor-single'])
-  if (rule.rangeCount > 1) parse.add('formula:anchor-multi-range')
+  // A multi-range cfvo is written against the first range's anchor, and where it is evaluated is the scope reading
+  // (`formula:cfvo-scope-multi-range`, Ruling S5-H), not the per-cell multi-range anchor of an expression.
+  if (rule.rangeCount > 1 && use !== 'cfvo') parse.add('formula:anchor-multi-range')
   if (f.pinned) parse.add('formula:anchor-mixed-abs')
   if (f.dependencySheets.length > 0) {
     parse.add('formula:cross-sheet-reference')

@@ -30,6 +30,9 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const UNREACHABLE: Readonly<Record<string, string>> = {
   'formula:predicate-timeperiod-divergent': 'the divergent timePeriod formulas use TODAY(), and formula:fn-today is Task 38',
   'formula:truth-error': 'each configuration holds an NA() row, and NA is not on the allow-list (S5-B): those cells withhold, the 1/0 rows show error-no-match',
+  // Task 37: both bar configurations are withheld throughout (fail closed), never painted against their twins.
+  'bar:bounds-formula': 'a formula bar bound feeds the num path, whose gate bar:bounds-num is CF_STAGE3_NONDISCRIMINATING (never verified): the I column and its num twin W withhold alike',
+  'formula:active-present-bar': 'its fixture is a standalone x14 bar, and bar:pairing-standalone is CF_STAGE3_UNSUPPORTED: the activated bar and its twin withhold alike',
   'formula:fn-conditional-aggregate': 'its configuration\'s COUNTIF($A:$A,A2) column holds booleans and numeric text, a whole-rule hoist refusal (S5-HOIST); reproduced through the stage5-formula-hoist rows',
 }
 const REUSE_ONLY = /^formula:composition-stub-successor-/
@@ -189,8 +192,10 @@ describe('every registered formula reading is the reading production implements,
                 const { row, col } = rc(r)
                 const o = lease.value.at(row, col), s = shown(o)
                 const v = o.kind === 'ready' ? o.value.visual : undefined
+                // Task 37: an icon's token names the icon it draws, so a crop configuration whose readings differ only in the
+                // bucket (stage5-cfvo-scope scope-icon) can discriminate; a twin is still production's own twin cell.
                 const drawn = v !== undefined && (v.iconSet !== undefined || (v.dataBar !== undefined && v.dataBar.endFraction !== v.dataBar.startFraction))
-                out.set(r, { fill: s.fill, strike: s.strike, withheld: s.withheld, drawn, visual: v ? Object.keys(v).sort().join('&') : '' })
+                out.set(r, { fill: s.fill, strike: s.strike, withheld: s.withheld, drawn, visual: v ? Object.keys(v).sort().map(k => k === 'iconSet' && v.iconSet ? `iconSet:${v.iconSet.set}/${v.iconSet.iconId}` : k).join('&') : '' })
               }
               lease.release(); service.dispose()
               return out

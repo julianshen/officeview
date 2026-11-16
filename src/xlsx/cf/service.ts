@@ -8,7 +8,7 @@ import { evaluateIconSet, resolveIconThresholds } from './iconSet'
 import { barLayoutEvidence } from './evidence'
 import { resolveCfCellStyle } from './dxf'
 import { CF_BAR_CELL_BYTES, CF_FORMULA_NODE_BYTES, CF_ICON_CELL_BYTES, CF_LIMITS, createCfWorkBudget, type CfMemory, type CfWorkBudget } from './limits'
-import { cfDefinitionFormulas, isCfFormulaOperand, type CfCellState, type CfFormula, type CfLease, type CfLiteral, type CfOutcome, type CfPrepared, type CfPrepareRequest, type CfRule, type CfSheetRules, type CfValueSource, type SourceRect } from './model'
+import { cfDefinitionFormulas, cfVisualFormulaBounds, isCfFormulaOperand, type CfBarBound, type CfCellState, type CfDefinition, type CfFormula, type CfFormulaBound, type CfIconThreshold, type CfLease, type CfLiteral, type CfOutcome, type CfPrepared, type CfPrepareRequest, type CfRule, type CfScaleBound, type CfSheetRules, type CfValueSource, type SourceRect } from './model'
 import { cfElementToLiteral, cfTruth, formulaRequiredCapabilities, type CfEvaluationContext, type CfResult } from './formula'
 import { cfAdmittedSheetNames, prepareCfFormulaBatch, withCfDependencyGen, type CfFormulaBatch, type CfFormulaTask, type CfWorkbookSource } from './dependencies'
 import { cfEdgeModeOf, cfFormulaReading, cfTruthReadings } from './formulaReadings'
@@ -18,10 +18,14 @@ const quota = () => new PackageError('resource-limit', 'CF preparation exceeds i
 const cancel = () => new PackageError('cancelled', 'CF preparation cancelled or superseded')
 const blank: CfLiteral = Object.freeze({ kind: 'blank' })
 const inside = (r: SourceRect, row: number, col: number) => row >= r.firstRow && row <= r.lastRow && col >= r.firstCol && col <= r.lastCol
+/** A bound that resolves to a literal number without statistics: `num`, or a formula bound fed as one (Ruling S5-H). */
+const numLike = (b: CfScaleBound | CfIconThreshold['bound']): boolean => b.type === 'num' || (b.type === 'formula' && (b.cfvo === 'num' || b.cfvo === 'formula'))
+/** A percentile bound, literal or formula-valued: it needs the sorted copy. */
+const percentileLike = (b: CfBarBound | CfIconThreshold['bound']): boolean => b.type === 'percentile' || (b.type === 'formula' && b.cfvo === 'percentile')
 function statistical(rule: CfRule) {
   const d = rule.definition
   // An icon set reads statistics only through a non-`num` threshold; a `num`-only set requests none (Ruling S4-G).
-  if (d.kind === 'iconSet') return d.thresholds.some(t => t.bound.type !== 'num')
+  if (d.kind === 'iconSet') return d.thresholds.some(t => !numLike(t.bound))
   return d.kind === 'colorScale' || d.kind === 'dataBar' || d.kind === 'top10' || d.kind === 'aboveAverage' || (d.kind === 'predicate' && (d.type === 'uniqueValues' || d.type === 'duplicateValues'))
 }
 
@@ -47,6 +51,55 @@ function formulaRuleRefusal(rule: CfRule, formulas: readonly CfFormula[], check:
   }
   return undefined
 }
+type CfVisualDefinition = Extract<CfDefinition, { kind: 'colorScale' | 'dataBar' | 'iconSet' }>
+const isVisualDefinition = (d: CfDefinition): d is CfVisualDefinition => d.kind === 'colorScale' || d.kind === 'dataBar' || d.kind === 'iconSet'
+const VISUAL_FORMULA_CAPABILITY = { colorScale: 'scale:thresholds-formula', dataBar: 'bar:bounds-formula', iconSet: 'icon:thresholds-formula' } as const
+
+/**
+ * Task 37 (Rulings S5-H, S5-J): why a visual's formula bounds or activation are not evaluated, decided once per
+ * preparation, or undefined when every capability they need is held with production's reading. A `type="formula"` bound
+ * needs its family id, a scale's reference `num` Stage 2's `scale:thresholds-num-val-reference`, and every formula the
+ * parse and evaluation sets of its use. An activation on a stopIfTrue visual has no measured composition.
+ */
+function visualFormulaRefusal(rule: CfRule, d: CfVisualDefinition, check: (capability: string) => boolean): string | undefined {
+  const context = { dialect: d.dialect, rangeCount: rule.ranges.length, sourceType: d.kind }
+  const held = (f: CfFormula, use: 'cfvo' | 'activation'): boolean => {
+    const caps = formulaRequiredCapabilities(f, use, context)
+    for (const set of [caps.parse, caps.evaluation]) for (const cap of set) if (cfFormulaReading(cap, check) === undefined) return false
+    return true
+  }
+  for (const b of cfVisualFormulaBounds(d)) {
+    if (b.cfvo === 'formula' && cfFormulaReading(VISUAL_FORMULA_CAPABILITY[d.kind], check) === undefined) return 'cf-unmeasured-capability'
+    if (d.kind === 'colorScale' && b.cfvo === 'num' && !check('scale:thresholds-num-val-reference')) return 'cf-unmeasured-capability'
+    if (!held(b.formula, 'cfvo')) return 'cf-unmeasured-capability'
+  }
+  if (d.activation) {
+    if (rule.stopIfTrue) return 'cf-unmeasured-capability'
+    if (!held(d.activation, 'activation')) return 'cf-unmeasured-capability'
+  }
+  return undefined
+}
+
+/**
+ * Ruling S5-H: the number one cfvo formula result feeds its bound, or why it feeds none. A number feeds as written
+ * (`formula`/`num` as a num bound, `percent`/`percentile` as p). A text, blank or error result follows the
+ * `formula:cfvo-nonnumeric` reading, measured on colour scales only: `withheld` is no format at all (`no-match`), `zero`
+ * a 0 bound and `skipped` the bound's positional extreme (the first point `min`, the last `max`; a midpoint has none).
+ * A boolean or range result has no reading.
+ */
+function substitutedBound(b: CfFormulaBound, result: CfResult, position: 'first' | 'middle' | 'last', kind: CfVisualDefinition['kind'], check: (capability: string) => boolean): CfOutcome<CfScaleBound> {
+  const feed = (value: number): CfOutcome<CfScaleBound> => Number.isFinite(value)
+    ? { kind: 'ready', value: { type: b.cfvo === 'formula' ? 'num' : b.cfvo, value } }
+    : { kind: 'unresolved', reason: 'cf-formula-nonfinite' }
+  if (result.kind === 'number') return typeof result.value === 'number' ? feed(result.value) : { kind: 'unresolved', reason: 'cf-formula-unsupported' }
+  if (result.kind !== 'text' && result.kind !== 'blank' && result.kind !== 'error') return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
+  const reading = kind === 'colorScale' ? cfFormulaReading('formula:cfvo-nonnumeric', check) : undefined
+  if (reading === 'withheld') return { kind: 'no-match' }
+  if (reading === 'zero') return feed(0)
+  if (reading === 'skipped' && position !== 'middle') return { kind: 'ready', value: { type: position === 'first' ? 'min' : 'max' } }
+  return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
+}
+
 /** A formula operand's value as the literal `evaluateCellIs` compares (Ruling S5-F); an error operand refuses the cell. */
 function operandLiteral(result: CfResult, check: (capability: string) => boolean): CfOutcome<CfLiteral> {
   switch (result.kind) {
@@ -230,9 +283,9 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
           // statistical rule (top10, duplicates, averages) takes the session default (sorted).
           const ownSorted = (rule: CfRule): boolean => {
             const d = rule.definition
-            return d.kind === 'colorScale' ? d.points.some(p => p.bound.type === 'percentile')
-              : d.kind === 'dataBar' ? d.bounds.some(b => b.type === 'percentile')
-              : d.kind === 'iconSet' ? d.thresholds.some(t => t.bound.type === 'percentile') : true
+            return d.kind === 'colorScale' ? d.points.some(p => percentileLike(p.bound))
+              : d.kind === 'dataBar' ? d.bounds.some(b => percentileLike(b))
+              : d.kind === 'iconSet' ? d.thresholds.some(t => percentileLike(t.bound)) : true
           }
           // One scan per scope whatever the priority order: a sorted entry serves unsorted requests but not the reverse,
           // so a streaming rule whose scope another rule needs sorted asks for the sorted copy too (Bounded work).
@@ -263,8 +316,9 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
           budget.resume()
           // Ruling S3-B: the published layout, gated by this service's evidence; undefined withholds every bar.
           const barLayout = barLayoutEvidence(cap => evidence.allows(cap))
-          // Icon thresholds depend on the rule and its scope statistics only: resolved once per rule, not per cell.
-          const iconThresholds = new Map<CfRule, CfOutcome<readonly number[]>>()
+          // Icon thresholds depend on the (substituted) definition and its scope statistics only: resolved once per rule and
+          // formula scope, not per cell.
+          const iconThresholds = new Map<CfDefinition, CfOutcome<readonly number[]>>()
           // Stage 5 (Task 35, Rulings S5-B..S5-O): the formula rules, decided once per preparation (never per cell:
           // `cfDefinitionFormulas` allocates). Each is gated once on every capability its formulas need; a gated rule is
           // unresolved by name and builds no task. With no task no batch is built and nothing is scanned (production
@@ -276,18 +330,33 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
           const formulaGate = new Map<CfRule, CfOutcome<never>>()
           const formulaTasks: CfFormulaTask[] = []
           const taskOf = new Map<CfFormula, number>()
+          /** Task 37 (Ruling S5-H): each formula-bounded visual's scope anchors, one per measured scope: the first range's
+           * top-left (one scope), or each range's own under the `per-range` reading. */
+          const visualAnchors = new Map<CfRule, readonly Readonly<{ row: number; col: number }>[]>()
           for (const rule of ordered) {
             const formulas = cfDefinitionFormulas(rule.definition)
             if (formulas.length === 0) continue
             await work()
-            formulaRules.add(rule)
+            const visual = isVisualDefinition(rule.definition) ? rule.definition : undefined
+            if (!visual) formulaRules.add(rule)
             // Ruling S5-L: under manual calculation a formula rule is unresolved until formula:calc-manual-saved-values (not
             // registered: Task 38) confirms that Excel evaluates CF against the saved values.
             const refused = !options.evaluation ? 'cf-evaluation-context-missing'
               : options.evaluation.calcMode === 'manual' && cfFormulaReading('formula:calc-manual-saved-values', check) === undefined ? 'cf-unmeasured-capability'
-              : formulaRuleRefusal(rule, formulas, check)
+              : visual ? visualFormulaRefusal(rule, visual, check) : formulaRuleRefusal(rule, formulas, check)
             if (refused) { formulaGate.set(rule, { kind: 'unresolved', reason: refused }); continue }
-            for (const formula of formulas) { taskOf.set(formula, formulaTasks.length); formulaTasks.push({ rule, formula }) }
+            if (!visual) {
+              for (const formula of formulas) { taskOf.set(formula, formulaTasks.length); formulaTasks.push({ rule, formula }) }
+              continue
+            }
+            // A bound is evaluated at its scope anchors only, wherever this preparation's rects lie; the activation at every
+            // covered cell, like an expression.
+            const perRange = rule.ranges.length > 1 && cfFormulaReading('formula:cfvo-scope-multi-range', check) === 'per-range'
+            const anchors = (perRange ? rule.ranges : rule.ranges.slice(0, 1)).map(r => Object.freeze({ row: r.firstRow, col: r.firstCol }))
+            visualAnchors.set(rule, anchors)
+            const targets = anchors.map(a => Object.freeze({ firstRow: a.row, lastRow: a.row, firstCol: a.col, lastCol: a.col }))
+            for (const b of cfVisualFormulaBounds(visual)) { taskOf.set(b.formula, formulaTasks.length); formulaTasks.push({ rule, formula: b.formula, targets }) }
+            if (visual.activation) { taskOf.set(visual.activation, formulaTasks.length); formulaTasks.push({ rule, formula: visual.activation }) }
           }
           if (formulaTasks.length > 0) {
             batch = await prepareCfFormulaBatch(formulaTasks, {
@@ -301,6 +370,71 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
             budget.resume()
           }
           const readings = cfTruthReadings(check)
+          /**
+           * Task 37 (Ruling S5-H): the definition one cell's visual evaluates, with every formula bound replaced by its number,
+           * memoised per rule and measured scope (rule-wide: one; per-range: one per range). A cell in two ranges of a
+           * per-range rule has no single scope and is unresolved.
+           */
+          const substituted = new Map<CfRule, Array<CfOutcome<CfVisualDefinition> | undefined>>()
+          const visualDefinition = (rule: CfRule, d: CfVisualDefinition, row: number, col: number): CfOutcome<CfVisualDefinition> => {
+            const bounds = cfVisualFormulaBounds(d)
+            if (bounds.length === 0) return { kind: 'ready', value: d }
+            const anchors = visualAnchors.get(rule)
+            if (!batch || !anchors) return { kind: 'unresolved', reason: 'cf-formula-unevaluated' }
+            let scope = 0
+            if (anchors.length > 1) {
+              const owners = rule.ranges.flatMap((r, i) => inside(r, row, col) ? [i] : [])
+              if (owners.length !== 1) return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
+              scope = owners[0]!
+            }
+            let memo = substituted.get(rule)
+            if (!memo) substituted.set(rule, memo = [])
+            const known = memo[scope]
+            if (known) return known
+            const at = anchors[scope]!
+            const values = new Map<CfFormulaBound, CfScaleBound>()
+            let out: CfOutcome<CfVisualDefinition> | undefined
+            const list: readonly (CfBarBound | CfIconThreshold['bound'])[] = d.kind === 'colorScale' ? d.points.map(p => p.bound) : d.kind === 'dataBar' ? d.bounds : d.thresholds.map(t => t.bound)
+            for (let i = 0; i < list.length && !out; i++) {
+              const b = list[i]!
+              if (b.type !== 'formula') continue
+              const result = batch.evaluate(taskOf.get(b.formula)!, at.row, at.col)
+              if (result.kind !== 'ready') { out = result; break }
+              const bound = substitutedBound(b, result.value, i === 0 ? 'first' : i === list.length - 1 ? 'last' : 'middle', d.kind, check)
+              if (bound.kind !== 'ready') { out = bound; break }
+              values.set(b, bound.value)
+            }
+            if (!out) {
+              const of = <T extends CfScaleBound | CfIconThreshold['bound'] | CfBarBound>(b: T): T => (b.type === 'formula' ? values.get(b)! : b) as T
+              out = { kind: 'ready', value: d.kind === 'colorScale' ? { ...d, points: d.points.map(p => ({ ...p, bound: of(p.bound) })) as unknown as typeof d.points }
+                : d.kind === 'dataBar' ? { ...d, bounds: [of(d.bounds[0]), of(d.bounds[1])] as const }
+                : { ...d, thresholds: d.thresholds.map(t => ({ ...t, bound: of(t.bound) as CfIconThreshold['bound'] })) } }
+            }
+            // A pending referenced page is not memoised: the preparation is re-made once it completes.
+            if (!(out.kind === 'unresolved' && out.reason === 'cf-pending-data')) memo[scope] = out
+            return out
+          }
+          /** Ruling S5-J: the activation of one cell, ahead of the visual: true paints, false is no visual at that cell only. */
+          const activationAt = (d: CfVisualDefinition, row: number, col: number): CfOutcome<boolean> => {
+            if (!d.activation) return { kind: 'ready', value: true }
+            if (!batch) return { kind: 'unresolved', reason: 'cf-formula-unevaluated' }
+            const out = batch.evaluate(taskOf.get(d.activation)!, row, col)
+            if (out.kind !== 'ready') return out
+            const truth = cfTruth(out.value, { row, col }, readings)
+            if (truth.kind !== 'ready') return truth
+            return truth.value === 'halt' ? { kind: 'unresolved', reason: 'cf-unmeasured-capability' } : { kind: 'ready', value: truth.value }
+          }
+          /** The visual's own definition for this cell, its activation passed: or the outcome the cell takes instead. */
+          const visualAt = (rule: CfRule, d: CfVisualDefinition, row: number, col: number): CfOutcome<CfVisualDefinition> => {
+            const gated = formulaGate.get(rule)
+            if (gated) return gated
+            const active = activationAt(d, row, col)
+            if (active.kind !== 'ready') return active
+            if (!active.value) return { kind: 'no-match' }
+            return visualDefinition(rule, d, row, col)
+          }
+          const isPending = (out: CfOutcome<unknown>): out is { kind: 'unresolved'; reason: string; pendingSheetIds: readonly string[] } =>
+            out.kind === 'unresolved' && out.reason === 'cf-pending-data' && (out.pendingSheetIds?.length ?? 0) > 0
           const formulaOutcome = (rule: CfRule, row: number, col: number, value: CfLiteral): CfOutcome<unknown> => {
             const gated = formulaGate.get(rule)
             if (gated) return gated
@@ -357,12 +491,17 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                     outcomes.push({ kind: 'unresolved', reason: 'cf-no-statistics' })
                     continue
                   }
-                  const thresh = resolveScaleThresholds(rule.definition.points, preparedStats.value.value, { hasEvidence: cap => evidence.allows(cap) })
+                  // Stage 5: the activation gates this cell, and the formula bounds take their evaluated numbers.
+                  const visual = visualAt(rule, rule.definition, row, col)
+                  if (isPending(visual)) { for (const id of visual.pendingSheetIds) pendingSheets.add(id); return { kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: visual.pendingSheetIds } }
+                  if (visual.kind !== 'ready') { outcomes.push(visual); continue }
+                  const def = visual.value as Extract<CfDefinition, { kind: 'colorScale' }>
+                  const thresh = resolveScaleThresholds(def.points, preparedStats.value.value, { hasEvidence: cap => evidence.allows(cap) })
                   if (thresh.kind !== 'ready') {
                     outcomes.push(thresh)
                     continue
                   }
-                  const colorOut = scaleColorAt(value, rule.definition.points, thresh.value, { hasEvidence: cap => evidence.allows(cap) })
+                  const colorOut = scaleColorAt(value, def.points, thresh.value, { hasEvidence: cap => evidence.allows(cap) })
                   if (colorOut.kind === 'ready') {
                     let numVal: number | undefined
                     if (typeof value === 'number') numVal = value
@@ -384,10 +523,14 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                     outcomes.push(preparedStats?.kind === 'unresolved' ? preparedStats : { kind: 'unresolved', reason: 'cf-no-statistics' })
                     continue
                   }
+                  const visual = visualAt(rule, rule.definition, row, col)
+                  if (isPending(visual)) { for (const id of visual.pendingSheetIds) pendingSheets.add(id); return { kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: visual.pendingSheetIds } }
+                  if (visual.kind !== 'ready') { outcomes.push(visual); continue }
+                  const def = visual.value as Extract<CfDefinition, { kind: 'dataBar' }>
                   const gate = { hasEvidence: (cap: string) => evidence.allows(cap), layout: barLayout }
-                  const thresh = resolveBarThresholds(rule.definition, preparedStats.value.value, gate)
+                  const thresh = resolveBarThresholds(def, preparedStats.value.value, gate)
                   outcomes.push(thresh.kind !== 'ready' ? thresh
-                    : evaluateDataBar(value, rule.definition, thresh.value, preparedStats.value.value, gate))
+                    : evaluateDataBar(value, def, thresh.value, preparedStats.value.value, gate))
                 } else if (rule.definition.kind === 'iconSet') {
                   // No icon:* capability measures an icon rule that also carries a DXF (spec §5.7 and Ruling S4-I are
                   // silent on whether its fill and font apply): the whole contribution is withheld, which taints the
@@ -400,13 +543,17 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                     outcomes.push(preparedStats?.kind === 'unresolved' ? preparedStats : { kind: 'unresolved', reason: 'cf-no-statistics' })
                     continue
                   }
+                  const visual = visualAt(rule, rule.definition, row, col)
+                  if (isPending(visual)) { for (const id of visual.pendingSheetIds) pendingSheets.add(id); return { kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: visual.pendingSheetIds } }
+                  if (visual.kind !== 'ready') { outcomes.push(visual); continue }
+                  const def = visual.value as Extract<CfDefinition, { kind: 'iconSet' }>
                   const gate = { hasEvidence: (cap: string) => evidence.allows(cap) }
-                  let thresh = iconThresholds.get(rule)
+                  let thresh = iconThresholds.get(def)
                   if (!thresh) {
-                    thresh = resolveIconThresholds(rule.definition, needsStats && preparedStats?.kind === 'ready' ? preparedStats.value.value : undefined, gate)
-                    iconThresholds.set(rule, thresh)
+                    thresh = resolveIconThresholds(def, needsStats && preparedStats?.kind === 'ready' ? preparedStats.value.value : undefined, gate)
+                    iconThresholds.set(def, thresh)
                   }
-                  outcomes.push(thresh.kind !== 'ready' ? thresh : evaluateIconSet(value, rule.definition, thresh.value, gate))
+                  outcomes.push(thresh.kind !== 'ready' ? thresh : evaluateIconSet(value, def, thresh.value, gate))
                 } else if (formulaRules.has(rule)) {
                   // A formula rule never reaches the literal predicates (`evaluatePredicate` would read a formula operand
                   // as a literal): it is decided by the batch, or withheld by name.

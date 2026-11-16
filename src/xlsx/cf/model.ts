@@ -44,10 +44,16 @@ export type CfFormula = Readonly<{
 /** A `cellIs` operand that is a formula rather than a literal (it carries no `kind`, so no literal arm can mistake it for one). */
 export type CfFormulaOperand = Readonly<{ formula: CfFormula }>
 export const isCfFormulaOperand = (operand: CfLiteral | CfFormulaOperand): operand is CfFormulaOperand => 'formula' in operand
+/** Stage 5 (Ruling S5-H): a cfvo whose value is a formula: `type="formula"`, or a `num`/`percent`/`percentile` whose value
+ * is a reference or expression (`cfvo` keeps the authored type). It is never a threshold itself: the service evaluates it
+ * once per measured scope and substitutes the number (`formula`/`num` as a num bound, `percent`/`percentile` as p), so
+ * every resolver meets only the Stage 2-4 literal bounds; an unsubstituted one is unresolved there. */
+export type CfFormulaBound = Readonly<{ type: 'formula'; cfvo: 'formula' | 'num' | 'percent' | 'percentile'; formula: CfFormula }>
 export type CfScaleBound =
   | { type: 'min' }
   | { type: 'max' }
   | { type: 'num' | 'percent' | 'percentile'; value: number }
+  | CfFormulaBound
 export type CfScalePoint = Readonly<{ bound: CfScaleBound; argb: number }>
 export const COLOR_SCALE_WRITES: ReadonlySet<string> = Object.freeze(new Set(['colorScale', 'fill']))
 export const COLOR_SCALE_WRITE_MASK = COLOR_SCALE_WRITES
@@ -70,7 +76,7 @@ export const CF_ICON_SET_NAMES: readonly (CfIconSetName | 'NoIcons')[] = Object.
 /** The one canonical icon-set write mask, for resolved and unresolved icon sets alike (an icon never writes the fill slot). */
 export const ICON_SET_WRITES: ReadonlySet<string> = Object.freeze(new Set(['iconSet']))
 /** One icon-set threshold: `bound` is the cfvo, `gte` says whether a value equal to it reaches the bucket (spec §3, default true). */
-export type CfIconThreshold = Readonly<{ bound: { type: 'num' | 'percent' | 'percentile'; value: number } | { type: 'min' } | { type: 'max' }; gte: boolean }>
+export type CfIconThreshold = Readonly<{ bound: { type: 'num' | 'percent' | 'percentile'; value: number } | { type: 'min' } | { type: 'max' } | CfFormulaBound; gte: boolean }>
 /** A custom bucket mapping: the family and icon id one bucket shows, or `NoIcons` (id 0) for an empty bucket. */
 export type CfIconRef = Readonly<{ set: CfIconSetName | 'NoIcons'; iconId: number }>
 /** The evaluated icon of one cell (Task 26 evaluates it): the winning `(set, iconId)` with its bucket position. */
@@ -94,13 +100,15 @@ export type CfDefinition = (CfRuleOrigin & (
   | { kind: 'timePeriod'; period: CfTimePeriod }
   | { kind: 'top10'; rank?: number; bottom: boolean; percent: boolean }
   | { kind: 'aboveAverage'; above: boolean; equal: boolean; stdDev?: number }
-  | { kind: 'colorScale'; points: readonly [CfScalePoint, CfScalePoint] | readonly [CfScalePoint, CfScalePoint, CfScalePoint] }
+  /** `activation` (Ruling S5-J): the rule-level `<xm:f>` of an `activePresent="1"` x14 visual, a per-cell truth gate ahead of
+   * the visual's own evaluation. Present only when its capability is evidenced at parse. */
+  | { kind: 'colorScale'; points: readonly [CfScalePoint, CfScalePoint] | readonly [CfScalePoint, CfScalePoint, CfScalePoint]; activation?: CfFormula }
   // Colours are resolved ARGB, normalised once. An optional colour is absent when its element is missing or the
   // rule's settings never draw it; an evaluator that needs an absent colour must withhold (Ruling S3-F).
   // `thresholds` holds one entry per bucket (k cfvo for a k-icon family); every omitted attribute is its schema default.
   // `set` is the family (for a custom set, the bucket count's family); `custom` maps each bucket to its own icon.
   | { kind: 'iconSet'; set: CfIconSetName; thresholds: readonly CfIconThreshold[]; reverse: boolean; showValue: boolean
-      percentAttr: boolean; custom?: readonly CfIconRef[]; sheetRightToLeft?: boolean }
+      percentAttr: boolean; custom?: readonly CfIconRef[]; sheetRightToLeft?: boolean; activation?: CfFormula }
   | { kind: 'dataBar'; bounds: readonly [CfBarBound, CfBarBound]; fillArgb: number; negativeFillArgb?: number
       borderArgb?: number; negativeBorderArgb?: number; axisArgb?: number; minLength: number; maxLength: number; gradient: boolean
       border: boolean; negativeBarColorSameAsPositive: boolean; negativeBarBorderColorSameAsPositive: boolean
@@ -110,7 +118,7 @@ export type CfDefinition = (CfRuleOrigin & (
        * bare base `<dataBar>`. Excel's default 10/90 lengths differ between them; absent means unknown (fail closed). */
       pairing?: 'x14' | 'base-only'
       /** Colours Excel draws as automatic (`auto="1"`), resolved to the measured ARGB of their capability (S3-F amended). */
-      autoColors?: readonly ('negativeFill' | 'axis')[] }
+      autoColors?: readonly ('negativeFill' | 'axis')[]; activation?: CfFormula }
 )) | { kind: 'unresolved'; type: CfRuleType | 'unknown'; reason: string; origin?: CfRuleOrigin }
 /** Presence means a winning override; null explicitly clears a property. */
 export interface CfCellState {
@@ -156,5 +164,17 @@ export interface CfEngine {
 export function cfDefinitionFormulas(definition: CfDefinition): readonly CfFormula[] {
   if (definition.kind === 'expression') return [definition.formula]
   if (definition.kind === 'cellIs') return definition.operands.flatMap(operand => isCfFormulaOperand(operand) ? [operand.formula] : [])
-  return []
+  // Stage 5 (Task 37): a visual's formula bounds, in cfvo order, then its activation.
+  const bounds = cfVisualFormulaBounds(definition)
+  const activation = definition.kind === 'colorScale' || definition.kind === 'dataBar' || definition.kind === 'iconSet' ? definition.activation : undefined
+  if (bounds.length === 0 && !activation) return []
+  return [...bounds.map(b => b.formula), ...(activation ? [activation] : [])]
+}
+
+/** The formula bounds of a visual definition in cfvo order (empty for every other kind). */
+export function cfVisualFormulaBounds(definition: CfDefinition): readonly CfFormulaBound[] {
+  const bounds: readonly (CfBarBound | CfIconThreshold['bound'])[] = definition.kind === 'colorScale' ? definition.points.map(p => p.bound)
+    : definition.kind === 'dataBar' ? definition.bounds
+    : definition.kind === 'iconSet' ? definition.thresholds.map(t => t.bound) : []
+  return bounds.filter((b): b is CfFormulaBound => b.type === 'formula')
 }

@@ -21,7 +21,7 @@ import { attrs, elementNamespaceUri, getChildren, iterateChildren, textOf, type 
 import { resolveSheetColor, type SheetColorContext } from '../sheetColors'
 import { autoBarColourEvidence, hasEvidence } from './evidence'
 import { measureCfPayload } from './limits'
-import { compileCfFormula, countFormulaTokens, type CfFormulaRefusal, formulaRequiredCapabilities, isCfFormulaRefusal } from './formula'
+import { compileCfFormula, countFormulaTokens, type CfFormulaRefusal, type CfFormulaUse, formulaRequiredCapabilities, isCfFormulaRefusal } from './formula'
 import { parseCfDxf } from './dxf'
 import {
   CF_BAR_DEFINITION_BYTES,
@@ -667,6 +667,34 @@ interface BodyInputs {
   origin: CfRuleOrigin
 }
 
+type CompiledFormulas = { ok: true; formulas: CfFormula[] } | { ok: false; reason: string }
+/** A cfvo whose value compiles as a formula once the rule's structure has passed (Task 37, Ruling S5-H). */
+interface PendingCfvo { readonly cfvo: 'formula' | 'num' | 'percent' | 'percentile'; readonly text: string }
+/** The rule-body compile handed to the visual parsers: cfvo bounds and the activation compile together, after structure. */
+interface VisualFormulas {
+  compile(items: readonly { text: string; use: CfFormulaUse }[]): CompiledFormulas
+  dependencies(formulas: readonly CfFormula[]): Record<string, unknown>
+}
+/** Whether a cfvo value is a reference or expression (Stage 5) rather than an invalid literal. */
+function isFormulaCfvoText(clean: string): boolean {
+  return /^\$?[A-Za-z]{1,3}\$?\d+$/.test(clean) || /[A-Za-z_][A-Za-z0-9_]*\(/.test(clean) || clean.startsWith('$') || clean.startsWith('=') || /[:!]/.test(clean)
+}
+/** The family gate of a `type="formula"` cfvo (Ruling S5-H): checked before anything compiles. */
+const CFVO_FORMULA_CAPABILITY = { colorScale: 'scale:thresholds-formula', dataBar: 'bar:bounds-formula', iconSet: 'icon:thresholds-formula' } as const
+/** The activation gate of an `activePresent="1"` visual (Ruling S5-J): checked before any structural check of it. */
+const ACTIVE_PRESENT_CAPABILITY = { colorScale: 'formula:active-present-scale', dataBar: 'formula:active-present-bar', iconSet: 'formula:active-present-icon' } as const
+/**
+ * Ruling S5-J: whether an activation is admitted on this rule, decided before any structural check of it. Without its
+ * capability (or on any form but a standalone x14 rule) the rule keeps main's `cf-unsupported-rule`; with it, exactly one
+ * rule-level `<xm:f>` is required (`cf-invalid-rule` otherwise).
+ */
+function activationGate(inputs: BodyInputs, kind: keyof typeof ACTIVE_PRESENT_CAPABILITY): 'none' | 'compile' | 'cf-unsupported-rule' | 'cf-invalid-rule' {
+  if (!inputs.origin.activePresent) return 'none'
+  if (inputs.origin.dialect !== 'x14' || !hasEvidence(ACTIVE_PRESENT_CAPABILITY[kind])) return 'cf-unsupported-rule'
+  if (inputs.formulas.length !== 1 || inputs.hasForeignFormula) return 'cf-invalid-rule'
+  return 'compile'
+}
+
 interface PairedBar {
   readonly node: XmlNode
   readonly activePresent: boolean
@@ -678,6 +706,8 @@ export interface CfScaleBoundInput {
   readonly type: string
   readonly value?: number
   readonly val?: string
+  /** Stage 5: the value is a reference or expression (compiled as a formula bound, Ruling S5-H). */
+  readonly reference?: boolean
 }
 
 export type CfScaleColorInput =
@@ -738,8 +768,13 @@ export function scaleRequiredCapabilities(
       if (type === 'max' && i !== bounds.length - 1) {
         req.add('scale:thresholds-min-midlist-max-first')
       }
+    } else if (type === 'formula') {
+      // Ruling S5-H: the evaluated number feeds the num path.
+      req.add('scale:thresholds-formula')
+      req.add('scale:thresholds-num-bounds')
     } else if (type === 'num') {
       req.add('scale:thresholds-num-bounds')
+      if (b.reference) req.add('scale:thresholds-num-val-reference')
     } else if (type === 'percent') {
       req.add('scale:thresholds-percent')
       const val = b.value ?? (b.val !== undefined ? Number(b.val) : undefined)
@@ -791,19 +826,23 @@ export function scaleRequiredCapabilities(
 function parseColorScaleRule(
   fin: SheetFinalizer,
   inputs: BodyInputs,
+  fx: VisualFormulas,
   finishResolved: (definition: Record<string, unknown>, extraWrites?: CfWriteMask) => number,
   finishUnresolved: (reason: string, writes: CfWriteMask) => number,
 ): number {
   const slot = COLOR_SCALE_WRITES
+  const x14 = inputs.origin.dialect === 'x14'
 
-  // OD-3 / S2-K: any standalone x14 scale, literal or reference xm:f -> cf-unsupported-rule
-  if (inputs.origin.dialect === 'x14') {
+  // OD-3 / S2-K / S5-I: a standalone x14 scale resolves only with scale:dialect-standalone (the dialect Excel recorded);
+  // without it, literal or reference xm:f alike -> cf-unsupported-rule.
+  if (x14 && !hasEvidence('scale:dialect-standalone')) {
     return finishUnresolved('cf-unsupported-rule', slot)
   }
 
-  // S2-C: activePresent="1" -> cf-unsupported-rule
-  if (inputs.origin.activePresent) {
-    return finishUnresolved('cf-unsupported-rule', slot)
+  // S2-C / S5-J: activePresent="1" -> cf-unsupported-rule unless its activation is evidenced.
+  const activation = activationGate(inputs, 'colorScale')
+  if (activation === 'cf-unsupported-rule' || activation === 'cf-invalid-rule') {
+    return finishUnresolved(activation, slot)
   }
 
   const host = inputs.colorScaleNode
@@ -824,21 +863,32 @@ function parseColorScaleRule(
     return finishUnresolved('cf-invalid-rule', slot)
   }
 
-  const bounds: CfScaleBound[] = []
+  const bounds: (CfScaleBound | undefined)[] = []
   const boundsInput: CfScaleBoundInput[] = []
+  /** Formula-valued cfvo by index, compiled once the structure and colours have passed (Ruling S5-H). */
+  const pending = new Map<number, PendingCfvo>()
 
   for (let i = 0; i < cfvos.length; i++) {
     const cfvoNode = cfvos[i]!
     const a = attrs(cfvoNode)
     const cfvoType = a['type']
-    const val = a['val']
+    // A base cfvo carries `@val`; an x14 cfvo carries one `<xm:f>` and never `@val` (the bar and icon rule, S3-C/S4-C).
+    const fs = x14 ? kids(cfvoNode, 'f', XM_MAIN_NS) : []
+    if (x14 && (fs.length > 1 || a['val'] !== undefined)) return finishUnresolved('cf-invalid-cfvo', slot)
+    const val = x14 ? (fs[0] !== undefined ? textOf(fs[0]) : undefined) : a['val']
 
     if (!cfvoType) {
       return finishUnresolved('cf-invalid-cfvo', slot)
     }
 
     if (cfvoType === 'formula') {
-      return finishUnresolved('cf-unsupported-rule', slot)
+      // Stage 5 (S5-H): a formula bound needs its family gate before anything compiles; without it, main's refusal.
+      if (!hasEvidence(CFVO_FORMULA_CAPABILITY.colorScale)) return finishUnresolved('cf-unsupported-rule', slot)
+      if (val === undefined || val.trim() === '') return finishUnresolved('cf-invalid-cfvo', slot)
+      pending.set(i, { cfvo: 'formula', text: val })
+      bounds.push(undefined)
+      boundsInput.push({ type: 'formula' })
+      continue
     }
 
     if (
@@ -864,15 +914,14 @@ function parseColorScaleRule(
       const cleanVal = val.trim().replace(/^=/, '').trim()
       const isNumericLiteral = /^[+-]?(\d+(\.\d+)?|\.\d+)([eE][+-]?\d+)?$/.test(cleanVal)
       if (!isNumericLiteral) {
-        // Reference or formula val="$A$1" stays cf-unsupported-rule until Stage 5
-        const isFormulaOrRef =
-          /^\$?[A-Za-z]{1,3}\$?\d+$/.test(cleanVal) ||
-          /[A-Za-z_][A-Za-z0-9_]*\(/.test(cleanVal) ||
-          cleanVal.startsWith('$') ||
-          cleanVal.startsWith('=') ||
-          cleanVal === '$A$1'
-        if (isFormulaOrRef) {
-          return finishUnresolved('cf-unsupported-rule', slot)
+        // A reference or expression val="$A$1": Stage 5 compiles it (S5-H); a num reference also needs Stage 2's
+        // scale:thresholds-num-val-reference (scaleRequiredCapabilities, below). Without them, main's cf-unsupported-rule.
+        if (isFormulaCfvoText(cleanVal) || cleanVal === '$A$1') {
+          if (!hasEvidence(`formula:dialect-${inputs.origin.dialect}`)) return finishUnresolved('cf-unsupported-rule', slot)
+          pending.set(i, { cfvo: cfvoType, text: val })
+          bounds.push(undefined)
+          boundsInput.push({ type: cfvoType, reference: true })
+          continue
         }
         return finishUnresolved('cf-invalid-cfvo', slot)
       }
@@ -903,7 +952,7 @@ function parseColorScaleRule(
   }
 
   // Resolve endpoint colours (S2-F, Item 12)
-  const points: CfScalePoint[] = []
+  const argbs: number[] = []
 
   for (let i = 0; i < colors.length; i++) {
     const colorNode = colors[i]!
@@ -922,13 +971,27 @@ function parseColorScaleRule(
       return finishUnresolved('cf-unsupported-rule', slot)
     }
 
-    points.push({ bound: bounds[i]!, argb })
+    argbs.push(argb)
   }
+
+  // Stage 5: the formula bounds and the activation compile last, together, only once every structural and colour check
+  // has passed (nothing is reserved for a rule that is refused anyway).
+  const order = [...pending.keys()]
+  const items = [
+    ...order.map(i => ({ text: pending.get(i)!.text, use: 'cfvo' as const })),
+    ...(activation === 'compile' ? [{ text: inputs.formulas[0]!, use: 'activation' as const }] : []),
+  ]
+  const compiled = fx.compile(items)
+  if (!compiled.ok) return finishUnresolved(compiled.reason, slot)
+  order.forEach((index, k) => { bounds[index] = { type: 'formula', cfvo: pending.get(index)!.cfvo, formula: compiled.formulas[k]! } })
+  const points: CfScalePoint[] = argbs.map((argb, i) => ({ bound: bounds[i]!, argb }))
 
   return finishResolved(
     {
       kind: 'colorScale',
       points: points as [CfScalePoint, CfScalePoint] | [CfScalePoint, CfScalePoint, CfScalePoint],
+      ...(activation === 'compile' ? { activation: compiled.formulas[order.length]! } : {}),
+      ...fx.dependencies(compiled.formulas),
     },
     slot,
   )
@@ -1001,11 +1064,22 @@ function cfvoLiteral(text: string): number | 'cf-unsupported-rule' | 'cf-invalid
   return formulaOrRef ? 'cf-unsupported-rule' : 'cf-invalid-cfvo'
 }
 
-/** One bar cfvo (S3-C/S3-D). Base cfvo carry `@val`; x14 cfvo carry one `<xm:f>` and never `@val`. */
+/**
+ * Stage 5 (Ruling S5-H): whether a formula-valued cfvo may wait for compile. `type="formula"` needs its family gate, and
+ * every formula value the rule's formula dialect; without them, main's `cf-unsupported-rule`. Nothing compiles here.
+ */
+function cfvoFormulaAdmitted(family: keyof typeof CFVO_FORMULA_CAPABILITY, cfvoType: string, dialect: 'base' | 'x14'): boolean {
+  if (cfvoType === 'formula' && !hasEvidence(CFVO_FORMULA_CAPABILITY[family])) return false
+  return hasEvidence(`formula:dialect-${dialect}`)
+}
+
+/** One bar cfvo (S3-C/S3-D). Base cfvo carry `@val`; x14 cfvo carry one `<xm:f>` and never `@val`. A formula value is
+ * returned as `pending` (Stage 5) only when admitted; it compiles with the rule. */
 function barBound(
   cfvo: XmlNode,
   x14: boolean,
-): { bound: CfBarBound; legacy: boolean } | 'cf-unsupported-rule' | 'cf-invalid-cfvo' {
+  admitted: (cfvoType: string) => boolean = () => false,
+): { bound: CfBarBound; legacy: boolean } | { pending: PendingCfvo } | 'cf-unsupported-rule' | 'cf-invalid-cfvo' {
   const a = attrs(cfvo)
   const type = a['type']
   const fs = x14 ? kids(cfvo, 'f', XM_MAIN_NS) : []
@@ -1013,7 +1087,8 @@ function barBound(
   const text = x14 ? (fs[0] !== undefined ? textOf(fs[0]) : undefined) : a['val']
   switch (type) {
     case 'formula':
-      return 'cf-unsupported-rule'
+      if (!admitted('formula')) return 'cf-unsupported-rule'
+      return text === undefined || text.trim() === '' ? 'cf-invalid-cfvo' : { pending: { cfvo: 'formula', text } }
     case 'autoMin':
     case 'autoMax':
       // S3-C: auto bounds exist only in x14; a base auto bound stays unresolved until Excel's handling is recorded.
@@ -1027,6 +1102,7 @@ function barBound(
     case 'percentile': {
       if (text === undefined) return 'cf-invalid-cfvo'
       const value = cfvoLiteral(text)
+      if (value === 'cf-unsupported-rule' && admitted(type)) return { pending: { cfvo: type, text } }
       return typeof value === 'number' ? { bound: { type, value }, legacy: false } : value
     }
     default:
@@ -1054,15 +1130,19 @@ function parseDataBarRule(
   fin: SheetFinalizer,
   inputs: BodyInputs,
   rule: { readonly active: boolean; readonly hasDxf: boolean },
+  fx: VisualFormulas,
   finishResolved: (definition: Record<string, unknown>, extraWrites?: CfWriteMask) => number,
   finishUnresolved: (reason: string, writes: CfWriteMask) => number,
 ): number {
   const slot = DATA_BAR_WRITES
   const standalone = inputs.origin.dialect === 'x14'
   const paired = inputs.pairedBar
-  // S3-R: activation predicates wait for Stage 5, on the rule or its companion.
+  // S3-R / S5-J: an activation predicate resolves only on a standalone x14 bar with its evidence; a paired companion's
+  // activation has no fixture and stays refused.
   if (paired?.activeInvalid) return finishUnresolved('cf-invalid-rule', slot)
-  if (rule.active || paired?.activePresent) return finishUnresolved('cf-unsupported-rule', slot)
+  if (paired?.activePresent) return finishUnresolved('cf-unsupported-rule', slot)
+  const activation = rule.active ? activationGate(inputs, 'dataBar') : 'none'
+  if (activation === 'cf-unsupported-rule' || activation === 'cf-invalid-rule') return finishUnresolved(activation, slot)
   // Excel never writes a DXF on a bar: withhold rather than paint a bar rule's DXF.
   if (rule.hasDxf) return finishUnresolved('cf-unsupported-rule', slot)
   const host = inputs.dataBarNode
@@ -1076,11 +1156,15 @@ function parseDataBarRule(
   if ((!standalone && baseCfvos.length !== 2) || (x14Bar && x14Cfvos.length !== 2)) {
     return finishUnresolved('cf-invalid-rule', slot)
   }
-  // The base bounds are validated even when the companion's take precedence (S3-Q).
-  const parsedBase = baseCfvos.map(c => barBound(c, false))
-  const parsedX14 = x14Cfvos.map(c => barBound(c, true))
+  // The base bounds are validated even when the companion's take precedence (S3-Q). A formula value waits for compile
+  // (Stage 5, S5-H); only the effective side's formulas compile.
+  const admitted = (cfvoType: string): boolean => cfvoFormulaAdmitted('dataBar', cfvoType, inputs.origin.dialect)
+  const parsedBase = baseCfvos.map(c => barBound(c, false, admitted))
+  const parsedX14 = x14Cfvos.map(c => barBound(c, true, admitted))
   for (const p of [...parsedX14, ...parsedBase]) if (typeof p === 'string') return finishUnresolved(p, slot)
-  const effective = (x14Bar ? parsedX14 : parsedBase) as Array<{ bound: CfBarBound; legacy: boolean }>
+  const effectiveParsed = (x14Bar ? parsedX14 : parsedBase) as Array<{ bound: CfBarBound; legacy: boolean } | { pending: PendingCfvo }>
+  // Until compile, a pending formula bound stands as a formula bound without its formula (it never leaves this function).
+  const effective = effectiveParsed.map(p => 'pending' in p ? { bound: { type: 'formula' as const, cfvo: p.pending.cfvo, formula: undefined as unknown as CfFormula }, legacy: false } : p)
 
   // Attributes: the base `<dataBar>` carries minLength/maxLength/showValue; `<x14:dataBar>` carries the rest and,
   // when present, its lengths take precedence. Every omitted attribute takes its schema default (spec §3).
@@ -1200,7 +1284,21 @@ function parseDataBarRule(
   for (const cap of required) {
     if (!hasEvidence(cap)) return finishUnresolved('cf-unsupported-rule', slot)
   }
-  return finishResolved(definition, slot)
+  // Stage 5: the effective formula bounds and the activation compile last, together.
+  const order = effectiveParsed.flatMap((p, i) => 'pending' in p ? [i] : [])
+  const compiled = fx.compile([
+    ...order.map(i => ({ text: (effectiveParsed[i] as { pending: PendingCfvo }).pending.text, use: 'cfvo' as const })),
+    ...(activation === 'compile' ? [{ text: inputs.formulas[0]!, use: 'activation' as const }] : []),
+  ])
+  if (!compiled.ok) return finishUnresolved(compiled.reason, slot)
+  const bounds = [...definition.bounds] as CfBarBound[]
+  order.forEach((index, k) => { bounds[index] = { type: 'formula', cfvo: (effectiveParsed[index] as { pending: PendingCfvo }).pending.cfvo, formula: compiled.formulas[k]! } })
+  return finishResolved({
+    ...definition,
+    bounds: [bounds[0]!, bounds[1]!] as const,
+    ...(activation === 'compile' ? { activation: compiled.formulas[order.length]! } : {}),
+    ...fx.dependencies(compiled.formulas),
+  }, slot)
 }
 
 type CfIconDefinition = Extract<CfDefinition, { kind: 'iconSet' }>
@@ -1247,7 +1345,7 @@ export function iconRequiredCapabilities(def: CfIconDefinition, options: { reado
 }
 
 /** One icon cfvo (S4-C). Base cfvo carry `@val`; x14 cfvo carry one `<xm:f>` and never `@val`. `min`/`max` carry no value. */
-function iconThreshold(cfvo: XmlNode, x14: boolean): CfIconThreshold | 'cf-unsupported-rule' | 'cf-invalid-cfvo' {
+function iconThreshold(cfvo: XmlNode, x14: boolean, admitted: (cfvoType: string) => boolean = () => false): CfIconThreshold | { pending: PendingCfvo; gte: boolean } | 'cf-unsupported-rule' | 'cf-invalid-cfvo' {
   const a = attrs(cfvo)
   const fs = x14 ? kids(cfvo, 'f', XM_MAIN_NS) : []
   if (x14 && (fs.length > 1 || a['val'] !== undefined)) return 'cf-invalid-cfvo'
@@ -1256,7 +1354,9 @@ function iconThreshold(cfvo: XmlNode, x14: boolean): CfIconThreshold | 'cf-unsup
   const text = x14 ? (fs[0] !== undefined ? textOf(fs[0]) : undefined) : a['val']
   switch (a['type']) {
     case 'formula':
-      return 'cf-unsupported-rule'
+      // Stage 5 (S5-H): a formula threshold waits for compile only when admitted.
+      if (!admitted('formula')) return 'cf-unsupported-rule'
+      return text === undefined || text.trim() === '' ? 'cf-invalid-cfvo' : { pending: { cfvo: 'formula', text }, gte }
     case 'min':
     case 'max':
       return { bound: { type: a['type'] }, gte }
@@ -1265,6 +1365,7 @@ function iconThreshold(cfvo: XmlNode, x14: boolean): CfIconThreshold | 'cf-unsup
     case 'percentile': {
       if (text === undefined) return 'cf-invalid-cfvo'
       const value = cfvoLiteral(text)
+      if (value === 'cf-unsupported-rule' && admitted(a['type'])) return { pending: { cfvo: a['type'], text }, gte }
       return typeof value === 'number' ? { bound: { type: a['type'], value }, gte } : value
     }
     default:
@@ -1276,12 +1377,14 @@ function parseIconSetRule(
   fin: SheetFinalizer,
   inputs: BodyInputs,
   rule: { readonly active: boolean },
+  fx: VisualFormulas,
   finishResolved: (definition: Record<string, unknown>, extraWrites?: CfWriteMask) => number,
   finishUnresolved: (reason: string, writes: CfWriteMask) => number,
 ): number {
   const slot = ICON_SET_WRITES
-  // S4-P: activation predicates wait for Stage 5.
-  if (rule.active) return finishUnresolved('cf-unsupported-rule', slot)
+  // S4-P / S5-J: an activation predicate resolves only on a standalone x14 set with its evidence.
+  const activation = rule.active ? activationGate(inputs, 'iconSet') : 'none'
+  if (activation === 'cf-unsupported-rule' || activation === 'cf-invalid-rule') return finishUnresolved(activation, slot)
   const host = inputs.iconSetNode
   if (!host) return finishUnresolved('cf-invalid-rule', slot)
   if (inputs.cfvoMissingType) return finishUnresolved('cf-invalid-cfvo', slot)
@@ -1312,9 +1415,17 @@ function parseIconSetRule(
   const cfvos = kids(host, 'cfvo', inputs.ns)
   if (cfvos.length !== size) return finishUnresolved('cf-invalid-rule', slot)
   const thresholds: CfIconThreshold[] = []
+  const pending = new Map<number, PendingCfvo>()
+  const admitted = (cfvoType: string): boolean => cfvoFormulaAdmitted('iconSet', cfvoType, inputs.origin.dialect)
   for (const cfvo of cfvos) {
-    const t = iconThreshold(cfvo, standalone)
+    const t = iconThreshold(cfvo, standalone, admitted)
     if (typeof t === 'string') return finishUnresolved(t, slot)
+    if ('pending' in t) {
+      // Until compile, a formula threshold stands without its formula (it never leaves this function).
+      pending.set(thresholds.length, t.pending)
+      thresholds.push({ bound: { type: 'formula', cfvo: t.pending.cfvo, formula: undefined as unknown as CfFormula }, gte: t.gte })
+      continue
+    }
     thresholds.push(t)
   }
   // `custom` lives only on `<x14:iconSet>`; a base custom set is not a form Excel writes.
@@ -1347,7 +1458,19 @@ function parseIconSetRule(
   for (const cap of iconRequiredCapabilities({ ...inputs.origin, ...definition }, { defaultedAttributes: defaulted })) {
     if (!hasEvidence(cap)) return finishUnresolved('cf-unsupported-rule', slot)
   }
-  return finishResolved(definition, slot)
+  // Stage 5: the formula thresholds and the activation compile last, together.
+  const order = [...pending.keys()]
+  const compiled = fx.compile([
+    ...order.map(i => ({ text: pending.get(i)!.text, use: 'cfvo' as const })),
+    ...(activation === 'compile' ? [{ text: inputs.formulas[0]!, use: 'activation' as const }] : []),
+  ])
+  if (!compiled.ok) return finishUnresolved(compiled.reason, slot)
+  order.forEach((index, k) => { thresholds[index] = { bound: { type: 'formula', cfvo: pending.get(index)!.cfvo, formula: compiled.formulas[k]! }, gte: thresholds[index]!.gte } })
+  return finishResolved({
+    ...definition,
+    ...(activation === 'compile' ? { activation: compiled.formulas[order.length]! } : {}),
+    ...fx.dependencies(compiled.formulas),
+  }, slot)
 }
 
 function buildRuleBody(
@@ -1470,24 +1593,37 @@ function buildRuleBody(
    * reading) runs before anything is parsed or reserved, so without evidence the rule takes the exact pre-Stage-5 path.
    * Every formula's own parse set (pinning, multi-range, cross-sheet) is checked after compile; any miss refuses the rule.
    */
-  const compileFormulas = (texts: readonly string[], use: 'expression' | 'operand', sourceType: CfRuleType): { ok: true; formulas: CfFormula[] } | { ok: false; reason: string } => {
+  const compileFormulas = (texts: readonly string[], use: 'expression' | 'operand', sourceType: CfRuleType): CompiledFormulas =>
+    compileFormulaItems(texts.map(text => ({ text, use })), sourceType)
+  /**
+   * Task 37: the same compile for a visual's cfvo bounds and activation (Rulings S5-H, S5-J). A cfvo is written against
+   * the first range's top-left, whatever the range count: where it is then evaluated is the scope reading
+   * (`formula:cfvo-scope-multi-range`), which a multi-range rule needs before anything compiles. A cfvo also needs the
+   * evidence of its own kind (`formula:cfvo-reference` or `-expression`) at parse, so a reference `@val` without it keeps
+   * main's `cf-unsupported-rule`.
+   */
+  const compileFormulaItems = (items: readonly { text: string; use: CfFormulaUse }[], sourceType: CfRuleType): CompiledFormulas => {
     const dialect = inputs.origin.dialect
-    if (!hasEvidence(`formula:dialect-${dialect}`) || !hasEvidence('formula:anchor-single') || (ranges.length > 1 && !hasEvidence('formula:anchor-multi-range'))) {
-      return { ok: false, reason: 'cf-unsupported-rule' }
+    const multi = ranges.length > 1
+    if (!hasEvidence(`formula:dialect-${dialect}`) || !hasEvidence('formula:anchor-single')) return { ok: false, reason: 'cf-unsupported-rule' }
+    for (const item of items) {
+      if (multi && !hasEvidence(item.use === 'cfvo' ? 'formula:cfvo-scope-multi-range' : 'formula:anchor-multi-range')) return { ok: false, reason: 'cf-unsupported-rule' }
     }
-    const anchorCell = ranges.length === 1 ? { row: ranges[0]!.firstRow, col: ranges[0]!.firstCol } : undefined
+    const first = { row: ranges[0]!.firstRow, col: ranges[0]!.firstCol }
     const candidates: CfLease<CfFormula>[] = []
     let accepted = false
     try {
       let pending = 0
-      for (const text of texts) {
-        const compiled = fin.compileCandidate(text, anchorCell, pending)
+      for (const item of items) {
+        const compiled = fin.compileCandidate(item.text, item.use === 'cfvo' || !multi ? first : undefined, pending)
         if (isCfFormulaRefusal(compiled)) return { ok: false, reason: compiled.refused }
         candidates.push(compiled); pending += compiled.bytes
       }
-      for (const { value: f } of candidates) {
+      for (let i = 0; i < candidates.length; i++) {
+        const f = candidates[i]!.value, use = items[i]!.use
         // An operand is one value per cell (Ruling S5-F): a multi-cell result has no operand reading, so it never compiles here.
         if (use === 'operand' && f.rootArea) return { ok: false, reason: 'cf-unsupported-rule' }
+        if (use === 'cfvo' && !hasEvidence(f.ast.type === 'cell' ? 'formula:cfvo-reference' : 'formula:cfvo-expression')) return { ok: false, reason: 'cf-unsupported-rule' }
         for (const capability of formulaRequiredCapabilities(f, use, { dialect, rangeCount: ranges.length, sourceType }).parse) {
           if (!hasEvidence(capability)) return { ok: false, reason: 'cf-unsupported-rule' }
         }
@@ -1506,6 +1642,14 @@ function buildRuleBody(
     for (const f of formulas) for (const name of f.dependencySheets) if (!seen.has(name.toLowerCase())) { seen.add(name.toLowerCase()); names.push(name) }
     return names.length > 0 ? { dependencySheets: names } : {}
   }
+  /** The compile a visual parser uses for its pending cfvo bounds and its activation (Task 37). */
+  const visualFormulas = (sourceType: 'colorScale' | 'dataBar' | 'iconSet'): VisualFormulas => ({
+    compile: items => {
+      if (items.length === 0) return { ok: true, formulas: [] }
+      return compileFormulaItems(items, sourceType)
+    },
+    dependencies: dependenciesOf,
+  })
   /** A divergent text, blank or error formula compiles as an expression carrying its own `@type` (Ruling S5-G). */
   const divergentPredicate = (): number => {
     if (inputs.formulas.length !== 1) return finishUnresolved('cf-unsupported-rule', withDxf())
@@ -1608,14 +1752,14 @@ function buildRuleBody(
       return finishResolved({ kind: 'predicate', type: type as 'duplicateValues' | 'uniqueValues' })
     }
     case 'colorScale': {
-      return parseColorScaleRule(fin, inputs, finishResolved, finishUnresolved)
+      return parseColorScaleRule(fin, inputs, visualFormulas('colorScale'), finishResolved, finishUnresolved)
     }
     case 'dataBar': {
       const hasDxf = inputs.inlineDxf !== undefined || inputs.dxfIdText !== undefined
-      return parseDataBarRule(fin, inputs, { active, hasDxf }, finishResolved, finishUnresolved)
+      return parseDataBarRule(fin, inputs, { active, hasDxf }, visualFormulas('dataBar'), finishResolved, finishUnresolved)
     }
     case 'iconSet': {
-      return parseIconSetRule(fin, inputs, { active }, finishResolved, finishUnresolved)
+      return parseIconSetRule(fin, inputs, { active }, visualFormulas('iconSet'), finishResolved, finishUnresolved)
     }
     case 'expression': {
       if (inputs.hasForeignFormula || inputs.formulas.length !== 1) return finishUnresolved('cf-unsupported-rule', withDxf())

@@ -638,3 +638,26 @@ describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
     })
   })
 })
+
+describe('Stage 5 formula bounds, x14 scales and activation (Task 37)', () => {
+  const FX = ['formula:dialect-base', 'formula:dialect-x14', 'formula:anchor-single', 'formula:anchor-mixed-abs', 'formula:cfvo-reference', 'formula:cfvo-expression',
+    'formula:fn-aggregate', 'scale:thresholds-formula', 'scale:thresholds-num-bounds', 'scale:thresholds-num-val-reference', 'scale:thresholds-min-max', 'scale:thresholds-percent']
+  const scale = (cfvos: string, attrs = '') => `<conditionalFormatting sqref="A1:A9"><cfRule type="colorScale" priority="1"${attrs}><colorScale>${cfvos}<color rgb="FFFF0000"/><color rgb="FF00FF00"/></colorScale></cfRule></conditionalFormatting>`
+  it('formula, num and percent references compile into formula bounds; literals stay literals', () => {
+    const def = withExactCfEvidence(FX, () => parse(scale('<cfvo type="formula" val="SUM($A$1:$A$5)"/><cfvo type="percent" val="$B$1"/>')).value.rules[0]!.definition)
+    expect(def.kind).toBe('colorScale')
+    const points = (def as Extract<typeof def, { kind: 'colorScale' }>).points
+    expect(points.map(p => p.bound.type === 'formula' ? `formula:${p.bound.cfvo}` : p.bound.type)).toEqual(['formula:formula', 'formula:percent'])
+    const lit = withExactCfEvidence(FX, () => parse(scale('<cfvo type="num" val="5"/><cfvo type="max"/>')).value.rules[0]!.definition)
+    expect(lit).toMatchObject({ kind: 'colorScale', points: [{ bound: { type: 'num', value: 5 } }, { bound: { type: 'max' } }] })
+  })
+  it('a base activePresent scale stays cf-unsupported-rule even with the activation capability', () => {
+    const def = withExactCfEvidence([...FX, 'formula:active-present-scale'], () => parse(scale('<cfvo type="min"/><cfvo type="max"/>', ' activePresent="1"')).value.rules[0]!.definition)
+    expect(def).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+  })
+  it('an x14 scale cfvo carrying @val is cf-invalid-cfvo under scale:dialect-standalone', () => {
+    const x14 = `<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}"><x14:conditionalFormattings><x14:conditionalFormatting><x14:cfRule type="colorScale" priority="1" id="{00000000-0000-4000-8000-0000000000D1}"><x14:colorScale><x14:cfvo type="num" val="5"/><x14:cfvo type="max"/><x14:color rgb="FFFF0000"/><x14:color rgb="FF00FF00"/></x14:colorScale></x14:cfRule><xm:sqref>A1:A9</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>`
+    expect(withExactCfEvidence([...FX, 'scale:dialect-standalone'], () => parse(x14).value.rules[0]!.definition)).toMatchObject({ kind: 'unresolved', reason: 'cf-invalid-cfvo' })
+    expect(withExactCfEvidence(FX, () => parse(x14).value.rules[0]!.definition)).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+  })
+})
