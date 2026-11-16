@@ -5793,6 +5793,12 @@ export function evaluateFormulaCapabilities(
       const twins = Object.entries(cfg.twinExpect ?? {}).filter(([, e]) => e === 'visual').length
       const literal = Object.entries(cfg.positiveControls ?? {})
       if (twins + literal.length === 0) { control = refuse('formula-positive-control-missing', `${cfg.id}: no positive control (a twin expected to render or a literal-rule control) was fixed before capture, so blank evidence cannot be told from a failed readback`, observed); break }
+      // Each DXF component a reading predicts (a literal fill colour; a strikethrough on any token) needs a literal
+      // control showing it: a readback blind to one component would otherwise read as that component's absence.
+      const tokens = Object.values(cfg.hypotheses).flatMap(h => Object.values(h))
+      const fills = new Set(tokens.filter(t => !t.startsWith('twin:')).map(t => t.replace('+strike', '')).filter(f => f !== 'none'))
+      const unvouched = [...[...fills].filter(f => !literal.some(([, w]) => w.replace('+strike', '') === f)), ...(tokens.some(t => t.endsWith('+strike')) && !literal.some(([, w]) => w.endsWith('+strike')) ? ['+strike'] : [])]
+      if (unvouched.length > 0) { control = refuse('formula-positive-control-missing', `${cfg.id}: its readings predict ${unvouched.join(', ')}, but no literal positive control shows ${unvouched.length === 1 ? 'it' : 'them'}`, observed); break }
       for (const [ref, want] of literal) {
         const o = obs.fill(ref)
         const ctrl = controls[s5Bare(ref)]

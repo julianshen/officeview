@@ -5705,8 +5705,9 @@ export interface S5Configuration {
    * Fix round 6 (blank DXF evidence): literal positive controls, ref (with the configuration's own `pre:`/`calc:`/`post:`
    * prefix) -> the exact DisplayFormat token (fill, `+strike`) fixed before capture. Each is a cell under a literal `cellIs`
    * rule (`formula:positive-control`) on the dxf the configuration's readings predict; its DisplayFormat must show that
-   * token, and its same-content control nothing, before any reading is judged. A configuration whose twins hold no
-   * `visual` expectation carries these; one with neither refuses (`formula-positive-control-missing`).
+   * token, and its same-content control nothing, before any reading is judged. Every literal fill colour and any
+   * strikethrough (literal or twin token) a reading predicts needs a control showing it, and a configuration whose twins
+   * hold no `visual` expectation needs at least one; otherwise it refuses (`formula-positive-control-missing`).
    */
   positiveControls?: Readonly<Record<string, string>>
   note?: string
@@ -6992,7 +6993,10 @@ function authoredFixture(): S5Fixture {
   })
 }
 
-/** The literal positive-control rules (fix round 6): one per dxf, the token its DisplayFormat shows, and the readings' tokens it vouches for. */
+/**
+ * The literal positive-control rules (fix round 6): one per dxf, the token its DisplayFormat shows, and the DXF component
+ * of a reading's token it vouches for (a literal fill colour, or a strikethrough on any token, twin tokens included).
+ */
 const S5_POSITIVE_CONTROLS: ReadonlyArray<{ dxf: 0 | 1 | 2; token: string; vouches: (tok: string) => boolean }> = [
   { dxf: 0, token: S5_RED, vouches: t => t.startsWith(S5_RED) },
   { dxf: 1, token: S5_GREEN, vouches: t => t.startsWith(S5_GREEN) },
@@ -7000,23 +7004,26 @@ const S5_POSITIVE_CONTROLS: ReadonlyArray<{ dxf: 0 | 1 | 2; token: string; vouch
 ]
 
 /**
- * Fix round 6 (codex P1 #1, blank DXF evidence): every live configuration needs a functioning positive control. A
- * configuration whose twins hold no `visual` expectation (a DisplayFormat configuration of literal tokens) gains literal
- * controls: a cell holding 1 under `cellIs greaterThan 0` on each dxf its readings predict, in column B below every row
- * the fixture uses (inside the existing columns, so no same-content control moves; outside every sqref and every
- * whole-column reference, which name columns A and F..J only). The cells are designated, so each has its own
- * same-content control, and are read in the configuration's own observation table (its ref prefix).
+ * Fix round 6 (codex P1 #1, blank DXF evidence): every live configuration needs functioning positive controls. Each DXF
+ * component its readings predict (a literal fill colour, a strikethrough on a literal or twin token) gains a literal
+ * control on that dxf, and a configuration with neither such a component nor a twin expected to render gains the red
+ * one. A control is a cell holding 1 under `cellIs greaterThan 0`, in column B below every row the fixture uses (inside
+ * the existing columns, so no same-content control moves; outside every sqref and every whole-column reference, which
+ * name columns A and F..J only). The cells are designated, so each has its own same-content control, and are read in the
+ * configuration's own observation table (its ref prefix).
  */
 function withPositiveControls(fx: S5Fixture): S5Fixture {
   if (fx.status === 'unsupported') return fx
-  const lacking = fx.configurations.filter(cfg => cfg.record === undefined && !Object.values(cfg.twinExpect ?? {}).includes('visual'))
+  const tokens = (cfg: S5Configuration): string[] => Object.values(cfg.hypotheses).flatMap(h => Object.values(h))
+  const vouched = (cfg: S5Configuration): typeof S5_POSITIVE_CONTROLS => S5_POSITIVE_CONTROLS.filter(d => tokens(cfg).some(t => (d.dxf === 2 || !t.startsWith('twin:')) && d.vouches(t)))
+  const blind = (cfg: S5Configuration): boolean => !Object.values(cfg.twinExpect ?? {}).includes('visual')
+  const lacking = fx.configurations.filter(cfg => cfg.record === undefined && (vouched(cfg).length > 0 || blind(cfg)))
   if (lacking.length === 0) return fx
-  const literals = (cfg: S5Configuration): string[] => Object.values(cfg.hypotheses).flatMap(h => Object.values(h)).filter(t => !t.startsWith('twin:'))
-  const needed = S5_POSITIVE_CONTROLS.filter(d => lacking.some(cfg => literals(cfg).some(d.vouches)))
+  const needed = S5_POSITIVE_CONTROLS.filter(d => lacking.some(cfg => vouched(cfg).includes(d) || (d.dxf === 0 && vouched(cfg).length === 0)))
   const base = s5CellsAt(fx)
   const rows = [...Object.keys(base), ...fx.configurations.flatMap(cfg => cfg.refs.map(r => r.replace(/^(pre|calc|post):/, ''))), ...fx.rules.flatMap(r => r.sqref.split(/[\s:]+/))].map(rowOfRef).filter(r => r <= 1000)
   const top = Math.max(...rows, 1)
-  const at = (needed.length > 0 ? needed : [S5_POSITIVE_CONTROLS[0]!]).map((d, i) => ({ ...d, ref: `B${top + 1 + i}` }))
+  const at = needed.map((d, i) => ({ ...d, ref: `B${top + 1 + i}` }))
   for (const p of at) {
     if (fx.rules.some(r => isCellInSqrefLocal(p.ref, r.sqref)) || base[p.ref] !== undefined) throw new Error(`${fx.id}: positive control ${p.ref} is not a free cell`)
     if (fx.rules.some(r => r.marker.formulas.some(f => /\$?B:\$?B/.test(f)))) throw new Error(`${fx.id}: a rule reads all of column B`)
@@ -7033,8 +7040,8 @@ function withPositiveControls(fx: S5Fixture): S5Fixture {
       const prefixes = new Set(cfg.refs.map(r => /^(pre|calc|post):/.exec(r)?.[0] ?? ''))
       if (prefixes.size !== 1) throw new Error(`${fx.id} ${cfg.id}: mixed observation tables`)
       const prefix = [...prefixes][0]!
-      const mine = at.filter(p => literals(cfg).some(p.vouches))
-      return { ...cfg, positiveControls: Object.fromEntries((mine.length > 0 ? mine : [at[0]!]).map(p => [`${prefix}${p.ref}`, p.token])) }
+      const mine = vouched(cfg).length > 0 ? at.filter(p => vouched(cfg).some(d => d.dxf === p.dxf)) : at.filter(p => p.dxf === 0)
+      return { ...cfg, positiveControls: Object.fromEntries(mine.map(p => [`${prefix}${p.ref}`, p.token])) }
     }),
   }
 }

@@ -6529,6 +6529,13 @@ describe('Stage 5 fix round 6: positive controls in every configuration, all-riv
     const cfg: S5Configuration = { id: 'cfg', capabilityId: 'formula:truth-number', observable: 'fill', refs: ['B2', 'B3', 'B4'], hypotheses: { yes: { B2: 'FFFFC7CE', B3: 'FFFFC7CE', B4: 'FFFFC7CE' }, no: { B2: 'none', B3: 'none', B4: 'none' } } }
     const obs: FormulaObservation = { fill: () => ({ fill: 'none', strike: false }) }
     expect(evaluateFormulaCapabilities([cfg], { B2: 'Z2', B3: 'Z3', B4: 'Z4' }, obs)['formula:truth-number']).toMatchObject({ status: 'refused', code: 'formula-positive-control-missing' })
+    // A predicted component without its own control (a strikethrough on twin tokens, a green literal) refuses too, even
+    // when a visual twin or a red control exists: a strike- or green-blind readback would read as its absence.
+    const twinStrike: S5Configuration = { ...cfg, refs: ['B2', 'B3'], twinExpect: { C2: 'visual', C3: 'visual' }, positiveControls: { B9: 'FFFFC7CE' }, hypotheses: { yes: { B2: 'twin:C2+strike', B3: 'twin:C3+strike' }, no: { B2: 'twin:C2', B3: 'twin:C3' } } }
+    const lit = { fill: (r: string) => ({ fill: ['C2', 'C3', 'B2', 'B3', 'B9'].includes(r) ? 'FFFFC7CE' : 'none', strike: false }) }
+    expect(evaluateFormulaCapabilities([twinStrike], { B2: 'Z2', B3: 'Z3', B9: 'Z9' }, lit)['formula:truth-number']).toMatchObject({ status: 'refused', code: 'formula-positive-control-missing' })
+    const green: S5Configuration = { ...cfg, positiveControls: { B9: 'FFFFC7CE' }, hypotheses: { yes: { B2: 'FFC6EFCE', B3: 'FFC6EFCE', B4: 'FFC6EFCE' }, no: { B2: 'none', B3: 'none', B4: 'none' } } }
+    expect(evaluateFormulaCapabilities([green], { B2: 'Z2', B3: 'Z3', B4: 'Z4', B9: 'Z9' }, { fill: r => ({ fill: r === 'B9' ? 'FFFFC7CE' : 'none', strike: false }) })['formula:truth-number']).toMatchObject({ status: 'refused', code: 'formula-positive-control-missing' })
   })
   it('#1 the authored-template diff ignores the literal positive controls Excel\'s dialog does not author', async () => {
     const { diffAuthoredFormulaTemplates } = await import('../scripts/cf-refs/generate')
@@ -6558,7 +6565,7 @@ describe('Stage 5 fix round 6: positive controls in every configuration, all-riv
     const triples: string[] = []
     const built: string[] = []
     const unbuilt: string[] = []
-    const corruptions: Record<string, number> = { 'blank-twins': 0, 'required-empty-visuals': 0, 'blank-twin-controls': 0, 'blank-dxf-controls': 0, 'tolerance-shift': 0, 'disjoint-rivals': 0 }
+    const corruptions: Record<string, number> = { 'blank-twins': 0, 'required-empty-visuals': 0, 'blank-twin-controls': 0, 'blank-dxf-controls': 0, 'strike-blind': 0, 'tolerance-shift': 0, 'disjoint-rivals': 0 }
     const kinds = new Set<string>()
     const outcomes: Record<string, number> = {}
     for (const c of CF_STAGE5_CASES) {
@@ -6651,6 +6658,13 @@ describe('Stage 5 fix round 6: positive controls in every configuration, all-riv
             // 4. every literal DXF positive control blank (its DisplayFormat shows no fill or font).
             const dxf = cfgs.filter(live).flatMap(x => Object.keys(x.positiveControls ?? {}))
             if (dxf.length > 0) { const x = clone(); for (const r of dxf) x.fill[r] = NONE; refused(x, 'blank-dxf-controls') }
+            // 4b. a strike-blind readback: fills read correctly but no strikethrough anywhere (applies when a live
+            // configuration of the group predicts a `+strike` token, literal or twin).
+            if (cfgs.filter(live).some(x => Object.values(x.hypotheses).some(h => Object.values(h).some(t => t.endsWith('+strike'))))) {
+              const x = clone()
+              for (const r of Object.keys(x.fill)) x.fill[r] = { ...x.fill[r]!, strike: false }
+              refused(x, 'strike-blind')
+            }
             // 5. bars moved into the +-1 px band shared by the winner's and a rival's twin, so no cell decides.
             {
               const x = clone()
@@ -6706,6 +6720,17 @@ describe('Stage 5 fix round 6: positive controls in every configuration, all-riv
       }
     }
     // Coverage is explicit: every triple either builds a verifying baseline or is listed here with its refusal.
+    // The triple set, derived independently from the raw catalogue (ordered tables read directly, not resolved).
+    const derived = CF_STAGE5_CASES.flatMap(c => {
+      const cfgs = c.formulaConfigurations ?? []
+      const ord = cfgs.find(x => x.orderedHypotheses)?.orderedHypotheses
+      return (ord ? Object.keys(ord.tables) : ['-']).flatMap(order => {
+        const at = (x: S5Configuration): Record<string, unknown> => (x.orderedHypotheses && order !== '-' ? x.orderedHypotheses.tables[order]! : x.hypotheses)
+        const caps = [...new Set(cfgs.filter(evidenceOf).map(x => x.capabilityId))]
+        return caps.flatMap(cap => [...new Set(cfgs.filter(x => x.capabilityId === cap && evidenceOf(x)).flatMap(x => Object.keys(at(x))))].map(h => `${c.id}|${cap}|${order}|${h}`))
+      })
+    })
+    expect([...triples].sort()).toEqual([...derived].sort())
     expect([...built, ...unbuilt.map(u => u.slice(0, u.indexOf(': ')))].sort()).toEqual([...triples].sort())
     expect(unbuilt).toEqual(EXPECTED_UNBUILT)
     expect([...kinds].sort()).toEqual(['crop:bar', 'crop:icon', 'fill:fill'])
@@ -6728,14 +6753,15 @@ const EXPECTED_UNBUILT: readonly string[] = [
   'stage5-cfvo-formulas|bar:bounds-formula|-|zero: refused formula-twin-blank',
   'stage5-cfvo-formulas|icon:thresholds-formula|-|ignored: refused formula-twin-blank',
 ]
-const EXPECTED_COVERAGE = { triples: 169, built: 165, 'blank-twins': 47, 'required-empty-visuals': 94, 'blank-twin-controls': 47, 'blank-dxf-controls': 118, 'tolerance-shift': 4, 'disjoint-rivals': 28 }
+const EXPECTED_COVERAGE = { triples: 169, built: 165, 'blank-twins': 47, 'required-empty-visuals': 94, 'blank-twin-controls': 47, 'blank-dxf-controls': 126, 'strike-blind': 10, 'tolerance-shift': 4, 'disjoint-rivals': 28 }
 /** How each corruption refuses (a corruption can also eliminate the winner or leave two readings standing). */
 const EXPECTED_OUTCOMES: Readonly<Record<string, number>> = {
   'blank-twins -> formula-twin-missing': 47,
   'required-empty-visuals -> formula-hypothesis-none': 79,
   'required-empty-visuals -> formula-unexpected-visual': 15,
   'blank-twin-controls -> formula-twin-missing': 47,
-  'blank-dxf-controls -> formula-positive-control-failed': 118,
+  'blank-dxf-controls -> formula-positive-control-failed': 126,
+  'strike-blind -> formula-positive-control-failed': 10,
   'tolerance-shift -> formula-replication-shortfall': 2,
   'tolerance-shift -> non-discriminating': 2,
   'disjoint-rivals -> formula-replication-shortfall': 15,
