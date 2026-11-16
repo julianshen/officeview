@@ -1189,6 +1189,13 @@ build and the hoist scans, which run between two per-call spends on their own bu
 the per-call rate; at 881 units per ms a call at the new cap is about 340 ms on this machine, under the 10x (500 ms)
 ceiling of Ruling S3-I1-UNITS. The worst production call is now the formula text-path call at 55,011 units (5.5x).
 
+Task 34 review fix round 2 (2026-11-16) re-ran the script after its eight fixes: the view's charged `index` term
+(empty index steps only), the per-operation text bound with rendered operands and criterion text, the budget
+preflight, refcounted hoist leases and the invariant-subtree memo. The formula rows are unchanged at 55,011 and 14,091
+units. Their reads are dense single-column cells, so they take no empty index step, and their values are numbers,
+which no text operation renders. Their formulas have no memoisable subtree, because `AVERAGE($A:$A)` is hoisted.
+`activeUnits` stays at 300,000.
+
 Every production call shape admits with at least 5.1x margin (the worst is the 200-rule sparse scope; the 4x floor
 would be 194,316 units). The warm rate, 2,242 to 6,894 units per ms, is the one to read: the cold populated rows spend
 about 32 ms in the whole-sheet bounds scan, which runs on its own whole-scan budget between two per-call spends, so
