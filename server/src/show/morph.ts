@@ -87,12 +87,12 @@ type Unproven = MorphUnproven
 interface PairInputs { plan: MorphPlan; bitmaps: Map<MorphLayerRef, LayerBitmap>; page: { w: number; h: number }; durationMs: number; docKey: string }
 
 /**
- * `opts.grant`: the bytes admission granted the pair (PR #78 round 13; default the to-slide's `showBuildGrant`).
+ * `opts.grant`: the bytes admission granted the pair (PR #78 round 13; default both slides' `showMorphGrant`).
  * Both slides' layer rasters and their masked copies lease from one ledger of that size before they exist.
  */
 export function buildMorphPlan(doc: ShowHost, job: MorphJob, opts: Pick<ShowBuildOptions, 'grant' | 'ledger'> = {}): BuiltMorph {
   if (!doc.show) throw new Error('show: not a deck')
-  const ws = jobLedger(doc.show, job.to, job.scale, opts)
+  const ws = jobLedger(doc.show, [job.from, job.to], job.scale, opts)
   const p = pairInputs(doc, job, ws)
   if ('refused' in p) return p
   try {
@@ -109,7 +109,7 @@ export function buildMorphPlan(doc: ShowHost, job: MorphJob, opts: Pick<ShowBuil
  */
 export function morphReference(doc: ShowHost, job: MorphJob, progresses: readonly number[]): { w: number; h: number; frames: Uint8ClampedArray[] } {
   if (!doc.show) throw new Error('show: not a deck')
-  const p = pairInputs(doc, job, jobLedger(doc.show, job.to, job.scale, {}))
+  const p = pairInputs(doc, job, jobLedger(doc.show, [job.from, job.to], job.scale, {}))
   if ('refused' in p) throw new Error('show-morph: refused')
   try {
     const W = Math.max(1, Math.ceil(p.page.w * job.scale)), H = Math.max(1, Math.ceil(p.page.h * job.scale))

@@ -24,7 +24,7 @@ import { canNotes, effectivePolicy, forensicNotices, resumeInvariant, type AuthD
 import { docRefOf, type Keys } from './keys'
 import { admit } from './policy'
 import { AdmissionRefused, RenderFailed, RenderTimeout, type Pool } from './pool'
-import { showBuildGrant } from './show/grant'
+import { showBuildGrant, showMorphGrant } from './show/grant'
 import { encodeShowMessage, PlanRejected, SHOW_TRACK_WINDOW, type ShowMessage } from '../../src/stream/show-plan'
 import type { TestOnlyOptions } from './config'
 import type { ShowDeliveryRecord } from './audit-store'
@@ -774,7 +774,8 @@ export function createStreamServer(o: StreamServerOptions) {
     const alive = textAlive(ws, s.sid, sd)
     const p = sd.policy, mark = markOf(p, sd.decision), strictMarks = o.animation?.strictMarks === true
     const base = { docRef: d.docRef, contentPolicy: p.contentPolicy, scale: scale as 1 | 2, motion: motion as 'full' | 'reduced', mark, strictMarks }
-    const estimate = showEstimate(d.units[unit]!, scale)
+    // A Morph pair prepares both slides (PR #78 round 13): it is admitted for both.
+    const estimate = kind === 'morph' ? showMorphGrant(d.units[msg.from as number]!, d.units[unit]!, scale) : showEstimate(d.units[unit]!, scale)
 
     // 6. The build.
     // `head`: the plan (tag 1) or Morph record (tag 5); a track has none.

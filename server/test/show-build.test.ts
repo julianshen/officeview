@@ -18,7 +18,7 @@ import { canvasBackend } from '../../src/core/canvas-backend'
 import type { LayerBitmap } from '../../src/slideshow/types'
 import { inkPixels } from './show-classify-helper'
 import { decodePng } from '../src/mark/png'
-import { SHOW_BUNDLE_BUDGET, showBuildGrant, type BuiltShowPlan, type ShowPlanJob } from '../src/show/build'
+import { SHOW_BUNDLE_BUDGET, showBuildGrant, showMorphGrant, type BuiltShowPlan, type ShowPlanJob } from '../src/show/build'
 import { createSlideShowWorkspace } from '../../src/slideshow/workspace'
 import type { SlideShowWorkspace } from '../../src/slideshow/types'
 import { morphDeck } from '../../src/testdata/show-decks'
@@ -619,9 +619,10 @@ describe('the preparation ledger (PR #78 round 13: bounded before every raster)'
     host.showOptions = { ledger: t.make }
     const pair = { from: 0, to: 1, fromStep: 0, scale: 2 as const, motion: 'full' as const, mark: { kind: 'fixed' as const }, strictMarks: false }
     expect(await host.showMorph(docKey, pair)).toEqual({ refused: 'morph-fallback' })
-    expect(t.s.grant).toBe(grant2)
+    // A pair is granted both slides' bytes (at most 64 MiB): far less than 64 full-slide surfaces.
+    expect(t.s.grant).toBe(showMorphGrant({ w: 960, h: 720 }, { w: 960, h: 720 }, 2))
     expect(t.s.refused).toBeGreaterThan(0)
-    expect(t.s.peak).toBeLessThanOrEqual(grant2)
+    expect(t.s.peak).toBeLessThanOrEqual(t.s.grant)
     const small = await openDeck(await morphDeck())
     const u = trackedLedger()
     small.host.showOptions = { ledger: u.make }

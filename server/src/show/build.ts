@@ -25,7 +25,7 @@ import { showCanvasBackend } from './canvas'
 import type { PptxDocument, PptxPackageHandle } from '../../../src/pptx/types'
 import { createDiagnosticSink } from '../../../src/slideshow/diagnostics'
 import { createSlideShowWorkspace } from '../../../src/slideshow/workspace'
-import { SHOW_BUILD_BYTES, showBuildGrant } from './grant'
+import { SHOW_BUILD_BYTES, showBuildGrant, showMorphGrant } from './grant'
 import { createSlideTimeline, type SlideTimeline } from '../../../src/slideshow/engine/steps'
 import { hitRegionsOf, layoutTextBases, prepareSlide, rasterPreparedLayer, runRegionsOf, type PreparedSlide } from '../../../src/slideshow/prepare'
 import type { PlanLayer } from '../../../src/slideshow/render/plan'
@@ -83,7 +83,7 @@ export interface BuiltShowPlan { plan: ShowPlanRecord; assets: ShowAsset[]; deco
 export type ShowRefusal = { refused: 'show-budget' | 'show-limits' | 'show-plan-timeout' | 'still'; diagnostics: Array<{ code: string; step?: number }> }
 
 export const SHOW_BUNDLE_BUDGET = SHOW_PLAN_LIMITS.showDecoded
-export { SHOW_BUILD_BYTES, showBuildGrant }
+export { SHOW_BUILD_BYTES, showBuildGrant, showMorphGrant }
 export const SHOW_PLAN_DEADLINE_MS = 10_000
 /** The entry frame's asset id; layer `i` (z order) is `1 + i`; track frames start at `TRACK_ASSET_BASE`. */
 export const ENTRY_ASSET_ID = 0
@@ -112,10 +112,15 @@ export interface ShowBuildOptions {
 /** A finite per-job ledger of `grant` bytes (no terminal reserve): every preparation surface leases from it first. */
 export const showLedger = (grant: number): SlideShowWorkspace => createSlideShowWorkspace('desktop', { limit: grant, scratch: 0 })
 
-/** The job's ledger: the given grant (a finite, non-negative number, at most `SHOW_BUILD_BYTES`), else the slide's own. */
-export function jobLedger(show: ShowDoc, unit: number, scale: number, opts: Pick<ShowBuildOptions, 'grant' | 'ledger'>): SlideShowWorkspace {
+/**
+ * The job's ledger: the given grant (a finite, non-negative number, at most `SHOW_BUILD_BYTES`), else what `onShow`
+ * admits for it: the slide's `showBuildGrant`, or a Morph pair's `showMorphGrant` (`unit` = [from, to]).
+ */
+export function jobLedger(show: ShowDoc, unit: number | readonly [number, number], scale: number, opts: Pick<ShowBuildOptions, 'grant' | 'ledger'>): SlideShowWorkspace {
   const given = opts.grant
-  const grant = given !== undefined && Number.isFinite(given) && given >= 0 ? Math.min(given, SHOW_BUILD_BYTES) : showBuildGrant(show.units[unit] ?? { w: 0, h: 0 }, scale)
+  const size = (u: number) => show.units[u] ?? { w: 0, h: 0 }
+  const grant = given !== undefined && Number.isFinite(given) && given >= 0 ? Math.min(given, SHOW_BUILD_BYTES)
+    : typeof unit === 'number' ? showBuildGrant(size(unit), scale) : showMorphGrant(size(unit[0]), size(unit[1]), scale)
   return (opts.ledger ?? showLedger)(grant)
 }
 

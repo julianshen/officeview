@@ -13,3 +13,6 @@ export const SHOW_BUILD_BYTES = 64 * 1024 * 1024
  * refuses the slide to its still (`show-budget`), and a Morph pair to its fallback.
  */
 export const showBuildGrant = (size: { w: number; h: number }, scale: number) => Math.min(SHOW_BUILD_BYTES, size.w * size.h * 4 * scale ** 2 * 4)
+
+/** A Morph pair prepares both slides (each one's layers, and their masked copies): both slides' grants, at most `SHOW_BUILD_BYTES`. */
+export const showMorphGrant = (from: { w: number; h: number }, to: { w: number; h: number }, scale: number) => Math.min(SHOW_BUILD_BYTES, showBuildGrant(from, scale) + showBuildGrant(to, scale))
