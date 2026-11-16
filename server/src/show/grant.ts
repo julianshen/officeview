@@ -10,7 +10,7 @@
  *   most workers × `SHOW_BUILD_BYTES`, and every canvas the build makes is charged to the grant as it is made.
  */
 
-/** Page surfaces a job's preparation may hold at once (measured peaks: plans ≤ 6.3, a layered Morph pair ≤ 5.8). */
+/** Page surfaces a job's preparation may hold at once (measured peaks: corpus plans ≤ 4.0, synthetic plans ≤ 6.3, layered Morph pairs ≤ 5.6). */
 export const SHOW_GRANT_PAGES = 8
 
 /**

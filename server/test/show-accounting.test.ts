@@ -12,7 +12,7 @@ import { DocumentHost } from '../src/render'
 import { showBuildGrant, showMorphGrant } from '../src/show/grant'
 import { createSlideShowWorkspace } from '../../src/slideshow/workspace'
 import type { SlideShowWorkspace } from '../../src/slideshow/types'
-import { flyInDeck, morphDeck } from '../../src/testdata/show-decks'
+import { flyInDeck, morphAdversaryDeck, morphDeck } from '../../src/testdata/show-decks'
 import { fullSlideLayersDeck, growthDeck, openDeck } from './show-fixtures'
 
 function rig() {
@@ -103,4 +103,15 @@ describe('show job canvas accounting (PR #78 round 13b)', () => {
       expect(s.ws!.used()).toBe(0)
     }
   }, 180_000)
+
+  it('a layered Morph pair lets each masked original go once its copy exists (T5 coveredPair peaks under 6 pages, not 7.4)', async () => {
+    const { s, host, job } = rig()
+    const { docKey } = await openDeck(await morphAdversaryDeck('coveredPair'), 'covered', host)
+    await host.showPlan(docKey, { ...plan(1), unitIndex: 1 }, 64 * 1024 * 1024)
+    const r = await job(() => host.showMorph(docKey, { from: 0, to: 1, fromStep: 0, scale: 1, motion: 'full', mark: { kind: 'off' }, strictMarks: false }))
+    expect('refused' in r || 'frames' in r).toBe(false)
+    expect(s.created).toBe(s.leased)
+    expect(s.peak).toBeLessThanOrEqual(6 * 960 * 720 * 4)
+    expect(s.ws!.used()).toBe(0)
+  }, 60_000)
 })

@@ -84,7 +84,7 @@ const resolveFont = (f: string) => f
 export type MorphUnproven = 'colour' | 'mask' | 'swept' | 'budget' | 'reconstruction' | 'strict-marks' | 'mark-rest' | 'limits' | 'marks'
 type Unproven = MorphUnproven
 
-interface PairInputs { plan: MorphPlan; bitmaps: Map<MorphLayerRef, LayerBitmap>; page: { w: number; h: number }; durationMs: number; docKey: string }
+interface PairInputs { plan: MorphPlan; bitmaps: Map<MorphLayerRef, LayerBitmap>; page: { w: number; h: number }; durationMs: number; docKey: string; reraster: (r: MorphLayerRef) => LayerBitmap }
 
 /**
  * `opts.grant`: the bytes admission granted the pair (PR #78 round 13; default both slides' `showMorphGrant`).
@@ -100,7 +100,7 @@ export function buildMorphPlan(doc: ShowHost, job: MorphJob, opts: Pick<ShowBuil
       const p = pairInputs(doc, job, ws)
       if ('refused' in p) return p
       try {
-        return assemble(p.plan, p.bitmaps, job, p.page, p.durationMs, p.docKey)
+        return assemble(p.plan, p.bitmaps, job, p.page, p.durationMs, p.docKey, p.reraster)
       } finally {
         for (const l of p.plan.leases) l.release()
       }
@@ -195,10 +195,16 @@ function pairInputs(doc: ShowHost, job: MorphJob, ws: SlideShowWorkspace): PairI
     },
   })
   if (typeof plan === 'string') { drop(); return { refused: 'morph-fallback' } }
-  return { plan, bitmaps, page: slideSize(to.ps.slide), durationMs: spec.durationMs, docKey: show.docKey }
+  /** Rasterises `r` again (round 13b: an original released after the proof, wanted back by the composited fallback). */
+  const reraster = (r: MorphLayerRef): LayerBitmap => {
+    const out = rasterOne(r.side === 'from' ? from.ps : to.ps, r.layer, { scale: r.scale, images: show.images ?? [], resolveFont, canvas: factory, workspace: OPEN_WORKSPACE, maxTextureSize: MAX_UNIT_PX, sink })
+    if ('refused' in out) throw new Error('show-morph: a layer that painted no longer paints')
+    return { canvas: out.canvas, bounds: out.bounds, scale: out.scale, bytes: out.bytes }
+  }
+  return { plan, bitmaps, page: slideSize(to.ps.slide), durationMs: spec.durationMs, docKey: show.docKey, reraster }
 }
 
-function assemble(plan: MorphPlan, bitmaps: ReadonlyMap<MorphLayerRef, LayerBitmap>, job: MorphJob, page: { w: number; h: number }, durationMs: number, docKey: string): BuiltMorph {
+function assemble(plan: MorphPlan, bitmaps: Map<MorphLayerRef, LayerBitmap>, job: MorphJob, page: { w: number; h: number }, durationMs: number, docKey: string, reraster: (r: MorphLayerRef) => LayerBitmap): BuiltMorph {
   const scale = job.scale
   const W = Math.max(1, Math.ceil(page.w * scale)), H = Math.max(1, Math.ceil(page.h * scale))
   const dur = Number.isFinite(durationMs) && durationMs > 0 ? durationMs : 0
@@ -208,12 +214,30 @@ function assemble(plan: MorphPlan, bitmaps: ReadonlyMap<MorphLayerRef, LayerBitm
   const samples = Array.from({ length: SAMPLES_PER_INTERVAL + 1 }, (_, k) => k / SAMPLES_PER_INTERVAL)
   const lists = samples.map(p => drawsAtProgress(spec, p))
 
-  const composited = (why: Unproven): BuiltMorph => compositeMorph(plan, bitmaps, used, spec, job, page, W, H, dur, why)
+  // Round 13b: after a masked proof, each masked layer's original is released (its masked copy is what ships); the
+  // composited fallback draws originals, so it rasterises those again first, and lets the masked copies go.
+  const released = new Set<number>()
+  let maskedCopies: LayerBitmap[] = []
+  /** A masked layer's original goes back as soon as its masked copy exists (the proof composes the copies). */
+  const dropOriginal = (ref: number, copy: LayerBitmap) => {
+    maskedCopies.push(copy)
+    const original = bmpOf(ref)
+    if (original) releaseCanvas(original.canvas)
+    bitmaps.delete(plan.refs[ref]!)
+    released.add(ref)
+  }
+  const composited = (why: Unproven): BuiltMorph => {
+    for (const b of maskedCopies) releaseCanvas(b.canvas)
+    maskedCopies = []
+    for (const ref of released) bitmaps.set(plan.refs[ref]!, reraster(plan.refs[ref]!))
+    released.clear()
+    return compositeMorph(plan, bitmaps, used, spec, job, page, W, H, dur, why)
+  }
   // z order (bottom-first) as `morphFrame` paints: each item's from side, then its to side; then `over`.
   const order: number[] = []
   for (const it of plan.items) { if (it.from) order.push(it.from.ref); if (it.to) order.push(it.to.ref) }
   for (const r of plan.over) order.push(r)
-  const proved = prove(order, bmpOf, used, lists, scale, W, H)
+  const proved = prove(order, bmpOf, used, lists, scale, W, H, dropOriginal)
   if (typeof proved === 'string') return composited(proved)
   if (job.strictMarks && proved.movers > 0) return composited('strict-marks')
 
@@ -223,7 +247,7 @@ function assemble(plan: MorphPlan, bitmaps: ReadonlyMap<MorphLayerRef, LayerBitm
   const restOf = (ref: number): Rect | undefined => {
     const list = sideOf.get(ref) === 'to' ? lists[lists.length - 1]! : lists[0]!
     const d = flatten(list).find(x => x.handle.id === ref)
-    const bmp = bmpOf(ref)!
+    const bmp = proved.rasters.get(ref)!
     // No draw at its rest (a side not shown there): its mark has no page anchor (fail closed).
     if (!d) return undefined
     const m = stateMatrix(d.state)
@@ -344,7 +368,7 @@ function composerOf(rasters: ReadonlyMap<number, LayerBitmap>, scale: number, W:
 
 interface Proved { rasters: Map<number, LayerBitmap>; movers: number }
 
-function prove(order: readonly number[], bmpOf: (ref: number) => LayerBitmap | undefined, used: ReadonlySet<number>, lists: readonly LayerDraw[][], scale: number, W: number, H: number): Proved | Unproven {
+function prove(order: readonly number[], bmpOf: (ref: number) => LayerBitmap | undefined, used: ReadonlySet<number>, lists: readonly LayerDraw[][], scale: number, W: number, H: number, dropOriginal: (ref: number, copy: LayerBitmap) => void): Proved | Unproven {
   const rasters = new Map<number, LayerBitmap>()
   for (const r of used) { const b = bmpOf(r); if (!b) return 'limits'; rasters.set(r, b) }
   // Rule 5: one full composite per sample, plus one without each drawn ref, plus the reconstruction.
@@ -407,9 +431,12 @@ function prove(order: readonly number[], bmpOf: (ref: number) => LayerBitmap | u
     if (!proof.ok) return proof.reason
     // Reconstruction: the masked rasters compose every sample exactly.
     if (masks.size) {
+      // Round 13b: the samples are composed already, so the first composer (its page and scratch) goes first, and
+      // each original goes back as its masked copy is made.
+      composer.dispose()
       const masked = new Map(rasters)
-      for (const [ref, m] of masks) masked.set(ref, maskedOf(rasters.get(ref)!, m))
-      const again = composerOf(masked, scale, W, H, composer.canvas)
+      for (const [ref, m] of masks) { const copy = maskedOf(rasters.get(ref)!, m); masked.set(ref, copy); rasters.delete(ref); dropOriginal(ref, copy) }
+      const again = composerOf(masked, scale, W, H)
       try {
         if (again.refused) return 'limits'
         for (let k = 0; k < lists.length; k++) {
