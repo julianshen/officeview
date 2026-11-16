@@ -848,34 +848,64 @@ export interface CfCallShape {
   readonly textual: boolean
   readonly textOps: number
   readonly literalUnits: number
+  /** Non-text operations that consume a text operation's output or a read (comparisons, arithmetic, coercing calls). */
+  readonly consumers: number
+  /** UPPER/LOWER calls: case mapping can lengthen a string (`'ß'.toUpperCase()` is `'SS'`). */
+  readonly caseOps: number
+  /** Operands of a text operation rendered from a non-string (numbers, booleans, errors, computed or hoisted values). */
+  readonly renderOperands: number
+  /** Cell reads that are a text operation's operand: a non-string value there is rendered too. */
+  readonly renderRefs: readonly number[]
+  /** Criterion text the conditional matcher and frequency keys parse: literal units, and the refs whose string units. */
+  readonly criterionLiteralUnits: number
+  readonly criterionRefs: readonly number[]
 }
+/** The longest text the engine renders from a non-string operand (`coerceToString`: `String(round15(v))` for a finite
+ * number, at most 23 units, e.g. `-0.00000123456789012345`; `FALSE`; an error code). Asserted by test. */
+export const CF_TEXT_RENDER_UNITS = 24
+/** The most a case mapping lengthens one code unit (`'ΐ'.toUpperCase()` is three units). */
+const CASE_GROWTH = 3
+/** Text operations whose FIRST operand alone is text (the rest are counts); `&` and CONCAT render every operand. */
+const TEXT_PRODUCING: ReadonlySet<string> = new Set(['TRIM', 'UPPER', 'LOWER', 'LEFT', 'RIGHT', 'MID', 'CONCAT'])
+const producesText = (node: AstNode): boolean => (node.type === 'binary' && node.op === '&') || (node.type === 'call' && TEXT_PRODUCING.has(node.name.toUpperCase()))
+const TEXT_FIRST_ONLY: ReadonlySet<string> = new Set(['LEN', 'TRIM', 'UPPER', 'LOWER', 'LEFT', 'RIGHT', 'MID'])
 export function cfCallShape(f: CfFormula, hoisted: readonly CfHoist[] = []): CfCallShape {
   const hoists = new Map(hoisted.map(h => [h.node, h]))
   const refs: RefNode[] = [], reads: ReadKind[] = [], aggregates: number[] = [], conditionals: Conditional[] = []
-  let nodes = 0, lookups = 0, textual = false, textOps = 0, literalUnits = 0
+  let nodes = 0, lookups = 0, textual = false, textOps = 0, literalUnits = 0, consumers = 0, caseOps = 0, renderOperands = 0, criterionLiteralUnits = 0
+  const renderRefs: number[] = [], criterionRefs: number[] = []
   const addRef = (node: RefNode, kind: ReadKind): number => { refs.push(node); reads.push(kind); return refs.length - 1 }
-  const visit = (node: AstNode, root = false): void => {
+  /** `textArg`: the node is an operand a text operation renders as text (finding 2). */
+  const visit = (node: AstNode, root = false, textArg = false): void => {
     nodes++
     const hoist = hoists.get(node)
     if (hoist) {
-      if (hoist.kind === 'countif-frequency' && hoist.criterion && isRefNode(hoist.criterion)) { addRef(hoist.criterion, 'cell'); lookups++ }
+      if (textArg) renderOperands++ // a hoisted value is a number
+      if (hoist.kind === 'countif-frequency' && hoist.criterion && isRefNode(hoist.criterion)) { criterionRefs.push(addRef(hoist.criterion, 'cell')); lookups++ }
       return
     }
+    // A text operand that is itself text (a string literal, a cell's string, a text-producing operation) is already in
+    // the source units; anything else is rendered.
+    if (textArg && node.type !== 'cell' && node.type !== 'string' && !producesText(node)) renderOperands++
     switch (node.type) {
-      case 'cell': addRef(node, 'cell'); return
+      case 'cell': { const i = addRef(node, 'cell'); if (textArg) renderRefs.push(i); return }
       case 'range': case 'wholeCol': case 'wholeRow': addRef(node, root ? 'root-area' : 'traversal'); return
       case 'string': literalUnits += node.value.length; return
       // Any operator consumes its operands' strings: arithmetic and unary operators coerce them (a numeric parse walks the
       // whole string), comparisons compare them, `&` copies them (Task 34 fix 3).
-      case 'unary': textual = true; visit(node.expr); return
-      case 'binary':
+      case 'unary': textual = true; consumers++; visit(node.expr); return
+      case 'binary': {
         textual = true
-        if (node.op === '&') textOps++
-        visit(node.left); visit(node.right); return
+        const concat = node.op === '&'
+        if (concat) textOps++; else consumers++
+        visit(node.left, false, concat); visit(node.right, false, concat); return
+      }
       case 'call': {
         const name = node.name.toUpperCase()
-        if (CF_FORMULA_FUNCTIONS.get(name)?.text) { textual = true; textOps++ }
-        if (!STRING_NEUTRAL.has(name)) textual = true
+        const isText = CF_FORMULA_FUNCTIONS.get(name)?.text === true
+        if (isText) { textual = true; textOps++ }
+        if (name === 'UPPER' || name === 'LOWER') caseOps++
+        if (!STRING_NEUTRAL.has(name)) { textual = true; if (!isText) consumers++ }
         if (CONDITIONAL.has(name)) {
           const roles = conditionalRoles(name, node.args.length)
           const c: Conditional = { refs: [], pairs: [] }
@@ -887,7 +917,14 @@ export function cfCallShape(f: CfFormula, hoisted: readonly CfHoist[] = []): CfC
               const index = addRef(arg, 'traversal')
               c.refs.push(index)
               if (role === 'r') lastRange = index
-            } else if (role === 'c') { c.pairs.push({ range: lastRange, criterion: arg }); lastRange = undefined; visit(arg) } else visit(arg)
+            } else if (role === 'c') {
+              c.pairs.push({ range: lastRange, criterion: arg }); lastRange = undefined
+              // The criterion's text is parsed whatever the formula's other work (cond.ts criterionOf): charged always.
+              if (arg.type === 'string') criterionLiteralUnits += arg.value.length
+              const before = refs.length
+              visit(arg)
+              if (arg.type === 'cell' && refs.length === before + 1) criterionRefs.push(before)
+            } else visit(arg)
           })
           conditionals.push(c)
           return
@@ -898,14 +935,14 @@ export function cfCallShape(f: CfFormula, hoisted: readonly CfHoist[] = []): CfC
           }
           return
         }
-        for (const arg of node.args) visit(arg)
+        node.args.forEach((arg, i) => visit(arg, false, isText && (i === 0 || !TEXT_FIRST_ONLY.has(name))))
         return
       }
       default: return
     }
   }
   visit(f.ast, true)
-  return { nodes, refs, reads, aggregates, conditionals, lookups, textual, textOps, literalUnits }
+  return { nodes, refs, reads, aggregates, conditionals, lookups, textual, textOps, literalUnits, consumers, caseOps, renderOperands, renderRefs, criterionLiteralUnits, criterionRefs }
 }
 
 /** Components of one call's static bound, each charged before the work happens (S5-N). */
@@ -926,7 +963,7 @@ export function cfCallWorkBreakdown(shape: CfCallShape, payload: CfPayloadMetric
   let enumeration = 0, reads = 0, sort = 0, comparisons = 0, matcher = 0, text = 0
   const traverse = (): void => { enumeration += v; sort += sortUnits(v) }
   shape.reads.forEach((kind, i) => {
-    if (kind === 'cell') { reads++; text += atom(i).stringUnits }
+    if (kind === 'cell') reads++
     else if (kind === 'root-area') { const a = admittedAtom(shape.refs[i]!); reads += (a.lastRow - a.firstRow + 1) * (a.lastCol - a.firstCol + 1) }
   })
   for (const i of shape.aggregates) { traverse(); reads += atom(i).cells }
@@ -943,13 +980,32 @@ export function cfCallWorkBreakdown(shape: CfCallShape, payload: CfPayloadMetric
       if (t === 0) comparisons += amount; else matcher += amount
     }
   }
-  if (!shape.textual) text = 0
-  else text += shape.literalUnits
+  text = cfTextUnits(shape, payload).text
   const lookups = shape.lookups
   // The empty index steps the view build took (finding 1), measured and charged as they happened.
   const index = payload.index ?? 0
   const total = shape.nodes + v + index + enumeration + reads + sort + comparisons + matcher + text + lookups
   return { nodes: shape.nodes, viewBuild: v, index, enumeration, reads, sort, comparisons, matcher, text, lookups, total }
+}
+/**
+ * Text work and the longest intermediate string of one call (finding 2). The source units are every single-cell read's
+ * string units, the literal units, and `CF_TEXT_RENDER_UNITS` per operand a text operation renders from a non-string (a
+ * number, boolean or error cell, a computed or hoisted value). No intermediate string is longer than the source units
+ * times `CASE_GROWTH` per case mapping (concatenation, slicing and trimming never lengthen past their inputs). A call
+ * with text operations walks at most that intermediate once per text operation and once per consumer; without one, each
+ * consumer walks its own read once. Criterion text (conditional criteria, frequency keys) is parsed whatever else the
+ * call does, so it is always charged.
+ */
+export function cfTextUnits(shape: CfCallShape, payload: CfPayloadMetrics): Readonly<{ text: number; intermediate: number }> {
+  const atom = (i: number) => payload.atoms[i] ?? { cells: 0, stringUnits: 0, longestString: 0 }
+  let source = shape.literalUnits + CF_TEXT_RENDER_UNITS * shape.renderOperands
+  shape.reads.forEach((kind, i) => { if (kind === 'cell') source += atom(i).stringUnits })
+  for (const i of shape.renderRefs) if (atom(i).stringUnits === 0 && atom(i).cells > 0) source += CF_TEXT_RENDER_UNITS
+  const intermediate = Math.min(source * CASE_GROWTH ** shape.caseOps, Number.MAX_SAFE_INTEGER)
+  let text = !shape.textual ? 0 : shape.textOps > 0 ? Math.min(intermediate * (shape.textOps + shape.consumers), Number.MAX_SAFE_INTEGER) : source
+  text += shape.criterionLiteralUnits
+  for (const i of shape.criterionRefs) text += atom(i).stringUnits
+  return { text, intermediate }
 }
 /** The static bound of one call (or `'unbounded'`); a call is evaluated only at or under `CF_LIMITS.checkpointUnits`. */
 export function cfCallWorkUnits(f: CfFormula, payload: CfPayloadMetrics, criterionLengths: readonly (number | undefined)[], hoisted: readonly CfHoist[] = planCfHoist(f)): number | 'unbounded' {
@@ -966,13 +1022,13 @@ export function cfEvaluatorScratchBytes(f: CfFormula, payload: CfPayloadMetrics,
   const shape = cfCallShape(f, hoisted)
   const atom = (i: number) => payload.atoms[i] ?? { cells: 0, stringUnits: 0, longestString: 0 }
   let bytes = CF_FORMULA_CALL_BYTES + CF_VIEW_WORKSPACE_BYTES + shape.nodes * CF_SLOT_BYTES + payload.viewCells * CF_VIEW_KEY_BYTES
-  let textUnits = shape.literalUnits
   shape.reads.forEach((kind, i) => {
     if (kind === 'traversal') bytes += CF_TRAVERSAL_BYTES + atom(i).cells * (CF_POPULATED_SLOT_BYTES + CF_FLAT_ITEM_BYTES)
     else if (kind === 'root-area') { const a = admittedAtom(shape.refs[i]!); bytes += (a.lastRow - a.firstRow + 1) * (a.lastCol - a.firstCol + 1) * CF_FLAT_ITEM_BYTES }
-    else textUnits += atom(i).stringUnits
   })
-  if (shape.textual) bytes += textUnits * (2 + CF_CHAR_SLOT_BYTES) * (shape.textOps + 1)
+  // Each text operation (and the read it starts from) may hold a string and its character array at the longest
+  // intermediate length.
+  if (shape.textual) bytes += cfTextUnits(shape, payload).intermediate * (2 + CF_CHAR_SLOT_BYTES) * (shape.textOps + 1)
   const work = cfCallWorkBreakdown(shape, payload, criterionLengths)
   if (work !== 'unbounded') bytes += work.matcher * CF_MATCHER_CELL_BYTES
   return bytes
