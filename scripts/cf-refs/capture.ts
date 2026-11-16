@@ -502,8 +502,19 @@ export function buildClockProbeScript(c: CfOracleCase, workbookName: string): st
   ]
 }
 
-/** The live edit of a referenced sheet without saving, then the DisplayFormat reads of the refreshed cells. */
-export function buildDynamicRefreshScript(workbookName: string, sheetName: string, spec: NonNullable<CfOracleCase['formulaDynamicRefresh']>): string[] {
+/** The cells a dynamic refresh reads: every `post:` ref and its same-content control (the evaluator checks both). */
+export function dynamicRefreshRefs(c: CfOracleCase): string[] {
+  const out = new Set<string>()
+  for (const ref of c.formulaDynamicRefresh?.refs ?? []) {
+    out.add(ref)
+    const ctrl = c.expected.cells.find(e => e.ref === ref)?.controlRef
+    if (ctrl) out.add(ctrl)
+  }
+  return [...out]
+}
+
+/** The live edit of a referenced sheet without saving, then the DisplayFormat reads of the refreshed cells and their controls. */
+export function buildDynamicRefreshScript(workbookName: string, sheetName: string, spec: NonNullable<CfOracleCase['formulaDynamicRefresh']>, refs: readonly string[] = spec.refs): string[] {
   return [
     `set wb to workbook "${q(workbookName)}"`,
     `set ws to worksheet "${q(sheetName)}" of wb`,
@@ -511,7 +522,7 @@ export function buildDynamicRefreshScript(workbookName: string, sheetName: strin
     `set calcMode to "unknown"`,
     `set wbCount to ((count of workbooks) as string)`,
     `set outList to {}`,
-    ...spec.refs.flatMap(s5CellReadLines),
+    ...refs.flatMap(s5CellReadLines),
     `set AppleScript's text item delimiters to "|||"`,
     `return calcMode & "###" & wbCount & "###" & (outList as string)`,
   ]
@@ -521,7 +532,7 @@ export function buildDynamicRefreshScript(workbookName: string, sheetName: strin
 export function buildStage5CaptureScripts(c: CfOracleCase, workbookName: string): { clock: string[]; dynamicRefresh: string[][] } {
   return {
     clock: buildClockProbeScript(c, workbookName),
-    dynamicRefresh: c.formulaDynamicRefresh ? [buildDynamicRefreshScript(workbookName, c.sheet, c.formulaDynamicRefresh)] : [],
+    dynamicRefresh: c.formulaDynamicRefresh ? [buildDynamicRefreshScript(workbookName, c.sheet, c.formulaDynamicRefresh, dynamicRefreshRefs(c))] : [],
   }
 }
 
@@ -999,7 +1010,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
           // A live edit of the referenced sheet, never saved (the close discards it), in its own owned open/close.
           const name = openWorkbook(savedAbs)
           try {
-            formulaDynamic = parseS5Observation(runScript(buildDynamicRefreshScript(name, c.sheet, c.formulaDynamicRefresh), 30_000), c.formulaDynamicRefresh.refs).cells
+            const refs = dynamicRefreshRefs(c)
+            formulaDynamic = parseS5Observation(runScript(buildDynamicRefreshScript(name, c.sheet, c.formulaDynamicRefresh, refs), 30_000), refs).cells
           } finally {
             if (!preExisting.has(name)) closeOwnedWorkbook(name, preExisting)
           }

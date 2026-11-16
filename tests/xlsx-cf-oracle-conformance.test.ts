@@ -1450,6 +1450,9 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(covered).toBeGreaterThan(200)
     expect(withheld).toBe(covered)
     expect(preparedSheets + refusedSheets).toBe(stage5.length)
+    // Non-vacuous: the production service ran on (nearly) every Stage 5 sheet, not only the parse-refused branch.
+    expect(preparedSheets).toBeGreaterThanOrEqual(25)
+    expect(covered).toBeGreaterThan(600)
   }, 120_000)
 
   it('guard: FINDINGS structure strictly disallows non-withheld outcomes', () => {

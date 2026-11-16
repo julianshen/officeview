@@ -5637,6 +5637,34 @@ describe('Stage 5 formula oracle (Task 31)', () => {
       const flat = evaluateFormulaCapabilities([c1], controls, twin({ B2: 'FF111111', B3: 'FF222222', C2: 'FF111111', C3: 'FF222222', D2: 'FF111111', D3: 'FF222222', ...unformatted }))
       expect(flat['formula:truth-number']!.status).toBe('non-discriminating')
     })
+    it('prefixed refs read their own observation set, and their controls under the same prefix', () => {
+      // post: (live edit) and pre: (manual calculation) refs and their controls come from their own tables.
+      const tables: Record<string, Record<string, string>> = { 'post:': { B3: RED, B5: RED, P3: 'none', P5: 'none' }, 'pre:': { B2: RED, B4: RED, P2: 'none', P4: 'none' } }
+      const prefixed: FormulaObservation = {
+        fill: ref => { const m = /^(post:|pre:)?(.*)$/.exec(ref)!; const v = tables[m[1] ?? '']?.[m[2]!]; return v === undefined ? undefined : { fill: v, strike: false } },
+        same: () => undefined,
+      }
+      const live = evaluateFormulaCapabilities([cfg(['post:B3', 'post:B5'], { documented: { 'post:B3': RED, 'post:B5': RED }, stale: { 'post:B3': 'none', 'post:B5': 'none' } })], controls, prefixed)
+      expect(live['formula:truth-number']).toMatchObject({ status: 'discriminating', matched: 'documented' })
+      const pre = evaluateFormulaCapabilities([cfg(['pre:B2', 'pre:B4'], { saved: { 'pre:B2': RED, 'pre:B4': RED }, recomputed: { 'pre:B2': 'none', 'pre:B4': 'none' } })], controls, prefixed)
+      expect(pre['formula:truth-number']).toMatchObject({ status: 'discriminating', matched: 'saved' })
+      // A dynamic-refresh observation that skipped the controls refuses (the capture reads both).
+      delete tables['post:']!.P3
+      expect(evaluateFormulaCapabilities([cfg(['post:B3', 'post:B5'], { documented: { 'post:B3': RED, 'post:B5': RED }, stale: { 'post:B3': 'none', 'post:B5': 'none' } })], controls, prefixed)['formula:truth-number']).toMatchObject({ code: 'fill-unobserved' })
+    })
+    it('the capture reads every refreshed cell and its control, and the manual route every pre:/calc: cell and its control', async () => {
+      const { dynamicRefreshRefs } = await import('../scripts/cf-refs/capture')
+      const { manualObservationRefs } = await import('../scripts/cf-refs/build')
+      const cross = CF_STAGE5_CASES.find(x => x.id === 'stage5-cross-sheet')!
+      const ctrl = (c: CfOracleCase, ref: string): string => c.expected.cells.find(e => e.ref === ref)!.controlRef
+      expect(dynamicRefreshRefs(cross)).toEqual(['B3', ctrl(cross, 'B3'), 'B5', ctrl(cross, 'B5')])
+      const script = buildStage5CaptureScripts(cross, 'x.xlsx').dynamicRefresh[0]!.join('\n')
+      for (const ref of dynamicRefreshRefs(cross)) expect(script).toContain(`range "${ref}" of ws`)
+      expect(script).not.toMatch(/\bsave\b|^\s*calculate\b/m)
+      const manual = CF_STAGE5_CASES.find(x => x.id === 'stage5-calc-manual')!
+      const refs = manualObservationRefs(manual)
+      for (const r of ['C2', 'C5', 'H2', 'H5']) expect(refs, r).toEqual(expect.arrayContaining([r, ctrl(manual, r)]))
+    })
     it('replicationShortfall groups by an explicit configuration key when given one', () => {
       expect(replicationShortfall(['C1', 'D1'])).toMatch(/configuration C has 1/)
       expect(replicationShortfall(['C1', 'D1'], 2, () => 'cols')).toBeUndefined()
