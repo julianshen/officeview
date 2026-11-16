@@ -236,6 +236,13 @@ time).
   session aggregate, since one grant may exceed it; the per-worker bound
   caps it instead. Server preparation memory is therefore at most
   workers × 128 MiB (`server/src/pool.ts` `stats().prep`, asserted).
+- **One running show job per session** (round 13c, codex). A show job
+  takes its session's show slot after request admission and before its
+  worker slot, and holds it until it ends. A viewer therefore holds one
+  grant (≤ 128 MiB) of active preparation, whatever the worker count,
+  while different sessions still prepare in parallel. A job waiting for
+  the session slot holds no worker slot and no grant, and leaves at once
+  when its socket closes.
 - **The grant size** is 8 page surfaces at the bucket for a plan or track,
   and 8 pages of the larger slide for a Morph pair. Both are capped at
   128 MiB (the per-show decoded budget), so 8 pages of a 2560 × 1440

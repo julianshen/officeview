@@ -456,6 +456,16 @@ Evidence:
     are now 8 MiB at most.
   - **Concurrency.** Two builds cannot add up past the bound: each worker runs one job at a time, and each holds
     one grant at most.
+  - **One running show job per session (round 13c, codex).** Without this, documents bound to different workers
+    let one session hold a grant on every worker (8 × 128 MiB with 8 workers). A show job now takes its session's
+    show slot after request admission and before its worker slot, and holds it until it ends; the session's next
+    job takes the slot in order.
+    - A viewer holds at most one grant of active preparation (asserted; `stats().prep.peakPerSession`).
+    - Sessions still prepare in parallel on different workers.
+    - A waiting job holds no worker slot and no grant. A socket that closes while the job waits removes it
+      (`ShowCancelled`) without it ever taking the slot.
+    - The "holding →" browser test's throughput is unchanged: 300 presses in 12.7 s (webgl2) and 13.3 s (canvas2d)
+      before, with 40 `show-morph`, 1 `show-plan` and 3 `unit` requests on each backend.
   - **Not in the ledger** (typed arrays, a bounded count per job):
     - pixel readbacks (a few pages per job; nothing is kept per boundary);
     - the classifier's alpha and seen arrays (2 bytes per raster px);
@@ -468,7 +478,8 @@ Evidence:
       stays within the grant, and the ledger ends empty. It covers a grant sweep, a working set larger than its
       rasters, a track, Morph pairs, and the `coveredPair` peak.
     - `server/test/show-admission.test.ts`: queued jobs hold only their request charge, the slot holds the grant,
-      the peak stays within workers × cap, and a 40-request flood of scale-2 16:9 grants is not refused.
+      the peak stays within workers × cap, a 40-request flood of scale-2 16:9 grants is not refused, one session's
+      builds on two workers run one at a time, two sessions run in parallel, and a waiting job cancels cleanly.
     - `server/test/show-build.test.ts` (the preparation ledger) and `server/test/show-wire.test.ts` (32 full-slide
       boxes at scale 2 answer `show-budget`).
 - **The streamed show clock stops while the document is hidden (codex P2, approved).** As the local session's
