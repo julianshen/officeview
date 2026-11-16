@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { cfDocumentEvaluationOf, cfEvaluationContextFor, compileCfFormula, isCfFormulaRefusal } from '../src/xlsx/cf/formula'
-import { prepareCfPaint, residentSource } from '../src/xlsx/cf/render'
+import { residentSource } from '../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
 import { createCfService } from '../src/xlsx/cf/service'
 import { CF_LIMITS, createCfMemory } from '../src/xlsx/cf/limits'
@@ -22,7 +22,7 @@ import { VERIFIED_CAPABILITIES, injectCfFormulaSelections, withExactCfEvidence, 
 import { CF_FORMULA_PRODUCTION_READINGS, cfFormulaReading } from '../src/xlsx/cf/formulaReadings'
 import { cfRulesVersion, createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
-import { isCellInSqref } from '../scripts/cf-refs/verify'
+import { decodePngSync, isCellInSqref } from '../scripts/cf-refs/verify'
 import { CF_STAGE5_CAPABILITIES, CF_STAGE5_FIXTURES, CF_STAGE5_REUSED_CAPTURES, type CfManifest } from '../scripts/cf-refs/cases'
 import { CF_STAGE5_PRODUCTION_READINGS } from '../scripts/cf-refs/audit'
 import type { CfCellState, CfOutcome, CfValueSource } from '../src/xlsx/cf/model'
@@ -30,6 +30,28 @@ import { FORMULA_CAPS, GREEN, RED, SELECTIONS, parseRules, prepare, rc, sheetOf,
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const manifest = (): CfManifest => JSON.parse(readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest
+/** Excel's own cell background in a committed capture: the majority colour of the cell's first inner row (the
+ * conformance test's `excelCellBackground`; a bar or icon never covers that row). */
+const pngs = new Map<string, { png: NonNullable<ReturnType<typeof decodePngSync>>; cols: number[]; rows: number[] }>()
+function excelBackground(c: { id: string; captures: ReadonlyArray<{ pngPath: string; sidecarPath: string }> }, ref: string): string {
+  let cap = pngs.get(c.id)
+  if (!cap) {
+    const sc = JSON.parse(readFileSync(join(REPO_ROOT, c.captures[0]!.sidecarPath), 'utf8')) as { colWidthsPt: number[]; rowHeightsPt: number[] }
+    cap = { png: decodePngSync(new Uint8Array(readFileSync(join(REPO_ROOT, c.captures[0]!.pngPath))))!, cols: sc.colWidthsPt, rows: sc.rowHeightsPt }
+    pngs.set(c.id, cap)
+  }
+  const { row, col } = rc(ref)
+  const x0 = Math.round(cap.cols.slice(0, col).reduce((a, b) => a + b, 0)), w = Math.round(cap.cols[col]!)
+  const y = Math.round(cap.rows.slice(0, row).reduce((a, b) => a + b, 0)) + 1
+  const votes = new Map<string, number>()
+  for (let x = x0 + 1; x <= x0 + w - 2; x++) {
+    const i = (y * cap.png.width + x) * 4
+    const argb = `FF${[0, 1, 2].map(k => cap!.png.data[i + k]!.toString(16).padStart(2, '0')).join('').toUpperCase()}`
+    votes.set(argb, (votes.get(argb) ?? 0) + 1)
+  }
+  return [...votes].sort((a, b) => b[1] - a[1])[0]![0]
+}
+const argbDelta = (a: string, b: string): number => Math.max(...[2, 4, 6].map(k => Math.abs(parseInt(a.slice(k, k + 2), 16) - parseInt(b.slice(k, k + 2), 16))))
 const expr = (sqref: string, priority: number, formula: string, o: { dxf?: number; stop?: boolean; type?: string; attrs?: string } = {}): string =>
   `<conditionalFormatting sqref="${sqref}"><cfRule type="${o.type ?? 'expression'}" priority="${priority}" dxfId="${o.dxf ?? 0}"${o.stop ? ' stopIfTrue="1"' : ''}${o.attrs ?? ''}><formula>${formula}</formula></cfRule></conditionalFormatting>`
 const cellIs = (sqref: string, priority: number, operator: string, formulas: readonly string[], dxf = 0): string =>
@@ -361,38 +383,58 @@ describe('stub successors repaint only where Excel did (S5-STUB)', () => {
     expect(['G2', 'G3'].filter(r => paints(full.get(r)))).toEqual(['G2', 'G3'])
   }, 120_000)
 
-  it('every stub cell is Excel\'s recorded outcome or withheld, under production and under injected successors', async () => {
-    const all = [...FORMULA_CAPS, 'formula:composition-stop-dxf', 'formula:composition-stop-scale', 'formula:composition-stop-bar', 'formula:composition-stop-icon',
-      'formula:composition-stub-successor-dxf', 'formula:composition-stub-successor-scale', 'formula:composition-stub-successor-bar', 'formula:composition-stub-successor-icon']
-    const painted: string[] = []
-    for (const inject of [[], all]) {
-      await withInjectedCfEvidence(inject, async () => {
-        injectCfFormulaSelections(SELECTIONS)
-        try {
-          for (const [caseId, refs] of Object.entries(SUCCESSORS)) {
-            const c = manifest().cases.find(x => x.id === caseId)!
-            const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
-            const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
-            const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, evaluation: cfDocumentEvaluationOf(doc) })
-            for (const ref of refs) {
-              const exp = c.expected.cells.find(e => e.ref === ref)!
-              const { row, col } = rc(ref)
-              const st = paint!.layer.styleAt(row, col, undefined)
-              const got = Boolean(st && (st.fillColor || st.color || st.bold !== undefined || st.strike))
-              if (!got) continue // withheld
-              painted.push(`${inject.length > 0 ? 'injected' : 'production'}:${caseId}:${ref}`)
-              // Painted: Excel's recorded outcome. For a Stage 3/4 cell the expected fill is the non-visual rule's.
-              expect(exp.matched === true || c.stage >= 3, `${caseId}:${ref} paints where Excel recorded no match`).toBe(true)
-              if (exp.fillRgb) expect(st!.fillColor, `${caseId}:${ref} fill`).toBe(exp.fillRgb)
-            }
-            paint!.dispose()
-          }
-        } finally { injectCfFormulaSelections(null) }
-      })
+  type StubExpected = Readonly<{ fill: string; visual?: string; tolerance: number }>
+  /** Excel's recorded outcome at a stub cell, in production's terms: its background (the DisplayFormat fill for Stages
+   * 1-2, the capture's background pixel for Stages 3-4, `none` when it is the base white) and its visual slot. */
+  function stubExpected(c: CfManifest['cases'][number], exp: CfManifest['cases'][number]['expected']['cells'][number]): StubExpected {
+    const e = exp as typeof exp & { barApplied?: boolean; iconApplied?: boolean }
+    if (c.stage === 1) return { fill: e.matched && e.fillRgb ? e.fillRgb.toUpperCase() : 'none', visual: '', tolerance: 0 }
+    if (c.stage === 2) {
+      const sidecar = JSON.parse(readFileSync(join(REPO_ROOT, c.captures[0]!.sidecarPath), 'utf8')) as { observedCells: Array<{ ref: string; fillRgb: string; fillSource: string }> }
+      const o = sidecar.observedCells.find(x => x.ref === exp.ref && x.fillSource === 'excel-display-format')!
+      // A scale paints the fill slot, so the DisplayFormat fill already decides it (the recipe's scaleApplied flag predates
+      // the capture: L2:L4 show the expression's fill). The visual slot is not compared separately.
+      return { fill: o.fillRgb.toUpperCase() === 'FFFFFFFF' ? 'none' : o.fillRgb.toUpperCase(), tolerance: 0 }
     }
-    // Production paints none of them; under the injected successors the stage1-blanks-errors cells repaint as Excel did.
-    expect(painted.filter(p => p.startsWith('production:'))).toEqual([])
-    expect(painted).toEqual(expect.arrayContaining(['injected:stage1-blanks-errors:D2', 'injected:stage1-blanks-errors:G6', 'injected:stage1-blanks-errors:J8', 'injected:stage1-blanks-errors:M6']))
+    const bg = excelBackground(c, exp.ref)
+    return { fill: argbDelta(bg, 'FFFFFFFF') <= 8 ? 'none' : bg, visual: c.stage === 3 ? (e.barApplied ? 'dataBar' : '') : (e.iconApplied ? 'iconSet' : ''), tolerance: 8 }
+  }
+  /** The S5-STUB verdict at one stub cell, pure: a cell that paints nothing is withheld (allowed unless `required`); a cell
+   * that paints must show exactly Excel's background and visual slot. Returns a violation, or undefined. */
+  function stubCellVerdict(key: string, expected: StubExpected, got: StubShown, required: boolean): string | undefined {
+    if (!paints(got)) return required ? `${key}: withheld under its full successor set` : undefined
+    const fillOk = expected.fill === 'none' ? got.fill === 'none' : got.fill !== 'none' && argbDelta(got.fill, expected.fill) <= expected.tolerance
+    if (!fillOk) return `${key}: production fill ${got.fill}, Excel ${expected.fill}`
+    if (expected.visual !== undefined && got.visual !== expected.visual) return `${key}: production visual '${got.visual}', Excel '${expected.visual}'`
+    return undefined
+  }
+  it('the stub verdict compares Excel\'s background and visual slot (fix round 1 #2: a spurious fill on Stage 4 L5 fails)', () => {
+    const c = manifest().cases.find(x => x.id === 'stage4-icon-composition')!
+    const l5 = stubExpected(c, c.expected.cells.find(e => e.ref === 'L5')!)
+    // Excel recorded an icon-only result at L5: no fill, the icon slot.
+    expect(l5).toMatchObject({ fill: 'none', visual: 'iconSet' })
+    expect(stubCellVerdict('L5', l5, { fill: RED, strike: false, visual: 'iconSet', properties: 2 }, false)).toMatch(/production fill FFFFC7CE, Excel none/)
+    expect(stubCellVerdict('L5', l5, { fill: 'none', strike: false, visual: '', properties: 1 }, false)).toMatch(/visual/)
+    expect(stubCellVerdict('L5', l5, { fill: 'none', strike: false, visual: 'iconSet', properties: 0 }, false)).toBeUndefined()
+    expect(stubCellVerdict('L5', l5, { fill: 'none', strike: false, visual: '', properties: 0 }, false)).toBeUndefined()
+    expect(stubCellVerdict('L5', l5, { fill: 'none', strike: false, visual: '', properties: 0 }, true)).toMatch(/withheld/)
+  })
+  it('every stub cell is Excel\'s recorded outcome or withheld under production, and Excel\'s recorded outcome under its full successor set', async () => {
+    const violations: string[] = []
+    let compared = 0
+    for (const [caseId, refs] of Object.entries(SUCCESSORS)) {
+      const c = manifest().cases.find(x => x.id === caseId)!
+      for (const [label, inject] of [['production', []], ['successors', STUB_CAPS[caseId]!]] as const) {
+        const states = await stubStates(caseId, inject)
+        for (const ref of refs) {
+          const v = stubCellVerdict(`${label}:${caseId}:${ref}`, stubExpected(c, c.expected.cells.find(e => e.ref === ref)!), states.get(ref)!, label === 'successors')
+          if (v) violations.push(v)
+          if (label === 'successors' && !v) compared++
+        }
+      }
+    }
+    expect(violations).toEqual([])
+    expect(compared).toBe(Object.values(SUCCESSORS).reduce((n, r) => n + r.length, 0))
   }, 120_000)
 
   it('the re-pointing commit touches only the inventoried conformance lines', ctx => {
