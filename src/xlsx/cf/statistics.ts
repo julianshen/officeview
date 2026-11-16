@@ -463,13 +463,18 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
     const sheet = `${stamp.owner}\u0000${stamp.sheetId}`
     const gen = `${stamp.structureGen}:${stamp.workbookValueGen}:${stamp.dependencyGen ?? 0}`
     for (const [key, entry] of hoistCache) if (entry.sheet === sheet && entry.gen !== gen) { entry.lease.release(); hoistCache.delete(key) }
-    const key = `${sheet}\u0000${gen}\u0000${rule.id}\u0000${hoists.map(h => `${h.kind}:${h.fn}:${scopeKey([h.range.rect])}`).join('|')}`
+    // The key names each hoist's node and criterion, so two same-function, same-range hoists never share a slot.
+    const key = `${sheet}\u0000${gen}\u0000${rule.id}\u0000${hoists.map(h => `${h.kind}:${h.fn}:${scopeKey([h.range.rect])}:${hoistNodeId(h.node)}:${h.criterion ? hoistNodeId(h.criterion) : ''}`).join('|')}`
     const hit = hoistCache.get(key)
-    if (hit && hit.rule === rule) return { kind: 'ready', value: borrowedHoists(hit.lease.value) }
+    // A hit serves only when the cached record holds every planned node; otherwise it is a miss.
+    if (hit && hit.rule === rule && hoists.every(h => hoistedHas(hit.lease.value, h))) return { kind: 'ready', value: borrowedHoists(hit.lease.value) }
     const built = await scanHoists(hoists, stamp, source, budget, signal, memory)
     if (built.kind !== 'ready') return built
     // Recheck the source generation after the scan, before adoption (S5-K): a commit during the scan cancels it.
     if (signal.aborted || !stampsMatch(source.stamp(stamp.sheetId), stamp)) { built.value.release(); throw cancelled() }
+    // An overwritten entry releases its lease (a displaced record is never leaked).
+    const displaced = hoistCache.get(key)
+    if (displaced) displaced.lease.release()
     hoistCache.set(key, { sheet, gen, rule, lease: built.value })
     return { kind: 'ready', value: borrowedHoists(built.value.value) }
   }
@@ -1176,6 +1181,16 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
   return { prepareStatistics, prepareHoists, get size() { return cache.size }, dispose }
 }
 
+/** A per-session identity for AST nodes (the hoist cache key names nodes, not their spelling). */
+const hoistNodeIds = new WeakMap<object, number>()
+let nextHoistNodeId = 1
+const hoistNodeId = (node: object): number => {
+  let id = hoistNodeIds.get(node)
+  if (id === undefined) { id = nextHoistNodeId++; hoistNodeIds.set(node, id) }
+  return id
+}
+const hoistedHas = (value: CfHoisted, h: CfHoist): boolean =>
+  h.kind === 'countif-frequency' ? value.frequencies.has(h.node) && value.longest.has(h.node) : value.scalars.has(h.node)
 const borrowedHoists = (value: CfHoisted): CfLease<CfHoisted> => ({
   value, bytes: 0, release() {}, transfer: () => ({ kind: 'unresolved', reason: 'cf-borrowed-hoist' }),
 })

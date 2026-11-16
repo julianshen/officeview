@@ -378,3 +378,62 @@ describe('the service statistics loop runs hoists beside statistical rules only 
   })
 })
 void refOf; void compile; void createCfUnitCeiling
+
+describe('the hoist cache keys by node and criterion, checks a hit, and never leaks a displaced lease (Task 34 fix 1)', () => {
+  const cells: Cells = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`A${i + 1}`, i % 3 === 0 ? 'x' : i % 3 === 1 ? 'y' : 'z']))
+  it('an overwritten entry releases its lease: the ledger holds one entry, and nothing after dispose', async () => {
+    const memory = createCfMemory()
+    const session = createCfStatistics(memory)
+    const source = fakeSource(cells)
+    const rule = formulaRule('COUNTIF($A$1:$A$10,"x")>1', 'B1')
+    const plan = planCfHoist(formulaOf(rule))
+    expect((await session.prepareHoists(rule, plan, source.stamp('s1'), source, scan(), {})).kind).toBe('ready')
+    const one = memory.currentBytes
+    expect(one).toBeGreaterThan(0)
+    // The same key from a rebuilt rule object (same id, same compiled formula) misses on identity and overwrites the entry.
+    const rebuilt: CfRule = { ...rule }
+    expect((await session.prepareHoists(rebuilt, plan, source.stamp('s1'), source, scan(), {})).kind).toBe('ready')
+    expect(memory.currentBytes).toBe(one)
+    session.dispose()
+    expect(memory.currentBytes).toBe(0)
+  })
+  it('a hit whose cached maps lack a planned node misses and rescans', async () => {
+    const memory = createCfMemory()
+    const session = createCfStatistics(memory)
+    const source = fakeSource(cells)
+    const rule = formulaRule('COUNTIF($A$1:$A$10,"x")>1', 'B1')
+    const plan = planCfHoist(formulaOf(rule))
+    await session.prepareHoists(rule, plan, source.stamp('s1'), source, scan(), {})
+    const scans = source.pageCalls.length
+    // The same rule recompiled: equal text, fresh nodes. The cached maps are keyed by the old nodes.
+    const fresh = planCfHoist(compile('COUNTIF($A$1:$A$10,"x")>1', 'B1'))
+    const out = await session.prepareHoists(rule, fresh, source.stamp('s1'), source, scan(), {})
+    expect(source.pageCalls.length).toBeGreaterThan(scans)
+    expect(hoisted(out).scalars.get(fresh[0]!.node)).toBe(4)
+    session.dispose()
+    expect(memory.currentBytes).toBe(0)
+  })
+  it('two same-range COUNTIFs with different criteria in one rule paint as the engine does (no cf-resource-limit)', async () => {
+    const text = 'COUNTIF($A$1:$A$10,"x")>COUNTIF($A$1:$A$10,"y")'
+    const source = fakeSource(cells)
+    const memory = createCfMemory()
+    const statistics = createCfStatistics(memory)
+    const rule = formulaRule(text, 'B1')
+    const plan = planCfHoist(formulaOf(rule))
+    expect(plan).toHaveLength(2)
+    for (let round = 0; round < 2; round++) {
+      // The second round hits the cache: the two hoists must keep their own values.
+      const batch = await batchOf([rule], source, { statistics, memory })
+      const o = batch.evaluate(0, 0, 1)
+      expect(o).toEqual({ kind: 'ready', value: { kind: 'boolean', value: engineEval(text, cells, a1('B1')).value } })
+      batch.dispose()
+    }
+    const swapped = 'COUNTIF($A$1:$A$10,"y")>COUNTIF($A$1:$A$10,"x")'
+    const other = formulaRule(swapped, 'B1')
+    const batch = await batchOf([other], source, { statistics, memory })
+    expect(batch.evaluate(0, 0, 1)).toEqual({ kind: 'ready', value: { kind: 'boolean', value: engineEval(swapped, cells, a1('B1')).value } })
+    batch.dispose()
+    statistics.dispose()
+    expect(memory.currentBytes).toBe(0)
+  })
+})
