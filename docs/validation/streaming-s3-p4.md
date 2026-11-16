@@ -459,13 +459,40 @@ Evidence:
     - **Fail closed:**
       - a reference to a node not in the tree;
       - a cycle among the `tn` references;
-      - a tree deeper than 256 or over 20,000 nodes.
+      - a tree deeper than 256 or over 20,000 nodes;
+      - timing outside the allowlist on a dependent node (round 12d, below).
 
       The reader already breaks a deck's `tn` cycles (`timing-cycle`), so the cycle check guards trees that reach
       the analysis by another path. The `cycle` fixture, once the reader has broken it, classifies as eligible:
       its broken node never begins, and no media end reaches it. The cycle check covers `tn` references only.
       Structural cycles (parent, child and seq relations) are the scheduler's, and the fixpoint is conservative
       over them.
+    - **Timing allowlist (round 12d, fail closed by construction).**
+      - **The gap it closes.** Codex found a second rule the hand-written model missed: `accel` or `decel` on a
+        container whose implicit duration follows a sound. Until the sound ends, the duration is infinite and
+        `localFromElapsed` passes time through. After it, the duration is finite and eased, so a held
+        container's fixed-offset children change progress.
+      - **What it cost.** Composited frames baked without the end differed by 217 px with `accel`, and by
+        124/310 px with `decel`. The linear control differed by 0 px.
+      - **The rule.** Every media-dependent node (`B`, `C` or `E`) must carry only timing the model handles
+        (`timingModelled`, `TIMING_*` in `server/src/show/eligibility.ts`). The lists come from what the
+        scheduler, `steps.ts` and `behaviours.ts` read on a `cTn`:
+        - **Modelled, any value:** `id`, `start`, `end`, `endSync`, `durMs`, `fill`, `restart`, and the role and
+          preset fields the engine matches on but that set no local time (`nodeType`, `presetClass`,
+          `presetId`, `presetSubtype`, `grpId`).
+        - **Default only:** `accel` and `decel` (0), `autoRev` (false), and `repeatCount`, `repeatDurMs` and
+          `iterate` (absent). Each changes local time or activity in a way the analysis does not model.
+        - **Ignored by the engine, so allowed:** `syncBehavior`, `masterRel`, `afterEffect`.
+      - **Refused:**
+        - any other key, or a non-default value of a default-only one;
+        - a dependent `excl`;
+        - a dependent `seq` with non-default options (concurrent, `nextAc` or `prevAc`).
+      - **Corpus check.** The dependent nodes are:
+        - `lo-tdf44223`: pars 5, 4 and 3, and the audio;
+        - `lo-narration` and `lo-bnc591147` slide 2: the audio only.
+
+        They carry only `id`, `fill`, `nodeType`, the preset fields, `grpId`, `masterRel`, and zero
+        `accel`/`decel`/`autoRev`. The main sequence's `nextAc="seek"` is not dependent.
     - **Morph.** `buildMorphPlan` applies the same predicate on both sides, so a pair into or out of a slide is
       refused (`morph-fallback`) only when that slide is.
     - **Coverage.** `holdsMedia` walks by node kind to depth 256 over both trees, so it covers at least the
@@ -683,7 +710,7 @@ Evidence:
 |---|---|
 | `scripts/stream-show-compare.ts` | the harness (`compareStreamDeck`, `measureWidening`, `installDom`, CLI) |
 | `server/test/stream-show-parity.test.ts` | synthetic decks: widening within the ceiling; structure equal and every frame within tolerance (fly-in, Morph, Cube, both mark modes); Morph pairs map to local keys; composited Morph at its keyframe times; `mediaEndDeck` plays its still (round 12); fallback rate reported |
-| `server/test/show-eligibility.test.ts`, `server/test/show-wire.test.ts` | rounds 12–12c: a media end that reaches drawing gives the still (`onEnd` start; after a finite or an indefinite clip; codex's end-condition counterexample; a `fill="remove"` `endSync` container), and the wire answers `still` and `morph-fallback` both ways; an unresolved reference, a `tn` cycle, the depth bound and a late-beginning child of a media-ended container fail closed; media beside an unrelated click animation and the `lo-tdf44223` effect-sound shape (two clicks) stay eligible and reconstruct the client's history, and Morph pairs into and out of an eligible media slide build |
+| `server/test/show-eligibility.test.ts`, `server/test/show-wire.test.ts` | rounds 12–12c: a media end that reaches drawing gives the still (`onEnd` start; after a finite or an indefinite clip; codex's end-condition counterexample; a `fill="remove"` `endSync` container), and the wire answers `still` and `morph-fallback` both ways; an unresolved reference, a `tn` cycle, the depth bound, a late-beginning child of a media-ended container, easing on a dependent parent or ancestor (codex's composited counterexamples) and any unmodelled timing attribute fail closed, while the linear control stays eligible; media beside an unrelated click animation and the `lo-tdf44223` effect-sound shape (two clicks) stay eligible and reconstruct the client's history, and Morph pairs into and out of an eligible media slide build |
 | `tests/browser/stream-present-anim.spec.ts` | Chromium × {webgl2, canvas2d}: end to end; the 10 s hold; revocation mid-animation |
 | `server/test/app.ts` | `?deck=fly\|morph\|cube` (synthetic decks) |
 | `src/debug/stream-viewer.tsx` | `deck=` forwarded; `backend=canvas2d` makes WebGL2 unavailable to the page; `__ovStream.endedAt` |
