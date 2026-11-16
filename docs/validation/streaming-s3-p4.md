@@ -414,47 +414,83 @@ Evidence:
       (1131 px), and none of it was reconstructed.
   - **Ruling, round 12: option (b), refuse.** Option (a) would evaluate the client's synthetic histories on the
     server, but their end times depend on the frame, so it needs timing assumptions the client does not share.
-  - **Ruling, round 12b (coordinator): narrow the refusal, keeping it sound by construction.** Round 12 refused
-    every slide holding media. That cost three corpus slides that had passed parity, so it was narrowed:
-    - **The assumptions.** `mediaEndTimelines` rebuilds the slide's scheduled tree with every audio and video
-      node's duration set to `0` (ends as it begins: the earliest synthetic end), `1` ms (an end just after the
-      begin, so a dependence on the end's exact time shows), and `'indefinite'` (never ends: what the server
-      evaluated before).
-      - The node's own duration is the fourth assumption: the timeline the server plays from.
-      - Only the media leaves and their ancestors are copied. Every other node keeps its identity, because the
-        prepared slide's entrances and the text fan-out's `orderOf` are keyed by node.
-    - **The comparison.** `mediaEndMatters` compares the classifier's observations on the server's timeline and on
-      each assumption:
-      - the step count;
-      - every boundary;
-      - the autoplay interval and each click step: start, duration, sample times, the draw at every sample, and
-        the non-media behaviours still running after it;
-      - every trigger sequence from every checkpoint.
+  - **Ruling, rounds 12b and 12c (coordinator): narrow the refusal, sound by construction.** Round 12 refused every
+    slide holding media. That cost three corpus slides that had passed parity, so it was narrowed.
+  - **Round 12b's bracketing was unsound (codex, round 12c) and is replaced.**
+    - Round 12b compared the classifier's sampled observations with every media node ending at 0 ms, at 1 ms and
+      never.
+    - End-condition semantics are not monotonic in the end time. In the counterexample (`mediaEndRevealDeck('endCondition')`),
+      an entrance begins at 20 ms with `fill="remove"`, and its container's end condition is the video's `onEnd`.
+    - An end at or before 20 ms is ignored, so all three assumptions agree. A delayed first tick (an end at
+      500 ms) cuts the entrance short.
+    - Sampling can never prove independence.
+  - **The rule: a conservative structural dependency analysis** (`mediaEndAffectsDrawing`, gated by `holdsMedia`,
+    over both the streamed and the scheduled trees, `mediaRefused`). No timing is sampled.
+    - Per node, three flags grow to a fixpoint: `B` (its begin may depend on a media end), `C` (it may be cut
+      short at such a time), and `E` (its end may depend).
+    - **Begin (`B`):**
+      - its parent's begin depends;
+      - a start condition names a node whose begin or end depends, whatever the event (a node that begins again
+        does so after its end);
+      - in a `seq`, it is chained to its previous sibling (a finite delay or no condition) and that sibling's end
+        depends. A click-advanced sibling (indefinite delay) is not chained;
+      - its parent repeats or reverses and the parent's end depends;
+      - an `excl` sibling depends.
+    - **Cut short (`C`):**
+      - it is media (the synthetic end);
+      - an end condition or its own `endSync` names a dependent node;
+      - its parent is cut short;
+      - its parent's `endSync` ends it with a dependent sibling;
+      - an `excl` sibling depends.
+    - **End (`E`):**
+      - `B` or `C`;
+      - it is a container whose end follows its children (no explicit `dur`, or an `endSync`) and a child's
+        end depends.
 
-      Any difference sends the slide to its still: `classifySlide`, reason `media`, so no layers or tracks ship.
-      Equal under every assumption, the end changes nothing the classification saw, and the slide plays its
-      layers with its media inert. `classifySlide` given no media timelines refuses a slide holding media (fail
-      closed).
-    - **Morph.** `buildMorphPlan` applies the same predicate, so a pair into or out of a slide is refused
-      (`morph-fallback`) only when that slide is.
-    - **The client does not need the server's timing.** Between its begin and the first frame after it, the
-      client's end lies between the `0` and `indefinite` assumptions, and the `1` ms one separates "ends now"
-      from "ends a moment later".
-    - **Coverage.** `holdsMedia`, which gates the check, walks by node kind to depth 256 over both trees, so it
-      covers at least the driver's own `mediaNodes` set (by kind, to depth 64).
+      An implicit end is the latest child end, so it never cuts a child short. An explicit `dur` blocks
+      propagation from below: the root and the main sequence (`dur="indefinite"`) stop it.
+    - **Refuse to the still (reason `media`) when:**
+      - a drawn behaviour (not media, not `cmd`) has `B` or `C`; or
+      - a container with drawn descendants has `E` and any of these holds:
+        - it lets go of them at its end (a `fill` other than `hold` or `freeze`);
+        - it can begin again (an event start, or a `restart` other than `never`);
+        - it holds a non-media descendant whose begin is not a fixed offset (an event, a `tn` or an indefinite
+          delay), which could begin after the client's end of the container.
+    - **Fail closed:**
+      - a reference to a node not in the tree;
+      - a cycle among the `tn` references;
+      - a tree deeper than 256 or over 20,000 nodes.
+
+      The reader already breaks a deck's `tn` cycles (`timing-cycle`), so the cycle check guards trees that reach
+      the analysis by another path. The `cycle` fixture, once the reader has broken it, classifies as eligible:
+      its broken node never begins, and no media end reaches it. The cycle check covers `tn` references only.
+      Structural cycles (parent, child and seq relations) are the scheduler's, and the fixpoint is conservative
+      over them.
+    - **Morph.** `buildMorphPlan` applies the same predicate on both sides, so a pair into or out of a slide is
+      refused (`morph-fallback`) only when that slide is.
+    - **Coverage.** `holdsMedia` walks by node kind to depth 256 over both trees, so it covers at least the
+      driver's own `mediaNodes` set (by kind, to depth 64).
     - **`cmd` nodes are not media.** They stay inert, per the Task 14 ruling, and get no synthetic end.
       `cmdHoldDeck` still plays from layers with 2 clicks.
-  - **Corpus outcome (round 12b): no corpus slide is refused for media.** All three return to animating, with
-    parity as before round 12:
-    - `lo-bnc591147` slide 2: an audio node at the root, which begins with the main sequence (`onBegin` of
-      `tn 2`), next to the mediacall `cmd`. No condition names its id (`7`), and its end gates no drawn behaviour.
-    - `lo-narration` slide 1: a narration audio node (`isNarration`), placed the same way. No condition names it.
-    - `lo-tdf44223` slide 1: the fly-in's effect sound (`wind.wav`), begun by the effect (`evt="begin"`, `tn 5`).
-      Nothing waits on its end, and the step's duration is that of its finite effects.
+  - **Corpus outcome (round 12c): no corpus slide is refused for media.** All three animate, with parity as before
+    round 12. The dependency paths:
+    - **`lo-bnc591147` slide 2 and `lo-narration` slide 1:**
+      - the audio (`cTn 7`) is a child of the timing root, with an indefinite-delay start, so it never begins in
+        the model;
+      - its `E` stops at the root's explicit `dur="indefinite"`;
+      - no condition names it.
+    - **`lo-tdf44223` slide 1:**
+      - the effect sound (`wind.wav`) is a child of click effect par 5, begun by its `evt="begin"` on `tn 5`;
+      - `E` climbs pars 5, 4 and 3, all `fill="hold"` with implicit ends, holding only offset-started children
+        and the audio, and stops at the main sequence;
+      - no drawn behaviour gets `B` or `C`.
+      - `mediaEndRevealDeck('effectSound')` is its synthetic copy, with a second click step: it plays `layers`
+        and reconstructs the client's history (sound ended, click, click) exactly.
 
-    Stills and the composited rate are back to their round-11 values: 1 still, rate 0.25
-    (`streaming-s3-p4-rates.json`). The synthetic `mediaEndDeck`, an entrance on the video's `onEnd`, plays its
-    still and passes as a unit still against local after its synthetic end.
+    Stills and the composited rate are unchanged from round 11: 1 still, rate 0.25
+    (`streaming-s3-p4-rates.json`). The compare and rates JSON regenerate unchanged from round 12b. The synthetic
+    `mediaEndDeck`, an entrance on the video's `onEnd`, plays its still, and it passes as a unit still against
+    local after its synthetic end.
   - **Audit of other client-injected events:** the driver writes a cursor in only these ways:
     - `initial()` or `checkpoint(n)` on entry;
     - `next()` and `previous()`;
@@ -647,7 +683,7 @@ Evidence:
 |---|---|
 | `scripts/stream-show-compare.ts` | the harness (`compareStreamDeck`, `measureWidening`, `installDom`, CLI) |
 | `server/test/stream-show-parity.test.ts` | synthetic decks: widening within the ceiling; structure equal and every frame within tolerance (fly-in, Morph, Cube, both mark modes); Morph pairs map to local keys; composited Morph at its keyframe times; `mediaEndDeck` plays its still (round 12); fallback rate reported |
-| `server/test/show-eligibility.test.ts`, `server/test/show-wire.test.ts` | rounds 12 and 12b: a media end that reveals ink (`onEnd`, after a finite clip, after an indefinite clip) gives the still, and the wire answers `still` and `morph-fallback` both ways; media beside an unrelated click animation stays eligible, ships layers that reconstruct the client's history, and its Morph pairs build; no media timelines fails closed |
+| `server/test/show-eligibility.test.ts`, `server/test/show-wire.test.ts` | rounds 12–12c: a media end that reaches drawing gives the still (`onEnd` start; after a finite or an indefinite clip; codex's end-condition counterexample; a `fill="remove"` `endSync` container), and the wire answers `still` and `morph-fallback` both ways; an unresolved reference, a `tn` cycle, the depth bound and a late-beginning child of a media-ended container fail closed; media beside an unrelated click animation and the `lo-tdf44223` effect-sound shape (two clicks) stay eligible and reconstruct the client's history, and Morph pairs into and out of an eligible media slide build |
 | `tests/browser/stream-present-anim.spec.ts` | Chromium × {webgl2, canvas2d}: end to end; the 10 s hold; revocation mid-animation |
 | `server/test/app.ts` | `?deck=fly\|morph\|cube` (synthetic decks) |
 | `src/debug/stream-viewer.tsx` | `deck=` forwarded; `backend=canvas2d` makes WebGL2 unavailable to the page; `__ovStream.endedAt` |
