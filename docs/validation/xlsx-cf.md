@@ -2163,3 +2163,14 @@ Every Stage 5 configuration, whether fill, scale, bar or icon, goes through one 
   - anchor-multi under `B2:B4 D5:D8`: first-listed and bounding-box coincide;
   - `bar:bounds-formula` / zero: only degenerate twins, so no witness;
   - `icon:thresholds-formula` / ignored: only empty twins.
+
+### 14.x Known metadata defect: `stage2-scale-composition` L2:L4 `scaleApplied` (Task 35, recorded, not corrected)
+
+- **What.** In the committed manifest, `stage2-scale-composition` L2:L5 all carry `scaleApplied: true`. The capture says otherwise:
+  - At L2:L4 the higher-priority `stopIfTrue` expression (`MOD(L2,2)=1`) matches. Excel's DisplayFormat fill there is the expression's `FFFFC7CE`, so the scale did not paint.
+  - Only L5, where the expression is false, shows the scale's colour (`FFF8696B`).
+- **What it affects.** The DisplayFormat fills, which are the evidence, are correct; only the derived flag is wrong. Nothing reads the flag as evidence:
+  - The Stage 2 Lesson 1 comparison uses the fills.
+  - The Task 35 S5-STUB test (`tests/xlsx-cf-formula-rules.test.ts`) judges Stage 2 stub cells by their fill alone.
+  - `scripts/cf-refs/capture.ts` reads the flag only to choose which cells to probe.
+- **Where it comes from.** The manifest is generated, so it is not edited by hand. The flag is set by the `stage2-scale-composition` expected-cells generator in `scripts/cf-refs/cases.ts`, which writes `scaleApplied: true` for every row 2-5 of columns B to L. The correction belongs there, at L2:L4 only, followed by regenerating the manifest. That would change a Stage 2 fixture's expected record, so it needs its own ruling and is not done here.
