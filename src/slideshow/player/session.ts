@@ -15,36 +15,35 @@
  * the surface and the cut change at once. A slide's metadata (its click
  * steps) arrives asynchronously; step inputs typed meanwhile are queued for
  * that slide and replayed in order, and a stale load is released unused.
+ * The navigation itself is the package-free show driver (player/driver.ts,
+ * piece 4 Task 3): the session supplies its slide source (the package's
+ * metadata store) and stage, and keeps the package, media, sounds,
+ * accessibility and presenter wiring.
  *
  * Working assumptions (pending D4): Previous from slide n+1 enters slide n
  * at its last checkpoint; Next enters a slide at its initial state.
  */
 import { preparedPlacement, SlideShowError, type ShowStart, type SlideShowSession } from '../../components/present'
 import { emuToPx } from '../../core/geometry'
-import { attrs } from '../../core/xml'
 import { throwIfAborted } from '../../core/package-error'
-import { HandlePackage } from '../../pptx/appearance/handle-package'
-import { masterArtwork } from '../../pptx/appearance/master-art'
 import { validateSlideSize } from '../../pptx/appearance/size'
-import { slideTheme } from '../../pptx/parse'
-import type { PptxPackageHandle, PptxShape } from '../../pptx/types'
+import type { PptxPackageHandle } from '../../pptx/types'
 import { ManualClock, RafClock } from '../clock'
 import { createDiagnosticSink } from '../diagnostics'
-import { createAutoAdvance, createKioskTimer, type AutoAdvance, type KioskTimer } from '../engine/advance'
-import { createSlideTimeline, type SlideCursor, type SlideTimeline } from '../engine/steps'
-import { openShowPackage, readRelationships, readShowIndex } from '../read/deck'
+import type { SlideCursor } from '../engine/steps'
+import { openShowPackage, readShowIndex } from '../read/deck'
 import { shapeResolver } from '../read/resolve'
 import { createSlideMetadataStore } from '../read/store'
+import { createUnderlayReader } from '../read/underlay'
 import { readSlideTiming } from '../read/timing'
-import { diagnoseInheritedTransition } from '../read/transition'
 import type { DiagnosticSink, LinkSpec, MetadataHandle, RenderState, ShowClock, ShowIndex, ShowSlide, SlideShowWorkspace, TerminalReserve } from '../types'
 import { admitShow, createSlideShowWorkspace, type SlideShowProfile } from '../workspace'
 import { createShowA11y, showTargets, slideTitle, visibleText, type ShowA11y, type ShowTarget } from './a11y'
 import { createCursorHider, type CursorHider, type CursorTimer } from './cursor'
-import { hitTarget } from './hit-test'
+import { createShowDriver, type DriverStage, type DriverVisit, type ShowDriver, type SlideSource } from './driver'
 import { createGestureState, gestureToInput, keyToInput, MODIFIER_KEYS } from './keys'
 import { runLink } from './links'
-import { nextVisible, previousVisible, visibleOrder } from './order'
+import { visibleOrder } from './order'
 import { createStage, type Stage, type StageDeps } from './stage'
 import { createAudienceSurface, END_OF_SHOW, type AudienceSurface } from './surface'
 import { adoptPresenterWindow, type PresenterWindow } from '../presenter/window'
@@ -53,7 +52,7 @@ import { createPresenterPlacement, type PresenterPlacement } from '../presenter/
 import { createElapsedTimer, type ElapsedTimer } from '../presenter/timer'
 import type { PreviewOptions } from '../presenter/preview'
 import { openMediaLease } from '../media/lease'
-import { createMediaPlayer, type MediaController, type MediaPlayer } from '../media/player'
+import { createMediaPlayer, type MediaPlayer } from '../media/player'
 import { createTransitionSound, type TransitionSoundController } from '../media/sounds'
 
 export type ShowInput =
@@ -171,24 +170,7 @@ function sizeProblem(start: ShowStart): string | undefined {
   return undefined
 }
 
-interface Visit {
-  index: number
-  at: 'initial' | 'last'
-  handle?: MetadataHandle
-  meta?: ShowSlide
-  timeline?: SlideTimeline
-  cursor?: SlideCursor
-  advance?: AutoAdvance
-  /** S2-7: the slide's media, following its timeline. */
-  media?: MediaController
-  /** Step inputs typed while the slide's metadata loads. */
-  queue: Array<'next' | 'previous'>
-}
-
 const NO_NOTES: ShowSlide['notes'] = []
-
-/** A slide with no readable metadata: static, no links, no transition. */
-const staticSlide = (index: number): ShowSlide => ({ index, hidden: false, timing: undefined, notes: [], links: [], media: [], builds: [] })
 
 /**
  * The viewer's protection policy (spec 6.3). Copy comes from the start's `allowCopy`, never from CSS a consumer
@@ -271,11 +253,10 @@ export async function createSession(start: ShowStart): Promise<SessionController
     frameSubs.clear()
     presenterWindow?.close()
     stopFrames?.()
-    // Media lets go of its URLs before the leases (and the workspace) go.
-    visit?.media?.leave()
+    // Media lets go of its URLs before the leases (and the workspace) go: the driver leaves the shown slide's media, then its lease.
+    driver?.dispose()
     sounds?.dispose()
     player?.dispose()
-    visit?.handle?.release()
     stage?.dispose()
     store?.close()
     terminal?.release()
@@ -285,7 +266,8 @@ export async function createSession(start: ShowStart): Promise<SessionController
     surface?.dispose()
   }
 
-  let visit: Visit | undefined
+  /** The navigation (created once the stage is up); `slide` and `visit` below read through it. */
+  let driver: ShowDriver | undefined
   let index: ShowIndex
   try {
     index = await readShowIndex(doc, handle, sink, signal)
@@ -307,69 +289,23 @@ export async function createSession(start: ShowStart): Promise<SessionController
   terminal = admitted.terminal
 
   // The model assembly point: the timing reader and a resolver over the slide and its layout and master artwork.
-  const underlays = new Map<number, readonly PptxShape[]>()
+  const underlay = createUnderlayReader(handle, index, sink, signal)
   store = createSlideMetadataStore({
     doc, handle, index, workspace, sink, signal,
     timing: readSlideTiming,
-    resolver: (slide) => shapeResolver(slide, underlays.get(doc.slides.indexOf(slide)) ?? []),
+    resolver: (slide) => shapeResolver(slide, underlay.underlays.get(doc.slides.indexOf(slide)) ?? []),
   })
 
-  /**
-   * Layout and master artwork ids per layout, parsed once per show (S1-19
-   * review M2): the resolver only needs the ids, so the cache keeps an
-   * id-only skeleton (no geometry, text or image bytes). A slide that hides
-   * the master shapes (`showMasterSp="0"`) has no underlay.
-   */
-  const underlayCache = new Map<string, Promise<readonly PptxShape[]>>()
-  const skeleton = (list: readonly PptxShape[], depth = 0): PptxShape[] =>
-    depth > 64 ? [] : list.map((s) => ({ source: s.source && { ...s.source }, children: s.children && skeleton(s.children, depth + 1) }) as PptxShape)
-  /** Layout and master artwork for the resolver; inherited transitions are diagnosed on the way (they are not inherited). */
-  async function underlayOf(i: number): Promise<readonly PptxShape[]> {
-    const part = index.slides[i]?.partPath
-    if (!handle || !part) return []
-    try {
-      const rels = await readRelationships(handle, part, signal)
-      const local = (list: typeof rels, kind: string) => list.find((r) => !r.external && r.type?.endsWith(`/${kind}`))?.target
-      const layout = local(rels, 'slideLayout')
-      const master = layout ? local(await readRelationships(handle, layout, signal), 'slideMaster') : local(rels, 'slideMaster')
-      // A private, bounded view over the handle: its cache dies with this call.
-      const pkg = HandlePackage.over(handle)
-      for (const [path, kind] of [[layout, 'layout'], [master, 'master']] as const) {
-        const root = path ? await pkg.xmlOrdered(path) : undefined
-        if (root) diagnoseInheritedTransition(root, kind, i, sink)
-      }
-      if (['0', 'false'].includes(attrs(await pkg.xmlOrdered(part)).showMasterSp ?? '')) return []
-      const key = `${layout ?? ''}|${master ?? ''}`
-      let art = underlayCache.get(key)
-      if (!art) {
-        art = slideTheme(pkg, part).then((theme) => masterArtwork(pkg, part, theme.context)).then((a) => skeleton([...a.master, ...a.layout]))
-        underlayCache.set(key, art)
-        art.catch(() => underlayCache.delete(key))
-      }
-      return await art
-    } catch (e) {
-      throwIfAborted(signal)
-      sink.add({ code: 'underlay', slideIndex: i, message: `Layout and master artwork could not be read (${e instanceof Error ? e.message : String(e)}); master-only targets read as missing` })
-      return []
-    }
-  }
-
-  async function acquire(i: number): Promise<MetadataHandle> {
-    const mine = store!.resident().includes(i) ? undefined : await underlayOf(i)
-    if (mine) underlays.set(i, mine)
-    try {
-      return await store!.acquire(i, signal)
-    } finally {
-      // A second visit to the same slide may have joined the same read with its own copy: leave that one.
-      if (mine && underlays.get(i) === mine) underlays.delete(i)
-    }
-  }
+  const acquire = (i: number): Promise<MetadataHandle> => underlay.acquire(store!, i)
 
   // ---------------------------------------------------------------------
   // State
   // ---------------------------------------------------------------------
 
-  let slide: number | 'end' = 'end'
+  /** The deck index on screen, or the end-of-show slide. */
+  const current = (): number | 'end' => driver?.slide ?? 'end'
+  /** The shown slide's visit (its metadata, timeline and cursor once in). */
+  const shown = (): DriverVisit | undefined => driver?.visit
   let lastShown = 0
   let screen: SessionState['screen'] = 'slide'
   let buffer = ''
@@ -378,7 +314,6 @@ export async function createSession(start: ShowStart): Promise<SessionController
   let exited = false
   /** Input waits for the first slide: before that, Esc cancels through the start's signal. */
   let started = false
-  let kioskTimer: KioskTimer | undefined
   let resolveEnded!: () => void
   const ended = new Promise<void>((resolve) => { resolveEnded = resolve })
 
@@ -390,7 +325,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
     if (paused || hiddenDoc) clock.pause()
     else clock.resume()
   }
-  const render = () => surface?.show({ slide, count, screen })
+  const render = () => surface?.show({ slide: current(), count, screen })
   /**
    * Presenter View follows the same state (one owner, spec 5.1): subscribers
    * are told when anything it shows changes — never per frame otherwise.
@@ -402,18 +337,15 @@ export async function createSession(start: ShowStart): Promise<SessionController
   let timer: ElapsedTimer | undefined
   const syncPresenter = (force = false) => {
     if (!viewSubs.size) return
-    const v = visit
+    const v = shown()
     const t = sessionDeps.now(win)
     const busy = v?.timeline && v.cursor && stage ? v.timeline.busyUntil(v.cursor) > Math.max(0, slideTime()) : false
-    const key = [slide, v?.cursor?.step ?? -1, v?.meta ? 1 : 0, busy, screen, paused, presenter, swapped ? 1 : 0, sink.list().length,
+    const key = [current(), v?.cursor?.step ?? -1, v?.slide ? 1 : 0, busy, screen, paused, presenter, swapped ? 1 : 0, sink.list().length,
       timer ? Math.floor(timer.elapsed(t) / 1000) : 0, timer?.paused, Math.floor(sessionDeps.wall() / 60000)].join('|')
     if (!force && key === viewKey) return
     viewKey = key
     viewVersion++
     for (const cb of [...viewSubs]) cb()
-  }
-  const report = () => {
-    if (started && !exited && visit?.cursor && slide === visit.index) cb.onSlideChange?.(visit.index, visit.cursor.step)
   }
   /** The slide's own timeline time: show time since its transition ended (negative while it runs). */
   const slideTime = () => (stage ? stage.slideTime(clock!.now()) : 0)
@@ -421,6 +353,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
   /** Live region: "Slide n of m: {title}" once per change (spec 9). */
   const announce = () => {
     if (!a11y) return
+    const slide = current()
     if (slide === 'end') { a11y.announce(END_OF_SHOW); return }
     const title = slideTitle(doc.slides[slide])
     a11y.announce(`Slide ${slide + 1} of ${count}${title ? `: ${title}` : ''}`)
@@ -431,8 +364,8 @@ export async function createSession(start: ShowStart): Promise<SessionController
   function updateA11y(force = false, drawn?: RenderState): void {
     syncPresenter()
     if (!a11y || !stage) return
-    const v = visit
-    if (slide === 'end' || !v || !v.cursor || screen !== 'slide') {
+    const v = shown()
+    if (current() === 'end' || !v || !v.cursor || screen !== 'slide') {
       if (force || a11yKey !== '') { a11yKey = ''; a11y.setText([]); a11y.setTargets([]) }
       return
     }
@@ -443,186 +376,68 @@ export async function createSession(start: ShowStart): Promise<SessionController
     if (!force && key === a11yKey) return
     a11yKey = key
     const pptx = doc.slides[v.index]
-    a11y.setText(visibleText(pptx, state, v.meta?.builds ?? []))
-    a11y.setTargets(kiosk ? [] : showTargets(pptx, state, v.timeline?.triggers() ?? [], v.meta?.links ?? [], v.meta?.builds ?? []))
+    a11y.setText(visibleText(pptx, state, v.slide?.builds ?? []))
+    a11y.setTargets(kiosk ? [] : showTargets(pptx, state, v.timeline?.triggers() ?? [], v.slide?.links ?? [], v.slide?.builds ?? []))
   }
 
-  /** Shows deck slide `i` (a cut, or a transition once its model is in) and loads its click steps. Resolves when the slide is drawable. */
-  function enter(i: number | 'end', at: Visit['at'] = 'initial'): Promise<void> {
-    const left = visit
-    if (left) {
-      // Everything but cross-slide media (numSld) and a looping transition sound stops here (spec 7).
-      left.media?.leave()
-      sounds?.stopAt(left.index)
-    }
-    visit?.handle?.release()
-    visit = undefined
-    stage?.leave()
-    slide = i
-    screen = 'slide'
-    render()
-    announce()
-    updateA11y(true)
-    if (i === 'end') return Promise.resolve()
-    lastShown = i
-    const v: Visit = { index: i, at, queue: [] }
-    visit = v
-    // An initial entry is build 0 whatever the slide holds: reported at once, so a slide left before its
-    // metadata arrives is still reported. A last-checkpoint entry is reported when its step count is known.
-    if (at === 'initial' && started) cb.onSlideChange?.(i, 0)
-    const live = () => visit === v && !exited
-    return acquire(i).then(
-      (h) => {
-        if (!live()) { h.release(); return undefined }
-        v.handle = h
-        v.meta = h.slide
-        return h.slide.timing
-      },
-      (e) => {
-        if (!live()) return undefined
-        // The store degrades read and limit failures itself; anything left (aggregate refusal of even a static entry) is static.
-        sink.add({ code: 'slide-refused', slideIndex: i, message: `Slide metadata refused (${e instanceof Error ? e.message : String(e)}); the slide is static` })
-        return { refused: 'metadata' }
-      },
-    ).then((timing) => {
-      if (!live()) return
-      const options = { showAnimation: index.settings.showAnimation, reducedMotion: motion, sink, slideIndex: i }
-      try {
-        // Text by word or letter (S2-8): the stage's fanned-out working copy, charged to the slide's metadata.
-        const handle = v.handle
-        const text = timing && !('refused' in timing) && handle && v.meta && stage?.textTiming
-          ? stage.textTiming(i, v.meta, (bytes, tag) => handle.attach(bytes, tag)) : undefined
-        v.timeline = createSlideTimeline(text?.tree ?? timing, text ? { ...options, orderOf: text.orderOf } : options)
-      } catch (e) {
-        // A bound the navigation layer refuses (spec: refuse and diagnose, never a wrong answer): the slide is static.
-        sink.add({ code: 'slide-refused', slideIndex: i, message: `Slide timing refused (${e instanceof Error ? e.message : String(e)}); the slide is static` })
-        v.timeline = createSlideTimeline({ refused: 'timeline' }, options)
+  /**
+   * What the driver tells the session (spec 4.1, 7, 9): the slide changed (surface, live region, media and
+   * sounds), it became drawable (its transition sound starts with the transition), its step or cursor moved.
+   */
+  const hooks = {
+    onSlideChange(i: number, build: number) {
+      if (started && !exited && current() === i) cb.onSlideChange?.(i, build)
+      updateA11y()
+    },
+    onVisit(v: DriverVisit | undefined) {
+      if (v) {
+        // The transition sound starts with the transition: the stage has just set its start, now that the incoming
+        // frame can be drawn (PR #18 review P1's showNow start; PR #19 review 2).
+        sounds?.start(v.index)
+        updateA11y(true)
+        return
       }
-      v.meta ??= staticSlide(i)
-      v.advance = createAutoAdvance(v.meta, index.settings, v.timeline)
-      if (player) {
-        const media = v.media = player.enter(v.meta, () => Math.max(0, slideTime()))
-        media.onEnd((id, synthetic, t) => mediaEnded(v, id, synthetic, t))
-      }
-      v.cursor = at === 'last' ? v.timeline.checkpoint(v.timeline.steps) : v.timeline.initial()
-      const neighbours = [previousVisible(order, i), nextVisible(order, i)].filter((n): n is number => n !== undefined)
-      return stage!.enter({ index: i, slide: v.meta, timeline: v.timeline, cursor: v.cursor }, clock!.now(), neighbours)
-    }).then(() => {
-      if (!live() || !v.cursor) return
-      // The transition sound starts with the transition: the stage has just set its start, now that the incoming
-      // frame can be drawn (PR #18 review P1's showNow start; PR #19 review 2).
-      sounds?.start(i)
-      if (at === 'last') report()
+      // Everything but cross-slide media (numSld) and a looping transition sound stops on a slide change (spec 7).
+      sounds?.stopAt(lastShown)
+      const slide = current()
+      if (slide !== 'end') lastShown = slide
+      screen = 'slide'
+      render()
+      announce()
       updateA11y(true)
-      // Replay the inputs typed while it loaded. One that changes the slide hands the rest to the new visit,
-      // which replays them once it is ready in turn (PR #18 review 3); explicit navigation (goTo) supersedes them.
-      const rest = v.queue.splice(0)
-      for (let q = rest.shift(); q && !exited; q = rest.shift()) {
-        if (visit && visit !== v && !visit.cursor) { visit.queue.push(q, ...rest); break }
-        q === 'next' ? next() : previous()
-      }
-    })
+    },
+    onCursor: () => updateA11y(),
+    runLink: (link: LinkSpec, v: DriverVisit) => openLink(link, v.index),
+    onEnd: () => exit(),
+    held: () => screen !== 'slide',
   }
 
-  /** A media node's end, real or synthetic, joins the slide's history (spec 7); never earlier than its last event. */
-  function mediaEnded(v: Visit, id: number, synthetic: boolean, t: number): void {
-    if (visit !== v || exited || !v.cursor || !v.timeline) return
-    const last = v.cursor.mode === 'checkpoint' ? 0 : v.cursor.events[v.cursor.events.length - 1]?.t ?? 0
-    v.cursor = v.timeline.mediaEnd(v.cursor, id, Math.max(t, last), synthetic)
-    updateA11y()
-  }
+  const next = () => { if (!exited) driver?.next() }
+  const previous = () => { if (!exited) driver?.previous() }
+  const goTo = (i: number) => { if (!exited) driver?.goTo(i) }
+  const first = () => { if (!exited) driver?.first() }
+  const last = () => { if (!exited) driver?.last() }
 
-  /** The next visible slide, the loop (a kiosk restart counts as one), or the end of the show. */
-  function leaveForward(from: number): void {
-    const after = nextVisible(order, from)
-    if (after === undefined && loop) kioskTimer?.restarted(clock!.now())
-    void enter(after ?? (loop ? order[0] : undefined) ?? 'end')
+  function openLink(link: LinkSpec, slideIndex: number): void {
+    if (win) runLink(link, { goTo, next, previous, first, last, exit }, win, { sink, slideIndex, open: start.platform.open })
   }
-
-  function next(): void {
-    if (exited) return
-    if (slide === 'end') { exit(); return }
-    const v = visit!
-    if (!v.cursor || !v.timeline) { v.queue.push('next'); return }
-    const after = v.timeline.next(v.cursor, Math.max(0, slideTime()))
-    // Identity: the timeline returns the same cursor when the slide has nothing left (S1-10).
-    if (after !== v.cursor) { v.cursor = after; report(); updateA11y(); return }
-    leaveForward(v.index)
-  }
-
-  function previous(): void {
-    if (exited) return
-    if (slide === 'end') {
-      const to = previousVisible(order, Infinity)
-      if (to !== undefined) void enter(to, 'last')
-      return
-    }
-    const v = visit!
-    if (!v.cursor || !v.timeline) { v.queue.push('previous'); return }
-    if (v.cursor.step > 0) { v.cursor = v.timeline.checkpoint(v.cursor.step - 1); report(); updateA11y(); return }
-    const to = previousVisible(order, v.index)
-    if (to !== undefined) void enter(to, 'last')
-  }
-
-  function goTo(i: number): void {
-    if (exited) return
-    if (!Number.isInteger(i) || i < 0 || i >= count) {
-      sink.add({ code: 'invalid-slide', message: `goTo(${i}) is outside the deck; ignored.` })
-      return
-    }
-    void enter(i)
-  }
-
-  const first = () => { if (order.length) void enter(order[0]) }
-  const last = () => { if (order.length) void enter(order[order.length - 1]) }
 
   /** A trigger runs its interactive sequence; a link runs its action (spec 4.3). Neither is a click advance. */
   function activate(target: { spid: string; kind: 'trigger' | 'link'; run?: { p: number; r: number } }): void {
     if (exited || !started || kiosk) return
-    const v = visit
-    if (!v || !v.cursor || !v.timeline || slide !== v.index) return
-    if (target.kind === 'trigger') {
-      const after = v.timeline.trigger(v.cursor, target.spid, Math.max(0, slideTime()))
-      if (after) { v.cursor = after; updateA11y() }
-      return
-    }
+    const v = shown()
+    if (!v || !v.cursor || !v.timeline || current() !== v.index) return
+    if (target.kind === 'trigger') { driver!.trigger(target.spid); return }
     // The link on the run named, else the shape's own; a target naming no run falls back to the first link.
-    const links = (v.meta?.links ?? []).filter((l: LinkSpec) => l.spid === target.spid)
+    const links = (v.slide?.links ?? []).filter((l: LinkSpec) => l.spid === target.spid)
     const run = target.run
     const link = run ? links.find((l) => l.run?.p === run.p && l.run.r === run.r) : links.find((l) => !l.run) ?? links[0]
-    if (link && win) runLink(link, { goTo, next, previous, first, last, exit }, win, { sink, slideIndex: v.index, open: start.platform.open })
+    if (link) openLink(link, v.index)
   }
 
   /** A click on the slide: the topmost trigger, else the topmost link, else an advance unless `advClick="0"`. */
   function click(clientX: number, clientY: number): void {
-    const v = visit
-    if (slide !== 'end' && v?.cursor && v.timeline && stage?.plan) {
-      const at = stage.toSlide(clientX, clientY)
-      const triggers = v.timeline.triggers()
-      const links = v.meta?.links ?? []
-      const st = stage
-      // A trigger beats a link on the same shape (pending D4; recorded in the catalogue). A link on text runs
-      // is taken only over the laid-out run it is on (PR #18 review 3); elsewhere the shape's own link, if any,
-      // else the click passes to the shapes below. Text that cannot be located keeps the first run's link.
-      const accept = (spid: string, leaf: PptxShape, lx: number, ly: number, w: number, h: number): Parameters<typeof activate>[0] | undefined => {
-        if (triggers.includes(spid)) return { spid, kind: 'trigger' }
-        const mine = links.filter((l) => l.spid === spid)
-        if (!mine.length) return undefined
-        const own = mine.some((l) => !l.run)
-        const runs = mine.filter((l) => l.run)
-        if (runs.length && leaf.source?.id === spid) {
-          const run = st.runAt(leaf, lx, ly, w, h)
-          if (run && runs.some((l) => l.run!.p === run.p && l.run!.r === run.r)) return { spid, kind: 'link', run }
-          if (run === undefined && !own) return { spid, kind: 'link', run: runs[0].run }
-        }
-        return own ? { spid, kind: 'link' } : undefined
-      }
-      const target = at && (triggers.length || links.length) ? hitTarget(st.plan!, st.stateAt(v.cursor, clock!.now()), at.x, at.y, accept) : undefined
-      if (target) { activate(target); return }
-      // advClick="0": mouse clicks never advance; keyboard, API and presenter next still do (spec 4.4).
-      if (v.advance && !v.advance.clickAdvances) return
-    }
-    next()
+    if (!exited) driver?.click(clientX, clientY)
   }
 
   function exit(): void {
@@ -656,29 +471,12 @@ export async function createSession(start: ShowStart): Promise<SessionController
 
   /** One frame: the kiosk restart, auto-advance, then the stage draws (spec 4.4; every timer is show-clock time). */
   function tick(): void {
-    if (exited || !started || !clock || !stage) return
-    const t = clock.now()
-    if (kioskTimer?.restartDue(t)) {
-      kioskTimer.restarted(t)
-      if (order.length) void enter(order[0])
-      return
-    }
-    const v = visit
-    if (v && v.cursor && v.advance && slide === v.index && screen === 'slide' && v.advance.due(v.cursor, 0, slideTime())) {
-      // An automatic advance is a Next (never gated by advClick or kiosk; the show plays on its own).
-      next()
-    }
-    // Media follows the slide's timeline (S2-7); a checkpoint entry records what has begun without playing it.
-    const m = visit
-    if (m && m.media?.wants && m.cursor && m.timeline && slide === m.index) {
-      const st = slideTime()
-      if (st >= 0) m.media.sync(m.timeline.stateAt(m.cursor, st), st, m.cursor.mode === 'checkpoint')
-    }
-    const w = visit
-    const cursor = w && slide === w.index ? w.cursor : undefined
-    const drawn = stage.frame(cursor, clock.now())
+    if (exited || !started || !clock || !stage || !driver) return
+    const drawn = driver.tick()
     // Presenter View copies the frame now, before the browser presents (and may clear) a WebGL canvas.
     afterFrame()
+    const w = driver.visit
+    const cursor = w && driver.slide === w.index ? w.cursor : undefined
     updateA11y(false, cursor ? drawn : undefined)
   }
 
@@ -758,14 +556,14 @@ export async function createSession(start: ShowStart): Promise<SessionController
 
   const session: SessionController = {
     get slideIndex() { return lastShown },
-    get buildIndex() { return visit?.cursor?.step ?? 0 },
+    get buildIndex() { return shown()?.cursor?.step ?? 0 },
     get surface() { return surfaceKind },
     get presenter() { return presenter },
     get state(): SessionState {
-      return { slide, build: visit?.cursor?.step ?? 0, screen, buffer, paused, clockPaused: paused || hiddenDoc, kiosk, loop, order, exited }
+      return { slide: current(), build: shown()?.cursor?.step ?? 0, screen, buffer, paused, clockPaused: paused || hiddenDoc, kiosk, loop, order, exited }
     },
     get stage() { return stage },
-    get cursor() { return visit?.cursor },
+    get cursor() { return shown()?.cursor },
     next,
     previous,
     goTo,
@@ -794,7 +592,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
     },
     get version() { return viewVersion },
     deck: doc,
-    notes: () => visit?.meta?.notes ?? NO_NOTES,
+    notes: () => shown()?.slide?.notes ?? NO_NOTES,
     diagnostics: () => sink.list(),
     sink,
     get timer() { return timer ??= createElapsedTimer(sessionDeps.now(win)) },
@@ -881,7 +679,31 @@ export async function createSession(start: ShowStart): Promise<SessionController
       stopTransitionSound: (onlyLooping) => sounds?.release(onlyLooping) ?? false,
     })
     const mp = player
-    sounds = createTransitionSound({ root: surface.root, sink, slide: (i) => (visit?.index === i ? visit.meta : undefined), open: (rec, s) => mp.open(rec, s) })
+    sounds = createTransitionSound({ root: surface.root, sink, slide: (i) => { const v = shown(); return v?.index === i ? v.slide : undefined }, open: (rec, s) => mp.open(rec, s) })
+    // The driver's slide source and stage: the package's metadata store (the hidden slides and the range are off
+    // the visible order), and the engine, late-bound so a test seam that wraps a stage method still sees every call.
+    const slides: SlideSource = {
+      count,
+      settings: index.settings,
+      hidden: (i) => !order.includes(i),
+      acquire: (i) => acquire(i).then((h) => ({ slide: h.slide, charge: (bytes: number, tag: string) => h.attach(bytes, tag), release: () => h.release() })),
+    }
+    const st = stage
+    const engine: DriverStage = {
+      prepare: (n) => st.prepare?.(n),
+      enter: (m, t, n) => st.enter(m, t, n),
+      frame: (c, t) => st.frame(c, t),
+      // The local stage captures the outgoing frame inside its own leave() (seams that wrap leave see it there).
+      flattenCurrent: () => {},
+      leave: () => st.leave(),
+      hitTest: (x, y, c, t, on) => st.hitTest?.(x, y, c, t, on),
+      slideTime: (t) => st.slideTime(t),
+      get textTiming() { return st.textTiming && ((i: number, meta: ShowSlide, charge: (bytes: number, tag: string) => boolean) => st.textTiming!(i, meta, charge)) },
+    }
+    driver = createShowDriver({
+      source: slides, stage: engine, clock, sink, reducedMotion: motion, kiosk,
+      hooks: { ...hooks, media: (slide, now) => mp.enter(slide, now) },
+    })
     cursorHider = createCursorHider(surface.root, sessionDeps.timer(win))
     const on = { signal: listeners.signal }
     const gestures = createGestureState(() => clock!.now())
@@ -952,7 +774,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
     const from = start.from === 'current' ? (count ? Math.min(Math.max(0, cb.currentSlide()), count - 1) : 'beginning') : start.from
     const firstShown = firstSlide({ index }, from)
     // Every start-time diagnostic reaches the host before onStart.
-    await enter(firstShown)
+    await driver.start(firstShown)
     if (!start.isCurrent()) throw new SlideShowError('cancelled')
     // Presenter View's elapsed timer counts from the first slide (spec 5.2), on the injected monotonic clock.
     timer = createElapsedTimer(sessionDeps.now(win))
@@ -999,8 +821,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
     started = true
     // Presenter View was asked for but there is one screen (blocked, or the window could not be set up): it starts swapped in.
     if (presenter === 'swap') toggleView()
-    kioskTimer = createKioskTimer(index.settings, clock.now(), sink)
-    stage.frame(visit?.cursor, clock.now())
+    stage.frame(driver.visit?.cursor, clock.now())
     stopFrames = sessionDeps.frames(win, tick)
   } catch (e) {
     release()
@@ -1036,6 +857,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
 
   cb.onStart?.()
   // The first slide is reported after onStart (its metadata, and any start-time diagnostic, came first).
-  if (visit) cb.onSlideChange?.(visit.index, visit.cursor?.step ?? 0)
+  const firstVisit = driver?.visit
+  if (firstVisit) cb.onSlideChange?.(firstVisit.index, firstVisit.cursor?.step ?? 0)
   return session
 }

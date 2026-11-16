@@ -11,7 +11,8 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { installCanvasBackend, type CanvasBackend } from '../../src/core/canvas-backend'
 import { OfficePackage } from '../../src/core/zip'
-import { paintWatermark, setWatermarkMeasurer, type WatermarkOptions } from '../../src/core/watermark'
+import type { WatermarkOptions } from '../../src/core/watermark'
+import { FIXED_MARK_TEXT, markOptions, paintMark, type MarkSpec } from './mark/visible'
 import { detectAndParse } from '../../src/components/loadOfficeSource'
 import { getPaintables, type PaintableArray } from '../../src/render/paint'
 import { createRecorder, type ImageSnapshot } from '../../src/stream/record/recorder'
@@ -24,19 +25,24 @@ import { hiddenSlideUnits } from './policy/pptx'
 import { pptxPackageHandle } from '../../src/pptx/parse'
 import { drawNotes, NOTES_WIDTH_CSS, planNotes, readSlideNotes } from './notes'
 import type { PptxDocument } from '../../src/pptx/types'
+import { decodeImageAsset } from '../../src/core/images'
+import { createDiagnosticSink } from '../../src/slideshow/diagnostics'
+import { readShowIndex } from '../../src/slideshow/read/deck'
+import { shapeResolver } from '../../src/slideshow/read/resolve'
+import { createSlideMetadataStore } from '../../src/slideshow/read/store'
+import { createUnderlayReader } from '../../src/slideshow/read/underlay'
+import { readSlideTiming } from '../../src/slideshow/read/timing'
+import type { Lease, SlideShowWorkspace } from '../../src/slideshow/types'
+import { gateBackend } from './show/canvas'
+import { buildShowPlan, createShowDoc, type BuiltShowPlan, type ShowBuildOptions, type ShowDoc, type ShowPlanJob, type ShowRefusal } from './show/build'
+import { renderTrack } from './show/tracks'
+import { buildMorphPlan, MorphInvalid, morphReference, type BuiltMorph, type MorphJob } from './show/morph'
 import { answerText, buildServedUnit, OBSERVER_BUDGET, prepareWorkspace, recordSpans, ServedCache, TEXT_RECORD_BUDGET, TextBudgetExceeded, TextRefusal, type ServedUnit, type TextJob, type TextReply } from './text/served'
 
 export const MAX_UNIT_PX = 8192
 export const SCALE_BUCKETS = [1, 2] as const
-export const FIXED_MARK_TEXT = 'officeview · protected'
-export type MarkSpec = { kind: 'fixed' } | { kind: 'viewer'; text: string } | { kind: 'off' }
+export { FIXED_MARK_TEXT, markOptions, paintMark, type MarkSpec }
 export type Projection = 'final-raster' | 'commands'
-
-/** Visible-mark styling [call]: mid-grey reads on light and dark pages alike. */
-export function markOptions(mark: MarkSpec): WatermarkOptions | undefined {
-  if (mark.kind === 'off') return undefined
-  return { text: mark.kind === 'fixed' ? FIXED_MARK_TEXT : mark.text, color: '#808080', opacity: 0.18 }
-}
 
 export const sizeCeil = (v: number) => Math.ceil(v - 1e-9)
 /** A unit surface is allowed only within BOTH the per-side cap and the §14
@@ -71,18 +77,27 @@ export function layoutFingerprint(contentPolicyId: string): string {
   h.update(`officeview@${versionOf(resolve(root, 'package.json'))}\n`)
   h.update(`@napi-rs/canvas@${versionOf(resolve(root, 'node_modules/@napi-rs/canvas/package.json'))}\n`)
   h.update(`pack@${pack.version}:${pack.faces.map((f) => `${f.id}=${f.hash96}`).join(',')}\n`)
+  // The alias table changes layout too, and the show path resolves fonts pack-only (Task 14 ruling).
+  h.update(`aliases=${Object.entries(pack.aliases).sort().map(([k, v]) => `${k}>${v}`).join(',')};show=pack-only/1\n`)
   h.update(`locale=en-US\npolicy=${contentPolicyId}\n`)
   return h.digest('hex')
 }
 
-/** `notes`: a deck's ORIGINAL package (the projection drops notes slides) and unit i's slide part. */
-interface OpenDoc { key: string; paintables: PaintableArray; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
+/**
+ * The `DocumentHost` entry for an open document. `notes`: a deck's ORIGINAL package (the projection drops notes
+ * slides) and unit i's slide part. `show` (piece 4): a deck's show inputs over the PROJECTED package (never the
+ * original, which holds withheld content), its metadata store and the show-plan caches. `anim` (D5): the shown
+ * units with timing, a transition or both.
+ */
+export interface OpenDoc { key: string; docRef: string; show?: ShowDoc; anim: number[]; morph: number[]; paintables: PaintableArray; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
 /** A notes job (Stage 3c): `draw: false` plans only (size, truncation, characters drawn); `true` draws with the visible mark. */
 export interface NotesJob { unitIndex: number; scale: number; mark: MarkSpec; draw: boolean }
 export interface NotesPlan { kind: 'notes-plan'; w: number; h: number; truncated: boolean; chars: number }
 export type NotesRaster = RenderedUnit & { kind: 'raster'; truncated: boolean; chars: number }
 /** `hidden`: unit indices of hidden slides (pptx under `'full'` only; elsewhere they are not units). */
-export interface OpenResult { docKey: string; units: UnitSize[]; hidden: number[]; layoutFingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; diagnostics: PolicyDiagnostic[]; fontDiagnostics: number }
+/** `anim` (piece 4 D5): shown units with timing, a transition or both (a plan is requested only for these).
+ * `morph` (Task 7): the shown units entered by a Morph transition (a `show-morph` names one as its `to`). */
+export interface OpenResult { docKey: string; units: UnitSize[]; hidden: number[]; anim: number[]; morph: number[]; layoutFingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; diagnostics: PolicyDiagnostic[]; fontDiagnostics: number }
 
 const registerFont = () => { throw new Error('stream server: embedded fonts are not registered in Stage 1') }
 
@@ -110,22 +125,6 @@ export function criticalChunksOnly(png: Uint8Array): Uint8Array {
   return out
 }
 
-/** Paints the visible mark from a clean watermark module state.
- *
- * `src/core/watermark.ts` keeps a process-global text-width cache keyed on the
- * ROUNDED point size, but (with no measurer registered, as here) stores a
- * width computed from the UNROUNDED pixel size. Two pages whose sizes round to
- * the same pt (a 960-px deck and a 955-px sheet are both 50 pt) then share one
- * entry, and whichever painted first sets the tile step of the other: the
- * canonical a long-lived worker serves would depend on what it rendered
- * before, and a fresh trace process would refuse the reference (F1, Stage 2b).
- * `setWatermarkMeasurer(null)` is the module's only reset (measurer stays
- * null, cache cleared), so every mark is laid out from its own page alone. */
-function paintMark(ctx: CanvasRenderingContext2D, page: { widthPx: number; heightPx: number }, mark: WatermarkOptions): void {
-  setWatermarkMeasurer(null)
-  paintWatermark(ctx, page, mark)
-}
-
 /** Hidden slides of a deck opened under `'full'`, read from the original
  * package (there the projection is the identity). A slide list that does not
  * line up with the units refuses the open: never guess which unit is hidden. */
@@ -133,6 +132,22 @@ export async function hiddenUnits(doc: PptxDocument, units: number): Promise<num
   const handle = pptxPackageHandle(doc)
   if (!handle || handle.slideParts.length !== units) throw new RenderRefusal('unsupported-format', 'slide list does not match the units')
   return hiddenSlideUnits(handle)
+}
+
+/** An unbounded lease ledger for the show metadata store: its own 64 MiB aggregate bounds what it retains. */
+const SHOW_META_WORKSPACE: SlideShowWorkspace = {
+  limit: Number.POSITIVE_INFINITY, used: () => 0, reserveTerminal: () => undefined,
+  lease: (bytes, tag) => { const l: Lease = { tag, bytes, grow: () => true, shrink() {}, transfer: () => l, release() {} }; return l },
+}
+
+/** A deck's show inputs over its projected package (piece 4): the show index, the metadata store, the caches. */
+async function openShow(docRef: string, docKey: string, contentPolicyId: string, fingerprint: string, doc: PptxDocument, handle: NonNullable<ReturnType<typeof pptxPackageHandle>>, units: UnitSize[], hidden: number[]): Promise<ShowDoc> {
+  const sink = createDiagnosticSink()
+  const index = await readShowIndex(doc, handle, sink)
+  // The resolver sees the slide's layout and master artwork, exactly as local mode's (`createUnderlayReader`).
+  const underlay = createUnderlayReader(handle, index, sink)
+  const store = createSlideMetadataStore({ doc, handle, index, workspace: SHOW_META_WORKSPACE, sink, timing: readSlideTiming, resolver: (slide) => shapeResolver(slide, underlay.underlays.get(doc.slides.indexOf(slide)) ?? []) })
+  return createShowDoc({ docRef, docKey, contentPolicyId, fingerprint, doc, handle, index, store, acquire: (i) => underlay.acquire(store, i), sink, units, hidden })
 }
 
 export class DocumentHost {
@@ -143,7 +158,7 @@ export class DocumentHost {
   pages = 0
   /** Reads a 'full' deck's hidden units after its paintables exist (TEST-ONLY override: fault injection). */
   hiddenReader: (doc: PptxDocument, paintables: PaintableArray) => Promise<number[]> = (doc, paintables) => hiddenUnits(doc, paintables.length)
-  constructor(backend = serverBackend(), servedCacheBytes?: number) { this.backend = backend; installCanvasBackend(backend); this.served = new ServedCache(servedCacheBytes) }
+  constructor(backend = serverBackend(), servedCacheBytes?: number) { this.backend = backend; installCanvasBackend(gateBackend(backend)); this.served = new ServedCache(servedCacheBytes) }
 
   async open(docRef: string, bytes: Uint8Array, contentPolicy: 'visible-only' | 'full'): Promise<OpenResult> {
     const contentPolicyId = contentPolicy === 'full' ? 'full@1' : 'visible-only@1'
@@ -169,14 +184,35 @@ export class DocumentHost {
       const notes = handle && handle.slideParts.length === paintables.length ? { pkg: original, slideParts: [...handle.slideParts] } : undefined
       // Projection read every original entry through the cache: the retained package keeps the archive, not those reads.
       original.dropCache()
-      doc = { key, paintables, raw, hidden, ...(notes ? { notes } : {}), units: raw.map((r) => ({ w: sizeCeil(Math.max(1, r.widthPx)), h: sizeCeil(Math.max(1, r.heightPx)) })), fingerprint, contentPolicyId: projected.contentPolicyId, diagnostics: projected.diagnostics, format: admitted.format }
+      const units = raw.map((r) => ({ w: sizeCeil(Math.max(1, r.widthPx)), h: sizeCeil(Math.max(1, r.heightPx)) }))
+      let show: ShowDoc | undefined
+      const anim: number[] = [], morph: number[] = []
+      if (handle && handle.slideParts.length === paintables.length) {
+        try {
+          show = await openShow(docRef, key, projected.contentPolicyId, fingerprint, parsed as PptxDocument, handle, units, hidden)
+          for (let i = 0; i < units.length; i++) {
+            if (hidden.includes(i)) continue
+            const h = await show.acquire(i)
+            if ((h.slide.timing && !('refused' in h.slide.timing)) || h.slide.transition) anim.push(i)
+            if (h.slide.transition?.element === 'morph') morph.push(i)
+            h.release()
+          }
+        } catch {
+          // No readable show index or metadata: every slide stays a piece-3 still (fail closed).
+          show?.store.close()
+          show = undefined
+          anim.length = 0
+          morph.length = 0
+        }
+      }
+      doc = { key, docRef, paintables, raw, hidden, anim, morph, ...(notes ? { notes } : {}), ...(show ? { show } : {}), units, fingerprint, contentPolicyId: projected.contentPolicyId, diagnostics: projected.diagnostics, format: admitted.format }
       this.docs.set(key, doc)
     }
-    return { docKey: key, units: doc.units, hidden: doc.hidden, layoutFingerprint: doc.fingerprint, contentPolicyId: doc.contentPolicyId, format: doc.format, diagnostics: doc.diagnostics, fontDiagnostics: doc.paintables.fontDiagnostics?.length ?? 0 }
+    return { docKey: key, units: doc.units, hidden: doc.hidden, anim: [...doc.anim], morph: [...doc.morph], layoutFingerprint: doc.fingerprint, contentPolicyId: doc.contentPolicyId, format: doc.format, diagnostics: doc.diagnostics, fontDiagnostics: doc.paintables.fontDiagnostics?.length ?? 0 }
   }
 
   has(docKey: string) { return this.docs.has(docKey) }
-  drop(docKey: string) { const d = this.docs.get(docKey); if (d) { d.paintables.dispose(); this.docs.delete(docKey) } this.served.drop(docKey) }
+  drop(docKey: string) { const d = this.docs.get(docKey); if (d) { d.paintables.dispose(); d.show?.store.close(); this.docs.delete(docKey) } this.served.drop(docKey) }
   get docCount() { return this.docs.size }
 
   render(docKey: string, job: { unitIndex: number; scale: number; projection: Projection; mark: MarkSpec; missingFaces?: readonly string[] }, observers: readonly PaintObserver[] = []): RenderedUnit {
@@ -200,6 +236,93 @@ export class DocumentHost {
       return { ...this.raster(paintable, job.unitIndex, w, h, job.scale, page, mark, observers), fallback: `recorder:${cmd.reason}` }
     }
     return this.raster(paintable, job.unitIndex, w, h, job.scale, page, mark, observers)
+  }
+
+  /** TEST-ONLY seams for the show-plan build (a forced budget or composite mismatch, a ledger); empty in production. */
+  showOptions: ShowBuildOptions = {}
+  /** The seams plus the job's admitted grant (PR #78 round 13), when the pool sent one. */
+  private showJobOptions(grant?: number): ShowBuildOptions { return grant === undefined ? this.showOptions : { ...this.showOptions, grant } }
+
+  /**
+   * Piece 4: the show-plan bundle of one shown slide (`buildShowPlan`). The slide's metadata and the deck's
+   * images are read here (async), then the build runs synchronously on them. A hidden or out-of-range unit
+   * has no plan (`unit-range`).
+   */
+  async showPlan(docKey: string, job: ShowPlanJob, grant?: number): Promise<BuiltShowPlan | ShowRefusal> {
+    const doc = this.showDoc(docKey, job)
+    await this.loadShow(doc.show!, job.unitIndex)
+    this.pages++
+    return buildShowPlan(doc, job, this.showJobOptions(grant))
+  }
+
+  /** Piece 4: the keyframe track of one `composited` step (`renderTrack`); `[]` for a step that plays from layers. */
+  async showTrack(docKey: string, job: ShowPlanJob & { step: number }, grant?: number): Promise<Array<{ assetId: number; w: number; h: number; png: Uint8Array }>> {
+    const doc = this.showDoc(docKey, job)
+    if (!Number.isInteger(job.step) || job.step < 0) throw new RenderRefusal('bad-job')
+    await this.loadShow(doc.show!, job.unitIndex)
+    this.pages++
+    return renderTrack(doc, job, this.showJobOptions(grant))
+  }
+
+  /**
+   * Piece 4 Task 7: one Morph pair (`buildMorphPlan`): `from` and `to` shown slides of this deck, `to` entered by
+   * Morph, `fromStep` within the from-slide's steps (checked here, on the slide as prepared: `unit-range`).
+   */
+  async showMorph(docKey: string, job: MorphJob, grant?: number): Promise<BuiltMorph> {
+    const doc = this.docs.get(docKey)
+    if (!doc) throw new RenderRefusal('unknown-doc')
+    if (!doc.show) throw new RenderRefusal('unsupported-format', 'no show for this document')
+    if (!job || typeof job !== 'object' || (job.motion !== 'full' && job.motion !== 'reduced') || !job.mark || typeof job.mark !== 'object' || (job.strictMarks !== undefined && typeof job.strictMarks !== 'boolean')) throw new RenderRefusal('bad-job')
+    if (job.scale !== 1 && job.scale !== 2) throw new RenderRefusal('scale')
+    const shown = (u: unknown) => Number.isInteger(u) && (u as number) >= 0 && (u as number) < doc.units.length && !doc.hidden.includes(u as number)
+    if (!shown(job.from) || !shown(job.to) || job.from === job.to || !doc.morph.includes(job.to) || !Number.isInteger(job.fromStep) || job.fromStep < 0) throw new RenderRefusal('unit-range')
+    await this.loadShow(doc.show, job.from)
+    await this.loadShow(doc.show, job.to)
+    this.pages++
+    try { return buildMorphPlan(doc, job, this.showJobOptions(grant)) } catch (e) { if (e instanceof MorphInvalid) throw new RenderRefusal('unit-range', e.message); throw e }
+  }
+
+  /** TEST-ONLY (Task 7 fix round 1): the Morph pair composed from the server's own rasters, marks off (`morphReference`). */
+  async showMorphReference(docKey: string, job: MorphJob, progresses: readonly number[]) {
+    const doc = this.docs.get(docKey)
+    if (!doc?.show) throw new RenderRefusal('unknown-doc')
+    await this.loadShow(doc.show, job.from)
+    await this.loadShow(doc.show, job.to)
+    return morphReference(doc, job, progresses)
+  }
+
+  /** Show-plan cache counters, summed over open documents (L1: preparation; L2: marked bundles). */
+  showCacheStats() {
+    const out = { l1: { hits: 0, misses: 0 }, l2: { hits: 0, misses: 0 } }
+    for (const d of this.docs.values()) {
+      if (!d.show) continue
+      out.l1.hits += d.show.stats.l1.hits; out.l1.misses += d.show.stats.l1.misses
+      out.l2.hits += d.show.stats.l2.hits; out.l2.misses += d.show.stats.l2.misses
+    }
+    return out
+  }
+
+  private showDoc(docKey: string, job: ShowPlanJob): OpenDoc {
+    const doc = this.docs.get(docKey)
+    if (!doc) throw new RenderRefusal('unknown-doc')
+    if (!doc.show) throw new RenderRefusal('unsupported-format', 'no show for this document')
+    if (!job || typeof job !== 'object' || (job.motion !== 'full' && job.motion !== 'reduced') || typeof job.strictMarks !== 'boolean' || !job.mark || typeof job.mark !== 'object') throw new RenderRefusal('bad-job')
+    if (!Number.isInteger(job.unitIndex) || job.unitIndex < 0 || job.unitIndex >= doc.units.length || doc.hidden.includes(job.unitIndex)) throw new RenderRefusal('unit-range')
+    if (job.scale !== 1 && job.scale !== 2) throw new RenderRefusal('scale')
+    if (job.kBasis !== undefined && !(job.kBasis instanceof Uint8Array && job.kBasis.length === 32)) throw new RenderRefusal('bad-job')
+    return doc
+  }
+
+  private async loadShow(show: ShowDoc, unit: number): Promise<void> {
+    if (!show.metas.has(unit)) {
+      const h = await show.acquire(unit)
+      // The handle is held for the document's life: the slide's text-build working copy is charged to it.
+      show.metas.set(unit, { slide: h.slide, charge: (bytes, tag) => h.attach(bytes, tag) })
+    }
+    if (!show.images) {
+      const backend = this.backend
+      show.images = await Promise.all(show.doc.images.map((a) => decodeImageAsset(a as never, (b, mime) => backend.decodeImage(b, mime) as Promise<CanvasImageSource>).catch(() => undefined)))
+    }
   }
 
   /** Stage 3c notes: unit i's notes slide read from the original package

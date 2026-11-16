@@ -99,23 +99,36 @@ export function unitNeedsRaster(use: FaceUse, missingFaces: readonly string[]): 
  * (`bold 12pt Calibri` → `bold 12pt "Carlito"`). An installed system face of
  * the alias name (Arial, Times New Roman on macOS) would otherwise win over
  * the alias registration, so pinning happens on the name, not the registry. */
-export function pinFontString(font: string, pack: Pack): string {
+export function pinFontString(font: string, pack: Pack, o: { packOnly?: boolean } = {}): string {
   const m = /^(\s*(?:[^\s"',]+\s+)*?[\d.]+(?:px|pt|em|rem|%)(?:\/[^\s]+)?\s+)(.+)$/i.exec(font)
   if (!m) return font
   let changed = false
-  const families = m[2]!.split(',').map((raw) => {
+  const families: string[] = []
+  for (const raw of m[2]!.split(',')) {
     const name = raw.trim().replace(/^["']|["']$/g, '')
     const target = Object.entries(pack.aliases).find(([a]) => a.toLowerCase() === name.toLowerCase())?.[1]
-    if (!target) return raw.trim()
+    if (target) { changed = true; families.push(`"${target}"`); continue }
+    if (!o.packOnly) { families.push(raw.trim()); continue }
+    // Pack-only (Task 14 ruling): a pack family stays; a generic maps to its pack family; anything else is dropped,
+    // so the canvas never falls through to a host face.
+    const own = pack.faces.find((f) => f.family.toLowerCase() === name.toLowerCase())?.family
+    const generic = PACK_GENERIC[name.toLowerCase()]
     changed = true
-    return `"${target}"`
-  })
-  return changed ? `${m[1]}${families.join(', ')}` : font
+    if (own) families.push(`"${own}"`)
+    else if (generic) families.push(`"${generic}"`)
+  }
+  if (o.packOnly && families.length === 0) families.push(`"${PACK_FALLBACK}"`)
+  const unique = o.packOnly ? [...new Set(families)] : families
+  return changed ? `${m[1]}${unique.join(', ')}` : font
 }
+
+/** Pack-only resolution: the generic CSS families, and the face a font string with no pack family falls back to. */
+export const PACK_FALLBACK = 'Liberation Sans'
+const PACK_GENERIC: Record<string, string> = { 'sans-serif': 'Liberation Sans', serif: 'Liberation Serif', monospace: 'Liberation Mono', 'system-ui': 'Liberation Sans', cursive: 'Liberation Sans', fantasy: 'Liberation Sans', 'ui-sans-serif': 'Liberation Sans', 'ui-serif': 'Liberation Serif', 'ui-monospace': 'Liberation Mono' }
 
 /** A 2-D context view whose `font` setter pins alias families. Methods are
  * bound once per name; every other property passes through. */
-export function pinFonts<T extends object>(ctx: T, pack: Pack): T {
+export function pinFonts<T extends object>(ctx: T, pack: Pack, o: { packOnly?: boolean } = {}): T {
   const bound = new Map<PropertyKey, unknown>()
   return new Proxy(ctx, {
     get(target, key) {
@@ -126,7 +139,7 @@ export function pinFonts<T extends object>(ctx: T, pack: Pack): T {
       return b
     },
     set(target, key, value) {
-      return Reflect.set(target, key, key === 'font' && typeof value === 'string' ? pinFontString(value, pack) : value, target)
+      return Reflect.set(target, key, key === 'font' && typeof value === 'string' ? pinFontString(value, pack, o) : value, target)
     },
   })
 }

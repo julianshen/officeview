@@ -10,7 +10,7 @@ import type { Manifest } from '../manifest'
 import { replayUnit } from '../replay'
 import { StreamSessionError } from './errors'
 import type { PrintedPage } from './print-wire'
-import type { NotesLease, PrintOptions, StreamNotice, UnitLease, UnitPayload } from './session'
+import type { NotesLease, PrintOptions, ShowMotion, ShowReply, ShowRequestOptions, StreamNotice, UnitLease, UnitPayload } from './session'
 import type { RemoteRange, TextMessage, TextRequest } from './text-wire'
 import type { UnitBudgetView } from './unit-budget'
 
@@ -28,6 +28,11 @@ export interface SessionLike {
   print?(from: number, to: number, opts: PrintOptions): Promise<PrintedPage[]>
   /** One checked notes image (see StreamSession.notes); absent ⇒ notes are unavailable. */
   notes?(unit: number, scale: 1 | 2, signal?: AbortSignal): Promise<NotesLease>
+  /** Piece 4 (D1): one slide bundle, keyframe track or Morph pair (see StreamSession.showPlan); absent ⇒ no animated playback.
+   * `o.workspace` is charged the retained payloads; `o.onSend` (R16) is called once per server-charged send. */
+  showPlan?(unit: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions): Promise<ShowReply>
+  showTrack?(unit: number, step: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions): Promise<ShowReply>
+  showMorph?(from: number, to: number, fromStep: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions): Promise<ShowReply>
   close(): void
   readonly ended?: Promise<StreamSessionError | undefined>
   /** Calls `cb` after a resume has replaced `manifest`; returns the unsubscribe. */
@@ -77,6 +82,8 @@ export interface RemoteOfficeDoc {
   readonly ended: Promise<StreamSessionError | undefined>
   /** R28: the session's unit send budget (every paint's sends are stamped on it). */
   readonly unitBudget?: UnitBudgetView
+  /** @internal Piece 4 (Task 11): the session's show requests, read by the lazy streamed show only. */
+  readonly session?: Pick<SessionLike, 'showPlan' | 'showTrack' | 'showMorph'>
 }
 
 /** Rects of one unit, in page px at scale 1 relative to the unit. */

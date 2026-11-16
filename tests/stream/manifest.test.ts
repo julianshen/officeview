@@ -69,6 +69,16 @@ describe('MANIFEST', () => {
     const units = { count: 2, list: [{ w: 960, h: 540 }, { w: 960, h: 540, hidden }] }
     expect(validateManifest({ ...exampleManifest(), units })).toEqual({ ok: false, field: 'units.list[1].hidden' })
   })
+  it('a unit with anim: true keeps it (piece 4 D5); others carry no anim key', () => {
+    const units = { count: 3, list: [{ w: 960, h: 540 }, { w: 960, h: 540, anim: true }, { w: 960, h: 540, hidden: true, anim: true }] }
+    const r = validateManifest({ ...exampleManifest(), units })
+    expect(r).toEqual({ ok: true, manifest: { ...exampleManifest(), units } })
+    expect(r.ok && 'anim' in r.manifest.units.list[0]!).toBe(false)
+  })
+  it.each([[false], ['x'], [1], [null], [{}]])('rejects units.list[i].anim %p (only true is valid)', (anim) => {
+    const units = { count: 2, list: [{ w: 960, h: 540 }, { w: 960, h: 540, anim }] }
+    expect(validateManifest({ ...exampleManifest(), units })).toEqual({ ok: false, field: 'units.list[1].anim' })
+  })
   it.each([['present'], ['notes']])('rejects a non-boolean can.%s', (k) => {
     expect(validateManifest({ ...exampleManifest(), can: { ...exampleManifest().can, [k]: 'yes' } })).toEqual({ ok: false, field: `can.${k}` })
   })

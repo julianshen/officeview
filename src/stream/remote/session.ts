@@ -22,6 +22,8 @@ import { FRAGMENT_CAP, HEADER_BYTES, Kind, Reassembler, REASSEMBLY_MS, type Fram
 import { validateManifest, type Manifest } from '../manifest'
 import type { Asset } from '../ops'
 import { decodeRasterBody, UNIT_RASTER_DECODED_CAP } from '../raster'
+import { decodeShowMessage, SHOW_PLAN_LIMITS } from '../show-plan'
+import type { AllocationOwner, Lease } from '../../slideshow/types'
 import type { StreamSource } from '../source'
 import { decodeUnit } from '../unit'
 import { closeName, StreamSessionError, type StreamErrorCode } from './errors'
@@ -44,6 +46,16 @@ export type UnitPayload =
 export type UnitLease = UnitPayload & { release(): void }
 /** A checked notes image plus its admission lease (released once decoded; idempotent). */
 export type NotesLease = { w: number; h: number; png: Uint8Array; release(): void }
+/** A show reply's kind-6 payloads in arrival order, plus its admission lease (released once decoded; idempotent). */
+export type ShowReply = { messages: Uint8Array[]; release(): void }
+export type ShowMotion = 'full' | 'reduced'
+/** What a show request needs besides its fields: the show workspace its retained payloads are charged to, and R16's hook. */
+export interface ShowRequestOptions {
+  /** Each completed message is leased here at its encoded bytes until `decodeBundle` or `release()` frees it (ruling 5). */
+  workspace: AllocationOwner
+  /** R16: called once per server-charged send. */
+  onSend?: () => void
+}
 /** Manifest notices, plus 'face-missing', 'text-unavailable', 'resumed', 'unit-failed'. */
 export type StreamNotice = { code: string; unit?: number }
 export type SessionState = 'open' | 'resuming' | 'closed'
@@ -68,11 +80,13 @@ const RESUME_BACKOFF_MS = [250, 500, 1000]
 const PRINT_ENCODED_CAP = 8 << 20
 /** NOTES_RASTER encoded cap (§14; twin of the server's NOTES_ENCODED_CAP). */
 const NOTES_ENCODED_CAP = 8 << 20
-const CAPS: Partial<Record<Kind, [encoded: number, decoded: number]>> = {
+export const CAPS: Partial<Record<Kind, [encoded: number, decoded: number]>> = {
   [Kind.MANIFEST]: [256 << 10, 256 << 10], [Kind.ASSET_DEFINE]: [1 << 20, 8 << 20],
   [Kind.UNIT_RASTER]: [8 << 20, 64 << 20], [Kind.UNIT_COMMANDS]: [8 << 20, 8 << 20],
   [Kind.PRINT_RASTER]: [PRINT_ENCODED_CAP, 64 << 20],
   [Kind.NOTES_RASTER]: [NOTES_ENCODED_CAP, 64 << 20],
+  // SHOW_PLAN (piece 4): one message ≤ 8 MiB encoded / 32 MiB decoded (parent §14); a bundle is several messages.
+  [Kind.SHOW_PLAN]: [8 << 20, 32 << 20],
 }
 /** The notes image (twins of server/src/notes.ts): exactly 720 × scale device px
  * wide, 1..NOTES_MAX_PX device px tall. */
@@ -94,6 +108,34 @@ export const notesGrant = (w: number, h: number) => {
 }
 /** The refusal codes a notes request rejects with; any other is `policy-refused`. */
 const NOTES_REFUSALS = new Set<StreamErrorCode>(['policy-refused', 'invalid-unit', 'rate-limited', 'session-rotated'])
+/** The refusal codes a show request rejects with (server/src/ws.ts ShowErrorCode); any other is `policy-refused`.
+ * `still`, `show-budget`, `show-limits`, `show-plan-timeout`: play the piece-3 still; `morph-fallback`: the fade. */
+const SHOW_REFUSALS = new Set<StreamErrorCode>([...NOTES_REFUSALS, 'still', 'show-budget', 'show-limits', 'show-plan-timeout', 'morph-fallback'])
+/** A `*-start` header is one text message ≤ 64 KiB (D1). */
+const SHOW_START_BYTES = 64 << 10
+/** A sent show request with no start yet fails after this (`now()`): the server's build has a 10 s
+ * deadline (SHOW_PLAN_DEADLINE_MS) plus queueing and marking, and refuses `show-plan-timeout` itself. */
+export const SHOW_REPLY_MS = 30_000
+/** The most kind-6 messages a reply may declare (D1, D2): a plan, its entry frame and one asset per
+ * layer; a track's frames; a Morph record and its assets (every side and `over` asset) or frames. */
+const SHOW_MAX_MESSAGES = {
+  plan: 2 + SHOW_PLAN_LIMITS.layers,
+  track: SHOW_PLAN_LIMITS.trackFrames,
+  morph: 1 + 3 * SHOW_PLAN_LIMITS.morphItems,
+} as const
+/** Per encoded message, the slack a retained reply may run past its declared decoded bytes (an
+ * incompressible PNG is slightly larger than its RGBA). */
+const SHOW_MESSAGE_SLACK = 65536
+/**
+ * The admission grant of a show reply declaring `decodedBytes` (D1): one message is in reassembly at
+ * a time, so the grant is one message's true peak, as print's: its encoded bound (≤ the 8 MiB kind
+ * cap) plus 2 × its decoded body (inflated chunks + their contiguous copy), the body at most the
+ * 32 MiB kind-6 decoded cap. Controller ruling (Task 10 follow-up): it covers only the message in
+ * flight — taken at its first fragment, released when it completes reassembly.
+ */
+export const showGrant = (decodedBytes: number) => showEncodedAllowance(decodedBytes) + 2 * Math.min(CAPS[Kind.SHOW_PLAN]![1], decodedBytes)
+/** The grant's encoded part: the most encoded bytes one message of the reply may declare (enforced before buffering). */
+export const showEncodedAllowance = (decodedBytes: number) => Math.min(CAPS[Kind.SHOW_PLAN]![0], Math.ceil(decodedBytes * 1.01) + 65536)
 /**
  * A print job's peak transient bytes for one page are its encoded fragments
  * (`Reassembler.push`, src/stream/frame.ts:124, ≤ PRINT_ENCODED_CAP) plus the
@@ -181,6 +223,42 @@ interface NotesReq {
   fail: (e: unknown) => void
 }
 
+type ShowKind = 'plan' | 'track' | 'morph'
+interface ShowReq {
+  readonly show: ShowKind
+  /** The request's own fields (`unit` [+ `step`], or `from`, `to`, `fromStep`), sent and echoed by the start. */
+  readonly fields: Readonly<Record<string, number>>
+  /** The server unit every asset of the reply carries (a Morph pair: `to`). */
+  readonly unit: number
+  readonly scale: 1 | 2; readonly motion: ShowMotion
+  reqId: number
+  /** Sent on the current socket (false while it waits for log room or a resume). */
+  sent: boolean
+  /** The checked start: declared messages and decoded bytes, one message's decoded cap, the retained-bytes bound. */
+  start?: { messages: number; decodedBytes: number; encodedCap: number; bodyCap: number; retainCap: number }
+  /** A Morph reply's record says it is composited: its assets are frames (tag 4). */
+  composited?: boolean
+  /** The checked kind-6 payloads so far, and their bytes. */
+  received: Uint8Array[]; bytes: number
+  /** Every declared message has arrived: the reply settles once the inbox has drained what was queued with it. */
+  complete: boolean
+  rotatedRetry: boolean
+  /** While no message for it is in reassembly, it fails at this time (`now()`). */
+  deadline: number
+  /** R16: called once per server-charged send. */
+  onSend?: () => void
+  readonly workspace: AllocationOwner
+  /** The admission grant of the message in flight (one at a time), released when it completes. */
+  grant?: () => void
+  /** The workspace leases of the completed messages (their encoded bytes). */
+  leases: Lease[]
+  /** Admission could not fit its next message: its rejection surfaces as `admission`. */
+  admissionShort: boolean
+  resolve: (messages: Uint8Array[]) => void
+  fail: (e: unknown) => void
+}
+const isShow = (r: UnitReq | ShowReq): r is ShowReq => 'show' in r
+
 /** Re-issued after a resume; copy and a11y are not (the server may already
  * have counted them against the copy quota). */
 const REISSUED = new Set<TextRequest['type']>(['search', 'select'])
@@ -212,6 +290,8 @@ export class StreamSession {
   private printJob?: PrintJob
   /** Granted notes requests by their current reqId. */
   private readonly notesReqs = new Map<number, NotesReq>()
+  /** Show requests (piece 4) by their current reqId. */
+  private readonly shows = new Map<number, ShowReq>()
   private readonly admission = new Admission()
   private missingFaces: string[] = []
   private state: SessionState | 'opening' = 'opening'
@@ -225,8 +305,8 @@ export class StreamSession {
   private readonly manifestListeners = new Set<() => void>()
   /** R28: every server-charged unit send of this sid, whoever asked (survives resume). */
   private readonly sendLog = new UnitSendLog(() => this.now(), UNIT_FIRST_CAP, UNIT_SPAN_MS)
-  /** Unit requests waiting for log room, oldest first (each still in `units`). */
-  private readonly waiting = new Set<UnitReq>()
+  /** Unit and show requests waiting for log room, oldest first (each still in `units` / `shows`). */
+  private readonly waiting = new Set<UnitReq | ShowReq>()
   private drainTimer?: ReturnType<typeof setTimeout>
   /**
    * R28: the session's unit send budget, for callers that pace themselves (the
@@ -266,7 +346,7 @@ export class StreamSession {
   stats() {
     return {
       inFlight: this.admission.inFlight, inFlightBytes: this.admission.inFlightBytes, pending: this.units.size,
-      printing: !!this.printJob, notesPending: this.notesReqs.size, printHeld: this.printJob?.pages.length ?? 0, printMaxBlobBytes: this.printMaxBlobBytes(),
+      printing: !!this.printJob, notesPending: this.notesReqs.size, showPending: this.shows.size, printHeld: this.printJob?.pages.length ?? 0, printMaxBlobBytes: this.printMaxBlobBytes(),
       /** Encoded bytes held in partial reassembly. */
       reassemblyBytes: this.reasm.bufferedBytes,
     }
@@ -455,6 +535,103 @@ export class StreamSession {
     })
   }
 
+  /**
+   * Piece 4 (D1): one slide bundle of a streamed show. The reply is `show-plan-start {unit, messages,
+   * decodedBytes}` (any `diag` before it is tolerated), then exactly `messages` SHOW_PLAN (kind 6)
+   * payloads: the plan record, the entry frame, the layers. Each is checked against the request (the
+   * tag order of its kind, an asset's unit) and kept as received; `decodeBundle` (show-bundle.ts)
+   * turns them into bitmaps. Refuses without sending when `can.present` is off, the scale or motion
+   * is not one the server takes (`policy-refused`), or the unit is out of range or hidden
+   * (`invalid-unit`). A refusal rejects with its code: `still`, `show-budget`, `show-limits` and
+   * `show-plan-timeout` mean "play the piece-3 still"; an unknown code is `policy-refused`; a
+   * `session-rotated` one (stale jti, uncharged) is re-sent once. Anything else that does not match
+   * the request — a start over 64 KiB, for another unit or kind, declaring over 128 MiB or an
+   * impossible count; a message before the start, past the declared count, out of order or for
+   * another unit — rejects `policy-refused`, and everything it holds is released. Admission
+   * (`showGrant`) covers only the message in flight: taken at its first fragment (now or never: no
+   * room fails the reply with the local, transient `admission`, never a server rate pause) and
+   * released once it completes. A completed message is leased in `o.workspace` at its encoded bytes
+   * (no room: `workspace-full`) until `decodeBundle` or the reply's `release()` frees it.
+   * The send is charged to the `'unit'` class: it is held to the session's send log like a unit
+   * request (R28), recorded once, and `onSend` (R16) is called once. Abort rejects with its reason;
+   * a drop with the request sent rejects `session-rotated` (never re-issued: the server charged and
+   * audited it); a session end rejects with the session failure.
+   */
+  showPlan(unit: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions): Promise<ShowReply> {
+    return this.showRequest('plan', unit, { unit }, scale, motion, signal, o)
+  }
+  /**
+   * One keyframe track of `step` (D1, D4): `show-track-start {unit, step, messages, decodedBytes, encodedBytes}`, then
+   * tag-4 frames only. D23 (final review finding 1): the frames are never all decoded together, so `decodedBytes` is
+   * the live window's bound (at most 8 frames' `w·h·4`) and `encodedBytes` is Σ the encoded payloads, which stay
+   * retained while the track plays: each ≤ 128 MiB, the encoded total also ≤ `messages` × 8 MiB, and the payloads
+   * received never past it. Otherwise as `showPlan`; a track or Morph start of any other key set is refused.
+   */
+  showTrack(unit: number, step: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions): Promise<ShowReply> {
+    const bad = !Number.isInteger(step) || step < 0 || step >= SHOW_PLAN_LIMITS.steps
+    return this.showRequest('track', unit, { unit, step }, scale, motion, signal, o, bad ? `no step ${step}` : undefined)
+  }
+  /**
+   * One Morph pair (D1, D11): `show-morph-start`, then the tag-5 record, whose `from`, `to` and
+   * `fromStep` must be the request's, then its tag-2 assets or, for a composited record, exactly its
+   * `count` tag-4 frames. Every asset carries `to`'s unit. `morph-fallback` means play the fade. The start also declares
+   * `encodedBytes`, as a track's; a composited pair's `decodedBytes` is its window bound plus the record, a layered
+   * pair's Σ its assets plus the record (all held together). As `showPlan`.
+   */
+  showMorph(from: number, to: number, fromStep: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions): Promise<ShowReply> {
+    const bad = !this.shownUnit(from) || from === to || !Number.isInteger(fromStep) || fromStep < 0 || fromStep > SHOW_PLAN_LIMITS.steps
+    return this.showRequest('morph', to, { from, to, fromStep }, scale, motion, signal, o, bad ? `no Morph pair ${from} → ${to} at ${fromStep}` : undefined)
+  }
+
+  private shownUnit(u: number) {
+    const d = Number.isInteger(u) && u >= 0 ? this.manifest.units.list[u] : undefined
+    return !!d && !d.hidden
+  }
+  /** The one show request path (see `showPlan`); `invalid`: why the request's own fields name nothing (`invalid-unit`). */
+  private async showRequest(show: ShowKind, unit: number, fields: Record<string, number>, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions, invalid?: string): Promise<ShowReply> {
+    if (this.state === 'closed') throw this.failure ?? new StreamSessionError('closed')
+    if (signal?.aborted) throw signal.reason ?? abortError()
+    const m = this.manifest
+    if (!m.can.present) throw new StreamSessionError('policy-refused', 'presenting is off for this session')
+    if ((scale !== 1 && scale !== 2) || !m.recorder.scalesBuckets.includes(scale)) throw new StreamSessionError('policy-refused', `no show scale ${scale}`)
+    if (motion !== 'full' && motion !== 'reduced') throw new StreamSessionError('policy-refused', `no show motion ${String(motion)}`)
+    if (invalid || !this.shownUnit(unit)) throw new StreamSessionError('invalid-unit', invalid ?? `no show unit ${unit}`)
+    // D13: under reduced motion a Morph plays as a fade; the server refuses the pair (`invalid-unit`), so it is never sent.
+    if (show === 'morph' && motion === 'reduced') throw new StreamSessionError('invalid-unit', 'a Morph pair under reduced motion plays as a fade')
+    return new Promise<ShowReply>((resolve, reject) => {
+      // The one settlement path: idempotent, drops the request, its place in the send queue, its
+      // abort listener, its partial reassembly, its message grant and — unless handed out — its payload leases.
+      let settled = false
+      const settle = (done: () => void, keepLeases = false) => {
+        if (settled) return
+        settled = true
+        if (this.shows.get(req.reqId) === req) this.shows.delete(req.reqId)
+        this.waiting.delete(req)
+        signal?.removeEventListener('abort', onAbort)
+        if (req.reqId) this.reasm.drop(req.reqId)
+        // After any message for it that is still being processed (the inbox is serial).
+        if (req.grant) { const r = req.grant; req.grant = undefined; void this.inbox.then(r) }
+        if (!keepLeases) for (const l of req.leases.splice(0)) l.release()
+        req.received = []; req.bytes = 0
+        done()
+      }
+      const onAbort = () => req.fail(signal!.reason ?? abortError())
+      const req: ShowReq = {
+        show, fields, unit, scale, motion, reqId: 0, sent: false, received: [], bytes: 0, complete: false, rotatedRetry: false, deadline: 0,
+        workspace: o.workspace, leases: [], admissionShort: false,
+        ...(o.onSend ? { onSend: o.onSend } : {}),
+        resolve: (messages) => settle(() => {
+          const leases = req.leases.splice(0)
+          let freed = false
+          resolve({ messages, release: () => { if (freed) return; freed = true; for (const l of leases) l.release() } })
+        }, true),
+        fail: (e) => settle(() => reject(e)),
+      }
+      signal?.addEventListener('abort', onAbort, { once: true })
+      this.issueShow(req)
+    })
+  }
+
   /** Idempotent: closes the socket once (1000), rejects everything pending. */
   close(): void { this.end(undefined, 1000) }
 
@@ -496,11 +673,14 @@ export class StreamSession {
   }
   /** A `session-rotated` refusal of a live unit request that onText re-sends once. */
   private rotatedResend(m: Record<string, unknown>) {
-    if (m.type !== 'refused' || m.code !== 'session-rotated') return false
+    if (m.code !== 'session-rotated') return false
+    // A show request's stale-token refusal comes as `error` (R30: its slot passes to the re-send).
+    if (m.type === 'error') { const s = this.liveShow(m.reqId); return !!s && !s.start && !s.rotatedRetry }
+    if (m.type !== 'refused') return false
     const req = this.units.get(m.reqId as number)
     return !!req && !req.rotatedRetry
   }
-  private hasRoom(req: UnitReq) { return this.sendLog.room(0, req.sent ? UNIT_RESEND_CAP : UNIT_FIRST_CAP) > 0 }
+  private hasRoom(req: UnitReq | ShowReq) { return this.sendLog.room(0, req.sent ? UNIT_RESEND_CAP : UNIT_FIRST_CAP) > 0 }
   private waitingFirst() { let n = 0; for (const r of this.waiting) if (!r.sent) n++; return n }
   /** Sends what the log now has room for, oldest first, then waits for the next slot. */
   private drain() {
@@ -508,9 +688,10 @@ export class StreamSession {
     // While resuming, resume() re-issues every request (waiting ones included).
     if (this.state !== 'open' || !this.sock || this.sock.readyState !== 1) return
     for (const req of this.waiting) {
-      if (this.units.get(req.reqId) !== req) { this.waiting.delete(req); continue }
+      if ((isShow(req) ? this.shows : this.units).get(req.reqId) !== req) { this.waiting.delete(req); continue }
       if (!this.hasRoom(req)) break
-      this.transmit(req, true)
+      if (isShow(req)) this.transmitShow(req, true)
+      else this.transmit(req, true)
     }
     this.scheduleDrain()
   }
@@ -649,6 +830,135 @@ export class StreamSession {
     req.resolve(r)
   }
 
+  /**
+   * Sends the show request under a fresh reqId (the retired one's partial reassembly is dropped),
+   * unless `can.present` went off meanwhile. `charged` false only for the stale-jti re-send, whose
+   * log slot moves to the new reqId (R30). A charged send waits behind any queued one and for log room.
+   */
+  private issueShow(req: ShowReq, charged = true) {
+    const prev = req.reqId
+    if (prev) { if (this.shows.get(prev) === req) this.shows.delete(prev); this.reasm.drop(prev) }
+    req.reqId = this.allocId(); req.sent = false; req.start = undefined; req.composited = undefined; req.received = []; req.bytes = 0; req.complete = false; req.admissionShort = false
+    if (!charged) this.sendLog.transfer(prev, req.reqId)
+    this.shows.set(req.reqId, req)
+    if (this.state === 'resuming' || !this.sock || this.sock.readyState !== 1) return
+    if (!this.manifest.can.present) return req.fail(new StreamSessionError('policy-refused', 'presenting is off for this session'))
+    if (charged && (this.waiting.size || !this.hasRoom(req))) { this.waiting.add(req); return this.scheduleDrain() }
+    this.transmitShow(req, charged)
+  }
+  private transmitShow(req: ShowReq, charged: boolean) {
+    this.waiting.delete(req)
+    try {
+      this.send({ reqId: req.reqId, type: `show-${req.show}`, token: this.token, ...req.fields, scale: req.scale, motion: req.motion })
+    } catch { return req.fail(new StreamSessionError('policy-refused', 'the show request could not be sent')) }
+    req.sent = true
+    req.deadline = this.now() + SHOW_REPLY_MS
+    if (charged) {
+      // R28/R29: one record per charged send; it holds its slot until the server's first reply.
+      this.sendLog.record(req.reqId)
+      try { req.onSend?.() } catch { /* a hook never breaks the send */ }
+    }
+    this.ensureSweeper()
+  }
+  /** The sent show request `reqId` names on the current socket. */
+  private liveShow(reqId: unknown): ShowReq | undefined {
+    const req = typeof reqId === 'number' ? this.shows.get(reqId) : undefined
+    return req?.sent ? req : undefined
+  }
+  /**
+   * Kind 6 is admitted only for a live show request with its start, short of its declared count, and
+   * holding the grant of the message in flight: taken at a message's first fragment, now or never
+   * (§14/R10: waiting in the serial inbox would block the messages whose completion frees the room).
+   */
+  private showAdmits(reqId: number): boolean {
+    const req = this.liveShow(reqId)
+    if (!req?.start || req.complete || req.received.length >= req.start.messages) return false
+    if (req.grant) return true
+    const grant = this.admission.tryAcquire(showGrant(req.start.decodedBytes))
+    if (!grant) { req.admissionShort = true; return false }
+    req.grant = grant
+    return true
+  }
+  /** The text messages of a show request: a refusal, a `diag`, the `*-start`. */
+  private onShowText(req: ShowReq, m: Record<string, unknown>, data: string) {
+    if (m.type === 'error' || m.type === 'refused') {
+      // A RENEW race (stale jti, refused before the rate gate): re-sent once, uncharged.
+      if (m.code === 'session-rotated' && !req.start && !req.rotatedRetry) { req.rotatedRetry = true; return this.issueShow(req, false) }
+      const code = SHOW_REFUSALS.has(m.code as StreamErrorCode) ? m.code as StreamErrorCode : 'policy-refused'
+      return req.fail(new StreamSessionError(code))
+    }
+    const hostile = (why: string) => req.fail(new StreamSessionError('policy-refused', why))
+    if (utf8Bytes(data) > SHOW_START_BYTES) return hostile(`${String(m.type)} message over 64 KiB of UTF-8`)
+    // Task 7: diagnostics (forensic-unmarked, morph-composited, step-truncated) may precede the start.
+    if (m.type === 'diag') return
+    if (m.type !== `show-${req.show}-start`) return hostile(`unexpected ${String(m.type)} on a show-${req.show} request`)
+    if (req.start) return hostile('a second start')
+    if (m.unit !== req.unit || Object.entries(req.fields).some(([k, v]) => m[k] !== v)) return hostile(`show-${req.show}-start does not match the request`)
+    // A closed key set per kind: a track or Morph start also declares its encoded bytes (D23), a plan start never.
+    const windowed = req.show !== 'plan'
+    const keys = new Set(['reqId', 'type', 'unit', 'messages', 'decodedBytes', ...Object.keys(req.fields), ...(windowed ? ['encodedBytes'] : [])])
+    if (Object.keys(m).length !== keys.size || Object.keys(m).some((k) => !keys.has(k))) return hostile(`show-${req.show}-start has another key set`)
+    const n = m.messages, decoded = m.decodedBytes, encoded = m.encodedBytes
+    if (!Number.isInteger(n) || (n as number) < 1 || (n as number) > SHOW_MAX_MESSAGES[req.show]) return hostile('the declared message count is out of range')
+    // §5 admission: the reply's decoded bytes held at once never exceed the show budget. A plan's are all its
+    // assets together; a track's (and a Morph pair's) are its live D23 window, at most 8 decoded frames (plus the record).
+    if (!Number.isInteger(decoded) || (decoded as number) < 1 || (decoded as number) > SHOW_PLAN_LIMITS.showDecoded) return hostile('the declared decoded bytes are out of range')
+    // D23: a windowed reply's encoded PNGs stay retained (and charged) while it plays: within the show budget, and
+    // within the kind-6 per-message encoded cap for every declared message.
+    if (windowed && (!Number.isInteger(encoded) || (encoded as number) < 1 || (encoded as number) > SHOW_PLAN_LIMITS.showDecoded || (encoded as number) > (n as number) * CAPS[Kind.SHOW_PLAN]![0])) return hostile('the declared encoded bytes are out of range')
+    // Nothing is reserved here: each message takes its grant at its first fragment (`showAdmits`).
+    req.start = {
+      messages: n as number, decodedBytes: decoded as number,
+      encodedCap: showEncodedAllowance(decoded as number),
+      bodyCap: Math.min(CAPS[Kind.SHOW_PLAN]![1], decoded as number),
+      // A plan's retained bytes are bounded by its decoded total; a windowed reply's are exactly its declared encoded bytes.
+      retainCap: windowed ? encoded as number : (decoded as number) + (n as number) * SHOW_MESSAGE_SLACK,
+    }
+    // A declared reply's messages must start arriving in time too.
+    req.deadline = this.now() + REASSEMBLY_MS
+  }
+  /** One kind-6 message of a show request: in its kind's order, for the request's unit (a Morph record: the request's pair). */
+  private onShowFrame(req: ShowReq, payload: Uint8Array) {
+    const hostile = (why: string) => req.fail(new StreamSessionError('policy-refused', why))
+    // Ruling 1: the message is reassembled, so its admission grant is done.
+    if (req.grant) { const r = req.grant; req.grant = undefined; r() }
+    const start = req.start
+    if (!start || req.complete || req.received.length >= start.messages) return hostile('a show message past the declared reply')
+    const i = req.received.length, tag = payload[0]
+    const want = req.show === 'plan' ? (i === 0 ? 1 : i === 1 ? 3 : 2)
+      : req.show === 'track' ? 4
+      : i === 0 ? 5 : req.composited ? 4 : 2
+    if (tag !== want) return hostile(`show message ${i} has tag ${String(tag)}, expected ${want}`)
+    if (tag === 5) {
+      let rec: ReturnType<typeof decodeShowMessage>
+      try { rec = decodeShowMessage(payload, { unit: req.unit, maxDecoded: start.decodedBytes }) } catch (e) { return hostile(`Morph record: ${(e as Error).message}`) }
+      if (rec.tag !== 5) return hostile('not a Morph record')
+      const f = req.fields
+      // Task 4 ruling: the record is the pair asked for, never another one.
+      if (rec.morph.from !== f.from || rec.morph.to !== f.to || rec.morph.fromStep !== f.fromStep) return hostile('the Morph record is not the pair requested')
+      if (rec.morph.composited && start.messages !== 1 + rec.morph.composited.count) return hostile('the composited Morph does not match the declared reply')
+      req.composited = !!rec.morph.composited
+    } else if (tag !== 1) {
+      // An asset: `u32 LE unit` right after the tag must be the request's (the codec re-checks it all in decodeBundle).
+      if (payload.length < 21) return hostile('a truncated show asset')
+      const unit = new DataView(payload.buffer, payload.byteOffset, payload.byteLength).getUint32(1, true)
+      if (unit !== req.unit) return hostile(`show asset for unit ${unit}, expected ${req.unit}`)
+    }
+    req.bytes += payload.length
+    if (req.bytes > start.retainCap) return hostile('the show reply is over its declared bytes')
+    // Ruling 5: a retained payload is charged to the show workspace at its encoded bytes.
+    const lease = req.workspace.lease(payload.length, 'remote-show:message')
+    if (!lease) return req.fail(new StreamSessionError('workspace-full', 'no workspace room for a show message'))
+    req.leases.push(lease)
+    req.received.push(payload)
+    req.deadline = this.now() + REASSEMBLY_MS
+    if (req.received.length < start.messages) return
+    // Complete. It settles once the inbox has processed what was queued with it, so a surplus
+    // message already received rejects the whole reply (D1 has no terminator: a later one is unsolicited).
+    req.complete = true
+    void this.inbox.then(() => { if (this.shows.get(req.reqId) === req) req.resolve(req.received) })
+  }
+
   /** A re-issued request's consumer first learns its earlier answer is void. */
   private reissueText(req: TextReq) {
     if (req.sent && !this.deliver(req, { type: 'restart' })) return
@@ -695,12 +1005,17 @@ export class StreamSession {
         : kind === Kind.PRINT_RASTER ? this.livePrint(reqId) !== undefined
         // NOTES_RASTER only ever for a live, sent notes request holding its declared grant.
         : kind === Kind.NOTES_RASTER ? this.liveNotes(reqId)?.start !== undefined
+        // SHOW_PLAN only ever for a live, sent show request holding its declared grant, short of its declared count.
+        : kind === Kind.SHOW_PLAN ? this.showAdmits(reqId)
         : this.units.has(reqId) && UNIT_KINDS.has(kind)),
-      encodedCap: (k) => CAPS[k]?.[0] ?? 0,
+      // A show message's declared total is held to its request's encoded allowance (the grant's encoded
+      // part) as well as the kind cap, before any fragment of it is copied.
+      encodedCap: (k, reqId) => Math.min(CAPS[k]?.[0] ?? 0, k === Kind.SHOW_PLAN ? this.liveShow(reqId)?.start?.encodedCap ?? 0 : Infinity),
       // A unit response may never decode past the bytes its request was admitted for.
       decodedCap: (k, reqId) => Math.min(CAPS[k]?.[1] ?? 0, k === Kind.MANIFEST ? Infinity
         : k === Kind.PRINT_RASTER ? this.livePrint(reqId)?.pageCap ?? 0
         : k === Kind.NOTES_RASTER ? this.liveNotes(reqId)?.bodyCap ?? 0
+        : k === Kind.SHOW_PLAN ? this.liveShow(reqId)?.start?.bodyCap ?? 0
         : this.units.get(reqId)?.grant ?? 0),
     })
     return new Promise<Manifest>((resolve, reject) => {
@@ -772,6 +1087,9 @@ export class StreamSession {
     // R29: any reply starts its send's span — except a stale-token refusal about to be
     // re-sent (R30): the server never counted it, and its slot passes to the re-send.
     if (typeof m.reqId === 'number' && !this.rotatedResend(m)) this.unitAnswered(m.reqId)
+    // R28: a show refusal (`error`) of a charged send blocks the log before the caller hears of it —
+    // also when the request was aborted meanwhile (a notes refusal's reqId is never in the log).
+    if (m.type === 'error' && m.code === 'rate-limited' && typeof m.reqId === 'number' && this.sendLog.has(m.reqId)) this.sendLog.refused()
     if (m.type === 'renew' && typeof m.token === 'string' && typeof m.jti === 'string' && jtiOf(m.token) === m.jti) {
       this.send({ reqId: this.allocId(), type: 'renew-ack', jti: m.jti })
       this.token = m.token
@@ -781,6 +1099,8 @@ export class StreamSession {
     if (job) return this.onPrintText(job, m, data)
     const notes = this.liveNotes(m.reqId)
     if (notes) return this.onNotesText(notes, m, data)
+    const show = this.liveShow(m.reqId)
+    if (show) return this.onShowText(show, m, data)
     const text = typeof m.reqId === 'number' ? this.texts.get(m.reqId) : undefined
     // Only text-service answers are held to 48 KiB (refused/diag are control messages).
     if (text) return this.onTextAnswer(text, m, TEXT_ANSWER_TYPES.has(m.type as string) ? utf8Bytes(data) : 0)
@@ -803,6 +1123,9 @@ export class StreamSession {
       if (job) return job.fail(new StreamSessionError('policy-refused', `print frame rejected: ${res.reason}`), true)
       const notes = this.liveNotes(res.reqId)
       if (notes) return notes.fail(new StreamSessionError('policy-refused', `notes frame rejected: ${res.reason}`))
+      // Fail closed: a kind-6 message before the start or past the declared count, over a cap, or malformed.
+      const show = this.liveShow(res.reqId)
+      if (show) return show.fail(show.admissionShort ? new StreamSessionError('admission', 'no admission room for a show message') : new StreamSessionError('policy-refused', `show frame rejected: ${res.reason}`))
       const req = res.reqId !== undefined ? this.units.get(res.reqId) : undefined
       if (req) this.retryOrFail(req)
       else if (res.reqId !== undefined && res.reqId === this.helloReqId && this.handshake) this.end(new StreamSessionError('manifest-invalid'), 1000)
@@ -818,6 +1141,11 @@ export class StreamSession {
       // A message that completed after its request settled is dropped.
       const notes = this.liveNotes(res.reqId)
       return notes && this.onNotesFrame(notes, res.payload)
+    }
+    if (res.kind === Kind.SHOW_PLAN) {
+      // A message that completed after its request settled is dropped.
+      const show = this.liveShow(res.reqId)
+      return show && this.onShowFrame(show, res.payload)
     }
     const req = this.units.get(res.reqId)
     if (!req) return
@@ -884,6 +1212,8 @@ export class StreamSession {
     if (this.printJob?.sent) this.printJob.fail(new StreamSessionError('session-rotated', 'the session resumed with a print job in flight'), false)
     // Likewise a sent notes request (the server audits each one): never re-issued.
     for (const req of [...this.notesReqs.values()]) if (req.sent) req.fail(new StreamSessionError('session-rotated', 'the session resumed with a notes request in flight'))
+    // Likewise a sent show request (the server charged and audited it; a re-issue is a second charge).
+    for (const req of [...this.shows.values()]) if (req.sent) req.fail(new StreamSessionError('session-rotated', 'the session resumed with a show request in flight'))
     this.scheduleResume()
   }
 
@@ -919,6 +1249,8 @@ export class StreamSession {
     if (this.printJob?.granted && !this.printJob.sent) this.issuePrint(this.printJob)
     // Notes requested while resuming go out now, if the new manifest still offers notes.
     for (const req of [...this.notesReqs.values()]) if (!req.sent) this.issueNotes(req)
+    // Show requests asked for while resuming (or waiting for log room) go out now, through the log.
+    for (const req of [...this.shows.values()]) if (!req.sent) this.issueShow(req)
   }
 
   private ensureSweeper() {
@@ -929,6 +1261,8 @@ export class StreamSession {
         if (job) { job.fail(new StreamSessionError('policy-refused', 'a print page timed out in reassembly'), true); continue }
         const notes = this.liveNotes(r.reqId)
         if (notes) { notes.fail(new StreamSessionError('policy-refused', 'a notes image timed out in reassembly')); continue }
+        const show = this.liveShow(r.reqId)
+        if (show) { show.fail(new StreamSessionError('policy-refused', 'a show message timed out in reassembly')); continue }
         const req = r.reqId !== undefined ? this.units.get(r.reqId) : undefined
         if (req) this.retryOrFail(req)
       }
@@ -937,7 +1271,10 @@ export class StreamSession {
       for (const req of [...this.notesReqs.values()]) {
         if (req.sent && now >= req.deadline && !this.reasm.has(req.reqId)) req.fail(new StreamSessionError('policy-refused', 'the notes request timed out'))
       }
-      if (!this.units.size && !this.printJob && !this.notesReqs.size && this.sweeper) { clearInterval(this.sweeper); this.sweeper = undefined }
+      for (const req of [...this.shows.values()]) {
+        if (req.sent && !req.complete && now >= req.deadline && !this.reasm.has(req.reqId)) req.fail(new StreamSessionError('policy-refused', 'the show request timed out'))
+      }
+      if (!this.units.size && !this.printJob && !this.notesReqs.size && !this.shows.size && this.sweeper) { clearInterval(this.sweeper); this.sweeper = undefined }
     }, 1000)
   }
 
@@ -956,6 +1293,7 @@ export class StreamSession {
     for (const req of [...this.texts.values()]) req.reject(err)
     this.printJob?.fail(err, false)
     for (const req of [...this.notesReqs.values()]) req.fail(err)
+    for (const req of [...this.shows.values()]) req.fail(err)
     this.admission.drain(err)
     this.setState('closed', error)
     this.settleEnded(error)

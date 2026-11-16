@@ -2,6 +2,7 @@
 import { describe, expect, it, vi, type Mock } from 'vitest'
 import { createShowFetcher, type ImageBitmapLike } from '../../src/stream/remote/show-fetch'
 import { StreamSessionError } from '../../src/stream/remote/errors'
+import type { ShowBundle } from '../../src/stream/remote/show-bundle'
 // The real server rate gates (server/src/rate.ts), loaded by a non-literal path so
 // the client typecheck does not walk the Bun-only server graph. The module imports
 // the notes/print renderers only for two per-minute constants; those pull Bun-only
@@ -449,5 +450,239 @@ describe('createShowFetcher', () => {
       expect(verdicts).toEqual([])
       expect(maxInWindow(charges)).toBeLessThanOrEqual(56)
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Piece 4 Task 11: animated units are fetched as show bundles
+// ---------------------------------------------------------------------------
+
+describe('show bundles (piece 4 Task 11)', () => {
+  interface BundleCall { unit: number; scale: number; motion: string; signal: AbortSignal; resolve(bytes?: number): ShowBundle & { release: Mock<() => void> }; reject(e: unknown): void }
+  function bundleSetup(o: { animated?: number[]; showBytes?: number; extraBytes?: () => number; maxCached?: number; motion?: 'full' | 'reduced' } = {}) {
+    const clock = fakeClock()
+    const io = fakeIo(clock)
+    const bundles: BundleCall[] = []
+    const bio = {
+      ...io,
+      bundle(unit: number, scale: number, _dpr: number, motion: 'full' | 'reduced', signal: AbortSignal, charge: () => void) {
+        charge()
+        return new Promise<ShowBundle>((res, rej) => {
+          bundles.push({
+            unit, scale, motion, signal,
+            resolve: (bytes = 1000) => { const b = { unit, plan: {} as ShowBundle['plan'], assets: { bitmap: () => undefined, bytes: () => 0 }, decodedBytes: bytes, release: vi.fn<() => void>() }; res(b); return b },
+            reject: rej,
+          })
+        })
+      },
+    }
+    const animated = new Set(o.animated ?? [0, 1, 2, 3])
+    const f = createShowFetcher(bio, clock, { animated: (u) => animated.has(u), motion: o.motion ?? 'full', ...(o.showBytes !== undefined ? { showBytes: o.showBytes } : {}), ...(o.extraBytes ? { extraBytes: o.extraBytes } : {}), ...(o.maxCached !== undefined ? { maxCached: o.maxCached } : {}) })
+    const ready: number[] = []
+    const errors: [number, string][] = []
+    f.onReady((u) => ready.push(u))
+    f.onError((u, c) => errors.push([u, c]))
+    f.setBucket(1, 1)
+    return { clock, io, bundles, f, ready, errors }
+  }
+
+  it('demote: a bundled unit becomes a piece-3 still — its bundle is released and the unit is asked for through paint (PR #78 round 8)', async () => {
+    const { clock, io, bundles, f, ready } = bundleSetup({ animated: [0] })
+    f.want([0])
+    const b = bundles[0]!.resolve()
+    await flush()
+    expect(f.bundle(0)).toBe(b)
+    f.demote(0)
+    expect(b.release).toHaveBeenCalledTimes(1)
+    expect(f.bundle(0)).toBeUndefined()
+    await clock.advance(1_000)
+    expect(io.calls.map((c) => c.unit)).toEqual([0])
+    io.calls[0]!.resolve()
+    await flush()
+    expect(f.cached(0)).toBeDefined()
+    expect(ready).toEqual([0, 0])
+    // A still for the rest of the show: no bundle is asked for again.
+    f.want([0]); await clock.advance(5_000)
+    expect(bundles).toHaveLength(1)
+  })
+
+  it('an animated unit is fetched as a bundle (with the show motion), an unanimated one as a unit', async () => {
+    const { clock, io, bundles, f, ready } = bundleSetup({ animated: [0], motion: 'reduced' })
+    f.want([0, 1])
+    expect(bundles.map((b) => [b.unit, b.motion])).toEqual([[0, 'reduced']])
+    expect(io.calls).toHaveLength(0)
+    const b = bundles[0]!.resolve()
+    await flush()
+    expect(f.bundle(0)).toBe(b)
+    expect(f.cached(0)).toBeUndefined()
+    await clock.advance(1_000)
+    expect(io.calls.map((c) => c.unit)).toEqual([1])
+    io.calls[0]!.resolve()
+    await flush()
+    expect(f.bundle(1)).toBeUndefined()
+    expect(f.cached(1)).toBeDefined()
+    expect(ready).toEqual([0, 1])
+  })
+
+  it.each(['still', 'show-budget', 'show-limits', 'show-plan-timeout'] as const)('a %s refusal plays the piece-3 still: the unit is re-requested as a unit, not failed', async (code) => {
+    const { clock, io, bundles, f, errors } = bundleSetup()
+    f.want([0])
+    bundles[0]!.reject(new StreamSessionError(code))
+    await flush()
+    expect(errors).toEqual([[0, code]])
+    await clock.advance(300)
+    expect(io.calls.map((c) => c.unit)).toEqual([0])
+    io.calls[0]!.resolve()
+    await flush()
+    expect(f.cached(0)).toBeDefined()
+    // Later visits ask for the still again, never the bundle.
+    f.want([1]); await clock.advance(400); f.want([0]); await clock.advance(400)
+    expect(bundles.filter((b) => b.unit === 0)).toHaveLength(1)
+  })
+
+  it('an admission refusal is retried after the back-off without pausing other requests', async () => {
+    const { clock, bundles, f, errors } = bundleSetup()
+    f.want([0])
+    bundles[0]!.reject(new StreamSessionError('admission'))
+    await flush()
+    expect(errors).toEqual([[0, 'admission']])
+    expect(f.room()).toBe(true)
+    await clock.advance(2_100)
+    expect(bundles.filter((b) => b.unit === 0)).toHaveLength(2)
+  })
+
+  it('room() is false while a rate-limited pause holds, and paused() pauses the fetcher', async () => {
+    const { clock, bundles, f } = bundleSetup()
+    expect(f.room()).toBe(true)
+    f.paused()
+    expect(f.room()).toBe(false)
+    f.want([0])
+    expect(bundles).toHaveLength(0)
+    await clock.advance(2_100)
+    expect(f.room()).toBe(true)
+    expect(bundles).toHaveLength(1)
+  })
+
+  it('the per-show byte budget evicts least-recently-used non-target bundles first', async () => {
+    const { clock, bundles, f } = bundleSetup({ showBytes: 2_500 })
+    f.want([0, 1, 2])
+    const b0 = bundles[0]!.resolve(1000)
+    await clock.advance(1_000)
+    const b1 = bundles[1]!.resolve(1000)
+    await flush()
+    const b2 = bundles[2]!.resolve(1000)
+    await flush()
+    // 3000 > 2500: the oldest non-target (1) goes; the target 0 stays.
+    expect(b1.release).toHaveBeenCalledOnce()
+    expect(b0.release).not.toHaveBeenCalled()
+    expect(b2.release).not.toHaveBeenCalled()
+    expect(f.bundle(1)).toBeUndefined()
+    expect(f.bundleBytes()).toBe(2000)
+  })
+
+  it('track and Morph bytes held outside the cache count against the budget', async () => {
+    let extra = 0
+    const { clock, bundles, f } = bundleSetup({ showBytes: 2_500, extraBytes: () => extra })
+    extra = 1000
+    f.want([0, 1])
+    bundles[0]!.resolve(1000)
+    await clock.advance(1_000)
+    const b1 = bundles[1]!.resolve(1000)
+    await flush()
+    expect(b1.release).toHaveBeenCalledOnce()
+  })
+
+  it('a target bundle alone over the budget plays its still (show-budget)', async () => {
+    const { clock, io, bundles, f, errors } = bundleSetup({ showBytes: 500 })
+    f.want([0])
+    const b = bundles[0]!.resolve(1000)
+    await flush()
+    expect(b.release).toHaveBeenCalledOnce()
+    expect(f.bundle(0)).toBeUndefined()
+    expect(errors).toEqual([[0, 'show-budget']])
+    await clock.advance(300)
+    expect(io.calls.map((c) => c.unit)).toEqual([0])
+  })
+
+  it('a late bundle for an abandoned request is released; dispose releases every cached bundle', async () => {
+    const { clock, bundles, f } = bundleSetup()
+    f.want([0])
+    f.want([1])
+    expect(bundles[0]!.signal.aborted).toBe(true)
+    const late = bundles[0]!.resolve()
+    await clock.advance(400)
+    expect(late.release).toHaveBeenCalledOnce()
+    const b1 = bundles[1]!.resolve()
+    await flush()
+    f.dispose()
+    expect(b1.release).toHaveBeenCalledOnce()
+  })
+})
+
+describe('show bundles: byte eviction (Task 11 fix round 1)', () => {
+  function evictSetup(showBytes: number) {
+    const clock = fakeClock()
+    const io = fakeIo(clock)
+    const bundles: Array<{ unit: number; resolve(bytes: number): void }> = []
+    const f = createShowFetcher({
+      ...io,
+      bundle(unit: number, _s: number, _d: number, _m: 'full' | 'reduced', _sig: AbortSignal, charge: () => void) {
+        charge()
+        return new Promise<ShowBundle>((res) => {
+          bundles.push({ unit, resolve: (bytes) => res({ unit, plan: {} as ShowBundle['plan'], assets: { bitmap: () => undefined, bytes: () => 0 }, decodedBytes: bytes, release: vi.fn<() => void>() }) })
+        })
+      },
+    }, clock, { animated: () => true, showBytes })
+    f.setBucket(1, 1)
+    return { clock, bundles, f }
+  }
+
+  it('a byte-evicted neighbour is not re-requested while the wanted set is unchanged (no 1,2,1,2… loop)', async () => {
+    const { clock, bundles, f } = evictSetup(2_500)
+    f.want([0, 1, 2]); bundles[0]!.resolve(1000); await clock.advance(1_000)
+    bundles[1]!.resolve(1000); await flush()
+    bundles[2]!.resolve(1000); await flush()
+    for (let i = 3; i < 10 && bundles[i]; i++) { bundles[i]!.resolve(1000); await flush() }
+    await clock.advance(10_000)
+    expect(bundles.map((b) => b.unit)).toEqual([0, 1, 2])
+    f.dispose()
+  })
+
+  it('the evicted unit is asked for again when it becomes the target, or when the wanted set changes', async () => {
+    const { clock, bundles, f } = evictSetup(2_500)
+    f.want([0, 1, 2]); bundles[0]!.resolve(1000); await clock.advance(1_000)
+    bundles[1]!.resolve(1000); await flush()
+    bundles[2]!.resolve(1000); await flush()
+    expect(f.bundle(1)).toBeUndefined()
+    // Navigating to 1: it is the target now.
+    f.want([1, 2, 0]); await clock.advance(400)
+    expect(bundles.map((b) => b.unit)).toEqual([0, 1, 2, 1])
+    f.dispose()
+  })
+
+  it('makeRoom evicts non-target bundles for bytes held elsewhere and says whether they fit', async () => {
+    let extra = 0
+    const clock = fakeClock()
+    const bundles: Array<{ resolve(bytes: number): void }> = []
+    const f = createShowFetcher({
+      paint: () => new Promise<ImageBitmapLike>(() => {}),
+      bundle(unit: number, _s: number, _d: number, _m: 'full' | 'reduced', _sig: AbortSignal, charge: () => void) {
+        charge()
+        return new Promise<ShowBundle>((res) => { bundles.push({ resolve: (bytes) => res({ unit, plan: {} as ShowBundle['plan'], assets: { bitmap: () => undefined, bytes: () => 0 }, decodedBytes: bytes, release: vi.fn<() => void>() }) }) })
+      },
+    }, clock, { animated: () => true, showBytes: 3_000, extraBytes: () => extra })
+    f.setBucket(1, 1)
+    f.want([0, 1]); bundles[0]!.resolve(1000); await clock.advance(1_000)
+    bundles[1]!.resolve(1000); await flush()
+    expect(f.makeRoom(500)).toBe(true)
+    expect(f.bundle(1)).toBeDefined()
+    // 1,500 more does not fit beside both: the neighbour goes; the target stays.
+    expect(f.makeRoom(1_500)).toBe(true)
+    expect(f.bundle(1)).toBeUndefined()
+    expect(f.bundle(0)).toBeDefined()
+    extra = 1_500
+    expect(f.makeRoom(1_000)).toBe(false)
+    expect(f.bundle(0)).toBeDefined()
+    f.dispose()
   })
 })

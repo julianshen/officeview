@@ -1,0 +1,322 @@
+{
+  "generated": "bun scripts/show-fallback-rate.ts",
+  "build": {
+    "scale": 1,
+    "motion": "full",
+    "mark": "fixed",
+    "strictMarks": false,
+    "contentPolicy": "full"
+  },
+  "total": {
+    "slides": 43,
+    "anim": 29,
+    "stills": 1,
+    "steps": 12,
+    "composited": 3,
+    "rate": 0.25,
+    "reasons": {
+      "mask": 3
+    },
+    "stillReasons": {
+      "still": 1,
+      "still/step-composited": 1,
+      "still/trigger-cut": 1
+    }
+  },
+  "decks": [
+    {
+      "deck": "lo-airplane-transition.pptx",
+      "slides": 1,
+      "steps": 0,
+      "composited": 0,
+      "rate": null,
+      "reasons": {},
+      "anim": 1,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "lo-bnc591147.pptx",
+      "slides": 2,
+      "steps": 0,
+      "composited": 0,
+      "rate": null,
+      "reasons": {},
+      "anim": 2,
+      "stills": 1,
+      "stillReasons": {
+        "still": 1,
+        "still/step-composited": 1,
+        "still/trigger-cut": 1
+      }
+    },
+    {
+      "deck": "lo-connector-shape-animations.pptx",
+      "slides": 1,
+      "steps": 1,
+      "composited": 1,
+      "rate": 1,
+      "reasons": {
+        "mask": 1
+      },
+      "anim": 1,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "lo-narration.pptx",
+      "slides": 1,
+      "steps": 0,
+      "composited": 0,
+      "rate": null,
+      "reasons": {},
+      "anim": 1,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "lo-ooxtheme.pptx",
+      "slides": 1,
+      "steps": 0,
+      "composited": 0,
+      "rate": null,
+      "reasons": {},
+      "anim": 0,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "slides": 6,
+      "steps": 6,
+      "composited": 0,
+      "rate": 0,
+      "reasons": {},
+      "anim": 1,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "lo-tdf104792-smart-art-animation.pptx",
+      "slides": 1,
+      "steps": 2,
+      "composited": 0,
+      "rate": 0,
+      "reasons": {},
+      "anim": 1,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "lo-tdf105739.pptx",
+      "slides": 1,
+      "steps": 0,
+      "composited": 0,
+      "rate": null,
+      "reasons": {},
+      "anim": 0,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "lo-tdf115394.pptx",
+      "slides": 5,
+      "steps": 0,
+      "composited": 0,
+      "rate": null,
+      "reasons": {},
+      "anim": 5,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "lo-tdf123684.pptx",
+      "slides": 1,
+      "steps": 0,
+      "composited": 0,
+      "rate": null,
+      "reasons": {},
+      "anim": 0,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "lo-tdf142915.pptx",
+      "slides": 2,
+      "steps": 0,
+      "composited": 0,
+      "rate": null,
+      "reasons": {},
+      "anim": 2,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "lo-tdf146223.pptx",
+      "slides": 2,
+      "steps": 0,
+      "composited": 0,
+      "rate": null,
+      "reasons": {},
+      "anim": 2,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "lo-tdf149588_transparentSolidFill.pptx",
+      "slides": 1,
+      "steps": 0,
+      "composited": 0,
+      "rate": null,
+      "reasons": {},
+      "anim": 1,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "lo-tdf156808.pptx",
+      "slides": 1,
+      "steps": 0,
+      "composited": 0,
+      "rate": null,
+      "reasons": {},
+      "anim": 1,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "lo-tdf44223.pptx",
+      "slides": 2,
+      "steps": 1,
+      "composited": 0,
+      "rate": 0,
+      "reasons": {},
+      "anim": 2,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "lo-tdf93868.pptx",
+      "slides": 1,
+      "steps": 2,
+      "composited": 2,
+      "rate": 1,
+      "reasons": {
+        "mask": 2
+      },
+      "anim": 1,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "poi-copy-slide-demo.pptx",
+      "slides": 1,
+      "steps": 0,
+      "composited": 0,
+      "rate": null,
+      "reasons": {},
+      "anim": 0,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "poi-crop-to-0.pptx",
+      "slides": 3,
+      "steps": 0,
+      "composited": 0,
+      "rate": null,
+      "reasons": {},
+      "anim": 3,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "poi-picture-transparency.pptx",
+      "slides": 4,
+      "steps": 0,
+      "composited": 0,
+      "rate": null,
+      "reasons": {},
+      "anim": 4,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "poi-table_test.pptx",
+      "slides": 1,
+      "steps": 0,
+      "composited": 0,
+      "rate": null,
+      "reasons": {},
+      "anim": 1,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "poi-text-highlight.pptx",
+      "slides": 1,
+      "steps": 0,
+      "composited": 0,
+      "rate": null,
+      "reasons": {},
+      "anim": 0,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "pypptx-minimal.pptx",
+      "slides": 0,
+      "steps": 0,
+      "composited": 0,
+      "rate": null,
+      "reasons": {},
+      "anim": 0,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "pypptx-missing_rels_item.pptx",
+      "slides": 1,
+      "steps": 0,
+      "composited": 0,
+      "rate": null,
+      "reasons": {},
+      "anim": 0,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "pypptx-no-core-props.pptx",
+      "slides": 1,
+      "steps": 0,
+      "composited": 0,
+      "rate": null,
+      "reasons": {},
+      "anim": 0,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "pypptx-test.pptx",
+      "slides": 1,
+      "steps": 0,
+      "composited": 0,
+      "rate": null,
+      "reasons": {},
+      "anim": 0,
+      "stills": 0,
+      "stillReasons": {}
+    },
+    {
+      "deck": "pypptx-test_slides.pptx",
+      "slides": 1,
+      "steps": 0,
+      "composited": 0,
+      "rate": null,
+      "reasons": {},
+      "anim": 0,
+      "stills": 0,
+      "stillReasons": {}
+    }
+  ]
+}

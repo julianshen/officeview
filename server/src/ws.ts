@@ -23,7 +23,11 @@ import { loadPack, requiredFacesOf } from './fonts'
 import { canNotes, effectivePolicy, forensicNotices, resumeInvariant, type AuthDecision, type AuthRequest, type Authorize, type EffectivePolicy, type ResolveDocument } from './hooks'
 import { docRefOf, type Keys } from './keys'
 import { admit } from './policy'
-import { AdmissionRefused, RenderFailed, type Pool } from './pool'
+import { AdmissionRefused, RenderFailed, RenderTimeout, type Pool } from './pool'
+import { showBuildGrant, showMorphGrant } from './show/grant'
+import { encodeShowMessage, PlanRejected, SHOW_TRACK_WINDOW, type ShowMessage } from '../../src/stream/show-plan'
+import type { TestOnlyOptions } from './config'
+import type { ShowDeliveryRecord } from './audit-store'
 import { encodeNotesBody, NOTES_ENCODED_CAP, notesBasisLabel } from './notes'
 import { encodePrintBody, planPrint, PRINT_ENCODED_CAP, PRINT_SEND_HIGH_WATER, printArgs, printSizeOk, runPrint, type PrintJob, type PrintSlot } from './print'
 import { IpRates, SessionRates } from './rate'
@@ -41,8 +45,28 @@ export type CloseName = keyof typeof CLOSE
 export type RefusalCode = 'rate-limited' | 'policy-refused' | 'session-rotated' | 'text-unavailable' | 'copy-too-large' | 'copy-quota-exhausted' | 'print-too-large' | 'print-quota-exhausted'
 /** A notes refusal (Stage 3c), sent as `{reqId, type: 'error', code}`; `session-rotated` is the token preamble's retry signal. */
 export type NotesErrorCode = 'policy-refused' | 'invalid-unit' | 'rate-limited' | 'session-rotated'
+/**
+ * A show op refusal (piece 4 Task 7, D1), sent as `{reqId, type: 'error', code}`. Every one plays the slide's
+ * piece-3 still on the client (a Morph: the fade look-alike), never a plan with content withheld:
+ * - `invalid-unit`: hidden, out of range, not animated (D5), a step or `fromStep` the slide does not have, a Morph
+ *   pair whose `to` is not entered by Morph;
+ * - `show-budget`, `show-limits`, `show-plan-timeout`: the build's own refusals (D3, D10, §5 admission);
+ * - `still` (controller ruling): the classifier cannot prove the slide (`Classification.fallback`, a trigger that
+ *   can move a layer, a withdrawn interactive slide): the client plays the piece-3 still;
+ * - `morph-fallback` (`show-morph` only): `planMorph` refused (past 256 objects, its layers do not fit);
+ * - `rate-limited`, `policy-refused`, `session-rotated`: as for notes.
+ */
+export type ShowErrorCode = NotesErrorCode | 'show-budget' | 'show-limits' | 'show-plan-timeout' | 'still' | 'morph-fallback'
+/**
+ * D23 (final review finding 1): the decoded bytes a keyframe track holds at once — at most `SHOW_TRACK_WINDOW`
+ * frames of the largest frame's `w·h·4` — which its start declares, not Σ its frames (never decoded together).
+ */
+export const trackWindowBytes = (frames: ReadonlyArray<{ w: number; h: number }>) =>
+  Math.min(frames.length, SHOW_TRACK_WINDOW) * frames.reduce((m, f) => Math.max(m, f.w * f.h * 4), 0)
 
-const KIND = { MANIFEST: 1, ASSET_DEFINE: 2, UNIT_RASTER: 3, UNIT_COMMANDS: 4, NOTES_RASTER: 7, PRINT_RASTER: 8 } as const
+/** The most click steps a plan carries (D3): a track's step is below it, a Morph's `fromStep` at most it. */
+const SHOW_PLAN_LIMITS_STEPS = 64
+const KIND = { MANIFEST: 1, ASSET_DEFINE: 2, UNIT_RASTER: 3, UNIT_COMMANDS: 4, SHOW_PLAN: 6, NOTES_RASTER: 7, PRINT_RASTER: 8 } as const
 /** Admission charge of a notes plan (a measuring context and the notes part's parse). */
 const NOTES_PLAN_BYTES = 4 * 1024 * 1024
 const HELLO_CAP = 4 * 1024, TEXT_CAP = 64 * 1024, FRAGMENT = 1 << 20
@@ -76,6 +100,10 @@ export interface StreamServerOptions {
   planPrint?: typeof planPrint
   /** TEST-ONLY: interposes on binary sends and the socket's buffered amount (backpressure tests). */
   transport?: { sendBinary(ws: unknown, frame: Uint8Array): number; bufferedAmount(ws: unknown): number }
+  /** Piece 4 (spec §7): `strictMarks` plays every moving step `composited` (`config.animation`). */
+  animation?: { strictMarks?: boolean }
+  /** TEST-ONLY (`config.ts` `TestOnlyOptions`): never read from an `AuthDecision`. */
+  testOnly?: TestOnlyOptions
 }
 
 interface Conn {
@@ -90,11 +118,14 @@ interface Conn {
   missingFaces: string[]
   /** Print jobs waiting for this socket to drain. */
   drainWaiters: Set<() => void>
+  /** Aborted when the socket closes: its queued show builds and Layer-1 encodes never start (PR #78 round 4). */
+  gone: AbortController
 }
 type WS = ServerWebSocket<Conn>
 
 /** `hidden`: unit indices of hidden slides (pptx under 'full'); the show skips them and notes refuse them. */
-interface DocState { docRef: string; name: string; bytes: Uint8Array; units: UnitSize[]; hidden: ReadonlySet<number>; fingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; refs: number }
+/** `anim` (D5): shown units with timing, a transition or both; `morph` (Task 7): those entered by Morph. */
+interface DocState { docRef: string; name: string; bytes: Uint8Array; units: UnitSize[]; hidden: ReadonlySet<number>; anim: ReadonlySet<number>; morph: ReadonlySet<number>; fingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; refs: number }
 
 const isU32 = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 0 && (n as number) <= 0xffffffff
 
@@ -132,6 +163,7 @@ export function createStreamServer(o: StreamServerOptions) {
     if (ws.data.phase === 'closed') return
     const code = name === 'superseded' ? 4409 : CLOSE[name]
     ws.data.phase = 'closed'
+    ws.data.gone.abort()
     wakeDrain(ws)
     for (const t of ws.data.timers) clearTimeout(t)
     ws.close(code, name)
@@ -143,7 +175,7 @@ export function createStreamServer(o: StreamServerOptions) {
   }
   /** §14 per-kind encoded (`totalLen`) caps. A message over its cap is never
    * framed, so a conforming client never sees an encoded-cap rejection. */
-  const ENCODED: Record<number, number> = { [KIND.MANIFEST]: 256 << 10, [KIND.ASSET_DEFINE]: 1 << 20, [KIND.UNIT_RASTER]: 8 << 20, [KIND.UNIT_COMMANDS]: 8 << 20, [KIND.NOTES_RASTER]: NOTES_ENCODED_CAP, [KIND.PRINT_RASTER]: PRINT_ENCODED_CAP }
+  const ENCODED: Record<number, number> = { [KIND.MANIFEST]: 256 << 10, [KIND.ASSET_DEFINE]: 1 << 20, [KIND.UNIT_RASTER]: 8 << 20, [KIND.UNIT_COMMANDS]: 8 << 20, [KIND.SHOW_PLAN]: 8 << 20, [KIND.NOTES_RASTER]: NOTES_ENCODED_CAP, [KIND.PRINT_RASTER]: PRINT_ENCODED_CAP }
   const frame = (kind: number, reqId: number, payload: Uint8Array): Uint8Array[] | undefined => {
     const z = new Uint8Array(gzipSync(payload, { level: 6 }))
     if (z.length + 4 > ENCODED[kind]!) return undefined
@@ -248,7 +280,7 @@ export function createStreamServer(o: StreamServerOptions) {
         audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, services: { copy: policy.copy, textA11y: policy.textA11y, print: policy.print, notes: canNotes(policy) }, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, docRef, contentPolicy: policy.contentPolicy, visibleMark: markOf(policy, decision) })
       } catch { return close(ws, 'policy-refused') }
       table.create({ sid, docRef, ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), role: policy.role, effectivePolicy: policy, activeSocket: ws as never, jti: token.jti, startedAt })
-      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, hidden: new Set(opened.hidden), fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, copiedParagraphs: 0, printedPages: 0, ...(forensic ? { forensic } : {}) })
+      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, hidden: new Set(opened.hidden), anim: new Set(opened.anim.filter((i) => !opened.hidden.includes(i))), morph: new Set(opened.morph.filter((i) => !opened.hidden.includes(i))), fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, copiedParagraphs: 0, printedPages: 0, ...(forensic ? { forensic } : {}) })
       sessionRates.set(sid, ws.data.rates)
       ws.data.sid = sid
       committed = true
@@ -325,7 +357,7 @@ export function createStreamServer(o: StreamServerOptions) {
     const sd = sessionDoc.get(sid)!, p = sd.policy
     const m: Manifest = {
       v: 1, docRef: sd.doc.docRef, kind: sd.doc.format, name: sd.doc.name,
-      units: { count: sd.doc.units.length, list: sd.doc.units.map((u, i) => sd.doc.hidden.has(i) ? { ...u, hidden: true as const } : u) },
+      units: { count: sd.doc.units.length, list: sd.doc.units.map((u, i) => sd.doc.hidden.has(i) ? { ...u, hidden: true as const } : sd.doc.anim.has(i) ? { ...u, anim: true as const } : u) },
       layoutFingerprint: sd.doc.fingerprint,
       session: { sid, token, expiresSec: ttl, resume: 'session' },
       policy: { contentPolicy: p.contentPolicy, protection: p.projection, semantic: 'visible-only', contentPolicyId: sd.doc.contentPolicyId, viewerMarkId: p.visibleMark },
@@ -375,21 +407,21 @@ export function createStreamServer(o: StreamServerOptions) {
     const missing = p.projection === 'commands' ? [...ws.data.missingFaces].sort() : undefined
     const alive = () => owns(ws, s.sid) && ws.data.phase === 'stream'
     const ui = unitIndex as number, sc = scale as number
-    const first = await obtainUnit(s.sid, sd, ui, sc, p.projection, missing)
+    const first = await obtainUnit(s.sid, sd, ui, sc, p.projection, missing, ws.data.gone.signal)
     if (!alive()) return
     if (typeof first === 'string') return refuse(ws, reqId, first)
     let unit: RenderedUnit = first
     let messages = unit.kind === 'commands' ? prepareUnit(reqId, ui, unit) : undefined
     if (!messages && unit.kind === 'commands') {
       // Assets too large for ASSET_DEFINE's caps: ship the unit as a raster (Task 7).
-      const raster = await obtainUnit(s.sid, sd, ui, sc, 'final-raster', missing)
+      const raster = await obtainUnit(s.sid, sd, ui, sc, 'final-raster', missing, ws.data.gone.signal)
       if (!alive()) return
       if (typeof raster === 'string') return refuse(ws, reqId, raster)
       unit = raster
     }
     let unmarked: string | undefined
     if (unit.kind === 'raster') {
-      const d = await deliverRaster(alive, s.sid, sd, ui, sc, unit, (u) => prepareUnit(reqId, ui, u))
+      const d = await deliverRaster(alive, s.sid, sd, ui, sc, unit, (u) => prepareUnit(reqId, ui, u), ws.data.gone.signal)
       if (d === undefined) return
       if (typeof d === 'string') return refuse(ws, reqId, d)
       messages = d.messages; unmarked = d.unmarked
@@ -401,14 +433,14 @@ export function createStreamServer(o: StreamServerOptions) {
   }
 
   /** The canonical unit for a session: the render cache, else the pool (then cached). */
-  async function obtainUnit(sid: string, sd: { doc: DocState; policy: EffectivePolicy; decision: AuthDecision }, unitIndex: number, scale: number, projection: 'final-raster' | 'commands', missing?: string[]): Promise<RenderedUnit | RefusalCode> {
+  async function obtainUnit(sid: string, sd: { doc: DocState; policy: EffectivePolicy; decision: AuthDecision }, unitIndex: number, scale: number, projection: 'final-raster' | 'commands', missing?: string[], signal?: AbortSignal): Promise<RenderedUnit | RefusalCode> {
     const p = sd.policy, mark = markOf(p, sd.decision)
     const key = renderKey(keyFields(sd.doc, mark, unitIndex, scale, projection, missing))
     const hit = renderCache.get(key)
     if (hit) return hit
     const size = sd.doc.units[unitIndex]!, estimate = size.w * size.h * 4 * scale ** 2 * 2
     try {
-      const unit = await o.pool.render(sid, { docRef: sd.doc.docRef, contentPolicy: p.contentPolicy, unitIndex, scale, mark, projection, ...(projection === 'commands' && missing ? { missingFaces: missing } : {}) }, estimate)
+      const unit = await o.pool.render(sid, { docRef: sd.doc.docRef, contentPolicy: p.contentPolicy, unitIndex, scale, mark, projection, ...(projection === 'commands' && missing ? { missingFaces: missing } : {}) }, estimate, signal)
       renderCache.put(key, unit, unit.kind === 'raster' ? unit.png.length : unit.ops.length + unit.assets.reduce((n, a) => n + (a.type === 'bitmap' ? a.rgba.length : 256), 0))
       return unit
     } catch (e) { return e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused' }
@@ -418,12 +450,12 @@ export function createStreamServer(o: StreamServerOptions) {
    * raster, frame it with `pack`, then the durable delivery record — in that
    * order, so a unit over its frame cap leaves no delivery row, and nothing
    * goes out unrecorded. `undefined`: the caller died meanwhile (send nothing). */
-  async function deliverRaster(alive: () => boolean, sid: string, sd: { doc: DocState; forensic?: Issued }, unitIndex: number, scale: number, unit: RenderedUnit & { kind: 'raster' }, pack: (u: RenderedUnit & { kind: 'raster' }) => Uint8Array[][] | undefined): Promise<{ messages: Uint8Array[][]; unmarked?: string } | RefusalCode | undefined> {
+  async function deliverRaster(alive: () => boolean, sid: string, sd: { doc: DocState; forensic?: Issued }, unitIndex: number, scale: number, unit: RenderedUnit & { kind: 'raster' }, pack: (u: RenderedUnit & { kind: 'raster' }) => Uint8Array[][] | undefined, signal?: AbortSignal): Promise<{ messages: Uint8Array[][]; unmarked?: string } | RefusalCode | undefined> {
     // Every raster this session receives — fallbacks included — carries its Layer-1 mark.
     let unmarked: string | undefined
     const canonical = sd.forensic ? unit.png : undefined
     if (sd.forensic) {
-      const m = await markUnit(sid, sd, `${unitIndex}@${scale}`, unit)
+      const m = await markUnit(sid, sd, `${unitIndex}@${scale}`, unit, signal)
       if (!alive()) return undefined
       if (typeof m === 'string') return m
       unit = m.unit; unmarked = m.unmarked
@@ -474,7 +506,7 @@ export function createStreamServer(o: StreamServerOptions) {
       batch: (job) => {
         // A long walk can outlive the parse: every job re-charges it.
         if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return Promise.reject(new Error('document cache full'))
-        return o.pool.text(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, ...job })
+        return o.pool.text(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, ...job }, undefined, ws.data.gone.signal)
       },
       alive: textAlive(ws, s.sid, sd),
       send: (m) => send(ws, m),
@@ -495,7 +527,7 @@ export function createStreamServer(o: StreamServerOptions) {
     if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return refuse(ws, reqId, 'policy-refused')
     await runSelect({
       slot: sd, reqId, range,
-      job: (job) => o.pool.text(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, ...job }),
+      job: (job) => o.pool.text(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, ...job }, undefined, ws.data.gone.signal),
       alive: textAlive(ws, s.sid, sd),
       send: (m) => send(ws, m),
       refuse: (code) => refuse(ws, reqId, code),
@@ -519,7 +551,7 @@ export function createStreamServer(o: StreamServerOptions) {
       job: (job) => {
         // A queued copy can outlive the parse: charge it when it runs.
         if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return Promise.reject(new Error('document cache full'))
-        return o.pool.text(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, ...job })
+        return o.pool.text(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, ...job }, undefined, ws.data.gone.signal)
       },
       record: (r) => audit.recordCopy({ sid: s.sid, kind: 'copy', ...r }),
       alive: textAlive(ws, s.sid, sd),
@@ -547,7 +579,7 @@ export function createStreamServer(o: StreamServerOptions) {
       caps: () => sd.policy.copy,
       job: (job) => {
         if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return Promise.reject(new Error('document cache full'))
-        return o.pool.text(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, ...job })
+        return o.pool.text(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, ...job }, undefined, ws.data.gone.signal)
       },
       record: (r) => audit.recordCopy({ sid: s.sid, kind: 'a11y', paragraphs: r.paragraphs, fromUnit: args.unit, toUnit: args.unit }),
       alive: textAlive(ws, s.sid, sd),
@@ -652,7 +684,7 @@ export function createStreamServer(o: StreamServerOptions) {
     const run = async <T extends NotesPlan | NotesRaster>(draw: boolean, estimate: number): Promise<T | 'rate-limited' | 'policy-refused' | undefined> => {
       if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return 'policy-refused'
       let r: NotesPlan | NotesRaster
-      try { r = await o.pool.notes(s.sid, { ...job, draw }, estimate) } catch (e) { return alive() ? (e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined }
+      try { r = await o.pool.notes(s.sid, { ...job, draw }, estimate, ws.data.gone.signal) } catch (e) { return alive() ? (e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined }
       return alive() ? r as T : undefined
     }
     const plan = await run<NotesPlan>(false, NOTES_PLAN_BYTES)
@@ -667,7 +699,7 @@ export function createStreamServer(o: StreamServerOptions) {
     if (drawn.kind !== 'raster' || drawn.w !== plan.w || drawn.h !== plan.h || drawn.chars !== plan.chars) return deny(reqId, 'policy-refused')
     let img: NotesRaster = drawn
     if (sd.forensic) {
-      const m = await markUnit(s.sid, sd, notesBasisLabel(ui, sc), drawn)
+      const m = await markUnit(s.sid, sd, notesBasisLabel(ui, sc), drawn, ws.data.gone.signal)
       if (!alive()) return
       if (typeof m === 'string') return deny(reqId, m === 'rate-limited' ? m : 'policy-refused')
       // Both marks on every notes image (§13.1): one that cannot carry Layer-1 is not sent.
@@ -683,6 +715,156 @@ export function createStreamServer(o: StreamServerOptions) {
     }
     send(ws, { reqId, type: 'notes-start', w: img.w, h: img.h, scale: sc })
     sendFrames(ws, [f])
+  }
+
+  // -------------------------------------------------------------------------
+  // Piece 4 Task 7: show-plan, show-track, show-morph (plan D1, D4, D7, D11)
+  // -------------------------------------------------------------------------
+
+  /** One asset on its way out: its kind-6 tag, ids and pixels, and its Layer-1 crop (`rest`, page device px). */
+  interface OutAsset { tag: 2 | 3 | 4; assetId: number; w: number; h: number; png: Uint8Array; rest: { x: number; y: number; scale: number } }
+  // The admitted bytes are also the build's preparation grant on the worker (PR #78 round 13, `showBuildGrant`).
+  const showEstimate = (size: UnitSize, scale: number) => showBuildGrant(size, scale)
+  const shownUnit = (d: DocState, u: unknown): u is number => Number.isInteger(u) && (u as number) >= 0 && (u as number) < d.units.length && !d.hidden.has(u as number)
+  const showFailure = (e: unknown): ShowErrorCode => e instanceof AdmissionRefused ? 'rate-limited' : e instanceof RenderTimeout ? 'show-plan-timeout' : e instanceof RenderFailed && e.refusal === 'unit-range' ? 'invalid-unit' : 'policy-refused'
+
+  /**
+   * The three show ops. Their rules run in this order, all before any render (Task 7 brief):
+   * 1. the token, then `can.present` (a deck);
+   * 2. the unit: in range, not hidden, animated (D5); a track's step and a Morph's pair (`to` entered by Morph,
+   *    `from ≠ to`, both shown, `fromStep` an integer in 0..64; its exact range against the from-slide's steps is
+   *    checked on the worker, after the charge);
+   * 3. `scale` in `SCALE_BUCKETS` (1 or 2) and `motion` valid (a Morph under `reduced` motion plays as a fade, D13:
+ *    `invalid-unit`);
+   * 4. the `'unit'` rate: one charge per op (owner decision 2), `close` → 4008, `refuse` → `rate-limited`;
+   * 5. the fingerprint and the document ledger (as `onUnit`);
+   * 6. the build on the docRef's worker (L1/L2 caches, D6);
+   * 7. Layer-1 per asset with the session's basis (`markLayer`, D7); an asset that keeps no carrier ships unmarked;
+   * 8. every message framed, then the durable `show_deliveries` row;
+   * 9. `diag` text (forensic-unmarked, Morph diagnostics), `*-start`, then the kind-6 messages, each one sent only
+   *    while the session lives.
+   */
+  async function onShow(ws: WS, msg: Record<string, unknown>, kind: ShowDeliveryRecord['kind']) {
+    const deny = (reqId: unknown, code: ShowErrorCode) => send(ws, { reqId: isU32(reqId) ? reqId : 0, type: 'error', code })
+    const a = await textOp(ws, msg, undefined, deny)
+    if (!a) return
+    const { reqId, s, sd } = a
+    const d = sd.doc
+    if (d.format !== 'pptx') return deny(reqId, 'policy-refused')
+    const animated = (u: unknown): u is number => shownUnit(d, u) && d.anim.has(u)
+    const step = (x: unknown, max: number): x is number => Number.isInteger(x) && (x as number) >= 0 && (x as number) <= max
+    let unit: number
+    if (kind === 'morph') {
+      if (!shownUnit(d, msg.from) || !animated(msg.to) || !d.morph.has(msg.to) || msg.from === msg.to || !step(msg.fromStep, SHOW_PLAN_LIMITS_STEPS)) return deny(reqId, 'invalid-unit')
+      unit = msg.to
+    } else {
+      if (!animated(msg.unit)) return deny(reqId, 'invalid-unit')
+      if (kind === 'track' && !step(msg.step, SHOW_PLAN_LIMITS_STEPS - 1)) return deny(reqId, 'invalid-unit')
+      unit = msg.unit
+    }
+    const scale = msg.scale, motion = msg.motion
+    if (!(SCALE_BUCKETS as readonly unknown[]).includes(scale) || (scale !== 1 && scale !== 2) || (motion !== 'full' && motion !== 'reduced')) return deny(reqId, 'policy-refused')
+    // D13: under reduced motion a Morph plays as a short fade (`reducedTransition`, as local mode): no pair plays.
+    if (kind === 'morph' && motion === 'reduced') return deny(reqId, 'invalid-unit')
+    const rate = ws.data.rates.check('unit', now())
+    if (rate === 'close') return close(ws, 'rate-limited')
+    if (rate === 'refuse') return deny(reqId, 'rate-limited')
+    if (fingerprintOf(d.contentPolicyId) !== d.fingerprint) return close(ws, 'layout-changed')
+    if (!ledger.touch(d.docRef, sd.policy.contentPolicy, d.bytes.length)) return deny(reqId, 'policy-refused')
+    const alive = textAlive(ws, s.sid, sd)
+    const p = sd.policy, mark = markOf(p, sd.decision), strictMarks = o.animation?.strictMarks === true
+    const base = { docRef: d.docRef, contentPolicy: p.contentPolicy, scale: scale as 1 | 2, motion: motion as 'full' | 'reduced', mark, strictMarks }
+    // A Morph pair prepares both slides (PR #78 round 13): it is admitted for both.
+    const estimate = kind === 'morph' ? showMorphGrant(d.units[msg.from as number]!, d.units[unit]!, scale) : showEstimate(d.units[unit]!, scale)
+
+    // 6. The build.
+    // `head`: the plan (tag 1) or Morph record (tag 5); a track has none.
+    let head: ShowMessage | undefined, assets: OutAsset[], page: { w: number; h: number }, decoded: number
+    const diags: Array<Record<string, unknown>> = []
+    const start: Record<string, unknown> = { reqId, type: `show-${kind}-start`, unit }
+    try {
+      if (kind === 'plan') {
+        const built = await o.pool.showPlan(s.sid, { ...base, unitIndex: unit }, estimate, ws.data.gone.signal)
+        if (!alive()) return
+        if ('refused' in built) return deny(reqId, built.refused)
+        head = { tag: 1, plan: built.plan }
+        assets = built.assets
+        const entry = built.assets.find((x) => x.tag === 3)
+        if (!entry) return deny(reqId, 'policy-refused')
+        page = { w: entry.w, h: entry.h }
+        decoded = built.decodedBytes
+      } else if (kind === 'track') {
+        const frames = await o.pool.showTrack(s.sid, { ...base, unitIndex: unit, step: msg.step as number }, estimate, ws.data.gone.signal)
+        if (!alive()) return
+        if (!frames.length) return deny(reqId, 'invalid-unit')
+        assets = frames.map((f) => ({ tag: 4, ...f, rest: { x: 0, y: 0, scale: 1 } }))
+        page = { w: frames[0]!.w, h: frames[0]!.h }
+        decoded = trackWindowBytes(frames)
+        start.step = msg.step
+      } else {
+        const built = await o.pool.showMorph(s.sid, { ...base, from: msg.from as number, to: unit, fromStep: msg.fromStep as number }, estimate, ws.data.gone.signal)
+        if (!alive()) return
+        if ('refused' in built) return deny(reqId, built.refused)
+        head = { tag: 5, morph: built.record }
+        assets = 'frames' in built ? built.frames.map((f) => ({ tag: 4 as const, ...f })) : built.assets.map((x) => ({ tag: 2 as const, ...x }))
+        page = built.page
+        // A composited pair plays through the D23 window like a track; a layered pair's assets are all held at once.
+        decoded = 'frames' in built ? trackWindowBytes(assets) : assets.reduce((n, x) => n + x.w * x.h * 4, 0)
+        for (const code of built.diagnostics) diags.push({ reqId, type: 'diag', code, unit, ...(code === 'morph-composited' && 'reason' in built ? { reason: built.reason } : {}) })
+        Object.assign(start, { from: msg.from, to: unit, fromStep: msg.fromStep })
+      }
+    } catch (e) { return alive() ? deny(reqId, showFailure(e)) : undefined }
+
+    // 7. Layer-1 per asset, in order (the scratch lease holds two at most).
+    const marked = await markShow(alive, s.sid, sd, unit, scale, page, assets, ws.data.gone.signal)
+    if (marked === undefined) return
+    if (typeof marked === 'string') return deny(reqId, marked)
+
+    // 8. Every message framed (none over its cap), then the durable row.
+    const payloads: Uint8Array[] = []
+    try {
+      if (head) payloads.push(encodeShowMessage(head))
+      for (const x of marked.assets) payloads.push(encodeShowMessage({ tag: x.tag, unit, assetId: x.assetId, w: x.w, h: x.h, png: x.png }))
+    } catch (e) { if (e instanceof PlanRejected) return deny(reqId, 'policy-refused'); throw e }
+    // The Morph record's bytes count toward the reply's decoded total (a plan's are in `decodedBytes` already).
+    if (kind === 'morph') decoded += payloads[0]!.length
+    const messages: Uint8Array[][] = []
+    for (const pl of payloads) { const f = frame(KIND.SHOW_PLAN, reqId, pl); if (!f) return deny(reqId, 'policy-refused'); messages.push(f) }
+    const unmarked = marked.unmarked.length
+    try { audit.recordShow({ sid: s.sid, unitIndex: unit, kind, assetCount: assets.length, unmarked, ...(unmarked ? { reason: marked.reason } : {}) }) } catch { return deny(reqId, 'policy-refused') }
+
+    // 9. Diagnostics, the start, the messages.
+    if (marked.reason === 'layer-capacity' && unmarked) diags.push({ reqId, type: 'diag', code: 'forensic-unmarked', unit, reason: 'layer-capacity', assetIds: marked.unmarked })
+    for (const x of diags) send(ws, x)
+    // D23: a track or Morph start also declares Σ its encoded payloads (retained while it plays); a plan's never.
+    send(ws, { ...start, messages: messages.length, decodedBytes: decoded, ...(kind === 'plan' ? {} : { encodedBytes: payloads.reduce((n, p) => n + p.length, 0) }) })
+    for (const m of messages) {
+      if (!alive()) return
+      if (!sendFrames(ws, [m])) return
+    }
+  }
+
+  /**
+   * D7: Layer-1 on each show asset with the session's page-keyed basis (`${unit}@${scale}`), cropped to the asset's
+   * rest. An asset left with no carrier ships its visibly marked bytes, listed in `unmarked` (`layer-capacity`); a
+   * session without Layer-1 (policy, or `testOnly.forensicOff`) lists every asset (`forensic-off`). `undefined`: the
+   * session died meanwhile (send nothing).
+   */
+  async function markShow(alive: () => boolean, sid: string, sd: { doc: DocState; forensic?: Issued }, unit: number, scale: number, page: { w: number; h: number }, assets: OutAsset[], signal?: AbortSignal): Promise<{ assets: OutAsset[]; unmarked: number[]; reason: 'layer-capacity' | 'forensic-off' } | ShowErrorCode | undefined> {
+    if (!sd.forensic || o.testOnly?.forensicOff === true) return { assets, unmarked: assets.map((x) => x.assetId), reason: 'forensic-off' }
+    const kBasis = deriveBasisKey(o.keys.kBasisRoot, sd.doc.docRef, `${unit}@${scale}`)
+    const out: OutAsset[] = [], unmarked: number[] = []
+    for (const x of assets) {
+      let release: () => void
+      try { release = await leaseFor(sid).acquire() } catch (e) { return e instanceof LeaseFull ? 'rate-limited' : 'policy-refused' }
+      let r
+      try {
+        r = await o.pool.markLayer(sid, { png: x.png, w: x.w, h: x.h, kBasis, code: sd.forensic.code, crop: { x: x.rest.x, y: x.rest.y, pageW: page.w, pageH: page.h, scale: x.rest.scale }, ...(o.encodeHangMs ? { hangMs: o.encodeHangMs } : {}) }, encodeEstimate(x.w, x.h, x.png.length), signal)
+      } catch (e) { return alive() ? (e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined } finally { release() }
+      if (!alive()) return undefined
+      if ('unmarked' in r) { forensicStats.unmarked++; unmarked.push(x.assetId); out.push(x) } else { forensicStats.marked++; out.push({ ...x, png: r.png }) }
+    }
+    return { assets: out, unmarked, reason: 'layer-capacity' }
   }
 
   /** A page failure: `rate-limited` (admission or lease full), anything else `policy-refused`. */
@@ -707,12 +889,12 @@ export function createStreamServer(o: StreamServerOptions) {
   /** §9.4 steps 4–5 for one session: Layer-1 over the canonical raster under
    * the scratch lease, on the basis keyed by `label` (a unit's `${i}@${scale}`,
    * or `notesBasisLabel`). Unmarkable units ship canonical bytes with a reason. */
-  async function markUnit<U extends RenderedUnit & { kind: 'raster' }>(sid: string, sd: { doc: DocState; forensic?: Issued }, label: string, unit: U): Promise<{ unit: U; unmarked?: string } | RefusalCode> {
+  async function markUnit<U extends RenderedUnit & { kind: 'raster' }>(sid: string, sd: { doc: DocState; forensic?: Issued }, label: string, unit: U, signal?: AbortSignal): Promise<{ unit: U; unmarked?: string } | RefusalCode> {
     let release: () => void
     try { release = await leaseFor(sid).acquire() } catch (e) { return e instanceof LeaseFull ? 'rate-limited' : 'policy-refused' }
     try {
       const kBasis = deriveBasisKey(o.keys.kBasisRoot, sd.doc.docRef, label)
-      const r = await o.pool.encode(sid, { png: unit.png, w: unit.w, h: unit.h, kBasis, code: sd.forensic!.code, ...(o.encodeHangMs ? { hangMs: o.encodeHangMs } : {}) }, encodeEstimate(unit.w, unit.h, unit.png.length))
+      const r = await o.pool.encode(sid, { png: unit.png, w: unit.w, h: unit.h, kBasis, code: sd.forensic!.code, ...(o.encodeHangMs ? { hangMs: o.encodeHangMs } : {}) }, encodeEstimate(unit.w, unit.h, unit.png.length), signal)
       if ('unmarked' in r) { forensicStats.unmarked++; return { unit, unmarked: r.unmarked } }
       forensicStats.marked++
       forensicStats.carriers.push(r.carriers); if (forensicStats.carriers.length > 256) forensicStats.carriers.shift()
@@ -783,6 +965,9 @@ export function createStreamServer(o: StreamServerOptions) {
     if (m.type === 'print') return onPrint(ws, m)
     if (m.type === 'print-cancel') return onPrintCancel(ws, m)
     if (m.type === 'notes') return onNotes(ws, m)
+    if (m.type === 'show-plan') return onShow(ws, m, 'plan')
+    if (m.type === 'show-track') return onShow(ws, m, 'track')
+    if (m.type === 'show-morph') return onShow(ws, m, 'morph')
     return refuse(ws, m.reqId, 'policy-refused')
   }
 
@@ -796,7 +981,7 @@ export function createStreamServer(o: StreamServerOptions) {
       const ip = srv.requestIP(req)?.address ?? 'unknown'
       const gate = ipRates.admit(ip, now())
       if (gate !== 'ok') return new Response('Too Many Requests', { status: 429 })
-      const data: Conn = { ip, origin, url: req.url, headers: req.headers, phase: 'hello', rates: new SessionRates(), timers: new Set(), missingFaces: [], drainWaiters: new Set() }
+      const data: Conn = { ip, origin, url: req.url, headers: req.headers, phase: 'hello', rates: new SessionRates(), timers: new Set(), missingFaces: [], drainWaiters: new Set(), gone: new AbortController() }
       if (srv.upgrade(req, { data })) return undefined
       ipRates.release(ip)
       return new Response('Upgrade failed', { status: 400 })
@@ -822,6 +1007,7 @@ export function createStreamServer(o: StreamServerOptions) {
       close(ws: WS, code: number) {
         sockets.delete(ws)
         ipRates.release(ws.data.ip)
+        ws.data.gone.abort()
         wakeDrain(ws)
         for (const t of ws.data.timers) clearTimeout(t)
         const sid = ws.data.sid

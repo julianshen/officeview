@@ -44,7 +44,7 @@
  * applied, and the first Next leaves the slide.
  */
 import type { CTn, ContainerNode, DiagnosticSink, ShowEvent, TimeNode, TimingTree } from '../types'
-import { easeProgress } from './ease'
+import { easeProgress, invertEase } from './ease'
 import { createScheduler, type Scheduler, type SchedulerEntry, type SchedulerSnapshot } from './scheduler'
 
 export interface SlideCursor {
@@ -83,6 +83,12 @@ export interface SlideTimeline {
    * The playback layer fires each node's end at most once per activation.
    */
   mediaEnd(cursor: SlideCursor, nodeId: number, t: number, synthetic: boolean): SlideCursor
+  /**
+   * Additive (piece 4 §6 rule 1, the eligibility classifier's sample times): for this history, every
+   * behaviour's begin and end time and every timing keyframe (`p:tav`) time, within `[from, to]`, sorted and
+   * distinct. Motion-path vertices are not keyframes. Media, indefinite and unresolved nodes are left out.
+   */
+  keyTimes(cursor: SlideCursor, from: number, to: number): number[]
 }
 
 export interface SlideTimelineOptions {
@@ -192,6 +198,7 @@ const staticTimeline: SlideTimeline = Object.freeze({
   initial: () => STATIC,
   busyUntil: () => -INF,
   mediaEnd: (cursor: SlideCursor) => cursor,
+  keyTimes: () => [],
 })
 
 export function createSlideTimeline(tree: TimingTree | { refused: string } | undefined, options: SlideTimelineOptions): SlideTimeline {
@@ -275,6 +282,9 @@ export function createSlideTimeline(tree: TimingTree | { refused: string } | und
   }
   const work: TimingTree = { root, build: tree.build }
   const scheduler: Scheduler = createScheduler(work, { sink: options.sink, slideIndex: options.slideIndex, orderOf })
+
+  /** The most iterations of one behaviour whose keyframe times `keyTimes` lists. */
+  const KEY_ITERATIONS = 64
 
   /** The latest finite end under `node` for this history: a container that never ends is searched below. */
   const finiteEnd = (node: TimeNode, events: readonly ShowEvent[]): number => {
@@ -383,6 +393,39 @@ export function createSlideTimeline(tree: TimingTree | { refused: string } | und
       if (cursor.mode === 'static' || !triggerSet.has(spid)) return undefined
       const events = base(cursor, t)
       return { step: cursor.step, events: [...events, { kind: 'trigger', spid, t }], mode: 'live' }
+    },
+    keyTimes(cursor, from, to) {
+      if (cursor.mode === 'static') return []
+      const out = new Set<number>()
+      const add = (t: number) => { if (Number.isFinite(t) && t >= from && t <= to) out.add(t) }
+      walk(work.root, (n) => {
+        if (isContainer(n) || n.kind === 'audio' || n.kind === 'video') return
+        const e = scheduler.endTimeOf(n.ctn.id, cursor.events)
+        if (typeof e !== 'number' || !Number.isFinite(e)) return
+        const c = n.ctn
+        const d = finite(c.durMs) ?? 0
+        const L = c.autoRev ? 2 * d : d
+        const rc = c.repeatCount === 'indefinite' ? INF : typeof c.repeatCount === 'number' && c.repeatCount > 0 ? c.repeatCount : undefined
+        const rd = c.repeatDurMs === 'indefinite' ? INF : finite(c.repeatDurMs)
+        const ad = rc === undefined && rd === undefined ? L : Math.min(rc === undefined ? INF : L === 0 ? 0 : rc * L, rd ?? INF)
+        if (!Number.isFinite(ad)) return
+        const b = e - ad
+        add(b)
+        add(e)
+        if (n.kind !== 'anim' || !(L > 0)) return
+        const iterations = Math.min(Math.ceil(ad / L), KEY_ITERATIONS)
+        for (let k = 0; k < iterations; k++) {
+          for (const key of n.keys) {
+            if (typeof key.tm !== 'number' || !Number.isFinite(key.tm)) continue
+            const q = invertEase(Math.min(1, Math.max(0, key.tm)), c.accel, c.decel)
+            for (const pos of c.autoRev ? [q / 2, 1 - q / 2] : [q]) {
+              const t = b + (k + pos) * L
+              if (t <= e) add(t)
+            }
+          }
+        }
+      })
+      return [...out].sort((x, y) => x - y)
     },
     mediaEnd(cursor, nodeId, t, synthetic) {
       if (cursor.mode === 'static') return cursor

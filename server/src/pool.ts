@@ -11,7 +11,10 @@
 import { availableParallelism } from 'node:os'
 import { resolve } from 'node:path'
 import { AdmissionModel, DEFAULT_CAPS, type Caps, type Job } from './admission'
-import type { MarkRasterResult } from './mark/mark-raster'
+import type { LayerCrop, MarkLayerResult, MarkRasterResult } from './mark/mark-raster'
+import { SHOW_BUILD_BYTES, showRequestBytes } from './show/grant'
+import { SHOW_PLAN_DEADLINE_MS, type BuiltShowPlan, type ShowPlanJob, type ShowRefusal } from './show/build'
+import type { BuiltMorph, MorphJob } from './show/morph'
 import type { MarkSpec, NotesJob, NotesPlan, NotesRaster, OpenResult, Projection, RenderedUnit } from './render'
 import type { WorkerReply, WorkerRequest } from './worker/render-worker'
 import { prepareWorkspace, TEXT_PREPARE_ALLOWANCE, type TextJob, type TextReply } from './text/served'
@@ -19,6 +22,8 @@ import { prepareWorkspace, TEXT_PREPARE_ALLOWANCE, type TextJob, type TextReply 
 export class AdmissionRefused extends Error { constructor(readonly reason: 'session-queue' | 'process-queue' | 'too-large') { super(`admission refused: ${reason}`); this.name = 'AdmissionRefused' } }
 export class RenderTimeout extends Error { constructor() { super('render deadline exceeded'); this.name = 'RenderTimeout' } }
 export class RenderFailed extends Error { constructor(m: string, readonly refusal?: string) { super(m); this.name = 'RenderFailed' } }
+/** A job whose socket closed before it reached a worker: nothing was run (PR #78 rounds 4–5: show, unit, notes, text). */
+export class ShowCancelled extends RenderFailed { constructor() { super('cancelled: the requesting socket closed'); this.name = 'ShowCancelled' } }
 /** A text op whose units do not all fit the worker's served-index cache at once (Task 5 maps it to copy-too-large). */
 export class TextTooLarge extends Error { constructor(readonly missing: number[]) { super(`text range exceeds the served-index cache (${missing.length} units missing)`); this.name = 'TextTooLarge' } }
 
@@ -27,12 +32,19 @@ export interface RenderJob { docRef: string; contentPolicy: 'visible-only' | 'fu
 export type PoolNotesJob = { docRef: string; contentPolicy: 'visible-only' | 'full' } & NotesJob
 /** A per-session Layer-1 encode (§9.4); no document affinity. */
 export interface EncodeJob { png: Uint8Array; w: number; h: number; kBasis: Uint8Array; code: Int8Array; hangMs?: number; crash?: boolean }
+/** Piece 4: a show-plan bundle or track job on the docRef's worker. */
+export type PoolShowJob = { docRef: string; contentPolicy: 'visible-only' | 'full'; hangMs?: number; crash?: boolean } & ShowPlanJob
+/** Piece 4 Task 7: a Morph pair job on the docRef's worker. */
+export type PoolMorphJob = { docRef: string; contentPolicy: 'visible-only' | 'full'; hangMs?: number; crash?: boolean } & MorphJob
+/** Piece 4 D7: a show-plan layer's per-session Layer-1 encode. */
+export interface MarkLayerJob { png: Uint8Array; w: number; h: number; kBasis: Uint8Array; code: Int8Array; crop: LayerCrop; hangMs?: number; crash?: boolean }
+export { SHOW_PLAN_DEADLINE_MS }
 export type PoolTextJob = { docRef: string; contentPolicy: 'visible-only' | 'full' } & TextJob
 /** Admission charge of one text op itself (index assembly, answer text);
  * every prepare it needs is charged separately (`prepareWorkspace`). */
 export const TEXT_JOB_BYTES = TEXT_PREPARE_ALLOWANCE
 /** `servedCacheBytes`: the worker's served-index bound per document (R6 default 32 MiB). */
-export interface PoolOptions { workers?: number; caps?: Caps; recyclePages?: number; now?: () => number; testHooks?: boolean; openDeadlineMs?: number; servedCacheBytes?: number }
+export interface PoolOptions { /** Piece 4 (tests shorten it): the show-plan job deadline, default `SHOW_PLAN_DEADLINE_MS`. */ showDeadlineMs?: number; workers?: number; caps?: Caps; recyclePages?: number; now?: () => number; testHooks?: boolean; openDeadlineMs?: number; servedCacheBytes?: number }
 
 const WORKER_URL = resolve(import.meta.dir, 'worker/render-worker.ts')
 const PRELOAD = resolve(import.meta.dir, '../../scripts/stream-s0/napi-preload.ts')
@@ -52,7 +64,12 @@ interface Slot {
   pages: number
   parses: number
   generation: number
+  /** The preparation grant of the show job holding this slot (0: none). */
+  prep: number
 }
+
+/** Round 13d: show requests a session may have waiting for its show slot (one more is running). */
+export const showQueueBound = (caps: Caps) => caps.perSessionOutstanding + caps.perSessionQueue - 1
 
 export class Pool {
   readonly admission: AdmissionModel
@@ -68,11 +85,44 @@ export class Pool {
   private readonly now: () => number
   private readonly testHooks: boolean
   private readonly servedCacheBytes?: number
+  private readonly showDeadlineMs: number
+  /**
+   * Piece 4 (controller ruling): show-plan refusals by slide (`docRef|policy|unit|scale|motion|strictMarks`: the
+   * L1 tuple; the fingerprint is per process). A slide that timed out retired its worker, and with it the worker's
+   * cache: a repeat request answers here, with no admission and no worker.
+   */
+  private showRefusals = new Map<string, ShowRefusal>()
+  /**
+   * Task 7 follow-up (controller ruling): track and Morph-pair refusals, the same way. A track is keyed by the
+   * slide's L1 tuple and its step, a pair by `docRef|policy|morph|from|to|fromStep|scale|motion|strictMarks`.
+   * `timeout`: the job passed the show deadline (its worker was retired); a repeat throws `RenderTimeout` at once.
+   * `morph-fallback`: `planMorph` refused the pair (deterministic). Cleared with `showRefusals` (re-register, forget).
+   */
+  private jobRefusals = new Map<string, 'timeout' | 'morph-fallback'>()
+  /** Runs `run` unless `key` is known refused; a timeout (and a Morph refusal) is remembered while the document is registered. */
+  private async remembered<T>(docRef: string, key: string, run: () => Promise<T>): Promise<T> {
+    const known = this.jobRefusals.get(key)
+    if (known === 'timeout') throw new RenderTimeout()
+    if (known === 'morph-fallback') return { refused: 'morph-fallback' } as T
+    try {
+      const r = await run()
+      if (r && typeof r === 'object' && (r as { refused?: unknown }).refused === 'morph-fallback' && this.sources.has(docRef)) this.jobRefusals.set(key, 'morph-fallback')
+      return r
+    } catch (e) {
+      if (e instanceof RenderTimeout && this.sources.has(docRef)) this.jobRefusals.set(key, 'timeout')
+      throw e
+    }
+  }
   /** `${docRef}|${policy}` → unit sizes from the last parse (prepare charges). */
   private unitSizes = new Map<string, OpenResult['units']>()
   private disposed = false
   /** Queued admission jobs waiting to start: resolve(true) = started, resolve(false) = cancelled. */
   private waiters = new Map<number, (started: boolean) => void>()
+  /** Worker-time preparation reservations (owner ruling, round 13b). */
+  private prep = { reserved: 0, peak: 0, peakPerWorker: 0, peakPerSession: 0 }
+  private prepBySession = new Map<string, number>()
+  /** Round 13c: each session's show slot (one running show job) and its waiters, in order. */
+  private showSessions = new Map<string, { busy: boolean; waiters: Array<() => void> }>()
 
   constructor(opts: PoolOptions = {}) {
     this.admission = new AdmissionModel(opts.caps ?? DEFAULT_CAPS)
@@ -81,8 +131,9 @@ export class Pool {
     this.now = opts.now ?? (() => performance.now())
     this.testHooks = opts.testHooks ?? false
     this.servedCacheBytes = opts.servedCacheBytes
+    this.showDeadlineMs = opts.showDeadlineMs ?? SHOW_PLAN_DEADLINE_MS
     for (let i = 0; i < (opts.workers ?? defaultWorkers()); i++) {
-      const slot = { index: i, busy: false, queue: [], pending: new Map(), docs: new Map(), pages: 0, parses: 0, generation: 0, closed: false } as unknown as Slot
+      const slot = { index: i, busy: false, queue: [], pending: new Map(), docs: new Map(), pages: 0, parses: 0, generation: 0, closed: false, prep: 0 } as unknown as Slot
       this.attach(slot)
       this.slots.push(slot)
     }
@@ -173,6 +224,7 @@ export class Pool {
   async open(docRef: string, bytes: Uint8Array, contentPolicy: 'visible-only' | 'full'): Promise<OpenResult> {
     if (this.disposed) throw new RenderFailed('pool disposed')
     this.sources.set(docRef, bytes)
+    this.dropShowRefusals(docRef)
     const slot = this.pick(docRef)
     return this.exclusive(slot, async () => (await this.ensureOpen(slot, docRef, contentPolicy, true)).open!)
   }
@@ -181,31 +233,29 @@ export class Pool {
    * path refunds exactly once: here for normal ends, in `renderOn` (after the
    * worker is gone) for a retired job, in `admission.cancel` for a queued job
    * that never started. */
-  async render(sessionId: string, job: RenderJob, bytesEstimate: number): Promise<RenderedUnit> {
-    if (this.disposed) throw new RenderFailed('pool disposed')
-    const res = this.admission.request(sessionId, bytesEstimate, this.now())
-    if (res.status === 'refused') throw new AdmissionRefused(res.reason)
-    const admitted = res.job
-    if (res.status === 'queued' && !(await new Promise<boolean>((r) => this.waiters.set(admitted.id, r)))) throw new RenderFailed('pool disposed')
+  async render(sessionId: string, job: RenderJob, bytesEstimate: number, signal?: AbortSignal): Promise<RenderedUnit> {
+    const admitted = await this.admit(sessionId, bytesEstimate, signal)
     const slot = this.pick(job.docRef)
     try {
-      return await this.exclusive(slot, () => this.renderOn(slot, admitted, job))
+      return await this.exclusive(slot, () => {
+        // Admitted, then waited for the worker: a socket that closed meanwhile has no use for the render.
+        if (signal?.aborted) throw new ShowCancelled()
+        return this.renderOn(slot, admitted, job, signal)
+      })
     } finally {
       if (admitted.state === 'running') this.finish(admitted)
     }
   }
 
   /** A notes job (Stage 3c): the same affinity, admission, deadline and recycle paths as `render`. */
-  async notes(sessionId: string, job: PoolNotesJob, bytesEstimate: number): Promise<NotesPlan | NotesRaster> {
-    if (this.disposed) throw new RenderFailed('pool disposed')
-    const res = this.admission.request(sessionId, bytesEstimate, this.now())
-    if (res.status === 'refused') throw new AdmissionRefused(res.reason)
-    const admitted = res.job
-    if (res.status === 'queued' && !(await new Promise<boolean>((r) => this.waiters.set(admitted.id, r)))) throw new RenderFailed('pool disposed')
+  async notes(sessionId: string, job: PoolNotesJob, bytesEstimate: number, signal?: AbortSignal): Promise<NotesPlan | NotesRaster> {
+    const admitted = await this.admit(sessionId, bytesEstimate, signal)
     const slot = this.pick(job.docRef)
     try {
       return await this.exclusive(slot, async () => {
+        if (signal?.aborted) throw new ShowCancelled()
         const { docKey } = await this.ensureOpen(slot, job.docRef, job.contentPolicy)
+        if (signal?.aborted) throw new ShowCancelled()
         const r = await this.runJob(slot, admitted, { type: 'notes', id: this.nextId++, docKey, unitIndex: job.unitIndex, scale: job.scale, mark: job.mark, draw: job.draw })
         if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
         return r as NotesPlan | NotesRaster
@@ -219,15 +269,12 @@ export class Pool {
    * least-loaded worker. `bytesEstimate` = w·h·4·3 (decode + marked copy +
    * encode buffers). The PNG is copied to the worker, never transferred: the
    * caller's bytes are the shared canonical cache entry. */
-  async encode(sessionId: string, job: EncodeJob, bytesEstimate: number): Promise<MarkRasterResult> {
-    if (this.disposed) throw new RenderFailed('pool disposed')
-    const res = this.admission.request(sessionId, bytesEstimate, this.now())
-    if (res.status === 'refused') throw new AdmissionRefused(res.reason)
-    const admitted = res.job
-    if (res.status === 'queued' && !(await new Promise<boolean>((r) => this.waiters.set(admitted.id, r)))) throw new RenderFailed('pool disposed')
+  async encode(sessionId: string, job: EncodeJob, bytesEstimate: number, signal?: AbortSignal): Promise<MarkRasterResult> {
+    const admitted = await this.admit(sessionId, bytesEstimate, signal)
     const slot = [...this.slots].sort((a, b) => (Number(a.busy) - Number(b.busy)) || (a.queue.length - b.queue.length) || a.index - b.index)[0]!
     try {
       return await this.exclusive(slot, () => {
+        if (signal?.aborted) throw new ShowCancelled()
         const msg: WorkerRequest = { type: 'encode', id: this.nextId++, png: job.png, w: job.w, h: job.h, kBasis: job.kBasis, code: job.code, ...(this.testHooks && job.hangMs ? { hangMs: job.hangMs } : {}), ...(this.testHooks && job.crash ? { crash: true } : {}) }
         this.encodes++
         return this.runJob(slot, admitted, msg) as Promise<MarkRasterResult>
@@ -237,6 +284,181 @@ export class Pool {
     }
   }
 
+  /**
+   * Piece 4: one slide's show-plan bundle, with the same document affinity, admission and recycle paths as
+   * `render`, under `SHOW_PLAN_DEADLINE_MS` (10 s, against 2 s for units). A bundle past the deadline retires
+   * its worker and plays its still: `{ refused: 'show-plan-timeout' }`.
+   */
+  async showPlan(sessionId: string, job: PoolShowJob, bytesEstimate: number, signal?: AbortSignal): Promise<BuiltShowPlan | ShowRefusal> {
+    const { docRef, contentPolicy, hangMs, crash, ...show } = job
+    const key = [docRef, contentPolicy, show.unitIndex, show.scale, show.motion, show.strictMarks].join('|')
+    const known = this.showRefusals.get(key)
+    if (known) return known
+    let r: BuiltShowPlan | ShowRefusal
+    try {
+      r = await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-plan', id: this.nextId++, docKey, job: show, grant: bytesEstimate, ...this.hooks(hangMs, crash) }), signal) as BuiltShowPlan | ShowRefusal
+    } catch (e) {
+      if (!(e instanceof RenderTimeout)) throw e
+      r = { refused: 'show-plan-timeout', diagnostics: [{ code: 'show-plan-timeout' }] }
+    }
+    if ('refused' in r && this.sources.has(docRef)) this.showRefusals.set(key, r)
+    return r
+  }
+
+  /** Piece 4: the keyframe track of one composited step (affinity, admission, `SHOW_PLAN_DEADLINE_MS`; a timeout throws `RenderTimeout`). */
+  async showTrack(sessionId: string, job: PoolShowJob & { step: number }, bytesEstimate: number, signal?: AbortSignal): Promise<Array<{ assetId: number; w: number; h: number; png: Uint8Array }>> {
+    const { docRef, contentPolicy, hangMs, crash, ...show } = job
+    const plan = [docRef, contentPolicy, show.unitIndex, show.scale, show.motion, show.strictMarks].join('|')
+    // A slide whose bundle is refused has no track.
+    if (this.showRefusals.has(plan)) return []
+    return await this.remembered(docRef, `${plan}|track|${show.step}`, async () => await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-track', id: this.nextId++, docKey, job: show, grant: bytesEstimate, ...this.hooks(hangMs, crash) }), signal) as Array<{ assetId: number; w: number; h: number; png: Uint8Array }>)
+  }
+
+  /** Piece 4 Task 7: one Morph pair (affinity, admission, `SHOW_PLAN_DEADLINE_MS`; a timeout throws `RenderTimeout`). */
+  async showMorph(sessionId: string, job: PoolMorphJob, bytesEstimate: number, signal?: AbortSignal): Promise<BuiltMorph> {
+    const { docRef, contentPolicy, hangMs, crash, ...morph } = job
+    const key = [docRef, contentPolicy, 'morph', morph.from, morph.to, morph.fromStep, morph.scale, morph.motion, morph.strictMarks === true].join('|')
+    return await this.remembered(docRef, key, async () => await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-morph', id: this.nextId++, docKey, job: morph, grant: bytesEstimate, ...this.hooks(hangMs, crash) }), signal) as BuiltMorph)
+  }
+
+  /**
+   * Piece 4 D7: a layer's per-session Layer-1 encode. It reads no document, so it runs on the least-loaded
+   * worker as `encode` does, with the same admission, under `SHOW_PLAN_DEADLINE_MS`.
+   */
+  async markLayer(sessionId: string, job: MarkLayerJob, bytesEstimate: number, signal?: AbortSignal): Promise<MarkLayerResult> {
+    const admitted = await this.admit(sessionId, bytesEstimate, signal)
+    const slot = [...this.slots].sort((a, b) => (Number(a.busy) - Number(b.busy)) || (a.queue.length - b.queue.length) || a.index - b.index)[0]!
+    try {
+      return await this.exclusive(slot, () => {
+        if (signal?.aborted) throw new ShowCancelled()
+        const msg: WorkerRequest = { type: 'mark-layer', id: this.nextId++, png: job.png, w: job.w, h: job.h, kBasis: job.kBasis, code: job.code, crop: job.crop, ...this.hooks(job.hangMs, job.crash) }
+        return this.runJob(slot, admitted, msg, this.showDeadlineMs) as Promise<MarkLayerResult>
+      })
+    } finally {
+      if (admitted.state === 'running') this.finish(admitted)
+    }
+  }
+
+  private hooks(hangMs?: number, crash?: boolean) { return { ...(this.testHooks && hangMs ? { hangMs } : {}), ...(this.testHooks && crash ? { crash: true } : {}) } }
+
+  /** A show job on the docRef's worker: admission, affinity, the show deadline, the recycle check. */
+  /**
+   * Admission for one job of `sessionId`: refused, started, or queued until it starts. `signal` (the requesting
+   * socket's): aborted while queued, the job leaves the queue unstarted (nothing charged) and `ShowCancelled` is
+   * thrown; aborted before the call, nothing is requested (PR #78 rounds 4–5: a closed page's backlog never runs).
+   */
+  private async admit(sessionId: string, bytesEstimate: number, signal?: AbortSignal): Promise<Job> {
+    if (this.disposed) throw new RenderFailed('pool disposed')
+    if (signal?.aborted) throw new ShowCancelled()
+    const res = this.admission.request(sessionId, bytesEstimate, this.now())
+    if (res.status === 'refused') throw new AdmissionRefused(res.reason)
+    const admitted = res.job
+    if (res.status === 'admitted') return admitted
+    let onAbort: (() => void) | undefined
+    const started = await new Promise<boolean>((r) => {
+      this.waiters.set(admitted.id, r)
+      onAbort = () => { if (this.waiters.get(admitted.id) === r && this.admission.cancel(admitted.id)) { this.waiters.delete(admitted.id); r(false) } }
+      signal?.addEventListener('abort', onAbort, { once: true })
+    })
+    if (onAbort) signal?.removeEventListener('abort', onAbort)
+    if (!started) throw this.disposed ? new RenderFailed('pool disposed') : new ShowCancelled()
+    return admitted
+  }
+
+  /**
+   * Owner ruling (PR #78 round 13b, reserve per worker): `grant` is the job's preparation grant. The session is
+   * admitted only for `showRequestBytes(grant)` (its queue entry and encoded reply); the grant itself is reserved
+   * when the job holds its worker's slot (`exclusive`: one job per worker) and released when it ends, so preparation
+   * never holds more than workers × `SHOW_BUILD_BYTES` (`stats().prep`).
+   */
+  private async showJob(sessionId: string, docRef: string, contentPolicy: 'visible-only' | 'full', grant: number, msg: (docKey: string) => WorkerRequest, signal?: AbortSignal): Promise<unknown> {
+    // Round 13c: one running show job per session (its session slot first, then admission, then its worker's), so a
+    // viewer holds one grant at most whatever the worker count. Round 13d: a job waiting for the session slot holds
+    // no general admission (no running place, no bytes), so the session's unit renders are not held behind it.
+    const leave = await this.sessionShowSlot(sessionId, signal)
+    try {
+      const admitted = await this.admit(sessionId, showRequestBytes(grant), signal)
+      try {
+        const slot = this.pick(docRef)
+        return await this.exclusive(slot, async () => {
+          // Admitted, then waited for the worker: a socket that closed meanwhile has no use for the build.
+          if (signal?.aborted) throw new ShowCancelled()
+          const held = this.reservePrep(slot, grant, sessionId)
+          try { return await this.showOnSlot(slot, admitted, docRef, contentPolicy, msg, signal) } finally { this.releasePrep(slot, held, sessionId) }
+        })
+      } finally {
+        if (admitted.state === 'running') this.finish(admitted)
+      }
+    } finally { leave() }
+  }
+
+  /**
+   * Round 13c: the session's show slot (one running show job per session). Resolves with its release, which hands
+   * the slot to the session's next waiter in order. `signal` aborted while waiting: the waiter leaves at once and
+   * `ShowCancelled` is thrown (it never took the slot).
+   */
+  private async sessionShowSlot(sessionId: string, signal?: AbortSignal): Promise<() => void> {
+    if (signal?.aborted) throw new ShowCancelled()
+    let q = this.showSessions.get(sessionId)
+    if (!q) this.showSessions.set(sessionId, q = { busy: false, waiters: [] })
+    const s = q
+    let released = false
+    const release = () => {
+      if (released) return
+      released = true
+      const next = s.waiters.shift()
+      if (next) next()
+      else { s.busy = false; this.showSessions.delete(sessionId) }
+    }
+    if (!s.busy) { s.busy = true; return release }
+    // Round 13d: bounded so a session keeps as many show requests in flight as general admission allowed it before
+    // (its running places plus its queue: 8 + 32), and refused the same way (`session-queue`).
+    if (s.waiters.length >= showQueueBound(this.admission.caps)) { this.admission.refusals['session-queue']++; throw new AdmissionRefused('session-queue') }
+    await new Promise<void>((ok, fail) => {
+      const onAbort = () => {
+        const i = s.waiters.indexOf(wake)
+        if (i >= 0) s.waiters.splice(i, 1)
+        fail(new ShowCancelled())
+      }
+      const wake = () => { signal?.removeEventListener('abort', onAbort); ok() }
+      s.waiters.push(wake)
+      signal?.addEventListener('abort', onAbort, { once: true })
+    })
+    return release
+  }
+
+  /** The worker's preparation reservation for the job on its slot (at most `SHOW_BUILD_BYTES`; one per worker). */
+  private reservePrep(slot: Slot, grant: number, sessionId: string): number {
+    const bytes = Math.max(0, Math.min(SHOW_BUILD_BYTES, Number.isFinite(grant) ? grant : SHOW_BUILD_BYTES))
+    if (slot.prep !== 0) throw new Error('pool: a worker holds two preparation grants')
+    slot.prep = bytes
+    this.prep.reserved += bytes
+    if (this.prep.reserved > this.slots.length * SHOW_BUILD_BYTES) throw new Error('pool: preparation past workers × SHOW_BUILD_BYTES')
+    this.prep.peak = Math.max(this.prep.peak, this.prep.reserved)
+    this.prep.peakPerWorker = Math.max(this.prep.peakPerWorker, bytes)
+    const mine = (this.prepBySession.get(sessionId) ?? 0) + bytes
+    if (mine > SHOW_BUILD_BYTES) throw new Error('pool: a session past one preparation grant')
+    this.prepBySession.set(sessionId, mine)
+    this.prep.peakPerSession = Math.max(this.prep.peakPerSession, mine)
+    return bytes
+  }
+  private releasePrep(slot: Slot, bytes: number, sessionId: string): void {
+    slot.prep = 0
+    this.prep.reserved -= bytes
+    const mine = (this.prepBySession.get(sessionId) ?? 0) - bytes
+    if (mine > 0) this.prepBySession.set(sessionId, mine); else this.prepBySession.delete(sessionId)
+  }
+
+  private async showOnSlot(slot: Slot, admitted: Job, docRef: string, contentPolicy: 'visible-only' | 'full', msg: (docKey: string) => WorkerRequest, signal?: AbortSignal): Promise<unknown> {
+    const { docKey } = await this.ensureOpen(slot, docRef, contentPolicy)
+    // Again after the (re)open: a socket that closed while the document was parsed gets no build.
+    if (signal?.aborted) throw new ShowCancelled()
+    const r = await this.runJob(slot, admitted, msg(docKey), this.showDeadlineMs)
+    if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
+    return r
+  }
+
+
   /** A text op on the docRef's worker (affinity, admission, deadline as
    * `render`). The op is charged `bytesEstimate`; every prepare (explicit or
    * for a `{ missing }` answer) is charged `prepareWorkspace(w, h)` from the
@@ -245,22 +467,24 @@ export class Pool {
    * job each, render deadline) and retries once; still missing ⇒
    * TextTooLarge. Everything runs in one exclusive turn of the slot, and the
    * recycle threshold is checked on every exit, success or not. */
-  async text(sessionId: string, job: PoolTextJob, bytesEstimate = TEXT_JOB_BYTES): Promise<TextReply> {
-    if (this.disposed) throw new RenderFailed('pool disposed')
-    const res = this.admission.request(sessionId, bytesEstimate, this.now())
-    if (res.status === 'refused') throw new AdmissionRefused(res.reason)
-    const admitted = res.job
-    if (res.status === 'queued' && !(await new Promise<boolean>((r) => this.waiters.set(admitted.id, r)))) throw new RenderFailed('pool disposed')
+  async text(sessionId: string, job: PoolTextJob, bytesEstimate = TEXT_JOB_BYTES, signal?: AbortSignal): Promise<TextReply> {
+    const admitted = await this.admit(sessionId, bytesEstimate, signal)
     const slot = this.pick(job.docRef)
     const { docRef: _d, contentPolicy: _c, ...rest } = job
     const op = rest as TextJob
     const k = `${job.docRef}|${job.contentPolicy}`
     try {
       return await this.exclusive(slot, async () => {
+        if (signal?.aborted) throw new ShowCancelled()
         const generation = slot.generation
         try {
           const { docKey } = await this.ensureOpen(slot, job.docRef, job.contentPolicy)
-          const post = (j: TextJob, owner: Job, grant?: number) => this.runJob(slot, owner, { type: 'text', id: this.nextId++, docKey, job: j, ...(grant !== undefined ? { grant } : {}) }) as Promise<TextReply>
+          // Checked before every post (after the reopen, and between a prepare and its retry): a closed socket's
+          // text op stops at the next await.
+          const post = (j: TextJob, owner: Job, grant?: number) => {
+            if (signal?.aborted) return Promise.reject(new ShowCancelled())
+            return this.runJob(slot, owner, { type: 'text', id: this.nextId++, docKey, job: j, ...(grant !== undefined ? { grant } : {}) }) as Promise<TextReply>
+          }
           const prepare = (unit: number) => this.prepareOn(sessionId, k, unit, (owner, grant) => post({ op: 'prepare', unit }, owner, grant))
           if (op.op === 'prepare') return await prepare(op.unit)
           let r = await post(op, admitted)
@@ -303,8 +527,10 @@ export class Pool {
     for (const j of started) { this.waiters.get(j.id)?.(true); this.waiters.delete(j.id) }
   }
 
-  private async renderOn(slot: Slot, admitted: Job, job: RenderJob): Promise<RenderedUnit> {
+  private async renderOn(slot: Slot, admitted: Job, job: RenderJob, signal?: AbortSignal): Promise<RenderedUnit> {
     const { docKey } = await this.ensureOpen(slot, job.docRef, job.contentPolicy)
+    // Again after the (re)open: a socket that closed while the document was parsed gets no render.
+    if (signal?.aborted) throw new ShowCancelled()
     const msg: WorkerRequest = { type: 'render', id: this.nextId++, docKey, unitIndex: job.unitIndex, scale: job.scale, projection: job.projection, mark: job.mark, ...(job.missingFaces ? { missingFaces: job.missingFaces } : {}), ...(this.testHooks && job.hangMs ? { hangMs: job.hangMs } : {}), ...(this.testHooks && job.crash ? { crash: true } : {}) }
     const r = await this.runJob(slot, admitted, msg)
     if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
@@ -312,10 +538,10 @@ export class Pool {
   }
 
   /** Posts one admitted job under the render deadline; owns the retire paths. */
-  private async runJob(slot: Slot, admitted: Job, msg: WorkerRequest): Promise<unknown> {
+  private async runJob(slot: Slot, admitted: Job, msg: WorkerRequest, deadlineMs = this.admission.caps.renderDeadlineMs): Promise<unknown> {
     // The deadline covers the paint only (the worker is idle when we post).
     admitted.startedAt = this.now()
-    const reply = await this.post(slot, msg, this.admission.caps.renderDeadlineMs + 1)
+    const reply = await this.post(slot, msg, deadlineMs + 1)
     if (reply === 'timeout') {
       // Retirement owner: only THIS job retires; its charge stays reserved
       // until the worker is gone, then is refunded once.
@@ -371,12 +597,19 @@ export class Pool {
     this.unitSizes.delete(`${docRef}|visible-only`); this.unitSizes.delete(`${docRef}|full`)
     this.sources.delete(docRef)
     this.affinity.delete(docRef)
+    this.dropShowRefusals(docRef)
+  }
+
+  private dropShowRefusals(docRef: string) {
+    for (const k of this.showRefusals.keys()) if (k.startsWith(`${docRef}|`)) this.showRefusals.delete(k)
+    for (const k of this.jobRefusals.keys()) if (k.startsWith(`${docRef}|`)) this.jobRefusals.delete(k)
   }
 
   stats() {
     return {
       workers: this.slots.map((s) => ({ index: s.index, generation: s.generation, pages: s.pages, parses: s.parses, docs: s.docs.size, busy: s.busy, closed: s.closed })),
       reserved: this.admission.reserved, running: this.admission.runningCount, queued: this.admission.queued,
+      prep: { ...this.prep, bound: this.slots.length * SHOW_BUILD_BYTES },
       retired: this.retired, recycled: this.recycled, encodes: this.encodes, affinity: Object.fromEntries(this.affinity), unitSizes: this.unitSizes.size,
     }
   }

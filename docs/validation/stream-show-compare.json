@@ -1,0 +1,6624 @@
+{
+  "generated": "bun scripts/stream-show-compare.ts --deck all",
+  "approx": {
+    "meanAbs": 0.08,
+    "rowMax": 0.3
+  },
+  "families": [
+    {
+      "family": "latin",
+      "meanAbs": 0.003265,
+      "rowMax": 0.154171,
+      "slides": 55,
+      "over": false
+    }
+  ],
+  "widening": [
+    {
+      "deck": "flyInDeck",
+      "slide": 1,
+      "family": "latin",
+      "layers": 3,
+      "meanAbs": 0.0000530648602033406,
+      "rowMax": 0.005138888888888888
+    },
+    {
+      "deck": "morphDeck",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.00004833310639070443,
+      "rowMax": 0.004497549019607843
+    },
+    {
+      "deck": "morphDeck",
+      "slide": 2,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.00004833310639070443,
+      "rowMax": 0.004497549019607843
+    },
+    {
+      "deck": "cubeDeck",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 6.35439360929557e-7,
+      "rowMax": 0.0002777777777777778
+    },
+    {
+      "deck": "cubeDeck",
+      "slide": 2,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 9.758533042846768e-7,
+      "rowMax": 0.0003921568627450981
+    },
+    {
+      "deck": "morphCompositedDeck",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.0000026892701525054465,
+      "rowMax": 0.0003921568627450981
+    },
+    {
+      "deck": "morphCompositedDeck",
+      "slide": 2,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.0000026892701525054465,
+      "rowMax": 0.0003921568627450981
+    },
+    {
+      "deck": "longStepDeck",
+      "slide": 1,
+      "family": "latin",
+      "layers": 2,
+      "meanAbs": 9.928740014524328e-7,
+      "rowMax": 0.0004003267973856209
+    },
+    {
+      "deck": "cmdHoldDeck",
+      "slide": 1,
+      "family": "latin",
+      "layers": 2,
+      "meanAbs": 0.0000020708514887436455,
+      "rowMax": 0.0004003267973856209
+    },
+    {
+      "deck": "autoplayTransitionDeck",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.0000010779774872912127,
+      "rowMax": 0.0003921568627450981
+    },
+    {
+      "deck": "autoplayTransitionDeck",
+      "slide": 2,
+      "family": "latin",
+      "layers": 2,
+      "meanAbs": 0.0000027913943355119827,
+      "rowMax": 0.00065359477124183
+    },
+    {
+      "deck": "mediaEndDeck",
+      "slide": 1,
+      "family": "latin",
+      "layers": 3,
+      "meanAbs": 0.0000021843228031953523,
+      "rowMax": 0.0004003267973856209
+    },
+    {
+      "deck": "lo-airplane-transition.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0,
+      "rowMax": 0
+    },
+    {
+      "deck": "lo-bnc591147.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 2,
+      "meanAbs": 0,
+      "rowMax": 0
+    },
+    {
+      "deck": "lo-bnc591147.pptx",
+      "slide": 2,
+      "family": "latin",
+      "layers": 2,
+      "meanAbs": 0,
+      "rowMax": 0
+    },
+    {
+      "deck": "lo-connector-shape-animations.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 4,
+      "meanAbs": 0.000035747719226579526,
+      "rowMax": 0.00931985294117647
+    },
+    {
+      "deck": "lo-narration.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 2,
+      "meanAbs": 0,
+      "rowMax": 0
+    },
+    {
+      "deck": "lo-ooxtheme.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.0012683780977668846,
+      "rowMax": 0.036663602941176474
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0,
+      "rowMax": 0
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "slide": 2,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0,
+      "rowMax": 0
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "slide": 3,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0,
+      "rowMax": 0
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "slide": 4,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0,
+      "rowMax": 0
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "slide": 5,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0,
+      "rowMax": 0
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "slide": 6,
+      "family": "latin",
+      "layers": 7,
+      "meanAbs": 0.0005167540395787945,
+      "rowMax": 0.011368464052287582
+    },
+    {
+      "deck": "lo-tdf104792-smart-art-animation.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.00029934300108932463,
+      "rowMax": 0.02412683823529412
+    },
+    {
+      "deck": "lo-tdf105739.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.0020494749114923745,
+      "rowMax": 0.003057598039215686
+    },
+    {
+      "deck": "lo-tdf115394.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.0011482800585511984,
+      "rowMax": 0.08622855392156863
+    },
+    {
+      "deck": "lo-tdf115394.pptx",
+      "slide": 2,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.0013307632080610022,
+      "rowMax": 0.1033455882352941
+    },
+    {
+      "deck": "lo-tdf115394.pptx",
+      "slide": 3,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.0011726919934640521,
+      "rowMax": 0.08842218137254902
+    },
+    {
+      "deck": "lo-tdf115394.pptx",
+      "slide": 4,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.001053708809912854,
+      "rowMax": 0.07456801470588235
+    },
+    {
+      "deck": "lo-tdf115394.pptx",
+      "slide": 5,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.0009741753472222222,
+      "rowMax": 0.07141544117647058
+    },
+    {
+      "deck": "lo-tdf123684.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.00033590771377995645,
+      "rowMax": 0.00947610294117647
+    },
+    {
+      "deck": "lo-tdf142915.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.000022722630718954248,
+      "rowMax": 0.0020618872549019607
+    },
+    {
+      "deck": "lo-tdf142915.pptx",
+      "slide": 2,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.00002398641748366013,
+      "rowMax": 0.0025643382352941177
+    },
+    {
+      "deck": "lo-tdf146223.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.0007669980029048657,
+      "rowMax": 0.03333333333333333
+    },
+    {
+      "deck": "lo-tdf146223.pptx",
+      "slide": 2,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0,
+      "rowMax": 0
+    },
+    {
+      "deck": "lo-tdf149588_transparentSolidFill.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.0005109017565359477,
+      "rowMax": 0.007285539215686275
+    },
+    {
+      "deck": "lo-tdf156808.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0,
+      "rowMax": 0
+    },
+    {
+      "deck": "lo-tdf44223.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 2,
+      "meanAbs": 0.0002784117987472767,
+      "rowMax": 0.0019577205882352943
+    },
+    {
+      "deck": "lo-tdf44223.pptx",
+      "slide": 2,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.000699286832788671,
+      "rowMax": 0.045922181372549026
+    },
+    {
+      "deck": "lo-tdf93868.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 3,
+      "meanAbs": 0.003265324301016703,
+      "rowMax": 0.1541707516339869
+    },
+    {
+      "deck": "poi-copy-slide-demo.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.0005711720452069716,
+      "rowMax": 0.035431985294117646
+    },
+    {
+      "deck": "poi-crop-to-0.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0,
+      "rowMax": 0
+    },
+    {
+      "deck": "poi-crop-to-0.pptx",
+      "slide": 2,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0,
+      "rowMax": 0
+    },
+    {
+      "deck": "poi-crop-to-0.pptx",
+      "slide": 3,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0,
+      "rowMax": 0
+    },
+    {
+      "deck": "poi-picture-transparency.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0,
+      "rowMax": 0
+    },
+    {
+      "deck": "poi-picture-transparency.pptx",
+      "slide": 2,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0,
+      "rowMax": 0
+    },
+    {
+      "deck": "poi-picture-transparency.pptx",
+      "slide": 3,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0,
+      "rowMax": 0
+    },
+    {
+      "deck": "poi-picture-transparency.pptx",
+      "slide": 4,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0,
+      "rowMax": 0
+    },
+    {
+      "deck": "poi-table_test.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.00026641220724400873,
+      "rowMax": 0.03646139705882353
+    },
+    {
+      "deck": "poi-text-highlight.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.0012770246119281044,
+      "rowMax": 0.05683517156862745
+    },
+    {
+      "deck": "pypptx-missing_rels_item.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.001279224537037037,
+      "rowMax": 0.08272467320261438
+    },
+    {
+      "deck": "pypptx-no-core-props.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.0007456143336964415,
+      "rowMax": 0.0417156862745098
+    },
+    {
+      "deck": "pypptx-test.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.001279224537037037,
+      "rowMax": 0.08272467320261438
+    },
+    {
+      "deck": "pypptx-test_slides.pptx",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 0.0012309254720406682,
+      "rowMax": 0.04210375816993464
+    }
+  ],
+  "unitStills": [
+    {
+      "deck": "morphDeck",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.00004833310639070443,
+      "rowMax": 0.004497549019607843,
+      "tol": {
+        "meanAbs": 0.020048333106390703,
+        "rowMax": 0.10449754901960785
+      }
+    },
+    {
+      "deck": "morphDeck",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0038857400599128537,
+      "rowMax": 0.006870915032679739,
+      "tol": {
+        "meanAbs": 0.020048333106390703,
+        "rowMax": 0.10449754901960785
+      }
+    },
+    {
+      "deck": "cubeDeck",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 6.35439360929557e-7,
+      "rowMax": 0.0002777777777777778,
+      "tol": {
+        "meanAbs": 0.020000975853304286,
+        "rowMax": 0.10039215686274511
+      }
+    },
+    {
+      "deck": "cubeDeck",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0029982071532316627,
+      "rowMax": 0.005142973856209151,
+      "tol": {
+        "meanAbs": 0.020000975853304286,
+        "rowMax": 0.10039215686274511
+      }
+    },
+    {
+      "deck": "morphCompositedDeck",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0000026892701525054465,
+      "rowMax": 0.0003921568627450981,
+      "tol": {
+        "meanAbs": 0.020002689270152505,
+        "rowMax": 0.10039215686274511
+      }
+    },
+    {
+      "deck": "morphCompositedDeck",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0036657135076252722,
+      "rowMax": 0.006764705882352942,
+      "tol": {
+        "meanAbs": 0.020002689270152505,
+        "rowMax": 0.10039215686274511
+      }
+    },
+    {
+      "deck": "autoplayTransitionDeck",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0000010779774872912127,
+      "rowMax": 0.0003921568627450981,
+      "tol": {
+        "meanAbs": 0.02000279139433551,
+        "rowMax": 0.10065359477124183
+      }
+    },
+    {
+      "deck": "autoplayTransitionDeck",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0038690143881626726,
+      "rowMax": 0.006870915032679739,
+      "tol": {
+        "meanAbs": 0.02000279139433551,
+        "rowMax": 0.10065359477124183
+      }
+    },
+    {
+      "deck": "mediaEndDeck",
+      "marks": "off",
+      "slide": 1,
+      "source": "refused:still",
+      "pass": true,
+      "meanAbs": 0.0000021502814088598404,
+      "rowMax": 0.0003921568627450981,
+      "tol": {
+        "meanAbs": 0.020002184322803197,
+        "rowMax": 0.10040032679738563
+      }
+    },
+    {
+      "deck": "mediaEndDeck",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "refused:still",
+      "pass": true,
+      "meanAbs": 0.0038853202160493826,
+      "rowMax": 0.006764705882352942,
+      "tol": {
+        "meanAbs": 0.020002184322803197,
+        "rowMax": 0.10040032679738563
+      }
+    },
+    {
+      "deck": "lo-bnc591147.pptx",
+      "marks": "off",
+      "slide": 1,
+      "source": "refused:still",
+      "pass": true,
+      "meanAbs": 0,
+      "rowMax": 0,
+      "tol": {
+        "meanAbs": 0.02,
+        "rowMax": 0.1
+      }
+    },
+    {
+      "deck": "lo-bnc591147.pptx",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "refused:still",
+      "pass": true,
+      "meanAbs": 0.0038800381263616557,
+      "rowMax": 0.006830065359477124,
+      "tol": {
+        "meanAbs": 0.02,
+        "rowMax": 0.1
+      }
+    },
+    {
+      "deck": "lo-ooxtheme.pptx",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": false,
+      "meanAbs": 0.009424870642701526,
+      "rowMax": 0.14416666666666667,
+      "tol": {
+        "meanAbs": 0.021268378097766886,
+        "rowMax": 0.13666360294117647
+      }
+    },
+    {
+      "deck": "lo-ooxtheme.pptx",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": false,
+      "meanAbs": 0.012842584082244009,
+      "rowMax": 0.14428615196078431,
+      "tol": {
+        "meanAbs": 0.021268378097766886,
+        "rowMax": 0.13666360294117647
+      }
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0,
+      "rowMax": 0,
+      "tol": {
+        "meanAbs": 0.020516754039578793,
+        "rowMax": 0.11136846405228759
+      }
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "marks": "off",
+      "slide": 2,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0,
+      "rowMax": 0,
+      "tol": {
+        "meanAbs": 0.020516754039578793,
+        "rowMax": 0.11136846405228759
+      }
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "marks": "off",
+      "slide": 3,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0,
+      "rowMax": 0,
+      "tol": {
+        "meanAbs": 0.020516754039578793,
+        "rowMax": 0.11136846405228759
+      }
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "marks": "off",
+      "slide": 4,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0,
+      "rowMax": 0,
+      "tol": {
+        "meanAbs": 0.020516754039578793,
+        "rowMax": 0.11136846405228759
+      }
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "marks": "off",
+      "slide": 5,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0,
+      "rowMax": 0,
+      "tol": {
+        "meanAbs": 0.020516754039578793,
+        "rowMax": 0.11136846405228759
+      }
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0032054057734204793,
+      "rowMax": 0.006299019607843137,
+      "tol": {
+        "meanAbs": 0.020516754039578793,
+        "rowMax": 0.11136846405228759
+      }
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "marks": "fixed",
+      "slide": 2,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0032054057734204793,
+      "rowMax": 0.006299019607843137,
+      "tol": {
+        "meanAbs": 0.020516754039578793,
+        "rowMax": 0.11136846405228759
+      }
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "marks": "fixed",
+      "slide": 3,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0032054057734204793,
+      "rowMax": 0.006299019607843137,
+      "tol": {
+        "meanAbs": 0.020516754039578793,
+        "rowMax": 0.11136846405228759
+      }
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "marks": "fixed",
+      "slide": 4,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0032054057734204793,
+      "rowMax": 0.006299019607843137,
+      "tol": {
+        "meanAbs": 0.020516754039578793,
+        "rowMax": 0.11136846405228759
+      }
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "marks": "fixed",
+      "slide": 5,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0032054057734204793,
+      "rowMax": 0.006299019607843137,
+      "tol": {
+        "meanAbs": 0.020516754039578793,
+        "rowMax": 0.11136846405228759
+      }
+    },
+    {
+      "deck": "lo-tdf105739.pptx",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0020494749114923745,
+      "rowMax": 0.003057598039215686,
+      "tol": {
+        "meanAbs": 0.022049474911492374,
+        "rowMax": 0.10305759803921569
+      }
+    },
+    {
+      "deck": "lo-tdf105739.pptx",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.004739625885076253,
+      "rowMax": 0.008183210784313727,
+      "tol": {
+        "meanAbs": 0.022049474911492374,
+        "rowMax": 0.10305759803921569
+      }
+    },
+    {
+      "deck": "lo-tdf123684.pptx",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0017951729302832244,
+      "rowMax": 0.012925857843137253,
+      "tol": {
+        "meanAbs": 0.020335907713779956,
+        "rowMax": 0.10947610294117648
+      }
+    },
+    {
+      "deck": "lo-tdf123684.pptx",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.004171934572440087,
+      "rowMax": 0.016240808823529414,
+      "tol": {
+        "meanAbs": 0.020335907713779956,
+        "rowMax": 0.10947610294117648
+      }
+    },
+    {
+      "deck": "poi-copy-slide-demo.pptx",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0005711720452069716,
+      "rowMax": 0.035431985294117646,
+      "tol": {
+        "meanAbs": 0.020571172045206972,
+        "rowMax": 0.13543198529411765
+      }
+    },
+    {
+      "deck": "poi-copy-slide-demo.pptx",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.004535215822440087,
+      "rowMax": 0.04084252450980392,
+      "tol": {
+        "meanAbs": 0.020571172045206972,
+        "rowMax": 0.13543198529411765
+      }
+    },
+    {
+      "deck": "poi-text-highlight.pptx",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": false,
+      "meanAbs": 0.0072149586397058825,
+      "rowMax": 0.1786703431372549,
+      "tol": {
+        "meanAbs": 0.021277024611928104,
+        "rowMax": 0.15683517156862745
+      }
+    },
+    {
+      "deck": "poi-text-highlight.pptx",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": false,
+      "meanAbs": 0.01111063027641612,
+      "rowMax": 0.18231004901960784,
+      "tol": {
+        "meanAbs": 0.021277024611928104,
+        "rowMax": 0.15683517156862745
+      }
+    },
+    {
+      "deck": "pypptx-missing_rels_item.pptx",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.001279224537037037,
+      "rowMax": 0.08272467320261438,
+      "tol": {
+        "meanAbs": 0.02127922453703704,
+        "rowMax": 0.18272467320261437
+      }
+    },
+    {
+      "deck": "pypptx-missing_rels_item.pptx",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.005149668663761801,
+      "rowMax": 0.08838235294117648,
+      "tol": {
+        "meanAbs": 0.02127922453703704,
+        "rowMax": 0.18272467320261437
+      }
+    },
+    {
+      "deck": "pypptx-no-core-props.pptx",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0007456143336964415,
+      "rowMax": 0.0417156862745098,
+      "tol": {
+        "meanAbs": 0.02074561433369644,
+        "rowMax": 0.1417156862745098
+      }
+    },
+    {
+      "deck": "pypptx-no-core-props.pptx",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0046113323801742915,
+      "rowMax": 0.04448120915032679,
+      "tol": {
+        "meanAbs": 0.02074561433369644,
+        "rowMax": 0.1417156862745098
+      }
+    },
+    {
+      "deck": "pypptx-test.pptx",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.001279224537037037,
+      "rowMax": 0.08272467320261438,
+      "tol": {
+        "meanAbs": 0.02127922453703704,
+        "rowMax": 0.18272467320261437
+      }
+    },
+    {
+      "deck": "pypptx-test.pptx",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.005149668663761801,
+      "rowMax": 0.08838235294117648,
+      "tol": {
+        "meanAbs": 0.02127922453703704,
+        "rowMax": 0.18272467320261437
+      }
+    },
+    {
+      "deck": "pypptx-test_slides.pptx",
+      "marks": "off",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.001923735929557008,
+      "rowMax": 0.043611111111111114,
+      "tol": {
+        "meanAbs": 0.021230925472040668,
+        "rowMax": 0.14210375816993465
+      }
+    },
+    {
+      "deck": "pypptx-test_slides.pptx",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.005511591094771242,
+      "rowMax": 0.04734885620915033,
+      "tol": {
+        "meanAbs": 0.021230925472040668,
+        "rowMax": 0.14210375816993465
+      }
+    }
+  ],
+  "results": [
+    {
+      "deck": "flyInDeck",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0000530648602033406,
+        "rowMax": 0.005138888888888888
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 1,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 6
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 100,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "layers",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.02005306486020334,
+          "rowMax": 0.10513888888888889
+        },
+        "hash": {
+          "local": "8c8dfa83",
+          "streamed": "3d6f91c5"
+        },
+        "status": "pass",
+        "meanAbs": 0.00005207198620188816,
+        "rowMax": 0.005138888888888888,
+        "detail": "meanAbs 0.0001 rowMax 0.0051 (row 49)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "flyInDeck",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0000530648602033406,
+        "rowMax": 0.005138888888888888
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 1,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 3,
+        "skipped-mark": 3
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 100,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "layers",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.02005306486020334,
+          "rowMax": 0.10513888888888889
+        },
+        "hash": {
+          "local": "254cd123",
+          "streamed": "29bc99a5"
+        },
+        "status": "pass",
+        "meanAbs": 0.0038978928376906317,
+        "rowMax": 0.010441176470588235,
+        "detail": "meanAbs 0.0039 rowMax 0.0104 (row 49)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "morphDeck",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.00004833310639070443,
+        "rowMax": 0.004497549019607843
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p159:morph{\"option\":\"byObject\"}"
+          ],
+          "morphPairs": [
+            [
+              "sp:2",
+              "sp:2",
+              "name-kind"
+            ]
+          ],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p159:morph{\"option\":\"byObject\"}"
+          ],
+          "morphPairs": [
+            [
+              "sp:2",
+              "sp:2",
+              "name-kind"
+            ]
+          ],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback",
+        "1:transition-approximate"
+      ],
+      "frames": {
+        "unit-still": 1,
+        "pass": 5
+      },
+      "gate": [],
+      "worst": {
+        "slide": 2,
+        "step": 0,
+        "pct": 0,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "transition",
+        "rows": [
+          "transition:p159:morph"
+        ],
+        "tol": {
+          "meanAbs": 0.08,
+          "rowMax": 0.3
+        },
+        "hash": {
+          "local": "085e85b4",
+          "streamed": "f5fb35f6"
+        },
+        "status": "pass",
+        "meanAbs": 0.000048350127087872184,
+        "rowMax": 0.004497549019607843,
+        "detail": "meanAbs 0.0000 rowMax 0.0045 (row 92)"
+      },
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020048333106390703,
+            "rowMax": 0.10449754901960785
+          },
+          "hash": {
+            "local": "085e85b4",
+            "streamed": "b08002cd"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.00004833310639070443,
+          "rowMax": 0.004497549019607843,
+          "detail": "unit still (unanimated): meanAbs 0.0000 rowMax 0.0045 (row 92)"
+        }
+      ]
+    },
+    {
+      "deck": "morphDeck",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.00004833310639070443,
+        "rowMax": 0.004497549019607843
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p159:morph{\"option\":\"byObject\"}"
+          ],
+          "morphPairs": [
+            [
+              "sp:2",
+              "sp:2",
+              "name-kind"
+            ]
+          ],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p159:morph{\"option\":\"byObject\"}"
+          ],
+          "morphPairs": [
+            [
+              "sp:2",
+              "sp:2",
+              "name-kind"
+            ]
+          ],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback",
+        "1:transition-approximate"
+      ],
+      "frames": {
+        "unit-still": 1,
+        "pass": 5
+      },
+      "gate": [],
+      "worst": {
+        "slide": 2,
+        "step": 0,
+        "pct": 75,
+        "ms": 900,
+        "streamedMs": 900,
+        "kind": "transition",
+        "rows": [
+          "transition:p159:morph"
+        ],
+        "tol": {
+          "meanAbs": 0.08,
+          "rowMax": 0.3
+        },
+        "hash": {
+          "local": "51ffa656",
+          "streamed": "0ed96f50"
+        },
+        "status": "pass",
+        "meanAbs": 0.004132784132171387,
+        "rowMax": 0.008839869281045753,
+        "detail": "meanAbs 0.0041 rowMax 0.0088 (row 301)"
+      },
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020048333106390703,
+            "rowMax": 0.10449754901960785
+          },
+          "hash": {
+            "local": "2e74bd8d",
+            "streamed": "eb237a2a"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0038857400599128537,
+          "rowMax": 0.006870915032679739,
+          "detail": "unit still (unanimated): meanAbs 0.0039 rowMax 0.0069 (row 397)"
+        }
+      ]
+    },
+    {
+      "deck": "cubeDeck",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 9.758533042846768e-7,
+        "rowMax": 0.0003921568627450981
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p14:prism"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p14:prism"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback",
+        "1:transition-approximate"
+      ],
+      "frames": {
+        "unit-still": 1,
+        "pass": 5
+      },
+      "gate": [],
+      "worst": {
+        "slide": 2,
+        "step": 0,
+        "pct": 100,
+        "ms": 1000,
+        "streamedMs": 1000,
+        "kind": "transition",
+        "rows": [
+          "transition:p14:prism"
+        ],
+        "tol": {
+          "meanAbs": 0.08,
+          "rowMax": 0.3
+        },
+        "hash": {
+          "local": "4579a797",
+          "streamed": "4d59ae35"
+        },
+        "status": "pass",
+        "meanAbs": 9.758533042846768e-7,
+        "rowMax": 0.0003921568627450981,
+        "detail": "meanAbs 0.0000 rowMax 0.0004 (row 580)"
+      },
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020000975853304286,
+            "rowMax": 0.10039215686274511
+          },
+          "hash": {
+            "local": "02d89dba",
+            "streamed": "bbcb11f5"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 6.35439360929557e-7,
+          "rowMax": 0.0002777777777777778,
+          "detail": "unit still (unanimated): meanAbs 0.0000 rowMax 0.0003 (row 120)"
+        }
+      ]
+    },
+    {
+      "deck": "cubeDeck",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 9.758533042846768e-7,
+        "rowMax": 0.0003921568627450981
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p14:prism"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p14:prism"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback",
+        "1:transition-approximate"
+      ],
+      "frames": {
+        "unit-still": 1,
+        "pass": 5
+      },
+      "gate": [],
+      "worst": {
+        "slide": 2,
+        "step": 0,
+        "pct": 75,
+        "ms": 750,
+        "streamedMs": 750,
+        "kind": "transition",
+        "rows": [
+          "transition:p14:prism"
+        ],
+        "tol": {
+          "meanAbs": 0.08,
+          "rowMax": 0.3
+        },
+        "hash": {
+          "local": "81efc778",
+          "streamed": "2ea72a3f"
+        },
+        "status": "pass",
+        "meanAbs": 0.008177247866739288,
+        "rowMax": 0.01287173202614379,
+        "detail": "meanAbs 0.0082 rowMax 0.0129 (row 156)"
+      },
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020000975853304286,
+            "rowMax": 0.10039215686274511
+          },
+          "hash": {
+            "local": "b00314d9",
+            "streamed": "4ffa45d2"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0029982071532316627,
+          "rowMax": 0.005142973856209151,
+          "detail": "unit still (unanimated): meanAbs 0.0030 rowMax 0.0051 (row 397)"
+        }
+      ]
+    },
+    {
+      "deck": "morphCompositedDeck",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0000026892701525054465,
+        "rowMax": 0.0003921568627450981
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p159:morph{\"option\":\"byObject\"}"
+          ],
+          "morphPairs": [
+            [
+              "sp:4",
+              "sp:4",
+              "name-kind"
+            ],
+            [
+              "sp:6",
+              "sp:6",
+              "name-kind"
+            ],
+            [
+              "sp:2",
+              "sp:2",
+              "name-kind"
+            ],
+            [
+              "sp:5",
+              "sp:5",
+              "name-kind"
+            ]
+          ],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p159:morph{\"option\":\"byObject\"}"
+          ],
+          "morphPairs": [
+            [
+              "sp:4",
+              "sp:4",
+              "name-kind"
+            ],
+            [
+              "sp:6",
+              "sp:6",
+              "name-kind"
+            ],
+            [
+              "sp:2",
+              "sp:2",
+              "name-kind"
+            ],
+            [
+              "sp:5",
+              "sp:5",
+              "name-kind"
+            ]
+          ],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        "1:morph-composited/swept",
+        ":backend-fallback",
+        "1:transition-approximate"
+      ],
+      "frames": {
+        "unit-still": 1,
+        "pass": 5
+      },
+      "gate": [],
+      "worst": {
+        "slide": 2,
+        "step": 0,
+        "pct": 50,
+        "ms": 600,
+        "streamedMs": 566.667,
+        "kind": "morph-composited",
+        "rows": [
+          "transition:p159:morph"
+        ],
+        "tol": {
+          "meanAbs": 0.08,
+          "rowMax": 0.3
+        },
+        "hash": {
+          "local": "4036f4c4",
+          "streamed": "c315a44c"
+        },
+        "status": "pass",
+        "meanAbs": 0.000001736111111111111,
+        "rowMax": 0.0004084967320261438,
+        "detail": "meanAbs 0.0000 rowMax 0.0004 (row 500)"
+      },
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020002689270152505,
+            "rowMax": 0.10039215686274511
+          },
+          "hash": {
+            "local": "ecf354b4",
+            "streamed": "62a04889"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0000026892701525054465,
+          "rowMax": 0.0003921568627450981,
+          "detail": "unit still (unanimated): meanAbs 0.0000 rowMax 0.0004 (row 400)"
+        }
+      ]
+    },
+    {
+      "deck": "morphCompositedDeck",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0000026892701525054465,
+        "rowMax": 0.0003921568627450981
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p159:morph{\"option\":\"byObject\"}"
+          ],
+          "morphPairs": [
+            [
+              "sp:4",
+              "sp:4",
+              "name-kind"
+            ],
+            [
+              "sp:6",
+              "sp:6",
+              "name-kind"
+            ],
+            [
+              "sp:2",
+              "sp:2",
+              "name-kind"
+            ],
+            [
+              "sp:5",
+              "sp:5",
+              "name-kind"
+            ]
+          ],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p159:morph{\"option\":\"byObject\"}"
+          ],
+          "morphPairs": [
+            [
+              "sp:4",
+              "sp:4",
+              "name-kind"
+            ],
+            [
+              "sp:6",
+              "sp:6",
+              "name-kind"
+            ],
+            [
+              "sp:2",
+              "sp:2",
+              "name-kind"
+            ],
+            [
+              "sp:5",
+              "sp:5",
+              "name-kind"
+            ]
+          ],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        "1:morph-composited/swept",
+        ":backend-fallback",
+        "1:transition-approximate"
+      ],
+      "frames": {
+        "unit-still": 1,
+        "pass": 5
+      },
+      "gate": [],
+      "worst": {
+        "slide": 2,
+        "step": 0,
+        "pct": 0,
+        "ms": 66.667,
+        "streamedMs": 33.333,
+        "kind": "morph-composited",
+        "rows": [
+          "transition:p159:morph"
+        ],
+        "tol": {
+          "meanAbs": 0.08,
+          "rowMax": 0.3
+        },
+        "hash": {
+          "local": "21217beb",
+          "streamed": "7674d1d7"
+        },
+        "status": "pass",
+        "meanAbs": 0.0036647830428467683,
+        "rowMax": 0.006764705882352942,
+        "detail": "meanAbs 0.0037 rowMax 0.0068 (row 48)"
+      },
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020002689270152505,
+            "rowMax": 0.10039215686274511
+          },
+          "hash": {
+            "local": "d3161fc9",
+            "streamed": "aba765f3"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0036657135076252722,
+          "rowMax": 0.006764705882352942,
+          "detail": "unit still (unanimated): meanAbs 0.0037 rowMax 0.0068 (row 48)"
+        }
+      ]
+    },
+    {
+      "deck": "longStepDeck",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 9.928740014524328e-7,
+        "rowMax": 0.0004003267973856209
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 1,
+        "composited": 1,
+        "rate": 1
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 6
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 1,
+        "pct": 25,
+        "ms": 2266.667,
+        "streamedMs": 2233.333,
+        "kind": "composited",
+        "rows": [
+          "preset:emph:8"
+        ],
+        "tol": {
+          "meanAbs": 0.08,
+          "rowMax": 0.3
+        },
+        "hash": {
+          "local": "5fd9aaeb",
+          "streamed": "d1d4912f"
+        },
+        "status": "pass",
+        "meanAbs": 0.000054000998547567174,
+        "rowMax": 0.003880718954248366,
+        "detail": "meanAbs 0.0001 rowMax 0.0039 (row 460)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "longStepDeck",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 9.928740014524328e-7,
+        "rowMax": 0.0004003267973856209
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 1,
+        "composited": 1,
+        "rate": 1
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 3,
+        "skipped-mark": 3
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 100,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "layers",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.020000992874001453,
+          "rowMax": 0.10040032679738563
+        },
+        "hash": {
+          "local": "20e478b5",
+          "streamed": "6f762a4b"
+        },
+        "status": "pass",
+        "meanAbs": 0.003780699664124909,
+        "rowMax": 0.006764705882352942,
+        "detail": "meanAbs 0.0038 rowMax 0.0068 (row 48)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "cmdHoldDeck",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0000020708514887436455,
+        "rowMax": 0.0004003267973856209
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback",
+        "0:harness-steps"
+      ],
+      "frames": {
+        "pass": 2
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 100,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "layers",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.020002070851488744,
+          "rowMax": 0.10040032679738563
+        },
+        "hash": {
+          "local": "b7506470",
+          "streamed": "2a5d4c03"
+        },
+        "status": "pass",
+        "meanAbs": 0.0000020708514887436455,
+        "rowMax": 0.0004003267973856209,
+        "detail": "meanAbs 0.0000 rowMax 0.0004 (row 640)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "cmdHoldDeck",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0000020708514887436455,
+        "rowMax": 0.0004003267973856209
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback",
+        "0:harness-steps"
+      ],
+      "frames": {
+        "pass": 2
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 100,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "layers",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.020002070851488744,
+          "rowMax": 0.10040032679738563
+        },
+        "hash": {
+          "local": "b62c28e2",
+          "streamed": "be3fee97"
+        },
+        "status": "pass",
+        "meanAbs": 0.003779825935003631,
+        "rowMax": 0.006760620915032679,
+        "detail": "meanAbs 0.0038 rowMax 0.0068 (row 48)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "autoplayTransitionDeck",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0000027913943355119827,
+        "rowMax": 0.00065359477124183
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p:fade"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p:fade"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1,
+        "pass": 5
+      },
+      "gate": [],
+      "worst": {
+        "slide": 2,
+        "step": 0,
+        "pct": 75,
+        "ms": 1125,
+        "streamedMs": 1125,
+        "kind": "transition",
+        "rows": [
+          "transition:p:fade",
+          "preset:entr:10"
+        ],
+        "tol": {
+          "meanAbs": 0.02000279139433551,
+          "rowMax": 0.10065359477124183
+        },
+        "hash": {
+          "local": "b2aa8f58",
+          "streamed": "b64fa871"
+        },
+        "status": "pass",
+        "meanAbs": 0.0000020424836601307187,
+        "rowMax": 0.00065359477124183,
+        "detail": "meanAbs 0.0000 rowMax 0.0007 (row 140)"
+      },
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.02000279139433551,
+            "rowMax": 0.10065359477124183
+          },
+          "hash": {
+            "local": "a377993e",
+            "streamed": "891b769c"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0000010779774872912127,
+          "rowMax": 0.0003921568627450981,
+          "detail": "unit still (unanimated): meanAbs 0.0000 rowMax 0.0004 (row 320)"
+        }
+      ]
+    },
+    {
+      "deck": "autoplayTransitionDeck",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0000027913943355119827,
+        "rowMax": 0.00065359477124183
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p:fade"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p:fade"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1,
+        "pass": 5
+      },
+      "gate": [],
+      "worst": {
+        "slide": 2,
+        "step": 0,
+        "pct": 0,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "transition",
+        "rows": [
+          "transition:p:fade",
+          "preset:entr:10"
+        ],
+        "tol": {
+          "meanAbs": 0.02000279139433551,
+          "rowMax": 0.10065359477124183
+        },
+        "hash": {
+          "local": "1bc380ea",
+          "streamed": "4b563503"
+        },
+        "status": "pass",
+        "meanAbs": 0.0038690143881626726,
+        "rowMax": 0.006870915032679739,
+        "detail": "meanAbs 0.0039 rowMax 0.0069 (row 397)"
+      },
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.02000279139433551,
+            "rowMax": 0.10065359477124183
+          },
+          "hash": {
+            "local": "1bc380ea",
+            "streamed": "4b563503"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0038690143881626726,
+          "rowMax": 0.006870915032679739,
+          "detail": "unit still (unanimated): meanAbs 0.0039 rowMax 0.0069 (row 397)"
+        }
+      ]
+    },
+    {
+      "deck": "mediaEndDeck",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0000021843228031953523,
+        "rowMax": 0.0004003267973856209
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": [
+          {
+            "slide": 1,
+            "code": "still",
+            "localSteps": 0
+          }
+        ]
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020002184322803197,
+            "rowMax": 0.10040032679738563
+          },
+          "hash": {
+            "local": "64401f6c",
+            "streamed": "37d6b0b8"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "refused:still"
+          },
+          "meanAbs": 0.0000021502814088598404,
+          "rowMax": 0.0003921568627450981,
+          "detail": "unit still (refused:still): meanAbs 0.0000 rowMax 0.0004 (row 420)"
+        }
+      ]
+    },
+    {
+      "deck": "mediaEndDeck",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0000021843228031953523,
+        "rowMax": 0.0004003267973856209
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": [
+          {
+            "slide": 1,
+            "code": "still",
+            "localSteps": 0
+          }
+        ]
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020002184322803197,
+            "rowMax": 0.10040032679738563
+          },
+          "hash": {
+            "local": "1c8c419b",
+            "streamed": "32473cf0"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "refused:still"
+          },
+          "meanAbs": 0.0038853202160493826,
+          "rowMax": 0.006764705882352942,
+          "detail": "unit still (refused:still): meanAbs 0.0039 rowMax 0.0068 (row 48)"
+        }
+      ]
+    },
+    {
+      "deck": "lo-airplane-transition.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0,
+        "rowMax": 0
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "p15:prstTrans{\"prst\":\"airplane\"}"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "p15:prstTrans{\"prst\":\"airplane\"}"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback",
+        "0:transition-approximate"
+      ],
+      "frames": {
+        "pass": 5
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 0,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "transition",
+        "rows": [
+          "transition:p15:prstTrans:airplane"
+        ],
+        "tol": {
+          "meanAbs": 0.08,
+          "rowMax": 0.3
+        },
+        "hash": {
+          "local": "10731dc5",
+          "streamed": "10731dc5"
+        },
+        "status": "pass",
+        "meanAbs": 0,
+        "rowMax": 0,
+        "detail": "meanAbs 0.0000 rowMax 0.0000 (row 0)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "lo-airplane-transition.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0,
+        "rowMax": 0
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "p15:prstTrans{\"prst\":\"airplane\"}"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "p15:prstTrans{\"prst\":\"airplane\"}"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback",
+        "0:transition-approximate"
+      ],
+      "frames": {
+        "pass": 5
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 0,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "transition",
+        "rows": [
+          "transition:p15:prstTrans:airplane"
+        ],
+        "tol": {
+          "meanAbs": 0.08,
+          "rowMax": 0.3
+        },
+        "hash": {
+          "local": "8d4a4bfb",
+          "streamed": "10731dc5"
+        },
+        "status": "pass",
+        "meanAbs": 0.004500995710784313,
+        "rowMax": 0.006752450980392157,
+        "detail": "meanAbs 0.0045 rowMax 0.0068 (row 59)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "lo-bnc591147.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0,
+        "rowMax": 0
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            1,
+            1
+          ],
+          "transitions": [
+            "none",
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 4
+        },
+        "streamed": {
+          "steps": [
+            0,
+            1
+          ],
+          "transitions": [
+            "none",
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 3
+        },
+        "equal": false,
+        "equalExceptStills": true,
+        "stills": [
+          {
+            "slide": 1,
+            "code": "still",
+            "localSteps": 1
+          }
+        ]
+      },
+      "fallback": {
+        "steps": 1,
+        "composited": 1,
+        "rate": 1
+      },
+      "diagnostics": [
+        ":backend-fallback",
+        "1:harness-steps"
+      ],
+      "frames": {
+        "unit-still": 1,
+        "pass": 2
+      },
+      "gate": [],
+      "worst": {
+        "slide": 2,
+        "step": 0,
+        "pct": 100,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "layers",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.02,
+          "rowMax": 0.1
+        },
+        "hash": {
+          "local": "4b5e8c1c",
+          "streamed": "c08a8d54"
+        },
+        "status": "pass",
+        "meanAbs": 0.000008135893246187363,
+        "rowMax": 0.0005106209150326798,
+        "detail": "meanAbs 0.0000 rowMax 0.0005 (row 360)"
+      },
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.02,
+            "rowMax": 0.1
+          },
+          "hash": {
+            "local": "309d7dc5",
+            "streamed": "309d7dc5"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "refused:still"
+          },
+          "meanAbs": 0,
+          "rowMax": 0,
+          "detail": "unit still (refused:still): meanAbs 0.0000 rowMax 0.0000 (row 0)"
+        }
+      ]
+    },
+    {
+      "deck": "lo-bnc591147.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0,
+        "rowMax": 0
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            1,
+            1
+          ],
+          "transitions": [
+            "none",
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 4
+        },
+        "streamed": {
+          "steps": [
+            0,
+            1
+          ],
+          "transitions": [
+            "none",
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 3
+        },
+        "equal": false,
+        "equalExceptStills": true,
+        "stills": [
+          {
+            "slide": 1,
+            "code": "still",
+            "localSteps": 1
+          }
+        ]
+      },
+      "fallback": {
+        "steps": 1,
+        "composited": 1,
+        "rate": 1
+      },
+      "diagnostics": [
+        ":backend-fallback",
+        "1:harness-steps"
+      ],
+      "frames": {
+        "unit-still": 1,
+        "pass": 2
+      },
+      "gate": [],
+      "worst": {
+        "slide": 2,
+        "step": 0,
+        "pct": 100,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "layers",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.02,
+          "rowMax": 0.1
+        },
+        "hash": {
+          "local": "5257a787",
+          "streamed": "7a9a3896"
+        },
+        "status": "pass",
+        "meanAbs": 0.0038969850671750185,
+        "rowMax": 0.006858660130718955,
+        "detail": "meanAbs 0.0039 rowMax 0.0069 (row 397)"
+      },
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.02,
+            "rowMax": 0.1
+          },
+          "hash": {
+            "local": "c86940cb",
+            "streamed": "9f60cb19"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "refused:still"
+          },
+          "meanAbs": 0.0038800381263616557,
+          "rowMax": 0.006830065359477124,
+          "detail": "unit still (refused:still): meanAbs 0.0039 rowMax 0.0068 (row 397)"
+        }
+      ]
+    },
+    {
+      "deck": "lo-connector-shape-animations.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.000035747719226579526,
+        "rowMax": 0.00931985294117647
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 1,
+        "composited": 1,
+        "rate": 1
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 6
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 1,
+        "pct": 100,
+        "ms": 500,
+        "streamedMs": 500,
+        "kind": "composited",
+        "rows": [
+          "preset:entr:22:1"
+        ],
+        "tol": {
+          "meanAbs": 0.08,
+          "rowMax": 0.3
+        },
+        "hash": {
+          "local": "52ed1c8f",
+          "streamed": "f46d430f"
+        },
+        "status": "pass",
+        "meanAbs": 0.00003178615196078432,
+        "rowMax": 0.007956495098039215,
+        "detail": "meanAbs 0.0000 rowMax 0.0080 (row 453)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "lo-connector-shape-animations.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.000035747719226579526,
+        "rowMax": 0.00931985294117647
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 1,
+        "composited": 1,
+        "rate": 1
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 6
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 1,
+        "pct": 100,
+        "ms": 500,
+        "streamedMs": 500,
+        "kind": "composited",
+        "rows": [
+          "preset:entr:22:1"
+        ],
+        "tol": {
+          "meanAbs": 0.08,
+          "rowMax": 0.3
+        },
+        "hash": {
+          "local": "f0b391ac",
+          "streamed": "bd587257"
+        },
+        "status": "pass",
+        "meanAbs": 0.003967933006535947,
+        "rowMax": 0.01288296568627451,
+        "detail": "meanAbs 0.0040 rowMax 0.0129 (row 453)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "lo-narration.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0,
+        "rowMax": 0
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "p:none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "p:none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 5
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 0,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "transition",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.02,
+          "rowMax": 0.1
+        },
+        "hash": {
+          "local": "35963f1c",
+          "streamed": "893965ac"
+        },
+        "status": "pass",
+        "meanAbs": 0.000009931576797385621,
+        "rowMax": 0.0003186274509803922,
+        "detail": "meanAbs 0.0000 rowMax 0.0003 (row 683)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "lo-narration.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0,
+        "rowMax": 0
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "p:none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "p:none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 5
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 0,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "transition",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.02,
+          "rowMax": 0.1
+        },
+        "hash": {
+          "local": "bbd6050a",
+          "streamed": "6d09d6fc"
+        },
+        "status": "pass",
+        "meanAbs": 0.003987889773965142,
+        "rowMax": 0.0067034313725490196,
+        "detail": "meanAbs 0.0040 rowMax 0.0067 (row 690)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "lo-ooxtheme.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0012683780977668846,
+        "rowMax": 0.036663602941176474
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.021268378097766886,
+            "rowMax": 0.13666360294117647
+          },
+          "hash": {
+            "local": "4ae80895",
+            "streamed": "58aaacf6"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": false,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.009424870642701526,
+          "rowMax": 0.14416666666666667,
+          "detail": "unit still (unanimated): meanAbs 0.0094 rowMax 0.1442 (row 442)"
+        }
+      ]
+    },
+    {
+      "deck": "lo-ooxtheme.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0012683780977668846,
+        "rowMax": 0.036663602941176474
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.021268378097766886,
+            "rowMax": 0.13666360294117647
+          },
+          "hash": {
+            "local": "80989f78",
+            "streamed": "cc38076c"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": false,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.012842584082244009,
+          "rowMax": 0.14428615196078431,
+          "detail": "unit still (unanimated): meanAbs 0.0128 rowMax 0.1443 (row 442)"
+        }
+      ]
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0005167540395787945,
+        "rowMax": 0.011368464052287582
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            6
+          ],
+          "transitions": [
+            "none",
+            "none",
+            "none",
+            "none",
+            "none",
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 12
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            6
+          ],
+          "transitions": [
+            "none",
+            "none",
+            "none",
+            "none",
+            "none",
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 12
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 6,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback",
+        ":behaviour-unsupported"
+      ],
+      "frames": {
+        "unit-still": 5,
+        "pass": 31
+      },
+      "gate": [],
+      "worst": {
+        "slide": 6,
+        "step": 6,
+        "pct": 100,
+        "ms": 2000,
+        "streamedMs": 2000,
+        "kind": "layers",
+        "rows": [
+          "preset:entr:10"
+        ],
+        "tol": {
+          "meanAbs": 0.08,
+          "rowMax": 0.3
+        },
+        "hash": {
+          "local": "eb26bfe0",
+          "streamed": "e6d10b9e"
+        },
+        "status": "pass",
+        "meanAbs": 0.0006498048293391431,
+        "rowMax": 0.025898692810457518,
+        "detail": "meanAbs 0.0006 rowMax 0.0259 (row 503)"
+      },
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020516754039578793,
+            "rowMax": 0.11136846405228759
+          },
+          "hash": {
+            "local": "d151b053",
+            "streamed": "d151b053"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0,
+          "rowMax": 0,
+          "detail": "unit still (unanimated): meanAbs 0.0000 rowMax 0.0000 (row 0)"
+        },
+        {
+          "slide": 2,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020516754039578793,
+            "rowMax": 0.11136846405228759
+          },
+          "hash": {
+            "local": "d151b053",
+            "streamed": "d151b053"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0,
+          "rowMax": 0,
+          "detail": "unit still (unanimated): meanAbs 0.0000 rowMax 0.0000 (row 0)"
+        },
+        {
+          "slide": 3,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020516754039578793,
+            "rowMax": 0.11136846405228759
+          },
+          "hash": {
+            "local": "d151b053",
+            "streamed": "d151b053"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0,
+          "rowMax": 0,
+          "detail": "unit still (unanimated): meanAbs 0.0000 rowMax 0.0000 (row 0)"
+        },
+        {
+          "slide": 4,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020516754039578793,
+            "rowMax": 0.11136846405228759
+          },
+          "hash": {
+            "local": "d151b053",
+            "streamed": "d151b053"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0,
+          "rowMax": 0,
+          "detail": "unit still (unanimated): meanAbs 0.0000 rowMax 0.0000 (row 0)"
+        },
+        {
+          "slide": 5,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020516754039578793,
+            "rowMax": 0.11136846405228759
+          },
+          "hash": {
+            "local": "d151b053",
+            "streamed": "d151b053"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0,
+          "rowMax": 0,
+          "detail": "unit still (unanimated): meanAbs 0.0000 rowMax 0.0000 (row 0)"
+        }
+      ]
+    },
+    {
+      "deck": "lo-tdf104788.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0005167540395787945,
+        "rowMax": 0.011368464052287582
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            6
+          ],
+          "transitions": [
+            "none",
+            "none",
+            "none",
+            "none",
+            "none",
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 12
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            6
+          ],
+          "transitions": [
+            "none",
+            "none",
+            "none",
+            "none",
+            "none",
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 12
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 6,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback",
+        ":behaviour-unsupported"
+      ],
+      "frames": {
+        "unit-still": 5,
+        "pass": 16,
+        "skipped-mark": 15
+      },
+      "gate": [],
+      "worst": {
+        "slide": 6,
+        "step": 6,
+        "pct": 100,
+        "ms": 2000,
+        "streamedMs": 2000,
+        "kind": "layers",
+        "rows": [
+          "preset:entr:10"
+        ],
+        "tol": {
+          "meanAbs": 0.08,
+          "rowMax": 0.3
+        },
+        "hash": {
+          "local": "90bffcd7",
+          "streamed": "00d6fd42"
+        },
+        "status": "pass",
+        "meanAbs": 0.00379503109114016,
+        "rowMax": 0.030739379084967322,
+        "detail": "meanAbs 0.0038 rowMax 0.0307 (row 503)"
+      },
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020516754039578793,
+            "rowMax": 0.11136846405228759
+          },
+          "hash": {
+            "local": "73b0f586",
+            "streamed": "a0e13930"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0032054057734204793,
+          "rowMax": 0.006299019607843137,
+          "detail": "unit still (unanimated): meanAbs 0.0032 rowMax 0.0063 (row 397)"
+        },
+        {
+          "slide": 2,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020516754039578793,
+            "rowMax": 0.11136846405228759
+          },
+          "hash": {
+            "local": "73b0f586",
+            "streamed": "a0e13930"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0032054057734204793,
+          "rowMax": 0.006299019607843137,
+          "detail": "unit still (unanimated): meanAbs 0.0032 rowMax 0.0063 (row 397)"
+        },
+        {
+          "slide": 3,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020516754039578793,
+            "rowMax": 0.11136846405228759
+          },
+          "hash": {
+            "local": "73b0f586",
+            "streamed": "a0e13930"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0032054057734204793,
+          "rowMax": 0.006299019607843137,
+          "detail": "unit still (unanimated): meanAbs 0.0032 rowMax 0.0063 (row 397)"
+        },
+        {
+          "slide": 4,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020516754039578793,
+            "rowMax": 0.11136846405228759
+          },
+          "hash": {
+            "local": "73b0f586",
+            "streamed": "a0e13930"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0032054057734204793,
+          "rowMax": 0.006299019607843137,
+          "detail": "unit still (unanimated): meanAbs 0.0032 rowMax 0.0063 (row 397)"
+        },
+        {
+          "slide": 5,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020516754039578793,
+            "rowMax": 0.11136846405228759
+          },
+          "hash": {
+            "local": "73b0f586",
+            "streamed": "a0e13930"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0032054057734204793,
+          "rowMax": 0.006299019607843137,
+          "detail": "unit still (unanimated): meanAbs 0.0032 rowMax 0.0063 (row 397)"
+        }
+      ]
+    },
+    {
+      "deck": "lo-tdf104792-smart-art-animation.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.00029934300108932463,
+        "rowMax": 0.02412683823529412
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            2
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 3
+        },
+        "streamed": {
+          "steps": [
+            2
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 3
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 2,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 11
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 100,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "layers",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.020299343001089324,
+          "rowMax": 0.12412683823529412
+        },
+        "hash": {
+          "local": "612c1d19",
+          "streamed": "efb6fb13"
+        },
+        "status": "pass",
+        "meanAbs": 0.00029934300108932463,
+        "rowMax": 0.02412683823529412,
+        "detail": "meanAbs 0.0003 rowMax 0.0241 (row 481)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "lo-tdf104792-smart-art-animation.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.00029934300108932463,
+        "rowMax": 0.02412683823529412
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            2
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 3
+        },
+        "streamed": {
+          "steps": [
+            2
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 3
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 2,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 11
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 100,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "layers",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.020299343001089324,
+          "rowMax": 0.12412683823529412
+        },
+        "hash": {
+          "local": "9b1ae770",
+          "streamed": "c7a1dd09"
+        },
+        "status": "pass",
+        "meanAbs": 0.0037947686887254903,
+        "rowMax": 0.026443014705882353,
+        "detail": "meanAbs 0.0038 rowMax 0.0264 (row 481)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "lo-tdf105739.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0020494749114923745,
+        "rowMax": 0.003057598039215686
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.022049474911492374,
+            "rowMax": 0.10305759803921569
+          },
+          "hash": {
+            "local": "b9014b2f",
+            "streamed": "0b510c0b"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0020494749114923745,
+          "rowMax": 0.003057598039215686,
+          "detail": "unit still (unanimated): meanAbs 0.0020 rowMax 0.0031 (row 14)"
+        }
+      ]
+    },
+    {
+      "deck": "lo-tdf105739.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0020494749114923745,
+        "rowMax": 0.003057598039215686
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.022049474911492374,
+            "rowMax": 0.10305759803921569
+          },
+          "hash": {
+            "local": "6f3cc92e",
+            "streamed": "99fbb56c"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.004739625885076253,
+          "rowMax": 0.008183210784313727,
+          "detail": "unit still (unanimated): meanAbs 0.0047 rowMax 0.0082 (row 64)"
+        }
+      ]
+    },
+    {
+      "deck": "lo-tdf115394.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0013307632080610022,
+        "rowMax": 0.1033455882352941
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "transitions": [
+            "p:fade{\"thruBlk\":\"1\"}",
+            "p:fade{\"thruBlk\":\"1\"}",
+            "p:fade{\"thruBlk\":\"1\"}",
+            "p:fade{\"thruBlk\":\"1\"}",
+            "p:fade{\"thruBlk\":\"1\"}"
+          ],
+          "morphPairs": [],
+          "clicks": 5
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "transitions": [
+            "p:fade{\"thruBlk\":\"1\"}",
+            "p:fade{\"thruBlk\":\"1\"}",
+            "p:fade{\"thruBlk\":\"1\"}",
+            "p:fade{\"thruBlk\":\"1\"}",
+            "p:fade{\"thruBlk\":\"1\"}"
+          ],
+          "morphPairs": [],
+          "clicks": 5
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 25
+      },
+      "gate": [],
+      "worst": {
+        "slide": 2,
+        "step": 0,
+        "pct": 100,
+        "ms": 750,
+        "streamedMs": 750,
+        "kind": "transition",
+        "rows": [
+          "transition:p:fade"
+        ],
+        "tol": {
+          "meanAbs": 0.021330763208061,
+          "rowMax": 0.2033455882352941
+        },
+        "hash": {
+          "local": "91b00584",
+          "streamed": "0a008154"
+        },
+        "status": "pass",
+        "meanAbs": 0.0013307632080610022,
+        "rowMax": 0.1033455882352941,
+        "detail": "meanAbs 0.0013 rowMax 0.1033 (row 95)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "lo-tdf115394.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0013307632080610022,
+        "rowMax": 0.1033455882352941
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "transitions": [
+            "p:fade{\"thruBlk\":\"1\"}",
+            "p:fade{\"thruBlk\":\"1\"}",
+            "p:fade{\"thruBlk\":\"1\"}",
+            "p:fade{\"thruBlk\":\"1\"}",
+            "p:fade{\"thruBlk\":\"1\"}"
+          ],
+          "morphPairs": [],
+          "clicks": 5
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "transitions": [
+            "p:fade{\"thruBlk\":\"1\"}",
+            "p:fade{\"thruBlk\":\"1\"}",
+            "p:fade{\"thruBlk\":\"1\"}",
+            "p:fade{\"thruBlk\":\"1\"}",
+            "p:fade{\"thruBlk\":\"1\"}"
+          ],
+          "morphPairs": [],
+          "clicks": 5
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 25
+      },
+      "gate": [],
+      "worst": {
+        "slide": 2,
+        "step": 0,
+        "pct": 100,
+        "ms": 750,
+        "streamedMs": 750,
+        "kind": "transition",
+        "rows": [
+          "transition:p:fade"
+        ],
+        "tol": {
+          "meanAbs": 0.021330763208061,
+          "rowMax": 0.2033455882352941
+        },
+        "hash": {
+          "local": "7841b372",
+          "streamed": "158daf83"
+        },
+        "status": "pass",
+        "meanAbs": 0.0052751353145424834,
+        "rowMax": 0.10496323529411765,
+        "detail": "meanAbs 0.0053 rowMax 0.1050 (row 95)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "lo-tdf123684.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.00033590771377995645,
+        "rowMax": 0.00947610294117647
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020335907713779956,
+            "rowMax": 0.10947610294117648
+          },
+          "hash": {
+            "local": "a29fa423",
+            "streamed": "2ae13ef7"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0017951729302832244,
+          "rowMax": 0.012925857843137253,
+          "detail": "unit still (unanimated): meanAbs 0.0018 rowMax 0.0129 (row 268)"
+        }
+      ]
+    },
+    {
+      "deck": "lo-tdf123684.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.00033590771377995645,
+        "rowMax": 0.00947610294117647
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020335907713779956,
+            "rowMax": 0.10947610294117648
+          },
+          "hash": {
+            "local": "1eabe12d",
+            "streamed": "31667c15"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.004171934572440087,
+          "rowMax": 0.016240808823529414,
+          "detail": "unit still (unanimated): meanAbs 0.0042 rowMax 0.0162 (row 297)"
+        }
+      ]
+    },
+    {
+      "deck": "lo-tdf142915.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.00002398641748366013,
+        "rowMax": 0.0025643382352941177
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "p:none",
+            "p:none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "p:none",
+            "p:none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 3
+      },
+      "gate": [],
+      "worst": {
+        "slide": 2,
+        "step": 0,
+        "pct": 100,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "transition",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.02002398641748366,
+          "rowMax": 0.10256433823529412
+        },
+        "hash": {
+          "local": "b1cb375f",
+          "streamed": "1a84453e"
+        },
+        "status": "pass",
+        "meanAbs": 0.00002398641748366013,
+        "rowMax": 0.0025643382352941177,
+        "detail": "meanAbs 0.0000 rowMax 0.0026 (row 124)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "lo-tdf142915.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.00002398641748366013,
+        "rowMax": 0.0025643382352941177
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "p:none",
+            "p:none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "p:none",
+            "p:none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 3
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 0,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "transition",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.02002398641748366,
+          "rowMax": 0.10256433823529412
+        },
+        "hash": {
+          "local": "4e023c8a",
+          "streamed": "517d1e62"
+        },
+        "status": "pass",
+        "meanAbs": 0.003996255446623093,
+        "rowMax": 0.006700367647058823,
+        "detail": "meanAbs 0.0040 rowMax 0.0067 (row 64)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "lo-tdf146223.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0007669980029048657,
+        "rowMax": 0.03333333333333333
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "p:fade",
+            "p:fade"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "p:fade",
+            "p:fade"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 10
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 100,
+        "ms": 1000,
+        "streamedMs": 1000,
+        "kind": "transition",
+        "rows": [
+          "transition:p:fade"
+        ],
+        "tol": {
+          "meanAbs": 0.020766998002904866,
+          "rowMax": 0.13333333333333333
+        },
+        "hash": {
+          "local": "7147c4a5",
+          "streamed": "4eb23018"
+        },
+        "status": "pass",
+        "meanAbs": 0.0007634520243282499,
+        "rowMax": 0.033165849673202616,
+        "detail": "meanAbs 0.0008 rowMax 0.0332 (row 182)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "lo-tdf146223.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0007669980029048657,
+        "rowMax": 0.03333333333333333
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "p:fade",
+            "p:fade"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0
+          ],
+          "transitions": [
+            "p:fade",
+            "p:fade"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 10
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 100,
+        "ms": 1000,
+        "streamedMs": 1000,
+        "kind": "transition",
+        "rows": [
+          "transition:p:fade"
+        ],
+        "tol": {
+          "meanAbs": 0.020766998002904866,
+          "rowMax": 0.13333333333333333
+        },
+        "hash": {
+          "local": "89850ce7",
+          "streamed": "6524a8b0"
+        },
+        "status": "pass",
+        "meanAbs": 0.004707697893972404,
+        "rowMax": 0.035555555555555556,
+        "detail": "meanAbs 0.0047 rowMax 0.0356 (row 182)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "lo-tdf149588_transparentSolidFill.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0005109017565359477,
+        "rowMax": 0.007285539215686275
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "p159:morph{\"option\":\"byObject\"}"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "p159:morph{\"option\":\"byObject\"}"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback",
+        "0:transition-approximate",
+        "0:transition-approximate"
+      ],
+      "frames": {
+        "pass": 5
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 100,
+        "ms": 1500,
+        "streamedMs": 1500,
+        "kind": "transition",
+        "rows": [
+          "transition:p159:morph"
+        ],
+        "tol": {
+          "meanAbs": 0.08,
+          "rowMax": 0.3
+        },
+        "hash": {
+          "local": "8de0c7f9",
+          "streamed": "07d10756"
+        },
+        "status": "pass",
+        "meanAbs": 0.000995404411764706,
+        "rowMax": 0.025689338235294117,
+        "detail": "meanAbs 0.0010 rowMax 0.0257 (row 297)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "lo-tdf149588_transparentSolidFill.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0005109017565359477,
+        "rowMax": 0.007285539215686275
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "p159:morph{\"option\":\"byObject\"}"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "p159:morph{\"option\":\"byObject\"}"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback",
+        "0:transition-approximate",
+        "0:transition-approximate"
+      ],
+      "frames": {
+        "pass": 5
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 100,
+        "ms": 1500,
+        "streamedMs": 1500,
+        "kind": "transition",
+        "rows": [
+          "transition:p159:morph"
+        ],
+        "tol": {
+          "meanAbs": 0.08,
+          "rowMax": 0.3
+        },
+        "hash": {
+          "local": "c14fbbdb",
+          "streamed": "e11d8d9d"
+        },
+        "status": "pass",
+        "meanAbs": 0.00458431202342048,
+        "rowMax": 0.030753676470588232,
+        "detail": "meanAbs 0.0046 rowMax 0.0308 (row 297)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "lo-tdf156808.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0,
+        "rowMax": 0
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "p14:flythrough{\"dir\":\"out\"}"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "p14:flythrough{\"dir\":\"out\"}"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 5
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 0,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "transition",
+        "rows": [
+          "transition:p14:flythrough"
+        ],
+        "tol": {
+          "meanAbs": 0.02,
+          "rowMax": 0.1
+        },
+        "hash": {
+          "local": "10731dc5",
+          "streamed": "10731dc5"
+        },
+        "status": "pass",
+        "meanAbs": 0,
+        "rowMax": 0,
+        "detail": "meanAbs 0.0000 rowMax 0.0000 (row 0)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "lo-tdf156808.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0,
+        "rowMax": 0
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "p14:flythrough{\"dir\":\"out\"}"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "p14:flythrough{\"dir\":\"out\"}"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 5
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 75,
+        "ms": 600,
+        "streamedMs": 600,
+        "kind": "transition",
+        "rows": [
+          "transition:p14:flythrough"
+        ],
+        "tol": {
+          "meanAbs": 0.02,
+          "rowMax": 0.1
+        },
+        "hash": {
+          "local": "8d4a4bfb",
+          "streamed": "2d29abf2"
+        },
+        "status": "pass",
+        "meanAbs": 0.006669070840141612,
+        "rowMax": 0.010174632352941177,
+        "detail": "meanAbs 0.0067 rowMax 0.0102 (row 464)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "lo-tdf44223.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.000699286832788671,
+        "rowMax": 0.045922181372549026
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            1,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p:split{\"orient\":\"vert\"}"
+          ],
+          "morphPairs": [],
+          "clicks": 3
+        },
+        "streamed": {
+          "steps": [
+            1,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p:split{\"orient\":\"vert\"}"
+          ],
+          "morphPairs": [],
+          "clicks": 3
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 1,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 11
+      },
+      "gate": [],
+      "worst": {
+        "slide": 2,
+        "step": 0,
+        "pct": 50,
+        "ms": 750,
+        "streamedMs": 750,
+        "kind": "transition",
+        "rows": [
+          "transition:p:split"
+        ],
+        "tol": {
+          "meanAbs": 0.020699286832788672,
+          "rowMax": 0.14592218137254903
+        },
+        "hash": {
+          "local": "b3f0e698",
+          "streamed": "c05bfb84"
+        },
+        "status": "pass",
+        "meanAbs": 0.000699286832788671,
+        "rowMax": 0.045922181372549026,
+        "detail": "meanAbs 0.0007 rowMax 0.0459 (row 397)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "lo-tdf44223.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.000699286832788671,
+        "rowMax": 0.045922181372549026
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            1,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p:split{\"orient\":\"vert\"}"
+          ],
+          "morphPairs": [],
+          "clicks": 3
+        },
+        "streamed": {
+          "steps": [
+            1,
+            0
+          ],
+          "transitions": [
+            "none",
+            "p:split{\"orient\":\"vert\"}"
+          ],
+          "morphPairs": [],
+          "clicks": 3
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 1,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 8,
+        "skipped-mark": 3
+      },
+      "gate": [],
+      "worst": {
+        "slide": 2,
+        "step": 0,
+        "pct": 50,
+        "ms": 750,
+        "streamedMs": 750,
+        "kind": "transition",
+        "rows": [
+          "transition:p:split"
+        ],
+        "tol": {
+          "meanAbs": 0.020699286832788672,
+          "rowMax": 0.14592218137254903
+        },
+        "hash": {
+          "local": "c918ce16",
+          "streamed": "33de7f25"
+        },
+        "status": "pass",
+        "meanAbs": 0.0046581095111655774,
+        "rowMax": 0.048691789215686274,
+        "detail": "meanAbs 0.0047 rowMax 0.0487 (row 397)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "lo-tdf93868.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.003265324301016703,
+        "rowMax": 0.1541707516339869
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            2
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 3
+        },
+        "streamed": {
+          "steps": [
+            2
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 3
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 2,
+        "composited": 2,
+        "rate": 1
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 11
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 2,
+        "pct": 50,
+        "ms": 266.667,
+        "streamedMs": 233.333,
+        "kind": "composited",
+        "rows": [
+          "preset:entr:3:10"
+        ],
+        "tol": {
+          "meanAbs": 0.08,
+          "rowMax": 0.3
+        },
+        "hash": {
+          "local": "051fe54c",
+          "streamed": "a105d7ce"
+        },
+        "status": "pass",
+        "meanAbs": 0.002141407952069717,
+        "rowMax": 0.15397058823529414,
+        "detail": "meanAbs 0.0021 rowMax 0.1540 (row 155)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "lo-tdf93868.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.003265324301016703,
+        "rowMax": 0.1541707516339869
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            2
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 3
+        },
+        "streamed": {
+          "steps": [
+            2
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 3
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 2,
+        "composited": 2,
+        "rate": 1
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 11
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 2,
+        "pct": 50,
+        "ms": 266.667,
+        "streamedMs": 233.333,
+        "kind": "composited",
+        "rows": [
+          "preset:entr:3:10"
+        ],
+        "tol": {
+          "meanAbs": 0.08,
+          "rowMax": 0.3
+        },
+        "hash": {
+          "local": "4c6f04df",
+          "streamed": "3c66b1a2"
+        },
+        "status": "pass",
+        "meanAbs": 0.005487580564633261,
+        "rowMax": 0.15295343137254902,
+        "detail": "meanAbs 0.0055 rowMax 0.1530 (row 155)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "poi-copy-slide-demo.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0005711720452069716,
+        "rowMax": 0.035431985294117646
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020571172045206972,
+            "rowMax": 0.13543198529411765
+          },
+          "hash": {
+            "local": "623db050",
+            "streamed": "0147b99e"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0005711720452069716,
+          "rowMax": 0.035431985294117646,
+          "detail": "unit still (unanimated): meanAbs 0.0006 rowMax 0.0354 (row 306)"
+        }
+      ]
+    },
+    {
+      "deck": "poi-copy-slide-demo.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0005711720452069716,
+        "rowMax": 0.035431985294117646
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020571172045206972,
+            "rowMax": 0.13543198529411765
+          },
+          "hash": {
+            "local": "333d5907",
+            "streamed": "b873ae53"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.004535215822440087,
+          "rowMax": 0.04084252450980392,
+          "detail": "unit still (unanimated): meanAbs 0.0045 rowMax 0.0408 (row 306)"
+        }
+      ]
+    },
+    {
+      "deck": "poi-crop-to-0.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0,
+        "rowMax": 0
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0,
+            0
+          ],
+          "transitions": [
+            "p:none",
+            "p:none",
+            "p:none"
+          ],
+          "morphPairs": [],
+          "clicks": 3
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0,
+            0
+          ],
+          "transitions": [
+            "p:none",
+            "p:none",
+            "p:none"
+          ],
+          "morphPairs": [],
+          "clicks": 3
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 15
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 0,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "transition",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.02,
+          "rowMax": 0.1
+        },
+        "hash": {
+          "local": "8e1fddc5",
+          "streamed": "8e1fddc5"
+        },
+        "status": "pass",
+        "meanAbs": 0,
+        "rowMax": 0,
+        "detail": "meanAbs 0.0000 rowMax 0.0000 (row 0)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "poi-crop-to-0.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0,
+        "rowMax": 0
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0,
+            0
+          ],
+          "transitions": [
+            "p:none",
+            "p:none",
+            "p:none"
+          ],
+          "morphPairs": [],
+          "clicks": 3
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0,
+            0
+          ],
+          "transitions": [
+            "p:none",
+            "p:none",
+            "p:none"
+          ],
+          "morphPairs": [],
+          "clicks": 3
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 15
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 0,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "transition",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.02,
+          "rowMax": 0.1
+        },
+        "hash": {
+          "local": "de2b7bdb",
+          "streamed": "c508ebc3"
+        },
+        "status": "pass",
+        "meanAbs": 0.003976707175925926,
+        "rowMax": 0.006700367647058823,
+        "detail": "meanAbs 0.0040 rowMax 0.0067 (row 64)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "poi-picture-transparency.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0,
+        "rowMax": 0
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "transitions": [
+            "p:none",
+            "p:none",
+            "p:none",
+            "p:none"
+          ],
+          "morphPairs": [],
+          "clicks": 4
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "transitions": [
+            "p:none",
+            "p:none",
+            "p:none",
+            "p:none"
+          ],
+          "morphPairs": [],
+          "clicks": 4
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 20
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 0,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "transition",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.02,
+          "rowMax": 0.1
+        },
+        "hash": {
+          "local": "d39e368d",
+          "streamed": "d39e368d"
+        },
+        "status": "pass",
+        "meanAbs": 0,
+        "rowMax": 0,
+        "detail": "meanAbs 0.0000 rowMax 0.0000 (row 0)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "poi-picture-transparency.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0,
+        "rowMax": 0
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "transitions": [
+            "p:none",
+            "p:none",
+            "p:none",
+            "p:none"
+          ],
+          "morphPairs": [],
+          "clicks": 4
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "transitions": [
+            "p:none",
+            "p:none",
+            "p:none",
+            "p:none"
+          ],
+          "morphPairs": [],
+          "clicks": 4
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 20
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 0,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "transition",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.02,
+          "rowMax": 0.1
+        },
+        "hash": {
+          "local": "cb4ec3e0",
+          "streamed": "5a049ef9"
+        },
+        "status": "pass",
+        "meanAbs": 0.0040886017478268975,
+        "rowMax": 0.007405760035583232,
+        "detail": "meanAbs 0.0041 rowMax 0.0074 (row 378)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "poi-table_test.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.00026641220724400873,
+        "rowMax": 0.03646139705882353
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 1
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 100,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "layers",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.020266412207244008,
+          "rowMax": 0.13646139705882354
+        },
+        "hash": {
+          "local": "012aef9f",
+          "streamed": "eccf354d"
+        },
+        "status": "pass",
+        "meanAbs": 0.00026641220724400873,
+        "rowMax": 0.03646139705882353,
+        "detail": "meanAbs 0.0003 rowMax 0.0365 (row 127)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "poi-table_test.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.00026641220724400873,
+        "rowMax": 0.03646139705882353
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "pass": 1
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 100,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "layers",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.020266412207244008,
+          "rowMax": 0.13646139705882354
+        },
+        "hash": {
+          "local": "e45f608b",
+          "streamed": "9ee59b22"
+        },
+        "status": "pass",
+        "meanAbs": 0.004113204656862745,
+        "rowMax": 0.03785539215686274,
+        "detail": "meanAbs 0.0041 rowMax 0.0379 (row 127)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "poi-text-highlight.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0012770246119281044,
+        "rowMax": 0.05683517156862745
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.021277024611928104,
+            "rowMax": 0.15683517156862745
+          },
+          "hash": {
+            "local": "6c1f0752",
+            "streamed": "c5ee0810"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": false,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0072149586397058825,
+          "rowMax": 0.1786703431372549,
+          "detail": "unit still (unanimated): meanAbs 0.0072 rowMax 0.1787 (row 327)"
+        }
+      ]
+    },
+    {
+      "deck": "poi-text-highlight.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0012770246119281044,
+        "rowMax": 0.05683517156862745
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.021277024611928104,
+            "rowMax": 0.15683517156862745
+          },
+          "hash": {
+            "local": "56d3a492",
+            "streamed": "cc051717"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": false,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.01111063027641612,
+          "rowMax": 0.18231004901960784,
+          "detail": "unit still (unanimated): meanAbs 0.0111 rowMax 0.1823 (row 327)"
+        }
+      ]
+    },
+    {
+      "deck": "pypptx-minimal.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0,
+        "rowMax": 0
+      },
+      "structure": {
+        "local": {
+          "steps": [],
+          "transitions": [],
+          "morphPairs": [],
+          "clicks": 0
+        },
+        "streamed": {
+          "steps": [],
+          "transitions": [],
+          "morphPairs": [],
+          "clicks": 0
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        "no-shown-slides"
+      ],
+      "frames": {},
+      "gate": [],
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "pypptx-minimal.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0,
+        "rowMax": 0
+      },
+      "structure": {
+        "local": {
+          "steps": [],
+          "transitions": [],
+          "morphPairs": [],
+          "clicks": 0
+        },
+        "streamed": {
+          "steps": [],
+          "transitions": [],
+          "morphPairs": [],
+          "clicks": 0
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        "no-shown-slides"
+      ],
+      "frames": {},
+      "gate": [],
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "pypptx-missing_rels_item.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.001279224537037037,
+        "rowMax": 0.08272467320261438
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.02127922453703704,
+            "rowMax": 0.18272467320261437
+          },
+          "hash": {
+            "local": "0f2afd4f",
+            "streamed": "83e8f2ea"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.001279224537037037,
+          "rowMax": 0.08272467320261438,
+          "detail": "unit still (unanimated): meanAbs 0.0013 rowMax 0.0827 (row 307)"
+        }
+      ]
+    },
+    {
+      "deck": "pypptx-missing_rels_item.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.001279224537037037,
+        "rowMax": 0.08272467320261438
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.02127922453703704,
+            "rowMax": 0.18272467320261437
+          },
+          "hash": {
+            "local": "5827aa88",
+            "streamed": "af3842c8"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.005149668663761801,
+          "rowMax": 0.08838235294117648,
+          "detail": "unit still (unanimated): meanAbs 0.0051 rowMax 0.0884 (row 307)"
+        }
+      ]
+    },
+    {
+      "deck": "pypptx-no-core-props.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0007456143336964415,
+        "rowMax": 0.0417156862745098
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.02074561433369644,
+            "rowMax": 0.1417156862745098
+          },
+          "hash": {
+            "local": "8757f9c1",
+            "streamed": "f0f8d874"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0007456143336964415,
+          "rowMax": 0.0417156862745098,
+          "detail": "unit still (unanimated): meanAbs 0.0007 rowMax 0.0417 (row 293)"
+        }
+      ]
+    },
+    {
+      "deck": "pypptx-no-core-props.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0007456143336964415,
+        "rowMax": 0.0417156862745098
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.02074561433369644,
+            "rowMax": 0.1417156862745098
+          },
+          "hash": {
+            "local": "1e042659",
+            "streamed": "9d7c6cb2"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0046113323801742915,
+          "rowMax": 0.04448120915032679,
+          "detail": "unit still (unanimated): meanAbs 0.0046 rowMax 0.0445 (row 293)"
+        }
+      ]
+    },
+    {
+      "deck": "pypptx-test.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.001279224537037037,
+        "rowMax": 0.08272467320261438
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.02127922453703704,
+            "rowMax": 0.18272467320261437
+          },
+          "hash": {
+            "local": "0f2afd4f",
+            "streamed": "83e8f2ea"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.001279224537037037,
+          "rowMax": 0.08272467320261438,
+          "detail": "unit still (unanimated): meanAbs 0.0013 rowMax 0.0827 (row 307)"
+        }
+      ]
+    },
+    {
+      "deck": "pypptx-test.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.001279224537037037,
+        "rowMax": 0.08272467320261438
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.02127922453703704,
+            "rowMax": 0.18272467320261437
+          },
+          "hash": {
+            "local": "5827aa88",
+            "streamed": "af3842c8"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.005149668663761801,
+          "rowMax": 0.08838235294117648,
+          "detail": "unit still (unanimated): meanAbs 0.0051 rowMax 0.0884 (row 307)"
+        }
+      ]
+    },
+    {
+      "deck": "pypptx-test_slides.pptx",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0012309254720406682,
+        "rowMax": 0.04210375816993464
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.021230925472040668,
+            "rowMax": 0.14210375816993465
+          },
+          "hash": {
+            "local": "40860113",
+            "streamed": "17ab33f0"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.001923735929557008,
+          "rowMax": 0.043611111111111114,
+          "detail": "unit still (unanimated): meanAbs 0.0019 rowMax 0.0436 (row 209)"
+        }
+      ]
+    },
+    {
+      "deck": "pypptx-test_slides.pptx",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0012309254720406682,
+        "rowMax": 0.04210375816993464
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.021230925472040668,
+            "rowMax": 0.14210375816993465
+          },
+          "hash": {
+            "local": "0f3537a2",
+            "streamed": "13749fcb"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.005511591094771242,
+          "rowMax": 0.04734885620915033,
+          "detail": "unit still (unanimated): meanAbs 0.0055 rowMax 0.0473 (row 303)"
+        }
+      ]
+    }
+  ]
+}
