@@ -80,9 +80,9 @@ export const CF_CHAR_SLOT_BYTES: number = measurePayloadBytes(['a'])! - measureP
  * unit (the measurer's string rule), never hand-counted. */
 const WIDEST_ERROR = Object.freeze({ kind: 'formula-error', code: '#DIV/0!' })
 /** One snapshot entry: a row slot in its column's sorted row list, a value slot holding the widest non-string value (a
- * tagged error object; a string's characters are priced per unit on top), its string-unit slot, and its slot in the
+ * tagged error object; a string's characters are priced per unit on top), its string-unit and kind/ASCII flag slots, and its slot in the
  * snapshot's row-major key index (fix round 2, finding 1). */
-export const CF_DEPENDENCY_CELL_BYTES: number = measurePayloadBytes([[1048575], [WIDEST_ERROR], [32767], [17179869183]])! - measurePayloadBytes([[], [], [], []])!
+export const CF_DEPENDENCY_CELL_BYTES: number = measurePayloadBytes([[1048575], [WIDEST_ERROR], [32767], [2], [17179869183]])! - measurePayloadBytes([[], [], [], [], []])!
 /** One slot of the row-major key index alone (a rebuild after an out-of-order source holds old plus new). */
 export const CF_DEPENDENCY_KEY_BYTES: number = measurePayloadBytes([17179869183])! - measurePayloadBytes([])!
 /** One memo or map entry (key and value slots): the evaluator's per-node memo and the CF-owned invariant memo. */
@@ -151,7 +151,7 @@ export const CF_VIEW_WORKSPACE_BYTES: number = (() => {
   return measurePayloadBytes({
     keySet: new Set(keys), ordered: keys, indexOf: keys,
     distinct: Array.from({ length: atoms }, () => shared).map((_, i) => i), // slots only: the areas are the caller's
-    perArea: Array.from({ length: atoms }, () => ({ cells: cap, stringUnits: 1e9, longestString: 32767 })),
+    perArea: Array.from({ length: atoms }, () => ({ cells: cap, stringUnits: 1e9, longestString: 32767, strings: cap, nonAscii: cap })),
   })!
 })()
 export interface CfRefusal { readonly kind: 'unresolved'; readonly reason: string }

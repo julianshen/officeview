@@ -10,7 +10,7 @@ import '../src/xlsx/formula/functions'
 import { CONDITIONAL_MAX_CRITERION_LENGTH } from '../src/xlsx/formula/functions/cond'
 import { DEFAULT_MAX_DP_CELLS, matchWildcard } from '../src/xlsx/formula/functions/wildcard'
 import * as schedulerModule from '../src/xlsx/view/scheduler'
-import { cfCallShape, cfCountifDpRefused, cfCountifKey, cfInvariantSubtrees, cfTruth, planCfHoist, type CfCallWorkBreakdown, type CfHoisted } from '../src/xlsx/cf/formula'
+import { CF_TEXT_UNIT_CHARS, cfCallShape, cfTextUnits, cfCountifDpRefused, cfCountifKey, cfInvariantSubtrees, cfTruth, planCfHoist, type CfCallWorkBreakdown, type CfHoisted } from '../src/xlsx/cf/formula'
 import { createCfMemory, createCfUnitCeiling, createCfWorkBudget, CF_FREQUENCY_ENTRY_BYTES, CF_LIMITS, type CfWorkBudget } from '../src/xlsx/cf/limits'
 import { createCfStatistics } from '../src/xlsx/cf/statistics'
 import { createCfService } from '../src/xlsx/cf/service'
@@ -117,7 +117,12 @@ describe('absolute-range aggregates are hoisted and paint on a 10,000-row column
     expect(run.painted[1]!.filter(Boolean).length).toBeGreaterThan(0)
     expect(Math.max(...run.calls.map(c => c.total))).toBeLessThanOrEqual(CF_LIMITS.checkpointUnits)
     // The ceiling pays the snapshot and the calls only; the hoist scans pay from scan budgets (and yield at their checkpoints).
-    expect(run.ceilingUsed).toBe(run.callUnits + 3 * 256)
+    // Each snapshot entry costs a unit, and a string its ASCII scan at the text rate (round 3, finding 4).
+    const scanUnits = batches.reduce((n, t) => {
+      for (let row = t.firstRow; row <= t.lastRow; row++) { const v = cells[`A${row + 1}`]; n += 1 + (typeof v === 'string' ? Math.ceil(v.length / CF_TEXT_UNIT_CHARS) : 0) }
+      return n
+    }, 0)
+    expect(run.ceilingUsed).toBe(run.callUnits + scanUnits)
     expect(run.scanBudgets.some(b => b.units >= ROWS)).toBe(true)
     expect(run.hostDuringPrepare).toBeGreaterThan(0)
     // The snapshot holds the per-cell footprint (256 criterion cells), never the 10,000-cell column.
@@ -213,9 +218,10 @@ describe('COUNTIF hoist policy refusals (S5-HOIST, round-3 #1, #5)', () => {
     expect(batch.evaluate(0, 1, 2)).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
     expect(batch.evaluate(0, 3, 2)).toEqual({ kind: 'ready', value: { kind: 'boolean', value: true } })
     batch.dispose()
-    // Where the bound admits the call, the DP policy is what refuses: 50 characters against a 100,000-character string.
-    const dp = await batchOf([formulaRule('COUNTIF($A$1:$A$2,B1)>0', 'C1')], fakeSource({ A1: 'y'.repeat(100_000), A2: 'b', B1: 'a'.repeat(50) }))
-    expect(cfCountifDpRefused(lit('a'.repeat(50)), 100_000)).toBe(true)
+    // Where the bound admits the call, the DP policy is what refuses: 10 characters against a 400,000-character string
+    // (the frequency key's parse is charged at 12 passes per character, so the criterion is kept short).
+    const dp = await batchOf([formulaRule('COUNTIF($A$1:$A$2,B1)>0', 'C1')], fakeSource({ A1: 'y'.repeat(400_000), A2: 'b', B1: 'a'.repeat(10) }))
+    expect(cfCountifDpRefused(lit('a'.repeat(10)), 400_000)).toBe(true)
     expect(dp.evaluate(0, 0, 2)).toEqual({ kind: 'unresolved', reason: 'cf-formula-unsupported' })
     dp.dispose()
   })
@@ -611,8 +617,11 @@ describe('invariant subtrees are memoised per preparation under a charged lease 
     const f = compile('UPPER($A$2)=B1', 'C1')
     const [node] = cfInvariantSubtrees(f)
     expect(node).toBeDefined()
-    expect(cfCallShape(f, [], new Map([[node!, 'x'.repeat(100)]])).literalUnits).toBe(100)
-    expect(cfCallShape(f, [], new Map([[node!, 7]])).literalUnits).toBe(0)
+    const metrics = { viewCells: 1, atoms: [{ cells: 1, stringUnits: 0, longestString: 0 }] }
+    const long = cfTextUnits(cfCallShape(f, [], new Map([[node!, 'x'.repeat(100)]])), metrics)
+    expect(long.intermediate).toBe(100)
+    expect(long.chars).toBeGreaterThanOrEqual(2 * 100) // folded and compared by the comparison
+    expect(cfTextUnits(cfCallShape(f, [], new Map([[node!, 7]])), metrics).chars).toBe(0)
   })
   it('the memo is charged on the preparation memory and released with it', async () => {
     const cells: Cells = { ...B, A1: 5 }

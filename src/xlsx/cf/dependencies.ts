@@ -20,7 +20,7 @@ import type { SparseCellStore, StoredCell } from '../formula/refs'
 import { hostTask } from '../view/scheduler'
 import { measurePayloadBytes } from '../view/payloadBytes'
 import {
-  cfFormulaFootprint, cfFormulaSemantics, cfLiteralToElement, createCfInvariantMemo, evaluateCfFormula, planCfHoist,
+  CF_TEXT_UNIT_CHARS, cfFormulaFootprint, cfFormulaSemantics, cfLiteralToElement, createCfInvariantMemo, evaluateCfFormula, planCfHoist,
   type CfCallWorkBreakdown, type CfEdgeMode, type CfEvaluationContext, type CfFootprintEntry, type CfFormulaContext, type CfFormulaPacing,
   type CfFormulaProbe, type CfHoist, type CfHoisted, type CfPayloadMetrics, type CfResult,
 } from './formula'
@@ -63,10 +63,12 @@ const containsRect = (o: SourceRect, i: SourceRect): boolean => o.firstRow <= i.
 const area = (r: SourceRect): number => (r.lastRow - r.firstRow + 1) * (r.lastCol - r.firstCol + 1)
 const sortUnits = (n: number): number => (n <= 1 ? 0 : n * Math.ceil(Math.log2(n)))
 /** One column of the snapshot index: its stored rows ascending, with their values and string units. */
-interface Column { rows: number[]; values: Slot[]; units: number[]; sorted: boolean }
+/** `flags`: 0 a non-string, 1 an ASCII string, 2 a string with a non-ASCII unit (round 3, finding 4). */
+interface Column { rows: number[]; values: Slot[]; units: number[]; flags: number[]; sorted: boolean }
 /** One new column's bookkeeping, DERIVED from the payload measurer (a map entry holding an empty column record). */
-export const CF_DEPENDENCY_COLUMN_BYTES: number = measurePayloadBytes(new Map([[0, { rows: [], values: [], units: [], sorted: true }]]))! - measurePayloadBytes(new Map())!
+export const CF_DEPENDENCY_COLUMN_BYTES: number = measurePayloadBytes(new Map([[0, { rows: [], values: [], units: [], flags: [], sorted: true }]]))! - measurePayloadBytes(new Map())!
 const INITIAL_CAPACITY = 16
+const isAsciiText = (s: string): boolean => { for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) >= 0x80) return false; return true }
 const W = 16384
 function lowerBound(rows: readonly number[], value: number): number {
   let a = 0, b = rows.length
@@ -117,10 +119,11 @@ export async function prepareCfDependencies(atoms: readonly CfFootprintEntry[], 
               if (signal.aborted) throw cancel()
               const row = rows[i]!, col = cols[i]!
               if (!scanRects.some(r => inRect(r, row, col))) continue
-              const spent = budget.spend(1)
+              const literal = values[i]!
+              // One unit per entry, plus the ASCII scan of a string at the text rate (round 3, finding 4).
+              const spent = budget.spend(1 + (literal.kind === 'string' ? Math.ceil(literal.value.length / CF_TEXT_UNIT_CHARS) : 0))
               if (spent === 'refused') return unresolved('cf-resource-limit')
               if (spent === 'yield') { await hostTask(); if (signal.aborted) throw cancel(); budget.resume() }
-              const literal = values[i]!
               const element = cfLiteralToElement(literal)
               const units = literal.kind === 'string' ? literal.value.length : 0
               let column = columns.get(col)
@@ -132,7 +135,7 @@ export async function prepareCfDependencies(atoms: readonly CfFootprintEntry[], 
               if (!column) {
                 columnBytes += CF_DEPENDENCY_COLUMN_BYTES
                 if (!settle()) return unresolved('cf-resource-limit')
-                column = { rows: [], values: [], units: [], sorted: true }
+                column = { rows: [], values: [], units: [], flags: [], sorted: true }
                 columns.set(col, column)
               }
               stringBytes += units * 2
@@ -141,6 +144,7 @@ export async function prepareCfDependencies(atoms: readonly CfFootprintEntry[], 
               if (last >= 0 && column.rows[last] === row) continue // the same cell met twice
               if (last >= 0 && column.rows[last]! > row) column.sorted = false
               column.rows.push(row); column.values.push(element === undefined ? UNAVAILABLE : element); column.units.push(units)
+              column.flags.push(literal.kind !== 'string' ? 0 : isAsciiText(literal.value) ? 1 : 2)
               const key = row * W + col
               if (key <= lastKey) keysSorted = false
               lastKey = key
@@ -161,12 +165,12 @@ export async function prepareCfDependencies(atoms: readonly CfFootprintEntry[], 
       const spent = budget.spend(sortUnits(column.rows.length))
       if (spent === 'refused') return unresolved('cf-resource-limit')
       const order = column.rows.map((_, i) => i).sort((a, b) => column.rows[a]! - column.rows[b]!)
-      const rowsOut: number[] = [], valuesOut: Slot[] = [], unitsOut: number[] = []
+      const rowsOut: number[] = [], valuesOut: Slot[] = [], unitsOut: number[] = [], flagsOut: number[] = []
       for (const i of order) {
         if (rowsOut.length && rowsOut[rowsOut.length - 1] === column.rows[i]) { count--; continue }
-        rowsOut.push(column.rows[i]!); valuesOut.push(column.values[i]!); unitsOut.push(column.units[i]!)
+        rowsOut.push(column.rows[i]!); valuesOut.push(column.values[i]!); unitsOut.push(column.units[i]!); flagsOut.push(column.flags[i]!)
       }
-      column.rows = rowsOut; column.values = valuesOut; column.units = unitsOut; column.sorted = true
+      column.rows = rowsOut; column.values = valuesOut; column.units = unitsOut; column.flags = flagsOut; column.sorted = true
       if (spent === 'yield') { await hostTask(); if (signal.aborted) throw cancel(); budget.resume() }
     }
     if (!keysSorted) {
@@ -218,9 +222,10 @@ function createSnapshot(sheetId: string, bounds: SourceRect, declared: readonly 
     if (slot === UNAVAILABLE) { tainted = true; return NA }
     return slot === undefined ? null : slot
   }
-  const unitsAt = (row: number, col: number): number => {
+  const entryAt = (row: number, col: number): [number, number] => {
     const column = columns.get(col)!
-    return column.units[lowerBound(column.rows, row)]!
+    const i = lowerBound(column.rows, row)
+    return [column.units[i]!, column.flags[i]!]
   }
   /**
    * Visits the stored cells of `r` (finding 1). The walk takes the cheaper of two indexes, each priced in O(log n)
@@ -229,7 +234,7 @@ function createSnapshot(sheetId: string, bounds: SourceRect, declared: readonly 
    * charges it and may refuse; every stored cell calls `hit`. Neither walk touches a column or key outside the rect's
    * span, so a sparse call never scans the snapshot.
    */
-  const walkIn = (r: SourceRect, step: () => boolean, hit: (row: number, col: number, units: number) => boolean): boolean => {
+  const walkIn = (r: SourceRect, step: () => boolean, hit: (row: number, col: number, units: number, flag: number) => boolean): boolean => {
     const c = clampTo(r, bounds)
     if (!c) return true
     const k0 = lowerBound(colKeys, c.firstCol), k1 = lowerBound(colKeys, c.lastCol + 1)
@@ -239,7 +244,7 @@ function createSnapshot(sheetId: string, bounds: SourceRect, declared: readonly 
         const col = colKeys[k]!, column = columns.get(col)!
         const at = lowerBound(column.rows, c.firstRow), end = lowerBound(column.rows, c.lastRow + 1)
         if (at === end && !step()) return false
-        for (let i = at; i < end; i++) if (!hit(column.rows[i]!, col, column.units[i]!)) return false
+        for (let i = at; i < end; i++) if (!hit(column.rows[i]!, col, column.units[i]!, column.flags[i]!)) return false
       }
       return true
     }
@@ -248,7 +253,8 @@ function createSnapshot(sheetId: string, bounds: SourceRect, declared: readonly 
       const key = keys[i]!, row = Math.floor(key / W), col = key % W
       if (col < c.firstCol) { if (!step()) return false; i = lowerBound(keys, row * W + c.firstCol); continue }
       if (col > c.lastCol) { if (!step()) return false; i = lowerBound(keys, (row + 1) * W + c.firstCol); continue }
-      if (!hit(row, col, unitsAt(row, col))) return false
+      const [units, flag] = entryAt(row, col)
+      if (!hit(row, col, units, flag)) return false
       i++
     }
     return true
@@ -285,12 +291,14 @@ function createSnapshot(sheetId: string, bounds: SourceRect, declared: readonly 
       const keySet = new Set<number>()
       let hits = 0, index = 0, refused = false
       const step = (): boolean => { if (budget.spend(1) === 'refused') { refused = true; return false } index++; return true }
-      const perArea: Array<{ cells: number; stringUnits: number; longestString: number }> = []
+      const perArea: Array<{ cells: number; stringUnits: number; longestString: number; strings: number; nonAscii: number }> = []
       for (const r of distinct) {
-        const m = { cells: 0, stringUnits: 0, longestString: 0 }
-        const ok = walkIn(r, step, (row, col, units) => {
+        const m = { cells: 0, stringUnits: 0, longestString: 0, strings: 0, nonAscii: 0 }
+        const ok = walkIn(r, step, (row, col, units, flag) => {
           if (++hits > cap) return false
           m.cells++; m.stringUnits += units; m.longestString = Math.max(m.longestString, units); keySet.add(row * W + col)
+          if (flag > 0) m.strings++
+          if (flag === 2) m.nonAscii++
           return true
         })
         if (!ok || refused) return unresolved('cf-resource-limit')

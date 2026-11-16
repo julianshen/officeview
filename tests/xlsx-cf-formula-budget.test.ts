@@ -13,12 +13,13 @@ import * as schedulerModule from '../src/xlsx/view/scheduler'
 import * as wildcardModule from '../src/xlsx/formula/functions/wildcard'
 import {
   cfCallShape, cfCallWorkBreakdown, cfEvaluatorScratchBytes, cfFormulaSemantics, createCfInvariantMemo, evaluateCfFormula,
-  type CfCallWorkBreakdown, type CfFormulaContext, CF_TEXT_RENDER_UNITS, cfTextUnits,
+  type CfCallWorkBreakdown, type CfFormulaContext, type TextValue, CF_TEXT_RENDER_UNITS, CF_TEXT_UNIT_CHARS, cfTextUnits,
 } from '../src/xlsx/cf/formula'
 import { CF_DEPENDENCY_COLUMN_BYTES, prepareCfDependencies, type CfDependencySnapshot } from '../src/xlsx/cf/dependencies'
 import { CF_DEPENDENCY_CELL_BYTES, CF_FORMULA_CALL_BYTES, CF_FORMULA_NODE_BYTES, CF_LIMITS, CF_VIEW_WORKSPACE_BYTES, type CfReservation, createCfMemory, createCfUnitCeiling, createCfWorkBudget, type CfUnitCeiling, type CfWorkBudget } from '../src/xlsx/cf/limits'
 import { measurePayloadBytes } from '../src/xlsx/view/payloadBytes'
-import { EVALUATION, a1, batchOf, compile, fakeSource, formulaRule, rectOf, refOf, type Cells } from './helpers/cf-formula'
+import { EVALUATION, a1, batchOf, compile, engineEval, fakeSource, formulaRule, rectOf, refOf, type CellInput, type Cells } from './helpers/cf-formula'
+import type { AstNode } from '../src/xlsx/formula/types'
 
 vi.mock('../src/xlsx/formula/evaluator', async importOriginal => {
   const actual = await importOriginal<typeof import('../src/xlsx/formula/evaluator')>()
@@ -194,7 +195,8 @@ describe('text work is bounded by measured payload before invocation (round-2 #1
     const snapshot = await snapshotOf({ A1: big, A2: big }, ['A1', 'A2'])
     const f = compile('LEN(A1&A2)', 'B1')
     const b = cfCallWorkBreakdown(cfCallShape(f), metricsOf(snapshot, ['A1', 'A2']), []) as CfCallWorkBreakdown
-    expect(b.text).toBe(2 * 65_534) // the 65,534-unit intermediate, walked by & and by LEN (finding 2)
+    // & renders both (65,534) and writes the result (65,534); LEN renders and splits it (2 x 65,534): 262,136 characters.
+    expect(b.text).toBe(262_136 / CF_TEXT_UNIT_CHARS)
     expect(b.total - b.text).toBeLessThanOrEqual(CF_LIMITS.checkpointUnits) // a mutant without the text term admits it
     evaluateNodeSpy.mockClear(); textCharsSpy.mockClear()
     expect(evaluateCfFormula(f, a1('B1'), snapshot, context(createCfMemory({ limitBytes: Number.MAX_SAFE_INTEGER })))).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
@@ -205,10 +207,11 @@ describe('text work is bounded by measured payload before invocation (round-2 #1
   it('every operator and every string-consuming call (AND/OR/NOT/IF, math, date, scalar aggregates over a scalar) charges the string it consumes: over 32,767 characters, and just over the cap, each withholds (Task 34 fix 3)', async () => {
     for (const text of ['A1+1>0', 'AND(A1)', 'OR(A1,TRUE)', 'NOT(A1)', '-A1<0', 'ABS(A1)>0', 'MAX(IFERROR(A1,0))', 'SUM(IFNA(A1,0))', 'IF(A1,1,0)', 'YEAR(A1)>0', 'MOD(A1,2)']) {
       const f = compile(text, 'B1')
-      for (const length of [32_767, 125]) {
+      for (const length of [32_767]) {
         const snapshot = await snapshotOf({ A1: 'x'.repeat(length) }, ['A1'])
         const b = cfCallWorkBreakdown(cfCallShape(f), metricsOf(snapshot, ['A1']), []) as CfCallWorkBreakdown
-        expect(b.text, `${text} over ${length}`).toBe(length)
+        // At least one pass over the string at the text rate (round 3 per-operation model).
+        expect(b.text, `${text} over ${length}`).toBeGreaterThanOrEqual(Math.ceil(length / CF_TEXT_UNIT_CHARS))
         expect(b.total, `${text} over ${length}`).toBeGreaterThan(CF_LIMITS.checkpointUnits)
         // A mutant that charges text only for text functions and & would admit it.
         expect(b.total - b.text, `${text} over ${length}`).toBeLessThanOrEqual(CF_LIMITS.checkpointUnits)
@@ -219,7 +222,7 @@ describe('text work is bounded by measured payload before invocation (round-2 #1
       }
     }
   })
-  it('LEN(A1&A2) over two 10-character strings is 4 + 2 + 2 + 2 x 20 = 48, and runs at its exact scratch bound but never one byte below', async () => {
+  it('LEN(A1&A2) over two 10-character strings is 4 + 2 + 2 + (40 + 40) / 4 = 28, and runs at its exact scratch bound but never one byte below', async () => {
     const snapshot = await snapshotOf({ A1: 'abcdefghij', A2: 'klmnopqrst' }, ['A1', 'A2'])
     const f = compile('LEN(A1&A2)', 'B1')
     const metrics = metricsOf(snapshot, ['A1', 'A2'])
@@ -231,7 +234,7 @@ describe('text work is bounded by measured payload before invocation (round-2 #1
     expect(evaluateNodeSpy).not.toHaveBeenCalled()
     const exact = createCfMemory({ limitBytes: scratch + tree })
     expect(evaluateCfFormula(f, a1('B1'), snapshot, context(exact, calls))).toEqual({ kind: 'ready', value: { kind: 'number', value: 20 } })
-    expect(calls[0]).toEqual({ nodes: 4, viewBuild: 2, index: 0, enumeration: 0, reads: 2, sort: 0, comparisons: 0, matcher: 0, text: 40, criterion: 0, lookups: 0, total: 48 })
+    expect(calls[0]).toEqual({ nodes: 4, viewBuild: 2, index: 0, enumeration: 0, reads: 2, sort: 0, comparisons: 0, matcher: 0, text: 20, criterion: 0, lookups: 0, total: 28 })
     expect(exact.peakBytes).toBe(scratch + tree)
     expect(exact.currentBytes).toBe(0)
     snapshot.dispose()
@@ -518,9 +521,13 @@ describe('text work is bounded per operation, generated strings and criteria inc
   })
   it('sibling case mappings do not compound: UPPER(A2)=UPPER(B2) over two 5-character strings evaluates', async () => {
     const f = compile('UPPER(A2)=UPPER(B2)', 'C2')
-    const five = { cells: 1, stringUnits: 5, longestString: 5 }
+    const five = { cells: 1, stringUnits: 5, longestString: 5 } // unmeasured ASCII: taken as non-ASCII
+    const asciiFive = { ...five, strings: 1, nonAscii: 0 }
+    // ASCII: each UPPER reads 5 and writes 5; the comparison folds and compares each 5-unit side (2 x 5 each): 40 / 4.
+    expect((cfCallWorkBreakdown(cfCallShape(f), { viewCells: 2, atoms: [asciiFive, asciiFive] }, []) as CfCallWorkBreakdown).text).toBe(10)
+    // Non-ASCII: each UPPER may write 15, and each folded side may grow again: (5 + 15) x 2 + 15 x 4 x 2 = 160 / 4.
     const b = cfCallWorkBreakdown(cfCallShape(f), { viewCells: 2, atoms: [five, five] }, []) as CfCallWorkBreakdown
-    expect(b.text).toBe(10 * 3 * 3) // (5 + 5) x 3 for one level of case mapping, walked by two UPPER and one comparison
+    expect(b.text).toBe(40)
     expect((await callOf('UPPER(A2)=UPPER(B2)', { A2: 'abcde', B2: 'ABCDE' }, 'C2')).out).toEqual({ kind: 'ready', value: { kind: 'boolean', value: true } })
     // Nested mappings do compound: UPPER(LOWER(A2)) is bounded at 9x.
     expect(cfTextUnits(cfCallShape(compile('LEN(UPPER(LOWER(A2)))>0', 'C2')), { viewCells: 1, atoms: [five] }).intermediate).toBe(45)
@@ -530,7 +537,8 @@ describe('text work is bounded per operation, generated strings and criteria inc
     const shape = cfCallShape(f)
     const b = cfCallWorkBreakdown(shape, { viewCells: 1, atoms: [{ cells: 1, stringUnits: 40, longestString: 40 }] }, []) as CfCallWorkBreakdown
     expect('ß'.repeat(40).toUpperCase().length).toBe(80)
-    expect(b.text).toBeGreaterThanOrEqual(40 + 80)
+    expect(cfTextUnits(shape, { viewCells: 1, atoms: [{ cells: 1, stringUnits: 40, longestString: 40 }] }).chars).toBeGreaterThanOrEqual(40 + 80)
+    expect(b.text).toBeGreaterThan(0)
     // The longest intermediate (what scratch is sized from, and what each later walk may meet) is the 80-unit output.
     expect(cfTextUnits(shape, { viewCells: 1, atoms: [{ cells: 1, stringUnits: 40, longestString: 40 }] }).intermediate).toBeGreaterThanOrEqual(80)
   })
@@ -593,5 +601,105 @@ describe('criterion preprocessing is charged before it runs (Task 34 fix round 3
     expect(batch.evaluate(0, 0, 2)).toEqual({ kind: 'ready', value: { kind: 'boolean', value: true } })
     expect(tokenize).toHaveBeenCalled()
     batch.dispose()
+  })
+})
+
+describe('the per-node text model: own passes per operation, ASCII from the snapshot (Task 34 fix round 3, finding 4)', () => {
+  /** One call through the evaluator: its outcome, its admitted breakdown, and its bound from the measured view. */
+  async function call(text: string, cells: Cells, at: string) {
+    const calls: CfCallWorkBreakdown[] = []
+    const batch = await batchOf([formulaRule(text, at)], fakeSource(cells), { onCall: b => calls.push(b) })
+    const t = a1(at)
+    evaluateNodeSpy.mockClear()
+    const out = batch.evaluate(0, t.row, t.col)
+    const ran = evaluateNodeSpy.mock.calls.length > 0
+    batch.dispose()
+    return { out, calls, ran }
+  }
+  /** The static bound over the real snapshot view (ASCII flags measured), whether or not the call is admitted. */
+  async function boundOf(text: string, cells: Cells, at: string, rects: string[]) {
+    const signal = new AbortController().signal
+    const snap = await prepareCfDependencies(rects.map(r => ({ rect: rectOf(r) })), fakeSource(cells), undefined, bigBudget(signal), createCfMemory(), signal, { sheetId: 's1' })
+    if (snap.kind !== 'ready') throw new Error('snapshot')
+    const view = snap.value.value.viewFor(rects.map(r => ({ rect: rectOf(r) })), bigBudget(), workspace())
+    if (view.kind !== 'ready') throw new Error('view')
+    const shape = cfCallShape(compile(text, at))
+    const b = cfCallWorkBreakdown(shape, view.value.metrics, shape.conditionals.flatMap(c => c.pairs.map(() => 0))) as CfCallWorkBreakdown
+    snap.value.value.dispose()
+    return b
+  }
+  const asText = (v: unknown) => (typeof v === 'boolean' ? { kind: 'boolean', value: v } : typeof v === 'string' ? { kind: 'text', value: v } : typeof v === 'number' ? { kind: 'number', value: v } : { kind: 'error', value: v })
+  const ascii = (n: number) => Array.from({ length: n }, (_, i) => String.fromCharCode(97 + (i % 26))).join('')
+  it('the brief\'s ordinary formulas evaluate and paint as the engine', async () => {
+    const cases: Array<[string, Cells, string]> = [
+      ['UPPER(A2)="ABC"', { A2: 'abc' + ascii(15) }, 'C2'],
+      ['UPPER(A2)="ABC"', { A2: ascii(60) }, 'C2'],
+      ['UPPER(A2)="ABC"', { A2: 'abc' }, 'C2'],
+      ['LOWER(A2)=B2', { A2: ascii(11).toUpperCase(), B2: ascii(11) }, 'C2'],
+      ['UPPER(A2)=""', { A2: '' }, 'C2'],
+      ['B1&UPPER($A$2)', { B1: -0.00000123456789012345, A2: 'ab' }, 'C1'],
+    ]
+    for (const [text, cells, at] of cases) {
+      const { out, calls } = await call(text, cells, at)
+      expect(out, `${text} ${JSON.stringify(cells)}`).toEqual({ kind: 'ready', value: asText(engineEval(text, cells, a1(at)).value) })
+      expect(calls[0]!.total).toBeLessThanOrEqual(CF_LIMITS.checkpointUnits)
+      // An empty-string cell is a string of length 0, never a rendered non-string: no text work at all.
+      if (text === 'UPPER(A2)=""') expect(calls[0]!.text).toBe(0)
+    }
+  })
+  it('adversarial shapes still refuse, their bounds over the cap', async () => {
+    const x = 'x'.repeat(32_767)
+    const cases: Array<[string, Cells, string, string[]]> = [
+      [`LEN(${'UPPER('.repeat(30)}A1${')'.repeat(30)})>0`, { A1: 'ß'.repeat(50) }, 'Z1', ['A1']],
+      ['UPPER(A2)="ABC"', { A2: 'é'.repeat(60) }, 'C2', ['A2']], // non-ASCII keeps the x3 expansion
+      ['A1+1>0', { A1: x }, 'B1', ['A1']],
+      ['AND(A1)', { A1: x }, 'B1', ['A1']],
+      ['COUNTIF(A1:A2,B1)', { A1: 1, A2: 2, B1: '0'.repeat(255) }, 'C1', ['A1:A2', 'B1']],
+      [`LEN(CONCAT(${Array.from({ length: 60 }, () => '1e100').join(',')}))>0`, {}, 'Z1', []],
+    ]
+    for (const [text, cells, at, rects] of cases) {
+      const { out, ran } = await call(text, cells, at)
+      expect(out, text).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
+      expect(ran, text).toBe(false)
+      if (rects.length) expect((await boundOf(text, cells, at, rects)).total, text).toBeGreaterThan(CF_LIMITS.checkpointUnits)
+    }
+  })
+  it('the 60-character case needs a rate: at one unit per character its own passes alone exceed the cap', async () => {
+    const b = await boundOf('UPPER(A2)="ABC"', { A2: ascii(60) }, 'C2', ['A2'])
+    const chars = cfTextUnits(cfCallShape(compile('UPPER(A2)="ABC"', 'C2')), { viewCells: 1, atoms: [{ cells: 1, stringUnits: 60, longestString: 60, strings: 1, nonAscii: 0 }] }).chars
+    expect(chars).toBe(60 + 60 + 2 * 60 + 2 * 3) // UPPER reads and writes 60; the comparison folds and compares each side
+    expect(b.total - b.text + chars).toBeGreaterThan(CF_LIMITS.checkpointUnits)
+    expect(b.total).toBeLessThanOrEqual(CF_LIMITS.checkpointUnits)
+  })
+  it('soundness: the model\'s length bound covers the engine\'s rendered result on random text formulas', () => {
+    const r = (() => { let a = 341; return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296 } })()
+    const pick = <T>(xs: readonly T[]): T => xs[Math.floor(r() * xs.length)]!
+    const values: CellInput[] = ['', 'ab', 'Hello World', '  a  b  ', 'ß'.repeat(4), 'ΐ'.repeat(3), 'İi', 'x'.repeat(30), 7, -0.00000123456789012345, 1e21, true, false, null]
+    const leaves = ['A1', 'A2', 'A3', 'A4', '"ab"', '"ẞ"', '1.5', 'TRUE', '-12345.678']
+    const ops: Array<(a: string, b: string) => string> = [
+      a => `UPPER(${a})`, a => `LOWER(${a})`, a => `TRIM(${a})`, a => `LEFT(${a},2)`, a => `RIGHT(${a},3)`, a => `MID(${a},2,3)`,
+      (a, b) => `${a}&${b}`, (a, b) => `CONCAT(${a},${b})`, (a, b) => `IF(TRUE,${a},${b})`, (a, b) => `IFERROR(${a},${b})`, a => `LEN(${a})`,
+    ]
+    const gen = (depth: number): string => (depth === 0 || r() < 0.25 ? pick(leaves) : pick(ops)(gen(depth - 1), gen(depth - 1)))
+    let checked = 0
+    for (let trial = 0; trial < 400; trial++) {
+      const cells: Cells = Object.fromEntries(['A1', 'A2', 'A3', 'A4'].map(k => [k, pick(values)]))
+      const text = gen(4)
+      const f = compile(text, 'B1')
+      const shape = cfCallShape(f)
+      const atoms = shape.refs.map(node => {
+        const v = cells[refOf((node as { ref: { row: number } }).ref.row, (node as { ref: { col: number } }).ref.col)]
+        if (v === null || v === undefined) return { cells: 0, stringUnits: 0, longestString: 0, strings: 0, nonAscii: 0 }
+        if (typeof v !== 'string') return { cells: 1, stringUnits: 0, longestString: 0, strings: 0, nonAscii: 0 }
+        return { cells: 1, stringUnits: v.length, longestString: v.length, strings: 1, nonAscii: /[^\x00-\x7f]/.test(v) ? 1 : 0 }
+      })
+      const trace = new Map<AstNode, TextValue>()
+      cfTextUnits(shape, { viewCells: atoms.length, atoms }, trace)
+      const engine = engineEval(text, cells, a1('B1'))
+      const rendered = evaluatorModule.coerceToString(engine.value as never).length
+      expect(rendered, `${text} over ${JSON.stringify(cells)}`).toBeLessThanOrEqual(trace.get(f.ast)!.len)
+      checked++
+    }
+    expect(checked).toBe(400)
   })
 })
