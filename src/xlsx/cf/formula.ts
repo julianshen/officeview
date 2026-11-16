@@ -945,7 +945,10 @@ export function cfCallWorkBreakdown(shape: CfCallShape, payload: CfPayloadMetric
       if (t === undefined || !Number.isSafeInteger(t) || t < 0) return 'unbounded'
       const units = p.range === undefined ? 0 : atom(p.range).stringUnits
       const amount = (t + 1) * (positions + units)
-      if (t === 0) comparisons += amount; else matcher += amount
+      if (t === 0) comparisons += amount
+      // A text criterion is validated once by `matchWildcard(body, '')` (cond.ts criterionOf) whatever the range holds:
+      // one DP row per token plus the initial one, over the empty text (round 4, finding 4).
+      else matcher += amount + (t + 1)
     }
   }
   const textUnits = cfTextUnits(shape, payload)

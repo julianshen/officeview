@@ -17,7 +17,7 @@ import {
   CF_FREQUENCY_KEY_PASSES, cfCriterionUnits,
 } from '../src/xlsx/cf/formula'
 import { CF_DEPENDENCY_COLUMN_BYTES, prepareCfDependencies, type CfDependencySnapshot } from '../src/xlsx/cf/dependencies'
-import { CF_DEPENDENCY_CELL_BYTES, CF_FORMULA_CALL_BYTES, CF_FORMULA_NODE_BYTES, CF_LIMITS, CF_VIEW_WORKSPACE_BYTES, type CfReservation, createCfMemory, createCfUnitCeiling, createCfWorkBudget, type CfUnitCeiling, type CfWorkBudget } from '../src/xlsx/cf/limits'
+import { CF_DEPENDENCY_CELL_BYTES, CF_FORMULA_CALL_BYTES, CF_MATCHER_CELL_BYTES, CF_FORMULA_NODE_BYTES, CF_LIMITS, CF_VIEW_WORKSPACE_BYTES, type CfReservation, createCfMemory, createCfUnitCeiling, createCfWorkBudget, type CfUnitCeiling, type CfWorkBudget } from '../src/xlsx/cf/limits'
 import { measurePayloadBytes } from '../src/xlsx/view/payloadBytes'
 import { EVALUATION, a1, batchOf, compile, engineEval, fakeSource, formulaRule, rectOf, refOf, type CellInput, type Cells } from './helpers/cf-formula'
 import type { AstNode } from '../src/xlsx/formula/types'
@@ -240,11 +240,11 @@ describe('text work is bounded by measured payload before invocation (round-2 #1
     expect(exact.currentBytes).toBe(0)
     snapshot.dispose()
   })
-  it('COUNTIF(A1:A2,B1): 2 x 11 x 11 = 242 matcher transitions over 10-character strings refuses; over 3 characters it is 50 plus the 3-character criterion parse, 53', async () => {
+  it('COUNTIF(A1:A2,B1): 2 x 11 x 11 = 242 matcher transitions (+ 11 for the criterion\'s validation, round 4) over 10-character strings refuses; over 3 characters it is 50 plus the 3-character criterion parse and its 4-row validation, 57', async () => {
     const f = compile('COUNTIF(A1:A2,B1)', 'C1')
     const ten = await snapshotOf({ A1: 'abcdefghij', A2: 'abcdefghik', B1: 'abcdefghij' }, ['A1:A2', 'B1'])
     const b10 = cfCallWorkBreakdown(cfCallShape(f), metricsOf(ten, ['A1:A2', 'B1']), [10]) as CfCallWorkBreakdown
-    expect(b10.matcher).toBe(242)
+    expect(b10.matcher).toBe(242 + 11)
     expect(b10.total - b10.matcher).toBeLessThanOrEqual(CF_LIMITS.checkpointUnits) // a mutant without the matcher term admits it
     evaluateNodeSpy.mockClear()
     expect(evaluateCfFormula(f, a1('C1'), ten, context())).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
@@ -252,7 +252,7 @@ describe('text work is bounded by measured payload before invocation (round-2 #1
     const three = await snapshotOf({ A1: 'abc', A2: 'abd', B1: 'abc' }, ['A1:A2', 'B1'])
     const calls: CfCallWorkBreakdown[] = []
     expect(evaluateCfFormula(f, a1('C1'), three, context(createCfMemory(), calls))).toEqual({ kind: 'ready', value: { kind: 'number', value: 1 } })
-    expect(calls[0]).toEqual({ nodes: 3, viewBuild: 3, index: 0, enumeration: 3, reads: 3, sort: 6, comparisons: 0, matcher: 32, text: 0, criterion: 3, lookups: 0, total: 53 })
+    expect(calls[0]).toEqual({ nodes: 3, viewBuild: 3, index: 0, enumeration: 3, reads: 3, sort: 6, comparisons: 0, matcher: 32 + 4, text: 0, criterion: 3, lookups: 0, total: 57 })
     ten.dispose(); three.dispose()
   })
 })
@@ -718,6 +718,33 @@ describe('the per-node text model: own passes per operation, ASCII from the snap
 })
 
 describe('Task 34 fix round 4 (codex round-3 findings 1, 2, 4, 5)', () => {
+  it('finding 4: a text criterion\'s validation (matchWildcard(body, \'\')) is in the bound whatever the range holds', async () => {
+    // Codex counterexample: COUNTIF(A1:A2,B1) over an empty A range, B1 = 140 ASCII 'a'.
+    const cells: Cells = { B1: 'a'.repeat(140) }
+    const calls: CfCallWorkBreakdown[] = []
+    const batch = await batchOf([formulaRule('COUNTIF(A1:A2,B1)', 'C1')], fakeSource(cells), { onCall: b => calls.push(b) })
+    evaluateNodeSpy.mockClear()
+    expect(batch.evaluate(0, 0, 2)).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
+    expect(evaluateNodeSpy).not.toHaveBeenCalled()
+    expect(calls).toEqual([])
+    batch.dispose()
+    // The validation walks one DP row per token plus one over the empty text: 141 cells, independent of the range.
+    const shape = cfCallShape(compile('COUNTIF(A1:A2,B1)', 'C1'))
+    const payload = { viewCells: 1, atoms: [{ cells: 0, stringUnits: 0, longestString: 0 }, { cells: 1, stringUnits: 140, longestString: 140, strings: 1, nonAscii: 0 }] }
+    const b = cfCallWorkBreakdown(shape, payload, [140]) as CfCallWorkBreakdown
+    expect(b.matcher).toBe(141)
+    expect(b.total).toBeGreaterThan(CF_LIMITS.checkpointUnits)
+    // Its DP rows are in the scratch bound.
+    const f = compile('COUNTIF(A1:A2,B1)', 'C1')
+    expect(cfEvaluatorScratchBytes(f, payload, [], [140]) - cfEvaluatorScratchBytes(f, payload, [], [0])).toBeGreaterThanOrEqual(141 * CF_MATCHER_CELL_BYTES)
+    const none = cfCallWorkBreakdown(shape, payload, [0]) as CfCallWorkBreakdown
+    expect(none.matcher).toBe(0) // a numeric criterion never reaches the matcher
+    // A short text criterion over an empty range still evaluates: 3 nodes + 1 view + 1 read + criterion + 4 matcher.
+    const short = await batchOf([formulaRule('COUNTIF(A1:A2,B1)', 'C1')], fakeSource({ B1: 'abc' }), { onCall: x => calls.push(x) })
+    expect(short.evaluate(0, 0, 2)).toEqual({ kind: 'ready', value: { kind: 'number', value: 0 } })
+    expect(calls[0]!.matcher).toBe(4)
+    short.dispose()
+  })
   it('finding 5: a refused frequency key pays its key-processing allowance to the budget and the ceiling; an admitted one pays it once', async () => {
     const run = async (B1: string) => {
       const signal = new AbortController().signal
