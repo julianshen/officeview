@@ -307,6 +307,8 @@ function parseLiteral(text: string): CfLiteral | undefined {
   return undefined
 }
 
+/** The Stage 5 capability that records which of the two readings Excel follows for a divergent `timePeriod` formula. */
+const TIME_PERIOD_DIVERGENT = 'formula:predicate-timeperiod-divergent'
 const REF_PATTERN = String.raw`\$?[A-Za-z]{1,3}\$?\d+`
 
 /** Cell references in a whitespace-normalized, string-stripped formula, excluding function calls.
@@ -448,6 +450,44 @@ function canonicalBlankFormula(type: string, formulas: readonly string[], anchor
     default:
       return false
   }
+}
+
+/**
+ * The ten `timePeriod` formulas Excel itself writes, spelled exactly as the resaved Stage 1 clock workbooks hold them
+ * (`stage1-timeperiod-today-clock`, `-2`; the tests read them back from the saved archives, parentheses included).
+ * `R` is a cell reference, which `canonicalTimePeriodFormula` then pins to the rule's anchor. Whitespace and letter case
+ * are ignored; any other spelling, however equivalent it looks, is divergent (fail-closed until it is measured).
+ */
+const TP_TODAY = String.raw`TODAY\(\)`
+const TP_WEEKDAY = String.raw`WEEKDAY\(TODAY\(\)\)`
+const TIME_PERIOD_PATTERNS: Readonly<Record<string, RegExp>> = (() => {
+  const R = REF_PATTERN
+  const month = (shift: string): string => String.raw`^AND\(MONTH\(${R}\)=MONTH\(EDATE\(${TP_TODAY},0${shift}1\)\),YEAR\(${R}\)=YEAR\(EDATE\(${TP_TODAY},0${shift}1\)\)\)$`
+  const patterns: Record<string, string> = {
+    today: String.raw`^FLOOR\(${R},1\)=${TP_TODAY}$`,
+    yesterday: String.raw`^FLOOR\(${R},1\)=${TP_TODAY}-1$`,
+    tomorrow: String.raw`^FLOOR\(${R},1\)=${TP_TODAY}\+1$`,
+    last7Days: String.raw`^AND\(${TP_TODAY}-FLOOR\(${R},1\)<=6,FLOOR\(${R},1\)<=${TP_TODAY}\)$`,
+    thisWeek: String.raw`^AND\(${TP_TODAY}-ROUNDDOWN\(${R},0\)<=${TP_WEEKDAY}-1,ROUNDDOWN\(${R},0\)-${TP_TODAY}<=7-${TP_WEEKDAY}\)$`,
+    lastWeek: String.raw`^AND\(${TP_TODAY}-ROUNDDOWN\(${R},0\)>=\(${TP_WEEKDAY}\),${TP_TODAY}-ROUNDDOWN\(${R},0\)<\(${TP_WEEKDAY}\+7\)\)$`,
+    nextWeek: String.raw`^AND\(ROUNDDOWN\(${R},0\)-${TP_TODAY}>\(7-${TP_WEEKDAY}\),ROUNDDOWN\(${R},0\)-${TP_TODAY}<\(15-${TP_WEEKDAY}\)\)$`,
+    thisMonth: String.raw`^AND\(MONTH\(${R}\)=MONTH\(${TP_TODAY}\),YEAR\(${R}\)=YEAR\(${TP_TODAY}\)\)$`,
+    lastMonth: month('-'),
+    nextMonth: month(String.raw`\+`),
+  }
+  return Object.fromEntries(Object.entries(patterns).map(([period, source]) => [period, new RegExp(source, 'i')]))
+})()
+
+/**
+ * Stage 5 (Ruling S5-G, round-1 #9): is this `timePeriod` rule's single `<formula>` the one Excel writes for its period, on
+ * its anchor? Anything else (a different pattern, a second formula, a pinned or off-anchor reference, an unknown anchor from
+ * a multi-range `sqref`, an unknown period) is divergent, and a divergent formula never falls back to the attribute.
+ */
+export function canonicalTimePeriodFormula(period: string, formulas: readonly string[], anchor: string | undefined): boolean {
+  const pattern = Object.prototype.hasOwnProperty.call(TIME_PERIOD_PATTERNS, period) ? TIME_PERIOD_PATTERNS[period] : undefined
+  if (pattern === undefined || formulas.length !== 1) return false
+  const f = stripOutsideStrings(formulas[0]!)
+  return refsMatchAnchor([f], anchor) && pattern.test(f)
 }
 
 function parseTopRank(
@@ -1531,8 +1571,18 @@ function buildRuleBody(
         return invalid(priority, true, `timePeriod="${inputs.periodText ?? ''}" is not a known period`)
       }
       if (inputs.hasForeignFormula) return finishUnresolved('cf-unsupported-rule', withDxf())
-      // Per Ruling R1c: timePeriod resolves from attribute; stored formulas are Excel-generated artifacts
-      return finishResolved({ kind: 'timePeriod', period: period as CfTimePeriod })
+      const attributePredicate = (): number => finishResolved({ kind: 'timePeriod', period: period as CfTimePeriod })
+      // Ruling S5-G: an absent formula or Excel's own pattern for this period keeps the Stage 1 attribute predicate
+      // (Ruling R1c, so every Stage 1 clock conformance cell is unchanged).
+      if (inputs.formulas.length === 0 || canonicalTimePeriodFormula(period, inputs.formulas, anchor)) return attributePredicate()
+      // A divergent formula follows the reading `formula:predicate-timeperiod-divergent` records. The bare capability id is the
+      // FORMULA reading only (production's `CF_STAGE5_PRODUCTION_READINGS` entry for it must be the string 'formula', so an
+      // Excel match of 'attribute' is withheld by the publication gate and never publishes the bare id). The attribute reading
+      // is reachable only through the `:attribute` injection key, which no published export carries. With neither, the rule is
+      // withheld: an unevidenced divergent formula never reaches the attribute predicate (round-1 #9).
+      if (hasEvidence(TIME_PERIOD_DIVERGENT, 'formula')) return divergentPredicate()
+      if (hasEvidence(TIME_PERIOD_DIVERGENT, 'attribute')) return attributePredicate()
+      return finishUnresolved('cf-unsupported-rule', withDxf())
     }
     case 'top10': {
       const rank = parseTopRank(inputs.attrs)

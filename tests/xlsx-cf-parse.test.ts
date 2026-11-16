@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { TextEncoder } from 'node:util'
-import { getChildren, parseXml, type XmlNode } from '../src/core/xml'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { attrs, getChildren, parseXml, textOf, type XmlNode } from '../src/core/xml'
 import { tokenizeBytes } from '../src/core/xml-stream'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
@@ -228,21 +230,18 @@ describe('CF rule parsing: all 18 types', () => {
     expect(ruleByPriority(value.rules, 5).definition).toMatchObject({ kind: 'predicate', type: 'notContainsErrors' })
   })
 
-  it('matches the ten canonical timePeriod patterns and refuses divergent or unknown periods', () => {
-    // One element per rule with the anchor cell as sqref top-left, mirroring
-    // the measured fixtures (stage1-timeperiod-today-clock).
-    const periods: Array<[string, string, string]> = [
-      ['today', 'B2:B9', 'FLOOR(B2,1)=TODAY()'],
-      ['yesterday', 'C2:C9', 'FLOOR(C2,1)=TODAY()-1'],
-      ['tomorrow', 'D2:D9', 'FLOOR(D2,1)=TODAY()+1'],
-      ['last7Days', 'E2:E9', 'AND(TODAY()-FLOOR(E2,1)&lt;=6,FLOOR(E2,1)&lt;=TODAY())'],
-      ['thisWeek', 'F2:F9', 'AND(TODAY()-ROUNDDOWN(F2,0)&lt;=(WEEKDAY(TODAY())-1),ROUNDDOWN(F2,0)-TODAY()&lt;=(7-WEEKDAY(TODAY())))'],
-      ['lastWeek', 'G2:G9', 'AND(TODAY()-ROUNDDOWN(G2,0)&gt;(WEEKDAY(TODAY())-1),TODAY()-ROUNDDOWN(G2,0)&lt;(WEEKDAY(TODAY())+6))'],
-      ['nextWeek', 'H2:H9', 'AND(ROUNDDOWN(H2,0)-TODAY()&gt;(7-WEEKDAY(TODAY())),ROUNDDOWN(H2,0)-TODAY()&lt;(15-WEEKDAY(TODAY())))'],
-      ['thisMonth', 'I2:I9', 'AND(MONTH(I2)=MONTH(TODAY()),YEAR(I2)=YEAR(TODAY()))'],
-      ['lastMonth', 'J2:J9', 'AND(MONTH(J2)=MONTH(EDATE(TODAY(),0-1)),YEAR(J2)=YEAR(EDATE(TODAY(),0-1)))'],
-      ['nextMonth', 'K2:K9', 'AND(MONTH(K2)=MONTH(EDATE(TODAY(),0+1)),YEAR(K2)=YEAR(EDATE(TODAY(),0+1)))'],
-    ]
+  it('matches the ten canonical timePeriod patterns and refuses divergent or unknown periods', async () => {
+    // Every pattern is the one Excel wrote into the resaved Stage 1 clock workbook, read from the saved archive (never
+    // typed here). Per Ruling S5-G (Task 33) a canonical formula keeps the attribute predicate and a divergent one does not.
+    const pkg = await OfficePackage.load(new Uint8Array(readFileSync(join(__dirname, 'fixtures/xlsx-cf/stage1-timeperiod-today-clock.xlsx'))))
+    const sheet = parseXml((await pkg.text('xl/worksheets/sheet1.xml'))!)
+    const periods: Array<[string, string, string]> = []
+    for (const block of getChildren(sheet, 'conditionalFormatting')) {
+      for (const cf of getChildren(block, 'cfRule')) {
+        periods.push([attrs(cf)['timePeriod']!, attrs(block)['sqref']!, textOf(getChildren(cf, 'formula')[0]).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')])
+      }
+    }
+    expect(periods.map(p => p[0])).toEqual(['today', 'yesterday', 'tomorrow', 'last7Days', 'thisWeek', 'lastWeek', 'nextWeek', 'thisMonth', 'lastMonth', 'nextMonth'])
     const rules = periods
       .map(([p, sq, f], i) => `<conditionalFormatting sqref="${sq}"><cfRule type="timePeriod" timePeriod="${p}" priority="${i + 1}"><formula>${f}</formula></cfRule></conditionalFormatting>`)
       .join('')
@@ -254,16 +253,17 @@ describe('CF rule parsing: all 18 types', () => {
       expect(r, p).toBeDefined()
       expect(r!.definition).toMatchObject({ kind: 'timePeriod', period: p })
     }
-    // Per Ruling R1c: timePeriod resolves from attribute, not stored formula;
-    // divergent or off-by-one formulas still resolve the rule definition.
+    // Ruling S5-G (round-1 #9) rewrites Stage 1 R1c: a divergent or off-by-one formula no longer resolves from the
+    // attribute. It is unresolved (cf-unsupported-rule) until formula:predicate-timeperiod-divergent records Excel's reading.
     const divergent = parse(
       `<conditionalFormatting sqref="B2:B3"><cfRule type="timePeriod" timePeriod="today" priority="1"><formula>FLOOR(B2,1)=TODAY()-2</formula></cfRule></conditionalFormatting>`,
     )
-    expect(divergent.value.rules[0]!.definition).toMatchObject({ kind: 'timePeriod', period: 'today' })
+    expect(divergent.value.rules[0]!.definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+    // The pre-Excel-resave lastWeek spelling (`>(WEEKDAY(TODAY())-1)`, `<(WEEKDAY(TODAY())+6)`) is off by one and divergent.
     const offByOne = parse(
       `<conditionalFormatting sqref="G2:G15"><cfRule type="timePeriod" timePeriod="lastWeek" priority="1"><formula>AND(TODAY()-ROUNDDOWN(G2,0)&gt;(WEEKDAY(TODAY())-1),TODAY()-ROUNDDOWN(G2,0)&lt;(WEEKDAY(TODAY())+6))</formula></cfRule></conditionalFormatting>`,
     )
-    expect(offByOne.value.rules[0]!.definition).toMatchObject({ kind: 'timePeriod', period: 'lastWeek' })
+    expect(offByOne.value.rules[0]!.definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
     const unknown = parse(
       `<conditionalFormatting sqref="B2:B3"><cfRule type="timePeriod" timePeriod="someday" priority="1"/></conditionalFormatting>`,
     )

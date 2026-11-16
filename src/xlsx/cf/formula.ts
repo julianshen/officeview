@@ -450,7 +450,8 @@ export function formulaRequiredCapabilities(f: CfFormula, use: CfFormulaUse, rul
       for (const kind of f.truth) evaluation.add(`formula:truth-${kind}`)
       if (use === 'activation') {
         evaluation.add(rule.sourceType === 'colorScale' ? 'formula:active-present-scale' : rule.sourceType === 'dataBar' ? 'formula:active-present-bar' : 'formula:active-present-icon')
-      } else if (rule.sourceType !== 'expression') evaluation.add('formula:predicate-divergent')
+      } else if (rule.sourceType === 'timePeriod') evaluation.add('formula:predicate-timeperiod-divergent')
+      else if (rule.sourceType !== 'expression') evaluation.add('formula:predicate-divergent')
       break
     case 'operand': {
       const reference = f.ast.type === 'cell'

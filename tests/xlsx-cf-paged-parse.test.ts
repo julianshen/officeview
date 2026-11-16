@@ -48,8 +48,15 @@ describe('paged CF capture', () => {
     const baseStars = '<conditionalFormatting sqref="M2:M6"><cfRule type="iconSet" priority="12"><iconSet iconSet="3Stars" reverse="1" showValue="0"><cfvo type="num" val="1"/><cfvo type="num" val="2" gte="0"/><cfvo type="num" val="3"/></iconSet></cfRule></conditionalFormatting>'
     const customIconSet = '<x14:conditionalFormatting><x14:cfRule type="iconSet" priority="13" id="{3B3B0019-0000-4000-8000-000000000003}"><x14:iconSet iconSet="3Arrows" custom="1"><x14:cfvo type="num"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="num" gte="0"><xm:f>20</xm:f></x14:cfvo><x14:cfvo type="num"><xm:f>40</xm:f></x14:cfvo><x14:cfIcon iconSet="3Flags" iconId="0"/><x14:cfIcon iconSet="NoIcons" iconId="0"/><x14:cfIcon iconSet="3Stars" iconId="2"/></x14:iconSet></x14:cfRule><xm:sqref>N2:N6</xm:sqref></x14:conditionalFormatting>'
     const standaloneStars = '<x14:conditionalFormatting><x14:cfRule type="iconSet" priority="14" id="{3B3B0019-0000-4000-8000-000000000004}"><x14:iconSet iconSet="3Stars" percent="0"><x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>33</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>67</xm:f></x14:cfvo></x14:iconSet></x14:cfRule><xm:sqref>O2:O6</xm:sqref></x14:conditionalFormatting>'
+    // Stage 5 (Task 33): one rule Excel's own `today` formula, one divergent formula and one absent formula, split everywhere.
+    const timePeriodCanonical = '<conditionalFormatting sqref="P2:P6"><cfRule type="timePeriod" priority="15" timePeriod="today"><formula>FLOOR(P2,1)=TODAY()</formula></cfRule></conditionalFormatting>'
+    const timePeriodDivergent = '<conditionalFormatting sqref="Q2:Q6"><cfRule type="timePeriod" priority="16" timePeriod="today"><formula>Q2=TODAY()-3</formula></cfRule></conditionalFormatting>'
+    const timePeriodAbsent = '<conditionalFormatting sqref="R2:R6"><cfRule type="timePeriod" priority="17" timePeriod="lastMonth"/></conditionalFormatting>'
     const xml = wrap(
       base +
+        timePeriodCanonical +
+        timePeriodDivergent +
+        timePeriodAbsent +
         baseIconSet +
         baseStars +
         twoColorScale +
@@ -80,6 +87,10 @@ describe('paged CF capture', () => {
       expect(barOf(8)).toMatchObject({ kind: 'dataBar', bounds: [{ type: 'percentile', value: 10 }, { type: 'num', value: 90 }] })
       expect(barOf(9)).toMatchObject({ kind: 'unresolved', type: 'dataBar', reason: 'cf-unsupported-rule' })
       expect(barOf(10)).toMatchObject({ kind: 'dataBar', dialect: 'x14', bounds: [{ type: 'autoMin' }, { type: 'autoMax' }] })
+      // A canonical or absent formula keeps the attribute predicate; the divergent one is withheld, never the attribute (S5-G).
+      expect(barOf(15)).toMatchObject({ kind: 'timePeriod', period: 'today' })
+      expect(barOf(16)).toMatchObject({ kind: 'unresolved', type: 'timePeriod', reason: 'cf-unsupported-rule' })
+      expect(barOf(17)).toMatchObject({ kind: 'timePeriod', period: 'lastMonth' })
       const iconOf = (priority: number) => expected.rules.find(r => r.priority === priority)!.definition
       expect(iconOf(11)).toMatchObject({ kind: 'iconSet', dialect: 'base', set: '3Arrows', showValue: true, percentAttr: true })
       // A base x14-only family is a recorded dialect outcome, so it is withheld whatever the evidence.
@@ -106,10 +117,14 @@ describe('paged CF capture', () => {
     const quoted = `<conditionalFormatting sqref="L2:L9"><cfRule type="expression" priority="4"><formula>'My Sheet'!$A$1&lt;L2</formula></cfRule></conditionalFormatting>`
     const refused = '<conditionalFormatting sqref="N2:N9"><cfRule type="expression" priority="5"><formula>INDIRECT("A1")</formula></cfRule></conditionalFormatting>'
     const x14 = '<x14:conditionalFormatting><x14:cfRule type="expression" priority="6" id="{01234567-89AB-CDEF-0123-456789ABCDEF}"><xm:f>$P2="茶"</xm:f></x14:cfRule><xm:sqref>P2:P9</xm:sqref></x14:conditionalFormatting>'
-    const xml = wrap(expression + operand + divergent + quoted + refused + `<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}"><x14:conditionalFormattings>${x14}</x14:conditionalFormattings></ext></extLst>`)
-    await withExactCfEvidence(['formula:dialect-base', 'formula:dialect-x14', 'formula:anchor-single', 'formula:anchor-mixed-abs', 'formula:cross-sheet-reference', 'formula:cross-sheet-quoted-name'], async () => {
+    // Task 33: a divergent timePeriod formula is an expression under the formula reading, and Excel's own formula stays a timePeriod.
+    const tpDivergent = '<conditionalFormatting sqref="R2:R9"><cfRule type="timePeriod" priority="7" timePeriod="today"><formula>R2=TODAY()-3</formula></cfRule></conditionalFormatting>'
+    const tpCanonical = '<conditionalFormatting sqref="T2:T9"><cfRule type="timePeriod" priority="8" timePeriod="thisMonth"><formula>AND(MONTH(T2)=MONTH(TODAY()),YEAR(T2)=YEAR(TODAY()))</formula></cfRule></conditionalFormatting>'
+    const xml = wrap(expression + operand + divergent + quoted + refused + tpDivergent + tpCanonical + `<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}"><x14:conditionalFormattings>${x14}</x14:conditionalFormattings></ext></extLst>`)
+    await withExactCfEvidence(['formula:dialect-base', 'formula:dialect-x14', 'formula:anchor-single', 'formula:anchor-mixed-abs', 'formula:cross-sheet-reference', 'formula:cross-sheet-quoted-name', 'formula:predicate-timeperiod-divergent'], async () => {
       const expected = parseCfSheet(parseXml(xml), styles, createCfMemory()).value
-      expect(expected.rules.map(r => r.definition.kind)).toEqual(['expression', 'cellIs', 'expression', 'expression', 'unresolved', 'expression'])
+      expect(expected.rules.map(r => r.definition.kind)).toEqual(['expression', 'cellIs', 'expression', 'expression', 'unresolved', 'expression', 'timePeriod', 'expression'])
+      expect(expected.rules[5]!.definition).toMatchObject({ kind: 'expression', sourceType: 'timePeriod' })
       expect(expected.rules[3]!.definition).toMatchObject({ dependencySheets: ['My Sheet'] })
       expect(expected.rules[1]!.definition).toMatchObject({ operands: [{ formula: { nodes: 1 } }, { formula: { nodes: 3 } }] })
       const bytes = new TextEncoder().encode(xml)
@@ -121,7 +136,7 @@ describe('paged CF capture', () => {
     })
     // Without evidence both paths stay unresolved, deep-equal.
     const none = parseCfSheet(parseXml(xml), styles, createCfMemory()).value
-    expect(none.rules.map(r => r.definition.kind)).toEqual(['unresolved', 'unresolved', 'unresolved', 'unresolved', 'unresolved', 'unresolved'])
+    expect(none.rules.map(r => r.definition.kind)).toEqual(['unresolved', 'unresolved', 'unresolved', 'unresolved', 'unresolved', 'unresolved', 'timePeriod', 'unresolved'])
     expect((await stream(xml, 100)).lease.value).toEqual(none)
   })
   it.each(['formula', 'color', 'dxf'])('ten thousand singleton duplicates do not build ten thousand nodes: %s', async tag => {

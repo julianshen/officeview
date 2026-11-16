@@ -12,6 +12,14 @@ in git history.
 
 ### Added
 
+- **Excel time-period rules (view-only): a rule's formula is classified, not ignored.** A conditional formatting
+  "dates occurring" rule whose `<formula>` is the one Excel itself writes for its period (today, yesterday, tomorrow,
+  last 7 days, this/last/next week, this/last/next month) is evaluated as before. A rule whose formula disagrees with its
+  `timePeriod` attribute used to paint from the attribute; it is now withheld, because Excel evaluates the formula and which
+  of the two it follows is measured only in Stage 5 (`formula:predicate-timeperiod-divergent`). Every Stage 1 clock
+  measurement is unchanged. A time-period rule on several ranges also stays withheld while multi-range anchoring is
+  unmeasured.
+
 - **Excel icon sets (view-only).** Conditional formatting icon sets now evaluate and paint in resident, worker-backed
   and paged views, in print and export, wherever Excel 16.115's own rendering verifies them. Buckets follow Excel's
   readings for every built-in family (base and x14), num, percent, percentile and mixed thresholds, `gte`, `reverse`,

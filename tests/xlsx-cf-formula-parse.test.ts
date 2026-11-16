@@ -566,6 +566,11 @@ describe('formulaRequiredCapabilities splits parse and evaluation gates (round-1
   it('a divergent predicate adds formula:predicate-divergent; operands and activation have their own gates', () => {
     expect(caps('ISBLANK(D2)', 'expression', { sourceType: 'containsBlanks' }).evaluation.has('formula:predicate-divergent')).toBe(true)
     expect(caps('ISBLANK(D2)').evaluation.has('formula:predicate-divergent')).toBe(false)
+    // A divergent timePeriod formula has its own capability (S5-G, round-1 #9): the text/blank/error one never authorises it.
+    const timePeriod = caps('A2=TODAY()-3', 'expression', { sourceType: 'timePeriod' }).evaluation
+    expect(timePeriod.has('formula:predicate-timeperiod-divergent')).toBe(true)
+    expect(timePeriod.has('formula:predicate-divergent')).toBe(false)
+    expect(caps('ISBLANK(D2)', 'expression', { sourceType: 'containsBlanks' }).evaluation.has('formula:predicate-timeperiod-divergent')).toBe(false)
     expect(caps('$F$1', 'operand', { sourceType: 'cellIs' }).evaluation).toEqual(new Set(['formula:cellis-operand-reference']))
     expect(caps('F2*2', 'operand', { sourceType: 'cellIs' }).evaluation).toEqual(new Set(['formula:cellis-operand-expression', 'formula:cellis-operand-relative']))
     expect(caps('Sheet2!$A$1', 'operand', { sourceType: 'cellIs' }).evaluation.has('formula:cellis-operand-cross-sheet')).toBe(true)
