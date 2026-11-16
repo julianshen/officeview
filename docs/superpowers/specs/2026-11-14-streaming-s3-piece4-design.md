@@ -222,6 +222,33 @@ its end (amended at planning). Over the per-show budget, prefetch stops and the 
 admitted. A slide still too big plays as its piece-3 still image with a
 `show-budget` diagnostic. It never plays with content withheld.
 
+*Amendment (2026-11-16, owner ruling, PR #78 round 13b: reserve per worker).*
+This changes when a show job is admitted (parent §12a.2 as built: request
+time).
+
+- **At request time** a show job (plan, track or Morph pair) is admitted
+  against the 96 MiB session aggregate only for its request charge,
+  `showRequestBytes`. That is its queue entry and encoded reply: one
+  8 MiB message, or its grant when smaller.
+- **At slot time**, once the job holds its worker's slot (one job per worker
+  at a time), the pool reserves the job's full preparation grant. It
+  releases the grant when the job ends. The grant is not charged to the
+  session aggregate, since one grant may exceed it; the per-worker bound
+  caps it instead. Server preparation memory is therefore at most
+  workers × 128 MiB (`server/src/pool.ts` `stats().prep`, asserted).
+- **The grant size** is 8 page surfaces at the bucket for a plan or track,
+  and 8 pages of the larger slide for a Morph pair. Both are capped at
+  128 MiB (the per-show decoded budget), so 8 pages of a 2560 × 1440
+  bucket fit (`server/src/show/grant.ts`).
+- **Measured peaks** (page surfaces, every canvas charged): corpus plans
+  ≤ 4.0, synthetic plans ≤ 6.3, layered Morph pairs ≤ 5.6. A 10× growth
+  strip at scale 1 needs 16 and plays its still.
+- **Charging.** Every canvas a job's build creates, painter scratch
+  included, is charged to the grant when it is created. A job that would
+  pass its grant stops allocating at once and refuses: a plan plays its
+  still (`show-budget`), a track is absent, and a Morph pair plays the
+  captured-frame fade.
+
 *Amendments (2026-11-14, as built; plan D1, D7):*
 - **D1, the wire shape.** One charged request answers with
   `show-plan-start {reqId, unit, messages, decodedBytes}`, then `messages`

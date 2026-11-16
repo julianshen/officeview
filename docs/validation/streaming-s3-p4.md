@@ -400,55 +400,87 @@ Evidence:
   over either cap, a decoded total over the budget, a missing, zero or fractional `encodedBytes`, an extra key,
   and a plan start carrying `encodedBytes`.
 
-## Preparation budget and the hidden-document clock (PR #78 round 13)
+## Preparation budget and the hidden-document clock (PR #78 rounds 13 and 13b)
 
-- **The admitted estimate is the build's grant (codex P1).** Before this round the show build rasterised every
-  layer through an open workspace. 32 full-slide boxes at scale 2 held about 350 MiB of canvases against a 44 MiB
-  admission, and the L1 limit and bundle budget both act only after rasterisation.
-  - `onShow` admits a plan or track job for `showBuildGrant` (four page surfaces at the bucket, at most 64 MiB;
-    `server/src/show/grant.ts`, unchanged formula). A Morph pair is admitted for both slides (`showMorphGrant`,
-    the sum, at most 64 MiB): the T5 `coveredPair` adversary needs about 4.4 pages at scale 1 (two backgrounds
-    and their masked copies), so one slide's grant made it fall from layered to composited.
-  - The pool sends the admitted estimate to the worker as the job's `grant`; absent (direct `DocumentHost`
-    callers, the rates script), the worker uses the same formula. Each job builds a finite ledger of that size.
-  - Leased before allocation: every layer raster and growth re-raster (`prepareL1`); a cached L1 entry's rasters
-    on a hit; every masked copy the classifier composes (released when classification ends); the shipped masked
-    copies (`classifiedRasters`, which the validation reference now reuses instead of drawing a second set); the
-    Morph rasters of both slides (`planMorph`'s raster callback releases an attempt's leases on pressure) and their
-    masked copies.
-  - A lease that does not fit releases what was leased and refuses: a plan plays its still (`show-budget`), a track
-    is `[]`, a Morph pair coarsens and then falls back (`morph-fallback`; masked copies without room: composited,
-    reason `budget`). A layer the texture cap refuses is no longer silently left out; it refuses the same way.
-  - **Not leased, a bounded multiple of the grant:** the per-layer validation copies (two per shipped layer,
-    `validate` and `validateMorph`), the visibly marked copy per shipped layer (`burnVisibleMark`, transient), the
-    classifier's alpha and seen arrays (2 bytes per raster px), and the composers' page surfaces (at most four, plus
-    the entry frame). Peak build memory is therefore about 4 × the grant plus five pages, against unbounded before.
-    Leasing the validation copies too would refuse an eligible corpus slide (`lo-tdf104788` slide 6 holds 0.38 of
-    its grant in rasters).
-  - Concurrent builds cannot add up past admission: each worker slot runs one job at a time (`exclusive`), every
-    job's grant is a process-wide admission reservation (512 MiB render reservation, 96 MiB per session), and what
-    a finished build retains is bounded by the L1 and L2 LRUs (256 MiB each per document).
-  - Corpus: `streaming-s3-p4-rates.json` regenerates unchanged; at scale 1 and 2 every corpus anim slide has the
-    same outcome as before (rasters peak at 0.59 of the grant).
-  - **Open (owner ruling):** the 64 MiB cap is under two page surfaces for a 1920 × 1080 px slide at scale 2.
-    There a Morph pair (two backgrounds, about 66 MiB) always falls back, and a plan with a background and one
-    full-slide target refuses to its still. 1280 × 720 and 960 × 720 slides are unaffected.
-  - Tests: `server/test/show-build.test.ts` (the preparation ledger: refusal and peak, track, an ordinary slide,
-    an explicit grant, the pool's grant, classifier and assembly masks, Morph), `server/test/show-wire.test.ts`
-    (the 32-box slide at scale 2 answers `show-budget`, no row).
-- **The streamed show clock stops while the document is hidden (codex P2).** As the local session's `hiddenDoc`
-  and `syncClock`, the remote session listens for `visibilitychange` on the audience document. The show clock runs
-  only when neither an explicit pause nor a hidden document holds it, so returning never lifts an explicit pause.
-  `clockPaused` reports both.
+- **Every canvas a show job creates is charged to its grant when it is created (codex P1, rounds 13 and 13b).**
+  Before round 13 the build rasterised through an open workspace. 32 full-slide boxes at scale 2 held about
+  350 MiB. Round 13 leased only the layer rasters, and codex showed that the compositor's upload copies, page
+  surfaces, marking and validation canvases were still unreserved. Round 13b closes that.
+  - **The gate.** `DocumentHost` installs its backend through `gateBackend` (`server/src/show/canvas.ts`).
+    Inside a show job (`withShowLedger`: a plan, a track with its plan, a Morph pair), every `createCanvas` by
+    any painter leases `w·h·4` from the job's ledger before the canvas exists. That includes paint scratch made
+    through the installed backend. A lease that does not fit throws `ShowBudgetExceeded`, so allocation stops
+    there, and the job refuses:
+    - a plan plays its still (`show-budget`);
+    - a track is `[]`;
+    - a Morph pair plays the captured-frame fade (`morph-fallback`). A Morph raster attempt coarsens first.
+  - **Ownership.** A charge is held until its owner gives the canvas back, or until the job ends:
+    - a composer's page and scratch on `dispose`;
+    - `markFrame`'s surface;
+    - each marked copy after its PNG is encoded;
+    - each validation set after its pass;
+    - a raster call's paint scratch (`releaseScratch`, also on a throw);
+    - a Morph pair's masked originals once their copies exist.
+    
+    The ledger ends empty on every path. After the job, the L1 rasters fall under the L1 cache's own byte bound;
+    an L1 hit charges them again for the next job.
+  - **Less held at once.**
+    - The server's composers adopt layer canvases instead of copying them
+      (`createCanvas2DCompositor(..., { adopt: true })`).
+    - Plan and Morph validation run in two passes over one shared page surface: the Layer-1 set (fidelity and
+      attribution), then the visible set (contribution). The verdict is unchanged, since every check must hold.
+    - `markFrame` reuses a free page surface.
+    - A Morph proof frees its first composer before the reconstruction. A composited fallback rasterises the
+      released originals again.
+  - **Measured peaks** (page surfaces at the bucket):
+    - corpus plans ≤ 4.02 (`lo-tdf104788` slide 6);
+    - synthetic plans ≤ 6.28 (the growth strip at scale 2); a 10× growth strip at scale 1 needs 16.1 and plays
+      its still;
+    - layered Morph pairs ≤ 5.62 (T5 `coveredPair`, was 7.38 before the originals were released); composited
+      pairs ≤ 4.45.
+- **Admission: reserve per worker (owner ruling, 2026-11-16; piece-4 spec amendment).**
+  - **At request time** a show job is admitted against the 96 MiB session aggregate only for `showRequestBytes`:
+    one 8 MiB encoded message, or the grant when smaller. That covers its queue entry and its reply.
+  - **At slot time**, once the job holds its worker's slot (`exclusive`: one job per worker), the pool reserves
+    the full grant and releases it when the job ends.
+    - The grant is not charged to the session aggregate. A grant may exceed it (8 pages of a 2560 × 1440 bucket
+      are 118 MB), and the per-worker bound already caps it.
+    - Server preparation is therefore at most workers × `SHOW_BUILD_BYTES` (`stats().prep`, asserted on every
+      reservation).
+  - **Grant size** (`server/src/show/grant.ts`, shared by `ws.ts`, the pool and the worker):
+    - a plan or track gets 8 page surfaces at the bucket;
+    - a Morph pair gets 8 pages of its larger slide (round 13's sum of two 4-page grants is replaced);
+    - both are capped at 128 MiB, the per-show decoded budget.
+  - **Why this unblocks the "holding →" test.** With full grants charged at request, 32 queued jobs filled the
+    session aggregate: queued 32, running 4, 88.5 MiB reserved, then a `session-queue` refusal. Request charges
+    are now 8 MiB at most.
+  - **Concurrency.** Two builds cannot add up past the bound: each worker runs one job at a time, and each holds
+    one grant at most.
+  - **Not in the ledger** (typed arrays, a bounded count per job):
+    - pixel readbacks (a few pages per job; nothing is kept per boundary);
+    - the classifier's alpha and seen arrays (2 bytes per raster px);
+    - PNG buffers;
+    - a Morph proof's 9 sample composites.
+    
+    A painter's module-level cache that keeps a scratch canvas would also sit outside job accounting.
+  - **Tests:**
+    - `server/test/show-accounting.test.ts` instruments the raw backend: bytes created equal bytes leased, the peak
+      stays within the grant, and the ledger ends empty. It covers a grant sweep, a working set larger than its
+      rasters, a track, Morph pairs, and the `coveredPair` peak.
+    - `server/test/show-admission.test.ts`: queued jobs hold only their request charge, the slot holds the grant,
+      the peak stays within workers × cap, and a 40-request flood of scale-2 16:9 grants is not refused.
+    - `server/test/show-build.test.ts` (the preparation ledger) and `server/test/show-wire.test.ts` (32 full-slide
+      boxes at scale 2 answer `show-budget`).
+- **The streamed show clock stops while the document is hidden (codex P2, approved).** As the local session's
+  `hiddenDoc` and `syncClock`, the remote session listens for `visibilitychange` on the audience document. The show
+  clock runs only when neither an explicit pause nor a hidden document holds it, so returning never lifts an
+  explicit pause. `clockPaused` reports both.
   - On the wall clock (`clock`): the fetcher's back-off and wakes, rate-limit pauses, the notes settle and retry
-    timers, failed-unit back-off, gestures, Presenter View's elapsed timer and refresh.
+    timers, failed-unit back-off, gestures, and Presenter View's elapsed timer and refresh.
   - On the show clock: builds, transitions, tracks, Morph, the after-timer advance, and the Morph wait
-    (`MORPH_WAIT_MS`), which decides what the viewer sees rather than a socket deadline. It already held for an
-    explicit pause.
+    (`MORPH_WAIT_MS`). The Morph wait decides what the viewer sees rather than being a socket deadline.
   - As locally, only the audience document is watched, not a Presenter View popup.
-  - Tests: `tests/stream/remote-show-anim.test.tsx` (a build mid-flight holds its pixels while hidden; the
-    after-timer advance does not fire on return; an explicit pause taken while hidden stays paused; a show started
-    hidden holds its clock).
+  - Tests: `tests/stream/remote-show-anim.test.tsx`.
 
 ## Known differences (rulings recorded in the plan and the Task 1–13 ledger)
 
