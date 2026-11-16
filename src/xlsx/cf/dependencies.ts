@@ -678,9 +678,9 @@ export async function prepareCfFormulaBatch(tasks: readonly CfFormulaTask[], opt
           if (refused) { taskOutcome[i] = refused; continue }
         }
         // Per task (Task 35): a predicate decides from the plan's hoist kinds, so an unevidenced kind is never hoisted.
-        // A hoist is scanned from the host source and its generation, so one over another sheet's range is not hoisted
-        // (the call pays per cell, and over the per-call cap refuses).
-        const planned = options.hoist ? planCfHoist(formula).filter(h => h.range.sheet === undefined || h.range.sheet.toLowerCase() === hostKey) : []
+        // A hoist is scanned from the host source and its generation, so `planCfHoist` never plans one over a qualified
+        // range (`absoluteArea`): such a call pays per cell, and over the per-call cap refuses (Task 36).
+        const planned = options.hoist ? planCfHoist(formula) : []
         const plan = planned.length > 0 && (typeof options.hoist === 'function' ? options.hoist(planned) : options.hoist === true) ? planned : []
         if (plan.length > 0) {
           if (!options.statistics) { taskOutcome[i] = unresolved('cf-resource-limit'); continue }

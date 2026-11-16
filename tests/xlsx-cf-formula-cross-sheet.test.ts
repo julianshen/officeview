@@ -486,3 +486,54 @@ describe('a no-cross-sheet workbook does zero cross-sheet work', () => {
     void compileCfFormula; void isCfFormulaRefusal
   })
 })
+
+describe('cross-sheet hoists, worker races and the snapshot layer (Task 36)', () => {
+  it('an aggregate over another sheet\'s range is never hoisted from the host: SUM(Sheet2!$A$1:$A$3) reads Sheet2', async () => {
+    const caps = [...CAPS, 'formula:hoist-aggregate', 'formula:hoist-countif-frequency']
+    const rules = parseRules(expr('B1', 1, 'SUM(Sheet2!$A$1:$A$3)&gt;5'), caps)
+    const s1 = named('Sheet1', 'sheet1', { A1: 0, A2: 0, A3: 0, B1: 1 }, rules)
+    const wb = cfWorkbookOfDocument([s1, named('Sheet2', 'sheet2', { A1: 3, A2: 3, A3: 3 })], createCfMemory(), 'cached')
+    expect(fillOf((await prepareWith(rules, s1, wb, ['B1'], caps)).out.get('B1'))).toBe(GREEN)
+  })
+
+  it('worker: a referenced sheet that commits while the preparation reads it returns cf-stale-generation, never a published reply', async () => {
+    const { rules, s1, s2 } = crossSheetDoc()
+    let gen = 0
+    const base = cfWorkbookOfDocument([s1, s2], createCfMemory(), 'cached').sheet('sheet2')!
+    const racing: CfWorkbookSheet = { ...base, valueGen: () => gen, values: { ...base.values, pages: (id, rects, budget, signal) => {
+      const inner = base.values.pages(id, rects, budget, signal)
+      return (async function* () { for await (const page of inner) yield page; gen = 1 })()
+    } } }
+    const workbook: CfWorkbookSource = { sheetIdOf: n => (n.toLowerCase() === 'sheet2' ? 'sheet2' : undefined), sheet: id => (id === 'sheet2' ? racing : undefined) }
+    const host = residentSource(s1, { owner: 'o', sheetId: 'sheet1', workbookValueGen: 0, cfGen: cfRulesVersion(rules), viewGen: 0, structureGen: 0, clockGen: 0 }, createCfMemory(), 'cached')
+    injectCfFormulaSelections(SELECTIONS)
+    const reply = await withExactCfEvidence(CAPS, () => prepareCfRemote({ rects: [{ r0: 1, r1: 1, c0: 0, c1: 0 }], stamp: { owner: 'o', sheetId: 'sheet1', workbookValueGen: 0, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 }, grantBytes: 1 << 22 },
+      'sheet1', host, rules, createCfMemory(), { evaluation: UTC, workbook, sheetName: 'Sheet1' })).finally(() => injectCfFormulaSelections(null))
+    expect(reply).toMatchObject({ kind: 'unresolved', reason: 'cf-stale-generation', states: [] })
+    expect(reply.dependencies).toBeUndefined()
+  })
+
+  it('the snapshot layer refuses on its own: no host name, unknown generation, pending and failed referenced sheets', async () => {
+    const { prepareCfDependencies } = await import('../src/xlsx/cf/dependencies')
+    const { createCfWorkBudget } = await import('../src/xlsx/cf/limits')
+    const { s1, s2 } = crossSheetDoc()
+    const host = residentSource(s1, { owner: 'o', sheetId: 'sheet1', workbookValueGen: 0, cfGen: 1, viewGen: 0, structureGen: 0, clockGen: 0 }, createCfMemory(), 'cached')
+    const atoms = [{ sheet: 'Sheet2', rect: rectOf('A2') }]
+    const sheetWith = (over: Partial<CfWorkbookSheet>): CfWorkbookSource => {
+      const base = cfWorkbookOfDocument([s1, s2], createCfMemory(), 'cached')
+      return { sheetIdOf: n => base.sheetIdOf(n), sheet: id => { const s = base.sheet(id); return s && { ...s, ...over } } }
+    }
+    const snap = async (workbook: CfWorkbookSource | undefined, sheetName: string | undefined) => {
+      const signal = new AbortController().signal
+      const out = await prepareCfDependencies(atoms, host, workbook, createCfWorkBudget({ signal, scan: true, maxUnits: 100_000 }), createCfMemory(), signal, { sheetId: 'sheet1', ...(sheetName ? { sheetName } : {}) })
+      if (out.kind === 'ready') out.value.value.dispose()
+      return out.kind === 'ready' ? 'ready' : out
+    }
+    expect(await snap(sheetWith({}), 'Sheet1')).toBe('ready')
+    expect(await snap(sheetWith({}), undefined)).toEqual({ kind: 'unresolved', reason: 'cf-formula-dependency' })
+    expect(await snap(undefined, 'Sheet1')).toEqual({ kind: 'unresolved', reason: 'cf-formula-dependency' })
+    expect(await snap(sheetWith({ valueGen: () => undefined }), 'Sheet1')).toEqual({ kind: 'unresolved', reason: 'cf-dependency-generation-unknown' })
+    expect(await snap(sheetWith({ state: () => 'pending' }), 'Sheet1')).toEqual({ kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: ['sheet2'] })
+    expect(await snap(sheetWith({ state: () => 'failed' }), 'Sheet1')).toEqual({ kind: 'unresolved', reason: 'cf-read-failed' })
+  })
+})

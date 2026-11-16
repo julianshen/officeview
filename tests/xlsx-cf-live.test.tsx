@@ -745,3 +745,37 @@ it('a clock tick with the lease kept invalidates the covered tiles of a tall mer
   }
 })
 
+
+it('Task 36 (S5-K, Review Focus 4): a mounted resident sheet reading Sheet2 stops painting at Sheet2\'s commit and repaints from it', async () => {
+  const { withExactCfEvidence, injectCfFormulaSelections } = await import('../src/xlsx/cf/evidence')
+  const { FORMULA_CAPS, GREEN, SELECTIONS, parseRules, sheetOf } = await import('./helpers/cf-formula-rules')
+  const caps = [...FORMULA_CAPS, 'formula:cross-sheet-reference']
+  const rules = parseRules('<conditionalFormatting sqref="A1"><cfRule type="expression" priority="1" dxfId="1"><formula>Sheet2!A1&gt;0</formula></cfRule></conditionalFormatting>', caps)
+  const s1 = { ...sheetOf(rules, { A1: 1 }), name: 'Sheet1', sheetId: 's1' } as XlsxSheet
+  const s2 = { ...sheetOf(rules, { A1: 5 }), name: 'Sheet2', sheetId: 's2', conditionalFormatting: undefined } as XlsxSheet
+  const doc = { sheets: [s1, s2] }, source = createObjectWorkbookSource(doc, 'cross-live')
+  const batches: import('../src/xlsx/cf/render').CfPaintBatch[] = []
+  const actual = paint.prepareCfPaint
+  const spy = vi.spyOn(paint, 'prepareCfPaint').mockImplementation(async (sheet, options) => {
+    const out = await actual(sheet, options)
+    if (out && options?.store) batches.push(out)
+    return out
+  })
+  injectCfFormulaSelections(SELECTIONS)
+  await withExactCfEvidence(caps, async () => {
+    const ui = render(<InteractiveSheetDoc doc={doc} source={source} />)
+    try {
+      await waitFor(() => expect(batches.some(b => b.layer.styleAt(0, 0, undefined)?.fillColor === GREEN)).toBe(true))
+      const before = batches.slice()
+      const overlay = { rects: [{ r0: 0, r1: 0, c0: 0, c1: 0 }], protectedRects: [{ r0: 0, r1: 0, c0: 0, c1: 0 }], merges: [], cell: () => ({ value: -1 }) }
+      act(() => { (source.store('s2') as unknown as { setValueOverlay(o: unknown): void }).setValueOverlay(overlay); ui.rerender(<InteractiveSheetDoc doc={doc} source={source} />) })
+      // No batch prepared before the commit paints after it, in the same tick.
+      for (const b of before) expect(b.layer.styleAt(0, 0, undefined)?.fillColor).toBeUndefined()
+      const count = batches.length
+      await waitFor(() => expect(batches.length).toBeGreaterThan(count))
+      await act(async () => { await new Promise(r => setTimeout(r, 20)) })
+      expect(batches.at(-1)!.stamp.dependencyGen).toBe(1)
+      expect(batches.at(-1)!.layer.styleAt(0, 0, undefined)?.fillColor).toBeUndefined()
+    } finally { ui.unmount(); cleanup(); spy.mockRestore(); injectCfFormulaSelections(null) }
+  })
+})

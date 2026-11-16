@@ -411,6 +411,8 @@ export class RemoteWorkbook implements WorkbookSource {
   acquireCfPreparation(sheetId: string, rects: readonly SourceRect[], stamp: CfReadStamp, signal?: AbortSignal): { state: PagedCfState; release(): void } { return this.conditionalFormats().acquire(sheetId, rects, stamp, signal) }
   /** Drops the sheet's cached CF preparations (scoped to rects when given);
    * held versions survive until their last release. */
+  /** Ruling S5-K: how many times the sheet's CF went stale through a referenced sheet (a live-key input). */
+  cfDependencyEpoch(sheetId: string): number { return this.cfCache?.dependencyEpoch(sheetId) ?? 0 }
   invalidateCf(sheetId: string, rects?: readonly SourceRect[]): void {
     this.cfCache?.invalidate(sheetId, rects)
     // Ruling S5-K: every sheet whose CF reads this one goes stale too, whole sheet (Lesson 5).

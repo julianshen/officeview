@@ -1080,7 +1080,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const first=tileLogicalBox(range.c0,range.r0,scroll.zoom,dpr),last=tileLogicalBox(range.c1,range.r1,scroll.zoom,dpr)
     return {x:first.x,y:first.y,width:last.x+last.width-first.x,height:last.y+last.height-first.y}
   }) } : undefined
-  const cfLiveKey = cfRules ? JSON.stringify([source.store(activeSheetId).stamp.docId, activeSheetId, source.store(activeSheetId).stamp.valueGen, entry?.structureGen, cfTextGen, scopedCf ? entry?.revision : 0, clockGen]) : hasRemoteCf ? JSON.stringify([identity.docId, activeSheetId, identity.valueGen, identity.viewGen, entry?.structureGen, remote!.merges(activeSheetId).gen, remote!.isClosed, clockGen]) : undefined
+  // S5-K: the referenced sheets' value generations (resident), or the cache's dependency epoch (remote), join the key.
+  const cfDepGen = cfRules ? cfRules.rules.flatMap(r => r.definition.kind === 'unresolved' ? [] : r.definition.dependencySheets ?? []).map(n => { const s = source.sheets.find(x => x.name.toLowerCase() === n.toLowerCase()); return s ? source.store(s.sheetId).stamp.valueGen : -1 }).join() : hasRemoteCf ? remote!.cfDependencyEpoch(activeSheetId) : 0
+  const cfLiveKey = cfRules ? JSON.stringify([source.store(activeSheetId).stamp.docId, activeSheetId, source.store(activeSheetId).stamp.valueGen, entry?.structureGen, cfTextGen, scopedCf ? entry?.revision : 0, clockGen, cfDepGen]) : hasRemoteCf ? JSON.stringify([identity.docId, activeSheetId, identity.valueGen, identity.viewGen, entry?.structureGen, remote!.merges(activeSheetId).gen, remote!.isClosed, clockGen, cfDepGen]) : undefined
   const cfViewportKey = cfViewport ? JSON.stringify([cfLiveKey, cfViewport.boxes]) : cfLiveKey
   const [viewportCf,setViewportCf]=useState<{key:string;generation:string|undefined;boxes?:readonly LogicalCellBox[];batch:import('../../xlsx/cf/render').CfPaintBatch|undefined}|null>(null)
   const heldViewportCf=useRef<import('../../xlsx/cf/render').CfPaintBatch|undefined>(undefined)
@@ -1097,7 +1099,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     let cancelled=false
     const sheet=entry.sheet
     void ensureConditionalFormatting([sheet]).then(async cf=>{
-      const batch=await cf?.prepareCfPaint(sheet,{store:source.store(activeSheetId!),memory:cf.paintMemoryFor(doc,chartParent),valuePolicy:doc.valuePolicy??'engine',evaluation:cf.cfDocumentEvaluationOf(doc),viewport:cfViewport})
+      const batch=await cf?.prepareCfPaint(sheet,{store:source.store(activeSheetId!),workbook:source,memory:cf.paintMemoryFor(doc,chartParent),valuePolicy:doc.valuePolicy??'engine',evaluation:cf.cfDocumentEvaluationOf(doc),viewport:cfViewport})
       if(cancelled){batch?.dispose();return}
       setViewportCf({key:cfViewportKey,generation:cfLiveKey,boxes:batch ? cfViewport?.boxes : undefined,batch})
     })
@@ -1120,6 +1122,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return text.prepareCfTextScope(sheet, {
       rects,
       store: source.store(sheet.sheetId ?? sheetIds[doc.sheets.findIndex(candidate => candidate.name === sheet.name)]!),
+      workbook: source,
       signal: batchSignal,
       locale: sheet.semantics?.locale ?? 'en-US',
       budget,
@@ -1158,7 +1161,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // when a bail-out re-run (same key, scope already claimed) cleans up.
     // Otherwise the claimed scope goes stale with no recovery (same key, no
     // new prepare). Explicit disposal (key change, unmount) ends scopes.
-    const live = () => !remote.isClosed && remote.identity(sheetId).docId === identity.docId && remote.identity(sheetId).valueGen === identity.valueGen && remote.identity(sheetId).viewGen === identity.viewGen && remote.merges(sheetId).gen === structureGen
+    const depEpoch = remote.cfDependencyEpoch(sheetId)
+    const live = () => !remote.isClosed && remote.identity(sheetId).docId === identity.docId && remote.identity(sheetId).valueGen === identity.valueGen && remote.identity(sheetId).viewGen === identity.viewGen && remote.merges(sheetId).gen === structureGen && remote.cfDependencyEpoch(sheetId) === depEpoch
     const current = () => live() && !batchSignal.aborted
     const text = await import('../../xlsx/cf/text')
     if (!current()) return undefined
@@ -1230,7 +1234,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const sheetIndex = sheetIds.indexOf(activeSheetId)
     let assetDoc = activeDrawings ? documentWithDrawings(doc, sheetIndex, activeDrawings) : doc
     if (activeSparklines) assetDoc = documentWithSparklines(assetDoc, sheetIndex, activeSparklines)
-    void loadAssets(assetDoc, { ...(fontKey ? { fallbackFonts } : {}), sheetIndex, profile, imageCache: imageCacheFor(), chartOwner: doc, chartParent, ...(cfRules ? {cfStore:source.store(activeSheetId)} : {}), ...(cfViewport ? { cfViewport } : {}) }).then(next => {
+    void loadAssets(assetDoc, { ...(fontKey ? { fallbackFonts } : {}), sheetIndex, profile, imageCache: imageCacheFor(), chartOwner: doc, chartParent, ...(cfRules ? {cfStore:source.store(activeSheetId),cfWorkbook:source} : {}), ...(cfViewport ? { cfViewport } : {}) }).then(next => {
       if (cancelled) { next.dispose(); return }
       if (fontGenRef.current.key !== fontKey || fontGenRef.current.gen === 0) fontGenRef.current = { key: fontKey, gen: fontGenRef.current.gen + 1 }
       setAssets({ lease: next, fontGen: fontGenRef.current.gen, fontKey, sheetId: activeSheetId, sparklineGen: activeSparklines?.gen ?? 0, cfLiveKey, cfViewportKey, cfBoxes:cfViewport?.boxes })

@@ -251,8 +251,12 @@ export class RemoteCfCache {
     }
     for (const sheetId of hosts) this.invalidateSheet(sheetId)
   }
+  /** Bumped at each dependency invalidation of a sheet: the view's live key reads it, so a held scope is replaced. */
+  private readonly dependencyEpochs = new Map<string, number>()
+  dependencyEpoch(sheetId: string): number { return this.dependencyEpochs.get(sheetId) ?? 0 }
   /** Whole-sheet invalidation: every entry of the sheet, and one whole-sheet change notice. */
   private invalidateSheet(sheetId: string): void {
+    this.dependencyEpochs.set(sheetId, this.dependencyEpoch(sheetId) + 1)
     this.invalidate(sheetId)
     this.deferChanged(sheetId, [{ r0: 0, r1: 1048575, c0: 0, c1: 16383 }], 'updated')
   }
