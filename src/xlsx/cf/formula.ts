@@ -869,7 +869,7 @@ const CASE_GROWTH = 3
 const TEXT_PRODUCING: ReadonlySet<string> = new Set(['TRIM', 'UPPER', 'LOWER', 'LEFT', 'RIGHT', 'MID', 'CONCAT'])
 const producesText = (node: AstNode): boolean => (node.type === 'binary' && node.op === '&') || (node.type === 'call' && TEXT_PRODUCING.has(node.name.toUpperCase()))
 const TEXT_FIRST_ONLY: ReadonlySet<string> = new Set(['LEN', 'TRIM', 'UPPER', 'LOWER', 'LEFT', 'RIGHT', 'MID'])
-export function cfCallShape(f: CfFormula, hoisted: readonly CfHoist[] = []): CfCallShape {
+export function cfCallShape(f: CfFormula, hoisted: readonly CfHoist[] = [], memoised: ReadonlyMap<AstNode, ElementValue> = new Map()): CfCallShape {
   const hoists = new Map(hoisted.map(h => [h.node, h]))
   const refs: RefNode[] = [], reads: ReadKind[] = [], aggregates: number[] = [], conditionals: Conditional[] = []
   let nodes = 0, lookups = 0, textual = false, textOps = 0, literalUnits = 0, consumers = 0, caseOps = 0, renderOperands = 0, criterionLiteralUnits = 0
@@ -886,6 +886,13 @@ export function cfCallShape(f: CfFormula, hoisted: readonly CfHoist[] = []): CfC
     }
     // A text operand that is itself text (a string literal, a cell's string, a text-producing operation) is already in
     // the source units; anything else is rendered.
+    const memo = memoised.get(node)
+    if (memo !== undefined) {
+      // A memoised subtree enters the call as one literal (finding 8); a string one is text the call may walk.
+      if (typeof memo === 'string') literalUnits += memo.length
+      else if (textArg) renderOperands++
+      return
+    }
     if (textArg && node.type !== 'cell' && node.type !== 'string' && !producesText(node)) renderOperands++
     switch (node.type) {
       case 'cell': { const i = addRef(node, 'cell'); if (textArg) renderRefs.push(i); return }
@@ -1018,8 +1025,9 @@ export function cfCallWorkUnits(f: CfFormula, payload: CfPayloadMetrics, criteri
  * area's matrix, the text intermediates (string and character array per text op plus one, for the atoms' and literals'
  * string units: S5-B round-2 #1) and the matcher's DP rows.
  */
-export function cfEvaluatorScratchBytes(f: CfFormula, payload: CfPayloadMetrics, hoisted: readonly CfHoist[] = planCfHoist(f), criterionLengths: readonly (number | undefined)[] = []): number {
-  const shape = cfCallShape(f, hoisted)
+export function cfEvaluatorScratchBytes(f: CfFormula, payload: CfPayloadMetrics, hoisted: readonly CfHoist[] = planCfHoist(f), criterionLengths: readonly (number | undefined)[] = [],
+  memoised: ReadonlyMap<AstNode, ElementValue> = new Map()): number {
+  const shape = cfCallShape(f, hoisted, memoised)
   const atom = (i: number) => payload.atoms[i] ?? { cells: 0, stringUnits: 0, longestString: 0 }
   let bytes = CF_FORMULA_CALL_BYTES + CF_VIEW_WORKSPACE_BYTES + shape.nodes * CF_SLOT_BYTES + payload.viewCells * CF_VIEW_KEY_BYTES
   shape.reads.forEach((kind, i) => {
@@ -1072,11 +1080,27 @@ export function cfTreeReadsMatchView(tree: AstNode, expected: readonly SourceRec
 /* ------------------------------------------------------------------ */
 
 /** A charged per-preparation memo of invariant formulas' results (S5-N caps table "Invariant results"). */
-export interface CfInvariantMemo { get(f: CfFormula): CfResult | undefined; set(f: CfFormula, result: CfResult): void; dispose(): void }
+export interface CfInvariantMemo {
+  get(f: CfFormula): CfResult | undefined; set(f: CfFormula, result: CfResult): void
+  /** Invariant subtrees (finding 8): a node's scalar value, memoised after the first clean call that computed it. */
+  getNode(node: AstNode): ElementValue | undefined; setNode(node: AstNode, value: ElementValue): void
+  dispose(): void
+}
 export function createCfInvariantMemo(memory: CfMemory): CfInvariantMemo {
   const entries = new Map<CfFormula, { result: CfResult; release(): void }>()
+  const nodes = new Map<AstNode, { value: ElementValue; release(): void }>()
   return {
     get: f => entries.get(f)?.result,
+    getNode: node => nodes.get(node)?.value,
+    setNode(node, value) {
+      if (nodes.has(node)) return
+      const bytes = measurePayloadBytes(value)
+      if (bytes === undefined) return
+      // Charged on the preparation's memory, owned by this memo (disposed with the preparation).
+      const hold = memory.reserve(CF_SLOT_BYTES + bytes)
+      if (hold.kind !== 'reserved') return // not memoised: later calls evaluate the subtree again, within their bound
+      nodes.set(node, { value, release: () => hold.release() })
+    },
     set(f, result) {
       if (entries.has(f)) return
       const bytes = measurePayloadBytes(result)
@@ -1085,8 +1109,60 @@ export function createCfInvariantMemo(memory: CfMemory): CfInvariantMemo {
       if (hold.kind !== 'reserved') return // not memoised: the next cell evaluates again, within its own bound
       entries.set(f, { result, release: () => hold.release() })
     },
-    dispose() { for (const e of entries.values()) e.release(); entries.clear() },
+    dispose() { for (const e of entries.values()) e.release(); entries.clear(); for (const e of nodes.values()) e.release(); nodes.clear() },
   }
+}
+
+/** Calls whose result may be one of their operands as read (a reference's value keeps its `fromRef` origin): never a
+ * memo root, since a literal in their place could read differently. */
+const PASS_THROUGH: ReadonlySet<string> = new Set(['IF', 'IFERROR', 'IFNA'])
+/**
+ * The maximal invariant subtrees of a formula below its root (finding 8, S5-N): the rule behind `f.invariant` applied per
+ * subtree (every reference `$`-pinned on both axes, no zero-argument ROW/COLUMN; compile already refuses a multi-cell
+ * reference in a scalar position, so no implicit intersection is involved), holding a reference or a call, rooted at an
+ * operator or at a call that computes its value (not a pass-through), and containing no hoisted node (its node identity
+ * must survive translation unchanged).
+ */
+export function cfInvariantSubtrees(f: CfFormula, hoisted: readonly CfHoist[] = []): readonly AstNode[] {
+  const hoistNodes = new Set<AstNode>(hoisted.map(h => h.node))
+  const info = new Map<AstNode, { invariant: boolean; work: boolean; hoist: boolean }>()
+  const facts = (node: AstNode): { invariant: boolean; work: boolean; hoist: boolean } => {
+    const known = info.get(node)
+    if (known) return known
+    let out: { invariant: boolean; work: boolean; hoist: boolean }
+    if (hoistNodes.has(node)) out = { invariant: false, work: true, hoist: true }
+    else switch (node.type) {
+      case 'cell': out = { invariant: node.ref.absRow && node.ref.absCol && node.ref.sheet === undefined, work: true, hoist: false }; break
+      case 'range': case 'wholeCol': case 'wholeRow': { const a = admittedAtom(node); out = { invariant: a.absRow && a.absCol && a.sheet === undefined, work: true, hoist: false }; break }
+      case 'unary': { const e = facts(node.expr); out = { ...e }; break }
+      case 'binary': { const l = facts(node.left), r = facts(node.right); out = { invariant: l.invariant && r.invariant, work: l.work || r.work, hoist: l.hoist || r.hoist }; break }
+      case 'call': {
+        const name = node.name.toUpperCase()
+        const args = node.args.map(facts)
+        out = { invariant: args.every(a => a.invariant) && !((name === 'ROW' || name === 'COLUMN') && node.args.length === 0), work: true, hoist: args.some(a => a.hoist) }
+        break
+      }
+      default: out = { invariant: true, work: false, hoist: false }
+    }
+    info.set(node, out)
+    return out
+  }
+  const eligible = (node: AstNode): boolean => {
+    const x = facts(node)
+    if (!x.invariant || !x.work || x.hoist) return false
+    if (node.type === 'unary' || node.type === 'binary') return true
+    return node.type === 'call' && node.args.length > 0 && !PASS_THROUGH.has(node.name.toUpperCase())
+  }
+  const out: AstNode[] = []
+  const stack: AstNode[] = []
+  const children = (node: AstNode): readonly AstNode[] => node.type === 'unary' ? [node.expr] : node.type === 'binary' ? [node.left, node.right] : node.type === 'call' ? node.args : []
+  stack.push(...children(f.ast))
+  while (stack.length) {
+    const node = stack.pop()!
+    if (eligible(node)) { out.push(node); continue }
+    stack.push(...children(node))
+  }
+  return out
 }
 /** Pacing between calls: a call never yields inside the engine, so it records the budget's `'yield'` for the loop. */
 export interface CfFormulaPacing { yieldPending: boolean }
@@ -1151,7 +1227,11 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
   snapshot.reset()
   const dRow = at.row - anchor.row, dCol = at.col - anchor.col
   const plan = context.hoists?.plan ?? []
-  const shape = cfCallShape(f, plan)
+  // Invariant subtrees already computed in this preparation enter as literals (finding 8).
+  const subtrees = cfInvariantSubtrees(f, plan)
+  const memoised = new Map<AstNode, ElementValue>()
+  for (const node of subtrees) { const v = context.invariants.getNode(node); if (v !== undefined) memoised.set(node, v) }
+  const shape = cfCallShape(f, plan, memoised)
   // Per-call meter: the dynamic spends (view build, reads, enumeration, sort) are refused past this call's own bound.
   let limit = Math.min(CF_LIMITS.checkpointUnits, context.ceiling.remaining), used = 0
   const meter: CfWorkBudget = {
@@ -1176,8 +1256,9 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
     if (area === 'unmeasured') return unresolved('cf-formula-edge-unmeasured')
     areas.push(area)
   }
-  // Frequency lookups and scalar hoists become literal nodes in the per-call tree (mode-proof: no handler runs).
+  // Frequency lookups, scalar hoists and memoised subtrees become literal nodes in the per-call tree (no handler runs).
   const substitutes = new Map<AstNode, AstNode>()
+  for (const [node, value] of memoised) substitutes.set(node, literalNode(value))
   const live: number[] = [] // indexes of refs with an on-sheet area, in shape order
   areas.forEach((a, i) => { if (a !== 'ref') live.push(i) })
   // The nodes alone past the cap refuse before any view work (the area dedupe is quadratic in references).
@@ -1226,7 +1307,7 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
   // latching budget is never poisoned for the calls that follow.
   if (breakdown === 'unbounded' || breakdown.total > CF_LIMITS.checkpointUnits || breakdown.total > context.ceiling.remaining
     || breakdown.total > context.budget.remaining) return unresolved('cf-resource-limit')
-  const scratch = cfEvaluatorScratchBytes(f, metrics, plan, criterionLengths)
+  const scratch = cfEvaluatorScratchBytes(f, metrics, plan, criterionLengths, memoised)
   if (scratch > CF_LIMITS.formulaScratchBytes) return unresolved('cf-resource-limit')
   if (!hold.grow(scratch)) return unresolved('cf-resource-limit')
   {
@@ -1259,7 +1340,18 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
       if (!context.ceiling.take(breakdown.total)) return unresolved('cf-resource-limit')
       limit = breakdown.total
       context.onCall?.(breakdown)
-      const outcome = invoke(f, tree.value.value, at, shape, areas, view.value, snapshot, context)
+      const outcome = invoke(f, tree.value.value, at, shape, areas, view.value, snapshot, context, values => {
+        // A clean call: memoise each invariant subtree it computed (scalar mode, a scalar value; a blank is skipped, since
+        // an empty literal could read as an omitted argument). Its node is shared by every translation, so the value the
+        // engine stored for it is the subtree's own.
+        for (const node of subtrees) {
+          if (memoised.has(node)) continue
+          const v = values.get(node)
+          if (v === undefined || v === null || isMatrixValue(v) || (typeof v === 'number' && !Number.isFinite(v))) continue
+          if (typeof v === 'object' && !isEvaluationError(v)) continue
+          context.invariants.setNode(node, v as ElementValue)
+        }
+      })
       context.onSettled?.(used, breakdown)
       if (outcome.kind === 'ready' && f.invariant) context.invariants.set(f, outcome.value)
       return outcome
@@ -1269,7 +1361,7 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
 }
 
 function invoke(f: CfFormula, tree: AstNode, at: Readonly<{ row: number; col: number }>, shape: CfCallShape, areas: readonly (SourceRect | 'ref')[],
-  view: CfDependencyView, snapshot: CfDependencySnapshot, context: CfFormulaContext): CfOutcome<CfResult> {
+  view: CfDependencyView, snapshot: CfDependencySnapshot, context: CfFormulaContext, onClean?: (nodeValues: WeakMap<AstNode, EvaluationValue>) => void): CfOutcome<CfResult> {
   try {
     // Shape before projection (S5-D round-1 #7): a root reference never reaches the engine's scalar projection.
     if (tree.type === 'error' && (f.ast.type === 'cell' || f.rootArea)) return { kind: 'ready', value: { kind: 'error', value: ERROR_ELEMENTS.get(tree.error) ?? ERROR_ELEMENTS.get('#REF!')! } }
@@ -1297,11 +1389,12 @@ function invoke(f: CfFormula, tree: AstNode, at: Readonly<{ row: number; col: nu
     })
     const features = new Set<string>()
     const issues: ReferenceIssue[] = []
+    const nodeValues = new WeakMap<AstNode, EvaluationValue>()
     const currentCell: CellRef = { row: at.row, col: at.col, absRow: false, absCol: false }
     const ctx: EvaluationContext = {
       typedValues: true, currentSheet: context.sheetName, currentCell, semantics: context.semantics, references,
       unsupportedFeatures: features, reportFormulaIssue: issue => { issues.push(issue) }, hasCycle: false,
-      nodeValues: new WeakMap(), flatArgs: new WeakMap(), functionWork: new WeakMap(), materializationBudget: context.materialization,
+      nodeValues, flatArgs: new WeakMap(), functionWork: new WeakMap(), materializationBudget: context.materialization,
       // Engine argument order is (sheet, col, row); a single-cell read goes through the call's view (charged, area-checked).
       getCellValue: (sheet, col, row) => {
         if (sheet !== undefined && sheet.toLowerCase() !== lower) { features.add('cf-cross-sheet-read'); return ERROR_ELEMENTS.get('#N/A')! }
@@ -1314,7 +1407,9 @@ function invoke(f: CfFormula, tree: AstNode, at: Readonly<{ row: number; col: nu
     if (snapshot.tainted) return unresolved('cf-formula-dependency')
     if (features.has('array-resource-limit')) return unresolved('cf-resource-limit')
     if (features.size > 0 || issues.length > 0 || ctx.hasCycle) return unresolved('cf-formula-unsupported')
-    return classifyValue(value)
+    const classified = classifyValue(value)
+    if (classified.kind === 'ready') onClean?.(nodeValues)
+    return classified
   } catch (error) {
     if (error === CF_WORK_REFUSED) return unresolved('cf-resource-limit')
     return unresolved('cf-formula-unsupported') // an engine failure is never a result

@@ -10,7 +10,7 @@ import '../src/xlsx/formula/functions'
 import { CONDITIONAL_MAX_CRITERION_LENGTH } from '../src/xlsx/formula/functions/cond'
 import { DEFAULT_MAX_DP_CELLS, matchWildcard } from '../src/xlsx/formula/functions/wildcard'
 import * as schedulerModule from '../src/xlsx/view/scheduler'
-import { cfCountifDpRefused, cfCountifKey, cfTruth, planCfHoist, type CfCallWorkBreakdown, type CfHoisted } from '../src/xlsx/cf/formula'
+import { cfCallShape, cfCountifDpRefused, cfCountifKey, cfInvariantSubtrees, cfTruth, planCfHoist, type CfCallWorkBreakdown, type CfHoisted } from '../src/xlsx/cf/formula'
 import { createCfMemory, createCfUnitCeiling, createCfWorkBudget, CF_FREQUENCY_ENTRY_BYTES, CF_LIMITS, type CfWorkBudget } from '../src/xlsx/cf/limits'
 import { createCfStatistics } from '../src/xlsx/cf/statistics'
 import { createCfService } from '../src/xlsx/cf/service'
@@ -540,5 +540,58 @@ describe('hoist leases are refcounted and the hoist cache is bounded (Task 34 fi
     expect(memory.currentBytes).toBe(one)
     expect(session.size).toBe(1)
     session.dispose()
+  })
+})
+
+describe('invariant subtrees are memoised per preparation under a charged lease (Task 34 fix round 2, finding 8, S5-N)', () => {
+  const engineAt = (text: string, cells: Cells, row: number, col: number) => engineEval(text.replace(/B1\b/g, refOf(row, 1)), cells, { row, col })
+  const resultOf = (v: unknown) => (typeof v === 'boolean' ? { kind: 'boolean', value: v } : typeof v === 'number' ? { kind: 'number', value: v } : typeof v === 'string' ? { kind: 'text', value: v } : { kind: 'error', value: v })
+  async function run(text: string, cells: Cells) {
+    const calls: CfCallWorkBreakdown[] = []
+    const memory = createCfMemory()
+    const batch = await batchOf([formulaRule(text, 'C1:C5')], fakeSource(cells), { onCall: b => calls.push(b), memory, hoist: false })
+    const outs = [0, 1, 2, 3, 4].map(row => batch.evaluate(0, row, 2))
+    const held = memory.currentBytes
+    batch.dispose()
+    return { outs, calls, held, after: memory.currentBytes }
+  }
+  const B = { B1: 1, B2: -2, B3: 3, B4: 0.5, B5: -7 }
+  it('SUM(IFERROR($A$1,0))+B1: the first call evaluates the subtree, every later call reads its memoised value', async () => {
+    for (const A1 of [5, 'txt', true, null, { error: '#N/A' as const }] as const) {
+      const cells: Cells = { ...B, ...(A1 === null ? {} : { A1 }) }
+      const text = 'SUM(IFERROR($A$1,0))+B1'
+      const { outs, calls, after } = await run(text, cells)
+      outs.forEach((o, row) => expect(o, `${JSON.stringify(A1)} at C${row + 1}`).toEqual({ kind: 'ready', value: resultOf(engineAt(text, cells, row, 2).value) }))
+      // The later calls no longer walk the subtree: fewer nodes, and A1 is not read.
+      expect(calls[1]!.nodes, JSON.stringify(A1)).toBeLessThan(calls[0]!.nodes)
+      expect(calls[1]!.reads).toBe(1)
+      for (const c of calls.slice(1)) expect(c).toEqual(calls[1])
+      expect(after).toBe(0)
+    }
+  })
+  it('a subtree as an aggregate argument (SUM(B1,$A$1*2)) and inside a comparison paint as the engine at every target', async () => {
+    const memoised = new Set(['B1+MAX($A$1:$A$3)>2', 'UPPER($A$2)=B1'])
+    for (const text of ['SUM(B1,$A$1*2)>0', 'AND(B1>0,MAX($A$1:$A$3)>2)', 'B1+MAX($A$1:$A$3)>2', 'UPPER($A$2)=B1']) {
+      const cells: Cells = { ...B, A1: 2, A2: 'ab', A3: 4 }
+      const { outs, calls } = await run(text, cells)
+      outs.forEach((o, row) => expect(o, `${text} at C${row + 1}`).toEqual({ kind: 'ready', value: resultOf(engineAt(text, cells, row, 2).value) }))
+      // An argument of SUM or AND is evaluated in the engine's array mode, outside the scalar memo the subtree values are
+      // read from, so it is never memoised (never served from a scalar value); operands of an operator are.
+      if (memoised.has(text)) expect(calls[1]!.nodes, text).toBeLessThan(calls[0]!.nodes)
+      else expect(calls[1]!.nodes, text).toBe(calls[0]!.nodes)
+    }
+  })
+  it('a memoised string enters the call as literal text: its length is in the text bound', () => {
+    const f = compile('UPPER($A$2)=B1', 'C1')
+    const [node] = cfInvariantSubtrees(f)
+    expect(node).toBeDefined()
+    expect(cfCallShape(f, [], new Map([[node!, 'x'.repeat(100)]])).literalUnits).toBe(100)
+    expect(cfCallShape(f, [], new Map([[node!, 7]])).literalUnits).toBe(0)
+  })
+  it('the memo is charged on the preparation memory and released with it', async () => {
+    const cells: Cells = { ...B, A1: 5 }
+    const full = await run('SUM(IFERROR($A$1,0))+B1', cells)
+    expect(full.held).toBeGreaterThan(0)
+    expect(full.after).toBe(0)
   })
 })
