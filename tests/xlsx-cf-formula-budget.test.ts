@@ -721,11 +721,13 @@ describe('the per-node text model: own passes per operation, ASCII from the snap
 })
 
 describe('Task 34 fix round 4 (codex round-3 findings 1, 2, 4, 5)', () => {
+  /** The production pacing budget and preparation ceiling (no test-only unit allowance). */
+  const production = () => { const signal = new AbortController().signal; return { signal, budget: createCfWorkBudget({ now: frozen, signal }), ceiling: createCfUnitCeiling() } }
   it('finding 4: a text criterion\'s validation (matchWildcard(body, \'\')) is in the bound whatever the range holds', async () => {
     // Codex counterexample: COUNTIF(A1:A2,B1) over an empty A range, B1 = 140 ASCII 'a'.
     const cells: Cells = { B1: 'a'.repeat(140) }
     const calls: CfCallWorkBreakdown[] = []
-    const batch = await batchOf([formulaRule('COUNTIF(A1:A2,B1)', 'C1')], fakeSource(cells), { onCall: b => calls.push(b) })
+    const batch = await batchOf([formulaRule('COUNTIF(A1:A2,B1)', 'C1')], fakeSource(cells), { ...production(), onCall: b => calls.push(b) })
     evaluateNodeSpy.mockClear()
     expect(batch.evaluate(0, 0, 2)).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
     expect(evaluateNodeSpy).not.toHaveBeenCalled()
@@ -743,7 +745,7 @@ describe('Task 34 fix round 4 (codex round-3 findings 1, 2, 4, 5)', () => {
     const none = cfCallWorkBreakdown(shape, payload, [0]) as CfCallWorkBreakdown
     expect(none.matcher).toBe(0) // a numeric criterion never reaches the matcher
     // A short text criterion over an empty range still evaluates: 3 nodes + 1 view + 1 read + criterion + 4 matcher.
-    const short = await batchOf([formulaRule('COUNTIF(A1:A2,B1)', 'C1')], fakeSource({ B1: 'abc' }), { onCall: x => calls.push(x) })
+    const short = await batchOf([formulaRule('COUNTIF(A1:A2,B1)', 'C1')], fakeSource({ B1: 'abc' }), { ...production(), onCall: x => calls.push(x) })
     expect(short.evaluate(0, 0, 2)).toEqual({ kind: 'ready', value: { kind: 'number', value: 0 } })
     expect(calls[0]!.matcher).toBe(4)
     short.dispose()
@@ -753,7 +755,7 @@ describe('Task 34 fix round 4 (codex round-3 findings 1, 2, 4, 5)', () => {
     const literal = 'a'.repeat(8000)
     const text = `ISNUMBER(IF(A1,"${literal}",0))`
     const calls: CfCallWorkBreakdown[] = []
-    const batch = await batchOf([formulaRule(text, 'B1:B2')], fakeSource({ A1: 1, A2: 2 }), { onCall: b => calls.push(b) })
+    const batch = await batchOf([formulaRule(text, 'B1:B2')], fakeSource({ A1: 1, A2: 2 }), { ...production(), onCall: b => calls.push(b) })
     const charCodeAt = vi.spyOn(String.prototype, 'charCodeAt')
     try {
       for (const row of [0, 1]) {
@@ -780,7 +782,7 @@ describe('Task 34 fix round 4 (codex round-3 findings 1, 2, 4, 5)', () => {
     const text = 'UPPER($A$1)=B1'
     const cells: Cells = { A1: 'a'.repeat(40), B1: 'x', B2: 'x', B3: 'x' }
     const calls: CfCallWorkBreakdown[] = []
-    const batch = await batchOf([formulaRule(text, 'C1:C3')], fakeSource(cells), { onCall: b => calls.push(b) })
+    const batch = await batchOf([formulaRule(text, 'C1:C3')], fakeSource(cells), { ...production(), onCall: b => calls.push(b) })
     const charCodeAt = vi.spyOn(String.prototype, 'charCodeAt')
     try {
       for (const row of [0, 1, 2]) {
@@ -798,7 +800,7 @@ describe('Task 34 fix round 4 (codex round-3 findings 1, 2, 4, 5)', () => {
     // Codex counterexample: 120 nested UPPER over IF(TRUE,A1,"") with A1 blank renders "0" through every UPPER.
     const text = `${'UPPER('.repeat(120)}IF(TRUE,A1,"")${')'.repeat(120)}`
     const calls: CfCallWorkBreakdown[] = []
-    const batch = await batchOf([formulaRule(text, 'B1')], fakeSource({}), { onCall: b => calls.push(b) })
+    const batch = await batchOf([formulaRule(text, 'B1')], fakeSource({}), { ...production(), onCall: b => calls.push(b) })
     evaluateNodeSpy.mockClear()
     expect(batch.evaluate(0, 0, 1)).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
     expect(evaluateNodeSpy).not.toHaveBeenCalled()
