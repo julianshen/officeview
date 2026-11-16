@@ -754,11 +754,13 @@ export type CfHoist = Readonly<{ node: AstNode; kind: 'scalar' | 'countif-freque
 export type CfHoisted = Readonly<{ scalars: ReadonlyMap<AstNode, ElementValue>; frequencies: ReadonlyMap<AstNode, ReadonlyMap<string, number>>; longest: ReadonlyMap<AstNode, number> }>
 const SCALAR_AGGREGATES: ReadonlySet<string> = new Set(['SUM', 'COUNT', 'COUNTA', 'AVERAGE', 'MIN', 'MAX'])
 /** Every axis `$`-pinned, on the host sheet (a cross-sheet range is scanned through its own store in Task 36). */
-function absoluteArea(node: AstNode): Readonly<{ rect: SourceRect }> | undefined {
+/** An absolute range, with its sheet qualifier when it has one (Task 36 fix round 1, #8: a qualified range is hoisted
+ * through its own sheet's store; the batch routes it by sheet). */
+function absoluteArea(node: AstNode): Readonly<{ sheet?: string; rect: SourceRect }> | undefined {
   if (node.type !== 'range' && node.type !== 'wholeCol' && node.type !== 'wholeRow') return undefined
   const atom = admittedAtom(node)
-  if (!atom.absRow || !atom.absCol || atom.sheet !== undefined) return undefined
-  return { rect: { firstRow: atom.firstRow, lastRow: atom.lastRow, firstCol: atom.firstCol, lastCol: atom.lastCol } }
+  if (!atom.absRow || !atom.absCol) return undefined
+  return { ...(atom.sheet !== undefined ? { sheet: atom.sheet } : {}), rect: { firstRow: atom.firstRow, lastRow: atom.lastRow, firstCol: atom.firstCol, lastCol: atom.lastCol } }
 }
 const invariantCriterion = (node: AstNode | undefined): boolean => node !== undefined && (node.type === 'number' || node.type === 'string'
   || (node.type === 'cell' && node.ref.absRow && node.ref.absCol && node.ref.sheet === undefined))
@@ -787,7 +789,7 @@ export function planCfHoist(f: CfFormula): readonly CfHoist[] {
     }
     if (range && fnName === 'SUMIF' && invariantCriterion(node.args[1])) {
       const sum = node.args[2] ? absoluteArea(node.args[2]) : undefined
-      if (node.args.length === 2 || (node.args.length === 3 && sum && sameRect(sum.rect, range.rect))) { out.push({ node, kind: 'scalar', fn: fnName, range, criterion: node.args[1]! }); continue }
+      if (node.args.length === 2 || (node.args.length === 3 && sum && sameRect(sum.rect, range.rect) && (sum.sheet ?? '').toLowerCase() === (range.sheet ?? '').toLowerCase())) { out.push({ node, kind: 'scalar', fn: fnName, range, criterion: node.args[1]! }); continue }
     }
     for (let i = node.args.length - 1; i >= 0; i--) stack.push(node.args[i]!)
   }
@@ -1393,10 +1395,11 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
   // unresolved. The snapshot's own sheet list is the only authority on which names it can read.
   const hostLower = context.sheetName.toLowerCase()
   const held = new Set(snapshot.sheets.slice(1).map(x => x.name?.toLowerCase()).filter((x): x is string => x !== undefined))
-  const sheetOfAtom = (sheet: string | undefined): string | undefined | 'missing' | 'unknown' => {
-    if (sheet === undefined || sheet.toLowerCase() === hostLower) return undefined
-    if (held.has(sheet.toLowerCase())) return sheet
-    return context.missingSheets?.has(sheet.toLowerCase()) ? 'missing' : 'unknown'
+  // A tagged result (fix round 1, #3): a sheet may be named anything, `missing` and `unknown` included.
+  const sheetOfAtom = (sheet: string | undefined): Readonly<{ kind: 'host' } | { kind: 'sheet'; name: string } | { kind: 'missing' } | { kind: 'unknown' }> => {
+    if (sheet === undefined || sheet.toLowerCase() === hostLower) return { kind: 'host' }
+    if (held.has(sheet.toLowerCase())) return { kind: 'sheet', name: sheet }
+    return context.missingSheets?.has(sheet.toLowerCase()) ? { kind: 'missing' } : { kind: 'unknown' }
   }
   if (f.usesClock && context.evaluation.timeZone === '') return unresolved('cf-evaluation-context-missing')
   const anchor = f.anchor
@@ -1444,11 +1447,11 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
   const substitutes = new Map<AstNode, AstNode>()
   for (const node of shape.refs) {
     const sheet = sheetOfAtom(admittedAtom(node).sheet)
-    if (sheet === 'unknown') return unresolved('cf-formula-dependency')
-    if (sheet === 'missing') { areas.push('ref'); areaSheets.push(undefined); substitutes.set(node, { type: 'error', error: '#REF!' }); continue }
+    if (sheet.kind === 'unknown') return unresolved('cf-formula-dependency')
+    if (sheet.kind === 'missing') { areas.push('ref'); areaSheets.push(undefined); substitutes.set(node, { type: 'error', error: '#REF!' }); continue }
     const area = translateRef(node)
     if (area === 'unmeasured') return unresolved('cf-formula-edge-unmeasured')
-    areas.push(area); areaSheets.push(sheet)
+    areas.push(area); areaSheets.push(sheet.kind === 'sheet' ? sheet.name : undefined)
   }
   // Frequency lookups, scalar hoists and memoised subtrees become literal nodes in the per-call tree (no handler runs).
   for (const [node, value] of memoised) substitutes.set(node, literalNode(value))

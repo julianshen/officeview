@@ -451,15 +451,16 @@ describe('dependency bytes are measurer-derived', () => {
     const depBytes = measurePayloadBytes(full)! - measurePayloadBytes(without)!
     expect(depBytes).toBe(measurePayloadBytes({ dependencies })! - measurePayloadBytes({})!)
     expect(depBytes).toBeGreaterThan(16 * 2 * 8)
-    // The exact grant: the smallest that returns ready; one byte less is cf-grant-required naming it, never a partial reply.
+    // The exact grant: the smallest that returns the full reply; one byte less omits the cross-sheet part (its states and
+    // the dependency list together, fix round 1), never a partial dependency list.
+    const fullAt = async (g: number) => { const r = await read(g); return r.kind === 'ready' && r.dependencies?.length === 16 }
     let lo = 1, hi = 1 << 22
-    while (lo < hi) { const mid = (lo + hi) >>> 1; if ((await read(mid)).kind === 'ready') hi = mid; else lo = mid + 1 }
+    while (lo < hi) { const mid = (lo + hi) >>> 1; if (await fullAt(mid)) hi = mid; else lo = mid + 1 }
     const short = await read(lo - 1)
-    expect(short.kind).toBe('unresolved')
-    expect(short.diagnostics[0]?.feature).toBe('cf-grant-required')
+    expect(short.kind).toBe('ready')
+    expect(short.diagnostics.some(d => d.feature === 'cf-grant-required')).toBe(true)
     expect(short.states).toEqual([])
     expect(short.dependencies).toBeUndefined()
-    expect(short.requiredBytes).toBeGreaterThanOrEqual(lo)
   })
 })
 
@@ -535,5 +536,171 @@ describe('cross-sheet hoists, worker races and the snapshot layer (Task 36)', ()
     expect(await snap(sheetWith({ valueGen: () => undefined }), 'Sheet1')).toEqual({ kind: 'unresolved', reason: 'cf-dependency-generation-unknown' })
     expect(await snap(sheetWith({ state: () => 'pending' }), 'Sheet1')).toEqual({ kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: ['sheet2'] })
     expect(await snap(sheetWith({ state: () => 'failed' }), 'Sheet1')).toEqual({ kind: 'unresolved', reason: 'cf-read-failed' })
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* Fix round 1 (codex review of Task 36).                              */
+/* ------------------------------------------------------------------ */
+describe('Task 36 fix round 1', () => {
+  const remoteRead = async (rules: CfSheetRules, s1: XlsxSheet, workbook: CfWorkbookSource, refs: readonly string[], grantBytes = 1 << 22, host?: CfValueSource) => {
+    const h = host ?? residentSource(s1, { owner: 'o', sheetId: 'sheet1', workbookValueGen: 0, cfGen: cfRulesVersion(rules), viewGen: 0, structureGen: 0, clockGen: 0 }, createCfMemory(), 'cached')
+    injectCfFormulaSelections(SELECTIONS)
+    try {
+      return await withExactCfEvidence(CAPS, () => prepareCfRemote({ rects: refs.map(ref => { const { row, col } = rc(ref); return { r0: row, r1: row, c0: col, c1: col } }),
+        stamp: { owner: 'o', sheetId: 'sheet1', workbookValueGen: 0, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 }, grantBytes }, 'sheet1', h, rules, createCfMemory(), { evaluation: UTC, workbook, sheetName: 'Sheet1' }))
+    } finally { injectCfFormulaSelections(null) }
+  }
+
+  it('#3: sheets literally named "missing" and "unknown" are ordinary sheets, never the internal sentinels', async () => {
+    for (const name of ['missing', 'unknown']) {
+      const rules = parseRules(expr('A2', 1, `ISERROR(${name}!A1)`), CAPS)
+      const s1 = named('Sheet1', 'sheet1', { A2: 1 }, rules)
+      const wb = cfWorkbookOfDocument([s1, named(name, 'sheet2', { A1: 7 })], createCfMemory(), 'cached')
+      expect(fillOf((await prepareWith(rules, s1, wb, ['A2'])).out.get('A2')), name).toBe('none')
+      // The same formula over a sheet whose A1 is an error does match: the reference was read, not replaced.
+      const err = cfWorkbookOfDocument([s1, named(name, 'sheet2', { A1: { err: '#DIV/0!' } })], createCfMemory(), 'cached')
+      expect(fillOf((await prepareWith(rules, s1, err, ['A2'])).out.get('A2')), name).toBe(GREEN)
+    }
+  })
+
+  it('#4: print (the asset path without a host store) and export agree on Sheet2!A1>0', async () => {
+    const rules = parseRules(expr('A1', 1, 'Sheet2!A1&gt;0'), CAPS)
+    const s1 = named('Sheet1', 'sheet1', { A1: 1 }, rules), s2 = named('Sheet2', 'sheet2', { A1: 5 })
+    const doc = { ...docOf([s1, s2]), valuePolicy: 'cached' } as XlsxDocument
+    const { prepareSheetAssets } = await import('../src/components/xlsx/sheetAssets')
+    injectCfFormulaSelections(SELECTIONS)
+    try {
+      await withExactCfEvidence(CAPS, async () => {
+        const lease = await prepareSheetAssets(doc, { sheetIndex: 0 })
+        const exported = await prepareCfPaint(s1, { valuePolicy: 'cached', evaluation: UTC, documentSheets: doc.sheets })
+        expect(exported!.layer.styleAt(0, 0, undefined)?.fillColor).toBe(GREEN)
+        expect(lease.assets.conditionalFormatting?.layer.styleAt(0, 0, undefined)?.fillColor).toBe(GREEN)
+        exported!.dispose(); lease.dispose()
+      })
+    } finally { injectCfFormulaSelections(null) }
+  })
+
+  it('#5: one persistent service: prepared while Sheet2 is pending, prepared again once it is ready, paints', async () => {
+    const { rules, s1, s2 } = crossSheetDoc()
+    const state = { now: 'pending' as 'ready' | 'pending' | 'failed' }
+    const sheet2 = drivenSheet('Sheet2', 'sheet2', s2, state)
+    const workbook: CfWorkbookSource = { sheetIdOf: n => (n.toLowerCase() === 'sheet2' ? 'sheet2' : undefined), sheet: id => (id === 'sheet2' ? sheet2 : undefined) }
+    const memory = createCfMemory()
+    const service = createCfService(rules, memory, { evidence: evidence(CAPS), evaluation: evaluation(), sheetName: 'Sheet1', workbook })
+    const stamp: CfStamp = { owner: 'o', sheetId: 'sheet1', workbookValueGen: 0, cfGen: 1, viewGen: 0, structureGen: 0, clockGen: 0 }
+    const once = async () => {
+      injectCfFormulaSelections(SELECTIONS)
+      try {
+        const lease = await service.prepareCf({ stamp, sourceRects: [rectOf('A2')], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, residentSource(s1, stamp, memory, 'cached'))
+        const out = at(lease, 'A2'); lease.release(); return out
+      } finally { injectCfFormulaSelections(null) }
+    }
+    expect((await once()).kind).toBe('unresolved')
+    state.now = 'ready'
+    expect(fillOf(await once())).toBe(GREEN)
+    service.dispose()
+  })
+
+  it('#7: the 16-sheet cap bounds resolution, stamps and the reply: 17 rules over 17 sheets list 16 dependencies', async () => {
+    const names = Array.from({ length: CF_REFERENCED_SHEETS_LIMIT + 1 }, (_, i) => `S${i + 2}`)
+    const rules = parseRules(names.map((n, i) => expr('A2', i + 1, `${n}!A1&gt;0`)).join(''), CAPS)
+    const s1 = named('Sheet1', 'sheet1', { A2: 1 }, rules)
+    const base = cfWorkbookOfDocument([s1, ...names.map((n, i) => named(n, `x${i}`, { A1: 1 }))], createCfMemory(), 'cached')
+    const resolved = new Set<string>()
+    const workbook: CfWorkbookSource = { sheetIdOf: n => base.sheetIdOf(n), sheet: id => { resolved.add(id); return base.sheet(id) } }
+    expect(cfDependencyIdentities(rules, 'Sheet1', workbook)).toHaveLength(CF_REFERENCED_SHEETS_LIMIT)
+    const reply = await remoteRead(rules, s1, workbook, ['A2'])
+    expect(reply.kind).toBe('ready')
+    expect(reply.dependencies).toHaveLength(CF_REFERENCED_SHEETS_LIMIT)
+    expect(reply.dependencies!.map(d => d.sheetId)).not.toContain(`x${CF_REFERENCED_SHEETS_LIMIT}`)
+    expect(resolved.has(`x${CF_REFERENCED_SHEETS_LIMIT}`)).toBe(false)
+  })
+
+  it('#8: SUM(Sheet2!$A$1:$A$1000)>0 is hoisted through Sheet2\'s own store, invalidated by its generation, under the scan budget', async () => {
+    const caps = [...CAPS, 'formula:hoist-aggregate', 'formula:hoist-countif-frequency']
+    const rules = parseRules(expr('B1', 1, 'SUM(Sheet2!$A$1:$A$1000)&gt;0'), caps)
+    const s1 = named('Sheet1', 'sheet1', { B1: 1 }, rules)
+    // 200 populated cells: per cell this SUM would exceed the 128-unit cap, so only a hoist can paint it.
+    const cells: Record<string, number> = { A500: 3 }
+    for (let r = 1; r <= 200; r++) cells[`A${r}`] = r === 1 ? -1 : 0
+    const doc = docOf([s1, named('Sheet2', 'sheet2', cells)])
+    const wb = createObjectWorkbookSource(doc, 'hoist-cross')
+    const run = async (c: readonly string[] = caps) => { const leg = await prepareStoreLeg(rules, wb, ['B1'], c); const out = fillOf(at(leg.lease, 'B1')); return { out, leg } }
+    const unhoisted = await run(CAPS)
+    expect(unhoisted.out).toBe('withheld')
+    unhoisted.leg.lease.release(); unhoisted.leg.service.dispose()
+    const first = await run()
+    expect(first.out).toBe(GREEN)
+    commit(wb.store('sheet2'), overlayOf({ A500: -3 }))
+    expect(at(first.leg.lease, 'B1')).toEqual({ kind: 'unresolved', reason: 'cf-stale-generation' })
+    first.leg.lease.release(); first.leg.service.dispose()
+    const second = await run()
+    expect(second.out).toBe('none')
+    second.leg.lease.release(); second.leg.service.dispose()
+    // The dependency scan pays from the scan budget: a starved one refuses the hoist (never paints).
+    const { createCfWorkBudget } = await import('../src/xlsx/cf/limits')
+    const memory = createCfMemory()
+    const workbook = cfWorkbookOfStores(wb.sheets, id => wb.store(id), memory)
+    const host = wb.store('sheet1')
+    const service = createCfService(rules, memory, { evidence: evidence(caps), evaluation: evaluation(), sheetName: 'Sheet1', workbook, statisticsBudget: () => createCfWorkBudget({ scan: true, maxUnits: 1 }) })
+    const stamp: CfStamp = { owner: host.stamp.docId, sheetId: 'sheet1', workbookValueGen: host.stamp.valueGen, cfGen: 1, viewGen: 0, structureGen: 0, clockGen: 0, dependencyGen: cfDependencyGenOf(rules, 'Sheet1', workbook) }
+    injectCfFormulaSelections(SELECTIONS)
+    try {
+      const lease = await service.prepareCf({ stamp, sourceRects: [rectOf('B1')], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, storeCfSource(host, stamp, memory))
+      expect(shown(at(lease, 'B1')).withheld || at(lease, 'B1').kind === 'unresolved').toBe(true)
+      lease.release()
+    } finally { injectCfFormulaSelections(null); service.dispose() }
+  })
+
+  it('(a) at grant - 1 the cross-sheet states and dependencies are omitted, base cells return, and admitReply keeps the reply', async () => {
+    const names = Array.from({ length: CF_REFERENCED_SHEETS_LIMIT }, (_, i) => `S${i + 2}`)
+    const plain = '<conditionalFormatting sqref="B2"><cfRule type="cellIs" priority="2" dxfId="0" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>'
+    const rules = parseRules(expr('A2', 1, `${names.map(n => `${n}!A1`).join('+')}&gt;0`) + plain, CAPS)
+    const s1 = named('Sheet1', 'sheet1', { A2: 1, B2: 1 }, rules)
+    const workbook = cfWorkbookOfDocument([s1, ...names.map((n, i) => named(n, `x${i}`, { A1: 1 }))], createCfMemory(), 'cached')
+    const full = await remoteRead(rules, s1, workbook, ['A2', 'B2'])
+    expect(full.kind).toBe('ready')
+    expect(wireFill(full, 'A2')).toBe(GREEN)
+    expect(wireFill(full, 'B2')).toBe('FFFFC7CE')
+    expect(full.dependencies).toHaveLength(16)
+    const fullAt = async (g: number) => { const r = await remoteRead(rules, s1, workbook, ['A2', 'B2'], g); return r.kind === 'ready' && r.dependencies !== undefined }
+    let lo = 1, hi = 1 << 22
+    while (lo < hi) { const mid = (lo + hi) >>> 1; if (await fullAt(mid)) hi = mid; else lo = mid + 1 }
+    const { CF_REPLY_ENVELOPE_BYTES } = await import('../src/xlsx/view/contracts')
+    expect(lo).toBe(measurePayloadBytes(full, () => true)! + CF_REPLY_ENVELOPE_BYTES)
+    const tight = await remoteRead(rules, s1, workbook, ['A2', 'B2'], lo - 1)
+    expect(tight.kind).toBe('ready')
+    expect(tight.dependencies).toBeUndefined()
+    expect(wireFill(tight, 'A2')).toBe('none')
+    expect(wireFill(tight, 'B2')).toBe('FFFFC7CE')
+    expect(tight.diagnostics.some(d => d.feature === 'cf-grant-required')).toBe(true)
+    expect(measurePayloadBytes(tight, () => true)! + CF_REPLY_ENVELOPE_BYTES).toBeLessThanOrEqual(lo - 1)
+    const { admitReply } = await import('../src/worker/viewerReplyLimit')
+    for (const [grant, result] of [[lo - 1, tight], [lo, full]] as const) {
+      const owner = { docId: 'o', sheetId: 'sheet1', valueGen: 0, fontGen: 0, viewGen: 0 }
+      const cmd = { kind: 'read', requestId: 'g', owner, query: { op: 'conditionalFormatting', rects: [], stamp: result.stamp, grantBytes: grant } } as never
+      const reply = { commandKind: 'read', requestId: 'g', owner, diagnostics: [], kind: 'complete', result: { kind: 'read', result: { op: 'conditionalFormatting', result } } } as never
+      const out = admitReply(cmd, reply, grant, () => true, false) as { kind: string; replyBytes?: number }
+      expect(out.kind, `grant ${grant}`).toBe('complete')
+      expect(out.replyBytes!).toBeLessThanOrEqual(grant)
+    }
+  })
+
+  it('(b) a dependency commit queued as a microtask at snapshot adoption is caught by the worker liveAfter recheck', async () => {
+    const { rules, s1, s2 } = crossSheetDoc()
+    let gen = 0, armed = false
+    const base = cfWorkbookOfDocument([s1, s2], createCfMemory(), 'cached').sheet('sheet2')!
+    const sheet2: CfWorkbookSheet = { ...base, valueGen: () => { if (armed) { armed = false; queueMicrotask(() => { gen = 1 }) } return gen } }
+    const workbook: CfWorkbookSource = { sheetIdOf: n => (n.toLowerCase() === 'sheet2' ? 'sheet2' : undefined), sheet: id => (id === 'sheet2' ? sheet2 : undefined) }
+    const inner = residentSource(s1, { owner: 'o', sheetId: 'sheet1', workbookValueGen: 0, cfGen: cfRulesVersion(rules), viewGen: 0, structureGen: 0, clockGen: 0 }, createCfMemory(), 'cached')
+    // The host's own page loop is the service's last read: the next stamp read is the adoption check.
+    const host: CfValueSource = { ...inner, pages: (id, rects, budget, signal) => {
+      const it = inner.pages(id, rects, budget, signal)
+      return (async function* () { for await (const p of it) yield p; armed = true })()
+    } }
+    const reply = await remoteRead(rules, s1, workbook, ['A2'], 1 << 22, host)
+    expect(gen).toBe(1)
+    expect(reply).toMatchObject({ kind: 'unresolved', reason: 'cf-stale-generation', states: [] })
   })
 })

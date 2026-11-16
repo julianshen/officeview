@@ -2078,6 +2078,12 @@ async function prepareCfRemoteOnce(
     sheetId, stamp: liveStamp, kind: 'ready', states: [], definitions,
     definitionsVersion: version, diagnostics: [], ...depField,
   }, memory)
+  // Task 36 (fix round 1): the `dependencies` list can be omitted with the cross-sheet states (the grant ladder below), so
+  // the base gate is priced without it, the full target with it, as the visual families are.
+  const templateBase = depField.dependencies ? limitsModule.measureCfWalkedBytes({
+    sheetId, stamp: liveStamp, kind: 'ready', states: [], definitions,
+    definitionsVersion: version, diagnostics: [],
+  }, memory) : templateBytes
   const diagBytes = limitsModule.measureCfWalkedBytes(diagnostics, memory)
   // Per-cell bound matching the walked wire size exactly for full wins:
   // 24 object + 3x16 property slots + 2x8 numbers + 16 props slot + properties,
@@ -2098,7 +2104,7 @@ async function prepareCfRemoteOnce(
   const perCellBar = perCellScale + (hasBar ? limitsModule.CF_BAR_CELL_BYTES : 0)
   const perCellIcon = perCellBar + (hasIcon ? limitsModule.CF_ICON_CELL_BYTES : 0)
   const hasVisual = hasScale || hasBar || hasIcon
-  if (templateBytes === undefined || diagBytes === undefined || !Number.isSafeInteger(perCell)) {
+  if (templateBytes === undefined || templateBase === undefined || diagBytes === undefined || !Number.isSafeInteger(perCell)) {
     working.release()
     return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting exceeds the receiver grant; retry with at least the estimated size.'), requiredBytes: undefined }
   }
@@ -2108,22 +2114,23 @@ async function prepareCfRemoteOnce(
     working.release()
     return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting exceeds the receiver grant; retry with at least the estimated size.'), requiredBytes: undefined }
   }
-  const boundedEstimate = templateBytes + estimate + envelopeBytes
+  const boundedEstimate = templateBase + estimate + envelopeBytes
   const boundedEstimateWithVisuals = templateBytes + estimateWithVisuals + envelopeBytes
+  const fullTarget = hasVisual || depField.dependencies
   if (!Number.isSafeInteger(boundedEstimate) || boundedEstimate > grantBytes) {
     working.release()
     return {
       ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting exceeds the receiver grant; retry with at least the estimated size.'),
-      requiredBytes: hasVisual ? boundedEstimateWithVisuals : boundedEstimate,
+      requiredBytes: fullTarget ? boundedEstimateWithVisuals : boundedEstimate,
     }
   }
-  const visualGrantTarget = hasVisual ? Math.min(grantBytes, boundedEstimateWithVisuals) : 0
+  const visualGrantTarget = fullTarget ? Math.min(grantBytes, boundedEstimateWithVisuals) : 0
   const workingTarget = Math.max(boundedEstimate, visualGrantTarget) + diagBytes
   if (!Number.isSafeInteger(workingTarget) || !working.grow(workingTarget)) {
     working.release()
     return {
       ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-budget-exceeded', 'Conditional formatting exceeds the admitted worker memory; retry when pressure drops.'),
-      requiredBytes: hasVisual ? boundedEstimateWithVisuals : boundedEstimate,
+      requiredBytes: fullTarget ? boundedEstimateWithVisuals : boundedEstimate,
     }
   }
   // Service and its lease live inside the working hold: everything built
@@ -2246,10 +2253,12 @@ async function prepareCfRemoteOnce(
     // Post-build measurement uses the same payload walker the kernel publishes
     // with, so preflight, publication and adoption share one framing model.
     // Every walk admits its traversal workspace on the shared account.
+    // The dependency list the reply carries: dropped together with the cross-sheet states when they are omitted below.
+    let depOut = depField
     const measureBuilt = (candidateStates: typeof states, withDiagnostics: boolean): number | undefined => {
       const candidate: CfReadResult = {
         sheetId, stamp: liveStamp, kind: 'ready', states: candidateStates, definitions,
-        definitionsVersion: version, diagnostics: withDiagnostics ? diagnostics : [], ...depField,
+        definitionsVersion: version, diagnostics: withDiagnostics ? diagnostics : [], ...depOut,
       }
       return limitsModule.measureCfWalkedBytes(candidate, memory)
     }
@@ -2274,16 +2283,25 @@ async function prepareCfRemoteOnce(
       if (fullNoDiagBytes !== undefined && fullNoDiagBytes + envelopeBytes <= grantBytes) {
         finalStates = states
         finalDiagnostics = []
-      } else if (hasVisual) {
+      } else if (hasVisual || depField.dependencies) {
         // A visual payload that exceeds the grant is omitted, never replaced (Rulings S3-S, S4-Q): icon fields go first,
         // then bar fields, then scale fields, while every cell's base properties still return. Each step offers the bounded
         // cf-grant-required diagnostics of the families omitted so far, and drops them when only the base fits.
-        const omit = (from: typeof states, field: 'icon' | 'bar' | 'scale'): typeof states => from.map(s => {
-          if (s[field] === undefined) return s
-          const { [field]: _, ...rest } = s
-          return rest
-        })
-        const families: { field: 'icon' | 'bar' | 'scale'; message: string }[] = [
+        // Task 36 (fix round 1): before any visual, the cross-sheet part goes: the states of every cell a cross-sheet rule
+        // covers and the `dependencies` list together, so what returns reads no other sheet and needs no dependency.
+        const host = options?.sheetName?.toLowerCase()
+        const crossRules = depField.dependencies ? rules.rules.filter(r => r.definition.kind !== 'unresolved' && (r.definition.dependencySheets ?? []).some(n => n.toLowerCase() !== host)) : []
+        const crossCovered = (row: number, col: number): boolean => crossRules.some(r => r.ranges.some(g => row >= g.firstRow && row <= g.lastRow && col >= g.firstCol && col <= g.lastCol))
+        const omit = (from: typeof states, field: 'icon' | 'bar' | 'scale' | 'formula'): typeof states => {
+          if (field === 'formula') { depOut = {}; return from.filter(s => !crossCovered(s.row, s.col)) }
+          return from.map(s => {
+            if (s[field] === undefined) return s
+            const { [field]: _, ...rest } = s
+            return rest
+          })
+        }
+        const families: { field: 'icon' | 'bar' | 'scale' | 'formula'; message: string }[] = [
+          ...(depField.dependencies ? [{ field: 'formula' as const, message: 'Conditional formatting that reads other sheets omitted due to receiver grant limit.' }] : []),
           ...(hasIcon ? [{ field: 'icon' as const, message: 'Conditional formatting icon sets omitted due to receiver grant limit.' }] : []),
           ...(hasBar ? [{ field: 'bar' as const, message: 'Conditional formatting data bars omitted due to receiver grant limit.' }] : []),
           ...(hasScale ? [{ field: 'scale' as const, message: 'Conditional formatting scale fill omitted due to receiver grant limit.' }] : []),
@@ -2297,7 +2315,7 @@ async function prepareCfRemoteOnce(
           const diagWithGrant = [...diagnostics, ...grantDiags]
           const withGrantDiagBytes = limitsModule.measureCfWalkedBytes({
             sheetId, stamp: liveStamp, kind: 'ready', states: omitted, definitions,
-            definitionsVersion: version, diagnostics: diagWithGrant, ...depField,
+            definitionsVersion: version, diagnostics: diagWithGrant, ...depOut,
           }, memory)
           if (withGrantDiagBytes !== undefined && withGrantDiagBytes + envelopeBytes <= grantBytes) {
             finalStates = omitted
@@ -2325,7 +2343,7 @@ async function prepareCfRemoteOnce(
     const published = live ?? definitions
     const result: CfReadResult = {
       sheetId, stamp: liveStamp, kind: 'ready', states: finalStates, definitions: published,
-      definitionsVersion: version, diagnostics: finalDiagnostics, ...depField,
+      definitionsVersion: version, diagnostics: finalDiagnostics, ...depOut,
     }
     // Transfer live outgoing ownership: adopt the wire result on the shared
     // account instead of refunding before return, so no window exists where

@@ -648,9 +648,14 @@ export async function prepareCfWireScope(
     /** Ruling S4-ROW-UNIFORM: each row's font uniformity (`cfRowUniformOfLayout` of the paged layout's
      * `nonUniformFontRows`); absent, every bottom-anchored icon frame withholds. */
     rowUniformOf?: (row: number) => boolean | undefined
+    /** Task 36 (fix round 1, #2): the receiver's live value generation of a sheet. Given, the scope paints only while
+     * every sheet its replies list (`CfReadResult.dependencies`) keeps the generation it was read at, whatever the cache
+     * has evicted since. */
+    identityOf?: (sheetId: string) => number | undefined
   },
 ): Promise<EffectiveFormatScope | undefined> {
   if (!rects.length) return undefined
+  const dependencies = new Map<string, number>()
   const chunks = chunkRects(rects)
   let bytes = DESCRIPTOR_WORKSPACE_BYTES + rects.length * 128 + (options.base?.rects.length ?? 0) * 8
   const states = new Map<number, CopiedState>()
@@ -692,6 +697,11 @@ export async function prepareCfWireScope(
           return fail()
         }
         if (result.kind !== 'ready') throw refused(`CF wire preparation is ${result.kind}`)
+        for (const d of result.dependencies ?? []) {
+          // Two chunks read at different generations of one sheet are never published together.
+          if (dependencies.has(d.sheetId) && dependencies.get(d.sheetId) !== d.valueGen) throw refused('CF wire preparation crossed a dependency generation')
+          dependencies.set(d.sheetId, d.valueGen)
+        }
         if (first) {
           first = false
           gen = result.stamp.cfGen
@@ -730,12 +740,17 @@ export async function prepareCfWireScope(
     const colors = options.colors ?? {}
     const locale = options.locale ?? 'en-US'
     let disposed = false
+    const identityOf = options.identityOf
+    const deps = [...dependencies]
+    const current = identityOf && deps.length > 0
+      ? () => (options.current?.() ?? true) && deps.every(([id, gen]) => identityOf(id) === gen)
+      : options.current
     const scope = assembleScope(gen, states, colors, locale, bytes, () => {
       if (!disposed) {
         disposed = true
         options.budget.release(bytes)
       }
-    }, options.current, regions, options.hosts ? styleAt => frameBarHosts(options.hosts!, styleAt) : undefined,
+    }, current, regions, options.hosts ? styleAt => frameBarHosts(options.hosts!, styleAt) : undefined,
     options.hosts ? styleAt => frameBarHosts(options.hosts!, styleAt) : undefined,
     createCfMemory({ limitBytes: CF_LIMITS.scratchBytes, context: budgetAllocationContext(options.budget) }), options.rowPtOf, options.rowUniformOf)
     const paintLayer: import('../tableStyles/regionLayer').RegionStyleLayer = {

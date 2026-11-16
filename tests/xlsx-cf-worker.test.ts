@@ -2921,3 +2921,100 @@ describe('remote cache entries follow their reply\'s dependencies (Task 36, Ruli
     expect(calls).toEqual([S2, S2])
   })
 })
+
+describe('Task 36 fix round 1: remote dependency validation, registrations, pending wake-up', () => {
+  const S1 = 'sheet1', S2 = 'sheet2', WHOLE = { r0: 0, r1: 1048575, c0: 0, c1: 16383 }
+  const stampOf = (): CfReadStamp => ({ owner: 'doc', sheetId: S1, workbookValueGen: 1, cfGen: 7, viewGen: 0, structureGen: 0, clockGen: 0 })
+  const flush = () => new Promise(r => setTimeout(r, 0))
+  function gatedHost() {
+    const gens = new Map<string, number>([[S1, 1], [S2, 3]])
+    const loads = new Map<string, 'complete' | 'loading' | 'incomplete'>()
+    const changed: { sheetId: string; rects: readonly SourceRect[] }[] = []
+    const requests: CommandOf<'read'>[] = []
+    const gates: Array<() => void> = []
+    let gated = false, pendingOn: string | undefined, n = 0
+    const identityOf = (sheetId: string): CacheIdentity => ({ docId: 'doc', sheetId, valueGen: gens.get(sheetId) ?? 0, fontGen: 0, viewGen: 0 })
+    const host: CfReadHost = {
+      identity: identityOf, loadState: id => ({ completeness: loads.get(id) ?? 'complete' }), hasConditionalFormatting: () => true,
+      grant: () => 1 << 20, releaseGrant: () => {}, nextRequestId: () => `g${++n}`, release: () => {}, admitEntry: () => () => {},
+      changed: (sheetId, rects) => { changed.push({ sheetId, rects }) },
+      request: async command => {
+        requests.push(command)
+        // The worker reads Sheet2's generation when it prepares (before the gate), as a real worker does.
+        const dep = gens.get(S2)!, pending = pendingOn
+        if (gated) await new Promise<void>(resolve => gates.push(resolve))
+        const q = command.query as { stamp: CfReadStamp }
+        const result: CfReadResult = pending
+          ? { sheetId: S1, stamp: { ...q.stamp }, kind: 'pending', reason: 'cf-pending-data', states: [], definitions: [], definitionsVersion: 7, diagnostics: [], pendingSheetIds: [pending] }
+          : { sheetId: S1, stamp: { ...q.stamp }, kind: 'ready', states: [{ row: 0, col: 0, properties: { 'fill.bg': 'FF00FF00' } }], definitions: [], definitionsVersion: 7, diagnostics: [], dependencies: [{ sheetId: S2, valueGen: dep }] }
+        return { commandKind: 'read', requestId: command.requestId, owner: identityOf(S1), diagnostics: [], replyBytes: 1024, kind: 'complete', result: { kind: 'read', result: { op: 'conditionalFormatting', result } } } as WorkerReply<'read'>
+      },
+    }
+    return { host, gens, loads, changed, requests, gates, gate: (on: boolean) => { gated = on }, setPending: (id: string | undefined) => { pendingOn = id } }
+  }
+
+  it('#1: a reply read at Sheet2 generation 3 that arrives after Sheet2 moved to 4 is never published; the host sheet is invalidated and reloaded', async () => {
+    const t = gatedHost()
+    t.gate(true)
+    const cache = new RemoteCfCache(t.host)
+    const held = cache.acquire(S1, [rect(0, 0)], stampOf())
+    await flush()
+    expect(t.requests).toHaveLength(1)
+    t.gens.set(S2, 4)
+    t.gate(false)
+    const epoch = cache.dependencyEpoch(S1)
+    t.gates.shift()!()
+    await flush(); await flush()
+    expect(t.changed.filter(c => c.sheetId === S1).flatMap(c => c.rects)).toContainEqual(WHOLE)
+    expect(cache.dependencyEpoch(S1)).toBeGreaterThan(epoch)
+    // The bounded retry re-read at generation 4 and published that, never generation 3.
+    expect(t.requests).toHaveLength(2)
+    expect(held.state.state).toBe('ready')
+    expect(held.state.result?.dependencies).toEqual([{ sheetId: S2, valueGen: 4 }])
+    held.release(); cache.close()
+  })
+
+  it('#2: a dependency registration outlives its entry: after eviction a Sheet2 commit still invalidates every tile of Sheet1', async () => {
+    const t = gatedHost()
+    const cache = new RemoteCfCache(t.host)
+    cache.get(S1, [rect(0, 0)], stampOf())
+    await flush()
+    expect(cache.get(S1, [rect(0, 0)], stampOf()).state).toBe('ready')
+    for (let i = 1; i <= 70; i++) cache.get('other', [rect(i, i)], { ...stampOf(), sheetId: 'other' })
+    await flush()
+    t.changed.length = 0
+    const epoch = cache.dependencyEpoch(S1)
+    cache.invalidateDependents(S2)
+    await flush()
+    expect(cache.dependencyEpoch(S1)).toBe(epoch + 1)
+    expect(t.changed.filter(c => c.sheetId === S1).flatMap(c => c.rects)).toContainEqual(WHOLE)
+    cache.close()
+  })
+
+  it('#2: a wire scope whose dependency identity moves stops painting at once (no cache lease needed)', async () => {
+    const { prepareCfWireScope } = await import('../src/xlsx/cf/text')
+    const gens = new Map([[S2, 3]])
+    const wire: CfReadResult = { sheetId: S1, stamp: stampOf(), kind: 'ready', states: [{ row: 0, col: 0, properties: { 'fill.pattern': 'solid', 'fill.bg': 'FF00FF00' } }], definitions: [], definitionsVersion: 7, diagnostics: [], dependencies: [{ sheetId: S2, valueGen: 3 }] }
+    const scope = (await prepareCfWireScope(async () => ({ result: structuredClone(wire), release() {} }), [rect(0, 0)], { budget: { reserve() {}, release() {} }, identityOf: id => gens.get(id) }))!
+    expect(scope.effectiveStyle(0, 0, undefined)?.fillColor).toBe('FF00FF00')
+    gens.set(S2, 4)
+    expect(scope.effectiveStyle(0, 0, undefined)?.fillColor).toBeUndefined()
+    scope.dispose()
+  })
+
+  it('#6: Sheet2 completes while the pending request is in flight: the pending reply schedules the retry at once', async () => {
+    const t = gatedHost()
+    t.setPending(S2); t.loads.set(S2, 'loading'); t.gate(true)
+    const cache = new RemoteCfCache(t.host)
+    const held = cache.acquire(S1, [rect(0, 0)], stampOf())
+    await flush()
+    // Completion lands mid-flight: the wake-up sees a loading entry and does nothing.
+    t.loads.set(S2, 'complete'); cache.wakeWaiting()
+    t.setPending(undefined); t.gate(false)
+    t.gates.shift()!()
+    await flush(); await flush()
+    expect(t.requests).toHaveLength(2)
+    expect(held.state.state).toBe('ready')
+    held.release(); cache.close()
+  })
+})

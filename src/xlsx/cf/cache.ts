@@ -56,7 +56,10 @@ export function createCfCache(memory: CfMemory, maxEntries = 16) {
     if (key.length > 65536) return Promise.reject(quota())
     const waiterHold = memory.reserve(256)
     if (waiterHold.kind !== 'reserved') return Promise.reject(quota())
-    const cached = ready.get(key)
+    let cached = ready.get(key)
+    // A preparation pending on a referenced sheet (Task 36, fix round 1 #5) is never reused: that sheet's completion
+    // moves no generation, so a cache hit would stay pending forever. It is re-prepared on the next request.
+    if (cached?.lease.value.pendingSheetIds?.length) { ready.delete(key); drop(cached); cached = undefined }
     if (cached) { ready.delete(key); ready.set(key, cached); return Promise.resolve(borrow(cached, waiterHold)) }
     let job = jobs.get(key), start = false
     if (job && job.controller.signal.aborted) { jobs.delete(key); job = undefined }

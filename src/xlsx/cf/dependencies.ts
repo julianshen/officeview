@@ -18,7 +18,7 @@
  * there. It is the seam Task 35 plugs into the service's page loop.
  */
 import { PackageError } from '../../core/package-error'
-import type { ElementValue } from '../formula/types'
+import type { AstNode, ElementValue } from '../formula/types'
 import type { SparseCellStore, StoredCell } from '../formula/refs'
 import { hostTask } from '../view/scheduler'
 import { measurePayloadBytes } from '../view/payloadBytes'
@@ -75,10 +75,18 @@ export function cfReferencedSheetNames(rules: CfSheetRules | undefined, hostName
   }
   return out
 }
-/** The referenced sheets the workbook knows, resolved once (unknown names are skipped: their rules never paint). */
+/**
+ * The admitted dependency set (fix round 1, #7): the first 16 distinct referenced names in rule order, known or not. It
+ * is the one set resolution, `dependencyGen`, the reply's `dependencies` and the batch's admission all use; a rule naming
+ * a sheet outside it is refused (`cf-resource-limit`) and nothing is resolved for that sheet.
+ */
+export function cfAdmittedSheetNames(rules: CfSheetRules | undefined, hostName: string | undefined): string[] {
+  return cfReferencedSheetNames(rules, hostName).slice(0, CF_REFERENCED_SHEETS_LIMIT)
+}
+/** The admitted referenced sheets the workbook knows, resolved once (unknown names are skipped: their rules never paint). */
 function resolveReferenced(rules: CfSheetRules | undefined, hostName: string | undefined, workbook: CfWorkbookSource): CfWorkbookSheet[] {
   const out: CfWorkbookSheet[] = []
-  for (const name of cfReferencedSheetNames(rules, hostName)) {
+  for (const name of cfAdmittedSheetNames(rules, hostName)) {
     const id = workbook.sheetIdOf(name)
     const sheet = id === undefined ? undefined : workbook.sheet(id)
     if (sheet && !out.some(s => s.sheetId === sheet.sheetId)) out.push(sheet)
@@ -573,6 +581,9 @@ export interface CfFormulaBatchOptions {
   readonly workbook?: CfWorkbookSource
   /** An unknown sheet name reads `#REF!` (only under the `formula:cross-sheet-missing` reading); absent: unresolved. */
   readonly missingSheet?: 'ref-error'
+  /** The sheet's admitted dependency set (`cfAdmittedSheetNames`); a task naming any other sheet is `cf-resource-limit`.
+   * Absent (a direct caller), the batch admits the first 16 distinct names its tasks meet. */
+  readonly admittedSheets?: readonly string[]
   /** Absent: every formula task is unresolved (`cf-evaluation-context-missing`, Ruling S5-L). */
   readonly evaluation: CfEvaluationContext | undefined
   readonly edge: CfEdgeMode | undefined
@@ -644,6 +655,7 @@ export async function prepareCfFormulaBatch(tasks: readonly CfFormulaTask[], opt
       const hostKey = lower(options.sheetName)
       // Ruling S5-K: the referenced sheets of the whole sheet's tasks, at most 16; their bounds clamp whole-axis atoms.
       const referenced = new Map<string, CfWorkbookSheet>()
+      const admitted = options.admittedSheets ? new Set(options.admittedSheets.map(n => n.toLowerCase())) : undefined
       const depBounds = new Map<string, SourceRect>()
       for (let i = 0; i < tasks.length; i++) {
         const { formula, rule } = tasks[i]!
@@ -657,6 +669,7 @@ export async function prepareCfFormulaBatch(tasks: readonly CfFormulaTask[], opt
           for (const name of others) {
             const key = name.toLowerCase()
             if (referenced.has(key) || missing.has(key)) continue
+            if (admitted && !admitted.has(key)) { refused = unresolved('cf-resource-limit'); break }
             const id = options.workbook.sheetIdOf(name)
             const sheet = id === undefined ? undefined : options.workbook.sheet(id)
             if (!sheet) {
@@ -678,18 +691,44 @@ export async function prepareCfFormulaBatch(tasks: readonly CfFormulaTask[], opt
           if (refused) { taskOutcome[i] = refused; continue }
         }
         // Per task (Task 35): a predicate decides from the plan's hoist kinds, so an unevidenced kind is never hoisted.
-        // A hoist is scanned from the host source and its generation, so `planCfHoist` never plans one over a qualified
-        // range (`absoluteArea`): such a call pays per cell, and over the per-call cap refuses (Task 36).
+        // Each hoist is scanned from its own sheet's store under that store's generation (Task 36 fix round 1, #8): the
+        // host's hoists through the host source and stamp, a qualified range's through the referenced sheet's canonical
+        // source and its live stamp (the statistics session's source recheck then compares that sheet's generation), each
+        // scan paying from its own scan budget. The values merge into one hoist record for the call.
         const planned = options.hoist ? planCfHoist(formula) : []
         const plan = planned.length > 0 && (typeof options.hoist === 'function' ? options.hoist(planned) : options.hoist === true) ? planned : []
         if (plan.length > 0) {
           if (!options.statistics) { taskOutcome[i] = unresolved('cf-resource-limit'); continue }
-          const out = await options.statistics.prepareHoists(rule, plan, options.stamp, options.source, scanBudget(), { signal })
-          // Owned before any further check, so a cancellation here disposes it with the rest.
-          if (out.kind === 'ready') hoistLeases.push(out.value)
-          if (signal.aborted) throw cancel()
-          if (out.kind !== 'ready') { taskOutcome[i] = out.kind === 'unresolved' ? out : unresolved('cf-resource-limit'); continue }
-          hoists[i] = { plan, values: out.value.value }
+          const groups = new Map<string, { sheet?: CfWorkbookSheet; hoists: CfHoist[] }>()
+          let unroutable = false
+          for (const h of plan) {
+            const key = h.range.sheet === undefined || h.range.sheet.toLowerCase() === hostKey ? '' : h.range.sheet.toLowerCase()
+            const sheet = key === '' ? undefined : referenced.get(key)
+            if (key !== '' && !sheet) { unroutable = true; break }
+            let g = groups.get(key)
+            if (!g) groups.set(key, g = { ...(sheet ? { sheet } : {}), hoists: [] })
+            g.hoists.push(h.range.sheet === undefined ? h : { ...h, range: { rect: h.range.rect } })
+          }
+          if (unroutable) { taskOutcome[i] = unresolved('cf-formula-dependency'); continue }
+          const scalars = new Map<AstNode, ElementValue>(), frequencies = new Map<AstNode, ReadonlyMap<string, number>>(), longest = new Map<AstNode, number>()
+          let refusedHoist: CfOutcome<void> | undefined, only: CfHoisted | undefined
+          for (const g of groups.values()) {
+            const stamp = g.sheet ? g.sheet.values.stamp(g.sheet.sheetId) : options.stamp
+            const out = await options.statistics.prepareHoists(rule, g.hoists, stamp, g.sheet ? g.sheet.values : options.source, scanBudget(), { signal })
+            // Owned before any further check, so a cancellation here disposes it with the rest.
+            if (out.kind === 'ready') hoistLeases.push(out.value)
+            if (signal.aborted) throw cancel()
+            if (out.kind !== 'ready') { refusedHoist = out.kind === 'unresolved' ? out : unresolved('cf-resource-limit'); break }
+            const v = out.value.value
+            // One sheet (the common case): its leased record is the call's, nothing new is built. Several: the merged
+            // maps hold references to leased values, one entry per hoist (at most the plan's length).
+            if (groups.size === 1) { only = v; break }
+            for (const [k, x] of v.scalars) scalars.set(k, x)
+            for (const [k, x] of v.frequencies) frequencies.set(k, x)
+            for (const [k, x] of v.longest) longest.set(k, x)
+          }
+          if (refusedHoist) { taskOutcome[i] = refusedHoist; continue }
+          hoists[i] = { plan, values: only ?? { scalars, frequencies, longest } }
         }
         const targets = options.targets ? rule.ranges.flatMap(r => options.targets!.map(t => clampTo(r, t)).filter((x): x is SourceRect => x !== undefined)) : rule.ranges
         // The cap counts the populated clamp; the snapshot declares the geometry as written (S5-SUMIF-SHAPE: a whole

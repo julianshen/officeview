@@ -85,6 +85,9 @@ interface Entry {
   diagnostics: CfReadDiagnostic[]
   pendingSheetIds?: readonly string[]
   controller?: AbortController
+  /** One immediate re-request after a reply whose dependencies were already stale (fix round 1, #1), or whose pending
+   * sheets had already settled (#6); cleared at each publication. Never the cfGen adoption retry (`adopted`). */
+  retried?: boolean
 }
 
 const empty = (): PagedCfState => ({ state: 'waiting', gen: 0, diagnostics: [] })
@@ -245,7 +248,7 @@ export class RemoteCfCache {
    * or release on a referenced sheet), every tile of each such sheet (Lesson 5). Held versions survive until released.
    */
   invalidateDependents(changedSheetId: string): void {
-    const hosts = new Set<string>()
+    const hosts = new Set<string>(this.dependents.get(changedSheetId)?.keys() ?? [])
     for (const entry of this.entries.values()) {
       if (entry.sheetId !== changedSheetId && entry.result?.dependencies?.some(d => d.sheetId === changedSheetId)) hosts.add(entry.sheetId)
     }
@@ -254,10 +257,31 @@ export class RemoteCfCache {
   /** Bumped at each dependency invalidation of a sheet: the view's live key reads it, so a held scope is replaced. */
   private readonly dependencyEpochs = new Map<string, number>()
   dependencyEpoch(sheetId: string): number { return this.dependencyEpochs.get(sheetId) ?? 0 }
-  /** Whole-sheet invalidation: every entry of the sheet, and one whole-sheet change notice. */
-  private invalidateSheet(sheetId: string): void {
+  /** Charged `dependency -> host` registrations, kept until close (at most sheets x 16 pairs). */
+  private readonly dependents = new Map<string, Map<string, () => void>>()
+  private registerDependent(dependency: string, host: string): boolean {
+    let hosts = this.dependents.get(dependency)
+    if (hosts?.has(host)) return true
+    const release = this.host.admitEntry(`cf-dependent:${dependency}\u0000${host}`, 128 + (dependency.length + host.length) * 2)
+    if (!release) return false
+    if (!hosts) this.dependents.set(dependency, hosts = new Map())
+    hosts.set(host, release)
+    return true
+  }
+  /** Whole-sheet invalidation: every entry of the sheet (but `keep`), and one whole-sheet change notice. */
+  private invalidateSheet(sheetId: string, keep?: Entry): void {
     this.dependencyEpochs.set(sheetId, this.dependencyEpoch(sheetId) + 1)
-    this.invalidate(sheetId)
+    if (keep) {
+      for (const [key, entry] of [...this.entries]) {
+        if (entry === keep || entry.sheetId !== sheetId) continue
+        this.entries.delete(key)
+        entry.detached = true
+        entry.gen++
+        this.deferChanged(sheetId, entry.rects, 'updated')
+        if (entry.refs <= 0 && !entry.dropped) this.drop(entry)
+        else if (entry.refs > 0) this.pinned.add(entry)
+      }
+    } else this.invalidate(sheetId)
     this.deferChanged(sheetId, [{ r0: 0, r1: 1048575, c0: 0, c1: 16383 }], 'updated')
   }
   /** A ready reply whose listed dependency moved its value generation (the main thread's identity of that sheet). */
@@ -286,6 +310,8 @@ export class RemoteCfCache {
     }
     this.entries.clear()
     this.pendingNotifies.clear()
+    for (const hosts of this.dependents.values()) for (const release of hosts.values()) { try { release() } catch { /* release-only path */ } }
+    this.dependents.clear()
   }
 
   get retainedEntries(): number { return [...this.entries.values()].filter(e => e.state === 'ready').length + [...this.pinned].filter(e => e.state === 'ready').length }
@@ -715,6 +741,13 @@ export class RemoteCfCache {
         entry.state = 'waiting'
         entry.pendingSheetIds = result.pendingSheetIds
         entry.owner = undefined
+        // The sheets it waits on may have settled while it was in flight (their wake-up saw a loading entry): retry once
+        // at once instead of waiting for another trigger (fix round 1, #6).
+        const waitsOn = result.pendingSheetIds ?? []
+        if (waitsOn.length > 0 && !entry.retried && waitsOn.every(id => this.host.loadState(id).completeness !== 'loading')) {
+          entry.retried = true
+          void this.load(entry)
+        }
         return
       }
       if (result.kind !== 'ready') {
@@ -726,6 +759,29 @@ export class RemoteCfCache {
         entry.gen++
         this.deferChanged(sheetId, entry.rects, 'status')
         return
+      }
+      // Ruling S5-K (fix round 1, #1): a reply read from other sheets is published only while every listed sheet still
+      // has the generation it was read at. A moved one: the reply is dropped, the whole host sheet goes stale, and this
+      // entry re-requests once at once (never through the cfGen adoption retry).
+      if (result.dependencies?.some(d => this.host.identity(d.sheetId).valueGen !== d.valueGen)) {
+        releaseOnce()
+        entry.state = 'waiting'
+        entry.owner = undefined
+        this.invalidateSheet(sheetId, entry)
+        if (!entry.retried) { entry.retried = true; void this.load(entry) }
+        return
+      }
+      // Each dependency is registered (charged) before publication, and the registration outlives the entry (#2):
+      // eviction never disconnects a live scope's host sheet from a later commit of the sheet it read.
+      for (const d of result.dependencies ?? []) {
+        if (!this.registerDependent(d.sheetId, sheetId)) {
+          releaseOnce()
+          entry.state = 'failed'
+          entry.diagnostics = [{ kind: 'resource-limit', feature: 'cf-cache-budget', message: 'Conditional formatting dependency registration exceeds the main-thread cache budget.' }]
+          entry.gen++
+          this.deferChanged(sheetId, entry.rects, 'status')
+          return
+        }
       }
       // Single-charge publication: independent states charged per entry,
       // shared definitions charged once per version in the registry — never
@@ -794,6 +850,7 @@ export class RemoteCfCache {
       }
       entry.diagnostics = [...result.diagnostics]
       entry.pendingSheetIds = undefined
+      entry.retried = false
       entry.state = 'ready'
       entry.gen++
       this.deferChanged(sheetId, entry.rects, 'updated')

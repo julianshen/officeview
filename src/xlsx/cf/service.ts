@@ -10,7 +10,7 @@ import { resolveCfCellStyle } from './dxf'
 import { CF_BAR_CELL_BYTES, CF_FORMULA_NODE_BYTES, CF_ICON_CELL_BYTES, CF_LIMITS, createCfWorkBudget, type CfMemory, type CfWorkBudget } from './limits'
 import { cfDefinitionFormulas, isCfFormulaOperand, type CfCellState, type CfFormula, type CfLease, type CfLiteral, type CfOutcome, type CfPrepared, type CfPrepareRequest, type CfRule, type CfSheetRules, type CfValueSource, type SourceRect } from './model'
 import { cfElementToLiteral, cfTruth, formulaRequiredCapabilities, type CfEvaluationContext, type CfResult } from './formula'
-import { prepareCfFormulaBatch, withCfDependencyGen, type CfFormulaBatch, type CfFormulaTask, type CfWorkbookSource } from './dependencies'
+import { cfAdmittedSheetNames, prepareCfFormulaBatch, withCfDependencyGen, type CfFormulaBatch, type CfFormulaTask, type CfWorkbookSource } from './dependencies'
 import { cfEdgeModeOf, cfFormulaReading, cfTruthReadings } from './formulaReadings'
 import { cfRuntimeEvidence, evaluateCellIsOperands, evaluatePredicate, type CfEvidenceGate } from './predicates'
 import { createCfStatistics, type CfRangeStatistics, type CfStatisticsOptions, type CfStatisticsSession } from './statistics'
@@ -292,7 +292,7 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
           if (formulaTasks.length > 0) {
             batch = await prepareCfFormulaBatch(formulaTasks, {
               source, sheetId: stamp.sheetId, ...(options.sheetName !== undefined ? { sheetName: options.sheetName } : {}), stamp, evaluation: options.evaluation,
-              ...(options.workbook ? { workbook: options.workbook } : {}),
+              ...(options.workbook ? { workbook: options.workbook, admittedSheets: cfAdmittedSheetNames(sheet, options.sheetName) } : {}),
               ...(cfFormulaReading('formula:cross-sheet-missing', check) === 'no-format' ? { missingSheet: 'ref-error' as const } : {}),
               edge: cfEdgeModeOf(check), memory, signal, budget, statistics, targets: rects,
               hoist: plan => plan.every(h => cfFormulaReading(h.kind === 'scalar' ? 'formula:hoist-aggregate' : 'formula:hoist-countif-frequency', check) !== undefined),
