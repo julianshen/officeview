@@ -502,8 +502,13 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
     }
     // The scan's workspace counts against the session cap beside the retained entries and concurrent workspaces.
     const token = {}
+    // The workspace entry tracks the reservation's high-water mark (round 4, finding 3): `CfReservation.grow` never
+    // shrinks, so a smaller later request (after a finished table folds into `held`) must not lower what other
+    // concurrent scans see as charged. It leaves the cap only when the scan's reservation is adopted or released.
     const fits = (bytes: number): boolean => {
-      if (withinCap(bytes - (workspaces.get(token) ?? 0)) > sessionCap) return false
+      const current = workspaces.get(token) ?? 0
+      if (bytes <= current) return true
+      if (withinCap(bytes - current) > sessionCap) return false
       workspaces.set(token, bytes)
       return true
     }

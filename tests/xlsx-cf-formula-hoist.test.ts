@@ -669,6 +669,22 @@ describe('hoists obey the statistics session cap and the combined entry limit (T
     session.dispose()
     expect(memory.currentBytes).toBe(0)
   }, 120_000)
+  it('concurrent constructions keep their high-water workspace charged: four 20,000-key hoists never pass the cap (round 4, finding 3)', async () => {
+    const n = 20_000
+    const cells: Cells = Object.fromEntries(Array.from({ length: n }, (_, i) => ['A' + (i + 1), i]))
+    const memory = createCfMemory()
+    const session = createCfStatistics(memory)
+    const source = fakeSource(cells, { bounds: rectOf('A1:A' + n) })
+    const big = () => createCfWorkBudget({ now: frozen, scan: true, maxUnits: 1e9 })
+    const rules = ['B1', 'C1', 'D1', 'E1'].map(c => formulaRule('COUNTIF($A$1:$A$' + n + ',' + c + ')>0', c))
+    const outs = await Promise.all(rules.map(r => session.prepareHoists(r, planCfHoist(formulaOf(r)), source.stamp('s1'), source, big(), {})))
+    // The ledger's construction peak stays under the session cap, whichever of the four are admitted.
+    expect(memory.peakBytes).toBeLessThanOrEqual(CF_LIMITS.statisticsBytes)
+    expect(outs.some(o => o.kind === 'ready')).toBe(true)
+    for (const o of outs) released(o)
+    session.dispose()
+    expect(memory.currentBytes).toBe(0)
+  }, 120_000)
   it('with maxEntries 1 (retained entries), a hoist then a statistics entry leaves one entry', async () => {
     const cells: Cells = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`A${i + 1}`, i % 5]))
     const memory = createCfMemory()
