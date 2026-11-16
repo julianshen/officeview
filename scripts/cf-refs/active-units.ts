@@ -21,8 +21,7 @@ import { cfRuntimeEvidence } from '../../src/xlsx/cf/predicates'
 import { cfRulesVersion } from '../../src/xlsx/view/pagedSource'
 import { barRule, scaleRule } from './audit'
 import { cfDocumentEvaluationOf, cfEvaluationContextFor, compileCfFormula, isCfFormulaRefusal } from '../../src/xlsx/cf/formula'
-import { prepareCfFormulaBatch } from '../../src/xlsx/cf/dependencies'
-import { createCfStatistics } from '../../src/xlsx/cf/statistics'
+import { withInjectedCfEvidence } from '../../src/xlsx/cf/evidence'
 import type { XlsxSheet } from '../../src/xlsx/types'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -49,6 +48,9 @@ function countingBudget(): CfWorkBudget & { activeMs(): number } {
 }
 
 type Source = ReturnType<typeof residentSource>
+/** The formula capabilities the formula rows evaluate under (production holds none until the Stage 5 captures land). */
+const FORMULA_CAPS = ['formula:dialect-base', 'formula:anchor-single', 'formula:anchor-mixed-abs', 'formula:truth-boolean', 'formula:fn-logical',
+  'formula:fn-math', 'formula:fn-aggregate', 'formula:fn-conditional-aggregate', 'formula:hoist-aggregate', 'formula:hoist-countif-frequency', 'formula:composition-overlapping']
 async function prepare(sheet: XlsxSheet, rect: Rect, budget: () => CfWorkBudget, shared?: Source, formulas = false) {
   const memory = createCfMemory()
   // The paint path's statistics budget (render.ts): a whole-scan budget, not the per-call one.
@@ -56,27 +58,17 @@ async function prepare(sheet: XlsxSheet, rect: Rect, budget: () => CfWorkBudget,
     statisticsBudget: () => createCfWorkBudget({ scan: true, maxUnits: 10_000_000 }), budget, ...(formulas ? { evaluation: EVALUATION } : {}) })
   const stamp = { owner: 'active-units', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(sheet.conditionalFormatting!), viewGen: 0, structureGen: 0, clockGen: 0 }
   const source = shared ?? residentSource(sheet, stamp, memory, 'engine')
+  const run = () => service.prepareCf({ stamp, sourceRects: [rect], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, source)
   let outcome = 'ready', bars = 0
   try {
-    const lease = await service.prepareCf({ stamp, sourceRects: [rect], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, source)
+    // Task 35: the formula rows are one real prepareCf, whose formula arm runs every per-cell call on this per-call budget
+    // (the snapshot and the hoist scans pay their own), under the formula capabilities injected for the measurement.
+    const lease = await (formulas ? withInjectedCfEvidence(FORMULA_CAPS, run) : run())
     for (let r = rect.firstRow; r <= rect.lastRow; r++) for (let c = rect.firstCol; c <= rect.lastCol; c++) {
       const o = lease.value.at(r, c)
-      if (o.kind === 'ready' && o.value.visual?.dataBar) bars++
+      if (o.kind === 'ready' && (o.value.visual?.dataBar || (formulas && Object.keys(o.value.properties).length > 0))) bars++
     }
     lease.release()
-    if (formulas) {
-      // The per-cell formula calls, on the same per-call budget (the snapshot and hoist scans pay their own).
-      const perCall = budget()
-      const rules = sheet.conditionalFormatting!.rules
-      const batch = await prepareCfFormulaBatch(rules.map(rule => ({ rule, formula: (rule.definition as unknown as { formula: never }).formula })), {
-        source, sheetId: stamp.sheetId, sheetName: sheet.name, stamp, evaluation: EVALUATION, edge: 'ref-error', memory, signal: new AbortController().signal,
-        budget: perCall, statistics: createCfStatistics(memory), hoist: true, targets: [rect],
-      })
-      const cells: Array<{ row: number; col: number }> = []
-      for (let r = rect.firstRow; r <= rect.lastRow; r++) for (let c = rect.firstCol; c <= rect.lastCol; c++) cells.push({ row: r, col: c })
-      await batch.run(cells, (_t, _r, _c, o) => { if (o.kind === 'ready') bars++ })
-      batch.dispose()
-    }
   } catch (e) { outcome = `refused (${(e as { code?: string }).code ?? (e as Error).message})` }
   service.dispose()
   return { outcome, bars }

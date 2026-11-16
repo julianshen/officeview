@@ -265,11 +265,12 @@ describe('a route given no policy leaves formula rules withheld by name; Stage 1
     expect(shape(at(0, 2) as never)).toEqual({ properties: {}, tainted: ['fill'] })
     lease.release(); service.dispose()
   })
-  it('with a context the formula is still withheld until the evaluator lands, never evaluated as a literal', async () => {
+  it('with a context but no formula evidence (production today) the formula is withheld by capability, never evaluated as a literal', async () => {
+    // Task 35: the formula arm now runs; without its formula:* capabilities each rule is gated before any evaluation.
     const { lease, service, at } = await prepare(cfEvaluationContextFor(TAIPEI, () => 0))
     const by = outcomesByPriority()
-    expect(by.get(1)).toContainEqual({ kind: 'unresolved', reason: 'cf-formula-unevaluated' })
-    expect(by.get(3)).toContainEqual({ kind: 'unresolved', reason: 'cf-formula-unevaluated' })
+    expect(by.get(1)).toContainEqual({ kind: 'unresolved', reason: 'cf-unmeasured-capability' })
+    expect(by.get(3)).toContainEqual({ kind: 'unresolved', reason: 'cf-unmeasured-capability' })
     expect(shape(at(0, 0) as never)).toEqual({ properties: {}, tainted: ['fill'] })
     lease.release(); service.dispose()
   })

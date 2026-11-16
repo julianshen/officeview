@@ -453,6 +453,17 @@ function evaluateTimePeriod(
 }
 
 /**
+ * Stage 5 operand path (Ruling S5-F): a `cellIs` whose formula operands the evaluator has already turned into literals
+ * for this cell. The comparison is the Stage 1 `evaluateCellIs`, under the same `cellIs:*` capabilities, unchanged.
+ */
+export function evaluateCellIsOperands(rule: CfRule, sourceAddress: CfSourceAddress, value: CfLiteral, operands: readonly CfLiteral[], evidence: CfEvidenceGate): CfOutcome<boolean> {
+  if (!inRanges(sourceAddress.row, sourceAddress.col, rule)) return { kind: 'no-match' }
+  const definition = rule.definition
+  if (definition.kind !== 'cellIs' || operands.length !== definition.operands.length) return unmeasured('cf-unsupported-rule')
+  return evaluateCellIs(definition.operator, operands, value, evidence)
+}
+
+/**
  * Decide one rule on one cell. `stats` carries the prepared range statistics
  * for rules that need them (top10/aboveAverage/duplicateValues/uniqueValues);
  * `evidence` gates measurement-pending semantics. Never reads the wall clock

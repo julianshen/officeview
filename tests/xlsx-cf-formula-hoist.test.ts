@@ -401,7 +401,7 @@ describe('the service statistics loop runs hoists beside statistical rules only 
     expect((await run(() => true)).columnScans).toBe(1)
     expect((await run(cap => !cap.startsWith('formula:hoist'))).columnScans).toBe(0)
     expect((await run(() => true, false)).columnScans).toBe(0)
-    // The per-cell formula arm is still Task 35's: the rule stays withheld whatever was hoisted.
+    // The per-cell formula arm (Task 35) consumes the hoist: the rule evaluates.
     expect((await run(() => true)).out).toMatchObject({ kind: 'ready' })
   })
 })

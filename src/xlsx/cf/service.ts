@@ -8,9 +8,11 @@ import { evaluateIconSet, resolveIconThresholds } from './iconSet'
 import { barLayoutEvidence } from './evidence'
 import { resolveCfCellStyle } from './dxf'
 import { CF_BAR_CELL_BYTES, CF_FORMULA_NODE_BYTES, CF_ICON_CELL_BYTES, CF_LIMITS, createCfWorkBudget, type CfMemory, type CfWorkBudget } from './limits'
-import { cfDefinitionFormulas, type CfCellState, type CfFormula, type CfLease, type CfLiteral, type CfOutcome, type CfPrepared, type CfPrepareRequest, type CfRule, type CfSheetRules, type CfValueSource, type SourceRect } from './model'
-import { planCfHoist, type CfEvaluationContext, type CfHoisted } from './formula'
-import { cfRuntimeEvidence, evaluatePredicate, type CfEvidenceGate } from './predicates'
+import { cfDefinitionFormulas, isCfFormulaOperand, type CfCellState, type CfFormula, type CfLease, type CfLiteral, type CfOutcome, type CfPrepared, type CfPrepareRequest, type CfRule, type CfSheetRules, type CfValueSource, type SourceRect } from './model'
+import { cfElementToLiteral, cfTruth, formulaRequiredCapabilities, type CfEvaluationContext, type CfResult } from './formula'
+import { prepareCfFormulaBatch, type CfFormulaBatch, type CfFormulaTask } from './dependencies'
+import { cfEdgeModeOf, cfFormulaReading, cfTruthReadings } from './formulaReadings'
+import { cfRuntimeEvidence, evaluateCellIsOperands, evaluatePredicate, type CfEvidenceGate } from './predicates'
 import { createCfStatistics, type CfRangeStatistics, type CfStatisticsOptions, type CfStatisticsSession } from './statistics'
 const quota = () => new PackageError('resource-limit', 'CF preparation exceeds its admitted batch')
 const cancel = () => new PackageError('cancelled', 'CF preparation cancelled or superseded')
@@ -29,6 +31,38 @@ export interface CfPaintStatistics {
   session: CfStatisticsSession
   stamp: import('./model').CfStamp
   results: Map<CfRule, CfOutcome<CfLease<CfRangeStatistics>>>
+}
+
+/**
+ * Stage 5 (Task 35): why a formula rule is not evaluated, decided once per preparation, or undefined when every capability
+ * its formulas need (the parse and evaluation sets) is held with the reading production implements (`cfFormulaReading`).
+ */
+function formulaRuleRefusal(rule: CfRule, formulas: readonly CfFormula[], check: (capability: string) => boolean): string | undefined {
+  const d = rule.definition
+  if (d.kind !== 'expression' && d.kind !== 'cellIs') return 'cf-unsupported-rule'
+  const context = { dialect: d.dialect, rangeCount: rule.ranges.length, sourceType: d.kind === 'expression' ? d.sourceType : 'cellIs' as const }
+  for (const f of formulas) {
+    const caps = formulaRequiredCapabilities(f, d.kind === 'expression' ? 'expression' : 'operand', context)
+    for (const set of [caps.parse, caps.evaluation]) for (const cap of set) if (cfFormulaReading(cap, check) === undefined) return 'cf-unmeasured-capability'
+  }
+  return undefined
+}
+/** A formula operand's value as the literal `evaluateCellIs` compares (Ruling S5-F); an error operand refuses the cell. */
+function operandLiteral(result: CfResult, check: (capability: string) => boolean): CfOutcome<CfLiteral> {
+  switch (result.kind) {
+    case 'range': return { kind: 'unresolved', reason: 'cf-unsupported-rule' }
+    case 'error': return { kind: 'unresolved', reason: 'cf-formula-operand-error' }
+    case 'blank': {
+      const reading = cfFormulaReading('formula:cellis-operand-blank', check)
+      return reading === 'blank-zero' ? { kind: 'ready', value: { kind: 'number', value: 0 } }
+        : reading === 'blank-empty-text' ? { kind: 'ready', value: { kind: 'string', value: '' } }
+        : { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
+    }
+    case 'text':
+      if (cfFormulaReading('formula:cellis-operand-text', check) !== 'text-compare') return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
+  }
+  const literal = cfElementToLiteral(result.value)
+  return literal ? { kind: 'ready', value: literal } : { kind: 'unresolved', reason: 'cf-formula-unsupported' }
 }
 
 /** Admitted preparation bound for rules over rects (Task 9): the same arithmetic
@@ -77,7 +111,10 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
     merges?: readonly SourceRect[];
     /** Stage 5: this preparation's evaluation context (one clock snapshot). Absent: every formula rule is unresolved
      * (`cf-evaluation-context-missing`); Stage 1-4 rules are unaffected. */
-    evaluation?: CfEvaluationContext } = {}) {
+    evaluation?: CfEvaluationContext
+    /** The host sheet's name, the formula context's `currentSheet` (default: the stamp's sheet id). Same-sheet results do
+     * not depend on it: a formula naming any sheet is refused before invocation until Task 36. */
+    sheetName?: string } = {}) {
   const cache = createCfCache(memory)
   const evidence = options.evidence ?? cfRuntimeEvidence
   async function prepareCf(request: CfPrepareRequest, source: CfValueSource, account = memory): Promise<CfLease<CfPrepared>> {
@@ -103,6 +140,7 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
         const statistics = options.statistics?.session ?? createCfStatistics(memory)
         const stats = options.statistics?.results ?? new Map<CfRule, CfOutcome<CfLease<CfRangeStatistics>>>()
         const leases: CfLease<CfRangeStatistics>[] = []
+        let batch: CfFormulaBatch | undefined
         let adopted = false
         const work = async (units = 1) => {
           if (signal.aborted) throw cancel()
@@ -206,22 +244,6 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
             stats.set(rule, out)
             if (!options.statistics && out.kind === 'ready') leases.push(out.value)
           }
-          // Ruling S5-HOIST: a formula rule's absolute-range aggregates are scanned here, beside the statistical rules, each
-          // on its own scan budget (never the per-cell ceiling), and only with an evaluation context and the hoist
-          // capability of every planned hoist: production, which holds neither capability, runs no new scan. The per-cell
-          // formula arm that consumes `hoisted` is Task 35.
-          const hoisted = new Map<CfFormula, CfOutcome<CfLease<CfHoisted>>>()
-          if (options.evaluation) for (const rule of ordered) for (const formula of cfDefinitionFormulas(rule.definition)) {
-            await work()
-            const plan = planCfHoist(formula)
-            if (plan.length === 0 || !plan.every(h => evidence.allows(h.kind === 'scalar' ? 'formula:hoist-aggregate' : 'formula:hoist-countif-frequency'))) continue
-            const scan = options.statisticsBudget?.() ?? createCfWorkBudget({ signal, scan: true })
-            const out = await statistics.prepareHoists(rule, plan, stamp, source, scan, { signal })
-            // Nothing consumes the hoists yet (Task 35): each lease is released as soon as it is granted (a later throw
-            // or cancellation can never strand it), leaving the session's cached entry as the only owner.
-            if (out.kind === 'ready') out.value.release()
-            hoisted.set(formula, out)
-          }
           budget.resume()
           for (const rule of ordered) if (rule.definition.kind === 'colorScale' || rule.definition.kind === 'dataBar' || rule.definition.kind === 'iconSet') {
             const prepared = stats.get(rule)
@@ -233,8 +255,61 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
           const barLayout = barLayoutEvidence(cap => evidence.allows(cap))
           // Icon thresholds depend on the rule and its scope statistics only: resolved once per rule, not per cell.
           const iconThresholds = new Map<CfRule, CfOutcome<readonly number[]>>()
-          // Formula rules, decided once per preparation (never per cell: `cfDefinitionFormulas` allocates).
-          const formulaRules = new Set<CfRule>(ordered.filter(rule => cfDefinitionFormulas(rule.definition).length > 0))
+          // Stage 5 (Task 35, Rulings S5-B..S5-O): the formula rules, decided once per preparation (never per cell:
+          // `cfDefinitionFormulas` allocates). Each is gated once on every capability its formulas need; a gated rule is
+          // unresolved by name and builds no task. With no task no batch is built and nothing is scanned (production
+          // today). The batch builds one snapshot, prepares the evidenced hoists (each kind under its own capability,
+          // S5-HOIST) and evaluates each call under the 128-unit cap from this preparation's pacing budget, whose
+          // `'yield'` latch the next `work()` honours between rules and cells.
+          const check = (capability: string): boolean => evidence.allows(capability)
+          const formulaRules = new Set<CfRule>()
+          const formulaGate = new Map<CfRule, CfOutcome<never>>()
+          const formulaTasks: CfFormulaTask[] = []
+          const taskOf = new Map<CfFormula, number>()
+          for (const rule of ordered) {
+            const formulas = cfDefinitionFormulas(rule.definition)
+            if (formulas.length === 0) continue
+            await work()
+            formulaRules.add(rule)
+            const refused = options.evaluation ? formulaRuleRefusal(rule, formulas, check) : 'cf-evaluation-context-missing'
+            if (refused) { formulaGate.set(rule, { kind: 'unresolved', reason: refused }); continue }
+            for (const formula of formulas) { taskOf.set(formula, formulaTasks.length); formulaTasks.push({ rule, formula }) }
+          }
+          if (formulaTasks.length > 0) {
+            batch = await prepareCfFormulaBatch(formulaTasks, {
+              source, sheetId: stamp.sheetId, sheetName: options.sheetName ?? stamp.sheetId, stamp, evaluation: options.evaluation,
+              edge: cfEdgeModeOf(check), memory, signal, budget, statistics, targets: rects,
+              hoist: plan => plan.every(h => cfFormulaReading(h.kind === 'scalar' ? 'formula:hoist-aggregate' : 'formula:hoist-countif-frequency', check) !== undefined),
+              ...(options.statisticsBudget ? { scanBudget: options.statisticsBudget } : {}),
+            })
+            budget.resume()
+          }
+          const readings = cfTruthReadings(check)
+          const formulaOutcome = (rule: CfRule, row: number, col: number, value: CfLiteral): CfOutcome<unknown> => {
+            const gated = formulaGate.get(rule)
+            if (gated) return gated
+            const d = rule.definition
+            if (!batch || (d.kind !== 'expression' && d.kind !== 'cellIs')) return { kind: 'unresolved', reason: 'cf-formula-unevaluated' }
+            if (d.kind === 'expression') {
+              const out = batch.evaluate(taskOf.get(d.formula)!, row, col)
+              if (out.kind !== 'ready') return out
+              const truth = cfTruth(out.value, { row, col }, readings)
+              if (truth.kind !== 'ready') return truth
+              // A halting error has no composition yet (`error-halts` is not a production reading).
+              if (truth.value === 'halt') return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
+              return truth.value ? { kind: 'ready', value: true } : { kind: 'no-match' }
+            }
+            const literals: CfLiteral[] = []
+            for (const operand of d.operands) {
+              if (!isCfFormulaOperand(operand)) { literals.push(operand); continue }
+              const out = batch.evaluate(taskOf.get(operand.formula)!, row, col)
+              if (out.kind !== 'ready') return out
+              const literal = operandLiteral(out.value, check)
+              if (literal.kind !== 'ready') return literal
+              literals.push(literal.value)
+            }
+            return evaluateCellIsOperands(rule, { row, col }, value, literals, evidence)
+          }
           const evaluate = async (row: number, col: number, value: CfLiteral): Promise<CfOutcome<CfCellState>> => {
             const textBytes = value.kind === 'string' ? 256 + value.value.length * 8 : 0
             if (textBytes > CF_LIMITS.scratchBytes) return { kind: 'unresolved', reason: 'cf-resource-limit' }
@@ -317,10 +392,9 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                   }
                   outcomes.push(thresh.kind !== 'ready' ? thresh : evaluateIconSet(value, rule.definition, thresh.value, gate))
                 } else if (formulaRules.has(rule)) {
-                  // A formula rule never reaches the literal predicates: `evaluatePredicate` would read a formula operand
-                  // as a literal. Without a context it withholds by name; with one it is still withheld until the formula
-                  // evaluator lands (Task 35), whatever evidence is injected.
-                  outcomes.push({ kind: 'unresolved', reason: options.evaluation ? 'cf-formula-unevaluated' : 'cf-evaluation-context-missing' })
+                  // A formula rule never reaches the literal predicates (`evaluatePredicate` would read a formula operand
+                  // as a literal): it is decided by the batch, or withheld by name.
+                  outcomes.push(formulaOutcome(rule, row, col, value))
                 } else {
                   outcomes.push(preparedStats?.kind === 'unresolved' ? preparedStats
                     : evaluatePredicate(rule, { row, col }, value, preparedStats?.kind === 'ready' ? preparedStats.value.value : undefined, evidence, options.dateContext))
@@ -331,7 +405,7 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
               // Stage 1 multi-positive guards apply to every NON-scale positive, independent of whether a scale
               // also matched or where it sorts (final review M6). Scale-vs-DXF precedence is composeCell's job
               // (scale:composition-* evidence); only DXF-vs-DXF ties and stacking are guarded here.
-              let dxfPositives = 0
+              let dxfPositives = 0, formulaPositives = 0
               const priorities = new Set<number>()
               for (let i = 0; i < outcomes.length; i++) {
                 await work()
@@ -344,6 +418,10 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                   return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
                 }
                 priorities.add(priority)
+                // Ruling S5-O: two matching formula rules write first-writer-wins only with formula:composition-overlapping.
+                if (formulaRules.has(matching[i]!) && ++formulaPositives > 1 && cfFormulaReading('formula:composition-overlapping', check) === undefined) {
+                  return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
+                }
                 if (++dxfPositives > 1 && (!evidence.allows('priority:fill-winner')
                   || !evidence.allows('priority:orthogonal-font-bold'))) {
                   return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
@@ -365,6 +443,7 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
           for (const [id, state] of data) if (state === undefined) { await work(); data.set(id, await evaluate(Math.floor(id / 16384), id % 16384, blank)) }
           return snapshot()
         } finally {
+          batch?.dispose()
           for (const lease of leases) lease.release()
           if (!options.statistics) statistics.dispose()
           if (!adopted) hold.release()

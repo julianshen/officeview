@@ -20,6 +20,7 @@
  * wall-clock durations are recorded as context only, never as proof of
  * algorithmic bounds. No timing assertion gates any outcome.
  */
+import { CF_FORMULA_PRODUCTION_READINGS } from '../../src/xlsx/cf/formulaReadings'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
@@ -986,11 +987,13 @@ export function auditStage5Manifest(manifest: CfManifest, options: { rootDir?: s
 }
 
 /**
- * The reading production implements for each Stage 5 capability (the Stage 4 `CF_STAGE4_PRODUCTION_READINGS` pattern). Empty
- * at Task 31: production evaluates no formula yet, so every matched reading is withheld (`reading-unimplemented`).
- * Tasks 32-38 add an entry only together with the code and tests that implement exactly that reading.
+ * The reading production implements for each Stage 5 capability (the Stage 4 `CF_STAGE4_PRODUCTION_READINGS` pattern):
+ * `CF_FORMULA_PRODUCTION_READINGS` (`src/xlsx/cf/formulaReadings.ts`), the one table production gates on, added by Task 35
+ * together with the code and tests that implement each reading (tests/xlsx-cf-formula-rules.test.ts pins every entry to a
+ * catalog hypothesis). A list is a selection, read from `VERIFIED_STAGE5_FORMULA_SELECTIONS`, which no render writes yet.
+ * A capability with a matched reading but no entry (`formula:truth-range`, `formula:fn-today`, ...) is withheld.
  */
-export const CF_STAGE5_PRODUCTION_READINGS: Readonly<Record<string, string | readonly string[]>> = {}
+export const CF_STAGE5_PRODUCTION_READINGS: Readonly<Record<string, string | readonly string[]>> = { ...CF_FORMULA_PRODUCTION_READINGS }
 
 export interface Stage5Publication {
   /** The ids `--publish-stage5` writes to `VERIFIED_STAGE5_CAPABILITIES` (sorted). */

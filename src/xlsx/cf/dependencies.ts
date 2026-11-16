@@ -367,7 +367,7 @@ export interface CfFormulaBatchOptions {
   /** Source scans (bounds, pages, hoist scans) pay from their own scan budgets. */
   readonly scanBudget?: () => CfWorkBudget
   /** Hoisting (S5-HOIST) is on only with its evidence; off, a hoistable call pays per cell (and over 128 refuses). */
-  readonly hoist?: boolean
+  readonly hoist?: boolean | ((plan: readonly CfHoist[]) => boolean)
   readonly statistics?: CfStatisticsSession
   /** The cells to prepare for (default: every task's ranges). */
   readonly targets?: readonly SourceRect[]
@@ -425,7 +425,9 @@ export async function prepareCfFormulaBatch(tasks: readonly CfFormulaTask[], opt
         if (!bounds) { taskOutcome[i] = unresolved('cf-pending-data'); continue }
         if (formula.dependencySheets.length > 0) { taskOutcome[i] = unresolved('cf-formula-dependency'); continue }
         if (!formula.anchor) { taskOutcome[i] = unresolved('cf-unmeasured-capability'); continue }
-        const plan = options.hoist ? planCfHoist(formula) : []
+        // Per task (Task 35): a predicate decides from the plan's hoist kinds, so an unevidenced kind is never hoisted.
+        const planned = options.hoist ? planCfHoist(formula) : []
+        const plan = planned.length > 0 && (typeof options.hoist === 'function' ? options.hoist(planned) : options.hoist === true) ? planned : []
         if (plan.length > 0) {
           if (!options.statistics) { taskOutcome[i] = unresolved('cf-resource-limit'); continue }
           const out = await options.statistics.prepareHoists(rule, plan, options.stamp, options.source, scanBudget(), { signal })

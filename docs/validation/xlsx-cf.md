@@ -1204,6 +1204,22 @@ numbers. The text rate is `CF_TEXT_UNIT_CHARS` = 4 characters per unit. At that 
 `LOWER(A1)=UPPER(A1)` over 30, and `LEN(TRIM(A1))>3` over 54). Numeric calls ran at 843 to 5,446 units per ms. So a
 text unit is not slower than a numeric one.
 
+**Task 35 (Stage 5, 2026-11-16): the formula rows re-measured through a real `prepareCf`.** Task 34's 55,011 / 14,091
+were composed: the service's own units plus a separate `prepareCfFormulaBatch` run. With the formula arm in the service,
+one `prepareCf` call now runs every per-cell formula call on its per-call budget, and both `scripts/cf-refs/active-units.ts`
+(the formula capabilities injected for the measurement, `formula:composition-overlapping` included so every cell takes
+the full composition path) and `tests/xlsx-cf-active-units.test.ts` (every gate open) measure that call directly:
+
+| Scope (one `prepareCf` call) | Cells | Per-call units | Of which formula arm (vs. no context) | Margin to 300,000 | Scan-budget units (test harness count) |
+|---|---|---|---|---|---|
+| populated 5,000-row column, 4 formula rules incl. `COUNTIF($A:$A,...)`, hoisted (text-path maximum) | 1,000 | 55,509 | 28,498 | 5.4x | 21,000 |
+| same (paint-path maximum) | 256 | 14,221 | 7,298 | 21.1x | 20,256 |
+
+Both stay under `activeUnits / 5` = 60,000, which the test asserts. The 498 units over the composed 55,011 are not decomposed
+here (the composed run counted the batch's calls apart from the service's own per-cell composition). `COUNTIF($A:$A,A1)` and
+`AVERAGE($A:$A)` are hoisted (each scan on its own scan budget); the dependency snapshot pays from its attempt budget
+under the preparation ceiling, not from the per-call units above. `activeUnits` is unchanged at 300,000.
+
 Every production call shape admits with at least 5.1x margin (the worst is the 200-rule sparse scope; the 4x floor
 would be 194,316 units). The warm rate, 2,242 to 6,894 units per ms, is the one to read: the cold populated rows spend
 about 32 ms in the whole-sheet bounds scan, which runs on its own whole-scan budget between two per-call spends, so

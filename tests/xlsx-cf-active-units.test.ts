@@ -249,8 +249,6 @@ describe('Task 34 (Lesson 9): formula rules keep the largest production call und
   const ROWS_POPULATED = 5_000
   it('1,000 text-path and 256 paint-path cells, four formula rules each, one COUNTIF($A:$A,...)', async () => {
     const { compileCfFormula, isCfFormulaRefusal, cfEvaluationContextFor, cfDocumentEvaluationOf } = await import('../src/xlsx/cf/formula')
-    const { prepareCfFormulaBatch } = await import('../src/xlsx/cf/dependencies')
-    const { createCfStatistics } = await import('../src/xlsx/cf/statistics')
     const evaluation = cfEvaluationContextFor(cfDocumentEvaluationOf({ calc: undefined, valuePolicy: 'cached', semantics: { dateSystem: '1900', timeZone: 'UTC' } } as never), () => Date.UTC(2026, 10, 16))
     const all = rect(0, ROWS_POPULATED - 1)
     const texts = ['COUNTIF($A:$A,A1)>1', 'A1>AVERAGE($A:$A)', 'MOD(A1,3)=0', 'AND(A1>10,A1<50)']
@@ -262,24 +260,36 @@ describe('Task 34 (Lesson 9): formula rules keep the largest production call und
     })
     const rows = Array.from({ length: ROWS_POPULATED }, (_, r) => ({ index: r, cells: [{ ref: `A${r + 1}`, row: r, col: 0, value: (r * 37) % 97, styleIndex: 0, hasCachedValue: true } as XlsxCell] }))
     const s = { name: 'F', sheetId: 'f', rows, cols: [], merges: [], mergeRanges: [], conditionalFormatting: { diagnostics: [], rules } } as unknown as XlsxSheet
-    for (const cellsPerCall of [1000, 256]) {
+    // Task 35: measured through one real prepareCf, whose formula arm now runs every per-cell call (no composed estimate).
+    const measure = async (cellsPerCall: number, withFormulas: boolean) => {
       const stamp = stampOf(s), memory = createCfMemory()
       const counter = createCfWorkBudget({ now: frozen(), scan: true, maxUnits: 10_000_000 })
-      const service = createCfService(s.conditionalFormatting!, memory, { evidence: { allows: () => true }, evaluation, budget: () => counter })
+      let scanUnits = 0
+      const scan = (): CfWorkBudget => {
+        const b = createCfWorkBudget({ now: frozen(), scan: true })
+        return { get units() { return b.units }, get remaining() { return b.remaining }, spend(n: number) { scanUnits += n; return b.spend(n) }, resume: () => b.resume() }
+      }
+      const service = createCfService(s.conditionalFormatting!, memory, { evidence: { allows: () => true }, ...(withFormulas ? { evaluation } : {}), budget: () => counter, statisticsBudget: scan })
       const request = rect(1000, 1000 + cellsPerCall - 1)
       const source = residentSource(s, stamp, memory, 'engine')
       const lease = await service.prepareCf({ stamp, sourceRects: [request], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, source)
-      const serviceUnits = counter.units
-      const batch = await prepareCfFormulaBatch(rules.map(rule => ({ rule, formula: (rule.definition as unknown as { formula: never }).formula })), {
-        source, sheetId: 'f', sheetName: 'F', stamp, evaluation, edge: 'ref-error', memory, signal: new AbortController().signal, budget: counter,
-        statistics: createCfStatistics(memory), hoist: true, targets: [request],
-      })
-      let ready = 0
-      await batch.run(Array.from({ length: cellsPerCall }, (_, i) => ({ row: 1000 + i, col: 0 })), (_t, _r, _c, o) => { if (o.kind === 'ready') ready++ })
-      batch.dispose(); lease.release(); service.dispose()
-      expect(ready, `${cellsPerCall} cells`).toBe(4 * cellsPerCall) // every formula call ran
-      expect(counter.units, `${cellsPerCall} cells`).toBeLessThanOrEqual(CF_LIMITS.activeUnits / 5)
-      expect(counter.units - serviceUnits, `${cellsPerCall} cells: the formula calls`).toBeGreaterThan(0)
+      let painted = 0, unresolved = 0
+      for (let i = 0; i < cellsPerCall; i++) {
+        const o = lease.value.at(1000 + i, 0)
+        if (o.kind === 'ready' && Object.keys(o.value.properties).length > 0) painted++
+        if (o.kind === 'unresolved' || (o.kind === 'ready' && o.value.unresolvedWrites)) unresolved++
+      }
+      lease.release(); service.dispose()
+      return { units: counter.units, scanUnits, painted, unresolved }
+    }
+    for (const cellsPerCall of [1000, 256]) {
+      const real = await measure(cellsPerCall, true), plain = await measure(cellsPerCall, false)
+      // Every cell evaluated: nothing is withheld, and the rules paint some cells.
+      expect(real.unresolved, `${cellsPerCall} cells`).toBe(0)
+      expect(real.painted, `${cellsPerCall} cells`).toBeGreaterThan(0)
+      expect(real.units, `${cellsPerCall} cells`).toBeLessThanOrEqual(CF_LIMITS.activeUnits / 5)
+      expect(real.units - plain.units, `${cellsPerCall} cells: the formula calls`).toBeGreaterThan(0)
+      console.info(`[calibration] ${cellsPerCall} cells x 4 formula rules: prepareCf pacing ${real.units} units (formula arm ${real.units - plain.units}), scan budgets ${real.scanUnits}`)
     }
   }, 60_000)
 })

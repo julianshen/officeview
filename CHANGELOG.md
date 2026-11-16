@@ -12,6 +12,12 @@ in git history.
 
 ### Added
 
+- **Excel formula conditional formatting rules (view-only, withheld until measured).** "Use a formula" rules, `cellIs`
+  rules whose value is a reference or a formula, and text, blank and error rules whose formula differs from the one Excel
+  writes are now evaluated per cell by a bounded formula evaluator, and compose with the other rule kinds. Each such rule
+  paints only once Excel's own rendering of its shape is published; until the Stage 5 Excel captures are recorded, every
+  one stays withheld, as before.
+
 - **Excel time-period rules (view-only): a rule's formula is classified, not ignored.** A conditional formatting
   "dates occurring" rule whose `<formula>` is the one Excel itself writes for its period (today, yesterday, tomorrow,
   last 7 days, this/last/next week, this/last/next month) is evaluated as before. A rule whose formula disagrees with its

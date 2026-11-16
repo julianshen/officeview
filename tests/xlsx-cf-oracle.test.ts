@@ -5794,9 +5794,11 @@ describe('Stage 5 formula oracle (Task 31)', () => {
     const mismatch = stage5Publication(report('range-top-left'), prod)
     expect(mismatch.published).toEqual([])
     expect(mismatch.withheld['formula:truth-range']).toMatch(/reading-mismatch: Excel matched range-top-left, production implements range-implicit/)
-    // Production implements no Stage 5 reading yet (Tasks 32-38 add them): every matched reading is withheld.
+    // Production does not implement a range reading yet (Task 35 registers only the readings it implements, in
+    // CF_FORMULA_PRODUCTION_READINGS): a matched range reading is withheld.
     expect(stage5Publication(report('range-implicit')).withheld['formula:truth-range']).toMatch(/reading-unimplemented/)
-    expect(Object.keys(CF_STAGE5_PRODUCTION_READINGS)).toEqual([])
+    expect(Object.keys(CF_STAGE5_PRODUCTION_READINGS)).not.toContain('formula:truth-range')
+    expect(CF_STAGE5_PRODUCTION_READINGS['formula:predicate-timeperiod-divergent']).toBe('formula')
     // An unverified capability never publishes, whatever its reading.
     const unverified = stage5Publication({ ...report('range-implicit'), perCapability: [{ capabilityId: 'formula:truth-range', caseId: 'stage5-formula-truthiness', disposition: 'supported-structural' }] }, prod)
     expect(unverified.published).toEqual([])
