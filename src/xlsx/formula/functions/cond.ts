@@ -97,6 +97,9 @@ function selected(arg: AstNode, ctx: EvaluationContext | undefined, evalNode: Ev
   return value === null ? 0 : value
 }
 
+/** The criterion length past which a text criterion has no accepted outcome (`criterionOf`). Named so CF hoisting
+ * (Ruling S5-HOIST) mirrors the engine's own refusal instead of restating it; the value is unchanged. */
+export const CONDITIONAL_MAX_CRITERION_LENGTH = 255
 type AggregateName = 'SUMIF' | 'SUMIFS' | 'COUNTIF' | 'COUNTIFS' | 'AVERAGEIF' | 'AVERAGEIFS'
 type Relation = '=' | '<>' | '<' | '>' | '<=' | '>='
 type Criterion = { kind: 'number'; number: number; op: Relation } | { kind: 'blank' } | { kind: 'text'; pattern: string; op: '=' | '<>' } | { kind: 'error'; code: '#N/A' }
@@ -176,7 +179,7 @@ function criterionOf(arg: AstNode, family: AggregateName, ctx: EvaluationContext
   if (typeof value === 'number') return Number.isFinite(value) ? { kind: 'number', number: value, op: '=' } : formulaError('#VALUE!')
   if (typeof value !== 'string') return unavailable(ctx, 'conditional-criteria-unavailable', 'Criteria must be a finite scalar input; array criteria belong to the later array runtime')
   if (value === '') return { kind: 'blank' }
-  if (value.length > 255) return unavailable(ctx, 'conditional-long-criterion-unverified', 'Criteria beyond255 characters have documented function limits but no accepted outcome for this profile')
+  if (value.length > CONDITIONAL_MAX_CRITERION_LENGTH) return unavailable(ctx, 'conditional-long-criterion-unverified', 'Criteria beyond255 characters have documented function limits but no accepted outcome for this profile')
   const prefix = /^(<=|>=|<>|=|<|>)/.exec(value)
   const op: Relation = prefix ? prefix[1] as Relation : '='
   const body = prefix ? value.slice(prefix[0].length) : value

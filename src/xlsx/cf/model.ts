@@ -3,7 +3,10 @@ import type { XlsxCellStyle } from '../types'
 import type { AstNode } from '../formula/types'
 import type { CfMemory, CfWorkBudget } from './limits'
 export type SourceRect = Readonly<{ firstRow: number; lastRow: number; firstCol: number; lastCol: number }>
-export type CfStamp = Readonly<{ owner: string; sheetId: string; workbookValueGen: number; cfGen: number; viewGen: number; structureGen: number; clockGen: number }>
+/** `dependencyGen` (Stage 5, Ruling S5-K): the sum of the referenced sheets' value generations, absent = 0. Task 34 adds
+ * the field and its comparison so hoists and tiles invalidate on a referenced-sheet commit; Task 36 fills it at every
+ * stamp construction site. */
+export type CfStamp = Readonly<{ owner: string; sheetId: string; workbookValueGen: number; cfGen: number; viewGen: number; structureGen: number; clockGen: number; dependencyGen?: number }>
 export type CfOutcome<T> = { kind: 'ready'; value: T } | { kind: 'no-match' } | { kind: 'unresolved'; reason: string; pendingSheetIds?: readonly string[] }
 export type CfWriteMask = ReadonlySet<string> // Property paths; singleton ALL for unknown writes.
 /** `dateSerial` marks a number whose cell is displayed with a date or time format (S3-G); absent means a plain number,

@@ -5,6 +5,7 @@ import type { CfLease, CfPrepared, CfStamp } from './model'
 export function sameCfStamp(a: CfStamp, b: CfStamp): boolean {
   return a.owner === b.owner && a.sheetId === b.sheetId && a.workbookValueGen === b.workbookValueGen && a.cfGen === b.cfGen
     && a.viewGen === b.viewGen && a.structureGen === b.structureGen && a.clockGen === b.clockGen
+    && (a.dependencyGen ?? 0) === (b.dependencyGen ?? 0)
 }
 const cancelled = () => new PackageError('cancelled', 'CF preparation is no longer current')
 const quota = () => new PackageError('resource-limit', 'CF preparation admission refused')

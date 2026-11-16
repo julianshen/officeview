@@ -75,15 +75,65 @@ export const CF_FORMULA_FIXED_BYTES: number = measurePayloadBytes({
 /** One element of a character array the evaluator builds for a text function (`textChars`): a one-code-unit string slot. */
 export const CF_CHAR_SLOT_BYTES: number = measurePayloadBytes(['a'])! - measurePayloadBytes([])!
 
+/* Stage 5 Task 34: dependency snapshot and evaluator scratch prices (Ruling S5-N, Lessons 6 and 15). Each is DERIVED from
+ * the payload measurer over the widest value the structure holds; string payloads are priced separately at 2 B per code
+ * unit (the measurer's string rule), never hand-counted. */
+const WIDEST_ERROR = Object.freeze({ kind: 'formula-error', code: '#DIV/0!' })
+/** One snapshot entry: a row slot in its column's sorted row list plus a value slot holding the widest non-string value
+ * (a tagged error object; a string's characters are priced per unit on top). */
+export const CF_DEPENDENCY_CELL_BYTES: number = measurePayloadBytes([[1048575], [WIDEST_ERROR]])! - measurePayloadBytes([[], []])!
+/** One memo or map entry (key and value slots): the evaluator's per-node memo and the CF-owned invariant memo. */
+export const CF_SLOT_BYTES: number = measurePayloadBytes(new Map([[0, 0]]))! - measurePayloadBytes(new Map())!
+/** One populated slot `{ col, row }` the engine's sparse cursor builds per matched cell (refs.ts `populated`). */
+export const CF_POPULATED_SLOT_BYTES: number = measurePayloadBytes([{ col: 16383, row: 1048575 }])! - measurePayloadBytes([])!
+/** One flattened argument item `{ value, fromRef, omitted }` (functions.ts `FlatArgItem`) at its widest value. */
+export const CF_FLAT_ITEM_BYTES: number = measurePayloadBytes([{ value: WIDEST_ERROR, fromRef: true, omitted: true }])! - measurePayloadBytes([])!
+/** One key of a per-call view's sorted key list. */
+export const CF_VIEW_KEY_BYTES: number = measurePayloadBytes([0])! - measurePayloadBytes([])!
+/** One frequency-map entry of a COUNTIF hoist (an empty key string; its characters are priced per unit on top). */
+export const CF_FREQUENCY_ENTRY_BYTES: number = measurePayloadBytes(new Map([['', 0]]))! - measurePayloadBytes(new Map())!
+/** [call] Per-call engine bookkeeping the payload measurer cannot see (closures, WeakMaps, the reference-services object,
+ * the evaluation context): a policy allowance, not a measurement, reviewed with the caps table (S5-N). */
+export const CF_FORMULA_CALL_BYTES = 8 * 1024
+/** [call] Per traversal occurrence: the engine's resolved-reference object, its cursor map and argument progress. */
+export const CF_TRAVERSAL_BYTES = 1024
+/** [call] The conditional matcher's typed rows at a conservative 8 B per DP cell (Ruling S5-N caps table). */
+export const CF_MATCHER_CELL_BYTES = 8
+
+/** Thrown by a CF-owned store or callback when a per-call spend is refused (Ruling S5-N): it unwinds the synchronous
+ * engine call (no engine frame catches it) and the evaluation is discarded as `cf-resource-limit`. */
+export const CF_WORK_REFUSED: unique symbol = Symbol('cf-work-refused')
+
+/** One preparation's per-cell evaluation ceiling (Global Constraints "Bounded work"): every snapshot attempt and every
+ * per-cell call draws from it, so fallbacks cannot multiply total work. Unlike a CfWorkBudget its refusal is not final:
+ * a call too large for what is left is refused alone, and a smaller one after it may still run (S5-N: one rule's
+ * refusal never refuses another). */
+export interface CfUnitCeiling { readonly limit: number; readonly used: number; readonly remaining: number; take(units: number): boolean }
+export function createCfUnitCeiling(limit: number = CF_LIMITS.formulaCeilingUnits): CfUnitCeiling {
+  if (!validBytes(limit)) throw new RangeError('Invalid CF unit ceiling')
+  let used = 0
+  return {
+    limit, get used() { return used }, get remaining() { return limit - used },
+    take(units) { if (!validBytes(units) || units > limit - used) return false; used += units; return true },
+  }
+}
+
+/** Ruling S3-I1-UNITS: one preparation call's own work units (calibrated in docs/validation/xlsx-cf.md section 11). */
+const ACTIVE_UNITS = 250_000
 export const CF_LIMITS = Object.freeze({ rules: 4096, rangesPerRule: 256, rangesPerSheet: 16384,
   sheetMetadataBytes: 4 * 1024 ** 2, workbookMetadataBytes: 16 * 1024 ** 2,
   textUnits: 8192, formulaTokens: 4096, formulaChildren: 3, cfvo: 5, customIcons: 5,
   // Stage 5 (Ruling S5-B caps table): reference atoms per compiled formula and distinct sheets one rule may reference.
   formulaAtoms: 64, referencedSheets: 16,
+  // Stage 5 Task 34 (Ruling S5-N caps table): the dependency snapshot's cells per preparation; one MaterializationBudget
+  // per preparation (array materialization only); the per-cell evaluation ceiling every snapshot attempt and every call
+  // of one preparation draws from (2 x activeUnits, Global Constraints "Bounded work"); and the per-call evaluator
+  // scratch cap (S5-B round-2 #1, 64 KiB).
+  dependencyCells: 262_144, materializationCells: 1_000_000, formulaCeilingUnits: 2 * ACTIVE_UNITS, formulaScratchBytes: 64 * 1024,
   statisticsBytes: 8 * 1024 ** 2, scratchBytes: 8 * 1024 ** 2, workUnits: 1_000_000,
   // Ruling S3-I1-UNITS: one preparation call's own work, in deterministic units (never wall time). Calibrated in
   // docs/validation/xlsx-cf.md section 11 (scripts/cf-refs/active-units.ts): >= 5x the largest production call.
-  activeUnits: 250_000, checkpointUnits: 128, sliceMs: 4, preparedCells: CF_PAINT_BATCH_CELLS,
+  activeUnits: ACTIVE_UNITS, checkpointUnits: 128, sliceMs: 4, preparedCells: CF_PAINT_BATCH_CELLS,
   matchingRules: 4096, descriptorUnits: 128, diagnostics: 64 })
 export interface CfRefusal { readonly kind: 'unresolved'; readonly reason: string }
 const refuse = (reason = 'cf-budget-exceeded'): CfRefusal => ({ kind: 'unresolved', reason })
