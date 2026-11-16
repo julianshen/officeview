@@ -14,6 +14,7 @@ import * as wildcardModule from '../src/xlsx/formula/functions/wildcard'
 import {
   cfCallShape, cfCallWorkBreakdown, cfEvaluatorScratchBytes, cfFormulaSemantics, createCfInvariantMemo, evaluateCfFormula,
   type CfCallWorkBreakdown, type CfFormulaContext, type TextValue, CF_TEXT_RENDER_UNITS, CF_TEXT_UNIT_CHARS, cfTextUnits,
+  CF_FREQUENCY_KEY_PASSES, cfCriterionUnits,
 } from '../src/xlsx/cf/formula'
 import { CF_DEPENDENCY_COLUMN_BYTES, prepareCfDependencies, type CfDependencySnapshot } from '../src/xlsx/cf/dependencies'
 import { CF_DEPENDENCY_CELL_BYTES, CF_FORMULA_CALL_BYTES, CF_FORMULA_NODE_BYTES, CF_LIMITS, CF_VIEW_WORKSPACE_BYTES, type CfReservation, createCfMemory, createCfUnitCeiling, createCfWorkBudget, type CfUnitCeiling, type CfWorkBudget } from '../src/xlsx/cf/limits'
@@ -713,5 +714,35 @@ describe('the per-node text model: own passes per operation, ASCII from the snap
       checked++
     }
     expect(checked).toBe(400)
+  })
+})
+
+describe('Task 34 fix round 4 (codex round-3 findings 1, 2, 4, 5)', () => {
+  it('finding 5: a refused frequency key pays its key-processing allowance to the budget and the ceiling; an admitted one pays it once', async () => {
+    const run = async (B1: string) => {
+      const signal = new AbortController().signal
+      const budget = createCfWorkBudget({ now: frozen, signal })
+      const ceiling = createCfUnitCeiling()
+      const calls: CfCallWorkBreakdown[] = []
+      const batch = await batchOf([formulaRule('COUNTIF($A$1:$A$2,B1)>0', 'C1')], fakeSource({ A1: 1, A2: 2, B1 }), { budget, signal, ceiling, hoist: true, onCall: b => calls.push(b) })
+      const units = budget.units, used = ceiling.used
+      const out = batch.evaluate(0, 0, 2)
+      batch.dispose()
+      return { out, budget: budget.units - units, ceiling: ceiling.used - used, calls }
+    }
+    // Codex counterexample: 50 zeros are processed (ASCII, wildcard and numeric checks), then refused.
+    const refused = await run('0'.repeat(50))
+    expect(refused.out).toEqual({ kind: 'unresolved', reason: 'cf-formula-unsupported' })
+    const key = cfCriterionUnits(50, CF_FREQUENCY_KEY_PASSES)
+    expect(key).toBe(113)
+    // View build (1) + the criterion read (1) + the key's processing, spent before cfCountifKey runs.
+    expect(refused.budget).toBe(2 + key)
+    expect(refused.ceiling).toBe(2 + key)
+    // An admitted key of the same length is charged once, inside the admitted bound.
+    const admitted = await run('a'.repeat(50))
+    expect(admitted.out).toEqual({ kind: 'ready', value: { kind: 'boolean', value: false } })
+    expect(admitted.calls[0]!.criterion).toBe(key)
+    expect(admitted.budget).toBe(admitted.calls[0]!.total)
+    expect(admitted.ceiling).toBe(admitted.calls[0]!.total)
   })
 })

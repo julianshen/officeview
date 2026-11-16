@@ -1434,6 +1434,10 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
       const raw = i < 0 ? 'ref' : readAt(i)
       if (snapshot.tainted) return unresolved('cf-formula-dependency')
       const literal = raw === 'ref' ? undefined : cfElementToLiteral(raw)
+      // The key's processing (ASCII, wildcard and numeric checks, the fold, the hash) is spent on the meter BEFORE it
+      // runs (round 4, finding 5), at the units the bound's criterion term counts for it: a refused key keeps the charge
+      // (the finally below), an admitted call's bound already includes it once.
+      if (literal?.kind === 'string' && meter.spend(cfCriterionUnits(literal.value.length, CF_FREQUENCY_KEY_PASSES)) === 'refused') return unresolved('cf-resource-limit')
       const key = literal ? cfCountifKey(literal) : 'refuse'
       if (key === 'refuse' || meter.spend(1) === 'refused') return unresolved(key === 'refuse' ? 'cf-formula-unsupported' : 'cf-resource-limit')
       if (cfCountifDpRefused(literal!, context.hoists!.values.longest.get(hoist.node) ?? 0)) return unresolved('cf-formula-unsupported')
