@@ -391,3 +391,18 @@ describe('the translated tree reads exactly the call\'s view areas (Task 34 fix 
     expect(cfTreeReadsMatchView(at(3, hoisted), [])).toBe(false)
   })
 })
+
+describe('taint is evaluation-local: a tainted call never contaminates a later call (Task 34 fix round 2, finding 5)', () => {
+  it('IFERROR(A1,TRUE) over an unrepresentable error, then a valid frequency lookup on the same snapshot, returns the lookup\'s own answer', async () => {
+    const cells: Cells = { A1: { error: '#GETTING_DATA' as never }, B1: 'k', B2: 'm', C1: 'k' }
+    const tainted = formulaRule('IFERROR(A1,TRUE)', 'D1'), lookup = formulaRule('COUNTIF($B$1:$B$2,C1)>0', 'D1')
+    const alone = await batchOf([lookup], fakeSource(cells))
+    expect(alone.evaluate(0, 0, 3)).toEqual({ kind: 'ready', value: { kind: 'boolean', value: true } })
+    alone.dispose()
+    const both = await batchOf([tainted, lookup], fakeSource(cells))
+    expect(both.attempts).toBe(1) // one shared snapshot
+    expect(both.evaluate(0, 0, 3)).toEqual({ kind: 'unresolved', reason: 'cf-formula-dependency' })
+    expect(both.evaluate(1, 0, 3)).toEqual({ kind: 'ready', value: { kind: 'boolean', value: true } })
+    both.dispose()
+  })
+})

@@ -1176,6 +1176,10 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
   if (!anchor) return unresolved('cf-unmeasured-capability') // multi-range anchor (S5-C)
   const cached = f.invariant ? context.invariants.get(f) : undefined
   if (cached) return { kind: 'ready', value: cached }
+  // A fresh evaluation-local taint scope before any read (the view, criterion reads, frequency lookups, the call):
+  // a taint left by an earlier call on the shared snapshot never reaches this one, and this call's own preliminary
+  // reads stay in scope through invocation.
+  snapshot.reset()
   const dRow = at.row - anchor.row, dCol = at.col - anchor.col
   const plan = context.hoists?.plan ?? []
   const shape = cfCallShape(f, plan)
@@ -1276,7 +1280,6 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
       if (!context.ceiling.take(breakdown.total)) return unresolved('cf-resource-limit')
       limit = breakdown.total
       context.onCall?.(breakdown)
-      snapshot.reset()
       const outcome = invoke(f, tree.value.value, at, shape, areas, view.value, snapshot, context)
       context.onSettled?.(used, breakdown)
       if (outcome.kind === 'ready' && f.invariant) context.invariants.set(f, outcome.value)
