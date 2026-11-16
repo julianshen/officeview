@@ -209,6 +209,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
   let screen: SessionState['screen'] = 'slide'
   let buffer = ''
   let paused = false
+  /** The audience document is hidden (PR #78 round 13, as the local session's `hiddenDoc`). */
+  let hiddenDoc = false
   let exited = false
   let started = false
   /** The click checkpoint on screen (the driver's cursor step). */
@@ -237,7 +239,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
   const clock = remoteShowDeps.clock(win)
   /**
    * The show clock (fix round 1): what the driver and PlanStage play by — builds, transitions, tracks, Morph and the
-   * after-timer advance. It stops while the show is paused; transport pacing and deadlines keep `clock`.
+   * after-timer advance. It stops while the show is paused or its document is hidden (`syncClock`, as the local
+   * session); transport pacing and deadlines (the fetcher's back-off and wakes, notes settling, retries) keep `clock`.
    */
   let pausedAt: number | undefined
   let pausedFor = 0
@@ -247,6 +250,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     pause() { if (pausedAt === undefined) pausedAt = clock.now() },
     resume() { if (pausedAt === undefined) return; pausedFor += clock.now() - pausedAt; pausedAt = undefined },
   }
+  /** An explicit pause and a hidden document compose: the show clock runs only when neither holds it. */
+  const syncClock = () => { if (paused || hiddenDoc) showClock.pause(); else showClock.resume() }
   const showBytes = remoteShowDeps.showBytes
 
   // ---------------------------------------------------------------------
@@ -1077,7 +1082,7 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
       case 'last': lastSlide(); break
       case 'black': case 'white': setScreen(target.kind); break
       // The show clock stops with the show: builds, transitions, tracks and the after-timer advance hold.
-      case 'pause': paused = !paused; if (paused) showClock.pause(); else showClock.resume(); syncPresenter(); break
+      case 'pause': paused = !paused; syncClock(); syncPresenter(); break
     }
   }
 
@@ -1091,7 +1096,7 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     get surface() { return surfaceKind },
     get presenter() { return presenter },
     get state(): SessionState {
-      return { slide, build, screen, buffer, paused, clockPaused: paused, kiosk, loop, order, exited }
+      return { slide, build, screen, buffer, paused, clockPaused: paused || hiddenDoc, kiosk, loop, order, exited }
     },
     stage: undefined,
     get cursor() { return driver?.visit?.cursor },
@@ -1395,6 +1400,10 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
       applyBucket()
       render()
     }
+    // Spec 6.2 (PR #78 round 13): while the audience document is hidden the show clock stops, as locally.
+    const visibility = () => { hiddenDoc = owner.visibilityState === 'hidden'; syncClock() }
+    owner.addEventListener('visibilitychange', visibility, on)
+    visibility()
     win?.addEventListener('resize', resized, on)
     owner.addEventListener('fullscreenchange', resized, on)
     const watchDpr = () => {

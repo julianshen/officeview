@@ -1272,6 +1272,96 @@ describe('fix round 1: pause freezes the show clock', () => {
   })
 })
 
+describe('PR #78 round 13: a hidden document stops the show clock (as the local session)', () => {
+  const fadeIn = (o: { durationMs: number; advTmMs?: number }) => (p: Plan): Plan => ({ ...p, show: { ...p.show, transition: { element: 'fade', ns: 'p', attrs: {}, advClick: true, ...o } as unknown as NonNullable<Plan['show']['transition']> } })
+  const shot = (c: HTMLCanvasElement) => c.toDataURL()
+  let state: DocumentVisibilityState = 'visible'
+  const set = (v: DocumentVisibilityState) => { state = v; document.dispatchEvent(new Event('visibilitychange')) }
+  beforeEach(() => {
+    state = 'visible'
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state })
+  })
+  afterEach(() => { delete (document as { visibilityState?: unknown }).visibilityState })
+
+  it('a build mid-flight while hidden keeps its pixels, and resumes from there when visible', async () => {
+    const fd = animDoc(['fly'])
+    const { s, canvas } = await show(fd)
+    await run(300)
+    s.next()
+    await run(80)
+    set('hidden')
+    expect(s.state.clockPaused).toBe(true)
+    expect(s.state.paused).toBe(false)
+    const before = shot(canvas)
+    // The frame loop keeps ticking here (a browser would throttle it): the show clock must not move.
+    await run(800)
+    expect(shot(canvas)).toBe(before)
+    set('visible')
+    expect(s.state.clockPaused).toBe(false)
+    await run(16)
+    expect(shot(canvas)).not.toBe(before)
+    await run(800)
+    expect(shot(canvas)).not.toBe(before)
+    s.exit()
+  })
+
+  it('the after-timer auto-advance does not fire on return: it waits out the hidden time', async () => {
+    const auto = { messages: (u: number) => bundleOf(MORPH_TO, u, fadeIn({ durationMs: 100, advTmMs: 500 })) }
+    const fd = animDoc([auto, 'fly'])
+    const { s } = await show(fd)
+    await run(50)
+    set('hidden')
+    await run(2_000)
+    expect(s.state.slide).toBe(0)
+    set('visible')
+    await run(100)
+    expect(s.state.slide).toBe(0)
+    await run(800)
+    expect(s.state.slide).toBe(1)
+    s.exit()
+  })
+
+  it('an explicit pause taken while hidden stays paused after the document returns; resuming it plays on', async () => {
+    const auto = { messages: (u: number) => bundleOf(MORPH_TO, u, fadeIn({ durationMs: 100, advTmMs: 500 })) }
+    const fd = animDoc([auto, 'fly'])
+    const { s } = await show(fd)
+    await run(50)
+    set('hidden')
+    await run(2_000)
+    expect(s.state.slide).toBe(0)
+    s.dispatch({ kind: 'pause' })
+    set('visible')
+    expect(s.state.paused).toBe(true)
+    expect(s.state.clockPaused).toBe(true)
+    await run(2_000)
+    expect(s.state.slide).toBe(0)
+    // And the other order: hidden during an explicit pause, then visible, is still paused.
+    set('hidden')
+    set('visible')
+    expect(s.state.clockPaused).toBe(true)
+    await run(1_000)
+    expect(s.state.slide).toBe(0)
+    s.dispatch({ kind: 'pause' })
+    expect(s.state.clockPaused).toBe(false)
+    await run(800)
+    expect(s.state.slide).toBe(1)
+    s.exit()
+  })
+
+  it('a show started while hidden holds its clock until the document is visible', async () => {
+    state = 'hidden'
+    const auto = { messages: (u: number) => bundleOf(MORPH_TO, u, fadeIn({ durationMs: 100, advTmMs: 500 })) }
+    const { s } = await show(animDoc([auto, 'fly']))
+    expect(s.state.clockPaused).toBe(true)
+    await run(2_000)
+    expect(s.state.slide).toBe(0)
+    set('visible')
+    await run(1_000)
+    expect(s.state.slide).toBe(1)
+    s.exit()
+  })
+})
+
 describe('fix round 1: decoded track frames are admitted against the show budget', () => {
   const RGB: Record<string, number[]> = { '#ff0000': [255, 0, 0], '#00ff00': [0, 255, 0], '#0000ff': [0, 0, 255] }
   /** One track whose frame i is COLORS[i]. */
