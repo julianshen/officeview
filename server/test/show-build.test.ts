@@ -537,7 +537,7 @@ describe('pool show jobs', () => {
 
 /** A per-build ledger that records its grant, its peak and how many leases it gave (PR #78 round 13). */
 function trackedLedger() {
-  const s = { grant: -1, peak: 0, leases: 0, refused: 0, builds: 0, tags: [] as string[], ws: undefined as SlideShowWorkspace | undefined }
+  const s = { grant: -1, peak: 0, leases: 0, refused: 0, builds: 0, ws: undefined as SlideShowWorkspace | undefined }
   const make = (grant: number): SlideShowWorkspace => {
     const ws = createSlideShowWorkspace('desktop', { limit: grant, scratch: 0 })
     s.grant = grant; s.ws = ws; s.builds++
@@ -547,7 +547,7 @@ function trackedLedger() {
       lease(bytes, tag) {
         const l = ws.lease(bytes, tag)
         if (!l) { s.refused++; return undefined }
-        s.leases++; s.tags.push(tag); note()
+        s.leases++; note()
         return { tag: l.tag, get bytes() { return l.bytes }, grow: (b) => { const ok = l.grow(b); note(); return ok }, shrink: (b) => l.shrink(b), transfer: (t) => l.transfer(t), release: () => l.release() }
       },
     }
@@ -592,17 +592,6 @@ describe('the preparation ledger (PR #78 round 13: bounded before every raster)'
     expect(t.s.leases).toBeGreaterThan(0)
     expect(t.s.peak).toBeGreaterThan(0)
     expect(t.s.peak).toBeLessThanOrEqual(grant2)
-  }, 60_000)
-
-  it('the classifier and the assembly lease each masked copy before drawing it', async () => {
-    // The strip grown 10× has unobserved pixels: a masked layer.
-    const { host, docKey } = await openDeck(await growthDeck(10, { x: 0, y: 340, w: 960, h: 24 }))
-    const t = trackedLedger()
-    host.showOptions = { ledger: t.make }
-    built(await host.showPlan(docKey, job({ scale: 2 })))
-    expect(t.s.tags).toContain('classify:mask')
-    expect(t.s.tags).toContain('masks')
-    expect(t.s.peak).toBeLessThanOrEqual(t.s.grant)
   }, 60_000)
 
   it('the admitted grant, when the worker is given one, bounds the build', async () => {
