@@ -704,3 +704,27 @@ describe('Task 36 fix round 1', () => {
     expect(reply).toMatchObject({ kind: 'unresolved', reason: 'cf-stale-generation', states: [] })
   })
 })
+
+describe('Task 36 fix round 2', () => {
+  it('#1: a hoisted COUNTIF/SUMIF over Sheet2 never reads its unqualified criterion from Sheet2', async () => {
+    const caps = [...CAPS, 'formula:hoist-aggregate', 'formula:hoist-countif-frequency']
+    for (const formula of ['COUNTIF(Sheet2!$A$1:$A$2,$B$1)&gt;0', 'SUMIF(Sheet2!$A$1:$A$2,$B$1)&gt;0']) {
+      const rules = parseRules(expr('C1', 1, formula), caps)
+      const s1 = named('Sheet1', 'sheet1', { B1: 9, C1: 1 }, rules)
+      const wb = cfWorkbookOfDocument([s1, named('Sheet2', 'sheet2', { A1: 1, A2: 2, B1: 1 })], createCfMemory(), 'cached')
+      expect(fillOf((await prepareWith(rules, s1, wb, ['C1'], CAPS)).out.get('C1')), `${formula} unhoisted`).toBe('none')
+      expect(fillOf((await prepareWith(rules, s1, wb, ['C1'], caps)).out.get('C1')), `${formula} hoisted`).toBe('none')
+    }
+  })
+
+  it('#7 residual: the resident live key reads only the admitted, deduplicated 16 referenced stores', async () => {
+    const { cfResidentDependencyKey } = await import('../src/xlsx/cfLoader')
+    const names = Array.from({ length: CF_REFERENCED_SHEETS_LIMIT + 1 }, (_, i) => `S${i + 2}`)
+    const rules = parseRules([...names, 'S2', 'sheet1'].map((n, i) => expr('A2', i + 1, `${n}!A1&gt;0`)).join(''), CAPS)
+    const sheets = [{ sheetId: 'h', name: 'Sheet1' }, ...names.map((n, i) => ({ sheetId: `x${i}`, name: n }))]
+    let reads = 0
+    const key = cfResidentDependencyKey(rules, 'Sheet1', sheets, id => { reads++; return { stamp: { valueGen: id === 'x0' ? 5 : 0 }, completeness: 'complete' } })
+    expect(reads).toBe(CF_REFERENCED_SHEETS_LIMIT)
+    expect(key.startsWith('5complete')).toBe(true)
+  })
+})

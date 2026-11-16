@@ -652,6 +652,9 @@ export async function prepareCfWireScope(
      * every sheet its replies list (`CfReadResult.dependencies`) keeps the generation it was read at, whatever the cache
      * has evicted since. */
     identityOf?: (sheetId: string) => number | undefined
+    /** Fix round 2 (#4): holds the receiver's dependency registration for the scope's life (released on dispose), so a
+     * commit of a sheet it read still invalidates its host after the cache evicts the reply. Null refuses the scope. */
+    retainDependencies?: (dependencies: readonly { sheetId: string }[]) => (() => void) | null
   },
 ): Promise<EffectiveFormatScope | undefined> {
   if (!rects.length) return undefined
@@ -742,12 +745,15 @@ export async function prepareCfWireScope(
     let disposed = false
     const identityOf = options.identityOf
     const deps = [...dependencies]
+    const releaseDependencies = deps.length > 0 && options.retainDependencies ? options.retainDependencies(deps.map(([sheetId]) => ({ sheetId }))) : undefined
+    if (releaseDependencies === null) throw refused('CF wire preparation could not register its dependencies')
     const current = identityOf && deps.length > 0
       ? () => (options.current?.() ?? true) && deps.every(([id, gen]) => identityOf(id) === gen)
       : options.current
     const scope = assembleScope(gen, states, colors, locale, bytes, () => {
       if (!disposed) {
         disposed = true
+        releaseDependencies?.()
         options.budget.release(bytes)
       }
     }, current, regions, options.hosts ? styleAt => frameBarHosts(options.hosts!, styleAt) : undefined,

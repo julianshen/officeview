@@ -701,7 +701,16 @@ export async function prepareCfFormulaBatch(tasks: readonly CfFormulaTask[], opt
           if (!options.statistics) { taskOutcome[i] = unresolved('cf-resource-limit'); continue }
           const groups = new Map<string, { sheet?: CfWorkbookSheet; hoists: CfHoist[] }>()
           let unroutable = false
+          // A scalar COUNTIF/SUMIF's criterion cell is always the host's (an unqualified absolute cell); a hoist would read
+          // it from the range's sheet, so such a shape over another sheet is not hoisted (fix round 2, #1: fail closed,
+          // per-cell evaluation reads the criterion from the host).
+          const routed: CfHoist[] = []
           for (const h of plan) {
+            const other = h.range.sheet !== undefined && h.range.sheet.toLowerCase() !== hostKey
+            if (other && h.kind === 'scalar' && h.criterion?.type === 'cell') continue
+            routed.push(h)
+          }
+          for (const h of routed) {
             const key = h.range.sheet === undefined || h.range.sheet.toLowerCase() === hostKey ? '' : h.range.sheet.toLowerCase()
             const sheet = key === '' ? undefined : referenced.get(key)
             if (key !== '' && !sheet) { unroutable = true; break }
@@ -728,14 +737,16 @@ export async function prepareCfFormulaBatch(tasks: readonly CfFormulaTask[], opt
             for (const [k, x] of v.longest) longest.set(k, x)
           }
           if (refusedHoist) { taskOutcome[i] = refusedHoist; continue }
-          hoists[i] = { plan, values: only ?? { scalars, frequencies, longest } }
+          if (routed.length > 0) hoists[i] = { plan: routed, values: only ?? { scalars, frequencies, longest } }
         }
         const targets = options.targets ? rule.ranges.flatMap(r => options.targets!.map(t => clampTo(r, t)).filter((x): x is SourceRect => x !== undefined)) : rule.ranges
         // The cap counts the populated clamp; the snapshot declares the geometry as written (S5-SUMIF-SHAPE: a whole
         // column stays a whole column, so `countAbsent` and coverage see the true area).
         const boundsOf = (sheet: string | undefined): SourceRect | undefined => (sheet === undefined || sheet.toLowerCase() === hostKey ? bounds : depBounds.get(sheet.toLowerCase()))
-        const capped = cfFormulaFootprint(formula, targets, formula.anchor, options.edge, { bounds, boundsOf, hoists: plan })
-        const declared = cfFormulaFootprint(formula, targets, formula.anchor, options.edge, { hoists: plan, uncapped: true })
+        // The footprint excludes exactly the hoists applied (a shape refused above is read per cell).
+        const applied = hoists[i]?.plan ?? []
+        const capped = cfFormulaFootprint(formula, targets, formula.anchor, options.edge, { bounds, boundsOf, hoists: applied })
+        const declared = cfFormulaFootprint(formula, targets, formula.anchor, options.edge, { hoists: applied, uncapped: true })
         if (capped === 'over-cap' || declared === 'over-cap') { taskOutcome[i] = unresolved('cf-resource-limit'); continue }
         // A missing sheet's atoms read `#REF!` and are never snapshotted.
         footprints[i] = declared.filter(e => e.sheet === undefined || !missing.has(e.sheet.toLowerCase()))

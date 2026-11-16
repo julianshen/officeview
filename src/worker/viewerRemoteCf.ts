@@ -88,6 +88,11 @@ interface Entry {
   /** One immediate re-request after a reply whose dependencies were already stale (fix round 1, #1), or whose pending
    * sheets had already settled (#6); cleared at each publication. Never the cfGen adoption retry (`adopted`). */
   retried?: boolean
+  /** Terminal dependency rejection (fix round 2, #2): the main identities seen when it was rejected. The entry reloads
+   * only once one of them moves (an external change), never on its own notifications. */
+  rejected?: readonly { sheetId: string; valueGen: number }[]
+  /** Dependency registrations this entry's published reply owns (fix round 2, #4), released with its result. */
+  owned?: string[]
 }
 
 const empty = (): PagedCfState => ({ state: 'waiting', gen: 0, diagnostics: [] })
@@ -183,6 +188,7 @@ export class RemoteCfCache {
     // Ruling S5-K: a reply read from other sheets is current only while each keeps the value generation it listed; a
     // moved one makes the whole host sheet stale (Lesson 5), not only this scope.
     if (this.dependenciesMoved(entry)) return this.get(sheetId, rects, stamp, true)
+    if (this.rejectionLifted(entry)) { this.reset(entry); entry.gen++ }
     if (entry.state === 'waiting' && !entry.controller) void this.load(entry)
     return entry
   }
@@ -207,6 +213,7 @@ export class RemoteCfCache {
     }
     // A moved dependency (S5-K): the whole host sheet goes stale, then this scope is acquired afresh.
     if (this.dependenciesMoved(entry)) { this.invalidateSheet(sheetId); return this.acquire(sheetId, rects, stamp, signal) }
+    if (this.rejectionLifted(entry)) { this.reset(entry); entry.gen++ }
     entry.refs++
     if (entry.state === 'waiting' && !entry.controller) void this.load(entry)
     let released = false
@@ -248,7 +255,8 @@ export class RemoteCfCache {
    * or release on a referenced sheet), every tile of each such sheet (Lesson 5). Held versions survive until released.
    */
   invalidateDependents(changedSheetId: string): void {
-    const hosts = new Set<string>(this.dependents.get(changedSheetId)?.keys() ?? [])
+    const hosts = new Set<string>()
+    for (const r of this.registrations.values()) if (r.dependency === changedSheetId) hosts.add(r.host)
     for (const entry of this.entries.values()) {
       if (entry.sheetId !== changedSheetId && entry.result?.dependencies?.some(d => d.sheetId === changedSheetId)) hosts.add(entry.sheetId)
     }
@@ -257,16 +265,61 @@ export class RemoteCfCache {
   /** Bumped at each dependency invalidation of a sheet: the view's live key reads it, so a held scope is replaced. */
   private readonly dependencyEpochs = new Map<string, number>()
   dependencyEpoch(sheetId: string): number { return this.dependencyEpochs.get(sheetId) ?? 0 }
-  /** Charged `dependency -> host` registrations, kept until close (at most sheets x 16 pairs). */
-  private readonly dependents = new Map<string, Map<string, () => void>>()
-  private registerDependent(dependency: string, host: string): boolean {
-    let hosts = this.dependents.get(dependency)
-    if (hosts?.has(host)) return true
-    const release = this.host.admitEntry(`cf-dependent:${dependency}\u0000${host}`, 128 + (dependency.length + host.length) * 2)
-    if (!release) return false
-    if (!hosts) this.dependents.set(dependency, hosts = new Map())
-    hosts.set(host, release)
+  /**
+   * Charged `dependency -> host` registrations (fix round 2, #4), each owned by the published entries and live
+   * subscriptions (`retainDependencies`) that read it: released when its last owner goes, counted in `retainedBytes`.
+   */
+  private readonly registrations = new Map<string, { dependency: string; host: string; owners: number; bytes: number; release: () => void }>()
+  private readonly rejectedSignatures = new Map<string, string>()
+  private own(dependency: string, host: string): string | undefined {
+    const key = `${dependency}\u0000${host}`
+    const known = this.registrations.get(key)
+    if (known) { known.owners++; return key }
+    const bytes = 128 + (dependency.length + host.length) * 2
+    const release = this.host.admitEntry(`cf-dependent:${key}`, bytes)
+    if (!release) return undefined
+    this.registrations.set(key, { dependency, host, owners: 1, bytes, release })
+    return key
+  }
+  private disown(key: string): void {
+    const r = this.registrations.get(key)
+    if (!r || --r.owners > 0) return
+    this.registrations.delete(key)
+    try { r.release() } catch { /* release-only path */ }
+  }
+  /** Owns every dependency of `entry`'s reply, or none (rollback on the first refusal). */
+  private ownDependencies(entry: Entry, dependencies: readonly { sheetId: string }[]): boolean {
+    this.disownEntry(entry)
+    const owned: string[] = []
+    for (const d of dependencies) {
+      const key = this.own(d.sheetId, entry.sheetId)
+      if (key === undefined) { for (const k of owned) this.disown(k); return false }
+      owned.push(key)
+    }
+    if (owned.length) entry.owned = owned
     return true
+  }
+  private disownEntry(entry: Entry): void {
+    if (!entry.owned) return
+    for (const key of entry.owned) this.disown(key)
+    entry.owned = undefined
+  }
+  /** A live consumer's own hold on the sheets its copied states read (a wire scope keeps it after releasing its cache
+   * lease): a later commit of any of them still invalidates `hostSheetId`. Null when the registration is refused. */
+  retainDependencies(hostSheetId: string, dependencies: readonly { sheetId: string; valueGen?: number }[]): (() => void) | null {
+    if (this.closed) return null
+    const owned: string[] = []
+    for (const d of dependencies) {
+      const key = this.own(d.sheetId, hostSheetId)
+      if (key === undefined) { for (const k of owned) this.disown(k); return null }
+      owned.push(key)
+    }
+    let released = false
+    return () => { if (released) return; released = true; for (const k of owned) this.disown(k) }
+  }
+  /** A terminal dependency rejection whose recorded identities have since moved. */
+  private rejectionLifted(entry: Entry): boolean {
+    return entry.state === 'failed' && entry.rejected !== undefined && entry.rejected.some(d => this.host.identity(d.sheetId).valueGen !== d.valueGen)
   }
   /** Whole-sheet invalidation: every entry of the sheet (but `keep`), and one whole-sheet change notice. */
   private invalidateSheet(sheetId: string, keep?: Entry): void {
@@ -310,14 +363,15 @@ export class RemoteCfCache {
     }
     this.entries.clear()
     this.pendingNotifies.clear()
-    for (const hosts of this.dependents.values()) for (const release of hosts.values()) { try { release() } catch { /* release-only path */ } }
-    this.dependents.clear()
+    for (const r of this.registrations.values()) { try { r.release() } catch { /* release-only path */ } }
+    this.registrations.clear()
   }
 
   get retainedEntries(): number { return [...this.entries.values()].filter(e => e.state === 'ready').length + [...this.pinned].filter(e => e.state === 'ready').length }
   get retainedBytes(): number {
     let total = [...this.entries.values()].reduce((n, e) => n + e.bytes, 0) + [...this.pinned].reduce((n, e) => n + e.bytes, 0)
     for (const shared of this.sharedDefs.values()) total += shared.bytes
+    for (const r of this.registrations.values()) total += r.bytes
     return total
   }
   /** Test seam: live version-keyed shared definition entries. */
@@ -485,6 +539,7 @@ export class RemoteCfCache {
   private drop(entry: Entry): void {
     if (entry.dropped) return
     entry.dropped = true
+    this.disownEntry(entry)
     this.pinned.delete(entry)
     this.unshare(entry)
     if (entry.releaseStates) {
@@ -528,6 +583,9 @@ export class RemoteCfCache {
     entry.owner = undefined
     entry.state = 'waiting'
     entry.adopted = false
+    entry.retried = false
+    entry.rejected = undefined
+    this.disownEntry(entry)
     // The entry (and its ledger-admitted metadata) is reused, not dropped.
     entry.bytes = entry.meta
   }
@@ -671,6 +729,33 @@ export class RemoteCfCache {
         this.deferChanged(sheetId, entry.rects, 'status')
         return
       }
+      // Ruling S5-K (fix rounds 1-2): a reply read from other sheets is published only while every listed sheet still has
+      // the generation it was read at, decided BEFORE any cfGen adoption (#3: a rejected reply never consumes it). The
+      // first rejection drops the reply, marks the host sheet stale (once per distinct identity set, #2) and re-requests
+      // once; an exhausted rejection is terminal until one of those identities moves.
+      if (result.kind === 'ready' && result.dependencies?.some(d => this.host.identity(d.sheetId).valueGen !== d.valueGen)) {
+        releaseOnce()
+        entry.controller = undefined
+        entry.owner = undefined
+        const seen = result.dependencies.map(d => ({ sheetId: d.sheetId, valueGen: this.host.identity(d.sheetId).valueGen }))
+        const signature = JSON.stringify(seen)
+        if (this.rejectedSignatures.get(sheetId) !== signature) {
+          this.rejectedSignatures.set(sheetId, signature)
+          this.invalidateSheet(sheetId, entry)
+        }
+        if (!entry.retried) {
+          entry.retried = true
+          entry.state = 'waiting'
+          void this.load(entry)
+          return
+        }
+        entry.state = 'failed'
+        entry.rejected = seen
+        entry.diagnostics = [{ kind: 'stale', feature: 'cf-stale-generation', message: 'Conditional formatting read other sheets at generations this view does not hold yet.' }]
+        entry.gen++
+        this.deferChanged(sheetId, entry.rects, 'status')
+        return
+      }
       // Bounded version adoption: a cold request (cfGen 0, "unknown, adopt
       // live") publishes the live reply under the adopted stamp; a first
       // stale-version reply rekeys and reloads once so a provider that raced
@@ -760,28 +845,15 @@ export class RemoteCfCache {
         this.deferChanged(sheetId, entry.rects, 'status')
         return
       }
-      // Ruling S5-K (fix round 1, #1): a reply read from other sheets is published only while every listed sheet still
-      // has the generation it was read at. A moved one: the reply is dropped, the whole host sheet goes stale, and this
-      // entry re-requests once at once (never through the cfGen adoption retry).
-      if (result.dependencies?.some(d => this.host.identity(d.sheetId).valueGen !== d.valueGen)) {
+      // Each dependency is registered (charged, owned by this entry) before publication (fix round 2, #4); a refused
+      // registration rolls back whatever this reply registered and fails the entry.
+      if (!this.ownDependencies(entry, result.dependencies ?? [])) {
         releaseOnce()
-        entry.state = 'waiting'
-        entry.owner = undefined
-        this.invalidateSheet(sheetId, entry)
-        if (!entry.retried) { entry.retried = true; void this.load(entry) }
+        entry.state = 'failed'
+        entry.diagnostics = [{ kind: 'resource-limit', feature: 'cf-cache-budget', message: 'Conditional formatting dependency registration exceeds the main-thread cache budget.' }]
+        entry.gen++
+        this.deferChanged(sheetId, entry.rects, 'status')
         return
-      }
-      // Each dependency is registered (charged) before publication, and the registration outlives the entry (#2):
-      // eviction never disconnects a live scope's host sheet from a later commit of the sheet it read.
-      for (const d of result.dependencies ?? []) {
-        if (!this.registerDependent(d.sheetId, sheetId)) {
-          releaseOnce()
-          entry.state = 'failed'
-          entry.diagnostics = [{ kind: 'resource-limit', feature: 'cf-cache-budget', message: 'Conditional formatting dependency registration exceeds the main-thread cache budget.' }]
-          entry.gen++
-          this.deferChanged(sheetId, entry.rects, 'status')
-          return
-        }
       }
       // Single-charge publication: independent states charged per entry,
       // shared definitions charged once per version in the registry — never
@@ -813,6 +885,7 @@ export class RemoteCfCache {
         entry.sharedVersion = undefined
         const bytes = replyBytes + entry.meta
         if (!Number.isSafeInteger(bytes) || !this.makeRoom(entry, bytes)) {
+          this.disownEntry(entry)
           releaseOnce()
           entry.state = 'failed'
           entry.diagnostics = [{ kind: 'resource-limit', feature: 'cf-cache-budget', message: 'Conditional formatting data exceeds the main-thread cache budget.' }]
@@ -832,6 +905,7 @@ export class RemoteCfCache {
       const statesBytes = split.statesBytes
       const needed = entry.meta + statesBytes
       if (!Number.isSafeInteger(needed) || !this.makeRoom(entry, needed)) {
+          this.disownEntry(entry)
           this.unshare(entry)
           try { releaseStates() } catch { /* release-only path */ }
           releaseOnce()

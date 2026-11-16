@@ -2980,6 +2980,8 @@ describe('Task 36 fix round 1: remote dependency validation, registrations, pend
     cache.get(S1, [rect(0, 0)], stampOf())
     await flush()
     expect(cache.get(S1, [rect(0, 0)], stampOf()).state).toBe('ready')
+    // A live scope keeps its own hold (fix round 2, #4: registrations are owned by live subscriptions).
+    const hold = cache.retainDependencies(S1, [{ sheetId: S2 }])
     for (let i = 1; i <= 70; i++) cache.get('other', [rect(i, i)], { ...stampOf(), sheetId: 'other' })
     await flush()
     t.changed.length = 0
@@ -2988,6 +2990,7 @@ describe('Task 36 fix round 1: remote dependency validation, registrations, pend
     await flush()
     expect(cache.dependencyEpoch(S1)).toBe(epoch + 1)
     expect(t.changed.filter(c => c.sheetId === S1).flatMap(c => c.rects)).toContainEqual(WHOLE)
+    hold!()
     cache.close()
   })
 
@@ -3015,6 +3018,131 @@ describe('Task 36 fix round 1: remote dependency validation, registrations, pend
     await flush(); await flush()
     expect(t.requests).toHaveLength(2)
     expect(held.state.state).toBe('ready')
+    held.release(); cache.close()
+  })
+})
+
+describe('Task 36 fix round 2: terminal rejection, adoption order, owned registrations', () => {
+  const S1 = 'sheet1', S2 = 'sheet2'
+  const stampOf = (cfGen = 7): CfReadStamp => ({ owner: 'doc', sheetId: S1, workbookValueGen: 1, cfGen, viewGen: 0, structureGen: 0, clockGen: 0 })
+  const flush = () => new Promise(r => setTimeout(r, 0))
+  function host(opts: { depGen: () => number; version?: () => number; depSheet?: () => string; ledger?: { limit: number; used: number } }) {
+    const gens = new Map<string, number>([[S1, 1], [S2, 3]])
+    const requests: CfReadStamp[] = [], changed: string[] = []
+    let n = 0, onChanged: (() => void) | undefined
+    const identityOf = (sheetId: string): CacheIdentity => ({ docId: 'doc', sheetId, valueGen: gens.get(sheetId) ?? 0, fontGen: 0, viewGen: 0 })
+    const h: CfReadHost = {
+      identity: identityOf, loadState: () => ({ completeness: 'complete' }), hasConditionalFormatting: () => true,
+      grant: () => 1 << 20, releaseGrant: () => {}, nextRequestId: () => `q${++n}`, release: () => {},
+      admitEntry: (_k, bytes) => {
+        const l = opts.ledger
+        if (!l) return () => {}
+        if (l.used + bytes > l.limit) return null
+        l.used += bytes
+        let done = false
+        return () => { if (!done) { done = true; l.used -= bytes } }
+      },
+      changed: sheetId => { changed.push(sheetId); onChanged?.() },
+      request: async command => {
+        const q = command.query as { stamp: CfReadStamp }
+        requests.push(q.stamp)
+        const result: CfReadResult = { sheetId: S1, stamp: { ...q.stamp, cfGen: opts.version?.() ?? q.stamp.cfGen }, kind: 'ready', states: [{ row: 0, col: 0, properties: { 'fill.bg': 'FF00FF00' } }],
+          definitions: [], definitionsVersion: 7, diagnostics: [], dependencies: [{ sheetId: opts.depSheet?.() ?? S2, valueGen: opts.depGen() }] }
+        return { commandKind: 'read', requestId: command.requestId, owner: identityOf(S1), diagnostics: [], replyBytes: 1024, kind: 'complete', result: { kind: 'read', result: { op: 'conditionalFormatting', result } } } as WorkerReply<'read'>
+      },
+    }
+    return { h, gens, requests, changed, observe: (f: () => void) => { onChanged = f } }
+  }
+
+  it('#2: an exhausted dependency rejection is terminal until an identity changes (bounded requests with unchanged identities)', async () => {
+    const t = host({ depGen: () => 9 }) // the worker keeps answering a generation the main thread never has
+    const cache = new RemoteCfCache(t.h)
+    t.observe(() => { cache.get(S1, [rect(0, 0)], stampOf()) })
+    cache.get(S1, [rect(0, 0)], stampOf())
+    for (let i = 0; i < 20; i++) await flush()
+    expect(t.requests.length).toBeLessThanOrEqual(2)
+    expect(cache.get(S1, [rect(0, 0)], stampOf()).state).toBe('failed')
+    expect(cache.dependencyEpoch(S1)).toBeLessThanOrEqual(1)
+    // An external identity change ends it.
+    const before = t.requests.length
+    t.gens.set(S2, 9)
+    cache.get(S1, [rect(0, 0)], stampOf())
+    for (let i = 0; i < 5; i++) await flush()
+    expect(t.requests.length).toBe(before + 1)
+    expect(cache.get(S1, [rect(0, 0)], stampOf()).state).toBe('ready')
+    cache.close()
+  })
+
+  it('#3: a cold reply rejected for stale dependencies does not consume the cfGen adoption', async () => {
+    let version = 8, dep = 2
+    const t = host({ depGen: () => dep, version: () => version })
+    // First reply: version 8, stale dependency (2 != 3). The retry meets version 9 with a current dependency.
+    const real = t.h.request
+    let calls = 0
+    t.h.request = async (c, s) => { if (++calls === 2) { version = 9; dep = 3 } return real(c, s) }
+    const cache = new RemoteCfCache(t.h)
+    const held = cache.acquire(S1, [rect(0, 0)], stampOf(0))
+    for (let i = 0; i < 10; i++) await flush()
+    // Both requests are cold: the rejected version 8 was never adopted.
+    expect(t.requests.map(r => r.cfGen)).toEqual([0, 0])
+    expect(held.state.state).toBe('ready')
+    expect(held.state.result?.stamp.cfGen).toBe(9)
+    held.release(); cache.close()
+  })
+
+  it('#4: superseded registrations are pruned once their consumers finish, and are counted in the cache bytes', async () => {
+    let sheet = 'd0'
+    const ledger = { limit: 8000, used: 0 }
+    const t = host({ depGen: () => 0, depSheet: () => sheet, ledger })
+    const cache = new RemoteCfCache(t.h)
+    for (let i = 0; i < 25; i++) {
+      sheet = `dep-${i}`
+      const held = cache.acquire(S1, [rect(0, 0)], stampOf(7 + i))
+      for (let k = 0; k < 3; k++) await flush()
+      expect(held.state.state, `round ${i}`).toBe('ready')
+      expect(cache.retainedBytes).toBeGreaterThan(0)
+      held.release()
+      cache.invalidate(S1)
+    }
+    expect(cache.retainedBytes).toBe(0)
+    expect(ledger.used).toBe(0)
+    cache.close()
+  })
+
+  it('#4: a live subscription keeps its registration through eviction; its release prunes it', async () => {
+    const t = host({ depGen: () => 3 })
+    const cache = new RemoteCfCache(t.h)
+    const release = cache.retainDependencies(S1, [{ sheetId: S2, valueGen: 3 }])
+    expect(release).not.toBeNull()
+    // The registration is cache-owned memory: counted with no entry at all.
+    expect(cache.retainedEntries).toBe(0)
+    expect(cache.retainedBytes).toBeGreaterThan(0)
+    const epoch = cache.dependencyEpoch(S1)
+    cache.invalidateDependents(S2)
+    expect(cache.dependencyEpoch(S1)).toBe(epoch + 1)
+    release!()
+    cache.invalidateDependents(S2)
+    expect(cache.dependencyEpoch(S1)).toBe(epoch + 1)
+    expect(cache.retainedBytes).toBe(0)
+    cache.close()
+  })
+
+  it('#4: a held entry whose reply is superseded (reset by an owner change) releases the old reply\'s registrations', async () => {
+    let sheet = 'dep-a'
+    const t = host({ depGen: () => 0, depSheet: () => sheet })
+    const cache = new RemoteCfCache(t.h)
+    const held = cache.acquire(S1, [rect(0, 0)], stampOf())
+    for (let k = 0; k < 3; k++) await flush()
+    expect(held.state.state).toBe('ready')
+    sheet = 'dep-b'
+    t.gens.set(S1, 2) // the host's owner moves: the held entry is reset and reloads
+    cache.get(S1, [rect(0, 0)], stampOf())
+    // At the reset, before any new reply is published, the old reply's registration is already gone.
+    const epoch = cache.dependencyEpoch(S1)
+    cache.invalidateDependents('dep-a')
+    expect(cache.dependencyEpoch(S1)).toBe(epoch)
+    for (let k = 0; k < 3; k++) await flush()
+    expect(held.state.result?.dependencies).toEqual([{ sheetId: 'dep-b', valueGen: 0 }])
     held.release(); cache.close()
   })
 })

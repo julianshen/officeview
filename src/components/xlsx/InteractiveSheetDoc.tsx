@@ -109,7 +109,7 @@ import { initialOrigin, paneLogicalBoxes, paneRegions, visibleSpans } from '../.
 import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS, SIZED_DRAWING_BYTES, axisUpperBytes, cellFont, type SessionSizes } from '../../xlsx/view/axisSizes'
 import { columnWidthPx } from '../../xlsx/columnWidth'
 import { AutoFitRefusedError, autoFitSize, createFitMeasure, resizeRegion, type ResizeRequest } from './sheetResize'
-import { ensureConditionalFormatting, cfNeedsViewport, CF_PAINT_BATCH_CELLS } from '../../xlsx/cfLoader'
+import { ensureConditionalFormatting, cfNeedsViewport, cfResidentDependencyKey, CF_PAINT_BATCH_CELLS } from '../../xlsx/cfLoader'
 import { tileLogicalBox, tileRangeFor, TILE_PREFETCH_RING } from '../../xlsx/view/tileCache'
 import { sparklineInvalidationBox } from '../../xlsx/view/sparklineInvalidation'
 import type { ValueOverlay } from '../../xlsx/view/contracts'
@@ -1081,7 +1081,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return {x:first.x,y:first.y,width:last.x+last.width-first.x,height:last.y+last.height-first.y}
   }) } : undefined
   // S5-K: the referenced sheets' value generations (resident), or the cache's dependency epoch (remote), join the key.
-  const cfDepGen = cfRules ? cfRules.rules.flatMap(r => r.definition.kind === 'unresolved' ? [] : r.definition.dependencySheets ?? []).map(n => { const s = source.sheets.find(x => x.name.toLowerCase() === n.toLowerCase()); const t = s && source.store(s.sheetId); return t ? `${t.stamp.valueGen}${t.completeness}` : -1 }).join() : hasRemoteCf ? remote!.cfDependencyEpoch(activeSheetId) : 0
+  const cfDepGen = cfRules ? cfResidentDependencyKey(cfRules, entry?.sheet.name ?? '', source.sheets, id => source.store(id)) : hasRemoteCf ? remote!.cfDependencyEpoch(activeSheetId) : 0
   const cfLiveKey = cfRules ? JSON.stringify([source.store(activeSheetId).stamp.docId, activeSheetId, source.store(activeSheetId).stamp.valueGen, entry?.structureGen, cfTextGen, scopedCf ? entry?.revision : 0, clockGen, cfDepGen]) : hasRemoteCf ? JSON.stringify([identity.docId, activeSheetId, identity.valueGen, identity.viewGen, entry?.structureGen, remote!.merges(activeSheetId).gen, remote!.isClosed, clockGen, cfDepGen]) : undefined
   const cfViewportKey = cfViewport ? JSON.stringify([cfLiveKey, cfViewport.boxes]) : cfLiveKey
   const [viewportCf,setViewportCf]=useState<{key:string;generation:string|undefined;boxes?:readonly LogicalCellBox[];batch:import('../../xlsx/cf/render').CfPaintBatch|undefined}|null>(null)
@@ -1213,7 +1213,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       },
       rects,
       // Ruling S4-ROW-EXACT: the authored row heights the paged layout holds (pt), for the icon frame.
-      { locale, budget, current: live, identityOf: id => remote.identity(id).valueGen, base, onEmpty, ...(hosts ? { hosts } : {}), rowPtOf: text.cfRowPtOfOverrides(remote.layout(sheetId).rowOverrides, remote.layout(sheetId).defaultRowPt), rowUniformOf: text.cfRowUniformOfLayout(remote.layout(sheetId).nonUniformFontRows), colors: remote.formatting().colors ?? { theme: doc.sheets[sheetIds.indexOf(sheetId)]?.drawingTheme?.palette }},
+      { locale, budget, current: live, identityOf: id => remote.identity(id).valueGen, retainDependencies: deps => remote.retainCfDependencies(sheetId, deps), base, onEmpty, ...(hosts ? { hosts } : {}), rowPtOf: text.cfRowPtOfOverrides(remote.layout(sheetId).rowOverrides, remote.layout(sheetId).defaultRowPt), rowUniformOf: text.cfRowUniformOfLayout(remote.layout(sheetId).nonUniformFontRows), colors: remote.formatting().colors ?? { theme: doc.sheets[sheetIds.indexOf(sheetId)]?.drawingTheme?.palette }},
     )
   }
   const residentBatch = currentViewportCf?.batch ?? (assets?.cfLiveKey === cfLiveKey ? assets?.lease.assets.conditionalFormatting : undefined)
