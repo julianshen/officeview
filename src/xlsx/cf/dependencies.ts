@@ -296,7 +296,11 @@ function createSnapshot(sheetId: string, bounds: SourceRect, declared: readonly 
         const m = { cells: 0, stringUnits: 0, longestString: 0, strings: 0, nonAscii: 0 }
         const ok = walkIn(r, step, (row, col, units, flag) => {
           if (++hits > cap) return false
-          m.cells++; m.stringUnits += units; m.longestString = Math.max(m.longestString, units); keySet.add(row * W + col)
+          // Each new view key is the view build's unit, spent as it is added (round 3): a walk refused part-way has
+          // still paid for what it built.
+          const key = row * W + col
+          if (!keySet.has(key)) { if (budget.spend(1) === 'refused') { refused = true; return false } keySet.add(key) }
+          m.cells++; m.stringUnits += units; m.longestString = Math.max(m.longestString, units)
           if (flag > 0) m.strings++
           if (flag === 2) m.nonAscii++
           return true
@@ -305,8 +309,7 @@ function createSnapshot(sheetId: string, bounds: SourceRect, declared: readonly 
         perArea.push(m)
       }
       const keys = keySet
-      const viewCells = keys.size
-      if (budget.spend(viewCells) === 'refused') return unresolved('cf-resource-limit')
+      const viewCells = keys.size // already spent, one per key
       const metrics: CfPayloadMetrics = { viewCells, index, atoms: indexOf.map(i => perArea[i]!) }
       const inView = (row: number, col: number): boolean => distinct.some(r => inRect(r, row, col))
       const charge = (units: number): void => { if (budget.spend(units) === 'refused') throw CF_WORK_REFUSED }

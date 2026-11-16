@@ -974,10 +974,12 @@ export const CF_TEXT_UNIT_CHARS = 4
  * replaces, the numeric pattern, a suffix test, slice, search, Number), `coerceToBoolean` (trim and a case fold, then
  * the compare), a string comparison (a case fold of each side, then the compare), `textChars` (Array.from) and a join. */
 const COERCE_NUMBER_PASSES = 8
-/** Passes a conditional criterion's parse makes (prefix strip, numeric pattern, wildcard tokens), and a frequency key's
- * (`cfCountifKey`: ASCII test, wildcard, prefix and error tests, `numericLooking` with `coerceToNumber`, the fold). */
+/** Passes a conditional criterion's parse makes (prefix strip, numeric pattern, wildcard tokens), and an admitted
+ * frequency key's costliest path (`cfCountifKey`: the ASCII test, the wildcard test, the numeric pattern, then
+ * `coerceToNumber`'s trim, thousands replace and numeric test, which rejects there; the fold's replace and its output;
+ * and the map lookup's hash: 9. The anchored prefix and `#` tests read O(1)). */
 export const CF_CRITERION_PASSES = 3
-export const CF_FREQUENCY_KEY_PASSES = 12
+export const CF_FREQUENCY_KEY_PASSES = 9
 /** Each function's text profile: how its operands are consumed and what it returns. Exhaustive over the allow-list
  * (asserted at load), so a function added to it is never priced as free. */
 type TextProfile = 'concat' | 'len' | 'trim' | 'case' | 'slice' | 'logical' | 'if' | 'pass' | 'is' | 'number-of-args' | 'position' | 'aggregate' | 'conditional'
@@ -1055,7 +1057,7 @@ export function cfTextUnits(shape: CfCallShape, payload: CfPayloadMetrics, trace
       case 'number': return literalValue(node.value)
       case 'boolean': return BOOLEAN_VALUE
       case 'error': return { len: node.error.length, text: false, ascii: true }
-      case 'empty': return BLANK_VALUE
+      case 'empty': return NUMBER_VALUE // an omitted argument reads as 0 or blank depending on the handler: bounded as a number
       case 'cell': { const i = shape.cellRefs.get(node); return out(i === undefined ? NUMBER_VALUE : cellValue(i)) }
       case 'range': case 'wholeCol': case 'wholeRow': return BLANK_VALUE // traversed, never rendered (scalar slots refuse ranges)
       case 'unary': { chars += numberPasses(walk(node.expr)); return NUMBER_VALUE }
@@ -1086,7 +1088,7 @@ export function cfTextUnits(shape: CfCallShape, payload: CfPayloadMetrics, trace
         const args = node.args.map(walk)
         switch (profile) {
           case 'concat': { const len = args.reduce((n, a) => n + a.len, 0); chars += len * 2; return out({ len, text: true, ascii: args.every(a => a.ascii) }) }
-          case 'len': chars += 2 * (args[0]?.len ?? 0); return { len: 5, text: false, ascii: true }
+          case 'len': chars += 2 * (args[0]?.len ?? 0); return NUMBER_VALUE
           case 'trim': { const x = args[0] ?? BLANK_VALUE; chars += 3 * x.len; return out({ len: x.len, text: true, ascii: x.ascii }) }
           case 'case': { const x = args[0] ?? BLANK_VALUE; const len = x.len * growth(x); chars += x.len + len; return out({ len, text: true, ascii: x.ascii }) }
           case 'slice': {

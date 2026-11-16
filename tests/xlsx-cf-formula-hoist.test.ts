@@ -689,3 +689,17 @@ describe('hoists obey the statistics session cap and the combined entry limit (T
     expect(memory.currentBytes).toBe(0)
   })
 })
+
+describe('the frequency key is charged on its costliest admitted path (Task 34 fix round 3, follow-up)', () => {
+  it('COUNTIF($A:$A,A1)>1 over 50-character ASCII text paints as the engine with the hoist', async () => {
+    const words = ['a', 'b', 'c', 'a', 'd', 'b', 'e', 'a'].map(w => w.repeat(50))
+    const cells: Cells = Object.fromEntries(words.map((w, i) => ['A' + (i + 1), w]))
+    const text = 'COUNTIF($A:$A,A1)>1'
+    const batch = await batchOf([formulaRule(text, 'B1:B8')], fakeSource(cells), { hoist: true })
+    for (let row = 0; row < 8; row++) {
+      const engine = engineEval(text.replace('A1', 'A' + (row + 1)), cells, { row, col: 1 }).value
+      expect(batch.evaluate(0, row, 1), 'B' + (row + 1)).toEqual({ kind: 'ready', value: { kind: 'boolean', value: engine } })
+    }
+    batch.dispose()
+  })
+})

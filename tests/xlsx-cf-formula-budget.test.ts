@@ -564,13 +564,24 @@ describe('a refused call\'s discovery work is charged to the preparation (Task 3
     expect(hostTaskSpy).toHaveBeenCalled()
     batch.dispose()
   })
+  it('cell hits walked before a refusal are charged: an un-hoisted SUM(A1:A200) refused at hit 129, three times', async () => {
+    const signal = new AbortController().signal
+    const budget = createCfWorkBudget({ now: frozen, signal })
+    const ceiling = createCfUnitCeiling()
+    const batch = await batchOf([formulaRule('SUM(A1:A200)>0', 'B1')], fakeSource(Object.fromEntries(Array.from({ length: 200 }, (_, r) => [`A${r + 1}`, r]))), { budget, signal, ceiling, hoist: false })
+    const before = ceiling.used
+    for (let i = 0; i < 3; i++) expect(batch.evaluate(0, 0, 1)).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
+    expect(budget.units).toBe(3 * CF_LIMITS.checkpointUnits)
+    expect(ceiling.used - before).toBe(3 * CF_LIMITS.checkpointUnits)
+    batch.dispose()
+  })
   it('discovery is bounded by the budget\'s remaining units before it runs', async () => {
     const signal = new AbortController().signal
     const budget = createCfWorkBudget({ now: frozen, signal })
     expect(budget.spend(budget.remaining - 3)).not.toBe('refused')
     const batch = await batchOf([formulaRule('SUM(A1:A10)>0', 'B1')], fakeSource(Object.fromEntries(Array.from({ length: 10 }, (_, r) => [`A${r + 1}`, r]))), { budget, signal, hoist: false })
     expect(batch.evaluate(0, 0, 1)).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
-    expect(budget.remaining).toBe(3) // the 10-cell view build was refused before it spent: nothing to charge
+    expect(budget.remaining).toBe(0) // the view build spent its first 3 keys, then refused: those 3 are charged
     expect(budget.spend(0)).not.toBe('refused') // never latched
     batch.dispose()
   })
@@ -679,6 +690,7 @@ describe('the per-node text model: own passes per operation, ASCII from the snap
     const ops: Array<(a: string, b: string) => string> = [
       a => `UPPER(${a})`, a => `LOWER(${a})`, a => `TRIM(${a})`, a => `LEFT(${a},2)`, a => `RIGHT(${a},3)`, a => `MID(${a},2,3)`,
       (a, b) => `${a}&${b}`, (a, b) => `CONCAT(${a},${b})`, (a, b) => `IF(TRUE,${a},${b})`, (a, b) => `IFERROR(${a},${b})`, a => `LEN(${a})`,
+      (_a, b) => `IF(TRUE,,${b})`, (a, _b) => `IF(FALSE,${a},)`, // omitted arguments
     ]
     const gen = (depth: number): string => (depth === 0 || r() < 0.25 ? pick(leaves) : pick(ops)(gen(depth - 1), gen(depth - 1)))
     let checked = 0
