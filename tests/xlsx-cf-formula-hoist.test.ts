@@ -613,3 +613,62 @@ describe('invariant subtrees are memoised per preparation under a charged lease 
     expect(full.after).toBe(0)
   })
 })
+
+describe('hoists obey the statistics session cap and the combined entry limit (Task 34 fix round 3, finding 3)', () => {
+  it('a frequency hoist that would pass the session byte cap is refused during construction and never cached', async () => {
+    const n = 131_073
+    const cells: Cells = Object.fromEntries(Array.from({ length: n }, (_, i) => [`A${i + 1}`, i]))
+    const memory = createCfMemory()
+    const session = createCfStatistics(memory)
+    const rule = formulaRule(`COUNTIF($A$1:$A$${n},B1)>0`, 'B1')
+    const source = fakeSource(cells, { bounds: rectOf('A1:A' + n) })
+    const out = await session.prepareHoists(rule, planCfHoist(formulaOf(rule)), source.stamp('s1'), source, createCfWorkBudget({ now: frozen, scan: true, maxUnits: 1e9 }), {})
+    expect(out).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
+    expect(memory.peakBytes).toBeLessThanOrEqual(CF_LIMITS.statisticsBytes)
+    expect(memory.currentBytes).toBe(0)
+    expect(session.size).toBe(0)
+    session.dispose()
+  }, 120_000)
+  it('an outstanding leased entry counts: a second large hoist that would pass the cap beside it is refused', async () => {
+    const n = 50_000
+    const cells: Cells = Object.fromEntries(Array.from({ length: n }, (_, i) => ['A' + (i + 1), i]))
+    const memory = createCfMemory()
+    const session = createCfStatistics(memory)
+    const source = fakeSource(cells, { bounds: rectOf('A1:A' + n) })
+    const big = () => createCfWorkBudget({ now: frozen, scan: true, maxUnits: 1e9 })
+    const first = formulaRule('COUNTIF($A$1:$A$' + n + ',B1)>0', 'B1'), second = formulaRule('COUNTIF($A$1:$A$' + n + ',C1)>0', 'C1')
+    const a = await session.prepareHoists(first, planCfHoist(formulaOf(first)), source.stamp('s1'), source, big(), {})
+    expect(a.kind).toBe('ready')
+    const held = memory.currentBytes
+    // The second scan fits alone, in a fresh session...
+    const alone = createCfStatistics(createCfMemory())
+    expect(released(await alone.prepareHoists(second, planCfHoist(formulaOf(second)), source.stamp('s1'), source, big(), {})).kind).toBe('ready')
+    alone.dispose()
+    // ...but not beside the first, still leased.
+    const b = await session.prepareHoists(second, planCfHoist(formulaOf(second)), source.stamp('s1'), source, big(), {})
+    expect(b).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
+    expect(memory.currentBytes).toBe(held)
+    released(a)
+    session.dispose()
+    expect(memory.currentBytes).toBe(0)
+  }, 120_000)
+  it('with maxEntries 1 (retained entries), a hoist then a statistics entry leaves one entry', async () => {
+    const cells: Cells = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`A${i + 1}`, i % 5]))
+    const memory = createCfMemory()
+    const session = createCfStatistics(memory, { maxEntries: 1, retainEntries: true })
+    const source = fakeSource(cells)
+    const rule = formulaRule('COUNTIF($A$1:$A$20,B1)>0', 'B1')
+    released(await session.prepareHoists(rule, planCfHoist(formulaOf(rule)), source.stamp('s1'), source, scan(), {}))
+    expect(session.size).toBe(1)
+    const stats = await session.prepareStatistics([[rectOf('A1:A20')]], source.stamp('s1'), source, scan())
+    for (const o of stats) if (o.kind === 'ready') o.value.release()
+    expect(session.size).toBe(1)
+    // The older hoist went, the statistics entry stayed: asking for it again scans nothing.
+    const scans = source.pageCalls.length
+    const again = await session.prepareStatistics([[rectOf('A1:A20')]], source.stamp('s1'), source, scan())
+    for (const o of again) if (o.kind === 'ready') o.value.release()
+    expect(source.pageCalls.length).toBe(scans)
+    session.dispose()
+    expect(memory.currentBytes).toBe(0)
+  })
+})

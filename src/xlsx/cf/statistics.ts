@@ -434,7 +434,13 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
     if (retainedHeld < 0) retainedHeld = 0
   }
 
-  function evict(): void {
+  function evict(keepHoist?: string): void {
+    // Hoist entries count with the statistics entries (round 3, finding 3); the older hoists go first, never the one
+    // just inserted.
+    for (const [key, entry] of [...hoistCache]) {
+      if (cache.size + hoistCache.size <= maxEntries && retainedHeld <= sessionCap) break
+      if (key !== keepHoist) dropHoist(key, entry)
+    }
     // LRU: Map preserves insertion order; the first key is the least recently used.
     for (const [key, entry] of cache.entries()) {
       if (cache.size + hoistCache.size <= maxEntries && retainedHeld <= sessionCap) break
@@ -478,12 +484,6 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
       transfer: () => ({ kind: 'unresolved', reason: 'cf-borrowed-hoist' }),
     }
   }
-  function evictHoists(keep: string): void {
-    for (const [key, entry] of hoistCache) {
-      if (cache.size + hoistCache.size <= maxEntries && retainedHeld <= sessionCap) break
-      if (key !== keep) dropHoist(key, entry)
-    }
-  }
   async function prepareHoists(rule: CfRule, hoists: readonly CfHoist[], stamp: CfStamp, source: CfValueSource, budget: CfWorkBudget,
     options: CfStatisticsOptions = {}): Promise<CfOutcome<CfLease<CfHoisted>>> {
     const signal = options.signal ?? new AbortController().signal
@@ -500,8 +500,18 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
       hoistCache.delete(key); hoistCache.set(key, hit) // LRU: most recently used last
       return { kind: 'ready', value: leaseHoist(hit) }
     }
-    const built = await scanHoists(hoists, stamp, source, budget, signal, memory)
+    // The scan's workspace counts against the session cap beside the retained entries and concurrent workspaces.
+    const token = {}
+    const fits = (bytes: number): boolean => {
+      if (withinCap(bytes - (workspaces.get(token) ?? 0)) > sessionCap) return false
+      workspaces.set(token, bytes)
+      return true
+    }
+    let built: CfOutcome<CfLease<CfHoisted>>
+    try { built = await scanHoists(hoists, stamp, source, budget, signal, memory, fits) } finally { workspaces.delete(token) }
     if (built.kind !== 'ready') return built
+    // Publication re-checks the cap: an entry that would not fit beside what the session holds is refused, not cached.
+    if (!checkCap(built.value.bytes)) { built.value.release(); return { kind: 'unresolved', reason: 'cf-resource-limit' } }
     // Recheck the source generation after the scan, before adoption (S5-K): a commit during the scan cancels it.
     if (signal.aborted || !stampsMatch(source.stamp(stamp.sheetId), stamp)) { built.value.release(); throw cancelled() }
     // An overwritten entry, and every entry of an older object of the same rule, is dropped (never leaked).
@@ -510,8 +520,7 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
     retainedHeld += entry.bytes
     hoistCache.set(key, entry)
     const out = leaseHoist(entry)
-    evictHoists(key)
-    evict()
+    evict(key)
     return { kind: 'ready', value: out }
   }
 
@@ -951,7 +960,7 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
         if (entry === undefined) {
           entry = { stats: built.value.stats, bytes: built.value.bytes, lease: built.value.candidate, refs: 0 }
           cache.set(key, entry)
-          if (cache.size > maxEntries) evict()
+          if (cache.size + hoistCache.size > maxEntries) evict()
         } else {
           // Same key completed twice (inflight dedupe should prevent this):
           // prefer the cached entry and release the duplicate candidate.
@@ -1241,7 +1250,7 @@ const FREQUENCY_INITIAL_CAPACITY = 16
  * statistics totals: those are compensated (Neumaier) and differ from the engine's sequential sum.
  */
 async function scanHoists(hoists: readonly CfHoist[], stamp: CfStamp, source: CfValueSource, budget: CfWorkBudget, signal: AbortSignal,
-  memory: CfMemory): Promise<CfOutcome<CfLease<CfHoisted>>> {
+  memory: CfMemory, fits: (bytes: number) => boolean = () => true): Promise<CfOutcome<CfLease<CfHoisted>>> {
   const spend: SpendState = { pending: 0, signal, budget }
   const refuse = (reason = 'cf-resource-limit'): CfOutcome<never> => ({ kind: 'unresolved', reason })
   let bounds: SourceRect | undefined
@@ -1252,13 +1261,15 @@ async function scanHoists(hoists: readonly CfHoist[], stamp: CfStamp, source: Cf
   }
   if (signal.aborted) throw cancelled()
   if (!bounds) return refuse('cf-pending-data')
+  // Every reservation is first checked against the session byte cap (round 3, finding 3), then made on the ledger.
+  if (!fits(HOIST_BASE_BYTES)) return refuse()
   const hold = memory.reserve(HOIST_BASE_BYTES)
   if (hold.kind !== 'reserved') return refuse()
   // `held` is what the record retains (base, scalars, keys, finished tables); `table` the frequency table being built.
   // A growth reserves held + old table + new table before it happens (the peak), then keeps only the new table.
   let held = HOIST_BASE_BYTES, table = 0, adopted = false
-  const grow = (bytes: number): boolean => { if (!hold.grow(held + table + bytes)) return false; held += bytes; return true }
-  const growTable = (next: number): boolean => { if (!hold.grow(held + table + next)) return false; table = next; return true }
+  const grow = (bytes: number): boolean => { if (!fits(held + table + bytes) || !hold.grow(held + table + bytes)) return false; held += bytes; return true }
+  const growTable = (next: number): boolean => { if (!fits(held + table + next) || !hold.grow(held + table + next)) return false; table = next; return true }
   const scalars = new Map<AstNode, ElementValue>(), frequencies = new Map<AstNode, ReadonlyMap<string, number>>(), longest = new Map<AstNode, number>()
   /** Stream one rect's stored cells in row-major order, spending one unit plus the string units of each cell first. */
   const stream = async (rect: SourceRect, visit: (literal: CfLiteral) => boolean | 'refuse'): Promise<CfOutcome<void>> => {
