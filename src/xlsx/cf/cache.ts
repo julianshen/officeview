@@ -42,7 +42,8 @@ export function createCfCache(memory: CfMemory, maxEntries = 16) {
     entry.refs++
     let released = false
     const release = () => { if (!released) { released = true; hold.release(); drop(entry) } }
-    const value: CfPrepared = Object.freeze({ stamp: entry.stamp,
+    const pending = entry.lease.value.pendingSheetIds
+    const value: CfPrepared = Object.freeze({ stamp: entry.stamp, ...(pending ? { pendingSheetIds: pending } : {}),
       at: (row: number, col: number) => released || !isCurrent(entry.stamp)
         ? { kind: 'unresolved' as const, reason: 'cf-stale-generation' } : entry.lease.value.at(row, col), dispose: release })
     return { value, bytes: entry.lease.bytes, release,

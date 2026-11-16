@@ -10,7 +10,7 @@ import { resolveCfCellStyle } from './dxf'
 import { CF_BAR_CELL_BYTES, CF_FORMULA_NODE_BYTES, CF_ICON_CELL_BYTES, CF_LIMITS, createCfWorkBudget, type CfMemory, type CfWorkBudget } from './limits'
 import { cfDefinitionFormulas, isCfFormulaOperand, type CfCellState, type CfFormula, type CfLease, type CfLiteral, type CfOutcome, type CfPrepared, type CfPrepareRequest, type CfRule, type CfSheetRules, type CfValueSource, type SourceRect } from './model'
 import { cfElementToLiteral, cfTruth, formulaRequiredCapabilities, type CfEvaluationContext, type CfResult } from './formula'
-import { prepareCfFormulaBatch, type CfFormulaBatch, type CfFormulaTask } from './dependencies'
+import { prepareCfFormulaBatch, withCfDependencyGen, type CfFormulaBatch, type CfFormulaTask, type CfWorkbookSource } from './dependencies'
 import { cfEdgeModeOf, cfFormulaReading, cfTruthReadings } from './formulaReadings'
 import { cfRuntimeEvidence, evaluateCellIsOperands, evaluatePredicate, type CfEvidenceGate } from './predicates'
 import { createCfStatistics, type CfRangeStatistics, type CfStatisticsOptions, type CfStatisticsSession } from './statistics'
@@ -112,13 +112,20 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
     /** Stage 5: this preparation's evaluation context (one clock snapshot). Absent: every formula rule is unresolved
      * (`cf-evaluation-context-missing`); Stage 1-4 rules are unaffected. */
     evaluation?: CfEvaluationContext
-    /** The host sheet's name, the formula context's `currentSheet` (default: the stamp's sheet id). Same-sheet results do
-     * not depend on it: a formula naming any sheet is refused before invocation until Task 36. */
-    sheetName?: string } = {}) {
+    /** The host sheet's name, the formula context's `currentSheet` (default: the stamp's sheet id). Without it a formula
+     * naming any sheet withholds (the host cannot be told from another sheet). */
+    sheetName?: string
+    /** Task 36 (Ruling S5-K): the workbook's other sheets, values and generations from one overlay-aware store. The
+     * source the service reads is wrapped so its `stamp()` carries the live `dependencyGen`; absent, cross-sheet rules
+     * withhold and no stamp is touched. */
+    workbook?: CfWorkbookSource } = {}) {
   const cache = createCfCache(memory)
   const evidence = options.evidence ?? cfRuntimeEvidence
-  async function prepareCf(request: CfPrepareRequest, source: CfValueSource, account = memory): Promise<CfLease<CfPrepared>> {
+  async function prepareCf(request: CfPrepareRequest, hostSource: CfValueSource, account = memory): Promise<CfLease<CfPrepared>> {
     if (account !== memory) throw quota()
+    // One live stamp for every check below (`at`, adoption, the batch and statistics rechecks): a referenced sheet's
+    // commit moves it exactly as a host commit does. Identity when no rule names another sheet.
+    const source = withCfDependencyGen(hostSource, sheet, options.sheetName, options.workbook)
     if (options.statistics && !sameCfStamp(options.statistics.stamp, request.stamp)) throw cancel()
     cache.activate(request.stamp) // invalidate old paint even if the new request refuses
     if (request.signal.aborted) throw cancel()
@@ -167,12 +174,15 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
             ordered[j + 1] = value
           }
           const data = new Map<number, CfOutcome<CfCellState> | undefined>()
+          /** Referenced sheets still importing (S5-K): the cells reading them are pending, and so is the preparation. */
+          const pendingSheets = new Set<string>()
           for (const rect of rects) for (let row = rect.firstRow; row <= rect.lastRow; row++) for (let col = rect.firstCol; col <= rect.lastCol; col++) {
             await work(); data.set(row * 16384 + col, undefined)
           }
           const snapshot = (reason?: string): CfLease<CfPrepared> => {
             if (signal.aborted || !sameCfStamp(source.stamp(stamp.sheetId), stamp)) throw cancel()
-            const prepared: CfPrepared = Object.freeze({ stamp,
+            const pending = pendingSheets.size > 0 ? Object.freeze([...pendingSheets]) : undefined
+            const prepared: CfPrepared = Object.freeze({ stamp, ...(pending ? { pendingSheetIds: pending } : {}),
               at(row: number, col: number): CfOutcome<CfCellState> {
                 if (!Number.isInteger(row) || !Number.isInteger(col) || col < 0 || col >= 16384 || row < 0 || row >= 1048576) return { kind: 'unresolved', reason: 'cf-outside-preparation' }
                 if (!sameCfStamp(source.stamp(stamp.sheetId), stamp)) return { kind: 'unresolved', reason: 'cf-stale-generation' }
@@ -281,7 +291,9 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
           }
           if (formulaTasks.length > 0) {
             batch = await prepareCfFormulaBatch(formulaTasks, {
-              source, sheetId: stamp.sheetId, sheetName: options.sheetName ?? stamp.sheetId, stamp, evaluation: options.evaluation,
+              source, sheetId: stamp.sheetId, ...(options.sheetName !== undefined ? { sheetName: options.sheetName } : {}), stamp, evaluation: options.evaluation,
+              ...(options.workbook ? { workbook: options.workbook } : {}),
+              ...(cfFormulaReading('formula:cross-sheet-missing', check) === 'no-format' ? { missingSheet: 'ref-error' as const } : {}),
               edge: cfEdgeModeOf(check), memory, signal, budget, statistics, targets: rects,
               hoist: plan => plan.every(h => cfFormulaReading(h.kind === 'scalar' ? 'formula:hoist-aggregate' : 'formula:hoist-countif-frequency', check) !== undefined),
               ...(options.statisticsBudget ? { scanBudget: options.statisticsBudget } : {}),
@@ -398,7 +410,14 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                 } else if (formulaRules.has(rule)) {
                   // A formula rule never reaches the literal predicates (`evaluatePredicate` would read a formula operand
                   // as a literal): it is decided by the batch, or withheld by name.
-                  outcomes.push(formulaOutcome(rule, row, col, value))
+                  const out = formulaOutcome(rule, row, col, value)
+                  // A referenced page still importing (S5-K): the cell is pending as a whole (base paints, no permanent
+                  // diagnostic), never composed as a tainted write, and the preparation names the sheet.
+                  if (out.kind === 'unresolved' && out.reason === 'cf-pending-data' && out.pendingSheetIds?.length) {
+                    for (const id of out.pendingSheetIds) pendingSheets.add(id)
+                    return { kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: out.pendingSheetIds }
+                  }
+                  outcomes.push(out)
                 } else {
                   outcomes.push(preparedStats?.kind === 'unresolved' ? preparedStats
                     : evaluatePredicate(rule, { row, col }, value, preparedStats?.kind === 'ready' ? preparedStats.value.value : undefined, evidence, options.dateContext))

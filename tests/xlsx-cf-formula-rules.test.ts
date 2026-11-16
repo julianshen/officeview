@@ -534,7 +534,8 @@ describe('every formula capability production queries is a catalog capability wi
   })
   it('an unregistered capability is never honoured, whatever evidence holds it', () => {
     const all = (): boolean => true
-    for (const id of ['formula:truth-range', 'formula:fn-today', 'formula:anchor-multi-range', 'formula:cross-sheet-reference']) expect(cfFormulaReading(id, all), id).toBeUndefined()
+    // Task 36 registered the cross-sheet readings; the missing-sheet reading stays unregistered (an unknown sheet is unresolved).
+    for (const id of ['formula:truth-range', 'formula:fn-today', 'formula:anchor-multi-range', 'formula:cross-sheet-missing']) expect(cfFormulaReading(id, all), id).toBeUndefined()
     expect(cfFormulaReading('formula:truth-number', all)).toBe('number-nonzero-true')
     expect(cfFormulaReading('formula:truth-number', () => false)).toBeUndefined()
     // A selection needs its matched reading: none is published, so none resolves.

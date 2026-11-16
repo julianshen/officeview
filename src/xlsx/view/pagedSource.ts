@@ -86,6 +86,9 @@ function sameOverlayMerges(a: readonly SourceRect[] | undefined, b: readonly Sou
 interface OverlayState { overlay?: ValueOverlay; structureGen: number }
 const overlayStates = new WeakMap<object, OverlayState>()
 const workbookAdapters = new WeakMap<object, Map<string, PagedXlsxSheetAdapter>>()
+/** Each workbook's `storeFor` (Task 36, Ruling S5-K): a sheet a cross-sheet CF formula reads is created through the same
+ * path a later activation uses, so there is one canonical, overlay-aware adapter per sheet. */
+const workbookStoreFactories = new WeakMap<object, (sheetId: string) => PagedXlsxSheetAdapter | undefined>()
 
 /** Conservative structured-clone size for the sparkline model, recursive; depth is bounded by the sparkline model.
  * Repeated references are counted again. */
@@ -1001,9 +1004,13 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       const carriesFormula = liveRules?.rules.some(rule => rule.definition.kind === 'expression'
         || (rule.definition.kind === 'cellIs' && rule.definition.operands.some(operand => 'formula' in operand))) === true
       const evaluation = carriesFormula ? (await import('../cf/formula')).cfDocumentEvaluationOfPaged(this.workbook) : undefined
+      // Ruling S5-K: only a sheet whose rules name another sheet gets the workbook seam (no cross-sheet work otherwise).
+      const crossSheet = carriesFormula && liveRules?.rules.some(rule => rule.definition.kind !== 'unresolved' && (rule.definition.dependencySheets?.length ?? 0) > 0) === true
+      const workbook = crossSheet ? this.cfWorkbook(account) : undefined
       const remoteOptions: CfRemotePrepareOptions = {
         ...options,
         ...(evaluation ? { evaluation } : {}),
+        ...(workbook ? { workbook, sheetName: this.sheet.name } : {}),
         dateContext,
         hiddenRows: (this.sheet.metadata?.hiddenRows ?? []).map(run => ({ firstRow: run.r0, lastRow: run.r1, firstCol: 0, lastCol: 16383 })),
         merges: (this.sheet.mergeRects ?? []).map(m => ({ firstRow: m.r0, lastRow: m.r1, firstCol: m.c0, lastCol: m.c1 })),
@@ -1012,6 +1019,51 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       return await prepareCfRemote(request, this.sheet.sheetId, source, liveRules, account, remoteOptions)
     } finally {
       try { hashHold.release() } catch { /* release-only path */ }
+    }
+  }
+
+  /**
+   * Task 36 (Ruling S5-K): the workbook seam over the canonical adapters. Each referenced sheet's values and generation
+   * come from its own `PagedXlsxSheetAdapter` (overlay-aware), created through the workbook's `storeFor` when it was never
+   * activated; raw `workbook.store.pages` is never read for CF.
+   */
+  private cfWorkbook(memory: CfMemory): import('../cf/dependencies').CfWorkbookSource {
+    const workbook = this.workbook
+    const adapterOf = (sheetId: string): PagedXlsxSheetAdapter | undefined => workbookStoreFactories.get(workbook)?.(sheetId) ?? workbookAdapters.get(workbook)?.get(sheetId)
+    const made = new Map<string, import('../cf/dependencies').CfWorkbookSheet>()
+    return {
+      sheetIdOf: name => workbook.sheets.find(s => s.name.toLowerCase() === name.toLowerCase())?.sheetId,
+      sheet(sheetId) {
+        const known = made.get(sheetId)
+        if (known) return known
+        const paged = workbook.sheets.find(s => s.sheetId === sheetId)
+        const adapter = paged ? adapterOf(sheetId) : undefined
+        if (!paged || !adapter) return undefined
+        const sheet = adapter.cfDependencySheet(memory)
+        made.set(sheetId, sheet)
+        return sheet
+      },
+    }
+  }
+  /** This sheet as another sheet's CF dependency: its values (overlay-aware pages), its live value generation, and its
+   * import state, all read from this one adapter. */
+  cfDependencySheet(memory: CfMemory): import('../cf/dependencies').CfWorkbookSheet {
+    const self = this
+    const values: CfValueSource = {
+      bounds: async () => {
+        if (self.sheet.state !== 'complete') return undefined
+        const used = self.extent.used
+        if (!used) return { firstRow: 0, lastRow: 1048575, firstCol: 0, lastCol: 16383 }
+        return { firstRow: used.r0, lastRow: used.r1, firstCol: used.c0, lastCol: used.c1 }
+      },
+      stamp: () => ({ owner: self.stamp.docId, sheetId: self.sheet.sheetId, workbookValueGen: self.stamp.valueGen, cfGen: 0, viewGen: 0, structureGen: self.structureGen, clockGen: 0 }),
+      pages: (id, rects, budget, signal) => self.cfPages({ rects: [], stamp: { owner: '', sheetId: id, workbookValueGen: 0, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 }, grantBytes: 0 }, memory, signal)(id, rects, budget, signal),
+      ...(this.workbook.formatting?.styles ? { numberFormats: 'resolved' as const } : {}),
+    }
+    return {
+      sheetId: this.sheet.sheetId, name: this.sheet.name, values,
+      state: () => (self.sheet.state === 'complete' ? 'ready' : self.sheet.state === 'incomplete' ? 'failed' : 'pending'),
+      valueGen: () => self.stamp.valueGen,
     }
   }
 
@@ -1763,6 +1815,10 @@ export interface CfRemotePrepareOptions {
   /** Sheet layout facts the scale scope gates need (hidden rows, merged regions), in CF rect naming. */
   readonly hiddenRows?: readonly { firstRow: number; lastRow: number; firstCol: number; lastCol: number }[]
   readonly merges?: readonly { firstRow: number; lastRow: number; firstCol: number; lastCol: number }[]
+  /** Task 36 (Ruling S5-K): the workbook's other sheets, over the worker's canonical adapters, and the host's name.
+   * Absent: cross-sheet rules withhold, and the reply carries no `dependencies`. */
+  readonly workbook?: import('../cf/dependencies').CfWorkbookSource
+  readonly sheetName?: string
 }
 export async function prepareCfRemote(
   request: CfReadRequest,
@@ -1830,6 +1886,8 @@ async function prepareCfRemoteOnce(
   const limitsModule = await import('../cf/limits')
   const serviceModule = await import('../cf/service')
   const modelModule = await import('../cf/model')
+  // Only a preparation handed a workbook loads the cross-sheet helpers (a sheet without cross-sheet rules gets none).
+  const depsModule = options?.workbook && rules ? await import('../cf/dependencies') : undefined
   // One clock snapshot per preparation, from the injected `now` (Ruling S5-L). Taken before anything is reserved, and only a
   // policy-carrying route loads the module.
   const evaluation = options?.evaluation ? (await import('../cf/formula')).cfEvaluationContextFor(options.evaluation, options.now ?? Date.now) : undefined
@@ -1934,6 +1992,13 @@ async function prepareCfRemoteOnce(
     }
   }
   const liveStamp: CfReadStamp = { ...request.stamp, workbookValueGen: live.workbookValueGen, cfGen: version }
+  // Ruling S5-K: the referenced sheets' generations this preparation reads, captured once. The service stamp carries
+  // their sum (`dependencyGen`), so the batch goes stale synchronously at a referenced commit; the reply lists them so
+  // the main cache entry is current only while each keeps its `valueGen`. Absent when no rule names another sheet.
+  const dependencies = depsModule ? depsModule.cfDependencyIdentities(rules, options?.sheetName, options?.workbook) : []
+  const dependencyGen = dependencies.reduce((n, d) => n + d.valueGen, 0)
+  const depField: { dependencies?: readonly { sheetId: string; valueGen: number }[] } = dependencies.length > 0 ? { dependencies } : {}
+  const dependenciesMoved = (): boolean => depsModule !== undefined && depsModule.cfDependencyGenOf(rules, options?.sheetName, options?.workbook) !== dependencyGen
   // CF service ranges use firstRow/lastRow naming; the wire uses r0/r1/c0/c1.
   // Built inside the admitted hold: the rect list is request-bounded above.
   const cfRects = request.rects.map(r => ({ firstRow: r.r0, lastRow: r.r1, firstCol: r.c0, lastCol: r.c1 }))
@@ -2011,7 +2076,7 @@ async function prepareCfRemoteOnce(
   // traversal workspace on the shared account instead of running unbounded.
   const templateBytes = limitsModule.measureCfWalkedBytes({
     sheetId, stamp: liveStamp, kind: 'ready', states: [], definitions,
-    definitionsVersion: version, diagnostics: [],
+    definitionsVersion: version, diagnostics: [], ...depField,
   }, memory)
   const diagBytes = limitsModule.measureCfWalkedBytes(diagnostics, memory)
   // Per-cell bound matching the walked wire size exactly for full wins:
@@ -2064,7 +2129,8 @@ async function prepareCfRemoteOnce(
   // Service and its lease live inside the working hold: everything built
   // below is covered by the pre-admitted bound, and a single finally unwinds
   // in reverse order (lease, service, working hold) exactly once.
-  const service = serviceModule.createCfService(rules, memory, { budget: options?.budget, dateContext: options?.dateContext, merges: options?.merges, ...(evaluation ? { evaluation } : {}), ...(options?.hiddenRows?.length ? { statisticsOptions: { hiddenRows: options.hiddenRows } } : {}) })
+  const service = serviceModule.createCfService(rules, memory, { budget: options?.budget, dateContext: options?.dateContext, merges: options?.merges, ...(evaluation ? { evaluation } : {}), ...(options?.hiddenRows?.length ? { statisticsOptions: { hiddenRows: options.hiddenRows } } : {}),
+    ...(options?.workbook ? { workbook: options.workbook } : {}), ...(options?.sheetName !== undefined ? { sheetName: options.sheetName } : {}) })
   let prepared: CfLease<CfPrepared> | undefined
   try {
     if (signal?.aborted) throw cancelled()
@@ -2072,11 +2138,16 @@ async function prepareCfRemoteOnce(
       prepared = await service.prepareCf(
           // The service grant bounds the transient workspace (its own session
           // cap); the receiver grant above bounds the wire reply.
-          { stamp: { ...liveStamp }, sourceRects: cfRects, signal: signal ?? new AbortController().signal, grantBytes: limitsModule.CF_LIMITS.scratchBytes },
+          { stamp: { ...liveStamp, ...(dependencyGen !== 0 ? { dependencyGen } : {}) }, sourceRects: cfRects, signal: signal ?? new AbortController().signal, grantBytes: limitsModule.CF_LIMITS.scratchBytes },
           source,
           memory,
         )
     } catch (error) {
+      // A referenced sheet that committed mid-build cancels the service's adoption (S5-K): that is a stale generation,
+      // never a value published under the newer one.
+      if (error instanceof PackageError && error.code === 'cancelled' && !signal?.aborted && dependenciesMoved()) {
+        return { ...cfReadError(sheetId, liveStamp, 'cf-stale-generation', 'cf-stale-source', 'A sheet these rules read changed generation during preparation.'), requiredBytes: undefined }
+      }
       if (error instanceof PackageError && error.code === 'cancelled') throw error
       if (signal?.aborted) throw cancelled()
         if (error instanceof CfPageFault) {
@@ -2106,13 +2177,19 @@ async function prepareCfRemoteOnce(
     // Revalidate liveness before publishing: a generation change during the
     // scan must withhold instead of publishing stale states.
     const liveAfter = source.stamp(sheetId)
-    if (liveAfter.workbookValueGen !== request.stamp.workbookValueGen) {
+    if (liveAfter.workbookValueGen !== request.stamp.workbookValueGen || dependenciesMoved()) {
       try { prepared.release() } catch { /* release-only path */ }
       prepared = undefined
       return {
         ...cfReadError(sheetId, { ...request.stamp, workbookValueGen: liveAfter.workbookValueGen }, 'cf-stale-generation', 'cf-stale-source', 'Conditional formatting source changed generation during preparation.'),
         requiredBytes: undefined,
       }
+    }
+    // A referenced sheet still importing (S5-K): the reply is pending on it, with no permanent diagnostic; the main cache
+    // waits for that sheet and re-requests once it completes.
+    if (prepared.value.pendingSheetIds?.length) {
+      const pendingSheetIds = [...prepared.value.pendingSheetIds]
+      return { ...cfReadError(sheetId, liveStamp, 'cf-pending-data', 'cf-source-pending', 'A sheet these conditional formats read is still importing.'), pendingSheetIds }
     }
     const states: CfReadResult['states'][number][] = []
     let unresolvedCells = 0
@@ -2172,7 +2249,7 @@ async function prepareCfRemoteOnce(
     const measureBuilt = (candidateStates: typeof states, withDiagnostics: boolean): number | undefined => {
       const candidate: CfReadResult = {
         sheetId, stamp: liveStamp, kind: 'ready', states: candidateStates, definitions,
-        definitionsVersion: version, diagnostics: withDiagnostics ? diagnostics : [],
+        definitionsVersion: version, diagnostics: withDiagnostics ? diagnostics : [], ...depField,
       }
       return limitsModule.measureCfWalkedBytes(candidate, memory)
     }
@@ -2220,7 +2297,7 @@ async function prepareCfRemoteOnce(
           const diagWithGrant = [...diagnostics, ...grantDiags]
           const withGrantDiagBytes = limitsModule.measureCfWalkedBytes({
             sheetId, stamp: liveStamp, kind: 'ready', states: omitted, definitions,
-            definitionsVersion: version, diagnostics: diagWithGrant,
+            definitionsVersion: version, diagnostics: diagWithGrant, ...depField,
           }, memory)
           if (withGrantDiagBytes !== undefined && withGrantDiagBytes + envelopeBytes <= grantBytes) {
             finalStates = omitted
@@ -2248,7 +2325,7 @@ async function prepareCfRemoteOnce(
     const published = live ?? definitions
     const result: CfReadResult = {
       sheetId, stamp: liveStamp, kind: 'ready', states: finalStates, definitions: published,
-      definitionsVersion: version, diagnostics: finalDiagnostics,
+      definitionsVersion: version, diagnostics: finalDiagnostics, ...depField,
     }
     // Transfer live outgoing ownership: adopt the wire result on the shared
     // account instead of refunding before return, so no window exists where
@@ -2542,6 +2619,7 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
     }
     return store
   }
+  workbookStoreFactories.set(workbook, sheetId => (workbook.sheets.some(s => s.sheetId === sheetId) ? storeFor(sheetId) : undefined))
   /** Builds a sheet's pivot assets for its current generation (`pivotAssets` runs one build per key). */
   const buildPivotAssets = async (sheetId: string, signal: AbortSignal, profile: ProfileId, memory: Parameters<NonNullable<WorkbookSource['pivotAssets']>>[3]): Promise<WorkerPivotAssets | undefined> => {
       const sheet = find(sheetId)

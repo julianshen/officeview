@@ -8,7 +8,10 @@
  * `stored()` element and the sort on entering `stored()` spend from the call's own meter first, and a read outside the
  * view or of an unavailable value taints the call instead of serving a guessed blank.
  *
- * Cross-sheet values are Task 36: a qualified atom refuses here (`cf-formula-dependency`).
+ * Cross-sheet values (Task 36, Ruling S5-K): a qualified atom is read from the referenced sheet's own source, resolved
+ * through the workbook seam `CfWorkbookSource`, whose values and generation come from one overlay-aware store. Each sheet
+ * is its own snapshot (its own bounds, its own keys); the composite dispatches reads and views by sheet, so two sheets'
+ * `A1` never share a key and a call's view cardinality counts every sheet it reads.
  *
  * The batch driver below runs the per-cell calls between cooperative checkpoints: a call never yields inside the
  * engine; the loop awaits `hostTask()` between cells whenever the pacing budget said `'yield'`, and checks cancellation
@@ -28,15 +31,105 @@ import {
   CF_DEPENDENCY_CELL_BYTES, CF_DEPENDENCY_KEY_BYTES, CF_LIMITS, CF_VIEW_WORKSPACE_BYTES, CF_WORK_REFUSED, createCfUnitCeiling, createCfWorkBudget,
   type CfMemory, type CfReservation, type CfUnitCeiling, type CfWorkBudget,
 } from './limits'
-import type { CfFormula, CfLease, CfOutcome, CfRule, CfStamp, CfValueSource, SourceRect } from './model'
+import type { CfFormula, CfLease, CfOutcome, CfRule, CfSheetRules, CfStamp, CfValueSource, SourceRect } from './model'
 import type { CfStatisticsSession } from './statistics'
 
-/** The other sheets' stores (Task 36). Values and generation come from the same store. */
-export interface CfWorkbookSource { sheetIdOf(name: string): string | undefined; store(sheetId: string): unknown }
+/**
+ * One referenced sheet of the workbook seam (Task 36, Ruling S5-K): its values and its live value generation come from the
+ * same canonical, overlay-aware store, so a value read and the generation it is published under cannot disagree.
+ */
+export interface CfWorkbookSheet {
+  readonly sheetId: string
+  readonly name: string
+  readonly values: CfValueSource
+  /** `'pending'` while the sheet is still importing, `'failed'` when its import ended incomplete. */
+  state(): 'ready' | 'pending' | 'failed'
+  /** The live value generation, or undefined when this view cannot name it (`cf-dependency-generation-unknown`). */
+  valueGen(): number | undefined
+}
+/** The other sheets of the host's workbook (Task 36). Absent on a leg: every cross-sheet rule withholds (S5-P). */
+export interface CfWorkbookSource {
+  sheetIdOf(name: string): string | undefined
+  sheet(sheetId: string): CfWorkbookSheet | undefined
+}
+/** Ruling S5-K caps table: at most 16 distinct referenced sheets per sheet's rules (one formula's own cap is enforced at
+ * compile, `CF_LIMITS.referencedSheets`; this one bounds the union over the sheet's tasks). */
+export const CF_REFERENCED_SHEETS_LIMIT: number = CF_LIMITS.referencedSheets
+const lower = (s: string | undefined): string | undefined => s?.toLowerCase()
+/** The other sheets `rules` name, case-insensitive distinct in first-appearance order, the host excluded. Reads only the
+ * rule origins' `dependencySheets` (no formula is walked), so a sheet without cross-sheet rules does no work. */
+export function cfReferencedSheetNames(rules: CfSheetRules | undefined, hostName: string | undefined): string[] {
+  const out: string[] = []
+  if (!rules) return out
+  const seen = new Set<string>()
+  const host = lower(hostName)
+  for (const rule of rules.rules) {
+    const d = rule.definition
+    const names = d.kind === 'unresolved' ? undefined : d.dependencySheets
+    if (!names) continue
+    for (const name of names) {
+      const key = name.toLowerCase()
+      if (key === host || seen.has(key)) continue
+      seen.add(key); out.push(name)
+    }
+  }
+  return out
+}
+/** The referenced sheets the workbook knows, resolved once (unknown names are skipped: their rules never paint). */
+function resolveReferenced(rules: CfSheetRules | undefined, hostName: string | undefined, workbook: CfWorkbookSource): CfWorkbookSheet[] {
+  const out: CfWorkbookSheet[] = []
+  for (const name of cfReferencedSheetNames(rules, hostName)) {
+    const id = workbook.sheetIdOf(name)
+    const sheet = id === undefined ? undefined : workbook.sheet(id)
+    if (sheet && !out.some(s => s.sheetId === sheet.sheetId)) out.push(sheet)
+  }
+  return out
+}
+const sumGen = (sheets: readonly CfWorkbookSheet[]): number => {
+  let gen = 0
+  for (const s of sheets) { const g = s.valueGen(); if (g !== undefined && Number.isSafeInteger(g)) gen += g }
+  return gen
+}
+/**
+ * `CfStamp.dependencyGen` (Ruling S5-K): the sum of the referenced sheets' live value generations, the host excluded; 0
+ * when no rule names another sheet, without reading the workbook. A sheet whose generation is unknown contributes nothing
+ * (its rules are refused, `cf-dependency-generation-unknown`).
+ */
+export function cfDependencyGenOf(rules: CfSheetRules | undefined, hostName: string | undefined, workbook: CfWorkbookSource | undefined): number {
+  if (!workbook || cfReferencedSheetNames(rules, hostName).length === 0) return 0
+  return sumGen(resolveReferenced(rules, hostName, workbook))
+}
+/** The referenced sheets' `{ sheetId, valueGen }` pairs, for the worker reply (`CfReadResult.dependencies`). */
+export function cfDependencyIdentities(rules: CfSheetRules | undefined, hostName: string | undefined, workbook: CfWorkbookSource | undefined): Array<{ sheetId: string; valueGen: number }> {
+  if (!workbook || cfReferencedSheetNames(rules, hostName).length === 0) return []
+  const out: Array<{ sheetId: string; valueGen: number }> = []
+  for (const s of resolveReferenced(rules, hostName, workbook)) { const g = s.valueGen(); if (g !== undefined) out.push({ sheetId: s.sheetId, valueGen: g }) }
+  return out
+}
+/**
+ * The host source with a live `dependencyGen` on every `stamp()` (Ruling S5-K): `CfPrepared.at` re-reads it, so a
+ * referenced sheet's commit makes the old batch stale synchronously, exactly as a host commit does. Without a cross-sheet
+ * rule (or without a workbook) the host source is returned unchanged and its stamp is never touched.
+ */
+export function withCfDependencyGen(host: CfValueSource, rules: CfSheetRules | undefined, hostName: string | undefined, workbook: CfWorkbookSource | undefined): CfValueSource {
+  if (!workbook || cfReferencedSheetNames(rules, hostName).length === 0) return host
+  const sheets = resolveReferenced(rules, hostName, workbook)
+  return {
+    bounds: (id, budget, signal) => host.bounds(id, budget, signal),
+    pages: (id, rects, budget, signal) => host.pages(id, rects, budget, signal),
+    ...(host.numberFormats ? { numberFormats: host.numberFormats } : {}),
+    stamp: id => ({ ...host.stamp(id), dependencyGen: sumGen(sheets) }),
+  }
+}
 /** One call's restricted view: its store for the engine, its measured payload, and a charged single-cell reader. */
-export type CfDependencyView = Readonly<{ store: SparseCellStore; metrics: CfPayloadMetrics; read(row: number, col: number): ElementValue }>
+export type CfDependencyView = Readonly<{ store: SparseCellStore; metrics: CfPayloadMetrics
+  /** A charged single-cell read; `sheet` names a referenced sheet (absent: the host). */
+  read(row: number, col: number, sheet?: string): ElementValue }>
 export interface CfDependencySnapshot {
   readonly sheetId: string
+  /** Every sheet the snapshot holds, the host first (its name absent when the caller gave none); the engine's
+   * `ReferenceServices` resolve names and ids from exactly this list. */
+  readonly sheets: readonly Readonly<{ sheetId: string; name?: string }>[]
   /** Stored entries held. */
   readonly entries: number
   /** A snapshot read (uncharged): taints on a cell outside the snapshot, another sheet, or an unavailable value. */
@@ -84,16 +177,59 @@ function lowerBound(rows: readonly number[], value: number): number {
  * The lease holds the final table. A refusal publishes nothing and returns the ledger to its baseline.
  */
 export async function prepareCfDependencies(atoms: readonly CfFootprintEntry[], host: CfValueSource, workbook: CfWorkbookSource | undefined,
-  budget: CfWorkBudget, memory: CfMemory, signal: AbortSignal, options: Readonly<{ sheetId: string; scanBudget?: () => CfWorkBudget }>): Promise<CfOutcome<CfLease<CfDependencySnapshot>>> {
-  void workbook // Task 36 (S5-K): cross-sheet stores
+  budget: CfWorkBudget, memory: CfMemory, signal: AbortSignal, options: Readonly<{ sheetId: string; sheetName?: string; scanBudget?: () => CfWorkBudget }>): Promise<CfOutcome<CfLease<CfDependencySnapshot>>> {
   if (signal.aborted) throw cancel()
-  if (atoms.some(a => a.sheet !== undefined)) return unresolved('cf-formula-dependency')
+  // A qualifier naming the host is the host (case-insensitive); any other qualifier is a referenced sheet (S5-K).
+  const hostKey = lower(options.sheetName)
+  const own: CfFootprintEntry[] = [], others = new Map<string, { sheet: CfWorkbookSheet; name: string; atoms: CfFootprintEntry[] }>()
+  for (const a of atoms) {
+    if (a.sheet === undefined || lower(a.sheet) === hostKey) { own.push({ rect: a.rect }); continue }
+    // No workbook, or no host name to tell the host from another sheet: a qualified atom cannot be read (S5-P).
+    if (!workbook || hostKey === undefined) return unresolved('cf-formula-dependency')
+    const key = a.sheet.toLowerCase()
+    let group = others.get(key)
+    if (!group) {
+      const id = workbook.sheetIdOf(a.sheet)
+      const sheet = id === undefined ? undefined : workbook.sheet(id)
+      if (!sheet) return unresolved('cf-formula-dependency')
+      if (others.size >= CF_REFERENCED_SHEETS_LIMIT) return unresolved('cf-resource-limit')
+      const state = sheet.state()
+      if (state === 'pending') return { kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: [sheet.sheetId] }
+      if (state === 'failed') return unresolved('cf-read-failed')
+      if (sheet.valueGen() === undefined) return unresolved('cf-dependency-generation-unknown')
+      others.set(key, group = { sheet, name: a.sheet, atoms: [] })
+    }
+    group.atoms.push({ rect: a.rect })
+  }
+  const hostSnap = await prepareSheetSnapshot(own, host, budget, memory, signal, { sheetId: options.sheetId, ...(options.scanBudget ? { scanBudget: options.scanBudget } : {}) }, false)
+  if (others.size === 0 || hostSnap.kind !== 'ready') return hostSnap
+  const subs = new Map<string, CfLease<CfDependencySnapshot>>()
+  const releaseAll = (): void => { hostSnap.value.value.dispose(); for (const l of subs.values()) l.value.dispose() }
+  try {
+    for (const [key, group] of others) {
+      const out = await prepareSheetSnapshot(group.atoms, group.sheet.values, budget, memory, signal, { sheetId: group.sheet.sheetId, ...(options.scanBudget ? { scanBudget: options.scanBudget } : {}) }, true)
+      if (out.kind !== 'ready') { releaseAll(); return out }
+      subs.set(key, out.value)
+    }
+  } catch (error) { releaseAll(); throw error }
+  const composite = composeSnapshots(hostSnap.value.value, options.sheetName, [...others].map(([key, g]) => ({ key, name: g.name, snapshot: subs.get(key)!.value })))
+  const leases = [hostSnap.value, ...subs.values()]
+  const bytes = leases.reduce((n, l) => n + l.bytes, 0)
+  return { kind: 'ready', value: { value: composite, bytes, release: () => composite.dispose(),
+    transfer: () => ({ kind: 'unresolved', reason: 'cf-dependency-snapshot-transfer' }) } }
+}
+
+/** One sheet's snapshot (the Task 34 single-sheet table). `dependency`: a referenced sheet, whose pending page or fault
+ * names it (`pendingSheetIds`) instead of reading as a permanent dependency failure. */
+async function prepareSheetSnapshot(atoms: readonly CfFootprintEntry[], host: CfValueSource,
+  budget: CfWorkBudget, memory: CfMemory, signal: AbortSignal, options: Readonly<{ sheetId: string; scanBudget?: () => CfWorkBudget }>, dependency: boolean): Promise<CfOutcome<CfLease<CfDependencySnapshot>>> {
   const sheetId = options.sheetId
+  const failure = (error: unknown): CfOutcome<never> => sourceFailure(error, signal, dependency ? sheetId : undefined)
   const scan = (): CfWorkBudget => options.scanBudget?.() ?? createCfWorkBudget({ signal, scan: true })
   let bounds: SourceRect | undefined
-  try { bounds = await host.bounds(sheetId, scan(), signal) } catch (error) { return sourceFailure(error, signal) }
+  try { bounds = await host.bounds(sheetId, scan(), signal) } catch (error) { return failure(error) }
   if (signal.aborted) throw cancel()
-  if (!bounds) return unresolved('cf-pending-data')
+  if (!bounds) return dependency ? { kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: [sheetId] } : unresolved('cf-pending-data')
   const declared = atoms.map(a => Object.freeze({ ...a.rect }))
   const scanRects = declared.map(r => clampTo(r, bounds!)).filter((r): r is SourceRect => r !== undefined)
   let cells = 0
@@ -156,7 +292,7 @@ export async function prepareCfDependencies(atoms: readonly CfFootprintEntry[], 
       } catch (error) {
         if (error instanceof PackageError && error.code === 'cancelled') throw error
         if (signal.aborted) throw cancel()
-        return sourceFailure(error, signal)
+        return failure(error)
       }
     }
     // An out-of-order source is sorted here, charged n log n before the work.
@@ -194,9 +330,16 @@ export async function prepareCfDependencies(atoms: readonly CfFootprintEntry[], 
     if (!adopted) hold.release()
   }
 }
-function sourceFailure(error: unknown, signal: AbortSignal): CfOutcome<never> {
+function sourceFailure(error: unknown, signal: AbortSignal, dependencySheetId?: string): CfOutcome<never> {
   if (error instanceof PackageError && error.code === 'cancelled') throw error
   if (signal.aborted) throw cancel()
+  // A referenced sheet's page fault (pagedSource `CfPageFault`, matched by name: no worker import here): an unimported
+  // page is pending on that sheet, a page whose generation moved is stale; neither is a permanent dependency failure.
+  if (dependencySheetId !== undefined && error instanceof Error && error.name === 'CfPageFault') {
+    const fault = (error as Error & { fault?: string }).fault
+    if (fault === 'incomplete') return { kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: [dependencySheetId] }
+    if (fault === 'stale') return unresolved('cf-stale-generation')
+  }
   const message = error instanceof Error ? error.message : ''
   if (message === 'CF cancelled') throw cancel()
   if (message === 'CF work limit' || (error instanceof PackageError && error.code === 'resource-limit')) return unresolved('cf-resource-limit')
@@ -260,7 +403,7 @@ function createSnapshot(sheetId: string, bounds: SourceRect, declared: readonly 
     return true
   }
   const snapshot: CfDependencySnapshot = {
-    sheetId, entries: count,
+    sheetId, entries: count, sheets: [{ sheetId }],
     get tainted() { return tainted },
     reset() { tainted = false },
     dispose() { if (!disposed) { disposed = true; columns.clear(); release() } },
@@ -347,13 +490,89 @@ function createSnapshot(sheetId: string, bounds: SourceRect, declared: readonly 
   return snapshot
 }
 
+/**
+ * The host snapshot plus one per referenced sheet (Ruling S5-K). Reads and views dispatch by sheet; a view's metrics sum
+ * every sheet's (its `viewCells` is the call's whole cardinality, so the bound prices every sheet it reads) and its atoms
+ * keep the call's order. The distinct-area total across sheets stays within the one workspace the caller reserved.
+ */
+function composeSnapshots(host: CfDependencySnapshot, hostName: string | undefined, others: readonly { key: string; name: string; snapshot: CfDependencySnapshot }[]): CfDependencySnapshot {
+  const hostKey = lower(hostName)
+  const byKey = new Map(others.map(o => [o.key, o.snapshot] as const))
+  const byId = new Map<string, CfDependencySnapshot>([[host.sheetId, host], ...others.map(o => [o.snapshot.sheetId, o.snapshot] as const)])
+  const all = [host, ...others.map(o => o.snapshot)]
+  let disposed = false, tainted = false
+  const subOf = (sheet: string | undefined): CfDependencySnapshot | undefined => (sheet === undefined || lower(sheet) === hostKey ? host : byKey.get(sheet.toLowerCase()))
+  return {
+    sheetId: host.sheetId,
+    sheets: [{ sheetId: host.sheetId, ...(hostName !== undefined ? { name: hostName } : {}) }, ...others.map(o => ({ sheetId: o.snapshot.sheetId, name: o.name }))],
+    get entries() { return all.reduce((n, s) => n + s.entries, 0) },
+    get tainted() { return tainted || all.some(s => s.tainted) },
+    reset() { tainted = false; for (const s of all) s.reset() },
+    dispose() { if (disposed) return; disposed = true; for (const s of all) s.dispose() },
+    read(sheet, row, col) {
+      const sub = disposed ? undefined : subOf(sheet)
+      if (!sub) { tainted = true; return NA }
+      return sub.read(undefined, row, col)
+    },
+    viewFor(effective, budget, workspace) {
+      if (disposed) return unresolved('cf-formula-dependency')
+      const groups = new Map<CfDependencySnapshot, { entries: CfFootprintEntry[]; at: number[] }>()
+      const distinct = new Set<string>()
+      for (let i = 0; i < effective.length; i++) {
+        const e = effective[i]!, sub = subOf(e.sheet)
+        if (!sub) return unresolved('cf-formula-dependency')
+        distinct.add(`${sub.sheetId}|${e.rect.firstRow}:${e.rect.lastRow}:${e.rect.firstCol}:${e.rect.lastCol}`)
+        let g = groups.get(sub)
+        if (!g) groups.set(sub, g = { entries: [], at: [] })
+        g.entries.push({ rect: e.rect }); g.at.push(i)
+      }
+      // One workspace for every sheet's view: the distinct areas of the whole call are capped as one view's are.
+      if (distinct.size > CF_LIMITS.formulaAtoms) return unresolved('cf-resource-limit')
+      const atoms: Array<CfPayloadMetrics['atoms'][number]> = new Array(effective.length)
+      let viewCells = 0, index = 0
+      const views = new Map<string, CfDependencyView>()
+      for (const [sub, g] of groups) {
+        const v = sub.viewFor(g.entries, budget, workspace)
+        if (v.kind !== 'ready') return v
+        views.set(sub.sheetId, v.value)
+        viewCells += v.value.metrics.viewCells; index += v.value.metrics.index ?? 0
+        g.at.forEach((pos, j) => { atoms[pos] = v.value.metrics.atoms[j]! })
+      }
+      const viewOf = (sheet: string | undefined): CfDependencyView | undefined => { const sub = subOf(sheet); return sub ? views.get(sub.sheetId) : undefined }
+      const store: SparseCellStore = {
+        read(address) {
+          const v = byId.has(address.sheetId) ? views.get(address.sheetId) : undefined
+          if (!v) { tainted = true; return { value: NA, origin: 'input' } }
+          return v.store.read(address)
+        },
+        stored(): Iterable<StoredCell> {
+          // Each sheet's view charges its own sort and elements on entry (their sum never exceeds the bound's v log v).
+          const parts = [...views.values()].map(v => v.store.stored())
+          return (function* () { for (const p of parts) yield* p })()
+        },
+      }
+      return { kind: 'ready', value: { store, metrics: { viewCells, index, atoms }, read(row, col, sheet) {
+        const v = viewOf(sheet)
+        if (!v) { tainted = true; return NA }
+        return v.read(row, col)
+      } } }
+    },
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* The batch driver: one snapshot, hoists, bounded calls, yields.      */
 /* ------------------------------------------------------------------ */
 
 export interface CfFormulaTask { readonly rule: CfRule; readonly formula: CfFormula }
 export interface CfFormulaBatchOptions {
-  readonly source: CfValueSource; readonly sheetId: string; readonly sheetName: string; readonly stamp: CfStamp
+  /** `sheetName`: the host's name, the formula context's `currentSheet`. Absent (the sheet-id fallback), a formula naming
+   * any sheet withholds: the host cannot be told apart from another sheet. */
+  readonly source: CfValueSource; readonly sheetId: string; readonly sheetName?: string; readonly stamp: CfStamp
+  /** The other sheets (Task 36, Ruling S5-K). Absent: every cross-sheet task withholds (`cf-formula-dependency`). */
+  readonly workbook?: CfWorkbookSource
+  /** An unknown sheet name reads `#REF!` (only under the `formula:cross-sheet-missing` reading); absent: unresolved. */
+  readonly missingSheet?: 'ref-error'
   /** Absent: every formula task is unresolved (`cf-evaluation-context-missing`, Ruling S5-L). */
   readonly evaluation: CfEvaluationContext | undefined
   readonly edge: CfEdgeMode | undefined
@@ -403,6 +622,8 @@ export async function prepareCfFormulaBatch(tasks: readonly CfFormulaTask[], opt
   const hoists: Array<Readonly<{ plan: readonly CfHoist[]; values: CfHoisted }> | undefined> = tasks.map(() => undefined)
   const invariants = createCfInvariantMemo(memory)
   const pacing: CfFormulaPacing = { yieldPending: false }
+  /** Lower-cased unknown sheet names that read `#REF!` (only under `missingSheet: 'ref-error'`). */
+  const missing = new Set<string>()
   let attempts = 0, disposed = false
   const dispose = (): void => {
     if (disposed) return
@@ -420,13 +641,46 @@ export async function prepareCfFormulaBatch(tasks: readonly CfFormulaTask[], opt
       if (signal.aborted) throw cancel()
       const footprints: Array<readonly CfFootprintEntry[]> = tasks.map(() => [])
       const cappedCells: number[] = tasks.map(() => 0)
+      const hostKey = lower(options.sheetName)
+      // Ruling S5-K: the referenced sheets of the whole sheet's tasks, at most 16; their bounds clamp whole-axis atoms.
+      const referenced = new Map<string, CfWorkbookSheet>()
+      const depBounds = new Map<string, SourceRect>()
       for (let i = 0; i < tasks.length; i++) {
         const { formula, rule } = tasks[i]!
         if (!bounds) { taskOutcome[i] = unresolved('cf-pending-data'); continue }
-        if (formula.dependencySheets.length > 0) { taskOutcome[i] = unresolved('cf-formula-dependency'); continue }
         if (!formula.anchor) { taskOutcome[i] = unresolved('cf-unmeasured-capability'); continue }
+        const others = formula.dependencySheets.filter(name => name.toLowerCase() !== hostKey)
+        if (formula.dependencySheets.length > 0 && hostKey === undefined) { taskOutcome[i] = unresolved('cf-formula-dependency'); continue }
+        if (others.length > 0) {
+          if (!options.workbook) { taskOutcome[i] = unresolved('cf-formula-dependency'); continue }
+          let refused: CfOutcome<void> | undefined
+          for (const name of others) {
+            const key = name.toLowerCase()
+            if (referenced.has(key) || missing.has(key)) continue
+            const id = options.workbook.sheetIdOf(name)
+            const sheet = id === undefined ? undefined : options.workbook.sheet(id)
+            if (!sheet) {
+              // Decided before invocation: an unknown sheet never reaches the engine as a silent `#REF!` no-match.
+              if (options.missingSheet === 'ref-error') { missing.add(key); continue }
+              refused = unresolved('cf-formula-dependency'); break
+            }
+            if (referenced.size >= CF_REFERENCED_SHEETS_LIMIT) { refused = unresolved('cf-resource-limit'); break }
+            if (sheet.valueGen() === undefined) { refused = unresolved('cf-dependency-generation-unknown'); break }
+            const state = sheet.state()
+            if (state === 'pending') { refused = { kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: [sheet.sheetId] }; break }
+            if (state === 'failed') { refused = unresolved('cf-read-failed'); break }
+            let b: SourceRect | undefined
+            try { b = await sheet.values.bounds(sheet.sheetId, scanBudget(), signal) } catch (error) { b = undefined; if (signal.aborted) throw cancel(); void error }
+            if (signal.aborted) throw cancel()
+            if (!b) { refused = { kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: [sheet.sheetId] }; break }
+            referenced.set(key, sheet); depBounds.set(key, b)
+          }
+          if (refused) { taskOutcome[i] = refused; continue }
+        }
         // Per task (Task 35): a predicate decides from the plan's hoist kinds, so an unevidenced kind is never hoisted.
-        const planned = options.hoist ? planCfHoist(formula) : []
+        // A hoist is scanned from the host source and its generation, so one over another sheet's range is not hoisted
+        // (the call pays per cell, and over the per-call cap refuses).
+        const planned = options.hoist ? planCfHoist(formula).filter(h => h.range.sheet === undefined || h.range.sheet.toLowerCase() === hostKey) : []
         const plan = planned.length > 0 && (typeof options.hoist === 'function' ? options.hoist(planned) : options.hoist === true) ? planned : []
         if (plan.length > 0) {
           if (!options.statistics) { taskOutcome[i] = unresolved('cf-resource-limit'); continue }
@@ -440,10 +694,12 @@ export async function prepareCfFormulaBatch(tasks: readonly CfFormulaTask[], opt
         const targets = options.targets ? rule.ranges.flatMap(r => options.targets!.map(t => clampTo(r, t)).filter((x): x is SourceRect => x !== undefined)) : rule.ranges
         // The cap counts the populated clamp; the snapshot declares the geometry as written (S5-SUMIF-SHAPE: a whole
         // column stays a whole column, so `countAbsent` and coverage see the true area).
-        const capped = cfFormulaFootprint(formula, targets, formula.anchor, options.edge, { bounds, hoists: plan })
+        const boundsOf = (sheet: string | undefined): SourceRect | undefined => (sheet === undefined || sheet.toLowerCase() === hostKey ? bounds : depBounds.get(sheet.toLowerCase()))
+        const capped = cfFormulaFootprint(formula, targets, formula.anchor, options.edge, { bounds, boundsOf, hoists: plan })
         const declared = cfFormulaFootprint(formula, targets, formula.anchor, options.edge, { hoists: plan, uncapped: true })
         if (capped === 'over-cap' || declared === 'over-cap') { taskOutcome[i] = unresolved('cf-resource-limit'); continue }
-        footprints[i] = declared
+        // A missing sheet's atoms read `#REF!` and are never snapshotted.
+        footprints[i] = declared.filter(e => e.sheet === undefined || !missing.has(e.sheet.toLowerCase()))
         cappedCells[i] = capped.reduce((n, e) => n + area(e.rect), 0)
       }
       // One shared snapshot of the admitted tasks' footprints, in priority order, within the cell cap.
@@ -460,7 +716,7 @@ export async function prepareCfFormulaBatch(tasks: readonly CfFormulaTask[], opt
         attempts++
         const b = attemptBudget()
         try {
-          const out = await prepareCfDependencies(atoms, options.source, undefined, b, memory, signal, { sheetId: options.sheetId, scanBudget })
+          const out = await prepareCfDependencies(atoms, options.source, options.workbook, b, memory, signal, { sheetId: options.sheetId, ...(options.sheetName !== undefined ? { sheetName: options.sheetName } : {}), scanBudget })
           if (out.kind === 'ready') owned.push(out.value)
           return out
         } finally {
@@ -483,7 +739,8 @@ export async function prepareCfFormulaBatch(tasks: readonly CfFormulaTask[], opt
   } catch (error) { dispose(); throw error }
   const materialization = { limit: CF_LIMITS.materializationCells, used: 0 }
   const contexts: Array<CfFormulaContext | undefined> = tasks.map((_, i) => evaluation && snapshots[i] ? {
-    sheetName: options.sheetName, evaluation, semantics: cfFormulaSemantics(evaluation), edge: options.edge, materialization, budget: options.budget,
+    sheetName: options.sheetName ?? options.sheetId, evaluation, semantics: cfFormulaSemantics(evaluation), edge: options.edge, materialization, budget: options.budget,
+    ...(missing.size > 0 ? { missingSheets: missing } : {}),
     memory, invariants, ceiling, pacing, ...(hoists[i] ? { hoists: hoists[i] } : {}), ...(options.probe ? { probe: options.probe } : {}), ...(options.onCall ? { onCall: options.onCall } : {}), ...(options.onSettled ? { onSettled: options.onSettled } : {}),
   } : undefined)
   const covers = (task: number, row: number, col: number): boolean => tasks[task]!.rule.ranges.some(r => inRect(r, row, col))

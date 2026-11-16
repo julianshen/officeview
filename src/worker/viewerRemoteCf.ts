@@ -163,9 +163,10 @@ export class RemoteCfCache {
   private entrySeq = 0
   constructor(private readonly host: CfReadHost, readonly budgetBytes: number = Number.MAX_SAFE_INTEGER) {}
 
-  get(sheetId: string, rects: readonly SourceRect[], stamp: CfReadStamp): PagedCfState {
+  get(sheetId: string, rects: readonly SourceRect[], stamp: CfReadStamp, dependencyStale = false): PagedCfState {
     if (!this.host.hasConditionalFormatting(sheetId)) return empty()
     if (this.closed) return empty()
+    if (dependencyStale) this.invalidateSheet(sheetId)
     const entry = this.entryFor(sheetId, rects, stamp)
     if (!entry) return { state: 'failed', gen: 0, diagnostics: [{ kind: 'resource-limit', feature: 'cf-cache-budget', message: 'Conditional formatting cache is pinned at capacity.' }] }
     // Liveness gate: a changed owner invalidates the cached preparation even
@@ -176,6 +177,9 @@ export class RemoteCfCache {
       entry.gen++
       this.deferChanged(sheetId, entry.rects, 'updated')
     }
+    // Ruling S5-K: a reply read from other sheets is current only while each keeps the value generation it listed; a
+    // moved one makes the whole host sheet stale (Lesson 5), not only this scope.
+    if (this.dependenciesMoved(entry)) return this.get(sheetId, rects, stamp, true)
     if (entry.state === 'waiting' && !entry.controller) void this.load(entry)
     return entry
   }
@@ -198,6 +202,8 @@ export class RemoteCfCache {
       entry.gen++
       this.deferChanged(sheetId, entry.rects, 'updated')
     }
+    // A moved dependency (S5-K): the whole host sheet goes stale, then this scope is acquired afresh.
+    if (this.dependenciesMoved(entry)) { this.invalidateSheet(sheetId); return this.acquire(sheetId, rects, stamp, signal) }
     entry.refs++
     if (entry.state === 'waiting' && !entry.controller) void this.load(entry)
     let released = false
@@ -232,6 +238,30 @@ export class RemoteCfCache {
       if (entry.refs <= 0 && !entry.dropped) this.drop(entry)
       else if (entry.refs > 0) this.pinned.add(entry)
     }
+  }
+
+  /**
+   * Ruling S5-K: drops the CF of every sheet whose cached reply lists `changedSheetId` among its dependencies (a commit
+   * or release on a referenced sheet), every tile of each such sheet (Lesson 5). Held versions survive until released.
+   */
+  invalidateDependents(changedSheetId: string): void {
+    const hosts = new Set<string>()
+    for (const entry of this.entries.values()) {
+      if (entry.sheetId !== changedSheetId && entry.result?.dependencies?.some(d => d.sheetId === changedSheetId)) hosts.add(entry.sheetId)
+    }
+    for (const sheetId of hosts) this.invalidateSheet(sheetId)
+  }
+  /** Whole-sheet invalidation: every entry of the sheet, and one whole-sheet change notice. */
+  private invalidateSheet(sheetId: string): void {
+    this.invalidate(sheetId)
+    this.deferChanged(sheetId, [{ r0: 0, r1: 1048575, c0: 0, c1: 16383 }], 'updated')
+  }
+  /** A ready reply whose listed dependency moved its value generation (the main thread's identity of that sheet). */
+  private dependenciesMoved(entry: Entry): boolean {
+    const deps = entry.state === 'ready' ? entry.result?.dependencies : undefined
+    if (!deps) return false
+    for (const d of deps) if (this.host.identity(d.sheetId).valueGen !== d.valueGen) return true
+    return false
   }
 
   close(): void {
@@ -513,6 +543,18 @@ export class RemoteCfCache {
     if (this.closed) return
     const completeness = this.host.loadState(sheetId).completeness
     if (completeness === 'loading') return
+    // A reply pending on a referenced sheet (S5-K) waits for that sheet: no request while it loads, one when it
+    // completes, and a permanent failure (once) when its import ended incomplete.
+    const dependencyPending = entry.pendingSheetIds?.filter(id => id !== sheetId) ?? []
+    if (dependencyPending.some(id => this.host.loadState(id).completeness === 'loading')) return
+    if (dependencyPending.some(id => this.host.loadState(id).completeness === 'incomplete')) {
+      entry.state = 'failed'
+      entry.pendingSheetIds = undefined
+      entry.diagnostics = [{ kind: 'unsupported', feature: 'cf-read-failed', message: 'Conditional formatting is unavailable because a sheet its rules read did not finish loading.' }]
+      entry.gen++
+      this.deferChanged(sheetId, entry.rects, 'status')
+      return
+    }
     if (completeness === 'incomplete') {
       entry.state = 'failed'
       entry.diagnostics = [{ kind: 'unsupported', feature: 'cf-read-failed', message: 'Conditional formatting is unavailable because the sheet did not finish loading.' }]

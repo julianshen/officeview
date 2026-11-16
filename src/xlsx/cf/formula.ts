@@ -600,7 +600,7 @@ export type CfFootprintEntry = Readonly<{ sheet?: string; rect: SourceRect }>
  * `options.hoists` the atoms are the per-cell remainder's: hoisted ranges are scanned by the hoist, not snapshotted.
  */
 export function cfFormulaFootprint(f: CfFormula, targets: readonly SourceRect[], anchor: Readonly<{ row: number; col: number }>, edge: CfEdgeMode | undefined,
-  options: Readonly<{ bounds?: SourceRect; hoists?: readonly CfHoist[]; uncapped?: boolean }> = {}): readonly CfFootprintEntry[] | 'over-cap' {
+  options: Readonly<{ bounds?: SourceRect; boundsOf?: (sheet: string | undefined) => SourceRect | undefined; hoists?: readonly CfHoist[]; uncapped?: boolean }> = {}): readonly CfFootprintEntry[] | 'over-cap' {
   const out: CfFootprintEntry[] = []
   const owner: number[] = [] // the atom each entry came from
   // One entry per atom (the brief's shape: `{A1:A50, A2:A9}` keeps both); an atom's own shifts merge when one contains
@@ -626,7 +626,8 @@ export function cfFormulaFootprint(f: CfFormula, targets: readonly SourceRect[],
       const cols = shiftedSpans(atom.firstCol, atom.lastCol, atom.absCol, t.firstCol - anchor.col, t.lastCol - anchor.col, MAX_COL, edge)
       for (const [r0, r1] of rows) for (const [c0, c1] of cols) {
         let rect: SourceRect = { firstRow: r0, lastRow: r1, firstCol: c0, lastCol: c1 }
-        const b = options.bounds
+        // A qualified atom clamps to its own sheet's populated bounds (Task 36), never the host's.
+        const b = options.boundsOf ? options.boundsOf(atom.sheet) : options.bounds
         if (b && atom.axis === 'col') rect = { ...rect, firstRow: Math.max(r0, b.firstRow), lastRow: Math.min(r1, b.lastRow) }
         if (b && atom.axis === 'row') rect = { ...rect, firstCol: Math.max(c0, b.firstCol), lastCol: Math.min(c1, b.lastCol) }
         if (rect.firstRow > rect.lastRow || rect.firstCol > rect.lastCol) continue
@@ -1202,8 +1203,12 @@ export function cfEvaluatorScratchBytes(f: CfFormula, payload: CfPayloadMetrics,
  * table reference, an intersection, a spill or an implicit intersection) is a mismatch. Fail closed: on `false` the call
  * never runs.
  */
-export function cfTreeReadsMatchView(tree: AstNode, expected: readonly SourceRect[]): boolean {
-  const key = (sheet: string | undefined, r: SourceRect): string => `${(sheet ?? '').toLowerCase()}!${r.firstRow}:${r.lastRow}:${r.firstCol}:${r.lastCol}`
+export function cfTreeReadsMatchView(tree: AstNode, expected: readonly (SourceRect | CfFootprintEntry)[], hostName?: string): boolean {
+  // The host's own name is the host (Task 36): `Sheet1!A1` in Sheet1's rule reads the same view area as `A1`. Any other
+  // qualifier must match an expected area of that same sheet.
+  const host = hostName?.toLowerCase()
+  const sheetKey = (sheet: string | undefined): string => (sheet === undefined || sheet.toLowerCase() === host ? '' : sheet.toLowerCase())
+  const key = (sheet: string | undefined, r: SourceRect): string => `${sheetKey(sheet)}!${r.firstRow}:${r.lastRow}:${r.firstCol}:${r.lastCol}`
   const read = new Set<string>()
   const stack: AstNode[] = [tree]
   while (stack.length) {
@@ -1222,7 +1227,7 @@ export function cfTreeReadsMatchView(tree: AstNode, expected: readonly SourceRec
       default: return false
     }
   }
-  const want = new Set(expected.map(r => key(undefined, r)))
+  const want = new Set(expected.map(e => ('rect' in e ? key(e.sheet, e.rect) : key(undefined, e))))
   if (want.size !== read.size) return false
   for (const k of read) if (!want.has(k)) return false
   return true
@@ -1337,6 +1342,8 @@ export type CfFormulaProbe = (ctx: EvaluationContext) => void
 export type CfFormulaContext = Readonly<{
   sheetName: string; evaluation: CfEvaluationContext; semantics: ResolvedSemantics; edge: CfEdgeMode | undefined
   materialization: MaterializationBudget; budget: CfWorkBudget; memory: CfMemory; invariants: CfInvariantMemo
+  /** Lower-cased sheet names the workbook does not hold, read as `#REF!` (only under `formula:cross-sheet-missing`). */
+  missingSheets?: ReadonlySet<string>
   /** The preparation ceiling every call draws its static bound from (non-final refusal). */
   ceiling: CfUnitCeiling
   /** The rule's hoist plan and hoisted values; absent, nothing is hoisted (a hoistable call then pays per cell). */
@@ -1381,7 +1388,16 @@ function criterionTokens(value: EvaluationValue | undefined): number | undefined
  * flag, a work refusal or a taint, even when `IFERROR`/`IFNA` masked it.
  */
 export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col: number }>, snapshot: CfDependencySnapshot, context: CfFormulaContext): CfOutcome<CfResult> {
-  if (f.dependencySheets.length > 0) return unresolved('cf-formula-dependency') // cross-sheet sources: Task 36 (S5-K)
+  // Cross-sheet atoms (Task 36, S5-K): each area carries its sheet (absent for the host, by name, case-insensitive); a
+  // name the snapshot does not hold is decided here, before any read: `#REF!` under the missing-sheet reading, else
+  // unresolved. The snapshot's own sheet list is the only authority on which names it can read.
+  const hostLower = context.sheetName.toLowerCase()
+  const held = new Set(snapshot.sheets.slice(1).map(x => x.name?.toLowerCase()).filter((x): x is string => x !== undefined))
+  const sheetOfAtom = (sheet: string | undefined): string | undefined | 'missing' | 'unknown' => {
+    if (sheet === undefined || sheet.toLowerCase() === hostLower) return undefined
+    if (held.has(sheet.toLowerCase())) return sheet
+    return context.missingSheets?.has(sheet.toLowerCase()) ? 'missing' : 'unknown'
+  }
   if (f.usesClock && context.evaluation.timeZone === '') return unresolved('cf-evaluation-context-missing')
   const anchor = f.anchor
   if (!anchor) return unresolved('cf-unmeasured-capability') // multi-range anchor (S5-C)
@@ -1423,13 +1439,18 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
     } catch (error) { if (error === EDGE_UNMEASURED) return 'unmeasured'; throw error }
   }
   const areas: Array<SourceRect | 'ref'> = []
+  const areaSheets: Array<string | undefined> = []
+  // A missing sheet's reference becomes a `#REF!` literal in the per-call tree (no read, no view area).
+  const substitutes = new Map<AstNode, AstNode>()
   for (const node of shape.refs) {
+    const sheet = sheetOfAtom(admittedAtom(node).sheet)
+    if (sheet === 'unknown') return unresolved('cf-formula-dependency')
+    if (sheet === 'missing') { areas.push('ref'); areaSheets.push(undefined); substitutes.set(node, { type: 'error', error: '#REF!' }); continue }
     const area = translateRef(node)
     if (area === 'unmeasured') return unresolved('cf-formula-edge-unmeasured')
-    areas.push(area)
+    areas.push(area); areaSheets.push(sheet)
   }
   // Frequency lookups, scalar hoists and memoised subtrees become literal nodes in the per-call tree (no handler runs).
-  const substitutes = new Map<AstNode, AstNode>()
   for (const [node, value] of memoised) substitutes.set(node, literalNode(value))
   const live: number[] = [] // indexes of refs with an on-sheet area, in shape order
   areas.forEach((a, i) => { if (a !== 'ref') live.push(i) })
@@ -1440,7 +1461,7 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
   const hold = context.memory.reserve(CF_FORMULA_CALL_BYTES + CF_VIEW_WORKSPACE_BYTES)
   if (hold.kind !== 'reserved') return unresolved('cf-resource-limit')
   try {
-  const view = snapshot.viewFor(live.map(i => ({ rect: areas[i] as SourceRect })), meter, hold)
+  const view = snapshot.viewFor(live.map(i => (areaSheets[i] !== undefined ? { sheet: areaSheets[i]!, rect: areas[i] as SourceRect } : { rect: areas[i] as SourceRect })), meter, hold)
   if (view.kind !== 'ready') return view.kind === 'unresolved' ? view : unresolved('cf-formula-dependency')
   const metrics: CfPayloadMetrics = { viewCells: view.value.metrics.viewCells, index: view.value.metrics.index ?? 0, atoms: shape.refs.map((_, i) => {
     const j = live.indexOf(i)
@@ -1448,7 +1469,7 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
   }) }
   const readAt = (i: number): ElementValue | 'ref' => {
     const a = areas[i]!
-    return a === 'ref' ? 'ref' : view.value.read(a.firstRow, a.firstCol)
+    return a === 'ref' ? 'ref' : view.value.read(a.firstRow, a.firstCol, areaSheets[i])
   }
   for (const hoist of plan) {
     if (hoist.kind === 'scalar') {
@@ -1468,7 +1489,7 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
     else if (node.type === 'cell') {
       const i = shape.refs.indexOf(node)
       const a = i < 0 ? 'ref' : areas[i]!
-      value = a === 'ref' ? null : snapshot.read(undefined, a.firstRow, a.firstCol)
+      value = a === 'ref' ? null : snapshot.read(areaSheets[i], a.firstRow, a.firstCol)
     }
     // The criterion's parse (prefix strip, numeric pattern, wildcard tokens) is charged on the meter BEFORE it runs, at
     // the units the bound's text term counts for it (round 3, finding 2): a long criterion is refused unparsed.
@@ -1515,8 +1536,9 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
       // The tree the engine walks must read exactly the view's areas, except the frequency criteria read above (their
       // calls are already literal nodes). A mismatch never runs: the view would not cover, or not price, what it reads.
       const lookupRefs = new Set(plan.filter(h => h.kind === 'countif-frequency').map(h => shape.refs.indexOf(h.criterion as RefNode)))
-      const engineAreas = areas.filter((a, i): a is SourceRect => a !== 'ref' && !lookupRefs.has(i))
-      if (!cfTreeReadsMatchView(tree.value.value, engineAreas)) return unresolved('cf-formula-dependency')
+      const engineAreas: CfFootprintEntry[] = []
+      areas.forEach((a, i) => { if (a !== 'ref' && !lookupRefs.has(i)) engineAreas.push(areaSheets[i] !== undefined ? { sheet: areaSheets[i]!, rect: a } : { rect: a }) })
+      if (!cfTreeReadsMatchView(tree.value.value, engineAreas, context.sheetName)) return unresolved('cf-formula-dependency')
       // Admission: the whole static bound is charged before the call, from the pacing budget then the ceiling.
       const spent = context.budget.spend(breakdown.total)
       if (spent === 'refused') return unresolved('cf-resource-limit')
@@ -1525,7 +1547,7 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
       admitted = true // the bound charged covers the discovery already metered
       limit = breakdown.total
       context.onCall?.(breakdown)
-      const outcome = invoke(f, tree.value.value, at, shape, areas, view.value, snapshot, context, stores => {
+      const outcome = invoke(f, tree.value.value, at, shape, areas, areaSheets, view.value, snapshot, context, stores => {
         // A clean call: memoise each invariant subtree it computed, in whichever mode the engine evaluated it (a scalar
         // value; a blank is skipped, since an empty literal could read as an omitted argument; a node computed in both
         // modes to different values is skipped). Its node is shared by every translation, so the value the engine
@@ -1557,7 +1579,7 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
   }
 }
 
-function invoke(f: CfFormula, tree: AstNode, at: Readonly<{ row: number; col: number }>, shape: CfCallShape, areas: readonly (SourceRect | 'ref')[],
+function invoke(f: CfFormula, tree: AstNode, at: Readonly<{ row: number; col: number }>, shape: CfCallShape, areas: readonly (SourceRect | 'ref')[], areaSheets: readonly (string | undefined)[],
   view: CfDependencyView, snapshot: CfDependencySnapshot, context: CfFormulaContext, onClean?: (stores: ModeFrameStores) => void): CfOutcome<CfResult> {
   try {
     // Shape before projection (S5-D round-1 #7): a root reference never reaches the engine's scalar projection.
@@ -1565,23 +1587,26 @@ function invoke(f: CfFormula, tree: AstNode, at: Readonly<{ row: number; col: nu
     if (f.ast.type === 'cell') {
       const a = areas[0]!
       if (a === 'ref') return { kind: 'ready', value: { kind: 'error', value: ERROR_ELEMENTS.get('#REF!')! } }
-      const value = view.read(a.firstRow, a.firstCol)
+      const value = view.read(a.firstRow, a.firstCol, areaSheets[0])
       return snapshot.tainted ? unresolved('cf-formula-dependency') : classifyValue(value)
     }
     if (f.rootArea) {
       const a = areas[0]!
       if (a === 'ref') return { kind: 'ready', value: { kind: 'error', value: ERROR_ELEMENTS.get('#REF!')! } }
       const values: ElementValue[][] = []
-      for (let r = a.firstRow; r <= a.lastRow; r++) { const row: ElementValue[] = []; for (let c = a.firstCol; c <= a.lastCol; c++) row.push(view.read(r, c)); values.push(row) }
+      for (let r = a.firstRow; r <= a.lastRow; r++) { const row: ElementValue[] = []; for (let c = a.firstCol; c <= a.lastCol; c++) row.push(view.read(r, c, areaSheets[0])); values.push(row) }
       if (snapshot.tainted) return unresolved('cf-formula-dependency')
       return { kind: 'ready', value: { kind: 'range', matrix: { kind: 'formula-matrix', rows: values.length, cols: values[0]!.length, values }, area: a } }
     }
     void shape
     const lower = context.sheetName.toLowerCase()
+    // Every sheet the snapshot holds (Task 36): the host under its context name, each referenced sheet under its own.
+    const sheets = snapshot.sheets.map((x, i) => ({ sheetId: x.sheetId, name: i === 0 ? context.sheetName : x.name ?? x.sheetId, workbookIndex: i }))
+    const idOfName = new Map(sheets.map(x => [x.name.toLowerCase(), x.sheetId] as const))
     const references = createReferenceServices({
-      generation: () => 0, sheets: [{ sheetId: snapshot.sheetId, name: context.sheetName, workbookIndex: 0 }],
-      sheetIdOfName: name => (name.toLowerCase() === lower ? snapshot.sheetId : undefined),
-      sheetNameOfId: id => (id === snapshot.sheetId ? context.sheetName : undefined),
+      generation: () => 0, sheets,
+      sheetIdOfName: name => idOfName.get(name.toLowerCase()),
+      sheetNameOfId: id => sheets.find(x => x.sheetId === id)?.name,
       store: view.store, definedNames: [], tables: undefined,
     })
     const features = new Set<string>()
@@ -1600,8 +1625,9 @@ function invoke(f: CfFormula, tree: AstNode, at: Readonly<{ row: number; col: nu
       materializationBudget: context.materialization,
       // Engine argument order is (sheet, col, row); a single-cell read goes through the call's view (charged, area-checked).
       getCellValue: (sheet, col, row) => {
-        if (sheet !== undefined && sheet.toLowerCase() !== lower) { features.add('cf-cross-sheet-read'); return ERROR_ELEMENTS.get('#N/A')! }
-        const value = view.read(row, col)
+        const other = sheet !== undefined && sheet.toLowerCase() !== lower
+        if (other && !idOfName.has(sheet.toLowerCase())) { features.add('cf-cross-sheet-read'); return ERROR_ELEMENTS.get('#N/A')! }
+        const value = view.read(row, col, other ? sheet : undefined)
         context.probe?.(ctx)
         return value
       },

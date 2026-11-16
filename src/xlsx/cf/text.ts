@@ -6,7 +6,8 @@ import { cfEvaluationContextFor, type CfDocumentEvaluation } from './formula'
 export { cfDocumentEvaluationOf, cfDocumentEvaluationOfPaged } from './formula'
 import { createCfStatistics } from './statistics'
 import { resolveCfCellStyle } from './dxf'
-import { cfRowPtOfSheet, cfRowUniformOfSheet, frameBarHosts, layoutCfCell, residentBarHosts, residentSource, storeCfSource, type CfFrameHostSource } from './render'
+import { cfRowPtOfSheet, cfRowUniformOfSheet, cfWorkbookFor, frameBarHosts, layoutCfCell, residentBarHosts, residentSource, storeCfSource, type CfFrameHostSource, type CfWorkbookStores } from './render'
+import { cfDependencyGenOf, withCfDependencyGen } from './dependencies'
 export type { CfFrameHostSource } from './render'
 import { regionStylesFor } from '../tableStyleLoader'
 import type { XlsxCellStyle } from '../types'
@@ -37,6 +38,9 @@ export interface CfTextScopeRequest {
   readonly valuePolicy?: ValuePolicy
   readonly workbookValueGen?: number
   readonly store?: SourceStore
+  /** Task 36 (Ruling S5-K): the workbook's canonical stores (with `store`), or the document's sheets (without one). */
+  readonly workbook?: CfWorkbookStores
+  readonly documentSheets?: readonly XlsxSheet[]
   readonly dateContext?: import('./predicates').CfDateContext
   /** Stage 5 (Ruling S5-L): the document's evaluation policy; this scope takes one clock snapshot from `now` (default: the
    * wall clock). Absent: formula rules are unresolved, Stage 1-4 rules unchanged. */
@@ -432,6 +436,8 @@ export async function prepareCfTextScope(
   } : undefined)
     try {
       const gen = cfRulesVersion(rules)
+      const workbook = cfWorkbookFor(rules, sheet.name, request.store, request.workbook, request.documentSheets, account, request.valuePolicy ?? 'engine')
+      const dependencyGen = cfDependencyGenOf(rules, sheet.name, workbook)
       const stamp: CfStamp = {
         owner: request.store?.stamp.docId ?? 'cf-text',
         sheetId: sheet.sheetId ?? sheet.name,
@@ -440,14 +446,17 @@ export async function prepareCfTextScope(
         viewGen: 0,
         structureGen: request.store?.structureGen ?? 0,
         clockGen: 0,
+        ...(dependencyGen !== 0 ? { dependencyGen } : {}),
       }
       statistics.stamp = stamp
-      const source = request.store ? storeCfSource(request.store, stamp, account) : residentSource(sheet, stamp, account, request.valuePolicy ?? 'engine')
+      // The scope's liveness reads the live `dependencyGen` too (S5-K).
+      const source = withCfDependencyGen(request.store ? storeCfSource(request.store, stamp, account) : residentSource(sheet, stamp, account, request.valuePolicy ?? 'engine'), rules, sheet.name, workbook)
       const colors = request.colors ?? { theme: sheet.drawingTheme?.palette ?? sheet.tableStyleSource?.colors.theme, indexed: sheet.tableStyleSource?.colors.indexed }
       const locale = request.locale ?? 'en-US'
       for (const chunk of modelChunks) {
         if (request.signal.aborted) { closeAccount(); return fail() }
-        const service = createCfService(rules, account, { evidence: cfRuntimeEvidence, dateContext, statistics, statisticsOptions, merges: sheetMerges, ...(evaluation ? { evaluation } : {}) })
+        const service = createCfService(rules, account, { evidence: cfRuntimeEvidence, dateContext, statistics, statisticsOptions, merges: sheetMerges, ...(evaluation ? { evaluation } : {}),
+          sheetName: sheet.name, ...(workbook ? { workbook } : {}) })
         let lease: CfLease<CfPrepared>
         try {
           lease = await service.prepareCf(
@@ -509,7 +518,8 @@ export async function prepareCfTextScope(
         disposed = true
         request.budget.release(bytes + hostBytes)
       }
-    }, () => source.stamp(stamp.sheetId).workbookValueGen === stamp.workbookValueGen && source.stamp(stamp.sheetId).structureGen === stamp.structureGen,
+    }, () => source.stamp(stamp.sheetId).workbookValueGen === stamp.workbookValueGen && source.stamp(stamp.sheetId).structureGen === stamp.structureGen
+      && (source.stamp(stamp.sheetId).dependencyGen ?? 0) === (stamp.dependencyGen ?? 0),
     undefined, request.hosts ? styleAt => frameBarHosts(request.hosts!, styleAt) : styleAt => residentBarHosts(sheet, (row, col, own) => styleAt(row, col, base?.styleAt(row, col, own) ?? own), admitHosts),
     request.hosts ? styleAt => frameBarHosts(request.hosts!, styleAt) : styleAt => residentBarHosts(sheet, (row, col, own) => styleAt(row, col, base?.styleAt(row, col, own) ?? own), admitHosts, { layoutContext: request.layoutContext }),
     createCfMemory({ limitBytes: CF_LIMITS.scratchBytes, context: budgetAllocationContext(request.budget) }), cfRowPtOfSheet(sheet), cfRowUniformOfSheet(sheet))

@@ -12,9 +12,10 @@ import { formulaSelectionEvidence } from './evidence'
 import type { CfEdgeMode, CfTruthReading } from './formula'
 
 export const CF_FORMULA_PRODUCTION_READINGS: Readonly<Record<string, string | readonly string[]>> = Object.freeze({
-  // parse.ts: the base dialect compiles; the anchor is the sole range's top-left; `$` pins an axis. `dialect-x14` is not
-  // registered: its only configuration is cross-sheet (Task 36), so no fixture shows production reproducing it.
+  // parse.ts: the base and x14 dialects compile; the anchor is the sole range's top-left; `$` pins an axis. `dialect-x14`'s
+  // only configuration is cross-sheet: Task 36 reads it, and the readings test reproduces it there.
   'formula:dialect-base': 'applies',
+  'formula:dialect-x14': 'applies',
   'formula:anchor-single': 'relative-top-left',
   'formula:anchor-mixed-abs': 'pinned',
   // translate.ts: a uniform edge mode for both axes.
@@ -56,6 +57,12 @@ export const CF_FORMULA_PRODUCTION_READINGS: Readonly<Record<string, string | re
   'formula:composition-stop-icon': 'halts',
   'formula:composition-expression-vs-scale': 'priority-wins',
   'formula:composition-overlapping': 'first-wins',
+  // dependencies.ts (Task 36, Ruling S5-K): another sheet's cells are read through the workbook seam, relatively and
+  // absolutely, through a quoted name and as a cellIs operand. `formula:cross-sheet-missing` is not registered: an unknown
+  // sheet stays unresolved (its `no-format` reading, `#REF!`, is implemented behind it and exercised only by tests).
+  'formula:cross-sheet-reference': 'documented',
+  'formula:cross-sheet-quoted-name': 'documented',
+  'formula:cellis-operand-cross-sheet': 'documented',
   // Reuse-only capabilities (Ruling S5-STUB): the Stage 1-4 capture is the recorded outcome.
   'formula:composition-stub-successor-dxf': 'recorded',
   'formula:composition-stub-successor-scale': 'recorded',

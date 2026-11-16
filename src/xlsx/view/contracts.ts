@@ -435,6 +435,10 @@ export interface CfReadResult {
   readonly pendingSheetIds?: readonly string[]
   /** Exact estimate when the receiver grant was too small; retry with at least this. */
   readonly requiredBytes?: number
+  /** Task 36 (Ruling S5-K): the other sheets these states were read from, each with the value generation read (at most
+   * 16, priced by the payload measurer with the rest of the reply). The receiver's entry is current only while each
+   * listed sheet keeps that `valueGen`. Absent when no rule names another sheet. */
+  readonly dependencies?: readonly Readonly<{ sheetId: string; valueGen: number }>[]
 }
 /** Reply envelope accounted on top of every CF read reply: the kernel-added
  * command/owner/request/stamp framing around the payload (a 1,042 B empty

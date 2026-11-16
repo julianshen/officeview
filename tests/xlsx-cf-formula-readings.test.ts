@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { cfDocumentEvaluationOf, cfEvaluationContextFor } from '../src/xlsx/cf/formula'
-import { residentSource } from '../src/xlsx/cf/render'
+import { cfWorkbookOfDocument, residentSource } from '../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
 import { createCfService } from '../src/xlsx/cf/service'
 import { CF_LIMITS, createCfMemory } from '../src/xlsx/cf/limits'
@@ -180,7 +180,8 @@ describe('every registered formula reading is the reading production implements,
               const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
               const cells = cellsOf(cfg)
               const memory = createCfMemory()
-              const service = createCfService(sheet.conditionalFormatting!, memory, { evidence: cfRuntimeEvidence, evaluation: cfEvaluationContextFor(cfDocumentEvaluationOf(doc), Date.now), sheetName: sheet.name })
+              // The document's other sheets (Task 36): cross-sheet configurations read them through the static workbook seam.
+              const service = createCfService(sheet.conditionalFormatting!, memory, { evidence: cfRuntimeEvidence, evaluation: cfEvaluationContextFor(cfDocumentEvaluationOf(doc), Date.now), sheetName: sheet.name, workbook: cfWorkbookOfDocument(doc.sheets, memory, 'engine') })
               const stamp = { owner: 'readings', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(sheet.conditionalFormatting!), viewGen: 0, structureGen: 0, clockGen: 0 }
               const lease = await service.prepareCf({ stamp, sourceRects: cells.map(r => { const { row, col } = rc(r); return { firstRow: row, lastRow: row, firstCol: col, lastCol: col } }), signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, residentSource(sheet, stamp, memory, 'engine'))
               const out = new Map<string, Shown>()

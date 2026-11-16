@@ -2792,3 +2792,132 @@ describe('CF fix round 5 (review-t7-r5)', () => {
   })
 })
 
+
+describe('remote cache entries follow their reply\'s dependencies (Task 36, Ruling S5-K)', () => {
+  const S1 = 'sheet1', S2 = 'sheet2', WHOLE = { r0: 0, r1: 1048575, c0: 0, c1: 16383 }
+  const stampOf = (): CfReadStamp => ({ owner: 'doc', sheetId: S1, workbookValueGen: 1, cfGen: 7, viewGen: 0, structureGen: 0, clockGen: 0 })
+  function depHost() {
+    const gens = new Map<string, number>([[S1, 1], [S2, 3]])
+    const loads = new Map<string, 'complete' | 'loading' | 'incomplete'>()
+    const changed: { sheetId: string; rects: readonly SourceRect[] }[] = []
+    const requests: CommandOf<'read'>[] = []
+    let pendingOn: string | undefined
+    let n = 0
+    const identityOf = (sheetId: string): CacheIdentity => ({ docId: 'doc', sheetId, valueGen: gens.get(sheetId) ?? 0, fontGen: 0, viewGen: 0 })
+    const host: CfReadHost = {
+      identity: identityOf,
+      loadState: id => ({ completeness: loads.get(id) ?? 'complete' }),
+      hasConditionalFormatting: () => true,
+      grant: () => 1 << 20, releaseGrant: () => {},
+      nextRequestId: () => `d${++n}`,
+      release: () => {},
+      admitEntry: () => () => {},
+      changed: (sheetId, rects) => { changed.push({ sheetId, rects }) },
+      request: async command => {
+        requests.push(command)
+        const q = command.query as { stamp: CfReadStamp }
+        const result: CfReadResult = pendingOn
+          ? { sheetId: S1, stamp: { ...q.stamp }, kind: 'pending', reason: 'cf-pending-data', states: [], definitions: [], definitionsVersion: 7,
+              diagnostics: [{ kind: 'pending', feature: 'cf-source-pending', message: 'pending' }], pendingSheetIds: [pendingOn] }
+          : { sheetId: S1, stamp: { ...q.stamp }, kind: 'ready', states: [{ row: 0, col: 0, properties: { 'fill.pattern': 'solid' } }], definitions: [], definitionsVersion: 7,
+              diagnostics: [], dependencies: [{ sheetId: S2, valueGen: gens.get(S2)! }] }
+        return { commandKind: 'read', requestId: command.requestId, owner: identityOf(S1), diagnostics: [], replyBytes: 1024, kind: 'complete',
+          result: { kind: 'read', result: { op: 'conditionalFormatting', result } } } as WorkerReply<'read'>
+      },
+    }
+    return { host, gens, loads, changed, requests, setPending: (id: string | undefined) => { pendingOn = id } }
+  }
+  const flush = () => new Promise(r => setTimeout(r, 0))
+
+  it('a reply listing {Sheet2, valueGen 3} is current until Sheet2 moves to 4; then get() is stale and every tile of Sheet1 is invalidated', async () => {
+    const t = depHost()
+    const cache = new RemoteCfCache(t.host)
+    cache.get(S1, [rect(0, 0)], stampOf())
+    await flush()
+    const ready = cache.get(S1, [rect(0, 0)], stampOf())
+    expect(ready.state).toBe('ready')
+    expect(ready.result?.dependencies).toEqual([{ sheetId: S2, valueGen: 3 }])
+    expect(t.requests).toHaveLength(1)
+    // An unrelated identity change leaves it current.
+    t.gens.set('sheet9', 5)
+    expect(cache.get(S1, [rect(0, 0)], stampOf()).state).toBe('ready')
+    t.changed.length = 0
+    t.gens.set(S2, 4)
+    const stale = cache.get(S1, [rect(0, 0)], stampOf())
+    expect(stale.state).not.toBe('ready')
+    expect(stale.result).toBeUndefined()
+    await flush()
+    expect(t.changed.filter(c => c.sheetId === S1).flatMap(c => c.rects)).toContainEqual(WHOLE)
+    const fresh = cache.get(S1, [rect(0, 0)], stampOf())
+    expect(fresh.state).toBe('ready')
+    expect(fresh.result?.dependencies).toEqual([{ sheetId: S2, valueGen: 4 }])
+    cache.close()
+  })
+
+  it('invalidateDependents drops every scope of each sheet whose reply lists the committed sheet, and no other', async () => {
+    const t = depHost()
+    const cache = new RemoteCfCache(t.host)
+    cache.get(S1, [rect(0, 0)], stampOf()); cache.get(S1, [rect(5, 5)], stampOf())
+    await flush()
+    expect(cache.get(S1, [rect(5, 5)], stampOf()).state).toBe('ready')
+    t.changed.length = 0
+    cache.invalidateDependents('sheet9')
+    await flush()
+    expect(t.changed).toEqual([])
+    cache.invalidateDependents(S2)
+    expect(cache.get(S1, [rect(0, 0)], stampOf()).result).toBeUndefined()
+    await flush()
+    expect(t.changed.filter(c => c.sheetId === S1).flatMap(c => c.rects)).toContainEqual(WHOLE)
+    cache.close()
+  })
+
+  it('a reply pending on Sheet2 waits for it: no request while it loads, exactly one when it completes; incomplete fails once', async () => {
+    const t = depHost()
+    t.setPending(S2)
+    t.loads.set(S2, 'loading')
+    const cache = new RemoteCfCache(t.host)
+    const held = cache.acquire(S1, [rect(0, 0)], stampOf())
+    await flush()
+    expect(held.state.state).toBe('waiting')
+    expect(held.state.pendingSheetIds).toEqual([S2])
+    expect(t.requests).toHaveLength(1)
+    for (let i = 0; i < 3; i++) { cache.wakeWaiting(); await flush() }
+    expect(t.requests).toHaveLength(1)
+    t.setPending(undefined)
+    t.loads.set(S2, 'complete')
+    t.changed.length = 0
+    cache.wakeWaiting(); await flush()
+    cache.wakeWaiting(); await flush()
+    expect(t.requests).toHaveLength(2)
+    expect(held.state.state).toBe('ready')
+    expect(t.changed.filter(c => c.sheetId === S1)).toHaveLength(1)
+    held.release(); cache.close()
+    // A Sheet2 that ends incomplete: cf-read-failed, once, with no further request.
+    const u = depHost()
+    u.setPending(S2); u.loads.set(S2, 'loading')
+    const other = new RemoteCfCache(u.host)
+    const h2 = other.acquire(S1, [rect(0, 0)], stampOf())
+    await flush()
+    u.loads.set(S2, 'incomplete')
+    other.wakeWaiting(); await flush()
+    other.wakeWaiting(); await flush()
+    expect(h2.state.state).toBe('failed')
+    expect(h2.state.diagnostics.map(d => d.feature)).toEqual(['cf-read-failed'])
+    expect(u.requests).toHaveLength(1)
+    h2.release(); other.close()
+  })
+
+  it('a pivot commit (:706, through invalidateRegionStyles) and a pivot release (:752) both reach invalidateDependents', async () => {
+    const { RemoteWorkbook } = await import('../src/worker/viewerRemoteSource')
+    const calls: string[] = []
+    const cfCache = { invalidate: () => {}, invalidateDependents: (id: string) => { calls.push(id) } }
+    const proto = RemoteWorkbook.prototype as unknown as Record<string, (...a: unknown[]) => void>
+    proto.invalidateCf!.call({ cfCache }, S2)
+    const fake = {
+      closed: false, sheets: [{ sheetId: S2 }], identities: new Map(), owner: { workbookValueGen: 1, sheetVector: [{ sheetId: S2, valueGen: 3 }] }, stores: new Map(), cfCache,
+      identity: (id: string) => ({ docId: 'doc', sheetId: id, valueGen: 3, fontGen: 0, viewGen: 0 }), notify: () => {},
+    }
+    proto.adoptPivotReleaseValueGen!.call(fake, S2, 4)
+    expect(calls).toEqual([S2, S2])
+  })
+})

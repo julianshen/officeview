@@ -127,7 +127,9 @@ export interface CfRule { readonly id: number; readonly priority: number; readon
 export interface CfSheetRules { readonly rules: readonly CfRule[]; readonly unresolvedSheet?: Readonly<{ reason: string; writes: 'ALL' }>; readonly diagnostics: readonly CfDiagnostic[] }
 export interface CfDiagnostic { kind: 'unsupported' | 'parse'; feature: `cf-${string}`; message: string }
 export interface CfLease<T> { readonly value: T; readonly bytes: number; release(): void; transfer(memory: CfMemory): CfOutcome<CfLease<T>> }
-export interface CfPrepared { readonly stamp: CfStamp; at(sourceRow: number, col: number): CfOutcome<CfCellState>; dispose(): void }
+/** `pendingSheetIds` (Task 36): referenced sheets still importing when this preparation ran; its cells reading them are
+ * `cf-pending-data`, and a consumer re-prepares once they complete. */
+export interface CfPrepared { readonly stamp: CfStamp; readonly pendingSheetIds?: readonly string[]; at(sourceRow: number, col: number): CfOutcome<CfCellState>; dispose(): void }
 export interface CfPrepareRequest { readonly stamp: CfStamp; readonly sourceRects: readonly SourceRect[]; readonly signal: AbortSignal; readonly grantBytes: number }
 export interface CfValuePage { readonly rows: Uint32Array; readonly cols: Uint16Array; readonly values: readonly CfLiteral[] }
 export interface CfValueSource {
