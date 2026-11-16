@@ -601,64 +601,12 @@
     },
     {
       "deck": "lo-bnc591147.pptx",
-      "marks": "off",
-      "slide": 2,
-      "source": "refused:still",
-      "pass": true,
-      "meanAbs": 0.000008135893246187363,
-      "rowMax": 0.0005106209150326798,
-      "tol": {
-        "meanAbs": 0.02,
-        "rowMax": 0.1
-      }
-    },
-    {
-      "deck": "lo-bnc591147.pptx",
       "marks": "fixed",
       "slide": 1,
       "source": "refused:still",
       "pass": true,
       "meanAbs": 0.0038800381263616557,
       "rowMax": 0.006830065359477124,
-      "tol": {
-        "meanAbs": 0.02,
-        "rowMax": 0.1
-      }
-    },
-    {
-      "deck": "lo-bnc591147.pptx",
-      "marks": "fixed",
-      "slide": 2,
-      "source": "refused:still",
-      "pass": true,
-      "meanAbs": 0.003897229030501089,
-      "rowMax": 0.006870915032679739,
-      "tol": {
-        "meanAbs": 0.02,
-        "rowMax": 0.1
-      }
-    },
-    {
-      "deck": "lo-narration.pptx",
-      "marks": "off",
-      "slide": 1,
-      "source": "refused:still",
-      "pass": true,
-      "meanAbs": 0.000009931576797385621,
-      "rowMax": 0.0003186274509803922,
-      "tol": {
-        "meanAbs": 0.02,
-        "rowMax": 0.1
-      }
-    },
-    {
-      "deck": "lo-narration.pptx",
-      "marks": "fixed",
-      "slide": 1,
-      "source": "refused:still",
-      "pass": true,
-      "meanAbs": 0.0039866387527233114,
-      "rowMax": 0.006700367647058823,
       "tol": {
         "meanAbs": 0.02,
         "rowMax": 0.1
@@ -870,32 +818,6 @@
       "tol": {
         "meanAbs": 0.020335907713779956,
         "rowMax": 0.10947610294117648
-      }
-    },
-    {
-      "deck": "lo-tdf44223.pptx",
-      "marks": "off",
-      "slide": 1,
-      "source": "refused:still",
-      "pass": true,
-      "meanAbs": 0.00027092694716775596,
-      "rowMax": 0.0019117647058823528,
-      "tol": {
-        "meanAbs": 0.020699286832788672,
-        "rowMax": 0.14592218137254903
-      }
-    },
-    {
-      "deck": "lo-tdf44223.pptx",
-      "marks": "fixed",
-      "slide": 1,
-      "source": "refused:still",
-      "pass": true,
-      "meanAbs": 0.0042332473788126365,
-      "rowMax": 0.007190563725490195,
-      "tol": {
-        "meanAbs": 0.020699286832788672,
-        "rowMax": 0.14592218137254903
       }
     },
     {
@@ -2738,14 +2660,14 @@
         "streamed": {
           "steps": [
             0,
-            0
+            1
           ],
           "transitions": [
             "none",
             "none"
           ],
           "morphPairs": [],
-          "clicks": 2
+          "clicks": 3
         },
         "equal": false,
         "equalExceptStills": true,
@@ -2754,26 +2676,44 @@
             "slide": 1,
             "code": "still",
             "localSteps": 1
-          },
-          {
-            "slide": 2,
-            "code": "still",
-            "localSteps": 1
           }
         ]
       },
       "fallback": {
-        "steps": 2,
-        "composited": 2,
+        "steps": 1,
+        "composited": 1,
         "rate": 1
       },
       "diagnostics": [
-        ":backend-fallback"
+        ":backend-fallback",
+        "1:harness-steps"
       ],
       "frames": {
-        "unit-still": 2
+        "unit-still": 1,
+        "pass": 2
       },
       "gate": [],
+      "worst": {
+        "slide": 2,
+        "step": 0,
+        "pct": 100,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "layers",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.02,
+          "rowMax": 0.1
+        },
+        "hash": {
+          "local": "4b5e8c1c",
+          "streamed": "c08a8d54"
+        },
+        "status": "pass",
+        "meanAbs": 0.000008135893246187363,
+        "rowMax": 0.0005106209150326798,
+        "detail": "meanAbs 0.0000 rowMax 0.0005 (row 360)"
+      },
       "failures": [],
       "stillFrames": [
         {
@@ -2800,31 +2740,6 @@
           "meanAbs": 0,
           "rowMax": 0,
           "detail": "unit still (refused:still): meanAbs 0.0000 rowMax 0.0000 (row 0)"
-        },
-        {
-          "slide": 2,
-          "step": 0,
-          "pct": 100,
-          "ms": 0,
-          "streamedMs": 0,
-          "kind": "still",
-          "rows": [],
-          "tol": {
-            "meanAbs": 0.02,
-            "rowMax": 0.1
-          },
-          "hash": {
-            "local": "4b5e8c1c",
-            "streamed": "c08a8d54"
-          },
-          "status": "unit-still",
-          "unitStill": {
-            "pass": true,
-            "source": "refused:still"
-          },
-          "meanAbs": 0.000008135893246187363,
-          "rowMax": 0.0005106209150326798,
-          "detail": "unit still (refused:still): meanAbs 0.0000 rowMax 0.0005 (row 360)"
         }
       ]
     },
@@ -2852,14 +2767,14 @@
         "streamed": {
           "steps": [
             0,
-            0
+            1
           ],
           "transitions": [
             "none",
             "none"
           ],
           "morphPairs": [],
-          "clicks": 2
+          "clicks": 3
         },
         "equal": false,
         "equalExceptStills": true,
@@ -2868,26 +2783,44 @@
             "slide": 1,
             "code": "still",
             "localSteps": 1
-          },
-          {
-            "slide": 2,
-            "code": "still",
-            "localSteps": 1
           }
         ]
       },
       "fallback": {
-        "steps": 2,
-        "composited": 2,
+        "steps": 1,
+        "composited": 1,
         "rate": 1
       },
       "diagnostics": [
-        ":backend-fallback"
+        ":backend-fallback",
+        "1:harness-steps"
       ],
       "frames": {
-        "unit-still": 2
+        "unit-still": 1,
+        "pass": 2
       },
       "gate": [],
+      "worst": {
+        "slide": 2,
+        "step": 0,
+        "pct": 100,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "layers",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.02,
+          "rowMax": 0.1
+        },
+        "hash": {
+          "local": "5257a787",
+          "streamed": "7a9a3896"
+        },
+        "status": "pass",
+        "meanAbs": 0.0038969850671750185,
+        "rowMax": 0.006858660130718955,
+        "detail": "meanAbs 0.0039 rowMax 0.0069 (row 397)"
+      },
       "failures": [],
       "stillFrames": [
         {
@@ -2914,31 +2847,6 @@
           "meanAbs": 0.0038800381263616557,
           "rowMax": 0.006830065359477124,
           "detail": "unit still (refused:still): meanAbs 0.0039 rowMax 0.0068 (row 397)"
-        },
-        {
-          "slide": 2,
-          "step": 0,
-          "pct": 100,
-          "ms": 0,
-          "streamedMs": 0,
-          "kind": "still",
-          "rows": [],
-          "tol": {
-            "meanAbs": 0.02,
-            "rowMax": 0.1
-          },
-          "hash": {
-            "local": "5257a787",
-            "streamed": "478c053e"
-          },
-          "status": "unit-still",
-          "unitStill": {
-            "pass": true,
-            "source": "refused:still"
-          },
-          "meanAbs": 0.003897229030501089,
-          "rowMax": 0.006870915032679739,
-          "detail": "unit still (refused:still): meanAbs 0.0039 rowMax 0.0069 (row 397)"
         }
       ]
     },
@@ -3108,20 +3016,14 @@
             0
           ],
           "transitions": [
-            "none"
+            "p:none"
           ],
           "morphPairs": [],
           "clicks": 1
         },
-        "equal": false,
+        "equal": true,
         "equalExceptStills": true,
-        "stills": [
-          {
-            "slide": 1,
-            "code": "still",
-            "localSteps": 0
-          }
-        ]
+        "stills": []
       },
       "fallback": {
         "steps": 0,
@@ -3132,37 +3034,32 @@
         ":backend-fallback"
       ],
       "frames": {
-        "unit-still": 1
+        "pass": 5
       },
       "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 0,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "transition",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.02,
+          "rowMax": 0.1
+        },
+        "hash": {
+          "local": "35963f1c",
+          "streamed": "893965ac"
+        },
+        "status": "pass",
+        "meanAbs": 0.000009931576797385621,
+        "rowMax": 0.0003186274509803922,
+        "detail": "meanAbs 0.0000 rowMax 0.0003 (row 683)"
+      },
       "failures": [],
-      "stillFrames": [
-        {
-          "slide": 1,
-          "step": 0,
-          "pct": 100,
-          "ms": 0,
-          "streamedMs": 0,
-          "kind": "still",
-          "rows": [],
-          "tol": {
-            "meanAbs": 0.02,
-            "rowMax": 0.1
-          },
-          "hash": {
-            "local": "35963f1c",
-            "streamed": "893965ac"
-          },
-          "status": "unit-still",
-          "unitStill": {
-            "pass": true,
-            "source": "refused:still"
-          },
-          "meanAbs": 0.000009931576797385621,
-          "rowMax": 0.0003186274509803922,
-          "detail": "unit still (refused:still): meanAbs 0.0000 rowMax 0.0003 (row 683)"
-        }
-      ]
+      "stillFrames": []
     },
     {
       "deck": "lo-narration.pptx",
@@ -3188,20 +3085,14 @@
             0
           ],
           "transitions": [
-            "none"
+            "p:none"
           ],
           "morphPairs": [],
           "clicks": 1
         },
-        "equal": false,
+        "equal": true,
         "equalExceptStills": true,
-        "stills": [
-          {
-            "slide": 1,
-            "code": "still",
-            "localSteps": 0
-          }
-        ]
+        "stills": []
       },
       "fallback": {
         "steps": 0,
@@ -3212,37 +3103,32 @@
         ":backend-fallback"
       ],
       "frames": {
-        "unit-still": 1
+        "pass": 5
       },
       "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 0,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "transition",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.02,
+          "rowMax": 0.1
+        },
+        "hash": {
+          "local": "bbd6050a",
+          "streamed": "6d09d6fc"
+        },
+        "status": "pass",
+        "meanAbs": 0.003987889773965142,
+        "rowMax": 0.0067034313725490196,
+        "detail": "meanAbs 0.0040 rowMax 0.0067 (row 690)"
+      },
       "failures": [],
-      "stillFrames": [
-        {
-          "slide": 1,
-          "step": 0,
-          "pct": 100,
-          "ms": 0,
-          "streamedMs": 0,
-          "kind": "still",
-          "rows": [],
-          "tol": {
-            "meanAbs": 0.02,
-            "rowMax": 0.1
-          },
-          "hash": {
-            "local": "bbd6050a",
-            "streamed": "b87be59a"
-          },
-          "status": "unit-still",
-          "unitStill": {
-            "pass": true,
-            "source": "refused:still"
-          },
-          "meanAbs": 0.0039866387527233114,
-          "rowMax": 0.006700367647058823,
-          "detail": "unit still (refused:still): meanAbs 0.0040 rowMax 0.0067 (row 64)"
-        }
-      ]
+      "stillFrames": []
     },
     {
       "deck": "lo-ooxtheme.pptx",
@@ -5046,7 +4932,7 @@
         },
         "streamed": {
           "steps": [
-            0,
+            1,
             0
           ],
           "transitions": [
@@ -5054,29 +4940,22 @@
             "p:split{\"orient\":\"vert\"}"
           ],
           "morphPairs": [],
-          "clicks": 2
+          "clicks": 3
         },
-        "equal": false,
+        "equal": true,
         "equalExceptStills": true,
-        "stills": [
-          {
-            "slide": 1,
-            "code": "still",
-            "localSteps": 1
-          }
-        ]
+        "stills": []
       },
       "fallback": {
         "steps": 1,
-        "composited": 1,
-        "rate": 1
+        "composited": 0,
+        "rate": 0
       },
       "diagnostics": [
         ":backend-fallback"
       ],
       "frames": {
-        "unit-still": 1,
-        "pass": 5
+        "pass": 11
       },
       "gate": [],
       "worst": {
@@ -5103,33 +4982,7 @@
         "detail": "meanAbs 0.0007 rowMax 0.0459 (row 397)"
       },
       "failures": [],
-      "stillFrames": [
-        {
-          "slide": 1,
-          "step": 0,
-          "pct": 100,
-          "ms": 0,
-          "streamedMs": 0,
-          "kind": "still",
-          "rows": [],
-          "tol": {
-            "meanAbs": 0.020699286832788672,
-            "rowMax": 0.14592218137254903
-          },
-          "hash": {
-            "local": "2cdb4c98",
-            "streamed": "1ca4e1bc"
-          },
-          "status": "unit-still",
-          "unitStill": {
-            "pass": true,
-            "source": "refused:still"
-          },
-          "meanAbs": 0.00027092694716775596,
-          "rowMax": 0.0019117647058823528,
-          "detail": "unit still (refused:still): meanAbs 0.0003 rowMax 0.0019 (row 128)"
-        }
-      ]
+      "stillFrames": []
     },
     {
       "deck": "lo-tdf44223.pptx",
@@ -5154,7 +5007,7 @@
         },
         "streamed": {
           "steps": [
-            0,
+            1,
             0
           ],
           "transitions": [
@@ -5162,29 +5015,23 @@
             "p:split{\"orient\":\"vert\"}"
           ],
           "morphPairs": [],
-          "clicks": 2
+          "clicks": 3
         },
-        "equal": false,
+        "equal": true,
         "equalExceptStills": true,
-        "stills": [
-          {
-            "slide": 1,
-            "code": "still",
-            "localSteps": 1
-          }
-        ]
+        "stills": []
       },
       "fallback": {
         "steps": 1,
-        "composited": 1,
-        "rate": 1
+        "composited": 0,
+        "rate": 0
       },
       "diagnostics": [
         ":backend-fallback"
       ],
       "frames": {
-        "unit-still": 1,
-        "pass": 5
+        "pass": 8,
+        "skipped-mark": 3
       },
       "gate": [],
       "worst": {
@@ -5203,41 +5050,15 @@
         },
         "hash": {
           "local": "c918ce16",
-          "streamed": "a1eefe6d"
+          "streamed": "33de7f25"
         },
         "status": "pass",
-        "meanAbs": 0.004657726545479302,
-        "rowMax": 0.0486734068627451,
+        "meanAbs": 0.0046581095111655774,
+        "rowMax": 0.048691789215686274,
         "detail": "meanAbs 0.0047 rowMax 0.0487 (row 397)"
       },
       "failures": [],
-      "stillFrames": [
-        {
-          "slide": 1,
-          "step": 0,
-          "pct": 100,
-          "ms": 0,
-          "streamedMs": 0,
-          "kind": "still",
-          "rows": [],
-          "tol": {
-            "meanAbs": 0.020699286832788672,
-            "rowMax": 0.14592218137254903
-          },
-          "hash": {
-            "local": "19531c25",
-            "streamed": "7ebca13d"
-          },
-          "status": "unit-still",
-          "unitStill": {
-            "pass": true,
-            "source": "refused:still"
-          },
-          "meanAbs": 0.0042332473788126365,
-          "rowMax": 0.007190563725490195,
-          "detail": "unit still (refused:still): meanAbs 0.0042 rowMax 0.0072 (row 530)"
-        }
-      ]
+      "stillFrames": []
     },
     {
       "deck": "lo-tdf93868.pptx",
