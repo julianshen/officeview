@@ -143,10 +143,15 @@ import { createCfUnitCeiling, createCfWorkBudget } from '../src/xlsx/cf/limits'
 import type { CfRule } from '../src/xlsx/cf/model'
 import { EVALUATION, cfEval, engineEval, fakeSource, formulaOf, formulaRule, batchOf, type Cells } from './helpers/cf-formula'
 import { cfTreeReadsMatchView, planCfHoist } from '../src/xlsx/cf/formula'
+import * as translateModule from '../src/xlsx/cf/translate'
 
 vi.mock('../src/xlsx/formula/evaluator', async importOriginal => {
   const actual = await importOriginal<typeof import('../src/xlsx/formula/evaluator')>()
   return { ...actual, evaluateNode: vi.fn(actual.evaluateNode), coerceToBoolean: vi.fn(actual.coerceToBoolean) }
+})
+vi.mock('../src/xlsx/cf/translate', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/xlsx/cf/translate')>()
+  return { ...actual, translateCfFormula: vi.fn(actual.translateCfFormula) }
 })
 const evaluateNodeSpy = vi.mocked(evaluatorModule.evaluateNode)
 const coerceSpy = vi.mocked(evaluatorModule.coerceToBoolean)
@@ -404,5 +409,23 @@ describe('taint is evaluation-local: a tainted call never contaminates a later c
     expect(both.evaluate(0, 0, 3)).toEqual({ kind: 'unresolved', reason: 'cf-formula-dependency' })
     expect(both.evaluate(1, 0, 3)).toEqual({ kind: 'ready', value: { kind: 'boolean', value: true } })
     both.dispose()
+  })
+})
+
+describe('the evaluator calls the tree guard on the tree it is about to run (Task 34 fix round 2, finding 7)', () => {
+  it('a translated tree misread by one row, inside the view, is refused before evaluateNode', async () => {
+    const actual = await vi.importActual<typeof import('../src/xlsx/cf/translate')>('../src/xlsx/cf/translate')
+    const translateSpy = vi.mocked(translateModule.translateCfFormula)
+    const cells: Cells = { A1: 1, A2: 9, A3: 2, A4: 8, A5: 3, A6: 7, A7: 4, A8: 6, A9: 5, A10: 5 }
+    const text = 'A2*10>SUM($A$1:$A$10)'
+    const batch = await batchOf([formulaRule(text, 'B2:B9')], fakeSource(cells), { hoist: false })
+    // At B5 the call reads A5 (3: 30 > 50 is FALSE). The injected tree reads A6 (7: 70 > 50 is TRUE), a cell the view holds.
+    expect(batch.evaluate(0, 4, 1)).toEqual({ kind: 'ready', value: { kind: 'boolean', value: false } })
+    translateSpy.mockImplementationOnce((f, dRow, dCol, edge, memory, substitute) => actual.translateCfFormula(f, dRow + 1, dCol, edge, memory, substitute))
+    evaluateNodeSpy.mockClear()
+    expect(batch.evaluate(0, 4, 1)).toEqual({ kind: 'unresolved', reason: 'cf-formula-dependency' })
+    expect(translateSpy).toHaveBeenCalled()
+    expect(evaluateNodeSpy).not.toHaveBeenCalled()
+    batch.dispose()
   })
 })
