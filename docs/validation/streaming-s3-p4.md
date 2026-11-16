@@ -449,8 +449,31 @@ Evidence:
 
       An implicit end is the latest child end, so it never cuts a child short. An explicit `dur` blocks
       propagation from below: the root and the main sequence (`dur="indefinite"`) stop it.
+    - **"Drawn" (round 12e)** is any leaf whose activity a renderer observes:
+      - a behaviour with render edits (not media, not `cmd`); or
+      - any leaf, media and `cmd` included, on a shape target with an own or inherited `presetClass`.
+        `timingTargets` (`src/slideshow/engine/targets.ts`) puts such a leaf in its target's entrance set when
+        the class is `entr`.
+    - **Why media counts (codex, round 12e).** The entrance gate shows a hidden target only while one of its
+      entrance nodes is active or frozen. That gate runs in `slideStateAt` (`server/src/show/compose.ts`), in the
+      local stage (`src/slideshow/player/stage.ts`) and in PlanStage (`src/stream/remote/plan-stage.ts`). So
+      a video with an entrance class and `fill="remove"`, covering the ink, flipped the cover when its synthetic
+      end came. The ink under the cover was dropped: 1131 px live against 0 classified.
+    - **The audit of every `active`/`frozen` consumer** (`ACTIVITY_CONSUMERS` in
+      `server/src/show/eligibility.ts`):
+      - **Render edits:** `renderStateAt`/`docOrder`. Media and `cmd` make none.
+      - **The entrance gate:** the three places above.
+      - **Not drawing:**
+        - the step settle (`steps.ts`) and the synthetic ends (`driver.ts`);
+        - the local media player, which is absent in a streamed show;
+        - the autoplay tests at `initial()`, which see one history with no media end;
+        - the classifier's emphasis and timed-effect checks (media excluded, render edits only).
+    - **Plain media stays eligible:** no class on itself or any ancestor, or a non-shape target such as
+      `p:sndTgt`. In the corpus:
+      - the `lo-narration` and `lo-bnc591147` audio targets a shape, but has no class on it or any ancestor;
+      - the `lo-tdf44223` effect sound targets `p:sndTgt`.
     - **Refuse to the still (reason `media`) when:**
-      - a drawn behaviour (not media, not `cmd`) has `B` or `C`; or
+      - a drawn leaf has `B` or `C`; or
       - a container with drawn descendants has `E` and any of these holds:
         - it lets go of them at its end (a `fill` other than `hold` or `freeze`);
         - it can begin again (an event start, or a `restart` other than `never`);
@@ -710,7 +733,7 @@ Evidence:
 |---|---|
 | `scripts/stream-show-compare.ts` | the harness (`compareStreamDeck`, `measureWidening`, `installDom`, CLI) |
 | `server/test/stream-show-parity.test.ts` | synthetic decks: widening within the ceiling; structure equal and every frame within tolerance (fly-in, Morph, Cube, both mark modes); Morph pairs map to local keys; composited Morph at its keyframe times; `mediaEndDeck` plays its still (round 12); fallback rate reported |
-| `server/test/show-eligibility.test.ts`, `server/test/show-wire.test.ts` | rounds 12–12c: a media end that reaches drawing gives the still (`onEnd` start; after a finite or an indefinite clip; codex's end-condition counterexample; a `fill="remove"` `endSync` container), and the wire answers `still` and `morph-fallback` both ways; an unresolved reference, a `tn` cycle, the depth bound, a late-beginning child of a media-ended container, easing on a dependent parent or ancestor (codex's composited counterexamples) and any unmodelled timing attribute fail closed, while the linear control stays eligible; media beside an unrelated click animation and the `lo-tdf44223` effect-sound shape (two clicks) stay eligible and reconstruct the client's history, and Morph pairs into and out of an eligible media slide build |
+| `server/test/show-eligibility.test.ts`, `server/test/show-wire.test.ts` | rounds 12–12c: a media end that reaches drawing gives the still (`onEnd` start; after a finite or an indefinite clip; codex's end-condition counterexample; a `fill="remove"` `endSync` container), and the wire answers `still` and `morph-fallback` both ways; an unresolved reference, a `tn` cycle, the depth bound, a late-beginning child of a media-ended container, easing on a dependent parent or ancestor (codex's composited counterexamples) and any unmodelled timing attribute fail closed, while the linear control stays eligible; media with an own or inherited entrance class covering the ink (codex round 12e) refuses, and plain media covering it stays eligible; media beside an unrelated click animation and the `lo-tdf44223` effect-sound shape (two clicks) stay eligible and reconstruct the client's history, and Morph pairs into and out of an eligible media slide build |
 | `tests/browser/stream-present-anim.spec.ts` | Chromium × {webgl2, canvas2d}: end to end; the 10 s hold; revocation mid-animation |
 | `server/test/app.ts` | `?deck=fly\|morph\|cube` (synthetic decks) |
 | `src/debug/stream-viewer.tsx` | `deck=` forwarded; `backend=canvas2d` makes WebGL2 unavailable to the page; `__ovStream.endedAt` |
