@@ -631,20 +631,6 @@ export function translateCfFormula(f: CfFormula, dRow: number, dCol: number, edg
   }
 }
 
-/** Reference nodes in pre-order, left to right, skipping the subtrees in `exclude` (hoisted nodes). */
-function refNodesOf(ast: AstNode, exclude?: ReadonlySet<AstNode>): RefNode[] {
-  const out: RefNode[] = []
-  const stack: AstNode[] = [ast]
-  while (stack.length) {
-    const node = stack.pop()!
-    if (exclude?.has(node)) continue
-    if (isRefNode(node)) { out.push(node); continue }
-    if (node.type === 'unary') stack.push(node.expr)
-    else if (node.type === 'binary') stack.push(node.right, node.left)
-    else if (node.type === 'call') for (let i = node.args.length - 1; i >= 0; i--) stack.push(node.args[i]!)
-  }
-  return out
-}
 /** The atom of an admitted reference node (admission already refused every shape `atomOf` refuses). */
 function admittedAtom(node: RefNode): CfFormulaRef {
   const atom = atomOf(node)
@@ -671,11 +657,11 @@ export type CfFootprintEntry = Readonly<{ sheet?: string; rect: SourceRect }>
  * The cells a formula reads over `targets` (Ruling S5-N caps table): each atom shifted by every target's offset from the
  * anchor (a relative axis spans the targets' range, a pinned axis stays), clipped to the sheet (plus the wrapped part
  * under `wrap`), whole-column and whole-row atoms clamped to `options.bounds` along their axis (the referenced sheet's
- * populated bounds, as statistics clamp). Identical and contained rects merge. More than `CF_LIMITS.dependencyCells`
- * cells is `'over-cap'`. `options.exclude` drops hoisted subtrees: their ranges are scanned by the hoist, not snapshotted.
+ * populated bounds, as statistics clamp). More than `CF_LIMITS.dependencyCells` cells is `'over-cap'`. With
+ * `options.hoists` the atoms are the per-cell remainder's: hoisted ranges are scanned by the hoist, not snapshotted.
  */
 export function cfFormulaFootprint(f: CfFormula, targets: readonly SourceRect[], anchor: Readonly<{ row: number; col: number }>, edge: CfEdgeMode | undefined,
-  options: Readonly<{ bounds?: SourceRect; exclude?: ReadonlySet<AstNode>; uncapped?: boolean }> = {}): readonly CfFootprintEntry[] | 'over-cap' {
+  options: Readonly<{ bounds?: SourceRect; hoists?: readonly CfHoist[]; uncapped?: boolean }> = {}): readonly CfFootprintEntry[] | 'over-cap' {
   const out: CfFootprintEntry[] = []
   const owner: number[] = [] // the atom each entry came from
   // One entry per atom (the brief's shape: `{A1:A50, A2:A9}` keeps both); an atom's own shifts merge when one contains
@@ -691,7 +677,9 @@ export function cfFormulaFootprint(f: CfFormula, targets: readonly SourceRect[],
     out.push(entry); owner.push(atomIndex)
   }
   let atomIndex = -1
-  for (const node of refNodesOf(f.ast, options.exclude)) {
+  // The references the per-cell call reads, from the same shape its view is built from: a hoisted call's range is
+  // excluded, but a frequency hoist's criterion cell is still read per cell and stays in the footprint.
+  for (const node of cfCallShape(f, options.hoists ?? []).refs) {
     const atom = admittedAtom(node)
     atomIndex++
     for (const t of targets) {

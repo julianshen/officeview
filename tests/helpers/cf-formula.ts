@@ -110,6 +110,10 @@ export const SEMANTICS: ResolvedSemantics = Object.freeze({
  * blank-to-0 boundary) and the unsupported features the engine recorded.
  */
 export function engineEval(text: string, cells: Cells, at: { row: number; col: number }, sheet = 'Sheet1'): { value: EvaluationValue; features: string[] } {
+  return engineOf(cells, sheet)(text, at)
+}
+/** The same oracle over one fixed store, reused across many evaluations. */
+export function engineOf(cells: Cells, sheet = 'Sheet1'): (text: string, at: { row: number; col: number }) => { value: EvaluationValue; features: string[] } {
   const map = new Map<string, ElementValue>()
   for (const c of storedCells(cells)) map.set(`${c.row}:${c.col}`, elementOf(c.value))
   const store: SparseCellStore = {
@@ -123,15 +127,17 @@ export function engineEval(text: string, cells: Cells, at: { row: number; col: n
     sheetIdOfName: n => (n.toLowerCase() === sheet.toLowerCase() ? 'sheet' : undefined), sheetNameOfId: id => (id === 'sheet' ? sheet : undefined),
     store, definedNames: [], tables: undefined,
   })
-  const currentCell: CellRef = { row: at.row, col: at.col, absRow: false, absCol: false }
-  const features = new Set<string>()
-  const ctx: EvaluationContext = {
-    typedValues: true, currentSheet: sheet, currentCell, semantics: SEMANTICS, references, unsupportedFeatures: features,
-    nodeValues: new WeakMap(), flatArgs: new WeakMap(), functionWork: new WeakMap(),
-    getCellValue: (_s, col, row) => map.get(`${row}:${col}`) ?? null,
+  return (text, at) => {
+    const currentCell: CellRef = { row: at.row, col: at.col, absRow: false, absCol: false }
+    const features = new Set<string>()
+    const ctx: EvaluationContext = {
+      typedValues: true, currentSheet: sheet, currentCell, semantics: SEMANTICS, references, unsupportedFeatures: features,
+      nodeValues: new WeakMap(), flatArgs: new WeakMap(), functionWork: new WeakMap(),
+      getCellValue: (_s, col, row) => map.get(`${row}:${col}`) ?? null,
+    }
+    const value = evaluateNode(parseFormula(text.replace(/^=/, '')), ctx)
+    return { value, features: [...features].sort() }
   }
-  const value = evaluateNode(parseFormula(text.replace(/^=/, '')), ctx)
-  return { value, features: [...features].sort() }
 }
 
 /* ------------------------------------------------------------------ */

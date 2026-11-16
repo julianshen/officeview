@@ -85,7 +85,7 @@ describe('relative-range traversal work is charged per occurrence before it happ
     expect(Math.floor((5000 - 1004) / 37)).toBe(108)
     const readyRows = outcomes.map((o, i) => (o.kind === 'ready' ? i : -1)).filter(i => i >= 0)
     expect(readyRows).toEqual(Array.from({ length: 108 }, (_, i) => i)) // B2:B109, in row-major order
-    expect(outcomes.slice(108).every(o => o.kind === 'unresolved' && (o as { reason: string }).reason === 'cf-resource-limit')).toBe(true)
+    expect(outcomes.slice(108).every(o => o.kind === 'unresolved' && (o as unknown as { reason: string }).reason === 'cf-resource-limit')).toBe(true)
     // Mutant (charging removed): every target evaluates.
     const mutant = await run(freeCeiling())
     expect(mutant.outcomes.filter(o => o.kind === 'ready')).toHaveLength(1000)

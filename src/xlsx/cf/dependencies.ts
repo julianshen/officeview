@@ -378,11 +378,10 @@ export async function prepareCfFormulaBatch(tasks: readonly CfFormulaTask[], opt
           hoists[i] = { plan, values: out.value.value }
         }
         const targets = options.targets ? rule.ranges.flatMap(r => options.targets!.map(t => clampTo(r, t)).filter((x): x is SourceRect => x !== undefined)) : rule.ranges
-        const exclude = new Set(plan.map(h => h.node))
         // The cap counts the populated clamp; the snapshot declares the geometry as written (S5-SUMIF-SHAPE: a whole
         // column stays a whole column, so `countAbsent` and coverage see the true area).
-        const capped = cfFormulaFootprint(formula, targets, formula.anchor, options.edge, { bounds, exclude })
-        const declared = cfFormulaFootprint(formula, targets, formula.anchor, options.edge, { exclude, uncapped: true })
+        const capped = cfFormulaFootprint(formula, targets, formula.anchor, options.edge, { bounds, hoists: plan })
+        const declared = cfFormulaFootprint(formula, targets, formula.anchor, options.edge, { hoists: plan, uncapped: true })
         if (capped === 'over-cap' || declared === 'over-cap') { taskOutcome[i] = unresolved('cf-resource-limit'); continue }
         footprints[i] = declared
         cappedCells[i] = capped.reduce((n, e) => n + area(e.rect), 0)
