@@ -2059,3 +2059,13 @@ Evidence kind is read from the owning case's per-cell `iconEvidence` labels (ver
 - **Manual calculation:** the observation reads the stale sources `A2:A5` and `E1` before and after the explicit calculation. An input that already looks recalculated on open is refused.
 - **S5-STUB reuse** reads each Stage 1–4 capture in its own representation: Stage 1/2 `observedCells`, Stage 3 `observedBars`, Stage 4 `observedIcons`. All five reused captures are now evidenced.
 - **The post-capture suite is runnable:** the preparation invariants are checked on the freshly generated catalogue, and committed cases go through the verifier.
+
+### Fix round 2 (codex re-review)
+
+- **Bars:** a bar witness is the Stage 3 column scan (`measureBarGeometry`: three scanlines that agree, with the control's text masked), and at least half of the measured bar box must be ink.
+- **Icons:** an icon witness is a Stage 4 glyph-key class (`classifyIconCrop` on the left 28 px, twin sets included) at the frame position that `measureIconGeometry` locates. That position is relative to the cell, with the control's text excluded.
+- **Comparison:** formula and twin cells are compared by these measurements, never by crop equality.
+- **Noise:** isolated pixels and unclassified ink are unmeasurable, which is fail-closed.
+- **Expected-empty cells:** a cell whose reading predicts no visual, such as a zero-length bar below the minimum, is checked as empty by the same measurement.
+- **Witness count:** a configuration needs at least 2 validated non-empty witnesses (`formula-twin-blank` otherwise).
+- **Row height:** Stage 5 workbooks with an icon rule use the glyph key's 20 pt rows, so their crops have the key's size. This needs the Stage 4 key capture (`stage4-icon-glyph-key`), which is measured.

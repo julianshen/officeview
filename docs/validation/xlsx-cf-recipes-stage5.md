@@ -58,7 +58,7 @@ done
 
 - **What the capture records:**
   - Excel's DisplayFormat for every designated cell, twin and control: interior colour, base colour and strikethrough, as `formulaObservations` in `refs/<id>.json`.
-  - The PNG, from which the bar and icon twins are compared crop by crop.
+  - The PNG. From it, the bars are measured with the Stage 3 column scan and the icons are classified against the Stage 4 glyph key (`stage4-icon-glyph-key` must stay measured), and twins are compared by those measurements.
   - `formulaEvaluation`: the verifier's own recomputation per capability.
   - `matched`/`fillSource` on the case's cells, which follow the DisplayFormat readback and are never seeded.
 - **`stage5-cross-sheet`:** the capture also opens the saved workbook a second time. It sets `Sheet2!A3` and `Sheet2!A5` to 1 without saving, reads `B3` and `B5` (the `formulaDynamicRefresh` observation), and closes without saving.
