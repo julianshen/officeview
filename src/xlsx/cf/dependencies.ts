@@ -376,8 +376,10 @@ export interface CfFormulaBatch {
   dispose(): void
 }
 
+/** The value generations a batch read (the fields the statistics session's source recheck compares; a rule change makes
+ * a new batch, so cfGen, which a source stamp does not own, is not compared). */
 const sameDataGeneration = (a: CfStamp, b: CfStamp): boolean => a.owner === b.owner && a.sheetId === b.sheetId && a.workbookValueGen === b.workbookValueGen
-  && a.structureGen === b.structureGen && a.cfGen === b.cfGen && (a.dependencyGen ?? 0) === (b.dependencyGen ?? 0)
+  && a.structureGen === b.structureGen && (a.dependencyGen ?? 0) === (b.dependencyGen ?? 0)
 export async function prepareCfFormulaBatch(tasks: readonly CfFormulaTask[], options: CfFormulaBatchOptions): Promise<CfFormulaBatch> {
   const { signal, memory, evaluation } = options
   const ceiling = options.ceiling ?? createCfUnitCeiling()
@@ -416,9 +418,10 @@ export async function prepareCfFormulaBatch(tasks: readonly CfFormulaTask[], opt
         if (plan.length > 0) {
           if (!options.statistics) { taskOutcome[i] = unresolved('cf-resource-limit'); continue }
           const out = await options.statistics.prepareHoists(rule, plan, options.stamp, options.source, scanBudget(), { signal })
+          // Owned before any further check, so a cancellation here disposes it with the rest.
+          if (out.kind === 'ready') hoistLeases.push(out.value)
           if (signal.aborted) throw cancel()
           if (out.kind !== 'ready') { taskOutcome[i] = out.kind === 'unresolved' ? out : unresolved('cf-resource-limit'); continue }
-          hoistLeases.push(out.value)
           hoists[i] = { plan, values: out.value.value }
         }
         const targets = options.targets ? rule.ranges.flatMap(r => options.targets!.map(t => clampTo(r, t)).filter((x): x is SourceRect => x !== undefined)) : rule.ranges

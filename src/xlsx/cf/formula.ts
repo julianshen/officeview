@@ -850,7 +850,8 @@ export interface CfCallShape {
   readonly literalUnits: number
   /** Non-text operations that consume a text operation's output or a read (comparisons, arithmetic, coercing calls). */
   readonly consumers: number
-  /** UPPER/LOWER calls: case mapping can lengthen a string (`'ß'.toUpperCase()` is `'SS'`). */
+  /** The deepest nesting of UPPER/LOWER calls: case mapping can lengthen a string (`'ß'.toUpperCase()` is `'SS'`), and
+   * only a mapping applied to another's output compounds; sibling mappings each grow their own operand. */
   readonly caseOps: number
   /** Operands of a text operation rendered from a non-string (numbers, booleans, errors, computed or hoisted values). */
   readonly renderOperands: number
@@ -872,6 +873,7 @@ const TEXT_FIRST_ONLY: ReadonlySet<string> = new Set(['LEN', 'TRIM', 'UPPER', 'L
 export function cfCallShape(f: CfFormula, hoisted: readonly CfHoist[] = [], memoised: ReadonlyMap<AstNode, ElementValue> = new Map()): CfCallShape {
   const hoists = new Map(hoisted.map(h => [h.node, h]))
   const refs: RefNode[] = [], reads: ReadKind[] = [], aggregates: number[] = [], conditionals: Conditional[] = []
+  let caseDepth = 0
   let nodes = 0, lookups = 0, textual = false, textOps = 0, literalUnits = 0, consumers = 0, caseOps = 0, renderOperands = 0, criterionLiteralUnits = 0
   const renderRefs: number[] = [], criterionRefs: number[] = []
   const addRef = (node: RefNode, kind: ReadKind): number => { refs.push(node); reads.push(kind); return refs.length - 1 }
@@ -911,7 +913,8 @@ export function cfCallShape(f: CfFormula, hoisted: readonly CfHoist[] = [], memo
         const name = node.name.toUpperCase()
         const isText = CF_FORMULA_FUNCTIONS.get(name)?.text === true
         if (isText) { textual = true; textOps++ }
-        if (name === 'UPPER' || name === 'LOWER') caseOps++
+        const caseMap = name === 'UPPER' || name === 'LOWER'
+        if (caseMap) { caseDepth++; caseOps = Math.max(caseOps, caseDepth) }
         if (!STRING_NEUTRAL.has(name)) { textual = true; if (!isText) consumers++ }
         if (CONDITIONAL.has(name)) {
           const roles = conditionalRoles(name, node.args.length)
@@ -943,6 +946,7 @@ export function cfCallShape(f: CfFormula, hoisted: readonly CfHoist[] = [], memo
           return
         }
         node.args.forEach((arg, i) => visit(arg, false, isText && (i === 0 || !TEXT_FIRST_ONLY.has(name))))
+        if (caseMap) caseDepth--
         return
       }
       default: return
@@ -998,7 +1002,8 @@ export function cfCallWorkBreakdown(shape: CfCallShape, payload: CfPayloadMetric
  * Text work and the longest intermediate string of one call (finding 2). The source units are every single-cell read's
  * string units, the literal units, and `CF_TEXT_RENDER_UNITS` per operand a text operation renders from a non-string (a
  * number, boolean or error cell, a computed or hoisted value). No intermediate string is longer than the source units
- * times `CASE_GROWTH` per case mapping (concatenation, slicing and trimming never lengthen past their inputs). A call
+ * times `CASE_GROWTH` per level of nested case mapping (concatenation, slicing and trimming never lengthen past their
+ * inputs; sibling mappings grow disjoint operands). A call
  * with text operations walks at most that intermediate once per text operation and once per consumer; without one, each
  * consumer walks its own read once. Criterion text (conditional criteria, frequency keys) is parsed whatever else the
  * call does, so it is always charged.
@@ -1113,6 +1118,7 @@ export function createCfInvariantMemo(memory: CfMemory): CfInvariantMemo {
   }
 }
 
+const NO_HOISTS: readonly CfHoist[] = Object.freeze([])
 /** Calls whose result may be one of their operands as read (a reference's value keeps its `fromRef` origin): never a
  * memo root, since a literal in their place could read differently. */
 const PASS_THROUGH: ReadonlySet<string> = new Set(['IF', 'IFERROR', 'IFNA'])
@@ -1123,7 +1129,16 @@ const PASS_THROUGH: ReadonlySet<string> = new Set(['IF', 'IFERROR', 'IFNA'])
  * operator or at a call that computes its value (not a pass-through), and containing no hoisted node (its node identity
  * must survive translation unchanged).
  */
+const subtreeCache = new WeakMap<CfFormula, { hoisted: readonly CfHoist[]; out: readonly AstNode[] }>()
 export function cfInvariantSubtrees(f: CfFormula, hoisted: readonly CfHoist[] = []): readonly AstNode[] {
+  // Memoised per formula and plan (a preparation passes one plan array per rule throughout).
+  const cached = subtreeCache.get(f)
+  if (cached && cached.hoisted === hoisted) return cached.out
+  const out = invariantSubtreesOf(f, hoisted)
+  subtreeCache.set(f, { hoisted, out })
+  return out
+}
+function invariantSubtreesOf(f: CfFormula, hoisted: readonly CfHoist[]): readonly AstNode[] {
   const hoistNodes = new Set<AstNode>(hoisted.map(h => h.node))
   const info = new Map<AstNode, { invariant: boolean; work: boolean; hoist: boolean }>()
   const facts = (node: AstNode): { invariant: boolean; work: boolean; hoist: boolean } => {
@@ -1226,9 +1241,9 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
   // reads stay in scope through invocation.
   snapshot.reset()
   const dRow = at.row - anchor.row, dCol = at.col - anchor.col
-  const plan = context.hoists?.plan ?? []
+  const plan = context.hoists?.plan ?? NO_HOISTS
   // Invariant subtrees already computed in this preparation enter as literals (finding 8).
-  const subtrees = cfInvariantSubtrees(f, plan)
+  const subtrees = cfInvariantSubtrees(f, context.hoists?.plan ?? NO_HOISTS)
   const memoised = new Map<AstNode, ElementValue>()
   for (const node of subtrees) { const v = context.invariants.getNode(node); if (v !== undefined) memoised.set(node, v) }
   const shape = cfCallShape(f, plan, memoised)

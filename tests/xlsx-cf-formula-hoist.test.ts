@@ -374,6 +374,23 @@ describe('the service statistics loop runs hoists beside statistical rules only 
     expect(memory.currentBytes).toBe(0) // the service's unconsumed hoist leases were released
     return { columnScans: source.pageCalls.filter(c => c.rects.length === 1 && c.rects[0]!.firstRow === 0 && c.rects[0]!.lastRow === 49).length, out }
   }
+  it('a cancellation during a later rule\'s hoist scan strands no earlier lease: after dispose the ledger is 0', async () => {
+    const source = fakeSource(cells)
+    const controller = new AbortController()
+    let hoistScans = 0
+    const pages = source.pages.bind(source)
+    source.pages = (id, rects, budget, signal) => {
+      if (rects.length === 1 && rects[0]!.firstRow === 0 && rects[0]!.lastRow === 49 && ++hoistScans === 2) controller.abort()
+      return pages(id, rects, budget, signal)
+    }
+    const rules = [formulaRule('COUNTIF($A:$A,A2)>1', 'A2:A50'), formulaRule('A2>AVERAGE($A:$A)', 'A2:A50')]
+    const memory = createCfMemory()
+    const service = createCfService({ rules, diagnostics: [] }, memory, { evidence: { allows: () => true }, evaluation: EVALUATION })
+    await expect(service.prepareCf({ stamp: source.stamp('s1'), sourceRects: [rectOf('A2:A50')], signal: controller.signal, grantBytes: CF_LIMITS.scratchBytes }, source)).rejects.toMatchObject({ code: 'cancelled' })
+    expect(hoistScans).toBe(2)
+    service.dispose()
+    expect(memory.currentBytes).toBe(0)
+  })
   it('scans the column once with the capability and a context; production (no capability) and a missing context scan nothing', async () => {
     expect((await run(() => true)).columnScans).toBe(1)
     expect((await run(cap => !cap.startsWith('formula:hoist'))).columnScans).toBe(0)
@@ -557,7 +574,7 @@ describe('invariant subtrees are memoised per preparation under a charged lease 
   }
   const B = { B1: 1, B2: -2, B3: 3, B4: 0.5, B5: -7 }
   it('SUM(IFERROR($A$1,0))+B1: the first call evaluates the subtree, every later call reads its memoised value', async () => {
-    for (const A1 of [5, 'txt', true, null, { error: '#N/A' as const }] as const) {
+    for (const A1 of [5, 'txt', true, null, { error: '#N/A' as const }, { error: '#DIV/0!' as const }] as const) {
       const cells: Cells = { ...B, ...(A1 === null ? {} : { A1 }) }
       const text = 'SUM(IFERROR($A$1,0))+B1'
       const { outs, calls, after } = await run(text, cells)
@@ -570,9 +587,10 @@ describe('invariant subtrees are memoised per preparation under a charged lease 
     }
   })
   it('a subtree as an aggregate argument (SUM(B1,$A$1*2)) and inside a comparison paint as the engine at every target', async () => {
-    const memoised = new Set(['B1+MAX($A$1:$A$3)>2', 'UPPER($A$2)=B1'])
-    for (const text of ['SUM(B1,$A$1*2)>0', 'AND(B1>0,MAX($A$1:$A$3)>2)', 'B1+MAX($A$1:$A$3)>2', 'UPPER($A$2)=B1']) {
-      const cells: Cells = { ...B, A1: 2, A2: 'ab', A3: 4 }
+    const memoised = new Set(['B1+MAX($A$1:$A$3)>2', 'UPPER($A$2)=B1', 'ISERROR(($A$4*2)+B1)'])
+    for (const text of ['SUM(B1,$A$1*2)>0', 'AND(B1>0,MAX($A$1:$A$3)>2)', 'B1+MAX($A$1:$A$3)>2', 'UPPER($A$2)=B1', 'ISERROR(($A$4*2)+B1)']) {
+      // A4 is an error: its memoised subtree is served as an error literal.
+      const cells: Cells = { ...B, A1: 2, A2: 'ab', A3: 4, A4: { error: '#DIV/0!' } }
       const { outs, calls } = await run(text, cells)
       outs.forEach((o, row) => expect(o, `${text} at C${row + 1}`).toEqual({ kind: 'ready', value: resultOf(engineAt(text, cells, row, 2).value) }))
       // An argument of SUM or AND is evaluated in the engine's array mode, outside the scalar memo the subtree values are

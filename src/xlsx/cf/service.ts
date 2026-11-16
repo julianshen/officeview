@@ -216,11 +216,12 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
             const plan = planCfHoist(formula)
             if (plan.length === 0 || !plan.every(h => evidence.allows(h.kind === 'scalar' ? 'formula:hoist-aggregate' : 'formula:hoist-countif-frequency'))) continue
             const scan = options.statisticsBudget?.() ?? createCfWorkBudget({ signal, scan: true })
-            hoisted.set(formula, await statistics.prepareHoists(rule, plan, stamp, source, scan, { signal }))
+            const out = await statistics.prepareHoists(rule, plan, stamp, source, scan, { signal })
+            // Nothing consumes the hoists yet (Task 35): each lease is released as soon as it is granted (a later throw
+            // or cancellation can never strand it), leaving the session's cached entry as the only owner.
+            if (out.kind === 'ready') out.value.release()
+            hoisted.set(formula, out)
           }
-          // Nothing consumes the hoists yet (Task 35): the leases are released now, leaving the session's cached entry
-          // as the only owner, so the charge never outlives the session.
-          for (const out of hoisted.values()) if (out.kind === 'ready') out.value.release()
           budget.resume()
           for (const rule of ordered) if (rule.definition.kind === 'colorScale' || rule.definition.kind === 'dataBar' || rule.definition.kind === 'iconSet') {
             const prepared = stats.get(rule)

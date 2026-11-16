@@ -34,6 +34,7 @@ function countingBudget(): CfWorkBudget & { activeMs(): number } {
   let start = now(), active = 0, units = 0, slice = 0, paused = false
   return {
     get units() { return units },
+    get remaining() { return Number.MAX_SAFE_INTEGER }, // counts, never refuses
     spend(n) {
       units += n // a spend made while paused counts, as in createCfWorkBudget
       if (paused) return 'yield'

@@ -510,6 +510,15 @@ describe('text work is bounded per operation, generated strings and criteria inc
     }
     for (const v of [true, false, { kind: 'formula-error', code: '#GETTING_DATA' }] as const) expect(evaluatorModule.coerceToString(v as never).length).toBeLessThanOrEqual(CF_TEXT_RENDER_UNITS)
   })
+  it('sibling case mappings do not compound: UPPER(A2)=UPPER(B2) over two 5-character strings evaluates', async () => {
+    const f = compile('UPPER(A2)=UPPER(B2)', 'C2')
+    const five = { cells: 1, stringUnits: 5, longestString: 5 }
+    const b = cfCallWorkBreakdown(cfCallShape(f), { viewCells: 2, atoms: [five, five] }, []) as CfCallWorkBreakdown
+    expect(b.text).toBe(10 * 3 * 3) // (5 + 5) x 3 for one level of case mapping, walked by two UPPER and one comparison
+    expect((await callOf('UPPER(A2)=UPPER(B2)', { A2: 'abcde', B2: 'ABCDE' }, 'C2')).out).toEqual({ kind: 'ready', value: { kind: 'boolean', value: true } })
+    // Nested mappings do compound: UPPER(LOWER(A2)) is bounded at 9x.
+    expect(cfTextUnits(cfCallShape(compile('LEN(UPPER(LOWER(A2)))>0', 'C2')), { viewCells: 1, atoms: [five] }).intermediate).toBe(45)
+  })
   it('case mapping can lengthen a string: UPPER over "ß" x 40 is bounded by its output (80), not its input', async () => {
     const f = compile('LEN(UPPER(A1))=80', 'B1')
     const shape = cfCallShape(f)
