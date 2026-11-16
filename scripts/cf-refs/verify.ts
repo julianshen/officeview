@@ -5642,6 +5642,61 @@ const fillToken = (o: { fill: string; strike: boolean }): string => `${o.fill}${
  * designated cell and its control were observed, and every control shows no format. Record configurations are evaluated
  * and kept, never evidence.
  */
+/**
+ * Ruling S5-WITNESS: the one witness rule every configuration goes through, once the winner is the sole surviving
+ * reading. Each designated cell's role comes from the winner's prediction, fixed before capture (a literal token, or the
+ * twin's `twinExpect`):
+ * - required-visual: the cell must render a validated visual (a Stage 3 bar, a Stage 4 icon class, or a fill checked
+ *   against its unformatted control), else `formula-twin-missing`;
+ * - required-empty: the cell must be validated empty by the same measurement, else `formula-unexpected-visual`.
+ * A cell is decisive against a rival only when its observation matches the winner and contradicts the rival's prediction
+ * beyond tolerance (a cell within tolerance of both decides nothing); every replication group a configuration designs to
+ * separate the pair needs >= 2 such cells. A bar or icon configuration also needs >= 2 required-visual witnesses.
+ */
+function s5Witness(
+  evidence: readonly S5Configuration[],
+  winner: string,
+  ctx: {
+    cfgRefuse: (code: CfRefusalCode, reason: string, observed?: Record<string, Record<string, string>>) => FormulaCapabilityEvaluation
+    observed: Record<string, Record<string, string>>
+    matches: (cfg: S5Configuration, ref: string, token: string) => boolean | undefined
+    stateOf: (cfg: S5Configuration, ref: string) => 'visual' | 'empty' | undefined
+    kindOf: (cfg: S5Configuration) => 'bar' | 'icon'
+  },
+): FormulaCapabilityEvaluation | undefined {
+  const { cfgRefuse: refuse, observed, matches, stateOf } = ctx
+  const roleOf = (cfg: S5Configuration, token: string): 'visual' | 'empty' | 'either' => {
+    const t = /^twin:([A-Z]+\d+)/.exec(token)?.[1]
+    if (t) return cfg.twinExpect?.[t] ?? 'either'
+    return token === 'none' ? 'empty' : 'visual'
+  }
+  for (const cfg of evidence) {
+    const a = cfg.hypotheses[winner]
+    if (!a) continue
+    let witnesses = 0
+    for (const ref of cfg.refs) {
+      const role = roleOf(cfg, a[ref]!)
+      if (role === 'either') continue
+      const got = stateOf(cfg, ref)
+      if (got === undefined) return refuse('missing-capture', `${cfg.id}: ${ref} cannot be measured`, observed)
+      if (role === 'visual' && got !== 'visual') return refuse('formula-twin-missing', `${cfg.id}: ${winner} requires a visual at ${ref}, which renders none`, observed)
+      if (role === 'empty' && got !== 'empty') return refuse('formula-unexpected-visual', `${cfg.id}: ${winner} requires ${ref} to be empty, but it shows a visual`, observed)
+      if (role === 'visual') witnesses++
+    }
+    if (cfg.observable === 'crop' && witnesses < 2) return refuse('formula-twin-blank', `${cfg.id}: ${witnesses} validated non-empty ${ctx.kindOf(cfg)} witness${witnesses === 1 ? '' : 'es'} for ${winner}, fewer than 2 (S4-REPLICATE): empty cells alone prove nothing`, observed)
+    const keyOf = (ref: string): string => (cfg.replicateBy === 'column' ? /^[A-Z]+/.exec(s5Bare(ref))![0] : cfg.id)
+    for (const rival of Object.keys(cfg.hypotheses).filter(n => n !== winner)) {
+      const b = cfg.hypotheses[rival]!
+      const designed = cfg.refs.filter(ref => a[ref] !== b[ref])
+      for (const key of new Set(designed.map(keyOf))) {
+        const decisive = designed.filter(ref => keyOf(ref) === key && matches(cfg, ref, a[ref]!) === true && matches(cfg, ref, b[ref]!) === false)
+        if (decisive.length < 2) return refuse('formula-replication-shortfall', `S4-REPLICATE: configuration ${cfg.replicateBy === 'column' ? key : cfg.id} has ${decisive.length} decisive cell${decisive.length === 1 ? '' : 's'}, fewer than 2 (${winner} vs ${rival}: a cell within tolerance of both decides nothing)`, observed)
+      }
+    }
+  }
+  return undefined
+}
+
 export function evaluateFormulaCapabilities(
   configs: readonly S5Configuration[],
   controls: Readonly<Record<string, string>>,
@@ -5678,21 +5733,6 @@ export function evaluateFormulaCapabilities(
       }
       return observed[cfg.id]![ref] === want
     }
-    const differs = (cfg: S5Configuration, ref: string, a: string, b: string): boolean | undefined => {
-      if (a === b) return false
-      const x = concrete(cfg, ref, a)
-      const y = concrete(cfg, ref, b)
-      if (x === undefined || y === undefined) return undefined
-      if (cfg.observable === 'crop') {
-        if (x === y) return false
-        const vx = visual(cfg, x)
-        const vy = visual(cfg, y)
-        const fx = obs.fill(`${s5PrefixOf(ref)}${x}`)
-        const fy = obs.fill(`${s5PrefixOf(ref)}${y}`)
-        return vx && vy && fx && fy ? !sameS5Visual(vx, vy) || fillToken(fx) !== fillToken(fy) : undefined
-      }
-      return x !== y
-    }
     for (const cfg of cfgs) {
       observed[cfg.id] = {}
       for (const ref of cfg.refs) {
@@ -5708,6 +5748,32 @@ export function evaluateFormulaCapabilities(
       }
     }
     if (failure) { out[cap] = { ...failure, observed }; continue }
+    // Ruling S5-WITNESS: a cell's rendered state, by the same measurement for formula cells and twins alike.
+    const stateOf = (cfg: S5Configuration, ref: string): 'visual' | 'empty' | undefined => {
+      if (cfg.observable === 'crop') {
+        const v = visual(cfg, s5Bare(ref))
+        return v === undefined ? undefined : v.kind === 'none' ? 'empty' : 'visual'
+      }
+      const f = obs.fill(ref)
+      return f === undefined ? undefined : f.fill !== 'none' || f.strike ? 'visual' : 'empty'
+    }
+    // Positive (and negative) controls: every twin a live reading names renders what was fixed for it before capture,
+    // before its observation is used as a prediction.
+    let control: FormulaCapabilityEvaluation | undefined
+    for (const cfg of cfgs.filter(c => c.record === undefined)) {
+      const named = new Set(Object.values(cfg.hypotheses).flatMap(h => Object.values(h).map(t => /^twin:([A-Z]+\d+)/.exec(t)?.[1]).filter((t): t is string => t !== undefined)))
+      for (const t of named) {
+        const want = cfg.twinExpect?.[t]
+        if (want === undefined) { control ??= refuse('formula-twin-missing', `${cfg.id}: twin ${t} has no expected rendering fixed before capture (Ruling S5-WITNESS)`, observed); continue }
+        if (want === 'either') continue
+        const prefix = s5PrefixOf(cfg.refs[0] ?? '')
+        const got = stateOf(cfg, `${prefix}${t}`)
+        if (got === undefined) control ??= refuse('missing-capture', `${cfg.id}: twin ${t} cannot be measured`, observed)
+        else if (want === 'visual' && got !== 'visual') control ??= refuse('formula-twin-missing', `${cfg.id}: the positive control ${t} renders nothing against its unformatted control, so it predicts nothing`, observed)
+        else if (want === 'empty' && got !== 'empty') control ??= refuse('formula-unexpected-visual', `${cfg.id}: twin ${t} should render nothing but shows a visual`, observed)
+      }
+    }
+    if (control) { out[cap] = control; continue }
     // Live configurations decide; a negative control must agree with the winner but never bears evidence (fix round 1 #3).
     const live = cfgs.filter(c => c.record === undefined)
     const evidence = live.filter(c => c.role !== 'negative-control')
@@ -5732,52 +5798,9 @@ export function evaluateFormulaCapabilities(
     if (twin.length > 0) { out[cap] = { status: 'non-discriminating', reason: `readings ${twin[0]} coincide at every designated cell (indistinguishable readings are never published as distinct)`, survivors, observed }; continue }
     if (survivors.length > 1) { out[cap] = { status: 'non-discriminating', reason: `hypotheses ${survivors.join(', ')} all match every designated cell`, survivors, observed }; continue }
     const winner = survivors[0]!
-    // Fix round 1 #3: replication per evidence configuration (and per range where declared). Wherever a configuration
-    // was designed to separate the winner from a rival (their tokens differ), it must do so at >= 2 cells of each group;
-    // one configuration never covers for another.
-    let shortfall: string | undefined
-    for (const cfg of evidence) {
-      const a = cfg.hypotheses[winner]
-      if (!a) continue
-      const keyOf = (ref: string): string => (cfg.replicateBy === 'column' ? /^[A-Z]+/.exec(s5Bare(ref))![0] : cfg.id)
-      for (const rival of Object.keys(cfg.hypotheses).filter(n => n !== winner)) {
-        const b = cfg.hypotheses[rival]!
-        const designed = cfg.refs.filter(ref => a[ref] !== b[ref])
-        for (const key of new Set(designed.map(keyOf))) {
-          const decisive = designed.filter(ref => keyOf(ref) === key && differs(cfg, ref, a[ref]!, b[ref]!) === true)
-          if (decisive.length < 2) {
-            shortfall = `S4-REPLICATE: configuration ${cfg.replicateBy === 'column' ? key : cfg.id} has ${decisive.length} decisive cell${decisive.length === 1 ? '' : 's'}, fewer than 2 (${winner} vs ${rival})`
-            break
-          }
-        }
-        if (shortfall) break
-      }
-      if (shortfall) break
-    }
-    if (shortfall) { out[cap] = { ...refuse('formula-replication-shortfall', shortfall, observed), survivors }; continue }
-    // Fix round 2: a measured configuration rests on validated non-empty witnesses. A cell whose winning reading
-    // predicts an empty cell (a zero-length bar, no icon) is checked as empty by the same measurement; at least two cells
-    // per configuration must show a measured bar or classified icon that its twin also shows (S4-REPLICATE).
-    let blank: FormulaCapabilityEvaluation | undefined
-    for (const cfg of evidence.filter(c => c.observable === 'crop')) {
-      // Fix round 3 #1: only the twins fixed as permitted-empty may show nothing; everywhere else the winning reading
-      // predicts a visual, and a missing one in the formula cell or the twin is a mismatch.
-      const permitted = new Set(cfg.emptyTwins ?? [])
-      for (const ref of cfg.refs) {
-        const t = /^twin:([A-Z]+\d+)/.exec(cfg.hypotheses[winner]?.[ref] ?? '')?.[1]
-        if (!t || permitted.has(t)) continue
-        const missing = [ref, t].filter(r => visual(cfg, s5Bare(r))?.kind === 'none')
-        if (missing.length > 0) blank ??= refuse('formula-twin-missing', `${cfg.id}: ${winner} predicts a ${kindOf(cfg)} at ${ref} (twin ${t}), but ${missing.join(' and ')} show${missing.length === 1 ? 's' : ''} none; only ${[...permitted].join(', ') || 'no cell'} may be empty`, observed)
-      }
-      const witnesses = cfg.refs.filter(ref => {
-        const t = /^twin:([A-Z]+\d+)/.exec(cfg.hypotheses[winner]?.[ref] ?? '')?.[1]
-        const v = t ? visual(cfg, t) : undefined
-        return v !== undefined && v.kind !== 'none'
-      })
-      if (witnesses.length < 2) blank ??= refuse('formula-twin-blank', `${cfg.id}: ${witnesses.length} validated non-empty ${kindOf(cfg)} witness${witnesses.length === 1 ? '' : 'es'} for ${winner}, fewer than 2 (S4-REPLICATE): empty cells alone prove nothing`, observed)
-    }
-    if (blank) { out[cap] = { ...blank, survivors }; continue }
-    out[cap] = { status: 'discriminating', reason: `${winner} matches every designated cell; each rival is eliminated at >= 2 decisive cells of every configuration designed to separate it`, matched: winner, survivors, observed }
+    const verdict = s5Witness(evidence, winner, { cfgRefuse: refuse, observed, matches, stateOf, kindOf })
+    if (verdict) { out[cap] = { ...verdict, survivors }; continue }
+    out[cap] = { status: 'discriminating', reason: `${winner} matches every designated cell; every required visual and empty cell is validated, and each rival is contradicted at >= 2 decisive cells of every replication group (Ruling S5-WITNESS)`, matched: winner, survivors, observed }
   }
   return out
 }

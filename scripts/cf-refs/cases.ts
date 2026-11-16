@@ -368,6 +368,7 @@ export type CfRefusalCode =
   | 'formula-manual-observation-invalid'
   | 'formula-twin-blank'
   | 'formula-twin-missing'
+  | 'formula-unexpected-visual'
 
 export interface VerifiedEvidence {
   kind: 'verified'
@@ -5686,11 +5687,12 @@ export interface S5Configuration {
   /** Replication is checked per column inside the configuration too (each range of a multi-range rule, fix round 1 #3). */
   replicateBy?: 'column'
   /**
-   * Fix round 3 #1 (crop configurations): the twin cells that may legitimately show no bar or icon, fixed before capture
-   * from each twin's own rule and values (a twin with no visual rule, a bar at or below its lower bound, a degenerate bar).
-   * Wherever a reading names any other twin, the formula cell and its twin must both show a visual (`formula-twin-missing`).
+   * Ruling S5-WITNESS (fix round 4): what each twin a reading names is expected to render, fixed before capture from the
+   * twin's own rule and values. `visual`: a positive control that must render (a bar, an icon class, a scale or DXF fill)
+   * before its observation is used as a prediction. `empty`: it must render nothing (no visual rule, a bar at or below its
+   * lower bound). `either`: unknown (a degenerate bar), validated only by equality with the formula cell.
    */
-  emptyTwins?: readonly string[]
+  twinExpect?: Readonly<Record<string, 'visual' | 'empty' | 'either'>>
   /**
    * Fix round 1 #2: hypotheses that depend on the sqref order Excel retains on resave. `tables` maps each possible order of
    * the named rule's sqref to its hypotheses; the verifier reads the retained order from the saved XML and evaluates that
@@ -6581,12 +6583,13 @@ function calcManualFixture(): S5Fixture {
 }
 
 function compositionFixture(): S5Fixture {
-  // A2..A5 = 0, 1, 0, 1: the p1 expression ($A2>0) is true on rows 3 and 5, never on the column minimum (row 2, a
-  // zero-length bar), so every p1-true row is decisive (fix round 3). Every target and twin holds 10, 20, 30, 40.
-  const V = [10, 20, 30, 40]
+  // A2..A7 = 0, 1, 0, 1, 0, 1: the p1 expression ($A2>0) is true on rows 3, 5 and 7, never on the column minimum (row 2,
+  // a zero-length bar). So every p1-true row is decisive and the unstopped rows 4 and 6 are two non-empty witnesses
+  // (fix rounds 3 and 4). Every target and twin holds 10, 20, 30, 40, 50, 60.
+  const V = [10, 20, 30, 40, 50, 60]
   const cols = ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T']
-  const cells: Record<string, S5Value> = { ...colValues('A', [0, 1, 0, 1]), ...Object.assign({}, ...cols.map(c => colValues(c, V))) }
-  const on = (r: string): boolean => rowOfRef(r) === 3 || rowOfRef(r) === 5
+  const cells: Record<string, S5Value> = { ...colValues('A', [0, 1, 0, 1, 0, 1]), ...Object.assign({}, ...cols.map(c => colValues(c, V))) }
+  const on = (r: string): boolean => [3, 5, 7].includes(rowOfRef(r))
   let p = 1
   const pct3: S5Cfvo[] = [{ type: 'percent', val: '0' }, { type: 'percent', val: '33' }, { type: 'percent', val: '67' }]
   const mm: S5Cfvo[] = [{ type: 'min' }, { type: 'max' }]
@@ -6597,7 +6600,7 @@ function compositionFixture(): S5Fixture {
   // p1 ahead of a literal green fill or a scale writes strikethrough (dxf 2), so the lower fill stays observable; ahead of a
   // bar or an icon it writes the red fill (dxf 0), compared by crop with the red-only, red + visual and visual-only twins.
   const stopAhead = (cap: string, col: string, f: string, lower: 'dxf' | 'scale' | 'bar' | 'icon'): void => {
-    const sq = `${col}2:${col}5`
+    const sq = `${col}2:${col}7`
     rules.push(s5Expr(cap, sq, p++, f, { dxf: lower === 'dxf' || lower === 'scale' ? 2 : 0, stop: true }))
     if (lower === 'dxf') rules.push(lit(cap, sq, 1))
     else if (lower === 'scale') rules.push(s5Scale(cap, sq, p++, mm))
@@ -6608,23 +6611,23 @@ function compositionFixture(): S5Fixture {
   const twinCap = 'formula:composition-twin'
   stopAhead('formula:composition-stop-dxf', 'B', P1, 'dxf')
   stopAhead('formula:composition-stop-scale', 'C', P1, 'scale')
-  rules.push(s5Scale(twinCap, 'D2:D5', p++, mm))
+  rules.push(s5Scale(twinCap, 'D2:D7', p++, mm))
   stopAhead('formula:composition-stop-bar', 'E', P1, 'bar')
-  rules.push(lit(twinCap, 'F2:F5', 0), lit(twinCap, 'G2:G5', 0), s5Bar(twinCap, 'G2:G5', p++, mm), s5Bar(twinCap, 'H2:H5', p++, mm))
+  rules.push(lit(twinCap, 'F2:F7', 0), lit(twinCap, 'G2:G7', 0), s5Bar(twinCap, 'G2:G7', p++, mm), s5Bar(twinCap, 'H2:H7', p++, mm))
   stopAhead('formula:composition-stop-icon', 'I', P1, 'icon')
-  rules.push(lit(twinCap, 'J2:J5', 0), lit(twinCap, 'K2:K5', 0), s5Icon(twinCap, 'K2:K5', p++, pct3), s5Icon(twinCap, 'L2:L5', p++, pct3))
+  rules.push(lit(twinCap, 'J2:J7', 0), lit(twinCap, 'K2:K7', 0), s5Icon(twinCap, 'K2:K7', p++, pct3), s5Icon(twinCap, 'L2:L7', p++, pct3))
   // An expression fill against a scale fill, both orders (M: expression first; N: scale first), twin scale O.
-  rules.push(s5Expr('formula:composition-expression-vs-scale', 'M2:M5', p++, '$A2>-1'), s5Scale('formula:composition-expression-vs-scale', 'M2:M5', p++, mm))
-  rules.push(s5Scale('formula:composition-expression-vs-scale', 'N2:N5', p++, mm), s5Expr('formula:composition-expression-vs-scale', 'N2:N5', p++, '$A2>-1'))
-  rules.push(s5Scale(twinCap, 'O2:O5', p++, mm))
+  rules.push(s5Expr('formula:composition-expression-vs-scale', 'M2:M7', p++, '$A2>-1'), s5Scale('formula:composition-expression-vs-scale', 'M2:M7', p++, mm))
+  rules.push(s5Scale('formula:composition-expression-vs-scale', 'N2:N7', p++, mm), s5Expr('formula:composition-expression-vs-scale', 'N2:N7', p++, '$A2>-1'))
+  rules.push(s5Scale(twinCap, 'O2:O7', p++, mm))
   // Two overlapping expressions (red ahead of green).
-  rules.push(s5Expr('formula:composition-overlapping', 'P2:P5', p++, '$A2>0', { dxf: 0 }), s5Expr('formula:composition-overlapping', 'P2:P5', p++, '$A2>-1', { dxf: 1 }))
+  rules.push(s5Expr('formula:composition-overlapping', 'P2:P7', p++, '$A2>0', { dxf: 0 }), s5Expr('formula:composition-overlapping', 'P2:P7', p++, '$A2>-1', { dxf: 1 }))
   // INDIRECT (unresolved in production, evaluated by Excel) p1 stopIfTrue ahead of each kind; twins reused (D, F/G/H, J/K/L).
   stopAhead('formula:composition-indirect-ahead-dxf', 'Q', IND, 'dxf')
   stopAhead('formula:composition-indirect-ahead-scale', 'R', IND, 'scale')
   stopAhead('formula:composition-indirect-ahead-bar', 'S', IND, 'bar')
   stopAhead('formula:composition-indirect-ahead-icon', 'T', IND, 'icon')
-  const refs = (c: string): string[] => rowsOf(c, 2, 5)
+  const refs = (c: string): string[] => rowsOf(c, 2, 7)
   const stopDxf = (id: string, cap: string, c: string, ignoredPrediction: boolean): S5Configuration =>
     s5Cfg(id, cap, refs(c), {
       halts: r => (on(r) ? `${NONE}+strike` : S5_GREEN),
@@ -6878,35 +6881,42 @@ function activePresentBarFixture(): S5Fixture {
 }
 
 /**
- * Fix round 3 #1: the twins of a crop configuration that may show no visual, from each twin's own rule and values. A
- * twin under no bar or icon rule shows none. An icon always draws a bucket. A bar draws nothing at or below its lower
- * bound (minLength 0); a degenerate bar (lower >= upper, or an unresolvable bound) may draw nothing anywhere.
+ * Ruling S5-WITNESS: the expected rendering of every twin a configuration names, from the twin's own rule and values.
+ * Crop configurations look at the bar or icon slot: a twin under no bar or icon rule renders nothing, an icon always
+ * draws a bucket, a bar draws nothing at or below its lower bound (minLength 0), and a degenerate or unresolvable bar is
+ * unknown. Fill configurations look at the DisplayFormat fill: a twin under a colour scale or a DXF rule renders a fill,
+ * any other renders none.
  */
-function s5EmptyTwins(fx: S5Fixture, cfg: S5Configuration): string[] {
+function s5TwinExpect(fx: S5Fixture, cfg: S5Configuration): Record<string, 'visual' | 'empty' | 'either'> {
   const cells = s5CellsAt(fx)
   const twins = new Set<string>()
   for (const preds of Object.values(cfg.hypotheses)) for (const tok of Object.values(preds)) { const m = /^twin:([A-Z]+\d+)/.exec(tok); if (m) twins.add(m[1]!) }
-  const out: string[] = []
-  for (const t of twins) {
-    const rules = fx.rules.filter(r => (r.marker.ruleType === 'dataBar' || r.marker.ruleType === 'iconSet') && isCellInSqrefLocal(t, r.sqref))
-    if (rules.length === 0) { out.push(t); continue }
-    if (rules.some(r => r.marker.ruleType === 'iconSet')) continue
+  const out: Record<string, 'visual' | 'empty' | 'either'> = {}
+  for (const t of [...twins].sort()) {
+    const covering = fx.rules.filter(r => isCellInSqrefLocal(t, r.sqref))
+    if (cfg.observable !== 'crop') {
+      out[t] = covering.some(r => r.marker.ruleType === 'colorScale' || r.marker.dxf?.fillRgb !== undefined) ? 'visual' : 'empty'
+      continue
+    }
+    const rules = covering.filter(r => r.marker.ruleType === 'dataBar' || r.marker.ruleType === 'iconSet')
+    if (rules.length === 0) { out[t] = 'empty'; continue }
+    if (rules.some(r => r.marker.ruleType === 'iconSet')) { out[t] = 'visual'; continue }
     const r = rules[0]!
     const bound = r.marker.bar?.cfvo
     const values = r.sqref.split(/\s+/).flatMap(rg => Object.entries(cells).filter(([ref]) => isCellInSqrefLocal(ref, rg)).map(([, v]) => v)).filter((v): v is number => typeof v === 'number')
-    const at = (c: { type: string; val?: string; f?: string } | undefined, edge: 'lo' | 'hi'): number => {
+    const at = (c: { type: string; val?: string; f?: string } | undefined): number => {
       if (!c) return NaN
       if (c.type === 'min') return Math.min(...values)
       if (c.type === 'max') return Math.max(...values)
       const n = Number(c.val ?? c.f)
-      return c.type === 'num' && Number.isFinite(n) ? n : edge === 'lo' ? NaN : NaN
+      return c.type === 'num' && Number.isFinite(n) ? n : NaN
     }
-    const lo = at(bound?.[0], 'lo')
-    const hi = at(bound?.[1], 'hi')
+    const lo = at(bound?.[0])
+    const hi = at(bound?.[1])
     const v = cells[t]
-    if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo >= hi || typeof v !== 'number' || v <= lo) out.push(t)
+    out[t] = !Number.isFinite(lo) || !Number.isFinite(hi) || lo >= hi || typeof v !== 'number' ? 'either' : v <= lo ? 'empty' : 'visual'
   }
-  return out.sort()
+  return out
 }
 
 const S5_UNRESOLVED: ReadonlyArray<{ id: string; formula: string; type?: CfPartMarker['ruleType']; operator?: string; extra?: Partial<S5Fixture> }> = [
@@ -6972,10 +6982,13 @@ function authoredFixture(): S5Fixture {
   })
 }
 
-/** Attaches the permitted-empty twins to every crop configuration (fix round 3 #1). */
+/** Attaches the expected twin renderings to every configuration that names a twin (Ruling S5-WITNESS). */
 const withEmptyTwins = (fx: S5Fixture): S5Fixture => ({
   ...fx,
-  configurations: fx.configurations.map(cfg => (cfg.observable === 'crop' ? { ...cfg, emptyTwins: s5EmptyTwins(fx, cfg) } : cfg)),
+  configurations: fx.configurations.map(cfg => {
+    const expect = s5TwinExpect(fx, cfg)
+    return Object.keys(expect).length > 0 ? { ...cfg, twinExpect: expect } : cfg
+  }),
 })
 
 export const CF_STAGE5_FIXTURES: readonly S5Fixture[] = ([

@@ -66957,7 +66957,7 @@
       "input": "tests/fixtures/xlsx-cf/inputs/stage5-composition.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage5-composition.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:AO5",
+      "range": "A1:AO7",
       "requiredAppearances": [
         "screen"
       ],
@@ -66965,7 +66965,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "B2:B5",
+          "sqref": "B2:B7",
           "capabilityId": "formula:composition-stop-dxf",
           "ruleType": "expression",
           "priority": 1,
@@ -66985,7 +66985,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "B2:B5",
+          "sqref": "B2:B7",
           "capabilityId": "formula:composition-stop-dxf",
           "ruleType": "cellIs",
           "operator": "greaterThan",
@@ -67000,7 +67000,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "C2:C5",
+          "sqref": "C2:C7",
           "capabilityId": "formula:composition-stop-scale",
           "ruleType": "expression",
           "priority": 3,
@@ -67020,7 +67020,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "C2:C5",
+          "sqref": "C2:C7",
           "capabilityId": "formula:composition-stop-scale",
           "ruleType": "colorScale",
           "priority": 4,
@@ -67044,7 +67044,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "D2:D5",
+          "sqref": "D2:D7",
           "capabilityId": "formula:composition-twin",
           "ruleType": "colorScale",
           "priority": 5,
@@ -67068,7 +67068,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "E2:E5",
+          "sqref": "E2:E7",
           "capabilityId": "formula:composition-stop-bar",
           "ruleType": "expression",
           "priority": 6,
@@ -67088,7 +67088,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "E2:E5",
+          "sqref": "E2:E7",
           "capabilityId": "formula:composition-stop-bar",
           "ruleType": "dataBar",
           "priority": 7,
@@ -67111,7 +67111,7 @@
         },
         {
           "part": "xl/worksheets/sheet1.xml",
-          "sqref": "E2:E5",
+          "sqref": "E2:E7",
           "extension": "x14",
           "capabilityId": "formula:composition-stop-bar",
           "ruleType": "dataBar",
@@ -67140,7 +67140,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "F2:F5",
+          "sqref": "F2:F7",
           "capabilityId": "formula:composition-twin",
           "ruleType": "cellIs",
           "operator": "greaterThan",
@@ -67155,7 +67155,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "G2:G5",
+          "sqref": "G2:G7",
           "capabilityId": "formula:composition-twin",
           "ruleType": "cellIs",
           "operator": "greaterThan",
@@ -67170,7 +67170,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "G2:G5",
+          "sqref": "G2:G7",
           "capabilityId": "formula:composition-twin",
           "ruleType": "dataBar",
           "priority": 10,
@@ -67193,7 +67193,7 @@
         },
         {
           "part": "xl/worksheets/sheet1.xml",
-          "sqref": "G2:G5",
+          "sqref": "G2:G7",
           "extension": "x14",
           "capabilityId": "formula:composition-twin",
           "ruleType": "dataBar",
@@ -67222,7 +67222,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "H2:H5",
+          "sqref": "H2:H7",
           "capabilityId": "formula:composition-twin",
           "ruleType": "dataBar",
           "priority": 11,
@@ -67245,7 +67245,7 @@
         },
         {
           "part": "xl/worksheets/sheet1.xml",
-          "sqref": "H2:H5",
+          "sqref": "H2:H7",
           "extension": "x14",
           "capabilityId": "formula:composition-twin",
           "ruleType": "dataBar",
@@ -67274,7 +67274,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "I2:I5",
+          "sqref": "I2:I7",
           "capabilityId": "formula:composition-stop-icon",
           "ruleType": "expression",
           "priority": 12,
@@ -67294,7 +67294,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "I2:I5",
+          "sqref": "I2:I7",
           "capabilityId": "formula:composition-stop-icon",
           "ruleType": "iconSet",
           "priority": 13,
@@ -67322,7 +67322,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "J2:J5",
+          "sqref": "J2:J7",
           "capabilityId": "formula:composition-twin",
           "ruleType": "cellIs",
           "operator": "greaterThan",
@@ -67337,7 +67337,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "K2:K5",
+          "sqref": "K2:K7",
           "capabilityId": "formula:composition-twin",
           "ruleType": "cellIs",
           "operator": "greaterThan",
@@ -67352,7 +67352,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "K2:K5",
+          "sqref": "K2:K7",
           "capabilityId": "formula:composition-twin",
           "ruleType": "iconSet",
           "priority": 16,
@@ -67380,7 +67380,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "L2:L5",
+          "sqref": "L2:L7",
           "capabilityId": "formula:composition-twin",
           "ruleType": "iconSet",
           "priority": 17,
@@ -67408,7 +67408,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "M2:M5",
+          "sqref": "M2:M7",
           "capabilityId": "formula:composition-expression-vs-scale",
           "ruleType": "expression",
           "priority": 18,
@@ -67427,7 +67427,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "M2:M5",
+          "sqref": "M2:M7",
           "capabilityId": "formula:composition-expression-vs-scale",
           "ruleType": "colorScale",
           "priority": 19,
@@ -67451,7 +67451,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "N2:N5",
+          "sqref": "N2:N7",
           "capabilityId": "formula:composition-expression-vs-scale",
           "ruleType": "colorScale",
           "priority": 20,
@@ -67475,7 +67475,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "N2:N5",
+          "sqref": "N2:N7",
           "capabilityId": "formula:composition-expression-vs-scale",
           "ruleType": "expression",
           "priority": 21,
@@ -67494,7 +67494,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "O2:O5",
+          "sqref": "O2:O7",
           "capabilityId": "formula:composition-twin",
           "ruleType": "colorScale",
           "priority": 22,
@@ -67518,7 +67518,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "P2:P5",
+          "sqref": "P2:P7",
           "capabilityId": "formula:composition-overlapping",
           "ruleType": "expression",
           "priority": 23,
@@ -67537,7 +67537,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "P2:P5",
+          "sqref": "P2:P7",
           "capabilityId": "formula:composition-overlapping",
           "ruleType": "expression",
           "priority": 24,
@@ -67556,7 +67556,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "Q2:Q5",
+          "sqref": "Q2:Q7",
           "capabilityId": "formula:composition-indirect-ahead-dxf",
           "ruleType": "expression",
           "priority": 25,
@@ -67576,7 +67576,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "Q2:Q5",
+          "sqref": "Q2:Q7",
           "capabilityId": "formula:composition-indirect-ahead-dxf",
           "ruleType": "cellIs",
           "operator": "greaterThan",
@@ -67591,7 +67591,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "R2:R5",
+          "sqref": "R2:R7",
           "capabilityId": "formula:composition-indirect-ahead-scale",
           "ruleType": "expression",
           "priority": 27,
@@ -67611,7 +67611,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "R2:R5",
+          "sqref": "R2:R7",
           "capabilityId": "formula:composition-indirect-ahead-scale",
           "ruleType": "colorScale",
           "priority": 28,
@@ -67635,7 +67635,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "S2:S5",
+          "sqref": "S2:S7",
           "capabilityId": "formula:composition-indirect-ahead-bar",
           "ruleType": "expression",
           "priority": 29,
@@ -67655,7 +67655,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "S2:S5",
+          "sqref": "S2:S7",
           "capabilityId": "formula:composition-indirect-ahead-bar",
           "ruleType": "dataBar",
           "priority": 30,
@@ -67678,7 +67678,7 @@
         },
         {
           "part": "xl/worksheets/sheet1.xml",
-          "sqref": "S2:S5",
+          "sqref": "S2:S7",
           "extension": "x14",
           "capabilityId": "formula:composition-indirect-ahead-bar",
           "ruleType": "dataBar",
@@ -67707,7 +67707,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "T2:T5",
+          "sqref": "T2:T7",
           "capabilityId": "formula:composition-indirect-ahead-icon",
           "ruleType": "expression",
           "priority": 31,
@@ -67727,7 +67727,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "T2:T5",
+          "sqref": "T2:T7",
           "capabilityId": "formula:composition-indirect-ahead-icon",
           "ruleType": "iconSet",
           "priority": 32,
@@ -67754,8 +67754,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "acb3d14362eed28f28c0505ade783d7678885e94982ccffadf3bb10981709f65",
-        "savedSha256": "acb3d14362eed28f28c0505ade783d7678885e94982ccffadf3bb10981709f65",
+        "inputSha256": "075647ec02667b38595a172c10504728ec79db8b071a60a5b3daff8a4eb41adc",
+        "savedSha256": "075647ec02667b38595a172c10504728ec79db8b071a60a5b3daff8a4eb41adc",
         "provenance": "seed-hypothesis",
         "positiveRefs": [],
         "negativeRefs": [
@@ -67763,70 +67763,104 @@
           "W3",
           "W4",
           "W5",
+          "W6",
+          "W7",
           "X2",
           "X3",
           "X4",
           "X5",
+          "X6",
+          "X7",
           "Y2",
           "Y4",
+          "Y6",
           "Y3",
           "Y5",
+          "Y7",
           "Z2",
           "Z3",
           "Z4",
           "Z5",
+          "Z6",
+          "Z7",
           "AC2",
           "AA3",
           "AC4",
           "AA5",
+          "AC6",
+          "AA7",
           "AB3",
           "AB5",
+          "AB7",
           "AD2",
           "AD3",
           "AD4",
           "AD5",
+          "AD6",
+          "AD7",
           "AG2",
           "AE3",
           "AG4",
           "AE5",
+          "AG6",
+          "AE7",
           "AF3",
           "AF5",
+          "AF7",
           "AH2",
           "AH3",
           "AH4",
           "AH5",
+          "AH6",
+          "AH7",
           "AI2",
           "AI3",
           "AI4",
           "AI5",
+          "AI6",
+          "AI7",
           "AJ2",
           "AJ3",
           "AJ4",
           "AJ5",
+          "AJ6",
+          "AJ7",
           "AK2",
           "AK3",
           "AK4",
           "AK5",
+          "AK6",
+          "AK7",
           "AL2",
           "AL3",
           "AL4",
           "AL5",
+          "AL6",
+          "AL7",
           "AM2",
           "AM3",
           "AM4",
           "AM5",
+          "AM6",
+          "AM7",
           "AN2",
           "AN3",
           "AN4",
           "AN5",
+          "AN6",
+          "AN7",
           "AC3",
           "AC5",
+          "AC7",
           "AO2",
           "AO3",
           "AO4",
           "AO5",
+          "AO6",
+          "AO7",
           "AG3",
-          "AG5"
+          "AG5",
+          "AG7"
         ],
         "cells": [
           {
@@ -67850,6 +67884,18 @@
           {
             "ref": "B5",
             "controlRef": "W5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B6",
+            "controlRef": "W6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B7",
+            "controlRef": "W7",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -67878,6 +67924,18 @@
             "fillSource": "unverified"
           },
           {
+            "ref": "C6",
+            "controlRef": "X6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C7",
+            "controlRef": "X7",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
             "ref": "D2",
             "controlRef": "Y2",
             "matched": false,
@@ -67890,6 +67948,12 @@
             "fillSource": "unverified"
           },
           {
+            "ref": "D6",
+            "controlRef": "Y6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
             "ref": "D3",
             "controlRef": "Y3",
             "matched": false,
@@ -67898,6 +67962,12 @@
           {
             "ref": "D5",
             "controlRef": "Y5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D7",
+            "controlRef": "Y7",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -67926,6 +67996,18 @@
             "fillSource": "unverified"
           },
           {
+            "ref": "E6",
+            "controlRef": "Z6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E7",
+            "controlRef": "Z7",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
             "ref": "H2",
             "controlRef": "AC2",
             "matched": false,
@@ -67950,6 +68032,18 @@
             "fillSource": "unverified"
           },
           {
+            "ref": "H6",
+            "controlRef": "AC6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F7",
+            "controlRef": "AA7",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
             "ref": "G3",
             "controlRef": "AB3",
             "matched": false,
@@ -67958,6 +68052,12 @@
           {
             "ref": "G5",
             "controlRef": "AB5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G7",
+            "controlRef": "AB7",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -67986,6 +68086,18 @@
             "fillSource": "unverified"
           },
           {
+            "ref": "I6",
+            "controlRef": "AD6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I7",
+            "controlRef": "AD7",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
             "ref": "L2",
             "controlRef": "AG2",
             "matched": false,
@@ -68010,6 +68122,18 @@
             "fillSource": "unverified"
           },
           {
+            "ref": "L6",
+            "controlRef": "AG6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "J7",
+            "controlRef": "AE7",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
             "ref": "K3",
             "controlRef": "AF3",
             "matched": false,
@@ -68018,6 +68142,12 @@
           {
             "ref": "K5",
             "controlRef": "AF5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "K7",
+            "controlRef": "AF7",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -68046,6 +68176,18 @@
             "fillSource": "unverified"
           },
           {
+            "ref": "M6",
+            "controlRef": "AH6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M7",
+            "controlRef": "AH7",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
             "ref": "N2",
             "controlRef": "AI2",
             "matched": false,
@@ -68066,6 +68208,18 @@
           {
             "ref": "N5",
             "controlRef": "AI5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N6",
+            "controlRef": "AI6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N7",
+            "controlRef": "AI7",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -68094,6 +68248,18 @@
             "fillSource": "unverified"
           },
           {
+            "ref": "O6",
+            "controlRef": "AJ6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "O7",
+            "controlRef": "AJ7",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
             "ref": "P2",
             "controlRef": "AK2",
             "matched": false,
@@ -68114,6 +68280,18 @@
           {
             "ref": "P5",
             "controlRef": "AK5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "P6",
+            "controlRef": "AK6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "P7",
+            "controlRef": "AK7",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -68142,6 +68320,18 @@
             "fillSource": "unverified"
           },
           {
+            "ref": "Q6",
+            "controlRef": "AL6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q7",
+            "controlRef": "AL7",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
             "ref": "R2",
             "controlRef": "AM2",
             "matched": false,
@@ -68162,6 +68352,18 @@
           {
             "ref": "R5",
             "controlRef": "AM5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R6",
+            "controlRef": "AM6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R7",
+            "controlRef": "AM7",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -68190,6 +68392,18 @@
             "fillSource": "unverified"
           },
           {
+            "ref": "S6",
+            "controlRef": "AN6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "S7",
+            "controlRef": "AN7",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
             "ref": "H3",
             "controlRef": "AC3",
             "matched": false,
@@ -68198,6 +68412,12 @@
           {
             "ref": "H5",
             "controlRef": "AC5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H7",
+            "controlRef": "AC7",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -68226,6 +68446,18 @@
             "fillSource": "unverified"
           },
           {
+            "ref": "T6",
+            "controlRef": "AO6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "T7",
+            "controlRef": "AO7",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
             "ref": "L3",
             "controlRef": "AG3",
             "matched": false,
@@ -68234,6 +68466,12 @@
           {
             "ref": "L5",
             "controlRef": "AG5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L7",
+            "controlRef": "AG7",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -68261,6 +68499,20 @@
           {
             "ref": "W5",
             "controlRef": "B5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "W6",
+            "controlRef": "B6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "W7",
+            "controlRef": "B7",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -68294,6 +68546,20 @@
             "note": "same-content unformatted control"
           },
           {
+            "ref": "X6",
+            "controlRef": "C6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "X7",
+            "controlRef": "C7",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
             "ref": "Y2",
             "controlRef": "D2",
             "matched": false,
@@ -68308,6 +68574,13 @@
             "note": "same-content unformatted control"
           },
           {
+            "ref": "Y6",
+            "controlRef": "D6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
             "ref": "Y3",
             "controlRef": "D3",
             "matched": false,
@@ -68317,6 +68590,13 @@
           {
             "ref": "Y5",
             "controlRef": "D5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Y7",
+            "controlRef": "D7",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -68350,6 +68630,20 @@
             "note": "same-content unformatted control"
           },
           {
+            "ref": "Z6",
+            "controlRef": "E6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Z7",
+            "controlRef": "E7",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
             "ref": "AC2",
             "controlRef": "H2",
             "matched": false,
@@ -68378,6 +68672,20 @@
             "note": "same-content unformatted control"
           },
           {
+            "ref": "AC6",
+            "controlRef": "H6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AA7",
+            "controlRef": "F7",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
             "ref": "AB3",
             "controlRef": "G3",
             "matched": false,
@@ -68387,6 +68695,13 @@
           {
             "ref": "AB5",
             "controlRef": "G5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AB7",
+            "controlRef": "G7",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -68420,6 +68735,20 @@
             "note": "same-content unformatted control"
           },
           {
+            "ref": "AD6",
+            "controlRef": "I6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AD7",
+            "controlRef": "I7",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
             "ref": "AG2",
             "controlRef": "L2",
             "matched": false,
@@ -68448,6 +68777,20 @@
             "note": "same-content unformatted control"
           },
           {
+            "ref": "AG6",
+            "controlRef": "L6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AE7",
+            "controlRef": "J7",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
             "ref": "AF3",
             "controlRef": "K3",
             "matched": false,
@@ -68457,6 +68800,13 @@
           {
             "ref": "AF5",
             "controlRef": "K5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AF7",
+            "controlRef": "K7",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -68490,6 +68840,20 @@
             "note": "same-content unformatted control"
           },
           {
+            "ref": "AH6",
+            "controlRef": "M6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AH7",
+            "controlRef": "M7",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
             "ref": "AI2",
             "controlRef": "N2",
             "matched": false,
@@ -68513,6 +68877,20 @@
           {
             "ref": "AI5",
             "controlRef": "N5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AI6",
+            "controlRef": "N6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AI7",
+            "controlRef": "N7",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -68546,6 +68924,20 @@
             "note": "same-content unformatted control"
           },
           {
+            "ref": "AJ6",
+            "controlRef": "O6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ7",
+            "controlRef": "O7",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
             "ref": "AK2",
             "controlRef": "P2",
             "matched": false,
@@ -68569,6 +68961,20 @@
           {
             "ref": "AK5",
             "controlRef": "P5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK6",
+            "controlRef": "P6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK7",
+            "controlRef": "P7",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -68602,6 +69008,20 @@
             "note": "same-content unformatted control"
           },
           {
+            "ref": "AL6",
+            "controlRef": "Q6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AL7",
+            "controlRef": "Q7",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
             "ref": "AM2",
             "controlRef": "R2",
             "matched": false,
@@ -68625,6 +69045,20 @@
           {
             "ref": "AM5",
             "controlRef": "R5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AM6",
+            "controlRef": "R6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AM7",
+            "controlRef": "R7",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -68658,6 +69092,20 @@
             "note": "same-content unformatted control"
           },
           {
+            "ref": "AN6",
+            "controlRef": "S6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AN7",
+            "controlRef": "S7",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
             "ref": "AC3",
             "controlRef": "H3",
             "matched": false,
@@ -68667,6 +69115,13 @@
           {
             "ref": "AC5",
             "controlRef": "H5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AC7",
+            "controlRef": "H7",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -68700,6 +69155,20 @@
             "note": "same-content unformatted control"
           },
           {
+            "ref": "AO6",
+            "controlRef": "T6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AO7",
+            "controlRef": "T7",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
             "ref": "AG3",
             "controlRef": "L3",
             "matched": false,
@@ -68709,6 +69178,13 @@
           {
             "ref": "AG5",
             "controlRef": "L5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AG7",
+            "controlRef": "L7",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -68724,20 +69200,26 @@
             "B2",
             "B3",
             "B4",
-            "B5"
+            "B5",
+            "B6",
+            "B7"
           ],
           "hypotheses": {
             "halts": {
               "B2": "FFC6EFCE",
               "B3": "none+strike",
               "B4": "FFC6EFCE",
-              "B5": "none+strike"
+              "B5": "none+strike",
+              "B6": "FFC6EFCE",
+              "B7": "none+strike"
             },
             "continues": {
               "B2": "FFC6EFCE",
               "B3": "FFC6EFCE+strike",
               "B4": "FFC6EFCE",
-              "B5": "FFC6EFCE+strike"
+              "B5": "FFC6EFCE+strike",
+              "B6": "FFC6EFCE",
+              "B7": "FFC6EFCE+strike"
             }
           }
         },
@@ -68749,21 +69231,35 @@
             "C2",
             "C3",
             "C4",
-            "C5"
+            "C5",
+            "C6",
+            "C7"
           ],
           "hypotheses": {
             "halts": {
               "C2": "twin:D2",
               "C3": "none+strike",
               "C4": "twin:D4",
-              "C5": "none+strike"
+              "C5": "none+strike",
+              "C6": "twin:D6",
+              "C7": "none+strike"
             },
             "continues": {
               "C2": "twin:D2",
               "C3": "twin:D3+strike",
               "C4": "twin:D4",
-              "C5": "twin:D5+strike"
+              "C5": "twin:D5+strike",
+              "C6": "twin:D6",
+              "C7": "twin:D7+strike"
             }
+          },
+          "twinExpect": {
+            "D2": "visual",
+            "D3": "visual",
+            "D4": "visual",
+            "D5": "visual",
+            "D6": "visual",
+            "D7": "visual"
           }
         },
         {
@@ -68774,27 +69270,39 @@
             "E2",
             "E3",
             "E4",
-            "E5"
+            "E5",
+            "E6",
+            "E7"
           ],
           "hypotheses": {
             "halts": {
               "E2": "twin:H2",
               "E3": "twin:F3",
               "E4": "twin:H4",
-              "E5": "twin:F5"
+              "E5": "twin:F5",
+              "E6": "twin:H6",
+              "E7": "twin:F7"
             },
             "continues": {
               "E2": "twin:H2",
               "E3": "twin:G3",
               "E4": "twin:H4",
-              "E5": "twin:G5"
+              "E5": "twin:G5",
+              "E6": "twin:H6",
+              "E7": "twin:G7"
             }
           },
-          "emptyTwins": [
-            "F3",
-            "F5",
-            "H2"
-          ]
+          "twinExpect": {
+            "F3": "empty",
+            "F5": "empty",
+            "F7": "empty",
+            "G3": "visual",
+            "G5": "visual",
+            "G7": "visual",
+            "H2": "empty",
+            "H4": "visual",
+            "H6": "visual"
+          }
         },
         {
           "id": "stop-icon",
@@ -68804,26 +69312,39 @@
             "I2",
             "I3",
             "I4",
-            "I5"
+            "I5",
+            "I6",
+            "I7"
           ],
           "hypotheses": {
             "halts": {
               "I2": "twin:L2",
               "I3": "twin:J3",
               "I4": "twin:L4",
-              "I5": "twin:J5"
+              "I5": "twin:J5",
+              "I6": "twin:L6",
+              "I7": "twin:J7"
             },
             "continues": {
               "I2": "twin:L2",
               "I3": "twin:K3",
               "I4": "twin:L4",
-              "I5": "twin:K5"
+              "I5": "twin:K5",
+              "I6": "twin:L6",
+              "I7": "twin:K7"
             }
           },
-          "emptyTwins": [
-            "J3",
-            "J5"
-          ]
+          "twinExpect": {
+            "J3": "empty",
+            "J5": "empty",
+            "J7": "empty",
+            "K3": "visual",
+            "K5": "visual",
+            "K7": "visual",
+            "L2": "visual",
+            "L4": "visual",
+            "L6": "visual"
+          }
         },
         {
           "id": "expression-vs-scale",
@@ -68834,10 +69355,14 @@
             "M3",
             "M4",
             "M5",
+            "M6",
+            "M7",
             "N2",
             "N3",
             "N4",
-            "N5"
+            "N5",
+            "N6",
+            "N7"
           ],
           "hypotheses": {
             "dxf-wins": {
@@ -68845,31 +69370,51 @@
               "M3": "FFFFC7CE",
               "M4": "FFFFC7CE",
               "M5": "FFFFC7CE",
+              "M6": "FFFFC7CE",
+              "M7": "FFFFC7CE",
               "N2": "FFFFC7CE",
               "N3": "FFFFC7CE",
               "N4": "FFFFC7CE",
-              "N5": "FFFFC7CE"
+              "N5": "FFFFC7CE",
+              "N6": "FFFFC7CE",
+              "N7": "FFFFC7CE"
             },
             "scale-wins": {
               "M2": "twin:O2",
               "M3": "twin:O3",
               "M4": "twin:O4",
               "M5": "twin:O5",
+              "M6": "twin:O6",
+              "M7": "twin:O7",
               "N2": "twin:O2",
               "N3": "twin:O3",
               "N4": "twin:O4",
-              "N5": "twin:O5"
+              "N5": "twin:O5",
+              "N6": "twin:O6",
+              "N7": "twin:O7"
             },
             "priority-wins": {
               "M2": "FFFFC7CE",
               "M3": "FFFFC7CE",
               "M4": "FFFFC7CE",
               "M5": "FFFFC7CE",
+              "M6": "FFFFC7CE",
+              "M7": "FFFFC7CE",
               "N2": "twin:O2",
               "N3": "twin:O3",
               "N4": "twin:O4",
-              "N5": "twin:O5"
+              "N5": "twin:O5",
+              "N6": "twin:O6",
+              "N7": "twin:O7"
             }
+          },
+          "twinExpect": {
+            "O2": "visual",
+            "O3": "visual",
+            "O4": "visual",
+            "O5": "visual",
+            "O6": "visual",
+            "O7": "visual"
           }
         },
         {
@@ -68880,20 +69425,26 @@
             "P2",
             "P3",
             "P4",
-            "P5"
+            "P5",
+            "P6",
+            "P7"
           ],
           "hypotheses": {
             "first-wins": {
               "P2": "FFC6EFCE",
               "P3": "FFFFC7CE",
               "P4": "FFC6EFCE",
-              "P5": "FFFFC7CE"
+              "P5": "FFFFC7CE",
+              "P6": "FFC6EFCE",
+              "P7": "FFFFC7CE"
             },
             "last-wins": {
               "P2": "FFC6EFCE",
               "P3": "FFC6EFCE",
               "P4": "FFC6EFCE",
-              "P5": "FFC6EFCE"
+              "P5": "FFC6EFCE",
+              "P6": "FFC6EFCE",
+              "P7": "FFC6EFCE"
             }
           }
         },
@@ -68905,26 +69456,34 @@
             "Q2",
             "Q3",
             "Q4",
-            "Q5"
+            "Q5",
+            "Q6",
+            "Q7"
           ],
           "hypotheses": {
             "halts": {
               "Q2": "FFC6EFCE",
               "Q3": "none+strike",
               "Q4": "FFC6EFCE",
-              "Q5": "none+strike"
+              "Q5": "none+strike",
+              "Q6": "FFC6EFCE",
+              "Q7": "none+strike"
             },
             "continues": {
               "Q2": "FFC6EFCE",
               "Q3": "FFC6EFCE+strike",
               "Q4": "FFC6EFCE",
-              "Q5": "FFC6EFCE+strike"
+              "Q5": "FFC6EFCE+strike",
+              "Q6": "FFC6EFCE",
+              "Q7": "FFC6EFCE+strike"
             },
             "ignored": {
               "Q2": "FFC6EFCE",
               "Q3": "FFC6EFCE",
               "Q4": "FFC6EFCE",
-              "Q5": "FFC6EFCE"
+              "Q5": "FFC6EFCE",
+              "Q6": "FFC6EFCE",
+              "Q7": "FFC6EFCE"
             }
           }
         },
@@ -68936,27 +69495,43 @@
             "R2",
             "R3",
             "R4",
-            "R5"
+            "R5",
+            "R6",
+            "R7"
           ],
           "hypotheses": {
             "halts": {
               "R2": "twin:D2",
               "R3": "none+strike",
               "R4": "twin:D4",
-              "R5": "none+strike"
+              "R5": "none+strike",
+              "R6": "twin:D6",
+              "R7": "none+strike"
             },
             "continues": {
               "R2": "twin:D2",
               "R3": "twin:D3+strike",
               "R4": "twin:D4",
-              "R5": "twin:D5+strike"
+              "R5": "twin:D5+strike",
+              "R6": "twin:D6",
+              "R7": "twin:D7+strike"
             },
             "ignored": {
               "R2": "twin:D2",
               "R3": "twin:D3",
               "R4": "twin:D4",
-              "R5": "twin:D5"
+              "R5": "twin:D5",
+              "R6": "twin:D6",
+              "R7": "twin:D7"
             }
+          },
+          "twinExpect": {
+            "D2": "visual",
+            "D3": "visual",
+            "D4": "visual",
+            "D5": "visual",
+            "D6": "visual",
+            "D7": "visual"
           }
         },
         {
@@ -68967,33 +69542,50 @@
             "S2",
             "S3",
             "S4",
-            "S5"
+            "S5",
+            "S6",
+            "S7"
           ],
           "hypotheses": {
             "halts": {
               "S2": "twin:H2",
               "S3": "twin:F3",
               "S4": "twin:H4",
-              "S5": "twin:F5"
+              "S5": "twin:F5",
+              "S6": "twin:H6",
+              "S7": "twin:F7"
             },
             "continues": {
               "S2": "twin:H2",
               "S3": "twin:G3",
               "S4": "twin:H4",
-              "S5": "twin:G5"
+              "S5": "twin:G5",
+              "S6": "twin:H6",
+              "S7": "twin:G7"
             },
             "ignored": {
               "S2": "twin:H2",
               "S3": "twin:H3",
               "S4": "twin:H4",
-              "S5": "twin:H5"
+              "S5": "twin:H5",
+              "S6": "twin:H6",
+              "S7": "twin:H7"
             }
           },
-          "emptyTwins": [
-            "F3",
-            "F5",
-            "H2"
-          ]
+          "twinExpect": {
+            "F3": "empty",
+            "F5": "empty",
+            "F7": "empty",
+            "G3": "visual",
+            "G5": "visual",
+            "G7": "visual",
+            "H2": "empty",
+            "H3": "visual",
+            "H4": "visual",
+            "H5": "visual",
+            "H6": "visual",
+            "H7": "visual"
+          }
         },
         {
           "id": "indirect-icon",
@@ -69003,32 +69595,50 @@
             "T2",
             "T3",
             "T4",
-            "T5"
+            "T5",
+            "T6",
+            "T7"
           ],
           "hypotheses": {
             "halts": {
               "T2": "twin:L2",
               "T3": "twin:J3",
               "T4": "twin:L4",
-              "T5": "twin:J5"
+              "T5": "twin:J5",
+              "T6": "twin:L6",
+              "T7": "twin:J7"
             },
             "continues": {
               "T2": "twin:L2",
               "T3": "twin:K3",
               "T4": "twin:L4",
-              "T5": "twin:K5"
+              "T5": "twin:K5",
+              "T6": "twin:L6",
+              "T7": "twin:K7"
             },
             "ignored": {
               "T2": "twin:L2",
               "T3": "twin:L3",
               "T4": "twin:L4",
-              "T5": "twin:L5"
+              "T5": "twin:L5",
+              "T6": "twin:L6",
+              "T7": "twin:L7"
             }
           },
-          "emptyTwins": [
-            "J3",
-            "J5"
-          ]
+          "twinExpect": {
+            "J3": "empty",
+            "J5": "empty",
+            "J7": "empty",
+            "K3": "visual",
+            "K5": "visual",
+            "K7": "visual",
+            "L2": "visual",
+            "L3": "visual",
+            "L4": "visual",
+            "L5": "visual",
+            "L6": "visual",
+            "L7": "visual"
+          }
         }
       ],
       "captures": [
@@ -73219,6 +73829,32 @@
               "B8": "twin:R8",
               "B9": "twin:R9"
             }
+          },
+          "twinExpect": {
+            "O2": "visual",
+            "O3": "visual",
+            "O4": "visual",
+            "O5": "visual",
+            "O6": "visual",
+            "O7": "visual",
+            "O8": "visual",
+            "O9": "visual",
+            "Q2": "visual",
+            "Q3": "visual",
+            "Q4": "visual",
+            "Q5": "visual",
+            "Q6": "visual",
+            "Q7": "visual",
+            "Q8": "visual",
+            "Q9": "visual",
+            "R2": "visual",
+            "R3": "visual",
+            "R4": "visual",
+            "R5": "visual",
+            "R6": "visual",
+            "R7": "visual",
+            "R8": "visual",
+            "R9": "visual"
           }
         },
         {
@@ -73266,6 +73902,32 @@
               "C8": "twin:R8",
               "C9": "twin:R9"
             }
+          },
+          "twinExpect": {
+            "P2": "visual",
+            "P3": "visual",
+            "P4": "visual",
+            "P5": "visual",
+            "P6": "visual",
+            "P7": "visual",
+            "P8": "visual",
+            "P9": "visual",
+            "Q2": "visual",
+            "Q3": "visual",
+            "Q4": "visual",
+            "Q5": "visual",
+            "Q6": "visual",
+            "Q7": "visual",
+            "Q8": "visual",
+            "Q9": "visual",
+            "R2": "visual",
+            "R3": "visual",
+            "R4": "visual",
+            "R5": "visual",
+            "R6": "visual",
+            "R7": "visual",
+            "R8": "visual",
+            "R9": "visual"
           }
         },
         {
@@ -73313,6 +73975,32 @@
               "D8": "twin:R8",
               "D9": "twin:R9"
             }
+          },
+          "twinExpect": {
+            "O2": "visual",
+            "O3": "visual",
+            "O4": "visual",
+            "O5": "visual",
+            "O6": "visual",
+            "O7": "visual",
+            "O8": "visual",
+            "O9": "visual",
+            "Q2": "visual",
+            "Q3": "visual",
+            "Q4": "visual",
+            "Q5": "visual",
+            "Q6": "visual",
+            "Q7": "visual",
+            "Q8": "visual",
+            "Q9": "visual",
+            "R2": "visual",
+            "R3": "visual",
+            "R4": "visual",
+            "R5": "visual",
+            "R6": "visual",
+            "R7": "visual",
+            "R8": "visual",
+            "R9": "visual"
           }
         },
         {
@@ -73360,6 +74048,24 @@
               "E8": "twin:R8",
               "E9": "twin:R9"
             }
+          },
+          "twinExpect": {
+            "R2": "visual",
+            "R3": "visual",
+            "R4": "visual",
+            "R5": "visual",
+            "R6": "visual",
+            "R7": "visual",
+            "R8": "visual",
+            "R9": "visual",
+            "S2": "visual",
+            "S3": "visual",
+            "S4": "visual",
+            "S5": "visual",
+            "S6": "visual",
+            "S7": "visual",
+            "S8": "visual",
+            "S9": "visual"
           }
         },
         {
@@ -73407,6 +74113,24 @@
               "G8": "twin:R8",
               "G9": "twin:R9"
             }
+          },
+          "twinExpect": {
+            "R2": "visual",
+            "R3": "visual",
+            "R4": "visual",
+            "R5": "visual",
+            "R6": "visual",
+            "R7": "visual",
+            "R8": "visual",
+            "R9": "visual",
+            "T2": "visual",
+            "T3": "visual",
+            "T4": "visual",
+            "T5": "visual",
+            "T6": "visual",
+            "T7": "visual",
+            "T8": "visual",
+            "T9": "visual"
           }
         },
         {
@@ -73455,19 +74179,32 @@
               "I9": "twin:Y9"
             }
           },
-          "emptyTwins": [
-            "W2",
-            "W3",
-            "X2",
-            "X3",
-            "X4",
-            "X5",
-            "X6",
-            "X7",
-            "X8",
-            "X9",
-            "Y2"
-          ]
+          "twinExpect": {
+            "W2": "empty",
+            "W3": "empty",
+            "W4": "visual",
+            "W5": "visual",
+            "W6": "visual",
+            "W7": "visual",
+            "W8": "visual",
+            "W9": "visual",
+            "X2": "either",
+            "X3": "either",
+            "X4": "either",
+            "X5": "either",
+            "X6": "either",
+            "X7": "either",
+            "X8": "either",
+            "X9": "either",
+            "Y2": "empty",
+            "Y3": "visual",
+            "Y4": "visual",
+            "Y5": "visual",
+            "Y6": "visual",
+            "Y7": "visual",
+            "Y8": "visual",
+            "Y9": "visual"
+          }
         },
         {
           "id": "cfvo-icon-formula",
@@ -73515,16 +74252,32 @@
               "J9": "twin:V9"
             }
           },
-          "emptyTwins": [
-            "V2",
-            "V3",
-            "V4",
-            "V5",
-            "V6",
-            "V7",
-            "V8",
-            "V9"
-          ]
+          "twinExpect": {
+            "AA2": "visual",
+            "AA3": "visual",
+            "AA4": "visual",
+            "AA5": "visual",
+            "AA6": "visual",
+            "AA7": "visual",
+            "AA8": "visual",
+            "AA9": "visual",
+            "V2": "empty",
+            "V3": "empty",
+            "V4": "empty",
+            "V5": "empty",
+            "V6": "empty",
+            "V7": "empty",
+            "V8": "empty",
+            "V9": "empty",
+            "Z2": "visual",
+            "Z3": "visual",
+            "Z4": "visual",
+            "Z5": "visual",
+            "Z6": "visual",
+            "Z7": "visual",
+            "Z8": "visual",
+            "Z9": "visual"
+          }
         },
         {
           "id": "cfvo-relative",
@@ -73571,6 +74324,32 @@
               "K8": "twin:R8",
               "K9": "twin:R9"
             }
+          },
+          "twinExpect": {
+            "Q2": "visual",
+            "Q3": "visual",
+            "Q4": "visual",
+            "Q5": "visual",
+            "Q6": "visual",
+            "Q7": "visual",
+            "Q8": "visual",
+            "Q9": "visual",
+            "R2": "visual",
+            "R3": "visual",
+            "R4": "visual",
+            "R5": "visual",
+            "R6": "visual",
+            "R7": "visual",
+            "R8": "visual",
+            "R9": "visual",
+            "U2": "visual",
+            "U3": "visual",
+            "U4": "visual",
+            "U5": "visual",
+            "U6": "visual",
+            "U7": "visual",
+            "U8": "visual",
+            "U9": "visual"
           }
         },
         {
@@ -73618,6 +74397,32 @@
               "L8": "twin:R8",
               "L9": "twin:R9"
             }
+          },
+          "twinExpect": {
+            "Q2": "visual",
+            "Q3": "visual",
+            "Q4": "visual",
+            "Q5": "visual",
+            "Q6": "visual",
+            "Q7": "visual",
+            "Q8": "visual",
+            "Q9": "visual",
+            "R2": "visual",
+            "R3": "visual",
+            "R4": "visual",
+            "R5": "visual",
+            "R6": "visual",
+            "R7": "visual",
+            "R8": "visual",
+            "R9": "visual",
+            "V2": "empty",
+            "V3": "empty",
+            "V4": "empty",
+            "V5": "empty",
+            "V6": "empty",
+            "V7": "empty",
+            "V8": "empty",
+            "V9": "empty"
           }
         },
         {
@@ -73665,6 +74470,32 @@
               "M8": "twin:R8",
               "M9": "twin:R9"
             }
+          },
+          "twinExpect": {
+            "Q2": "visual",
+            "Q3": "visual",
+            "Q4": "visual",
+            "Q5": "visual",
+            "Q6": "visual",
+            "Q7": "visual",
+            "Q8": "visual",
+            "Q9": "visual",
+            "R2": "visual",
+            "R3": "visual",
+            "R4": "visual",
+            "R5": "visual",
+            "R6": "visual",
+            "R7": "visual",
+            "R8": "visual",
+            "R9": "visual",
+            "V2": "empty",
+            "V3": "empty",
+            "V4": "empty",
+            "V5": "empty",
+            "V6": "empty",
+            "V7": "empty",
+            "V8": "empty",
+            "V9": "empty"
           }
         },
         {
@@ -73712,6 +74543,32 @@
               "N8": "twin:R8",
               "N9": "twin:R9"
             }
+          },
+          "twinExpect": {
+            "Q2": "visual",
+            "Q3": "visual",
+            "Q4": "visual",
+            "Q5": "visual",
+            "Q6": "visual",
+            "Q7": "visual",
+            "Q8": "visual",
+            "Q9": "visual",
+            "R2": "visual",
+            "R3": "visual",
+            "R4": "visual",
+            "R5": "visual",
+            "R6": "visual",
+            "R7": "visual",
+            "R8": "visual",
+            "R9": "visual",
+            "V2": "empty",
+            "V3": "empty",
+            "V4": "empty",
+            "V5": "empty",
+            "V6": "empty",
+            "V7": "empty",
+            "V8": "empty",
+            "V9": "empty"
           }
         }
       ],
@@ -75480,7 +76337,29 @@
               "F5": "twin:T5"
             }
           },
-          "replicateBy": "column"
+          "replicateBy": "column",
+          "twinExpect": {
+            "P2": "visual",
+            "P3": "visual",
+            "P4": "visual",
+            "P5": "visual",
+            "Q2": "visual",
+            "Q3": "visual",
+            "Q4": "visual",
+            "Q5": "visual",
+            "R2": "visual",
+            "R3": "visual",
+            "R4": "visual",
+            "R5": "visual",
+            "S2": "visual",
+            "S3": "visual",
+            "S4": "visual",
+            "S5": "visual",
+            "T2": "visual",
+            "T3": "visual",
+            "T4": "visual",
+            "T5": "visual"
+          }
         },
         {
           "id": "scope-scale-absolute",
@@ -75531,7 +76410,21 @@
             }
           },
           "note": "Negative control: an absolute bound reads the same value under both readings",
-          "role": "negative-control"
+          "role": "negative-control",
+          "twinExpect": {
+            "U2": "visual",
+            "U3": "visual",
+            "U4": "visual",
+            "U5": "visual",
+            "V2": "visual",
+            "V3": "visual",
+            "V4": "visual",
+            "V5": "visual",
+            "W2": "visual",
+            "W3": "visual",
+            "W4": "visual",
+            "W5": "visual"
+          }
         },
         {
           "id": "scope-icon",
@@ -75582,7 +76475,28 @@
             }
           },
           "replicateBy": "column",
-          "emptyTwins": []
+          "twinExpect": {
+            "P12": "visual",
+            "P13": "visual",
+            "P14": "visual",
+            "P15": "visual",
+            "Q12": "visual",
+            "Q13": "visual",
+            "Q14": "visual",
+            "Q15": "visual",
+            "R12": "visual",
+            "R13": "visual",
+            "R14": "visual",
+            "R15": "visual",
+            "S12": "visual",
+            "S13": "visual",
+            "S14": "visual",
+            "S15": "visual",
+            "T12": "visual",
+            "T13": "visual",
+            "T14": "visual",
+            "T15": "visual"
+          }
         }
       ],
       "captures": [
@@ -76051,6 +76965,24 @@
               "B8": "twin:D8",
               "B9": "twin:D9"
             }
+          },
+          "twinExpect": {
+            "C2": "visual",
+            "C3": "visual",
+            "C4": "visual",
+            "C5": "visual",
+            "C6": "visual",
+            "C7": "visual",
+            "C8": "visual",
+            "C9": "visual",
+            "D2": "empty",
+            "D3": "empty",
+            "D4": "empty",
+            "D5": "empty",
+            "D6": "empty",
+            "D7": "empty",
+            "D8": "empty",
+            "D9": "empty"
           }
         }
       ],
@@ -76313,6 +77245,14 @@
               "B4": "twin:C4",
               "B5": "twin:C5"
             }
+          },
+          "twinExpect": {
+            "C2": "visual",
+            "C3": "visual",
+            "C4": "visual",
+            "C5": "visual",
+            "D3": "empty",
+            "D5": "empty"
           }
         }
       ],
@@ -76664,12 +77604,17 @@
               "B7": "twin:C7"
             }
           },
-          "emptyTwins": [
-            "C2",
-            "D2",
-            "D4",
-            "D6"
-          ]
+          "twinExpect": {
+            "C2": "empty",
+            "C3": "visual",
+            "C4": "visual",
+            "C5": "visual",
+            "C6": "visual",
+            "C7": "visual",
+            "D2": "empty",
+            "D4": "empty",
+            "D6": "empty"
+          }
         }
       ],
       "captures": [
@@ -76940,10 +77885,14 @@
               "B5": "twin:C5"
             }
           },
-          "emptyTwins": [
-            "D3",
-            "D5"
-          ]
+          "twinExpect": {
+            "C2": "visual",
+            "C3": "visual",
+            "C4": "visual",
+            "C5": "visual",
+            "D3": "empty",
+            "D5": "empty"
+          }
         }
       ],
       "captures": [
