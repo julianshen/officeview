@@ -21,7 +21,7 @@
  * `strictMarks`; L2 (L1 + mark settings + `strictMarks`) holds the finished bundle and its verdict.
  */
 import { createHash } from 'node:crypto'
-import { showCanvasBackend } from './canvas'
+import { holdShowBytes, releaseCanvas, releaseScratch, showCanvasBackend, ShowBudgetExceeded, withShowLedger } from './canvas'
 import type { PptxDocument, PptxPackageHandle } from '../../../src/pptx/types'
 import { createDiagnosticSink } from '../../../src/slideshow/diagnostics'
 import { createSlideShowWorkspace } from '../../../src/slideshow/workspace'
@@ -46,7 +46,8 @@ import { markOptions, paintMark, type MarkSpec } from '../mark/visible'
 import { tauFor } from '../detect/tau'
 import { classifiedRasters, createSlideComposer, drawsAt, maskedRaster, slideStateAt, type DrawnLayer } from './compose'
 import { allocateFrames, classifySlide, stepDurations, type Classification } from './eligibility'
-import { burnVisibleMark, validateMarks } from './marks'
+import { burnVisibleMark, compareMarkContribution, MARK_FIDELITY } from './marks'
+import { compareFrames } from '../../../src/slideshow/compare'
 
 export interface ShowPlanJob {
   unitIndex: number
@@ -175,6 +176,13 @@ export function createShowDoc(init: Omit<ShowDoc, 'metas' | 'l1' | 'l2' | 'stats
 
 class Timeout extends Error { constructor() { super('show-plan-timeout') } }
 
+const OPEN_WORKSPACE: SlideShowWorkspace = {
+  limit: Number.POSITIVE_INFINITY, used: () => 0, reserveTerminal: () => undefined,
+  lease: (bytes, tag) => { const l: Lease = { tag, bytes, grow: () => true, shrink() {}, transfer: () => l, release() {} }; return l },
+}
+/** One layer raster; its paint scratch goes back when it returns (PR #78 round 13b), its own canvas stays charged. */
+export const rasterOne = (ps: PreparedSlide, layer: PlanLayer, ctx: Parameters<typeof rasterPreparedLayer>[2]) =>
+  releaseScratch(() => rasterPreparedLayer(ps, layer, ctx), r => ('refused' in r ? [] : [r.canvas as object]))
 const factory: CanvasFactory = (w, h) => showCanvasBackend().createCanvas(Math.max(1, Math.ceil(w)), Math.max(1, Math.ceil(h))) as never
 const resolveFont = (f: string) => f
 const measureCtx = () => showCanvasBackend().createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D
@@ -311,7 +319,7 @@ export function prepareShowSlide(show: ShowDoc, unit: number, motion: 'full' | '
   return { ps, timeline, cmdDropped, sink }
 }
 
-function prepareL1(show: ShowDoc, job: ShowPlanJob, ws: SlideShowWorkspace): L1Entry {
+function prepareL1(show: ShowDoc, job: ShowPlanJob): L1Entry {
   const unit = job.unitIndex
   const { ps, timeline, cmdDropped, sink } = prepareShowSlide(show, unit, job.motion)
   const meta = ps.meta, slide = ps.slide
@@ -331,16 +339,16 @@ function prepareL1(show: ShowDoc, job: ShowPlanJob, ws: SlideShowWorkspace): L1E
   // Rasters: every layer at the bucket; a growth target above it (D12), within maxUnitPx and the 64 MiB asset cap.
   const growth = growthOf(ps, growthTargets(tt?.tree ?? (meta.timing && !('refused' in meta.timing) ? meta.timing : undefined)))
   const rasters = new Map<PlanLayer, LayerBitmap>()
-  // PR #78 round 13: every raster leases its w·h·4 from the job's ledger before its canvas exists; one that does
-  // not fit releases what was leased and refuses the slide to its still (never a layer left out).
-  const ctx = (s: number) => ({ scale: s, images: show.images ?? [], resolveFont, canvas: factory, workspace: ws, maxTextureSize: MAX_UNIT_PX, sink })
-  const leases: Lease[] = []
+  // PR #78 round 13b: every raster canvas is charged to the job's ledger as it is made (`showCanvasBackend`); one
+  // that does not fit throws `ShowBudgetExceeded` and the slide plays its still. A layer the texture cap refuses
+  // refuses the slide too (never a layer left out).
+  const ctx = (s: number) => ({ scale: s, images: show.images ?? [], resolveFont, canvas: factory, workspace: OPEN_WORKSPACE, maxTextureSize: MAX_UNIT_PX, sink })
   for (const layer of ps.layers) {
     if (layer.kind === 'watermark') continue
-    let r = rasterPreparedLayer(ps, layer, ctx(scale))
+    let r = rasterOne(ps, layer, ctx(scale))
     if ('refused' in r) {
       if (r.refused === 'empty') continue
-      for (const l of leases) l.release()
+      for (const b of rasters.values()) releaseCanvas(b.canvas)
       return { refusal: { refused: 'show-budget', diagnostics: [{ code: 'show-budget' }] }, classes, refusals: new Map() }
     }
     const g = growth.get(layer)
@@ -348,12 +356,11 @@ function prepareL1(show: ShowDoc, job: ShowPlanJob, ws: SlideShowWorkspace): L1E
       const px = Math.max(r.canvas.width, r.canvas.height)
       const fit = Math.min(g, MAX_UNIT_PX / px, Math.sqrt(SHOW_PLAN_LIMITS.assetDecoded / (r.canvas.width * r.canvas.height * 4)))
       if (fit > 1 + 1e-9) {
-        // Leased beside the bucket raster (both are held at the peak); one that does not fit keeps the bucket raster.
-        const grown = rasterPreparedLayer(ps, layer, ctx(scale * fit))
-        if (!('refused' in grown)) { r.lease.release(); r = grown }
+        // Made beside the bucket raster (both are held at the peak), which is then given back.
+        const grown = rasterOne(ps, layer, ctx(scale * fit))
+        if (!('refused' in grown)) { releaseCanvas(r.canvas); r = grown }
       }
     }
-    leases.push(r.lease)
     rasters.set(layer, { canvas: r.canvas, bounds: r.bounds, scale: r.scale, bytes: r.bytes })
   }
 
@@ -420,17 +427,29 @@ const rastersBytes = (e: L1Entry) => [...(e.rasters?.values() ?? [])].reduce((n,
 const rgbaOf = (canvas: LayerBitmap['canvas']) => (canvas.getContext('2d') as unknown as CanvasRenderingContext2D).getImageData(0, 0, canvas.width, canvas.height).data
 
 /** `rgba` (W × H device px) with the page's visible mark painted once over it, at `scale` device px per slide px. */
-export function markFrame(rgba: Uint8ClampedArray, W: number, H: number, scale: number, page: { w: number; h: number }, mark: MarkSpec): Uint8ClampedArray {
+export function markFrame(rgba: Uint8ClampedArray, W: number, H: number, scale: number, page: { w: number; h: number }, mark: MarkSpec, reuse?: { width: number; height: number }): Uint8ClampedArray {
   const opts = markOptions(mark)
   if (!opts) return rgba
-  const c = showCanvasBackend().createCanvas(W, H)
+  // `reuse`: a free W × H surface of the caller's (round 13b: no page surface made per frame).
+  const own = !(reuse && reuse.width === W && reuse.height === H)
+  const c = own ? showCanvasBackend().createCanvas(W, H) : reuse as ReturnType<ReturnType<typeof showCanvasBackend>['createCanvas']>
   const ctx = c.getContext('2d') as unknown as CanvasRenderingContext2D
   const img = ctx.createImageData(W, H)
   img.data.set(rgba)
   ctx.putImageData(img, 0, 0)
+  ctx.save()
+  // A reused surface's context may carry a compositor's state: the mark is painted from the defaults.
+  ctx.globalAlpha = 1
+  ctx.globalCompositeOperation = 'source-over'
+  ;(ctx as { filter?: string }).filter = 'none'
+  ctx.shadowColor = 'rgba(0, 0, 0, 0)'
+  ctx.shadowBlur = 0
   ctx.setTransform(scale, 0, 0, scale, 0, 0)
   paintMark(ctx, { widthPx: page.w, heightPx: page.h }, opts)
-  return ctx.getImageData(0, 0, W, H).data
+  ctx.restore()
+  const out = ctx.getImageData(0, 0, W, H).data
+  if (own) releaseCanvas(c as object)
+  return out
 }
 
 /** A canvas-backed bitmap from straight RGBA, at `bounds` (slide px). */
@@ -495,35 +514,36 @@ function arrivalDraws(ps: PreparedSlide, timeline: SlideTimeline): DrawnLayer[] 
 const l1KeyOf = (show: ShowDoc, job: ShowPlanJob) => showPlanL1Key({ docRef: show.docRef, contentPolicyId: show.contentPolicyId, layoutFingerprint: show.fingerprint, scaleBucket: job.scale, motion: job.motion, unitId: job.unitIndex })
 
 /**
- * The cached L1 entry for `job` (computed on a miss), its rasters charged to `ws`: leased one by one as they are
- * drawn on a miss, or all at once on a hit (the cached rasters count toward this job's grant). A hit whose
- * rasters do not fit `ws` is refused (`show-budget`) without touching the cache.
+ * The cached L1 entry for `job` (computed on a miss), its rasters charged to the open job: as they are drawn on a
+ * miss, or all at once on a hit (the cached rasters are live while this job uses them; `holdShowBytes` throws
+ * `ShowBudgetExceeded` when they do not fit). When the job ends its charges are released and the rasters are the
+ * L1 cache's, under its own byte bound.
  */
-function l1For(show: ShowDoc, job: ShowPlanJob, ws: SlideShowWorkspace): L1Entry {
+function l1For(show: ShowDoc, job: ShowPlanJob): L1Entry {
   const key = l1KeyOf(show, job)
   const hit = show.l1.get(key)
   if (hit) {
     show.stats.l1.hits++
-    if (hit.rasters && !ws.lease(rastersBytes(hit) - L1_OVERHEAD, 'l1:rasters')) return { refusal: { refused: 'show-budget', diagnostics: [{ code: 'show-budget' }] }, classes: new Map(), refusals: new Map() }
+    for (const r of hit.rasters?.values() ?? []) holdShowBytes(r.canvas, r.canvas.width * r.canvas.height * 4, 'l1:raster')
     return hit
   }
   show.stats.l1.misses++
-  const entry = prepareL1(show, job, ws)
+  const entry = prepareL1(show, job)
   show.l1.put(key, entry, rastersBytes(entry))
   return entry
 }
 
 /** The preparation a keyframe track composes from (the slide's L1 entry: its timeline and original rasters). */
-export function trackInputs(show: ShowDoc, job: ShowPlanJob, ws: SlideShowWorkspace = jobLedger(show, job.unitIndex, job.scale, {})): { ps: PreparedSlide; timeline: SlideTimeline; rasters: Map<PlanLayer, LayerBitmap> } {
-  const e = l1For(show, job, ws)
+export function trackInputs(show: ShowDoc, job: ShowPlanJob): { ps: PreparedSlide; timeline: SlideTimeline; rasters: Map<PlanLayer, LayerBitmap> } {
+  const e = l1For(show, job)
   if (e.refusal || !e.ps || !e.timeline || !e.rasters) throw new Error('show: the slide has no plan')
   return { ps: e.ps, timeline: e.timeline, rasters: e.rasters }
 }
 
-function classificationOf(e: L1Entry, job: ShowPlanJob, ws: SlideShowWorkspace): Classification {
+function classificationOf(e: L1Entry, job: ShowPlanJob): Classification {
   const have = e.classes.get(job.strictMarks)
   if (have) return have
-  const c = classifySlide({ ps: e.ps!, timeline: e.timeline!, scale: job.scale, rasters: e.rasters!, strictMarks: job.strictMarks, triggers: e.timeline!.triggers(), resolveFont, workspace: ws })
+  const c = classifySlide({ ps: e.ps!, timeline: e.timeline!, scale: job.scale, rasters: e.rasters!, strictMarks: job.strictMarks, triggers: e.timeline!.triggers(), resolveFont })
   e.classes.set(job.strictMarks, c)
   return c
 }
@@ -539,41 +559,43 @@ export function buildShowPlan(doc: ShowHost, job: ShowPlanJob, opts: ShowBuildOp
   const start = now(), deadline = opts.deadlineMs ?? SHOW_PLAN_DEADLINE_MS
   const check = () => { if (now() - start > deadline) throw new Timeout() }
   const seamed = opts.budget !== undefined || !!opts.compose
-  const ws = jobLedger(show, job.unitIndex, job.scale, opts)
   let e: L1Entry | undefined
-  try {
+  // Joined to an open job (a track's) without a ledger of its own.
+  return withShowLedger(() => jobLedger(show, job.unitIndex, job.scale, opts), () => { try {
     const l2key = showPlanL2Key(l1KeyOf(show, job), markSettingsOf(job.mark), job.strictMarks, job.kBasis ? Buffer.from(job.kBasis).toString('hex') : '')
     if (!seamed) {
       const hit = show.l2.get(l2key)
       if (hit) { show.stats.l2.hits++; return hit }
     }
-    e = l1For(show, job, ws)
+    e = l1For(show, job)
     if (e.refusal) return e.refusal
     const refused = seamed ? undefined : e.refusals.get(job.strictMarks)
     if (refused) return refused
     show.stats.l2.misses++
     check()
-    const out = assemble(show, e, job, opts, check, ws)
+    const out = assemble(show, e, job, opts, check)
     if (seamed) return out
     if ('refused' in out) e.refusals.set(job.strictMarks, out)
     else show.l2.put(l2key, out, out.assets.reduce((n, a) => n + a.png.length, 64 * 1024))
     return out
   } catch (err) {
-    if (!(err instanceof Timeout)) throw err
-    const out: ShowRefusal = { refused: 'show-plan-timeout', diagnostics: [{ code: 'show-plan-timeout' }] }
+    // A canvas the grant had no room for (PR #78 round 13b): allocation stopped there; the slide plays its still.
+    const out: ShowRefusal | undefined = err instanceof Timeout ? { refused: 'show-plan-timeout', diagnostics: [{ code: 'show-plan-timeout' }] }
+      : err instanceof ShowBudgetExceeded ? { refused: 'show-budget', diagnostics: [{ code: 'show-budget' }] } : undefined
+    if (!out) throw err
     if (e && !seamed) e.refusals.set(job.strictMarks, out)
     return out
-  }
+  } })
 }
 
-function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOptions, check: () => void, ws: SlideShowWorkspace): BuiltShowPlan | ShowRefusal {
+function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOptions, check: () => void): BuiltShowPlan | ShowRefusal {
   const ps = e.ps!, timeline = e.timeline!, rasters = e.rasters!, record = e.record!
   // Fix round 3 (controller ruling): a trigger that can move a layer leaves its rests unprovable (trigger histories
   // cannot be enumerated): the slide plays its still, before any classification work.
   if (timeline.triggers().length > 0 && triggersMoveGeometry(ps.meta.timing && !('refused' in ps.meta.timing) ? ps.meta.timing : undefined)) {
     return { refused: 'still', diagnostics: [{ code: 'step-composited' }, { code: 'trigger-cut' }, { code: 'mark-rest' }] }
   }
-  const c = classificationOf(e, job, ws)
+  const c = classificationOf(e, job)
   check()
   if (c.fallback === 'still') {
     const codes = new Set(c.diagnostics.map(d => d.code))
@@ -593,7 +615,9 @@ function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOp
     // The entry frame: the slide as it arrives (what the incoming transition shows; round 7: with autoplay, the
     // initial state at time 0, not the settled checkpoint 0, which stays the boundary the rests are validated at),
     // composed from the original rasters, marked once (as a unit).
-    const entryRgba = markFrame(composer.compose(autoplay ? arrivalDraws(ps, timeline) : boundaries[0]!), PW, PH, scale, page, job.mark)
+    const entryRgba = markFrame(composer.compose(autoplay ? arrivalDraws(ps, timeline) : boundaries[0]!), PW, PH, scale, page, job.mark, composer.canvas)
+    // Its page surface goes back before the layers are marked and validated (PR #78 round 13b).
+    composer.dispose()
     check()
     // Fix round 1 (controller ruling): a trigger needs the layers that draw its end state whether it plays from
     // layers or is cut (§6a: a cut jumps to its end state), and so does autoplay. Task 5 lets a trigger slide play
@@ -632,9 +656,7 @@ function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOp
     let shipped: Shipped[] = []
     let classified: Map<PlanLayer, LayerBitmap> = new Map()
     if (!composited) {
-      // PR #78 round 13: the masked copies lease first (the validation reference draws from these same copies).
-      const maskBytes = [...c.masks.keys()].reduce((n, l) => { const b = rasters.get(l); return n + (b && !c.drop.has(l) ? b.canvas.width * b.canvas.height * 4 : 0) }, 0)
-      if (maskBytes > 0 && !ws.lease(maskBytes, 'masks')) return { refused: 'show-budget', diagnostics: [{ code: 'show-budget' }] }
+      // The masked copies (charged as made): the validation reference draws from these same copies.
       classified = classifiedRasters(rasters, c.drop, c.masks)
       ps.layers.forEach((layer, index) => {
         const bmp = classified.get(layer)
@@ -729,7 +751,9 @@ function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOp
     let layerAssets: ShowAsset[] = shipped.map(s => {
       const marked = burnVisibleMark(s.bmp, s.rest, job.mark, page)
       const w = marked.canvas.width, h = marked.canvas.height
-      return { tag: 2, assetId: 1 + s.index, w, h, png: encodePng(w, h, rgbaOf(marked.canvas)), rest: { x: Math.round(s.rest.x * scale), y: Math.round(s.rest.y * scale), scale: w / (s.rest.w * scale) } }
+      const png = encodePng(w, h, rgbaOf(marked.canvas))
+      if (marked.canvas !== s.bmp.canvas) releaseCanvas(marked.canvas)
+      return { tag: 2, assetId: 1 + s.index, w, h, png, rest: { x: Math.round(s.rest.x * scale), y: Math.round(s.rest.y * scale), scale: w / (s.rest.w * scale) } }
     })
     check()
 
@@ -802,64 +826,65 @@ function validate(ps: PreparedSlide, rasters: ReadonlyMap<PlanLayer, LayerBitmap
   const code = codes[0]!
   let chips: ReturnType<typeof basis> | undefined
   try { chips = basis(kBasis, PW, PH, DEFAULT_PARAMS) } catch { chips = undefined }
-  const sent = new Map<PlanLayer, LayerBitmap>(), visible = new Map<PlanLayer, LayerBitmap>()
-  for (const s of shipped) {
-    const v = decodePng(s.asset.png)
-    visible.set(s.layer, bitmapOf(v.w, v.h, v.rgba, s.bounds, s.scale))
-    const r = markLayerRaster({ png: s.asset.png, w: s.asset.w, h: s.asset.h, kBasis, code, crop: { x: s.asset.rest.x, y: s.asset.rest.y, pageW: PW, pageH: PH, scale: s.asset.rest.scale } })
-    const d = decodePng(r.png)
-    sent.set(s.layer, bitmapOf(d.w, d.h, d.rgba, s.bounds, s.scale))
-  }
-  env.check()
-  const layered = createSlideComposer(ps, sent, scale)
-  // The visible mark's own contribution (controller ruling): the shipped layers with their visible mark only.
-  const visibleOnly = createSlideComposer(ps, visible, scale)
-  const reference = createSlideComposer(ps, rasters, scale)
-  for (const l of c.drop) reference.classify(l, null)
-  // The shipped masked copies (`classifiedRasters`, the same `maskedRaster`), not a second copy of each (PR #78 round 13).
-  for (const [l, m] of c.masks) { const b = rasters.get(l); if (b) reference.classify(l, classified.get(l) ?? maskedRaster(b, m)) }
   const tau = tauFor(codes.length)
-  const visibleRefs = new Map<number, Uint8ClampedArray>()
   const image = (data: Uint8ClampedArray) => ({ width: PW, height: PH, data, colorSpace: 'srgb' }) as unknown as ImageData
+  // PR #78 round 13b: one page surface serves every composer here (each frame is read back before the next draws),
+  // and the two decoded sets are held one at a time: the Layer-1 set for the fidelity and attribution pass, then the
+  // visibly marked set for the contribution pass. The verdict is the same as checking both per boundary (all must hold).
+  const pageCanvas = showCanvasBackend().createCanvas(PW, PH)
+  const reference = createSlideComposer(ps, rasters, scale, { canvas: pageCanvas })
+  const decoded = (f: (s: (typeof shipped)[number]) => { w: number; h: number; rgba: Uint8ClampedArray }) => {
+    const out = new Map<PlanLayer, LayerBitmap>()
+    for (const s of shipped) { const d = f(s); out.set(s.layer, bitmapOf(d.w, d.h, d.rgba, s.bounds, s.scale)) }
+    return out
+  }
+  const releaseAll = (m: Map<PlanLayer, LayerBitmap>) => { for (const b of m.values()) releaseCanvas(b.canvas); m.clear() }
   try {
-    const visibleRef = (k: number) => {
-      let v = visibleRefs.get(k)
-      if (!v) { v = markFrame(new Uint8ClampedArray(reference.compose(boundaries[k]!, undefined, true)), PW, PH, scale, page, job.mark); visibleRefs.set(k, v) }
-      return v
-    }
-    const verdict = validateMarks({ plan: { steps: boundaries.slice(1) } },
-      (k) => {
+    for (const l of c.drop) reference.classify(l, null)
+    // The shipped masked copies (`classifiedRasters`, the same `maskedRaster`), not a second copy of each (PR #78 round 13).
+    for (const [l, m] of c.masks) { const b = rasters.get(l); if (b) reference.classify(l, classified.get(l) ?? maskedRaster(b, m)) }
+    /** The classified slide at boundary `k`, marked visibly once (recomputed, never kept per boundary). */
+    const visibleRef = (k: number) => markFrame(new Uint8ClampedArray(reference.compose(boundaries[k]!, undefined, true)), PW, PH, scale, page, job.mark, pageCanvas)
+    const unmarkedRef = (k: number) => image(new Uint8ClampedArray(reference.compose(boundaries[k]!, undefined, true)))
+
+    // Pass 1: the shipped layers with the validation code's Layer-1, against the reference marked once; attribution.
+    const sent = decoded(s => decodePng(markLayerRaster({ png: s.asset.png, w: s.asset.w, h: s.asset.h, kBasis, code, crop: { x: s.asset.rest.x, y: s.asset.rest.y, pageW: PW, pageH: PH, scale: s.asset.rest.scale } }).png))
+    env.check()
+    const layered = createSlideComposer(ps, sent, scale, { canvas: pageCanvas })
+    try {
+      for (let k = 0; k < boundaries.length; k++) {
         env.check()
         const v = visibleRef(k)
-        const r = markLayerRaster({ png: encodePng(PW, PH, v), w: PW, h: PH, kBasis, code, crop: { x: 0, y: 0, pageW: PW, pageH: PH } })
-        return image(decodePng(r.png).rgba)
-      },
-      (k) => {
-        const composite = image(new Uint8ClampedArray(layered.compose(boundaries[k]!)))
-        return env.compose ? env.compose(k, composite) : composite
-      },
-      {
-        ...(chips ? {
-          attributes: (k: number, composite: ImageData) => {
-            const bmp = (d: Uint8ClampedArray) => ({ width: PW, height: PH, data: d })
-            const decision = detect(bmp(new Uint8ClampedArray(composite.data)), bmp(visibleRef(k)), chips!, codes, DEFAULT_PARAMS, tau)
-            return decision.kind === 'attributed' && decision.index === 0
-          },
-        } : {}),
-        contribution: {
-          composeMarked: (k) => image(new Uint8ClampedArray(visibleOnly.compose(boundaries[k]!))),
-          // The shipped layers unmarked are the classified rasters: the reference's own unmarked composite.
-          composeUnmarked: (k) => image(new Uint8ClampedArray(reference.compose(boundaries[k]!, undefined, true))),
-          referenceMarked: (k) => image(visibleRef(k)),
-          referenceUnmarked: (k) => image(new Uint8ClampedArray(reference.compose(boundaries[k]!, undefined, true))),
-        },
-      })
-    if (layered.takeDiagnostics().length || visibleOnly.takeDiagnostics().length) return false
-    return verdict.ok
+        const ref = image(decodePng(markLayerRaster({ png: encodePng(PW, PH, v), w: PW, h: PH, kBasis, code, crop: { x: 0, y: 0, pageW: PW, pageH: PH } }).png).rgba)
+        let composite = image(new Uint8ClampedArray(layered.compose(boundaries[k]!)))
+        if (env.compose) composite = env.compose(k, composite)
+        if (!compareFrames(composite, ref, MARK_FIDELITY).pass) return false
+        if (chips) {
+          const bmp = (d: Uint8ClampedArray) => ({ width: PW, height: PH, data: d })
+          const decision = detect(bmp(new Uint8ClampedArray(composite.data)), bmp(v), chips, codes, DEFAULT_PARAMS, tau)
+          if (!(decision.kind === 'attributed' && decision.index === 0)) return false
+        }
+      }
+      if (layered.takeDiagnostics().length) return false
+    } finally { layered.dispose(); releaseAll(sent) }
+
+    // Pass 2: the visible mark's own contribution (controller ruling): the shipped layers with their visible mark only.
+    const visible = decoded(s => decodePng(s.asset.png))
+    const visibleOnly = createSlideComposer(ps, visible, scale, { canvas: pageCanvas })
+    try {
+      for (let k = 0; k < boundaries.length; k++) {
+        env.check()
+        const cm = image(new Uint8ClampedArray(visibleOnly.compose(boundaries[k]!)))
+        // The shipped layers unmarked are the classified rasters: the reference's own unmarked composite.
+        const ru = unmarkedRef(k)
+        if (!compareMarkContribution(cm, ru, image(visibleRef(k)), ru).pass) return false
+      }
+      if (visibleOnly.takeDiagnostics().length) return false
+    } finally { visibleOnly.dispose(); releaseAll(visible) }
+    return true
   } finally {
-    layered.dispose()
-    visibleOnly.dispose()
     reference.dispose()
+    releaseCanvas(pageCanvas)
   }
 }
 

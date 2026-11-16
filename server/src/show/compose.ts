@@ -16,7 +16,7 @@
  * The watermark layer is never composed here: marks are applied to the
  * classified assets later (D7), so classification sees unmarked ink only.
  */
-import { showCanvasBackend } from './canvas'
+import { releaseCanvas, showCanvasBackend } from './canvas'
 import type { FontResolver } from '../../../src/core/fonts/register'
 import { mul, stateMatrix } from '../../../src/slideshow/affine'
 import { renderStateAt, type BaseGeometry } from '../../../src/slideshow/engine/behaviours'
@@ -112,6 +112,8 @@ export interface SlideComposer {
   /** Output size in device px (`ceil(slide × scale)`). */
   readonly width: number
   readonly height: number
+  /** Its page surface: free between frames, so a caller may reuse it (`markFrame`'s `reuse`). */
+  readonly canvas: { width: number; height: number }
   /** Layers whose raster the compositor refused (over its texture size): they cannot be composed. */
   readonly refused: readonly PlanLayer[]
   /**
@@ -127,15 +129,20 @@ export interface SlideComposer {
   dispose(): void
 }
 
-export function createSlideComposer(ps: PreparedSlide, rasters: ReadonlyMap<PlanLayer, LayerBitmap>, scale: number): SlideComposer {
+/** `opts.canvas`: a page surface the caller owns, shared by composers used one frame at a time (PR #78 round 13b). */
+export function createSlideComposer(ps: PreparedSlide, rasters: ReadonlyMap<PlanLayer, LayerBitmap>, scale: number, opts: { canvas?: HTMLCanvasElement | OffscreenCanvas | object } = {}): SlideComposer {
   const { w, h } = slideSize(ps.slide)
   const width = Math.max(1, Math.ceil(w * scale)), height = Math.max(1, Math.ceil(h * scale))
   const backend = showCanvasBackend()
-  const factory: CanvasFactory = (cw, ch) => backend.createCanvas(Math.max(1, Math.ceil(cw)), Math.max(1, Math.ceil(ch))) as never
-  const canvas = factory(width, height)
+  // PR #78 round 13b: every canvas this composer makes (its page, the compositor's scratch) is charged to the open
+  // show job when made (`showCanvasBackend`) and given back on `dispose`; layers are adopted, never copied.
+  const made: object[] = []
+  const factory: CanvasFactory = (cw, ch) => { const x = backend.createCanvas(Math.max(1, Math.ceil(cw)), Math.max(1, Math.ceil(ch))); made.push(x as object); return x as never }
+  const shared = opts.canvas as HTMLCanvasElement | undefined
+  const canvas = shared && shared.width === width && shared.height === height ? shared : factory(width, height)
   const codes: string[] = []
   const sink: DiagnosticSink = { add: (d) => { codes.push(d.code) }, list: () => [] }
-  const c: Compositor = createCanvas2DCompositor(canvas, factory, OPEN_WORKSPACE, sink)
+  const c: Compositor = createCanvas2DCompositor(canvas, factory, OPEN_WORKSPACE, sink, { adopt: true })
   c.setViewport({ matrix: [scale, 0, 0, scale, 0, 0], deviceWidth: width, deviceHeight: height })
   const handles = new Map<PlanLayer, LayerHandle>()
   const refused: PlanLayer[] = []
@@ -148,7 +155,7 @@ export function createSlideComposer(ps: PreparedSlide, rasters: ReadonlyMap<Plan
   const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
   const alt = new Map<PlanLayer, LayerHandle | null>()
   return {
-    width, height, refused,
+    width, height, refused, canvas: canvas as unknown as { width: number; height: number },
     compose(draws, without, classified = false) {
       const list = []
       for (const d of draws) {
@@ -168,7 +175,7 @@ export function createSlideComposer(ps: PreparedSlide, rasters: ReadonlyMap<Plan
       alt.set(layer, 'refused' in up ? null : up)
     },
     takeDiagnostics: () => codes.splice(0),
-    dispose: () => c.dispose(),
+    dispose: () => { c.dispose(); for (const x of made.splice(0)) releaseCanvas(x) },
   }
 }
 

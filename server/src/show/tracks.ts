@@ -7,7 +7,7 @@
  * settled checkpoint after the step). One frame is the end frame alone; a step longer than its frames (the
  * 90-frame cap, or the slide's 512) plays its first frames and then cuts to the end (`step-truncated`).
  */
-import { showCanvasBackend } from './canvas'
+import { showCanvasBackend, ShowBudgetExceeded, withShowLedger } from './canvas'
 import { createDiagnosticSink } from '../../../src/slideshow/diagnostics'
 import { createRng } from '../../../src/slideshow/rng'
 import { encodePng } from '../mark/png'
@@ -30,12 +30,21 @@ export const trackAssetId = (step: number, i: number) => TRACK_ASSET_BASE + step
 export function renderTrack(doc: ShowHost, job: ShowPlanJob & { step: number }, opts: ShowBuildOptions = {}): Array<{ assetId: number; w: number; h: number; png: Uint8Array }> {
   const show = doc.show
   if (!show) throw new Error('show: not a deck')
+  // One job: the plan build and every frame canvas under the track's grant (PR #78 round 13b); out of room, no track.
+  try {
+    return withShowLedger(jobLedger(show, job.unitIndex, job.scale, opts), () => track(doc, show, job, opts))
+  } catch (e) {
+    if (e instanceof ShowBudgetExceeded) return []
+    throw e
+  }
+}
+
+function track(doc: ShowHost, show: NonNullable<ShowHost['show']>, job: ShowPlanJob & { step: number }, opts: ShowBuildOptions): Array<{ assetId: number; w: number; h: number; png: Uint8Array }> {
   const built = buildShowPlan(doc, job, opts)
   if ('refused' in built) return []
   const step = built.plan.steps[job.step]
   if (!step || step.eligibility !== 'composited' || !step.track) return []
-  // The rasters the frames compose from are charged to the track's own grant (PR #78 round 13).
-  const e = trackInputs(show, job, jobLedger(show, job.unitIndex, job.scale, opts))
+  const e = trackInputs(show, job)
   const { ps, timeline, rasters } = e
   const composer = createSlideComposer(ps, rasters, job.scale)
   try {
@@ -48,7 +57,7 @@ export function renderTrack(doc: ShowHost, job: ShowPlanJob & { step: number }, 
       const state = i === all.length - 1
         ? slideStateAt(ps, timeline, timeline.checkpoint(job.step + 1), 0, rng, sink)
         : slideStateAt(ps, timeline, win.cursor, win.t0 + t, rng, sink)
-      const rgba = markFrame(new Uint8ClampedArray(composer.compose(drawsAt(ps, state, draw))), W, H, job.scale, page, job.mark)
+      const rgba = markFrame(new Uint8ClampedArray(composer.compose(drawsAt(ps, state, draw))), W, H, job.scale, page, job.mark, composer.canvas)
       return { assetId: trackAssetId(job.step, i), w: W, h: H, png: encodePng(W, H, rgba) }
     })
   } finally {

@@ -46,9 +46,9 @@ import type { PreparedSlide } from '../../../src/slideshow/prepare'
 import type { PlanLayer } from '../../../src/slideshow/render/plan'
 import { createRng } from '../../../src/slideshow/rng'
 import { targetKey } from '../../../src/slideshow/target'
-import type { Affine, AllocationOwner, BehaviourNode, Condition, ContainerNode, DiagnosticSink, Lease, TimeNode, LayerBitmap, RenderState, TargetState } from '../../../src/slideshow/types'
+import type { Affine, BehaviourNode, Condition, ContainerNode, DiagnosticSink, TimeNode, LayerBitmap, RenderState, TargetState } from '../../../src/slideshow/types'
 import { SHOW_PLAN_LIMITS, type Rect } from '../../../src/stream/show-plan'
-import { showCanvasBackend } from './canvas'
+import { releaseCanvas, showCanvasBackend } from './canvas'
 import { createSlideComposer, deviceMatrix, drawsAt, maskedRaster, slideStateAt, type DrawnLayer } from './compose'
 
 export const SAMPLES_PER_INTERVAL = 8, CLASSIFY_BUDGET = 4096, TRACK_FPS = 15, TRACK_MAX_FRAMES = 90
@@ -63,11 +63,6 @@ export interface ClassifyInput {
   triggers: readonly string[]
   /** Additive to the brief: the font resolver the rasters used (it measures a paragraph range's mask box). Default: identity. */
   resolveFont?: FontResolver
-  /**
-   * Additive (PR #78 round 13): the job's ledger. Each masked copy the classifier composes leases from it first
-   * (released when classification ends); one that does not fit plays the still (`show-budget`). Absent: unbounded.
-   */
-  workspace?: AllocationOwner
 }
 export interface StepClass { eligibility: 'layers' | 'composited'; reason?: 'colour' | 'mask' | 'emphasis' | 'budget' | 'swept' | 'strict-marks' | 'mark-rest' | 'limits' | 'media'; frames?: number }
 export interface Classification {
@@ -377,7 +372,7 @@ export function classifySlide(input: ClassifyInput): Classification {
     infos.set(layer, { layer, bmp, w, h, alpha, seen: new Uint8Array(w * h) })
   }
   const order = [...infos.values()]
-  const held: Lease[] = []
+  const held: object[] = []
   const composer = createSlideComposer(ps, rasters, scale)
   const W = composer.width, H = composer.height
   const rng = createRng(0x5eed + ps.index)
@@ -603,8 +598,10 @@ export function classifySlide(input: ClassifyInput): Classification {
       const mask = maskOf(info)
       if (mask) {
         out.masks.set(info.layer, mask)
-        if (input.workspace) { const l = input.workspace.lease(info.w * info.h * 4, 'classify:mask'); if (!l) throw new Still('budget'); held.push(l) }
-        composer.classify(info.layer, maskedRaster(info.bmp, mask))
+        // Charged to the job as it is made (`showCanvasBackend`), given back when classification ends.
+        const m = maskedRaster(info.bmp, mask)
+        held.push(m.canvas)
+        composer.classify(info.layer, m)
       }
     }
     // A degraded effect anywhere: what was composed is not what the client shows.
@@ -660,7 +657,7 @@ export function classifySlide(input: ClassifyInput): Classification {
     throw e
   } finally {
     composer.dispose()
-    for (const l of held) l.release()
+    for (const x of held) releaseCanvas(x)
   }
 }
 

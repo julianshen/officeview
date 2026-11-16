@@ -33,6 +33,7 @@ import { createSlideMetadataStore } from '../../src/slideshow/read/store'
 import { createUnderlayReader } from '../../src/slideshow/read/underlay'
 import { readSlideTiming } from '../../src/slideshow/read/timing'
 import type { Lease, SlideShowWorkspace } from '../../src/slideshow/types'
+import { gateBackend } from './show/canvas'
 import { buildShowPlan, createShowDoc, type BuiltShowPlan, type ShowBuildOptions, type ShowDoc, type ShowPlanJob, type ShowRefusal } from './show/build'
 import { renderTrack } from './show/tracks'
 import { buildMorphPlan, MorphInvalid, morphReference, type BuiltMorph, type MorphJob } from './show/morph'
@@ -157,7 +158,7 @@ export class DocumentHost {
   pages = 0
   /** Reads a 'full' deck's hidden units after its paintables exist (TEST-ONLY override: fault injection). */
   hiddenReader: (doc: PptxDocument, paintables: PaintableArray) => Promise<number[]> = (doc, paintables) => hiddenUnits(doc, paintables.length)
-  constructor(backend = serverBackend(), servedCacheBytes?: number) { this.backend = backend; installCanvasBackend(backend); this.served = new ServedCache(servedCacheBytes) }
+  constructor(backend = serverBackend(), servedCacheBytes?: number) { this.backend = backend; installCanvasBackend(gateBackend(backend)); this.served = new ServedCache(servedCacheBytes) }
 
   async open(docRef: string, bytes: Uint8Array, contentPolicy: 'visible-only' | 'full'): Promise<OpenResult> {
     const contentPolicyId = contentPolicy === 'full' ? 'full@1' : 'visible-only@1'
