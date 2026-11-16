@@ -7,12 +7,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import { installCanvasBackend, type CanvasBackend } from '../../src/core/canvas-backend'
 import { createSlideTimeline } from '../../src/slideshow/engine/steps'
 import type { PreparedSlide } from '../../src/slideshow/prepare'
+import type { TimeNode, TimingTree } from '../../src/slideshow/types'
 import {
   MEDIA_END_REVEAL, MOVER_REVEAL, adversaryDeck, mediaEndRevealDeck, autoplayRevealDeck, triggerFadeDeck, triggerPulseDeck, triggerPulseMainDeck, triggerRevealDeck, twinDeck, flashColourDeck, flyInDeck, loadShowDeck, longStepDeck, manyLayersDeck, moveTwiceDeck, spinStepsDeck, triggerColourDeck, triggerDartDeck, triggerDeck,
 } from '../../src/testdata/show-decks'
 import { serverBackend } from '../src/backend'
 import {
-  CLASSIFY_BUDGET, SAMPLES_PER_INTERVAL, TRACK_FPS, TRACK_MAX_FRAMES, allocateFrames, sampleTimes, sweptHull,
+  CLASSIFY_BUDGET, SAMPLES_PER_INTERVAL, TRACK_FPS, TRACK_MAX_FRAMES, allocateFrames, mediaEndAffectsDrawing, sampleTimes, sweptHull,
 } from '../src/show/eligibility'
 import { classifiedRasters, drawsAt, slideStateAt } from '../src/show/compose'
 import { createDiagnosticSink } from '../../src/slideshow/diagnostics'
@@ -224,6 +225,92 @@ describe('show eligibility', () => {
       })
     }
 
+    it('an entrance whose END condition is the media end (codex counterexample): the slide plays its still (round 12c)', async () => {
+      const run = await classify(await mediaEndRevealDeck('endCondition'))
+      const { ps, timeline: tl } = run
+      const ink = targetLayer(ps, 'sp:2')
+      const drawsInk = (cursor: ReturnType<typeof tl.initial>, t: number) =>
+        drawsAt(ps, slideStateAt(ps, tl, cursor, t, createRng(1), createDiagnosticSink())).some(d => d.layer === ink && d.state.visible && d.state.opacity > 0)
+      // An early end (16 ms, before the entrance begins at 20 ms) is ignored; a delayed first tick (500 ms) cuts it.
+      expect(drawsInk(tl.mediaEnd(tl.initial(), MEDIA_END_REVEAL.videoId, 16, true), 600)).toBe(true)
+      expect(tl.stateAt(tl.initial(), 500).active.some(e => e.node.ctn.id === MEDIA_END_REVEAL.videoId)).toBe(true)
+      expect(drawsInk(tl.mediaEnd(tl.initial(), MEDIA_END_REVEAL.videoId, 500, true), 600)).toBe(false)
+      expect(run.c.fallback).toBe('still')
+    })
+
+    it('a fill-remove container that ends with its children (endSync) holding media and the ink: the still (round 12c)', async () => {
+      const run = await classify(await mediaEndRevealDeck('endSync'))
+      const { ps, timeline: tl } = run
+      const ink = targetLayer(ps, 'sp:2')
+      const drawsInk = (cursor: ReturnType<typeof tl.initial>, t: number) =>
+        drawsAt(ps, slideStateAt(ps, tl, cursor, t, createRng(1), createDiagnosticSink())).some(d => d.layer === ink && d.state.visible && d.state.opacity > 0)
+      expect(drawsInk(tl.initial(), 100)).toBe(true)
+      expect(drawsInk(tl.mediaEnd(tl.initial(), MEDIA_END_REVEAL.videoId, 16, true), 100)).toBe(false)
+      expect(run.c.fallback).toBe('still')
+    })
+
+    it('media with an unresolved reference: fails closed to the still (round 12c)', async () => {
+      const run = await classify(await mediaEndRevealDeck('unresolved'))
+      expect(run.c.fallback).toBe('still')
+    })
+
+    it('the dependency analysis fails closed on a reference cycle and past its bounds (round 12c)', async () => {
+      // The reader breaks a deck's `tn` cycles (`timing-cycle`): the fixture's B no longer names A.
+      const meta = await (await loadShowDeck(await mediaEndRevealDeck('cycle'))).meta(0)
+      const tree = meta.timing as TimingTree
+      const b = tree.root.kind === 'par' ? tree.root.children.find(n => n.ctn.id === 5)! : undefined
+      expect(b?.ctn.start.some(c => c.tn === 4)).toBe(false)
+      // A tree that reaches the analysis with the cycle intact fails closed, as does one past its bounds.
+      const ctn = (id: number, start: TimeNode['ctn']['start'] = []) => ({ id, durMs: undefined, accel: 0, decel: 0, autoRev: false, fill: 'hold' as const, start, end: [] })
+      const leaf = (kind: string, id: number, start: TimeNode['ctn']['start'] = []) => ({ kind, ctn: ctn(id, start), target: { spid: '2' }, attrNames: [], additive: 'base', accumulate: 'none' }) as unknown as TimeNode
+      const par = (id: number, children: TimeNode[], start: TimeNode['ctn']['start'] = []): TimeNode => ({ kind: 'par', ctn: ctn(id, start), children })
+      const onEnd = (tn: number) => [{ evt: 'onEnd', tn, delayMs: 0 }]
+      const cyclic = par(1, [leaf('video', 2), par(4, [leaf('set', 6)], onEnd(5)), par(5, [leaf('set', 7)], onEnd(4))])
+      expect(mediaEndAffectsDrawing(cyclic)).toBe(true)
+      let deep: TimeNode = leaf('set', 1000)
+      for (let i = 0; i < 300; i++) deep = par(2000 + i, [deep])
+      expect(mediaEndAffectsDrawing(par(1, [leaf('video', 2), deep]))).toBe(true)
+      // The same shapes without the cycle or the depth: nothing drawn waits on the video.
+      expect(mediaEndAffectsDrawing(par(1, [leaf('video', 2), par(4, [leaf('set', 6)])]))).toBe(false)
+      // A container whose end follows the video, holding a child that begins late (not at a fixed offset): its
+      // begin may come after the client's end of the container (parent activity).
+      expect(mediaEndAffectsDrawing(par(1, [par(3, [leaf('video', 2), par(4, [leaf('set', 6)], [{ delayMs: 'indefinite' }])])]))).toBe(true)
+      expect(mediaEndAffectsDrawing(par(1, [par(3, [leaf('video', 2), par(4, [leaf('set', 6)], [{ delayMs: 0 }])])]))).toBe(false)
+    })
+
+    it('an effect sound inside click effect 1, then click 2 (the lo-tdf44223 shape): layers that reconstruct the client history (round 12c)', async () => {
+      const run = await classify(await mediaEndRevealDeck('effectSound'))
+      const { ps, timeline: tl, c } = run
+      expect(tl.steps).toBe(2)
+      expect(c.fallback).toBeUndefined()
+      expect(c.steps.map(s => s.eligibility)).toEqual(['layers', 'layers'])
+      expect(c.drop.has(targetLayer(ps, 'sp:2'))).toBe(false)
+      // The client: click 1 at 100 ms, the sound ends on the next frame, click 2 at 1000 ms.
+      const one = tl.next(tl.initial(), 100)
+      expect(tl.stateAt(one, 110).active.some(e => e.node.ctn.id === MEDIA_END_REVEAL.soundId)).toBe(true)
+      const ended = tl.mediaEnd(one, MEDIA_END_REVEAL.soundId, 116, true)
+      const two = tl.next(ended, 1000)
+      expect(two.step).toBe(2)
+      for (const [cursor, t] of [[ended, 200], [ended, 400], [ended, 900], [two, 1100], [two, 1300], [two, 2000]] as const) {
+        const r = reconstruct(run, cursor, t)
+        expect({ t, diff: r.diff }).toEqual({ t, diff: 0 })
+      }
+      expect(reconstruct(run, two, 2000).inkOriginal).toBeGreaterThan(0)
+    })
+
+    it('an effect sound inside a click effect (the lo-tdf44223 shape): the slide stays eligible (round 12c)', () => {
+      const ctn = (id: number, o: Partial<TimeNode['ctn']> = {}) => ({ id, durMs: undefined, accel: 0, decel: 0, autoRev: false, fill: 'hold' as const, start: [{ delayMs: 0 }], end: [], ...o }) as TimeNode['ctn']
+      const leaf = (kind: string, id: number, o: Partial<TimeNode['ctn']> = {}) => ({ kind, ctn: ctn(id, o), target: { spid: '4' }, attrNames: [], additive: 'base', accumulate: 'none' }) as unknown as TimeNode
+      const effect: TimeNode = { kind: 'par', ctn: ctn(5), children: [leaf('set', 6, { durMs: 1 }), leaf('anim', 7, { durMs: 500 }), leaf('audio', -1, { start: [{ evt: 'begin', tn: 5, delayMs: 0 }], end: [{ evt: 'onStopAudio', delayMs: 0 }] })] }
+      const click: TimeNode = { kind: 'par', ctn: ctn(3, { start: [{ delayMs: 'indefinite' }] }), children: [{ kind: 'par', ctn: ctn(4), children: [effect] }] }
+      const main: TimeNode = { kind: 'seq', ctn: ctn(2, { durMs: 'indefinite', fill: undefined, start: [] }), children: [click], seq: { concurrent: true, nextAc: 'seek', prevAc: 'none' } }
+      const root: TimeNode = { kind: 'par', ctn: ctn(1, { durMs: 'indefinite', fill: undefined, start: [] }), children: [main] }
+      expect(mediaEndAffectsDrawing(root)).toBe(false)
+      // The same click effect with fill="remove" lets go of the fly-in when the sound ends: the still.
+      effect.ctn.fill = 'remove'
+      expect(mediaEndAffectsDrawing(root)).toBe(true)
+    })
+
     it('media no drawing depends on, beside a click animation: the slide stays eligible and plays its layers (round 12b)', async () => {
       const run = await classify(await mediaEndRevealDeck('unrelated'))
       const { ps, timeline: tl, c } = run
@@ -239,11 +326,6 @@ describe('show eligibility', () => {
         expect({ t, diff: r.diff }).toEqual({ t, diff: 0 })
       }
       expect(reconstruct(run, clicked, 1000).inkOriginal).toBeGreaterThan(0)
-    })
-
-    it('a classifier given no media-end timelines refuses a slide holding media (fail closed, round 12b)', async () => {
-      const run = await classify(await mediaEndRevealDeck('unrelated'), { mediaTimelines: false })
-      expect(run.c.fallback).toBe('still')
     })
 
     it('unproven autoplay before the first click falls back to the still', async () => {

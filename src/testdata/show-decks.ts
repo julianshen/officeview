@@ -363,7 +363,7 @@ export function autoplayRevealDeck(): Promise<Uint8Array> {
 }
 
 /** The video node's `cTn` id in `mediaEndRevealDeck` (PR #78 round 12). */
-export const MEDIA_END_REVEAL = Object.freeze({ videoId: 3, finiteMs: 5000 })
+export const MEDIA_END_REVEAL = Object.freeze({ videoId: 3, finiteMs: 5000, soundId: 90 })
 
 /**
  * One slide (PR #78 round 12): a video (id 3) begins with the slide, and the ink box (id 2) appears when it ends.
@@ -375,15 +375,51 @@ export const MEDIA_END_REVEAL = Object.freeze({ videoId: 3, finiteMs: 5000 })
  * - `afterIndefinite` (round 12b): as `afterPrevious`, behind an indefinite video.
  * - `unrelated` (round 12b): the indefinite video plays, and the box fades in on click 1, which no media end feeds:
  *   the slide stays eligible.
+ * - `endCondition` (round 12c, codex's counterexample): the box enters at 20 ms for 1 s (`fill="remove"`), and its
+ *   container's END condition is the video's `onEnd`. An end at or before 20 ms is ignored; a later one (a delayed
+ *   first tick) cuts the entrance short.
+ * - `endSync` (round 12c): the box appears inside a `fill="remove"` container that holds the video and ends with its
+ *   children (`endSync` `rtn="all"`): the video's end removes the box.
+ * - `unresolved` (round 12c): the box's entrance starts on the `onEnd` of a node that does not exist.
+ * - `cycle` (round 12c): two containers each start on the other's `onEnd`; one holds the box's entrance.
+ * - `effectSound` (round 12c, the `lo-tdf44223` shape): click 1 fades the box in with an indefinite sound begun by
+ *   its effect (`evt="begin"`); click 2 fades the media shape (id 3) in. Nothing waits on the sound's end.
  */
-export function mediaEndRevealDeck(kind: 'onEnd' | 'afterPrevious' | 'afterIndefinite' | 'unrelated' = 'onEnd'): Promise<Uint8Array> {
+export type MediaEndKind = 'onEnd' | 'afterPrevious' | 'afterIndefinite' | 'unrelated' | 'endCondition' | 'endSync' | 'unresolved' | 'cycle' | 'effectSound'
+export function mediaEndRevealDeck(kind: MediaEndKind = 'onEnd'): Promise<Uint8Array> {
   const v = MEDIA_END_REVEAL.videoId
   const id = ids(v + 1)
   const dur = kind === 'afterPrevious' ? ` dur="${MEDIA_END_REVEAL.finiteMs}"` : ''
   const video = `<p:video><p:cMediaNode vol="80000"><p:cTn id="${v}"${dur} fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn>${tgt(3)}</p:cMediaNode></p:video>`
   let nodes: string
+  const entr = (own: number, attrs: string, conds: string, kids: string) =>
+    `<p:par><p:cTn id="${own}" presetID="1" presetClass="entr" presetSubtype="0"${attrs} nodeType="afterEffect">${conds}<p:childTnLst>${kids}</p:childTnLst></p:cTn></p:par>`
+  const onEnd = (tn: number) => `<p:cond evt="onEnd" delay="0"><p:tn val="${tn}"/></p:cond>`
   if (kind === 'unrelated') {
     nodes = video + mainSeqXml([clickStep(id, [fadeIn(2)])])
+  } else if (kind === 'effectSound') {
+    const withSound: Effect = {
+      cls: 'entr', preset: 10, behaviours: (next) => {
+        const set = setVisibility(next, 2, 'visible')
+        const effect = Number(/id="(\d+)"/.exec(set)![1]) - 1
+        const sound = `<p:audio><p:cMediaNode><p:cTn id="${MEDIA_END_REVEAL.soundId}" display="0"><p:stCondLst><p:cond evt="begin" delay="0"><p:tn val="${effect}"/></p:cond></p:stCondLst></p:cTn>${tgt(3)}</p:cMediaNode></p:audio>`
+        return [set, animEffect(next, 2, 'in', 'fade', 500), sound]
+      },
+    }
+    nodes = mainSeqXml([clickStep(id, [withSound]), clickStep(id, [fadeIn(3)])])
+  } else if (kind === 'endCondition') {
+    const own = id()
+    const show = `<p:set><p:cBhvr><p:cTn id="${id()}" dur="1000" fill="remove"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn>${tgt(2)}${attrs('style.visibility')}</p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>`
+    nodes = video + entr(own, ' dur="1000" fill="remove"', `<p:stCondLst><p:cond delay="20"/></p:stCondLst><p:endCondLst>${onEnd(v)}</p:endCondLst>`, show)
+  } else if (kind === 'endSync') {
+    const own = id()
+    nodes = entr(own, ' fill="remove"', '<p:stCondLst><p:cond delay="0"/></p:stCondLst><p:endSync evt="end" delay="0"><p:rtn val="all"/></p:endSync>', video + setVisibility(id, 2, 'visible'))
+  } else if (kind === 'unresolved') {
+    nodes = video + entr(id(), ' fill="hold"', `<p:stCondLst>${onEnd(99)}</p:stCondLst>`, setVisibility(id, 2, 'visible'))
+  } else if (kind === 'cycle') {
+    const a = id(), b = id()
+    nodes = video + entr(a, ' fill="hold"', `<p:stCondLst>${onEnd(b)}</p:stCondLst>`, setVisibility(id, 2, 'visible')) +
+      `<p:par><p:cTn id="${b}" fill="hold"><p:stCondLst>${onEnd(a)}</p:stCondLst><p:childTnLst>${setVisibility(id, 3, 'visible')}</p:childTnLst></p:cTn></p:par>`
   } else {
     const own = id()
     const start = kind === 'onEnd' ? `<p:cond evt="onEnd" delay="0"><p:tn val="${v}"/></p:cond>` : '<p:cond delay="0"/>'
