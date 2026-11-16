@@ -12,12 +12,13 @@ import { createCfMemory, CF_FORMULA_NODE_BYTES, CF_LIMITS } from '../src/xlsx/cf
 import { withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import { parseCfSheet, type CfStylesSource } from '../src/xlsx/cf/parse'
 import {
-  CF_FORMULA_FUNCTIONS, compileCfFormula, compileCfFormulaWith, countFormulaTokens, formulaRequiredCapabilities,
+  CF_FORMULA_FUNCTIONS, cfFormulaReserveBound, compileCfFormula, compileCfFormulaWith, countFormulaTokens, formulaRequiredCapabilities,
   type CfFormulaRuleContext,
 } from '../src/xlsx/cf/formula'
 import type { CfFormula, CfLease } from '../src/xlsx/cf/model'
 import { cfDefinitionFormulas } from '../src/xlsx/cf/model'
 import { FUNCTIONS, registerFormulaFunction } from '../src/xlsx/formula/functions'
+import { measurePayloadBytes } from '../src/xlsx/view/payloadBytes'
 import * as parserModule from '../src/xlsx/formula/parser'
 import { CF_STAGE5_CAPABILITIES } from '../scripts/cf-refs/cases'
 import { estimateCfPrepareBytes } from '../src/xlsx/cf/service'
@@ -227,21 +228,56 @@ describe('compile caps refuse before construction', () => {
 
 describe('compile reserves before parsing and releases with the rule (round-1 #3)', () => {
   const text = '$B2>$C2'
-  const worst = countFormulaTokens(text) * CF_FORMULA_NODE_BYTES
+  const bound = cfFormulaReserveBound(text)
   it('one byte short: parseFormula is never called and no AST exists', () => {
-    const memory = createCfMemory({ limitBytes: worst - 1 })
+    const memory = createCfMemory({ limitBytes: bound - 1 })
     expect(compileCfFormula(text, { row: 1, col: 1 }, memory)).toMatchObject({ refused: 'cf-resource-limit' })
     expect(parseSpy).not.toHaveBeenCalled()
     expect(memory.currentBytes).toBe(0)
   })
-  it('exactly enough: it compiles and the parse account holds the reservation', () => {
-    const memory = createCfMemory({ limitBytes: worst })
+  it('exactly enough: it compiles, then the lease keeps only the measured bytes of the formula', () => {
+    const memory = createCfMemory({ limitBytes: bound })
     const out = compileCfFormula(text, { row: 1, col: 1 }, memory) as CfLease<CfFormula>
     expect(parseSpy).toHaveBeenCalledTimes(1)
-    expect(out.bytes).toBe(worst)
-    expect(memory.currentBytes).toBe(worst)
+    expect(out.bytes).toBe(measurePayloadBytes(out.value))
+    expect(out.bytes).toBeLessThan(bound)
+    expect(memory.currentBytes).toBe(out.bytes)
     out.release()
     expect(memory.currentBytes).toBe(0)
+  })
+  describe('the bound is reserved before anything is built, and covers everything built (P1)', () => {
+    const real = parserModule.parseFormula
+    const long = (n: number) => 'S'.repeat(n)
+    const many = (n: number) => Array.from({ length: n }, (_, i) => `'${long(31)}'!A${i + 1}`).join('+')
+    const cases: Record<string, string> = {
+      'a single cell': 'A1',
+      'an 8,000-character string': `"${'x'.repeat(8000)}"`,
+      'a quoted 31-character sheet range': `SUM('${long(31)}'!$A$1:$B$2)>0`,
+      '64 qualified atoms': many(64),
+      'a long string beside a call': `LEN("${'y'.repeat(4000)}")+LEN("${'z'.repeat(4000)}")`,
+      'the 4,096-token formula': WIDE_4096,
+      'a pinned expression': '$B2>$C2',
+      'nested calls': 'AND(OR(A1>0,B1<5),NOT(ISBLANK(C1)),IF(A1,1,"x")=1)',
+    }
+    it.each(Object.entries(cases))('%s: reserved at parse >= built (and its measuring workspace), with no growth after', (_name, text) => {
+      let reserved = 0, atParse = -1
+      parseSpy.mockImplementationOnce((input: Parameters<typeof real>[0]) => { atParse = reserved; return real(input) })
+      const out = compileCfFormulaWith(text, { row: 1, col: 1 }, absolute => { reserved = Math.max(reserved, absolute); return true })
+      if ('refused' in out) throw new Error(out.reason)
+      let workspace = 0
+      const built = measurePayloadBytes(out.formula, extra => { workspace += extra; return true })!
+      expect(atParse, 'reserved before parseFormula ran').toBeGreaterThanOrEqual(built + workspace)
+      expect(reserved, 'no growth after construction').toBe(atParse)
+      expect(out.retained).toBe(built)
+    })
+    it('refuses first, building nothing, when even the bound does not fit; the bound is derived from the text', () => {
+      for (const text of ['A1', `"${'x'.repeat(8000)}"`]) {
+        parseSpy.mockClear()
+        expect(compileCfFormulaWith(text, undefined, () => false)).toMatchObject({ refused: 'cf-resource-limit' })
+        expect(parseSpy).not.toHaveBeenCalled()
+      }
+      expect(cfFormulaReserveBound(`"${'x'.repeat(8000)}"`)).toBeGreaterThan(cfFormulaReserveBound('"x"') + 2 * 8000)
+    })
   })
   it('a refusal after the reservation (a parse failure, a function outside the list) returns the ledger to baseline', () => {
     const memory = createCfMemory()
@@ -301,6 +337,40 @@ describe('compile reserves before parsing and releases with the rule (round-1 #3
       lease.release(); expect(memory.currentBytes).toBe(0)
     })
   })
+  describe('a rejected rule leaves nothing charged (P2)', () => {
+    const NO_PIN = ['formula:dialect-base', 'formula:anchor-single']
+    const peakOf = (xml: string, evidence: readonly string[], limitBytes?: number) =>
+      withExactCfEvidence(evidence, () => { const r = parseSheet(xml, createCfMemory(limitBytes === undefined ? {} : { limitBytes })); const out = { peak: r.memory.peakBytes, rules: r.rules.map(x => x.definition.kind) }; r.lease.release(); return out })
+    const literal = `<conditionalFormatting sqref="C2"><cfRule type="cellIs" priority="900" dxfId="0" operator="greaterThan"><formula>1</formula></cfRule></conditionalFormatting>`
+    const pinnedBody = Array.from({ length: 40 }, (_, i) => `$B${i + 2}`).join('+')
+    it('150 expressions that compile but miss a parse capability keep the literal rule after them', () => {
+      const xml = Array.from({ length: 150 }, (_, i) => `<conditionalFormatting sqref="B${i + 2}"><cfRule type="expression" priority="${i + 1}" dxfId="0"><formula>${pinnedBody}</formula></cfRule></conditionalFormatting>`).join('') + literal
+      const control = peakOf(xml, [])
+      // The same rules with a memory that has only a little room over the no-evidence control.
+      const run = peakOf(xml, NO_PIN, control.peak + 64 * 1024)
+      expect(run.rules.slice(0, 150).every(k => k === 'unresolved')).toBe(true)
+      expect(run.rules.at(-1)).toBe('cellIs')
+      expect(run.peak - control.peak).toBeLessThan(64 * 1024)
+    })
+    it('between rules whose second operand is unsupported keep the literal rule after them', () => {
+      const first = Array.from({ length: 40 }, (_, i) => `B${i + 2}`).join('+')
+      const xml = Array.from({ length: 150 }, (_, i) => `<conditionalFormatting sqref="B${i + 2}"><cfRule type="cellIs" priority="${i + 1}" dxfId="0" operator="between"><formula>${first}</formula><formula>INDIRECT("A1")</formula></cfRule></conditionalFormatting>`).join('') + literal
+      const control = peakOf(xml, [])
+      const run = peakOf(xml, PARSE_SET, control.peak + 64 * 1024)
+      expect(run.rules.slice(0, 150).every(k => k === 'unresolved')).toBe(true)
+      expect(run.rules.at(-1)).toBe('cellIs')
+      expect(run.peak - control.peak).toBeLessThan(64 * 1024)
+    })
+    it('an accepted rule is charged exactly once, its measured bytes', () => {
+      withExactCfEvidence(PARSE_SET, () => {
+        const one = parseSheet(rule('expression', pinnedBody.replace(/\$/g, '$')))
+        const noFormula = withExactCfEvidence([], () => parseSheet(rule('expression', pinnedBody)))
+        expect(one.rules[0]!.definition.kind).toBe('expression')
+        expect(one.memory.currentBytes - noFormula.memory.currentBytes).toBeLessThanOrEqual(measurePayloadBytes((one.rules[0]!.definition as { formula: CfFormula }).formula)! + 4096)
+        one.lease.release(); noFormula.lease.release()
+      })
+    })
+  })
   it('a resolved formula holds only its measured bytes in the sheet', () => {
     withExactCfEvidence(PARSE_SET, () => {
       const memory = createCfMemory()
@@ -316,7 +386,7 @@ describe('compile reserves before parsing and releases with the rule (round-1 #3
     // Each holds about 0.5 MB, and its reservation (4,096 tokens x node bytes, about 1.8 MB) must also fit beside the others
     // under the 4 MiB sheet metadata cap: the later rules refuse by themselves.
     const big = WIDE_4096
-    const rules = Array.from({ length: 8 }, (_, i) => `<conditionalFormatting sqref="B${i + 2}"><cfRule type="expression" priority="${i + 1}" dxfId="0"><formula>${big}</formula></cfRule></conditionalFormatting>`).join('')
+    const rules = Array.from({ length: 16 }, (_, i) => `<conditionalFormatting sqref="B${i + 2}"><cfRule type="expression" priority="${i + 1}" dxfId="0"><formula>${big}</formula></cfRule></conditionalFormatting>`).join('')
     withExactCfEvidence(PARSE_SET, () => {
       const { rules: parsed, lease } = parseSheet(rules)
       expect(lease.value.unresolvedSheet).toBeUndefined()

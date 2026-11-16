@@ -107,6 +107,38 @@ describe('the document policy is built once and resolves its defaults', () => {
   })
 })
 
+describe('the policy is retained once per document and cannot be resampled (P3)', () => {
+  it('the same document yields the identical frozen object, whatever changes afterwards', () => {
+    const doc = { semantics: { dateSystem: '1900', timeZone: 'UTC' }, calc: { calcMode: 'manual' } } as unknown as XlsxDocument
+    const first = cfDocumentEvaluationOf(doc)
+    ;(doc as { calc: { calcMode: string } }).calc.calcMode = 'auto'
+    ;(doc as { semantics: { timeZone: string } }).semantics.timeZone = 'Asia/Taipei'
+    expect(cfDocumentEvaluationOf(doc)).toBe(first)
+    expect(first).toMatchObject({ calcMode: 'manual', timeZone: 'UTC' })
+  })
+  it('the paged workbook reads the ambient zone once: a zone change between preparations leaves the policy identical', () => {
+    const workbook = { calcMode: 'auto' as const, formatting: { dateSystem: '1900' as const } }
+    let zone = 'UTC'
+    const spy = vi.spyOn(Intl, 'DateTimeFormat').mockImplementation((() => ({ resolvedOptions: () => ({ timeZone: zone }) })) as never)
+    try {
+      const first = cfDocumentEvaluationOfPaged(workbook)
+      zone = 'Asia/Taipei'
+      const second = cfDocumentEvaluationOfPaged(workbook)
+      expect(second).toBe(first)
+      expect(second.timeZone).toBe('UTC')
+      // A different workbook is its own document: it samples for itself.
+      expect(cfDocumentEvaluationOfPaged({ ...workbook }).timeZone).toBe('Asia/Taipei')
+    } finally { spy.mockRestore() }
+  })
+  it('only the clock is sampled per preparation', () => {
+    const doc = { semantics: { dateSystem: '1900', timeZone: 'UTC' } } as unknown as XlsxDocument
+    const policy = cfDocumentEvaluationOf(doc)
+    const a = cfEvaluationContextFor(policy, () => 1), b = cfEvaluationContextFor(policy, () => 2)
+    expect([a.clock.epochNowMs, b.clock.epochNowMs]).toEqual([1, 2])
+    expect(cfDocumentEvaluationOf(doc)).toBe(policy)
+  })
+})
+
 describe('the clock is taken once per preparation from the injected now', () => {
   it('two contexts from one policy take two snapshots; the local-midnight tick advances clockGen', () => {
     const t0 = Date.UTC(2026, 10, 16, 15, 59, 59), t1 = Date.UTC(2026, 10, 16, 16, 0, 0)

@@ -17,7 +17,8 @@ import { FUNCTIONS } from '../formula/functions'
 import { epochToSerial } from '../formula/serial'
 import type { XlsxDocument } from '../types'
 import type { ValuePolicy } from '../view/contracts'
-import { CF_FORMULA_NODE_BYTES, CF_LIMITS, type CfMemory } from './limits'
+import { CF_FORMULA_ATOM_BYTES, CF_FORMULA_FIXED_BYTES, CF_FORMULA_NODE_BYTES, CF_FORMULA_TOKEN_BYTES, CF_LIMITS, type CfMemory } from './limits'
+import { MEASURE_ENTRY_BYTES } from '../view/payloadBytes'
 import { measurePayloadBytes } from '../view/payloadBytes'
 import type { CfFormula, CfFormulaRef, CfLease, CfRuleType, CfTruthKind } from './model'
 
@@ -327,11 +328,32 @@ function admit(ast: AstNode, anchor: { row: number; col: number } | undefined): 
 /** `compileCfFormulaWith`'s reservation hook: the absolute bytes the compile now needs held; false when it cannot be. */
 export type CfFormulaReserve = (absoluteBytes: number) => boolean
 
+/** Code units priced per source character: the lexer's token value and `raw`, the AST's literal or qualifier, an atom's
+ * sheet and the dependency list can each hold a copy, and a qualified range copies its sheet into every endpoint node. */
+const COPIES_PER_SOURCE_UNIT = 10
+/** Bytes a measuring walk may admit as workspace: one visited-set slot per distinct object, doubling in chunks. */
+const workspaceBound = (tokens: number): number => MEASURE_ENTRY_BYTES * (2 * (2 * tokens + 2 * CF_LIMITS.formulaAtoms + 16) + 16)
+/** What the formula itself may retain, from the input alone (tokens, text length): nodes, lexer tokens, string payloads,
+ * atoms and the wrapper. `tokens` never undercounts the nodes (a node needs at least one token). */
+const retainedBound = (tokens: number, units: number): number =>
+  tokens * (CF_FORMULA_NODE_BYTES + CF_FORMULA_TOKEN_BYTES) + units * 2 * COPIES_PER_SOURCE_UNIT + CF_FORMULA_FIXED_BYTES + Math.min(tokens, CF_LIMITS.formulaAtoms) * CF_FORMULA_ATOM_BYTES
+
 /**
- * Compile with the caller owning the reservation. The reservation for the worst case (`tokens x CF_FORMULA_NODE_BYTES`)
- * is requested BEFORE `parseFormula` runs, so a refused reservation constructs no AST; after parsing the exact measured
- * bytes are requested too (the token count does not bound the string payload or the node count of a range). Returns the
- * formula, the bytes the caller now holds for it (`bytes`) and its exact measured size (`retained`).
+ * The bytes reserved before `parseFormula` runs: a bound derived from the input alone that covers every allocation the
+ * compile makes (lexer tokens, the AST with its string payloads, atoms, the wrapper) and the measuring workspace. Nothing
+ * built may exceed it, so a refusal can never come after the allocation it was meant to prevent.
+ */
+export function cfFormulaReserveBound(text: string): number {
+  const source = text.trim().replace(/^=/, '').trim()
+  const tokens = Math.min(countFormulaTokens(source), CF_LIMITS.formulaTokens + 1)
+  return retainedBound(tokens, source.length) + workspaceBound(tokens)
+}
+
+/**
+ * Compile with the caller owning the reservation. The input-derived bound is requested BEFORE `parseFormula` runs and
+ * nothing is requested afterwards: the AST, the atoms and the measuring walk all fit inside it or the compile refuses.
+ * Returns the formula, the bytes the caller now holds (`bytes`, the whole bound) and what the formula retains (`retained`,
+ * its exact measured size, which the caller keeps after releasing the rest).
  */
 export function compileCfFormulaWith(text: string, anchor: { row: number; col: number } | undefined, reserve: CfFormulaReserve): { formula: CfFormula; bytes: number; retained: number } | CfFormulaRefusal {
   if (typeof text !== 'string') return unsupported('formula text is not a string')
@@ -343,8 +365,9 @@ export function compileCfFormulaWith(text: string, anchor: { row: number; col: n
   }
   const tokens = countFormulaTokens(source)
   if (tokens > CF_LIMITS.formulaTokens) return limited(`formula exceeds ${CF_LIMITS.formulaTokens} tokens`)
-  const worst = tokens * CF_FORMULA_NODE_BYTES
-  if (!reserve(worst)) return limited('compiled formula reservation refused')
+  const retainedCap = retainedBound(tokens, source.length), workspaceCap = workspaceBound(tokens)
+  const reserved = retainedCap + workspaceCap
+  if (!reserve(reserved)) return limited('compiled formula reservation refused')
   let ast: AstNode
   try {
     ast = parseFormula(source)
@@ -353,11 +376,12 @@ export function compileCfFormulaWith(text: string, anchor: { row: number; col: n
   }
   const result = admit(ast, anchor)
   if (isRefusal(result)) return result
-  const measured = measurePayloadBytes(result)
-  if (measured === undefined) return limited('compiled formula could not be measured')
-  const bytes = Math.max(worst, measured)
-  if (bytes > worst && !reserve(bytes)) return limited('compiled formula exceeds its reservation')
-  return { formula: result, bytes, retained: measured }
+  // The measuring walk admits its own workspace out of the reserved share, in chunks, before it grows.
+  let workspace = 0
+  const measured = measurePayloadBytes(result, extra => (workspace += extra) <= workspaceCap)
+  if (measured === undefined) return limited('compiled formula could not be measured within its reservation')
+  if (measured > retainedCap) return limited('compiled formula exceeds its reserved bound')
+  return { formula: result, bytes: reserved, retained: measured }
 }
 
 /**
@@ -370,7 +394,8 @@ export function compileCfFormula(text: string, anchor: { row: number; col: numbe
   try {
     const compiled = compileCfFormulaWith(text, anchor, bytes => hold.grow(bytes))
     if (isRefusal(compiled)) { hold.release(); return compiled }
-    return hold.adopt(compiled.formula, compiled.bytes)
+    // The workspace and the unused share go back: the lease keeps exactly what the formula retains.
+    return hold.adopt(compiled.formula, compiled.retained)
   } catch (error) {
     hold.release()
     throw error
@@ -443,23 +468,34 @@ export type CfEvaluationContext = CfDocumentEvaluation & Readonly<{ clock: Reado
  * time zone (`''`): `TODAY()` then has no clock to read and the rule withholds rather than guessing a zone.
  */
 export function cfDocumentEvaluationOf(doc: Pick<XlsxDocument, 'calc' | 'valuePolicy' | 'semantics'>): CfDocumentEvaluation {
-  return Object.freeze({
+  return retainedPolicy(doc, () => Object.freeze({
     calcMode: doc.calc?.calcMode ?? 'auto',
     // `workbookValuePolicy` (formula/value-policy.ts) restated: only a cached document carries the flag.
     valuePolicy: doc.valuePolicy === 'cached' ? 'cached' as const : 'engine' as const,
     dateSystem: doc.semantics?.dateSystem ?? '1900',
     timeZone: doc.semantics?.timeZone ?? '',
-  })
+  }))
+}
+/** One frozen policy per document or workbook, built the first time it is asked for and reused: the policy is never
+ * re-sampled (Ruling S5-L), so a later change to the document or the ambient zone cannot make two preparations disagree. */
+const documentPolicies = new WeakMap<object, CfDocumentEvaluation>()
+function retainedPolicy(owner: object, build: () => CfDocumentEvaluation): CfDocumentEvaluation {
+  let policy = documentPolicies.get(owner)
+  if (!policy) documentPolicies.set(owner, policy = build())
+  return policy
 }
 /** The worker twin: a paged workbook is always under the `'cached'` value policy (the adapters' policy). The zone is the
  * same ambient zone the paged CF date context takes. */
 export function cfDocumentEvaluationOfPaged(workbook: Readonly<{ calcMode?: 'auto' | 'manual' | 'autoNoTable'; formatting?: Readonly<{ dateSystem?: '1900' | '1904' }> }>): CfDocumentEvaluation {
-  let timeZone = 'UTC'
-  try {
-    const resolved = Intl.DateTimeFormat().resolvedOptions().timeZone
-    if (typeof resolved === 'string' && resolved !== '') timeZone = resolved
-  } catch { /* keep UTC */ }
-  return Object.freeze({ calcMode: workbook.calcMode ?? 'auto', valuePolicy: 'cached' as const, dateSystem: workbook.formatting?.dateSystem ?? '1900', timeZone })
+  // The ambient zone is read once, when this workbook's policy is first built.
+  return retainedPolicy(workbook, () => {
+    let timeZone = 'UTC'
+    try {
+      const resolved = Intl.DateTimeFormat().resolvedOptions().timeZone
+      if (typeof resolved === 'string' && resolved !== '') timeZone = resolved
+    } catch { /* keep UTC */ }
+    return Object.freeze({ calcMode: workbook.calcMode ?? 'auto', valuePolicy: 'cached' as const, dateSystem: workbook.formatting?.dateSystem ?? '1900', timeZone })
+  })
 }
 /** One clock snapshot from the injected `now`; `clockGen` is the local day serial of that sample (the interactive
  * midnight tick keys on it). A zone the engine cannot resolve falls back to the UTC day so the generation still advances. */

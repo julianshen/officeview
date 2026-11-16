@@ -56,6 +56,22 @@ export const CF_FORMULA_NODE_BYTES: number = Math.max(...[
   { type: 'number', value: -1.7976931348623157e308 },
   { type: 'string', value: '' },
 ].map(node => measurePayloadBytes(node)!))
+/** Bytes of one lexer token's own fields at their widest (every optional field present, strings empty: string payloads are
+ * priced per code unit by the compile bound). The lexer builds one token object per token before the AST exists. */
+const CF_TOKEN_SAMPLE_CELL = { sheet: '', col: 16383, row: 1048575, absCol: true, absRow: true }
+export const CF_FORMULA_TOKEN_BYTES: number = measurePayloadBytes({
+  type: 'cell', value: '', start: 8191, numValue: -1.7976931348623157e308, sheet: '', cellRef: CF_TOKEN_SAMPLE_CELL,
+  rangeRef: { sheet: '', from: CF_TOKEN_SAMPLE_CELL, to: CF_TOKEN_SAMPLE_CELL }, spaceBefore: true, raw: '',
+})!
+/** One reference atom at its widest (an empty sheet name; its characters are priced per code unit). */
+export const CF_FORMULA_ATOM_BYTES: number = measurePayloadBytes({ sheet: '', firstRow: 1048575, lastRow: 1048575, firstCol: 16383, lastCol: 16383, absRow: true, absCol: true, axis: 'col' })!
+/** The compiled formula wrapper at its widest: every family, every truth kind, a full dependency list and an anchor. */
+export const CF_FORMULA_FIXED_BYTES: number = measurePayloadBytes({
+  ast: null, nodes: 4096, atoms: [], invariant: true, usesClock: true,
+  families: ['aggregate', 'conditional-aggregate', 'date', 'information', 'logical', 'math', 'row-column', 'text', 'today'],
+  dependencySheets: Array.from({ length: 16 }, () => ''), anchor: { row: 1048575, col: 16383 }, pinned: true, rootArea: true,
+  truth: ['blank', 'boolean', 'error', 'number', 'range', 'text'],
+})!
 /** One element of a character array the evaluator builds for a text function (`textChars`): a one-code-unit string slot. */
 export const CF_CHAR_SLOT_BYTES: number = measurePayloadBytes(['a'])! - measurePayloadBytes([])!
 

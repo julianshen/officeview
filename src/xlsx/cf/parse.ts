@@ -21,7 +21,7 @@ import { attrs, elementNamespaceUri, getChildren, iterateChildren, textOf, type 
 import { resolveSheetColor, type SheetColorContext } from '../sheetColors'
 import { autoBarColourEvidence, hasEvidence } from './evidence'
 import { measureCfPayload } from './limits'
-import { compileCfFormulaWith, countFormulaTokens, formulaRequiredCapabilities, isCfFormulaRefusal } from './formula'
+import { compileCfFormula, countFormulaTokens, type CfFormulaRefusal, formulaRequiredCapabilities, isCfFormulaRefusal } from './formula'
 import { parseCfDxf } from './dxf'
 import {
   CF_BAR_DEFINITION_BYTES,
@@ -572,26 +572,28 @@ class SheetFinalizer {
   }
 
   /**
-   * Compile one formula against this sheet's hold: the worst-case reservation is admitted BEFORE `parseFormula` runs and
-   * lives in the sheet hold, so a parse failure, a cancelled streamed import and sheet disposal all return the ledger
-   * through the one release the sheet already owns. A formula the sheet cap cannot take refuses the rule only.
+   * Compile one formula on its own reservation of the workbook account (`compileCfFormula`: the input-derived bound is held
+   * before `parseFormula` runs, and the lease keeps only the formula's measured bytes). The candidate stays independently
+   * releasable until its whole rule passes; `pending` is what this rule's earlier candidates already hold.
    */
-  compileFormula(text: string, anchor: { row: number; col: number } | undefined): ReturnType<typeof compileCfFormulaWith> {
-    // The worst-case reservation (and the parse's transient workspace) lives on its own short-lived reservation, released on
-    // every exit; only the exact retained bytes of a formula that stays are admitted into the sheet hold. A refused or
-    // out-of-scope formula therefore leaves nothing charged, however many rules there are.
-    const temp = this.memory.reserve(0)
-    if (temp.kind !== 'reserved') return { refused: 'cf-resource-limit', reason: 'compiled formula reservation refused' }
-    let compiled: ReturnType<typeof compileCfFormulaWith>
-    try {
-      compiled = compileCfFormulaWith(text, anchor, absolute => this.retained + this.formulaBytes + absolute <= CF_LIMITS.sheetMetadataBytes && temp.grow(absolute))
-    } finally {
-      temp.release()
-    }
+  compileCandidate(text: string, anchor: { row: number; col: number } | undefined, pending: number): CfLease<CfFormula> | CfFormulaRefusal {
+    const compiled = compileCfFormula(text, anchor, this.memory)
     if (isCfFormulaRefusal(compiled)) return compiled
-    // Release-then-admit is safe: this code is synchronous, so nothing else claims the freed bytes in between.
-    if (!this.tryAdmit(compiled.retained)) return { refused: 'cf-resource-limit', reason: 'compiled formula does not fit the sheet hold' }
+    if (this.retained + this.formulaBytes + pending + compiled.bytes > CF_LIMITS.sheetMetadataBytes) {
+      compiled.release()
+      return { refused: 'cf-resource-limit', reason: 'compiled formula does not fit the sheet metadata cap' }
+    }
     return compiled
+  }
+
+  /** The rule passed: its candidates' bytes move into the sheet hold in one step (release, then admit; both synchronous). */
+  acceptCandidates(leases: readonly CfLease<CfFormula>[]): boolean {
+    let total = 0
+    for (const lease of leases) total += lease.bytes
+    for (const lease of leases) lease.release()
+    if (!this.tryAdmit(total)) return false
+    this.formulaBytes += total
+    return true
   }
 
   reserveMeta(bytes: number): boolean {
@@ -1434,22 +1436,30 @@ function buildRuleBody(
       return { ok: false, reason: 'cf-unsupported-rule' }
     }
     const anchorCell = ranges.length === 1 ? { row: ranges[0]!.firstRow, col: ranges[0]!.firstCol } : undefined
-    const formulas: CfFormula[] = []
-    let bytes = 0
-    for (const text of texts) {
-      const compiled = fin.compileFormula(text, anchorCell)
-      if (isCfFormulaRefusal(compiled)) return { ok: false, reason: compiled.refused }
-      formulas.push(compiled.formula); bytes += compiled.retained
-    }
-    for (const f of formulas) {
-      // An operand is one value per cell (Ruling S5-F): a multi-cell result has no operand reading, so it never compiles here.
-      if (use === 'operand' && f.rootArea) return { ok: false, reason: 'cf-unsupported-rule' }
-      for (const capability of formulaRequiredCapabilities(f, use, { dialect, rangeCount: ranges.length, sourceType }).parse) {
-        if (!hasEvidence(capability)) return { ok: false, reason: 'cf-unsupported-rule' }
+    const candidates: CfLease<CfFormula>[] = []
+    let accepted = false
+    try {
+      let pending = 0
+      for (const text of texts) {
+        const compiled = fin.compileCandidate(text, anchorCell, pending)
+        if (isCfFormulaRefusal(compiled)) return { ok: false, reason: compiled.refused }
+        candidates.push(compiled); pending += compiled.bytes
       }
+      for (const { value: f } of candidates) {
+        // An operand is one value per cell (Ruling S5-F): a multi-cell result has no operand reading, so it never compiles here.
+        if (use === 'operand' && f.rootArea) return { ok: false, reason: 'cf-unsupported-rule' }
+        for (const capability of formulaRequiredCapabilities(f, use, { dialect, rangeCount: ranges.length, sourceType }).parse) {
+          if (!hasEvidence(capability)) return { ok: false, reason: 'cf-unsupported-rule' }
+        }
+      }
+      const formulas = candidates.map(c => c.value)
+      accepted = true
+      // Ownership moves to the sheet only now; a rejection above has already given every candidate back (finally below).
+      if (!fin.acceptCandidates(candidates)) return { ok: false, reason: 'cf-resource-limit' }
+      return { ok: true, formulas }
+    } finally {
+      if (!accepted) for (const lease of candidates) lease.release()
     }
-    fin.formulaBytes += bytes
-    return { ok: true, formulas }
   }
   const dependenciesOf = (formulas: readonly CfFormula[]): Record<string, unknown> => {
     const seen = new Set<string>(), names: string[] = []
