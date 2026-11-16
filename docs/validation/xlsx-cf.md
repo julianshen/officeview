@@ -1196,6 +1196,14 @@ units. Their reads are dense single-column cells, so they take no empty index st
 which no text operation renders. Their formulas have no memoisable subtree, because `AVERAGE($A:$A)` is hoisted.
 `activeUnits` stays at 300,000.
 
+Fix round 3 (2026-11-16) re-ran the script after its five fixes: discovery charged on refusal, criterion parses
+preflighted, hoists under the session byte cap, array-mode subtree memoisation, and the per-node text model with the
+snapshot's charged ASCII scan. The formula rows are again 55,011 and 14,091 units, because these fixtures hold only
+numbers. The text rate is `CF_TEXT_UNIT_CHARS` = 4 characters per unit. At that rate, text calls near the cap ran at
+3,821 to 7,204 units per ms on this machine (1,000 calls each of `UPPER(A1)="ABC"` over 60 characters,
+`LOWER(A1)=UPPER(A1)` over 30, and `LEN(TRIM(A1))>3` over 54). Numeric calls ran at 843 to 5,446 units per ms. So a
+text unit is not slower than a numeric one.
+
 Every production call shape admits with at least 5.1x margin (the worst is the 200-rule sparse scope; the 4x floor
 would be 194,316 units). The warm rate, 2,242 to 6,894 units per ms, is the one to read: the cold populated rows spend
 about 32 ms in the whole-sheet bounds scan, which runs on its own whole-scan budget between two per-call spends, so
