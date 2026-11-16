@@ -280,3 +280,18 @@ export const manyObjectsMorphDeck = (n = 257) => {
   const boxes = (dx: number) => Array.from({ length: n }, (_, i) => rect(2 + i, `B${i}`, 10 + (i % 32) * 28 + dx, 10 + Math.floor(i / 32) * 60, 20, 20, '336699'))
   return buildPptxDeck({ slides: [{ bg: { solid: 'FFFFFF' }, shapes: boxes(0) }, { bg: { solid: 'FFFFFF' }, shapes: boxes(4), transition: MORPH }] })
 }
+
+/** PR #78 round 13: one slide of `n` full-slide boxes (ids 2 …), all appearing on click 1: `n` full-slide layer rasters. */
+export const fullSlideLayersDeck = (n = 32) => buildPptxDeck({
+  slides: [{
+    bg: { solid: 'FFFFFF' },
+    shapes: Array.from({ length: n }, (_, i) => rect(2 + i, `Full${i}`, 0, 0, 960, 720, i % 2 ? '336699' : 'F4B183')),
+    timingXml: oneStep(id => Array.from({ length: n }, (_, i) => appear(id, 2 + i))),
+  }],
+})
+
+/** PR #78 round 13: two slides of `n` full-slide boxes each, the second entered by Morph: `2n` full-slide Morph rasters. */
+export const fullSlideMorphDeck = (n = 32) => {
+  const boxes = (dx: number) => Array.from({ length: n }, (_, i) => rect(2 + i, `Full${i}`, dx, 0, 960, 720, i % 2 ? '336699' : 'F4B183'))
+  return buildPptxDeck({ slides: [{ bg: { solid: 'FFFFFF' }, shapes: boxes(0) }, { bg: { solid: 'FFFFFF' }, shapes: boxes(8), transition: MORPH }] })
+}

@@ -18,8 +18,12 @@ import { canvasBackend } from '../../src/core/canvas-backend'
 import type { LayerBitmap } from '../../src/slideshow/types'
 import { inkPixels } from './show-classify-helper'
 import { decodePng } from '../src/mark/png'
-import { SHOW_BUNDLE_BUDGET, type BuiltShowPlan, type ShowPlanJob } from '../src/show/build'
+import { SHOW_BUNDLE_BUDGET, showBuildGrant, type BuiltShowPlan, type ShowPlanJob } from '../src/show/build'
+import { createSlideShowWorkspace } from '../../src/slideshow/workspace'
+import type { SlideShowWorkspace } from '../../src/slideshow/types'
+import { morphDeck } from '../../src/testdata/show-decks'
 import { showPlanL1Key, showPlanL2Key } from '../src/cache'
+import { fullSlideLayersDeck, fullSlideMorphDeck } from './show-fixtures'
 import { cmdDeck, groupDeck, growthDeck, hiddenLinkDeck, masterTargetDeck, openDeck, runLinkDeck, runLinkWrapDeck, transitionOnlyDeck } from './show-fixtures'
 
 const job = (over: Partial<ShowPlanJob> = {}): ShowPlanJob => ({ unitIndex: 0, scale: 1, motion: 'full', mark: { kind: 'fixed' }, strictMarks: false, ...over })
@@ -520,7 +524,8 @@ describe('pool show jobs', () => {
     try {
       await pool.open('fly', await flyInDeck(), 'full')
       const t0 = performance.now()
-      const r = await pool.showPlan('s1', { docRef: 'fly', contentPolicy: 'full', ...job(), hangMs: 3000 }, 1024)
+      // The estimate is the build's grant on the worker (PR #78 round 13): the one `onShow` admits.
+      const r = await pool.showPlan('s1', { docRef: 'fly', contentPolicy: 'full', ...job(), hangMs: 3000 }, showBuildGrant({ w: 960, h: 720 }, 1))
       expect(performance.now() - t0).toBeGreaterThan(3000)
       expect('refused' in r).toBe(false)
       expect(pool.stats().retired).toBe(0)
@@ -528,4 +533,101 @@ describe('pool show jobs', () => {
       pool.dispose()
     }
   }, 60_000)
+})
+
+/** A per-build ledger that records its grant, its peak and how many leases it gave (PR #78 round 13). */
+function trackedLedger() {
+  const s = { grant: -1, peak: 0, leases: 0, refused: 0, builds: 0, ws: undefined as SlideShowWorkspace | undefined }
+  const make = (grant: number): SlideShowWorkspace => {
+    const ws = createSlideShowWorkspace('desktop', { limit: grant, scratch: 0 })
+    s.grant = grant; s.ws = ws; s.builds++
+    const note = () => { s.peak = Math.max(s.peak, ws.used()) }
+    return {
+      limit: ws.limit, used: ws.used, reserveTerminal: ws.reserveTerminal,
+      lease(bytes, tag) {
+        const l = ws.lease(bytes, tag)
+        if (!l) { s.refused++; return undefined }
+        s.leases++; note()
+        return { tag: l.tag, get bytes() { return l.bytes }, grow: (b) => { const ok = l.grow(b); note(); return ok }, shrink: (b) => l.shrink(b), transfer: (t) => l.transfer(t), release: () => l.release() }
+      },
+    }
+  }
+  return { s, make }
+}
+
+describe('the preparation ledger (PR #78 round 13: bounded before every raster)', () => {
+  const grant2 = showBuildGrant({ w: 960, h: 720 }, 2)
+
+  it('32 full-slide animated boxes at scale 2 refuse to show-budget; the ledger never passes its grant and ends empty', async () => {
+    const { host, docKey } = await openDeck(await fullSlideLayersDeck(32))
+    const t = trackedLedger()
+    host.showOptions = { ledger: t.make }
+    const r = await host.showPlan(docKey, job({ scale: 2 }))
+    expect('refused' in r && r).toEqual({ refused: 'show-budget', diagnostics: [{ code: 'show-budget' }] })
+    expect(t.s.grant).toBe(grant2)
+    expect(t.s.leases).toBeGreaterThan(0)
+    expect(t.s.refused).toBeGreaterThan(0)
+    expect(t.s.peak).toBeLessThanOrEqual(grant2)
+    // Far fewer than 32 full-slide surfaces (1920 × 1440 × 4 each) ever fit.
+    expect(t.s.peak).toBeLessThan(8 * 1920 * 1440 * 4)
+    expect(t.s.ws!.used()).toBe(0)
+  }, 60_000)
+
+  it('the same slide has no keyframe track either, and its track request stays within the grant', async () => {
+    const { host, docKey } = await openDeck(await fullSlideLayersDeck(32))
+    const t = trackedLedger()
+    host.showOptions = { ledger: t.make }
+    expect(await host.showTrack(docKey, { ...job({ scale: 2 }), step: 0 })).toEqual([])
+    expect(t.s.grant).toBe(grant2)
+    expect(t.s.refused).toBeGreaterThan(0)
+    expect(t.s.peak).toBeLessThanOrEqual(grant2)
+  }, 60_000)
+
+  it('an ordinary slide stays eligible: its rasters are charged and fit the grant', async () => {
+    const { host, docKey } = await openDeck(await flyInDeck())
+    const t = trackedLedger()
+    host.showOptions = { ledger: t.make }
+    built(await host.showPlan(docKey, job({ scale: 2 })))
+    expect(t.s.grant).toBe(grant2)
+    expect(t.s.leases).toBeGreaterThan(0)
+    expect(t.s.peak).toBeGreaterThan(0)
+    expect(t.s.peak).toBeLessThanOrEqual(grant2)
+  }, 60_000)
+
+  it('the admitted grant, when the worker is given one, bounds the build', async () => {
+    const { host, docKey } = await openDeck(await flyInDeck())
+    expect(await host.showPlan(docKey, job(), 4096)).toEqual({ refused: 'show-budget', diagnostics: [{ code: 'show-budget' }] })
+    const again = await openDeck(await flyInDeck())
+    built(await again.host.showPlan(again.docKey, job(), showBuildGrant({ w: 960, h: 720 }, 1)))
+  }, 60_000)
+
+  it('the pool sends the admitted estimate to the worker as the grant', async () => {
+    const pool = new Pool({ workers: 1 })
+    try {
+      await pool.open('fly', await flyInDeck(), 'full')
+      expect(await pool.showPlan('s1', { docRef: 'fly', contentPolicy: 'full', ...job() }, 4096)).toEqual({ refused: 'show-budget', diagnostics: [{ code: 'show-budget' }] })
+      const ok = await pool.showPlan('s1', { docRef: 'fly', contentPolicy: 'full', ...job({ scale: 2 }) }, grant2)
+      expect('refused' in ok).toBe(false)
+    } finally {
+      pool.dispose()
+    }
+  }, 60_000)
+
+  it('a Morph pair of 2 × 32 full-slide boxes at scale 2 falls back within the grant; an ordinary pair still builds', async () => {
+    const { host, docKey } = await openDeck(await fullSlideMorphDeck(32))
+    const t = trackedLedger()
+    host.showOptions = { ledger: t.make }
+    const pair = { from: 0, to: 1, fromStep: 0, scale: 2 as const, motion: 'full' as const, mark: { kind: 'fixed' as const }, strictMarks: false }
+    expect(await host.showMorph(docKey, pair)).toEqual({ refused: 'morph-fallback' })
+    expect(t.s.grant).toBe(grant2)
+    expect(t.s.refused).toBeGreaterThan(0)
+    expect(t.s.peak).toBeLessThanOrEqual(grant2)
+    const small = await openDeck(await morphDeck())
+    const u = trackedLedger()
+    small.host.showOptions = { ledger: u.make }
+    const ok = await small.host.showMorph(small.docKey, pair)
+    expect('refused' in ok).toBe(false)
+    expect(u.s.leases).toBeGreaterThan(0)
+    expect(u.s.peak).toBeLessThanOrEqual(u.s.grant)
+  }, 120_000)
 })

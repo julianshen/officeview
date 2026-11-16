@@ -285,7 +285,7 @@ export class Pool {
     if (known) return known
     let r: BuiltShowPlan | ShowRefusal
     try {
-      r = await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-plan', id: this.nextId++, docKey, job: show, ...this.hooks(hangMs, crash) }), signal) as BuiltShowPlan | ShowRefusal
+      r = await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-plan', id: this.nextId++, docKey, job: show, grant: bytesEstimate, ...this.hooks(hangMs, crash) }), signal) as BuiltShowPlan | ShowRefusal
     } catch (e) {
       if (!(e instanceof RenderTimeout)) throw e
       r = { refused: 'show-plan-timeout', diagnostics: [{ code: 'show-plan-timeout' }] }
@@ -300,14 +300,14 @@ export class Pool {
     const plan = [docRef, contentPolicy, show.unitIndex, show.scale, show.motion, show.strictMarks].join('|')
     // A slide whose bundle is refused has no track.
     if (this.showRefusals.has(plan)) return []
-    return await this.remembered(docRef, `${plan}|track|${show.step}`, async () => await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-track', id: this.nextId++, docKey, job: show, ...this.hooks(hangMs, crash) }), signal) as Array<{ assetId: number; w: number; h: number; png: Uint8Array }>)
+    return await this.remembered(docRef, `${plan}|track|${show.step}`, async () => await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-track', id: this.nextId++, docKey, job: show, grant: bytesEstimate, ...this.hooks(hangMs, crash) }), signal) as Array<{ assetId: number; w: number; h: number; png: Uint8Array }>)
   }
 
   /** Piece 4 Task 7: one Morph pair (affinity, admission, `SHOW_PLAN_DEADLINE_MS`; a timeout throws `RenderTimeout`). */
   async showMorph(sessionId: string, job: PoolMorphJob, bytesEstimate: number, signal?: AbortSignal): Promise<BuiltMorph> {
     const { docRef, contentPolicy, hangMs, crash, ...morph } = job
     const key = [docRef, contentPolicy, 'morph', morph.from, morph.to, morph.fromStep, morph.scale, morph.motion, morph.strictMarks === true].join('|')
-    return await this.remembered(docRef, key, async () => await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-morph', id: this.nextId++, docKey, job: morph, ...this.hooks(hangMs, crash) }), signal) as BuiltMorph)
+    return await this.remembered(docRef, key, async () => await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-morph', id: this.nextId++, docKey, job: morph, grant: bytesEstimate, ...this.hooks(hangMs, crash) }), signal) as BuiltMorph)
   }
 
   /**

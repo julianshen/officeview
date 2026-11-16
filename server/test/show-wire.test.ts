@@ -17,6 +17,7 @@ import { AuditTable } from '../src/audit'
 import { decodePng } from '../src/mark/png'
 import { AuditStore } from '../src/audit-store'
 import type { AuthDecision } from '../src/hooks'
+import { fullSlideLayersDeck } from './show-fixtures'
 import { appearMoveDeck, hiddenLinkDeck, manyObjectsMorphDeck, morphLateDeck, morphSweepDeck, revealThenMoveDeck, tinyBoxDeck } from './show-fixtures'
 import { tauFor } from '../src/detect/tau'
 import { deriveKeys } from '../src/keys'
@@ -266,6 +267,15 @@ describe('show wire', () => {
     expect(s.m.units.list[0]!.anim).toBe(true)
     const r = await s.c.showPlan(0, 1, 'full')
     expect(r.end).toEqual(error(r.reqId, 'still'))
+    expect(r.messages).toEqual([])
+    expect(s.store.showDeliveries(s.sid)).toEqual([])
+    s.stop()
+  }, 60_000)
+
+  test('a slide of 32 full-slide animated boxes at scale 2 → error show-budget, no row (its rasters never fit the admitted grant; PR #78 round 13)', async () => {
+    const s = await session(await fullSlideLayersDeck(32))
+    const r = await s.c.showPlan(0, 2, 'full', { ms: 45_000 })
+    expect(r.end).toEqual(error(r.reqId, 'show-budget'))
     expect(r.messages).toEqual([])
     expect(s.store.showDeliveries(s.sid)).toEqual([])
     s.stop()

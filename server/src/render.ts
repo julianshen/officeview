@@ -237,35 +237,37 @@ export class DocumentHost {
     return this.raster(paintable, job.unitIndex, w, h, job.scale, page, mark, observers)
   }
 
-  /** TEST-ONLY seams for the show-plan build (a forced budget or composite mismatch); empty in production. */
+  /** TEST-ONLY seams for the show-plan build (a forced budget or composite mismatch, a ledger); empty in production. */
   showOptions: ShowBuildOptions = {}
+  /** The seams plus the job's admitted grant (PR #78 round 13), when the pool sent one. */
+  private showJobOptions(grant?: number): ShowBuildOptions { return grant === undefined ? this.showOptions : { ...this.showOptions, grant } }
 
   /**
    * Piece 4: the show-plan bundle of one shown slide (`buildShowPlan`). The slide's metadata and the deck's
    * images are read here (async), then the build runs synchronously on them. A hidden or out-of-range unit
    * has no plan (`unit-range`).
    */
-  async showPlan(docKey: string, job: ShowPlanJob): Promise<BuiltShowPlan | ShowRefusal> {
+  async showPlan(docKey: string, job: ShowPlanJob, grant?: number): Promise<BuiltShowPlan | ShowRefusal> {
     const doc = this.showDoc(docKey, job)
     await this.loadShow(doc.show!, job.unitIndex)
     this.pages++
-    return buildShowPlan(doc, job, this.showOptions)
+    return buildShowPlan(doc, job, this.showJobOptions(grant))
   }
 
   /** Piece 4: the keyframe track of one `composited` step (`renderTrack`); `[]` for a step that plays from layers. */
-  async showTrack(docKey: string, job: ShowPlanJob & { step: number }): Promise<Array<{ assetId: number; w: number; h: number; png: Uint8Array }>> {
+  async showTrack(docKey: string, job: ShowPlanJob & { step: number }, grant?: number): Promise<Array<{ assetId: number; w: number; h: number; png: Uint8Array }>> {
     const doc = this.showDoc(docKey, job)
     if (!Number.isInteger(job.step) || job.step < 0) throw new RenderRefusal('bad-job')
     await this.loadShow(doc.show!, job.unitIndex)
     this.pages++
-    return renderTrack(doc, job, this.showOptions)
+    return renderTrack(doc, job, this.showJobOptions(grant))
   }
 
   /**
    * Piece 4 Task 7: one Morph pair (`buildMorphPlan`): `from` and `to` shown slides of this deck, `to` entered by
    * Morph, `fromStep` within the from-slide's steps (checked here, on the slide as prepared: `unit-range`).
    */
-  async showMorph(docKey: string, job: MorphJob): Promise<BuiltMorph> {
+  async showMorph(docKey: string, job: MorphJob, grant?: number): Promise<BuiltMorph> {
     const doc = this.docs.get(docKey)
     if (!doc) throw new RenderRefusal('unknown-doc')
     if (!doc.show) throw new RenderRefusal('unsupported-format', 'no show for this document')
@@ -276,7 +278,7 @@ export class DocumentHost {
     await this.loadShow(doc.show, job.from)
     await this.loadShow(doc.show, job.to)
     this.pages++
-    try { return buildMorphPlan(doc, job) } catch (e) { if (e instanceof MorphInvalid) throw new RenderRefusal('unit-range', e.message); throw e }
+    try { return buildMorphPlan(doc, job, this.showJobOptions(grant)) } catch (e) { if (e instanceof MorphInvalid) throw new RenderRefusal('unit-range', e.message); throw e }
   }
 
   /** TEST-ONLY (Task 7 fix round 1): the Morph pair composed from the server's own rasters, marks off (`morphReference`). */

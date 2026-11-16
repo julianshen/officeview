@@ -11,7 +11,7 @@ import { showCanvasBackend } from './canvas'
 import { createDiagnosticSink } from '../../../src/slideshow/diagnostics'
 import { createRng } from '../../../src/slideshow/rng'
 import { encodePng } from '../mark/png'
-import { buildShowPlan, markFrame, TRACK_ASSET_BASE, trackInputs, type ShowBuildOptions, type ShowHost, type ShowPlanJob } from './build'
+import { buildShowPlan, jobLedger, markFrame, TRACK_ASSET_BASE, trackInputs, type ShowBuildOptions, type ShowHost, type ShowPlanJob } from './build'
 import { createSlideComposer, drawsAt, slideStateAt } from './compose'
 import { stepWindow, TRACK_FPS, TRACK_MAX_FRAMES } from './eligibility'
 
@@ -34,7 +34,8 @@ export function renderTrack(doc: ShowHost, job: ShowPlanJob & { step: number }, 
   if ('refused' in built) return []
   const step = built.plan.steps[job.step]
   if (!step || step.eligibility !== 'composited' || !step.track) return []
-  const e = trackInputs(show, job)
+  // The rasters the frames compose from are charged to the track's own grant (PR #78 round 13).
+  const e = trackInputs(show, job, jobLedger(show, job.unitIndex, job.scale, opts))
   const { ps, timeline, rasters } = e
   const composer = createSlideComposer(ps, rasters, job.scale)
   try {

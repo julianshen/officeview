@@ -24,6 +24,7 @@ import { canNotes, effectivePolicy, forensicNotices, resumeInvariant, type AuthD
 import { docRefOf, type Keys } from './keys'
 import { admit } from './policy'
 import { AdmissionRefused, RenderFailed, RenderTimeout, type Pool } from './pool'
+import { showBuildGrant } from './show/grant'
 import { encodeShowMessage, PlanRejected, SHOW_TRACK_WINDOW, type ShowMessage } from '../../src/stream/show-plan'
 import type { TestOnlyOptions } from './config'
 import type { ShowDeliveryRecord } from './audit-store'
@@ -722,8 +723,8 @@ export function createStreamServer(o: StreamServerOptions) {
 
   /** One asset on its way out: its kind-6 tag, ids and pixels, and its Layer-1 crop (`rest`, page device px). */
   interface OutAsset { tag: 2 | 3 | 4; assetId: number; w: number; h: number; png: Uint8Array; rest: { x: number; y: number; scale: number } }
-  const SHOW_BUILD_BYTES = 64 * 1024 * 1024
-  const showEstimate = (size: UnitSize, scale: number) => Math.min(SHOW_BUILD_BYTES, size.w * size.h * 4 * scale ** 2 * 4)
+  // The admitted bytes are also the build's preparation grant on the worker (PR #78 round 13, `showBuildGrant`).
+  const showEstimate = (size: UnitSize, scale: number) => showBuildGrant(size, scale)
   const shownUnit = (d: DocState, u: unknown): u is number => Number.isInteger(u) && (u as number) >= 0 && (u as number) < d.units.length && !d.hidden.has(u as number)
   const showFailure = (e: unknown): ShowErrorCode => e instanceof AdmissionRefused ? 'rate-limited' : e instanceof RenderTimeout ? 'show-plan-timeout' : e instanceof RenderFailed && e.refusal === 'unit-range' ? 'invalid-unit' : 'policy-refused'
 

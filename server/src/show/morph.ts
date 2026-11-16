@@ -48,7 +48,7 @@ import { messageFor } from '../mark/message'
 import { DEFAULT_PARAMS } from '../mark/params'
 import { decodePng, encodePng } from '../mark/png'
 import type { MarkSpec } from '../mark/visible'
-import { markFrame, prepareShowSlide, SHOW_BUNDLE_BUDGET, VALIDATION_MESSAGE_KEY, type ShowHost } from './build'
+import { jobLedger, markFrame, prepareShowSlide, SHOW_BUNDLE_BUDGET, VALIDATION_MESSAGE_KEY, type ShowBuildOptions, type ShowHost } from './build'
 import { slideStateAt } from './compose'
 import { CLASSIFY_BUDGET, mediaRefused, proveItems, SAMPLES_PER_INTERVAL, TRACK_FPS, TRACK_MAX_FRAMES, type ProofItem } from './eligibility'
 import { burnVisibleMark, validateMarks } from './marks'
@@ -86,11 +86,17 @@ type Unproven = MorphUnproven
 
 interface PairInputs { plan: MorphPlan; bitmaps: Map<MorphLayerRef, LayerBitmap>; page: { w: number; h: number }; durationMs: number; docKey: string }
 
-export function buildMorphPlan(doc: ShowHost, job: MorphJob): BuiltMorph {
-  const p = pairInputs(doc, job)
+/**
+ * `opts.grant`: the bytes admission granted the pair (PR #78 round 13; default the to-slide's `showBuildGrant`).
+ * Both slides' layer rasters and their masked copies lease from one ledger of that size before they exist.
+ */
+export function buildMorphPlan(doc: ShowHost, job: MorphJob, opts: Pick<ShowBuildOptions, 'grant' | 'ledger'> = {}): BuiltMorph {
+  if (!doc.show) throw new Error('show: not a deck')
+  const ws = jobLedger(doc.show, job.to, job.scale, opts)
+  const p = pairInputs(doc, job, ws)
   if ('refused' in p) return p
   try {
-    return assemble(p.plan, p.bitmaps, job, p.page, p.durationMs, p.docKey)
+    return assemble(p.plan, p.bitmaps, job, p.page, p.durationMs, p.docKey, ws)
   } finally {
     for (const l of p.plan.leases) l.release()
   }
@@ -102,7 +108,8 @@ export function buildMorphPlan(doc: ShowHost, job: MorphJob): BuiltMorph {
  * decoded records and PNGs alone.
  */
 export function morphReference(doc: ShowHost, job: MorphJob, progresses: readonly number[]): { w: number; h: number; frames: Uint8ClampedArray[] } {
-  const p = pairInputs(doc, job)
+  if (!doc.show) throw new Error('show: not a deck')
+  const p = pairInputs(doc, job, jobLedger(doc.show, job.to, job.scale, {}))
   if ('refused' in p) throw new Error('show-morph: refused')
   try {
     const W = Math.max(1, Math.ceil(p.page.w * job.scale)), H = Math.max(1, Math.ceil(p.page.h * job.scale))
@@ -135,7 +142,7 @@ function frameSpecOf(plan: MorphPlan): { used: Set<number>; spec: MorphFrameSpec
   return { used, spec }
 }
 
-function pairInputs(doc: ShowHost, job: MorphJob): PairInputs | { refused: 'morph-fallback' } {
+function pairInputs(doc: ShowHost, job: MorphJob, ws: SlideShowWorkspace): PairInputs | { refused: 'morph-fallback' } {
   const show = doc.show
   if (!show) throw new Error('show: not a deck')
   const from = prepareShowSlide(show, job.from, job.motion)
@@ -153,31 +160,36 @@ function pairInputs(doc: ShowHost, job: MorphJob): PairInputs | { refused: 'morp
   const live = slideStateAt(to.ps, to.timeline, to.timeline.initial(), 0, createRng(0x5eed + job.to), sink)
 
   const bitmaps = new Map<MorphLayerRef, LayerBitmap>()
+  // PR #78 round 13: every raster leases from the pair's ledger before it exists. Pressure releases this attempt's
+  // leases (the planner then coarsens and asks again, or gives up: `morph-fallback`).
+  const held: Lease[] = []
+  const drop = () => { bitmaps.clear(); for (const l of held.splice(0)) l.release() }
   const plan = planMorph({ ps: from.ps, state: fromState }, to.ps, live, spec, {
-    sink, workspace: OPEN_WORKSPACE, canvas: factory, resolveFont, maxLayers: MORPH_MAX_LAYERS, scale, watermark: false,
+    sink, workspace: ws, canvas: factory, resolveFont, maxLayers: MORPH_MAX_LAYERS, scale, watermark: false,
     raster: (refs) => {
-      bitmaps.clear()
+      drop()
       const painted = new Set<number>()
       for (let i = 0; i < refs.length; i++) {
         const r = refs[i]!
         const ps = r.side === 'from' ? from.ps : to.ps
-        const out = rasterPreparedLayer(ps, r.layer, { scale: r.scale, images: show.images ?? [], resolveFont, canvas: factory, workspace: OPEN_WORKSPACE, maxTextureSize: MAX_UNIT_PX, sink })
+        const out = rasterPreparedLayer(ps, r.layer, { scale: r.scale, images: show.images ?? [], resolveFont, canvas: factory, workspace: ws, maxTextureSize: MAX_UNIT_PX, sink })
         if ('refused' in out) {
           if (out.refused === 'empty') continue
-          bitmaps.clear()
+          drop()
           return 'pressure'
         }
+        held.push(out.lease)
         bitmaps.set(r, { canvas: out.canvas, bounds: out.bounds, scale: out.scale, bytes: out.bytes })
         painted.add(i)
       }
       return painted
     },
   })
-  if (typeof plan === 'string') return { refused: 'morph-fallback' }
+  if (typeof plan === 'string') { drop(); return { refused: 'morph-fallback' } }
   return { plan, bitmaps, page: slideSize(to.ps.slide), durationMs: spec.durationMs, docKey: show.docKey }
 }
 
-function assemble(plan: MorphPlan, bitmaps: ReadonlyMap<MorphLayerRef, LayerBitmap>, job: MorphJob, page: { w: number; h: number }, durationMs: number, docKey: string): BuiltMorph {
+function assemble(plan: MorphPlan, bitmaps: ReadonlyMap<MorphLayerRef, LayerBitmap>, job: MorphJob, page: { w: number; h: number }, durationMs: number, docKey: string, ws: SlideShowWorkspace): BuiltMorph {
   const scale = job.scale
   const W = Math.max(1, Math.ceil(page.w * scale)), H = Math.max(1, Math.ceil(page.h * scale))
   const dur = Number.isFinite(durationMs) && durationMs > 0 ? durationMs : 0
@@ -192,7 +204,7 @@ function assemble(plan: MorphPlan, bitmaps: ReadonlyMap<MorphLayerRef, LayerBitm
   const order: number[] = []
   for (const it of plan.items) { if (it.from) order.push(it.from.ref); if (it.to) order.push(it.to.ref) }
   for (const r of plan.over) order.push(r)
-  const proved = prove(order, bmpOf, used, lists, scale, W, H)
+  const proved = prove(order, bmpOf, used, lists, scale, W, H, ws)
   if (typeof proved === 'string') return composited(proved)
   if (job.strictMarks && proved.movers > 0) return composited('strict-marks')
 
@@ -316,7 +328,7 @@ function composerOf(rasters: ReadonlyMap<number, LayerBitmap>, scale: number, W:
 
 interface Proved { rasters: Map<number, LayerBitmap>; movers: number }
 
-function prove(order: readonly number[], bmpOf: (ref: number) => LayerBitmap | undefined, used: ReadonlySet<number>, lists: readonly LayerDraw[][], scale: number, W: number, H: number): Proved | Unproven {
+function prove(order: readonly number[], bmpOf: (ref: number) => LayerBitmap | undefined, used: ReadonlySet<number>, lists: readonly LayerDraw[][], scale: number, W: number, H: number, ws: SlideShowWorkspace): Proved | Unproven {
   const rasters = new Map<number, LayerBitmap>()
   for (const r of used) { const b = bmpOf(r); if (!b) return 'limits'; rasters.set(r, b) }
   // Rule 5: one full composite per sample, plus one without each drawn ref, plus the reconstruction.
@@ -379,6 +391,9 @@ function prove(order: readonly number[], bmpOf: (ref: number) => LayerBitmap | u
     if (!proof.ok) return proof.reason
     // Reconstruction: the masked rasters compose every sample exactly.
     if (masks.size) {
+      // The masked copies lease first (PR #78 round 13); without room the pair plays composited (rule 5).
+      const maskBytes = [...masks.keys()].reduce((n, ref) => { const b = rasters.get(ref)!; return n + b.canvas.width * b.canvas.height * 4 }, 0)
+      if (!ws.lease(maskBytes, 'morph:masks')) return 'budget'
       const masked = new Map(rasters)
       for (const [ref, m] of masks) masked.set(ref, maskedOf(rasters.get(ref)!, m))
       const again = composerOf(masked, scale, W, H)
