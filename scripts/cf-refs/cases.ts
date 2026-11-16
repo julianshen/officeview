@@ -367,6 +367,7 @@ export type CfRefusalCode =
   | 'formula-replication-shortfall'
   | 'formula-manual-observation-invalid'
   | 'formula-twin-blank'
+  | 'formula-twin-missing'
 
 export interface VerifiedEvidence {
   kind: 'verified'
@@ -5685,6 +5686,12 @@ export interface S5Configuration {
   /** Replication is checked per column inside the configuration too (each range of a multi-range rule, fix round 1 #3). */
   replicateBy?: 'column'
   /**
+   * Fix round 3 #1 (crop configurations): the twin cells that may legitimately show no bar or icon, fixed before capture
+   * from each twin's own rule and values (a twin with no visual rule, a bar at or below its lower bound, a degenerate bar).
+   * Wherever a reading names any other twin, the formula cell and its twin must both show a visual (`formula-twin-missing`).
+   */
+  emptyTwins?: readonly string[]
+  /**
    * Fix round 1 #2: hypotheses that depend on the sqref order Excel retains on resave. `tables` maps each possible order of
    * the named rule's sqref to its hypotheses; the verifier reads the retained order from the saved XML and evaluates that
    * table (`hypotheses` is the table of the authored order).
@@ -6574,11 +6581,12 @@ function calcManualFixture(): S5Fixture {
 }
 
 function compositionFixture(): S5Fixture {
-  // A2..A5 = 1, 0, 1, 0: the p1 expression ($A2>0) is true on rows 2 and 4. Every target and twin holds 10, 20, 30, 40.
+  // A2..A5 = 0, 1, 0, 1: the p1 expression ($A2>0) is true on rows 3 and 5, never on the column minimum (row 2, a
+  // zero-length bar), so every p1-true row is decisive (fix round 3). Every target and twin holds 10, 20, 30, 40.
   const V = [10, 20, 30, 40]
   const cols = ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T']
-  const cells: Record<string, S5Value> = { ...colValues('A', [1, 0, 1, 0]), ...Object.assign({}, ...cols.map(c => colValues(c, V))) }
-  const on = (r: string): boolean => rowOfRef(r) === 2 || rowOfRef(r) === 4
+  const cells: Record<string, S5Value> = { ...colValues('A', [0, 1, 0, 1]), ...Object.assign({}, ...cols.map(c => colValues(c, V))) }
+  const on = (r: string): boolean => rowOfRef(r) === 3 || rowOfRef(r) === 5
   let p = 1
   const pct3: S5Cfvo[] = [{ type: 'percent', val: '0' }, { type: 'percent', val: '33' }, { type: 'percent', val: '67' }]
   const mm: S5Cfvo[] = [{ type: 'min' }, { type: 'max' }]
@@ -6832,13 +6840,16 @@ function x14ScaleFixture(): S5Fixture {
 }
 
 function activePresentFixture(kind: 'scale' | 'bar' | 'icon'): S5Fixture {
+  // Fix round 3 #4: the bar needs six rows. The column minimum (row 2) draws no bar, so the activation is false on it and on
+  // rows 4 and 6: active rows 3/5/7 are three non-empty witnesses, and inactive rows 4/6 two decisive ones.
+  if (kind === 'bar') return activePresentBarFixture()
   const V = [10, 20, 30, 40]
   const cap = `formula:active-present-${kind}`
   const mm: S5Cfvo[] = [{ type: 'min' }, { type: 'max' }]
   const pct3: S5Cfvo[] = [{ type: 'percent', val: '0' }, { type: 'percent', val: '33' }, { type: 'percent', val: '67' }]
   const act = { activation: '$A2>0', activePresent: true }
-  const rule = kind === 'scale' ? s5Scale(cap, 'B2:B5', 1, mm, { where: 'x14', ...act }) : kind === 'bar' ? s5BarX14(cap, 'B2:B5', 1, mm, act) : s5Icon(cap, 'B2:B5', 1, pct3, { where: 'x14', ...act })
-  const twin = kind === 'scale' ? s5Scale(`${cap}-twin`, 'C2:C5', 2, mm) : kind === 'bar' ? s5BarX14(`${cap}-twin`, 'C2:C5', 2, mm) : s5Icon(`${cap}-twin`, 'C2:C5', 2, pct3, { where: 'x14' })
+  const rule = kind === 'scale' ? s5Scale(cap, 'B2:B5', 1, mm, { where: 'x14', ...act }) : s5Icon(cap, 'B2:B5', 1, pct3, { where: 'x14', ...act })
+  const twin = kind === 'scale' ? s5Scale(`${cap}-twin`, 'C2:C5', 2, mm) : s5Icon(`${cap}-twin`, 'C2:C5', 2, pct3, { where: 'x14' })
   const on = (r: string): boolean => [2, 4].includes(rowOfRef(r))
   return s5rect({
     id: `stage5-active-present-${kind}`,
@@ -6848,6 +6859,54 @@ function activePresentFixture(kind: 'scale' | 'bar' | 'icon'): S5Fixture {
     rules: [rule, twin],
     configurations: [s5Cfg(`active-present-${kind}`, cap, rowsOf('B', 2, 5), { 'activation-gates': r => (on(r) ? `twin:C${rowOfRef(r)}` : `twin:D${rowOfRef(r)}`), ignored: twinCol('C') }, kind === 'scale' ? {} : { observable: 'crop' })],
   })
+}
+
+function activePresentBarFixture(): S5Fixture {
+  const V = [10, 20, 30, 40, 50, 60]
+  const cap = 'formula:active-present-bar'
+  const mm: S5Cfvo[] = [{ type: 'min' }, { type: 'max' }]
+  const act = { activation: '$A2>0', activePresent: true }
+  const on = (r: string): boolean => [3, 5, 7].includes(rowOfRef(r))
+  return s5rect({
+    id: 'stage5-active-present-bar',
+    question:
+      'S5-J: a hand-authored standalone x14 bar carrying activePresent="1" and the rule-level <xm:f>$A2>0</xm:f> (true on rows 3, 5 and 7 only): does Excel keep, strip or repair it on resave (recorded, never retried), and if kept, does the activation gate the bar per cell? Compared with the same bar without activation (C) and no rule (D).',
+    cells: { ...colValues('A', [0, 1, 0, 1, 0, 1]), ...colValues('B', V), ...colValues('C', V), ...colValues('D', V) },
+    rules: [s5BarX14(cap, 'B2:B7', 1, mm, act), s5BarX14(`${cap}-twin`, 'C2:C7', 2, mm)],
+    configurations: [s5Cfg('active-present-bar', cap, rowsOf('B', 2, 7), { 'activation-gates': r => (on(r) ? `twin:C${rowOfRef(r)}` : `twin:D${rowOfRef(r)}`), ignored: twinCol('C') }, { observable: 'crop' })],
+  })
+}
+
+/**
+ * Fix round 3 #1: the twins of a crop configuration that may show no visual, from each twin's own rule and values. A
+ * twin under no bar or icon rule shows none. An icon always draws a bucket. A bar draws nothing at or below its lower
+ * bound (minLength 0); a degenerate bar (lower >= upper, or an unresolvable bound) may draw nothing anywhere.
+ */
+function s5EmptyTwins(fx: S5Fixture, cfg: S5Configuration): string[] {
+  const cells = s5CellsAt(fx)
+  const twins = new Set<string>()
+  for (const preds of Object.values(cfg.hypotheses)) for (const tok of Object.values(preds)) { const m = /^twin:([A-Z]+\d+)/.exec(tok); if (m) twins.add(m[1]!) }
+  const out: string[] = []
+  for (const t of twins) {
+    const rules = fx.rules.filter(r => (r.marker.ruleType === 'dataBar' || r.marker.ruleType === 'iconSet') && isCellInSqrefLocal(t, r.sqref))
+    if (rules.length === 0) { out.push(t); continue }
+    if (rules.some(r => r.marker.ruleType === 'iconSet')) continue
+    const r = rules[0]!
+    const bound = r.marker.bar?.cfvo
+    const values = r.sqref.split(/\s+/).flatMap(rg => Object.entries(cells).filter(([ref]) => isCellInSqrefLocal(ref, rg)).map(([, v]) => v)).filter((v): v is number => typeof v === 'number')
+    const at = (c: { type: string; val?: string; f?: string } | undefined, edge: 'lo' | 'hi'): number => {
+      if (!c) return NaN
+      if (c.type === 'min') return Math.min(...values)
+      if (c.type === 'max') return Math.max(...values)
+      const n = Number(c.val ?? c.f)
+      return c.type === 'num' && Number.isFinite(n) ? n : edge === 'lo' ? NaN : NaN
+    }
+    const lo = at(bound?.[0], 'lo')
+    const hi = at(bound?.[1], 'hi')
+    const v = cells[t]
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo >= hi || typeof v !== 'number' || v <= lo) out.push(t)
+  }
+  return out.sort()
 }
 
 const S5_UNRESOLVED: ReadonlyArray<{ id: string; formula: string; type?: CfPartMarker['ruleType']; operator?: string; extra?: Partial<S5Fixture> }> = [
@@ -6913,7 +6972,13 @@ function authoredFixture(): S5Fixture {
   })
 }
 
-export const CF_STAGE5_FIXTURES: readonly S5Fixture[] = [
+/** Attaches the permitted-empty twins to every crop configuration (fix round 3 #1). */
+const withEmptyTwins = (fx: S5Fixture): S5Fixture => ({
+  ...fx,
+  configurations: fx.configurations.map(cfg => (cfg.observable === 'crop' ? { ...cfg, emptyTwins: s5EmptyTwins(fx, cfg) } : cfg)),
+})
+
+export const CF_STAGE5_FIXTURES: readonly S5Fixture[] = ([
   authoredFixture(),
   truthinessFixture(),
   anchorFixture(),
@@ -6937,7 +7002,7 @@ export const CF_STAGE5_FIXTURES: readonly S5Fixture[] = [
   activePresentFixture('bar'),
   activePresentFixture('icon'),
   ...S5_UNRESOLVED.map(unresolvedFixture),
-]
+] as const satisfies readonly S5Fixture[]).map(withEmptyTwins)
 
 /** The brief's matrix rows -> the workbooks that answer them ("one workbook each" rows and clock splits have several). */
 export const CF_STAGE5_GROUPS: Readonly<Record<string, readonly string[]>> = {

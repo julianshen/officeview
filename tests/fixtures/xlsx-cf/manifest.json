@@ -67754,8 +67754,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "f00af22d848d45ec391f58abd6e39b29cb294e73cda01692b755d1ecead37285",
-        "savedSha256": "f00af22d848d45ec391f58abd6e39b29cb294e73cda01692b755d1ecead37285",
+        "inputSha256": "acb3d14362eed28f28c0505ade783d7678885e94982ccffadf3bb10981709f65",
+        "savedSha256": "acb3d14362eed28f28c0505ade783d7678885e94982ccffadf3bb10981709f65",
         "provenance": "seed-hypothesis",
         "positiveRefs": [],
         "negativeRefs": [
@@ -67767,30 +67767,30 @@
           "X3",
           "X4",
           "X5",
-          "Y3",
-          "Y5",
           "Y2",
           "Y4",
+          "Y3",
+          "Y5",
           "Z2",
           "Z3",
           "Z4",
           "Z5",
-          "AA2",
-          "AC3",
-          "AA4",
-          "AC5",
-          "AB2",
-          "AB4",
+          "AC2",
+          "AA3",
+          "AC4",
+          "AA5",
+          "AB3",
+          "AB5",
           "AD2",
           "AD3",
           "AD4",
           "AD5",
-          "AE2",
-          "AG3",
-          "AE4",
-          "AG5",
-          "AF2",
-          "AF4",
+          "AG2",
+          "AE3",
+          "AG4",
+          "AE5",
+          "AF3",
+          "AF5",
           "AH2",
           "AH3",
           "AH4",
@@ -67819,14 +67819,14 @@
           "AN3",
           "AN4",
           "AN5",
-          "AC2",
-          "AC4",
+          "AC3",
+          "AC5",
           "AO2",
           "AO3",
           "AO4",
           "AO5",
-          "AG2",
-          "AG4"
+          "AG3",
+          "AG5"
         ],
         "cells": [
           {
@@ -67878,18 +67878,6 @@
             "fillSource": "unverified"
           },
           {
-            "ref": "D3",
-            "controlRef": "Y3",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "D5",
-            "controlRef": "Y5",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
             "ref": "D2",
             "controlRef": "Y2",
             "matched": false,
@@ -67898,6 +67886,18 @@
           {
             "ref": "D4",
             "controlRef": "Y4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D3",
+            "controlRef": "Y3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D5",
+            "controlRef": "Y5",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -67926,38 +67926,38 @@
             "fillSource": "unverified"
           },
           {
-            "ref": "F2",
-            "controlRef": "AA2",
+            "ref": "H2",
+            "controlRef": "AC2",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "H3",
-            "controlRef": "AC3",
+            "ref": "F3",
+            "controlRef": "AA3",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "F4",
-            "controlRef": "AA4",
+            "ref": "H4",
+            "controlRef": "AC4",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "H5",
-            "controlRef": "AC5",
+            "ref": "F5",
+            "controlRef": "AA5",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "G2",
-            "controlRef": "AB2",
+            "ref": "G3",
+            "controlRef": "AB3",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "G4",
-            "controlRef": "AB4",
+            "ref": "G5",
+            "controlRef": "AB5",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -67986,38 +67986,38 @@
             "fillSource": "unverified"
           },
           {
-            "ref": "J2",
-            "controlRef": "AE2",
+            "ref": "L2",
+            "controlRef": "AG2",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "L3",
-            "controlRef": "AG3",
+            "ref": "J3",
+            "controlRef": "AE3",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "J4",
-            "controlRef": "AE4",
+            "ref": "L4",
+            "controlRef": "AG4",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "L5",
-            "controlRef": "AG5",
+            "ref": "J5",
+            "controlRef": "AE5",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "K2",
-            "controlRef": "AF2",
+            "ref": "K3",
+            "controlRef": "AF3",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "K4",
-            "controlRef": "AF4",
+            "ref": "K5",
+            "controlRef": "AF5",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -68190,14 +68190,14 @@
             "fillSource": "unverified"
           },
           {
-            "ref": "H2",
-            "controlRef": "AC2",
+            "ref": "H3",
+            "controlRef": "AC3",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "H4",
-            "controlRef": "AC4",
+            "ref": "H5",
+            "controlRef": "AC5",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -68226,14 +68226,14 @@
             "fillSource": "unverified"
           },
           {
-            "ref": "L2",
-            "controlRef": "AG2",
+            "ref": "L3",
+            "controlRef": "AG3",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "L4",
-            "controlRef": "AG4",
+            "ref": "L5",
+            "controlRef": "AG5",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -68294,20 +68294,6 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "Y3",
-            "controlRef": "D3",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "Y5",
-            "controlRef": "D5",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
             "ref": "Y2",
             "controlRef": "D2",
             "matched": false,
@@ -68317,6 +68303,20 @@
           {
             "ref": "Y4",
             "controlRef": "D4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Y3",
+            "controlRef": "D3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Y5",
+            "controlRef": "D5",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -68350,43 +68350,43 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AA2",
-            "controlRef": "F2",
+            "ref": "AC2",
+            "controlRef": "H2",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AC3",
-            "controlRef": "H3",
+            "ref": "AA3",
+            "controlRef": "F3",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AA4",
-            "controlRef": "F4",
+            "ref": "AC4",
+            "controlRef": "H4",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AC5",
-            "controlRef": "H5",
+            "ref": "AA5",
+            "controlRef": "F5",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AB2",
-            "controlRef": "G2",
+            "ref": "AB3",
+            "controlRef": "G3",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AB4",
-            "controlRef": "G4",
+            "ref": "AB5",
+            "controlRef": "G5",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -68420,43 +68420,43 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AE2",
-            "controlRef": "J2",
+            "ref": "AG2",
+            "controlRef": "L2",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AG3",
-            "controlRef": "L3",
+            "ref": "AE3",
+            "controlRef": "J3",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AE4",
-            "controlRef": "J4",
+            "ref": "AG4",
+            "controlRef": "L4",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AG5",
-            "controlRef": "L5",
+            "ref": "AE5",
+            "controlRef": "J5",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AF2",
-            "controlRef": "K2",
+            "ref": "AF3",
+            "controlRef": "K3",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AF4",
-            "controlRef": "K4",
+            "ref": "AF5",
+            "controlRef": "K5",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -68658,15 +68658,15 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AC2",
-            "controlRef": "H2",
+            "ref": "AC3",
+            "controlRef": "H3",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AC4",
-            "controlRef": "H4",
+            "ref": "AC5",
+            "controlRef": "H5",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -68700,15 +68700,15 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AG2",
-            "controlRef": "L2",
+            "ref": "AG3",
+            "controlRef": "L3",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AG4",
-            "controlRef": "L4",
+            "ref": "AG5",
+            "controlRef": "L5",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -68728,16 +68728,16 @@
           ],
           "hypotheses": {
             "halts": {
-              "B2": "none+strike",
-              "B3": "FFC6EFCE",
-              "B4": "none+strike",
-              "B5": "FFC6EFCE"
+              "B2": "FFC6EFCE",
+              "B3": "none+strike",
+              "B4": "FFC6EFCE",
+              "B5": "none+strike"
             },
             "continues": {
-              "B2": "FFC6EFCE+strike",
-              "B3": "FFC6EFCE",
-              "B4": "FFC6EFCE+strike",
-              "B5": "FFC6EFCE"
+              "B2": "FFC6EFCE",
+              "B3": "FFC6EFCE+strike",
+              "B4": "FFC6EFCE",
+              "B5": "FFC6EFCE+strike"
             }
           }
         },
@@ -68753,16 +68753,16 @@
           ],
           "hypotheses": {
             "halts": {
-              "C2": "none+strike",
-              "C3": "twin:D3",
-              "C4": "none+strike",
-              "C5": "twin:D5"
+              "C2": "twin:D2",
+              "C3": "none+strike",
+              "C4": "twin:D4",
+              "C5": "none+strike"
             },
             "continues": {
-              "C2": "twin:D2+strike",
-              "C3": "twin:D3",
-              "C4": "twin:D4+strike",
-              "C5": "twin:D5"
+              "C2": "twin:D2",
+              "C3": "twin:D3+strike",
+              "C4": "twin:D4",
+              "C5": "twin:D5+strike"
             }
           }
         },
@@ -68778,18 +68778,23 @@
           ],
           "hypotheses": {
             "halts": {
-              "E2": "twin:F2",
-              "E3": "twin:H3",
-              "E4": "twin:F4",
-              "E5": "twin:H5"
+              "E2": "twin:H2",
+              "E3": "twin:F3",
+              "E4": "twin:H4",
+              "E5": "twin:F5"
             },
             "continues": {
-              "E2": "twin:G2",
-              "E3": "twin:H3",
-              "E4": "twin:G4",
-              "E5": "twin:H5"
+              "E2": "twin:H2",
+              "E3": "twin:G3",
+              "E4": "twin:H4",
+              "E5": "twin:G5"
             }
-          }
+          },
+          "emptyTwins": [
+            "F3",
+            "F5",
+            "H2"
+          ]
         },
         {
           "id": "stop-icon",
@@ -68803,18 +68808,22 @@
           ],
           "hypotheses": {
             "halts": {
-              "I2": "twin:J2",
-              "I3": "twin:L3",
-              "I4": "twin:J4",
-              "I5": "twin:L5"
+              "I2": "twin:L2",
+              "I3": "twin:J3",
+              "I4": "twin:L4",
+              "I5": "twin:J5"
             },
             "continues": {
-              "I2": "twin:K2",
-              "I3": "twin:L3",
-              "I4": "twin:K4",
-              "I5": "twin:L5"
+              "I2": "twin:L2",
+              "I3": "twin:K3",
+              "I4": "twin:L4",
+              "I5": "twin:K5"
             }
-          }
+          },
+          "emptyTwins": [
+            "J3",
+            "J5"
+          ]
         },
         {
           "id": "expression-vs-scale",
@@ -68875,10 +68884,10 @@
           ],
           "hypotheses": {
             "first-wins": {
-              "P2": "FFFFC7CE",
-              "P3": "FFC6EFCE",
-              "P4": "FFFFC7CE",
-              "P5": "FFC6EFCE"
+              "P2": "FFC6EFCE",
+              "P3": "FFFFC7CE",
+              "P4": "FFC6EFCE",
+              "P5": "FFFFC7CE"
             },
             "last-wins": {
               "P2": "FFC6EFCE",
@@ -68900,16 +68909,16 @@
           ],
           "hypotheses": {
             "halts": {
-              "Q2": "none+strike",
-              "Q3": "FFC6EFCE",
-              "Q4": "none+strike",
-              "Q5": "FFC6EFCE"
+              "Q2": "FFC6EFCE",
+              "Q3": "none+strike",
+              "Q4": "FFC6EFCE",
+              "Q5": "none+strike"
             },
             "continues": {
-              "Q2": "FFC6EFCE+strike",
-              "Q3": "FFC6EFCE",
-              "Q4": "FFC6EFCE+strike",
-              "Q5": "FFC6EFCE"
+              "Q2": "FFC6EFCE",
+              "Q3": "FFC6EFCE+strike",
+              "Q4": "FFC6EFCE",
+              "Q5": "FFC6EFCE+strike"
             },
             "ignored": {
               "Q2": "FFC6EFCE",
@@ -68931,16 +68940,16 @@
           ],
           "hypotheses": {
             "halts": {
-              "R2": "none+strike",
-              "R3": "twin:D3",
-              "R4": "none+strike",
-              "R5": "twin:D5"
+              "R2": "twin:D2",
+              "R3": "none+strike",
+              "R4": "twin:D4",
+              "R5": "none+strike"
             },
             "continues": {
-              "R2": "twin:D2+strike",
-              "R3": "twin:D3",
-              "R4": "twin:D4+strike",
-              "R5": "twin:D5"
+              "R2": "twin:D2",
+              "R3": "twin:D3+strike",
+              "R4": "twin:D4",
+              "R5": "twin:D5+strike"
             },
             "ignored": {
               "R2": "twin:D2",
@@ -68962,16 +68971,16 @@
           ],
           "hypotheses": {
             "halts": {
-              "S2": "twin:F2",
-              "S3": "twin:H3",
-              "S4": "twin:F4",
-              "S5": "twin:H5"
+              "S2": "twin:H2",
+              "S3": "twin:F3",
+              "S4": "twin:H4",
+              "S5": "twin:F5"
             },
             "continues": {
-              "S2": "twin:G2",
-              "S3": "twin:H3",
-              "S4": "twin:G4",
-              "S5": "twin:H5"
+              "S2": "twin:H2",
+              "S3": "twin:G3",
+              "S4": "twin:H4",
+              "S5": "twin:G5"
             },
             "ignored": {
               "S2": "twin:H2",
@@ -68979,7 +68988,12 @@
               "S4": "twin:H4",
               "S5": "twin:H5"
             }
-          }
+          },
+          "emptyTwins": [
+            "F3",
+            "F5",
+            "H2"
+          ]
         },
         {
           "id": "indirect-icon",
@@ -68993,16 +69007,16 @@
           ],
           "hypotheses": {
             "halts": {
-              "T2": "twin:J2",
-              "T3": "twin:L3",
-              "T4": "twin:J4",
-              "T5": "twin:L5"
+              "T2": "twin:L2",
+              "T3": "twin:J3",
+              "T4": "twin:L4",
+              "T5": "twin:J5"
             },
             "continues": {
-              "T2": "twin:K2",
-              "T3": "twin:L3",
-              "T4": "twin:K4",
-              "T5": "twin:L5"
+              "T2": "twin:L2",
+              "T3": "twin:K3",
+              "T4": "twin:L4",
+              "T5": "twin:K5"
             },
             "ignored": {
               "T2": "twin:L2",
@@ -69010,7 +69024,11 @@
               "T4": "twin:L4",
               "T5": "twin:L5"
             }
-          }
+          },
+          "emptyTwins": [
+            "J3",
+            "J5"
+          ]
         }
       ],
       "captures": [
@@ -73436,7 +73454,20 @@
               "I8": "twin:Y8",
               "I9": "twin:Y9"
             }
-          }
+          },
+          "emptyTwins": [
+            "W2",
+            "W3",
+            "X2",
+            "X3",
+            "X4",
+            "X5",
+            "X6",
+            "X7",
+            "X8",
+            "X9",
+            "Y2"
+          ]
         },
         {
           "id": "cfvo-icon-formula",
@@ -73483,7 +73514,17 @@
               "J8": "twin:V8",
               "J9": "twin:V9"
             }
-          }
+          },
+          "emptyTwins": [
+            "V2",
+            "V3",
+            "V4",
+            "V5",
+            "V6",
+            "V7",
+            "V8",
+            "V9"
+          ]
         },
         {
           "id": "cfvo-relative",
@@ -75540,7 +75581,8 @@
               "F15": "twin:T15"
             }
           },
-          "replicateBy": "column"
+          "replicateBy": "column",
+          "emptyTwins": []
         }
       ],
       "captures": [
@@ -76293,11 +76335,11 @@
     {
       "id": "stage5-active-present-bar",
       "stage": 5,
-      "question": "S5-J: a hand-authored x14 bar carrying activePresent=\"1\" and the rule-level <xm:f>$A2>0</xm:f> (false on rows 3 and 5): does Excel keep, strip or repair it on resave (recorded, never retried), and if kept, does the activation gate the bar per cell? Compared with the same bar without activation (C) and no rule (D).",
+      "question": "S5-J: a hand-authored standalone x14 bar carrying activePresent=\"1\" and the rule-level <xm:f>$A2>0</xm:f> (true on rows 3, 5 and 7 only): does Excel keep, strip or repair it on resave (recorded, never retried), and if kept, does the activation gate the bar per cell? Compared with the same bar without activation (C) and no rule (D).",
       "input": "tests/fixtures/xlsx-cf/inputs/stage5-active-present-bar.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage5-active-present-bar.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:I5",
+      "range": "A1:I7",
       "requiredAppearances": [
         "screen"
       ],
@@ -76305,7 +76347,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "x14",
-          "sqref": "B2:B5",
+          "sqref": "B2:B7",
           "capabilityId": "formula:active-present-bar",
           "ruleType": "dataBar",
           "priority": 1,
@@ -76343,7 +76385,7 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "x14",
-          "sqref": "C2:C5",
+          "sqref": "C2:C7",
           "capabilityId": "formula:active-present-bar-twin",
           "ruleType": "dataBar",
           "priority": 2,
@@ -76372,8 +76414,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "c0e31a53e55cd16b789a70569a4176572517ae1449b260c1f63ec29dbc9f42d4",
-        "savedSha256": "c0e31a53e55cd16b789a70569a4176572517ae1449b260c1f63ec29dbc9f42d4",
+        "inputSha256": "f9048a2c519988d44660a57b5e7a52159fd020a5a3399b7c96759bdf3247e37e",
+        "savedSha256": "f9048a2c519988d44660a57b5e7a52159fd020a5a3399b7c96759bdf3247e37e",
         "provenance": "seed-hypothesis",
         "positiveRefs": [],
         "negativeRefs": [
@@ -76381,12 +76423,17 @@
           "G3",
           "G4",
           "G5",
-          "H2",
-          "I3",
-          "H4",
-          "I5",
+          "G6",
+          "G7",
+          "I2",
           "H3",
-          "H5"
+          "I4",
+          "H5",
+          "I6",
+          "H7",
+          "H2",
+          "H4",
+          "H6"
         ],
         "cells": [
           {
@@ -76414,26 +76461,20 @@
             "fillSource": "unverified"
           },
           {
-            "ref": "C2",
-            "controlRef": "H2",
+            "ref": "B6",
+            "controlRef": "G6",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "D3",
-            "controlRef": "I3",
+            "ref": "B7",
+            "controlRef": "G7",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "C4",
-            "controlRef": "H4",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "D5",
-            "controlRef": "I5",
+            "ref": "D2",
+            "controlRef": "I2",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -76444,8 +76485,44 @@
             "fillSource": "unverified"
           },
           {
+            "ref": "D4",
+            "controlRef": "I4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
             "ref": "C5",
             "controlRef": "H5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D6",
+            "controlRef": "I6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C7",
+            "controlRef": "H7",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C2",
+            "controlRef": "H2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C4",
+            "controlRef": "H4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C6",
+            "controlRef": "H6",
             "matched": false,
             "fillSource": "unverified"
           },
@@ -76478,29 +76555,22 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "H2",
-            "controlRef": "C2",
+            "ref": "G6",
+            "controlRef": "B6",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "I3",
-            "controlRef": "D3",
+            "ref": "G7",
+            "controlRef": "B7",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "H4",
-            "controlRef": "C4",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "I5",
-            "controlRef": "D5",
+            "ref": "I2",
+            "controlRef": "D2",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -76513,8 +76583,50 @@
             "note": "same-content unformatted control"
           },
           {
+            "ref": "I4",
+            "controlRef": "D4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
             "ref": "H5",
             "controlRef": "C5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "I6",
+            "controlRef": "D6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "H7",
+            "controlRef": "C7",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "H2",
+            "controlRef": "C2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "H4",
+            "controlRef": "C4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "H6",
+            "controlRef": "C6",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -76530,22 +76642,34 @@
             "B2",
             "B3",
             "B4",
-            "B5"
+            "B5",
+            "B6",
+            "B7"
           ],
           "hypotheses": {
             "activation-gates": {
-              "B2": "twin:C2",
-              "B3": "twin:D3",
-              "B4": "twin:C4",
-              "B5": "twin:D5"
+              "B2": "twin:D2",
+              "B3": "twin:C3",
+              "B4": "twin:D4",
+              "B5": "twin:C5",
+              "B6": "twin:D6",
+              "B7": "twin:C7"
             },
             "ignored": {
               "B2": "twin:C2",
               "B3": "twin:C3",
               "B4": "twin:C4",
-              "B5": "twin:C5"
+              "B5": "twin:C5",
+              "B6": "twin:C6",
+              "B7": "twin:C7"
             }
-          }
+          },
+          "emptyTwins": [
+            "C2",
+            "D2",
+            "D4",
+            "D6"
+          ]
         }
       ],
       "captures": [
@@ -76815,7 +76939,11 @@
               "B4": "twin:C4",
               "B5": "twin:C5"
             }
-          }
+          },
+          "emptyTwins": [
+            "D3",
+            "D5"
+          ]
         }
       ],
       "captures": [

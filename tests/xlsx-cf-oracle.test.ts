@@ -121,7 +121,7 @@ import {
 import { auditStage5Manifest, CF_STAGE5_PRODUCTION_READINGS, stage5Publication, type Stage5AuditReport } from '../scripts/cf-refs/audit'
 import { buildExplicitCalculationObservationScript, buildManualObservationScript, buildStage5CaptureScripts } from '../scripts/cf-refs/capture'
 import { buildCaseBuildScripts } from '../scripts/cf-refs/build'
-import { evaluateFormulaCapabilities, normalizeCfFormula, verifyMarkerInArchive, type FormulaObservation } from '../scripts/cf-refs/verify'
+import { evaluateFormulaCapabilities, normalizeCfFormula, verifyMarkerInArchive, type FormulaObservation, type S5Visual } from '../scripts/cf-refs/verify'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const XML_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
@@ -5995,7 +5995,8 @@ describe('Stage 5 fix round 1 (codex review)', () => {
     })
     const ev = (m.sidecar.formulaEvaluation as Record<string, { status: string; code?: string }>)['bar:bounds-formula']!
     expect(ev.status, JSON.stringify(ev).slice(0, 400)).toBe('refused')
-    expect(ev.code, JSON.stringify(ev).slice(0, 400)).toBe('formula-twin-blank')
+    // Fix round 3: the evaluated reading predicts bars at I4..I9, so the white cells are missing visuals.
+    expect(ev.code, JSON.stringify(ev).slice(0, 400)).toBe('formula-twin-missing')
   })
 
   it('#5 aggregate fixtures that must paint read error-free ranges; error propagation is its own configuration', () => {
@@ -6147,19 +6148,27 @@ describe('Stage 5 fix round 2 (codex review): witnesses are Stage 3/4 measuremen
     })
     expect(ev['bar:bounds-formula'], JSON.stringify(ev['bar:bounds-formula']).slice(0, 300)).toMatchObject({ status: 'discriminating', matched: 'evaluated' })
     // W2 (5) and W3 (15) sit below the evaluated minimum and draw nothing; they are checked as empty, not refused.
-    expect(ev['bar:bounds-formula']!.observed!['cfvo-bar-formula']!.I2).toBe('none')
+    expect(ev['bar:bounds-formula']!.observed!['cfvo-bar-formula']!.I2).toBe('none|none')
   })
 
   it('#2 a configuration with fewer than two validated non-empty witnesses refuses', async () => {
-    const ev = await evaluateWith('stage5-cfvo-formulas', ['cfvo-bar-formula'], (ctx, box) => {
-      V.forEach((_v, i) => {
-        const r = i + 2
-        if (r === 9) { bar(ctx, box('I9'), 0.5); bar(ctx, box('W9'), 0.5) }
-        bar(ctx, box(`X${r}`), 1)
-        bar(ctx, box(`Y${r}`), 0.3)
-      })
-    })
-    expect(ev['bar:bounds-formula']).toMatchObject({ status: 'refused', code: 'formula-twin-blank' })
+    const { evaluateFormulaCapabilities: evalCaps } = await import('../scripts/cf-refs/verify')
+    // a's twins C2..C5 are permitted empty except C3; b names D twins (all permitted empty). b fails at B3 and B5, where
+    // the formula cell shows a bar, so a is the sole survivor, yet only B3 is a validated non-empty witness for a.
+    const cfg: S5Configuration = {
+      id: 'w', capabilityId: 'bar:bounds-formula', observable: 'crop', refs: ['B2', 'B3', 'B4', 'B5'], emptyTwins: ['C2', 'C4', 'C5', 'D2', 'D3', 'D4', 'D5'],
+      hypotheses: { a: { B2: 'twin:C2', B3: 'twin:C3', B4: 'twin:C4', B5: 'twin:C3' }, b: { B2: 'twin:D2', B3: 'twin:D3', B4: 'twin:D4', B5: 'twin:D5' } },
+    }
+    const bars: Record<string, S5Visual> = { B3: { kind: 'bar', left: 2, right: 30 }, B5: { kind: 'bar', left: 2, right: 30 }, C3: { kind: 'bar', left: 2, right: 30 } }
+    const obs: FormulaObservation = { fill: () => ({ fill: 'none', strike: false }), visual: ref => bars[ref] ?? { kind: 'none' } }
+    const one = evalCaps([cfg], { B2: 'P2', B3: 'P3', B4: 'P4', B5: 'P5' }, obs, { kindOf: () => 'bar' })['bar:bounds-formula']!
+    expect(one).toMatchObject({ status: 'discriminating', matched: 'a' })
+    // One witness only: a names permitted-empty twins except at B3; b is eliminated at two cells (B2 predicts C3's bar
+    // over an empty cell, B3 predicts D3's emptiness over a bar), so a is the sole survivor with one witness.
+    const thin: S5Configuration = { ...cfg, hypotheses: { a: { B2: 'twin:C2', B3: 'twin:C3', B4: 'twin:C4', B5: 'twin:C5' }, b: { B2: 'twin:C3', B3: 'twin:D3', B4: 'twin:D4', B5: 'twin:D5' } } }
+    const bars2: Record<string, S5Visual> = { B3: bars.B3!, C3: bars.C3! }
+    const ev = evalCaps([thin], { B2: 'P2', B3: 'P3', B4: 'P4', B5: 'P5' }, { ...obs, visual: ref => bars2[ref] ?? { kind: 'none' } }, { kindOf: () => 'bar' })['bar:bounds-formula']!
+    expect(ev, JSON.stringify(ev).slice(0, 300)).toMatchObject({ status: 'refused', code: 'formula-twin-blank' })
   })
 
   it('#3 icons compare by glyph class and frame position: 73 vs 74 px cells and right-aligned text do not matter (D13/Q13)', async () => {
@@ -6186,5 +6195,143 @@ describe('Stage 5 fix round 2 (codex review): witnesses are Stage 3/4 measuremen
       })
     })
     expect(ev['formula:cfvo-scope-multi-range'], JSON.stringify(ev['formula:cfvo-scope-multi-range']).slice(0, 400)).toMatchObject({ status: 'discriminating', matched: 'rule-wide' })
+  })
+})
+
+describe('Stage 5 fix round 3 (codex review): permitted blanks, composition fills, icons on fills, the activation bar', () => {
+  type Ctx = ReturnType<ReturnType<typeof createCanvas>['getContext']>
+  type Box = { x0: number; y0: number; x1: number; y1: number }
+  const RED_ARGB = 'FFFFC7CE'
+  async function evaluateWith(id: string, configIds: readonly string[], fills: Record<string, string>, paint: (ctx: Ctx, box: (ref: string) => Box, put: (ref: string, crop: DecodedPng, bg?: readonly [number, number, number]) => void) => void) {
+    const { evaluateFormulaCase } = await import('../scripts/cf-refs/verify')
+    const t = CF_STAGE5_CASES.find(c => c.id === id)!
+    const c: CfOracleCase = { ...t, formulaConfigurations: t.formulaConfigurations!.filter(x => configIds.includes(x.id)) }
+    expect(c.formulaConfigurations!.length, `${id} ${configIds.join(',')}`).toBe(configIds.length)
+    const parts = readZipPartsSync(await generateCaseArchive(t.id))!
+    const geom = computeWorksheetRangeGeometry(parts, t.range)!
+    const canvas = createCanvas(geom.expectedWidthPt, geom.expectedHeightPt)
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, geom.expectedWidthPt, geom.expectedHeightPt)
+    const box = (ref: string): Box => {
+      const p = parseA1(ref)!
+      const before = geom.colWidthsPt.slice(0, p.col - geom.minCol).reduce((a, b) => a + b, 0)
+      const top = geom.rowHeightsPt.slice(0, p.row - geom.minRow).reduce((a, b) => a + b, 0)
+      return { x0: Math.round(before), x1: Math.round(before + geom.colWidthsPt[p.col - geom.minCol]!), y0: Math.round(top), y1: Math.round(top + geom.rowHeightsPt[p.row - geom.minRow]!) }
+    }
+    // A DisplayFormat fill is painted as the cell background too (the capture shows what DisplayFormat reports).
+    for (const [ref, argb] of Object.entries(fills)) { const b = box(ref); ctx.fillStyle = `#${argb.slice(2)}`; ctx.fillRect(b.x0 + 1, b.y0 + 1, b.x1 - b.x0 - 2, b.y1 - b.y0 - 2) }
+    const put = (ref: string, crop: DecodedPng, bg?: readonly [number, number, number]): void => {
+      const b = box(ref)
+      const img = ctx.createImageData(crop.width, crop.height)
+      img.data.set(crop.data)
+      if (bg) {
+        // The glyph on a filled cell: key pixels within +-8 of white become the cell's fill (anti-aliased ones stay).
+        for (let i = 0; i < img.data.length; i += 4) if ([0, 1, 2].every(k => 255 - img.data[i + k]! <= 8)) { img.data[i] = bg[0]; img.data[i + 1] = bg[1]; img.data[i + 2] = bg[2] }
+      }
+      ctx.putImageData(img, b.x0 + 1, b.y0 + 1)
+    }
+    paint(ctx, box, put)
+    const png = decodePngSync(new Uint8Array(canvas.toBuffer('image/png')))!
+    const formulaObservations = Object.fromEntries(t.expected.cells.map(e => [e.ref, { displayFormatFill: fills[e.ref] ?? 'FFFFFFFF', baseFill: 'FFFFFFFF', strikethrough: false }]))
+    const key = loadIconGlyphKey(REPO_ROOT)
+    return evaluateFormulaCase(c, { formulaObservations }, png, geom, parts, key && !('kind' in key) ? key : undefined)
+  }
+  const bar = (ctx: Ctx, b: Box, fraction: number): void => {
+    if (fraction <= 0) return
+    ctx.fillStyle = '#638ec6'
+    ctx.fillRect(b.x0 + 2, b.y0 + 2, Math.max(2, Math.round((b.x1 - b.x0 - 5) * fraction)), b.y1 - b.y0 - 4)
+  }
+  const glyphs = (): ((bucket: number) => DecodedPng) => {
+    const key = loadIconGlyphKey(REPO_ROOT) as { classes: ReadonlyMap<string, DecodedPng>; classOfPair: ReadonlyMap<string, string> }
+    return b => key.classes.get(key.classOfPair.get(`3Arrows:${b}`)!)!
+  }
+  const V = [5, 15, 30, 45, 60, 75, 90, 100]
+  const clamp = (x: number): number => Math.max(0, Math.min(1, x))
+  const RED_RGB = [0xff, 0xc7, 0xce] as const
+
+  it('#1 a missing visual where the reading predicts one is formula-twin-missing, not "fewer witnesses" (bars)', async () => {
+    const ev = await evaluateWith('stage5-cfvo-formulas', ['cfvo-bar-formula'], {}, (ctx, box) => {
+      V.forEach((v, i) => {
+        const r = i + 2
+        const evaluated = clamp((v - 20) / 60)
+        // I4:I7 and W4:W7 are cleared although the evaluated reading predicts bars there.
+        if (r < 4 || r > 7) { bar(ctx, box(`I${r}`), evaluated); bar(ctx, box(`W${r}`), evaluated) }
+        bar(ctx, box(`X${r}`), 1)
+        bar(ctx, box(`Y${r}`), clamp((v - 5) / 95) || 0.02)
+      })
+    })
+    expect(ev['bar:bounds-formula'], JSON.stringify(ev['bar:bounds-formula']).slice(0, 300)).toMatchObject({ status: 'refused', code: 'formula-twin-missing' })
+  })
+
+  it('#1 a missing visual where the reading predicts one is formula-twin-missing (icons: six of eight pairs cleared)', async () => {
+    const g = glyphs()
+    // [percent 0, formula $F$1 (20), num $F$2 (80)]: 5, 15 -> bucket 0; 30..75 -> 1; 90, 100 -> 2.
+    const bucket = (v: number): number => (v >= 80 ? 2 : v >= 20 ? 1 : 0)
+    const ev = await evaluateWith('stage5-cfvo-formulas', ['cfvo-icon-formula'], {}, (_ctx, _box, put) => {
+      V.forEach((v, i) => {
+        const r = i + 2
+        if (r <= 3) { put(`J${r}`, g(bucket(v))); put(`Z${r}`, g(bucket(v))) }
+        put(`AA${r}`, g(2))
+      })
+    })
+    expect(ev['icon:thresholds-formula'], JSON.stringify(ev['icon:thresholds-formula']).slice(0, 300)).toMatchObject({ status: 'refused', code: 'formula-twin-missing' })
+  })
+
+  it('#1 the permitted-empty cells are explicit in the catalogue, fixed before capture', () => {
+    const bars = CF_STAGE5_CASES.find(c => c.id === 'stage5-cfvo-formulas')!.formulaConfigurations!.find(x => x.id === 'cfvo-bar-formula')!
+    // W2/W3 hold 5/15, at or below the evaluated minimum 20; X is the degenerate [0, 0] twin; Y2 is the min/max minimum.
+    expect([...bars.emptyTwins!].sort()).toEqual(['W2', 'W3', 'X2', 'X3', 'X4', 'X5', 'X6', 'X7', 'X8', 'X9', 'Y2'])
+    const icons = CF_STAGE5_CASES.find(c => c.id === 'stage5-cfvo-formulas')!.formulaConfigurations!.find(x => x.id === 'cfvo-icon-formula')!
+    expect([...icons.emptyTwins!].sort()).toEqual(['V2', 'V3', 'V4', 'V5', 'V6', 'V7', 'V8', 'V9'])
+    for (const c of CF_STAGE5_CASES) for (const cfg of c.formulaConfigurations ?? []) if (cfg.observable === 'crop') expect(cfg.emptyTwins, `${c.id} ${cfg.id}`).toBeDefined()
+  })
+
+  it('#2 composition fills are compared with the bars: correct indirect-bar rendering discriminates continues', async () => {
+    // INDIRECT true on rows 3 and 5: continues -> G (red + bar), rows 2/4 -> H (bar only); ignored -> H everywhere.
+    const fills: Record<string, string> = { S3: RED_ARGB, S5: RED_ARGB, F2: RED_ARGB, F3: RED_ARGB, F4: RED_ARGB, F5: RED_ARGB, G2: RED_ARGB, G3: RED_ARGB, G4: RED_ARGB, G5: RED_ARGB }
+    const len = [0, 1 / 3, 2 / 3, 1] // min/max over 10..40
+    const ev = await evaluateWith('stage5-composition', ['indirect-bar'], fills, (ctx, box) => {
+      for (let r = 2; r <= 5; r++) for (const col of ['S', 'G', 'H']) bar(ctx, box(`${col}${r}`), len[r - 2]!)
+    })
+    expect(ev['formula:composition-indirect-ahead-bar'], JSON.stringify(ev['formula:composition-indirect-ahead-bar']).slice(0, 300)).toMatchObject({ status: 'discriminating', matched: 'continues' })
+  })
+
+  it('#3 icons on a red fill classify against the measured background: correct halts rendering discriminates', async () => {
+    const g = glyphs()
+    // 3 icons, percent 0/33/67 over 10..40: 10 -> 0, 20 -> 1, 30 and 40 -> 2. halts: rows 3/5 red, no icon; rows 2/4 icon.
+    const bucket = [0, 1, 2, 2]
+    const fills: Record<string, string> = { I3: RED_ARGB, I5: RED_ARGB, J2: RED_ARGB, J3: RED_ARGB, J4: RED_ARGB, J5: RED_ARGB, K2: RED_ARGB, K3: RED_ARGB, K4: RED_ARGB, K5: RED_ARGB }
+    const ev = await evaluateWith('stage5-composition', ['stop-icon'], fills, (_ctx, _box, put) => {
+      for (let r = 2; r <= 5; r++) {
+        if (r === 2 || r === 4) put(`I${r}`, g(bucket[r - 2]!))
+        put(`K${r}`, g(bucket[r - 2]!), RED_RGB)
+        put(`L${r}`, g(bucket[r - 2]!))
+      }
+    })
+    expect(ev['formula:composition-stop-icon'], JSON.stringify(ev['formula:composition-stop-icon']).slice(0, 400)).toMatchObject({ status: 'discriminating', matched: 'halts' })
+  })
+
+  it('#4 the activation-bar fixture has >= 2 non-empty active witnesses and >= 2 decisive inactive cells', async () => {
+    const c = CF_STAGE5_CASES.find(x => x.id === 'stage5-active-present-bar')!
+    const cfg = c.formulaConfigurations![0]!
+    const active = cfg.refs.filter(r => cfg.hypotheses['activation-gates']![r] !== cfg.hypotheses.ignored![r])
+    // Decisive inactive cells: the activation predicts no bar, while ignoring it predicts a twin that draws one.
+    const decisive = active.filter(r => !cfg.emptyTwins!.includes(cfg.hypotheses.ignored![r]!.slice(5)))
+    expect(decisive.length, 'decisive inactive cells').toBeGreaterThanOrEqual(2)
+    const witnesses = cfg.refs.filter(r => !cfg.emptyTwins!.includes(cfg.hypotheses['activation-gates']![r]!.slice(5)))
+    expect(witnesses.length, 'non-empty active witnesses').toBeGreaterThanOrEqual(2)
+    // Correct activation-gates rendering (bars on the active rows over the column's min/max, none on the inactive rows).
+    const vals = [10, 20, 30, 40, 50, 60]
+    const activeRows = new Set(cfg.refs.filter(r => !active.includes(r)).map(r => Number(r.slice(1))))
+    const ev = await evaluateWith(c.id, [cfg.id], {}, (ctx, box) => {
+      vals.forEach((v, i) => {
+        const r = i + 2
+        const f = (v - 10) / 50
+        if (activeRows.has(r)) bar(ctx, box(`B${r}`), f)
+        bar(ctx, box(`C${r}`), f)
+      })
+    })
+    expect(ev['formula:active-present-bar'], JSON.stringify(ev['formula:active-present-bar']).slice(0, 300)).toMatchObject({ status: 'discriminating', matched: 'activation-gates' })
   })
 })

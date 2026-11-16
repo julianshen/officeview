@@ -5669,9 +5669,12 @@ export function evaluateFormulaCapabilities(
       const want = concrete(cfg, ref, token)
       if (want === undefined) return undefined
       if (cfg.observable === 'crop') {
+        // Fix round 3 #2: the visual and the cell's DisplayFormat fill/strike (a composition fill) both have to agree.
         const a = visual(cfg, ref)
         const b = visual(cfg, want)
-        return a && b ? sameS5Visual(a, b) : undefined
+        const fa = obs.fill(`${s5PrefixOf(ref)}${s5Bare(ref)}`)
+        const fb = obs.fill(`${s5PrefixOf(ref)}${want}`)
+        return a && b && fa && fb ? sameS5Visual(a, b) && fillToken(fa) === fillToken(fb) : undefined
       }
       return observed[cfg.id]![ref] === want
     }
@@ -5684,7 +5687,9 @@ export function evaluateFormulaCapabilities(
         if (x === y) return false
         const vx = visual(cfg, x)
         const vy = visual(cfg, y)
-        return vx && vy ? !sameS5Visual(vx, vy) : undefined
+        const fx = obs.fill(`${s5PrefixOf(ref)}${x}`)
+        const fy = obs.fill(`${s5PrefixOf(ref)}${y}`)
+        return vx && vy && fx && fy ? !sameS5Visual(vx, vy) || fillToken(fx) !== fillToken(fy) : undefined
       }
       return x !== y
     }
@@ -5697,7 +5702,7 @@ export function evaluateFormulaCapabilities(
         if (!o || !co) { failure ??= refuse('fill-unobserved', `${cfg.id}: ${o ? `control ${ctrl ?? '(none)'} of ${ref}` : ref} has no DisplayFormat observation`); continue }
         if (cfg.observable === 'crop') {
           const v = visual(cfg, ref)
-          observed[cfg.id]![ref] = v ? describeS5Visual(v) : 'unmeasurable'
+          observed[cfg.id]![ref] = `${v ? describeS5Visual(v) : 'unmeasurable'}|${fillToken(o)}`
         } else observed[cfg.id]![ref] = fillToken(o)
         if (co.fill !== 'none' || co.strike) failure ??= refuse('formula-control-formatted', `${cfg.id}: the same-content control ${ctrl} of ${ref} shows ${fillToken(co)}, so the format is not the rule's (Lesson 3)`)
       }
@@ -5755,6 +5760,15 @@ export function evaluateFormulaCapabilities(
     // per configuration must show a measured bar or classified icon that its twin also shows (S4-REPLICATE).
     let blank: FormulaCapabilityEvaluation | undefined
     for (const cfg of evidence.filter(c => c.observable === 'crop')) {
+      // Fix round 3 #1: only the twins fixed as permitted-empty may show nothing; everywhere else the winning reading
+      // predicts a visual, and a missing one in the formula cell or the twin is a mismatch.
+      const permitted = new Set(cfg.emptyTwins ?? [])
+      for (const ref of cfg.refs) {
+        const t = /^twin:([A-Z]+\d+)/.exec(cfg.hypotheses[winner]?.[ref] ?? '')?.[1]
+        if (!t || permitted.has(t)) continue
+        const missing = [ref, t].filter(r => visual(cfg, s5Bare(r))?.kind === 'none')
+        if (missing.length > 0) blank ??= refuse('formula-twin-missing', `${cfg.id}: ${winner} predicts a ${kindOf(cfg)} at ${ref} (twin ${t}), but ${missing.join(' and ')} show${missing.length === 1 ? 's' : ''} none; only ${[...permitted].join(', ') || 'no cell'} may be empty`, observed)
+      }
       const witnesses = cfg.refs.filter(ref => {
         const t = /^twin:([A-Z]+\d+)/.exec(cfg.hypotheses[winner]?.[ref] ?? '')?.[1]
         const v = t ? visual(cfg, t) : undefined
@@ -5848,10 +5862,42 @@ function s5BarVisual(png: DecodedPng, geom: WorksheetRangeGeometry, ref: string,
   return { kind: 'bar', left: o.bar.leftPx - o.cellLeftPx, right: o.bar.rightPx - o.cellLeftPx }
 }
 
+/**
+ * Classifies a glyph drawn on a filled cell against the white-background glyph key (fix round 3 #3). For each key class,
+ * the key's crop is split into three zones: background (within +-8 of white), opaque ink (at least 128 below white on some
+ * channel), and anti-aliased edge (anything between, ignored). The cell matches a class when every background pixel
+ * equals the measured fill and every ink pixel equals the key, both within +-8. Exactly one match is the class; several
+ * that are all recorded twins of each other form the twin set; anything else is unclassified.
+ */
+export function classifyIconOnFill(png: DecodedPng, rect: { x: number; y: number; width: number; height: number }, key: IconGlyphKey, bg: readonly [number, number, number]): { glyphClass: string; referenceClass?: string } | undefined {
+  const sample = cropPng(png, rect)
+  if (!sample) return undefined
+  const fits = (k: DecodedPng): boolean => {
+    if (k.width !== sample.width || k.height !== sample.height) return false
+    let ink = 0
+    for (let i = 0; i < k.width * k.height; i++) {
+      const kp = [k.data[i * 4]!, k.data[i * 4 + 1]!, k.data[i * 4 + 2]!]
+      const sp = [sample.data[i * 4]!, sample.data[i * 4 + 1]!, sample.data[i * 4 + 2]!]
+      const fromWhite = Math.max(...kp.map(v => 255 - v))
+      if (fromWhite <= ICON_CLASS_TOLERANCE) { if (Math.max(...sp.map((v, c) => Math.abs(v - bg[c]!))) > ICON_CLASS_TOLERANCE) return false }
+      else if (fromWhite >= 128) { ink++; if (Math.max(...sp.map((v, c) => Math.abs(v - kp[c]!))) > ICON_CLASS_TOLERANCE) return false }
+    }
+    return ink > 0
+  }
+  const matches = [...key.classes].filter(([, k]) => fits(k)).map(([cls]) => cls)
+  if (matches.length === 1) return { glyphClass: matches[0]! }
+  if (matches.length > 1 && matches.every(a => matches.every(b => a === b || key.twins.get(a)?.has(b)))) return { glyphClass: iconTwinSetClass(matches), referenceClass: matches[0]! }
+  return undefined
+}
+
 function s5IconVisual(png: DecodedPng, geom: WorksheetRangeGeometry, ref: string, ctrl: string, key: IconGlyphKey | undefined): S5Visual | undefined {
   const rect = iconCropRect(png, geom, ref)
   if (!rect) return undefined
-  const cls = key ? classifyIconCrop(png, rect, key.classes, { tolerance: ICON_CLASS_TOLERANCE, twins: key.twins, faint: key.faint }) : undefined
+  // Fix round 3 #3: on a filled cell the white-background key cannot match pixel for pixel, so the glyph is matched with
+  // a key-referenced ink mask against the measured background.
+  const bg = perimeterBackground(png, rect)
+  const onFill = bg.some(ch => 255 - ch > ICON_CLASS_TOLERANCE)
+  const cls = key ? (onFill ? classifyIconOnFill(png, rect, key, bg) : classifyIconCrop(png, rect, key.classes, { tolerance: ICON_CLASS_TOLERANCE, twins: key.twins, faint: key.faint })) : undefined
   const glyph = cls && 'glyphClass' in cls ? cls : undefined
   const reference = glyph && key ? key.classes.get(glyph.referenceClass ?? glyph.glyphClass) : undefined
   const res = measureIconGeometry(png, geom, [ref], { controlOf: () => ctrl, tolerancePx: 1, unstable: 'record', ...(reference ? { referenceOf: () => reference } : {}) })
