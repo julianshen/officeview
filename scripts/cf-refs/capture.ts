@@ -36,6 +36,7 @@ import {
   decodePngSync,
   evaluateFormulaCase,
   formulaObservationOf,
+  stage5IconKey,
   type BarCapabilityEvaluation,
   evaluateBarCapabilities,
   isCellInSqref,
@@ -1174,7 +1175,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
               ...(isFormulaCase
                 ? (() => {
                     const recorded = { formulaObservations: formulaObservations ?? {}, ...(formulaDynamic ? { formulaDynamicRefresh: formulaDynamic } : {}) }
-                    return { lockBefore: sidecarLockBefore, lockAfter: sidecarLockAfter, ...recorded, formulaEvaluation: evaluateFormulaCase(cWithUpdatedExpected, recorded, decoded ?? undefined, capGeom ?? undefined, parts ?? undefined) }
+                    return { lockBefore: sidecarLockBefore, lockAfter: sidecarLockAfter, ...recorded, formulaEvaluation: evaluateFormulaCase(cWithUpdatedExpected, recorded, decoded ?? undefined, capGeom ?? undefined, parts ?? undefined, stage5IconKey(REPO_ROOT)) }
                   })()
                 : {}),
             },

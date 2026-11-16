@@ -5611,7 +5611,6 @@ describe('Stage 5 formula oracle (Task 31)', () => {
     const GREEN = 'FFC6EFCE'
     const obs = (fills: Record<string, string>): FormulaObservation => ({
       fill: ref => (fills[ref] === undefined ? undefined : { fill: fills[ref]!, strike: false }),
-      same: () => undefined,
     })
     const cfg = (refs: string[], hypotheses: Record<string, Record<string, string>>, extra: Partial<S5Configuration> = {}): S5Configuration => ({ id: 'cfg', capabilityId: 'formula:truth-number', observable: 'fill', refs, hypotheses, ...extra })
     const controls = { B2: 'P2', B3: 'P3', B4: 'P4', B5: 'P5' }
@@ -5655,8 +5654,7 @@ describe('Stage 5 formula oracle (Task 31)', () => {
       const tables: Record<string, Record<string, string>> = { 'post:': { B3: RED, B5: RED, P3: 'none', P5: 'none' }, 'pre:': { B2: RED, B4: RED, P2: 'none', P4: 'none' } }
       const prefixed: FormulaObservation = {
         fill: ref => { const m = /^(post:|pre:)?(.*)$/.exec(ref)!; const v = tables[m[1] ?? '']?.[m[2]!]; return v === undefined ? undefined : { fill: v, strike: false } },
-        same: () => undefined,
-      }
+        }
       const live = evaluateFormulaCapabilities([cfg(['post:B3', 'post:B5'], { documented: { 'post:B3': RED, 'post:B5': RED }, stale: { 'post:B3': 'none', 'post:B5': 'none' } })], controls, prefixed)
       expect(live['formula:truth-number']).toMatchObject({ status: 'discriminating', matched: 'documented' })
       const pre = evaluateFormulaCapabilities([cfg(['pre:B2', 'pre:B4'], { saved: { 'pre:B2': RED, 'pre:B4': RED }, recomputed: { 'pre:B2': 'none', 'pre:B4': 'none' } })], controls, prefixed)
@@ -5956,7 +5954,7 @@ describe('Stage 5 fix round 1 (codex review)', () => {
     expect(h['first-listed']).toEqual(h['bounding-box'])
     // Excel behaving as "first listed" under the retained order is not classified bounding-box: the readings coincide.
     const controls = Object.fromEntries(c.expected.cells.map(e => [e.ref, e.controlRef]))
-    const obs: FormulaObservation = { fill: ref => (controls[ref] === undefined ? { fill: 'none', strike: false } : { fill: h['first-listed']![ref] === RED ? RED : 'none', strike: false }), same: () => undefined }
+    const obs: FormulaObservation = { fill: ref => (controls[ref] === undefined ? { fill: 'none', strike: false } : { fill: h['first-listed']![ref] === RED ? RED : 'none', strike: false }) }
     const ev = evalCaps(cfgs, controls, obs)['formula:anchor-multi-range']!
     expect(ev.status).toBe('non-discriminating')
     expect(ev.reason).toMatch(/coincide/)
@@ -5971,12 +5969,12 @@ describe('Stage 5 fix round 1 (codex review)', () => {
     const { evaluateFormulaCapabilities: evalCaps } = await import('../scripts/cf-refs/verify')
     const controls = { B2: 'P2', B3: 'P3', D2: 'Q2', D3: 'Q3', F2: 'R2', F3: 'R3' }
     const none = { P2: 'none', P3: 'none', Q2: 'none', Q3: 'none', R2: 'none', R3: 'none' }
-    const fills = (f: Record<string, string>): FormulaObservation => ({ fill: r => ({ fill: f[r] ?? 'none', strike: false }), same: () => true })
+    const fills = (f: Record<string, string>): FormulaObservation => ({ fill: r => ({ fill: f[r] ?? 'none', strike: false }), visual: () => ({ kind: 'icon', cls: '3Arrows:0', left: 2, top: 3 }) })
     const scale: S5Configuration = { id: 'scale', capabilityId: 'formula:cfvo-scope-multi-range', observable: 'fill', refs: ['B2', 'B3'], hypotheses: { a: { B2: RED, B3: RED }, b: { B2: 'none', B3: 'none' } } }
     // Icon crops all identical: the configuration is designed to separate a/b (different twins) but cannot.
     const icon: S5Configuration = { id: 'icon', capabilityId: 'formula:cfvo-scope-multi-range', observable: 'crop', refs: ['D2', 'D3'], hypotheses: { a: { D2: 'twin:D7', D3: 'twin:D8' }, b: { D2: 'twin:D9', D3: 'twin:D10' } } }
-    const ev = evalCaps([scale, icon], controls, fills({ B2: RED, B3: RED, ...none }))['formula:cfvo-scope-multi-range']!
-    expect(ev.status).not.toBe('discriminating')
+    const ev = evalCaps([scale, icon], controls, fills({ B2: RED, B3: RED, ...none }), { kindOf: () => 'icon' })['formula:cfvo-scope-multi-range']!
+    expect(ev).toMatchObject({ status: 'refused', code: 'formula-replication-shortfall' })
     // Per range: D separates at two cells, F at one.
     const ranges: S5Configuration = { id: 'ranges', capabilityId: 'formula:cfvo-scope-multi-range', observable: 'fill', replicateBy: 'column', refs: ['D2', 'D3', 'F2', 'F3'], hypotheses: { a: { D2: RED, D3: RED, F2: RED, F3: 'none' }, b: { D2: 'none', D3: 'none', F2: 'none', F3: 'none' } } }
     const perRange = evalCaps([ranges], controls, fills({ D2: RED, D3: RED, F2: RED, ...none }))['formula:cfvo-scope-multi-range']!
@@ -6077,3 +6075,116 @@ function stage5CommittedViolations(manifest: CfManifest, rootDir: string): strin
   }
   return out
 }
+
+describe('Stage 5 fix round 2 (codex review): witnesses are Stage 3/4 measurements, not pixel deltas', () => {
+  type Ctx = ReturnType<ReturnType<typeof createCanvas>['getContext']>
+  type Box = { x0: number; y0: number; x1: number; y1: number }
+  /** Paints a synthetic capture of a Stage 5 case and evaluates the named configurations through the production evaluator. */
+  async function evaluateWith(id: string, configIds: readonly string[], paint: (ctx: Ctx, box: (ref: string) => Box, put: (ref: string, crop: DecodedPng) => void) => void) {
+    const { evaluateFormulaCase } = await import('../scripts/cf-refs/verify')
+    const t = CF_STAGE5_CASES.find(c => c.id === id)!
+    const c: CfOracleCase = { ...t, formulaConfigurations: t.formulaConfigurations!.filter(x => configIds.includes(x.id)) }
+    const parts = readZipPartsSync(await generateCaseArchive(t.id))!
+    const geom = computeWorksheetRangeGeometry(parts, t.range)!
+    const canvas = createCanvas(geom.expectedWidthPt, geom.expectedHeightPt)
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, geom.expectedWidthPt, geom.expectedHeightPt)
+    const box = (ref: string): Box => {
+      const p = parseA1(ref)!
+      const before = geom.colWidthsPt.slice(0, p.col - geom.minCol).reduce((a, b) => a + b, 0)
+      const top = geom.rowHeightsPt.slice(0, p.row - geom.minRow).reduce((a, b) => a + b, 0)
+      return { x0: Math.round(before), x1: Math.round(before + geom.colWidthsPt[p.col - geom.minCol]!), y0: Math.round(top), y1: Math.round(top + geom.rowHeightsPt[p.row - geom.minRow]!) }
+    }
+    const put = (ref: string, crop: DecodedPng): void => {
+      const b = box(ref)
+      const img = ctx.createImageData(crop.width, crop.height)
+      img.data.set(crop.data)
+      ctx.putImageData(img, b.x0 + 1, b.y0 + 1)
+    }
+    paint(ctx, box, put)
+    const png = decodePngSync(new Uint8Array(canvas.toBuffer('image/png')))!
+    const formulaObservations = Object.fromEntries(t.expected.cells.map(e => [e.ref, { displayFormatFill: 'FFFFFFFF', baseFill: 'FFFFFFFF', strikethrough: false }]))
+    const key = loadIconGlyphKey(REPO_ROOT)
+    return evaluateFormulaCase(c, { formulaObservations }, png, geom, parts, key && !('kind' in key) ? key : undefined)
+  }
+  const bar = (ctx: Ctx, b: Box, fraction: number, colour = '#638ec6'): void => {
+    if (fraction <= 0) return
+    ctx.fillStyle = colour
+    ctx.fillRect(b.x0 + 2, b.y0 + 2, Math.max(2, Math.round((b.x1 - b.x0 - 5) * fraction)), b.y1 - b.y0 - 4)
+  }
+  // The values of stage5-cfvo-formulas rows 2..9, and three bar readings: evaluated [20, 80], zero [0, 0] (full), min/max [5, 100].
+  const V = [5, 15, 30, 45, 60, 75, 90, 100]
+  const clamp = (x: number): number => Math.max(0, Math.min(1, x))
+
+  it('#1 isolated identical pixels never witness a bar (Stage 3 bar measurement, fill coverage)', async () => {
+    const ev = await evaluateWith('stage5-cfvo-formulas', ['cfvo-bar-formula'], (ctx, box) => {
+      for (let r = 2; r <= 9; r++) {
+        const mid = (b: Box): number => b.y0 + Math.floor((b.y1 - b.y0) * 0.5)
+        for (const [col, dx] of [['I', 10], ['W', 10], ['X', 20 + r], ['Y', 30 + r]] as const) { const b = box(`${col}${r}`); ctx.fillStyle = '#000000'; ctx.fillRect(b.x0 + dx, mid(b), 1, 1) }
+      }
+    })
+    expect(ev['bar:bounds-formula']!.status).not.toBe('discriminating')
+  })
+
+  it('#1 a positive icon witness must classify against the glyph key: noise never does', async () => {
+    const ev = await evaluateWith('stage5-cfvo-formulas', ['cfvo-icon-formula'], (ctx, box) => {
+      for (let r = 2; r <= 9; r++) for (const [col, n] of [['J', 3], ['Z', 3], ['AA', 7]] as const) { const b = box(`${col}${r}`); ctx.fillStyle = '#ff0000'; for (let k = 0; k < n; k++) ctx.fillRect(b.x0 + 4 + 2 * k, b.y0 + 6 + k, 3, 3) }
+    })
+    expect(ev['icon:thresholds-formula']!.status).not.toBe('discriminating')
+  })
+
+  it('#2 legitimate zero-length bars are expected-empty, not refused: two or more validated non-empty witnesses suffice', async () => {
+    const ev = await evaluateWith('stage5-cfvo-formulas', ['cfvo-bar-formula'], (ctx, box) => {
+      V.forEach((v, i) => {
+        const r = i + 2
+        const evaluated = clamp((v - 20) / 60)
+        bar(ctx, box(`I${r}`), evaluated)
+        bar(ctx, box(`W${r}`), evaluated)
+        bar(ctx, box(`X${r}`), 1)
+        bar(ctx, box(`Y${r}`), clamp((v - 5) / 95) || 0.02)
+      })
+    })
+    expect(ev['bar:bounds-formula'], JSON.stringify(ev['bar:bounds-formula']).slice(0, 300)).toMatchObject({ status: 'discriminating', matched: 'evaluated' })
+    // W2 (5) and W3 (15) sit below the evaluated minimum and draw nothing; they are checked as empty, not refused.
+    expect(ev['bar:bounds-formula']!.observed!['cfvo-bar-formula']!.I2).toBe('none')
+  })
+
+  it('#2 a configuration with fewer than two validated non-empty witnesses refuses', async () => {
+    const ev = await evaluateWith('stage5-cfvo-formulas', ['cfvo-bar-formula'], (ctx, box) => {
+      V.forEach((_v, i) => {
+        const r = i + 2
+        if (r === 9) { bar(ctx, box('I9'), 0.5); bar(ctx, box('W9'), 0.5) }
+        bar(ctx, box(`X${r}`), 1)
+        bar(ctx, box(`Y${r}`), 0.3)
+      })
+    })
+    expect(ev['bar:bounds-formula']).toMatchObject({ status: 'refused', code: 'formula-twin-blank' })
+  })
+
+  it('#3 icons compare by glyph class and frame position: 73 vs 74 px cells and right-aligned text do not matter (D13/Q13)', async () => {
+    const key = loadIconGlyphKey(REPO_ROOT)
+    expect(key && !('kind' in key)).toBe(true)
+    const k = key as Exclude<typeof key, undefined | { kind: 'refusal' }>
+    const crop = (b: number): DecodedPng => k.classes.get(k.classOfPair.get(`3Arrows:${b}`)!)!
+    // Values of rows 12..15 and the buckets of [percent 0, num 25, top] for top 40 (rule-wide), 60 or 80 (per range).
+    const vals: Record<string, number[]> = { B: [10, 20, 30, 40], D: [10, 45, 50, 60], F: [10, 45, 50, 80], P: [10, 20, 30, 40], Q: [10, 45, 50, 60], R: [10, 45, 50, 80], S: [10, 45, 50, 60], T: [10, 45, 50, 80] }
+    const top: Record<string, number> = { B: 40, D: 40, F: 40, P: 40, Q: 40, R: 40, S: 60, T: 80 }
+    const bucket = (v: number, t: number): number => (v >= t ? 2 : v >= 25 ? 1 : 0)
+    const c = CF_STAGE5_CASES.find(x => x.id === 'stage5-cfvo-scope')!
+    const geomParts = readZipPartsSync(await generateCaseArchive(c.id))!
+    const g = computeWorksheetRangeGeometry(geomParts, c.range)!
+    const widthOf = (ref: string): number => { const p = parseA1(ref)!; const before = g.colWidthsPt.slice(0, p.col - g.minCol).reduce((a, b) => a + b, 0); return Math.round(before + g.colWidthsPt[p.col - g.minCol]!) - Math.round(before) }
+    expect(new Set([widthOf('D13'), widthOf('Q13')]).size, 'the two cells round to different widths').toBe(2)
+    const ev = await evaluateWith('stage5-cfvo-scope', ['scope-icon'], (ctx, box, put) => {
+      for (const [col, vs] of Object.entries(vals)) vs.forEach((v, i) => {
+        const ref = `${col}${12 + i}`
+        put(ref, crop(bucket(v, top[col]!)))
+        // Right-aligned value strokes, drawn in the cell and in its same-content control alike.
+        const ctrl = c.expected.cells.find(e => e.ref === ref)!.controlRef
+        for (const r of [ref, ctrl]) { const b = box(r); ctx.fillStyle = '#000000'; ctx.fillRect(b.x1 - 12, b.y0 + 6, 2, 9); ctx.fillRect(b.x1 - 7, b.y0 + 6, 2, 9) }
+      })
+    })
+    expect(ev['formula:cfvo-scope-multi-range'], JSON.stringify(ev['formula:cfvo-scope-multi-range']).slice(0, 400)).toMatchObject({ status: 'discriminating', matched: 'rule-wide' })
+  })
+})

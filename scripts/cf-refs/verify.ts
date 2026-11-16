@@ -5612,10 +5612,11 @@ export function classifyIconCapture(c: CfOracleCase, evaluation: Readonly<Record
 export interface FormulaObservation {
   /** DisplayFormat at a ref (`pre:`/`calc:`/`post:` prefixes select the build-time or live-edit observations). */
   fill(ref: string): { fill: string; strike: boolean } | undefined
-  /** Whether two cells' capture crops are equal within the classification tolerance; undefined when unmeasurable. */
-  same(a: string, b: string): boolean | undefined
-  /** Whether a cell shows a real visual: its crop differs from its unformatted control's by a strong delta (fix round 1 #4). */
-  present?(ref: string): boolean | undefined
+  /**
+   * Fix round 2: what a bar or icon cell shows, measured by the Stage 3/4 machinery (`S5Visual`); undefined when
+   * unmeasurable. Crop configurations compare these, never raw crops.
+   */
+  visual?(ref: string, kind: 'bar' | 'icon'): S5Visual | undefined
 }
 
 export interface FormulaCapabilityEvaluation {
@@ -5645,7 +5646,7 @@ export function evaluateFormulaCapabilities(
   configs: readonly S5Configuration[],
   controls: Readonly<Record<string, string>>,
   obs: FormulaObservation,
-  options: { visualRefs?: ReadonlySet<string> } = {},
+  options: { kindOf?: (cfg: S5Configuration) => 'bar' | 'icon' } = {},
 ): Record<string, FormulaCapabilityEvaluation> {
   const byCap = new Map<string, S5Configuration[]>()
   for (const cfg of configs) byCap.set(cfg.capabilityId, [...(byCap.get(cfg.capabilityId) ?? []), cfg])
@@ -5654,6 +5655,8 @@ export function evaluateFormulaCapabilities(
     const refuse = (code: CfRefusalCode, reason: string, observed?: Record<string, Record<string, string>>): FormulaCapabilityEvaluation => ({ status: 'refused', code, reason, ...(observed ? { observed } : {}) })
     const observed: Record<string, Record<string, string>> = {}
     let failure: FormulaCapabilityEvaluation | undefined
+    const kindOf = (cfg: S5Configuration): 'bar' | 'icon' => options.kindOf?.(cfg) ?? 'bar'
+    const visual = (cfg: S5Configuration, ref: string): S5Visual | undefined => obs.visual?.(ref, kindOf(cfg))
     // concrete(cfg, ref, token): what the token predicts, resolved through the twin's observation.
     const concrete = (cfg: S5Configuration, ref: string, token: string): string | undefined => {
       const m = /^twin:([A-Z]+\d+)(\+strike)?$/.exec(token)
@@ -5665,7 +5668,11 @@ export function evaluateFormulaCapabilities(
     const matches = (cfg: S5Configuration, ref: string, token: string): boolean | undefined => {
       const want = concrete(cfg, ref, token)
       if (want === undefined) return undefined
-      if (cfg.observable === 'crop') return obs.same(ref, want)
+      if (cfg.observable === 'crop') {
+        const a = visual(cfg, ref)
+        const b = visual(cfg, want)
+        return a && b ? sameS5Visual(a, b) : undefined
+      }
       return observed[cfg.id]![ref] === want
     }
     const differs = (cfg: S5Configuration, ref: string, a: string, b: string): boolean | undefined => {
@@ -5675,8 +5682,9 @@ export function evaluateFormulaCapabilities(
       if (x === undefined || y === undefined) return undefined
       if (cfg.observable === 'crop') {
         if (x === y) return false
-        const same = obs.same(x, y)
-        return same === undefined ? undefined : !same
+        const vx = visual(cfg, x)
+        const vy = visual(cfg, y)
+        return vx && vy ? !sameS5Visual(vx, vy) : undefined
       }
       return x !== y
     }
@@ -5687,7 +5695,10 @@ export function evaluateFormulaCapabilities(
         const ctrl = controls[s5Bare(ref)]
         const co = ctrl !== undefined ? obs.fill(`${s5PrefixOf(ref)}${ctrl}`) : undefined
         if (!o || !co) { failure ??= refuse('fill-unobserved', `${cfg.id}: ${o ? `control ${ctrl ?? '(none)'} of ${ref}` : ref} has no DisplayFormat observation`); continue }
-        observed[cfg.id]![ref] = fillToken(o)
+        if (cfg.observable === 'crop') {
+          const v = visual(cfg, ref)
+          observed[cfg.id]![ref] = v ? describeS5Visual(v) : 'unmeasurable'
+        } else observed[cfg.id]![ref] = fillToken(o)
         if (co.fill !== 'none' || co.strike) failure ??= refuse('formula-control-formatted', `${cfg.id}: the same-content control ${ctrl} of ${ref} shows ${fillToken(co)}, so the format is not the rule's (Lesson 3)`)
       }
     }
@@ -5739,17 +5750,17 @@ export function evaluateFormulaCapabilities(
       if (shortfall) break
     }
     if (shortfall) { out[cap] = { ...refuse('formula-replication-shortfall', shortfall, observed), survivors }; continue }
-    // Fix round 1 #4: a twin the winner names that sits under a bar or icon rule must show a real visual (independent of
-    // crop equality): its crop differs strongly from its unformatted control.
+    // Fix round 2: a measured configuration rests on validated non-empty witnesses. A cell whose winning reading
+    // predicts an empty cell (a zero-length bar, no icon) is checked as empty by the same measurement; at least two cells
+    // per configuration must show a measured bar or classified icon that its twin also shows (S4-REPLICATE).
     let blank: FormulaCapabilityEvaluation | undefined
     for (const cfg of evidence.filter(c => c.observable === 'crop')) {
-      for (const ref of cfg.refs) {
+      const witnesses = cfg.refs.filter(ref => {
         const t = /^twin:([A-Z]+\d+)/.exec(cfg.hypotheses[winner]?.[ref] ?? '')?.[1]
-        if (!t || !options.visualRefs?.has(t)) continue
-        const shown = obs.present?.(t)
-        if (shown === undefined) { blank ??= refuse('missing-capture', `${cfg.id}: twin ${t} cannot be checked for a visual`, observed); continue }
-        if (!shown) blank ??= refuse('formula-twin-blank', `${cfg.id}: the twin ${t} the winning reading ${winner} names shows no bar or icon against its control, so crop equality proves nothing`, observed)
-      }
+        const v = t ? visual(cfg, t) : undefined
+        return v !== undefined && v.kind !== 'none'
+      })
+      if (witnesses.length < 2) blank ??= refuse('formula-twin-blank', `${cfg.id}: ${witnesses.length} validated non-empty ${kindOf(cfg)} witness${witnesses.length === 1 ? '' : 'es'} for ${winner}, fewer than 2 (S4-REPLICATE): empty cells alone prove nothing`, observed)
     }
     if (blank) { out[cap] = { ...blank, survivors }; continue }
     out[cap] = { status: 'discriminating', reason: `${winner} matches every designated cell; each rival is eliminated at >= 2 decisive cells of every configuration designed to separate it`, matched: winner, survivors, observed }
@@ -5759,27 +5770,13 @@ export function evaluateFormulaCapabilities(
 
 type S5FillRecord = Readonly<Record<string, { displayFormatFill?: string; baseFill?: string; strikethrough?: boolean }>>
 
-/**
- * Two cells' inner crops over their common area: fractional column widths (73.5 pt) round neighbouring boxes to 73 or 74
- * px, so the crops are aligned at the top-left and cut to the smaller box (the 1 px right/bottom edge is gridline-adjacent).
- */
-function s5CropPair(png: DecodedPng, geom: WorksheetRangeGeometry, a: string, b: string): [DecodedPng, DecodedPng] | undefined {
-  const ra = iconInnerBox(png, geom, a)
-  const rb = iconInnerBox(png, geom, b)
-  if (!ra || !rb || Math.abs(ra.width - rb.width) > 1 || Math.abs(ra.height - rb.height) > 1) return undefined
-  const width = Math.min(ra.width, rb.width) - 1
-  const height = Math.min(ra.height, rb.height) - 1
-  const ca = cropPng(png, { x: ra.x, y: ra.y, width, height })
-  const cb = cropPng(png, { x: rb.x, y: rb.y, width, height })
-  return ca && cb ? [ca, cb] : undefined
-}
-
 /** The observation source of a measured Stage 5 case: its sidecar fills, the build-time manual observations and the PNG. */
 export function formulaObservationOf(
   c: CfOracleCase,
   sidecar: Record<string, unknown>,
   png: DecodedPng | undefined,
   geom: WorksheetRangeGeometry | undefined,
+  iconKey?: IconGlyphKey,
 ): FormulaObservation {
   const tables: Record<string, S5FillRecord | undefined> = {
     '': sidecar.formulaObservations as S5FillRecord | undefined,
@@ -5794,18 +5791,77 @@ export function formulaObservationOf(
       const base = typeof rec.baseFill === 'string' ? rec.baseFill : 'FFFFFFFF'
       return { fill: rec.displayFormatFill.toUpperCase() === base.toUpperCase() ? 'none' : rec.displayFormatFill.toUpperCase(), strike: rec.strikethrough === true }
     },
-    same(a, b) {
-      if (!png || !geom) return undefined
-      const pair = s5CropPair(png, geom, a, b)
-      return pair ? cropDelta(pair[0], pair[1]).max <= ICON_CLASS_TOLERANCE : undefined
-    },
-    present(ref) {
+    visual(ref, kind) {
       if (!png || !geom) return undefined
       const ctrl = c.expected.cells.find(e => e.ref === ref)?.controlRef
-      const pair = ctrl ? s5CropPair(png, geom, ref, ctrl) : undefined
-      return pair ? cropDelta(pair[0], pair[1]).max >= BAR_STRONG_DELTA : undefined
+      if (!ctrl) return undefined
+      return kind === 'bar' ? s5BarVisual(png, geom, ref, ctrl) : s5IconVisual(png, geom, ref, ctrl, iconKey)
     },
   }
+}
+
+/**
+ * Fix round 2: what a bar or icon cell shows, measured by the Stage 3/4 machinery, never a raw pixel delta. A bar is the
+ * Stage 3 column scan (`measureBarGeometry`: three scanlines that agree, the control's text masked) whose box is at least
+ * half filled with ink; an icon is a Stage 4 glyph-key class (`classifyIconCrop` on the left `ICON_CROP_WIDTH_PX` px, twin
+ * sets included) at the frame position `measureIconGeometry` locates, the control's text excluded. Positions are relative
+ * to the cell's own box, so a 73 px and a 74 px cell compare equal. `undefined` is unmeasurable (fail closed).
+ */
+export type S5Visual = { kind: 'none' } | { kind: 'bar'; left: number; right: number } | { kind: 'icon'; cls: string; left: number; top: number }
+
+export const describeS5Visual = (v: S5Visual): string => (v.kind === 'none' ? 'none' : v.kind === 'bar' ? `bar:${v.left}-${v.right}` : `icon:${v.cls}@${v.left},${v.top}`)
+
+/** Two measured visuals agree: both empty, bars within +-1 px at each edge, or icons of agreeing classes within +-1 px. */
+export function sameS5Visual(a: S5Visual, b: S5Visual): boolean {
+  if (a.kind !== b.kind) return false
+  if (a.kind === 'none') return true
+  if (a.kind === 'bar' && b.kind === 'bar') return Math.abs(a.left - b.left) <= 1 && Math.abs(a.right - b.right) <= 1
+  if (a.kind === 'icon' && b.kind === 'icon') {
+    const ma = iconTwinSetMembers(a.cls) ?? [a.cls]
+    const mb = iconTwinSetMembers(b.cls) ?? [b.cls]
+    return ma.some(x => mb.includes(x)) && Math.abs(a.left - b.left) <= 1 && Math.abs(a.top - b.top) <= 1
+  }
+  return false
+}
+
+function s5BarVisual(png: DecodedPng, geom: WorksheetRangeGeometry, ref: string, ctrl: string): S5Visual | undefined {
+  const res = measureBarGeometry(png, geom, [ref], { controlOf: () => ctrl, axisArgb: 'FF000000', tolerancePx: 1 })
+  if ('kind' in res) return undefined
+  const o = (res as ReadonlyMap<string, CfObservedBar>).get(ref)
+  if (!o) return undefined
+  if (!o.bar) return { kind: 'none' }
+  // Fill coverage: a bar is a filled box, so at least half of its pixels differ strongly from the control's.
+  const box = cellPixelBox(png, geom, ref)
+  const cbox = cellPixelBox(png, geom, ctrl)
+  if (!box || !cbox) return undefined
+  let ink = 0
+  let all = 0
+  for (let y = o.bar.topPx; y <= o.bar.bottomPx; y++) {
+    for (let x = o.bar.leftPx; x <= o.bar.rightPx; x++) {
+      all++
+      const cx = cbox.x0 + (x - box.x0)
+      const cy = cbox.y0 + (y - box.y0)
+      if (cx < cbox.x1 && cy < cbox.y1 && rgbMaxDelta(pixelAt(png, x, y), pixelAt(png, cx, cy)) >= BAR_STRONG_DELTA) ink++
+    }
+  }
+  if (all < 4 || ink * 2 < all) return undefined
+  return { kind: 'bar', left: o.bar.leftPx - o.cellLeftPx, right: o.bar.rightPx - o.cellLeftPx }
+}
+
+function s5IconVisual(png: DecodedPng, geom: WorksheetRangeGeometry, ref: string, ctrl: string, key: IconGlyphKey | undefined): S5Visual | undefined {
+  const rect = iconCropRect(png, geom, ref)
+  if (!rect) return undefined
+  const cls = key ? classifyIconCrop(png, rect, key.classes, { tolerance: ICON_CLASS_TOLERANCE, twins: key.twins, faint: key.faint }) : undefined
+  const glyph = cls && 'glyphClass' in cls ? cls : undefined
+  const reference = glyph && key ? key.classes.get(glyph.referenceClass ?? glyph.glyphClass) : undefined
+  const res = measureIconGeometry(png, geom, [ref], { controlOf: () => ctrl, tolerancePx: 1, unstable: 'record', ...(reference ? { referenceOf: () => reference } : {}) })
+  if ('kind' in res) return undefined
+  const o = (res as ReadonlyMap<string, CfObservedIcon>).get(ref)
+  if (!o) return undefined
+  if (!o.icon) return glyph && iconTwinSetMembers(glyph.glyphClass)?.includes(ICON_NO_ICON_MEMBER) ? undefined : { kind: 'none' }
+  // Ink that classifies to no key class (or two) is not an icon witness: unmeasurable, never a match.
+  if (!glyph || !key || o.edgeStable === false) return undefined
+  return { kind: 'icon', cls: glyph.glyphClass, left: o.icon.leftPx - o.cellLeftPx, top: o.icon.topPx - o.cellTopPx }
 }
 
 /**
@@ -5841,11 +5897,9 @@ export function resolveFormulaConfigurations(c: CfOracleCase, parts?: Map<string
   })
 }
 
-/** Cells covered by a bar or icon rule (their crops must show a visual when a winning reading names them, fix round 1 #4). */
-function visualRefsOf(c: CfOracleCase): Set<string> {
-  const out = new Set<string>()
-  for (const e of c.expected.cells) if (c.markers.some(m => (m.ruleType === 'dataBar' || m.ruleType === 'iconSet') && isCellInSqref(e.ref, m.sqref))) out.add(e.ref)
-  return out
+/** Whether a crop configuration measures bars or icons: the visual rule covering its first designated cell. */
+function visualKindOf(c: CfOracleCase): (cfg: S5Configuration) => 'bar' | 'icon' {
+  return cfg => (c.markers.some(m => m.ruleType === 'iconSet' && cfg.refs.some(r => isCellInSqref(s5Bare(r), m.sqref))) ? 'icon' : 'bar')
 }
 
 /**
@@ -5875,8 +5929,14 @@ export function formulaControlsOf(c: CfOracleCase): Record<string, string> {
 }
 
 /** Evaluates a Stage 5 case's configurations against a sidecar and PNG (capture writes exactly this into the sidecar). */
-export function evaluateFormulaCase(c: CfOracleCase, sidecar: Record<string, unknown>, png?: DecodedPng, geom?: WorksheetRangeGeometry, parts?: Map<string, Uint8Array>): Record<string, FormulaCapabilityEvaluation> {
-  return evaluateFormulaCapabilities(resolveFormulaConfigurations(c, parts), formulaControlsOf(c), formulaObservationOf(c, sidecar, png, geom), { visualRefs: visualRefsOf(c) })
+export function evaluateFormulaCase(c: CfOracleCase, sidecar: Record<string, unknown>, png?: DecodedPng, geom?: WorksheetRangeGeometry, parts?: Map<string, Uint8Array>, iconKey?: IconGlyphKey): Record<string, FormulaCapabilityEvaluation> {
+  return evaluateFormulaCapabilities(resolveFormulaConfigurations(c, parts), formulaControlsOf(c), formulaObservationOf(c, sidecar, png, geom, iconKey), { kindOf: visualKindOf(c) })
+}
+
+/** The glyph key a Stage 5 icon measurement classifies against (the Stage 4 key capture), or undefined. */
+export function stage5IconKey(rootDir: string): IconGlyphKey | undefined {
+  const key = loadIconGlyphKey(rootDir)
+  return key && !('kind' in key) ? key : undefined
 }
 
 interface FormulaCaptureOutcome {
@@ -5894,6 +5954,7 @@ function verifyFormulaCapture(
   geom: WorksheetRangeGeometry,
   inputSha256: string,
   parts: Map<string, Uint8Array>,
+  rootDir: string,
 ): { ok: true; outcome: FormulaCaptureOutcome } | { ok: false; code: CfRefusalCode; reason: string } {
   const fail = (code: CfRefusalCode, reason: string): { ok: false; code: CfRefusalCode; reason: string } => ({ ok: false, code, reason })
   if (sidecar.lockBefore !== 'unlocked' || sidecar.lockAfter !== 'unlocked') return fail('display-locked', `Capture lock state before="${String(sidecar.lockBefore)}" after="${String(sidecar.lockAfter)}": a capture is valid only when the display was unlocked before and after it`)
@@ -5910,7 +5971,7 @@ function verifyFormulaCapture(
     if (m.sqrefOrder === 'any' && c.retainedSqrefs?.[m.capabilityId] === undefined) return fail('unobserved-expectation', `Case ${c.id}: the retained sqref order of ${m.capabilityId} was not recorded at build`)
   }
   if (c.formulaDynamicRefresh && (!sidecar.formulaDynamicRefresh || typeof sidecar.formulaDynamicRefresh !== 'object')) return fail('fill-unobserved', `Case ${c.id} declares a dynamic refresh but its sidecar records no formulaDynamicRefresh observation`)
-  const evaluation = evaluateFormulaCase(c, sidecar, decoded, geom, parts)
+  const evaluation = evaluateFormulaCase(c, sidecar, decoded, geom, parts, stage5IconKey(rootDir))
   if (JSON.stringify(sidecar.formulaEvaluation ?? null) !== JSON.stringify(evaluation)) return fail('sidecar-mismatch', `Sidecar formulaEvaluation for ${c.id} differs from the evaluation the verifier recomputes`)
   // A cell's claimed DisplayFormat outcome must be what the sidecar recorded.
   const obs = formulaObservationOf(c, sidecar, decoded, geom)
@@ -6538,7 +6599,7 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     }
 
     if (isFormulaCase) {
-      const res = verifyFormulaCapture(c, sidecar, decoded, activeGeom, inputSha256, parts)
+      const res = verifyFormulaCapture(c, sidecar, decoded, activeGeom, inputSha256, parts, rootDir)
       if (!res.ok) return { kind: 'refusal', id: c.id, status: c.status, code: res.code, reason: res.reason, structuralValid: true }
       formulaOutcome = res.outcome
       continue
