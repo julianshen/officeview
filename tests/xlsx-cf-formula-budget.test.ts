@@ -687,11 +687,12 @@ describe('the per-node text model: own passes per operation, ASCII from the snap
     const r = (() => { let a = 341; return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296 } })()
     const pick = <T>(xs: readonly T[]): T => xs[Math.floor(r() * xs.length)]!
     const values: CellInput[] = ['', 'ab', 'Hello World', '  a  b  ', 'ß'.repeat(4), 'ΐ'.repeat(3), 'İi', 'x'.repeat(30), 7, -0.00000123456789012345, 1e21, true, false, null]
-    const leaves = ['A1', 'A2', 'A3', 'A4', '"ab"', '"ẞ"', '1.5', 'TRUE', '-12345.678']
+    const leaves = ['A1', 'A2', 'A3', 'A4', 'A5', '"ab"', '"ẞ"', '1.5', 'TRUE', '-12345.678']
     const ops: Array<(a: string, b: string) => string> = [
       a => `UPPER(${a})`, a => `LOWER(${a})`, a => `TRIM(${a})`, a => `LEFT(${a},2)`, a => `RIGHT(${a},3)`, a => `MID(${a},2,3)`,
       (a, b) => `${a}&${b}`, (a, b) => `CONCAT(${a},${b})`, (a, b) => `IF(TRUE,${a},${b})`, (a, b) => `IFERROR(${a},${b})`, a => `LEN(${a})`,
       (_a, b) => `IF(TRUE,,${b})`, (a, _b) => `IF(FALSE,${a},)`, // omitted arguments
+      a => `IF(TRUE,${a},"")`, a => `IF(FALSE,"",${a})`, // a selected blank reference reads as 0 (round 4, finding 2)
     ]
     const gen = (depth: number): string => (depth === 0 || r() < 0.25 ? pick(leaves) : pick(ops)(gen(depth - 1), gen(depth - 1)))
     let checked = 0
@@ -744,6 +745,31 @@ describe('Task 34 fix round 4 (codex round-3 findings 1, 2, 4, 5)', () => {
     expect(short.evaluate(0, 0, 2)).toEqual({ kind: 'ready', value: { kind: 'number', value: 0 } })
     expect(calls[0]!.matcher).toBe(4)
     short.dispose()
+  })
+  it('finding 2: IF converts a selected blank to 0, so the length it propagates covers "0"', async () => {
+    // Codex counterexample: 120 nested UPPER over IF(TRUE,A1,"") with A1 blank renders "0" through every UPPER.
+    const text = `${'UPPER('.repeat(120)}IF(TRUE,A1,"")${')'.repeat(120)}`
+    const calls: CfCallWorkBreakdown[] = []
+    const batch = await batchOf([formulaRule(text, 'B1')], fakeSource({}), { onCall: b => calls.push(b) })
+    evaluateNodeSpy.mockClear()
+    expect(batch.evaluate(0, 0, 1)).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
+    expect(evaluateNodeSpy).not.toHaveBeenCalled()
+    batch.dispose()
+    expect(engineEval(text, {}, a1('B1')).value).toBe('0')
+    // The model: the IF node renders at least "0", and each UPPER reads and writes it (2 characters each).
+    const f = compile(text, 'B1')
+    const trace = new Map<AstNode, TextValue>()
+    const units = cfTextUnits(cfCallShape(f), { viewCells: 0, atoms: [{ cells: 0, stringUnits: 0, longestString: 0 }] }, trace)
+    expect(trace.get(f.ast)!.len).toBeGreaterThanOrEqual(1)
+    expect(units.chars).toBeGreaterThanOrEqual(120 * 2)
+    // IF(FALSE,"",A1) and an omitted branch convert too; an IFERROR passes a blank through unconverted (renders "").
+    for (const [t, want] of [['IF(FALSE,"",A1)', '0'], ['IFERROR(A1,"x")', '']] as const) {
+      const g = compile(t, 'B1')
+      const tr = new Map<AstNode, TextValue>()
+      cfTextUnits(cfCallShape(g), { viewCells: 0, atoms: [{ cells: 0, stringUnits: 0, longestString: 0 }] }, tr)
+      expect(evaluatorModule.coerceToString(engineEval(t, {}, a1('B1')).value as never)).toBe(want)
+      expect(tr.get(g.ast)!.len, t).toBeGreaterThanOrEqual(want.length)
+    }
   })
   it('finding 5: a refused frequency key pays its key-processing allowance to the budget and the ceiling; an admitted one pays it once', async () => {
     const run = async (B1: string) => {

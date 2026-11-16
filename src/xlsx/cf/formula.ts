@@ -999,16 +999,24 @@ const TEXT_PROFILE: Readonly<Record<string, TextProfile>> = {
 for (const name of CF_FORMULA_FUNCTIONS.keys()) if (!TEXT_PROFILE[name]) throw new Error(`CF text model has no profile for ${name}`)
 /** One node's value as text: the most characters it can render to, whether it may be a string, and whether a string
  * it holds is ASCII (non-strings render ASCII). */
-export type TextValue = Readonly<{ len: number; text: boolean; ascii: boolean }>
+export type TextValue = Readonly<{ len: number; text: boolean; ascii: boolean
+  /** The value may be a blank reference (round 4, finding 2): IF's selected branch converts it to 0. */
+  blank?: boolean }>
 const NUMBER_VALUE: TextValue = { len: CF_TEXT_RENDER_UNITS, text: false, ascii: true }
 const BOOLEAN_VALUE: TextValue = { len: 5, text: false, ascii: true }
 const BLANK_VALUE: TextValue = { len: 0, text: false, ascii: true }
+/** A blank reference as read: renders empty, but may reach IF as a blank. */
+const BLANK_READ: TextValue = { len: 0, text: false, ascii: true, blank: true }
+/** IF's selected-branch scalarization (functions.ts IF: a blank becomes 0, rendered "0"). */
+const ZERO_VALUE: TextValue = { len: 1, text: false, ascii: true }
 const literalValue = (v: ElementValue): TextValue => {
   if (typeof v === 'string') return { len: v.length, text: true, ascii: isAscii(v) }
   if (v === null) return BLANK_VALUE
   return { len: Math.min(coerceToString(v).length, CF_TEXT_RENDER_UNITS), text: false, ascii: true }
 }
-const union = (a: TextValue, b: TextValue): TextValue => ({ len: Math.max(a.len, b.len), text: a.text || b.text, ascii: a.ascii && b.ascii })
+const union = (a: TextValue, b: TextValue): TextValue => ({ len: Math.max(a.len, b.len), text: a.text || b.text, ascii: a.ascii && b.ascii, blank: (a.blank ?? false) || (b.blank ?? false) })
+/** IF's branch as returned: a possibly blank branch may also be the number 0 (and is never blank after IF). */
+const ifBranch = (x: TextValue): TextValue => (x.blank ? { len: Math.max(x.len, ZERO_VALUE.len), text: x.text, ascii: x.ascii } : x)
 const growth = (x: TextValue): number => (x.ascii ? 1 : CASE_GROWTH)
 /** Characters a coercion to a number walks (only a string is parsed). */
 const numberPasses = (x: TextValue): number => (x.text ? x.len * COERCE_NUMBER_PASSES : 0)
@@ -1038,7 +1046,7 @@ export function cfTextUnits(shape: CfCallShape, payload: CfPayloadMetrics, trace
   const out = (v: TextValue): TextValue => { if (v.text) intermediate = Math.max(intermediate, v.len); return v }
   const cellValue = (i: number): TextValue => {
     const a = atom(i)
-    if (a.cells === 0) return BLANK_VALUE
+    if (a.cells === 0) return BLANK_READ
     const strings = a.strings ?? (a.stringUnits > 0 ? a.cells : 0)
     if (strings === 0) return NUMBER_VALUE
     // An atom without measured ASCII flags is conservatively non-ASCII.
@@ -1101,7 +1109,8 @@ export function cfTextUnits(shape: CfCallShape, payload: CfPayloadMetrics, trace
             return out({ len: x.len, text: true, ascii: x.ascii })
           }
           case 'logical': for (const a of args) chars += booleanPasses(a); return BOOLEAN_VALUE
-          case 'if': chars += booleanPasses(args[0] ?? BLANK_VALUE); return out(union(args[1] ?? BOOLEAN_VALUE, args[2] ?? BOOLEAN_VALUE))
+          // A selected blank branch is returned as 0 (round 4, finding 2), applied per branch before the union.
+          case 'if': chars += booleanPasses(args[0] ?? BLANK_VALUE); return out(union(ifBranch(args[1] ?? BOOLEAN_VALUE), ifBranch(args[2] ?? BOOLEAN_VALUE)))
           case 'pass': return out(args.reduce(union, BLANK_VALUE))
           case 'is': return BOOLEAN_VALUE
           case 'number-of-args': for (const a of args) chars += numberPasses(a); return NUMBER_VALUE
