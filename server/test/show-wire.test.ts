@@ -271,7 +271,7 @@ describe('show wire', () => {
     s.stop()
   }, 60_000)
 
-  test('a slide holding media → error still (so no track), and no Morph pair into or out of it (PR #78 round 12)', async () => {
+  test('a slide whose drawing depends on a media end → error still (so no track), and no Morph pair into or out of it (PR #78 round 12)', async () => {
     // The client ends every media node at once (no media plays in a streamed show); no server history does.
     const s = await session(await mediaEndRevealDeck('onEnd'))
     const r = await s.c.showPlan(0, 1, 'full')
@@ -279,10 +279,25 @@ describe('show wire', () => {
     expect(r.messages).toEqual([])
     s.stop()
     for (const side of ['to', 'from'] as const) {
-      const m = await session(await morphDeck({ media: side }))
+      const m = await session(await morphDeck({ media: side, mediaReveal: true }))
       const pair = await m.c.showMorph(0, 1, 0, 1, 'full', { ms: 60_000 })
       expect({ side, end: pair.end }).toEqual({ side, end: error(pair.reqId, 'morph-fallback') })
       expect(m.store.showDeliveries(m.sid)).toEqual([])
+      m.stop()
+    }
+  }, 60_000)
+
+  test('media no drawing depends on: the plan ships layers, and Morph pairs into and out of the slide build (round 12b)', async () => {
+    const s = await session(await mediaEndRevealDeck('unrelated'))
+    const r = await s.c.showPlan(0, 1, 'full')
+    expect(r.end).toBeUndefined()
+    expect(planOf(decodeAll(0, r.messages)).steps.map((x) => x.eligibility)).toEqual(['layers'])
+    s.stop()
+    for (const side of ['to', 'from'] as const) {
+      const m = await session(await morphDeck({ media: side }))
+      const pair = await m.c.showMorph(0, 1, 0, 1, 'full', { ms: 60_000 })
+      expect({ side, end: pair.end }).toEqual({ side, end: undefined })
+      expect(pair.messages.length).toBeGreaterThan(0)
       m.stop()
     }
   }, 60_000)

@@ -40,13 +40,13 @@
  */
 import { invert, stateMatrix } from '../../../src/slideshow/affine'
 import type { SchedulerSnapshot } from '../../../src/slideshow/engine/scheduler'
-import type { SlideCursor, SlideTimeline } from '../../../src/slideshow/engine/steps'
+import { createSlideTimeline, type SlideCursor, type SlideTimeline, type SlideTimelineOptions } from '../../../src/slideshow/engine/steps'
 import type { FontResolver } from '../../../src/core/fonts/register'
 import type { PreparedSlide } from '../../../src/slideshow/prepare'
 import type { PlanLayer } from '../../../src/slideshow/render/plan'
 import { createRng } from '../../../src/slideshow/rng'
 import { targetKey } from '../../../src/slideshow/target'
-import type { Affine, BehaviourNode, DiagnosticSink, TimeNode, LayerBitmap, RenderState, TargetState } from '../../../src/slideshow/types'
+import type { Affine, BehaviourNode, DiagnosticSink, TimeNode, TimingTree, LayerBitmap, RenderState, TargetState } from '../../../src/slideshow/types'
 import { SHOW_PLAN_LIMITS, type Rect } from '../../../src/stream/show-plan'
 import { showCanvasBackend } from './canvas'
 import { createSlideComposer, deviceMatrix, drawsAt, maskedRaster, slideStateAt, type DrawnLayer } from './compose'
@@ -63,6 +63,11 @@ export interface ClassifyInput {
   triggers: readonly string[]
   /** Additive to the brief: the font resolver the rasters used (it measures a paragraph range's mask box). Default: identity. */
   resolveFont?: FontResolver
+  /**
+   * PR #78 round 12b: `timeline` rebuilt under each media-end assumption (`mediaEndTimelines`). Required for a slide
+   * holding media: without it such a slide plays its still (fail closed).
+   */
+  mediaTimelines?: readonly SlideTimeline[]
 }
 export interface StepClass { eligibility: 'layers' | 'composited'; reason?: 'colour' | 'mask' | 'emphasis' | 'budget' | 'swept' | 'strict-marks' | 'mark-rest' | 'limits' | 'media'; frames?: number }
 export interface Classification {
@@ -465,8 +470,9 @@ export function classifySlide(input: ClassifyInput): Classification {
     if (composer.refused.length) throw new Still('limits')
     // PR #78 round 12: a streamed show plays no media, so the client ends every audio/video node on the first frame
     // it is active (`syntheticEnds` in the shared driver), at a frame-dependent time and only on a live cursor.
-    // Every history built here has no media end, so what that end starts or cuts short is unproven: the still.
-    if (holdsMedia(ps)) throw new Still('media')
+    // Every history built here has no media end. Round 12b: unless every observation is the same under each
+    // media-end assumption (`mediaEndMatters`), what that end starts or cuts short is unproven: the still.
+    if (holdsMedia(ps) && (!input.mediaTimelines?.length || mediaEndMatters(ps, timeline, input.mediaTimelines, input.triggers, drawOpts))) throw new Still('media')
 
     // ---- Plan every state, before any composition -------------------------------------------------------
     const boundaries = Array.from({ length: n + 1 }, (_, k) => draws(stateAt(timeline.checkpoint(k), 0)))
@@ -686,6 +692,100 @@ export function holdsMedia(ps: PreparedSlide): boolean {
     return n.kind === 'audio' || n.kind === 'video'
   }
   return roots.some(r => !!r && media(r, 0))
+}
+
+/**
+ * PR #78 round 12b: the media-end assumptions. The client ends a media node on its first active frame, at a time it
+ * does not know in advance; the server brackets it. Each assumption sets every audio and video node's duration:
+ * `0` (it ends as it begins, the earliest synthetic end), `1` ms (an end just after the begin, so a dependence on
+ * the end's exact time differs from `0`), and `'indefinite'` (it never ends). The node's own duration (the
+ * timeline the server plays from) is the fourth. The node's `end` conditions and repeats are kept.
+ */
+export const MEDIA_END_ASSUMPTIONS: ReadonlyArray<number | 'indefinite'> = [0, 1, 'indefinite']
+
+/**
+ * The slide's timeline under each media-end assumption (empty when the tree holds no media). Only the media leaves
+ * and the containers above them are copied; every other node keeps its identity (the prepared slide's entrances
+ * and the text fan-out's `orderOf` are keyed by node).
+ */
+export function mediaEndTimelines(tree: TimingTree | { refused: string } | undefined, options: SlideTimelineOptions): SlideTimeline[] {
+  if (!tree || 'refused' in tree) return []
+  const out: SlideTimeline[] = []
+  for (const dur of MEDIA_END_ASSUMPTIONS) {
+    const order = new Map<TimeNode, number>()
+    let preorder = 0, found = false
+    const copy = (n: TimeNode, depth: number): TimeNode => {
+      const i = preorder++
+      const own = options.orderOf?.get(n) ?? i
+      if (depth > 256) { order.set(n, own); return n }
+      if ('children' in n) {
+        const kids = n.children.map(c => copy(c, depth + 1))
+        const same = kids.every((k, j) => k === n.children[j])
+        const m = same ? n : { ...n, children: kids } as TimeNode
+        order.set(m, own)
+        return m
+      }
+      if (n.kind !== 'audio' && n.kind !== 'video') { order.set(n, own); return n }
+      found = true
+      const m = { ...n, ctn: { ...n.ctn, durMs: dur } } as TimeNode
+      order.set(m, own)
+      return m
+    }
+    const root = copy(tree.root, 0)
+    if (!found) return []
+    out.push(createSlideTimeline({ ...tree, root }, { ...options, orderOf: order }))
+  }
+  return out
+}
+
+/**
+ * PR #78 round 12b: whether the slide's observations differ between `timeline` and any of `variants` (its
+ * media-end timelines). The observations are every history the classifier evaluates: the step count, each
+ * boundary, the autoplay interval and each click step (start, duration, sample times, the draw at every sample,
+ * the non-media behaviours still running after it) and every trigger sequence from every checkpoint. Equal under
+ * every assumption, no drawing depends on when a media node ends, so the client's synthetic end changes nothing
+ * the classification saw.
+ */
+export function mediaEndMatters(ps: PreparedSlide, timeline: SlideTimeline, variants: readonly SlideTimeline[], triggers: readonly string[], drawOpts?: Parameters<typeof drawsAt>[2]): boolean {
+  const opts = drawOpts ?? { measure: showCanvasBackend().createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D }
+  const layerIx = new Map(ps.layers.map((l, i) => [l, i]))
+  const signature = (tl: SlideTimeline): string => {
+    const out: unknown[] = []
+    const draw = (cursor: SlideCursor, t: number) =>
+      drawsAt(ps, slideStateAt(ps, tl, cursor, t, createRng(0x5eed + ps.index), NOOP_SINK), opts).map(d => [layerIx.get(d.layer), d.state])
+    const running = (cursor: SlideCursor, t: number) =>
+      tl.stateAt(cursor, t).active.filter(e => e.node.kind !== 'audio' && e.node.kind !== 'video').map(e => e.node.ctn.id).sort((a, b) => a - b)
+    const interval = (cursor: SlideCursor, t0: number, dur: number) => {
+      const times = samplesOver(dur, tl.keyTimes(cursor, t0, t0 + dur).map(t => t - t0))
+      out.push(t0, dur, times, times.map(t => draw(cursor, t0 + t)), running(cursor, t0 + dur + 1))
+    }
+    const n = tl.steps
+    out.push(n)
+    for (let k = 0; k <= n; k++) out.push(draw(tl.checkpoint(k), 0))
+    const t0 = startTime(tl)
+    out.push(tl.keyTimes(tl.initial(), 0, Number.POSITIVE_INFINITY))
+    interval(tl.initial(), 0, t0)
+    for (let k = 0; k < n; k++) { const iv = stepInterval(tl, k); interval(iv.cursor, iv.t0, iv.dur) }
+    for (let set = 1; set < 1 << Math.min(triggers.length, MAX_TRIGGERS); set++) {
+      const spids = triggers.filter((_, i) => set & (1 << i))
+      for (let k = 0; k <= n; k++) {
+        let cur: SlideCursor | undefined = tl.checkpoint(k)
+        let t = t0
+        for (const spid of spids) {
+          const from = t
+          cur = cur && tl.trigger(cur, spid, t)
+          if (!cur) break
+          const keys = tl.keyTimes(cur, t, Number.POSITIVE_INFINITY)
+          t = keys.length ? Math.max(t, keys[keys.length - 1]) : t
+          interval(cur, from, t - from)
+        }
+        out.push(cur ? draw(cur, t) : null)
+      }
+    }
+    return JSON.stringify(out)
+  }
+  const base = signature(timeline)
+  return variants.some(v => signature(v) !== base)
 }
 
 /** Every behaviour node of the slide's timing tree (the scheduled one, text builds fanned out), by `cTn` id. */

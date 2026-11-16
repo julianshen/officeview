@@ -155,6 +155,8 @@ export interface MorphDeckOptions {
   words?: number
   /** PR #78 round 12: the first (`from`) or second (`to`) slide also holds a video (id 3, `cTn` 3) that begins with it. */
   media?: 'from' | 'to'
+  /** Round 12b: with `media`, the video's shape (id 3) enters on the video's `onEnd`, so its drawing depends on the end. */
+  mediaReveal?: boolean
 }
 
 /**
@@ -230,7 +232,8 @@ export function morphDeck(options: MorphDeckOptions = {}): Promise<Uint8Array> {
     rect(2, 'Box', x, y, w, h, fill, text ? { paragraphs: [{ runs: [{ text, sz: '1200' }] }] } : {})
   const media = (side: 'from' | 'to') => (options.media === side ? [rect(3, 'Media', 80, 560, 160, 80, 'F4B183')] : [])
   const video = (side: 'from' | 'to') => (options.media === side
-    ? { timingXml: timingXmlOf(`<p:video><p:cMediaNode><p:cTn id="3" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn>${tgt(3)}</p:cMediaNode></p:video>`) }
+    ? { timingXml: timingXmlOf(`<p:video><p:cMediaNode><p:cTn id="3" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn>${tgt(3)}</p:cMediaNode></p:video>` +
+      (options.mediaReveal ? `<p:par><p:cTn id="4" presetID="1" presetClass="entr" presetSubtype="0" fill="hold" nodeType="afterEffect"><p:stCondLst><p:cond evt="onEnd" delay="0"><p:tn val="3"/></p:cond></p:stCondLst><p:childTnLst>${setVisibility(ids(5), 3, 'visible')}</p:childTnLst></p:cTn></p:par>` : '')) }
     : {})
   return deck([
     { bg: { solid: 'FFFFFF' }, shapes: [box(80, 80, 240, 160, 'D06040'), ...media('from')], ...video('from') },
@@ -369,18 +372,26 @@ export const MEDIA_END_REVEAL = Object.freeze({ videoId: 3, finiteMs: 5000 })
  *
  * - `onEnd`: the video is indefinite, and the box's entrance starts on its `onEnd`.
  * - `afterPrevious`: the video lasts `finiteMs`, and the entrance follows it in a `p:seq` (no condition names it).
+ * - `afterIndefinite` (round 12b): as `afterPrevious`, behind an indefinite video.
+ * - `unrelated` (round 12b): the indefinite video plays, and the box fades in on click 1, which no media end feeds:
+ *   the slide stays eligible.
  */
-export function mediaEndRevealDeck(kind: 'onEnd' | 'afterPrevious' = 'onEnd'): Promise<Uint8Array> {
+export function mediaEndRevealDeck(kind: 'onEnd' | 'afterPrevious' | 'afterIndefinite' | 'unrelated' = 'onEnd'): Promise<Uint8Array> {
   const v = MEDIA_END_REVEAL.videoId
   const id = ids(v + 1)
-  const dur = kind === 'onEnd' ? '' : ` dur="${MEDIA_END_REVEAL.finiteMs}"`
+  const dur = kind === 'afterPrevious' ? ` dur="${MEDIA_END_REVEAL.finiteMs}"` : ''
   const video = `<p:video><p:cMediaNode vol="80000"><p:cTn id="${v}"${dur} fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn>${tgt(3)}</p:cMediaNode></p:video>`
-  const own = id()
-  const start = kind === 'onEnd' ? `<p:cond evt="onEnd" delay="0"><p:tn val="${v}"/></p:cond>` : '<p:cond delay="0"/>'
-  const entrance = `<p:par><p:cTn id="${own}" presetID="1" presetClass="entr" presetSubtype="0" fill="hold" nodeType="afterEffect"><p:stCondLst>${start}</p:stCondLst><p:childTnLst>${setVisibility(id, 2, 'visible')}</p:childTnLst></p:cTn></p:par>`
-  const nodes = kind === 'onEnd'
-    ? video + entrance
-    : `<p:seq><p:cTn id="${id()}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${video}${entrance}</p:childTnLst></p:cTn></p:seq>`
+  let nodes: string
+  if (kind === 'unrelated') {
+    nodes = video + mainSeqXml([clickStep(id, [fadeIn(2)])])
+  } else {
+    const own = id()
+    const start = kind === 'onEnd' ? `<p:cond evt="onEnd" delay="0"><p:tn val="${v}"/></p:cond>` : '<p:cond delay="0"/>'
+    const entrance = `<p:par><p:cTn id="${own}" presetID="1" presetClass="entr" presetSubtype="0" fill="hold" nodeType="afterEffect"><p:stCondLst>${start}</p:stCondLst><p:childTnLst>${setVisibility(id, 2, 'visible')}</p:childTnLst></p:cTn></p:par>`
+    nodes = kind === 'onEnd'
+      ? video + entrance
+      : `<p:seq><p:cTn id="${id()}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${video}${entrance}</p:childTnLst></p:cTn></p:seq>`
+  }
   return deck([{
     bg: { solid: 'FFFFFF' },
     shapes: [rect(2, 'Ink', 400, 300, 160, 120, HIDDEN_INK), rect(3, 'Media', 80, 560, 160, 80, 'F4B183')],

@@ -14,7 +14,7 @@ import { createRng } from '../../src/slideshow/rng'
 import type { CanvasFactory, LayerBitmap, Lease, SlideShowWorkspace } from '../../src/slideshow/types'
 import { HIDDEN_INK, loadShowDeck } from '../../src/testdata/show-decks'
 import { classifiedRasters, createSlideComposer, drawsAt, slideStateAt } from '../src/show/compose'
-import { classifySlide, type Classification } from '../src/show/eligibility'
+import { classifySlide, mediaEndTimelines, type Classification } from '../src/show/eligibility'
 
 function roomyWorkspace(): SlideShowWorkspace {
   return {
@@ -30,7 +30,7 @@ export const factory = (): CanvasFactory => (w, h) => canvasBackend().createCanv
 export interface Run { ps: PreparedSlide; c: Classification; rasters: Map<PlanLayer, LayerBitmap>; timeline: SlideTimeline; scale: number; ms: number }
 
 /** Prepares, rasterises (decoding the deck's images when `images`) and classifies slide 0 of `bytes`. */
-export async function classify(bytes: Uint8Array, opts: { scale?: number; strictMarks?: boolean; images?: boolean } = {}): Promise<Run> {
+export async function classify(bytes: Uint8Array, opts: { scale?: number; strictMarks?: boolean; images?: boolean; mediaTimelines?: false } = {}): Promise<Run> {
   const scale = opts.scale ?? 0.25
   const d = await loadShowDeck(bytes)
   const meta = await d.meta(0)
@@ -45,9 +45,11 @@ export async function classify(bytes: Uint8Array, opts: { scale?: number; strict
     const r = rasterPreparedLayer(ps, layer, { scale, images, resolveFont: f => f, canvas: factory(), workspace: roomyWorkspace(), maxTextureSize: 8192, sink })
     if (!('refused' in r)) rasters.set(layer, r)
   }
-  const timeline = createSlideTimeline(meta.timing, { showAnimation: true, reducedMotion: false })
+  const options = { showAnimation: true, reducedMotion: false }
+  const timeline = createSlideTimeline(meta.timing, options)
+  const mediaTimelines = opts.mediaTimelines === false ? undefined : mediaEndTimelines(meta.timing, options)
   const t0 = performance.now()
-  const c = classifySlide({ ps, timeline, scale, rasters, strictMarks: opts.strictMarks ?? false, triggers: timeline.triggers() })
+  const c = classifySlide({ ps, timeline, scale, rasters, strictMarks: opts.strictMarks ?? false, triggers: timeline.triggers(), ...(mediaTimelines ? { mediaTimelines } : {}) })
   return { ps, c, rasters, timeline, scale, ms: performance.now() - t0 }
 }
 

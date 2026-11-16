@@ -43,7 +43,7 @@ import { decodePng, encodePng } from '../mark/png'
 import { markOptions, paintMark, type MarkSpec } from '../mark/visible'
 import { tauFor } from '../detect/tau'
 import { classifiedRasters, createSlideComposer, drawsAt, maskedRaster, slideStateAt, type DrawnLayer } from './compose'
-import { allocateFrames, classifySlide, stepDurations, type Classification } from './eligibility'
+import { allocateFrames, classifySlide, holdsMedia, mediaEndTimelines, stepDurations, type Classification } from './eligibility'
 import { burnVisibleMark, validateMarks } from './marks'
 
 export interface ShowPlanJob {
@@ -104,6 +104,8 @@ interface L1Entry {
   refusal?: ShowRefusal
   ps?: PreparedSlide
   timeline?: SlideTimeline
+  /** PR #78 round 12b: `timeline` under each media-end assumption (`mediaEndTimelines`). */
+  mediaTimelines?: SlideTimeline[]
   record?: Omit<ShowPlanRecord, 'layers' | 'steps' | 'entry' | 'diagnostics'>
   extraDiagnostics?: Array<{ code: string }>
   rasters?: Map<PlanLayer, LayerBitmap>
@@ -276,7 +278,7 @@ function stepTriggers(tree: TimingTree | undefined, steps: number): PlanStepReco
  * and its timeline under `motion`, with no raster. The bundle build (`prepareL1`) and the Morph pair build
  * (`morph.ts`) share it, so both classify the same show.
  */
-export function prepareShowSlide(show: ShowDoc, unit: number, motion: 'full' | 'reduced'): { ps: PreparedSlide; timeline: SlideTimeline; cmdDropped: boolean; sink: DiagnosticSink } {
+export function prepareShowSlide(show: ShowDoc, unit: number, motion: 'full' | 'reduced'): { ps: PreparedSlide; timeline: SlideTimeline; mediaTimelines: SlideTimeline[]; cmdDropped: boolean; sink: DiagnosticSink } {
   const loaded = show.metas.get(unit)
   if (!loaded) throw new Error(`show: slide ${unit} metadata not loaded`)
   const { meta, cmdDropped } = streamedMeta(loaded.slide)
@@ -286,13 +288,16 @@ export function prepareShowSlide(show: ShowDoc, unit: number, motion: 'full' | '
   layoutTextBases(ps, measureCtx(), resolveFont)
   const tt = ps.textTiming
   const settings = show.index.settings
-  const timeline = createSlideTimeline(tt?.tree ?? meta.timing, { showAnimation: settings.showAnimation, reducedMotion: motion === 'reduced', ...(tt ? { orderOf: tt.orderOf } : {}) })
-  return { ps, timeline, cmdDropped, sink }
+  const options = { showAnimation: settings.showAnimation, reducedMotion: motion === 'reduced', ...(tt ? { orderOf: tt.orderOf } : {}) }
+  const timeline = createSlideTimeline(tt?.tree ?? meta.timing, options)
+  // PR #78 round 12b: the same tree under each media-end assumption (empty without media).
+  const mediaTimelines = holdsMedia(ps) ? mediaEndTimelines(tt?.tree ?? meta.timing, options) : []
+  return { ps, timeline, mediaTimelines, cmdDropped, sink }
 }
 
 function prepareL1(show: ShowDoc, job: ShowPlanJob): L1Entry {
   const unit = job.unitIndex
-  const { ps, timeline, cmdDropped, sink } = prepareShowSlide(show, unit, job.motion)
+  const { ps, timeline, mediaTimelines, cmdDropped, sink } = prepareShowSlide(show, unit, job.motion)
   const meta = ps.meta, slide = ps.slide
   const measure = measureCtx()
   const tt = ps.textTiming
@@ -377,7 +382,7 @@ function prepareL1(show: ShowDoc, job: ShowPlanJob): L1Entry {
     iterate: { keys, groups },
   }
   const extraDiagnostics = [...(cmdDropped ? [{ code: 'cmd-dropped' }] : []), ...(withheld ? [{ code: 'link-withheld' }] : [])]
-  return { ps, timeline, record, extraDiagnostics, rasters, classes, refusals: new Map() }
+  return { ps, timeline, mediaTimelines, record, extraDiagnostics, rasters, classes, refusals: new Map() }
 }
 
 const rastersBytes = (e: L1Entry) => [...(e.rasters?.values() ?? [])].reduce((n, r) => n + r.canvas.width * r.canvas.height * 4, 0) + 64 * 1024
@@ -483,7 +488,7 @@ export function trackInputs(show: ShowDoc, job: ShowPlanJob): { ps: PreparedSlid
 function classificationOf(e: L1Entry, job: ShowPlanJob): Classification {
   const have = e.classes.get(job.strictMarks)
   if (have) return have
-  const c = classifySlide({ ps: e.ps!, timeline: e.timeline!, scale: job.scale, rasters: e.rasters!, strictMarks: job.strictMarks, triggers: e.timeline!.triggers(), resolveFont })
+  const c = classifySlide({ ps: e.ps!, timeline: e.timeline!, scale: job.scale, rasters: e.rasters!, strictMarks: job.strictMarks, triggers: e.timeline!.triggers(), resolveFont, ...(e.mediaTimelines ? { mediaTimelines: e.mediaTimelines } : {}) })
   e.classes.set(job.strictMarks, c)
   return c
 }

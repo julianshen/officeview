@@ -205,8 +205,8 @@ describe('show eligibility', () => {
 
   describe('the classification reconstructs the show (fix round 1)', () => {
     // PR #78 round 12: the client ends every audio/video node at once (`syntheticEnds`); the server's histories
-    // carry no media end, so a slide whose timing holds media is unproven and plays its still.
-    for (const kind of ['onEnd', 'afterPrevious'] as const) {
+    // carry no media end. Round 12b: a slide whose observations differ under the media-end assumptions plays its still.
+    for (const kind of ['onEnd', 'afterPrevious', 'afterIndefinite'] as const) {
       it(`a media end reveals ink (${kind}): the slide plays its still`, async () => {
         const run = await classify(await mediaEndRevealDeck(kind))
         const { ps, timeline: tl } = run
@@ -223,6 +223,28 @@ describe('show eligibility', () => {
         expect(() => reconstruct(run, tl.mediaEnd(tl.initial(), MEDIA_END_REVEAL.videoId, 16, true), 100)).toThrow()
       })
     }
+
+    it('media no drawing depends on, beside a click animation: the slide stays eligible and plays its layers (round 12b)', async () => {
+      const run = await classify(await mediaEndRevealDeck('unrelated'))
+      const { ps, timeline: tl, c } = run
+      expect(tl.steps).toBe(1)
+      expect(c.fallback).toBeUndefined()
+      expect(c.steps.map(s => s.eligibility)).toEqual(['layers'])
+      expect(c.drop.has(targetLayer(ps, 'sp:2'))).toBe(false)
+      // The client's history (the video ended at once, then the click) reconstructs exactly.
+      const ended = tl.mediaEnd(tl.initial(), MEDIA_END_REVEAL.videoId, 16, true)
+      const clicked = tl.next(ended, 200)
+      for (const t of [200, 450, 700, 1000]) {
+        const r = reconstruct(run, clicked, t)
+        expect({ t, diff: r.diff }).toEqual({ t, diff: 0 })
+      }
+      expect(reconstruct(run, clicked, 1000).inkOriginal).toBeGreaterThan(0)
+    })
+
+    it('a classifier given no media-end timelines refuses a slide holding media (fail closed, round 12b)', async () => {
+      const run = await classify(await mediaEndRevealDeck('unrelated'), { mediaTimelines: false })
+      expect(run.c.fallback).toBe('still')
+    })
 
     it('unproven autoplay before the first click falls back to the still', async () => {
       const run = await classify(await autoplayRevealDeck())
