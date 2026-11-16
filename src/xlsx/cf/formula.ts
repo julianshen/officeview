@@ -913,6 +913,9 @@ function conditionalRoles(name: string, count: number): Array<'t' | 'r' | 'c'> {
   if (name === 'COUNTIFS') return Array.from({ length: count }, (_, i) => (i % 2 === 0 ? 'r' : 'c'))
   return Array.from({ length: count }, (_, i) => (i === 0 ? 't' : i % 2 === 1 ? 'r' : 'c'))
 }
+/** Scalar functions that coerce a string operand (AND/OR/NOT/IF read it as a boolean, the math and date functions parse
+ * it as a number): each walks the string, so its length is charged as text work (Task 34 fix 3). */
+const STRING_CONSUMERS: ReadonlySet<string> = new Set(['AND', 'OR', 'NOT', 'IF', 'ABS', 'INT', 'MOD', 'ROUND', 'DATE', 'YEAR', 'MONTH', 'DAY', 'WEEKDAY'])
 type ReadKind = 'cell' | 'traversal' | 'root-area'
 interface Conditional { refs: number[]; pairs: Array<{ range: number | undefined; criterion: AstNode }> }
 /** The shape one per-cell call evaluates: the compiled tree with hoisted calls replaced by one node each. `refs` is the
@@ -926,7 +929,7 @@ export interface CfCallShape {
   readonly conditionals: readonly Conditional[]
   /** Frequency-hoist lookups (each also reads its criterion cell, listed in `refs`). */
   readonly lookups: number
-  /** Text work happens: a text-family call, `&` or a comparison walks string contents. */
+  /** Text work happens: a text-family call, any operator, or a string-consuming scalar function walks string contents. */
   readonly textual: boolean
   readonly textOps: number
   readonly literalUnits: number
@@ -947,14 +950,17 @@ export function cfCallShape(f: CfFormula, hoisted: readonly CfHoist[] = []): CfC
       case 'cell': addRef(node, 'cell'); return
       case 'range': case 'wholeCol': case 'wholeRow': addRef(node, root ? 'root-area' : 'traversal'); return
       case 'string': literalUnits += node.value.length; return
-      case 'unary': visit(node.expr); return
+      // Any operator consumes its operands' strings: arithmetic and unary operators coerce them (a numeric parse walks the
+      // whole string), comparisons compare them, `&` copies them (Task 34 fix 3).
+      case 'unary': textual = true; visit(node.expr); return
       case 'binary':
-        if (node.op === '&') { textual = true; textOps++ }
-        if (COMPARISONS.has(node.op)) textual = true
+        textual = true
+        if (node.op === '&') textOps++
         visit(node.left); visit(node.right); return
       case 'call': {
         const name = node.name.toUpperCase()
         if (CF_FORMULA_FUNCTIONS.get(name)?.text) { textual = true; textOps++ }
+        if (STRING_CONSUMERS.has(name)) textual = true
         if (CONDITIONAL.has(name)) {
           const roles = conditionalRoles(name, node.args.length)
           const c: Conditional = { refs: [], pairs: [] }

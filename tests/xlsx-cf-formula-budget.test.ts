@@ -194,6 +194,23 @@ describe('text work is bounded by measured payload before invocation (round-2 #1
     expect(textCharsSpy).not.toHaveBeenCalled()
     snapshot.dispose()
   })
+  it('arithmetic coercion and AND/OR/NOT charge the string they consume: over 32,767 characters, and just over the cap, each withholds (Task 34 fix 3)', async () => {
+    for (const text of ['A1+1>0', 'AND(A1)', 'OR(A1,TRUE)', 'NOT(A1)', '-A1<0', 'ABS(A1)>0']) {
+      const f = compile(text, 'B1')
+      for (const length of [32_767, 125]) {
+        const snapshot = await snapshotOf({ A1: 'x'.repeat(length) }, ['A1'])
+        const b = cfCallWorkBreakdown(cfCallShape(f), metricsOf(snapshot, ['A1']), []) as CfCallWorkBreakdown
+        expect(b.text, `${text} over ${length}`).toBe(length)
+        expect(b.total, `${text} over ${length}`).toBeGreaterThan(CF_LIMITS.checkpointUnits)
+        // A mutant that charges text only for text functions and & would admit it.
+        expect(b.total - b.text, `${text} over ${length}`).toBeLessThanOrEqual(CF_LIMITS.checkpointUnits)
+        evaluateNodeSpy.mockClear()
+        expect(evaluateCfFormula(f, a1('B1'), snapshot, context()), `${text} over ${length}`).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
+        expect(evaluateNodeSpy).not.toHaveBeenCalled()
+        snapshot.dispose()
+      }
+    }
+  })
   it('LEN(A1&A2) over two 10-character strings is 4 + 2 + 2 + 20 = 28, and runs at its exact scratch bound but never one byte below', async () => {
     const snapshot = await snapshotOf({ A1: 'abcdefghij', A2: 'klmnopqrst' }, ['A1', 'A2'])
     const f = compile('LEN(A1&A2)', 'B1')
