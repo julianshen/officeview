@@ -75,10 +75,14 @@ function* steps(
   // Ruling S5-STUB (Task 35 fix round 1 #1): a stopIfTrue formula rule ahead of a lower rule of kind K that contributes on
   // this cell is the stub shape the Stage 1-4 captures recorded. It composes only with formula:composition-stub-successor-K;
   // otherwise the formula rule is unresolved, so (as an unresolved stopIfTrue) it and everything after it are withheld.
+  // Decided lazily, once per rule, where a loop first reaches it (both loops already checkpoint per rule), so a cell with
+  // no such rule spends nothing extra.
   let outcomes = givenOutcomes
-  for (let i = 0; i < orderedRules.length; i++) {
-    const rule = orderedRules[i]!
-    if (!rule.stopIfTrue || !isFormulaRule(rule) || outcomes[i]?.kind === 'unresolved') continue
+  const gated = new Set<number>()
+  function* gateStub(i: number): Generator<void, void> {
+    if (gated.has(i)) return
+    gated.add(i)
+    if (outcomes[i]?.kind === 'unresolved') return
     for (let j = i + 1; j < orderedRules.length; j++) {
       yield
       const lower = outcomes[j]
@@ -88,7 +92,7 @@ function* steps(
       if (checkEvidence(`formula:composition-stub-successor-${kind}`)) continue
       if (outcomes === givenOutcomes) outcomes = [...givenOutcomes]
       ;(outcomes as (CfOutcome<unknown> | undefined)[])[i] = { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
-      break
+      return
     }
   }
   const properties: Record<string, string | number | boolean | null> = Object.create(null)
@@ -123,6 +127,7 @@ function* steps(
   for (let i = 0; i < orderedRules.length; i++) {
     yield
     const rule = orderedRules[i]!
+    if (rule.stopIfTrue && isFormulaRule(rule)) yield* gateStub(i)
     const outcome = outcomes[i]
     const slot = visualSlotOf(rule)
     const isScale = slot === 'colorScale'
@@ -256,6 +261,7 @@ function* steps(
   for (let i = 0; i < orderedRules.length; i++) {
     yield
     const rule = orderedRules[i]!
+    if (rule.stopIfTrue && isFormulaRule(rule)) yield* gateStub(i)
     const outcome = outcomes[i]
     const slot = visualSlotOf(rule)
     const isScale = slot === 'colorScale'
