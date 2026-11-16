@@ -132,6 +132,10 @@ Scanned all `.xlsx` archives in `corpus/` and `tests/fixtures/` by inspecting ZI
   - **Seen in the wild (Excel-resaved)**: `stage1-priority-composition.xlsx` (and its `.rejected` twin) carries one base rule, `<iconSet>` with the `iconSet` attribute omitted (3TrafficLights1), `percent` cfvo 0/33/67, no `gte`, `reverse`, `showValue` or `percent` attribute: Excel 16.114 omits default-valued attributes on resave, the form the glyph key provisionally pins (`ICON_KEY_PERCENT_FORM = '(omitted)'`).
   - **Authored by the oracle (30 Stage 4 workbooks, 15 inputs + 15 seeded saves, not yet resaved by Excel)**: dialects base (81 rules per workbook set) and standalone x14 (95 rules, including the 75 glyph-key rules); all 20 families (17 base, and `3Stars`/`3Triangles`/`5Boxes` only as x14), plus `iconSet` omitted; custom `cfIcon` mappings (87 rules) with `NoIcons iconId="0"` in the first, middle and last bucket and in all-`NoIcons` sets; cfvo types `num`, `percent`, `percentile`, `min`, `max` (and, unresolved shapes only, `formula`, `<xm:f>$A$1</xm:f>` and a cfvo without `type`); `gte="1"` written explicitly and `gte="0"`; `reverse="1"` on 3-, 4- and 5-icon and custom sets; `showValue="0"`; `<iconSet percent="0">` once (`stage4-icon-degenerate` H).
 
+- **Formula-bearing conditional formatting inventory (Task 31, Stage 5)**: I scanned every `.xlsx` by reading its ZIP entries (`xl/worksheets/*.xml`), skipping `~$` lockfiles. In each `<cfRule>`/`<x14:cfRule>` the scan looked for a `<formula>` or `<xm:f>` child, a `cfvo type="formula"`, or a `num`/`percent`/`percentile` cfvo whose `@val` is not a literal. It covered `corpus/` (this worktree holds only `corpus.lock.json`; the main checkout's materialized `corpus/` holds 9 `.xlsx`) and `tests/fixtures/` (626 `.xlsx` outside `xlsx-cf/`).
+  - **The count is 0.** No corpus workbook and no fixture outside `tests/fixtures/xlsx-cf/` contains conditional formatting at all, so none contains a formula-bearing rule. The formula-bearing workbooks in the repository are the oracle's own: Stages 1–4 carry their divergent predicate formulas, `cellIs` operands and expression stubs, and Stage 5 adds its 30 workbooks.
+  - **Corpus gate (Task 39):** Stage 5 has no third-party writer shapes to be compatible with. `tests/fixtures/xlsx-cf/excel-authored-formulas.xlsx` (Excel's dialog, orchestrator, Lesson 12; it does not exist yet) is therefore the corpus gate, as `excel-authored-iconsets.xlsx` was for Stage 4.
+
 ---
 
 ## 5. Stage 1 Verification, Resource Audit & Browser Evidence (Task 11)
@@ -2004,3 +2008,40 @@ Evidence kind is read from the owning case's per-cell `iconEvidence` labels (ver
 | `icon:composition-icon-stopIfTrue` | S4-J | — | — | withheld | refused-unsupported |
 | `icon:geometry-row-offset` | S4-K | pixel-measured | anchor-constant | published | — |
 | `icon:glyph-<set>-<id>` (75 pairs) | S4-A, OD-9(b) | pixel-approximated (*unverified* artwork) | — | 54 published, 21 withheld | the 15 classes in `CF_ICON_GLYPH_WITHHELD` failed the approximation check; their pairs: 3ArrowsGray-2, 3Flags-0, 3Flags-1, 3Flags-2, 3Signs-1, 3Symbols2-1, 4ArrowsGray-3, 4Rating-0, 4Rating-1, 4Rating-2, 4Rating-3, 5ArrowsGray-4, 5Rating-0, 5Rating-1, 5Rating-2, 5Rating-3, 5Rating-4, 3Stars-0, 3Stars-1, 3Stars-2, 3Triangles-0 |
+
+## 14. Stage 5 Formula Oracle Cases (Task 31: semantic route, audit, conformance)
+
+**Preparation only.** No Excel capture has been run for Stage 5. Every case is `recipe-pending` (21 workbooks) or `unsupported` (9 unresolved shapes), and production withholds every formula rule. The orchestrator's run sequence is [`xlsx-cf-recipes-stage5.md`](xlsx-cf-recipes-stage5.md).
+
+### Harness additions
+
+- **Cases (`scripts/cf-refs/cases.ts`).** `CF_STAGE5_FIXTURES` and `CF_STAGE5_CASES` hold 30 workbooks for the 17 matrix rows; `CF_STAGE5_GROUPS` maps each row to its workbooks.
+  - Rows split where one workbook cannot answer them: `stage5-formula-anchor` plus `-anchor-multi` (the multi-range rule overlaps `B2:B4`); `stage5-predicate-formulas` plus `-predicate-timeperiod` (the clock window); `stage5-cross-sheet` plus `-cross-sheet-missing` (one malformed shape per workbook); and one workbook per `activePresent` kind and per unresolved shape.
+  - The registries are `CF_STAGE5_CAPABILITIES` (80 ids), `CF_STAGE5_NONDISCRIMINATING` (the literal twin rules), `CF_STAGE5_UNSUPPORTED` (empty until an Excel outcome is recorded) and `CF_STAGE5_REUSED_CAPTURES`. The reused captures are the Stage 1–4 stub cells of S5-STUB plus `stage1-blanks-errors`.
+- **Hypotheses before capture (Lessons 3, 14).** Each configuration names competing hypotheses as the observable each predicts per designated cell:
+  - a DisplayFormat fill, `none`, or `twin:<ref>` (the same DisplayFormat as a literal-bound twin of the formula rule), optionally with `+strike`;
+  - for bars and icons, which DisplayFormat cannot read: a crop equal to a twin's.
+
+  A static test checks that every pair of hypotheses is separated at ≥ 2 cells of one configuration, and that every control is uncovered. The verifier refuses a manifest whose configurations differ from the catalogue's.
+- **Semantic route (`verify.ts`).** `evaluateFormulaCapabilities` verifies a capability only when all of these hold:
+  - exactly one hypothesis matches every designated cell of every live configuration;
+  - each rival is eliminated at ≥ 2 decisive cells of one configuration (`replicationShortfall`, keyed by configuration);
+  - every cell and control was observed;
+  - every control is unformatted.
+
+  Agreeing hypotheses are `non-discriminating`, and no match is `formula-hypothesis-none` (a finding). Gates: every `formula:*` capability waits on `formula:truth-boolean` reading `boolean`; `formula:anchor-mixed-abs` also waits on `formula:truth-number`, and `formula:relative-wrap` on `formula:truth-error`.
+- **Markers.** `CfPartMarker.formula` (`kind`, `anchor`, `dialect`), `scale.cfvo[].f`, `scale.dialect`, `activePresent` and `sqrefOrder: 'any'` are compared by formula semantics (`normalizeCfFormula`: case, spaces and unneeded sheet quotes folded; `$`, operators and operand order kept). Stage 1–4 markers keep their exact text comparison.
+- **Manual calculation (round-1 #4).** `CfOracleCase.calcObservation: 'pre-calculate'` changes both scripts:
+  - **Build** observes first with `buildManualObservationScript` (no `calculate`; it records the calculation mode and workbook count), then runs one explicit calculation observation, and resaves without `calculate`.
+  - **Capture:** the clock probe skips its `calculate`.
+
+  Both observations are stored as `manualObservation`, bound to the input hash.
+- **Audit.** `audit.ts --stage 5` (`auditStage5Manifest`) reports per-capability dispositions and the reused captures. `--publish-stage5` writes `VERIFIED_STAGE5_CAPABILITIES` only for a `stageComplete` audit, and only the `stage5Publication` subset whose matched reading equals `CF_STAGE5_PRODUCTION_READINGS`, which is empty until Tasks 32–38 implement readings. Without the flag the committed Stage 5 export, absent today, is kept verbatim, so `verifiedCapabilities.ts` is unchanged.
+- **Generator.** The generator gains extra sheets (including the quoted `My Sheet`), `<calcPr calcMode="manual">`, defined names, a table part, and cached text, boolean and error formula results. All of it is additive: the Stage 1–4 archives are byte-identical, pinned by a digest test. `--diff-authored-formulas` diffs the templates against `excel-authored-formulas.xlsx`.
+
+### Known limits of the prepared machinery (not evidence)
+
+- **Bar and icon formula bounds** (`bar:bounds-formula`, `icon:thresholds-formula`, the composition and cfvo-scope icon configurations, the `activePresent` bar and icon) are decided by crop equality with literal twins in the same workbook (±8 per channel). That is weaker than the Stage 3/4 pixel models, and it depends on the twin rendering identically, which needs the same values and widths.
+- **The marker does not pin bar and icon cfvo formulas**; `--diff-authored-formulas` and the saved XML do.
+- **The multi-range anchor hypotheses** are written for the authored order `D5:D8 B2:B4`. If Excel re-sorts the sqref on resave, "first listed" must be read against the recorded order (Ruling S5-C).
+- **`stage5-formula-functions`** states the `documented` hypothesis from Excel's comparison order (numbers < text < booleans) through a small independent model in `cases.ts`, never through the viewer's evaluator. A disagreement is `formula-hypothesis-none`, never a refit.

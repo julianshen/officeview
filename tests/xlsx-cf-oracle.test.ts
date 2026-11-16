@@ -5643,6 +5643,64 @@ describe('Stage 5 formula oracle (Task 31)', () => {
     })
   })
 
+  it('a measured Stage 5 case verifies from its stored capture alone, and edited hypotheses or sidecars refuse', async () => {
+    const { evaluateFormulaCase } = await import('../scripts/cf-refs/verify')
+    const root = mkdtempSync(join(tmpdir(), 'ov-cf-s5-e2e-'))
+    s5dirs.push(root)
+    const t = CF_STAGE5_CASES.find(c => c.id === 'stage5-formula-edge')!
+    const bytes = await generateCaseArchive(t.id)
+    for (const d of ['tests/fixtures/xlsx-cf/inputs', 'tests/fixtures/xlsx-cf/refs']) mkdirSync(join(root, d), { recursive: true })
+    writeFileSync(join(root, t.input), bytes)
+    writeFileSync(join(root, t.saved), bytes)
+    const parts = readZipPartsSync(bytes)!
+    const geom = computeWorksheetRangeGeometry(parts, t.range)!
+    const canvas = createCanvas(geom.expectedWidthPt, geom.expectedHeightPt)
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, geom.expectedWidthPt, geom.expectedHeightPt)
+    const png = new Uint8Array(canvas.toBuffer('image/png'))
+    writeFileSync(join(root, t.captures[0]!.pngPath), png)
+    // Excel "shows" the wrap reading: the overflowing targets format, the controls stay white.
+    const fills: Record<string, string> = { A3: 'FFFFC7CE', A4: 'FFFFC7CE', C1: 'FFC6EFCE', D1: 'FFC6EFCE' }
+    const formulaObservations = Object.fromEntries(t.expected.cells.map(e => [e.ref, { displayFormatFill: fills[e.ref] ?? 'FFFFFFFF', baseFill: 'FFFFFFFF', strikethrough: false }]))
+    const h = sha256(bytes)
+    const c: CfOracleCase = {
+      ...t,
+      status: 'measured',
+      resavedByExcel: true,
+      resaveReceipt: { resavedAt: '2026-11-16T00:00:00Z', excelVersion: '16.114', inputSha256: h, savedSha256: h, openedRepairFree: true },
+      expected: { ...t.expected, inputSha256: h, savedSha256: h, provenance: 'excel-observed', cells: t.expected.cells.map(e => ({ ...e, fillSource: 'excel-display-format' as const, matched: fills[e.ref] !== undefined })) },
+      captures: [{ ...t.captures[0]!, pngSha256: sha256(png) }],
+    }
+    const recorded = { formulaObservations }
+    const sidecar = {
+      excelVersion: '16.114', route: 'copy-picture', appearance: 'screen', scale: 1, pxPerPt: 1, width: geom.expectedWidthPt, height: geom.expectedHeightPt,
+      colWidthsPt: geom.colWidthsPt, rowHeightsPt: geom.rowHeightsPt, geometrySource: 'excel-measured', resavedByExcel: true, resaveSavedSha256: h,
+      sheet: c.sheet, range: c.range, hostTimeZone: 'Asia/Taipei', savedSha256: h, pngSha256: sha256(png), capturedAt: '2026-11-16T00:00:00Z',
+      lockBefore: 'unlocked', lockAfter: 'unlocked', ...recorded, formulaEvaluation: evaluateFormulaCase(c, recorded, decodePngSync(png)!, geom),
+    }
+    const sidecarAbs = join(root, c.captures[0]!.sidecarPath)
+    writeFileSync(sidecarAbs, JSON.stringify(sidecar))
+    const res = verifyCfCase(c, { rootDir: root })
+    expect(res.kind, res.kind === 'refusal' ? res.reason : '').toBe('verified')
+    expect(res.kind === 'verified' && res.verifiedCapabilities).toEqual(['formula:relative-wrap'])
+    expect(res.kind === 'verified' && res.matchedHypotheses).toEqual({ 'formula:relative-wrap': 'wrap' })
+    // The Stage 5 gates hold it back: formula:truth-boolean (and formula:truth-error for the #REF! reading) are unverified.
+    const manifest: CfManifest = { version: 1, excelBuild: '16.114', locale: 'zh-TW', dateSystem: '1900', hostTimeZone: 'Asia/Taipei', generatedAt: '', cases: [c] }
+    expect(isCapabilityVerified('formula:relative-wrap', manifest, { rootDir: root })).toBe(false)
+    // Lesson 14: hypotheses edited after the capture refuse, whatever the sidecar says.
+    const edited = { ...c, formulaConfigurations: c.formulaConfigurations!.map(x => ({ ...x, hypotheses: { ...x.hypotheses, extra: x.hypotheses.wrap! } })) }
+    const refusedEdit = verifyCfCase(edited, { rootDir: root })
+    expect(refusedEdit.kind === 'refusal' && refusedEdit.code).toBe('unobserved-expectation')
+    // A sidecar evaluation that differs from the recomputation refuses.
+    writeFileSync(sidecarAbs, JSON.stringify({ ...sidecar, formulaEvaluation: {} }))
+    const tampered = verifyCfCase(c, { rootDir: root })
+    expect(tampered.kind === 'refusal' && tampered.code).toBe('sidecar-mismatch')
+    // A locked display before the capture refuses.
+    writeFileSync(sidecarAbs, JSON.stringify({ ...sidecar, lockBefore: 'locked' }))
+    expect((verifyCfCase(c, { rootDir: root }) as { code?: string }).code).toBe('display-locked')
+  })
+
   it('audit --stage 5 --write is idempotent (Lesson 4)', () => {
     const manifest = loadManifest()
     const committed = readFileSync(resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts'), 'utf8')
