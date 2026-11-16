@@ -57,6 +57,8 @@ export interface FakeSource extends CfValueSource {
   readonly pageCalls: Array<{ rects: readonly SourceRect[]; yielded: number }>
   boundsCalls: number
   valueGen: number
+  /** Referenced-sheet generation sum (Ruling S5-K); 0 is the same as absent. */
+  dependencyGen: number
   /** Cells whose read throws the resident source's unavailable-value error (`render.ts residentSource`). */
   unavailable: Set<string>
 }
@@ -65,8 +67,8 @@ export function fakeSource(cells: Cells, options: { sheetId?: string; bounds?: S
   const list = storedCells(cells)
   const pageCalls: FakeSource['pageCalls'] = []
   const source: FakeSource = {
-    pageCalls, boundsCalls: 0, valueGen: 1, unavailable: new Set(),
-    stamp: () => ({ owner: 'fake', sheetId, workbookValueGen: source.valueGen, cfGen: 1, viewGen: 1, structureGen: 1, clockGen: 1 }),
+    pageCalls, boundsCalls: 0, valueGen: 1, dependencyGen: 0, unavailable: new Set(),
+    stamp: () => ({ owner: 'fake', sheetId, workbookValueGen: source.valueGen, cfGen: 1, viewGen: 1, structureGen: 1, clockGen: 1, ...(source.dependencyGen ? { dependencyGen: source.dependencyGen } : {}) }),
     async bounds() {
       source.boundsCalls++
       if (options.pending) return undefined

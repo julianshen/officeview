@@ -8,8 +8,8 @@ import { evaluateIconSet, resolveIconThresholds } from './iconSet'
 import { barLayoutEvidence } from './evidence'
 import { resolveCfCellStyle } from './dxf'
 import { CF_BAR_CELL_BYTES, CF_FORMULA_NODE_BYTES, CF_ICON_CELL_BYTES, CF_LIMITS, createCfWorkBudget, type CfMemory, type CfWorkBudget } from './limits'
-import { cfDefinitionFormulas, type CfCellState, type CfLease, type CfLiteral, type CfOutcome, type CfPrepared, type CfPrepareRequest, type CfRule, type CfSheetRules, type CfValueSource, type SourceRect } from './model'
-import type { CfEvaluationContext } from './formula'
+import { cfDefinitionFormulas, type CfCellState, type CfFormula, type CfLease, type CfLiteral, type CfOutcome, type CfPrepared, type CfPrepareRequest, type CfRule, type CfSheetRules, type CfValueSource, type SourceRect } from './model'
+import { planCfHoist, type CfEvaluationContext, type CfHoisted } from './formula'
 import { cfRuntimeEvidence, evaluatePredicate, type CfEvidenceGate } from './predicates'
 import { createCfStatistics, type CfRangeStatistics, type CfStatisticsOptions, type CfStatisticsSession } from './statistics'
 const quota = () => new PackageError('resource-limit', 'CF preparation exceeds its admitted batch')
@@ -206,6 +206,19 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
             stats.set(rule, out)
             if (!options.statistics && out.kind === 'ready') leases.push(out.value)
           }
+          // Ruling S5-HOIST: a formula rule's absolute-range aggregates are scanned here, beside the statistical rules, each
+          // on its own scan budget (never the per-cell ceiling), and only with an evaluation context and the hoist
+          // capability of every planned hoist: production, which holds neither capability, runs no new scan. The per-cell
+          // formula arm that consumes `hoisted` is Task 35.
+          const hoisted = new Map<CfFormula, CfOutcome<CfLease<CfHoisted>>>()
+          if (options.evaluation) for (const rule of ordered) for (const formula of cfDefinitionFormulas(rule.definition)) {
+            await work()
+            const plan = planCfHoist(formula)
+            if (plan.length === 0 || !plan.every(h => evidence.allows(h.kind === 'scalar' ? 'formula:hoist-aggregate' : 'formula:hoist-countif-frequency'))) continue
+            const scan = options.statisticsBudget?.() ?? createCfWorkBudget({ signal, scan: true })
+            hoisted.set(formula, await statistics.prepareHoists(rule, plan, stamp, source, scan, { signal }))
+          }
+          void hoisted
           budget.resume()
           for (const rule of ordered) if (rule.definition.kind === 'colorScale' || rule.definition.kind === 'dataBar' || rule.definition.kind === 'iconSet') {
             const prepared = stats.get(rule)

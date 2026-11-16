@@ -1103,6 +1103,8 @@ export type CfFormulaContext = Readonly<{
   probe?: CfFormulaProbe
   /** Observes each admitted call's static breakdown (tests, calibration). */
   onCall?: (breakdown: CfCallWorkBreakdown) => void
+  /** Observes the store work a call actually metered (view build, reads, enumeration, sort, lookups) against its bound. */
+  onSettled?: (spent: number, breakdown: CfCallWorkBreakdown) => void
 }>
 /** The semantics a CF formula reads: the document's date system and zone, and this preparation's clock (S5-M). */
 export function cfFormulaSemantics(evaluation: CfEvaluationContext): ResolvedSemantics {
@@ -1120,8 +1122,11 @@ function criterionTokens(value: EvaluationValue | undefined): number | undefined
   if (value === undefined) return undefined
   if (typeof value !== 'string') return 0
   if (value.length > CONDITIONAL_MAX_CRITERION_LENGTH) return 'long'
-  const toks = tokenizeWildcardPattern(value)
-  return Array.isArray(toks) ? toks.length : value.length
+  // `criterionOf` (functions/cond.ts): a comparison prefix is stripped, and a numeric body is a number criterion.
+  const body = value.replace(ENGINE_COMPARISON_PREFIX, '')
+  if (ENGINE_NUMERIC_CRITERION.test(body)) return 0
+  const toks = tokenizeWildcardPattern(body)
+  return Array.isArray(toks) ? toks.length : body.length
 }
 
 /**
@@ -1237,6 +1242,7 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
       context.onCall?.(breakdown)
       snapshot.reset()
       const outcome = invoke(f, tree.value.value, at, shape, areas, view.value, snapshot, context)
+      context.onSettled?.(used, breakdown)
       if (outcome.kind === 'ready' && f.invariant) context.invariants.set(f, outcome.value)
       return outcome
     } finally { tree.value.release() }

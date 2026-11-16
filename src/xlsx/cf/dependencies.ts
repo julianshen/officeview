@@ -64,7 +64,7 @@ const sortUnits = (n: number): number => (n <= 1 ? 0 : n * Math.ceil(Math.log2(n
 /** One column of the snapshot index: its stored rows ascending, with their values and string units. */
 interface Column { rows: number[]; values: Slot[]; units: number[]; sorted: boolean }
 /** One new column's bookkeeping, DERIVED from the payload measurer (a map entry holding an empty column record). */
-const CF_DEPENDENCY_COLUMN_BYTES: number = measurePayloadBytes(new Map([[0, { rows: [], values: [], units: [], sorted: true }]]))! - measurePayloadBytes(new Map())!
+export const CF_DEPENDENCY_COLUMN_BYTES: number = measurePayloadBytes(new Map([[0, { rows: [], values: [], units: [], sorted: true }]]))! - measurePayloadBytes(new Map())!
 const INITIAL_CAPACITY = 16
 function lowerBound(rows: readonly number[], value: number): number {
   let a = 0, b = rows.length
@@ -319,6 +319,7 @@ export interface CfFormulaBatchOptions {
   /** The cells to prepare for (default: every task's ranges). */
   readonly targets?: readonly SourceRect[]
   readonly onCall?: (breakdown: CfCallWorkBreakdown) => void
+  readonly onSettled?: (spent: number, breakdown: CfCallWorkBreakdown) => void
   readonly probe?: CfFormulaProbe
 }
 export interface CfFormulaBatch {
@@ -424,7 +425,7 @@ export async function prepareCfFormulaBatch(tasks: readonly CfFormulaTask[], opt
   const materialization = { limit: CF_LIMITS.materializationCells, used: 0 }
   const contexts: Array<CfFormulaContext | undefined> = tasks.map((_, i) => evaluation && snapshots[i] ? {
     sheetName: options.sheetName, evaluation, semantics: cfFormulaSemantics(evaluation), edge: options.edge, materialization, budget: options.budget,
-    memory, invariants, ceiling, pacing, ...(hoists[i] ? { hoists: hoists[i] } : {}), ...(options.probe ? { probe: options.probe } : {}), ...(options.onCall ? { onCall: options.onCall } : {}),
+    memory, invariants, ceiling, pacing, ...(hoists[i] ? { hoists: hoists[i] } : {}), ...(options.probe ? { probe: options.probe } : {}), ...(options.onCall ? { onCall: options.onCall } : {}), ...(options.onSettled ? { onSettled: options.onSettled } : {}),
   } : undefined)
   const covers = (task: number, row: number, col: number): boolean => tasks[task]!.rule.ranges.some(r => inRect(r, row, col))
   const batch: CfFormulaBatch = {
