@@ -587,14 +587,14 @@ describe('invariant subtrees are memoised per preparation under a charged lease 
     }
   })
   it('a subtree as an aggregate argument (SUM(B1,$A$1*2)) and inside a comparison paint as the engine at every target', async () => {
-    const memoised = new Set(['B1+MAX($A$1:$A$3)>2', 'UPPER($A$2)=B1', 'ISERROR(($A$4*2)+B1)'])
+    // Every one is memoised, the array-mode arguments of SUM and AND included (round 3, finding 5).
+    const memoised = new Set(['SUM(B1,$A$1*2)>0', 'AND(B1>0,MAX($A$1:$A$3)>2)', 'B1+MAX($A$1:$A$3)>2', 'UPPER($A$2)=B1', 'ISERROR(($A$4*2)+B1)'])
     for (const text of ['SUM(B1,$A$1*2)>0', 'AND(B1>0,MAX($A$1:$A$3)>2)', 'B1+MAX($A$1:$A$3)>2', 'UPPER($A$2)=B1', 'ISERROR(($A$4*2)+B1)']) {
       // A4 is an error: its memoised subtree is served as an error literal.
       const cells: Cells = { ...B, A1: 2, A2: 'ab', A3: 4, A4: { error: '#DIV/0!' } }
       const { outs, calls } = await run(text, cells)
       outs.forEach((o, row) => expect(o, `${text} at C${row + 1}`).toEqual({ kind: 'ready', value: resultOf(engineAt(text, cells, row, 2).value) }))
-      // An argument of SUM or AND is evaluated in the engine's array mode, outside the scalar memo the subtree values are
-      // read from, so it is never memoised (never served from a scalar value); operands of an operator are.
+      // An argument of SUM or AND is evaluated in the engine's array mode: its value is read from that mode's store.
       if (memoised.has(text)) expect(calls[1]!.nodes, text).toBeLessThan(calls[0]!.nodes)
       else expect(calls[1]!.nodes, text).toBe(calls[0]!.nodes)
     }

@@ -11,7 +11,7 @@
  * The CF engine stays out of the eager and paged-worker closures; this file imports the formula engine modules directly
  * (never the `../formula` barrel) and no eager site imports it.
  */
-import type { AstNode, CellRef, ElementValue, EvaluationContext, EvaluationValue, FormulaError, MaterializationBudget, MatrixValue, ReferenceIssue, ResolvedSemantics } from '../formula/types'
+import type { AstNode, CellRef, ElementValue, EvaluationContext, EvaluationValue, FormulaError, MaterializationBudget, MatrixValue, ModeFrameStores, ReferenceIssue, ResolvedSemantics } from '../formula/types'
 import { parseFormula } from '../formula/parser'
 // functions.ts before evaluator.ts and cond.ts: the engine modules import each other, and functions.ts must finish
 // evaluating before the conditional table is read.
@@ -1370,13 +1370,17 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
       admitted = true // the bound charged covers the discovery already metered
       limit = breakdown.total
       context.onCall?.(breakdown)
-      const outcome = invoke(f, tree.value.value, at, shape, areas, view.value, snapshot, context, values => {
-        // A clean call: memoise each invariant subtree it computed (scalar mode, a scalar value; a blank is skipped, since
-        // an empty literal could read as an omitted argument). Its node is shared by every translation, so the value the
-        // engine stored for it is the subtree's own.
+      const outcome = invoke(f, tree.value.value, at, shape, areas, view.value, snapshot, context, stores => {
+        // A clean call: memoise each invariant subtree it computed, in whichever mode the engine evaluated it (a scalar
+        // value; a blank is skipped, since an empty literal could read as an omitted argument; a node computed in both
+        // modes to different values is skipped). Its node is shared by every translation, so the value the engine
+        // stored for it is the subtree's own, and the literal evaluates to the same value in either mode.
         for (const node of subtrees) {
           if (memoised.has(node)) continue
-          const v = values.get(node)
+          const inScalar = stores.scalar.nodeValues.has(node), inArray = stores.array.nodeValues.has(node)
+          const sv = stores.scalar.nodeValues.get(node), av = stores.array.nodeValues.get(node)
+          if (inScalar && inArray && !Object.is(sv, av) && !(isEvaluationError(sv) && isEvaluationError(av) && sv.code === av.code)) continue
+          const v = inScalar ? sv : av
           if (v === undefined || v === null || isMatrixValue(v) || (typeof v === 'number' && !Number.isFinite(v))) continue
           if (typeof v === 'object' && !isEvaluationError(v)) continue
           context.invariants.setNode(node, v as ElementValue)
@@ -1399,7 +1403,7 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
 }
 
 function invoke(f: CfFormula, tree: AstNode, at: Readonly<{ row: number; col: number }>, shape: CfCallShape, areas: readonly (SourceRect | 'ref')[],
-  view: CfDependencyView, snapshot: CfDependencySnapshot, context: CfFormulaContext, onClean?: (nodeValues: WeakMap<AstNode, EvaluationValue>) => void): CfOutcome<CfResult> {
+  view: CfDependencyView, snapshot: CfDependencySnapshot, context: CfFormulaContext, onClean?: (stores: ModeFrameStores) => void): CfOutcome<CfResult> {
   try {
     // Shape before projection (S5-D round-1 #7): a root reference never reaches the engine's scalar projection.
     if (tree.type === 'error' && (f.ast.type === 'cell' || f.rootArea)) return { kind: 'ready', value: { kind: 'error', value: ERROR_ELEMENTS.get(tree.error) ?? ERROR_ELEMENTS.get('#REF!')! } }
@@ -1427,12 +1431,18 @@ function invoke(f: CfFormula, tree: AstNode, at: Readonly<{ row: number; col: nu
     })
     const features = new Set<string>()
     const issues: ReferenceIssue[] = []
-    const nodeValues = new WeakMap<AstNode, EvaluationValue>()
+    // Caller-owned stores for both evaluation modes (round 3, finding 5): an argument the engine evaluates in array mode
+    // (SUM, AND, ...) leaves its value in the array store, where the subtree memo can read it.
+    const stores: ModeFrameStores = {
+      scalar: { nodeValues: new WeakMap(), flatArgs: new WeakMap(), functionWork: new WeakMap() },
+      array: { nodeValues: new WeakMap(), flatArgs: new WeakMap(), functionWork: new WeakMap() },
+    }
     const currentCell: CellRef = { row: at.row, col: at.col, absRow: false, absCol: false }
     const ctx: EvaluationContext = {
       typedValues: true, currentSheet: context.sheetName, currentCell, semantics: context.semantics, references,
       unsupportedFeatures: features, reportFormulaIssue: issue => { issues.push(issue) }, hasCycle: false,
-      nodeValues, flatArgs: new WeakMap(), functionWork: new WeakMap(), materializationBudget: context.materialization,
+      mode: 'scalar', modeStores: stores, nodeValues: stores.scalar.nodeValues, flatArgs: stores.scalar.flatArgs, functionWork: stores.scalar.functionWork,
+      materializationBudget: context.materialization,
       // Engine argument order is (sheet, col, row); a single-cell read goes through the call's view (charged, area-checked).
       getCellValue: (sheet, col, row) => {
         if (sheet !== undefined && sheet.toLowerCase() !== lower) { features.add('cf-cross-sheet-read'); return ERROR_ELEMENTS.get('#N/A')! }
@@ -1446,7 +1456,7 @@ function invoke(f: CfFormula, tree: AstNode, at: Readonly<{ row: number; col: nu
     if (features.has('array-resource-limit')) return unresolved('cf-resource-limit')
     if (features.size > 0 || issues.length > 0 || ctx.hasCycle) return unresolved('cf-formula-unsupported')
     const classified = classifyValue(value)
-    if (classified.kind === 'ready') onClean?.(nodeValues)
+    if (classified.kind === 'ready') onClean?.(stores)
     return classified
   } catch (error) {
     if (error === CF_WORK_REFUSED) return unresolved('cf-resource-limit')
