@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from 'bun:test'
 import { DEFAULT_CAPS } from '../src/admission'
+import { AdmissionRefused, showQueueBound } from '../src/pool'
 import { Pool } from '../src/pool'
 import { SHOW_BUILD_BYTES, showBuildGrant, showRequestBytes } from '../src/show/grant'
 import { flyInDeck } from '../../src/testdata/show-decks'
@@ -23,7 +24,8 @@ describe('show admission: request charge at request time, the grant at slot time
       const c = pool.showPlan('s1', { docRef: 'fly', ...job, motion: 'reduced' }, grant)
       await until(() => pool.stats().prep.reserved > 0)
       const st = pool.stats()
-      expect(st.reserved).toBe(3 * showRequestBytes(grant))
+      // Round 13d: the two waiting for the session's show slot hold no general admission.
+      expect(st.reserved).toBe(showRequestBytes(grant))
       expect(st.prep).toMatchObject({ reserved: grant, bound: SHOW_BUILD_BYTES })
       await Promise.all([a, b, c])
       expect(pool.stats().prep.reserved).toBe(0)
@@ -108,12 +110,55 @@ describe('show admission: request charge at request time, the grant at slot time
       // It waits for the session's running job, holding no worker slot and no grant.
       expect(pool.stats().prep.reserved).toBe(grant)
       expect(pool.stats().workers[1]!.busy).toBe(false)
+      // Round 13d: and no general admission either (only the running job's request charge is reserved).
+      expect(pool.stats().reserved).toBe(showRequestBytes(grant))
       ac.abort()
       expect(await waiting).toBe('ShowCancelled')
       await first
       expect(pool.stats()).toMatchObject({ reserved: 0, running: 0, queued: 0, prep: { reserved: 0 } })
       // The session's slot is free again.
       expect('refused' in await pool.showPlan('s1', { docRef: 'b', ...job }, grant)).toBe(false)
+    } finally { pool.dispose() }
+  }, 60_000)
+
+  it("round 13d: show jobs waiting for the session's show slot hold no running place, so the session's unit renders still run", async () => {
+    const pool = new Pool({ workers: 2, testHooks: true })
+    try {
+      await pool.open('a', await flyInDeck(), 'full')
+      await pool.open('b', await flyInDeck(), 'full')
+      const ac = new AbortController()
+      const first = pool.showPlan('s1', { docRef: 'a', ...job, hangMs: 1500 }, grant)
+      await until(() => pool.stats().prep.reserved > 0)
+      // Seven more fill what used to be the session's 8 running places.
+      const waiting = Array.from({ length: 7 }, (_, i) => pool.showPlan('s1', { docRef: 'a', ...job, mark: { kind: 'viewer', text: `w${i}` } }, grant, ac.signal).catch(() => 'cancelled'))
+      await new Promise(r => setTimeout(r, 50))
+      let showDone = false
+      void first.then(() => { showDone = true })
+      const unit = await pool.render('s1', { docRef: 'b', contentPolicy: 'full', unitIndex: 0, scale: 1, projection: 'final-raster', mark: { kind: 'off' } }, 1024)
+      expect(unit.kind).toBe('raster')
+      expect(showDone).toBe(false)
+      ac.abort()
+      await Promise.all([first, ...waiting])
+      expect(pool.stats()).toMatchObject({ reserved: 0, running: 0, queued: 0, prep: { reserved: 0 } })
+    } finally { pool.dispose() }
+  }, 60_000)
+
+  it("round 13d: the session's show queue is bounded (8 running places + 32 queued, less the running job); past it a request is refused session-queue, and cancelling the queue releases it", async () => {
+    const pool = new Pool({ workers: 1, testHooks: true })
+    try {
+      await pool.open('a', await flyInDeck(), 'full')
+      const ac = new AbortController()
+      const first = pool.showPlan('s1', { docRef: 'a', ...job, hangMs: 1500 }, grant)
+      await until(() => pool.stats().prep.reserved > 0)
+      const queued = Array.from({ length: showQueueBound(DEFAULT_CAPS) }, (_, i) => pool.showPlan('s1', { docRef: 'a', ...job, mark: { kind: 'viewer', text: `q${i}` } }, grant, ac.signal).then(() => 'built', (e: Error) => e.name))
+      const over = await pool.showPlan('s1', { docRef: 'a', ...job, mark: { kind: 'viewer', text: 'over' } }, grant).then(() => 'built', (e: unknown) => e instanceof AdmissionRefused ? e.reason : String(e))
+      expect(over).toBe('session-queue')
+      // Another session is not affected.
+      const other = pool.showPlan('s2', { docRef: 'a', ...job, mark: { kind: 'viewer', text: 'other' } }, grant)
+      ac.abort()
+      expect(new Set(await Promise.all(queued))).toEqual(new Set(['ShowCancelled']))
+      await Promise.all([first, other])
+      expect(pool.stats()).toMatchObject({ reserved: 0, running: 0, queued: 0, prep: { reserved: 0 } })
     } finally { pool.dispose() }
   }, 60_000)
 })

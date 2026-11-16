@@ -68,6 +68,9 @@ interface Slot {
   prep: number
 }
 
+/** Round 13d: show requests a session may have waiting for its show slot (one more is running). */
+export const showQueueBound = (caps: Caps) => caps.perSessionOutstanding + caps.perSessionQueue - 1
+
 export class Pool {
   readonly admission: AdmissionModel
   private slots: Slot[] = []
@@ -369,11 +372,12 @@ export class Pool {
    * never holds more than workers × `SHOW_BUILD_BYTES` (`stats().prep`).
    */
   private async showJob(sessionId: string, docRef: string, contentPolicy: 'visible-only' | 'full', grant: number, msg: (docKey: string) => WorkerRequest, signal?: AbortSignal): Promise<unknown> {
-    const admitted = await this.admit(sessionId, showRequestBytes(grant), signal)
+    // Round 13c: one running show job per session (its session slot first, then admission, then its worker's), so a
+    // viewer holds one grant at most whatever the worker count. Round 13d: a job waiting for the session slot holds
+    // no general admission (no running place, no bytes), so the session's unit renders are not held behind it.
+    const leave = await this.sessionShowSlot(sessionId, signal)
     try {
-      // Round 13c: one running show job per session (its session slot first, then its worker's), so a viewer holds
-      // one grant at most whatever the worker count; a job waiting here holds no worker slot and no grant.
-      const leave = await this.sessionShowSlot(sessionId, signal)
+      const admitted = await this.admit(sessionId, showRequestBytes(grant), signal)
       try {
         const slot = this.pick(docRef)
         return await this.exclusive(slot, async () => {
@@ -382,10 +386,10 @@ export class Pool {
           const held = this.reservePrep(slot, grant, sessionId)
           try { return await this.showOnSlot(slot, admitted, docRef, contentPolicy, msg, signal) } finally { this.releasePrep(slot, held, sessionId) }
         })
-      } finally { leave() }
-    } finally {
-      if (admitted.state === 'running') this.finish(admitted)
-    }
+      } finally {
+        if (admitted.state === 'running') this.finish(admitted)
+      }
+    } finally { leave() }
   }
 
   /**
@@ -407,6 +411,9 @@ export class Pool {
       else { s.busy = false; this.showSessions.delete(sessionId) }
     }
     if (!s.busy) { s.busy = true; return release }
+    // Round 13d: bounded so a session keeps as many show requests in flight as general admission allowed it before
+    // (its running places plus its queue: 8 + 32), and refused the same way (`session-queue`).
+    if (s.waiters.length >= showQueueBound(this.admission.caps)) { this.admission.refusals['session-queue']++; throw new AdmissionRefused('session-queue') }
     await new Promise<void>((ok, fail) => {
       const onAbort = () => {
         const i = s.waiters.indexOf(wake)
