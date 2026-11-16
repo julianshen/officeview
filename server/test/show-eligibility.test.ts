@@ -339,12 +339,50 @@ describe('show eligibility', () => {
       for (const t of [200, 400, 600]) expect({ t, diff: pixelsDiffer(run, one, ended, t) }).toEqual({ t, diff: 0 })
     })
 
+    // Round 12e (codex): media is observed by the entrance gate. `timingTargets` puts a media leaf with an (own or
+    // inherited) entrance class into its target's entrance set, and the server compositor and both client stages
+    // hide that target unless an entrance node is active or frozen: the media's synthetic end flips the cover.
+    const coverDeck = async (variant: 'own' | 'inherited' | 'plain') => {
+      const z = await JSZip.loadAsync(await mediaEndRevealDeck('unrelated'))
+      let xml = await z.file('ppt/slides/slide1.xml')!.async('string')
+      if (variant === 'own') xml = xml.replace('<p:cTn id="3" fill="hold"', '<p:cTn id="3" presetClass="entr" presetID="1" fill="remove"')
+      if (variant === 'plain') xml = xml.replace('<p:cTn id="3" fill="hold"', '<p:cTn id="3" fill="remove"')
+      if (variant === 'inherited') {
+        xml = xml.replace('<p:video>', '<p:par><p:cTn id="80" presetID="1" presetClass="entr" presetSubtype="0" fill="remove"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:video>')
+          .replace('</p:video>', '</p:video></p:childTnLst></p:cTn></p:par>')
+      }
+      // The media shape (id 3) becomes a cover over the ink box.
+      xml = xml.replace('<a:off x="762000" y="5334000"/><a:ext cx="1524000" cy="762000"/>', '<a:off x="3429000" y="2476500"/><a:ext cx="2286000" cy="1905000"/>')
+      z.file('ppt/slides/slide1.xml', xml)
+      return z.generateAsync({ type: 'uint8array' })
+    }
+    for (const variant of ['own', 'inherited'] as const) {
+      it(`a media node with ${variant === 'own' ? 'its own' : 'an inherited'} entrance class covering the ink: the still (round 12e)`, async () => {
+        const run = await classify(await coverDeck(variant))
+        const tl = run.timeline
+        expect(tl.stateAt(tl.initial(), 16).active.some(e => e.node.ctn.id === MEDIA_END_REVEAL.videoId)).toBe(true)
+        const ended = tl.mediaEnd(tl.initial(), MEDIA_END_REVEAL.videoId, 16, true)
+        // The fixture: the synthetic end flips the cover's visibility.
+        expect(pixelsDiffer(run, tl.initial(), ended, 100)).toBeGreaterThan(0)
+        expect(run.c.fallback).toBe('still')
+      })
+    }
+    it('plain media (no entrance class) covering the ink: eligible, and its end changes no pixel (round 12e)', async () => {
+      const run = await classify(await coverDeck('plain'))
+      const tl = run.timeline
+      const ended = tl.mediaEnd(tl.initial(), MEDIA_END_REVEAL.videoId, 16, true)
+      expect(run.c.fallback).toBeUndefined()
+      expect(pixelsDiffer(run, tl.initial(), ended, 100)).toBe(0)
+      const clicked = tl.next(ended, 100)
+      for (const t of [200, 700]) expect({ t, diff: reconstruct(run, clicked, t).diff }).toEqual({ t, diff: 0 })
+    })
+
     it('a timing attribute the model does not handle, on a media-dependent node, refuses (allowlist, round 12d)', () => {
       const ctn = (id: number, o: Record<string, unknown> = {}) => ({ id, durMs: undefined, accel: 0, decel: 0, autoRev: false, fill: 'hold' as const, start: [{ delayMs: 0 }], end: [], ...o }) as TimeNode['ctn']
       const leaf = (kind: string, id: number, o: Record<string, unknown> = {}) => ({ kind, ctn: ctn(id, o), target: { spid: '4' }, attrNames: [], additive: 'base', accumulate: 'none' }) as unknown as TimeNode
       const tree = (o: Record<string, unknown>, kind: 'par' | 'seq' | 'excl' = 'par'): TimeNode => ({
         kind: 'par', ctn: ctn(1, { durMs: 'indefinite', fill: undefined, start: [] }),
-        children: [{ kind, ctn: ctn(5, o), children: [leaf('anim', 7, { durMs: 500 }), leaf('audio', 9)] } as TimeNode],
+        children: [{ kind, ctn: ctn(5, o), children: [leaf('anim', 7, { durMs: 500 }), { ...leaf('audio', 9), target: { snd: 'builtIn:wind.wav' } } as TimeNode] } as TimeNode],
       })
       expect(mediaEndAffectsDrawing(tree({}))).toBe(false)
       for (const o of [{ speed: 2 }, { accel: 0.5 }, { decel: 0.5 }, { autoRev: true }, { repeatCount: 2 }, { repeatDurMs: 1000 }, { iterate: { type: 'wd', backwards: false, tmPct: 0.1 } }]) {

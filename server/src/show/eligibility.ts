@@ -773,7 +773,15 @@ export function mediaEndAffectsDrawing(root: TimeNode): boolean {
   }
   // Round 12d: a media-dependent node carries only timing the model handles (`timingModelled`).
   for (const n of nodes) if ((B.has(n) || C.has(n) || E.has(n)) && !timingModelled(n)) return true
-  const drawn = (n: TimeNode) => !('children' in n) && !isMedia(n) && n.kind !== 'cmd'
+  // Round 12e: "drawn" is any leaf whose activity a renderer observes (`ACTIVITY_CONSUMERS`): a behaviour with render
+  // edits (not media, not `cmd`), or any leaf on a shape target with an own or inherited `presetClass`, which
+  // `timingTargets` may put in an entrance set that the entrance gate reads (media and `cmd` included).
+  const classOf = (n: TimeNode): string | undefined => {
+    for (let m: TimeNode | undefined = n; m; m = parent.get(m)) if (m.ctn.presetClass !== undefined) return m.ctn.presetClass
+    return undefined
+  }
+  const drawn = (n: TimeNode) => !('children' in n) &&
+    ((!isMedia(n) && n.kind !== 'cmd') || ('spid' in n.target && classOf(n) !== undefined))
   const drawnBelow = (n: TimeNode): boolean => 'children' in n ? n.children.some(o => drawn(o) || drawnBelow(o)) : false
   // A begin that is not a fixed offset into its parent: it may come after the container's client-side end.
   const late = (n: TimeNode) => n.ctn.start.some(c => c.evt !== undefined || c.tn !== undefined || c.delayMs === 'indefinite')
@@ -787,6 +795,22 @@ export function mediaEndAffectsDrawing(root: TimeNode): boolean {
   }
   return false
 }
+
+/**
+ * PR #78 round 12e: every consumer of a timeline snapshot's `active`/`frozen` entries, server and client (audited
+ * with a search for `.active`/`.frozen` outside the scheduler). Each either reads only render edits (which media and
+ * `cmd` do not make), only reads the entrance sets, or does not draw:
+ * - render edits: `renderStateAt` / `docOrder` (`src/slideshow/engine/behaviours.ts`); media and `cmd` return none.
+ * - the entrance gate (a hidden target shows once one of its entrance nodes is active or frozen): `slideStateAt`
+ *   (`server/src/show/compose.ts`), the local stage (`src/slideshow/player/stage.ts`) and PlanStage
+ *   (`src/stream/remote/plan-stage.ts`), over `timingTargets`' `entrances` (`src/slideshow/engine/targets.ts`),
+ *   which keeps any leaf on a shape target with an `entr` class, media included.
+ * - not drawing: the step settle (`steps.ts`), the synthetic ends (`driver.ts`), the local media player
+ *   (`src/slideshow/media/player.ts`, absent in a streamed show), the autoplay tests at `initial()` (`build.ts`,
+ *   `plan-stage.ts`, this file: one history, no media end), and this file's emphasis and timed-effect checks
+ *   (media excluded, render edits only).
+ */
+export const ACTIVITY_CONSUMERS = ['renderStateAt', 'entrance gate (compose.ts, stage.ts, plan-stage.ts)'] as const
 
 /**
  * PR #78 round 12d: the `p:cTn` timing attributes, from what the scheduler (`src/slideshow/engine/scheduler.ts`,

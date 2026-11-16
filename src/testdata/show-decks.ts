@@ -402,7 +402,8 @@ export function mediaEndRevealDeck(kind: MediaEndKind = 'onEnd'): Promise<Uint8A
       cls: 'entr', preset: 10, behaviours: (next) => {
         const set = setVisibility(next, 2, 'visible')
         const effect = Number(/id="(\d+)"/.exec(set)![1]) - 1
-        const sound = `<p:audio><p:cMediaNode><p:cTn id="${MEDIA_END_REVEAL.soundId}" display="0"><p:stCondLst><p:cond evt="begin" delay="0"><p:tn val="${effect}"/></p:cond></p:stCondLst></p:cTn>${tgt(3)}</p:cMediaNode></p:audio>`
+        // An effect sound targets the sound itself (`p:sndTgt`), as PowerPoint writes it: no shape's entrance set.
+        const sound = `<p:audio><p:cMediaNode><p:cTn id="${MEDIA_END_REVEAL.soundId}" display="0"><p:stCondLst><p:cond evt="begin" delay="0"><p:tn val="${effect}"/></p:cond></p:stCondLst></p:cTn><p:tgtEl><p:sndTgt name="wind.wav"/></p:tgtEl></p:cMediaNode></p:audio>`
         return [set, animEffect(next, 2, 'in', 'fade', 500), sound]
       },
     }
