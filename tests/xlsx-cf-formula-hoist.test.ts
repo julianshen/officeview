@@ -599,6 +599,14 @@ describe('invariant subtrees are memoised per preparation under a charged lease 
       else expect(calls[1]!.nodes, text).toBe(calls[0]!.nodes)
     }
   })
+  it('array-mode memo values keep their meaning: booleans and numeric text inside SUM, COUNT and COUNTA paint as the engine', async () => {
+    const cells: Cells = { ...B, A1: 2, A2: '3' }
+    for (const fn of ['SUM', 'COUNT', 'COUNTA']) for (const arg of ['$A$1>0', '$A$2&""', '$A$1*2']) {
+      const text = `${fn}(B1,${arg})`
+      const { outs } = await run(text, cells)
+      outs.forEach((o, row) => expect(o, `${text} at C${row + 1}`).toEqual({ kind: 'ready', value: resultOf(engineAt(text, cells, row, 2).value) }))
+    }
+  })
   it('a memoised string enters the call as literal text: its length is in the text bound', () => {
     const f = compile('UPPER($A$2)=B1', 'C1')
     const [node] = cfInvariantSubtrees(f)
