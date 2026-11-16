@@ -2078,3 +2078,14 @@ Evidence kind is read from the owning case's per-cell `iconEvidence` labels (ver
 - **Fixtures:**
   - `stage5-active-present-bar` now has six rows, giving three non-empty active witnesses and two decisive inactive cells.
   - `stage5-composition` moves its p1-true rows to 3 and 5, so none falls on the column minimum, where a bar has zero length.
+
+### Fix round 4: Ruling S5-WITNESS (orchestrator ruling)
+
+Every Stage 5 configuration, whether fill, scale, bar or icon, goes through one witness rule, `s5Witness`, instead of per-configuration bookkeeping:
+- **Twins:** each twin a reading names carries `twinExpect` (`visual`, `empty` or `either`), fixed before capture from the twin's own rule and values.
+  - **Positive controls** must render (a Stage 3 bar, a Stage 4 icon class, or a fill against the unformatted control) before their observation is used as a prediction; otherwise `formula-twin-missing`.
+  - **Empty twins** must render nothing; otherwise `formula-unexpected-visual`.
+- **The winner's cells:** each required-visual and required-empty cell is validated by the same measurement, formula cell and twin alike.
+- **Decisive cells:** a cell is decisive only when its observation matches the winner and contradicts the rival beyond tolerance. A cell within tolerance of both decides nothing. Every replication group needs at least 2 such cells, and a bar or icon configuration also needs at least 2 required-visual witnesses.
+- **Adversarial test:** a generic test applies four corruptions to every configuration and every reading that can win: blank twins, visuals in required-empty cells, blank positive controls, and shifts into the shared tolerance band. Each must refuse.
+- **Fixture:** `stage5-composition` now has six rows (p1 true on rows 3, 5 and 7), so `stop-bar` and `indirect-bar` each have two non-empty unstopped witnesses and two decisive stopped cells.
