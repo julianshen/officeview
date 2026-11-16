@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import '../src/xlsx/formula/functions'
 import * as evaluatorModule from '../src/xlsx/formula/evaluator'
 import * as schedulerModule from '../src/xlsx/view/scheduler'
+import * as wildcardModule from '../src/xlsx/formula/functions/wildcard'
 import {
   cfCallShape, cfCallWorkBreakdown, cfEvaluatorScratchBytes, cfFormulaSemantics, createCfInvariantMemo, evaluateCfFormula,
   type CfCallWorkBreakdown, type CfFormulaContext, CF_TEXT_RENDER_UNITS, cfTextUnits,
@@ -27,6 +28,10 @@ const hostHooks: { onHost?: () => void } = {}
 vi.mock('../src/xlsx/view/scheduler', async importOriginal => {
   const actual = await importOriginal<typeof import('../src/xlsx/view/scheduler')>()
   return { ...actual, hostTask: vi.fn(async () => { hostHooks.onHost?.() }) }
+})
+vi.mock('../src/xlsx/formula/functions/wildcard', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/xlsx/formula/functions/wildcard')>()
+  return { ...actual, tokenizeWildcardPattern: vi.fn(actual.tokenizeWildcardPattern) }
 })
 const evaluateNodeSpy = vi.mocked(evaluatorModule.evaluateNode)
 const textCharsSpy = vi.mocked(evaluatorModule.textChars)
@@ -58,7 +63,7 @@ describe('relative-range traversal work is charged per occurrence before it happ
   it('SUM(A1:A4)+SUM(A1:A4) on a 4-cell view: 5 nodes + 4 view build + 2 x (4 enumeration + 4 reads + 8 sort) = 41', async () => {
     const { out, calls } = await sumTwice(units => createCfUnitCeiling(units + 1000))
     expect(out[0]).toEqual({ kind: 'ready', value: { kind: 'number', value: 20 } })
-    expect(calls[0]).toEqual({ nodes: 5, viewBuild: 4, index: 0, enumeration: 8, reads: 8, sort: 16, comparisons: 0, matcher: 0, text: 0, lookups: 0, total: 41 })
+    expect(calls[0]).toEqual({ nodes: 5, viewBuild: 4, index: 0, enumeration: 8, reads: 8, sort: 16, comparisons: 0, matcher: 0, text: 0, criterion: 0, lookups: 0, total: 41 })
   })
   it('with 40 units left the call never runs and the rule is unresolved, while a second rule in the batch still evaluates', async () => {
     const { out, calls, sumRan } = await sumTwice(units => createCfUnitCeiling(units + 40)) // the snapshot build takes 4 (A1:A4)
@@ -84,7 +89,7 @@ describe('relative-range traversal work is charged per occurrence before it happ
     const { calls, snapshotUnits, entries, outcomes } = await run(createCfUnitCeiling(5000))
     expect(entries).toBe(1004)
     expect(snapshotUnits).toBe(1004) // built once, one unit per entry
-    expect(calls[0]).toEqual({ nodes: 3, viewBuild: 5, index: 0, enumeration: 5, reads: 5, sort: 15, comparisons: 4, matcher: 0, text: 0, lookups: 0, total: 37 })
+    expect(calls[0]).toEqual({ nodes: 3, viewBuild: 5, index: 0, enumeration: 5, reads: 5, sort: 15, comparisons: 4, matcher: 0, text: 0, criterion: 0, lookups: 0, total: 37 })
     expect(Math.floor((5000 - 1004) / 37)).toBe(108)
     const readyRows = outcomes.map((o, i) => (o.kind === 'ready' ? i : -1)).filter(i => i >= 0)
     expect(readyRows).toEqual(Array.from({ length: 108 }, (_, i) => i)) // B2:B109, in row-major order
@@ -226,7 +231,7 @@ describe('text work is bounded by measured payload before invocation (round-2 #1
     expect(evaluateNodeSpy).not.toHaveBeenCalled()
     const exact = createCfMemory({ limitBytes: scratch + tree })
     expect(evaluateCfFormula(f, a1('B1'), snapshot, context(exact, calls))).toEqual({ kind: 'ready', value: { kind: 'number', value: 20 } })
-    expect(calls[0]).toEqual({ nodes: 4, viewBuild: 2, index: 0, enumeration: 0, reads: 2, sort: 0, comparisons: 0, matcher: 0, text: 40, lookups: 0, total: 48 })
+    expect(calls[0]).toEqual({ nodes: 4, viewBuild: 2, index: 0, enumeration: 0, reads: 2, sort: 0, comparisons: 0, matcher: 0, text: 40, criterion: 0, lookups: 0, total: 48 })
     expect(exact.peakBytes).toBe(scratch + tree)
     expect(exact.currentBytes).toBe(0)
     snapshot.dispose()
@@ -243,7 +248,7 @@ describe('text work is bounded by measured payload before invocation (round-2 #1
     const three = await snapshotOf({ A1: 'abc', A2: 'abd', B1: 'abc' }, ['A1:A2', 'B1'])
     const calls: CfCallWorkBreakdown[] = []
     expect(evaluateCfFormula(f, a1('C1'), three, context(createCfMemory(), calls))).toEqual({ kind: 'ready', value: { kind: 'number', value: 1 } })
-    expect(calls[0]).toEqual({ nodes: 3, viewBuild: 3, index: 0, enumeration: 3, reads: 3, sort: 6, comparisons: 0, matcher: 32, text: 3, lookups: 0, total: 53 })
+    expect(calls[0]).toEqual({ nodes: 3, viewBuild: 3, index: 0, enumeration: 3, reads: 3, sort: 6, comparisons: 0, matcher: 32, text: 0, criterion: 3, lookups: 0, total: 53 })
     ten.dispose(); three.dispose()
   })
 })
@@ -344,7 +349,7 @@ describe('the static bound covers the store work the engine actually performs (S
       expect(out.kind, text).not.toBe('no-match')
       expect(settled, text).toHaveLength(1)
       const [spent, b] = settled[0]!
-      const dynamic = b.viewBuild + b.enumeration + b.sort + b.reads + b.lookups
+      const dynamic = b.viewBuild + b.index + b.enumeration + b.sort + b.reads + b.lookups + b.criterion
       if (exact.includes(text)) expect(spent, text).toBe(dynamic)
       else expect(spent, text).toBeLessThanOrEqual(dynamic)
       expect(spent, text).toBeGreaterThan(0)
@@ -559,6 +564,34 @@ describe('a refused call\'s discovery work is charged to the preparation (Task 3
     expect(batch.evaluate(0, 0, 1)).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
     expect(budget.remaining).toBe(3) // the 10-cell view build was refused before it spent: nothing to charge
     expect(budget.spend(0)).not.toBe('refused') // never latched
+    batch.dispose()
+  })
+})
+
+describe('criterion preprocessing is charged before it runs (Task 34 fix round 3, finding 2)', () => {
+  const twenty = Array.from({ length: 20 }, () => 'COUNTIF(A1:A2,B1)').join('+') + '>0'
+  it('twenty COUNTIF terms over a 255-character criterion never tokenise it: the first preflight refuses', async () => {
+    const tokenize = vi.mocked(wildcardModule.tokenizeWildcardPattern)
+    for (const B1 of ['a'.repeat(255), '0'.repeat(255)]) {
+      const signal = new AbortController().signal
+      const budget = createCfWorkBudget({ now: frozen, signal })
+      const batch = await batchOf([formulaRule(twenty, 'C1')], fakeSource({ A1: 1, A2: 2, B1 }), { budget, signal })
+      tokenize.mockClear(); evaluateNodeSpy.mockClear()
+      expect(batch.evaluate(0, 0, 2)).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
+      expect(tokenize).not.toHaveBeenCalled()
+      expect(evaluateNodeSpy).not.toHaveBeenCalled()
+      // What the refused call did is charged, and it is bounded by the per-call cap.
+      expect(budget.units).toBeGreaterThan(0)
+      expect(budget.units).toBeLessThanOrEqual(CF_LIMITS.checkpointUnits)
+      batch.dispose()
+    }
+  })
+  it('a short criterion is still tokenised and evaluates', async () => {
+    const tokenize = vi.mocked(wildcardModule.tokenizeWildcardPattern)
+    tokenize.mockClear()
+    const batch = await batchOf([formulaRule('COUNTIF(A1:A2,B1)>0', 'C1')], fakeSource({ A1: 'ab', A2: 'x', B1: 'ab' }))
+    expect(batch.evaluate(0, 0, 2)).toEqual({ kind: 'ready', value: { kind: 'boolean', value: true } })
+    expect(tokenize).toHaveBeenCalled()
     batch.dispose()
   })
 })

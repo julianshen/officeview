@@ -957,7 +957,9 @@ export function cfCallShape(f: CfFormula, hoisted: readonly CfHoist[] = [], memo
 }
 
 /** Components of one call's static bound, each charged before the work happens (S5-N). */
-export type CfCallWorkBreakdown = Readonly<{ nodes: number; viewBuild: number; index: number; enumeration: number; reads: number; sort: number; comparisons: number; matcher: number; text: number; lookups: number; total: number }>
+export type CfCallWorkBreakdown = Readonly<{ nodes: number; viewBuild: number; index: number; enumeration: number; reads: number; sort: number; comparisons: number; matcher: number; text: number
+  /** Criterion text parsed (conditional criteria and frequency keys), spent on the meter before the parse. */
+  criterion: number; lookups: number; total: number }>
 const sortUnits = (v: number): number => (v <= 1 ? 0 : v * Math.ceil(Math.log2(v)))
 /**
  * The static per-call work bound (Ruling S5-N, round-2 #2, round-4 #1): nodes + view build (v) + per traversal
@@ -991,12 +993,14 @@ export function cfCallWorkBreakdown(shape: CfCallShape, payload: CfPayloadMetric
       if (t === 0) comparisons += amount; else matcher += amount
     }
   }
-  text = cfTextUnits(shape, payload).text
+  const textUnits = cfTextUnits(shape, payload)
+  text = textUnits.text
+  const criterion = textUnits.criterion
   const lookups = shape.lookups
   // The empty index steps the view build took (finding 1), measured and charged as they happened.
   const index = payload.index ?? 0
-  const total = shape.nodes + v + index + enumeration + reads + sort + comparisons + matcher + text + lookups
-  return { nodes: shape.nodes, viewBuild: v, index, enumeration, reads, sort, comparisons, matcher, text, lookups, total }
+  const total = shape.nodes + v + index + enumeration + reads + sort + comparisons + matcher + text + criterion + lookups
+  return { nodes: shape.nodes, viewBuild: v, index, enumeration, reads, sort, comparisons, matcher, text, criterion, lookups, total }
 }
 /**
  * Text work and the longest intermediate string of one call (finding 2). The source units are every single-cell read's
@@ -1008,17 +1012,20 @@ export function cfCallWorkBreakdown(shape: CfCallShape, payload: CfPayloadMetric
  * consumer walks its own read once. Criterion text (conditional criteria, frequency keys) is parsed whatever else the
  * call does, so it is always charged.
  */
-export function cfTextUnits(shape: CfCallShape, payload: CfPayloadMetrics): Readonly<{ text: number; intermediate: number }> {
+export function cfTextUnits(shape: CfCallShape, payload: CfPayloadMetrics): Readonly<{ text: number; criterion: number; intermediate: number }> {
   const atom = (i: number) => payload.atoms[i] ?? { cells: 0, stringUnits: 0, longestString: 0 }
   let source = shape.literalUnits + CF_TEXT_RENDER_UNITS * shape.renderOperands
   shape.reads.forEach((kind, i) => { if (kind === 'cell') source += atom(i).stringUnits })
   for (const i of shape.renderRefs) if (atom(i).stringUnits === 0 && atom(i).cells > 0) source += CF_TEXT_RENDER_UNITS
   const intermediate = Math.min(source * CASE_GROWTH ** shape.caseOps, Number.MAX_SAFE_INTEGER)
   let text = !shape.textual ? 0 : shape.textOps > 0 ? Math.min(intermediate * (shape.textOps + shape.consumers), Number.MAX_SAFE_INTEGER) : source
-  text += shape.criterionLiteralUnits
-  for (const i of shape.criterionRefs) text += atom(i).stringUnits
-  return { text, intermediate }
+  let criterion = cfCriterionUnits(shape.criterionLiteralUnits)
+  for (const i of shape.criterionRefs) criterion += cfCriterionUnits(atom(i).stringUnits)
+  return { text, criterion, intermediate }
 }
+/** The units a criterion's parse costs for its length: the same figure is spent on the call meter before the parse and
+ * counted in the bound's text term. */
+export const cfCriterionUnits = (length: number): number => length
 /** The static bound of one call (or `'unbounded'`); a call is evaluated only at or under `CF_LIMITS.checkpointUnits`. */
 export function cfCallWorkUnits(f: CfFormula, payload: CfPayloadMetrics, criterionLengths: readonly (number | undefined)[], hoisted: readonly CfHoist[] = planCfHoist(f)): number | 'unbounded' {
   const b = cfCallWorkBreakdown(cfCallShape(f, hoisted), payload, criterionLengths)
@@ -1313,6 +1320,12 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
       const i = shape.refs.indexOf(node)
       const a = i < 0 ? 'ref' : areas[i]!
       value = a === 'ref' ? null : snapshot.read(undefined, a.firstRow, a.firstCol)
+    }
+    // The criterion's parse (prefix strip, numeric pattern, wildcard tokens) is charged on the meter BEFORE it runs, at
+    // the units the bound's text term counts for it (round 3, finding 2): a long criterion is refused unparsed.
+    if (typeof value === 'string') {
+      if (value.length > CONDITIONAL_MAX_CRITERION_LENGTH) return unresolved('cf-formula-unsupported') // conditional-long-criterion-unverified
+      if (meter.spend(cfCriterionUnits(value.length)) === 'refused') return unresolved('cf-resource-limit')
     }
     const t = criterionTokens(value)
     if (t === 'long') return unresolved('cf-formula-unsupported') // the engine records conditional-long-criterion-unverified
