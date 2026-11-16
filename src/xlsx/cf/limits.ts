@@ -79,9 +79,12 @@ export const CF_CHAR_SLOT_BYTES: number = measurePayloadBytes(['a'])! - measureP
  * the payload measurer over the widest value the structure holds; string payloads are priced separately at 2 B per code
  * unit (the measurer's string rule), never hand-counted. */
 const WIDEST_ERROR = Object.freeze({ kind: 'formula-error', code: '#DIV/0!' })
-/** One snapshot entry: a row slot in its column's sorted row list plus a value slot holding the widest non-string value
- * (a tagged error object; a string's characters are priced per unit on top). */
-export const CF_DEPENDENCY_CELL_BYTES: number = measurePayloadBytes([[1048575], [WIDEST_ERROR]])! - measurePayloadBytes([[], []])!
+/** One snapshot entry: a row slot in its column's sorted row list, a value slot holding the widest non-string value (a
+ * tagged error object; a string's characters are priced per unit on top), its string-unit slot, and its slot in the
+ * snapshot's row-major key index (fix round 2, finding 1). */
+export const CF_DEPENDENCY_CELL_BYTES: number = measurePayloadBytes([[1048575], [WIDEST_ERROR], [32767], [17179869183]])! - measurePayloadBytes([[], [], [], []])!
+/** One slot of the row-major key index alone (a rebuild after an out-of-order source holds old plus new). */
+export const CF_DEPENDENCY_KEY_BYTES: number = measurePayloadBytes([17179869183])! - measurePayloadBytes([])!
 /** One memo or map entry (key and value slots): the evaluator's per-node memo and the CF-owned invariant memo. */
 export const CF_SLOT_BYTES: number = measurePayloadBytes(new Map([[0, 0]]))! - measurePayloadBytes(new Map())!
 /** One populated slot `{ col, row }` the engine's sparse cursor builds per matched cell (refs.ts `populated`). */
@@ -137,6 +140,20 @@ export const CF_LIMITS = Object.freeze({ rules: 4096, rangesPerRule: 256, ranges
   // docs/validation/xlsx-cf.md section 11 (scripts/cf-refs/active-units.ts): >= 5x the largest production call.
   activeUnits: ACTIVE_UNITS, checkpointUnits: 128, sliceMs: 4, preparedCells: CF_PAINT_BATCH_CELLS,
   matchingRules: 4096, descriptorUnits: 128, diagnostics: 64 })
+/** The worst-case workspace one per-call view builds (fix round 2, finding 1): its key set and sorted key list at the
+ * per-call cap, one area index per reference occurrence (at most the cap), and per distinct area (at most one per admitted
+ * atom) its slot and measured metrics. DERIVED from the measurer; the evaluator reserves it with the per-call
+ * bookkeeping before `viewFor`, which refuses without it. */
+export const CF_VIEW_WORKSPACE_BYTES: number = (() => {
+  const cap = CF_LIMITS.checkpointUnits, atoms = CF_LIMITS.formulaAtoms
+  const keys = Array.from({ length: cap }, (_, i) => 17179869183 - i)
+  const shared = { firstRow: 0, lastRow: 0, firstCol: 0, lastCol: 0 }
+  return measurePayloadBytes({
+    keySet: new Set(keys), ordered: keys, indexOf: keys,
+    distinct: Array.from({ length: atoms }, () => shared).map((_, i) => i), // slots only: the areas are the caller's
+    perArea: Array.from({ length: atoms }, () => ({ cells: cap, stringUnits: 1e9, longestString: 32767 })),
+  })!
+})()
 export interface CfRefusal { readonly kind: 'unresolved'; readonly reason: string }
 const refuse = (reason = 'cf-budget-exceeded'): CfRefusal => ({ kind: 'unresolved', reason })
 const validBytes = (n: number): boolean => Number.isSafeInteger(n) && n >= 0

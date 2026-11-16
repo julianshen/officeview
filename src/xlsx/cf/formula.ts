@@ -24,7 +24,7 @@ import { epochToSerial } from '../formula/serial'
 import type { XlsxDocument } from '../types'
 import type { ValuePolicy } from '../view/contracts'
 import {
-  CF_CHAR_SLOT_BYTES, CF_FLAT_ITEM_BYTES, CF_FORMULA_ATOM_BYTES, CF_FORMULA_CALL_BYTES, CF_FORMULA_FIXED_BYTES, CF_FORMULA_NODE_BYTES,
+  CF_CHAR_SLOT_BYTES, CF_FLAT_ITEM_BYTES, CF_FORMULA_ATOM_BYTES, CF_FORMULA_CALL_BYTES, CF_FORMULA_FIXED_BYTES, CF_VIEW_WORKSPACE_BYTES, CF_FORMULA_NODE_BYTES,
   CF_FORMULA_TOKEN_BYTES, CF_LIMITS, CF_MATCHER_CELL_BYTES, CF_POPULATED_SLOT_BYTES, CF_SLOT_BYTES, CF_TRAVERSAL_BYTES, CF_VIEW_KEY_BYTES,
   CF_WORK_REFUSED, type CfMemory, type CfUnitCeiling, type CfWorkBudget,
 } from './limits'
@@ -815,7 +815,7 @@ export function cfCountifDpRefused(criterion: CfLiteral, longestString: number):
 
 /** Measured while a call's view is built: the view's cardinality and, per read reference in the call's shape order, the
  * stored cells of its area, their total string units and the longest string. */
-export type CfPayloadMetrics = Readonly<{ viewCells: number; atoms: readonly Readonly<{ cells: number; stringUnits: number; longestString: number }>[] }>
+export type CfPayloadMetrics = Readonly<{ viewCells: number; index?: number; atoms: readonly Readonly<{ cells: number; stringUnits: number; longestString: number }>[] }>
 const CONDITIONAL: ReadonlySet<string> = new Set(['COUNTIF', 'COUNTIFS', 'SUMIF', 'SUMIFS', 'AVERAGEIF', 'AVERAGEIFS'])
 /** Argument roles of a conditional aggregate: `t` is a sum/average target range, `r` a criteria range, `c` a criterion. */
 function conditionalRoles(name: string, count: number): Array<'t' | 'r' | 'c'> {
@@ -909,7 +909,7 @@ export function cfCallShape(f: CfFormula, hoisted: readonly CfHoist[] = []): CfC
 }
 
 /** Components of one call's static bound, each charged before the work happens (S5-N). */
-export type CfCallWorkBreakdown = Readonly<{ nodes: number; viewBuild: number; enumeration: number; reads: number; sort: number; comparisons: number; matcher: number; text: number; lookups: number; total: number }>
+export type CfCallWorkBreakdown = Readonly<{ nodes: number; viewBuild: number; index: number; enumeration: number; reads: number; sort: number; comparisons: number; matcher: number; text: number; lookups: number; total: number }>
 const sortUnits = (v: number): number => (v <= 1 ? 0 : v * Math.ceil(Math.log2(v)))
 /**
  * The static per-call work bound (Ruling S5-N, round-2 #2, round-4 #1): nodes + view build (v) + per traversal
@@ -946,8 +946,10 @@ export function cfCallWorkBreakdown(shape: CfCallShape, payload: CfPayloadMetric
   if (!shape.textual) text = 0
   else text += shape.literalUnits
   const lookups = shape.lookups
-  const total = shape.nodes + v + enumeration + reads + sort + comparisons + matcher + text + lookups
-  return { nodes: shape.nodes, viewBuild: v, enumeration, reads, sort, comparisons, matcher, text, lookups, total }
+  // The empty index steps the view build took (finding 1), measured and charged as they happened.
+  const index = payload.index ?? 0
+  const total = shape.nodes + v + index + enumeration + reads + sort + comparisons + matcher + text + lookups
+  return { nodes: shape.nodes, viewBuild: v, index, enumeration, reads, sort, comparisons, matcher, text, lookups, total }
 }
 /** The static bound of one call (or `'unbounded'`); a call is evaluated only at or under `CF_LIMITS.checkpointUnits`. */
 export function cfCallWorkUnits(f: CfFormula, payload: CfPayloadMetrics, criterionLengths: readonly (number | undefined)[], hoisted: readonly CfHoist[] = planCfHoist(f)): number | 'unbounded' {
@@ -963,7 +965,7 @@ export function cfCallWorkUnits(f: CfFormula, payload: CfPayloadMetrics, criteri
 export function cfEvaluatorScratchBytes(f: CfFormula, payload: CfPayloadMetrics, hoisted: readonly CfHoist[] = planCfHoist(f), criterionLengths: readonly (number | undefined)[] = []): number {
   const shape = cfCallShape(f, hoisted)
   const atom = (i: number) => payload.atoms[i] ?? { cells: 0, stringUnits: 0, longestString: 0 }
-  let bytes = CF_FORMULA_CALL_BYTES + shape.nodes * CF_SLOT_BYTES + payload.viewCells * CF_VIEW_KEY_BYTES
+  let bytes = CF_FORMULA_CALL_BYTES + CF_VIEW_WORKSPACE_BYTES + shape.nodes * CF_SLOT_BYTES + payload.viewCells * CF_VIEW_KEY_BYTES
   let textUnits = shape.literalUnits
   shape.reads.forEach((kind, i) => {
     if (kind === 'traversal') bytes += CF_TRAVERSAL_BYTES + atom(i).cells * (CF_POPULATED_SLOT_BYTES + CF_FLAT_ITEM_BYTES)
@@ -1122,9 +1124,16 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
   const substitutes = new Map<AstNode, AstNode>()
   const live: number[] = [] // indexes of refs with an on-sheet area, in shape order
   areas.forEach((a, i) => { if (a !== 'ref') live.push(i) })
-  const view = snapshot.viewFor(live.map(i => ({ rect: areas[i] as SourceRect })), meter)
+  // The nodes alone past the cap refuse before any view work (the area dedupe is quadratic in references).
+  if (shape.nodes > CF_LIMITS.checkpointUnits) return unresolved('cf-resource-limit')
+  // The per-call bookkeeping, the view's workspace included, is reserved BEFORE the view is built (finding 1); it grows
+  // to the full scratch bound once the payload is measured.
+  const hold = context.memory.reserve(CF_FORMULA_CALL_BYTES + CF_VIEW_WORKSPACE_BYTES)
+  if (hold.kind !== 'reserved') return unresolved('cf-resource-limit')
+  try {
+  const view = snapshot.viewFor(live.map(i => ({ rect: areas[i] as SourceRect })), meter, hold)
   if (view.kind !== 'ready') return view.kind === 'unresolved' ? view : unresolved('cf-formula-dependency')
-  const metrics: CfPayloadMetrics = { viewCells: view.value.metrics.viewCells, atoms: shape.refs.map((_, i) => {
+  const metrics: CfPayloadMetrics = { viewCells: view.value.metrics.viewCells, index: view.value.metrics.index ?? 0, atoms: shape.refs.map((_, i) => {
     const j = live.indexOf(i)
     return j < 0 ? { cells: 0, stringUnits: 0, longestString: 0 } : view.value.metrics.atoms[j]!
   }) }
@@ -1163,9 +1172,8 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
     || breakdown.total > context.budget.remaining) return unresolved('cf-resource-limit')
   const scratch = cfEvaluatorScratchBytes(f, metrics, plan, criterionLengths)
   if (scratch > CF_LIMITS.formulaScratchBytes) return unresolved('cf-resource-limit')
-  const hold = context.memory.reserve(scratch)
-  if (hold.kind !== 'reserved') return unresolved('cf-resource-limit')
-  try {
+  if (!hold.grow(scratch)) return unresolved('cf-resource-limit')
+  {
     // Frequency lookups: the criterion read and the lookup are within the bound (one unit each).
     for (const hoist of plan) {
       if (hoist.kind !== 'countif-frequency') continue
@@ -1200,6 +1208,7 @@ export function evaluateCfFormula(f: CfFormula, at: Readonly<{ row: number; col:
       if (outcome.kind === 'ready' && f.invariant) context.invariants.set(f, outcome.value)
       return outcome
     } finally { tree.value.release() }
+  }
   } finally { hold.release() }
 }
 

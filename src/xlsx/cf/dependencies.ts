@@ -25,8 +25,8 @@ import {
   type CfFormulaProbe, type CfHoist, type CfHoisted, type CfPayloadMetrics, type CfResult,
 } from './formula'
 import {
-  CF_DEPENDENCY_CELL_BYTES, CF_LIMITS, CF_WORK_REFUSED, createCfUnitCeiling, createCfWorkBudget,
-  type CfMemory, type CfUnitCeiling, type CfWorkBudget,
+  CF_DEPENDENCY_CELL_BYTES, CF_DEPENDENCY_KEY_BYTES, CF_LIMITS, CF_VIEW_WORKSPACE_BYTES, CF_WORK_REFUSED, createCfUnitCeiling, createCfWorkBudget,
+  type CfMemory, type CfReservation, type CfUnitCeiling, type CfWorkBudget,
 } from './limits'
 import type { CfFormula, CfLease, CfOutcome, CfRule, CfStamp, CfValueSource, SourceRect } from './model'
 import type { CfStatisticsSession } from './statistics'
@@ -44,8 +44,9 @@ export interface CfDependencySnapshot {
   readonly tainted: boolean
   reset(): void
   dispose(): void
-  /** The per-call store over the call's effective areas. Refused before any traversal when an area is not fully covered. */
-  viewFor(effective: readonly CfFootprintEntry[], budget: CfWorkBudget): CfOutcome<CfDependencyView>
+  /** The per-call store over the call's effective areas. Refused before any traversal when an area is not fully covered,
+   * and before anything is built unless `workspace` already holds `CF_VIEW_WORKSPACE_BYTES` (the caller reserves it). */
+  viewFor(effective: readonly CfFootprintEntry[], budget: CfWorkBudget, workspace: CfReservation): CfOutcome<CfDependencyView>
 }
 
 const UNAVAILABLE: unique symbol = Symbol('cf-unavailable')
@@ -66,6 +67,7 @@ interface Column { rows: number[]; values: Slot[]; units: number[]; sorted: bool
 /** One new column's bookkeeping, DERIVED from the payload measurer (a map entry holding an empty column record). */
 export const CF_DEPENDENCY_COLUMN_BYTES: number = measurePayloadBytes(new Map([[0, { rows: [], values: [], units: [], sorted: true }]]))! - measurePayloadBytes(new Map())!
 const INITIAL_CAPACITY = 16
+const W = 16384
 function lowerBound(rows: readonly number[], value: number): number {
   let a = 0, b = rows.length
   while (a < b) { const m = (a + b) >>> 1; if (rows[m]! < value) a = m + 1; else b = m }
@@ -99,6 +101,8 @@ export async function prepareCfDependencies(atoms: readonly CfFootprintEntry[], 
   const hold = memory.reserve(base)
   if (hold.kind !== 'reserved') return unresolved('cf-resource-limit')
   const columns = new Map<number, Column>()
+  // The row-major key index (row * 16384 + col), in arrival order; rebuilt (charged) when the source was out of order.
+  let keys: number[] = [], keysSorted = true, lastKey = -1
   let count = 0, capacity = INITIAL_CAPACITY, stringBytes = 0, columnBytes = 0, adopted = false
   // The table is reserved at its capacity; growing to 2x holds old plus new until the copy is done (Lesson 15).
   if (!hold.grow(base + capacity * CF_DEPENDENCY_CELL_BYTES)) { hold.release(); return unresolved('cf-resource-limit') }
@@ -137,6 +141,10 @@ export async function prepareCfDependencies(atoms: readonly CfFootprintEntry[], 
               if (last >= 0 && column.rows[last] === row) continue // the same cell met twice
               if (last >= 0 && column.rows[last]! > row) column.sorted = false
               column.rows.push(row); column.values.push(element === undefined ? UNAVAILABLE : element); column.units.push(units)
+              const key = row * W + col
+              if (key <= lastKey) keysSorted = false
+              lastKey = key
+              keys.push(key)
               count++
             }
           } finally { page.release() }
@@ -161,8 +169,20 @@ export async function prepareCfDependencies(atoms: readonly CfFootprintEntry[], 
       column.rows = rowsOut; column.values = valuesOut; column.units = unitsOut; column.sorted = true
       if (spent === 'yield') { await hostTask(); if (signal.aborted) throw cancel(); budget.resume() }
     }
+    if (!keysSorted) {
+      // Rebuilt from the normalised columns (so it follows both column dedupes), then sorted: n log n charged first, and
+      // the new index held beside the old one until the old is dropped.
+      const spent = budget.spend(count + sortUnits(count))
+      if (spent === 'refused') return unresolved('cf-resource-limit')
+      if (!hold.grow(base + columnBytes + stringBytes + capacity * CF_DEPENDENCY_CELL_BYTES + count * CF_DEPENDENCY_KEY_BYTES)) return unresolved('cf-resource-limit')
+      const rebuilt: number[] = []
+      for (const [col, column] of columns) for (const row of column.rows) rebuilt.push(row * W + col)
+      rebuilt.sort((a, b) => a - b)
+      keys = rebuilt
+      if (spent === 'yield') { await hostTask(); if (signal.aborted) throw cancel(); budget.resume() }
+    }
     if (signal.aborted) throw cancel()
-    const snapshot = createSnapshot(sheetId, bounds, declared, columns, count, () => lease.release())
+    const snapshot = createSnapshot(sheetId, bounds, declared, columns, keys, count, () => lease.release())
     const lease = hold.adopt(snapshot as CfDependencySnapshot, base + columnBytes + stringBytes + capacity * CF_DEPENDENCY_CELL_BYTES)
     adopted = true
     return { kind: 'ready', value: lease }
@@ -180,7 +200,7 @@ function sourceFailure(error: unknown, signal: AbortSignal): CfOutcome<never> {
   return unresolved('cf-formula-dependency')
 }
 
-function createSnapshot(sheetId: string, bounds: SourceRect, declared: readonly SourceRect[], columns: Map<number, Column>, count: number, release: () => void): CfDependencySnapshot {
+function createSnapshot(sheetId: string, bounds: SourceRect, declared: readonly SourceRect[], columns: Map<number, Column>, keys: readonly number[], count: number, release: () => void): CfDependencySnapshot {
   const colKeys = [...columns.keys()].sort((a, b) => a - b)
   let tainted = false, disposed = false
   const lookup = (row: number, col: number): Slot | undefined => {
@@ -198,32 +218,40 @@ function createSnapshot(sheetId: string, bounds: SourceRect, declared: readonly 
     if (slot === UNAVAILABLE) { tainted = true; return NA }
     return slot === undefined ? null : slot
   }
-  /** Visits the stored cells of `r` in row-major order; `visit` returns false to stop. */
-  const eachIn = (r: SourceRect, visit: (row: number, col: number, units: number) => boolean): void => {
-    const c = clampTo(r, bounds)
-    if (!c) return
-    const perColumn: Array<{ col: number; at: number; end: number; column: Column }> = []
-    for (let k = lowerBound(colKeys, c.firstCol); k < colKeys.length && colKeys[k]! <= c.lastCol; k++) {
-      const column = columns.get(colKeys[k]!)!
-      perColumn.push({ col: colKeys[k]!, at: lowerBound(column.rows, c.firstRow), end: lowerBound(column.rows, c.lastRow + 1), column })
-    }
-    for (;;) {
-      let best: (typeof perColumn)[number] | undefined
-      for (const p of perColumn) if (p.at < p.end && (!best || p.column.rows[p.at]! < best.column.rows[best.at]!)) best = p
-      if (!best) return
-      if (!visit(best.column.rows[best.at]!, best.col, best.column.units[best.at]!)) return
-      best.at++
-    }
+  const unitsAt = (row: number, col: number): number => {
+    const column = columns.get(col)!
+    return column.units[lowerBound(column.rows, row)]!
   }
-  const countIn = (r: SourceRect, cap: number): number => {
+  /**
+   * Visits the stored cells of `r` (finding 1). The walk takes the cheaper of two indexes, each priced in O(log n)
+   * first: by column (the populated columns in the rect's column span) or by row (the keys in its row band). Every step
+   * that finds no cell (an empty column, or a key past the rect's columns that makes the walk jump) calls `step`, which
+   * charges it and may refuse; every stored cell calls `hit`. Neither walk touches a column or key outside the rect's
+   * span, so a sparse call never scans the snapshot.
+   */
+  const walkIn = (r: SourceRect, step: () => boolean, hit: (row: number, col: number, units: number) => boolean): boolean => {
     const c = clampTo(r, bounds)
-    if (!c) return 0
-    let n = 0
-    for (let k = lowerBound(colKeys, c.firstCol); k < colKeys.length && colKeys[k]! <= c.lastCol && n <= cap; k++) {
-      const column = columns.get(colKeys[k]!)!
-      n += lowerBound(column.rows, c.lastRow + 1) - lowerBound(column.rows, c.firstRow)
+    if (!c) return true
+    const k0 = lowerBound(colKeys, c.firstCol), k1 = lowerBound(colKeys, c.lastCol + 1)
+    const b0 = lowerBound(keys, c.firstRow * W), b1 = lowerBound(keys, (c.lastRow + 1) * W)
+    if (k1 - k0 <= b1 - b0) {
+      for (let k = k0; k < k1; k++) {
+        const col = colKeys[k]!, column = columns.get(col)!
+        const at = lowerBound(column.rows, c.firstRow), end = lowerBound(column.rows, c.lastRow + 1)
+        if (at === end && !step()) return false
+        for (let i = at; i < end; i++) if (!hit(column.rows[i]!, col, column.units[i]!)) return false
+      }
+      return true
     }
-    return n
+    const last = c.lastRow * W + c.lastCol
+    for (let i = lowerBound(keys, c.firstRow * W + c.firstCol); i < keys.length && keys[i]! <= last;) {
+      const key = keys[i]!, row = Math.floor(key / W), col = key % W
+      if (col < c.firstCol) { if (!step()) return false; i = lowerBound(keys, row * W + c.firstCol); continue }
+      if (col > c.lastCol) { if (!step()) return false; i = lowerBound(keys, (row + 1) * W + c.firstCol); continue }
+      if (!hit(row, col, unitsAt(row, col))) return false
+      i++
+    }
+    return true
   }
   const snapshot: CfDependencySnapshot = {
     sheetId, entries: count,
@@ -234,30 +262,44 @@ function createSnapshot(sheetId: string, bounds: SourceRect, declared: readonly 
       if (disposed || sheet !== undefined || !declared.some(d => inRect(d, row, col))) { tainted = true; return NA }
       return value(row, col)
     },
-    viewFor(effective, budget) {
+    viewFor(effective, budget, workspace) {
       if (disposed) return unresolved('cf-formula-dependency')
+      // Nothing is built until the caller's reservation holds the worst-case workspace (finding 1).
+      if (workspace.bytes < CF_VIEW_WORKSPACE_BYTES) return unresolved('cf-resource-limit')
+      const cap = CF_LIMITS.checkpointUnits
+      if (effective.length > cap) return unresolved('cf-resource-limit')
+      let distinctCount = 0
       // Coverage of every effective area BEFORE any traversal (S5-SUMIF-SHAPE): an uncovered area is never served empty.
       for (const e of effective) if (e.sheet !== undefined || !covered(e.rect)) return unresolved('cf-formula-dependency')
-      const cap = CF_LIMITS.checkpointUnits
       const distinct: SourceRect[] = []
       const indexOf = effective.map(e => {
         const i = distinct.findIndex(d => d.firstRow === e.rect.firstRow && d.lastRow === e.rect.lastRow && d.firstCol === e.rect.firstCol && d.lastCol === e.rect.lastCol)
         if (i >= 0) return i
-        distinct.push(e.rect)
+        distinct.push(e.rect); distinctCount++
         return distinct.length - 1
       })
-      // Every stored cell of an area is read at least once by its call, so more than the per-call cap refuses now.
-      let total = 0
-      for (const r of distinct) { total += countIn(r, cap); if (total > cap) return unresolved('cf-resource-limit') }
-      const keys = new Set<number>()
-      const perArea = distinct.map(r => {
-        let cells = 0, stringUnits = 0, longestString = 0
-        eachIn(r, (row, col, units) => { cells++; stringUnits += units; longestString = Math.max(longestString, units); keys.add(row * 16384 + col); return true })
-        return { cells, stringUnits, longestString }
-      })
+      // The workspace is priced at CF_LIMITS.formulaAtoms distinct areas (one per admitted atom).
+      if (distinctCount > CF_LIMITS.formulaAtoms) return unresolved('cf-resource-limit')
+      // Every stored cell of an area is read at least once by its call, so more than the per-call cap refuses; each
+      // empty index step is charged as it is taken (the call's `index` term).
+      const keySet = new Set<number>()
+      let hits = 0, index = 0, refused = false
+      const step = (): boolean => { if (budget.spend(1) === 'refused') { refused = true; return false } index++; return true }
+      const perArea: Array<{ cells: number; stringUnits: number; longestString: number }> = []
+      for (const r of distinct) {
+        const m = { cells: 0, stringUnits: 0, longestString: 0 }
+        const ok = walkIn(r, step, (row, col, units) => {
+          if (++hits > cap) return false
+          m.cells++; m.stringUnits += units; m.longestString = Math.max(m.longestString, units); keySet.add(row * W + col)
+          return true
+        })
+        if (!ok || refused) return unresolved('cf-resource-limit')
+        perArea.push(m)
+      }
+      const keys = keySet
       const viewCells = keys.size
       if (budget.spend(viewCells) === 'refused') return unresolved('cf-resource-limit')
-      const metrics: CfPayloadMetrics = { viewCells, atoms: indexOf.map(i => perArea[i]!) }
+      const metrics: CfPayloadMetrics = { viewCells, index, atoms: indexOf.map(i => perArea[i]!) }
       const inView = (row: number, col: number): boolean => distinct.some(r => inRect(r, row, col))
       const charge = (units: number): void => { if (budget.spend(units) === 'refused') throw CF_WORK_REFUSED }
       let ordered: number[] | undefined
@@ -277,7 +319,7 @@ function createSnapshot(sheetId: string, bounds: SourceRect, declared: readonly 
           return (function* () {
             for (const key of list) {
               charge(1)
-              const row = Math.floor(key / 16384), col = key % 16384
+              const row = Math.floor(key / W), col = key % W
               const slot = lookup(row, col)
               yield { address: { sheetId, row, col }, value: slot === UNAVAILABLE || slot === undefined ? NA : slot, origin: 'input' as const }
             }

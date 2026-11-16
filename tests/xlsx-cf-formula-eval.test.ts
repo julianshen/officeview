@@ -11,7 +11,7 @@ import {
   cfElementToLiteral, cfFormulaFootprint, cfLiteralToElement, cfTruth, translateCfFormula,
   type CfResult, type CfTruthReading,
 } from '../src/xlsx/cf/formula'
-import { CF_FORMULA_NODE_BYTES, CF_LIMITS, createCfMemory } from '../src/xlsx/cf/limits'
+import { CF_FORMULA_CALL_BYTES, CF_FORMULA_NODE_BYTES, CF_LIMITS, CF_VIEW_WORKSPACE_BYTES, createCfMemory, type CfReservation } from '../src/xlsx/cf/limits'
 import type { CfLiteral } from '../src/xlsx/cf/model'
 import { a1, compile, rectOf } from './helpers/cf-formula'
 
@@ -302,7 +302,7 @@ describe('a read outside the snapshot taints and discards (Review Focus 1)', () 
     const snap = await prepareCfDependencies([{ rect: rectOf('A1:A2') }], fakeSource({ A1: 1, A2: 2, A3: 3 }), undefined, createCfWorkBudget({ signal, scan: true }), memory, signal, { sheetId: 's1' })
     const snapshot = ready<{ value: Parameters<typeof evaluateCfFormula>[2] }>(snap).value
     const spend = vi.fn(() => 'continue' as const)
-    expect(snapshot.viewFor([{ rect: rectOf('A1:A3') }], { spend, resume() {}, units: 0, remaining: Number.MAX_SAFE_INTEGER })).toEqual({ kind: 'unresolved', reason: 'cf-formula-dependency' })
+    expect(snapshot.viewFor([{ rect: rectOf('A1:A3') }], { spend, resume() {}, units: 0, remaining: Number.MAX_SAFE_INTEGER }, createCfMemory().reserve(CF_FORMULA_CALL_BYTES + CF_VIEW_WORKSPACE_BYTES) as CfReservation)).toEqual({ kind: 'unresolved', reason: 'cf-formula-dependency' })
     expect(spend).not.toHaveBeenCalled()
     snapshot.dispose()
   })

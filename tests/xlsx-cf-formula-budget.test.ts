@@ -15,7 +15,7 @@ import {
   type CfCallWorkBreakdown, type CfFormulaContext,
 } from '../src/xlsx/cf/formula'
 import { CF_DEPENDENCY_COLUMN_BYTES, prepareCfDependencies, type CfDependencySnapshot } from '../src/xlsx/cf/dependencies'
-import { CF_DEPENDENCY_CELL_BYTES, CF_FORMULA_NODE_BYTES, CF_LIMITS, createCfMemory, createCfUnitCeiling, createCfWorkBudget, type CfUnitCeiling, type CfWorkBudget } from '../src/xlsx/cf/limits'
+import { CF_DEPENDENCY_CELL_BYTES, CF_FORMULA_CALL_BYTES, CF_FORMULA_NODE_BYTES, CF_LIMITS, CF_VIEW_WORKSPACE_BYTES, type CfReservation, createCfMemory, createCfUnitCeiling, createCfWorkBudget, type CfUnitCeiling, type CfWorkBudget } from '../src/xlsx/cf/limits'
 import { measurePayloadBytes } from '../src/xlsx/view/payloadBytes'
 import { EVALUATION, a1, batchOf, compile, fakeSource, formulaRule, rectOf, refOf, type Cells } from './helpers/cf-formula'
 
@@ -34,6 +34,9 @@ const hostTaskSpy = vi.mocked(schedulerModule.hostTask)
 afterEach(() => { hostHooks.onHost = undefined; evaluateNodeSpy.mockClear(); textCharsSpy.mockClear(); hostTaskSpy.mockClear() })
 
 const frozen = () => 0
+/** The per-call bookkeeping reservation a direct viewFor call needs (the evaluator makes it before building a view). */
+type FakeSourceLike = ReturnType<typeof fakeSource>
+const workspace = () => createCfMemory().reserve(CF_FORMULA_CALL_BYTES + CF_VIEW_WORKSPACE_BYTES) as CfReservation
 const bigBudget = (signal = new AbortController().signal): CfWorkBudget => createCfWorkBudget({ now: frozen, signal, scan: true, maxUnits: 1e9 })
 /** A ceiling that never charges: the mutant "charging removed". */
 const freeCeiling = (): CfUnitCeiling => ({ limit: Infinity, used: 0, remaining: Infinity, take: () => true })
@@ -55,7 +58,7 @@ describe('relative-range traversal work is charged per occurrence before it happ
   it('SUM(A1:A4)+SUM(A1:A4) on a 4-cell view: 5 nodes + 4 view build + 2 x (4 enumeration + 4 reads + 8 sort) = 41', async () => {
     const { out, calls } = await sumTwice(units => createCfUnitCeiling(units + 1000))
     expect(out[0]).toEqual({ kind: 'ready', value: { kind: 'number', value: 20 } })
-    expect(calls[0]).toEqual({ nodes: 5, viewBuild: 4, enumeration: 8, reads: 8, sort: 16, comparisons: 0, matcher: 0, text: 0, lookups: 0, total: 41 })
+    expect(calls[0]).toEqual({ nodes: 5, viewBuild: 4, index: 0, enumeration: 8, reads: 8, sort: 16, comparisons: 0, matcher: 0, text: 0, lookups: 0, total: 41 })
   })
   it('with 40 units left the call never runs and the rule is unresolved, while a second rule in the batch still evaluates', async () => {
     const { out, calls, sumRan } = await sumTwice(units => createCfUnitCeiling(units + 40)) // the snapshot build takes 4 (A1:A4)
@@ -81,7 +84,7 @@ describe('relative-range traversal work is charged per occurrence before it happ
     const { calls, snapshotUnits, entries, outcomes } = await run(createCfUnitCeiling(5000))
     expect(entries).toBe(1004)
     expect(snapshotUnits).toBe(1004) // built once, one unit per entry
-    expect(calls[0]).toEqual({ nodes: 3, viewBuild: 5, enumeration: 5, reads: 5, sort: 15, comparisons: 4, matcher: 0, text: 0, lookups: 0, total: 37 })
+    expect(calls[0]).toEqual({ nodes: 3, viewBuild: 5, index: 0, enumeration: 5, reads: 5, sort: 15, comparisons: 4, matcher: 0, text: 0, lookups: 0, total: 37 })
     expect(Math.floor((5000 - 1004) / 37)).toBe(108)
     const readyRows = outcomes.map((o, i) => (o.kind === 'ready' ? i : -1)).filter(i => i >= 0)
     expect(readyRows).toEqual(Array.from({ length: 108 }, (_, i) => i)) // B2:B109, in row-major order
@@ -177,7 +180,7 @@ describe('text work is bounded by measured payload before invocation (round-2 #1
     budget: bigBudget(), memory, invariants: createCfInvariantMemo(createCfMemory()), ceiling: createCfUnitCeiling(), ...(calls ? { onCall: b => calls.push(b) } : {}),
   })
   const metricsOf = (snapshot: CfDependencySnapshot, rects: string[]) => {
-    const view = snapshot.viewFor(rects.map(r => ({ rect: rectOf(r) })), bigBudget())
+    const view = snapshot.viewFor(rects.map(r => ({ rect: rectOf(r) })), bigBudget(), workspace())
     if (view.kind !== 'ready') throw new Error('view refused')
     return view.value.metrics
   }
@@ -223,7 +226,7 @@ describe('text work is bounded by measured payload before invocation (round-2 #1
     expect(evaluateNodeSpy).not.toHaveBeenCalled()
     const exact = createCfMemory({ limitBytes: scratch + tree })
     expect(evaluateCfFormula(f, a1('B1'), snapshot, context(exact, calls))).toEqual({ kind: 'ready', value: { kind: 'number', value: 20 } })
-    expect(calls[0]).toEqual({ nodes: 4, viewBuild: 2, enumeration: 0, reads: 2, sort: 0, comparisons: 0, matcher: 0, text: 20, lookups: 0, total: 28 })
+    expect(calls[0]).toEqual({ nodes: 4, viewBuild: 2, index: 0, enumeration: 0, reads: 2, sort: 0, comparisons: 0, matcher: 0, text: 20, lookups: 0, total: 28 })
     expect(exact.peakBytes).toBe(scratch + tree)
     expect(exact.currentBytes).toBe(0)
     snapshot.dispose()
@@ -240,7 +243,7 @@ describe('text work is bounded by measured payload before invocation (round-2 #1
     const three = await snapshotOf({ A1: 'abc', A2: 'abd', B1: 'abc' }, ['A1:A2', 'B1'])
     const calls: CfCallWorkBreakdown[] = []
     expect(evaluateCfFormula(f, a1('C1'), three, context(createCfMemory(), calls))).toEqual({ kind: 'ready', value: { kind: 'number', value: 1 } })
-    expect(calls[0]).toEqual({ nodes: 3, viewBuild: 3, enumeration: 3, reads: 3, sort: 6, comparisons: 0, matcher: 32, text: 0, lookups: 0, total: 50 })
+    expect(calls[0]).toEqual({ nodes: 3, viewBuild: 3, index: 0, enumeration: 3, reads: 3, sort: 6, comparisons: 0, matcher: 32, text: 0, lookups: 0, total: 50 })
     ten.dispose(); three.dispose()
   })
 })
@@ -252,7 +255,7 @@ describe('evaluator scratch and snapshot growth are reserved before use (Lessons
     if (snap.kind !== 'ready') throw new Error('snapshot')
     const snapshot = snap.value.value
     const f = compile('SUM(A1:A4)>2', 'B1')
-    const view = snapshot.viewFor([{ rect: rectOf('A1:A4') }], bigBudget())
+    const view = snapshot.viewFor([{ rect: rectOf('A1:A4') }], bigBudget(), workspace())
     if (view.kind !== 'ready') throw new Error('view')
     const scratch = cfEvaluatorScratchBytes(f, view.value.metrics)
     const short = createCfMemory({ limitBytes: scratch - 1 })
@@ -263,7 +266,8 @@ describe('evaluator scratch and snapshot growth are reserved before use (Lessons
     })
     expect(out).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
     expect(evaluateNodeSpy).not.toHaveBeenCalled()
-    expect(short.peakBytes).toBe(0)
+    // Only the per-call bookkeeping (the view's workspace) was ever held: the scratch growth was refused before use.
+    expect(short.peakBytes).toBe(CF_FORMULA_CALL_BYTES + CF_VIEW_WORKSPACE_BYTES)
     snapshot.dispose()
     expect(memory.currentBytes).toBe(0)
   })
@@ -363,5 +367,103 @@ describe('a refused call never poisons the shared production budget (Task 34 fix
     expect(calls).toEqual([5])
     expect(budget.remaining).toBe(1)
     batch.dispose()
+  })
+})
+
+describe('the view index walk is bounded, charged and reserved before it builds anything (Task 34 fix round 2, finding 1)', () => {
+  const ref = (row: number, col: number) => refOf(row, col)
+  /** A rule `SUM(<rect>)>0` anchored at `at`, beside a second rule whose footprint puts `others` in the shared snapshot. */
+  async function walk(rect: string, others: Cells, coverRects: readonly string[], at: string, options: { memory?: ReturnType<typeof createCfMemory> } = {}) {
+    const calls: CfCallWorkBreakdown[] = []
+    const settled: Array<{ spent: number; total: number }> = []
+    const rule = formulaRule(`SUM(${rect})>0`, at)
+    const cover = coverRects.map(r => formulaRule(`COUNTA(${r})>0`, at))
+    const batch = await batchOf([rule, ...cover], fakeSource(others), {
+      hoist: false, onCall: b => calls.push(b), onSettled: (spent, b) => settled.push({ spent, total: b.total }), ...(options.memory ? { memory: options.memory } : {}),
+    })
+    const t = a1(at)
+    evaluateNodeSpy.mockClear()
+    const out = batch.evaluate(0, t.row, t.col)
+    batch.dispose()
+    return { out, calls, settled }
+  }
+  it('a one-row call over a snapshot whose other row fills every column walks the row, not 16,384 columns', async () => {
+    // Row 2 holds A2:XFD2 (16,384 columns); row 1 holds only XFD1. SUM(A1:XFD1) reads one cell.
+    const others: Cells = Object.fromEntries(Array.from({ length: 16384 }, (_, c) => [ref(1, c), 1]))
+    const cells: Cells = { ...others, XFD1: 5 }
+    const calls: CfCallWorkBreakdown[] = []
+    const rule = formulaRule('SUM(A1:XFD1)>0', 'A3'), cover = formulaRule('SUM(A2:XFD2)>0', 'A3')
+    const batch = await batchOf([rule, cover], fakeSource(cells), { hoist: false, onCall: b => calls.push(b) })
+    expect(batch.evaluate(0, 2, 0)).toEqual({ kind: 'ready', value: { kind: 'boolean', value: true } })
+    expect(calls[0]!.index).toBeLessThanOrEqual(2)
+    expect(calls[0]!.total).toBeLessThanOrEqual(CF_LIMITS.checkpointUnits)
+    batch.dispose()
+  }, 60_000)
+  it('empty steps are charged as index work: 20 rows each holding a key past the rect cost 20, in the bound and metered', async () => {
+    // A1:T20 is empty; U1:U20 (a key per row, outside the rect) and A21:T21 (a key per column, outside the rect).
+    const others: Cells = { ...Object.fromEntries(Array.from({ length: 20 }, (_, r) => [ref(r, 20), 1])), ...Object.fromEntries(Array.from({ length: 20 }, (_, c) => [ref(20, c), 1])) }
+    const { out, calls, settled } = await walk('A1:T20', others, ['U1:U20', 'A21:T21'], 'Z1')
+    expect(out).toEqual({ kind: 'ready', value: { kind: 'boolean', value: false } })
+    expect(calls[0]!.index).toBe(20)
+    expect(calls[0]!.total).toBe(calls[0]!.nodes + calls[0]!.viewBuild + calls[0]!.enumeration + calls[0]!.reads + calls[0]!.sort + calls[0]!.index + calls[0]!.text)
+    expect(settled[0]!.spent).toBeLessThanOrEqual(settled[0]!.total)
+  })
+  it('an empty rect whose index walk passes 128 empty steps is refused, though it reads no cell', async () => {
+    const others: Cells = { ...Object.fromEntries(Array.from({ length: 200 }, (_, r) => [ref(r, 200), 1])), ...Object.fromEntries(Array.from({ length: 200 }, (_, c) => [ref(200, c), 1])) }
+    const { out } = await walk(`A1:${ref(199, 199)}`, others, [`${ref(0, 200)}:${ref(199, 200)}`, `A201:${ref(200, 199)}`], 'HA1')
+    expect(out).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
+    expect(evaluateNodeSpy).not.toHaveBeenCalled()
+  })
+  it('viewFor itself stops the walk at the cap (each empty step spent as taken) and refuses without the workspace reservation', async () => {
+    const signal = new AbortController().signal, memory = createCfMemory()
+    const atoms = ['A1:GR200', 'GS1:GS200', 'A201:GR201'].map(r => ({ rect: rectOf(r) }))
+    const cells: Cells = { ...Object.fromEntries(Array.from({ length: 200 }, (_, r) => [ref(r, 200), 1])), ...Object.fromEntries(Array.from({ length: 200 }, (_, c) => [ref(200, c), 1])) }
+    const snap = await prepareCfDependencies(atoms, fakeSource(cells), undefined, bigBudget(signal), memory, signal, { sheetId: 's1' })
+    if (snap.kind !== 'ready') throw new Error('snapshot')
+    const snapshot = snap.value.value
+    let limit: number = CF_LIMITS.checkpointUnits, used = 0
+    const spend = vi.fn((n: number) => { if (n > limit - used) return 'refused' as const; used += n; return 'continue' as const })
+    const meter: CfWorkBudget = { spend, resume() {}, get units() { return used }, get remaining() { return limit - used } }
+    expect(snapshot.viewFor([{ rect: rectOf('A1:GR200') }], meter, workspace())).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
+    expect(spend).toHaveBeenCalledTimes(CF_LIMITS.checkpointUnits + 1) // 128 steps taken, the 129th refused, none after
+    spend.mockClear(); used = 0; limit = 1e9
+    const none = createCfMemory().reserve(0) as CfReservation
+    expect(snapshot.viewFor([{ rect: rectOf('A1:GR200') }], meter, none)).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
+    expect(spend).not.toHaveBeenCalled()
+    snapshot.dispose()
+  })
+  it('an out-of-order source rebuilds the row-major index (charged): the row walk still finds every cell once', async () => {
+    const cells: Cells = { ...Object.fromEntries(Array.from({ length: 26 }, (_, c) => [ref(1, c), 1])), Z1: 5, Y1: 'ab' }
+    const base = fakeSource(cells)
+    const reversed: FakeSourceLike = { ...base, async *pages(id, rects, budget, signal) { const all = []; for await (const p of base.pages(id, rects, budget, signal)) all.push(p); yield* all.reverse() } }
+    const signal = new AbortController().signal, memory = createCfMemory()
+    const inOrder = bigBudget(signal), outOfOrder = bigBudget(signal)
+    const a = await prepareCfDependencies([{ rect: rectOf('A1:Z2') }], base, undefined, inOrder, memory, signal, { sheetId: 's1' })
+    const b = await prepareCfDependencies([{ rect: rectOf('A1:Z2') }], reversed, undefined, outOfOrder, memory, signal, { sheetId: 's1' })
+    if (a.kind !== 'ready' || b.kind !== 'ready') throw new Error('snapshot')
+    expect(outOfOrder.units).toBeGreaterThan(inOrder.units) // the rebuild and its sort were charged
+    for (const snap of [a.value.value, b.value.value]) {
+      const view = snap.viewFor([{ rect: rectOf('A1:Z1') }], bigBudget(), workspace())
+      if (view.kind !== 'ready') throw new Error('view')
+      expect(view.value.metrics).toMatchObject({ viewCells: 2, index: 0, atoms: [{ cells: 2, stringUnits: 2, longestString: 2 }] })
+      snap.dispose()
+    }
+    expect(memory.currentBytes).toBe(0)
+  })
+  it('the per-call workspace is reserved before the view is built: a grant below it never calls viewFor', async () => {
+    const signal = new AbortController().signal, memory = createCfMemory()
+    const snap = await prepareCfDependencies([{ rect: rectOf('A1:A4') }], fakeSource({ A1: 1, A2: 2, A3: 3, A4: 4 }), undefined, bigBudget(signal), memory, signal, { sheetId: 's1' })
+    if (snap.kind !== 'ready') throw new Error('snapshot')
+    const snapshot = snap.value.value
+    const viewSpy = vi.spyOn(snapshot, 'viewFor')
+    const budget = bigBudget()
+    const out = evaluateCfFormula(compile('SUM(A1:A4)>2', 'B1'), a1('B1'), snapshot, {
+      sheetName: 'Sheet1', evaluation: EVALUATION, semantics: cfFormulaSemantics(EVALUATION), edge: 'ref-error', materialization: { limit: 1e6, used: 0 },
+      budget, memory: createCfMemory({ limitBytes: 0 }), invariants: createCfInvariantMemo(createCfMemory()), ceiling: createCfUnitCeiling(),
+    })
+    expect(out).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
+    expect(viewSpy).not.toHaveBeenCalled()
+    expect(budget.units).toBe(0)
+    snapshot.dispose()
   })
 })
