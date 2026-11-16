@@ -273,6 +273,13 @@ describe('a read outside the snapshot taints and discards (Review Focus 1)', () 
     snapshot.dispose()
     expect(memory.currentBytes).toBe(0)
   })
+  it('an unrepresentable snapshot value taints at read time even when IFERROR masks the read (second line of defence)', async () => {
+    // Covered statically (A2 is in the footprint), so only the read-time taint can catch it.
+    const masked = await cfEval('IFERROR(A2,TRUE)', 'B2', { A2: { error: '#GETTING_DATA' as never } }, 'B2')
+    expect(masked).toEqual({ kind: 'unresolved', reason: 'cf-formula-dependency' })
+    expect(await cfEval('A2', 'B2', { A2: { error: '#GETTING_DATA' as never } }, 'B2')).toEqual({ kind: 'unresolved', reason: 'cf-formula-dependency' })
+    expect(valueOf(await cfEval('IFERROR(A2,TRUE)', 'B2', { A2: { error: '#N/A' } }, 'B2'))).toEqual({ kind: 'boolean', value: true })
+  })
   it('a cached-unavailable cell is unresolved, and a pending source is cf-pending-data', async () => {
     const source = fakeSource({ A2: 1 })
     source.unavailable.add('A2')
