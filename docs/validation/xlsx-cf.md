@@ -2069,3 +2069,12 @@ Evidence kind is read from the owning case's per-cell `iconEvidence` labels (ver
 - **Expected-empty cells:** a cell whose reading predicts no visual, such as a zero-length bar below the minimum, is checked as empty by the same measurement.
 - **Witness count:** a configuration needs at least 2 validated non-empty witnesses (`formula-twin-blank` otherwise).
 - **Row height:** Stage 5 workbooks with an icon rule use the glyph key's 20 pt rows, so their crops have the key's size. This needs the Stage 4 key capture (`stage4-icon-glyph-key`), which is measured.
+
+### Fix round 3 (codex re-review)
+
+- **Permitted blanks:** each crop configuration lists the twins that may show no visual (`emptyTwins`), fixed before capture from each twin's own rule and values: a twin under no bar or icon rule, a bar at or below its lower bound, or a degenerate bar. Wherever the winning reading names any other twin, a missing bar or icon is `formula-twin-missing`. The requirement of at least 2 non-empty witnesses still holds.
+- **Composition fills:** crop matching and rival discrimination compare the DisplayFormat fill and strikethrough alongside the measured bar or icon.
+- **Icons on fills:** a glyph on a measured fill is classified with an ink mask referenced to the key. Background pixels must equal the fill, opaque key ink must equal the key, and anti-aliased edges are ignored. The fill itself is validated through DisplayFormat.
+- **Fixtures:**
+  - `stage5-active-present-bar` now has six rows, giving three non-empty active witnesses and two decisive inactive cells.
+  - `stage5-composition` moves its p1-true rows to 3 and 5, so none falls on the column minimum, where a bar has zero length.
