@@ -24,6 +24,7 @@ import { CF_FORMULA_PRODUCTION_READINGS, cfFormulaReading } from '../src/xlsx/cf
 import { MEASURED_CF_OFFICE_THEME, parseCfSheet, type CfStylesSource } from '../src/xlsx/cf/parse'
 import { cfRulesVersion } from '../src/xlsx/view/pagedSource'
 import { CF_STAGE5_CAPABILITIES, CF_STAGE5_UNSUPPORTED, type CfManifest } from '../scripts/cf-refs/cases'
+import { auditStage5Manifest, stage5Publication, type Stage5AuditReport } from '../scripts/cf-refs/audit'
 import { resolveScaleThresholds } from '../src/xlsx/cf/colorScale'
 import { resolveBarThresholds } from '../src/xlsx/cf/dataBar'
 import { resolveIconThresholds } from '../src/xlsx/cf/iconSet'
@@ -34,7 +35,7 @@ import type { CfReadResult } from '../src/xlsx/view/contracts'
 import type { CfCellState, CfDefinition, CfOutcome, CfSheetRules, CfStamp } from '../src/xlsx/cf/model'
 import type { CfWorkbookSheet, CfWorkbookSource } from '../src/xlsx/cf/dependencies'
 import type { XlsxSheet } from '../src/xlsx/types'
-import { UTC, rc, sheetOf } from './helpers/cf-formula-rules'
+import { GREEN, UTC, rc, sheetOf, shown, stylesFor } from './helpers/cf-formula-rules'
 
 // A pass-through spy on the one evaluator (Tasks 34-36): every formula call goes through `evaluateCfFormula`.
 vi.mock('../src/xlsx/cf/formula', async importOriginal => {
@@ -56,8 +57,8 @@ const CFVO_CAPS: readonly string[] = [
   'formula:dialect-base', 'formula:dialect-x14', 'formula:anchor-single', 'formula:anchor-mixed-abs',
   'formula:fn-aggregate', 'formula:fn-math', 'formula:cfvo-reference', 'formula:cfvo-expression',
   'scale:thresholds-formula', 'bar:bounds-formula', 'icon:thresholds-formula',
-  // A formula bar bound feeds the num path, whose own gate is non-discriminating in Stage 3 (CF_STAGE3_NONDISCRIMINATING):
-  // injected here so the bar arm can be exercised at all.
+  // The literal num twins of the bar tests need it (CF_STAGE3_NONDISCRIMINATING); a formula-resolved bar threshold does not
+  // (fix round 1, ruling 2: it is authorised through bar:bounds-formula).
   'bar:bounds-num',
 ]
 /** Production's evidence plus `extra`: the exact set a test runs under (parse and service alike). */
@@ -249,7 +250,18 @@ describe('non-numeric or relative cfvo results withhold', () => {
     const selected = await prepareSheet(sheetOf(parseRules(xml, caps), cells), all, caps, { selections: { 'formula:cfvo-nonnumeric': 'zero' } })
     for (const r of refsOf('L')) expect(visualOf(selected.out.get(r)), r).toMatch(WITHHELD)
   })
-  for (const [reading, twin] of [['withheld', 'V'], ['zero', 'Q'], ['skipped', 'R']] as const) {
+  it('under the withheld reading the bound is unresolved and keeps its slot taint: a lower matching fill never paints (fix round 1, #1)', async () => {
+    const caps = capsWith('formula:cfvo-nonnumeric')
+    const greenBelow = scale('L2:L9', 1, '<cfvo type="formula" val="$F$3"/><cfvo type="max"/>')
+      + '<conditionalFormatting sqref="L2:L9"><cfRule type="cellIs" dxfId="1" priority="2" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>'
+    const rules = withExactCfEvidence(caps, () => parseCfSheet(parseXml(worksheet(greenBelow)), stylesFor(), createCfMemory(), { sheetRightToLeft: false }).value)
+    const { out } = await prepareSheet(sheetOf(rules, cells), refsOf('L'), caps, { selections: { 'formula:cfvo-nonnumeric': 'withheld' } })
+    for (const r of refsOf('L')) {
+      expect(visualOf(out.get(r)), r).toMatch(WITHHELD)
+      expect(shown(out.get(r)).fill, r).not.toBe(GREEN)
+    }
+  })
+  for (const [reading, twin] of [['zero', 'Q'], ['skipped', 'R']] as const) {
     it(`under the ${reading} reading each non-numeric bound shows twin ${twin}`, async () => {
       const caps = capsWith('formula:cfvo-nonnumeric')
       const { out } = await prepareSheet(sheetOf(parseRules(xml, caps), cells), all, caps, { selections: { 'formula:cfvo-nonnumeric': reading } })
@@ -257,7 +269,6 @@ describe('non-numeric or relative cfvo results withhold', () => {
         const want = visualOf(out.get(`${twin}${r.slice(1)}`))
         expect(visualOf(out.get(r)), `${r} (${reading})`).toBe(want)
       }
-      if (reading === 'withheld') for (const r of refsOf('L')) expect(out.get(r)!.kind, r).toBe('ready')
     })
   }
   it('a boolean result is unresolved under every reading', async () => {
@@ -492,6 +503,53 @@ describe('activePresent follows its recorded outcome (S5-J)', () => {
     const doc = await loadFixture('stage5-active-present-icon', caps)
     const { out } = await prepareSheet(doc.sheets[0]!, ['B2'], caps.filter(c => c !== 'formula:active-present-icon'))
     expect(visualOf(out.get('B2'))).toMatch(WITHHELD)
+  })
+})
+
+describe('fix round 1: formula bar provenance, activation first, publication', () => {
+  it('a formula-resolved bar threshold is authorised by bar:bounds-formula, not bar:bounds-num; literal num keeps its gate (ruling 2)', async () => {
+    const formulaBar = pairedBar('B2:B12', 1, '{00000000-0000-4000-8000-000000000021}', '<cfvo type="min"/><cfvo type="formula" val="$F$1"/>', '<x14:cfvo type="min"/><x14:cfvo type="formula"><xm:f>$F$1</xm:f></x14:cfvo>')
+    const twinBar = pairedBar('C2:C12', 2, '{00000000-0000-4000-8000-000000000022}', '<cfvo type="min"/><cfvo type="num" val="50"/>', '<x14:cfvo type="min"/><x14:cfvo type="num"><xm:f>50</xm:f></x14:cfvo>')
+    const xml = formulaBar.base + twinBar.base + ext(formulaBar.x14 + twinBar.x14)
+    const cells = { F1: 50, ...col('B', BAR_DATA), ...col('C', BAR_DATA) }
+    const noNum = capsWith().filter(c => c !== 'bar:bounds-num')
+    const { out } = await prepareSheet(sheetOf(parseRules(xml, noNum), cells), [...rows('B', 2, 12), ...rows('C', 2, 12)], noNum)
+    for (const r of rows('B', 3, 12)) {
+      const o = out.get(r)!
+      expect(o.kind === 'ready' && o.value.visual?.dataBar !== undefined, `${r} formula bar paints`).toBe(true)
+      expect(visualOf(out.get(`C${r.slice(1)}`)), `C${r.slice(1)} literal num twin`).toMatch(WITHHELD)
+    }
+    // With both, the formula bar equals its literal twin.
+    const both = await prepareSheet(sheetOf(parseRules(xml, capsWith()), cells), [...rows('B', 2, 12), ...rows('C', 2, 12)], capsWith())
+    twinsAgree(both.out, rows('B', 2, 12).map(r => [r, `C${r.slice(1)}`] as const))
+    // Without bar:bounds-formula in the service, the formula bar withholds.
+    const noFormula = await prepareSheet(sheetOf(parseRules(xml, capsWith()), cells), ['B5'], capsWith().filter(c => c !== 'bar:bounds-formula'))
+    expect(visualOf(noFormula.out.get('B5'))).toMatch(WITHHELD)
+    // Stage 3 refusals stay: data beyond the formula bound withholds the whole rule.
+    const beyond = await prepareSheet(sheetOf(parseRules(xml, noNum), { ...cells, B12: 70 }), ['B5'], noNum)
+    expect(visualOf(beyond.out.get('B5'))).toMatch(WITHHELD)
+  })
+  it('a confirmed false activation is no-match even when the scope statistics refuse (ruling 3)', async () => {
+    const caps = ACTIVE_CAPS('scale')
+    const x14 = `<x14:conditionalFormatting><x14:cfRule type="colorScale" priority="1" activePresent="1" id="{00000000-0000-4000-8000-0000000000F1}"><xm:f>$A2&gt;0</xm:f><x14:colorScale><x14:cfvo type="min"/><x14:cfvo type="max"/><x14:color rgb="FFF8696B"/><x14:color rgb="FF63BE7B"/></x14:colorScale></x14:cfRule><xm:sqref>B2:B5</xm:sqref></x14:conditionalFormatting>`
+    const rules = parseRules(`<sheetData/>${ext(x14)}`, caps)
+    const clean = await prepareSheet(sheetOf(rules, { A2: -1, A3: 1, B2: 10, B3: 20, B4: 30, B5: 40 }), ['B2', 'B3'], caps)
+    expect(visualOf(clean.out.get('B2'))).toBe('none')
+    expect(visualOf(clean.out.get('B3'))).toMatch(/^\{/)
+    // codex's repro: another scope cell #N/A makes the scope refuse (participation-error-presence); the inactive cell stays clean.
+    const na = await prepareSheet(sheetOf(rules, { A2: -1, A3: 1, B2: 10, B3: 20, B4: { err: '#N/A' }, B5: 40 }), ['B2', 'B3'], caps.filter(c => c !== 'scale:participation-error-presence'))
+    expect(visualOf(na.out.get('B2'))).toBe('none')
+    expect(visualOf(na.out.get('B3'))).toMatch(WITHHELD)
+  })
+  it('a synthetic verified report does not publish bar:bounds-formula or formula:active-present-bar (finding 4)', () => {
+    const base = auditStage5Manifest({ cases: [] } as never, { rootDir: REPO_ROOT })
+    const ids = ['bar:bounds-formula', 'formula:active-present-bar', 'icon:thresholds-formula']
+    const report: Stage5AuditReport = { ...base, ok: true, stageComplete: true, blocked: [], blockedCapabilities: [],
+      perCapability: ids.map(capabilityId => ({ capabilityId, caseId: 'stage5-cfvo-formulas', disposition: 'verified' as const })),
+      matchedReadings: { 'bar:bounds-formula': 'evaluated', 'formula:active-present-bar': 'activation-gates', 'icon:thresholds-formula': 'evaluated' } }
+    const pub = stage5Publication(report)
+    expect(pub.published).toEqual(['icon:thresholds-formula'])
+    for (const id of ids.slice(0, 2)) expect(pub.withheld[id], id).toMatch(/fixture-unconfirmable/)
   })
 })
 

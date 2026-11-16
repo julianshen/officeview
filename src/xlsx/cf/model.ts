@@ -52,7 +52,9 @@ export type CfFormulaBound = Readonly<{ type: 'formula'; cfvo: 'formula' | 'num'
 export type CfScaleBound =
   | { type: 'min' }
   | { type: 'max' }
-  | { type: 'num' | 'percent' | 'percentile'; value: number }
+  /** `resolved` (Task 37 fix round 1): the number came from a formula bound, so a resolver that gates its literal twin
+   * differently (a bar: `bar:bounds-formula`, not `bar:bounds-num`) keeps the provenance. */
+  | { type: 'num' | 'percent' | 'percentile'; value: number; resolved?: 'formula' }
   | CfFormulaBound
 export type CfScalePoint = Readonly<{ bound: CfScaleBound; argb: number }>
 export const COLOR_SCALE_WRITES: ReadonlySet<string> = Object.freeze(new Set(['colorScale', 'fill']))

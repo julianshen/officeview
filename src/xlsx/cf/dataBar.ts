@@ -32,7 +32,8 @@ const unmeasured = (): CfOutcome<never> => ({ kind: 'unresolved', reason: 'cf-un
 function boundCapability(bound: CfBarBound): string {
   switch (bound.type) {
     case 'min': case 'max': return 'bar:bounds-min-max'
-    case 'num': return 'bar:bounds-num'
+    // A formula-resolved threshold is authorised by its own formula capability (fix round 1, ruling 2).
+    case 'num': return bound.resolved === 'formula' ? 'bar:bounds-formula' : 'bar:bounds-num'
     case 'percent': return 'bar:bounds-percent'
     case 'percentile': return 'bar:bounds-percentile'
     case 'autoMin': return 'bar:bounds-automin'

@@ -999,7 +999,18 @@ export const CF_STAGE5_PRODUCTION_READINGS: Readonly<Record<string, string | rea
  * Task 35 fix round 2 (ruling a): capabilities whose Stage 5 fixture production cannot confirm, with the only witnesses
  * that may fail there. The publication gate refuses them whatever the audit verified (tests/xlsx-cf-formula-readings.test.ts).
  */
-export const CF_STAGE5_UNCONFIRMABLE: Readonly<Record<string, Readonly<{ reason: string; witnesses: readonly string[] }>>> = {
+export const CF_STAGE5_UNCONFIRMABLE: Readonly<Record<string, Readonly<{ reason: string; witnesses: readonly string[]
+  /** Task 37 fix round 1: production withholds the configuration's designated cells (fail closed) rather than painting them,
+   * so the narrow check accepts withheld cells; it still refuses any painted cell that contradicts the reading. */
+  designatedWithheld?: true }>>> = {
+  'bar:bounds-formula': {
+    reason: 'stage5-cfvo-formulas cfvo-bar-formula: the bar column holds 5..100 against formula bounds 20..80, a whole-scope cf-value-beyond-bounds (Ruling S3-E), and its num twin W needs bar:bounds-num (CF_STAGE3_NONDISCRIMINATING), so production cannot reproduce the fixture (Task 37 fix round 1)',
+    witnesses: ['W2', 'W3', 'W4', 'W5', 'W6', 'W7', 'W8', 'W9'], designatedWithheld: true,
+  },
+  'formula:active-present-bar': {
+    reason: 'stage5-active-present-bar: a standalone x14 bar, and bar:pairing-standalone is CF_STAGE3_UNSUPPORTED, so the activated bar and its twin withhold in production (Task 37 fix round 1)',
+    witnesses: ['C2', 'C3', 'C4', 'C5', 'C6', 'C7'], designatedWithheld: true,
+  },
   'formula:composition-stop-icon': {
     reason: "stage5-composition stop-icon: its continues witnesses K3/K5/K7 (a red fill plus an icon) are withheld in production while icon:composition-dxf-fill is unpublished, so production cannot confirm the fixture's reading (S5-WITNESS)",
     witnesses: ['K3', 'K5', 'K7'],

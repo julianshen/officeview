@@ -94,19 +94,21 @@ function substitutedShape(d: CfVisualDefinition): unknown {
 /**
  * Ruling S5-H: the number one cfvo formula result feeds its bound, or why it feeds none. A number feeds as written
  * (`formula`/`num` as a num bound, `percent`/`percentile` as p). A text, blank or error result follows the
- * `formula:cfvo-nonnumeric` reading, measured on `type="formula"` colour-scale bounds only: `withheld` is no format at all (`no-match`), `zero`
+ * `formula:cfvo-nonnumeric` reading, measured on `type="formula"` colour-scale bounds only: `withheld` is unresolved (slot taint kept), `zero`
  * a 0 bound and `skipped` the bound's positional extreme (the first point `min`, the last `max`; a midpoint has none).
  * A boolean or range result has no reading.
  */
 function substitutedBound(b: CfFormulaBound, result: CfResult, position: 'first' | 'middle' | 'last', kind: CfVisualDefinition['kind'], check: (capability: string) => boolean): CfOutcome<CfScaleBound> {
   const feed = (value: number): CfOutcome<CfScaleBound> => Number.isFinite(value)
-    ? { kind: 'ready', value: { type: b.cfvo === 'formula' ? 'num' : b.cfvo, value } }
+    ? { kind: 'ready', value: { type: b.cfvo === 'formula' ? 'num' : b.cfvo, value, resolved: 'formula' } }
     : { kind: 'unresolved', reason: 'cf-formula-nonfinite' }
   if (result.kind === 'number') return typeof result.value === 'number' ? feed(result.value) : { kind: 'unresolved', reason: 'cf-formula-unsupported' }
   if (result.kind !== 'text' && result.kind !== 'blank' && result.kind !== 'error') return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
   // Measured only for `type="formula"` bounds on colour scales (stage5-cfvo-formulas L/M/N).
   const reading = kind === 'colorScale' && b.cfvo === 'formula' ? cfFormulaReading('formula:cfvo-nonnumeric', check) : undefined
-  if (reading === 'withheld') return { kind: 'no-match' }
+  // Fix round 1 (ruling 1): Excel painting nothing for the rule does not show that lower rules may paint the slot, so the
+  // `withheld` reading is unresolved and keeps the rule's slot taint (no composition evidence exists).
+  if (reading === 'withheld') return { kind: 'unresolved', reason: 'cf-formula-nonnumeric-withheld' }
   if (reading === 'zero') return feed(0)
   if (reading === 'skipped' && position !== 'middle') return { kind: 'ready', value: { type: position === 'first' ? 'min' : 'max' } }
   return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
@@ -441,13 +443,12 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
             return truth.value === 'halt' ? { kind: 'unresolved', reason: 'cf-unmeasured-capability' } : { kind: 'ready', value: truth.value }
           }
           /** The visual's own definition for this cell, its activation passed: or the outcome the cell takes instead. */
-          const visualAt = (rule: CfRule, d: CfVisualDefinition, row: number, col: number, owner: number): CfOutcome<CfVisualDefinition> => {
+          /** Fix round 1 (ruling 3): the rule's capability gate, then its activation, before any scope or statistics refusal,
+           * so a confirmed false activation is no visual at that cell and taints nothing. */
+          const activeAt = (rule: CfRule, d: CfVisualDefinition, row: number, col: number): CfOutcome<boolean> => {
             const gated = formulaGate.get(rule)
             if (gated) return gated
-            const active = activationAt(d, row, col)
-            if (active.kind !== 'ready') return active
-            if (!active.value) return { kind: 'no-match' }
-            return visualDefinition(rule, d, owner)
+            return activationAt(d, row, col)
           }
           const isPending = (out: CfOutcome<unknown>): out is { kind: 'unresolved'; reason: string; pendingSheetIds: readonly string[] } =>
             out.kind === 'unresolved' && out.reason === 'cf-pending-data' && (out.pendingSheetIds?.length ?? 0) > 0
@@ -502,6 +503,10 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                 const preparedStats = stats.get(rule)
                 if (rule.definition.kind === 'colorScale') {
                   if (value.kind === 'string') isTextInScale = true
+                  const active = activeAt(rule, rule.definition, row, col)
+                  if (isPending(active)) { for (const id of active.pendingSheetIds) pendingSheets.add(id); return { kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: active.pendingSheetIds } }
+                  if (active.kind !== 'ready') { outcomes.push(active); continue }
+                  if (!active.value) { outcomes.push({ kind: 'no-match' }); continue }
                   const blocked = scopeBlock.get(rule)
                   if (blocked) {
                     outcomes.push(blocked)
@@ -515,8 +520,8 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                     outcomes.push({ kind: 'unresolved', reason: 'cf-no-statistics' })
                     continue
                   }
-                  // Stage 5: the activation gates this cell, and the formula bounds take their evaluated numbers.
-                  const visual = visualAt(rule, rule.definition, row, col, owner)
+                  // Stage 5: the formula bounds take their evaluated numbers (memoised per scope).
+                  const visual = visualDefinition(rule, rule.definition, owner)
                   if (isPending(visual)) { for (const id of visual.pendingSheetIds) pendingSheets.add(id); return { kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: visual.pendingSheetIds } }
                   if (visual.kind !== 'ready') { outcomes.push(visual); continue }
                   const def = visual.value as Extract<CfDefinition, { kind: 'colorScale' }>
@@ -541,13 +546,17 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                     outcomes.push(colorOut)
                   }
                 } else if (rule.definition.kind === 'dataBar') {
+                  const active = activeAt(rule, rule.definition, row, col)
+                  if (isPending(active)) { for (const id of active.pendingSheetIds) pendingSheets.add(id); return { kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: active.pendingSheetIds } }
+                  if (active.kind !== 'ready') { outcomes.push(active); continue }
+                  if (!active.value) { outcomes.push({ kind: 'no-match' }); continue }
                   const blocked = scopeBlock.get(rule)
                   if (blocked) { outcomes.push(blocked); continue }
                   if (preparedStats?.kind !== 'ready') {
                     outcomes.push(preparedStats?.kind === 'unresolved' ? preparedStats : { kind: 'unresolved', reason: 'cf-no-statistics' })
                     continue
                   }
-                  const visual = visualAt(rule, rule.definition, row, col, owner)
+                  const visual = visualDefinition(rule, rule.definition, owner)
                   if (isPending(visual)) { for (const id of visual.pendingSheetIds) pendingSheets.add(id); return { kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: visual.pendingSheetIds } }
                   if (visual.kind !== 'ready') { outcomes.push(visual); continue }
                   const def = visual.value as Extract<CfDefinition, { kind: 'dataBar' }>
@@ -560,6 +569,10 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                   // silent on whether its fill and font apply): the whole contribution is withheld, which taints the
                   // icon slot and every DXF write (fail closed).
                   if (rule.dxf && Object.keys(rule.dxf).length > 0) { outcomes.push({ kind: 'unresolved', reason: 'cf-unmeasured-capability' }); continue }
+                  const active = activeAt(rule, rule.definition, row, col)
+                  if (isPending(active)) { for (const id of active.pendingSheetIds) pendingSheets.add(id); return { kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: active.pendingSheetIds } }
+                  if (active.kind !== 'ready') { outcomes.push(active); continue }
+                  if (!active.value) { outcomes.push({ kind: 'no-match' }); continue }
                   const blocked = scopeBlock.get(rule)
                   if (blocked) { outcomes.push(blocked); continue }
                   const needsStats = statistical(rule)
@@ -567,7 +580,7 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                     outcomes.push(preparedStats?.kind === 'unresolved' ? preparedStats : { kind: 'unresolved', reason: 'cf-no-statistics' })
                     continue
                   }
-                  const visual = visualAt(rule, rule.definition, row, col, owner)
+                  const visual = visualDefinition(rule, rule.definition, owner)
                   if (isPending(visual)) { for (const id of visual.pendingSheetIds) pendingSheets.add(id); return { kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: visual.pendingSheetIds } }
                   if (visual.kind !== 'ready') { outcomes.push(visual); continue }
                   const def = visual.value as Extract<CfDefinition, { kind: 'iconSet' }>

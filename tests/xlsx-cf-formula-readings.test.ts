@@ -30,9 +30,6 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const UNREACHABLE: Readonly<Record<string, string>> = {
   'formula:predicate-timeperiod-divergent': 'the divergent timePeriod formulas use TODAY(), and formula:fn-today is Task 38',
   'formula:truth-error': 'each configuration holds an NA() row, and NA is not on the allow-list (S5-B): those cells withhold, the 1/0 rows show error-no-match',
-  // Task 37: both bar configurations are withheld throughout (fail closed), never painted against their twins.
-  'bar:bounds-formula': 'a formula bar bound feeds the num path, whose gate bar:bounds-num is CF_STAGE3_NONDISCRIMINATING (never verified): the I column and its num twin W withhold alike',
-  'formula:active-present-bar': 'its fixture is a standalone x14 bar, and bar:pairing-standalone is CF_STAGE3_UNSUPPORTED: the activated bar and its twin withhold alike',
   'formula:fn-conditional-aggregate': 'its configuration\'s COUNTIF($A:$A,A2) column holds booleans and numeric text, a whole-rule hoist refusal (S5-HOIST); reproduced through the stage5-formula-hoist rows',
 }
 const REUSE_ONLY = /^formula:composition-stub-successor-/
@@ -96,7 +93,8 @@ export function unconfirmableViolations(cfg: Config, verdict: ReturnType<typeof 
     const ref = /witness (\S+):/.exec(reason)?.[1]
     if (!ref || !allowed.has(ref)) out.push(`${reason} (not a documented unconfirmable witness)`)
   }
-  for (const r of cfg.refs.filter(x => !x.includes(':'))) if (got.get(r)?.withheld !== false) out.push(`${cfg.id} ${r}: withheld`)
+  // Task 37 fix round 1: an entry whose designated cells production withholds (fail closed) accepts them withheld.
+  if (!CF_STAGE5_UNCONFIRMABLE[cfg.capabilityId]?.designatedWithheld) for (const r of cfg.refs.filter(x => !x.includes(':'))) if (got.get(r)?.withheld !== false) out.push(`${cfg.id} ${r}: withheld`)
   return out
 }
 
