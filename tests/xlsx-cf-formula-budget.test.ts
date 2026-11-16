@@ -240,11 +240,11 @@ describe('text work is bounded by measured payload before invocation (round-2 #1
     expect(exact.currentBytes).toBe(0)
     snapshot.dispose()
   })
-  it('COUNTIF(A1:A2,B1): 2 x 11 x 11 = 242 matcher transitions (+ 11 for the criterion\'s validation, round 4) over 10-character strings refuses; over 3 characters it is 50 plus the 3-character criterion parse and its 4-row validation, 57', async () => {
+  it('COUNTIF(A1:A2,B1): 2 x 11 x 11 = 242 matcher transitions (+ 11 validation rows + 25 per-cell re-tokenisation, round 4) over 10-character strings refuses; over 3 characters it is 50 plus the 6-pass criterion parse, its 4-row validation and 8 re-tokenisation units, 67', async () => {
     const f = compile('COUNTIF(A1:A2,B1)', 'C1')
     const ten = await snapshotOf({ A1: 'abcdefghij', A2: 'abcdefghik', B1: 'abcdefghij' }, ['A1:A2', 'B1'])
     const b10 = cfCallWorkBreakdown(cfCallShape(f), metricsOf(ten, ['A1:A2', 'B1']), [10]) as CfCallWorkBreakdown
-    expect(b10.matcher).toBe(242 + 11)
+    expect(b10.matcher).toBe(242 + 11 + Math.ceil((2 * 2 * 2 * 10 + 20) / 4))
     expect(b10.total - b10.matcher).toBeLessThanOrEqual(CF_LIMITS.checkpointUnits) // a mutant without the matcher term admits it
     evaluateNodeSpy.mockClear()
     expect(evaluateCfFormula(f, a1('C1'), ten, context())).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
@@ -252,7 +252,7 @@ describe('text work is bounded by measured payload before invocation (round-2 #1
     const three = await snapshotOf({ A1: 'abc', A2: 'abd', B1: 'abc' }, ['A1:A2', 'B1'])
     const calls: CfCallWorkBreakdown[] = []
     expect(evaluateCfFormula(f, a1('C1'), three, context(createCfMemory(), calls))).toEqual({ kind: 'ready', value: { kind: 'number', value: 1 } })
-    expect(calls[0]).toEqual({ nodes: 3, viewBuild: 3, index: 0, enumeration: 3, reads: 3, sort: 6, comparisons: 0, matcher: 32 + 4, text: 0, criterion: 3, lookups: 0, total: 57 })
+    expect(calls[0]).toEqual({ nodes: 3, viewBuild: 3, index: 0, enumeration: 3, reads: 3, sort: 6, comparisons: 0, matcher: 32 + 4 + 8, text: 0, criterion: 5, lookups: 0, total: 67 })
     ten.dispose(); three.dispose()
   })
 })
@@ -820,6 +820,25 @@ describe('Task 34 fix round 4 (codex round-3 findings 1, 2, 4, 5)', () => {
       expect(evaluatorModule.coerceToString(engineEval(t, {}, a1('B1')).value as never)).toBe(want)
       expect(tr.get(g.ast)!.len, t).toBeGreaterThanOrEqual(want.length)
     }
+  })
+  it('ruling on concern 2: the engine\'s own criterion re-parse and per-cell re-tokenisation are in the bound', async () => {
+    // 60 ASCII characters over an empty range: 111 before (3 parse passes counted); with the engine's re-parse
+    // (numeric pattern, tokenise, ASCII test: 3 more passes) the true work is 3 + 1 + 1 + ceil(6 x 60 / 4) + 61 = 156.
+    const { budget, ceiling, signal } = production()
+    const calls: CfCallWorkBreakdown[] = []
+    const batch = await batchOf([formulaRule('COUNTIF(A1:A2,B1)', 'C1')], fakeSource({ B1: 'a'.repeat(60) }), { budget, ceiling, signal, onCall: b => calls.push(b) })
+    evaluateNodeSpy.mockClear()
+    expect(batch.evaluate(0, 0, 2)).toEqual({ kind: 'unresolved', reason: 'cf-resource-limit' })
+    expect(evaluateNodeSpy).not.toHaveBeenCalled()
+    expect(calls).toEqual([])
+    batch.dispose()
+    expect(cfCriterionUnits(60)).toBe(Math.ceil(6 * 60 / 4))
+    // Per range string cell, matchWildcard re-tokenises the pattern and ASCII-tests pattern and text: with t tokens a
+    // pattern is at most 2t characters, so 2 x 2t per string cell plus the cells' characters, at the text rate.
+    const shape = cfCallShape(compile('COUNTIF(A1:A2,B1)', 'C1'))
+    const payload = { viewCells: 3, atoms: [{ cells: 2, stringUnits: 6, longestString: 3, strings: 2, nonAscii: 0 }, { cells: 1, stringUnits: 3, longestString: 3, strings: 1, nonAscii: 0 }] }
+    const b = cfCallWorkBreakdown(shape, payload, [3]) as CfCallWorkBreakdown
+    expect(b.matcher).toBe(4 * (2 + 6) + 4 + Math.ceil((2 * 2 * 2 * 3 + 6) / 4))
   })
   it('finding 5: a refused frequency key pays its key-processing allowance to the budget and the ceiling; an admitted one pays it once', async () => {
     const run = async (B1: string) => {

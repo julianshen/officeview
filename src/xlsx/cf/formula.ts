@@ -981,7 +981,13 @@ export function cfCallWorkBreakdown(shape: CfCallShape, payload: CfPayloadMetric
       if (t === 0) comparisons += amount
       // A text criterion is validated once by `matchWildcard(body, '')` (cond.ts criterionOf) whatever the range holds:
       // one DP row per token plus the initial one, over the empty text (round 4, finding 4).
-      else matcher += amount + (t + 1)
+      // Each range string cell's own matchWildcard re-tokenises the pattern (at most 2t characters: `~x` is one token)
+      // and ASCII-tests the pattern and the cell, at the text rate (round 4, ruling on concern 2).
+      else {
+        const a = p.range === undefined ? undefined : atom(p.range)
+        const strings = a ? (a.strings ?? a.cells) : 0
+        matcher += amount + (t + 1) + charsToUnits(strings * 2 * 2 * t + (a?.stringUnits ?? 0))
+      }
     }
   }
   const textUnits = cfTextUnits(shape, payload, trace)
@@ -1014,7 +1020,9 @@ const COERCE_NUMBER_PASSES = 8
  * frequency key's costliest path (`cfCountifKey`: the ASCII test, the wildcard test, the numeric pattern, then
  * `coerceToNumber`'s trim, thousands replace and numeric test, which rejects there; the fold's replace and its output;
  * and the map lookup's hash: 9. The anchored prefix and `#` tests read O(1)). */
-export const CF_CRITERION_PASSES = 3
+/** Our preflight's 3 passes plus the engine's own re-parse in `criterionOf` (the numeric pattern, then the validation
+ * `matchWildcard(body, '')`: its tokenisation and the pattern's ASCII test): 6 (round 4, ruling on concern 2). */
+export const CF_CRITERION_PASSES = 6
 export const CF_FREQUENCY_KEY_PASSES = 9
 /** Each function's text profile: how its operands are consumed and what it returns. Exhaustive over the allow-list
  * (asserted at load), so a function added to it is never priced as free. */
