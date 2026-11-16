@@ -11,7 +11,7 @@ import { resolveCfCellStyle } from './dxf'
 import { barPaintable, barWithheld, CF_BAR_RENDER_MODEL, paintDataBars, type CfBarHost, type CfBarScale } from './dataBarPaint'
 import { admitBatchGlyphs, cfHidesText, iconPaintsOn, iconTextInset, paintIconCells, type CfAdmittedGlyphs, type CfIconGate } from './iconPaint'
 import type { CfBarDescriptor, CfCellState, CfIconDescriptor, CfLiteral, CfPrepareRequest, CfStamp, CfValueSource, SourceRect } from './model'
-import { cfDependencyGenOf, cfReferencedSheetNames, withCfDependencyGen, type CfWorkbookSheet, type CfWorkbookSource } from './dependencies'
+import { cfAdmittedSheetNames, cfDependencyGenOf, cfReferencedSheetNames, withCfDependencyGen, type CfWorkbookSheet, type CfWorkbookSource } from './dependencies'
 import type { XlsxSheet } from '../types'
 import type { RegionStyleLayer } from '../tableStyles/regionLayer'
 import { regionStylesFor } from '../tableStyleLoader'
@@ -165,6 +165,21 @@ export function cfWorkbookOfStores(sheets: readonly Readonly<{ sheetId: string; 
       return sheet
     },
   }
+}
+/**
+ * Task 36 (Ruling S5-K, fix rounds 2-3): the resident live key's dependency part, over the preparation's own admitted set
+ * (`cfAdmittedSheetNames`: the first 16 distinct referenced names, host excluded). Each admitted sheet's current value
+ * generation and completeness join the key; an unknown name reads `-1`. One store read per admitted sheet. Lazy: the
+ * interactive view calls it on every render once the CF runtime is loaded, and withholds resident CF until then.
+ */
+export function cfResidentDependencyKey(rules: import('./model').CfSheetRules | undefined, hostName: string, sheets: readonly Readonly<{ sheetId: string; name: string }>[],
+  storeOf: (sheetId: string) => Readonly<{ stamp: Readonly<{ valueGen: number }>; completeness?: string }>): string {
+  const parts: Array<string | number> = []
+  for (const name of cfAdmittedSheetNames(rules, hostName)) {
+    const s = sheets.find(x => x.name.toLowerCase() === name.toLowerCase()), t = s && storeOf(s.sheetId)
+    parts.push(t ? `${t.stamp.valueGen}${t.completeness}` : -1)
+  }
+  return parts.join()
 }
 /** The canonical stores of a workbook (the resident `WorkbookSource` shape). */
 export type CfWorkbookStores = Readonly<{ sheets: readonly Readonly<{ sheetId: string; name: string }>[]; store(sheetId: string): SourceStore }>

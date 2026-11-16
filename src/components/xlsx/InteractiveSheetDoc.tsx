@@ -109,7 +109,7 @@ import { initialOrigin, paneLogicalBoxes, paneRegions, visibleSpans } from '../.
 import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS, SIZED_DRAWING_BYTES, axisUpperBytes, cellFont, type SessionSizes } from '../../xlsx/view/axisSizes'
 import { columnWidthPx } from '../../xlsx/columnWidth'
 import { AutoFitRefusedError, autoFitSize, createFitMeasure, resizeRegion, type ResizeRequest } from './sheetResize'
-import { ensureConditionalFormatting, cfNeedsViewport, cfResidentDependencyKey, CF_PAINT_BATCH_CELLS } from '../../xlsx/cfLoader'
+import { ensureConditionalFormatting, cfNeedsViewport, CF_PAINT_BATCH_CELLS } from '../../xlsx/cfLoader'
 import { tileLogicalBox, tileRangeFor, TILE_PREFETCH_RING } from '../../xlsx/view/tileCache'
 import { sparklineInvalidationBox } from '../../xlsx/view/sparklineInvalidation'
 import type { ValueOverlay } from '../../xlsx/view/contracts'
@@ -1081,8 +1081,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return {x:first.x,y:first.y,width:last.x+last.width-first.x,height:last.y+last.height-first.y}
   }) } : undefined
   // S5-K: the referenced sheets' value generations (resident), or the cache's dependency epoch (remote), join the key.
-  const cfDepGen = cfRules ? cfResidentDependencyKey(cfRules, entry?.sheet.name ?? '', source.sheets, id => source.store(id)) : hasRemoteCf ? remote!.cfDependencyEpoch(activeSheetId) : 0
-  const cfLiveKey = cfRules ? JSON.stringify([source.store(activeSheetId).stamp.docId, activeSheetId, source.store(activeSheetId).stamp.valueGen, entry?.structureGen, cfTextGen, scopedCf ? entry?.revision : 0, clockGen, cfDepGen]) : hasRemoteCf ? JSON.stringify([identity.docId, activeSheetId, identity.valueGen, identity.viewGen, entry?.structureGen, remote!.merges(activeSheetId).gen, remote!.isClosed, clockGen, cfDepGen]) : undefined
+  // S5-K: the lazy CF runtime (kept once loaded) builds the resident dependency key on every render; resident CF is withheld
+  // until it is loaded.
+  // Only a sheet whose rules name another sheet needs it; any other sheet's key part is empty, as before.
+  const cfCross = cfRules?.rules.some(r => r.definition.kind !== 'unresolved' && r.definition.dependencySheets?.length)
+  const [cfRuntime, setCfRuntime] = useState<typeof import('../../xlsx/cf/render')>()
+  useEffect(() => { if (cfCross && !cfRuntime) void ensureConditionalFormatting([entry!.sheet]).then(cf => cf && setCfRuntime(cf)) }, [cfCross, cfRuntime])
+  const cfDepGen = cfRules ? cfCross ? cfRuntime?.cfResidentDependencyKey(cfRules, entry!.sheet.name, source.sheets, id => source.store(id)) : '' : hasRemoteCf ? remote!.cfDependencyEpoch(activeSheetId) : 0
+  const cfLiveKey = cfRules ? cfDepGen === undefined ? undefined : JSON.stringify([source.store(activeSheetId).stamp.docId, activeSheetId, source.store(activeSheetId).stamp.valueGen, entry?.structureGen, cfTextGen, scopedCf ? entry?.revision : 0, clockGen, cfDepGen]) : hasRemoteCf ? JSON.stringify([identity.docId, activeSheetId, identity.valueGen, identity.viewGen, entry?.structureGen, remote!.merges(activeSheetId).gen, remote!.isClosed, clockGen, cfDepGen]) : undefined
   const cfViewportKey = cfViewport ? JSON.stringify([cfLiveKey, cfViewport.boxes]) : cfLiveKey
   const [viewportCf,setViewportCf]=useState<{key:string;generation:string|undefined;boxes?:readonly LogicalCellBox[];batch:import('../../xlsx/cf/render').CfPaintBatch|undefined}|null>(null)
   const heldViewportCf=useRef<import('../../xlsx/cf/render').CfPaintBatch|undefined>(undefined)

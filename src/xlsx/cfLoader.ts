@@ -2,7 +2,7 @@
 import type { XmlNode } from '../core/xml'
 import { attrs, getChildren } from '../core/xml'
 import type { XlsxSheet } from './types'
-import type { CfRule, CfSheetRules } from './cf/model'
+import type { CfRule } from './cf/model'
 type CfFoundation = typeof import('./cf/limits')
 let pending: Promise<CfFoundation> | undefined
 export function preloadCf(): Promise<CfFoundation> {
@@ -93,26 +93,6 @@ export function cfNeedsViewport(sheet: Pick<XlsxSheet, 'conditionalFormatting'>)
   return false
 }
 
-/**
- * Task 36 (Ruling S5-K, fix round 2): the resident live key's dependency part, over the same admitted set the preparation
- * uses: the first 16 distinct referenced names in rule order (case-insensitive, the host excluded). Each admitted sheet's
- * value generation and completeness join the key; an unknown name reads `-1`. Reads one store per admitted sheet.
- */
-export function cfResidentDependencyKey(rules: CfSheetRules | undefined, hostName: string, sheets: readonly { sheetId: string; name: string }[],
-  storeOf: (sheetId: string) => { stamp: { valueGen: number }; completeness?: string }): string {
-  const host = hostName.toLowerCase(), seen = new Set<string>(), parts: Array<string | number> = []
-  for (const rule of rules?.rules ?? []) {
-    const d = rule.definition
-    for (const name of d.kind === 'unresolved' ? [] : d.dependencySheets ?? []) {
-      const k = name.toLowerCase()
-      if (k === host || seen.has(k) || seen.size >= 16) continue
-      seen.add(k)
-      const s = sheets.find(x => x.name.toLowerCase() === k), t = s && storeOf(s.sheetId)
-      parts.push(t ? `${t.stamp.valueGen}${t.completeness}` : -1)
-    }
-  }
-  return parts.join()
-}
 /**
  * Typed check for whether a rule definition can potentially match blank cells (M4).
  * Centralized next to cfExplicitBounds without dynamic casting.

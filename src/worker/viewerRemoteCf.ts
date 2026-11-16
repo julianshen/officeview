@@ -188,7 +188,7 @@ export class RemoteCfCache {
     // Ruling S5-K: a reply read from other sheets is current only while each keeps the value generation it listed; a
     // moved one makes the whole host sheet stale (Lesson 5), not only this scope.
     if (this.dependenciesMoved(entry)) return this.get(sheetId, rects, stamp, true)
-    if (this.rejectionLifted(entry)) { this.reset(entry); entry.gen++ }
+    if (this.rejectionLifted(entry)) this.revive(entry)
     if (entry.state === 'waiting' && !entry.controller) void this.load(entry)
     return entry
   }
@@ -213,7 +213,7 @@ export class RemoteCfCache {
     }
     // A moved dependency (S5-K): the whole host sheet goes stale, then this scope is acquired afresh.
     if (this.dependenciesMoved(entry)) { this.invalidateSheet(sheetId); return this.acquire(sheetId, rects, stamp, signal) }
-    if (this.rejectionLifted(entry)) { this.reset(entry); entry.gen++ }
+    if (this.rejectionLifted(entry)) this.revive(entry)
     entry.refs++
     if (entry.state === 'waiting' && !entry.controller) void this.load(entry)
     let released = false
@@ -255,12 +255,29 @@ export class RemoteCfCache {
    * or release on a referenced sheet), every tile of each such sheet (Lesson 5). Held versions survive until released.
    */
   invalidateDependents(changedSheetId: string): void {
+    // A terminal rejection recorded against the changed sheet (fix round 3, #1) holds no registration: when that sheet's
+    // identity genuinely moved, the entry is revived in place (host sheet stale, epoch advanced, one bounded retry).
+    // Unchanged identities stay terminal.
+    const revived = new Set<Entry>()
+    for (const entry of this.entries.values()) {
+      if (entry.rejected?.some(d => d.sheetId === changedSheetId) && this.rejectionLifted(entry)) { this.revive(entry); revived.add(entry) }
+    }
+    for (const entry of revived) if (entry.refs > 0 && entry.state === 'waiting' && !entry.controller) void this.load(entry)
     const hosts = new Set<string>()
     for (const r of this.registrations.values()) if (r.dependency === changedSheetId) hosts.add(r.host)
     for (const entry of this.entries.values()) {
       if (entry.sheetId !== changedSheetId && entry.result?.dependencies?.some(d => d.sheetId === changedSheetId)) hosts.add(entry.sheetId)
     }
-    for (const sheetId of hosts) this.invalidateSheet(sheetId)
+    for (const sheetId of hosts) this.invalidateSheet(sheetId, revived)
+  }
+  /** Fix round 3 (#1): a lifted terminal rejection becomes a fresh waiting entry in place; its host sheet goes stale
+   * (dependency epoch advanced, one whole-sheet notice) and the entry has its one bounded retry again. */
+  private revive(entry: Entry): void {
+    this.reset(entry)
+    entry.gen++
+    this.rejectedSignatures.delete(entry.sheetId)
+    this.dependencyEpochs.set(entry.sheetId, this.dependencyEpoch(entry.sheetId) + 1)
+    this.deferChanged(entry.sheetId, [{ r0: 0, r1: 1048575, c0: 0, c1: 16383 }], 'updated')
   }
   /** Bumped at each dependency invalidation of a sheet: the view's live key reads it, so a held scope is replaced. */
   private readonly dependencyEpochs = new Map<string, number>()
@@ -322,11 +339,12 @@ export class RemoteCfCache {
     return entry.state === 'failed' && entry.rejected !== undefined && entry.rejected.some(d => this.host.identity(d.sheetId).valueGen !== d.valueGen)
   }
   /** Whole-sheet invalidation: every entry of the sheet (but `keep`), and one whole-sheet change notice. */
-  private invalidateSheet(sheetId: string, keep?: Entry): void {
+  private invalidateSheet(sheetId: string, keep?: Entry | ReadonlySet<Entry>): void {
     this.dependencyEpochs.set(sheetId, this.dependencyEpoch(sheetId) + 1)
     if (keep) {
+      const kept = (entry: Entry): boolean => (keep instanceof Set ? keep.has(entry) : entry === keep)
       for (const [key, entry] of [...this.entries]) {
-        if (entry === keep || entry.sheetId !== sheetId) continue
+        if (kept(entry) || entry.sheetId !== sheetId) continue
         this.entries.delete(key)
         entry.detached = true
         entry.gen++
@@ -622,6 +640,8 @@ export class RemoteCfCache {
   wakeWaiting(): void {
     if (this.closed) return
     for (const entry of this.entries.values()) {
+      // A terminal dependency rejection whose recorded identities moved recovers here too (fix round 3, #1).
+      if (entry.refs > 0 && this.rejectionLifted(entry)) this.revive(entry)
       if (entry.refs > 0 && entry.state === 'waiting' && !entry.controller) void this.load(entry)
     }
   }

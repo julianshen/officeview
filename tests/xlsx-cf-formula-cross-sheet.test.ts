@@ -718,7 +718,9 @@ describe('Task 36 fix round 2', () => {
   })
 
   it('#7 residual: the resident live key reads only the admitted, deduplicated 16 referenced stores', async () => {
-    const { cfResidentDependencyKey } = await import('../src/xlsx/cfLoader')
+    const { cfResidentDependencyKey } = await import('../src/xlsx/cf/render')
+    // Round 3 (#2): the helper lives in the lazy CF runtime, never in the eager loader.
+    expect('cfResidentDependencyKey' in (await import('../src/xlsx/cfLoader'))).toBe(false)
     const names = Array.from({ length: CF_REFERENCED_SHEETS_LIMIT + 1 }, (_, i) => `S${i + 2}`)
     const rules = parseRules([...names, 'S2', 'sheet1'].map((n, i) => expr('A2', i + 1, `${n}!A1&gt;0`)).join(''), CAPS)
     const sheets = [{ sheetId: 'h', name: 'Sheet1' }, ...names.map((n, i) => ({ sheetId: `x${i}`, name: n }))]

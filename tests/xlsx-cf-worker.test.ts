@@ -3145,4 +3145,48 @@ describe('Task 36 fix round 2: terminal rejection, adoption order, owned registr
     expect(held.state.result?.dependencies).toEqual([{ sheetId: 'dep-b', valueGen: 0 }])
     held.release(); cache.close()
   })
+
+  it('round 3 #1: a terminal rejection recovers on a genuine dependency identity change without an explicit get()', async () => {
+    const t = host({ depGen: () => 9 }) // main holds Sheet2 at 3; the worker answers 9
+    const cache = new RemoteCfCache(t.h)
+    const held = cache.acquire(S1, [rect(0, 0)], stampOf())
+    for (let i = 0; i < 10; i++) await flush()
+    expect(held.state.state).toBe('failed')
+    expect(t.requests).toHaveLength(2)
+    const epoch = cache.dependencyEpoch(S1)
+    // Unchanged identities stay terminal.
+    cache.invalidateDependents(S2); cache.wakeWaiting()
+    for (let i = 0; i < 5; i++) await flush()
+    expect(held.state.state).toBe('failed')
+    expect(t.requests).toHaveLength(2)
+    // The genuine change: Sheet2 reaches 9 on the main thread.
+    t.gens.set(S2, 9)
+    t.changed.length = 0
+    cache.invalidateDependents(S2); cache.wakeWaiting()
+    for (let i = 0; i < 5; i++) await flush()
+    expect(cache.dependencyEpoch(S1)).toBeGreaterThan(epoch)
+    expect(t.changed).toContain(S1)
+    expect(t.requests).toHaveLength(3)
+    expect(held.state.state).toBe('ready')
+    held.release(); cache.close()
+  })
+
+  it.each(['invalidateDependents', 'wakeWaiting'] as const)('round 3 #1: either trigger alone (%s) revives a lifted terminal rejection; unchanged stays terminal', async trigger => {
+    const t = host({ depGen: () => 9 })
+    const cache = new RemoteCfCache(t.h)
+    const held = cache.acquire(S1, [rect(0, 0)], stampOf())
+    for (let i = 0; i < 10; i++) await flush()
+    expect(held.state.state).toBe('failed')
+    const fire = () => (trigger === 'wakeWaiting' ? cache.wakeWaiting() : cache.invalidateDependents(S2))
+    fire()
+    for (let i = 0; i < 5; i++) await flush()
+    expect(t.requests).toHaveLength(2)
+    t.gens.set(S2, 9)
+    fire()
+    for (let i = 0; i < 5; i++) await flush()
+    expect(t.requests).toHaveLength(3)
+    expect(held.state.state).toBe('ready')
+    held.release(); cache.close()
+  })
 })
+
