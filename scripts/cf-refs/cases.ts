@@ -7276,10 +7276,30 @@ function s5Ruling(cap: string): string {
 }
 
 /**
- * Stage 5 capabilities recorded as unsupported although their case may be captured (the S3-CLOSE mechanism). Empty
- * until an Excel outcome (a strip, a repair, a rejected resave) is recorded by the orchestrator.
+ * Stage 5 capabilities recorded as unsupported although their case may be captured (the S3-CLOSE mechanism): an Excel
+ * outcome on the construct a case tests (Ruling S5-REPAIR, S5-J, OD-16), a finding no hypothesis predicted (S4-MINMAX
+ * precedent), or a re-deferral whose capture cannot measure it (Task 39). Production keeps every one unresolved.
  */
-export const CF_STAGE5_UNSUPPORTED: Readonly<Record<string, string>> = {}
+export const CF_STAGE5_UNSUPPORTED: Readonly<Record<string, string>> = {
+  'formula:active-present-scale':
+    'Ruling S5-J / OD-16: Excel 16.115 rewrote the standalone x14 colour scale on resave (stage5-active-present-scale.rejected.xlsx): activePresent dropped and the rule moved to the base dialect with its activation as a <formula> child. Permanent recorded refusal; production keeps cf-unsupported-rule.',
+  'formula:active-present-bar':
+    'Ruling S5-J / OD-16: Excel 16.115 rewrote the standalone x14 data bar on resave (stage5-active-present-bar.rejected.xlsx): activePresent dropped and the rule moved to a paired base bar with its activation as a <formula> child. Permanent recorded refusal; production keeps cf-unsupported-rule.',
+  'formula:active-present-icon':
+    'Ruling S5-J / OD-16: Excel 16.115 rewrote the standalone x14 icon set on resave (stage5-active-present-icon.rejected.xlsx): activePresent dropped and the rule moved to the base dialect with its activation as a <formula> child. Permanent recorded refusal; production keeps cf-unsupported-rule.',
+  'formula:predicate-timeperiod-divergent':
+    'Ruling S5-REPAIR: Excel 16.115 replaced the divergent formula A2=TODAY()-3 of a timePeriod="today" rule with the canonical FLOOR(A2,1)=TODAY() on resave (stage5-predicate-timeperiod.rejected.xlsx): Excel regenerates the formula from the attribute, so a divergent timePeriod formula is not a shape Excel keeps. Production keeps it unresolved (Task 33).',
+  'formula:cross-sheet-missing':
+    'Ruling S5-REPAIR / S5-K: Excel reads =Gone!A1>0 (no such sheet) as an external-workbook reference; opening the workbook prompted to update links (answered Don\'t update), so no capture exists. Production keeps a formula naming an unknown sheet unresolved; its #REF! reading is never registered.',
+  'formula:cfvo-nonnumeric':
+    'Finding (S4-MINMAX precedent): no hypothesis (withheld, zero, skipped) matched what Excel showed for a text, blank or error formula bound in stage5-cfvo-formulas L..N; recorded, never fitted. Production keeps a non-numeric formula bound unresolved.',
+  'bar:bounds-formula':
+    'Re-deferred (Task 39): the stage5-cfvo-formulas bar fixture holds 5..100 against formula bounds 20..80 (a whole-scope cf-value-beyond-bounds, Ruling S3-E) and its twin W7 cannot be measured, so the capture cannot evidence it (CF_STAGE5_UNCONFIRMABLE). Fixing the fixture is a new case version; production keeps formula bar bounds unresolved.',
+  'icon:thresholds-formula':
+    'Re-deferred (Task 39): every icon crop of stage5-cfvo-formulas is unclassifiable (icon-class-none). Its cells sit on the default style, which Excel draws vertically centred, 3 px above the bottom-aligned frame of the Stage 4 glyph key, so twin Z2 cannot be measured. A rebuild with bottom-aligned cells is a new case version; production keeps formula icon thresholds unresolved.',
+  'formula:cfvo-scope-multi-range':
+    'Re-deferred (Task 39): the scope-icon configuration of stage5-cfvo-scope cannot be measured (twin P12 is an unclassifiable icon crop: default style, vertically centred, 3 px off the glyph key frame), so the capability cannot verify. Production keeps a multi-range formula bound unresolved.',
+}
 
 /**
  * Stage 5 capabilities no capture can turn into evidence (Lesson 3): the twin registries (literal comparison rules,
