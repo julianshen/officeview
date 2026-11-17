@@ -144,10 +144,12 @@ export function verifyCellExpectations(
     const pos = parseA1(exp.ref)
     if (!pos) return `Invalid cell reference: ${exp.ref}`
     const actual = actualAt(pos.row, pos.col)
-    // Fix round 5: on a Stage 5 case every expected cell, resolved or not, must equal the counterfactual run of the real
-    // compositor in every component (fill, each font path, colour scale, bar, icon, unresolved writes); a mismatch fails
-    // here, before any acceptance path below.
-    if (c.stage === 5) {
+    // Fix round 5: on a measured Stage 5 case (the population the audit rows and conformance compare) every expected cell,
+    // resolved or not, must equal the counterfactual run of the real compositor in every component (fill, each font path,
+    // colour scale, bar, icon, unresolved writes); a mismatch fails here, before any acceptance path below. An unmeasured
+    // case (no Excel evidence; e.g. a hand-authored unpaired x14 twin production refuses structurally) keeps the round-4
+    // check on its matched-but-unresolved cells.
+    if (c.stage === 5 && (c.status === 'measured' || (exp.matched && actual.unresolved))) {
       const v = stage5CellAgreement(stage5TokenOfActual(actual), undefined, stage5Truths?.get(exp.ref))
       if (!v.agrees) return `Cell ${exp.ref}: ${v.disagreement}`
     }
