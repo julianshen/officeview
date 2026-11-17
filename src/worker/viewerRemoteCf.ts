@@ -949,7 +949,7 @@ export class RemoteCfCache {
       entry.pendingSheetIds = undefined
       entry.retried = false
       // Ruling S5-M: learn the sheet's clock fact (a ready reply says it; absent means the sheet may read the clock).
-      this.clockFacts.set(sheetId, result.clockFree === true)
+      this.clockFacts.set(sheetId, result.clockFree === true);
       entry.state = 'ready'
       entry.gen++
       this.deferChanged(sheetId, entry.rects, 'updated')
