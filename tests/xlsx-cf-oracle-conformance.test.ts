@@ -101,6 +101,14 @@ function underUnevidencedBarStop(c: { markers: ReadonlyArray<{ ruleType: string;
     c.markers.some(m => m.ruleType !== 'dataBar' && m.priority !== undefined && m.priority > bar.priority! && isCellInSqref(ref, m.sqref)))
 }
 
+/**
+ * Task 39: the capabilities of the formula-bearing markers (a `formula` marker: an expression, a formula operand, a formula
+ * bound or activation) covering `ref` that production does not hold. Non-empty means production withholds the cell.
+ */
+function stage5UnpublishedFormulaCaps(c: { markers: ReadonlyArray<{ sqref: string; capabilityId: string; formula?: unknown }> }, ref: string): string[] {
+  return c.markers.filter(m => m.formula !== undefined && isCellInSqref(ref, m.sqref) && !VERIFIED_CAPABILITIES.has(m.capabilityId)).map(m => m.capabilityId)
+}
+
 describe('production viewer conditional formatting oracle conformance (C1 & C3)', () => {
   const manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8')) as CfManifest
 
@@ -209,6 +217,8 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     let stage4StubWithheld = 0
     let stage3StubCompared = 0
     let stage4StubCompared = 0
+    let stage5Withheld = 0
+    let stage5Compared = 0
 
     for (const c of manifest.cases) {
       if (c.status !== 'measured' || c.stage === 2) continue
@@ -241,6 +251,19 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
           // as withheld rather than skipped silently:
           // S5-STUB: withheld until its successors are verified, otherwise compared with Excel below.
           if (STAGE5_OR_DEFERRED_WITHHELD.has(cellKey) && stubOutcome(cellKey, gotMatched) === 'withheld') continue
+          if (c.stage === 5) {
+            // Task 39 (dual gate, Lesson 1): a Stage 5 cell under a formula-bearing rule whose capability production does
+            // not hold is measured but unpublished, so production WITHHOLDS it (no style), whatever Excel showed. Once the
+            // capability is published (`--publish-stage5`), the cell takes the Excel comparison below. Literal twins and
+            // positive controls carry no formula and are always compared with Excel.
+            const unpublished = stage5UnpublishedFormulaCaps(c, exp.ref)
+            if (unpublished.length > 0) {
+              expect(gotMatched, `${cellKey}: measured but unpublished (${unpublished.join(', ')}), so production withholds it`).toBe(false)
+              stage5Withheld++
+              continue
+            }
+            stage5Compared++
+          }
           if (c.stage === 3) {
             stage3Checked++
             // Ruling S3-A / OD-7: a bar cell whose bar:* capabilities are not verified in production is WITHHELD,
@@ -390,6 +413,17 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(stage4Evidenced).toBeGreaterThan(200)
     expect(stage4IconOnlyWithheld).toBeGreaterThan(200)
     expect(stage4StubWithheld + stage4StubCompared).toBe(4)
+    // Stage 5 (Task 39), pinned to the manifest: every expected cell of a measured Stage 5 case under a formula-bearing
+    // marker whose capability production does not hold is withheld; every other one was compared with Excel.
+    const measured5 = manifest.cases.filter(c => c.stage === 5 && c.status === 'measured')
+    const expectedStage5Withheld = measured5.flatMap(c => c.expected.cells.filter(exp => stage5UnpublishedFormulaCaps(c, exp.ref).length > 0)).length
+    const expectedStage5Compared = measured5.flatMap(c => c.expected.cells.filter(exp => stage5UnpublishedFormulaCaps(c, exp.ref).length === 0)).length
+    expect(measured5.length).toBeGreaterThan(10)
+    expect(stage5Withheld).toBe(expectedStage5Withheld)
+    expect(stage5Compared).toBe(expectedStage5Compared)
+    expect(stage5Compared).toBeGreaterThan(100)
+    // The guard applies only while unpublished: with nothing of Stage 5 published, every formula-covered cell is withheld.
+    if (!measured5.some(c => c.markers.some(m => m.formula && VERIFIED_CAPABILITIES.has(m.capabilityId)))) expect(stage5Withheld).toBeGreaterThan(100)
   })
 
   it('proves all 53 previously withheld cells now paint under production evidence (C1)', async () => {

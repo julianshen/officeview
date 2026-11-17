@@ -200,17 +200,28 @@ describe('values a formula reads equal the host literals (S5-E): ISBLANK and =A2
     const entry = manifest.cases.find(c => c.id === 'stage5-formula-functions')!
     const sidecar = entry.captures[0]?.sidecarPath
     const captured = entry.status !== 'recipe-pending' && sidecar !== undefined && existsSync(sidecar)
-    const result = valueOf(await cfEval('A2=""', 'L2', { A3: 1 }, 'L2'))
+    // Task 39: the row is the fixture's own unstored blank in column A (the workbook's bytes, fixed before capture), not
+    // row 2, which holds 5 in stage5-formula-functions; and the sidecar records DisplayFormat as `formulaObservations`
+    // (capture.ts), a fill equal to the base fill meaning no format.
+    const { OfficePackage } = await import('../src/core/zip')
+    const { parseXlsx } = await import('../src/xlsx/parse')
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync('tests/fixtures/xlsx-cf/inputs/stage5-formula-functions.xlsx'))))
+    const stored = new Set(doc.sheets[0]!.rows.flatMap(r => r.cells).filter(c => c.col === 0).map(c => c.row + 1))
+    const row = [...Array(18).keys()].map(i => i + 2).find(r => !stored.has(r))!
+    expect(row, 'the fixture holds an unstored blank in A2:A19').toBeDefined()
+    const target = `L${row}`
+    const result = valueOf(await cfEval(`A${row}=""`, target, { [`A${row + 1}`]: 1 }, target))
     if (!captured) {
       // No Excel observation exists yet (Task 31: recipe-pending): production holds no truth reading, so the cell withholds.
       expect(entry.status).toBe('recipe-pending')
-      expect(cfTruth(result, a1('L2'), new Set()).kind).toBe('unresolved')
+      expect(cfTruth(result, a1(target), new Set()).kind).toBe('unresolved')
       return
     }
-    const observed = JSON.parse(readFileSync(sidecar!, 'utf8')) as { cells?: Record<string, { fill?: string }> }
-    const fill = observed.cells?.L2?.fill
-    expect(fill, 'the sidecar observes L2').toBeDefined()
-    expect(cfTruth(result, a1('L2'), all('boolean'))).toEqual({ kind: 'ready', value: fill !== 'none' })
+    const observed = JSON.parse(readFileSync(sidecar!, 'utf8')) as { formulaObservations?: Record<string, { displayFormatFill?: string; baseFill?: string }> }
+    const o = observed.formulaObservations?.[target]
+    expect(o?.displayFormatFill, `the sidecar observes ${target}`).toBeDefined()
+    const fill = o!.displayFormatFill!.toUpperCase() === (o!.baseFill ?? 'FFFFFFFF').toUpperCase() ? 'none' : o!.displayFormatFill!
+    expect(cfTruth(result, a1(target), all('boolean'))).toEqual({ kind: 'ready', value: fill !== 'none' })
   })
 })
 
