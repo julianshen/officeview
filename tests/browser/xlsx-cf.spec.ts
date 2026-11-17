@@ -1442,19 +1442,38 @@ test('Stage 5 slicer commit on another sheet repaints the visible dependent shee
   }
 })
 
-// ---- Stage 5 at the six zoom/DPR pairs and across a midnight (Task 39 fix round 1, F6) ----
+// ---- Stage 5 at the six zoom/DPR pairs and across a midnight (Task 39 fix rounds 1-2, F6/R3) ----
+
+/** The CF fill pixels (red FFC7CE or green C6EFCE, +-24) inside one cell's on-screen box, its 2 px border excluded. */
+async function cellFillPixels(page: Page, ref: string): Promise<number> {
+  const box = await cell(page, ref).boundingBox()
+  if (!box || box.width < 6 || box.height < 6) throw new Error(`${ref}: no on-screen cell box`)
+  const img = await decode(await page.screenshot({ clip: { x: box.x + 2, y: box.y + 2, width: box.width - 4, height: box.height - 4 }, animations: 'disabled', caret: 'hide' }))
+  let n = 0
+  for (let i = 0; i < img.data.length; i += 4) {
+    const [r, g, b] = [img.data[i]!, img.data[i + 1]!, img.data[i + 2]!]
+    if ((Math.abs(r - 0xff) <= 24 && Math.abs(g - 0xc7) <= 24 && Math.abs(b - 0xce) <= 24) || (Math.abs(r - 0xc6) <= 24 && Math.abs(g - 0xef) <= 24 && Math.abs(b - 0xce) <= 24)) n++
+  }
+  return n
+}
+/** Whether a cell is mostly CF-filled (at least a third of its inner box). */
+async function cellFilled(page: Page, ref: string): Promise<boolean> {
+  const box = (await cell(page, ref).boundingBox())!
+  return (await cellFillPixels(page, ref)) * 3 >= Math.max(1, (box.width - 4) * (box.height - 4)) * (await page.evaluate(() => window.devicePixelRatio)) ** 2
+}
 
 test('Stage 5 formula rules paint and announce at the six zoom/DPR pairs on every leg (production evidence)', async ({ browser }) => {
   const bytes = readFileSync(`${CF_FIXTURES}${S5_AUTHORED}.xlsx`)
   for (const leg of LEGS) {
     await test.step(leg.name, async () => {
+      // R3: one reference per leg, so announcements are compared across both DPRs as well as across the zooms.
+      const reference: string[] = []
       for (const dpr of [1, 2]) {
         const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: dpr })
         try {
           const page = await context.newPage()
           try {
             await openCf(page, S5_AUTHORED, bytes, leg)
-            const reference: string[] = []
             for (const zoom of ['50%', '100%', '200%']) {
               const label = page.getByRole('button', { name: 'Reset zoom' })
               for (let i = 0; i < 12; i++) {
@@ -1471,8 +1490,17 @@ test('Stage 5 formula rules paint and announce at the six zoom/DPR pairs on ever
               if (reference.length === 0) reference.push(...names)
               else expect(names, where).toEqual(reference)
               for (const n of names) expect(n, where).not.toMatch(FORMULA_TEXT)
-              const grid = await settledCfGrid(page, 50)
-              expect(countPink(grid, 0, 0, grid.width, grid.height), `${where}: the formula fill paints`).toBeGreaterThan(50)
+              await settledCfGrid(page, 50)
+              // R3: the pixels of each designated formula cell agree with its announcement: an applied cell is filled, a
+              // cell without applied formatting is not.
+              const all = await namesOf(page, S5_CELLS)
+              let filled = 0
+              for (const [i, ref] of S5_CELLS.entries()) {
+                const appliedHere = /Conditional formatting applied/.test(all[i] ?? '')
+                expect(await cellFilled(page, ref), `${where} ${ref}: pixels follow the announcement`).toBe(appliedHere)
+                if (appliedHere) filled++
+              }
+              expect(filled, `${where}: formula cells painted`).toBeGreaterThan(2)
               await expect(page.getByRole('alert'), `${where}: no error alert`).toHaveCount(0)
             }
           } finally { await page.close() }
@@ -1506,9 +1534,46 @@ test('Stage 5 midnight tick repaints TODAY() rules on the resident leg (injected
       await expect.poll(async () => (await namesOf(page, ['B2']))[0] ?? '', { timeout: 30_000, message: 'the grid announces' }).toMatch(/B2, value/)
       expect(await applied('B4'), 'before midnight: the anchor-day cell is not today').toBe(false)
       expect(await applied('B9'), 'before midnight: the anchor-day cell is not today').toBe(false)
-      await page.clock.runFor(60_000)
+      // R3: the canvas, not only the announcement: B4/B9 unfilled before midnight, filled after it.
+      expect(await cellFilled(page, 'B4'), 'before midnight: B4 unfilled on the canvas').toBe(false)
+      expect(await cellFilled(page, 'B9'), 'before midnight: B9 unfilled on the canvas').toBe(false)
+      await midnightTick(page)
       await expect.poll(async () => (await applied('B4')) && (await applied('B9')), { timeout: 30_000, message: 'after midnight: the anchor-day cells match TODAY()' }).toBe(true)
+      await expect.poll(async () => (await cellFilled(page, 'B4')) && (await cellFilled(page, 'B9')), { timeout: 30_000, message: 'after midnight: the canvas repaints B4/B9' }).toBe(true)
       await expect(page.getByRole('alert')).toHaveCount(0)
+    } finally { await page.close() }
+  } finally { await context.close() }
+})
+
+/** Crosses the anchor day's midnight on the injected clock (the page is paused at 23:59:30). */
+async function midnightTick(page: Page): Promise<void> { await page.clock.runFor(60_000) }
+
+/**
+ * R3 revert-check, kept as a test: a canvas that is not repainted after midnight (every 2D draw call disabled just
+ * before the tick, while the accessibility layer still updates) is caught by the pixel check that the midnight test uses.
+ */
+test('Stage 5 midnight pixel check catches a stale canvas (revert-check)', async ({ browser }) => {
+  const id = 'stage5-clock-today'
+  const bytes = readFileSync(`${CF_FIXTURES}${id}.xlsx`)
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, timezoneId: 'Asia/Taipei' })
+  try {
+    const page = await context.newPage()
+    try {
+      await page.clock.install({ time: new Date('2026-11-17T23:58:00+08:00') })
+      await openCf(page, `${id}-stale`, bytes, LEGS[0]!)
+      await page.clock.pauseAt(new Date('2026-11-17T23:59:30+08:00'))
+      await expect.poll(async () => (await namesOf(page, ['B2']))[0] ?? '', { timeout: 30_000 }).toMatch(/B2, value/)
+      expect(await cellFilled(page, 'B4')).toBe(false)
+      // Freeze the canvas: every 2D drawing and clearing call becomes a no-op from here on.
+      await page.evaluate(() => {
+        const proto = CanvasRenderingContext2D.prototype as unknown as Record<string, unknown>
+        for (const name of ['fillRect', 'clearRect', 'strokeRect', 'fillText', 'drawImage', 'fill', 'stroke', 'putImageData']) proto[name] = () => {}
+      })
+      await midnightTick(page)
+      // The announcement moves on, the frozen canvas does not: the pixel check reports the stale frame.
+      await expect.poll(async () => /Conditional formatting applied/.test((await namesOf(page, ['B4']))[0] ?? ''), { timeout: 30_000 }).toBe(true)
+      await page.waitForTimeout(1000)
+      expect(await cellFilled(page, 'B4'), 'a stale canvas is detected (B4 still unfilled)').toBe(false)
     } finally { await page.close() }
   } finally { await context.close() }
 })
