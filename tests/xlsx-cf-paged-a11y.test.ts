@@ -333,3 +333,27 @@ describe('the viewer frame host source announces icons as the other legs do (Tas
     expect(source).not.toMatch(/const frameHostSource = \(sheetId: string\)[^]*?return box \? \{ box, base: styleForCell/)
   })
 })
+
+describe('a formula-bounded bar and scale announce on the forced-paged scope as on the resident one (Task 37 follow-up, S5-P)', () => {
+  it('a host the frame lays out announces the position under $F$1; a 3 px host withholds, on both scopes alike', async () => {
+    const { formulaBoundsBytes, load, textLeg, workerLeg, withPaint, frameHosts, firstSelections } = await import('./helpers/cf-views')
+    const { injectCfFormulaSelections, VERIFIED_CAPABILITIES } = await import('../src/xlsx/cf/evidence')
+    const { REGISTERED } = await import('./helpers/cf-views')
+    const { withIcons } = await import('./helpers/cf-icons')
+    await withIcons(async () => {
+      injectCfFormulaSelections(firstSelections())
+      try {
+        const l = await load(formulaBoundsBytes(), 'cached')
+        const refs = ['B2', 'B5', 'B8', 'C5', 'C8']
+        for (const [width, expectBar] of [[200, true], [3, false]] as const) {
+          const hosts = frameHosts(width)
+          const resident = await textLeg(l, refs, { hosts, resident: true }), paged = (await workerLeg(l, refs, { hosts })).scope
+          expect(Object.fromEntries([...paged].map(([k, v]) => [k, v.desc]))).toEqual(Object.fromEntries([...resident].map(([k, v]) => [k, v.desc])))
+          expect(resident.get('B8')!.desc, `width ${width}`).toBe(expectBar ? 'cf:dataBar|Data bar, 100% of range' : 'cf-unavailable|Conditional formatting unavailable')
+          expect(paged.get('C8')!.desc).toBe('cf:colorScale|Colour scale, 100% of range')
+        }
+      } finally { injectCfFormulaSelections(null) }
+    }, { extra: [...VERIFIED_CAPABILITIES, ...REGISTERED, 'bar:participation-dateserial'] })
+    void withPaint
+  })
+})

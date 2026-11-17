@@ -15,8 +15,9 @@ import { createCfMemory } from '../src/xlsx/cf/limits'
 import { cfRulesVersion, prepareCfRemote } from '../src/xlsx/view/pagedSource'
 import { residentSource } from '../src/xlsx/cf/render'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
+import { VERIFIED_CAPABILITIES, injectCfFormulaSelections } from '../src/xlsx/cf/evidence'
 import {
-  GREEN, NOW, REGISTERED, RED, UTC_AUTO, cellIsRule, cfBlock, exprRule, fixtureBytes, frameHosts, load, rcOf, residentLeg, staticLeg, textLeg, withPaint, workbookBytes, workerLeg,
+  formulaBoundsBytes, GREEN, NOW, REGISTERED, firstSelections, RED, UTC_AUTO, cellIsRule, cfBlock, exprRule, fixtureBytes, frameHosts, load, rcOf, residentLeg, staticLeg, textLeg, withPaint, workbookBytes, workerLeg,
   type Loaded, type Obs,
 } from './helpers/cf-views'
 
@@ -281,6 +282,167 @@ describe('manual calculation withholds until measured (S5-L)', () => {
       for (const [name, leg] of Object.entries(legs)) expect(TODAYS.map(r => leg.get(r)!.fill), name).toEqual([undefined, undefined, undefined, undefined])
       for (const name of ['text', 'textResident', 'worker'] as const) expect(TODAYS.map(r => legs[name].get(r)!.desc), name).toEqual(TODAYS.map(() => UNAVAILABLE))
     }, [...REGISTERED, 'formula:calc-manual-today'])
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* Static, print, export, resident, worker and forced-paged agree (Lesson 13). */
+/* ------------------------------------------------------------------ */
+
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { isCellInSqref } from '../scripts/cf-refs/verify'
+import type { CfManifest } from '../scripts/cf-refs/cases'
+import { REPO_ROOT } from './helpers/cf-views'
+
+const MATRIX = ['stage5-formula-authored', 'stage5-formula-functions', 'stage5-predicate-formulas', 'stage5-cellis-operands', 'stage5-composition', 'stage5-cross-sheet']
+const manifest = (): CfManifest => JSON.parse(readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest
+const markedCells = (id: string): string[] => {
+  const c = manifest().cases.find(x => x.id === id)!
+  return c.expected.cells.map(e => e.ref).filter(r => c.markers.some(m => m.formula !== undefined && isCellInSqref(r, m.sqref)))
+}
+const paintToken = (o: Obs): string => `${o.fill ?? '-'}${o.strike ? '+strike' : ''}${o.fmt ? `|${o.fmt}` : ''}`
+const tokens = (m: ReadonlyMap<string, Obs>, f: (o: Obs) => string = paintToken): string[] => [...m.entries()].map(([k, v]) => `${k}:${f(v)}`)
+
+describe('static, print, export, resident, worker and forced-paged agree for paint, a11y and copy/find (Lesson 13)', () => {
+  it('every leg shows each Stage 5 fixture cell identically, and the cross-sheet fixture reads its other sheet on all of them', async () => {
+    let painted = 0, described = 0, compared = 0
+    for (const id of MATRIX) {
+      await withPaint(async () => {
+        const l = await load(fixtureBytes(id), 'cached', manifest().cases.find(x => x.id === id)!.sheet)
+        const refs = markedCells(id)
+        // The same frame hosts on every scope, so bars and icons are decided on one geometry (not on the legs' own).
+        const hosts = frameHosts()
+        const worker = await workerLeg(l, refs, { hosts })
+        expect(worker.wire.kind, id).toBe('ready')
+        const paint = { static: await staticLeg(l, refs), resident: await residentLeg(l, refs), text: await textLeg(l, refs, { hosts }), textResident: await textLeg(l, refs, { resident: true, hosts }), forcedPaged: worker.scope }
+        const reference = tokens(paint.static)
+        for (const [name, leg] of Object.entries(paint)) expect(tokens(leg), `${id}: ${name} paints what static paints`).toEqual(reference)
+        const announced = { text: tokens(paint.text, o => o.desc ?? '-'), textResident: tokens(paint.textResident, o => o.desc ?? '-'), forcedPaged: tokens(paint.forcedPaged, o => o.desc ?? '-') }
+        expect(announced.textResident, `${id}: resident announces what text announces`).toEqual(announced.text)
+        expect(announced.forcedPaged, `${id}: forced-paged announces what text announces`).toEqual(announced.text)
+        // The raw worker wire carries the same fills the scopes derive.
+        for (const r of refs) { const st = worker.states.get(r); if (st?.properties['fill.bg']) expect(paint.forcedPaged.get(r)!.fill).toBe(String(st.properties['fill.bg']).toUpperCase()) }
+        painted += reference.filter(t => !t.endsWith(':-')).length
+        described += announced.text.filter(t => !t.endsWith(':-')).length
+        compared += refs.length * 5
+      })
+    }
+    expect(compared).toBeGreaterThan(200)
+    expect(painted, 'real paint is compared, not only withholding').toBeGreaterThan(20)
+    expect(described).toBeGreaterThan(20)
+  })
+
+  it('under production evidence every leg withholds identically, and withholds what the evidenced run paints (no Stage 5 capability is verified)', async () => {
+    let withheldPaint = 0, evidencedPaint = 0
+    for (const id of MATRIX) {
+      const sheetName = manifest().cases.find(x => x.id === id)!.sheet
+      const refs = markedCells(id), hosts = frameHosts()
+      const production = await load(fixtureBytes(id), 'cached', sheetName)
+      const legs = [await staticLeg(production, refs), await residentLeg(production, refs), await textLeg(production, refs, { hosts }), await textLeg(production, refs, { resident: true, hosts }), (await workerLeg(production, refs, { hosts })).scope]
+      for (const leg of legs) expect(tokens(leg), id).toEqual(tokens(legs[0]!))
+      expect(tokens(legs[3]!, o => o.desc ?? '-'), id).toEqual(tokens(legs[2]!, o => o.desc ?? '-'))
+      expect(tokens(legs[4]!, o => o.desc ?? '-'), id).toEqual(tokens(legs[2]!, o => o.desc ?? '-'))
+      withheldPaint += tokens(legs[0]!).filter(t => !t.endsWith(':-')).length
+      await withPaint(async () => { evidencedPaint += tokens(await staticLeg(await load(fixtureBytes(id), 'cached', sheetName), refs)).filter(t => !t.endsWith(':-')).length })
+    }
+    expect(evidencedPaint, 'the evidence is what adds paint').toBeGreaterThan(withheldPaint + 20)
+  })
+
+  it('a leg without the workbook source withholds the cross-sheet cells identically on paint, a11y and copy/find', async () => {
+    const id = 'stage5-cross-sheet'
+    await withPaint(async () => {
+      const l = await load(fixtureBytes(id), 'cached', manifest().cases.find(x => x.id === id)!.sheet)
+      const refs = markedCells(id)
+      const withBook = await staticLeg(l, refs)
+      expect(tokens(withBook).some(t => !t.endsWith(':-')), 'with the workbook the cross-sheet rules paint').toBe(true)
+      const bare = { static: await staticLeg(l, refs, { workbook: false }), resident: await residentLeg(l, refs, { workbook: false }), text: await textLeg(l, refs, { workbook: false }), textResident: await textLeg(l, refs, { workbook: false, resident: true }) }
+      for (const [name, leg] of Object.entries(bare)) expect(tokens(leg).every(t => t.endsWith(':-')), `${name}: paints nothing`).toBe(true)
+      expect(tokens(bare.textResident, o => o.desc ?? '-')).toEqual(tokens(bare.text, o => o.desc ?? '-'))
+      expect(tokens(bare.text, o => o.desc ?? '-').some(t => t.endsWith(UNAVAILABLE)), 'a11y names the withheld cells').toBe(true)
+    })
+  })
+})
+
+describe('formula cfvo bounds announce and paint the same on every scope, forced-paged included (Task 37 follow-up)', () => {
+  it('a data bar, a colour scale and an icon set bounded by formulas are described identically by text, resident and forced-paged scopes', async () => {
+    const { withIcons } = await import('./helpers/cf-icons')
+    await withIcons(async () => {
+      injectCfFormulaSelections(firstSelections())
+      try {
+        const l = await load(formulaBoundsBytes(), 'cached')
+        const refs = ['B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'C2', 'C5', 'C8', 'D2', 'D5', 'D8'], hosts = frameHosts()
+        const text = await textLeg(l, refs, { hosts }), resident = await textLeg(l, refs, { hosts, resident: true }), forced = await workerLeg(l, refs, { hosts })
+        expect(tokens(resident, o => o.desc ?? '-')).toEqual(tokens(text, o => o.desc ?? '-'))
+        expect(tokens(forced.scope, o => o.desc ?? '-')).toEqual(tokens(text, o => o.desc ?? '-'))
+        expect(tokens(forced.scope)).toEqual(tokens(text))
+        const all = tokens(text, o => o.desc ?? '-').join('\n')
+        expect(all, 'a formula-bounded bar announces its position').toMatch(/B8:cf:dataBar\|Data bar, 100% of range/)
+        expect(all, 'a formula-bounded scale announces its position').toMatch(/C8:cf:colorScale\|Colour scale, 100% of range/)
+        // The icon's bucket comes from the formula threshold on the wire the forced-paged leg reads (D2 = 0, D5 = 40 under $F$1 = 50;
+        // D8 = 100 above it). Whether its frame paints is the icon host tests' business (S4-ROW-EXACT, glyph table): here every
+        // scope agrees on it, which the equalities above pin.
+        const buckets = (forced.wire as unknown as { states: Array<{ row: number; col: number; icon?: { bucket: number; buckets: number } }> }).states.filter(x => x.col === 3).map(x => `${x.row}:${x.icon?.bucket}/${x.icon?.buckets}`)
+        expect(buckets).toEqual(['1:0/3', '4:0/3', '7:2/3'])
+      } finally { injectCfFormulaSelections(null) }
+    }, { extra: [...VERIFIED_CAPABILITIES, ...REGISTERED, 'bar:participation-dateserial'] })
+  })
+  it('under production evidence every scope announces the same unavailable formatting, and none paints', async () => {
+    const l = await load(formulaBoundsBytes(), 'cached')
+    const refs = ['B4', 'C4', 'D4'], hosts = frameHosts()
+    const text = await textLeg(l, refs, { hosts }), forced = await workerLeg(l, refs, { hosts })
+    expect(tokens(forced.scope, o => o.desc ?? '-')).toEqual(tokens(text, o => o.desc ?? '-'))
+    expect(tokens(text, o => o.desc ?? '-').every(t => t.endsWith(UNAVAILABLE) || t.endsWith(':-'))).toBe(true)
+  })
+})
+
+describe('formula descriptors carry no formula text (S5-Q, Lesson 10)', () => {
+  /** C holds `=$A2>1` (rows 3-4 match) and E the literal twin `>1`, both with the same DXF; A and E hold 1, 2, 3. */
+  const twinBytes = (dxf: number): Uint8Array => workbookBytes(
+    { A2: 1, A3: 2, A4: 3, C2: 1, C3: 2, C4: 3, E2: 1, E3: 2, E4: 3 },
+    cfBlock('C2:C4', exprRule('$A2&gt;1', 1, dxf)) + cfBlock('E2:E4', cellIsRule('greaterThan', '1', 2, dxf)))
+  const FORMULA_TEXT = /[=$!]|[A-Z]{2,}\(|\b[A-Z]{1,3}\d+\b|\bformula\b|TODAY|COUNTIF|ISBLANK/
+  for (const dxf of [0, 2]) {
+    it(`a matching expression announces exactly what its Stage 1 twin announces, on every scope (dxf ${dxf})`, async () => {
+      await withPaint(async () => {
+        const l = await load(twinBytes(dxf), 'cached')
+        const refs = ['C2', 'C3', 'C4', 'E2', 'E3', 'E4'], hosts = frameHosts()
+        const worker = await workerLeg(l, refs, { hosts })
+        const scopes = [await textLeg(l, refs, { hosts }), await textLeg(l, refs, { hosts, resident: true }), worker.scope]
+        for (const scope of scopes) {
+          for (const [formula, literal] of [['C2', 'E2'], ['C3', 'E3'], ['C4', 'E4']] as const) {
+            expect(scope.get(formula), `${formula} equals ${literal}`).toEqual(scope.get(literal))
+          }
+          expect(scope.get('C3')!.desc, 'the match is announced').toBeDefined()
+          expect(scope.get('C2')!.desc, 'no match, nothing announced').toBeUndefined()
+          for (const r of refs) { const d = scope.get(r)!.desc; if (d) { expect(d.split('|')[1]!.length).toBeLessThanOrEqual(128); expect(d, r).not.toMatch(FORMULA_TEXT) } }
+        }
+        // Copy and find follow the effective number format exactly as Stage 1 does.
+        if (dxf === 2) for (const scope of scopes) { expect(scope.get('C3')!.fmt).toBe('0.00'); expect(scope.get('E3')!.fmt).toBe('0.00'); expect(scope.get('C2')!.fmt).toBeUndefined() }
+      })
+    })
+  }
+})
+
+describe('blank cells match formula rules in every view (Stage 1 B2/Z5 pattern, a CF-only sheet)', () => {
+  const blankBytes = (): Uint8Array => workbookBytes({}, cfBlock('B2', exprRule('ISBLANK(B2)', 1, 1)) + cfBlock('Z5', exprRule('ISBLANK(Z5)', 2, 1)))
+  it('=ISBLANK(B2) over unstored cells paints on the static, resident and text legs, and reaches the worker and its forced-paged scope', async () => {
+    await withPaint(async () => {
+      const l = await load(blankBytes(), 'cached')
+      const refs = ['B2', 'Z5']
+      const worker = await workerLeg(l, refs)
+      const legs = [await staticLeg(l, refs), await residentLeg(l, refs), await textLeg(l, refs), await textLeg(l, refs, { resident: true }), worker.scope]
+      for (const leg of legs) expect(refs.map(r => leg.get(r)!.fill), 'unstored B2 and Z5 paint').toEqual([GREEN, GREEN])
+      expect(worker.states.get('B2')!.properties['fill.bg']).toBe(GREEN)
+      expect(worker.states.get('Z5')!.properties['fill.bg']).toBe(GREEN)
+    })
+  })
+  it('the same rule is withheld identically under production evidence', async () => {
+    const l = await load(blankBytes(), 'cached')
+    const refs = ['B2', 'Z5']
+    const worker = await workerLeg(l, refs)
+    for (const leg of [await staticLeg(l, refs), await textLeg(l, refs), worker.scope]) expect(refs.map(r => leg.get(r)!.fill)).toEqual([undefined, undefined])
+    expect(refs.map(r => worker.scope.get(r)!.desc)).toEqual([UNAVAILABLE, UNAVAILABLE])
   })
 })
 void NOW; void RED; void frameHosts; void rcOf; void ({} as Loaded); void ({} as CfDocumentEvaluation); void GREEN; void cfDocumentEvaluationOfPaged

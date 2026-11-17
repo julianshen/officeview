@@ -5,6 +5,7 @@
  * show per cell: the fill, strikethrough and number format the cell resolves to, and the accessible descriptor. Nothing here
  * decides an expectation: the tests compare legs with each other and with a stated literal twin.
  */
+import { createCanvas } from 'canvas'
 import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -56,11 +57,11 @@ const STYLES = `<cellXfs count="1"><xf numFmtId="0"/></cellXfs>${DXFS}`
 
 export type CellSpec = number | string | boolean | { f: string; v?: number }
 /** `rows`: A1 notation to a value; a `{ f }` is a formula (cached `v` only when stated: an uncached formula otherwise). */
-export function sheetData(cells: Readonly<Record<string, CellSpec>>): string {
+export function sheetData(cells: Readonly<Record<string, CellSpec>>, rowHt?: number): string {
   const byRow = new Map<number, Array<[string, CellSpec]>>()
   for (const [ref, v] of Object.entries(cells)) { const r = Number(/\d+/.exec(ref)![0]); byRow.set(r, [...(byRow.get(r) ?? []), [ref, v]]) }
   const colIndex = (ref: string): number => [...ref.replace(/\d+/g, '')].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0)
-  return [...byRow].sort((a, b) => a[0] - b[0]).map(([r, list]) => `<row r="${r}">${list.sort((a, b) => colIndex(a[0]) - colIndex(b[0])).map(([ref, v]) => {
+  return [...byRow].sort((a, b) => a[0] - b[0]).map(([r, list]) => `<row r="${r}"${rowHt ? ` ht="${rowHt}" customHeight="1"` : ''}>${list.sort((a, b) => colIndex(a[0]) - colIndex(b[0])).map(([ref, v]) => {
     if (typeof v === 'number') return `<c r="${ref}"><v>${v}</v></c>`
     if (typeof v === 'boolean') return `<c r="${ref}" t="b"><v>${v ? 1 : 0}</v></c>`
     if (typeof v === 'string') return `<c r="${ref}" t="inlineStr"><is><t>${v}</t></is></c>`
@@ -70,7 +71,8 @@ export function sheetData(cells: Readonly<Record<string, CellSpec>>): string {
 export const cfBlock = (sqref: string, rules: string): string => `<conditionalFormatting sqref="${sqref}">${rules}</conditionalFormatting>`
 export const exprRule = (formula: string, priority: number, dxfId: number): string => `<cfRule type="expression" priority="${priority}" dxfId="${dxfId}"><formula>${formula}</formula></cfRule>`
 export const cellIsRule = (op: string, formula: string, priority: number, dxfId: number): string => `<cfRule type="cellIs" operator="${op}" priority="${priority}" dxfId="${dxfId}"><formula>${formula}</formula></cfRule>`
-export const workbookBytes = (cells: Readonly<Record<string, CellSpec>>, cf: string): Uint8Array => xlsxBytes({ sheetData: sheetData(cells), afterSheetData: cf, styles: STYLES })
+/** `rowHt`: every row's authored height in pt (an icon's frame is decided only on an exact row height, S4-ROW-EXACT). */
+export const workbookBytes = (cells: Readonly<Record<string, CellSpec>>, cf: string, rowHt?: number): Uint8Array => xlsxBytes({ sheetData: sheetData(cells, rowHt), afterSheetData: cf, styles: STYLES })
 
 /* ------------------------------ loading ------------------------------ */
 
@@ -134,7 +136,7 @@ export async function textLeg(l: Loaded, refs: readonly string[], o: LegOptions 
   const scope = await prepareCfTextScope(l.sheet, {
     rects: rectOf(refs), signal: new AbortController().signal, budget: BUDGET,
     ...(source ? { store: source.store(l.sheetId), ...(o.workbook === false ? {} : { workbook: source }) } : o.workbook === false ? {} : { documentSheets: l.doc.sheets }),
-    ...(o.valuePolicy ? { valuePolicy: o.valuePolicy } : {}), ...(policyOf(l, o) ? { evaluation: policyOf(l, o)! } : {}), now: now(o), ...(o.hosts ? { hosts: o.hosts } : {}),
+    ...(o.valuePolicy ? { valuePolicy: o.valuePolicy } : {}), ...(policyOf(l, o) ? { evaluation: policyOf(l, o)! } : {}), now: now(o), ...(o.hosts ? { hosts: o.hosts, layoutContext: () => createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D } : {}),
   } as never)
   const out = new Map<string, Obs>()
   try { for (const r of refs) { const { row, col } = rcOf(r); out.set(r, scope ? obsOfStyle(scope.effectiveStyle(row, col, undefined), scope.describe(row, col)) : {}) } } finally { scope?.dispose(); await source?.release() }
@@ -153,7 +155,7 @@ export async function workerLeg(l: Loaded, refs: readonly string[], o: LegOption
     const wire = await read(rects)
     const states = new Map<string, { properties: Record<string, unknown>; unresolvedReason?: string; unresolvedWrites?: readonly string[] }>()
     if (wire.kind === 'ready') for (const s of wire.states) { states.set(refOfRc(s.row, s.col), { properties: s.properties, ...(s.unresolvedReason ? { unresolvedReason: s.unresolvedReason } : {}), ...(s.unresolvedWrites ? { unresolvedWrites: s.unresolvedWrites } : {}) }) }
-    const scope = await prepareCfWireScope(async rs => ({ result: structuredClone(await read(rs as never)), release() {} }), rects, { budget: BUDGET, ...(o.hosts ? { hosts: o.hosts } : {}) } as never)
+    const scope = await prepareCfWireScope(async rs => ({ result: structuredClone(await read(rs as never)), release() {} }), rects, { budget: BUDGET, ...(o.hosts ? { hosts: o.hosts, rowPtOf: () => 15, rowUniformOf: () => true } : {}) } as never)
     const out = new Map<string, Obs>()
     try { for (const r of refs) { const { row, col } = rcOf(r); out.set(r, scope ? obsOfStyle(scope.effectiveStyle(row, col, undefined), scope.describe(row, col)) : {}) } } finally { scope?.dispose() }
     return { wire, states, scope: out }
@@ -165,3 +167,21 @@ export function refOfRc(row: number, col: number): string {
   return `${s}${row + 1}`
 }
 void cfEvaluationContextFor; void cfRulesVersion
+
+const X14 = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main', XM = 'http://schemas.microsoft.com/office/excel/2006/main'
+const BAR_GUID = '{00000000-0000-4000-8000-0000000000a1}'
+/** B: a data bar whose max is `$F$1`; C: a colour scale whose max is `$F$1`; D: a 3Arrows icon set whose middle threshold is `$F$1`. */
+export const formulaBoundsBytes = (): Uint8Array => {
+  const data = [0, 5, 10, 20, 30, 40, 50]
+  const cells: Record<string, number> = { F1: 50 }
+  data.forEach((v, i) => { cells[`B${i + 2}`] = v; cells[`C${i + 2}`] = v; cells[`D${i + 2}`] = v * 2 })
+  const bar = `<conditionalFormatting sqref="B2:B8"><cfRule type="dataBar" priority="1"><dataBar><cfvo type="min"/><cfvo type="formula" val="$F$1"/><color rgb="FF0000FF"/></dataBar>`
+    + `<extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}" xmlns:x14="${X14}"><x14:id>${BAR_GUID}</x14:id></ext></extLst></cfRule></conditionalFormatting>`
+  const scale = `<conditionalFormatting sqref="C2:C8"><cfRule type="colorScale" priority="2"><colorScale><cfvo type="min"/><cfvo type="formula" val="$F$1"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>`
+  const icon = `<conditionalFormatting sqref="D2:D8"><cfRule type="iconSet" priority="3"><iconSet iconSet="3Arrows"><cfvo type="percent" val="0"/><cfvo type="formula" val="$F$1"/><cfvo type="num" val="80"/></iconSet></cfRule></conditionalFormatting>`
+  const x14 = `<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}" xmlns:x14="${X14}" xmlns:xm="${XM}"><x14:conditionalFormattings><x14:conditionalFormatting><x14:cfRule type="dataBar" id="${BAR_GUID}">`
+    + `<x14:dataBar minLength="0" maxLength="100" gradient="0"><x14:cfvo type="min"/><x14:cfvo type="formula"><xm:f>$F$1</xm:f></x14:cfvo><x14:negativeFillColor rgb="FFFF0000"/><x14:axisColor rgb="FF000000"/></x14:dataBar>`
+    + `</x14:cfRule><xm:sqref>B2:B8</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>`
+  return workbookBytes(cells, bar + scale + icon + x14, 15)
+}
+

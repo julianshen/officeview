@@ -556,3 +556,25 @@ describe('the midnight tick re-prepares only sheets that read the clock (S5-M, R
     expect(free.after, 'a clock-free sheet sees no tick: zero preparations').toBe(free.before)
   })
 })
+
+describe('a formula rule announces what its Stage 1 twin announces and adds no tab stop (S5-Q, Lesson 10)', () => {
+  it('the accessible name and the focus order are the twin\'s, with no formula text', async () => {
+    const { load, withPaint, workbookBytes, cfBlock, exprRule, cellIsRule, textLeg, frameHosts } = await import('./helpers/cf-views')
+    const bytes = workbookBytes({ A2: 1, A3: 2, C2: 1, C3: 2, E2: 1, E3: 2 }, cfBlock('C2:C3', exprRule('$A2&gt;1', 1, 0)) + cfBlock('E2:E3', cellIsRule('greaterThan', '1', 2, 0)))
+    await withPaint(async () => {
+      const l = await load(bytes, 'cached')
+      const legs = await textLeg(l, ['C3', 'E3'], { hosts: frameHosts() })
+      const formula = legs.get('C3')!.desc!, twin = legs.get('E3')!.desc!
+      expect(formula).toBe(twin)
+      const text = formula.split('|')[1]!
+      expect(text).toBe('Conditional formatting applied: fill')
+      expect(text).not.toMatch(/[=$]|[A-Z]\d|\(/)
+      const tabbableOf = (name: string): string[] => {
+        const ui = render(<GridSemantics {...gridFixture({ cellPresentation: () => ({ text: withCfDescription('2', name) }) })} />)
+        try { return [...ui.container.querySelectorAll('[tabindex]')].filter(node => node.getAttribute('tabindex') !== '-1').map(node => node.getAttribute('role') ?? '') } finally { ui.unmount() }
+      }
+      expect(tabbableOf(text)).toEqual(['grid'])
+      expect(tabbableOf(text)).toEqual(tabbableOf(undefined as unknown as string))
+    })
+  })
+})
