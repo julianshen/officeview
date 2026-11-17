@@ -2252,6 +2252,32 @@ export async function stage4CaseRecords(manifest: CfManifest, rootDir: string = 
 export { stage5CellAgreement, type Stage5Excel, type Stage5Production } from './stage5-withhold'
 import { stage5CellAgreement, stage5Justifications, stage5MarkerSlots, type Stage5Excel, type Stage5Justification, type Stage5Production } from './stage5-withhold'
 
+export interface Stage5CaseRecord {
+  caseId: string
+  /** The variant: the designated cell (or its control). */
+  ref: string
+  status: string
+  /** Whether the row was compared with Excel; when not, `notCompared` says why (an unmeasured case). */
+  compared: boolean
+  notCompared?: string
+  /** `display-format` under a formula rule, `literal` under literal twins/controls only, `control` with no rule. */
+  evidenceKind: 'display-format' | 'literal' | 'control'
+  /** The formula capabilities of the rules covering the cell. */
+  capabilities: string[]
+  excel: Stage5Excel | undefined
+  production: Stage5Production
+  /** The rule- and slot-specific justifications for the cell's unresolved slots (stage5Justifications). */
+  justification: Stage5Justification[]
+  /** Every resolved slot is Excel's, every unresolved slot is justified for that slot, a measured visual agrees. */
+  agrees: boolean
+  disagreement?: string
+  mode: 'resident'
+  stamp: { cfGen: number; workbookValueGen: number }
+  /** The case's CF memory peak (bytes) and the work units its preparations spent. */
+  bytePeak: number
+  workUnits: number
+}
+
 /** The per-case/variant records of every Stage 5 case under production evidence (nothing injected). */
 export async function stage5CaseRecords(manifest: CfManifest, rootDir: string = REPO_ROOT): Promise<Stage5CaseRecord[]> {
   const { OfficePackage } = await import('../../src/core/zip')
@@ -2337,7 +2363,7 @@ export async function stage5CaseRecords(manifest: CfManifest, rootDir: string = 
           if (cls) production = { ...production, visual: `icon:${cls}` }
         }
         const justification = production.unresolved.length > 0 || production.visual === 'withheld' ? stage5Justifications(c, exp.ref) : []
-        const verdict = stage5CellAgreement(production, excel, justification, k.covering.flatMap(m => stage5MarkerSlots(m)))
+        const verdict = stage5CellAgreement(production, excel, justification, k.covering.flatMap(m => stage5MarkerSlots(m as never)))
         out.push({
           caseId: c.id, ref: exp.ref, status: c.status, compared: true,
           evidenceKind: k.kind, capabilities: k.formulaCaps, excel, production, justification,
