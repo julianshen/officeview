@@ -1297,12 +1297,21 @@ test('Stage 5 print capture paints formula rules', async ({ context }) => {
 
 // ---- Stage 5: a referenced-sheet commit in the SAME live session (fix round 2, finding 6) ----
 //
-// The viewer is view-only, but a pivot click is a real in-session commit: it replaces the pivot's displayed cells (an overlay on the
-// pivot's sheet) without reopening anything. The Excel-saved pivot workbook tests/fixtures/xlsx-pivots/engine/baseline.xlsx has the
-// pivot on "Pivot" and its source data on "Data"; this spec adds one cross-sheet rule to "Data"!A2, `Pivot!$B$7>5000`. East's
-// first child row is B7 = 1234.5 (false); collapsing East moves the next region's 6497.84 into B7 (true). The test goes to Data,
-// returns to Pivot, clicks Collapse East, goes back to Data and expects A2 to have repainted and re-announced: a dependent sheet's
-// cached tiles and subscriptions that did not follow the commit would still show the old state. No reopen, no forced rerender.
+// The viewer is view-only, but a pivot click is a real in-session commit on all three legs: it replaces the pivot's displayed cells
+// (an overlay on the pivot's sheet) without reopening anything. The Excel-saved pivot workbook
+// tests/fixtures/xlsx-pivots/engine/baseline.xlsx has the pivot on "Pivot" and its source data on "Data"; this spec adds one
+// cross-sheet rule to "Data"!A2, `Pivot!$B$7>5000`. East's first child row is B7 = 1234.5 (false); collapsing East moves the next
+// region's 6497.84 into B7 (true). The test visits Data, goes back to Pivot, clicks Collapse East (the commit), returns to Data and
+// expects A2 painted and announced: the dependent rule must read the COMMITTED overlay value of the other sheet, on the resident,
+// worker and forced-paged legs alike (no reopen, no forced rerender; the evidence seam is the debug one above).
+//
+// What this cannot show, and why: keeping the dependent sheet ON SCREEN while the referenced sheet commits needs a control on the
+// dependent sheet that drives another sheet's pivot, i.e. a slicer or timeline; those actions are gated off ("This slicer action has
+// not been measured in Excel and is not available", src/xlsx/pivots/slicers/controller.ts:13, announced at :127 and :189), and this
+// task does not fake a pivot capability. A sheet switch re-prepares the sheet it lands on, so the dependency-epoch and tile-eviction
+// subscriptions are not what this test exercises: removing them leaves it green (checked). They stay covered by
+// tests/xlsx-cf-live.test.tsx, tests/xlsx-cf-formula-cross-sheet.test.ts and the remote-cache dependency tests; the revert-checks that
+// do fail this test are dropping the resident CF workbook (sheetAssets) and the worker's cross-sheet seam (pagedSource cfWorkbook).
 const PIVOTS = fileURLToPath(new URL('../fixtures/xlsx-pivots/', import.meta.url))
 async function crossSheetPivotBytes(): Promise<Buffer> {
   const zip = await JSZip.loadAsync(readFileSync(`${PIVOTS}engine/baseline.xlsx`))
