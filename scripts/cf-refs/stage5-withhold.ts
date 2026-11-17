@@ -13,6 +13,7 @@ import { CF_FORMULA_PRODUCTION_READINGS, cfFormulaReading } from '../../src/xlsx
 import { createCfMemory } from '../../src/xlsx/cf/limits'
 import { VERIFIED_CAPABILITIES } from '../../src/xlsx/cf/evidence'
 import { isCellInSqref } from './verify'
+import type { CfOracleCase } from './cases'
 
 type Cfvo = Readonly<{ type: string; val?: string; f?: string }>
 type Marker = Readonly<{ sqref: string; capabilityId: string; ruleType: string; formulas?: readonly string[]; formula?: Readonly<{ kind: string; anchor: string; dialect: 'base' | 'x14' }>; dxf?: Readonly<{ fillRgb?: string }>
@@ -41,9 +42,10 @@ function held(capability: string, published: (id: string) => boolean): boolean {
 }
 
 /** The recorded reasons `ref` of `c` may be withheld (empty: none, so withholding it is a failure). */
-export function stage5WithholdJustification(c: CaseLike, ref: string, published: (id: string) => boolean = id => VERIFIED_CAPABILITIES.has(id)): string[] {
+export function stage5WithholdJustification(c: CaseLike | CfOracleCase, ref: string, published: (id: string) => boolean = id => VERIFIED_CAPABILITIES.has(id)): string[] {
   const reasons = new Set<string>()
-  for (const m of c.markers) {
+  const cs = c as unknown as CaseLike
+  for (const m of cs.markers) {
     if (m.formula === undefined || !isCellInSqref(ref, m.sqref)) continue
     if (!held(m.capabilityId, published)) reasons.add(`${m.capabilityId} not held`)
     const ranges = m.sqref.trim().split(/\s+/)
@@ -74,14 +76,14 @@ export function stage5WithholdJustification(c: CaseLike, ref: string, published:
   // Literal visual gates of Stages 3-4 that a Stage 5 twin meets (each a capability absent from the published set):
   // a bar with a `num` bound needs bar:bounds-num (Task 37 ruling), and an icon over a cell a DXF fill rule also covers
   // needs icon:composition-dxf-fill (S4-I).
-  const covering = c.markers.filter(m => isCellInSqref(ref, m.sqref))
+  const covering = cs.markers.filter(m => isCellInSqref(ref, m.sqref))
   for (const m of covering) {
     if (m.formula !== undefined) continue
     if (m.ruleType === 'dataBar' && (m.bar?.cfvo ?? []).some(b => b.type === 'num') && !published('bar:bounds-num')) reasons.add('bar:bounds-num not held (a literal bar with num bounds)')
     if (m.ruleType === 'iconSet' && covering.some(o => o !== m && o.dxf?.fillRgb !== undefined) && !published('icon:composition-dxf-fill')) reasons.add('icon:composition-dxf-fill not held (an icon over a DXF fill)')
   }
   // A record configuration (fixed before capture: "recorded, never evidence") names its refusal itself.
-  for (const cfg of c.formulaConfigurations ?? []) if (cfg.record && cfg.refs.includes(ref)) reasons.add(`${cfg.id}: ${cfg.record}`)
+  for (const cfg of cs.formulaConfigurations ?? []) if (cfg.record && cfg.refs.includes(ref)) reasons.add(`${cfg.id}: ${cfg.record}`)
   const enumerated = STAGE5_ENUMERATED_REFUSALS[`${c.id}:${ref}`]
   if (enumerated) reasons.add(enumerated)
   return [...reasons].sort()
