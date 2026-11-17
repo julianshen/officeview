@@ -14,7 +14,7 @@ Piece 5 makes audio play during a streamed show the way it plays in a local show
 
 **Owner decisions (2026-11-16 and 2026-11-17):**
 - **Per-viewer encodes:** (a), each viewer gets their own marked encode. The alternative was one shared encode with a generic mark. (a) stays in force for video in piece 6. For audio it is superseded by "Shared audio encodes" below.
-- **Shared audio encodes (2026-11-17):** audio carries no mark, so the server encodes each `(part content digest, encode params sha, ffmpeg version)` once and serves it to every session that is allowed that media. Authorization stays per session (§4.3). Per-viewer encodes return with video in piece 6.
+- **Shared audio encodes (2026-11-17):** audio carries no mark, so the server encodes each `(document id, part content digest, encode params sha, ffmpeg version)` once and serves it to every session of that document that is allowed that media. Sharing is across viewers of the same document only, never across documents. Authorization stays per session (§4.3). Per-viewer encodes return with video in piece 6.
 - **Encoder:** approach 1, ffmpeg as a separate process on the server. The alternative was ffmpeg compiled to WebAssembly inside the worker pool.
 - **When encoding happens:** (a), all of a viewer's media is made ready when their show starts, in slide order (encoded, unless already cached or in flight, §4.4), and each file is delivered whole once it is ready. The alternatives were streaming while encoding (fragmented MP4), and encoding only when a media slide is next.
 
@@ -136,12 +136,15 @@ The manifest gains:
   - Unsolicited or overrunning chunks are dropped before allocation, as with print and the show plan.
 - **Rates.** A new rate class `media` allows 6 requests per minute per session, refuse-only. It is separate from `unit`, so the show's unit budget is untouched.
 - **Authorization.** A session is served only the media ids bound to its own plan. `media-request` is checked against the session's plan before the cache is consulted, so another session's id, or a bare cache key, answers `invalid-media`. Cache keys never reach the client.
-- **Shared encode cache.** One cache per server, on disk, keyed by `(sourceHash, encodeParamsSha, ffmpegVersion)`.
-  - `sourceHash` is the probe's content digest of the part, so identical audio in two decks or two sessions is one entry. The `-t` trim comes from the probe of that same content, so it needs no key field.
+- **Shared encode cache.** One cache per server, on disk, keyed by `(docId, sourceHash, encodeParamsSha, ffmpegVersion)`.
+  - `docId` is the document identity the session opened. Identical audio in two different documents is two entries, so one document's viewers cannot learn from timing what another document holds.
+  - `sourceHash` is the probe's content digest of the part, so one document's repeated audio, and every session of that document, is one entry. The `-t` trim comes from the probe of that same content, so it needs no key field.
   - **Single flight.** There is one encode per key. A request or queue item for a key that is already encoding joins it and takes no server slot. The encode belongs to the key, not to the session that started it: it is killed only when its last waiter is gone (abort, `media-end`, socket close or expiry). A failure that is not cached (`media-timeout`, `media-busy`) goes to every joiner.
   - **References.** A session holds a reference on a key from when its queue readies it until the file is delivered to that session, the viewer passes the slide, the session drops it under pressure, or the session ends.
   - **Budgets.** The cache holds at most 2 GiB. Each session may hold references to at most 256 MiB of look-ahead, which counts a shared entry in full against every session that references it. An encode in flight reserves the 32 MiB output cap.
-  - **Eviction.** Only an entry with no references is evictable, least-recently-used first, and only when a new entry needs the room. Entries stay cached after their sessions end, which is what lets a later session start without encoding. They are deleted at server shutdown. A re-request after eviction re-encodes.
+  - **Eviction.** Only an entry with no references is evictable under pressure, least-recently-used first, and only when a new entry needs the room. Entries stay cached after their sessions end, which is what lets a later session of the same document start without encoding.
+  - **Retention.** An entry with no references is also deleted after 10 minutes idle. All entries are deleted at server shutdown. A re-request after eviction re-encodes.
+  - **Revocation.** When a document is revoked or closed, every entry with its `docId` is deleted at once, even if referenced. A delivery in flight then fails with `media-unavailable`, and the show behaves as for any runtime refusal.
   - **Pressure.** When a session is at its 256 MiB look-ahead, encode-ahead waits. A `media-request` first drops that session's own farthest-ahead undelivered references, which stay cached if anything still references them. If the 2 GiB is still all referenced, encode-ahead waits and a `media-request` is refused `media-busy`.
 
 ### 4.4 Client
@@ -226,12 +229,14 @@ The video rows (≤ 5 min, ≤ 64 MiB, ≤ 1280×720 and ≤ 30 fps) are deferre
 - **Forensic survival on video.** This gate ran first and was RED (§1). It moves to piece 6 unchanged; the builder does not lower it.
 - **Video stays piece 4.** With media on, every piece-4 video still test passes unchanged, and a slide holding both a video and audio stays a still exactly when piece 4's rule fires on its video.
 - **Sharing.**
-  - Two sessions that request the same part start exactly one encode, whether the second arrives while the first is encoding or after it finishes. Both receive byte-identical files under different `mediaId`s, and the audit rows read `miss` and `joined` or `hit`.
+  - Two sessions of one document that request the same part start exactly one encode, whether the second arrives while the first is encoding or after it finishes. Both receive byte-identical files under different `mediaId`s, and the audit rows read `miss` and `joined` or `hit`.
+  - Two documents with byte-identical audio produce two encodes.
+  - An unreferenced entry is gone after the idle TTL (on an injected clock). Revoking a document deletes its entries at once, and a delivery in flight fails with `media-unavailable`.
   - A session cannot request another session's `mediaId` or a cache key.
   - One session's close does not kill an encode another session waits on. The last waiter's close does.
 - **Parity.** `stream-show-compare --deck all` plus the media fixtures pass, with media ends computed per §5.
 - **Hostile tests:** for kind 9, for `media-start` overrun, for unsolicited chunks, and for every refusal reason.
-- **Lifecycle:** cancellation on socket close kills ffmpeg when no other session waits, and releases the session's references. After every path no reference, in-flight encode or child process remains. Unreferenced cache entries remain until eviction, and the disk ledger is empty after server shutdown.
+- **Lifecycle:** cancellation on socket close kills ffmpeg when no other session waits, and releases the session's references. After every path no reference, in-flight encode or child process remains. Unreferenced cache entries remain until eviction or the idle TTL, and the disk ledger is empty after server shutdown.
 
 ## 9. Left to the builder
 
