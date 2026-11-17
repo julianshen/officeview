@@ -13,7 +13,12 @@ import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const mutant = vi.hoisted(() => ({ refuse: undefined as string | undefined }))
+const mutant = vi.hoisted(() => ({ refuse: undefined as string | undefined, afterParse: undefined as ((doc: import('../src/xlsx/types').XlsxDocument) => void) | undefined }))
+// Fix round 4: a doc mutation applied after production's own parse, so the audit rows (which parse from disk) see it.
+vi.mock('../src/xlsx/parse', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/xlsx/parse')>()
+  return { ...actual, parseXlsx: async (...args: Parameters<typeof actual.parseXlsx>) => { const doc = await actual.parseXlsx(...args); mutant.afterParse?.(doc); return doc } }
+})
 vi.mock('../src/xlsx/cf/formula', async importOriginal => {
   const actual = await importOriginal<typeof import('../src/xlsx/cf/formula')>()
   const refused = { refused: 'cf-resource-limit' as const, reason: 'mutant: refused at compile' }
@@ -157,4 +162,89 @@ describe('fix round 3 (S1, S2): justification scope follows the compositor\'s re
     const { stage5VerdictOf } = await import('./helpers/cf-stage5-verdict')
     expect(stage5VerdictOf(c, 'Q3', { fill: 'none', strike: false, unresolved: ['font.bold'], visual: 'none' }, REPO_ROOT)).toMatch(/strikethrough/)
   })
+})
+
+describe('fix round 4 (codex r3): the counterfactual compositor catches what the hand-mirrored grants accepted', () => {
+  type Token = import('../scripts/cf-refs/stage5-withhold').Stage5Production
+  type Case = import('../scripts/cf-refs/cases').CfOracleCase
+  type Doc = import('../src/xlsx/types').XlsxDocument
+  type Sheet = import('../src/xlsx/types').XlsxSheet
+  const refOf = (row: number, col: number) => `${String.fromCharCode(65 + col)}${row + 1}`
+  const actualOf = (t: Token): import('../scripts/cf-compare').ActualCellOutcome => ({
+    applied: t.fill !== 'none' || t.strike, unresolved: t.unresolved.length > 0, unresolvedSlots: [...t.unresolved],
+    ...(t.fill !== 'none' || t.strike ? { style: { ...(t.fill !== 'none' ? { fillColor: t.fill } : {}), ...(t.strike ? { strike: true } : {}) } } : {}),
+  })
+  /** cf-compare's Stage 5 check over production's own tokens for every expected and observed cell of the (mutated) doc. */
+  async function compareProduction(c: Case, doc: Doc, sheet: Sheet): Promise<string | undefined> {
+    const { verifyCaseCells, stage5ObservedFills } = await import('../scripts/cf-compare')
+    const { stage5ProductionAt } = await import('./helpers/cf-stage5-verdict')
+    const { stage5CounterfactualOf } = await import('../scripts/cf-refs/stage5-withhold') as { stage5CounterfactualOf?: (input: unknown) => Promise<unknown> }
+    const refs = [...new Set([...c.expected.cells.map(e => e.ref), ...(stage5ObservedFills(c, REPO_ROOT)?.keys() ?? [])])]
+    const tokens = new Map<string, Token>()
+    for (const ref of refs) tokens.set(ref, await stage5ProductionAt(doc, sheet, ref))
+    const truths = stage5CounterfactualOf ? await stage5CounterfactualOf({ c, doc, sheet, refs, now: Date.now }) : undefined
+    return (verifyCaseCells as (...a: unknown[]) => string | undefined)(c, REPO_ROOT, (row: number, col: number) => actualOf(tokens.get(refOf(row, col)) ?? { fill: 'none', strike: false, unresolved: [], visual: 'none' }), truths)
+  }
+  const refuseRule = (sheet: Sheet, priority: number, type: string) => {
+    const rule = sheet.conditionalFormatting!.rules.find(r => r.priority === priority)!
+    ;(rule as { definition: unknown }).definition = { kind: 'unresolved', type, reason: 'cf-resource-limit' }
+  }
+
+  it('r3 #1: composition I2 with the priority-13 icon refused while the stop expression is false disagrees: audit, conformance helper, cf-compare', async () => {
+    const { stage5SlotVerdict, stage5ProductionAt } = await import('./helpers/cf-stage5-verdict')
+    const { stage5CaseRecords } = await import('../scripts/cf-refs/audit')
+    const clean = await loadCase('stage5-composition')
+    expect(await stage5SlotVerdict(clean.c, clean.doc, clean.sheet, 'I2', REPO_ROOT), 'unmutated').toBeUndefined()
+    expect((await stage5ProductionAt(clean.doc, clean.sheet, 'I2')).unresolved, 'unmutated I2 composes with no unresolved write').toEqual([])
+    expect(await compareProduction(clean.c, clean.doc, clean.sheet), 'unmutated cf-compare').toBeUndefined()
+    const m = await loadCase('stage5-composition')
+    refuseRule(m.sheet, 13, 'iconSet')
+    expect((await stage5ProductionAt(m.doc, m.sheet, 'I2')).unresolved, 'the mutant reaches production').toEqual(['iconSet'])
+    expect.soft(await stage5SlotVerdict(m.c, m.doc, m.sheet, 'I2', REPO_ROOT), 'conformance helper').toMatch(/I2/)
+    expect.soft(await compareProduction(m.c, m.doc, m.sheet), 'cf-compare').toMatch(/I2/)
+    mutant.afterParse = doc => refuseRule(doc.sheets.find(s => s.name === m.c.sheet) ?? doc.sheets[0]!, 13, 'iconSet')
+    try {
+      const rows = await stage5CaseRecords({ ...manifest(), cases: [m.c] }, REPO_ROOT)
+      const i2 = rows.find(r => r.ref === 'I2')!
+      expect(i2.production.unresolved, JSON.stringify(i2.production)).toEqual(['iconSet'])
+      expect.soft(i2.agrees, JSON.stringify(i2)).toBe(false)
+    } finally { mutant.afterParse = undefined }
+  }, 180000)
+
+  it('r3 #2: the relative-scale marker made stopIfTrue over a lower strike rule keeps strike; a mutant that also loses strike disagrees everywhere', async () => {
+    const { stage5SlotVerdict, stage5ProductionAt } = await import('./helpers/cf-stage5-verdict')
+    const { stage5CaseRecords } = await import('../scripts/cf-refs/audit')
+    const { VERIFIED_CAPABILITIES } = await import('../src/xlsx/cf/evidence')
+    // The premise: the scale's stop flag is ignored (measured), so compose.ts's halts() is false for it.
+    expect(VERIFIED_CAPABILITIES.has('scale:composition-scale-stopIfTrue')).toBe(true)
+    const STRIKE_PRIORITY = 1000
+    const strikeRule = (await loadCase('stage5-composition')).sheet.conditionalFormatting!.rules.find(r => r.priority === 35)!
+    /** The synthetic variant: K2:K9's relative scale (p8) carries stopIfTrue, and a literal strike rule (cellIs > 0) lies below it. */
+    const synthesize = (doc: Doc, refuseStrike: boolean) => {
+      const sheet = doc.sheets.find(s => s.name === 'Sheet1') ?? doc.sheets[0]!
+      const cf = sheet.conditionalFormatting!
+      const strike = { ...strikeRule, id: 9999, priority: STRIKE_PRIORITY, documentOrder: 9999, ranges: [{ firstRow: 1, lastRow: 8, firstCol: 10, lastCol: 10 }],
+        ...(refuseStrike ? { definition: { kind: 'unresolved', type: 'cellIs', reason: 'cf-resource-limit' } } : {}) }
+      ;(sheet as { conditionalFormatting: unknown }).conditionalFormatting = { ...cf, rules: [...cf.rules.map(r => r.priority === 8 ? { ...r, stopIfTrue: true } : r), strike] }
+    }
+    const base = manifest().cases.find(x => x.id === 'stage5-cfvo-formulas')!
+    const c = { ...base, markers: [...base.markers.map(k => k.priority === 8 ? { ...k, stopIfTrue: true } : k),
+      { part: 'xl/worksheets/sheet1.xml', extension: 'legacy', sqref: 'K2:K9', capabilityId: 'formula:positive-control', ruleType: 'cellIs', priority: STRIKE_PRIORITY, dxf: { strikethrough: true } }] } as unknown as Case
+    const clean = await loadCase('stage5-cfvo-formulas')
+    synthesize(clean.doc, false)
+    expect(await stage5ProductionAt(clean.doc, clean.sheet, 'K3'), 'synthetic: only the scale withholds, strike kept').toMatchObject({ unresolved: ['colorScale', 'fill'], strike: true })
+    const m = await loadCase('stage5-cfvo-formulas')
+    synthesize(m.doc, true)
+    expect((await stage5ProductionAt(m.doc, m.sheet, 'K3')).unresolved, 'the mutant also loses strike').toEqual(['colorScale', 'fill', 'font.strike'])
+    expect.soft(await stage5SlotVerdict(c, m.doc, m.sheet, 'K3', REPO_ROOT), 'conformance helper').toMatch(/K3.*(without a recorded justification|counterfactual)/)
+    expect.soft(await compareProduction(c, m.doc, m.sheet), 'cf-compare').toMatch(/K\d.*(without a recorded justification|counterfactual)/)
+    mutant.afterParse = doc => synthesize(doc, true)
+    try {
+      const rows = await stage5CaseRecords({ ...manifest(), cases: [c] }, REPO_ROOT)
+      const k3 = rows.find(r => r.ref === 'K3')!
+      expect(k3.production.unresolved, JSON.stringify(k3.production)).toEqual(['colorScale', 'fill', 'font.strike'])
+      expect.soft(k3.agrees, JSON.stringify(k3)).toBe(false)
+      expect.soft(k3.disagreement).toMatch(/without a recorded justification|counterfactual/)
+    } finally { mutant.afterParse = undefined }
+  }, 180000)
 })
