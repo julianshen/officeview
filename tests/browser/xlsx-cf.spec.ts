@@ -1367,6 +1367,17 @@ test('Stage 5 cross-sheet commit in the same live session repaints the dependent
 // (20) at All and the Total column (90) once Apples alone is selected. The measured single-item click from All and Clear Filter are
 // the actions the slicer controller allows (src/xlsx/pivots/slicers/controller.ts:177-184 and :166 for clear); nothing is injected.
 // No sheet switch, no reopen, no forced rerender: the sheet's own subscriptions must repaint and re-announce A2 after each commit.
+//
+// Legs (fix round 4). Every leg must COMMIT (the slicer republishes its selection only for a committed result). Forced paged holds
+// the pivot in the worker, so its commit is a remote controlApply then controlCommit (src/worker/viewerRemotePivots.ts applyLinked),
+// counted at the worker port; `?worker=1` alone admits this small workbook resident, so its commit is the main-thread one (zero
+// control commands, pinned). The worker's transaction chunk is served by the harness warmup (vite.harness.config.ts).
+// Revert-checks, each fails this test: the resident dependency key in the CF live key (resident leg); the remote dependency epoch
+// in that key, or RemoteCfCache.invalidateDependents (forced-paged leg); the harness warmup of slicers/transaction.ts (forced paged:
+// the commit is refused). What it does NOT prove: that the CF-key tile invalidation (the `paintedCf` check in the canvas effect) is
+// needed here. The slicer publication also advances Data's drawing generation, whose tile invalidation repaints Data on its own:
+// removing the CF-key invalidation alone leaves this test green, removing both fails it (checked). The announcements follow the CF
+// evaluation, not the tiles.
 async function slicerOnDataBytes(): Promise<Buffer> {
   const zip = await JSZip.loadAsync(readFileSync(`${PIVOTS}controls/controls-seed.xlsx`))
   const s1 = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
@@ -1392,35 +1403,39 @@ test('Stage 5 slicer commit on another sheet repaints the visible dependent shee
       const page = await context.newPage()
       try {
         await openCf(page, 'stage5-slicer-controls', bytes, leg, { cfev: true })
-        await page.getByRole('combobox', { name: 'Worksheet' }).selectOption({ label: 'Data' })
+        const sheets = page.getByRole('combobox', { name: 'Worksheet' })
+        // The slicer's target is resolved against the pivot definitions of the sheets the viewer holds loaded (paged shells carry
+        // none, InteractiveSheetDoc.tsx slicer apply). Wait for 工作表1's pivot display before leaving it: a pivot field button
+        // (named after the field on the resident legs, after the saved caption when paged).
+        await expect(sheets.locator('option:checked')).toHaveText('工作表1')
+        await expect(page.getByRole('button', { name: /^Filter and sort / }).first()).toBeAttached({ timeout: 30_000 })
+        await sheets.selectOption({ label: 'Data' })
         await expect(cell(page, 'A2')).toContainText('2023', { timeout: 30_000 })
         const exact = (img: Img): number => countColor(img, 0, 0, img.width, img.height, 0xff, 0xc7, 0xce, 2)
         const a2 = async (): Promise<string> => (await namesOf(page, ['A2']))[0]!
         await expect.poll(a2, { timeout: 15_000, message: `${leg.name}: A2 settles at All` }).not.toMatch(/Conditional formatting applied/)
         const fillAll = exact(await settledCfGrid(page, 0))
         expect(fillAll, `${leg.name}: the rule's fill is absent at All`).toBeLessThan(100)
+        const linked = async (): Promise<[number, number]> => { const c = await counts(page); return [c.controlApply ?? 0, c.controlCommit ?? 0] }
+        const [applied0, committed0] = await linked()
         // Commit 1, Data on screen throughout: All -> Apples alone.
         await page.getByRole('button', { name: 'Apples, selected' }).click()
-        if (leg.paged) {
-          // The forced-paged leg has no such commit in this harness, and it is not faked. Two independent facts, both observed:
-          // (1) the slicer's target is resolved against the pivot definitions of the sheets the viewer holds loaded ("paged shells
-          // carry no pivot definitions", src/components/xlsx/InteractiveSheetDoc.tsx:2300-2308); with the pivot's own sheet not
-          // loaded while Data is displayed the click is refused ("This slicer target is missing or ambiguous", :2308); and
-          // (2) the slicer transaction chunk (src/xlsx/pivots/slicers/transaction.ts) is a lazy import the strict-fs harness server
-          // answers 403 to on this leg (vite.harness.config.ts:131-134, the "Failed to fetch dynamically imported module" notice).
-          // Either way nothing commits, so the leg pins the invariant: no commit, no change, Data stays selected.
-          await page.waitForTimeout(5000)
-          expect(await a2(), `${leg.name}: A2 is unchanged after the click`).not.toMatch(/Conditional formatting applied/)
-          expect(exact(await settledCfGrid(page, 0)), `${leg.name}: no fill after the click`).toBeLessThan(100)
-          await expect(page.getByRole('combobox', { name: 'Worksheet' }).locator('option:checked')).toHaveText('Data')
-          return
-        }
+        // The commit succeeded: the controller publishes the new selection only for a committed result (controller.ts enqueue).
+        await expect(page.getByRole('button', { name: 'Bananas, not selected' })).toBeAttached({ timeout: 30_000 })
+        await expect(page.getByRole('button', { name: 'Apples, selected' })).toBeAttached()
+        // Forced paged holds the pivot in the worker: the click is one remote controlApply then controlCommit
+        // (src/worker/viewerRemotePivots.ts applyLinked). `?worker=1` alone admits this small workbook resident, so its commit is the
+        // main-thread one and no control command reaches the worker (pinned, so the leg cannot silently change kind).
+        const remote = leg.paged ? 1 : 0
+        await expect.poll(linked, { timeout: 30_000, message: `${leg.name}: ${remote} remote apply and commit` }).toEqual([applied0 + remote, committed0 + remote])
         // Data is still the selected worksheet: nothing below switches sheets.
-        await expect(page.getByRole('combobox', { name: 'Worksheet' }).locator('option:checked')).toHaveText('Data')
+        await expect(sheets.locator('option:checked')).toHaveText('Data')
         await expect.poll(a2, { timeout: 30_000, message: `${leg.name}: A2 announces the rule after the slicer commit` }).toMatch(/Conditional formatting applied/)
         await expect.poll(async () => exact(await settledCfGrid(page, 0)), { timeout: 30_000, message: `${leg.name}: A2's fill paints after the commit` }).toBeGreaterThan(fillAll + 300)
         // Commit 2, still on Data: Clear Filter restores All, and the rule goes away again.
         await page.getByRole('button', { name: 'Clear Filter' }).click()
+        await expect(page.getByRole('button', { name: 'Bananas, selected' })).toBeAttached({ timeout: 30_000 })
+        await expect.poll(linked, { timeout: 30_000, message: `${leg.name}: the clear's remote apply and commit` }).toEqual([applied0 + 2 * remote, committed0 + 2 * remote])
         await expect.poll(a2, { timeout: 30_000, message: `${leg.name}: A2 withdraws the rule after Clear Filter` }).not.toMatch(/Conditional formatting applied/)
         await expect.poll(async () => exact(await settledCfGrid(page, 0)), { timeout: 30_000, message: `${leg.name}: A2's fill is gone after Clear Filter` }).toBeLessThan(100)
         await expect(page.getByRole('alert')).toHaveCount(0)
