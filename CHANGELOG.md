@@ -15,8 +15,12 @@ in git history.
 - **Excel formula conditional formatting rules (view-only, withheld until measured).** "Use a formula" rules, `cellIs`
   rules whose value is a reference or a formula, and text, blank and error rules whose formula differs from the one Excel
   writes are now evaluated per cell by a bounded formula evaluator, and compose with the other rule kinds. Each such rule
-  paints only once Excel's own rendering of its shape is published; until the Stage 5 Excel captures are recorded, every
-  one stays withheld, as before.
+  paints only once Excel's own rendering of its shape is published. The Stage 5 Excel captures are recorded (Excel 16.115:
+  15 cases verified), but publication waits for the dual gate: two cases (`stage5-composition`, `stage5-cross-sheet`) are
+  rebuilt as new case versions after generator fixes, so every formula rule stays withheld, as before, until the Stage 5
+  audit is complete. Shapes Excel rewrites or refuses are recorded as permanent refusals: `activePresent` on scales,
+  bars and icon sets (Excel drops it), a time-period formula that differs from its period (Excel replaces it), a
+  reference to a missing sheet (Excel treats it as an external link), and a non-numeric formula bound.
 
 - **Excel time-period rules (view-only): a rule's formula is classified, not ignored.** A conditional formatting
   "dates occurring" rule whose `<formula>` is the one Excel itself writes for its period (today, yesterday, tomorrow,

@@ -2174,3 +2174,160 @@ Every Stage 5 configuration, whether fill, scale, bar or icon, goes through one 
   - The Task 35 S5-STUB test (`tests/xlsx-cf-formula-rules.test.ts`) judges Stage 2 stub cells by their fill alone.
   - `scripts/cf-refs/capture.ts` reads the flag only to choose which cells to probe.
 - **Where it comes from.** The manifest is generated, so it is not edited by hand. The flag is set by the `stage2-scale-composition` expected-cells generator in `scripts/cf-refs/cases.ts`, which writes `scaleApplied: true` for every row 2-5 of columns B to L. The correction belongs there, at L2:L4 only, followed by regenerating the manifest. That would change a Stage 2 fixture's expected record, so it needs its own ruling and is not done here.
+
+### 14.y Task 39: Stage 5 validation, the dual gate and the recorded Excel outcomes
+
+**Excel run (b5e08ec5, authored fixture b619726a, Excel 16.115).** 15 cases verified: formula-authored, truthiness, anchor, anchor-multi, edge, functions, hoist, hoist-aggregate, cellis-operands, predicate-formulas, cfvo-formulas, cfvo-scope, x14-scale (S5-I: Excel kept the x14 standalone scale), clock-today and calc-manual. Recorded outcomes, never retried: composition, cross-sheet, predicate-timeperiod and the three activePresent cases were rejected at build; cross-sheet-missing raised an external-link update prompt (answered Don't update); of the unresolved shapes, name and indirect opened repair-free, table, array-constant, spill, cellis-text and external prompted a repair (answered No), union was repaired (rule dropped) and duplicate-formula was stripped.
+
+**"Rejected" means the build's structural check, not an Excel repair dialog.** `build.ts` keeps a resave as `<id>.rejected.xlsx` when its zip holds a repair part or `verifyCfCase` refuses it structurally. For all six cases it was the latter (`stripped-rule`: a marker no longer found).
+
+**Ruling S5-REPAIR, per case (each `*.rejected.xlsx` diffed against its generated input):**
+
+| Case | What Excel's resave shows | Cause | Disposition |
+|---|---|---|---|
+| `stage5-composition` | Every rule kept, but identical rules on adjacent columns merged into one sqref: B2:C7, F2:G7, J2:K7, Q2:R7, S2:T7 (semantics preserved) | Incidental generator layout defect | Generator fixed (`ce59e04f`): columns re-lettered so no two adjacent columns start with the same rule; predictions unchanged. **Needs Excel rebuild** as a new case version |
+| `stage5-cross-sheet` | The `cellIs` with operand `Sheet2!$A$1` (D2:D5) moved from the base `<cfRule>` to the x14 dialect; nothing else changed | Incidental generator defect: `s5CellIs` wrote only the base form. `--diff-authored-formulas` reported 0 because `excel-authored-formulas.xlsx` holds no cross-sheet `cellIs`, so it never compared that shape | Generator fixed (`ce59e04f`): the rule is written in Excel's x14 form. Excel's own rejected output now passes the structural markers. **Needs Excel rebuild** |
+| `stage5-predicate-timeperiod` | `A2=TODAY()-3` under `timePeriod="today"` rewritten to the canonical `FLOOR(A2,1)=TODAY()` | Excel regenerates the formula from the attribute: the very construct the case tests | `formula:predicate-timeperiod-divergent` refused-unsupported; production keeps divergent time-period formulas unresolved (Task 33) |
+| `stage5-active-present-{scale,bar,icon}` | `activePresent` dropped; each rule moved to the base dialect (the bar to a paired base bar) with its activation as a `<formula>` child | S5-J: Excel does not keep the construct | `formula:active-present-*` refused-unsupported permanently (OD-16) |
+
+**Finding: no Stage 5 icon crop classified.** Every icon crop in the Stage 5 captures is `icon-class-none`, while the Stage 4 crops classify exactly (a positive control: `stage4-icon-families` B2..B4 match their key class with 0 differing pixels). Cause: the Stage 5 generator left cells on the default style, which Excel draws vertically centred. The icon sits at cell top + 4 px, while the Stage 4 glyph key was captured bottom-aligned (cell top + 7 px), and the key comparison is position-exact. The composition case now puts its Sheet1 cells on an explicit bottom-aligned style (`S5Fixture.cellVertical`). The measured cases are not regenerated, because that would discard their verified evidence. Their icon-dependent capabilities are re-deferred instead (below).
+
+**Recorded refusals (`CF_STAGE5_UNSUPPORTED`, Task 39):** `formula:active-present-scale|bar|icon`, `formula:predicate-timeperiod-divergent`, `formula:cross-sheet-missing` (the external-link prompt; no capture), `formula:cfvo-nonnumeric` (no hypothesis matched: a finding, never fitted, as S4-MINMAX), and three re-deferrals: `bar:bounds-formula` (fixture holds 5..100 against bounds 20..80; twin W7 unmeasurable), `icon:thresholds-formula` and `formula:cfvo-scope-multi-range` (icon twins Z2 and P12 unmeasurable on the default style). Each stays unresolved in production.
+
+**Readings Excel matched that production does not implement (withheld by the gate, re-deferred; no production change after the capture):**
+- `formula:truth-text`: `text-boolean-parse`, against production's `text-no-match | text-true`.
+- `formula:truth-range` and `formula:truth-range-nested`: `range-top-left`, no production reading.
+- `formula:hoist-aggregate-errors`: `error-propagates`, no production reading.
+- `formula:cellis-operand-text`: `text-compare`; `formula:cellis-operand-error`: `no-format`.
+- `formula:calc-manual-today`: `cf-today-live`, deliberately unregistered (a volatile TODAY() under manual calculation).
+- `formula:cfvo-relative`: `zero`, against production's `anchor-top-left` (reading-mismatch).
+- Expected after the composition rebuild: the provisional (rejected) capture read `continues` for stop-dxf and stop-scale and `halts` for stop-bar, against production's `halts` throughout. If the rebuild repeats it, stop-dxf and stop-scale are withheld as reading-mismatch. Note also that DisplayFormat may not reflect stopIfTrue, while the bar reading came from pixels.
+
+**Parked items closed or re-deferred:**
+- `CF_STAGE5_UNCONFIRMABLE`: `bar:bounds-formula` and `formula:active-present-bar` are now also refused-unsupported. `formula:composition-stop-icon` stays unconfirmable; its witnesses moved to L3/L5/L7 with the re-lettering.
+- `VERIFIED_STAGE5_FORMULA_SELECTIONS`: `--publish-stage5` now renders it beside the set, and a plain `--write` carries a committed block verbatim (`7b0102fe`). Closed.
+- `stage2-scale-composition` L2:L4 `scaleApplied`: re-deferred unchanged (§14.x). No evidence reads the flag; correcting it changes a Stage 2 expected record and needs its own ruling.
+- `stage5-calc-manual`: Excel's resave recomputed the stale values. Readings and tests therefore read `tests/fixtures/xlsx-cf/inputs/stage5-calc-manual.xlsx`, and the pre-calculate observation was made on that input (`manualObservation.inputSha256`).
+- Cross-sheet `COUNTIF`/`SUMIF` with a cell criterion: not hoisted (Task 36), so it evaluates per cell and may refuse over large ranges with `cf-resource-limit`. Known limit, re-deferred.
+- `formula:cross-sheet-missing`: refused-unsupported (above). `formula:calc-manual-today`: verified but unregistered, so withheld (above).
+
+**Dual gate: not met; nothing published.** `audit --stage 5` reports `ok=true structural=31/31 unsupported=9 pending=7 unverifiedNonDiscriminating=9 stageComplete=false blockedCapabilities=13`. The 13 blocked capabilities are exactly the 10 of `stage5-composition` and the 3 of `stage5-cross-sheet`, pending their rebuild. `--write --publish-stage5` was not run, and `src/xlsx/cf/verifiedCapabilities.ts` is unchanged from the Stage 5 base (`fc61c6c6`). The gate would publish 34 ids today, with selections `formula:relative-wrap=wrap` and `formula:cellis-operand-blank=blank-zero`. Conformance: a measured Stage 5 cell under a formula-bearing marker whose capability production does not hold is asserted withheld. Counts are pinned to the manifest (709 withheld, 1,083 compared with Excel); no injection, and Stage 1–4 assertions unchanged. The audits for stages 1–4 stay ok and complete.
+
+**Resource audit (`audit --stage 5`, `scripts/cf-refs/pressure-stage5.ts`):**
+
+| Scenario | Result |
+|---|---|
+| 100 formula rules over a declared 1M-row `A:A` (100 populated) | 1 snapshot attempt, 40 entries for 40 target cells, 4,000 ready, net 0 |
+| `SUM($A:$A)>0`, `COUNTIF($A:$A,A2)>1` on 5,000 visible cells, 10,000 populated | 2 column scans (one per rule), both clamped to row 10,000; 5,020 calls, max 6 units (≤ 128); 0 refused; net 0 |
+| the same over ~1M populated rows | both `cf-resource-limit` at the scan budget, 0 calls |
+| relative `SUM(A1:A200)>0` | `cf-resource-limit` before any call (0 calls) |
+| snapshot cap | 262,144 cells admitted (262,144 entries), 262,145 refused; net 0 |
+| 16 / 17 referenced sheets | 16 ready; 17 refused at compile; a union of 18 refuses only the rule crossing 16 |
+| refused footprint beside a ready rule | ready 10/10, refused 10/10 (`cf-resource-limit`) |
+| 20 cycles: ready, pending, closed mid cross-sheet read | 20/20/20, 0 B held between cycles, net 0 |
+| shared Stage 1–4 checks | distinct-range-300 refused (0 reads); 20 open/read/cancel/close cycles final net 0; no-CF baseline 0 reserves, 0 reads, no scope |
+
+**Gates and sizes (Task 39, before the composition and cross-sheet rebuild):**
+- `npx vitest run`: 718 files, 14,291 passed, 13 failed, 131 skipped. Every failure is environmental and pre-existing: missing `corpus/` files (slideshow-morph, stream/local-unchanged, stream/recorder, pivots-parse, pivots-records) and `core-entry`, which needs the full build's `.d.ts`. The two known reds (conformance "zero unexpected mismatches" and formula-eval "sidecar observes L2") now pass.
+- `npx tsc --noEmit -p .`: only the 3 known `@napi-rs/canvas` errors. `bun run gates:core` stops there, so its two vite builds (`OV_MODULE_MAP=1`) and `bun scripts/core-gates.ts` ran by hand.
+- `core-gates`: core closure ok; the index closure is 422,494 B with module-set FAIL, environmental as on main (absolute `node_modules` paths). Task 39 adds no product code: `evidence.ts` changes by one comment, and `viewerRemoteCf.ts` and two other source files lose stray whitespace only.
+- Eager gzip 36,524 B (limit 38,720); `check-eager` ok (158 modules; paged worker chunks clean). `scripts/eager-baseline.json` is unchanged by Task 39; Tasks 32 and 38 recorded their growth. `indexModuleSetHash` stays `5b23020808b682f78f91eda9dc68dad2e2d27d6f29ba1ff1dcb2832350ca7340` (baseline).
+- CF lazy chunks: 110,311 B, gzip -9 of the chunks whose modules all live in `src/xlsx/cf/` per `dist/.module-map.json`. §13.5 records 72,213 B for PR 4 without its method, so the delta (+38,098 B, mostly `formula.ts`, `dependencies.ts` and `statistics.ts`) is approximate.
+- `git diff --check`: clean (Task 39 cleared four pre-existing whitespace findings on the branch).
+- Browser `tests/browser/xlsx-cf.spec.ts` on Chromium (scratch config: the vite webServer only, cached headless shell 1243): 34/34. **WebKit: blocked gate**, not installed on this host. The repo Playwright config cannot launch here: its second webServer needs `@napi-rs/canvas`, and it wants Chromium 1248 while 1243 is cached.
+- `bun scripts/cf-compare.ts --stage 5`:
+  - static, print and export: 0 pass, 8 pending, 14 unsupported, 64 fail. These are whole-frame cross-renderer pixel diffs, failing for every stage as in §13.5; off-capture fidelity is *unverified*.
+  - paged: 59 pass, 7 pending, 14 unsupported, 6 fail.
+  - interactive: 57 pass, 6 pending, 14 unsupported, 9 fail, after `cf-compare` records a refused batch per case instead of crashing (stage5-formula-truthiness: one 8-row batch over 70 rules exceeds the grant, so it is withheld).
+  - The Stage 5 failures are not product mismatches:
+    - composition, cross-sheet and cross-sheet-missing compare against seed expectations (recipe-pending; the literal positive controls are seeded `matched: false`, and production paints them);
+    - cfvo-formulas Y2 is a literal min/max bar cell, and the viewport check counts a bar as "formatting applied" against Excel's DisplayFormat, which shows no fill for a bar.
+  - The two Stage 3 paged failures predate this task.
+- Corpus gate: this worktree has no `corpus/`, so 0 corpus files were read. That count is recorded, never a pass. The unconditional part ran: `excel-authored-formulas.xlsx` and all Stage 5 workbooks (inputs and saved) parse identically on the resident and paged paths.
+
+**Capability rows (one per Stage 5 capability, at the state above):**
+
+| Capability | Case | Ruling | Evidence | Matched (Excel) | Status | Refusal in force |
+|---|---|---|---|---|---|---|
+| `formula:dialect-base` | formula-authored | S5-A | DisplayFormat / PNG measurement | applies | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:dialect-x14` | formula-authored | S5-A | DisplayFormat / PNG measurement | applies | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:positive-control` | formula-authored | S5-A | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
+| `formula:truth-number` | formula-truthiness | S5-D | DisplayFormat / PNG measurement | number-nonzero-true | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:truth-boolean` | formula-truthiness | S5-D | DisplayFormat / PNG measurement | boolean | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:truth-text` | formula-truthiness | S5-D | DisplayFormat / PNG measurement | text-boolean-parse | withheld: reading-unimplemented: Excel matched text-boolean-parse, production implements text-no-match | text-true | withheld (production holds no Stage 5 id) |
+| `formula:truth-blank` | formula-truthiness | S5-D | DisplayFormat / PNG measurement | blank-no-match | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:truth-error` | formula-truthiness | S5-D | DisplayFormat / PNG measurement | error-no-match | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:truth-range` | formula-truthiness | S5-D | DisplayFormat / PNG measurement | range-top-left | withheld: reading-unimplemented: Excel matched range-top-left, production names no reading | withheld (production holds no Stage 5 id) |
+| `formula:truth-range-nested` | formula-truthiness | S5-D | DisplayFormat / PNG measurement | range-top-left | withheld: reading-unimplemented: Excel matched range-top-left, production names no reading | withheld (production holds no Stage 5 id) |
+| `formula:anchor-single` | formula-anchor | S5-C | DisplayFormat / PNG measurement | relative-top-left | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:anchor-mixed-abs` | formula-anchor | S5-C | DisplayFormat / PNG measurement | pinned | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:anchor-multi-range` | formula-anchor-multi | S5-C | twin / non-discriminating | — | withheld: unverified-nondiscriminating | withheld (production holds no Stage 5 id) |
+| `formula:relative-wrap` | formula-edge | S5-C | DisplayFormat / PNG measurement | wrap | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:fn-logical` | formula-functions | S5-E | DisplayFormat / PNG measurement | documented | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:fn-information` | formula-functions | S5-E | DisplayFormat / PNG measurement | documented | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:fn-text` | formula-functions | S5-E | DisplayFormat / PNG measurement | documented | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:fn-math` | formula-functions | S5-E | DisplayFormat / PNG measurement | documented | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:fn-aggregate` | formula-functions | S5-E | DisplayFormat / PNG measurement | documented | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:fn-conditional-aggregate` | formula-functions | S5-E | DisplayFormat / PNG measurement | documented | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:fn-date` | formula-functions | S5-E | DisplayFormat / PNG measurement | documented | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:fn-row-column` | formula-functions | S5-E | DisplayFormat / PNG measurement | documented | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:hoist-countif-frequency` | formula-hoist | S5-HOIST | DisplayFormat / PNG measurement | documented | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:hoist-aggregate-errors` | formula-hoist | S5-HOIST | DisplayFormat / PNG measurement | error-propagates | withheld: reading-unimplemented: Excel matched error-propagates, production names no reading | withheld (production holds no Stage 5 id) |
+| `formula:hoist-aggregate` | formula-hoist-aggregate | S5-HOIST | DisplayFormat / PNG measurement | documented | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:cellis-operand-reference` | cellis-operands | S5-F | DisplayFormat / PNG measurement | documented | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:cellis-operand-relative` | cellis-operands | S5-F | DisplayFormat / PNG measurement | documented | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:cellis-operand-expression` | cellis-operands | S5-F | DisplayFormat / PNG measurement | documented | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:cellis-operand-text` | cellis-operands | S5-F | DisplayFormat / PNG measurement | text-compare | withheld: reading-unimplemented: Excel matched text-compare, production names no reading | withheld (production holds no Stage 5 id) |
+| `formula:cellis-operand-blank` | cellis-operands | S5-F | DisplayFormat / PNG measurement | blank-zero | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:cellis-operand-error` | cellis-operands | S5-F | DisplayFormat / PNG measurement | no-format | withheld: reading-unimplemented: Excel matched no-format, production names no reading | withheld (production holds no Stage 5 id) |
+| `formula:predicate-divergent` | predicate-formulas | S5-G | DisplayFormat / PNG measurement | formula | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:predicate-timeperiod-divergent` | predicate-timeperiod | S5-G | recorded Excel outcome | — | withheld: refused-unsupported | Ruling S5-REPAIR: Excel 16.115 replaced the divergent formula A2=TODAY()-3 of a timePeriod="today" rule with the canonical FLOOR(A2,1)=TODAY() on r... |
+| `formula:fn-today` | clock-today | S5-M | DisplayFormat / PNG measurement | local-today | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:calc-manual-saved-values` | calc-manual | S5-L | DisplayFormat / PNG measurement | saved-values | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:calc-manual-today` | calc-manual | S5-L | DisplayFormat / PNG measurement | cf-today-live | withheld: reading-unimplemented: Excel matched cf-today-live, production names no reading | withheld (production holds no Stage 5 id) |
+| `formula:composition-stop-dxf` | composition | S5-O | none yet | — | pending Excel rebuild | withheld (production holds no Stage 5 id) |
+| `formula:composition-twin` | composition | S5-O | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
+| `formula:composition-stop-scale` | composition | S5-O | none yet | — | pending Excel rebuild | withheld (production holds no Stage 5 id) |
+| `formula:composition-stop-bar` | composition | S5-O | none yet | — | pending Excel rebuild | withheld (production holds no Stage 5 id) |
+| `formula:composition-stop-icon` | composition | S5-O | none yet | — | pending Excel rebuild | withheld (production holds no Stage 5 id) |
+| `formula:composition-expression-vs-scale` | composition | S5-O | none yet | — | pending Excel rebuild | withheld (production holds no Stage 5 id) |
+| `formula:composition-overlapping` | composition | S5-O | none yet | — | pending Excel rebuild | withheld (production holds no Stage 5 id) |
+| `formula:composition-indirect-ahead-dxf` | composition | S5-O | none yet | — | pending Excel rebuild | withheld (production holds no Stage 5 id) |
+| `formula:composition-indirect-ahead-bar` | composition | S5-O | none yet | — | pending Excel rebuild | withheld (production holds no Stage 5 id) |
+| `formula:composition-indirect-ahead-scale` | composition | S5-O | none yet | — | pending Excel rebuild | withheld (production holds no Stage 5 id) |
+| `formula:composition-indirect-ahead-icon` | composition | S5-O | none yet | — | pending Excel rebuild | withheld (production holds no Stage 5 id) |
+| `formula:cross-sheet-reference` | cross-sheet | S5-K | none yet | — | pending Excel rebuild | withheld (production holds no Stage 5 id) |
+| `formula:cellis-operand-cross-sheet` | cross-sheet | S5-F | none yet | — | pending Excel rebuild | withheld (production holds no Stage 5 id) |
+| `formula:cross-sheet-quoted-name` | cross-sheet | S5-K | none yet | — | pending Excel rebuild | withheld (production holds no Stage 5 id) |
+| `formula:cross-sheet-missing` | cross-sheet-missing | S5-K | recorded Excel outcome | — | withheld: refused-unsupported | Ruling S5-REPAIR / S5-K: Excel reads =Gone!A1>0 (no such sheet) as an external-workbook reference; opening the workbook prompted to update links (a... |
+| `scale:thresholds-formula` | cfvo-formulas | S5-H | DisplayFormat / PNG measurement | evaluated | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:cfvo-expression` | cfvo-formulas | S5-H | DisplayFormat / PNG measurement | evaluated | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:cfvo-reference` | cfvo-formulas | S5-H | DisplayFormat / PNG measurement | evaluated | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `bar:bounds-formula` | cfvo-formulas | S5-H | recorded Excel outcome | — | withheld: refused-unsupported | Re-deferred (Task 39): the stage5-cfvo-formulas bar fixture holds 5..100 against formula bounds 20..80 (a whole-scope cf-value-beyond-bounds, Rulin... |
+| `icon:thresholds-formula` | cfvo-formulas | S5-H | recorded Excel outcome | — | withheld: refused-unsupported | Re-deferred (Task 39): every icon crop of stage5-cfvo-formulas is unclassifiable (icon-class-none). Its cells sit on the default style, which Excel... |
+| `formula:cfvo-relative` | cfvo-formulas | S5-H | DisplayFormat / PNG measurement | zero | withheld: reading-mismatch: Excel matched zero, production implements anchor-top-left | withheld (production holds no Stage 5 id) |
+| `formula:cfvo-nonnumeric` | cfvo-formulas | S5-H | recorded Excel outcome | — | withheld: refused-unsupported | Finding (S4-MINMAX precedent): no hypothesis (withheld, zero, skipped) matched what Excel showed for a text, blank or error formula bound in stage5... |
+| `formula:cfvo-twin` | cfvo-formulas | S5-H | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
+| `formula:cfvo-scope-multi-range` | cfvo-scope | S5-H | recorded Excel outcome | — | withheld: refused-unsupported | Re-deferred (Task 39): the scope-icon configuration of stage5-cfvo-scope cannot be measured (twin P12 is an unclassifiable icon crop: default style... |
+| `formula:cfvo-scope-twin` | cfvo-scope | S5-H | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
+| `scale:dialect-standalone` | x14-scale | S5-I | DisplayFormat / PNG measurement | standalone-evaluated | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:x14-scale-twin` | x14-scale | S5-A | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
+| `formula:active-present-scale` | active-present-scale | S5-J | recorded Excel outcome | — | withheld: refused-unsupported | Ruling S5-J / OD-16: Excel 16.115 rewrote the standalone x14 colour scale on resave (stage5-active-present-scale.rejected.xlsx): activePresent drop... |
+| `formula:active-present-scale-twin` | active-present-scale | S5-J | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
+| `formula:active-present-bar` | active-present-bar | S5-J | recorded Excel outcome | — | withheld: refused-unsupported | Ruling S5-J / OD-16: Excel 16.115 rewrote the standalone x14 data bar on resave (stage5-active-present-bar.rejected.xlsx): activePresent dropped an... |
+| `formula:active-present-bar-twin` | active-present-bar | S5-J | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
+| `formula:active-present-icon` | active-present-icon | S5-J | recorded Excel outcome | — | withheld: refused-unsupported | Ruling S5-J / OD-16: Excel 16.115 rewrote the standalone x14 icon set on resave (stage5-active-present-icon.rejected.xlsx): activePresent dropped a... |
+| `formula:active-present-icon-twin` | active-present-icon | S5-J | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
+| `formula:unresolved-name` | unresolved-shapes-name | A | recorded Excel outcome | — | withheld: refused-unsupported | withheld (production holds no Stage 5 id) |
+| `formula:unresolved-external` | unresolved-shapes-external | A | recorded Excel outcome | — | withheld: refused-unsupported | withheld (production holds no Stage 5 id) |
+| `formula:unresolved-table` | unresolved-shapes-table | A | recorded Excel outcome | — | withheld: refused-unsupported | withheld (production holds no Stage 5 id) |
+| `formula:unresolved-indirect` | unresolved-shapes-indirect | A | recorded Excel outcome | — | withheld: refused-unsupported | withheld (production holds no Stage 5 id) |
+| `formula:unresolved-array-constant` | unresolved-shapes-array-constant | A | recorded Excel outcome | — | withheld: refused-unsupported | withheld (production holds no Stage 5 id) |
+| `formula:unresolved-union` | unresolved-shapes-union | A | recorded Excel outcome | — | withheld: refused-unsupported | withheld (production holds no Stage 5 id) |
+| `formula:unresolved-spill` | unresolved-shapes-spill | A | recorded Excel outcome | — | withheld: refused-unsupported | withheld (production holds no Stage 5 id) |
+| `formula:unresolved-duplicate-formula` | unresolved-shapes-duplicate-formula | A | recorded Excel outcome | — | withheld: refused-unsupported | withheld (production holds no Stage 5 id) |
+| `formula:unresolved-cellis-text` | unresolved-shapes-cellis-text | A | recorded Excel outcome | — | withheld: refused-unsupported | withheld (production holds no Stage 5 id) |
+| `formula:composition-stub-successor-dxf` | composition | S5-STUB | reused Stage 1-4 capture (S5-STUB) | recorded | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:composition-stub-successor-scale` | composition | S5-STUB | reused Stage 1-4 capture (S5-STUB) | recorded | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:composition-stub-successor-bar` | composition | S5-STUB | reused Stage 1-4 capture (S5-STUB) | recorded | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
+| `formula:composition-stub-successor-icon` | composition | S5-STUB | reused Stage 1-4 capture (S5-STUB) | recorded | publishable (gate), not published: audit incomplete | withheld (production holds no Stage 5 id) |
