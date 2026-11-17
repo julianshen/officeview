@@ -25,7 +25,7 @@ import { getPaintables } from '../src/render/paint'
 import { computeMetrics } from '../src/xlsx/render'
 import type { XlsxDocument } from '../src/xlsx/types'
 import { parseRangeA1, parseA1, type CfObservedBar, type CfObservedIcon } from './cf-refs/verify'
-import { stage5WithholdJustification } from './cf-refs/stage5-withhold'
+import { stage5CellAgreement, stage5Justifications, stage5MarkerSlots, stage5SlotJustified } from './cf-refs/stage5-withhold'
 import type { CfManifest, CfOracleCase } from './cf-refs/cases'
 import { CF_MANIFEST_PATH } from './cf-refs/generate'
 import { ICON_NO_ICON_MEMBER, iconTwinSetMembers, isCellInSqref, observedIconClass, verifyCfCase } from './cf-refs/verify'
@@ -113,6 +113,9 @@ export interface ActualCellOutcome {
   icon?: { set: string; iconId: number } | null
   iconWithheld?: boolean
   unresolved?: boolean
+  /** Fix round 2 (R2): the write slots production left unresolved at the cell (compose.ts groups or paths; `ALL` for a
+   * cell-wide refusal). Absent: derived from `unresolved` (`ALL` when true). */
+  unresolvedSlots?: readonly string[]
   style?: {
     fillColor?: string
     color?: string
@@ -136,7 +139,9 @@ export function verifyCellExpectations(
     // An icon is no cell style (S4-I): an icon cell is compared on whether an icon is drawn (Excel's `iconApplied`), and
     // on its style expectations only when it has some. A withheld icon slot is allowed (fail closed); the glyph class
     // itself is compared in tests/xlsx-cf-oracle-conformance.test.ts.
-    if (actual.iconCell) {
+    // Fix round 2 (R2): on a Stage 5 case the icon slot never excuses the whole cell; its slots are checked one by one
+    // in verifyCaseCells against Excel's observation (stage5CellAgreement).
+    if (actual.iconCell && c.stage !== 5) {
       if (actual.unresolved || actual.iconWithheld) continue
       const drawn = actual.icon !== undefined && actual.icon !== null && actual.icon.set !== 'NoIcons'
       // Excel's evidence is the sidecar's observed class (the `iconApplied` labels are seeds, unreliable on faint and
@@ -152,8 +157,13 @@ export function verifyCellExpectations(
     if (exp.matched) {
       // Task 39 fix round 1 (F2): on a Stage 5 case an unresolved cell under a formula rule is a failure unless an
       // independently recorded justification exists; Stages 1-4 keep their withheld-is-skipped rule.
-      if (actual.unresolved && c.stage === 5 && c.markers.some(m => m.formula !== undefined && isCellInSqref(exp.ref, m.sqref)) && stage5WithholdJustification(c, exp.ref).length === 0) {
-        return `Cell ${exp.ref} expected matched: true, but production left it unresolved without a recorded justification`
+      if (actual.unresolved && c.stage === 5) {
+        // Fix round 2 (R2): each unresolved slot needs a justification for that slot of that rule.
+        const js = stage5Justifications(c, exp.ref)
+        const covering = c.markers.filter(m => isCellInSqref(exp.ref, m.sqref)).flatMap(m => stage5MarkerSlots(m as never))
+        const slots = actual.unresolvedSlots ?? ['ALL']
+        const open = (slots.includes('ALL') ? covering : slots.map(w => w.split('.')[0]!)).filter(slot => !stage5SlotJustified(js, slot))
+        if (open.length > 0) return `Cell ${exp.ref} expected matched: true, but production left ${open.join('+')} unresolved without a recorded justification`
       }
       if (actual.unresolved) continue
       if (!actual.applied) {
@@ -227,6 +237,18 @@ export function stage2ObservedFills(c: CfOracleCase, rootDir: string): Map<strin
  * Stage 2 does. Only a Stage 5 case with a readable screen sidecar yields a map. Production's withheld cells are reported by
  * `verifyCaseCells`, never counted as matches.
  */
+/** Fix round 2 (R2): Excel's DisplayFormat strikethrough per observed Stage 5 cell. */
+export function stage5ObservedStrikes(c: CfOracleCase, rootDir: string): Map<string, boolean> {
+  const out = new Map<string, boolean>()
+  const cap = c.captures.find(x => x.appearance === 'screen') ?? c.captures[0]
+  if (!cap?.sidecarPath || !existsSync(resolve(rootDir, cap.sidecarPath))) return out
+  try {
+    const sidecar = JSON.parse(readFileSync(resolve(rootDir, cap.sidecarPath), 'utf8')) as { formulaObservations?: Record<string, { strikethrough?: unknown }> }
+    for (const [ref, o] of Object.entries(sidecar.formulaObservations ?? {})) out.set(ref.toUpperCase(), o?.strikethrough === true)
+  } catch { /* an unreadable sidecar has no strikethrough evidence */ }
+  return out
+}
+
 export function stage5ObservedFills(c: CfOracleCase, rootDir: string): Map<string, string> | undefined {
   if (c.stage !== 5) return undefined
   const cap = c.captures.find(x => x.appearance === 'screen') ?? c.captures[0]
@@ -335,6 +357,24 @@ export function verifyCaseCells(
   )
   if (mismatch) return mismatch
   let compared = 0
+  if (c.stage === 5) {
+    // Fix round 2 (R2): every Stage 5 observed cell is checked slot by slot, never skipped as unresolved: each resolved
+    // slot is Excel's (fill, strikethrough), each unresolved slot has a justification for that slot of that rule.
+    const strikes = stage5ObservedStrikes(c, rootDir)
+    for (const [ref, want] of observed) {
+      const pos = parseA1(ref)
+      if (!pos) return `Invalid observed cell reference: ${ref}`
+      const actual = actualAt(pos.row, pos.col)
+      const slots = actual.unresolvedSlots ?? (actual.unresolved ? ['ALL'] : [])
+      const production = { fill: actual.applied && actual.style?.fillColor ? String(actual.style.fillColor).toUpperCase() : 'none', strike: actual.applied && actual.style?.strike === true, unresolved: [...slots], visual: 'none' }
+      const excel = { fill: want === 'FFFFFFFF' ? 'none' : want, strike: strikes.get(ref) === true }
+      const covering = c.markers.filter(m => isCellInSqref(ref, m.sqref)).flatMap(m => stage5MarkerSlots(m as never))
+      const v = stage5CellAgreement(production, excel, slots.length > 0 ? stage5Justifications(c, ref) : [], covering)
+      if (!v.agrees) return `Cell ${ref}: ${v.disagreement}`
+      compared++
+    }
+    return compared === 0 ? `Stage 5 case ${c.id}: no observed cell was compared` : undefined
+  }
   for (const [ref, want] of observed) {
     const pos = parseA1(ref)
     if (!pos) return `Invalid observed cell reference: ${ref}`
@@ -486,7 +526,8 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
       || desc?.key === 'cf-unavailable'
     const iconCell = c.markers.some(m => m.ruleType === 'iconSet' && isCellInSqref(`${String.fromCharCode(65 + col)}${row + 1}`, m.sqref))
     const iconWithheld = outcome?.kind !== 'ready' && outcome?.kind !== 'no-match' || (outcome?.writes?.length ?? 0) > 0
-    return { applied, unresolved, style: hasStyle ? style : undefined, ...(iconCell ? { iconCell, icon: outcome?.icon ?? null, iconWithheld } : {}) }
+    const unresolvedSlots = outcome === undefined || outcome.kind === 'unresolved' ? ['ALL'] : [...(outcome.writes ?? [])]
+    return { applied, unresolved, unresolvedSlots, style: hasStyle ? style : undefined, ...(iconCell ? { iconCell, icon: outcome?.icon ?? null, iconWithheld } : {}) }
   })
   // Task 39 fix round 1 (F2): the Stage 5 accounting of the formula cells Excel formats.
   let stage5Stats: CfCompareResult['stage5']
@@ -499,7 +540,7 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
       const outcome = outcomes.get(`${pos.row},${pos.col}`)
       const style = scope ? scope.effectiveStyle(pos.row, pos.col, base as never) : (base as never)
       if (style && style !== base && Object.keys(style).length > 0 && (outcome?.writes.length ?? 0) === 0) stage5Stats.painted++
-      else if (stage5WithholdJustification(c, exp.ref).length > 0) stage5Stats.justifiedWithheld++
+      else if (stage5Justifications(c, exp.ref).some(j => j.slots.includes('fill'))) stage5Stats.justifiedWithheld++
     }
   }
   scope?.dispose()
@@ -601,20 +642,21 @@ export async function comparePagedViewport(c: CfOracleCase, rootDir: string): Pr
       const s = stateMap.get(`${row},${col}`)
       const iconCell = c.markers.some(m => m.ruleType === 'iconSet' && isCellInSqref(`${String.fromCharCode(65 + col)}${row + 1}`, m.sqref))
       // A cell with no state is a no-match: for an icon cell, production claims no icon.
-      if (!s) return iconCell ? { applied: false, iconCell, icon: null } : { applied: false, unresolved: true }
+      if (!s) return iconCell ? { applied: false, iconCell, icon: null, unresolvedSlots: [] } : { applied: false, unresolved: true, unresolvedSlots: [] }
       const iconState = iconCell ? { iconCell, icon: s.icon ? { set: CF_ICON_SET_NAMES[s.icon.set] ?? `#${s.icon.set}`, iconId: s.icon.iconId } : null, iconWithheld: s.unresolvedReason !== undefined || (s.unresolvedWrites?.length ?? 0) > 0 } : {}
       const unresolved = s.unresolvedReason !== undefined || (s.unresolvedWrites !== undefined && s.unresolvedWrites.length > 0)
+      const unresolvedSlots = s.unresolvedReason !== undefined ? ['ALL'] : [...(s.unresolvedWrites ?? [])]
       const hasProps = s.properties !== undefined && Object.keys(s.properties).length > 0
       const hasScale = s.scale?.argb !== undefined
       // A wire bar descriptor is an applied outcome (Task 23): the bar paints, though it writes no style property.
       const hasBar = s.bar !== undefined
       // Task 39 fix round 1 (F2): on a Stage 5 case Excel's expectation is its DisplayFormat fill, which a bar never writes.
-      if (!hasProps && !hasScale) return { applied: hasBar && c.stage !== 5, unresolved, ...iconState }
+      if (!hasProps && !hasScale) return { applied: hasBar && c.stage !== 5, unresolved, unresolvedSlots, ...iconState }
       const style = resolveCfCellStyle(base as never, {
         properties: s.properties,
         ...(hasScale ? { visual: { colorScale: { ruleId: s.scale!.ruleId, argb: s.scale!.argb, ...(s.scale!.fraction !== undefined ? { fraction: s.scale!.fraction } : {}) } } } : {}),
       }, colors)
-      return { applied: true, unresolved, style, ...iconState }
+      return { applied: true, unresolved, unresolvedSlots, style, ...iconState }
     })
     const outputHash = sha256Hex(lines)
     if (mismatch) {

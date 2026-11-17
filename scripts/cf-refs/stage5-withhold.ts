@@ -1,12 +1,16 @@
 /**
- * Task 39 fix round 1 (F1, ruling): a Stage 5 cell may be withheld only where an independently recorded justification
- * exists, keyed per cell from evidence, never from production's own unavailable state:
- * - a capability absent from the published set (or a reading production does not implement) that a covering formula rule
- *   needs: the rule's own marker capability, and every parse and evaluation capability its formula text requires
- *   (compiled here from the manifest's marker, not taken from production's parse);
- * - a formula the CF compiler refuses outright (an unsupported shape: the refusal is the justification);
- * - an enumerated refusal (`STAGE5_ENUMERATED_REFUSALS`), each with its ruling.
- * An empty list means the cell has no justification: withholding it is a failure.
+ * Task 39 fix rounds 1-2 (rulings F1, R1, R2): a Stage 5 cell may leave a write slot unresolved only where an
+ * independently recorded justification exists for THAT slot of THAT rule, keyed per cell from evidence, never from
+ * production's own unavailable state. A justification names the rule (its marker: capability and priority) and the
+ * slots it may leave unresolved: the rule's own slots, plus, for a stopIfTrue rule, the slots of the lower rules covering
+ * the cell (the stop's downstream effect). Its reason is one of:
+ * - a capability absent from the published set (or a reading production does not implement) that the rule needs: its
+ *   marker capability, every parse and evaluation capability its formula text requires (compiled here from the
+ *   manifest's marker), a formula bound's family, or a literal Stage 3-4 gate a twin meets;
+ * - a record configuration fixed before capture ("recorded, never evidence") covering the cell;
+ * - an enumerated refusal (`STAGE5_ENUMERATED_REFUSALS`), keyed by case, cell and exact formula text.
+ * A compile refusal is NOT a justification by itself (R1): the compiler cannot vouch for its own refusal. Only an
+ * enumerated expectation (`STAGE5_EXPECTED_COMPILE_REFUSALS`: case, formula text, refusal reason) can.
  */
 import { compileCfFormula, formulaRequiredCapabilities, isCfFormulaRefusal, type CfFormulaUse } from '../../src/xlsx/cf/formula'
 import { CF_FORMULA_PRODUCTION_READINGS, cfFormulaReading } from '../../src/xlsx/cf/formulaReadings'
@@ -16,20 +20,36 @@ import { isCellInSqref } from './verify'
 import type { CfOracleCase } from './cases'
 
 type Cfvo = Readonly<{ type: string; val?: string; f?: string }>
-type Marker = Readonly<{ sqref: string; capabilityId: string; ruleType: string; formulas?: readonly string[]; formula?: Readonly<{ kind: string; anchor: string; dialect: 'base' | 'x14' }>; dxf?: Readonly<{ fillRgb?: string }>
+type Marker = Readonly<{ sqref: string; capabilityId: string; ruleType: string; priority?: number; stopIfTrue?: boolean; formulas?: readonly string[]
+  formula?: Readonly<{ kind: string; anchor: string; dialect: 'base' | 'x14' }>
+  dxf?: Readonly<{ fillRgb?: string; fontRgb?: string; bold?: boolean; italic?: boolean; underline?: unknown; strikethrough?: boolean; numFmt?: unknown; borderTop?: unknown; borderBottom?: unknown }>
   scale?: Readonly<{ cfvo?: readonly Cfvo[] }>; bar?: Readonly<{ cfvo?: readonly Cfvo[] }>; icon?: Readonly<{ cfvo?: readonly Cfvo[] }> }>
+type CaseLike = Readonly<{ id: string; markers: readonly Marker[]; formulaConfigurations?: ReadonlyArray<Readonly<{ id: string; capabilityId?: string; refs: readonly string[]; record?: string }>> }>
+
+/** One rule-and-slot-specific justification. */
+export interface Stage5Justification { rule: string; slots: readonly string[]; reason: string }
+
 /** The family capability a `type="formula"` bound needs (service.ts VISUAL_FORMULA_CAPABILITY, Ruling S5-H). */
 const FORMULA_BOUND_FAMILY: Readonly<Record<string, string>> = { colorScale: 'scale:thresholds-formula', dataBar: 'bar:bounds-formula', iconSet: 'icon:thresholds-formula' }
 const isLiteralNumber = (v: string | undefined): boolean => v === undefined || /^-?\d+(\.\d+)?$/.test(v.trim())
-type CaseLike = Readonly<{ id: string; markers: readonly Marker[]; formulaConfigurations?: ReadonlyArray<Readonly<{ id: string; refs: readonly string[]; record?: string }>> }>
 
 /**
- * Per-cell refusals a published configuration still takes, each with the ruling that records it (`caseId:ref`). Each is
- * checked against the workbook's own data in tests/xlsx-cf-stage5.test.ts.
+ * Enumerated refusals a published configuration still takes: case, cell range, exact formula text and the ruling.
+ * Checked against the workbook's own data in tests/xlsx-cf-stage5.test.ts.
  */
-export const STAGE5_ENUMERATED_REFUSALS: Readonly<Record<string, string>> = Object.fromEntries(
-  Array.from({ length: 18 }, (_, i) => [`stage5-formula-functions:H${i + 2}`,
-    'S5-HOIST policy (Task 34; recorded in stage5-formula-hoist hoist-refused-boolean): COUNTIF($A:$A,A2)>1 counts over a range holding a boolean (A6 = TRUE), which the COUNTIF frequency hoist refuses for the whole rule']))
+export const STAGE5_ENUMERATED_REFUSALS: ReadonlyArray<Readonly<{ caseId: string; refs: readonly string[]; formula: string; reason: string }>> = [{
+  caseId: 'stage5-formula-functions', refs: Array.from({ length: 18 }, (_, i) => `H${i + 2}`), formula: 'COUNTIF($A:$A,A2)>1',
+  reason: 'S5-HOIST policy (Task 34; recorded in stage5-formula-hoist hoist-refused-boolean): COUNTIF($A:$A,A2)>1 counts over a range holding a boolean (A6 = TRUE), which the COUNTIF frequency hoist refuses for the whole rule',
+}]
+
+/**
+ * Ruling R1: compile refusals that are expected, each recorded independently of the compiler (case, exact formula text,
+ * refusal code, and the ruling that predicts it). Any other compile refusal of a covering rule leaves its slots
+ * unjustified. tests/xlsx-cf-stage5.test.ts checks each entry still refuses exactly so.
+ */
+export const STAGE5_EXPECTED_COMPILE_REFUSALS: ReadonlyArray<Readonly<{ caseId: string; formula: string; refused: 'cf-unsupported-rule' | 'cf-resource-limit'; reason: string }>> = [
+  { caseId: 'stage5-formula-truthiness', formula: 'NA()', refused: 'cf-unsupported-rule', reason: 'OD-13 / Ruling S5-B: the closed tier-1 function allow-list holds no NA(), so the error-truth rule built on it is unresolved' },
+]
 
 const a1 = (ref: string): { row: number; col: number } => {
   const m = /^([A-Z]+)(\d+)$/.exec(ref)!
@@ -41,50 +61,127 @@ function held(capability: string, published: (id: string) => boolean): boolean {
   return Object.prototype.hasOwnProperty.call(CF_FORMULA_PRODUCTION_READINGS, capability) ? cfFormulaReading(capability, published) !== undefined : published(capability)
 }
 
-/** The recorded reasons `ref` of `c` may be withheld (empty: none, so withholding it is a failure). */
-export function stage5WithholdJustification(c: CaseLike | CfOracleCase, ref: string, published: (id: string) => boolean = id => VERIFIED_CAPABILITIES.has(id)): string[] {
-  const reasons = new Set<string>()
+/** The write slots (compose.ts groups) a rule's marker writes: its visual slot, or its DXF's property groups. */
+export function stage5MarkerSlots(m: Marker): string[] {
+  if (m.ruleType === 'dataBar') return ['dataBar', 'showValue']
+  if (m.ruleType === 'iconSet') return ['iconSet', 'showValue']
+  if (m.ruleType === 'colorScale') return ['fill', 'colorScale']
+  const d = m.dxf ?? {}
+  const out: string[] = []
+  if (d.fillRgb !== undefined) out.push('fill')
+  if (d.fontRgb !== undefined || d.bold !== undefined || d.italic !== undefined || d.underline !== undefined || d.strikethrough !== undefined) out.push('font')
+  if (d.numFmt !== undefined) out.push('numFmt')
+  if (d.borderTop !== undefined || d.borderBottom !== undefined) out.push('border')
+  return out
+}
+
+const label = (m: Marker): string => `${m.capabilityId}/${m.ruleType}${m.priority !== undefined ? `@p${m.priority}` : ''}`
+
+/** The capability reasons a formula marker is not held (empty: production holds everything it needs). */
+function formulaMarkerReasons(m: Marker, caseId: string, published: (id: string) => boolean): string[] {
+  const reasons: string[] = []
+  if (!held(m.capabilityId, published)) reasons.push(`${m.capabilityId} not held`)
+  const ranges = m.sqref.trim().split(/\s+/)
+  const use = m.formula!.kind as CfFormulaUse
+  const texts = new Set(m.formulas ?? [])
+  // A visual's formula bounds (S5-H): each non-literal cfvo value is a cfvo formula; a `formula` bound needs its family
+  // capability, a colour scale's reference `num` the Stage 2 reference reading (service.ts visualFormulaRefusal).
+  if (use === 'cfvo') {
+    for (const b of m.scale?.cfvo ?? m.bar?.cfvo ?? m.icon?.cfvo ?? []) {
+      const text = b.f ?? b.val
+      if (isLiteralNumber(text)) continue
+      texts.add(text!)
+      if (b.type === 'formula' && FORMULA_BOUND_FAMILY[m.ruleType] && !held(FORMULA_BOUND_FAMILY[m.ruleType]!, published)) reasons.push(`${FORMULA_BOUND_FAMILY[m.ruleType]} not held (a formula bound)`)
+      if (m.ruleType === 'colorScale' && b.type === 'num' && !published('scale:thresholds-num-val-reference')) reasons.push('scale:thresholds-num-val-reference not held')
+    }
+  }
+  for (const text of texts) {
+    const out = compileCfFormula(text, use === 'cfvo' || ranges.length === 1 ? a1(m.formula!.anchor) : undefined, createCfMemory())
+    if (isCfFormulaRefusal(out)) {
+      // R1: only an independently recorded expectation of exactly this refusal justifies it.
+      const expected = STAGE5_EXPECTED_COMPILE_REFUSALS.find(e => e.caseId === caseId && e.formula === text && e.refused === out.refused)
+      if (expected) reasons.push(`${text}: expected compile refusal (${expected.reason})`)
+      continue
+    }
+    try {
+      const caps = formulaRequiredCapabilities(out.value, use, { dialect: m.formula!.dialect, rangeCount: ranges.length, sourceType: m.ruleType as never })
+      const needed = [...caps.parse, ...caps.evaluation]
+      if (use === 'cfvo') needed.push(out.value.ast.type === 'cell' ? 'formula:cfvo-reference' : 'formula:cfvo-expression')
+      for (const cap of needed) if (!held(cap, published)) reasons.push(`${cap} not held (needed by ${text})`)
+    } finally { out.release() }
+  }
+  return reasons
+}
+
+/** The rule- and slot-specific justifications for `ref` of `c` (empty: no slot of the cell may be left unresolved). */
+export function stage5Justifications(c: CaseLike | CfOracleCase, ref: string, published: (id: string) => boolean = id => VERIFIED_CAPABILITIES.has(id)): Stage5Justification[] {
   const cs = c as unknown as CaseLike
-  for (const m of cs.markers) {
-    if (m.formula === undefined || !isCellInSqref(ref, m.sqref)) continue
-    if (!held(m.capabilityId, published)) reasons.add(`${m.capabilityId} not held`)
-    const ranges = m.sqref.trim().split(/\s+/)
-    const use = m.formula.kind as CfFormulaUse
-    const texts = new Set(m.formulas ?? [])
-    // A visual's formula bounds (S5-H): each non-literal cfvo value is a cfvo formula; a `formula` bound needs its family
-    // capability, a colour scale's reference `num` the Stage 2 reference reading (service.ts visualFormulaRefusal).
-    if (use === 'cfvo') {
-      for (const b of m.scale?.cfvo ?? m.bar?.cfvo ?? m.icon?.cfvo ?? []) {
-        const text = b.f ?? b.val
-        if (isLiteralNumber(text)) continue
-        texts.add(text!)
-        if (b.type === 'formula' && FORMULA_BOUND_FAMILY[m.ruleType] && !held(FORMULA_BOUND_FAMILY[m.ruleType]!, published)) reasons.add(`${FORMULA_BOUND_FAMILY[m.ruleType]} not held (a formula bound)`)
-        if (m.ruleType === 'colorScale' && b.type === 'num' && !published('scale:thresholds-num-val-reference')) reasons.add('scale:thresholds-num-val-reference not held')
-      }
-    }
-    for (const text of texts) {
-      const out = compileCfFormula(text, use === 'cfvo' || ranges.length === 1 ? a1(m.formula.anchor) : undefined, createCfMemory())
-      if (isCfFormulaRefusal(out)) { reasons.add(`${m.capabilityId}: ${text} refused at compile (${out.refused}: ${out.reason})`); continue }
-      try {
-        const caps = formulaRequiredCapabilities(out.value, use, { dialect: m.formula.dialect, rangeCount: ranges.length, sourceType: m.ruleType as never })
-        const needed = [...caps.parse, ...caps.evaluation]
-        if (use === 'cfvo') needed.push(out.value.ast.type === 'cell' ? 'formula:cfvo-reference' : 'formula:cfvo-expression')
-        for (const cap of needed) if (!held(cap, published)) reasons.add(`${cap} not held (needed by ${text})`)
-      } finally { out.release() }
-    }
-  }
-  // Literal visual gates of Stages 3-4 that a Stage 5 twin meets (each a capability absent from the published set):
-  // a bar with a `num` bound needs bar:bounds-num (Task 37 ruling), and an icon over a cell a DXF fill rule also covers
-  // needs icon:composition-dxf-fill (S4-I).
   const covering = cs.markers.filter(m => isCellInSqref(ref, m.sqref))
+  const lowerSlots = (m: Marker): string[] => m.stopIfTrue && m.priority !== undefined
+    ? covering.filter(o => o.priority !== undefined && o.priority > m.priority!).flatMap(stage5MarkerSlots) : []
+  const scope = (m: Marker): string[] => [...new Set([...stage5MarkerSlots(m), ...lowerSlots(m)])]
+  const out: Stage5Justification[] = []
   for (const m of covering) {
-    if (m.formula !== undefined) continue
-    if (m.ruleType === 'dataBar' && (m.bar?.cfvo ?? []).some(b => b.type === 'num') && !published('bar:bounds-num')) reasons.add('bar:bounds-num not held (a literal bar with num bounds)')
-    if (m.ruleType === 'iconSet' && covering.some(o => o !== m && o.dxf?.fillRgb !== undefined) && !published('icon:composition-dxf-fill')) reasons.add('icon:composition-dxf-fill not held (an icon over a DXF fill)')
+    if (m.formula !== undefined) {
+      for (const reason of formulaMarkerReasons(m, cs.id, published)) out.push({ rule: label(m), slots: scope(m), reason })
+    } else {
+      // Literal visual gates of Stages 3-4 that a Stage 5 twin meets (each a capability absent from the published set):
+      // a bar with a `num` bound needs bar:bounds-num (Task 37 ruling); an icon over a cell a DXF fill rule also covers
+      // needs icon:composition-dxf-fill (S4-I). Each excuses only that visual's own slot.
+      if (m.ruleType === 'dataBar' && (m.bar?.cfvo ?? []).some(b => b.type === 'num') && !published('bar:bounds-num')) out.push({ rule: label(m), slots: stage5MarkerSlots(m), reason: 'bar:bounds-num not held (a literal bar with num bounds)' })
+      if (m.ruleType === 'iconSet' && covering.some(o => o !== m && o.dxf?.fillRgb !== undefined) && !published('icon:composition-dxf-fill')) out.push({ rule: label(m), slots: stage5MarkerSlots(m), reason: 'icon:composition-dxf-fill not held (an icon over a DXF fill)' })
+    }
   }
-  // A record configuration (fixed before capture: "recorded, never evidence") names its refusal itself.
-  for (const cfg of cs.formulaConfigurations ?? []) if (cfg.record && cfg.refs.includes(ref)) reasons.add(`${cfg.id}: ${cfg.record}`)
-  const enumerated = STAGE5_ENUMERATED_REFUSALS[`${c.id}:${ref}`]
-  if (enumerated) reasons.add(enumerated)
-  return [...reasons].sort()
+  // A record configuration (fixed before capture: "recorded, never evidence") names its refusal: it excuses the slots
+  // of the formula rules of its capability that cover the cell.
+  for (const cfg of cs.formulaConfigurations ?? []) {
+    if (!cfg.record || !cfg.refs.includes(ref)) continue
+    for (const m of covering.filter(x => x.formula !== undefined && (cfg.capabilityId === undefined || x.capabilityId === cfg.capabilityId))) out.push({ rule: label(m), slots: scope(m), reason: `${cfg.id}: ${cfg.record}` })
+  }
+  for (const e of STAGE5_ENUMERATED_REFUSALS) {
+    if (e.caseId !== cs.id || !e.refs.includes(ref)) continue
+    for (const m of covering.filter(x => x.formulas?.includes(e.formula))) out.push({ rule: label(m), slots: scope(m), reason: e.reason })
+  }
+  return out
+}
+
+/** Backward-compatible flat list of reasons (any slot); prefer `stage5Justifications`. */
+export function stage5WithholdJustification(c: CaseLike | CfOracleCase, ref: string, published?: (id: string) => boolean): string[] {
+  return [...new Set(stage5Justifications(c, ref, published).map(j => `${j.rule}: ${j.reason}`))].sort()
+}
+
+/** Whether the justifications excuse `slot` (a compose.ts write group; `ALL` needs every covering rule's slots). */
+export function stage5SlotJustified(justifications: readonly Stage5Justification[], slot: string): boolean {
+  return justifications.some(j => j.slots.includes(slot) || j.slots.includes('ALL'))
+}
+
+/** What production shows at a cell: the resolved fill/strike, the unresolved write slots, and the visual it draws. */
+export interface Stage5Production { fill: string; strike: boolean; unresolved: string[]; visual: string }
+/** What Excel showed: its DisplayFormat fill/strike, and the bar/icon measured from the PNG where measurable. */
+export interface Stage5Excel { fill: string; strike: boolean; visual?: string }
+
+const argbClose = (a: string, b: string): boolean => a === b || (a.length === 8 && b.length === 8 && [2, 4, 6].every(k => Math.abs(parseInt(a.slice(k, k + 2), 16) - parseInt(b.slice(k, k + 2), 16)) <= 8))
+const groupOf = (w: string): string => w.split('.')[0]!
+
+/**
+ * Rulings F3/R2: one cell's verdict. Every unresolved slot must be excused by a justification naming that slot; a
+ * cell-wide `ALL` needs every slot of every covering rule excused (`coveringSlots`). Every slot left resolved is compared
+ * with Excel: the fill (within +-8, the Stage 2 scale tolerance), the strikethrough, and a bar or icon Excel was measured
+ * to draw (or not).
+ */
+export function stage5CellAgreement(production: Stage5Production, excel: Stage5Excel | undefined, justifications: readonly Stage5Justification[], coveringSlots: readonly string[] = []): { agrees: boolean; disagreement?: string } {
+  const unresolved = new Set(production.unresolved.map(groupOf))
+  const toExcuse = unresolved.has('ALL') ? new Set([...coveringSlots, ...[...unresolved].filter(s => s !== 'ALL')]) : unresolved
+  for (const slot of toExcuse) if (!stage5SlotJustified(justifications, slot)) return { agrees: false, disagreement: `slot ${slot} unresolved without a recorded justification for it` }
+  const open = (slot: string): boolean => !unresolved.has('ALL') && !unresolved.has(slot)
+  if (!excel) return { agrees: true }
+  if (open('fill') && open('colorScale') && !argbClose(production.fill, excel.fill)) return { agrees: false, disagreement: `fill ${production.fill} vs Excel ${excel.fill}` }
+  if (open('font') && production.strike !== excel.strike) return { agrees: false, disagreement: `strikethrough ${production.strike} vs Excel ${excel.strike}` }
+  if (excel.visual !== undefined) {
+    const slot = excel.visual === 'bar' || production.visual === 'bar' ? 'dataBar' : 'iconSet'
+    if (production.visual === 'withheld') {
+      if (excel.visual !== 'none' && !stage5SlotJustified(justifications, slot)) return { agrees: false, disagreement: `visual withheld without a recorded justification (Excel ${excel.visual})` }
+    } else if (production.visual !== excel.visual) return { agrees: false, disagreement: `visual ${production.visual} vs Excel ${excel.visual}` }
+  }
+  return { agrees: true }
 }

@@ -15,7 +15,7 @@ import { OfficePackage } from '../src/core/zip'
 import { parseXlsx, type ParseXlsxOptions } from '../src/xlsx/parse'
 import { cfDocumentEvaluationOf, prepareCfPaint, residentSource } from '../src/xlsx/cf/render'
 import { prepareCfTextScope } from '../src/xlsx/cf/text'
-import { stage5WithholdJustification } from '../scripts/cf-refs/stage5-withhold'
+import { stage5SlotVerdict } from './helpers/cf-stage5-verdict'
 import type { CfDateContext } from '../src/xlsx/cf/predicates'
 import type { XlsxSheet } from '../src/xlsx/types'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
@@ -124,19 +124,19 @@ async function stage5WithheldAt(sheet: XlsxSheet, doc: Awaited<ReturnType<typeof
 }
 
 /**
- * Task 39 fix round 1 (F1, ruling): one Stage 5 cell under a formula rule that production paints nothing at. Withheld is
- * accepted only with an independently recorded justification (`stage5WithholdJustification`: a capability the cell's
- * formula rules need is not published, the formula is refused at compile, or an enumerated refusal); production's own
- * unavailable state never counts. Not withheld, it must be Excel's outcome (no format). Returns the violation, if any.
+ * Task 39 fix rounds 1-2 (F1, R2): one Stage 5 cell under a formula rule. The production service's outcome at the cell is
+ * compared slot by slot (`stage5SlotVerdict`): every unresolved slot needs a justification for that slot of that rule,
+ * every resolved slot is Excel's. A cell the paint leaves unformatted where Excel shows a format must also be announced
+ * withheld by production's text scope (not a no-match). Returns the violation, if any.
  */
-async function stage5UnpaintedVerdict(c: CfManifest['cases'][number], exp: { ref: string; matched?: boolean }, sheet: XlsxSheet, doc: Awaited<ReturnType<typeof parseXlsx>>, dateContext: CfDateContext | undefined): Promise<{ violation?: string; withheld: boolean }> {
+async function stage5CellVerdict5(c: CfManifest['cases'][number], exp: { ref: string; matched?: boolean }, gotMatched: boolean, sheet: XlsxSheet, doc: Awaited<ReturnType<typeof parseXlsx>>, dateContext: CfDateContext | undefined): Promise<{ violation?: string; withheld: boolean }> {
   const key = `${c.id}:${exp.ref}`
+  const slot = await stage5SlotVerdict(c, doc, sheet, exp.ref, REPO_ROOT)
+  if (slot) return { withheld: false, violation: slot }
+  if (gotMatched) return { withheld: false }
   const withheld = await stage5WithheldAt(sheet, doc, exp.ref, dateContext)
-  if (withheld) {
-    const why = stage5WithholdJustification(c, exp.ref)
-    return why.length > 0 ? { withheld } : { withheld, violation: `${key}: withheld without a recorded justification (every capability its formula rules need is published)` }
-  }
-  return exp.matched ? { withheld, violation: `${key}: Excel shows a format and production paints none (a no-match, not withheld)` } : { withheld }
+  if (!withheld && exp.matched) return { withheld, violation: `${key}: Excel shows a format and production paints none (a no-match, not withheld)` }
+  return { withheld }
 }
 
 describe('production viewer conditional formatting oracle conformance (C1 & C3)', () => {
@@ -292,11 +292,9 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
             // Where production paints nothing but Excel shows a format, production must announce the cell withheld: a
             // no-match there would be a wrong paint. Literal twins and positive controls carry no formula: always compared.
             if (stage5FormulaCovered(c, exp.ref)) {
-              if (!gotMatched) {
-                const verdict = await stage5UnpaintedVerdict(c, exp, sheet, doc, dateContext)
-                expect(verdict.violation, cellKey).toBeUndefined()
-                if (verdict.withheld) { stage5Withheld++; continue }
-              }
+              const verdict = await stage5CellVerdict5(c, exp, gotMatched, sheet, doc, dateContext)
+              expect(verdict.violation, cellKey).toBeUndefined()
+              if (verdict.withheld) { stage5Withheld++; continue }
               stage5FormulaCompared++
             } else stage5Compared++
           }
@@ -1612,8 +1610,7 @@ describe('a Stage 5 cell withheld without a recorded justification fails (Task 3
         const { row, col } = refToRowCol(exp.ref)
         const st = paint.layer.styleAt(row, col, undefined)
         const gotMatched = Boolean(st && (st.fillColor || st.color || st.bold !== undefined || st.strike === true || st.formatCode || st.numFmtId))
-        if (gotMatched) continue
-        const v = await stage5UnpaintedVerdict(c, exp, sheet, doc, undefined)
+        const v = await stage5CellVerdict5(c, exp, gotMatched, sheet, doc, undefined)
         if (v.violation) out.push(v.violation)
       }
       paint.dispose()
@@ -1624,6 +1621,6 @@ describe('a Stage 5 cell withheld without a recorded justification fails (Task 3
     ;(rule as { definition: unknown }).definition = { kind: 'unresolved', type: 'expression', reason: 'cf-resource-limit' }
     const caught = await verdicts()
     expect(caught.length, 'the mutant is caught').toBeGreaterThan(0)
-    expect(caught.every(v => /withheld without a recorded justification/.test(v))).toBe(true)
+    expect(caught.every(v => /without a recorded justification/.test(v))).toBe(true)
   }, 120000)
 })

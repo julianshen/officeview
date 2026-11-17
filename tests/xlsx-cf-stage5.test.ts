@@ -332,14 +332,21 @@ describe('per-case and per-variant Stage 5 audit rows (Task 39; fix round 1, F3)
   it('a resolved paint is compared even when another slot is unresolved; a visual is compared where Excel measured one', async () => {
     const { stage5CellAgreement } = await import('../scripts/cf-refs/audit')
     const RED = 'FFFFC7CE', GREEN = 'FFC6EFCE'
+    // Fix round 2 (R2): a justification names its rule and the slots it may leave unresolved.
+    const font = [{ rule: 'r@p1', slots: ['font'], reason: 'x' }], fill = [{ rule: 'r@p1', slots: ['fill'], reason: 'x' }]
+    const icon = [{ rule: 'icon@p2', slots: ['iconSet'], reason: 'icon:composition-dxf-fill not held' }]
     // Codex's synthetic: production paints a green fill with an unresolved font.strike; Excel shows red. Wrong paint.
-    expect(stage5CellAgreement({ fill: GREEN, strike: false, unresolved: ['font.strike'], visual: 'none' }, { fill: RED, strike: false }, ['x']).agrees).toBe(false)
-    // The same unresolved strike with Excel's own fill is fine only with a justification for the unresolved slot.
-    expect(stage5CellAgreement({ fill: RED, strike: false, unresolved: ['font.strike'], visual: 'none' }, { fill: RED, strike: false }, ['x']).agrees).toBe(true)
+    expect(stage5CellAgreement({ fill: GREEN, strike: false, unresolved: ['font.strike'], visual: 'none' }, { fill: RED, strike: false }, font).agrees).toBe(false)
+    // The same unresolved strike with Excel's own fill is fine only with a justification for the font slot.
+    expect(stage5CellAgreement({ fill: RED, strike: false, unresolved: ['font.strike'], visual: 'none' }, { fill: RED, strike: false }, font).agrees).toBe(true)
+    expect(stage5CellAgreement({ fill: RED, strike: false, unresolved: ['font.strike'], visual: 'none' }, { fill: RED, strike: false }, fill).agrees).toBe(false)
     expect(stage5CellAgreement({ fill: RED, strike: false, unresolved: ['font.strike'], visual: 'none' }, { fill: RED, strike: false }, []).agrees).toBe(false)
-    // A wholly withheld fill needs a justification.
+    // A wholly withheld fill needs a justification for the fill slot; an icon justification does not excuse it (R2).
     expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['fill'], visual: 'none' }, { fill: RED, strike: false }, []).agrees).toBe(false)
-    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['fill'], visual: 'none' }, { fill: RED, strike: false }, ['x']).agrees).toBe(true)
+    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['fill', 'iconSet'], visual: 'withheld' }, { fill: RED, strike: false }, icon).agrees).toBe(false)
+    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['fill'], visual: 'none' }, { fill: RED, strike: false }, fill).agrees).toBe(true)
+    // A cell-wide refusal needs every covering slot excused.
+    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['ALL'], visual: 'withheld' }, { fill: RED, strike: false }, icon, ['fill', 'iconSet']).agrees).toBe(false)
     // Visual evidence: a bar where Excel measured none (or the reverse) disagrees; unmeasured is not compared.
     expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: [], visual: 'bar' }, { fill: 'none', strike: false, visual: 'none' }, []).agrees).toBe(false)
     expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: [], visual: 'bar' }, { fill: 'none', strike: false, visual: 'bar' }, []).agrees).toBe(true)
@@ -411,11 +418,11 @@ describe('the no-formula baseline keeps literal CF and does no formula work (Tas
 describe('enumerated withholding justifications are backed by the workbook (Task 39 fix round 1, F1)', () => {
   it('every enumerated refusal names a cell whose rule reads a range the S5-HOIST policy refuses', async () => {
     const { STAGE5_ENUMERATED_REFUSALS, stage5WithholdJustification } = await import('../scripts/cf-refs/stage5-withhold')
-    const keys = Object.keys(STAGE5_ENUMERATED_REFUSALS)
+    const keys = STAGE5_ENUMERATED_REFUSALS.flatMap(e => e.refs)
     expect(keys.length).toBe(18)
     const c = manifest().cases.find(x => x.id === 'stage5-formula-functions')!
     for (const k of keys) {
-      const ref = k.split(':')[1]!
+      const ref = k
       expect(c.markers.some(m => m.formulas?.includes('COUNTIF($A:$A,A2)>1') && m.sqref.split(':')[0]!.startsWith('H')), k).toBe(true)
       expect(stage5WithholdJustification(c, ref).join(), k).toMatch(/S5-HOIST policy/)
     }

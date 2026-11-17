@@ -2247,55 +2247,10 @@ export async function stage4CaseRecords(manifest: CfManifest, rootDir: string = 
   }
   return out
 }
-/** What production shows at a cell: the resolved fill/strike, the unresolved write slots, and the visual it draws. */
-export interface Stage5Production { fill: string; strike: boolean; unresolved: string[]; visual: string }
-/** What Excel showed: its DisplayFormat fill/strike, and the bar/icon measured from the PNG where measurable. */
-export interface Stage5Excel { fill: string; strike: boolean; visual?: string }
-
-export interface Stage5CaseRecord {
-  caseId: string
-  /** The variant: the designated cell (or its control). */
-  ref: string
-  status: string
-  /** Whether the row was compared with Excel; when not, `notCompared` says why (an unmeasured case). */
-  compared: boolean
-  notCompared?: string
-  /** `display-format` under a formula rule, `literal` under literal twins/controls only, `control` with no rule. */
-  evidenceKind: 'display-format' | 'literal' | 'control'
-  /** The formula capabilities of the rules covering the cell. */
-  capabilities: string[]
-  excel: Stage5Excel | undefined
-  production: Stage5Production
-  /** The recorded justifications for any unresolved slot (stage5WithholdJustification). */
-  justification: string[]
-  /** Fix round 1 (F3): every resolved component is Excel's, every unresolved slot is justified, a measured visual agrees. */
-  agrees: boolean
-  disagreement?: string
-  mode: 'resident'
-  stamp: { cfGen: number; workbookValueGen: number }
-  /** The case's CF memory peak (bytes) and the work units its preparations spent. */
-  bytePeak: number
-  workUnits: number
-}
-
-const argbClose = (a: string, b: string): boolean => a === b || (a.length === 8 && b.length === 8 && [2, 4, 6].every(k => Math.abs(parseInt(a.slice(k, k + 2), 16) - parseInt(b.slice(k, k + 2), 16)) <= 8))
-
-/**
- * Task 39 fix round 1 (F3): one cell's verdict. Resolved paint and unresolved slots are kept apart: the resolved fill is
- * compared with Excel's (within +-8, the Stage 2 scale tolerance) unless the fill slot is unresolved, the strikethrough
- * unless a font slot is, and any unresolved slot needs a recorded justification. A bar or icon Excel was measured to draw
- * (or not) must match what production draws; an unmeasured visual is not compared.
- */
-export function stage5CellAgreement(production: Stage5Production, excel: Stage5Excel | undefined, justification: readonly string[]): { agrees: boolean; disagreement?: string } {
-  const slot = (prefix: string): boolean => production.unresolved.some(w => w === 'ALL' || w === prefix || w.startsWith(`${prefix}.`))
-  if (production.unresolved.length > 0 && justification.length === 0) return { agrees: false, disagreement: `unresolved ${production.unresolved.join('+')} without a recorded justification` }
-  if (!excel) return { agrees: true }
-  if (!slot('fill') && !argbClose(production.fill, excel.fill)) return { agrees: false, disagreement: `fill ${production.fill} vs Excel ${excel.fill}` }
-  if (!slot('font') && production.strike !== excel.strike) return { agrees: false, disagreement: `strikethrough ${production.strike} vs Excel ${excel.strike}` }
-  if (excel.visual !== undefined && production.visual !== 'withheld' && production.visual !== excel.visual) return { agrees: false, disagreement: `visual ${production.visual} vs Excel ${excel.visual}` }
-  if (production.visual === 'withheld' && excel.visual !== undefined && excel.visual !== 'none' && justification.length === 0) return { agrees: false, disagreement: `visual withheld without a recorded justification (Excel ${excel.visual})` }
-  return { agrees: true }
-}
+// Fix round 2 (R2): the agreement and the slot-specific justifications live in ./stage5-withhold (shared with
+// cf-compare and the conformance test).
+export { stage5CellAgreement, type Stage5Excel, type Stage5Production } from './stage5-withhold'
+import { stage5CellAgreement, stage5Justifications, stage5MarkerSlots, type Stage5Excel, type Stage5Justification, type Stage5Production } from './stage5-withhold'
 
 /** The per-case/variant records of every Stage 5 case under production evidence (nothing injected). */
 export async function stage5CaseRecords(manifest: CfManifest, rootDir: string = REPO_ROOT): Promise<Stage5CaseRecord[]> {
@@ -2309,7 +2264,6 @@ export async function stage5CaseRecords(manifest: CfManifest, rootDir: string = 
   const { resolveCfCellStyle } = await import('../../src/xlsx/cf/dxf')
   const { cfRulesVersion } = await import('../../src/xlsx/view/pagedSource')
   const { formulaObservationOf, decodePngSync, computeWorksheetRangeGeometry, readZipPartsSync, stage5IconKey, describeS5Visual } = await import('./verify')
-  const { stage5WithholdJustification } = await import('./stage5-withhold')
   const refRC = (ref: string) => { const m = /^([A-Z]+)(\d+)$/.exec(ref)!; return { row: Number(m[2]) - 1, col: [...m[1]!].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1 } }
   const iconKey = stage5IconKey(rootDir)
   const out: Stage5CaseRecord[] = []
@@ -2382,8 +2336,8 @@ export async function stage5CaseRecords(manifest: CfManifest, rootDir: string = 
           const cls = CF_ICON_GLYPH_CLASSES[production.visual.slice(5)]
           if (cls) production = { ...production, visual: `icon:${cls}` }
         }
-        const justification = production.unresolved.length > 0 || production.visual === 'withheld' ? stage5WithholdJustification(c, exp.ref) : []
-        const verdict = stage5CellAgreement(production, excel, justification)
+        const justification = production.unresolved.length > 0 || production.visual === 'withheld' ? stage5Justifications(c, exp.ref) : []
+        const verdict = stage5CellAgreement(production, excel, justification, k.covering.flatMap(m => stage5MarkerSlots(m)))
         out.push({
           caseId: c.id, ref: exp.ref, status: c.status, compared: true,
           evidenceKind: k.kind, capabilities: k.formulaCaps, excel, production, justification,
