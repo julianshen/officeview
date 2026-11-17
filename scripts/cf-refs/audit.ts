@@ -953,7 +953,9 @@ export function auditStage5Manifest(manifest: CfManifest, options: { rootDir?: s
   for (const p of perCapability) {
     if (p.disposition !== 'verified') continue
     const res = evidence.get(p.caseId)
-    const matched = res?.kind === 'verified' ? res.matchedHypotheses?.[p.capabilityId] : ownedByCase(p.capabilityId) ? undefined : 'recorded'
+    // A reuse-only capability (S5-STUB) has no configuration in its owning case, so its reading is always the recorded
+    // Stage 1-4 outcome, whether or not that case's own capture verifies (Task 39: the composition rebuild verified it).
+    const matched = !ownedByCase(p.capabilityId) ? 'recorded' : res?.kind === 'verified' ? res.matchedHypotheses?.[p.capabilityId] : undefined
     if (typeof matched === 'string') matchedReadings[p.capabilityId] = matched
   }
   const ids = new Set(CF_STAGE5_CAPABILITIES.map(e => e.capabilityId))

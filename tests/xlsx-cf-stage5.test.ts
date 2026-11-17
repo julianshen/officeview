@@ -44,6 +44,9 @@ const RECORDED_EXCEL_REFUSALS = [
   'formula:predicate-timeperiod-divergent',
   'formula:cross-sheet-missing',
   'formula:cfvo-nonnumeric',
+  // Re-deferred after the composition rebuild: the icon-only twin K2 is unmeasurable (icon drawn at cell top + 4 px).
+  'formula:composition-stop-icon',
+  'formula:composition-indirect-ahead-icon',
 ]
 
 describe('every enabled formula capability has verified evidence', () => {
@@ -300,4 +303,18 @@ describe('Stage 5 pressure scenarios and resource bounds (zero unowned live byte
     const { pressureFormulaCrossSheetCycles } = await import('../scripts/cf-refs/pressure-stage5')
     expect(await pressureFormulaCrossSheetCycles(20)).toMatchObject({ cycles: 20, ready: 20, pending: 20, cancelled: 20, maxNetBetween: 0, netBytes: 0 })
   })
+})
+
+describe('reuse-only capabilities keep their recorded reading whatever the owning case verifies (Task 39 gate defect)', () => {
+  it('the S5-STUB successors are matched `recorded` and publish with a verified stage5-composition', () => {
+    const audit = auditStage5Manifest(manifest(), { rootDir: REPO_ROOT })
+    const stubs = audit.perCapability.filter(p => p.capabilityId.startsWith('formula:composition-stub-successor-'))
+    expect(stubs).toHaveLength(4)
+    for (const p of stubs) {
+      expect(p.disposition, p.capabilityId).toBe('verified')
+      expect(audit.matchedReadings[p.capabilityId], p.capabilityId).toBe('recorded')
+    }
+    const gate = stage5Publication(audit)
+    for (const p of stubs) expect(gate.published, p.capabilityId).toContain(p.capabilityId)
+  }, 120000)
 })
