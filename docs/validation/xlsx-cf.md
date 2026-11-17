@@ -2430,6 +2430,39 @@ There are 2,036 rows over 17 cases: 791 formula cells, 542 painted as Excel, 0 d
 - **Known limit (accepted):** step 1 derives a formula's own needs from production's static `formulaRequiredCapabilities`. If that function regresses, the justification set regresses with it.
 - **Known limit:** the counterfactual reuses production's evaluator and compositor, so a defect inside them is caught only by the Excel comparison of the resolved components.
 
+### 14.z.5 Task 39 fix round 5 (codex re-review 4)
+
+- **Every surface fails directly on a counterfactual mismatch.**
+  - **Lesson 1 (r4 #1).** `tests/xlsx-cf-formula-rules.test.ts` now records any disagreement with the counterfactual as a violation in its own right. It is reported before, and regardless of, the fill/strike and unverified acceptance paths. Previously a disagreement only cleared the `justified` flag. Codex's two mutants now each give one violation, where the old helper returned none:
+    - I2 with the p13 icon refused;
+    - I3 with the p12 stopping expression refused.
+  - **cf-compare (r4 #2).** `stage5TokenOfActual` keeps the leg's icon and bar descriptors, resolved properties and colour-scale colour.
+    - Both legs (the interactive service outcome and the paged wire state) report them on every Stage 5 cell.
+    - On a measured case, every expected cell is checked against the counterfactual first, resolved or not.
+    - Codex's I2 mutant (icon nulled, `unresolved=false`, no unresolved slots) now fails with "visual none differs from the counterfactual's icon:…".
+  - **Audit rows and conformance.** They already failed on any `stage5CellAgreement` disagreement. They now compare the richer token below.
+- **Every component is compared.** The Stage 5 token now carries, alongside the unresolved write paths:
+  - fill and strikethrough, in Excel's vocabulary;
+  - every resolved DXF property (fill, each font path, numFmt, borders);
+  - the colour-scale colour;
+  - the bar/icon visual.
+
+  `stage5CellAgreement` requires each component to equal the counterfactual's. A token that does not report a component never agrees, so nothing is skipped. Excel's capture is then compared on fill, strikethrough and measured visuals, as before.
+- **Population.** The every-cell check covers the measured Stage 5 cases, the same population as the audit rows and conformance.
+  - An unmeasured case keeps the round-4 check on its matched-but-unresolved cells. Such a case has no Excel evidence: in `stage5-active-present-bar` (recipe-pending), production refuses a hand-authored unpaired x14 twin structurally.
+- **Harness defect fixed.** cf-compare (bar/icon cell detection) and the mutants helper named column AA as `[`. Both now use multi-letter A1 names. The defect surfaced once visuals were compared.
+
+**Gates after fix round 5:**
+- `npx vitest run`: 719 files, 14,377 passed, 13 failed, all environmental (missing `corpus/`, `core-entry`, stream, pivots, slideshow-morph).
+- `tsc -p .`: the 3 known errors.
+- Stages 1–4 audits: ok. Stage 5: `ok=true structural=31/31 unsupported=9 pending=5 unverifiedNonDiscriminating=9 stageComplete=true blockedCapabilities=0`.
+- Case records: 2,160 rows. 542 of 791 formula cells paint as Excel, 268 have justified unresolved slots, 57 visual comparisons were made, and 0 disagree.
+- Publish: `--write --publish-stage5` run twice, byte-identical. The published set is unchanged at 42.
+- Chromium (scratch config): 37/37.
+- `cf-compare --stage 5`: interactive 60 pass, 6 pending, 14 unsupported, 6 fail; paged 62 pass, 7 pending, 14 unsupported, 3 fail. The only Stage 5 failure is the `stage5-cross-sheet-missing` seed, as before; the paged wire states equal the resident counterfactual in every component on every measured case.
+- `check-eager`: ok. No production change this round (eager gzip 36,519 B as in 14.z.4).
+- `git diff --check`: clean.
+
 **Gates after fix round 4:**
 - `npx vitest run`: 719 files, 14,375 passed, 13 failed, all environmental (missing `corpus/`, `core-entry`, stream, pivots, slideshow-morph). The fix round 4 known red is cleared.
 - `tsc -p .`: the 3 known errors. `tsc -p tsconfig.scripts.json`: clean.
