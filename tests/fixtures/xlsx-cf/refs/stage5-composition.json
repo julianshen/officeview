@@ -62,13 +62,14 @@
     20
   ],
   "geometrySource": "excel-measured",
-  "resavedByExcel": false,
+  "resavedByExcel": true,
+  "resaveSavedSha256": "883824501988798d1a3728c8cf01d774f538fe2668f089bbeff972cc073e670f",
   "sheet": "Sheet1",
   "range": "A1:AO10",
   "hostTimeZone": "Asia/Taipei",
-  "savedSha256": "8c1d565810b3bb89e327d15553c7762f2299f9085a1b1914e34c032fc54ff8bb",
-  "pngSha256": "7cbfda6c73e88ca61082be290c46e9bcb43be962f83bea750edf2a5afd64da1e",
-  "capturedAt": "2026-11-17T15:04:35.413Z",
+  "savedSha256": "883824501988798d1a3728c8cf01d774f538fe2668f089bbeff972cc073e670f",
+  "pngSha256": "72b6e5d5ba0d6114d84c4c36d953e654b0ad93d3e6cc4362cbe58444ea88907a",
+  "capturedAt": "2026-11-17T18:46:35.106Z",
   "lockBefore": "unlocked",
   "lockAfter": "unlocked",
   "formulaObservations": {
@@ -78,7 +79,7 @@
       "strikethrough": false
     },
     "B3": {
-      "displayFormatFill": "FFC6EFCE",
+      "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": true
     },
@@ -88,7 +89,7 @@
       "strikethrough": false
     },
     "B5": {
-      "displayFormatFill": "FFC6EFCE",
+      "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": true
     },
@@ -98,7 +99,7 @@
       "strikethrough": false
     },
     "B7": {
-      "displayFormatFill": "FFC6EFCE",
+      "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": true
     },
@@ -112,62 +113,62 @@
       "baseFill": "FFFFFFFF",
       "strikethrough": true
     },
-    "C2": {
-      "displayFormatFill": "FFF8696B",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": false
-    },
-    "C3": {
-      "displayFormatFill": "FFDB7A6E",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": true
-    },
-    "C4": {
-      "displayFormatFill": "FFBD8B71",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": false
-    },
-    "C5": {
-      "displayFormatFill": "FF9F9C74",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": true
-    },
-    "C6": {
-      "displayFormatFill": "FF81AD77",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": false
-    },
-    "C7": {
-      "displayFormatFill": "FF63BE7B",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": true
-    },
     "D2": {
       "displayFormatFill": "FFF8696B",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
+    },
+    "D3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": true
     },
     "D4": {
       "displayFormatFill": "FFBD8B71",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
+    "D5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": true
+    },
     "D6": {
       "displayFormatFill": "FF81AD77",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "D3": {
+    "D7": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": true
+    },
+    "C2": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "C4": {
+      "displayFormatFill": "FFBD8B71",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "C6": {
+      "displayFormatFill": "FF81AD77",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "C3": {
       "displayFormatFill": "FFDB7A6E",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "D5": {
+    "C5": {
       "displayFormatFill": "FF9F9C74",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "D7": {
+    "C7": {
       "displayFormatFill": "FF63BE7B",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
@@ -202,7 +203,7 @@
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "H2": {
+    "G2": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
@@ -212,7 +213,7 @@
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "H4": {
+    "G4": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
@@ -222,7 +223,7 @@
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "H6": {
+    "G6": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
@@ -232,17 +233,17 @@
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "G3": {
+    "H3": {
       "displayFormatFill": "FFFFC7CE",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "G5": {
+    "H5": {
       "displayFormatFill": "FFFFC7CE",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "G7": {
+    "H7": {
       "displayFormatFill": "FFFFC7CE",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
@@ -277,7 +278,7 @@
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "L2": {
+    "K2": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
@@ -287,7 +288,7 @@
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "L4": {
+    "K4": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
@@ -297,7 +298,7 @@
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "L6": {
+    "K6": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
@@ -307,17 +308,17 @@
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "K3": {
+    "L3": {
       "displayFormatFill": "FFFFC7CE",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "K5": {
+    "L5": {
       "displayFormatFill": "FFFFC7CE",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "K7": {
+    "L7": {
       "displayFormatFill": "FFFFC7CE",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
@@ -453,7 +454,7 @@
       "strikethrough": false
     },
     "Q3": {
-      "displayFormatFill": "FFC6EFCE",
+      "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": true
     },
@@ -463,7 +464,7 @@
       "strikethrough": false
     },
     "Q5": {
-      "displayFormatFill": "FFC6EFCE",
+      "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": true
     },
@@ -473,81 +474,81 @@
       "strikethrough": false
     },
     "Q7": {
-      "displayFormatFill": "FFC6EFCE",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": true
-    },
-    "R2": {
-      "displayFormatFill": "FFF8696B",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": false
-    },
-    "R3": {
-      "displayFormatFill": "FFDB7A6E",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": true
-    },
-    "R4": {
-      "displayFormatFill": "FFBD8B71",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": false
-    },
-    "R5": {
-      "displayFormatFill": "FF9F9C74",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": true
-    },
-    "R6": {
-      "displayFormatFill": "FF81AD77",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": false
-    },
-    "R7": {
-      "displayFormatFill": "FF63BE7B",
+      "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": true
     },
     "S2": {
-      "displayFormatFill": "FFFFFFFF",
+      "displayFormatFill": "FFF8696B",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
     "S3": {
-      "displayFormatFill": "FFFFC7CE",
+      "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
-      "strikethrough": false
+      "strikethrough": true
     },
     "S4": {
-      "displayFormatFill": "FFFFFFFF",
+      "displayFormatFill": "FFBD8B71",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
     "S5": {
-      "displayFormatFill": "FFFFC7CE",
+      "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
-      "strikethrough": false
+      "strikethrough": true
     },
     "S6": {
-      "displayFormatFill": "FFFFFFFF",
+      "displayFormatFill": "FF81AD77",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
     "S7": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": true
+    },
+    "R2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "R3": {
       "displayFormatFill": "FFFFC7CE",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "H3": {
+    "R4": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "H5": {
+    "R5": {
+      "displayFormatFill": "FFFFC7CE",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "R6": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "H7": {
+    "R7": {
+      "displayFormatFill": "FFFFC7CE",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "G3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "G5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "G7": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
@@ -582,17 +583,17 @@
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "L3": {
+    "K3": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "L5": {
+    "K5": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "L7": {
+    "K7": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
@@ -637,47 +638,7 @@
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "X2": {
-      "displayFormatFill": "FFFFFFFF",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": false
-    },
-    "X3": {
-      "displayFormatFill": "FFFFFFFF",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": false
-    },
-    "X4": {
-      "displayFormatFill": "FFFFFFFF",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": false
-    },
-    "X5": {
-      "displayFormatFill": "FFFFFFFF",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": false
-    },
-    "X6": {
-      "displayFormatFill": "FFFFFFFF",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": false
-    },
-    "X7": {
-      "displayFormatFill": "FFFFFFFF",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": false
-    },
     "Y2": {
-      "displayFormatFill": "FFFFFFFF",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": false
-    },
-    "Y4": {
-      "displayFormatFill": "FFFFFFFF",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": false
-    },
-    "Y6": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
@@ -687,12 +648,52 @@
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
+    "Y4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
     "Y5": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
+    "Y6": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
     "Y7": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X6": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X7": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
@@ -727,7 +728,7 @@
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "AC2": {
+    "AB2": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
@@ -737,7 +738,7 @@
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "AC4": {
+    "AB4": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
@@ -747,7 +748,7 @@
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "AC6": {
+    "AB6": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
@@ -757,17 +758,17 @@
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "AB3": {
+    "AC3": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "AB5": {
+    "AC5": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "AB7": {
+    "AC7": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
@@ -802,7 +803,7 @@
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "AG2": {
+    "AF2": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
@@ -812,7 +813,7 @@
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "AG4": {
+    "AF4": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
@@ -822,7 +823,7 @@
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "AG6": {
+    "AF6": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
@@ -832,17 +833,17 @@
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "AF3": {
+    "AG3": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "AF5": {
+    "AG5": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "AF7": {
+    "AG7": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
@@ -1002,36 +1003,6 @@
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "AM2": {
-      "displayFormatFill": "FFFFFFFF",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": false
-    },
-    "AM3": {
-      "displayFormatFill": "FFFFFFFF",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": false
-    },
-    "AM4": {
-      "displayFormatFill": "FFFFFFFF",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": false
-    },
-    "AM5": {
-      "displayFormatFill": "FFFFFFFF",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": false
-    },
-    "AM6": {
-      "displayFormatFill": "FFFFFFFF",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": false
-    },
-    "AM7": {
-      "displayFormatFill": "FFFFFFFF",
-      "baseFill": "FFFFFFFF",
-      "strikethrough": false
-    },
     "AN2": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
@@ -1062,17 +1033,47 @@
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "AC3": {
+    "AM2": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "AC5": {
+    "AM3": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "AC7": {
+    "AM4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AM5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AM6": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AM7": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AB3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AB5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AB7": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
@@ -1107,17 +1108,17 @@
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "AG3": {
+    "AF3": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "AG5": {
+    "AF5": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
     },
-    "AG7": {
+    "AF7": {
       "displayFormatFill": "FFFFFFFF",
       "baseFill": "FFFFFFFF",
       "strikethrough": false
@@ -1126,37 +1127,37 @@
   "formulaEvaluation": {
     "formula:composition-stop-dxf": {
       "status": "discriminating",
-      "reason": "continues matches every designated cell; every required visual and empty cell is validated, and each rival is contradicted at >= 2 decisive cells of every replication group (Ruling S5-WITNESS)",
-      "matched": "continues",
+      "reason": "halts matches every designated cell; every required visual and empty cell is validated, and each rival is contradicted at >= 2 decisive cells of every replication group (Ruling S5-WITNESS)",
+      "matched": "halts",
       "survivors": [
-        "continues"
+        "halts"
       ],
       "observed": {
         "stop-dxf": {
           "B2": "FFC6EFCE",
-          "B3": "FFC6EFCE+strike",
+          "B3": "none+strike",
           "B4": "FFC6EFCE",
-          "B5": "FFC6EFCE+strike",
+          "B5": "none+strike",
           "B6": "FFC6EFCE",
-          "B7": "FFC6EFCE+strike"
+          "B7": "none+strike"
         }
       }
     },
     "formula:composition-stop-scale": {
       "status": "discriminating",
-      "reason": "continues matches every designated cell; every required visual and empty cell is validated, and each rival is contradicted at >= 2 decisive cells of every replication group (Ruling S5-WITNESS)",
-      "matched": "continues",
+      "reason": "halts matches every designated cell; every required visual and empty cell is validated, and each rival is contradicted at >= 2 decisive cells of every replication group (Ruling S5-WITNESS)",
+      "matched": "halts",
       "survivors": [
-        "continues"
+        "halts"
       ],
       "observed": {
         "stop-scale": {
-          "C2": "FFF8696B",
-          "C3": "FFDB7A6E+strike",
-          "C4": "FFBD8B71",
-          "C5": "FF9F9C74+strike",
-          "C6": "FF81AD77",
-          "C7": "FF63BE7B+strike"
+          "D2": "FFF8696B",
+          "D3": "none+strike",
+          "D4": "FFBD8B71",
+          "D5": "none+strike",
+          "D6": "FF81AD77",
+          "D7": "none+strike"
         }
       }
     },
@@ -1181,7 +1182,7 @@
     "formula:composition-stop-icon": {
       "status": "refused",
       "code": "missing-capture",
-      "reason": "stop-icon: twin L2 cannot be measured",
+      "reason": "stop-icon: twin K2 cannot be measured",
       "observed": {
         "stop-icon": {
           "I2": "unmeasurable|none",
@@ -1237,37 +1238,37 @@
     },
     "formula:composition-indirect-ahead-dxf": {
       "status": "discriminating",
-      "reason": "continues matches every designated cell; every required visual and empty cell is validated, and each rival is contradicted at >= 2 decisive cells of every replication group (Ruling S5-WITNESS)",
-      "matched": "continues",
+      "reason": "halts matches every designated cell; every required visual and empty cell is validated, and each rival is contradicted at >= 2 decisive cells of every replication group (Ruling S5-WITNESS)",
+      "matched": "halts",
       "survivors": [
-        "continues"
+        "halts"
       ],
       "observed": {
         "indirect-dxf": {
           "Q2": "FFC6EFCE",
-          "Q3": "FFC6EFCE+strike",
+          "Q3": "none+strike",
           "Q4": "FFC6EFCE",
-          "Q5": "FFC6EFCE+strike",
+          "Q5": "none+strike",
           "Q6": "FFC6EFCE",
-          "Q7": "FFC6EFCE+strike"
+          "Q7": "none+strike"
         }
       }
     },
     "formula:composition-indirect-ahead-scale": {
       "status": "discriminating",
-      "reason": "continues matches every designated cell; every required visual and empty cell is validated, and each rival is contradicted at >= 2 decisive cells of every replication group (Ruling S5-WITNESS)",
-      "matched": "continues",
+      "reason": "halts matches every designated cell; every required visual and empty cell is validated, and each rival is contradicted at >= 2 decisive cells of every replication group (Ruling S5-WITNESS)",
+      "matched": "halts",
       "survivors": [
-        "continues"
+        "halts"
       ],
       "observed": {
         "indirect-scale": {
-          "R2": "FFF8696B",
-          "R3": "FFDB7A6E+strike",
-          "R4": "FFBD8B71",
-          "R5": "FF9F9C74+strike",
-          "R6": "FF81AD77",
-          "R7": "FF63BE7B+strike"
+          "S2": "FFF8696B",
+          "S3": "none+strike",
+          "S4": "FFBD8B71",
+          "S5": "none+strike",
+          "S6": "FF81AD77",
+          "S7": "none+strike"
         }
       }
     },
@@ -1280,19 +1281,19 @@
       ],
       "observed": {
         "indirect-bar": {
-          "S2": "none|none",
-          "S3": "none|FFFFC7CE",
-          "S4": "bar:2-33|none",
-          "S5": "none|FFFFC7CE",
-          "S6": "bar:2-66|none",
-          "S7": "none|FFFFC7CE"
+          "R2": "none|none",
+          "R3": "none|FFFFC7CE",
+          "R4": "bar:2-33|none",
+          "R5": "none|FFFFC7CE",
+          "R6": "bar:2-66|none",
+          "R7": "none|FFFFC7CE"
         }
       }
     },
     "formula:composition-indirect-ahead-icon": {
       "status": "refused",
       "code": "missing-capture",
-      "reason": "indirect-icon: twin L2 cannot be measured",
+      "reason": "indirect-icon: twin K2 cannot be measured",
       "observed": {
         "indirect-icon": {
           "T2": "unmeasurable|none",

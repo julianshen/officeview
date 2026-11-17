@@ -28,13 +28,14 @@
     18
   ],
   "geometrySource": "excel-measured",
-  "resavedByExcel": false,
+  "resavedByExcel": true,
+  "resaveSavedSha256": "3c79e0039f3896383afe7d4a5b2296f9f7919b9e5045e7f5089795caedca926b",
   "sheet": "Sheet1",
   "range": "A1:K6",
   "hostTimeZone": "Asia/Taipei",
-  "savedSha256": "7d20c807a6f695df728867c61a228b6892affae6ba5436da05f376260bf44baa",
+  "savedSha256": "3c79e0039f3896383afe7d4a5b2296f9f7919b9e5045e7f5089795caedca926b",
   "pngSha256": "6e1798534d30e8f80e3d49fb27e25e0c4b4231947ecacce80a37b6b6b0592f26",
-  "capturedAt": "2026-11-17T15:23:32.258Z",
+  "capturedAt": "2026-11-17T18:47:26.404Z",
   "lockBefore": "unlocked",
   "lockAfter": "unlocked",
   "formulaObservations": {
