@@ -175,6 +175,42 @@ describe('media temp', () => {
     await t.remove()
   })
 
+  it('a second createMediaTemp on a claimed root is refused and leaves the first intact and usable', async () => {
+    const base = sub('twice')
+    const t = await createMediaTemp(base)
+    const a = await t.create(new Uint8Array([9]))
+    await expect(createMediaTemp(base)).rejects.toThrow(/already claimed/)
+    expect([...readFileSync(a.path)]).toEqual([9])
+    const b = await t.create(new Uint8Array([8]))
+    expect(t.live()).toBe(2)
+    await a.dispose(); await b.dispose()
+    await t.remove()
+    const again = await createMediaTemp(base) // released by remove(): claimable again
+    await again.remove()
+  })
+
+  it('a concurrent double call cannot race past the claim: exactly one wins', async () => {
+    const base = sub('race')
+    const rs = await Promise.allSettled([createMediaTemp(base), createMediaTemp(base)])
+    expect(rs.filter((r) => r.status === 'fulfilled').length).toBe(1)
+    const won = rs.find((r) => r.status === 'fulfilled') as PromiseFulfilledResult<Awaited<ReturnType<typeof createMediaTemp>>>
+    const f = await won.value.create(new Uint8Array([1]))
+    expect(existsSync(f.path)).toBe(true)
+    await won.value.remove()
+  })
+
+  it('a stale directory left by an earlier (dead) process with this pid is reclaimed', async () => {
+    const base = sub('stale')
+    const stale = join(base, `ov-media-${process.pid}`)
+    mkdirSync(stale, { mode: 0o755 })
+    writeFileSync(join(stale, 'leftover.bin'), new Uint8Array(4))
+    const t = await createMediaTemp(base)
+    expect(t.dir).toBe(stale)
+    expect(existsSync(join(stale, 'leftover.bin'))).toBe(false)
+    expect(statSync(stale).mode & 0o777).toBe(0o700)
+    await t.remove()
+  })
+
   it('a pre-planted symlink at the directory name is refused', async () => {
     const base = join(root, 'plant')
     mkdirSync(join(base, 'target'), { recursive: true })

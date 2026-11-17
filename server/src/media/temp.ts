@@ -32,8 +32,9 @@ async function claimDir(dir: string): Promise<void> {
     await mkdir(dir, { mode: 0o700 })
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e
-    // A predictable name in a shared tmp: only a real directory we own (a stale one of a dead process with our pid)
-    // is reclaimed, emptied and reused; a symlink or anyone else's entry is refused.
+    // A predictable name in a shared tmp. The caller has already checked `claimed`, so this process holds no live
+    // instance here: an existing `ov-media-<our pid>` can only be left by an earlier, dead process that had our pid.
+    // Only a real directory we own is reclaimed, emptied and reused; a symlink or anyone else's entry is refused.
     const st = await lstat(dir)
     if (!st.isDirectory() || st.isSymbolicLink() || (uid() !== undefined && st.uid !== uid())) throw new Error(`media temp: ${dir} exists and is not ours`)
     await rm(dir, { recursive: true, force: true })
@@ -44,9 +45,16 @@ async function claimDir(dir: string): Promise<void> {
   if (!st.isDirectory() || (st.mode & 0o777) !== 0o700) throw new Error(`media temp: ${dir} is not a 0700 directory`)
 }
 
+/** Directories claimed by this process. A second claim throws (rather than sharing an instance whose `remove()`
+ * would pull files from under the other holder). Set synchronously before any await, so concurrent calls cannot
+ * both pass the check; released by `remove()` or a failed claim. */
+const claimed = new Set<string>()
+
 export async function createMediaTemp(root: string = tmpdir()): Promise<MediaTemp> {
   const dir = join(resolve(root), `ov-media-${process.pid}`)
-  await claimDir(dir)
+  if (claimed.has(dir)) throw new Error(`media temp: ${dir} is already claimed by this process`)
+  claimed.add(dir)
+  try { await claimDir(dir) } catch (e) { claimed.delete(dir); throw e }
   /** Ledger: one entry per live handle; `bytes` undefined means "reserved, size read when asked". */
   const ledger = new Map<symbol, { path: string; bytes?: number }>()
 
@@ -108,7 +116,7 @@ export async function createMediaTemp(root: string = tmpdir()): Promise<MediaTem
     },
     async remove() {
       ledger.clear()
-      await rm(dir, { recursive: true, force: true })
+      try { await rm(dir, { recursive: true, force: true }) } finally { claimed.delete(dir) }
     },
   }
 }
