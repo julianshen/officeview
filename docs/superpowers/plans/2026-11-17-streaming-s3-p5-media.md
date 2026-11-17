@@ -15,11 +15,15 @@
 >
 >   Every other ruling still applies, with its numbers rescaled to the 32 MiB audio cap where it cites 60 or 64 MiB (X3).
 
-**Goal:** A streamed show plays shape audio, narration, effect sounds and transition sounds, on the same timing as local playback. Every media byte on the wire is a per-session server encode: audio-only AAC/M4A, carrying no mark and no source metadata. Video slides behave exactly as in piece 4.
+> **Shared audio encodes (owner decision, 2026-11-17; spec §1, commit `b7661275`).** Audio carries no mark, so one encode per `(docId, part content digest, encode params sha, ffmpeg version)` serves every session of that document that is allowed that media. Sharing is across viewers of one document only (spec `d7401c58`), never across documents. Authorization stays per session: a session gets only the media ids bound to its own plan.
+> - **Changed:** D12 (references, budgets, eviction, idle TTL, revoke deletion), the new D23 (key and single flight), Tasks 7, 8, 9 and 13, the Global Constraints (limits, cache, audit), Review Focus 3, 4, 5 and 8, and the coverage table.
+> - **Unchanged:** the mediaId scheme (D2), the wire, the client (Tasks 10 and 11) and every other task. Decision (a) returns with video in piece 6.
+
+**Goal:** A streamed show plays shape audio, narration, effect sounds and transition sounds, on the same timing as local playback. Every media byte on the wire is a server encode, shared across sessions: audio-only AAC/M4A, carrying no mark and no source metadata. Video slides behave exactly as in piece 4.
 
 **Architecture:**
-- **Encoding.** ffmpeg runs as a sandboxed child process. Each viewer's audio is encoded at show start, in slide order from the starting slide, one encode at a time per viewer, and transcoded to AAC M4A in a single ffmpeg run.
-- **Delivery.** A finished file waits in the session's disk cache until the client asks for it. It is then delivered whole as `media-start` plus stored MEDIA_CHUNK (kind 9) messages.
+- **Encoding.** ffmpeg runs as a sandboxed child process. At show start each viewer's queue readies its audio in slide order from the starting slide, one key at a time. A key that is not cached is transcoded to AAC M4A in a single ffmpeg run, once per key across all sessions (D23).
+- **Delivery.** A finished file waits in the server's shared disk cache until the client asks for it. It is then delivered whole as `media-start` plus stored MEDIA_CHUNK (kind 9) messages.
 - **Timing.** The show plan re-ships audio records, whitelisted media commands and transition sounds. Audio ends become deterministic on the show clock (`begin + durationMs`) through one DOM-free helper, which the server classifier and the client driver share. Video nodes keep piece 4's rule (D22). The client opens remote leases through the unchanged `MediaPlayerDeps.open` and `TransitionSoundDeps.open` seams.
 
 **Tech Stack:** TypeScript, Bun server (`server/`, `node:child_process`, bun `Worker`), ffmpeg/ffprobe (external binaries, ≥ the major version that Task 1 recorded, 8), vitest, Playwright (Chromium).
@@ -35,9 +39,9 @@ It builds on plan commit `02b6d65a` and spec commit `a597183c` (main `a868b370`,
 - **Task 1 was the gate.** It came back RED, the plan stopped, and the owner rescoped piece 5 to audio (spec §1). No gate was lowered; the video gate moves to piece 6 unchanged.
 - **Reviewer:** every task is reviewed by a different model family (codex) from its implementer, before the next task starts.
 - **Owner decisions (spec §1):**
-  - (a) per-viewer encodes (marked for video, which is now piece 6; audio carries no mark);
+  - (a) per-viewer encodes, for video in piece 6 only. For audio it is superseded by the shared-encode decision: one encode per key serves every allowed session of the same document, and authorization stays per session;
   - approach 1, ffmpeg as a separate process;
-  - (a) everything encoded at show start, in slide order, each file delivered whole.
+  - (a) everything readied at show start, in slide order (encoded unless already cached or in flight), each file delivered whole.
 - **What reaches the client:** no original media byte, no 64-byte window of any source part, and no source metadata. There are no tags, chapters, encoder strings, subtitle, data or attachment streams, cover art or timestamps from the source. No part path, rId or content type from the package reaches the client: not in records, not in timing-tree targets, not in transition sounds (D3).
 - **Marks:** audio carries no mark. No video stream reaches the wire: every output is audio-only M4A, and no video record ships (D22).
 - **Limits (spec §6, verbatim):**
@@ -47,7 +51,8 @@ It builds on plan commit `02b6d65a` and spec commit `a597183c` (main `a868b370`,
   | Audio duration | ≤ 30 min | `media-too-long` |
   | Output size | ≤ 32 MiB audio | `media-too-large` |
   | Encode wall time | ≤ 2 × duration + 30 s, then killed | `media-timeout` |
-  | Concurrent encodes | 1 per session; ⌈cores / 4⌉ per server, queue 16 | `media-busy` |
+  | Concurrent encodes | 1 awaited key per session; ⌈cores / 4⌉ distinct encodes per server, queue 16; joiners take no slot | `media-busy` |
+  | Encode cache | 2 GiB per server, shared; 256 MiB of referenced look-ahead per session | `media-busy` (`media-request` only) |
   | Not decodable, or not in the allowlist | — | `media-unreadable` |
   | External link or online video | — | `media-linked` |
   | ffmpeg absent, or `OV_MEDIA=off` | — | `media-unavailable` |
@@ -62,8 +67,8 @@ It builds on plan commit `02b6d65a` and spec commit `a597183c` (main `a868b370`,
   - unsolicited or overrunning chunks are dropped before allocation;
   - chunks are sent under the 4 MiB send high-water mark (`PRINT_SEND_HIGH_WATER`).
 - **Rates:** a new rate class `media` allows 6 `media-request`s per minute per session. It is refuse-only and never counts toward 4008. The `unit` budget is untouched.
-- **Encode cache:** at most 256 MiB per session and 2 GiB per server, evicted least-recently-used, and deleted when the session ends. Encodes are never charged as units and never hold a render worker slot. The media memory budget is deferred to piece 6 with the video frames it charged (spec §6).
-- **Temp files:** a per-process directory with mode 0700, files with mode 0600, deleted when their job ends. The disk ledger, the cache and the admission counts are empty after every path.
+- **Encode cache:** one shared cache per server, at most 2 GiB, keyed by `(docId, sourceHash, encodeParamsSha, ffmpegVersion)` (D23). Each session may reference at most 256 MiB of look-ahead. Only unreferenced entries are evicted under pressure, least-recently-used. An unreferenced entry is also deleted after 10 minutes idle (`MEDIA_IDLE_TTL_MS`), and revoking or closing a document deletes all its entries at once (D12, D23). Encodes are never charged as units and never hold a render worker slot. The media memory budget is deferred to piece 6 with the video frames it charged (spec §6).
+- **Temp files:** a per-process directory with mode 0700, files with mode 0600, deleted when their job ends. After every path the session holds no reference, no encode is in flight, no child process runs, and the admission counts are empty. Unreferenced cache entries remain until eviction or the idle TTL. The disk ledger is empty after `MediaServices.close()`.
 - **Sandbox:**
   - ffmpeg runs with `-protocol_whitelist file`, an explicit demuxer from the allowlist (D7), bounded `-probesize` and `-analyzeduration`, and no network;
   - it runs under CPU-seconds, address-space (D5) and file-size limits, in its own process group;
@@ -75,7 +80,7 @@ It builds on plan commit `02b6d65a` and spec commit `a597183c` (main `a868b370`,
   - a slide whose drawn frames could diverge from local playback is refused to its still ("unproven → still");
   - local shows keep ending media on the element's `ended` event, unchanged;
   - every existing `tests/slideshow-*.test.ts(x)` test, golden and corpus test stays green.
-- **Audit:** a new `media_deliveries` table has the columns `sid, unit_index, media_id, kind, source_hash, out_bytes, duration_ms, reason, at, ffmpeg_version, encode_params_sha` (spec §7: the mark and geometry columns are dropped, not nulled), and the `services` row gains `media`.
+- **Audit:** a new `media_deliveries` table has the columns `sid, unit_index, media_id, kind, source_hash, out_bytes, duration_ms, reason, at, ffmpeg_version, encode_params_sha, cache_state` (spec §7: the mark and geometry columns are dropped, not nulled). `cache_state` is `hit`, `joined` or `miss`, and is empty on a refusal that never reached the cache. Rows stay per session, and the `services` row gains `media`.
 - **Commits end with:**
   ```
   Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
@@ -169,12 +174,23 @@ It builds on plan commit `02b6d65a` and spec commit `a597183c` (main `a868b370`,
 - **D9, D10, D11.** Removed: deferred to piece 6 (frame geometry, per-frame marking and the reference, and τ over a time window).
 - **D12. Budget collisions.**
   - **Request pacing.** The client paces `media-request` to the 6/min class with its own send log: current slide first, then next, each in `media[]` order. A request that waits keeps the clock end (D4), and a delivered lease is never re-requested while its span holds.
-  - **Cache pressure** (a deviation from spec §4.4's "evictable once the viewer has passed it", on Task 14's amendment list). Under the spec's rule alone, twelve 25 MiB files on one slide could never all deliver. The eviction order is:
-    1. A delivered entry becomes evictable at once, ahead of the LRU order. The client already holds its Blob, and a re-request re-encodes.
-    2. The entries of slides the viewer has passed become evictable next.
-    3. For a `media-request` only, the undelivered entries farthest from the cursor, in queue order, are evicted next (X3).
-  - **Waiting.** Encode-ahead never uses rung 3. An encode-ahead that does not fit waits for the next delivery or cursor move. A request always fits, because one file (≤ 32 MiB) fits in 256 MiB once rung 3 has run. So a backward jump with the cache full of undelivered ahead-of-cursor entries cannot deadlock (Task 8 test).
-  - **Server queue.** A session holds at most one place in the server queue of 16, so encode-ahead never fills it. Only a `media-request` whose encode cannot be placed gets `media-busy` (`MediaAdmission.slot(sid, 'request', …)`).
+  - **References (D23's cache).** A reference is a `(sid, key)` pair. A session takes it when its queue readies the key, and releases it when:
+    1. the file is delivered to that session;
+    2. the viewer passes the slide;
+    3. the session drops it under pressure (below);
+    4. the session ends.
+  - **Budgets.**
+    - A session references at most 256 MiB (`MEDIA_SESSION_LOOKAHEAD`). A shared entry counts in full against every session that references it.
+    - The server cache holds at most 2 GiB (`MEDIA_SERVER_CACHE`). An encode in flight reserves 32 MiB against it.
+  - **Eviction.** Only an entry with no references is evictable under pressure, least-recently-used first, and only when a new entry needs the room. A delivered or passed entry therefore stays cached for later sessions of the same document. A re-request after eviction re-encodes.
+  - **Idle TTL.** An entry with no references is deleted `MEDIA_IDLE_TTL_MS = 600_000` after its last reference was released or its last use, whichever is later. The cache takes an injected clock and a sweep that runs on a timer, so tests need no real wait. Referenced entries never expire.
+  - **Revocation.** When a document is revoked or closed, `cache.dropDocument(docId)` deletes every entry with that `docId` at once, referenced or not, and aborts that document's in-flight encodes. A delivery in flight then fails with `media-unavailable` (the client keeps the clock end, D4), and the sessions' queues see `media-unavailable` for the rest of that show.
+  - **Pressure.** Under the old per-session cache, twelve 25 MiB files on one slide could never all deliver. The rules now are:
+    1. Encode-ahead never drops or evicts anything. Over the session's look-ahead, or without server room, it waits for the next delivery, cursor move or release.
+    2. A `media-request` that would exceed the session's look-ahead first drops that session's own farthest-ahead undelivered references, in queue order. The entries stay cached, and stay pinned while another session references them.
+    3. A `media-request` that still has no server room, because the whole 2 GiB is referenced, gets `media-busy`.
+  - **No deadlock.** After rule 2 a request needs at most 32 MiB of a 256 MiB look-ahead, so a backward jump with the look-ahead full of undelivered ahead-of-cursor entries cannot wait forever (Task 8 test). Only rule 3 can refuse, and only when other sessions pin the server cache.
+  - **Server queue.** A session holds at most one place in the server queue of 16, so encode-ahead never fills it. Only a `media-request` whose encode cannot be placed gets `media-busy` (`MediaAdmission.slot(sid, 'request', …)`). A key that is already encoding is joined and takes no place.
 - **D13. Chunk size.** The server sends MEDIA_CHUNK payloads of 1 MiB − 64 B, one fragment each, so the 5 s reassembly window never covers a multi-fragment chunk on a slow link. The 4 MiB cap stays as the admission bound.
 - **D14. Kind 9 is stored only.** Kind 9 must have the compressed flag clear, and every other kind must have it set, as today. A compressed kind-9 message is rejected (`flags`), and so is a stored message of any other kind. This narrows the spec's "may be sent stored".
 - **D15. Shared command whitelist.** `parseMediaCommand(cmdType, text): MediaCommand | undefined` is extracted from the inline `onstopaudio` test, `playFrom` regex and verb `switch` in `player.ts` `command()` (~581–604) into `src/slideshow/media/commands.ts`. There is no existing function to move (X11).
@@ -229,16 +245,27 @@ It builds on plan commit `02b6d65a` and spec commit `a597183c` (main `a868b370`,
     - a mixed slide stays a still exactly when its video end gates drawing;
     - audio chained after a video is refused, or a still when a build waits on it.
 
+- **D23. Encode key, single flight and authorization (owner decision, 2026-11-17).**
+  - **Key.** `EncodeKey = { docId, sourceHash, paramsSha, ffmpegVersion }`, built by `encodeKeyOf(docId, entry, info)` (Task 7) from the session's document identity, the probe's `sourceHash` (D21), `encodeParamsSha(info.version)` (D8) and `info.version`. `docId` is the `docRef` the session opened, the same value the session passes to `pool.mediaRefs`, so every session of one document computes one `docId`. The cache file name is `encodeKeyId(key)`, a sha256 over its canonical JSON. `durationMs` is not a key field: it is a function of the content, and the `-t` trim comes from it.
+  - **Per document, not per content.** Two documents with byte-identical audio get two keys and two encodes. Sharing across documents would open a timing channel between tenants, so the owner ruled it out (2026-11-17).
+  - **Authorization stays per session.** The `mediaId → key` map exists only in the session's own queue items (`mediaJobsFor`, Task 8). `EncodeCache` takes keys and never a mediaId, and a key never reaches the wire. `media-request` is checked against the session's own plan before the cache is touched (Task 9 order, step 4), so another session's id answers `invalid-media`.
+  - **Single flight.** `EncodeCache.acquire` returns `origin: 'hit'` for a finished entry, `'joined'` for a key already encoding, and `'miss'` for the call that starts it. Only a `miss` calls `run`, which takes a server slot, extracts the part (`pool.mediaPart`) and transcodes. A `hit` or `joined` does none of that.
+  - **Waiters.** Each acquiring queue item and request is a waiter. The encode belongs to the key, not to its starter: its `AbortSignal` fires only when its last waiter has gone (abort, `end()`, socket close, expiry). The server slot is released when the encode ends, whoever started it.
+  - **Shared failures.** A `media-timeout`, or an abort, goes to every joiner and is not cached, so a later request encodes again (X6). A `media-too-large` or `media-unreadable` result is cached as a refusal for the key, and answers every session's request without re-encoding.
+  - **Determinism.** The audio argv uses `+bitexact`, so two encodes of one key are byte-identical (Task 7 test). That is what makes sharing invisible to a viewer.
+  - **Lifetime.** The cache starts empty with each process (the temp dir is per process) and is deleted by `MediaServices.close()`. Entries outlive their sessions, which is the point of sharing, but expire after the idle TTL and are deleted on revocation (D12). This is a change from "deleted when the session ends" (spec §4.3).
+  - **Audit.** The session's first reference to a key fixes its `cache_state`: `hit`, `joined` or `miss` (the starter). A request with no earlier reference acquires, and takes the origin from that call.
+
 ## Review Focus
 
 1. **An audio part whose encode fails after the slide was classified** (`media-timeout` on a loaded server; `media-too-large` behaves the same but is reachable only through the test seam, because 30 min at 128 kb/s stays under 32 MiB). The slide's later builds run on the clock, exactly as the classifier planned, while the poster and the notice show. Test: Task 11 `"a runtime media-timeout keeps the clock end: builds after the narration fire at begin+durationMs"`.
 2. **A slide holding more media than the request rate allows** (a shape audio, a narration, 3 effect sounds and a transition sound: 6 parts, plus the next slide's). Requests are paced, the session never closes 4008, and each late part plays from its offset or not at all. Test: Task 11 `"eight media parts across current+next stay within 6 requests/min and never close 4008"`.
-3. **One slide whose encodes exceed the 256 MiB session cache** (twelve 25 MiB audio files; 30 min at 128 kb/s is about 27.5 MiB). Encoding never deadlocks. Each file is delivered in turn, delivered entries are evicted first, and the ledger ends empty. Test: Task 8 `"twelve 25 MiB encodes on one slide all deliver under the 256 MiB cache without deadlock"`.
-4. **A viewer who jumps back and forth fast** (goTo 9, 2, 9 within one second) while an encode runs. The queue re-orders, at most one ffmpeg group runs for the session, and no orphan process or temp file survives. Test: Task 8 `"rapid jumps re-queue with one running group and no orphan pid or temp file"`.
-5. **Socket close in the middle of a delivery.** The server stops sending, kills any running group, and empties the cache and the temp files. The client releases its partial Blob charge, and the workspace returns to its baseline. Test: Task 10 `"socket close mid-delivery releases the partial charge"`, and Task 13 `"close mid-delivery: ledgers empty, no pid, no file"`.
+3. **One slide whose encodes exceed the 256 MiB session look-ahead** (twelve 25 MiB audio files; 30 min at 128 kb/s is about 27.5 MiB). Encoding never deadlocks. Each file is delivered in turn, delivered references are released first, and the session ends with no references. Test: Task 8 `"twelve 25 MiB encodes on one slide all deliver under the 256 MiB look-ahead without deadlock"`.
+4. **A viewer who jumps back and forth fast** (goTo 9, 2, 9 within one second) while an encode runs. The queue re-orders, the session waits on at most one key, at most one ffmpeg group runs for each key, and no orphan process or temp file survives. Test: Task 8 `"rapid jumps re-queue with one running group and no orphan pid or temp file"`.
+5. **Socket close in the middle of a delivery.** The server stops sending, releases the session's references, and kills a running group only if no other session waits on it. The client releases its partial Blob charge, and the workspace returns to its baseline. Test: Task 10 `"socket close mid-delivery releases the partial charge"`, and Task 13 `"close mid-delivery: no references, no in-flight encode, no pid, no orphan file"`.
 6. **The video boundary (D22).** With media on, a video slide classifies, draws and fetches exactly as in piece 4, and a slide with both a video and audio stays a still exactly when its video end gates drawing. Tests: Task 5 `"mixed slide: a video end that gates a build → still; one that gates nothing → the audio ends on the clock"`, and Task 11 `"videoDeck: the still plays, no media-request is sent, and the fetches equal those with media off"`.
 7. **A part with a video stream used as audio** (`av.mp4` as a narration). The output is audio-only, with no video stream, no H.264 bytes and only allowlisted tags. Tests: Task 7 `"av.mp4 used as audio: the output has one AAC stream and no video stream"`, and Task 13's wire audit.
-
+8. **Two sessions of one document, one part (shared encodes).** The second session never starts a second encode, whether it arrives while the first is encoding or after. Both get byte-identical files under different mediaIds, neither can request the other's id, and one session's close does not kill an encode the other awaits. Tests: Task 8 `"two sessions requesting the same part start exactly one encode"` and `"the encode survives the starter's end() while another session waits; it is killed when the last waiter ends"`, and Task 13 `"two sessions of one document: one ffmpeg spawn, identical bytes, different mediaIds"`.
 ---
 
 ### Task 1: Feasibility gate: forensic Layer-1 survival on H.264 (STOP if red)
@@ -602,7 +629,7 @@ It builds on plan commit `02b6d65a` and spec commit `a597183c` (main `a868b370`,
 ### Task 7: Transcoder (audio path)
 
 **Files:**
-- Create: `server/src/media/transcode.ts`, `server/src/media/params.ts` (the D8 audio argv template, `MUXER_TAG_ALLOWLIST` and `encodeParamsSha`)
+- Create: `server/src/media/transcode.ts`, `server/src/media/params.ts` (the D8 audio argv template, `MUXER_TAG_ALLOWLIST`, `encodeParamsSha` and the D23 `EncodeKey`)
 - Test: `server/test/media/transcode.test.ts`
 
 **Interfaces:**
@@ -612,6 +639,9 @@ It builds on plan commit `02b6d65a` and spec commit `a597183c` (main `a868b370`,
   // server/src/media/params.ts
   export function audioArgv(src: string, demuxer: Demuxer, out: string, durationMs: number): string[]   // D8 audio
   export function encodeParamsSha(ffmpegVersion: string): string   // sha256 of canonical JSON {audio argv template, ffmpegVersion} (D8)
+  export interface EncodeKey { docId: string; sourceHash: string; paramsSha: string; ffmpegVersion: string }   // D23: the shared-cache key
+  export function encodeKeyOf(docId: string, entry: Pick<ProbedMedia, 'sourceHash'>, info: Pick<FfmpegInfo, 'version'>): EncodeKey
+  export function encodeKeyId(key: EncodeKey): string   // sha256 hex of the canonical JSON; the cache file name
   export const MUXER_TAG_ALLOWLIST: Readonly<{ format: Record<string, readonly string[]>; stream: Record<string, readonly string[]> }>   // X4: exact values the mp4 muxer writes for an audio-only M4A
   // server/src/media/transcode.ts
   export interface TranscodeSeams { maxBytes?: number; wallCapMs?: number }   // test-only
@@ -630,6 +660,8 @@ It builds on plan commit `02b6d65a` and spec commit `a597183c` (main `a868b370`,
   - `"no 64-byte window of the source appears in the output"`. Source windows with fewer than 32 distinct byte values are skipped (X29 R8);
   - `"av.mp4 used as audio: the output has one AAC stream and no video stream"`;
   - `"encodeParamsSha changes with the ffmpeg version and with the argv template"`;
+  - `"encodeKeyOf depends on docId, sourceHash, paramsSha and ffmpegVersion only: two entries of one document with equal sourceHash and different k or partPath give one key; a different docId or ffmpeg version gives a different key"`;
+  - `"two encodes of one source are byte-identical"` (the premise of sharing, D23);
   - `"a high-bitrate source over 32 MiB → media-too-large, never truncated, output deleted"`, using a test-only `maxBytes` seam set to 256 KiB;
   - `"wall cap → media-timeout and the group is killed"`, using a `wallCapMs` seam;
   - `"audio path: AAC in M4A for mp3, wav, m4a and wma sources"`.
@@ -638,66 +670,100 @@ It builds on plan commit `02b6d65a` and spec commit `a597183c` (main `a868b370`,
 - [ ] **Step 4: Run the tests and confirm they pass.** Same command. Expected: PASS. Record the encode wall time per fixture in the commit body.
 - [ ] **Step 5: Commit** `feat(server): sandboxed metadata-free audio transcoder`
 
-### Task 8: Media admission, encode cache and show-start queue
+### Task 8: Media admission, shared encode cache and show-start queue
 
 **Files:**
 - Create:
   - `server/src/media/admission.ts`: the server-wide slots ⌈cores/4⌉ and a queue of 16;
-  - `server/src/media/cache.ts`: per-session ≤ 256 MiB, per-server ≤ 2 GiB, LRU with the D12 order;
+  - `server/src/media/cache.ts`: the shared cache, references, single flight and eviction (D12, D23);
   - `server/src/media/queue.ts`: the per-session encode order (D1, D12);
   - `server/src/media/jobs.ts`: `mediaJobsFor`;
   - `server/src/media/services.ts`: `createMediaServices`, the one object `ws.ts` and `main.ts` hold (X8).
-- Test: `server/test/media/queue.test.ts`
+- Test: `server/test/media/queue.test.ts`, `server/test/media/cache.test.ts`
 
 **Interfaces:**
 - Consumes:
-  - Task 7: `transcode`, `EncodeJob` and `EncodeResult`;
+  - Task 7: `transcode`, `EncodeJob`, `EncodeResult`, `EncodeKey`, `encodeKeyOf` and `encodeKeyId`;
   - Task 4: `MediaRef` and `sessionMediaId`;
   - Task 3: `pool.mediaRefs` and `pool.mediaPart` (D21);
   - Task 2: `FfmpegInfo`, `MediaTemp` and `probeFfmpeg`.
 - Produces:
   ```ts
-  export const MEDIA_SESSION_CACHE = 256 << 20, MEDIA_SERVER_CACHE = 2 * 1024 ** 3 /* not 2 << 30: that is -2^31 in int32 */, MEDIA_QUEUE = 16
-  export interface MediaAdmission { slot(sid: string, mode: 'ahead' | 'request', signal: AbortSignal): Promise<{ release(): void }> | { refused: 'media-busy' }; readonly running: number; readonly queued: number }
+  export const MEDIA_IDLE_TTL_MS = 600_000
+  export const MEDIA_SESSION_LOOKAHEAD = 256 << 20, MEDIA_SERVER_CACHE = 2 * 1024 ** 3 /* not 2 << 30: that is -2^31 in int32 */, MEDIA_QUEUE = 16
+  export interface MediaAdmission { slot(sid: string /* the encode's starter */, mode: 'ahead' | 'request', signal: AbortSignal): Promise<{ release(): void }> | { refused: 'media-busy' }; readonly running: number; readonly queued: number }
   export function createMediaAdmission(o: { slots: number; queue: number }): MediaAdmission
   export type CachedMedia = { path: string; bytes: number; result: EncodeResult & { ok: true } } | { refused: 'media-too-large' | 'media-unreadable'; bytes: 0 }
-  export interface EncodeCache { get(sid: string, mediaId: string): CachedMedia | undefined; put(sid: string, mediaId: string, unit: number, entry: CachedMedia, need?: { cursor: number; order: readonly number[] }): Promise<boolean /* false: no room */>; delivered(sid: string, mediaId: string): void; passed(sid: string, beforeUnit: number): void; dropSession(sid: string): Promise<void>; bytes(sid?: string): number }
-  export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; serverBytes: number }): EncodeCache
-  export interface SessionMediaQueue { start(unit: number): Promise<number> /* queued count */; cursor(unit: number): void; request(mediaId: string): Promise<{ ok: true; path: string; result: EncodeResult & { ok: true } } | { ok: false; reason: MediaRefusal }>; end(): Promise<void>; readonly running: string | undefined }
-  export interface MediaItem { mediaId: string; unit: number; ref: MediaRef; job: (out: string, src: string) => EncodeJob }
-  export function mediaJobsFor(refs: MediaUnitRefs /* pool.mediaRefs */, unit: number, s: { mediaKey: Uint8Array }): MediaItem[]   // server/src/media/jobs.ts: skips hidden slides/shapes and refused entries; audio uses only (D22)
-  export function createSessionMediaQueue(o: { sid: string; items: (unit: number) => Promise<MediaItem[]>; part: (partPath: string) => Promise<{ path: string; dispose(): Promise<void> }>; units: number; info: FfmpegInfo; temp: MediaTemp; admission: MediaAdmission; cache: EncodeCache; transcode: typeof transcode; seams?: TranscodeSeams }): SessionMediaQueue
+  export type EncodeOrigin = 'hit' | 'joined' | 'miss'
+  export type EncodeRun = (signal: AbortSignal /* fires when the last waiter is gone */) => Promise<{ ok: true; path: string; result: EncodeResult & { ok: true } } | { ok: false; reason: MediaRefusal }>   // slot + part + transcode, built by the queue; called only on a miss
+  export type Acquired = { wait: true /* ahead only: no room under the look-ahead or the server cap */ } | { origin: EncodeOrigin; done: Promise<{ ok: true; media: CachedMedia } | { ok: false; reason: MediaRefusal }> }
+  export interface EncodeCache {
+    acquire(sid: string, unit: number, key: EncodeKey, run: EncodeRun, o: { mode: 'ahead' | 'request'; signal: AbortSignal; cursor: number; order: readonly number[] }): Acquired   // takes the (sid, key) reference and a waiter; single flight per key
+    peek(key: EncodeKey): CachedMedia | undefined                  // done entries only; no reference
+    delivered(sid: string, key: EncodeKey): void                   // releases that session's reference
+    passed(sid: string, beforeUnit: number): void                  // releases references of slides the viewer has passed
+    dropSession(sid: string): void                                 // releases every reference and waiter of the session; aborts encodes left with no waiter; leaves entries cached
+    dropDocument(docId: string): Promise<void>                     // revocation or close: deletes every entry with this docId at once, referenced or not; aborts its in-flight encodes; a delivery in flight then fails media-unavailable
+    room(): Promise<void>                                          // resolves on the next release or eviction, for waiting encode-ahead
+    stats(): { entries: number; bytes: number; referenced: number; inflight: number }
+    referencesOf(sid: string): number
+    close(): Promise<void>                                         // deletes every entry file
+  }
+  export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; serverBytes: number; idleTtlMs?: number /* default MEDIA_IDLE_TTL_MS */; now?: () => number /* test seam; the sweep runs on it */ }): EncodeCache
+  export interface SessionMediaQueue { start(unit: number): Promise<number> /* keys enqueued: not cached, not joined */; cursor(unit: number): void; request(mediaId: string): Promise<{ ok: true; path: string; result: EncodeResult & { ok: true }; origin: EncodeOrigin } | { ok: false; reason: MediaRefusal }>; end(): Promise<void>; readonly running: string | undefined }
+  export interface MediaItem { mediaId: string; unit: number; ref: MediaRef; key: EncodeKey; job: (out: string, src: string) => EncodeJob }
+  export function mediaJobsFor(refs: MediaUnitRefs /* pool.mediaRefs */, unit: number, s: { mediaKey: Uint8Array; docId: string }, info: FfmpegInfo): MediaItem[]   // server/src/media/jobs.ts: skips hidden slides/shapes and refused entries; audio uses only (D22); item.key = encodeKeyOf(s.docId, entry, info)
+  export function createSessionMediaQueue(o: { sid: string; items: (unit: number) => Promise<MediaItem[]>; part: (partPath: string) => Promise<{ path: string; dispose(): Promise<void> }>; units: number; info: FfmpegInfo; temp: MediaTemp; admission: MediaAdmission; cache: EncodeCache /* the shared one */; transcode: typeof transcode; seams?: TranscodeSeams }): SessionMediaQueue
   // server/src/media/services.ts
   export interface MediaTestOnly { maxBytes?: number; wallCapMs?: number; slots?: number; queue?: number }
-  export interface MediaServices { readonly info: FfmpegInfo | undefined; readonly temp: MediaTemp; readonly admission: MediaAdmission; readonly cache: EncodeCache; readonly testOnly?: MediaTestOnly; close(): Promise<void> /* ends every queue, removes the temp dir */ }
+  export interface MediaServices { readonly info: FfmpegInfo | undefined; readonly temp: MediaTemp; readonly admission: MediaAdmission; readonly cache: EncodeCache; readonly testOnly?: MediaTestOnly; close(): Promise<void> /* ends every queue, closes the cache, removes the temp dir */ }
   export function createMediaServices(o: { env: Record<string, string | undefined>; enabled: boolean; testOnly?: MediaTestOnly }): Promise<MediaServices>
   ```
   - **Order:** see D1. A `request` for an item not yet encoded moves it to the front.
-  - **Encode-ahead** calls `slot(sid, 'ahead', …)`. It takes a server slot only when one is free, holds at most one place in the queue, and never refuses to the client (D12). A `request` calls `slot(sid, 'request', …)`, which is the only caller that can get `media-busy`.
-  - **`put`'s `need`.** Passing `need` means the put is for a `request`, which allows rung 3 below. Encode-ahead omits it.
-  - **Cache pressure.** A `put` that does not fit evicts in the D12 order: delivered entries first, then passed slides' entries, then, for a `request` only, the undelivered entries farthest from the cursor in queue order. Encode-ahead never evicts undelivered entries; it waits for the next delivery or cursor move (X3).
-  - **`end()`** cancels the queued items, kills the running one, drops the cache and disposes the temp files.
+  - **Start.** `start(unit)` enqueues an encode only for a key that is not cached. A cached key takes a reference (within the look-ahead) and is not enqueued. A key already encoding is awaited at its turn through `acquire`, which joins it. The returned count is the keys that will start an encode.
+  - **Encode-ahead** calls `acquire(..., { mode: 'ahead' })`. On `{ wait: true }` it waits for `cache.room()`, a delivery or a cursor move. It takes a server slot only on a miss and only when one is free, holds at most one place in the queue, and never refuses to the client (D12). A `request` uses `mode: 'request'`, which is the only caller that can get `media-busy`.
+  - **Cache pressure.** The D12 rules apply inside `acquire`: encode-ahead never drops or evicts; a request first drops the session's own farthest-ahead undelivered references (`order` and `cursor` give the distance), then evicts unreferenced entries LRU, then refuses `media-busy`.
+  - **Origin.** The session's first reference to a key records its `EncodeOrigin`. `request` returns it, and Task 9 audits it as `cache_state` (D23).
+  - **`end()`** cancels the session's queued items, calls `cache.dropSession(sid)` and disposes the session's temp files. A running encode stops only if no other session waits on it (D23). Cache entries remain until the idle TTL, eviction or revocation.
 
-- [ ] **Step 1: Write the failing tests.** `queue.test.ts` uses a fake transcode with controllable durations and sizes, and a real cache over the temp dir:
+- [ ] **Step 1: Write the failing tests.** `queue.test.ts` uses a fake transcode with controllable durations, sizes and a call counter, and a real cache over the temp dir:
   - `"mediaJobsFor ids equal bindMedia's ids for the same slide and session"`;
+  - `"mediaJobsFor keys are equal for two sessions of one document while their mediaIds differ; the same bytes in a second document give a different key"` (D23);
   - `"mediaJobsFor skips hidden slides and hidden shapes, and yields no item for a video node"` (D22);
   - `"start encodes in slide order from the start unit, then wraps"`;
-  - `"one encode at a time per session"`;
-  - `"request moves an item to the front; a cached item resolves at once"`;
+  - `"one key awaited at a time per session"`;
+  - `"request moves an item to the front; a cached item resolves at once with origin hit"`;
   - `"jump re-queues from N"`;
-  - `"twelve 25 MiB encodes on one slide all deliver under the 256 MiB cache without deadlock"` (Review Focus 3);
-  - `"backward jump with the cache full of undelivered ahead entries evicts the farthest and delivers"`. The cache holds 10 × 25 MiB undelivered entries for slides after the cursor, then a jump back requests an earlier slide's narration. That file is encoded and delivered, the farthest-ahead entry is evicted, and nothing waits forever (X3);
+  - `"two sessions requesting the same part start exactly one encode"`. Both sessions of one document call `start` and `request` on one deck. The fake transcode is called once, the origins are `miss` and `joined`, both sessions resolve with the same bytes, and `admission.running` never exceeds 1;
+  - `"a session starting after the encode finished starts none: origin hit, zero transcode calls"`;
+  - `"two documents with byte-identical audio produce two encodes: two transcode calls, two entries, no joins"` (D23);
+  - `"revoking a document mid-delivery: its entries are deleted, the delivery fails media-unavailable, its in-flight encode is aborted, and another document's entries are untouched"`;
+  - `"start enqueues only keys not already cached: the returned count is 0 for a deck whose keys are all cached or encoding"`;
+  - `"the encode survives the starter's end() while another session waits; it is killed when the last waiter ends"`;
+  - `"a media-timeout reaches every joiner and is not cached; the next request encodes again"`, and `"a media-too-large result is cached as a refusal for the key: a request from a second session answers it without re-encoding"` (X6);
+  - `"twelve 25 MiB encodes on one slide all deliver under the 256 MiB look-ahead without deadlock"` (Review Focus 3);
+  - `"backward jump with the look-ahead full of undelivered ahead entries drops the farthest own references and delivers"`. The session references 10 × 25 MiB undelivered entries for slides after the cursor, then a jump back requests an earlier slide's narration. That file is encoded and delivered, the farthest-ahead references are dropped (the entries stay cached), and nothing waits forever (X3);
   - `"rapid jumps re-queue with one running group and no orphan pid or temp file"` (Review Focus 4). It uses the real `transcode` on `a.m4a`, under `skipIf`;
-  - `"server queue full: encode-ahead waits silently; a request gets media-busy"`;
-  - `"server cache 2 GiB evicts other sessions' delivered entries first"`;
-  - `"end(): queued cancelled, running killed, cache and temp empty"`;
-  - `"a media-too-large result is cached as a refusal: a re-request answers it without re-encoding"`. A `media-timeout` is not cached, and a re-request encodes again (X6);
+  - `"server queue full: encode-ahead waits silently; a request gets media-busy; a joiner takes no place"`;
+  - `"end(): queued items cancelled, references dropped, entries remain cached until the TTL; services.close() empties the temp dir"`;
   - `"MEDIA_SERVER_CACHE is 2 GiB and positive"`;
-  - `"createMediaServices: close() ends queues and removes the temp dir"`.
-- [ ] **Step 2: Run** `cd server && OV_MEDIA_REQUIRED=1 bun test test/media/queue.test.ts`. Expected: FAIL.
+  - `"createMediaServices: close() ends queues, closes the cache and removes the temp dir"`.
+
+  `cache.test.ts` uses the real cache with a fake `EncodeRun`:
+  - `"a key referenced by another session is not evicted under server pressure"`;
+  - `"unreferenced entries evict least-recently-used first, and survive their sessions' end"`;
+  - `"an unreferenced entry is gone after MEDIA_IDLE_TTL_MS on the injected clock; a referenced entry is not, however long it idles; releasing the reference starts the idle count"`;
+  - `"dropDocument deletes every entry of that docId at once, referenced or not, and no other document's"`;
+  - `"a delivered key is released for that session and stays cached for another"`;
+  - `"a shared entry counts in full against each referencing session's look-ahead"`;
+  - `"server cache wholly referenced: ahead gets wait, a request gets media-busy"`;
+  - `"an encode in flight reserves 32 MiB and settles to its real size"`;
+  - `"dropSession releases references and aborts only the encodes left with no waiter"`;
+  - `"hit, joined and miss are reported for finished, in-flight and absent keys"`.
+- [ ] **Step 2: Run** `cd server && OV_MEDIA_REQUIRED=1 bun test test/media/queue.test.ts test/media/cache.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement** the signatures above.
 - [ ] **Step 4: Run the tests and confirm they pass.** Same command. Expected: PASS.
-- [ ] **Step 5: Commit** `feat(server): media admission class, per-session encode cache and show-start queue`
+- [ ] **Step 5: Commit** `feat(server): media admission class, shared encode cache and show-start queue`
 
 ### Task 9: Wire: kind 9, media messages, rate class and audit
 
@@ -714,7 +780,8 @@ It builds on plan commit `02b6d65a` and spec commit `a597183c` (main `a868b370`,
     - `StreamServerOptions.media` gains `services?: MediaServices` (Task 8);
     - the per-session media state on the `sessionDoc` entry: Task 4's `mediaKey`, plus `queue?: SessionMediaQueue`, created at `media-show`;
     - handlers for `media-show`, `media-cursor`, `media-request` and `media-end`;
-    - every close path, including session expiry and revocation, calls `queue.end()`, which ends in `cache.dropSession(sid)`;
+    - every close path, including session expiry and revocation, calls `queue.end()`, which ends in `cache.dropSession(sid)` (the session's references and waiters; the shared entries stay);
+    - the existing document revoke and close path calls `cache.dropDocument(docId)`, with `docId` the `docRef` held on the `sessionDoc` entry (D23), which also feeds `mediaJobsFor`'s `s.docId`. Revoking a document and revoking one session are different events: the second never deletes cache entries;
     - `services.media`;
   - `server/src/main.ts`: `createMediaServices` at startup, passed as `media.services`, and `MediaServices.close()` on shutdown;
   - `src/stream/remote/session.ts`: `CAPS[Kind.MEDIA_CHUNK] = [4 << 20, 4 << 20]`;
@@ -723,7 +790,7 @@ It builds on plan commit `02b6d65a` and spec commit `a597183c` (main `a868b370`,
     - the server start helper takes `media?: { enabled?: boolean; testOnly?: MediaTestOnly }` and returns the `MediaServices` it built, so that tests can read the ledgers;
   - `server/src/rate.ts`: `RateClass` gains `'media'`, `MEDIA_RATE_PER_MIN = 6`, refuse-only;
   - `server/src/audit-store.ts`, `server/src/audit.ts`:
-    - the `media_deliveries` table;
+    - the `media_deliveries` table, including `cache_state TEXT` (`hit` | `joined` | `miss`, from `queue.request`'s `origin`);
     - the `services` column `media TEXT`;
     - the readers `mediaDeliveries(sid): MediaDeliveryRecord[]` and `mediaDeliveryById(mediaId): MediaDeliveryRecord | undefined`, in the pattern of `showDeliveries(sid)`.
 - Test: `tests/stream/frame-kind9.test.ts`, `server/test/media/media-wire.test.ts`
@@ -755,7 +822,7 @@ It builds on plan commit `02b6d65a` and spec commit `a597183c` (main `a868b370`,
     7. the audit row;
     8. `media-start`;
     9. the chunks, under `PRINT_SEND_HIGH_WATER`. The send stops when the session is revoked or its socket closes.
-  - **Audit.** A `media_deliveries` row is written per delivery and per refusal, with the Global Constraints columns. `kind` is `audio`.
+  - **Audit.** A `media_deliveries` row is written per delivery and per refusal, with the Global Constraints columns. `kind` is `audio`. Rows are per session: two sessions that share an encode each get their own row, with their own `cache_state`.
 
 - [ ] **Step 1: Write the failing tests.**
   - `frame-kind9.test.ts`:
@@ -772,14 +839,17 @@ It builds on plan commit `02b6d65a` and spec commit `a597183c` (main `a868b370`,
     - `"7th media-request in 60 s → rate-limited; never closes 4008; unit budget untouched"`;
     - `"can.media false → media-unavailable"`;
     - `"revoked mid-delivery stops sending"`;
-    - `"media_deliveries row has exactly the eleven columns; ffmpeg_version and encode_params_sha match the result"`;
+    - `"media_deliveries row has exactly the twelve columns; ffmpeg_version and encode_params_sha match the result; cache_state is miss"`;
+    - `"two sessions of one document: the second media-request starts no encode; its row reads joined or hit, the first reads miss; the bytes are identical and the mediaIds differ"`;
+    - `"session B requesting session A's mediaId, or a cache key, → invalid-media; no row reads from the cache"`;
+    - `"document revoked mid-delivery: the send stops, the client gets media-refused media-unavailable, and the document's entries are gone"`;
     - `"services row records media on/off"`;
     - `"media-cursor flood is message-rate-limited only"`;
     - one `"refusal <reason>"` case for each of `media-too-long`, `media-too-large`, `media-timeout`, `media-busy`, `media-unreadable`, `media-linked` and `media-unavailable`. The server-side causes are reached through the harness's `media.testOnly` seams (Task 8 `MediaTestOnly`):
       - `maxBytes` for `media-too-large`;
       - `wallCapMs` for `media-timeout`;
       - `slots: 1, queue: 0` with a held slot for `media-busy`;
-    - `"session expiry ends the queue and drops the cache"`.
+    - `"session expiry ends the queue and drops the session's references; the cache entries remain"`.
 - [ ] **Step 2: Run** `npx vitest run tests/stream/frame-kind9.test.ts` and `cd server && OV_MEDIA_REQUIRED=1 bun test test/media/media-wire.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement** the changes above.
 - [ ] **Step 4: Run the tests and confirm they pass.** The commands above, then `npx vitest run tests/stream`, `cd server && OV_MEDIA_REQUIRED=1 bun test` and `bun run gates:core`. Expected: PASS, with the index closure within ±4 B of 421,385 B.
@@ -886,23 +956,28 @@ It builds on plan commit `02b6d65a` and spec commit `a597183c` (main `a868b370`,
     - `"reassembled outputs show no metadata under ffprobe -show_format -show_streams"`, against the Task 7 `MUXER_TAG_ALLOWLIST` (X4): every tag is in the list with its pinned value, and there is no `encoder`, no `creation_time`, no chapter and no extra stream;
     - `"no shipped plan record or text message contains an rId or part path from the package"` (D3);
     - `"no reassembled output has a video stream"`, including `av.mp4` used as audio (D22, Review Focus 7);
-    - `"every delivery has a media_deliveries row"`, read through `AuditStore.mediaDeliveries(sid)` (Task 9).
+    - `"every delivery has a media_deliveries row with a cache_state"`, read through `AuditStore.mediaDeliveries(sid)` (Task 9);
+    - `"two sessions of one document: one ffmpeg spawn, identical bytes, different mediaIds"` (Review Focus 8). The spawn is counted through the sandbox's pid log, and the second session's reassembled outputs equal the first's byte for byte;
+    - `"two documents with byte-identical audio: two ffmpeg spawns, and neither session's request is answered from the other's entry"` (D23);
+    - `"a session cannot fetch another session's media: a foreign mediaId → invalid-media, and no cache key or key id appears in any message or plan"` (D23).
   - `hostile.test.ts`:
     - for each hostile fixture embedded in a deck, `"<fixture> → media-unreadable, no ffmpeg output file left"`.
     - The client-side kind-9 vectors (compressed kind 9, a 4 MiB + 1 B chunk, an unsolicited chunk, an overrun of `media-start` `bytes`) are not re-run here. The harness reassembler accepts every reqId (`harness.ts:42`), so it cannot exercise client rejection. Task 9's `frame-kind9.test.ts` and Task 10's `remote-media.test.ts` own them (X29 R5).
   - `lifecycle.test.ts`:
     - `"close mid-delivery: ledgers empty, no pid, no file"` (Review Focus 5);
-    - `"close mid-encode kills the group"`;
-    - `"media-end cancels queued encodes"`;
-    - `"session expiry drops the cache"`;
-    - `"server shutdown removes the per-process temp dir"`.
+    - `"close mid-encode kills the group when no other session waits on it, and leaves it running when one does"`;
+    - `"media-end cancels queued encodes and releases references"`;
+    - `"session expiry releases the session's references; the cache entries remain and a later session of the same document starts no encode"`;
+    - `"an unreferenced entry is deleted after the idle TTL, on the injected clock; a later session of that document encodes again"`;
+    - `"document revoke deletes its entries at once and kills its in-flight encode, even when referenced"`;
+    - `"server shutdown removes the per-process temp dir and every cache entry"`.
 
     After each test it asserts, through the `MediaServices` that `server/test/harness.ts` returns (Task 9):
-    - `admission.running === 0`, `admission.queued === 0`, `cache.bytes() === 0` and `temp.live() === 0`;
-    - that the per-process temp dir holds no file;
+    - `admission.running === 0`, `admission.queued === 0`, `cache.referencesOf(sid) === 0` and `cache.stats().inflight === 0`;
+    - that every file in the per-process temp dir is a cache entry (`temp.live() === cache.stats().entries`);
     - that no child pid remains.
 
-    `"session expiry drops the cache"` relies on expiry closing the socket, and on every close path calling `queue.end()` (Task 9). `"server shutdown removes the per-process temp dir"` calls `MediaServices.close()`, as `main.ts` does on shutdown.
+    The expiry test relies on expiry closing the socket, and on every close path calling `queue.end()` (Task 9). The shutdown test calls `MediaServices.close()`, as `main.ts` does on shutdown, and then asserts `temp.live() === 0` and `cache.stats().entries === 0`.
 - [ ] **Step 2: Run** `cd server && OV_MEDIA_REQUIRED=1 bun test test/media`. Expected: PASS. A failure is fixed in the owning task's files.
 - [ ] **Step 3: Commit** `test(server): media wire audit, hostile inputs and lifecycle battery`
 
@@ -919,7 +994,7 @@ It builds on plan commit `02b6d65a` and spec commit `a597183c` (main `a868b370`,
     - D1, the show messages (without `scale`), and `media-request` carrying `token` as every request does;
     - D4, which the controller has already ruled;
     - D5, which the owner has already ruled;
-    - D12, the eviction order: delivered entries evict first and the request rung follows, against spec §4.4's "once the viewer has passed it";
+    - D12 and D23, which the shared-encode spec amendment (`b7661275`) already carries. What the plan adds is the `request` rule that drops the session's own farthest-ahead references, and the in-flight 32 MiB reservation;
     - D14;
     - D22: a video node ends at its first live frame (piece 4's synthetic end), against §5.3's "finite `dur`, else at once"; and audio chained after a video end ships refused;
     - the X4 tag allowlist: the pinned mp4-muxer tags of an audio-only M4A are allowed, against §8's literal "no tags".
@@ -949,9 +1024,9 @@ It builds on plan commit `02b6d65a` and spec commit `a597183c` (main `a868b370`,
   Expected: green, except the size gate, which stays red with Δ ≤ 4 B against 421,385 B. Then write `docs/validation/streaming-s3-p5.md` with:
   - the parent §12a.8 3d list and spec §8, each line with the test that proves it;
   - the Task 1 RED result and the owner rescope, by reference to `streaming-s3-p5-feasibility.md`;
-  - the wire audit;
+  - the wire audit, including the sharing cases (one spawn for two sessions, identical bytes);
   - the parity table;
-  - the encode timings;
+  - the encode timings, and the cache hit, joined and miss counts from the media decks;
   - the sandbox status per platform;
   - what is not machine-checked: real-world codecs outside the fixtures, and non-Chromium playback.
 - [ ] **Step 5: Commit** `docs(stream): piece 5 validation, parity with media, spec amendments`
@@ -960,15 +1035,15 @@ It builds on plan commit `02b6d65a` and spec commit `a597183c` (main `a868b370`,
 
 | Spec | Task |
 |---|---|
-| §1 owner decisions | 7 and 8 (per-viewer), 2 (process), 8 (show start); rescope: Task 1 (RED), D22 |
+| §1 owner decisions | 7 and 8 (shared audio encodes, D23; per-viewer returns with video), 2 (process), 8 (show start); rescope: Task 1 (RED), D22 |
 | §3 goals 1–5, non-goals (video), anti-goals | 11; 7, 13; 7, 13; 2, 7, 8; 5; D22, Tasks 4, 5, 11 |
 | §4.1 plan media, commands, transition sounds, manifest | 3, 4 |
 | §4.2 transcoder, sandbox (audio path) | 2, 7 |
-| §4.3 delivery, kind 9, caps, rate, cache | 8, 9, 10 |
+| §4.3 delivery, kind 9, caps, rate, shared cache (per document, idle TTL, revoke), authorization | 8 (D12, D23), 9, 10 |
 | §4.4 client leases, encoding order, request timing, Presenter View, lazy | 9 (D1), 8, 10, 11 |
 | §5 media ends on the show clock; video keeps piece 4's rule | 5, 11, 14 |
 | §6 limits and refusals | 3, 7, 8, 9 |
-| §7 audit | 9 |
+| §7 audit (incl. `cache_state`) | 9, 13 |
 | §8 fixtures, wire audit, video stays piece 4, parity, hostile, lifecycle | 3, 4, 5, 11, 13, 14 |
 | §9 builder choices | D5, D7, D8 |
 | §4.2 "behave as in piece 4" when off | D18, Task 4 |
