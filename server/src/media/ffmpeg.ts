@@ -79,7 +79,9 @@ async function run(info: FfmpegInfo, bin: 'ffmpeg' | 'ffprobe', argv: string[], 
   const parts: Buffer[] = []
   let n = 0
   r.stdout.on('data', (b: Buffer) => { if (n < STDOUT_CAP) { parts.push(b); n += b.length } })
-  const res = await r.done
+  // `done` does not imply stdout is drained: wait for its end too, or a loaded machine reads a short list.
+  const drained = new Promise<void>((ok) => { r.stdout.once('end', ok); r.stdout.once('close', ok); r.stdout.once('error', () => ok()) })
+  const [res] = await Promise.all([r.done, drained])
   return { ...res, stdout: Buffer.concat(parts).subarray(0, STDOUT_CAP).toString('utf8') }
 }
 
