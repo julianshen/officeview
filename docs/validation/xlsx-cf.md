@@ -2364,6 +2364,37 @@ There are 2,036 rows over 17 cases: 791 formula cells, 542 painted as Excel, 0 d
   - A kept revert-check test freezes every 2D draw call before the tick and shows the pixel check reports the stale frame.
   - The zoom/DPR test ties pixels to each designated formula cell (applied means filled, otherwise unfilled) and compares announcements across both DPRs and all three zooms per leg.
 
+### 14.z.3 Task 39 fix round 3 (codex re-review 2)
+
+- **S1: grants are scoped by the compositor's real effect** (`stage5Justifications`, compose.ts).
+  - A rule that is itself unresolved gets `ALL` if it is a halting stopIfTrue rule (compose.ts :279). The reasons are: an unheld capability its evaluation needs, a record configuration, or an enumerated or expected compile refusal. A non-halting rule gets its own writes, plus the lower icon or bar slot that an unknown fill or bar leaves unknown.
+  - A missing stop gate (`formula:composition-stop-<kind>`, `-indirect-ahead-<kind>`) is applied after the stopping rule paints (compose.ts :363). It excuses only the writes of the lower rules of that kind.
+  - A missing expression-vs-scale gate excuses `fill` and `colorScale`.
+  - A literal Stage 3–4 gate excuses only that visual's own slot.
+  - `ALL` is excused only by an `ALL` grant.
+  - The composition INDIRECT expression is now an expected compile refusal (S5-O/S5-B), like `NA()`.
+  - Codex's I3 mutant (the stopping expression refused: no fill, `ALL` unresolved) now disagrees in the audit rows, the conformance helper and cf-compare.
+- **S2: property-level paths.**
+  - Marker writes, grants and comparisons use compose.ts's exact paths: `fill`, `font.strike`, `font.bold`, …, `colorScale`, `dataBar`, `iconSet`. Nothing is collapsed to `font`, and no grant covers the whole font.
+  - A resolved component is compared unless an unresolved write conflicts with it (compose.ts `conflicts`).
+  - Codex's Q3 mutant (`font.bold` unresolved, strikethrough resolved false, Excel struck) now disagrees in all three places.
+- **Other scopes checked:**
+  - record configurations, enumerated refusals and literal gates now use the same compositor scopes;
+  - cf-compare's per-cell check, the Lesson 1 verdict and the conformance helper drop the "every covering slot" expansion of `ALL`;
+  - the visual comparison is skipped only when its own slot is unresolved.
+
+**Gates after fix round 3:**
+- `npx vitest run`: 14,372 passed, 13 failed, all environmental (missing `corpus/` and `core-entry`).
+- `tsc -p .`: the 3 known errors.
+- Stages 1–5 audits: ok and complete. Stage 5 case records: 2,160 rows, 0 disagreeing.
+- No-formula baseline: 0 compiles, 0 snapshot preparations, 0 clock reads.
+- Publish: `--write --publish-stage5` run twice, byte-identical. The published set is unchanged at 42.
+- Chromium: 37/37.
+- `cf-compare --stage 5`: interactive 60 pass, 6 fail; paged 62 pass, 3 fail. The only Stage 5 failure is the `stage5-cross-sheet-missing` seed.
+- Eager gzip 36,517 B; `check-eager` ok.
+- Index closure 422,487 B (environmental FAIL; the growth is recorded).
+- `git diff --check`: clean.
+
 **Gates after fix round 2:**
 - `npx vitest run`: 14,369 passed, 14 failed.
   - 13 failures are environmental (missing `corpus/` and `core-entry`).
