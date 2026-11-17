@@ -249,3 +249,37 @@ export async function pressureFormulaCrossSheetCycles(rounds = 20): Promise<Stag
 
 /** The per-call checkpoint every formula call must stay within (CF_LIMITS.checkpointUnits). */
 export const CHECKPOINT_UNITS: number = CF_LIMITS.checkpointUnits
+
+/**
+ * Task 39 fix round 1 (F5): the no-formula baseline keeps its conditional formatting (literal `cellIs` rules only) and
+ * runs every production path that prepares CF for it: parse (resident), static paint with the document's evaluation
+ * policy and sheets, and the text scope. It counts formula compiles, dependency-snapshot preparations and clock reads
+ * (`cfFormulaActivity`), which must all stay 0. The positive control (one expression rule added) must move all three.
+ */
+export async function pressureNoFormulaBaseline(): Promise<{ literal: { compiles: number; snapshots: number; clockReads: number; painted: number }; control: { compiles: number; snapshots: number; clockReads: number; painted: number } }> {
+  const { cfFormulaActivity } = await import('../../src/xlsx/cf/formula')
+  const { workbookBytes, cfBlock, cellIsRule, exprRule, load } = await import('../../tests/helpers/cf-views')
+  const { prepareCfPaint } = await import('../../src/xlsx/cf/render')
+  const { prepareCfTextScope } = await import('../../src/xlsx/cf/text')
+  const { cfDocumentEvaluationOf } = await import('../../src/xlsx/cf/formula')
+  const measure = async (bytes: Uint8Array): Promise<{ compiles: number; snapshots: number; clockReads: number; painted: number }> => {
+    const before = cfFormulaActivity()
+    const { doc, sheet } = await load(bytes, 'cached')
+    const evaluation = cfDocumentEvaluationOf(doc)
+    let painted = 0
+    for (let i = 0; i < 3; i++) {
+      const batch = await prepareCfPaint(sheet, { evaluation, valuePolicy: 'cached', documentSheets: doc.sheets })
+      for (let row = 1; row <= 3; row++) if (batch?.layer.styleAt(row, 1, undefined)?.fillColor) painted++
+      batch?.dispose()
+    }
+    const budget = { reserve: () => {}, release: () => {}, retain: (_t: unknown, _b: number, commit: () => void) => commit(), settle: () => {} }
+    const scope = await prepareCfTextScope(sheet, { rects: [{ r0: 1, r1: 3, c0: 1, c1: 1 }], signal: new AbortController().signal, locale: 'en-US', budget: budget as never, evaluation, documentSheets: doc.sheets })
+    scope?.dispose()
+    const after = cfFormulaActivity()
+    return { compiles: after.compiles - before.compiles, snapshots: after.snapshots - before.snapshots, clockReads: after.clockReads - before.clockReads, painted }
+  }
+  const cells = { A2: 1, A3: 2, A4: 3, B2: 1, B3: 5, B4: 9 }
+  const literal = await measure(workbookBytes(cells, cfBlock('B2:B4', cellIsRule('greaterThan', '4', 1, 0))))
+  const control = await measure(workbookBytes(cells, cfBlock('B2:B4', cellIsRule('greaterThan', '4', 1, 0)) + cfBlock('C2:C4', exprRule('$A2&gt;1', 2, 1))))
+  return { literal, control }
+}

@@ -410,7 +410,19 @@ export function cfFormulaReserveBound(text: string): number {
  * Returns the formula, the bytes the caller now holds (`bytes`, the whole bound) and what the formula retains (`retained`,
  * its exact measured size, which the caller keeps after releasing the rest).
  */
+/**
+ * Task 39 (resource audit): counts of the formula machinery's work, read by `audit --stage 5`'s no-formula baseline
+ * (the brief: zero formula compiles, dependency-snapshot preparations and clock reads for a sheet without formula CF).
+ */
+const formulaActivity = { compiles: 0, snapshots: 0, clockReads: 0 }
+export function cfFormulaActivity(): Readonly<{ compiles: number; snapshots: number; clockReads: number }> {
+  return { ...formulaActivity }
+}
+/** Records one dependency-snapshot preparation (dependencies.ts `prepareCfFormulaBatch`). */
+export function noteCfSnapshotPreparation(): void { formulaActivity.snapshots++ }
+
 export function compileCfFormulaWith(text: string, anchor: { row: number; col: number } | undefined, reserve: CfFormulaReserve): { formula: CfFormula; bytes: number; retained: number } | CfFormulaRefusal {
+  formulaActivity.compiles++
   if (typeof text !== 'string') return unsupported('formula text is not a string')
   const source = text.trim().replace(/^=/, '').trim()
   if (source === '') return unsupported('empty formula')
@@ -578,7 +590,10 @@ export function cfRoutePolicy(evaluation: CfEvaluationContext | undefined, decla
  */
 export function cfAlignClock(evaluation: CfEvaluationContext | undefined, dateContext: CfDateContext | undefined, fallback: () => CfDateContext | undefined): Readonly<{ evaluation: CfEvaluationContext | undefined; dateContext: CfDateContext | undefined }> {
   if (!evaluation) return { evaluation, dateContext: dateContext ?? fallback() }
-  const derived: CfDateContext = Object.freeze({ dateSystem: evaluation.dateSystem, timeZone: evaluation.timeZone, epochNowMs: evaluation.clock.epochNowMs })
+  // Task 39 fix round 1 (F5): the derived context reads the evaluation's clock only when a rule reads its instant, so a
+  // sheet with no clock-reading rule takes no clock sample.
+  const derived: CfDateContext = Object.freeze(Object.defineProperty({ dateSystem: evaluation.dateSystem, timeZone: evaluation.timeZone } as CfDateContext,
+    'epochNowMs', { get: () => evaluation.clock.epochNowMs, enumerable: true }))
   if (!dateContext) return { evaluation, dateContext: derived }
   let agrees = dateContext.dateSystem === derived.dateSystem && dateContext.timeZone === derived.timeZone && dateContext.epochNowMs === derived.epochNowMs
   if (agrees && dateContext.clockSerial !== undefined) {
@@ -590,12 +605,21 @@ export function cfAlignClock(evaluation: CfEvaluationContext | undefined, dateCo
 /** One clock snapshot from the injected `now`; `clockGen` is the local day number of that sample (the interactive
  * midnight tick keys on it). A zone the engine cannot resolve falls back to the UTC day so the generation still advances. */
 export function cfEvaluationContextFor(policy: CfDocumentEvaluation, now: () => number): CfEvaluationContext {
-  const epochNowMs = now()
-  const serial = epochToSerial(epochNowMs, policy.timeZone, policy.dateSystem)
-  // The unix day number of the local calendar date: the interactive midnight tick's own numbering (`localDaySerial`), so a
-  // main-thread stamp and this one name the same day. A zone the engine cannot resolve falls back to the UTC day.
-  const clockGen = typeof serial === 'number' ? Math.floor(serial) - (policy.dateSystem === '1904' ? 24_107 : 25_569) : Number.isFinite(epochNowMs) ? Math.floor(epochNowMs / 86_400_000) : 0
-  return Object.freeze({ ...policy, clock: Object.freeze({ epochNowMs, clockGen }) })
+  // Task 39 fix round 1 (F5): the one snapshot is taken at the first read of `clock` (memoised), so a preparation whose
+  // rules never read the clock (no formula, no time period) takes no clock sample.
+  let clock: CfEvaluationContext['clock'] | undefined
+  const sample = (): CfEvaluationContext['clock'] => {
+    if (clock) return clock
+    formulaActivity.clockReads++
+    const epochNowMs = now()
+    const serial = epochToSerial(epochNowMs, policy.timeZone, policy.dateSystem)
+    // The unix day number of the local calendar date: the interactive midnight tick's own numbering (`localDaySerial`), so a
+    // main-thread stamp and this one name the same day. A zone the engine cannot resolve falls back to the UTC day.
+    const clockGen = typeof serial === 'number' ? Math.floor(serial) - (policy.dateSystem === '1904' ? 24_107 : 25_569) : Number.isFinite(epochNowMs) ? Math.floor(epochNowMs / 86_400_000) : 0
+    clock = Object.freeze({ epochNowMs, clockGen })
+    return clock
+  }
+  return Object.freeze(Object.defineProperty({ ...policy } as CfEvaluationContext, 'clock', { get: sample, enumerable: true }))
 }
 
 /* ================================================================== */

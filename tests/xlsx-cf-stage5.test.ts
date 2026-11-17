@@ -375,3 +375,15 @@ describe('publication is validated first, then written atomically (Task 39 fix r
     expect(list(dir)).toEqual(['x.ts'])
   })
 })
+
+describe('the no-formula baseline keeps literal CF and does no formula work (Task 39 fix round 1, F5)', () => {
+  it('literal cellIs CF: 0 formula compiles, 0 snapshot preparations, 0 clock reads; one expression rule moves all three', async () => {
+    const { pressureNoFormulaBaseline } = await import('../scripts/cf-refs/pressure-stage5')
+    const { literal, control } = await pressureNoFormulaBaseline()
+    expect(literal.painted, 'the literal CF still paints (the baseline keeps CF)').toBeGreaterThan(0)
+    expect({ compiles: literal.compiles, snapshots: literal.snapshots, clockReads: literal.clockReads }).toEqual({ compiles: 0, snapshots: 0, clockReads: 0 })
+    expect(control.compiles, 'positive control: compiles').toBeGreaterThan(0)
+    expect(control.snapshots, 'positive control: snapshots').toBeGreaterThan(0)
+    expect(control.clockReads, 'positive control: clock reads').toBeGreaterThan(0)
+  }, 120000)
+})

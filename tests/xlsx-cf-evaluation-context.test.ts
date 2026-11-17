@@ -145,8 +145,11 @@ describe('the clock is taken once per preparation from the injected now', () => 
     const t0 = Date.UTC(2026, 10, 16, 15, 59, 59), t1 = Date.UTC(2026, 10, 16, 16, 0, 0)
     const now = vi.fn().mockReturnValueOnce(t0).mockReturnValueOnce(t1)
     const first = cfEvaluationContextFor(TAIPEI, now), second = cfEvaluationContextFor(TAIPEI, now)
-    expect(now).toHaveBeenCalledTimes(2)
+    // Task 39 fix round 1 (F5): the snapshot is taken at the first read of `clock`, once (no clock-reading rule, no sample).
+    expect(now).toHaveBeenCalledTimes(0)
     expect([first.clock.epochNowMs, second.clock.epochNowMs]).toEqual([t0, t1])
+    expect([first.clock.epochNowMs, second.clock.epochNowMs]).toEqual([t0, t1])
+    expect(now).toHaveBeenCalledTimes(2)
     expect(second.clock.clockGen).toBe(first.clock.clockGen + 1)
     expect(first).toMatchObject(TAIPEI)
     expect(Object.isFrozen(first) && Object.isFrozen(first.clock)).toBe(true)

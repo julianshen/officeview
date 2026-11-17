@@ -25,7 +25,7 @@ import { measurePayloadBytes } from '../view/payloadBytes'
 import {
   CF_TEXT_UNIT_CHARS, cfFormulaFootprint, cfFormulaSemantics, cfLiteralToElement, createCfInvariantMemo, evaluateCfFormula, planCfHoist,
   type CfCallWorkBreakdown, type CfEdgeMode, type CfEvaluationContext, type CfFootprintEntry, type CfFormulaContext, type CfFormulaPacing,
-  type CfFormulaProbe, type CfHoist, type CfHoisted, type CfPayloadMetrics, type CfResult,
+  type CfFormulaProbe, type CfHoist, type CfHoisted, type CfPayloadMetrics, type CfResult, noteCfSnapshotPreparation,
 } from './formula'
 import {
   CF_DEPENDENCY_CELL_BYTES, CF_DEPENDENCY_KEY_BYTES, CF_LIMITS, CF_VIEW_WORKSPACE_BYTES, CF_WORK_REFUSED, createCfUnitCeiling, createCfWorkBudget,
@@ -625,6 +625,7 @@ export interface CfFormulaBatch {
 const sameDataGeneration = (a: CfStamp, b: CfStamp): boolean => a.owner === b.owner && a.sheetId === b.sheetId && a.workbookValueGen === b.workbookValueGen
   && a.structureGen === b.structureGen && (a.dependencyGen ?? 0) === (b.dependencyGen ?? 0)
 export async function prepareCfFormulaBatch(tasks: readonly CfFormulaTask[], options: CfFormulaBatchOptions): Promise<CfFormulaBatch> {
+  noteCfSnapshotPreparation()
   const { signal, memory, evaluation } = options
   const ceiling = options.ceiling ?? createCfUnitCeiling()
   const scanBudget = (): CfWorkBudget => options.scanBudget?.() ?? createCfWorkBudget({ signal, scan: true })
