@@ -135,7 +135,14 @@ describe('fix round 3 (S1, S2): justification scope follows the compositor\'s re
     ;(rule as { definition: unknown }).definition = { kind: 'unresolved', type: 'expression', reason: 'cf-resource-limit' }
     expect(await stage5SlotVerdict(m.c, m.doc, m.sheet, 'I3', REPO_ROOT)).toMatch(/without a recorded justification/)
     expect(await compareWith(m.c, 'I3', { applied: false, unresolved: true, unresolvedSlots: ['ALL'] })).toMatch(/I3/)
-    void stage5CaseRecords
+    // The audit rows on production's own parse with the expression refused (the compiler mocked to refuse $A2>0).
+    mutant.refuse = '$A2>0'
+    try {
+      const rows = await stage5CaseRecords({ ...manifest(), cases: [m.c] }, REPO_ROOT)
+      const i3 = rows.find(r => r.ref === 'I3')!
+      expect(i3.production.unresolved, JSON.stringify(i3.production)).toContain('ALL')
+      expect(i3.agrees, JSON.stringify(i3)).toBe(false)
+    } finally { mutant.refuse = undefined }
   }, 120000)
 
   it('S2: composition Q3 with only font.bold unresolved and strikethrough resolved false (Excel: struck) disagrees everywhere', async () => {
