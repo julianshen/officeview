@@ -387,3 +387,24 @@ describe('the no-formula baseline keeps literal CF and does no formula work (Tas
     expect(control.clockReads, 'positive control: clock reads').toBeGreaterThan(0)
   }, 120000)
 })
+
+describe('enumerated withholding justifications are backed by the workbook (Task 39 fix round 1, F1)', () => {
+  it('every enumerated refusal names a cell whose rule reads a range the S5-HOIST policy refuses', async () => {
+    const { STAGE5_ENUMERATED_REFUSALS, stage5WithholdJustification } = await import('../scripts/cf-refs/stage5-withhold')
+    const keys = Object.keys(STAGE5_ENUMERATED_REFUSALS)
+    expect(keys.length).toBe(18)
+    const c = manifest().cases.find(x => x.id === 'stage5-formula-functions')!
+    for (const k of keys) {
+      const ref = k.split(':')[1]!
+      expect(c.markers.some(m => m.formulas?.includes('COUNTIF($A:$A,A2)>1') && m.sqref.split(':')[0]!.startsWith('H')), k).toBe(true)
+      expect(stage5WithholdJustification(c, ref).join(), k).toMatch(/S5-HOIST policy/)
+    }
+    // The recorded condition: column A of the saved workbook holds a boolean.
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
+    const a = doc.sheets[0]!.rows.flatMap(r => r.cells).filter(x => x.col === 0)
+    expect(a.some(x => typeof (x as { value?: unknown }).value === 'boolean')).toBe(true)
+    // A published configuration with no such record is never justified (composition B2: every capability published).
+    const comp = manifest().cases.find(x => x.id === 'stage5-composition')!
+    expect(stage5WithholdJustification(comp, 'B2')).toEqual([])
+  })
+})

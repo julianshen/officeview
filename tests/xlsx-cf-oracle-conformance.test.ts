@@ -15,6 +15,7 @@ import { OfficePackage } from '../src/core/zip'
 import { parseXlsx, type ParseXlsxOptions } from '../src/xlsx/parse'
 import { cfDocumentEvaluationOf, prepareCfPaint, residentSource } from '../src/xlsx/cf/render'
 import { prepareCfTextScope } from '../src/xlsx/cf/text'
+import { stage5WithholdJustification } from '../scripts/cf-refs/stage5-withhold'
 import type { CfDateContext } from '../src/xlsx/cf/predicates'
 import type { XlsxSheet } from '../src/xlsx/types'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
@@ -109,20 +110,33 @@ function stage5FormulaCovered(c: { markers: ReadonlyArray<{ sqref: string; formu
   return c.markers.some(m => m.formula !== undefined && isCellInSqref(ref, m.sqref))
 }
 
-/** Task 39: production's own announcement of one cell (the text scope over the paint path's inputs): withheld or not. */
+/** Task 39: production's own announcement of one cell (the text scope over the paint path's inputs): withheld or not.
+ * Fix round 1 (F1): any exception is a failure (it propagates), never accepted as withholding. */
 async function stage5WithheldAt(sheet: XlsxSheet, doc: Awaited<ReturnType<typeof parseXlsx>>, ref: string, dateContext: CfDateContext | undefined): Promise<boolean> {
   const { row, col } = refToRowCol(ref)
   const budget = { reserve: () => {}, release: () => {}, retain: (_t: unknown, _b: number, commit: () => void) => commit(), settle: () => {} }
-  try {
-    const scope = await prepareCfTextScope(sheet, {
-      rects: [{ r0: row, r1: row, c0: col, c1: col }], signal: new AbortController().signal, locale: 'en-US', budget: budget as never,
-      documentSheets: doc.sheets, evaluation: cfDocumentEvaluationOf(doc), ...(dateContext ? { dateContext } : {}),
-    })
-    if (!scope) return true
-    try { return scope.describe(row, col)?.text === 'Conditional formatting unavailable' } finally { scope.dispose() }
-  } catch {
-    return true // a refused preparation withholds the whole request
+  const scope = await prepareCfTextScope(sheet, {
+    rects: [{ r0: row, r1: row, c0: col, c1: col }], signal: new AbortController().signal, locale: 'en-US', budget: budget as never,
+    documentSheets: doc.sheets, evaluation: cfDocumentEvaluationOf(doc), ...(dateContext ? { dateContext } : {}),
+  })
+  if (!scope) throw new Error(`${ref}: no text scope for a sheet with conditional formatting`)
+  try { return scope.describe(row, col)?.text === 'Conditional formatting unavailable' } finally { scope.dispose() }
+}
+
+/**
+ * Task 39 fix round 1 (F1, ruling): one Stage 5 cell under a formula rule that production paints nothing at. Withheld is
+ * accepted only with an independently recorded justification (`stage5WithholdJustification`: a capability the cell's
+ * formula rules need is not published, the formula is refused at compile, or an enumerated refusal); production's own
+ * unavailable state never counts. Not withheld, it must be Excel's outcome (no format). Returns the violation, if any.
+ */
+async function stage5UnpaintedVerdict(c: CfManifest['cases'][number], exp: { ref: string; matched?: boolean }, sheet: XlsxSheet, doc: Awaited<ReturnType<typeof parseXlsx>>, dateContext: CfDateContext | undefined): Promise<{ violation?: string; withheld: boolean }> {
+  const key = `${c.id}:${exp.ref}`
+  const withheld = await stage5WithheldAt(sheet, doc, exp.ref, dateContext)
+  if (withheld) {
+    const why = stage5WithholdJustification(c, exp.ref)
+    return why.length > 0 ? { withheld } : { withheld, violation: `${key}: withheld without a recorded justification (every capability its formula rules need is published)` }
   }
+  return exp.matched ? { withheld, violation: `${key}: Excel shows a format and production paints none (a no-match, not withheld)` } : { withheld }
 }
 
 describe('production viewer conditional formatting oracle conformance (C1 & C3)', () => {
@@ -247,7 +261,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
         const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
         const doc = await parseXlsx(await OfficePackage.load(bytes), parseOptionsFor(c))
         const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
-        const dateContext = c.clockRequirement ? {
+        const dateContext = c.clockRequirement && c.stage !== 5 ? { // Task 39 fix 1: a Stage 5 case takes the evaluation clock (faked Date), as paint.ts does
           clockSerial: c.clockRequirement.anchorSerial,
           dateSystem: c.clockRequirement.dateSystem,
         } : undefined
@@ -278,10 +292,10 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
             // Where production paints nothing but Excel shows a format, production must announce the cell withheld: a
             // no-match there would be a wrong paint. Literal twins and positive controls carry no formula: always compared.
             if (stage5FormulaCovered(c, exp.ref)) {
-              if (!gotMatched && exp.matched) {
-                expect(await stage5WithheldAt(sheet, doc, exp.ref, dateContext), `${cellKey}: Excel shows a format and production paints none, so production must withhold it`).toBe(true)
-                stage5Withheld++
-                continue
+              if (!gotMatched) {
+                const verdict = await stage5UnpaintedVerdict(c, exp, sheet, doc, dateContext)
+                expect(verdict.violation, cellKey).toBeUndefined()
+                if (verdict.withheld) { stage5Withheld++; continue }
               }
               stage5FormulaCompared++
             } else stage5Compared++
@@ -1582,4 +1596,34 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous
     }
   })
+})
+
+describe('a Stage 5 cell withheld without a recorded justification fails (Task 39 fix round 1, F1)', () => {
+  it('codex mutant: stage5-composition B2..B7 rule rewritten in memory to a resource refusal is caught', async () => {
+    const manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8')) as CfManifest
+    const c = manifest.cases.find(x => x.id === 'stage5-composition')!
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
+    const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+    const marker = c.markers.find(m => m.capabilityId === 'formula:composition-stop-dxf' && m.ruleType === 'expression')!
+    const verdicts = async (): Promise<string[]> => {
+      const out: string[] = []
+      const paint = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, evaluation: cfDocumentEvaluationOf(doc), documentSheets: doc.sheets }))!
+      for (const exp of c.expected.cells.filter(e => /^B[2-7]$/.test(e.ref))) {
+        const { row, col } = refToRowCol(exp.ref)
+        const st = paint.layer.styleAt(row, col, undefined)
+        const gotMatched = Boolean(st && (st.fillColor || st.color || st.bold !== undefined || st.strike === true || st.formatCode || st.numFmtId))
+        if (gotMatched) continue
+        const v = await stage5UnpaintedVerdict(c, exp, sheet, doc, undefined)
+        if (v.violation) out.push(v.violation)
+      }
+      paint.dispose()
+      return out
+    }
+    expect(await verdicts(), 'the unmutated sheet').toEqual([])
+    const rule = sheet.conditionalFormatting!.rules.find(r => r.priority === marker.priority)!
+    ;(rule as { definition: unknown }).definition = { kind: 'unresolved', type: 'expression', reason: 'cf-resource-limit' }
+    const caught = await verdicts()
+    expect(caught.length, 'the mutant is caught').toBeGreaterThan(0)
+    expect(caught.every(v => /withheld without a recorded justification/.test(v))).toBe(true)
+  }, 120000)
 })

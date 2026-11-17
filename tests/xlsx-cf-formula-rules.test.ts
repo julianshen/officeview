@@ -7,6 +7,7 @@
  * paint paths are exercised under injected evidence only.
  */
 import { describe, expect, it } from 'vitest'
+import { stage5WithholdJustification } from '../scripts/cf-refs/stage5-withhold'
 import { PRE_STAGE5_EVIDENCE } from './helpers/cf-stage5-off'
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
@@ -144,12 +145,29 @@ describe('expression rule paints exactly the DisplayFormat cells (Lesson 1)', ()
       const formulaSourced = outcome?.kind === 'ready' && Object.keys(outcome.value.properties).length > 0
       const isVerified = cellVerified(c, e.ref, verified), observed = observedToken(observations[e.ref])
       if (isVerified && observed) compared++
-      const v = stage5CellVerdict({ key: `${c.id}:${e.ref}`, verified: isVerified, ...(observed ? { observed } : {}) }, { fill: got.fill, strike: got.strike }, formulaSourced, got.withheld)
+      // Fix round 1 (F1): a withheld cell counts as withheld only with an independently recorded justification
+      // (stage5WithholdJustification), never on production's own unavailable state.
+      const justified = got.withheld && stage5WithholdJustification(c, e.ref).length > 0
+      const v = stage5CellVerdict({ key: `${c.id}:${e.ref}`, verified: isVerified, ...(observed ? { observed } : {}) }, { fill: got.fill, strike: got.strike }, formulaSourced, justified)
       if (v) violations.push(v)
       else if (isVerified && observed) { if (got.fill === observed.fill && got.strike === observed.strike) exact++; else withheld++ }
     }
     return { violations, compared, prepared, withheld, exact }
   }
+
+  it('codex mutant (Task 39 fix round 1, F1): stage5-composition B2..B7 rewritten in memory to a resource refusal fails', async () => {
+    const c = manifest().cases.find(x => x.id === 'stage5-composition')!
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
+    const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+    const verified = (id: string): boolean => VERIFIED_CAPABILITIES.has(id)
+    const run = () => lesson1Case(c, sheet, observationsOf(c), verified, cfEvaluationContextFor(cfDocumentEvaluationOf(doc), Date.now), doc.sheets)
+    expect((await run()).violations, 'the unmutated case').toEqual([])
+    const marker = c.markers.find(m => m.capabilityId === 'formula:composition-stop-dxf' && m.ruleType === 'expression')!
+    const rule = sheet.conditionalFormatting!.rules.find(r => r.priority === marker.priority)!
+    ;(rule as { definition: unknown }).definition = { kind: 'unresolved', type: 'expression', reason: 'cf-resource-limit' }
+    const mutant = await run()
+    expect(mutant.violations.filter(v => /^stage5-composition:B[2-7]:/.test(v)).length, mutant.violations.join('\n')).toBeGreaterThan(0)
+  })
 
   it('a dropped verified worksheet\'s CF fails where Excel painted (fix round 1 #3)', async () => {
     const c = manifest().cases.find(x => x.id === 'stage5-formula-truthiness')!
