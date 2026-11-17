@@ -219,6 +219,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     let stage4StubCompared = 0
     let stage5Withheld = 0
     let stage5Compared = 0
+    let stage5UnpublishedCompared = 0
 
     for (const c of manifest.cases) {
       if (c.status !== 'measured' || c.stage === 2) continue
@@ -245,7 +246,9 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
 
           const { row, col } = refToRowCol(exp.ref)
           const st = paint.layer.styleAt(row, col, undefined)
-          const gotMatched = Boolean(st && (st.fillColor || st.color || st.bold !== undefined || st.formatCode || st.numFmtId))
+          // Task 39: a strikethrough-only DXF (stage5-composition's dxf 2 positive control B10) is a CF match too; Excel's
+          // DisplayFormat records it as `matched` with no fill.
+          const gotMatched = Boolean(st && (st.fillColor || st.color || st.bold !== undefined || st.strike === true || st.formatCode || st.numFmtId))
 
           // Ruling M3: Withheld Stage 5 expressions or Stage 2/3 visuals must be asserted
           // as withheld rather than skipped silently:
@@ -256,13 +259,16 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
             // not hold is measured but unpublished, so production WITHHOLDS it (no style), whatever Excel showed. Once the
             // capability is published (`--publish-stage5`), the cell takes the Excel comparison below. Literal twins and
             // positive controls carry no formula and are always compared with Excel.
+            // A rule of higher priority that production holds may still write the cell (stage5-composition N: a published
+            // colour scale ahead of the unresolved expression), so such a cell is withheld OR Excel's outcome, never anything
+            // else (the S5-STUB principle).
             const unpublished = stage5UnpublishedFormulaCaps(c, exp.ref)
-            if (unpublished.length > 0) {
-              expect(gotMatched, `${cellKey}: measured but unpublished (${unpublished.join(', ')}), so production withholds it`).toBe(false)
+            if (unpublished.length > 0 && !gotMatched) {
               stage5Withheld++
               continue
             }
-            stage5Compared++
+            if (unpublished.length > 0) stage5UnpublishedCompared++
+            else stage5Compared++
           }
           if (c.stage === 3) {
             stage3Checked++
@@ -419,11 +425,13 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     const expectedStage5Withheld = measured5.flatMap(c => c.expected.cells.filter(exp => stage5UnpublishedFormulaCaps(c, exp.ref).length > 0)).length
     const expectedStage5Compared = measured5.flatMap(c => c.expected.cells.filter(exp => stage5UnpublishedFormulaCaps(c, exp.ref).length === 0)).length
     expect(measured5.length).toBeGreaterThan(10)
-    expect(stage5Withheld).toBe(expectedStage5Withheld)
+    expect(stage5Withheld + stage5UnpublishedCompared).toBe(expectedStage5Withheld)
     expect(stage5Compared).toBe(expectedStage5Compared)
     expect(stage5Compared).toBeGreaterThan(100)
     // The guard applies only while unpublished: with nothing of Stage 5 published, every formula-covered cell is withheld.
     if (!measured5.some(c => c.markers.some(m => m.formula && VERIFIED_CAPABILITIES.has(m.capabilityId)))) expect(stage5Withheld).toBeGreaterThan(100)
+    // eslint-disable-next-line no-console
+    console.log(`stage 5 conformance: withheld=${stage5Withheld} unpublishedCompared=${stage5UnpublishedCompared} compared=${stage5Compared}`)
   })
 
   it('proves all 53 previously withheld cells now paint under production evidence (C1)', async () => {
