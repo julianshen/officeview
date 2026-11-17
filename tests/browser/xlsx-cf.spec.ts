@@ -37,12 +37,14 @@ const LEGS: readonly Leg[] = [
 
 type Img = { width: number; height: number; data: Uint8ClampedArray }
 
-async function openCf(page: Page, name: string, bytes: Buffer, leg: Leg): Promise<void> {
+async function openCf(page: Page, name: string, bytes: Buffer, leg: Leg, extra: { cfev?: boolean } = {}): Promise<void> {
   const route = `/__fixtures/cf-${encodeURIComponent(name)}.xlsx`
   await page.route(url => url.pathname === route, r => r.fulfill({ body: bytes, contentType: 'application/octet-stream' }))
   const query = new URLSearchParams({ src: route })
   if (leg.worker) query.set('worker', '1')
   if (leg.paged) query.set('paged', '1')
+  // Stage 5 evidence seam (src/debug/cfEvidence.ts, debug-only): the page and its viewer worker hold the readings production implements.
+  if (extra.cfev) query.set('cfev', '1')
   await page.goto(`/src/debug/viewer-e2e.html?${query}`)
   await expect(page.getByRole('grid')).toBeVisible({ timeout: 60_000 })
 }
@@ -1123,11 +1125,11 @@ test('Stage 4 print capture paints the admitted icons', async ({ context }) => {
 
 // ==================== Stage 5 formula rules (Task 38) ====================
 //
-// No Stage 5 capability is verified yet (the Excel captures are pending), and the worker legs run their own module instance,
-// so no evidence can be injected into every leg: production withholds every formula cell, and these tests pin what the legs
-// show NOW (identical, each cell carrying a CF descriptor, no formula text) without asserting a paint the product does not yet
-// promise. They are written to keep passing, unchanged, once the capabilities publish: they compare legs with each other,
-// never with a fixed colour. Paint under injected evidence is covered by tests/xlsx-cf-formula-views.test.ts.
+// No Stage 5 capability is verified yet (the Excel captures are not published), so production withholds every formula cell. Two
+// kinds of run, each stating what it is: `cfev` runs open the page with the debug-only evidence seam (`?cfev=1`, src/debug/
+// cfEvidence.ts, excluded from the build) so the page AND its viewer worker hold the readings production implements and real
+// paint is compared across the legs, forced-paged included; production runs (no `cfev`) pin identical withholding. Neither
+// run compares with Excel, and neither asserts a verified capability.
 
 const S5_AUTHORED = 'stage5-formula-authored'
 const S5_CROSS = 'stage5-cross-sheet'
@@ -1136,7 +1138,9 @@ const S5_CROSS_CELLS = ['B2', 'B3', 'B4', 'B5', 'C2', 'C3', 'C4', 'C5', 'D2', 'D
 const FORMULA_TEXT = /[=$!]|[A-Z]{2,}\(|TODAY|COUNTIF|ISBLANK|Sheet2/
 const namesOf = async (page: Page, refs: readonly string[]): Promise<string[]> => Promise.all(refs.map(async ref => (await cell(page, ref).getAttribute('aria-label')) ?? (await cell(page, ref).textContent()) ?? ''))
 /** The names, each stripped of the cell's own value text: what is left is the CF announcement. */
-const announcements = (names: readonly string[]): string[] => names.map(n => n.replace(/^[A-Z]+\d+, value [^,]*,?\s*/, ''))
+const announcements = (names: readonly string[]): string[] => names.map(n => n.replace(/^[A-Z]+\d+, value [^;]*;?\s*/, ''))
+const appliedCount = (names: readonly string[]): number => names.filter(n => /Conditional formatting applied/.test(n)).length
+const announced = (refs: readonly string[], min: number) => async (page: Page): Promise<boolean> => (await namesOf(page, refs)).filter(n => /Conditional formatting/.test(n)).length >= min
 
 async function editSheetCell(raw: Buffer, sheetPath: string, ref: string, value: string): Promise<Buffer> {
   const zip = await JSZip.loadAsync(raw)
@@ -1149,57 +1153,84 @@ async function editSheetCell(raw: Buffer, sheetPath: string, ref: string, value:
 
 test('Stage 5 formula rules paint and announce on every leg, and legs agree', async ({ context }) => {
   const bytes = readFileSync(`${CF_FIXTURES}${S5_AUTHORED}.xlsx`)
-  const shots: Img[] = [], names: string[][] = []
-  for (const leg of LEGS) {
-    await test.step(leg.name, async () => {
-      const page = await context.newPage()
-      try {
-        await openCf(page, S5_AUTHORED, bytes, leg)
-        // The cells the formula rules reach carry a CF announcement ("applied" once verified, "unavailable" until then), never silence.
-        await expect(cell(page, 'B2')).toContainText(/\S/, { timeout: 30_000 })
-        await expect.poll(async () => (await namesOf(page, S5_CELLS)).filter(n => /Conditional formatting/.test(n)).length >= 6, { timeout: 30_000, message: `${leg.name}: the formula cells announce their CF state` }).toBe(true)
-        const grid = await settledCfGrid(page, 0)
-        shots.push(grid)
-        names.push(announcements(await namesOf(page, S5_CELLS)))
-        for (const n of names.at(-1)!) expect(n).not.toMatch(FORMULA_TEXT)
-        await expect(page.getByRole('alert'), `${leg.name}: no error alert`).toHaveCount(0)
-      } finally { await page.close() }
-    })
+  const shotsByRun: Record<string, number> = {}
+  for (const cfev of [true, false]) {
+    const shots: Img[] = [], names: string[][] = []
+    for (const leg of LEGS) {
+      await test.step(`${leg.name}${cfev ? ' (evidence seam)' : ' (production evidence)'}`, async () => {
+        const page = await context.newPage()
+        try {
+          await openCf(page, S5_AUTHORED, bytes, leg, { cfev })
+          await expect.poll(async () => announced(S5_CELLS, cfev ? 2 : 6)(page), { timeout: 30_000, message: `${leg.name}: the formula cells announce their CF state` }).toBe(true)
+          const grid = await settledCfGrid(page, cfev ? 200 : 0)
+          shots.push(grid)
+          names.push(announcements(await namesOf(page, S5_CELLS)))
+          for (const n of names.at(-1)!) expect(n).not.toMatch(FORMULA_TEXT)
+          if (cfev) {
+            expect(appliedCount(await namesOf(page, S5_CELLS)), `${leg.name}: formula rules apply`).toBeGreaterThan(2)
+            expect(countPink(grid, 0, 0, grid.width, grid.height), `${leg.name}: the formula fill paints`).toBeGreaterThan(200)
+          } else {
+            expect(appliedCount(await namesOf(page, S5_CELLS)), `${leg.name}: production withholds`).toBe(0)
+          }
+          await expect(page.getByRole('alert'), `${leg.name}: no error alert`).toHaveCount(0)
+        } finally { await page.close() }
+      })
+    }
+    expect(names[1], 'worker announces what resident announces').toEqual(names[0])
+    expect(names[2], 'forced paged announces what resident announces').toEqual(names[0])
+    const [resident, worker, paged] = shots as [Img, Img, Img]
+    expect(worker.width).toBe(resident.width); expect(paged.width).toBe(resident.width)
+    let differing = 0
+    for (let i = 0; i < resident.data.length; i += 4) if (Math.abs(resident.data[i]! - worker.data[i]!) > 4 || Math.abs(resident.data[i + 1]! - worker.data[i + 1]!) > 4 || Math.abs(resident.data[i + 2]! - worker.data[i + 2]!) > 4) differing++
+    expect(differing / (resident.width * resident.height), 'worker paints what resident paints').toBeLessThan(0.002)
+    // The forced-paged tile pipeline lays pixels out differently (its fill coverage is not pixel-equal), but it paints the same cells:
+    // the same number of filled row bands and column bands as resident, and the fill is present on it.
+    const bands = (img: Img): { rows: number; cols: number; pink: number } => {
+      const isPink = (x: number, y: number): boolean => { const i = (y * img.width + x) * 4; return Math.abs(img.data[i]! - 0xff) <= 48 && Math.abs(img.data[i + 1]! - 0xc7) <= 48 && Math.abs(img.data[i + 2]! - 0xce) <= 48 }
+      const rowHit = Array.from({ length: img.height }, (_, y) => { let n = 0; for (let x = 0; x < img.width; x++) if (isPink(x, y)) n++; return n >= 10 })
+      const colHit = Array.from({ length: img.width }, (_, x) => { let n = 0; for (let y = 0; y < img.height; y++) if (isPink(x, y)) n++; return n >= 10 })
+      const runs = (hit: boolean[]): number => hit.filter((v, i) => v && !hit[i - 1]).length
+      return { rows: runs(rowHit), cols: runs(colHit), pink: countPink(img, 0, 0, img.width, img.height) }
+    }
+    const [br, bw, bp] = [bands(resident), bands(worker), bands(paged)]
+    expect(bw, 'worker bands').toEqual(br)
+    expect(bp.pink, 'forced paged paints the fill').toBeGreaterThan(200)
+    expect({ rows: bp.rows, cols: bp.cols }, 'forced paged paints the same cells as resident').toEqual({ rows: br.rows, cols: br.cols })
+    shotsByRun[cfev ? 'evidence' : 'production'] = br.pink
   }
-  expect(names[1], 'worker announces what resident announces').toEqual(names[0])
-  expect(names[2], 'forced paged announces what resident announces').toEqual(names[0])
-  const [resident, worker, paged] = shots as [Img, Img, Img]
-  expect(worker.width).toBe(resident.width); expect(paged.width).toBe(resident.width)
-  let differing = 0
-  for (let i = 0; i < resident.data.length; i += 4) if (Math.abs(resident.data[i]! - worker.data[i]!) > 4 || Math.abs(resident.data[i + 1]! - worker.data[i + 1]!) > 4 || Math.abs(resident.data[i + 2]! - worker.data[i + 2]!) > 4) differing++
-  expect(differing / (resident.width * resident.height), 'worker paints what resident paints').toBeLessThan(0.002)
-  // Pink (the fixture's formula DXF) is painted equally by resident and worker; the paged tile pipeline is compared by presence.
-  expect(countPink(worker, 0, 0, worker.width, worker.height)).toBe(countPink(resident, 0, 0, resident.width, resident.height))
+  // The fixture also holds a literal rule with the same fill, which both runs paint; the formula rules are the difference.
+  expect(shotsByRun.evidence!, 'the evidence paints the formula fill the production run withholds').toBeGreaterThan(shotsByRun.production! + 200)
 })
 
 test('Stage 5 cross-sheet edit repaints the dependent sheet', async ({ context }) => {
+  // The viewer is view-only (no cell-commit API on this page, and a worker-backed workbook has no value commit), so the edit is
+  // made in the file and the page is opened on it: a new document, not a same-session commit. The same-session invalidation
+  // (a referenced-sheet commit staling the dependent sheet's tiles and subscriptions) is covered by tests/xlsx-cf-live.test.tsx,
+  // tests/xlsx-cf-formula-cross-sheet.test.ts and the remote-cache dependency epoch tests.
   const raw = readFileSync(`${CF_FIXTURES}${S5_CROSS}.xlsx`)
-  // Sheet2!A2 = 1 -> 9 moves every `Sheet2!A?>0` dependent of Sheet1; the legs must agree before and after.
   const edited = await editSheetCell(raw, 'xl/worksheets/sheet2.xml', 'A3', '9')
-  const seen: Record<string, string[][]> = {}
+  const seen: Record<string, { names: string[]; pink: number }[]> = {}
   for (const leg of LEGS) {
     await test.step(leg.name, async () => {
       for (const [phase, bytes] of [['before', raw], ['after', edited]] as const) {
         const page = await context.newPage()
         try {
-          await openCf(page, `${S5_CROSS}-${phase}`, bytes, leg)
-          await expect.poll(async () => (await namesOf(page, S5_CROSS_CELLS)).filter(n => /Conditional formatting/.test(n)).length >= 4, { timeout: 30_000, message: `${leg.name} ${phase}: announces` }).toBe(true)
-          const settled = announcements(await namesOf(page, S5_CROSS_CELLS))
-          for (const n of settled) expect(n).not.toMatch(FORMULA_TEXT)
-          ;(seen[phase] ??= []).push(settled)
+          await openCf(page, `${S5_CROSS}-${phase}`, bytes, leg, { cfev: true })
+          await expect.poll(async () => announced(S5_CROSS_CELLS, 4)(page), { timeout: 30_000, message: `${leg.name} ${phase}: announces` }).toBe(true)
+          const grid = await settledCfGrid(page, 0)
+          const names = announcements(await namesOf(page, S5_CROSS_CELLS))
+          for (const n of names) expect(n).not.toMatch(FORMULA_TEXT)
+          ;(seen[phase] ??= []).push({ names, pink: countPink(grid, 0, 0, grid.width, grid.height) })
         } finally { await page.close() }
       }
     })
   }
-  for (const phase of ['before', 'after']) { expect(seen[phase]![1], `${phase}: worker`).toEqual(seen[phase]![0]); expect(seen[phase]![2], `${phase}: forced paged`).toEqual(seen[phase]![0]) }
-  // Once the cross-sheet capabilities are verified, an edit to Sheet2 must move what Sheet1 announces; until then both runs withhold.
-  const applied = seen.before![0]!.some(n => /applied/.test(n))
-  if (applied) expect(seen.after![0], 'the dependent cells repaint').not.toEqual(seen.before![0])
+  for (const phase of ['before', 'after']) { expect(seen[phase]![1]!.names, `${phase}: worker`).toEqual(seen[phase]![0]!.names); expect(seen[phase]![2]!.names, `${phase}: forced paged`).toEqual(seen[phase]![0]!.names) }
+  expect(appliedCount(seen.before![0]!.names), 'the cross-sheet rules apply from Sheet2').toBeGreaterThan(1)
+  for (const leg of [0, 1, 2]) {
+    expect(seen.after![leg]!.names, `leg ${leg}: Sheet2 moved what Sheet1 announces`).not.toEqual(seen.before![leg]!.names)
+    expect(seen.after![leg]!.pink, `leg ${leg}: and what it paints`).not.toBe(seen.before![leg]!.pink)
+  }
 })
 
 test('Stage 5 formula rules under frozen panes', async ({ context }) => {
@@ -1209,8 +1240,8 @@ test('Stage 5 formula rules under frozen panes', async ({ context }) => {
     await test.step(leg.name, async () => {
       const page = await context.newPage()
       try {
-        await openCf(page, `${S5_AUTHORED}-frozen`, bytes, leg)
-        await expect.poll(async () => (await namesOf(page, S5_CELLS)).filter(n => /Conditional formatting/.test(n)).length >= 6, { timeout: 30_000, message: `${leg.name}: announces` }).toBe(true)
+        await openCf(page, `${S5_AUTHORED}-frozen`, bytes, leg, { cfev: true })
+        await expect.poll(async () => announced(S5_CELLS, 2)(page), { timeout: 30_000, message: `${leg.name}: announces` }).toBe(true)
         const scroller = page.getByTestId('officeview-sheet-scroller')
         await scroller.evaluate(node => { node.scrollTop = 600; node.scrollLeft = 400 })
         await page.waitForTimeout(500)
@@ -1218,8 +1249,11 @@ test('Stage 5 formula rules under frozen panes', async ({ context }) => {
         await expect(page.getByRole('rowheader', { name: 'Row 1' }).first(), 'frozen row header').toBeVisible()
         await scroller.evaluate(node => { node.scrollTop = 0; node.scrollLeft = 0 })
         await page.waitForTimeout(500)
-        await expect.poll(async () => (await namesOf(page, S5_CELLS)).filter(n => /Conditional formatting/.test(n)).length >= 6, { timeout: 30_000 }).toBe(true)
+        await expect.poll(async () => announced(S5_CELLS, 2)(page), { timeout: 30_000 }).toBe(true)
         names.push(announcements(await namesOf(page, S5_CELLS)))
+        expect(appliedCount(await namesOf(page, S5_CELLS)), `${leg.name}: formula rules apply under frozen panes`).toBeGreaterThan(2)
+        const grid = await settledCfGrid(page, 200)
+        expect(countPink(grid, 0, 0, grid.width, grid.height), `${leg.name}: the formula fill paints`).toBeGreaterThan(200)
         await expect(page.getByRole('alert')).toHaveCount(0)
       } finally { await page.close() }
     })
@@ -1237,20 +1271,26 @@ test('Stage 5 print capture paints formula rules', async ({ context }) => {
     for (let i = 0; i < data.length; i += 4) if (Math.abs(data[i]! - 0xff) <= 48 && Math.abs(data[i + 1]! - 0xc7) <= 48 && Math.abs(data[i + 2]! - 0xce) <= 48) count++
     return count
   })
-  const pink: number[] = []
-  for (const leg of LEGS.filter(l => !l.paged)) {
-    await test.step(leg.name, async () => {
-      const page = await context.newPage()
-      await page.addInitScript(() => { (window as unknown as { print: () => void }).print = () => { (window as unknown as { __printed: number }).__printed = 1 } })
-      try {
-        await openCf(page, S5_AUTHORED, bytes, leg)
-        await page.getByRole('button', { name: 'Print', exact: true }).click()
-        await page.waitForFunction(() => (window as unknown as { __printed?: number }).__printed === 1, { timeout: 30_000 })
-        await expect.poll(async () => page.locator('[data-testid="officeview-sheet-print-pages"] canvas').count(), { message: 'the workbook\'s pages are prepared' }).toBeGreaterThan(0)
-        pink.push(await pinkOf(page))
-      } finally { await page.close() }
-    })
+  const totals: Record<string, number> = {}
+  for (const cfev of [true, false]) {
+    const pink: number[] = []
+    for (const leg of LEGS.filter(l => !l.paged)) {
+      await test.step(`${leg.name}${cfev ? ' (evidence seam)' : ' (production evidence)'}`, async () => {
+        const page = await context.newPage()
+        await page.addInitScript(() => { (window as unknown as { print: () => void }).print = () => { (window as unknown as { __printed: number }).__printed = 1 } })
+        try {
+          await openCf(page, S5_AUTHORED, bytes, leg, { cfev })
+          await page.getByRole('button', { name: 'Print', exact: true }).click()
+          await page.waitForFunction(() => (window as unknown as { __printed?: number }).__printed === 1, { timeout: 30_000 })
+          await expect.poll(async () => page.locator('[data-testid="officeview-sheet-print-pages"] canvas').count(), { message: 'the workbook\'s pages are prepared' }).toBeGreaterThan(0)
+          pink.push(await pinkOf(page))
+        } finally { await page.close() }
+      })
+    }
+    // Print prepares the same CF the screen does: resident and worker pages carry the same formula fill.
+    expect(pink[1], `resident and worker print pages agree (${cfev ? 'evidence seam' : 'production'})`).toBe(pink[0])
+    totals[cfev ? 'evidence' : 'production'] = pink[0]!
   }
-  // Print prepares the same CF the screen does: resident and worker pages carry the same formula fill (none until verified).
-  expect(pink[1]).toBe(pink[0])
+  // The fixture also holds a literal rule with the same fill, which both runs print; the formula rules are the difference.
+  expect(totals.evidence!, 'the print page carries the formula fill only with the evidence').toBeGreaterThan(totals.production! + 200)
 })

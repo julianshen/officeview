@@ -5,6 +5,8 @@
  */
 // Capability denial (S10.3) runs before the entry module evaluates.
 import './workerCaps'
+// Debug-only Stage 5 evidence (`cfev` name segment); before the entry, like the capability denial.
+import './workerCfEvidence'
 import '../worker/worker-entry'
 import { createWorkerMessageHandler } from '../worker/workerMessages'
 // The kernel imports its large-source opener on demand; named here for the same reason.
