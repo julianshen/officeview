@@ -1125,11 +1125,11 @@ test('Stage 4 print capture paints the admitted icons', async ({ context }) => {
 
 // ==================== Stage 5 formula rules (Task 38) ====================
 //
-// No Stage 5 capability is verified yet (the Excel captures are not published), so production withholds every formula cell. Two
-// kinds of run, each stating what it is: `cfev` runs open the page with the debug-only evidence seam (`?cfev=1`, src/debug/
-// cfEvidence.ts, excluded from the build) so the page AND its viewer worker hold the readings production implements and real
-// paint is compared across the legs, forced-paged included; production runs (no `cfev`) pin identical withholding. Neither
-// run compares with Excel, and neither asserts a verified capability.
+// Task 39 published Stage 5 (42 capabilities, among them the formula dialects stage5-formula-authored needs). Two kinds of run,
+// each stating what it is: `cfev` runs open the page with the debug-only evidence seam (`?cfev=1`, src/debug/cfEvidence.ts,
+// excluded from the build) so the page AND its viewer worker hold every reading production implements; production runs (no
+// `cfev`) use the published set. On these fixtures both paint the formula rules, identically across the legs, forced-paged
+// included. Neither run compares with Excel here (tests/xlsx-cf-oracle-conformance.test.ts does).
 
 const S5_AUTHORED = 'stage5-formula-authored'
 const S5_CROSS = 'stage5-cross-sheet'
@@ -1161,17 +1161,14 @@ test('Stage 5 formula rules paint and announce on every leg, and legs agree', as
         const page = await context.newPage()
         try {
           await openCf(page, S5_AUTHORED, bytes, leg, { cfev })
-          await expect.poll(async () => announced(S5_CELLS, cfev ? 2 : 6)(page), { timeout: 30_000, message: `${leg.name}: the formula cells announce their CF state` }).toBe(true)
-          const grid = await settledCfGrid(page, cfev ? 200 : 0)
+          await expect.poll(async () => announced(S5_CELLS, 2)(page), { timeout: 30_000, message: `${leg.name}: the formula cells announce their CF state` }).toBe(true)
+          const grid = await settledCfGrid(page, 200)
           shots.push(grid)
           names.push(announcements(await namesOf(page, S5_CELLS)))
           for (const n of names.at(-1)!) expect(n).not.toMatch(FORMULA_TEXT)
-          if (cfev) {
-            expect(appliedCount(await namesOf(page, S5_CELLS)), `${leg.name}: formula rules apply`).toBeGreaterThan(2)
-            expect(countPink(grid, 0, 0, grid.width, grid.height), `${leg.name}: the formula fill paints`).toBeGreaterThan(200)
-          } else {
-            expect(appliedCount(await namesOf(page, S5_CELLS)), `${leg.name}: production withholds`).toBe(0)
-          }
+          // Published (Task 39): production applies the formula rules as the evidence seam does.
+          expect(appliedCount(await namesOf(page, S5_CELLS)), `${leg.name}: formula rules apply`).toBeGreaterThan(2)
+          expect(countPink(grid, 0, 0, grid.width, grid.height), `${leg.name}: the formula fill paints`).toBeGreaterThan(200)
           await expect(page.getByRole('alert'), `${leg.name}: no error alert`).toHaveCount(0)
         } finally { await page.close() }
       })
@@ -1198,8 +1195,9 @@ test('Stage 5 formula rules paint and announce on every leg, and legs agree', as
     expect({ rows: bp.rows, cols: bp.cols }, 'forced paged paints the same cells as resident').toEqual({ rows: br.rows, cols: br.cols })
     shotsByRun[cfev ? 'evidence' : 'production'] = br.pink
   }
-  // The fixture also holds a literal rule with the same fill, which both runs paint; the formula rules are the difference.
-  expect(shotsByRun.evidence!, 'the evidence paints the formula fill the production run withholds').toBeGreaterThan(shotsByRun.production! + 200)
+  // Published: production paints the formula fill the evidence seam paints (within anti-aliasing).
+  expect(Math.abs(shotsByRun.evidence! - shotsByRun.production!), 'production paints what the evidence seam paints').toBeLessThanOrEqual(200)
+  expect(shotsByRun.production!).toBeGreaterThan(200)
 })
 
 test('Stage 5 cross-sheet edit repaints the dependent sheet', async ({ context }) => {
@@ -1291,8 +1289,8 @@ test('Stage 5 print capture paints formula rules', async ({ context }) => {
     expect(pink[1], `resident and worker print pages agree (${cfev ? 'evidence seam' : 'production'})`).toBe(pink[0])
     totals[cfev ? 'evidence' : 'production'] = pink[0]!
   }
-  // The fixture also holds a literal rule with the same fill, which both runs print; the formula rules are the difference.
-  expect(totals.evidence!, 'the print page carries the formula fill only with the evidence').toBeGreaterThan(totals.production! + 200)
+  // Published (Task 39): production prints the formula fill the evidence seam prints.
+  expect(Math.abs(totals.evidence! - totals.production!), 'production prints what the evidence seam prints').toBeLessThanOrEqual(200)
 })
 
 // ---- Stage 5: a referenced-sheet commit in the SAME live session (fix round 2, finding 6) ----
