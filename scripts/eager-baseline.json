@@ -188,6 +188,12 @@
       "added": [],
       "removed": [],
       "gzipDelta": 30
+    },
+    {
+      "reason": "xlsx CF Stage 5 Task 38 (S5-M, Ruling M2): cfLoader.cfRulesUseClock (plain-data walk of the rules) keys the resident midnight tick (InteractiveSheetDoc tickGen) and the worker's clock-stamp adoption (pagedSource); CfReadOptions.now. No module added; no eager module imports a CF value. Measured 422489 -> 422715 B (+226) on this checkout (BASE 17d4a4da).",
+      "added": [],
+      "removed": [],
+      "gzipDelta": 226
     }
   ]
 }
