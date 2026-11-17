@@ -664,13 +664,17 @@ describe('the mounted viewer forwards the context: accessible names and copy (fi
       const present = SheetTileRenderer.prototype.present
       const spy = vi.spyOn(SheetTileRenderer.prototype, 'present').mockImplementation(function (this: InstanceType<typeof SheetTileRenderer>, ctx, frame) { frames.push(frame); return present.call(this, ctx, frame) })
       const paint = await import('../src/xlsx/cf/render')
-      const calls: Array<Parameters<typeof paint.prepareCfPaint>[1]> = []
+      const calls: Array<Parameters<typeof paint.prepareCfPaint>[1]> = [], viewportBatches: Array<Awaited<ReturnType<typeof paint.prepareCfPaint>>> = []
       const actual = paint.prepareCfPaint
-      const paintSpy = vi.spyOn(paint, 'prepareCfPaint').mockImplementation(async (sheet, options) => { calls.push(options); return actual(sheet, options) })
+      const paintSpy = vi.spyOn(paint, 'prepareCfPaint').mockImplementation(async (sheet, options) => { calls.push(options); const out = await actual(sheet, options); if (options?.viewport) viewportBatches.push(out); return out })
       const ui = render(<InteractiveSheetDoc doc={l.doc} source={createObjectWorkbookSource(l.doc, `viewport-${Math.random()}`)} />)
       try {
         await vi.waitFor(() => expect(calls.length).toBeGreaterThan(0), { timeout: 20_000 })
         expect(calls.some(c => c?.viewport), 'the scrolled path is the one taken').toBe(true)
+        // The batch the viewport path itself prepared (not the asset lease's) evaluates the formula: C4 (B4 = 6 > 3) paints, C2 does not.
+        await vi.waitFor(() => expect(viewportBatches.length).toBeGreaterThan(0), { timeout: 20_000 })
+        expect(viewportBatches[0]?.layer.styleAt(3, 2, undefined)?.fillColor).toBeDefined()
+        expect(viewportBatches[0]?.layer.styleAt(1, 2, undefined)?.fillColor).toBeUndefined()
         await vi.waitFor(() => expect(frames.some(f => f.assets?.conditionalFormatting?.layer.styleAt(3, 2, undefined)?.fillColor)).toBe(true), { timeout: 20_000 })
         expect(frames.some(f => f.assets?.conditionalFormatting?.layer.styleAt(1, 2, undefined)?.fillColor), 'C2 (B2 = 2, not > 3) never paints').toBe(false)
       } finally { ui.unmount(); spy.mockRestore(); paintSpy.mockRestore() }
