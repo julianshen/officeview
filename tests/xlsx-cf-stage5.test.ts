@@ -327,3 +327,20 @@ describe('reuse-only capabilities keep their recorded reading whatever the ownin
     for (const p of stubs) expect(gate.published, p.capabilityId).toContain(p.capabilityId)
   }, 120000)
 })
+
+describe('per-case and per-variant Stage 5 audit rows (Task 39)', () => {
+  it('one row per expected cell of every measured case; every row is Excel\'s reading or withheld', async () => {
+    const { stage5CaseRecords } = await import('../scripts/cf-refs/audit')
+    const m = manifest()
+    const rows = await stage5CaseRecords(m, REPO_ROOT)
+    const measured = m.cases.filter(c => c.stage === 5 && c.status === 'measured')
+    expect(rows.length).toBe(measured.reduce((n, c) => n + c.expected.cells.length, 0))
+    expect(new Set(rows.map(r => r.caseId))).toEqual(new Set(measured.map(c => c.id)))
+    expect(rows.filter(r => !r.agrees).map(r => `${r.caseId}:${r.ref} excel=${r.excel} production=${r.production}`)).toEqual([])
+    const formula = rows.filter(r => r.evidenceKind === 'display-format')
+    // Non-vacuous: production paints most formula cells exactly as Excel did, and still withholds some.
+    expect(formula.filter(r => r.production === r.excel && r.production !== 'none').length).toBeGreaterThan(100)
+    expect(formula.filter(r => r.production === 'withheld').length).toBeGreaterThan(0)
+    for (const r of rows) { expect(r.bytePeak, r.caseId).toBeGreaterThanOrEqual(0); expect(r.mode).toBe('resident') }
+  }, 300000)
+})

@@ -2247,6 +2247,88 @@ export async function stage4CaseRecords(manifest: CfManifest, rootDir: string = 
   }
   return out
 }
+export interface Stage5CaseRecord {
+  caseId: string
+  /** The variant: the designated cell (or its control). */
+  ref: string
+  status: string
+  /** `display-format` under a formula rule, `literal` under literal twins/controls only, `control` with no rule. */
+  evidenceKind: 'display-format' | 'literal' | 'control'
+  /** The formula capabilities of the rules covering the cell. */
+  capabilities: string[]
+  /** Excel's DisplayFormat at the cell: the fill (`none` when it is the base) with `+strike`, or undefined unobserved. */
+  excel: string | undefined
+  /** Production at the cell (resident, the document's evaluation context and sheets): a fill token, or `withheld`. */
+  production: string
+  /** Production is Excel's reading, or withheld (Lesson 2); `false` would be a wrong paint. */
+  agrees: boolean
+  mode: 'resident'
+  stamp: { cfGen: number; workbookValueGen: number }
+  /** The case's CF memory peak (bytes) and the work units its preparations spent. */
+  bytePeak: number
+  workUnits: number
+}
+
+/** The per-case/variant records of every measured Stage 5 case, under production evidence (nothing injected). */
+export async function stage5CaseRecords(manifest: CfManifest, rootDir: string = REPO_ROOT): Promise<Stage5CaseRecord[]> {
+  const { OfficePackage } = await import('../../src/core/zip')
+  const { parseXlsx } = await import('../../src/xlsx/parse')
+  const { createCfService } = await import('../../src/xlsx/cf/service')
+  const { CF_LIMITS } = await import('../../src/xlsx/cf/limits')
+  const { cfRuntimeEvidence } = await import('../../src/xlsx/cf/predicates')
+  const { cfWorkbookOfDocument, cfDocumentEvaluationOf } = await import('../../src/xlsx/cf/render')
+  const { cfEvaluationContextFor } = await import('../../src/xlsx/cf/formula')
+  const { resolveCfCellStyle } = await import('../../src/xlsx/cf/dxf')
+  const { cfRulesVersion } = await import('../../src/xlsx/view/pagedSource')
+  const refRC = (ref: string) => { const m = /^([A-Z]+)(\d+)$/.exec(ref)!; return { row: Number(m[2]) - 1, col: [...m[1]!].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1 } }
+  const out: Stage5CaseRecord[] = []
+  for (const c of manifest.cases.filter(x => x.stage === 5 && x.status === 'measured')) {
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(resolve(rootDir, c.saved)))))
+    const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+    const sidecar = c.captures[0] && existsSync(resolve(rootDir, c.captures[0].sidecarPath))
+      ? JSON.parse(readFileSync(resolve(rootDir, c.captures[0].sidecarPath), 'utf8')) as { formulaObservations?: Record<string, { displayFormatFill?: string; baseFill?: string; strikethrough?: boolean }> } : undefined
+    const memory = createCfMemory()
+    const budgets: CfWorkBudgetLike[] = []
+    const budget = (scan: boolean) => () => { const b = createCfWorkBudget(scan ? { scan: true } : {}); budgets.push(b); return b }
+    const cf = sheet.conditionalFormatting
+    // The clock cases were measured on their anchor day; production reads the same day through the evaluation clock.
+    const now = c.clockRequirement ? () => Date.parse(`${c.clockRequirement!.anchorLocalDate}T04:00:00+08:00`) : Date.now
+    const service = cf ? createCfService(cf, memory, { evidence: cfRuntimeEvidence, budget: budget(false), statisticsBudget: budget(true),
+      evaluation: cfEvaluationContextFor(cfDocumentEvaluationOf(doc), now), sheetName: sheet.name, workbook: cfWorkbookOfDocument(doc.sheets, memory, 'engine') }) : undefined
+    const stamp = { owner: 'audit-records', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cf ? cfRulesVersion(cf) : 0, viewGen: 0, structureGen: 0, clockGen: 0 }
+    const source = residentSource(sheet, stamp, memory, 'engine')
+    try {
+      for (const exp of c.expected.cells) {
+        const covering = c.markers.filter(m => isCellInSqref(exp.ref, m.sqref))
+        const formulaCaps = [...new Set(covering.filter(m => m.formula !== undefined).map(m => m.capabilityId))].sort()
+        const o = sidecar?.formulaObservations?.[exp.ref]
+        const excel = o && typeof o.displayFormatFill === 'string'
+          ? `${o.displayFormatFill.toUpperCase() === (o.baseFill ?? 'FFFFFFFF').toUpperCase() ? 'none' : o.displayFormatFill.toUpperCase()}${o.strikethrough ? '+strike' : ''}` : undefined
+        let production = 'none'
+        if (service) {
+          const { row, col } = refRC(exp.ref)
+          try {
+            const lease = await service.prepareCf({ stamp, sourceRects: [{ firstRow: row, lastRow: row, firstCol: col, lastCol: col }], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, source)
+            const r = lease.value.at(row, col)
+            lease.release()
+            if (r.kind === 'unresolved' || (r.kind === 'ready' && (r.value.unresolvedWrites?.size ?? 0) > 0)) production = 'withheld'
+            else if (r.kind === 'ready') { const st = resolveCfCellStyle(undefined, r.value); production = `${st.fillColor ?? 'none'}${st.strike ? '+strike' : ''}` }
+          } catch { production = 'withheld' }
+        }
+        out.push({
+          caseId: c.id, ref: exp.ref, status: c.status,
+          evidenceKind: formulaCaps.length > 0 ? 'display-format' : covering.length > 0 ? 'literal' : 'control',
+          capabilities: formulaCaps, excel, production,
+          agrees: production === 'withheld' || excel === undefined || production === excel,
+          mode: 'resident', stamp: { cfGen: stamp.cfGen, workbookValueGen: stamp.workbookValueGen }, bytePeak: 0, workUnits: 0,
+        })
+      }
+    } finally { service?.dispose() }
+    const units = budgets.reduce((n, b) => n + b.units, 0)
+    for (const r of out) if (r.caseId === c.id) { r.bytePeak = memory.peakBytes; r.workUnits = units }
+  }
+  return out
+}
 type CfWorkBudgetLike = { readonly units: number }
 type CfObservedIconRow = { ref: string; cellLeftPx: number; cellTopPx: number; icon: null | { leftPx: number; topPx: number; rightPx: number; bottomPx: number; glyphClass: string } }
 
@@ -2613,7 +2695,12 @@ async function main(): Promise<void> {
     console.log(`${cyc.name}: cycles=${cyc.cycles} ready=${cyc.ready} pending=${cyc.pending} closedMidRead=${cyc.cancelled} maxNetBetween=${cyc.maxNetBetween} net=${cyc.netBytes}`)
     if (cyc.ready !== 20 || cyc.pending !== 20 || cyc.cancelled !== 20 || cyc.maxNetBetween !== 0) fail('cross-sheet cycles must hold nothing between close and open')
     for (const p of [shared, hoists, cap, sheets, beside, cyc]) if (p.netBytes !== 0) fail(`${p.name} leaked ${p.netBytes} B`)
-    stage5Pressure = { shared, hoists, cap, sheets, beside, cyc }
+    const caseRecords5 = await stage5CaseRecords(manifest, REPO_ROOT)
+    const disagree = caseRecords5.filter(r => !r.agrees)
+    // eslint-disable-next-line no-console
+    console.log(`stage 5 case records: ${caseRecords5.length} rows over ${new Set(caseRecords5.map(r => r.caseId)).size} measured cases (resident); formula cells ${caseRecords5.filter(r => r.evidenceKind === 'display-format').length}, Excel's reading ${caseRecords5.filter(r => r.evidenceKind === 'display-format' && r.production === r.excel).length}, withheld ${caseRecords5.filter(r => r.production === 'withheld').length}, disagreeing ${disagree.length}${disagree.length ? ` (${disagree.slice(0, 5).map(r => `${r.caseId}:${r.ref} excel=${r.excel} production=${r.production}`).join('; ')})` : ''}`)
+    if (disagree.length > 0) fail(`${disagree.length} Stage 5 cells paint something other than Excel's reading or a withheld state`)
+    stage5Pressure = { shared, hoists, cap, sheets, beside, cyc, caseRecords: caseRecords5 }
   } else {
     const scaleShared = await pressureScale1MRowSharedStatistics()
     // eslint-disable-next-line no-console
