@@ -212,7 +212,7 @@ Every refusal shows the poster and raises a typed notice. Encodes have their own
   - hostile inputs: truncated files, bad headers, an HLS playlist, `concat:` and `file:` references.
   The corpus's 10-byte stubs are the `media-unreadable` cases.
 - **Wire audit.** Over every fixture, no sent chunk contains any 64-byte window of the source part, and the output has no metadata atoms or tags (checked with `ffprobe -show_format -show_streams`).
-- **Forensic survival on video.** This is a new gate. Detection on frames captured from the played MP4 must reach the parent's screenshot gate (≥ 90 %) at default zoom, and its JPEG q70 gate (≥ 75 %). The false-attribution rate must stay at or below 10⁻⁶ with τ unchanged. If the gate fails, the owner decides the next step; the builder does not lower it.
+- **Forensic survival on video.** This is a new gate. Detection on frames captured from the played MP4 must reach the parent's screenshot gate (≥ 90 %) at default zoom, and its JPEG q70 gate (≥ 75 %). The false-attribution rate must stay at or below 10⁻⁶ over the whole frame-window search, with τ recalibrated as §7 says. The underlying 10⁻⁶ bound itself does not change. If the gate fails, the owner decides the next step; the builder does not lower it.
 - **Parity.** `stream-show-compare --deck all` plus the media fixtures pass, with media ends computed per §5.
 - **Hostile tests:** for kind 9, for `media-start` overrun, for unsolicited chunks, and for every refusal reason.
 - **Lifecycle:** cancellation on socket close kills ffmpeg and deletes temporary files, and disk and memory ledgers are empty after every path.
@@ -220,6 +220,6 @@ Every refusal shows the poster and raises a typed notice. Encodes have their own
 ## 9. Left to the builder
 
 - The exact demuxer allowlist, CRF value and AAC bitrate.
-- How the mark is applied per frame, provided it equals `embed` (§4.2).
+- How the mark is applied per frame, provided it equals `markLayerRaster` on each frame (§4.2).
 - The wire field names beyond those above, and their refusal codes.
 - How the rlimits and sandbox are applied on macOS and Linux. If a limit can't be set on a platform, that platform fails closed with `media-unavailable`.
