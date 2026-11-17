@@ -328,20 +328,40 @@ describe('reuse-only capabilities keep their recorded reading whatever the ownin
   }, 120000)
 })
 
-describe('per-case and per-variant Stage 5 audit rows (Task 39)', () => {
-  it('one row per expected cell of every measured case; every row is Excel\'s reading or withheld', async () => {
+describe('per-case and per-variant Stage 5 audit rows (Task 39; fix round 1, F3)', () => {
+  it('a resolved paint is compared even when another slot is unresolved; a visual is compared where Excel measured one', async () => {
+    const { stage5CellAgreement } = await import('../scripts/cf-refs/audit')
+    const RED = 'FFFFC7CE', GREEN = 'FFC6EFCE'
+    // Codex's synthetic: production paints a green fill with an unresolved font.strike; Excel shows red. Wrong paint.
+    expect(stage5CellAgreement({ fill: GREEN, strike: false, unresolved: ['font.strike'], visual: 'none' }, { fill: RED, strike: false }, ['x']).agrees).toBe(false)
+    // The same unresolved strike with Excel's own fill is fine only with a justification for the unresolved slot.
+    expect(stage5CellAgreement({ fill: RED, strike: false, unresolved: ['font.strike'], visual: 'none' }, { fill: RED, strike: false }, ['x']).agrees).toBe(true)
+    expect(stage5CellAgreement({ fill: RED, strike: false, unresolved: ['font.strike'], visual: 'none' }, { fill: RED, strike: false }, []).agrees).toBe(false)
+    // A wholly withheld fill needs a justification.
+    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['fill'], visual: 'none' }, { fill: RED, strike: false }, []).agrees).toBe(false)
+    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['fill'], visual: 'none' }, { fill: RED, strike: false }, ['x']).agrees).toBe(true)
+    // Visual evidence: a bar where Excel measured none (or the reverse) disagrees; unmeasured is not compared.
+    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: [], visual: 'bar' }, { fill: 'none', strike: false, visual: 'none' }, []).agrees).toBe(false)
+    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: [], visual: 'bar' }, { fill: 'none', strike: false, visual: 'bar' }, []).agrees).toBe(true)
+    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: [], visual: 'bar' }, { fill: 'none', strike: false }, []).agrees).toBe(true)
+  })
+
+  it('rows for every Stage 5 case: measured cases compared cell by cell, the others say why they are not', async () => {
     const { stage5CaseRecords } = await import('../scripts/cf-refs/audit')
     const m = manifest()
     const rows = await stage5CaseRecords(m, REPO_ROOT)
-    const measured = m.cases.filter(c => c.stage === 5 && c.status === 'measured')
-    expect(rows.length).toBe(measured.reduce((n, c) => n + c.expected.cells.length, 0))
-    expect(new Set(rows.map(r => r.caseId))).toEqual(new Set(measured.map(c => c.id)))
-    expect(rows.filter(r => !r.agrees).map(r => `${r.caseId}:${r.ref} excel=${r.excel} production=${r.production}`)).toEqual([])
-    const formula = rows.filter(r => r.evidenceKind === 'display-format')
-    // Non-vacuous: production paints most formula cells exactly as Excel did, and still withholds some.
-    expect(formula.filter(r => r.production === r.excel && r.production !== 'none').length).toBeGreaterThan(100)
-    expect(formula.filter(r => r.production === 'withheld').length).toBeGreaterThan(0)
-    for (const r of rows) { expect(r.bytePeak, r.caseId).toBeGreaterThanOrEqual(0); expect(r.mode).toBe('resident') }
+    const all = m.cases.filter(c => c.stage === 5)
+    expect(all).toHaveLength(31)
+    expect(new Set(rows.map(r => r.caseId))).toEqual(new Set(all.map(c => c.id)))
+    const measured = all.filter(c => c.status === 'measured')
+    expect(rows.filter(r => r.compared).length).toBe(measured.reduce((n, c) => n + c.expected.cells.length, 0))
+    for (const r of rows.filter(x => !x.compared)) expect(r.notCompared, `${r.caseId}:${r.ref}`).toMatch(/\S/)
+    expect(rows.filter(r => r.compared && !r.agrees).map(r => `${r.caseId}:${r.ref} excel=${JSON.stringify(r.excel)} production=${JSON.stringify(r.production)}`)).toEqual([])
+    const formula = rows.filter(r => r.compared && r.evidenceKind === 'display-format')
+    expect(formula.filter(r => r.production.fill === r.excel?.fill && r.production.fill !== 'none' && r.production.unresolved.length === 0).length).toBeGreaterThan(100)
+    expect(formula.filter(r => r.production.unresolved.length > 0).length).toBeGreaterThan(0)
+    expect(rows.filter(r => r.excel?.visual !== undefined).length, 'bar or icon evidence compared').toBeGreaterThan(0)
+    for (const r of rows) expect(r.mode).toBe('resident')
   }, 300000)
 })
 

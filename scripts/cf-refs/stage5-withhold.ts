@@ -15,7 +15,7 @@ import { VERIFIED_CAPABILITIES } from '../../src/xlsx/cf/evidence'
 import { isCellInSqref } from './verify'
 
 type Cfvo = Readonly<{ type: string; val?: string; f?: string }>
-type Marker = Readonly<{ sqref: string; capabilityId: string; ruleType: string; formulas?: readonly string[]; formula?: Readonly<{ kind: string; anchor: string; dialect: 'base' | 'x14' }>
+type Marker = Readonly<{ sqref: string; capabilityId: string; ruleType: string; formulas?: readonly string[]; formula?: Readonly<{ kind: string; anchor: string; dialect: 'base' | 'x14' }>; dxf?: Readonly<{ fillRgb?: string }>
   scale?: Readonly<{ cfvo?: readonly Cfvo[] }>; bar?: Readonly<{ cfvo?: readonly Cfvo[] }>; icon?: Readonly<{ cfvo?: readonly Cfvo[] }> }>
 /** The family capability a `type="formula"` bound needs (service.ts VISUAL_FORMULA_CAPABILITY, Ruling S5-H). */
 const FORMULA_BOUND_FAMILY: Readonly<Record<string, string>> = { colorScale: 'scale:thresholds-formula', dataBar: 'bar:bounds-formula', iconSet: 'icon:thresholds-formula' }
@@ -70,6 +70,15 @@ export function stage5WithholdJustification(c: CaseLike, ref: string, published:
         for (const cap of needed) if (!held(cap, published)) reasons.add(`${cap} not held (needed by ${text})`)
       } finally { out.release() }
     }
+  }
+  // Literal visual gates of Stages 3-4 that a Stage 5 twin meets (each a capability absent from the published set):
+  // a bar with a `num` bound needs bar:bounds-num (Task 37 ruling), and an icon over a cell a DXF fill rule also covers
+  // needs icon:composition-dxf-fill (S4-I).
+  const covering = c.markers.filter(m => isCellInSqref(ref, m.sqref))
+  for (const m of covering) {
+    if (m.formula !== undefined) continue
+    if (m.ruleType === 'dataBar' && (m.bar?.cfvo ?? []).some(b => b.type === 'num') && !published('bar:bounds-num')) reasons.add('bar:bounds-num not held (a literal bar with num bounds)')
+    if (m.ruleType === 'iconSet' && covering.some(o => o !== m && o.dxf?.fillRgb !== undefined) && !published('icon:composition-dxf-fill')) reasons.add('icon:composition-dxf-fill not held (an icon over a DXF fill)')
   }
   // A record configuration (fixed before capture: "recorded, never evidence") names its refusal itself.
   for (const cfg of c.formulaConfigurations ?? []) if (cfg.record && cfg.refs.includes(ref)) reasons.add(`${cfg.id}: ${cfg.record}`)

@@ -2247,21 +2247,30 @@ export async function stage4CaseRecords(manifest: CfManifest, rootDir: string = 
   }
   return out
 }
+/** What production shows at a cell: the resolved fill/strike, the unresolved write slots, and the visual it draws. */
+export interface Stage5Production { fill: string; strike: boolean; unresolved: string[]; visual: string }
+/** What Excel showed: its DisplayFormat fill/strike, and the bar/icon measured from the PNG where measurable. */
+export interface Stage5Excel { fill: string; strike: boolean; visual?: string }
+
 export interface Stage5CaseRecord {
   caseId: string
   /** The variant: the designated cell (or its control). */
   ref: string
   status: string
+  /** Whether the row was compared with Excel; when not, `notCompared` says why (an unmeasured case). */
+  compared: boolean
+  notCompared?: string
   /** `display-format` under a formula rule, `literal` under literal twins/controls only, `control` with no rule. */
   evidenceKind: 'display-format' | 'literal' | 'control'
   /** The formula capabilities of the rules covering the cell. */
   capabilities: string[]
-  /** Excel's DisplayFormat at the cell: the fill (`none` when it is the base) with `+strike`, or undefined unobserved. */
-  excel: string | undefined
-  /** Production at the cell (resident, the document's evaluation context and sheets): a fill token, or `withheld`. */
-  production: string
-  /** Production is Excel's reading, or withheld (Lesson 2); `false` would be a wrong paint. */
+  excel: Stage5Excel | undefined
+  production: Stage5Production
+  /** The recorded justifications for any unresolved slot (stage5WithholdJustification). */
+  justification: string[]
+  /** Fix round 1 (F3): every resolved component is Excel's, every unresolved slot is justified, a measured visual agrees. */
   agrees: boolean
+  disagreement?: string
   mode: 'resident'
   stamp: { cfGen: number; workbookValueGen: number }
   /** The case's CF memory peak (bytes) and the work units its preparations spent. */
@@ -2269,7 +2278,26 @@ export interface Stage5CaseRecord {
   workUnits: number
 }
 
-/** The per-case/variant records of every measured Stage 5 case, under production evidence (nothing injected). */
+const argbClose = (a: string, b: string): boolean => a === b || (a.length === 8 && b.length === 8 && [2, 4, 6].every(k => Math.abs(parseInt(a.slice(k, k + 2), 16) - parseInt(b.slice(k, k + 2), 16)) <= 8))
+
+/**
+ * Task 39 fix round 1 (F3): one cell's verdict. Resolved paint and unresolved slots are kept apart: the resolved fill is
+ * compared with Excel's (within +-8, the Stage 2 scale tolerance) unless the fill slot is unresolved, the strikethrough
+ * unless a font slot is, and any unresolved slot needs a recorded justification. A bar or icon Excel was measured to draw
+ * (or not) must match what production draws; an unmeasured visual is not compared.
+ */
+export function stage5CellAgreement(production: Stage5Production, excel: Stage5Excel | undefined, justification: readonly string[]): { agrees: boolean; disagreement?: string } {
+  const slot = (prefix: string): boolean => production.unresolved.some(w => w === 'ALL' || w === prefix || w.startsWith(`${prefix}.`))
+  if (production.unresolved.length > 0 && justification.length === 0) return { agrees: false, disagreement: `unresolved ${production.unresolved.join('+')} without a recorded justification` }
+  if (!excel) return { agrees: true }
+  if (!slot('fill') && !argbClose(production.fill, excel.fill)) return { agrees: false, disagreement: `fill ${production.fill} vs Excel ${excel.fill}` }
+  if (!slot('font') && production.strike !== excel.strike) return { agrees: false, disagreement: `strikethrough ${production.strike} vs Excel ${excel.strike}` }
+  if (excel.visual !== undefined && production.visual !== 'withheld' && production.visual !== excel.visual) return { agrees: false, disagreement: `visual ${production.visual} vs Excel ${excel.visual}` }
+  if (production.visual === 'withheld' && excel.visual !== undefined && excel.visual !== 'none' && justification.length === 0) return { agrees: false, disagreement: `visual withheld without a recorded justification (Excel ${excel.visual})` }
+  return { agrees: true }
+}
+
+/** The per-case/variant records of every Stage 5 case under production evidence (nothing injected). */
 export async function stage5CaseRecords(manifest: CfManifest, rootDir: string = REPO_ROOT): Promise<Stage5CaseRecord[]> {
   const { OfficePackage } = await import('../../src/core/zip')
   const { parseXlsx } = await import('../../src/xlsx/parse')
@@ -2280,13 +2308,37 @@ export async function stage5CaseRecords(manifest: CfManifest, rootDir: string = 
   const { cfEvaluationContextFor } = await import('../../src/xlsx/cf/formula')
   const { resolveCfCellStyle } = await import('../../src/xlsx/cf/dxf')
   const { cfRulesVersion } = await import('../../src/xlsx/view/pagedSource')
+  const { formulaObservationOf, decodePngSync, computeWorksheetRangeGeometry, readZipPartsSync, stage5IconKey, describeS5Visual } = await import('./verify')
+  const { stage5WithholdJustification } = await import('./stage5-withhold')
   const refRC = (ref: string) => { const m = /^([A-Z]+)(\d+)$/.exec(ref)!; return { row: Number(m[2]) - 1, col: [...m[1]!].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1 } }
+  const iconKey = stage5IconKey(rootDir)
   const out: Stage5CaseRecord[] = []
-  for (const c of manifest.cases.filter(x => x.stage === 5 && x.status === 'measured')) {
-    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(resolve(rootDir, c.saved)))))
+  for (const c of manifest.cases.filter(x => x.stage === 5)) {
+    const kindOf = (ref: string): { covering: typeof c.markers; formulaCaps: string[]; kind: Stage5CaseRecord['evidenceKind'] } => {
+      const covering = c.markers.filter(m => isCellInSqref(ref, m.sqref))
+      const formulaCaps = [...new Set(covering.filter(m => m.formula !== undefined).map(m => m.capabilityId))].sort()
+      return { covering, formulaCaps, kind: formulaCaps.length > 0 ? 'display-format' : covering.length > 0 ? 'literal' : 'control' }
+    }
+    const blank: Stage5Production = { fill: 'none', strike: false, unresolved: [], visual: 'none' }
+    if (c.status !== 'measured') {
+      // Not compared: the case holds no verified Excel evidence (a recorded outcome, a refused shape, or pending).
+      const refs = c.expected.cells.length > 0 ? c.expected.cells.map(e => e.ref) : [...new Set(c.markers.map(m => m.sqref.split(/[: ]/)[0]!))]
+      for (const ref of refs) {
+        const k = kindOf(ref)
+        out.push({ caseId: c.id, ref, status: c.status, compared: false, notCompared: `${c.status}: ${c.reason ?? 'no verified Excel capture'}`.slice(0, 400),
+          evidenceKind: k.kind, capabilities: k.formulaCaps, excel: undefined, production: blank, justification: [], agrees: true, mode: 'resident', stamp: { cfGen: 0, workbookValueGen: 0 }, bytePeak: 0, workUnits: 0 })
+      }
+      continue
+    }
+    const savedBytes = new Uint8Array(readFileSync(resolve(rootDir, c.saved)))
+    const doc = await parseXlsx(await OfficePackage.load(savedBytes))
     const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
-    const sidecar = c.captures[0] && existsSync(resolve(rootDir, c.captures[0].sidecarPath))
-      ? JSON.parse(readFileSync(resolve(rootDir, c.captures[0].sidecarPath), 'utf8')) as { formulaObservations?: Record<string, { displayFormatFill?: string; baseFill?: string; strikethrough?: boolean }> } : undefined
+    const cap = c.captures.find(x => x.appearance === 'screen') ?? c.captures[0]
+    const sidecar = cap && existsSync(resolve(rootDir, cap.sidecarPath)) ? JSON.parse(readFileSync(resolve(rootDir, cap.sidecarPath), 'utf8')) as Record<string, unknown> : undefined
+    const png = cap && cap.pngPath && existsSync(resolve(rootDir, cap.pngPath)) ? decodePngSync(new Uint8Array(readFileSync(resolve(rootDir, cap.pngPath)))) ?? undefined : undefined
+    const parts = readZipPartsSync(savedBytes) ?? undefined
+    const geom = parts && sidecar && Array.isArray(sidecar.colWidthsPt) ? computeWorksheetRangeGeometry(parts, c.range, { colWidthsPt: sidecar.colWidthsPt as number[], rowHeightsPt: sidecar.rowHeightsPt as number[] }) ?? undefined : undefined
+    const observation = sidecar ? formulaObservationOf(c, sidecar, png, geom, iconKey) : undefined
     const memory = createCfMemory()
     const budgets: CfWorkBudgetLike[] = []
     const budget = (scan: boolean) => () => { const b = createCfWorkBudget(scan ? { scan: true } : {}); budgets.push(b); return b }
@@ -2299,31 +2351,48 @@ export async function stage5CaseRecords(manifest: CfManifest, rootDir: string = 
     const source = residentSource(sheet, stamp, memory, 'engine')
     try {
       for (const exp of c.expected.cells) {
-        const covering = c.markers.filter(m => isCellInSqref(exp.ref, m.sqref))
-        const formulaCaps = [...new Set(covering.filter(m => m.formula !== undefined).map(m => m.capabilityId))].sort()
-        const o = sidecar?.formulaObservations?.[exp.ref]
-        const excel = o && typeof o.displayFormatFill === 'string'
-          ? `${o.displayFormatFill.toUpperCase() === (o.baseFill ?? 'FFFFFFFF').toUpperCase() ? 'none' : o.displayFormatFill.toUpperCase()}${o.strikethrough ? '+strike' : ''}` : undefined
-        let production = 'none'
+        const k = kindOf(exp.ref)
+        const fill = observation?.fill(exp.ref)
+        const visualKind = k.covering.some(m => m.ruleType === 'iconSet') ? 'icon' : k.covering.some(m => m.ruleType === 'dataBar') ? 'bar' : undefined
+        const measured = visualKind && observation?.visual ? observation.visual(exp.ref, visualKind) : undefined
+        const visualToken = (v: NonNullable<typeof measured>): string => (v.kind === 'none' ? 'none' : v.kind === 'bar' ? 'bar' : `icon:${(v as { cls: string }).cls}`)
+        const excel: Stage5Excel | undefined = fill ? { fill: fill.fill, strike: fill.strike, ...(measured ? { visual: visualToken(measured) } : {}) } : undefined
+        let production: Stage5Production = { ...blank }
         if (service) {
           const { row, col } = refRC(exp.ref)
-          try {
-            const lease = await service.prepareCf({ stamp, sourceRects: [{ firstRow: row, lastRow: row, firstCol: col, lastCol: col }], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, source)
-            const r = lease.value.at(row, col)
-            lease.release()
-            if (r.kind === 'unresolved' || (r.kind === 'ready' && (r.value.unresolvedWrites?.size ?? 0) > 0)) production = 'withheld'
-            else if (r.kind === 'ready') { const st = resolveCfCellStyle(undefined, r.value); production = `${st.fillColor ?? 'none'}${st.strike ? '+strike' : ''}` }
-          } catch { production = 'withheld' }
+          const lease = await service.prepareCf({ stamp, sourceRects: [{ firstRow: row, lastRow: row, firstCol: col, lastCol: col }], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, source)
+          const r = lease.value.at(row, col)
+          lease.release()
+          if (r.kind === 'unresolved') production = { fill: 'none', strike: false, unresolved: ['ALL'], visual: 'withheld' }
+          else if (r.kind === 'ready') {
+            const st = resolveCfCellStyle(undefined, r.value)
+            const unresolved = [...(r.value.unresolvedWrites ?? [])].sort()
+            const v = r.value.visual
+            // A zero-length bar (the column minimum) draws nothing, as Excel's measurement reads it; a withheld visual slot
+            // (`dataBar`/`iconSet` unresolved) is `withheld`.
+            const bar = v?.dataBar as { startFraction?: number; endFraction?: number } | undefined
+            const drawnBar = bar !== undefined && Math.abs((bar.endFraction ?? 0) - (bar.startFraction ?? 0)) > 1e-9
+            const visual = drawnBar ? 'bar' : v?.iconSet ? `icon:${v.iconSet.set}:${v.iconSet.iconId}` : unresolved.some(w => w === 'ALL' || w === 'dataBar' || w === 'iconSet') ? 'withheld' : 'none'
+            production = { fill: st.fillColor ?? 'none', strike: st.strike === true, unresolved, visual }
+          }
         }
+        // Production names icons by family:id, the capture by glyph class; map through the published class table.
+        if (production.visual.startsWith('icon:') && excel?.visual?.startsWith('icon:')) {
+          const { CF_ICON_GLYPH_CLASSES } = await import('../../src/xlsx/cf/iconGlyphs')
+          const cls = CF_ICON_GLYPH_CLASSES[production.visual.slice(5)]
+          if (cls) production = { ...production, visual: `icon:${cls}` }
+        }
+        const justification = production.unresolved.length > 0 || production.visual === 'withheld' ? stage5WithholdJustification(c, exp.ref) : []
+        const verdict = stage5CellAgreement(production, excel, justification)
         out.push({
-          caseId: c.id, ref: exp.ref, status: c.status,
-          evidenceKind: formulaCaps.length > 0 ? 'display-format' : covering.length > 0 ? 'literal' : 'control',
-          capabilities: formulaCaps, excel, production,
-          agrees: production === 'withheld' || excel === undefined || production === excel,
+          caseId: c.id, ref: exp.ref, status: c.status, compared: true,
+          evidenceKind: k.kind, capabilities: k.formulaCaps, excel, production, justification,
+          agrees: verdict.agrees, ...(verdict.disagreement ? { disagreement: verdict.disagreement } : {}),
           mode: 'resident', stamp: { cfGen: stamp.cfGen, workbookValueGen: stamp.workbookValueGen }, bytePeak: 0, workUnits: 0,
         })
       }
     } finally { service?.dispose() }
+    void describeS5Visual
     const units = budgets.reduce((n, b) => n + b.units, 0)
     for (const r of out) if (r.caseId === c.id) { r.bytePeak = memory.peakBytes; r.workUnits = units }
   }
@@ -2711,11 +2780,17 @@ async function main(): Promise<void> {
     if (cyc.ready !== 20 || cyc.pending !== 20 || cyc.cancelled !== 20 || cyc.maxNetBetween !== 0) fail('cross-sheet cycles must hold nothing between close and open')
     for (const p of [shared, hoists, cap, sheets, beside, cyc]) if (p.netBytes !== 0) fail(`${p.name} leaked ${p.netBytes} B`)
     const caseRecords5 = await stage5CaseRecords(manifest, REPO_ROOT)
-    const disagree = caseRecords5.filter(r => !r.agrees)
+    const compared5 = caseRecords5.filter(r => r.compared)
+    const disagree = compared5.filter(r => !r.agrees)
     // eslint-disable-next-line no-console
-    console.log(`stage 5 case records: ${caseRecords5.length} rows over ${new Set(caseRecords5.map(r => r.caseId)).size} measured cases (resident); formula cells ${caseRecords5.filter(r => r.evidenceKind === 'display-format').length}, Excel's reading ${caseRecords5.filter(r => r.evidenceKind === 'display-format' && r.production === r.excel).length}, withheld ${caseRecords5.filter(r => r.production === 'withheld').length}, disagreeing ${disagree.length}${disagree.length ? ` (${disagree.slice(0, 5).map(r => `${r.caseId}:${r.ref} excel=${r.excel} production=${r.production}`).join('; ')})` : ''}`)
-    if (disagree.length > 0) fail(`${disagree.length} Stage 5 cells paint something other than Excel's reading or a withheld state`)
-    stage5Pressure = { shared, hoists, cap, sheets, beside, cyc, caseRecords: caseRecords5 }
+    console.log(`stage 5 case records: ${caseRecords5.length} rows over ${new Set(caseRecords5.map(r => r.caseId)).size} cases (${new Set(compared5.map(r => r.caseId)).size} measured and compared, resident); formula cells ${compared5.filter(r => r.evidenceKind === 'display-format').length}, painted as Excel with nothing unresolved ${compared5.filter(r => r.evidenceKind === 'display-format' && r.production.unresolved.length === 0 && r.production.fill === r.excel?.fill).length}, with justified unresolved slots ${compared5.filter(r => r.production.unresolved.length > 0).length}, visual evidence compared ${compared5.filter(r => r.excel?.visual !== undefined).length}, disagreeing ${disagree.length}${disagree.length ? ` (${disagree.slice(0, 5).map(r => `${r.caseId}:${r.ref} ${r.disagreement}`).join('; ')})` : ''}`)
+    if (disagree.length > 0) fail(`${disagree.length} Stage 5 cells disagree with Excel or are withheld without a recorded justification`)
+    const noFormula = await p5.pressureNoFormulaBaseline()
+    // eslint-disable-next-line no-console
+    console.log(`no-formula baseline (literal CF kept): compiles=${noFormula.literal.compiles} snapshots=${noFormula.literal.snapshots} clockReads=${noFormula.literal.clockReads} painted=${noFormula.literal.painted}; control (one expression): compiles=${noFormula.control.compiles} snapshots=${noFormula.control.snapshots} clockReads=${noFormula.control.clockReads}`)
+    if (noFormula.literal.compiles + noFormula.literal.snapshots + noFormula.literal.clockReads !== 0 || noFormula.literal.painted === 0) fail('the no-formula baseline did formula work (or painted nothing)')
+    if (noFormula.control.compiles === 0 || noFormula.control.snapshots === 0 || noFormula.control.clockReads === 0) fail('the no-formula positive control moved no counter')
+    stage5Pressure = { shared, hoists, cap, sheets, beside, cyc, caseRecords: caseRecords5, noFormula }
   } else {
     const scaleShared = await pressureScale1MRowSharedStatistics()
     // eslint-disable-next-line no-console
