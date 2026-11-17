@@ -1441,3 +1441,74 @@ test('Stage 5 slicer commit on another sheet repaints the visible dependent shee
     })
   }
 })
+
+// ---- Stage 5 at the six zoom/DPR pairs and across a midnight (Task 39 fix round 1, F6) ----
+
+test('Stage 5 formula rules paint and announce at the six zoom/DPR pairs on every leg (production evidence)', async ({ browser }) => {
+  const bytes = readFileSync(`${CF_FIXTURES}${S5_AUTHORED}.xlsx`)
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      for (const dpr of [1, 2]) {
+        const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: dpr })
+        try {
+          const page = await context.newPage()
+          try {
+            await openCf(page, S5_AUTHORED, bytes, leg)
+            const reference: string[] = []
+            for (const zoom of ['50%', '100%', '200%']) {
+              const label = page.getByRole('button', { name: 'Reset zoom' })
+              for (let i = 0; i < 12; i++) {
+                if ((await label.textContent()) === zoom) break
+                const current = Number((await label.textContent())!.replace('%', ''))
+                await page.getByRole('button', { name: current < Number(zoom.replace('%', '')) ? 'Zoom in' : 'Zoom out' }).click()
+              }
+              await expect(label).toHaveText(zoom, { timeout: 10_000 })
+              await page.getByTestId('officeview-sheet-scroller').evaluate(node => { node.scrollTop = 0; node.scrollLeft = 0 })
+              const where = `${leg.name} dpr=${dpr} zoom=${zoom}`
+              await expect.poll(async () => appliedCount(await namesOf(page, S5_CELLS)), { timeout: 30_000, message: `${where}: formula rules apply` }).toBeGreaterThan(2)
+              // The announcement is decided by the rule, not the scale: identical at every zoom and DPR.
+              const names = announcements(await namesOf(page, S5_CELLS))
+              if (reference.length === 0) reference.push(...names)
+              else expect(names, where).toEqual(reference)
+              for (const n of names) expect(n, where).not.toMatch(FORMULA_TEXT)
+              const grid = await settledCfGrid(page, 50)
+              expect(countPink(grid, 0, 0, grid.width, grid.height), `${where}: the formula fill paints`).toBeGreaterThan(50)
+              await expect(page.getByRole('alert'), `${where}: no error alert`).toHaveCount(0)
+            }
+          } finally { await page.close() }
+        } finally { await context.close() }
+      }
+    })
+  }
+})
+
+/**
+ * The midnight tick in a browser (resident leg). Playwright's clock (`page.clock`) fakes Date and timers on the page; it
+ * never reaches a dedicated worker (init scripts and clock installation do not run in a worker realm), so the worker and
+ * forced-paged legs cannot be put on a faked midnight here: their tick is covered by the mounted tests of Task 38
+ * (tests/xlsx-cf-live.test.tsx, the remote-cache clock-fact tests). stage5-clock-today holds `=A2=TODAY()` over B2:B10,
+ * with A4 and A9 on the anchor day: before the anchor day's midnight they do not match, after it they do.
+ */
+test('Stage 5 midnight tick repaints TODAY() rules on the resident leg (injected browser clock)', async ({ browser }) => {
+  const id = 'stage5-clock-today'
+  const bytes = readFileSync(`${CF_FIXTURES}${id}.xlsx`)
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, timezoneId: 'Asia/Taipei' })
+  try {
+    const page = await context.newPage()
+    try {
+      // Before the anchor day (2026-11-18, the capture's local day) begins in Asia/Taipei; the clock is paused at
+      // 23:59:30 so only runFor crosses midnight (a run without it stays on the 17th; revert-checked).
+      // The page loads on a flowing clock (its scheduling needs timers), then the clock is paused before midnight.
+      await page.clock.install({ time: new Date('2026-11-17T23:58:00+08:00') })
+      await openCf(page, `${id}-midnight`, bytes, LEGS[0]!)
+      await page.clock.pauseAt(new Date('2026-11-17T23:59:30+08:00'))
+      const applied = async (ref: string): Promise<boolean> => /Conditional formatting applied/.test((await namesOf(page, [ref]))[0] ?? '')
+      await expect.poll(async () => (await namesOf(page, ['B2']))[0] ?? '', { timeout: 30_000, message: 'the grid announces' }).toMatch(/B2, value/)
+      expect(await applied('B4'), 'before midnight: the anchor-day cell is not today').toBe(false)
+      expect(await applied('B9'), 'before midnight: the anchor-day cell is not today').toBe(false)
+      await page.clock.runFor(60_000)
+      await expect.poll(async () => (await applied('B4')) && (await applied('B9')), { timeout: 30_000, message: 'after midnight: the anchor-day cells match TODAY()' }).toBe(true)
+      await expect(page.getByRole('alert')).toHaveCount(0)
+    } finally { await page.close() }
+  } finally { await context.close() }
+})
