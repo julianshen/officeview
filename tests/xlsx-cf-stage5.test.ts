@@ -169,18 +169,33 @@ describe('every unresolved formula shape refuses atomically on both paths', () =
 const CORPUS_FORMULA_FILES = 0
 const corpusFiles = existsSync(CORPUS) ? readdirSync(CORPUS).filter(f => f.endsWith('.xlsx') && !f.startsWith('~$')).sort() : []
 const FORMULA_CF = /<(?:x14:)?cfRule\b[^>]*>(?:(?!<\/(?:x14:)?cfRule>)[\s\S])*?(?:<formula>|<xm:f>|cfvo type="formula")/
+/** Whether a workbook's worksheet parts (inflated) hold a formula-bearing CF rule. */
+async function hasFormulaCf(bytes: Uint8Array): Promise<boolean> {
+  const { readZipPartsSync } = await import('../scripts/cf-refs/verify')
+  const parts = readZipPartsSync(bytes)
+  expect(parts).not.toBeNull()
+  return [...parts!.entries()].some(([name, xml]) => /^xl\/worksheets\/[^/]+\.xml$/.test(name) && FORMULA_CF.test(new TextDecoder().decode(xml)))
+}
+
+/** Every Stage 1-5 capability plus the Stage 5 selections: the evidence a published Stage 5 would give the parser. */
+const ALL_STAGE5 = (): string[] => [...VERIFIED_CAPABILITIES, ...CF_STAGE5_CAPABILITIES.map(c => c.capabilityId)]
+const SELECTIONS = { 'formula:relative-wrap': 'wrap', 'formula:cellis-operand-blank': 'blank-zero' }
+async function withStage5Evidence<T>(fn: () => Promise<T>): Promise<T> {
+  const { withExactCfEvidence, injectCfFormulaSelections } = await import('../src/xlsx/cf/evidence')
+  injectCfFormulaSelections(SELECTIONS)
+  try { return await withExactCfEvidence(ALL_STAGE5(), fn) } finally { injectCfFormulaSelections(null) }
+}
+const resolvedFormulaRules = (cf: unknown): number => ((cf as { rules?: Array<{ definition: { kind?: string; formula?: unknown; operands?: unknown[]; dependencySheets?: unknown } }> } | undefined)?.rules ?? [])
+  .filter(r => r.definition.kind !== 'unresolved' && (r.definition.formula !== undefined || (r.definition.operands ?? []).some(o => (o as { formula?: unknown }).formula !== undefined))).length
 
 describe('formula CF files parse identically on both paths', () => {
-  it('the corpus formula-bearing file count equals the §4 inventory (0 is recorded, never a pass on its own)', () => {
+  it('the corpus formula-bearing file count equals the §4 inventory (0 is recorded, never a pass on its own)', async () => {
+    // Positive control: the scanner inflates the worksheet parts, so it must flag Excel's dialog-authored workbook.
+    expect(await hasFormulaCf(new Uint8Array(readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/excel-authored-formulas.xlsx'))))).toBe(true)
     // A missing corpus/ is recorded by the count below; the oracle workbooks are the unconditional part of the gate.
     let withFormulas = 0
-    for (const file of corpusFiles) {
-      const bytes = new Uint8Array(readFileSync(join(CORPUS, file)))
-      const text = new TextDecoder('latin1').decode(bytes)
-      if (FORMULA_CF.test(text)) withFormulas++
-    }
+    for (const file of corpusFiles) if (await hasFormulaCf(new Uint8Array(readFileSync(join(CORPUS, file))))) withFormulas++
     expect(withFormulas).toBe(CORPUS_FORMULA_FILES)
-    // The unconditional part: Excel's dialog-authored workbook and every Stage 5 workbook.
     expect(STAGE5_WORKBOOKS).toContain('tests/fixtures/xlsx-cf/excel-authored-formulas.xlsx')
     expect(STAGE5_WORKBOOKS.length).toBeGreaterThan(30)
   })
@@ -196,6 +211,29 @@ describe('formula CF files parse identically on both paths', () => {
     const { resident, paged } = await bothPaths(path, bytes, `stage5-both-${path}`)
     expect(paged.length).toBeGreaterThan(0)
     for (const p of paged) expect(p.cf, `${path} ${p.name}`).toEqual(resident.sheets.find(s => s.name === p.name)?.conditionalFormatting)
+  }, 120000)
+
+  // Without Stage 5 evidence every formula rule takes the pre-Stage-5 path on both sides, so parity above compares
+  // unresolved with unresolved. Under the evidence a publication would give, the formulas compile: parity must still hold.
+  const resolvedTotal: number[] = []
+  it.each(STAGE5_WORKBOOKS)('under Stage 5 evidence: %s', async path => {
+    const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, path)))
+    const { resident, paged } = await withStage5Evidence(() => bothPaths(path, bytes, `stage5-ev-${path}`))
+    for (const p of paged) {
+      const r = resident.sheets.find(s => s.name === p.name)?.conditionalFormatting
+      expect(p.cf, `${path} ${p.name}`).toEqual(r)
+      resolvedTotal.push(resolvedFormulaRules(r))
+    }
+  }, 120000)
+  it('under Stage 5 evidence formulas resolve (non-vacuous), and the x14 cross-sheet cellIs resolves on both paths', async () => {
+    expect(resolvedTotal.reduce((a, b) => a + b, 0)).toBeGreaterThan(50)
+    const path = 'tests/fixtures/xlsx-cf/inputs/stage5-cross-sheet.xlsx'
+    const { resident, paged } = await withStage5Evidence(() => bothPaths(path, new Uint8Array(readFileSync(join(REPO_ROOT, path))), 'stage5-ev-cross-operand'))
+    for (const cf of [resident.sheets.find(s => s.name === 'Sheet1')?.conditionalFormatting, paged.find(p => p.name === 'Sheet1')?.cf]) {
+      const rule = (cf as { rules: Array<{ priority: number; definition: { kind: string; operands?: Array<{ formula?: unknown }> } }> }).rules.find(r => r.priority === 3)!
+      expect(rule.definition.kind).toBe('cellIs')
+      expect(rule.definition.operands?.[0]?.formula).toBeDefined()
+    }
   }, 120000)
 })
 
