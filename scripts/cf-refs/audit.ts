@@ -2492,6 +2492,7 @@ async function main(): Promise<void> {
   let stage1Pressure: { whole: PressureSample; shared: PressureSample; bounds: ReturnType<typeof pressureRangeBoundaries>; refusedSheet: PressureSample; stats: PressureSample } | undefined
   let stage2Pressure: { scaleShared: PressureSample; percentile: PressureSample; extents: PressureSample } | undefined
   let stage4Pressure: Record<string, unknown> | undefined
+  let stage5Pressure: Record<string, unknown> | undefined
   let stage3Pressure: { barShared: Awaited<ReturnType<typeof pressureBar1MRowSharedScan>>; barPercentile: PressureSample; barExtents: PressureSample; barDistinct: PressureSample; barUnitCap: Awaited<ReturnType<typeof pressureBarUnitCap>> } | undefined
 
   if (stage === 1) {
@@ -2577,11 +2578,40 @@ async function main(): Promise<void> {
     console.log(`stage 4 case records: ${caseRecords.length} rows over ${new Set(caseRecords.map(r => r.caseId)).size} measured cases (resident mode); painted ${caseRecords.filter(r => r.produced.paints).length}`)
     stage4Pressure = { iconShared, iconPercentile, iconExtents, glyphs, iconDistinct, unitCap, caseRecords }
   } else if (stage === 5) {
-    // Stage 5 formula resource pressure (snapshot, hoist and per-call caps) is Task 39's audit; Task 31 runs the shared
-    // distinct-range, lifecycle, no-CF and module-graph checks below only.
     const r5 = report as Stage5AuditReport
     // eslint-disable-next-line no-console
     console.log(`stage 5 reused captures (S5-STUB): ${Object.entries(r5.reused).map(([k, v]) => `${k}=${v}`).join(', ')}`)
+    // Task 39: the formula resource scenarios (scripts/cf-refs/pressure-stage5.ts), each with zero unowned live bytes.
+    const p5 = await import('./pressure-stage5')
+    const fail = (msg: string): never => { throw new Error(`stage 5 pressure: ${msg}`) }
+    const shared = await p5.pressureFormulaSharedSnapshot()
+    // eslint-disable-next-line no-console
+    console.log(`${shared.name}: rules=${shared.rules} attempts=${shared.attempts} snapshotEntries=${shared.snapshotEntries}/${shared.targetCells} ready=${shared.ready} peak=${shared.peakBytes} net=${shared.netBytes} (${shared.wallMs}ms context only)`)
+    if (shared.attempts !== 1 || shared.snapshotEntries !== shared.targetCells || shared.ready !== shared.rules * shared.targetCells) fail('100 rules must share one snapshot of the target cells')
+    const hoists = await p5.pressureFormulaHoists()
+    // eslint-disable-next-line no-console
+    console.log(`${hoists.name}: visible=${hoists.visibleCells} columnScans=${hoists.columnScans} clamped=${hoists.clampedScans} calls=${hoists.calls} maxCallUnits=${hoists.maxCallUnits} refused=${hoists.refused}; ~1M populated: ${hoists.millionOutcomes.join(',')} calls=${hoists.millionCalls}; relative SUM(A1:A200): ${hoists.relativeOutcomes.join(',')} calls=${hoists.relativeCalls}; peak=${hoists.peakBytes} net=${hoists.netBytes} (${hoists.wallMs}ms context only)`)
+    if (hoists.columnScans !== 2 || hoists.clampedScans !== 2 || hoists.refused !== 0 || hoists.maxCallUnits > p5.CHECKPOINT_UNITS) fail('hoists must scan the populated column once per rule and keep every call within the checkpoint')
+    if (hoists.millionOutcomes.some(o => o !== 'unresolved:cf-resource-limit') || hoists.millionCalls !== 0) fail('a ~1M populated column must refuse at the scan budget')
+    if (hoists.relativeOutcomes.join() !== 'unresolved:cf-resource-limit' || hoists.relativeCalls !== 0) fail('a relative-range SUM(A1:A200) must refuse before any call')
+    const cap = await p5.pressureFormulaSnapshotCap()
+    // eslint-disable-next-line no-console
+    console.log(`${cap.name}: cap=${cap.cap} atCap=${cap.atCap} (entries=${cap.atCapEntries}) cap+1=${cap.overCap} peak=${cap.peakBytes} net=${cap.netBytes} (${cap.wallMs}ms context only)`)
+    if (cap.atCap !== 'ready' || cap.atCapEntries !== cap.cap || cap.overCap !== 'unresolved:cf-resource-limit') fail('the snapshot cap must admit exactly cap cells')
+    const sheets = await p5.pressureFormulaReferencedSheets()
+    // eslint-disable-next-line no-console
+    console.log(`${sheets.name}: 16=${sheets.at16} 17(compile)=${sheets.compile17} union18=${sheets.union18.join(',')} net=${sheets.netBytes}`)
+    if (sheets.at16 !== 'ready' || !sheets.compile17.startsWith('refused:') || sheets.union18.join() !== 'ready,unresolved:cf-resource-limit') fail('16 sheets admit, 17 refuse')
+    const beside = await p5.pressureFormulaRefusedBesideReady()
+    // eslint-disable-next-line no-console
+    console.log(`${beside.name}: ready=${beside.readyCells}/10 refused=${beside.refusedCells}/10 (${beside.refusedReasons.join(',')}) net=${beside.netBytes}`)
+    if (beside.readyCells !== 10 || beside.refusedCells !== 10) fail('a refused footprint must not take the ready rule down')
+    const cyc = await p5.pressureFormulaCrossSheetCycles(20)
+    // eslint-disable-next-line no-console
+    console.log(`${cyc.name}: cycles=${cyc.cycles} ready=${cyc.ready} pending=${cyc.pending} closedMidRead=${cyc.cancelled} maxNetBetween=${cyc.maxNetBetween} net=${cyc.netBytes}`)
+    if (cyc.ready !== 20 || cyc.pending !== 20 || cyc.cancelled !== 20 || cyc.maxNetBetween !== 0) fail('cross-sheet cycles must hold nothing between close and open')
+    for (const p of [shared, hoists, cap, sheets, beside, cyc]) if (p.netBytes !== 0) fail(`${p.name} leaked ${p.netBytes} B`)
+    stage5Pressure = { shared, hoists, cap, sheets, beside, cyc }
   } else {
     const scaleShared = await pressureScale1MRowSharedStatistics()
     // eslint-disable-next-line no-console
@@ -2641,7 +2671,7 @@ async function main(): Promise<void> {
         : stage === 4
           ? { report, publication: stage4Publication(report as Stage4AuditReport), ...stage4Pressure, distinct, cycles, baseline, eager }
           : stage === 5
-            ? { report, publication: stage5Publication(report as Stage5AuditReport), distinct, cycles, baseline, eager }
+            ? { report, publication: stage5Publication(report as Stage5AuditReport), ...stage5Pressure, distinct, cycles, baseline, eager }
             : { report, ...stage2Pressure, distinct, cycles, baseline, eager }
     writeFileSync(join(outDir, `stage${stage}-audit.json`), JSON.stringify(outData, null, 2))
   }

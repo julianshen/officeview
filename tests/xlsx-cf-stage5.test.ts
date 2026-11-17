@@ -225,3 +225,41 @@ describe('the Stage 5 formula selections travel with the published set (Task 35 
     }
   }, 120000)
 })
+
+describe('Stage 5 pressure scenarios and resource bounds (zero unowned live bytes)', () => {
+  it('100 formula rules over a declared 1M-row A:A share one snapshot of the target cells', async () => {
+    const { pressureFormulaSharedSnapshot } = await import('../scripts/cf-refs/pressure-stage5')
+    const s = await pressureFormulaSharedSnapshot()
+    expect(s).toMatchObject({ rules: 100, attempts: 1, snapshotEntries: 40, ready: 4000, netBytes: 0 })
+  })
+  it('SUM($A:$A) and COUNTIF($A:$A,A2)>1 hoist over 10,000 populated rows; ~1M populated refuse at the scan budget; SUM(A1:A200) refuses before any call', async () => {
+    const { pressureFormulaHoists, CHECKPOINT_UNITS } = await import('../scripts/cf-refs/pressure-stage5')
+    const s = await pressureFormulaHoists()
+    expect(s).toMatchObject({ visibleCells: 5000, columnScans: 2, clampedScans: 2, refused: 0, millionCalls: 0, relativeCalls: 0, netBytes: 0 })
+    expect(s.maxCallUnits).toBeLessThanOrEqual(CHECKPOINT_UNITS)
+    expect(s.calls).toBeGreaterThanOrEqual(5000)
+    expect(s.millionOutcomes).toEqual(['unresolved:cf-resource-limit', 'unresolved:cf-resource-limit'])
+    expect(s.relativeOutcomes).toEqual(['unresolved:cf-resource-limit'])
+  }, 120000)
+  it('the dependency snapshot admits exactly its cap and refuses cap + 1', async () => {
+    const { pressureFormulaSnapshotCap } = await import('../scripts/cf-refs/pressure-stage5')
+    const s = await pressureFormulaSnapshotCap()
+    expect(s).toMatchObject({ cap: 262_144, atCap: 'ready', atCapEntries: 262_144, overCap: 'unresolved:cf-resource-limit', netBytes: 0 })
+  }, 120000)
+  it('16 referenced sheets evaluate; 17 refuse at compile; a union of 18 refuses only the rule that crosses 16', async () => {
+    const { pressureFormulaReferencedSheets } = await import('../scripts/cf-refs/pressure-stage5')
+    const s = await pressureFormulaReferencedSheets()
+    expect(s.at16).toBe('ready')
+    expect(s.compile17).toMatch(/^refused:/)
+    expect(s.union18).toEqual(['ready', 'unresolved:cf-resource-limit'])
+    expect(s.netBytes).toBe(0)
+  })
+  it('a refused footprint beside a ready rule leaves the ready rule evaluating', async () => {
+    const { pressureFormulaRefusedBesideReady } = await import('../scripts/cf-refs/pressure-stage5')
+    expect(await pressureFormulaRefusedBesideReady()).toMatchObject({ readyCells: 10, refusedCells: 10, refusedReasons: ['unresolved:cf-resource-limit'], netBytes: 0 })
+  })
+  it('20 open/read/cancel/close cycles, including a close during a cross-sheet pending read, hold nothing between cycles', async () => {
+    const { pressureFormulaCrossSheetCycles } = await import('../scripts/cf-refs/pressure-stage5')
+    expect(await pressureFormulaCrossSheetCycles(20)).toMatchObject({ cycles: 20, ready: 20, pending: 20, cancelled: 20, maxNetBetween: 0, netBytes: 0 })
+  })
+})
