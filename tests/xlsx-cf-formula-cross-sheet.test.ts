@@ -145,7 +145,8 @@ describe('a referenced-sheet commit makes the old batch stale synchronously (Rev
   })
 
   it('resident leg (the interactive CfPaintBatch): its layer stops painting at the referenced commit, in the same tick', async () => {
-    const { s1, doc } = crossSheetDoc()
+    const { s1, doc: engineDoc } = crossSheetDoc()
+    const doc = { ...engineDoc, valuePolicy: 'cached' as const } // the store's own policy is the one the route and the context state
     const wb = createObjectWorkbookSource(doc, 'resident-batch')
     injectCfFormulaSelections(SELECTIONS)
     const batch = await withExactCfEvidence(CAPS, () => prepareCfPaint(s1, { store: wb.store('sheet1'), workbook: wb, valuePolicy: 'cached', evaluation: { ...UTC, valuePolicy: 'cached' }, paintRects: [rectOf('A2'), rectOf('A3')], now: () => Date.UTC(2026, 10, 16) }))

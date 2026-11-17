@@ -397,7 +397,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
   if (hold.kind !== 'reserved') return unavailable(sheet)
   const evidence = options.evidence ?? cfRuntimeEvidence
   // Ruling S5-L: one value policy per preparation, the document's when the route is given its context.
-  const { policy: valuePolicy, evaluation } = cfRoutePolicy(options.evaluation ? cfEvaluationContextFor(options.evaluation, options.now ?? Date.now) : undefined, options.valuePolicy ?? options.store?.valuePolicy, 'cached')
+  const { policy: valuePolicy, evaluation } = cfRoutePolicy(options.evaluation ? cfEvaluationContextFor(options.evaluation, options.now ?? Date.now) : undefined, [options.valuePolicy, options.store?.valuePolicy], 'cached')
   const workbook = cfWorkbookFor(rules, sheet.name, options.store, options.workbook, options.documentSheets, memory, valuePolicy)
   const dependencyGen = cfDependencyGenOf(rules, sheet.name, workbook)
   const stamp = options.request?.stamp ?? {

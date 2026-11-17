@@ -557,15 +557,16 @@ export function cfDocumentEvaluationOfPaged(workbook: Readonly<{ calcMode?: 'aut
 }
 /**
  * One route's value policy and evaluation context (Ruling S5-L). The policy a route reads values under is its explicit
- * one, else the store's own, else the document's (`evaluation.valuePolicy`), else the route's historical default (which
+ * one and its store's (each validated independently), else the document's (`evaluation.valuePolicy`), else the route's historical default (which
  * only a route with no context keeps, so no Stage 1-4 outcome moves). A route whose policy disagrees with the document's
  * has no single value for a formula to read: its context is dropped and every formula rule is
  * `cf-evaluation-context-missing`, as on a route handed none.
  */
-export function cfRoutePolicy(evaluation: CfEvaluationContext | undefined, explicit: ValuePolicy | undefined, routeDefault: ValuePolicy): Readonly<{ policy: ValuePolicy; evaluation: CfEvaluationContext | undefined }> {
-  if (!evaluation) return { policy: explicit ?? routeDefault, evaluation: undefined }
-  const policy = explicit ?? evaluation.valuePolicy
-  return { policy, evaluation: policy === evaluation.valuePolicy ? evaluation : undefined }
+export function cfRoutePolicy(evaluation: CfEvaluationContext | undefined, declared: readonly (ValuePolicy | undefined)[], routeDefault: ValuePolicy): Readonly<{ policy: ValuePolicy; evaluation: CfEvaluationContext | undefined }> {
+  const given = declared.filter((p): p is ValuePolicy => p !== undefined)
+  if (!evaluation) return { policy: given[0] ?? routeDefault, evaluation: undefined }
+  // Each authority (the route's explicit policy, its store's, the document's) is validated independently of the others.
+  return { policy: given[0] ?? evaluation.valuePolicy, evaluation: given.every(p => p === evaluation.valuePolicy) ? evaluation : undefined }
 }
 /** One clock snapshot from the injected `now`; `clockGen` is the local day number of that sample (the interactive
  * midnight tick keys on it). A zone the engine cannot resolve falls back to the UTC day so the generation still advances. */

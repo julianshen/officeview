@@ -430,7 +430,7 @@ export async function prepareCfTextScope(
   const statisticsOptions = hiddenRows.length > 0 ? { hiddenRows } : undefined
   const sheetMerges: ModelRect[] = (sheet.mergeRanges ?? []).map(m => ({ firstRow: m.minRow, lastRow: m.maxRow, firstCol: m.minCol, lastCol: m.maxCol }))
   // Ruling S5-L: one value policy per preparation, the document's when the route is given its context.
-  const { policy: valuePolicy, evaluation } = cfRoutePolicy(request.evaluation ? cfEvaluationContextFor(request.evaluation, request.now ?? Date.now) : undefined, request.valuePolicy ?? request.store?.valuePolicy, 'engine')
+  const { policy: valuePolicy, evaluation } = cfRoutePolicy(request.evaluation ? cfEvaluationContextFor(request.evaluation, request.now ?? Date.now) : undefined, [request.valuePolicy, request.store?.valuePolicy], 'engine')
   // One clock per preparation (Ruling S5-M): the predicates read the instant the formulas do.
   const dateContext = request.dateContext ?? (sheet.semantics ? {
     dateSystem: sheet.semantics.dateSystem,

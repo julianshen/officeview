@@ -120,6 +120,23 @@ describe('every route takes one evaluation context or withholds (S5-L, round-1 #
     })
   })
 
+  it('the store, the explicit and the context policies are checked independently: any disagreement withholds (fix round 1 #1)', async () => {
+    await withPaint(async () => {
+      // A store that serves 'engine' values for formula cells with no saved value (the codex repro), under a document whose
+      // explicit and context policies both say 'cached'.
+      const l = await load(policyBytes(), 'cached')
+      for (const cell of l.sheet.rows.flatMap(r => r.cells)) if (cell.formula) cell.value = (l.sheet.rows.flatMap(r => r.cells).find(c => c.ref === `A${cell.ref.slice(1)}`)!.value as number) * 2
+      const engineStore = { ...l, doc: { ...l.doc, valuePolicy: 'engine' as const } }
+      const cachedContext: CfDocumentEvaluation = { ...cfDocumentEvaluationOf(l.doc), valuePolicy: 'cached' }
+      const same = { evaluation: cachedContext, valuePolicy: 'cached' as const }
+      const legs = [await staticLeg(l, REFS, same), await residentLeg(engineStore, REFS, same), await textLeg(l, REFS, same), await textLeg(engineStore, REFS, { ...same, resident: true })]
+      for (const [i, leg] of legs.entries()) expect(FORMULA_CELLS.map(r => leg.get(r)!.fill), `leg ${i}`).toEqual(FORMULA_CELLS.map(() => undefined))
+      // The agreeing triple (store, explicit, context all 'engine') evaluates, so the withholding above is the disagreement's.
+      const agree = await residentLeg(engineStore, REFS, { evaluation: { ...cachedContext, valuePolicy: 'engine' }, valuePolicy: 'engine' })
+      expect(FORMULA_CELLS.map(r => agree.get(r)!.fill)).toEqual([undefined, undefined, RED, RED, RED])
+    })
+  })
+
   it('production evidence withholds every formula cell identically on every leg (nothing in Stage 5 is verified)', async () => {
     const l = await load(policyBytes(), 'cached')
     const legs = [await staticLeg(l, REFS), await residentLeg(l, REFS), await textLeg(l, REFS), await textLeg(l, REFS, { resident: true }), (await workerLeg(l, REFS)).scope]
