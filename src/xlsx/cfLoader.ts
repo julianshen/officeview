@@ -107,4 +107,3 @@ export function canRuleMatchBlanks(rule: Pick<CfRule, 'definition'>): boolean {
   if (def.kind === 'unresolved') return def.type === 'expression'
   return false
 }
-

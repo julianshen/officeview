@@ -101,4 +101,3 @@ export function translateCfFormula(f: CfFormula, dRow: number, dCol: number, edg
     throw error
   }
 }
-

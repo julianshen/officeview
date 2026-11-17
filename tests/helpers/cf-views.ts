@@ -191,4 +191,3 @@ export const formulaBoundsBytes = (): Uint8Array => {
     + `</x14:cfRule><xm:sqref>B2:B8</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>`
   return workbookBytes(cells, bar + scale + icon + x14, 15)
 }
-
