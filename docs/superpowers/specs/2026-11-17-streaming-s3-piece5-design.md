@@ -1,6 +1,6 @@
 # Server streaming — Stage 3 piece 5: audio in streamed shows (video deferred to piece 6)
 
-Status: draft for owner review, 2026-11-17. Amended 2026-11-17 after the feasibility gate: audio only (§1).
+Status: draft for owner review, 2026-11-17. Amended 2026-11-17 after the feasibility gate (audio only) and again for shared audio encodes (§1).
 Parents:
 - Stage 3 design `2026-11-11-streaming-s3-design.md` §4.5 and §5.
 - Server streaming design `2026-11-07-server-streaming-design.md` §12a.6, §12a.8 (3d), §13 and §14.
@@ -10,12 +10,13 @@ Parents:
 
 A streamed slide show today never plays sound or video. A slide whose media matters to the timing plays its piece-3 still. Any other media slide shows only its poster picture, and every audio and video node "ends" at once.
 
-Piece 5 makes audio play during a streamed show the way it plays in a local show. The deck's original media bytes never leave the server. The server re-encodes each audio part for each viewer, and the encode loses all of the source's metadata. Audio carries no mark (§4.2). Video stays as piece 4 left it (§3).
+Piece 5 makes audio play during a streamed show the way it plays in a local show. The deck's original media bytes never leave the server. The server re-encodes each audio part once, shares the encode across viewer sessions, and the encode loses all of the source's metadata. Audio carries no mark (§4.2), so every viewer's encode of a part is byte-identical. Video stays as piece 4 left it (§3).
 
 **Owner decisions (2026-11-16 and 2026-11-17):**
-- **Per-viewer encodes:** (a), each viewer gets their own marked encode. The alternative was one shared encode with a generic mark.
+- **Per-viewer encodes:** (a), each viewer gets their own marked encode. The alternative was one shared encode with a generic mark. (a) stays in force for video in piece 6. For audio it is superseded by "Shared audio encodes" below.
+- **Shared audio encodes (2026-11-17):** audio carries no mark, so the server encodes each `(part content digest, encode params sha, ffmpeg version)` once and serves it to every session that is allowed that media. Authorization stays per session (§4.3). Per-viewer encodes return with video in piece 6.
 - **Encoder:** approach 1, ffmpeg as a separate process on the server. The alternative was ffmpeg compiled to WebAssembly inside the worker pool.
-- **When encoding happens:** (a), all of a viewer's media is encoded when their show starts, in slide order, and each file is delivered whole once it is ready. The alternatives were streaming while encoding (fragmented MP4), and encoding only when a media slide is next.
+- **When encoding happens:** (a), all of a viewer's media is made ready when their show starts, in slide order (encoded, unless already cached or in flight, §4.4), and each file is delivered whole once it is ready. The alternatives were streaming while encoding (fragmented MP4), and encoding only when a media slide is next.
 
 **Owner decision (2026-11-17, after the feasibility gate): option 1, audio now, video later.**
 - **The gate was RED** (`docs/validation/streaming-s3-p5-feasibility.md`, on the feature branch). Forensic Layer 1 did not survive H.264 at any CRF in {18, 20, 23}. At CRF 18:
@@ -56,9 +57,9 @@ Piece 5 makes audio play during a streamed show the way it plays in a local show
 
 **Goals**
 1. Audio plays in a streamed show: shape audio, narration, effect sounds (`sndTgt`) and transition sounds. It follows the same timing, commands, slide spans and one-audio-output rule as local playback.
-2. Every byte of media on the wire is a server encode made for this session. Audio carries no mark (Stage 3 decision); it is still transcoded, metadata-free and audited.
+2. Every byte of media on the wire is a server encode, shared across sessions (§4.3). Audio carries no mark (Stage 3 decision); it is still transcoded, metadata-free and audited per delivery.
 3. No source metadata survives: no tags, chapters, encoder strings, subtitle, data or attachment streams, cover art or timestamps from the source.
-4. Encoding is bounded: duration and output size are capped, as are CPU time, wall time, concurrency per session and per server, and disk. Anything over a cap is refused with a typed reason, never truncated.
+4. Encoding is bounded: duration and output size are capped, as are CPU time, wall time, concurrency per session and per server, and disk (the shared cache, §4.3). Anything over a cap is refused with a typed reason, never truncated.
 5. Timing stays provable. The server can still classify every slide (piece 4 §6), so audio no longer has to refuse slides wholesale.
 
 **Non-goals**
@@ -72,6 +73,7 @@ Piece 5 makes audio play during a streamed show the way it plays in a local show
 **Anti-goals** (failures even if media plays)
 - Any original media byte, or any source metadata, reaching the client.
 - Any video stream on the wire. Every output is audio-only M4A.
+- A session receiving, or learning the id of, media that its own plan does not bind. Sharing the encode never widens authorization.
 - A hostile media part that makes ffmpeg read the network or the server's files, or exhaust server CPU, memory or disk.
 - A media slide whose drawn frames diverge from local playback without being refused. This is the piece-4 soundness rule, which still holds.
 - Media code in the eager or core bundle (parent T11; `bun run gates:core`).
@@ -79,7 +81,10 @@ Piece 5 makes audio play during a streamed show the way it plays in a local show
 ## 4. Architecture
 
 ```
-client show ──media-request{mediaId}──▶ ws ──▶ media admission ──▶ transcoder
+client show ──media-request{mediaId}──▶ ws ──▶ own-plan check ──▶ shared encode cache
+                                                       hit │ miss (one encode per key; joins)
+                                                           ▼
+                                                  media admission ──▶ transcoder
                                                                     │
        part bytes (package, bounded read) ──▶ private temp file ──▶ ffmpeg (sandboxed)
                                                                     │ AAC / M4A
@@ -90,9 +95,9 @@ client lease ◀── MEDIA_CHUNK ×N ◀── media-start{bytes,chunks,durati
 
 The show plan (OVSP) ships, per slide:
 
-- **Media records.** Each is `{mediaId, kind: 'audio', spid?, durationMs}`. A video node ships no record: video is not encoded in this piece (§1). `mediaId` is an opaque per-session id. No part path, rId or content type from the package is shipped. The server derives `durationMs` from its own probe of the source, capped (§6).
+- **Media records.** Each is `{mediaId, kind: 'audio', spid?, durationMs}`. A video node ships no record: video is not encoded in this piece (§1). `mediaId` is an opaque per-session id, so two sessions never share an id even when they share an encode. No part path, rId or content type from the package is shipped. The server derives `durationMs` from its own probe of the source, capped (§6).
   - *My call:* the probe runs during plan build, sandboxed like an encode (§4.2), with ≤ 2 s per part and ≤ 10 s per deck.
-  - Its result is a document property, so it is cached per document and shared across sessions.
+  - Its result is a document property, so it is cached per document and shared across sessions. It includes `sourceHash`, the sha256 of the part's bytes, which is the first part of the encode-cache key (§4.3).
   - `durationMs` is rounded down to whole milliseconds.
   - Every encode is trimmed or padded to exactly `durationMs` (`-t`), so the plan and `media-start` always agree.
   - A part whose probe fails or times out ships `refused: 'media-unreadable'`.
@@ -130,7 +135,14 @@ The manifest gains:
   - A whole media file: ≤ 32 MiB (audio), declared in `media-start` and enforced while receiving. The 64 MiB video cap is deferred to piece 6, which needs an owner ruling on it (§1).
   - Unsolicited or overrunning chunks are dropped before allocation, as with print and the show plan.
 - **Rates.** A new rate class `media` allows 6 requests per minute per session, refuse-only. It is separate from `unit`, so the show's unit budget is untouched.
-- **Encode cache.** Each session's encodes are cached on disk for the session's life: at most 256 MiB per session and 2 GiB per server, evicted least-recently-used, and deleted when the session ends. A re-request after eviction re-encodes.
+- **Authorization.** A session is served only the media ids bound to its own plan. `media-request` is checked against the session's plan before the cache is consulted, so another session's id, or a bare cache key, answers `invalid-media`. Cache keys never reach the client.
+- **Shared encode cache.** One cache per server, on disk, keyed by `(sourceHash, encodeParamsSha, ffmpegVersion)`.
+  - `sourceHash` is the probe's content digest of the part, so identical audio in two decks or two sessions is one entry. The `-t` trim comes from the probe of that same content, so it needs no key field.
+  - **Single flight.** There is one encode per key. A request or queue item for a key that is already encoding joins it and takes no server slot. The encode belongs to the key, not to the session that started it: it is killed only when its last waiter is gone (abort, `media-end`, socket close or expiry). A failure that is not cached (`media-timeout`, `media-busy`) goes to every joiner.
+  - **References.** A session holds a reference on a key from when its queue readies it until the file is delivered to that session, the viewer passes the slide, the session drops it under pressure, or the session ends.
+  - **Budgets.** The cache holds at most 2 GiB. Each session may hold references to at most 256 MiB of look-ahead, which counts a shared entry in full against every session that references it. An encode in flight reserves the 32 MiB output cap.
+  - **Eviction.** Only an entry with no references is evictable, least-recently-used first, and only when a new entry needs the room. Entries stay cached after their sessions end, which is what lets a later session start without encoding. They are deleted at server shutdown. A re-request after eviction re-encodes.
+  - **Pressure.** When a session is at its 256 MiB look-ahead, encode-ahead waits. A `media-request` first drops that session's own farthest-ahead undelivered references, which stay cached if anything still references them. If the 2 GiB is still all referenced, encode-ahead waits and a `media-request` is refused `media-busy`.
 
 ### 4.4 Client
 
@@ -138,14 +150,15 @@ The manifest gains:
   - They reassemble the chunks into a Blob and charge the show workspace exactly as `openMediaLease` does, including the peak while chunks and Blob coexist.
   - They hand the result to the unchanged media player.
   - `canPlayType('audio/mp4; codecs=…')` failing gives `media-codec`, as it does locally.
-- **Encoding order** (owner decision (a)). When the show starts, the server queues encodes for every media record in the plan, in slide order beginning at the starting slide. Each viewer runs one encode at a time. Encoding runs ahead of the viewer; it is not driven by their requests.
-  - Finished encodes wait in the session's encode cache (§4.3).
-  - Once the cache reaches its 256 MiB cap, encoding pauses until the viewer moves on and earlier slides' encodes can be evicted. Each slide's encodes become evictable once the viewer has passed it.
+- **Encoding order** (owner decision (a)). When the show starts, the server queues every media record in the plan, in slide order beginning at the starting slide. Each viewer's queue waits on one key at a time. Queuing runs ahead of the viewer; it is not driven by their requests.
+  - The queue enqueues an encode only for a key that is not already cached. A cached key just takes a reference. A key already encoding is joined at its turn, not started again.
+  - Finished encodes wait in the shared encode cache (§4.3).
+  - At the session's 256 MiB look-ahead, queuing pauses until a file is delivered or the viewer moves on and earlier slides' references are released.
   - A jump (go to slide N) re-queues from N.
-  - When the show ends, the encodes still queued are cancelled and the running one is killed.
+  - When the show ends, the session's queued items are cancelled and its references dropped. A running encode stops only if no other session waits on it.
 - **Request timing.** The client *requests delivery* of a slide's media when that slide becomes the next or current slide, the same window the piece-4 track working set uses. The client's workspace holds only the media near the viewer's slide.
   - If the encode is already in the cache, delivery starts at once.
-  - If not, that media moves to the front of the encode queue, and `media-start` follows when it is done.
+  - If not, that media moves to the front of the session's queue, and `media-start` follows when the encode is done, whether this session started it or joined it.
   - Media held across slides follows the lease span rules. Under workspace pressure, carried media is dropped first, as it is locally.
 - **Presenter View.** Audio plays only in the audience window, as in local Presenter View.
 - All of this code loads lazily on the remote show path.
@@ -178,22 +191,25 @@ Piece 4 refuses a slide when a media end could change what is drawn, because the
 | Audio duration | ≤ 30 min | `media-too-long` |
 | Output size | ≤ 32 MiB audio | `media-too-large` |
 | Encode wall time | ≤ 2 × duration + 30 s, then killed | `media-timeout` |
-| Concurrent encodes | 1 per session; ⌈cores / 4⌉ per server, queue 16 | `media-busy` |
+| Concurrent encodes | 1 awaited key per session; ⌈cores / 4⌉ distinct encodes per server, queue 16 (joiners take no slot) | `media-busy` |
+| Encode cache | 2 GiB per server, shared; 256 MiB of referenced look-ahead per session | `media-busy` (`media-request` only) |
 | Source not decodable or not in the allowlist | — | `media-unreadable` |
 | External link or online video | — | `media-linked` |
 | ffmpeg absent or `OV_MEDIA=off` | — | `media-unavailable` |
 | Media on a hidden shape or hidden slide | never encoded | (not shipped) |
 
-Every refusal shows the poster and raises a typed notice. Encodes have their own admission class: they are never charged as units and never hold a render worker slot. The server-wide media memory budget (256 MiB) only ever charged video frames in flight, so it is deferred to piece 6. The audio path holds no frames in the server process, and ffmpeg's own memory is bounded by the sandbox.
+Every refusal shows the poster and raises a typed notice. Encodes have their own admission class: they are never charged as units and never hold a render worker slot. Per-session limits (`media` rate, look-ahead) apply to each session separately; a shared encode is not charged to the sessions that join it. The server-wide media memory budget (256 MiB) only ever charged video frames in flight, so it is deferred to piece 6. The audio path holds no frames in the server process, and ffmpeg's own memory is bounded by the sandbox.
 
 The video rows (≤ 5 min, ≤ 64 MiB, ≤ 1280×720 and ≤ 30 fps) are deferred to piece 6.
 
 ## 7. Audit
 
-- A new `media_deliveries` table records `sid, unit_index, media_id, kind, source_hash, out_bytes, duration_ms, reason, at, ffmpeg_version, encode_params_sha`.
+- A new `media_deliveries` table records `sid, unit_index, media_id, kind, source_hash, out_bytes, duration_ms, reason, at, ffmpeg_version, encode_params_sha, cache_state`.
+  - Rows are per session and viewer: one per delivery and per refusal, through `sid`. Sharing an encode does not merge rows.
+  - `cache_state` records how this session came by the file: `hit` (already complete when the session referenced it, so served from cache), `joined` (waited on another session's encode) or `miss` (this session's request or queue started the encode). It is empty on a refusal that never reached the cache.
   - `kind` is always `audio` in this piece.
   - The mark and geometry columns (`marked_visible`, `marked_forensic`, `scale_bucket`, `crop`) are dropped, not nulled. Audio carries no mark, and piece 6 adds them with video.
-  - `ffmpeg_version` and `encode_params_sha` record which encoder and settings made the file.
+  - `ffmpeg_version` and `encode_params_sha` record which encoder and settings made the file. With `source_hash` they are the cache key.
 - The `services` row gains `media`.
 - **Video detection** (the time-window search and its recalibrated τ) is *deferred to piece 6*, with the columns it needed.
 
@@ -209,9 +225,13 @@ The video rows (≤ 5 min, ≤ 64 MiB, ≤ 1280×720 and ≤ 30 fps) are deferre
 - **Wire audit.** Over every fixture, no sent chunk contains any 64-byte window of the source part, the output has no metadata atoms or tags (checked with `ffprobe -show_format -show_streams`), and no output has a video stream.
 - **Forensic survival on video.** This gate ran first and was RED (§1). It moves to piece 6 unchanged; the builder does not lower it.
 - **Video stays piece 4.** With media on, every piece-4 video still test passes unchanged, and a slide holding both a video and audio stays a still exactly when piece 4's rule fires on its video.
+- **Sharing.**
+  - Two sessions that request the same part start exactly one encode, whether the second arrives while the first is encoding or after it finishes. Both receive byte-identical files under different `mediaId`s, and the audit rows read `miss` and `joined` or `hit`.
+  - A session cannot request another session's `mediaId` or a cache key.
+  - One session's close does not kill an encode another session waits on. The last waiter's close does.
 - **Parity.** `stream-show-compare --deck all` plus the media fixtures pass, with media ends computed per §5.
 - **Hostile tests:** for kind 9, for `media-start` overrun, for unsolicited chunks, and for every refusal reason.
-- **Lifecycle:** cancellation on socket close kills ffmpeg and deletes temporary files, and disk and memory ledgers are empty after every path.
+- **Lifecycle:** cancellation on socket close kills ffmpeg when no other session waits, and releases the session's references. After every path no reference, in-flight encode or child process remains. Unreferenced cache entries remain until eviction, and the disk ledger is empty after server shutdown.
 
 ## 9. Left to the builder
 
