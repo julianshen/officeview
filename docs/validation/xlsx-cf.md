@@ -2313,11 +2313,50 @@ There are 2,036 rows over 17 cases: 791 formula cells, 542 painted as Excel, 0 d
   - The Stage 5 viewport failures are harness limits:
     - a bar cell counts as "formatting applied" against Excel's DisplayFormat, which shows no fill (composition E2/G2, cfvo-formulas Y2);
     - recipe-pending seed expectations (cross-sheet-missing positive control B5).
-- Known limits, documented rather than built:
-  - no Stage 5 browser test at the six zoom/DPR pairs;
-  - no browser midnight tick; it is covered by the Task 38 mounted tests;
-  - the no-formula baseline is the shared no-CF baseline (0 reserves, 0 reads, no scope);
+- Known limits (after fix round 1):
+  - the browser midnight tick runs on the resident leg only, because Playwright's clock does not reach a dedicated worker;
   - `pressure-stage5.ts` imports `tests/helpers/cf-formula.ts`.
+
+### 14.z.1 Task 39 fix round 1 (codex review)
+
+- **F1, withholding needs a recorded justification.** A Stage 5 cell under a formula rule that production withholds must carry a justification keyed per cell from evidence (`scripts/cf-refs/stage5-withhold.ts`). The accepted justifications are:
+  - a capability the covering rules need that is not published. This covers the marker's own capability and every parse/evaluation capability its formula text requires, compiled from the manifest. It also covers a visual's formula-bound family, and the literal Stage 3–4 gates a twin meets: `bar:bounds-num`, `icon:composition-dxf-fill`.
+  - a compile refusal;
+  - a record configuration fixed before capture (the S5-HOIST refused columns);
+  - an enumerated refusal. Only one is enumerated: `stage5-formula-functions` H2:H19, where `COUNTIF($A:$A,A2)>1` reads a range holding a boolean (A6), which the S5-HOIST policy refuses. A test checks this against the workbook.
+
+  Production's own unavailable state never counts, and any exception in the text-scope helper is a failure. Codex's mutant (composition B2..B7 rewritten in memory to a resource refusal) passed the conformance test and the Lesson 1 verdict before this fix; it now fails both. A Stage 5 clock case now takes the evaluation clock, as `paint.ts` does, rather than an injected Stage 1 `dateContext`, which had dropped the evaluation context.
+- **F2, cf-compare on production's inputs.** The interactive service and text scope now receive the document's evaluation context (at the anchor day for a clock case) and its sheets, and the paged read takes the worker's clock.
+  - An unresolved Stage 5 formula cell with a verified expectation fails unless it is justified. Each result reports formula cells matched, painted and justified-withheld.
+  - On a Stage 5 case a data bar no longer counts as "formatting applied" against Excel's DisplayFormat.
+  - Interactive: 60 pass, 6 pending, 14 unsupported, 6 fail. Paged: 62 pass, 7 pending, 14 unsupported, 3 fail. None of the remaining failures is a Stage 5 formula cell. They are the Stage 1 time-period clock cases (S5-TP-MULTI narrowing), the Stage 3 participation and composition bars, the glyph-key batch limit, and the `stage5-cross-sheet-missing` positive-control seed (a recipe-pending case). All of them failed before this round.
+- **F3, audit rows.** Resolved paint and unresolved slots are kept apart (`stage5CellAgreement`).
+  - Every resolved component is compared with Excel: fill within ±8, and strikethrough.
+  - Every unresolved slot needs a justification.
+  - Bars and icons are compared with Excel's PNG measurement where one exists; a zero-length bar draws nothing.
+  - Rows now cover all 31 cases, and the 14 unmeasured ones say why they are not compared. Totals: 2,160 rows; 791 formula cells; 542 painted as Excel with nothing unresolved; 268 with justified unresolved slots; 57 visual comparisons; 0 disagreeing.
+- **F4, atomic publication.** `--write` renders, validates the whole audit, then writes a temporary sibling and renames it over the target. A failure leaves the target byte-unchanged; the test uses `--target` and the `CF_AUDIT_INJECT_FAILURE` seam.
+- **F5, the no-formula baseline keeps literal CF.** It counts formula compiles, dependency-snapshot preparations and clock reads through `cfFormulaActivity()`, and all three must be 0.
+  - It found a product defect: literal-only CF took a clock sample on every preparation (4 in the scenario). The evaluation context now samples the clock on first read, once, and the derived date context reads it lazily.
+  - A positive control (one expression rule) moves all three counters.
+- **F6, browser.** Added Chromium tests:
+  - Stage 5 at the six zoom/DPR pairs on all three legs, under production evidence.
+  - A midnight tick on the resident leg with Playwright's injected clock, paused before midnight. It is revert-checked: without the clock advance it fails.
+
+  The worker legs cannot take a faked midnight in a browser: Playwright's clock never reaches a dedicated worker realm. Their tick stays covered by the Task 38 mounted tests.
+
+**Gates after fix round 1:**
+- `npx vitest run`: 718 files, 14,366 passed, 13 failed (environmental: missing `corpus/` and `core-entry`).
+- `tsc -p .`: the 3 known errors.
+- Stages 1–5 audits: ok and complete.
+- `--write --publish-stage5`: run twice, byte-identical to the committed file. The published set is unchanged (42 ids).
+- Conformance: 21/21.
+- Eager gzip 36,517 B; `check-eager` ok.
+- Index closure 422,487 B: environmental FAIL, growth recorded.
+- CF chunks 110,842 B gzip -9.
+- `git diff --check`: clean.
+- Browser Chromium (scratch config): 36/36, including the new Stage 5 zoom/DPR and midnight-tick tests. WebKit is a blocked gate (not installed).
+- `cf-compare --stage 5`: static 0 pass, 6 pending, 14 unsupported, 66 fail (cross-renderer frames, as in every stage); paged 62 pass, 7 pending, 14 unsupported, 3 fail; interactive 60 pass, 6 pending, 14 unsupported, 6 fail. None of the remaining failures is a Stage 5 formula cell (see 14.z.1).
 
 **Capability rows (one per Stage 5 capability, after publication):**
 
