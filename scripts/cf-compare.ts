@@ -25,6 +25,7 @@ import { getPaintables } from '../src/render/paint'
 import { computeMetrics } from '../src/xlsx/render'
 import type { XlsxDocument } from '../src/xlsx/types'
 import { parseRangeA1, parseA1, type CfObservedBar, type CfObservedIcon } from './cf-refs/verify'
+import { stage5WithholdJustification } from './cf-refs/stage5-withhold'
 import type { CfManifest, CfOracleCase } from './cf-refs/cases'
 import { CF_MANIFEST_PATH } from './cf-refs/generate'
 import { ICON_NO_ICON_MEMBER, iconTwinSetMembers, isCellInSqref, observedIconClass, verifyCfCase } from './cf-refs/verify'
@@ -88,6 +89,9 @@ export interface CfCompareResult {
   oracleHash?: string
   /** Source reads issued to produce the output. */
   reads?: number
+  /** Task 39 fix round 1 (F2): on a Stage 5 case, the formula cells Excel formats, how many production painted, and how
+   * many it withheld with a recorded justification (`stage5WithholdJustification`). */
+  stage5?: { formulaMatched: number; painted: number; justifiedWithheld: number }
 }
 
 function sha256Hex(lines: string[]): string {
@@ -146,6 +150,11 @@ export function verifyCellExpectations(
       if (!styled) continue
     }
     if (exp.matched) {
+      // Task 39 fix round 1 (F2): on a Stage 5 case an unresolved cell under a formula rule is a failure unless an
+      // independently recorded justification exists; Stages 1-4 keep their withheld-is-skipped rule.
+      if (actual.unresolved && c.stage === 5 && c.markers.some(m => m.formula !== undefined && isCellInSqref(exp.ref, m.sqref)) && stage5WithholdJustification(c, exp.ref).length === 0) {
+        return `Cell ${exp.ref} expected matched: true, but production left it unresolved without a recorded justification`
+      }
       if (actual.unresolved) continue
       if (!actual.applied) {
         return `Cell ${exp.ref} expected matched: true, but no CF formatting applied`
@@ -365,11 +374,20 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
   // Service composition: full property VALUES per cell (red vs blue detected).
   const memory = createCfMemory()
   if (!sheet.conditionalFormatting) return fail(`No conditional formatting in ${c.saved}`)
-  const dateContext = c.clockRequirement ? {
+  // Task 39 fix round 1 (F2): production's inputs. A Stage 5 case takes the document's evaluation context (its clock at
+  // the case's anchor day for a clock case) and the workbook's other sheets, as render.ts passes them; Stages 1-4 keep
+  // their Stage 1 clock injection.
+  const stage5 = c.stage === 5
+  const dateContext = c.clockRequirement && !stage5 ? {
     clockSerial: c.clockRequirement.anchorSerial,
     dateSystem: c.clockRequirement.dateSystem,
   } : undefined
-  const oracle = createCfService(sheet.conditionalFormatting, memory, { evidence: cfRuntimeEvidence, dateContext })
+  const { cfDocumentEvaluationOf, cfWorkbookOfDocument } = await import('../src/xlsx/cf/render')
+  const { cfEvaluationContextFor } = await import('../src/xlsx/cf/formula')
+  const anchorNow = c.clockRequirement ? () => Date.parse(`${c.clockRequirement!.anchorLocalDate}T04:00:00+08:00`) : Date.now
+  const documentEvaluation = cfDocumentEvaluationOf(doc)
+  const oracle = createCfService(sheet.conditionalFormatting, memory, { evidence: cfRuntimeEvidence, dateContext,
+    ...(stage5 ? { evaluation: cfEvaluationContextFor(documentEvaluation, anchorNow), sheetName: sheet.name, workbook: cfWorkbookOfDocument(doc.sheets, memory, 'engine') } : {}) })
   const gen = cfRulesVersion(sheet.conditionalFormatting)
   const stamp = { owner: 'compare', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: gen, viewGen: 0, structureGen: 0, clockGen: 0 }
   const source = residentSource(sheet, stamp, memory, 'engine')
@@ -437,6 +455,7 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
       locale: 'en-US',
       budget,
       dateContext,
+      ...(stage5 ? { evaluation: documentEvaluation, now: anchorNow, documentSheets: doc.sheets } : {}),
     })
   } catch (error) {
     return fail(error instanceof Error ? error.message : String(error))
@@ -457,7 +476,10 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
     const hasStyle = Boolean(style && style !== base && Object.keys(style).length > 0)
     const desc = scope ? scope.describe(row, col) : undefined
     const hasWinningDesc = desc !== undefined && desc.key !== 'cf-unavailable'
-    const applied = hasStyle || hasWinningDesc
+    // A data bar is no cell style (Ruling S3-I) and Excel's DisplayFormat records no fill for it, so on a bar cell only
+    // the style counts as applied (Task 39 fix round 1, F2: E2/G2/Y2 zero-length bars at the column minimum).
+    const barCell = c.markers.some(m => m.ruleType === 'dataBar' && isCellInSqref(`${String.fromCharCode(65 + col)}${row + 1}`, m.sqref))
+    const applied = hasStyle || (hasWinningDesc && !(barCell && c.stage === 5))
     const unresolved = outcome === undefined
       || outcome.kind === 'unresolved'
       || (outcome.writes && outcome.writes.length > 0)
@@ -466,6 +488,20 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
     const iconWithheld = outcome?.kind !== 'ready' && outcome?.kind !== 'no-match' || (outcome?.writes?.length ?? 0) > 0
     return { applied, unresolved, style: hasStyle ? style : undefined, ...(iconCell ? { iconCell, icon: outcome?.icon ?? null, iconWithheld } : {}) }
   })
+  // Task 39 fix round 1 (F2): the Stage 5 accounting of the formula cells Excel formats.
+  let stage5Stats: CfCompareResult['stage5']
+  if (stage5) {
+    stage5Stats = { formulaMatched: 0, painted: 0, justifiedWithheld: 0 }
+    for (const exp of c.expected.cells) {
+      if (!exp.matched || !c.markers.some(m => m.formula !== undefined && isCellInSqref(exp.ref, m.sqref))) continue
+      const pos = parseA1(exp.ref)!
+      stage5Stats.formulaMatched++
+      const outcome = outcomes.get(`${pos.row},${pos.col}`)
+      const style = scope ? scope.effectiveStyle(pos.row, pos.col, base as never) : (base as never)
+      if (style && style !== base && Object.keys(style).length > 0 && (outcome?.writes.length ?? 0) === 0) stage5Stats.painted++
+      else if (stage5WithholdJustification(c, exp.ref).length > 0) stage5Stats.justifiedWithheld++
+    }
+  }
   scope?.dispose()
   if (net() !== 0) return fail(`resident viewport leaked ${net()} bytes`)
   if (scope && peakBytes <= 0) return fail('resident viewport observed no allocation')
@@ -478,6 +514,7 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
       ? `Interactive viewport verified: all ${c.expected.cells.length} cell expectations match.`
       : `Viewport cell expectations verified (${c.expected.cells.length} cells checked); pixel diff awaits Excel viewport refs.`,
     outputHash: sha256Hex(lines), workbookHash, oracleRef, oracleHash, reads: 1,
+    ...(stage5Stats ? { stage5: stage5Stats } : {}),
   }
 }
 
@@ -514,15 +551,18 @@ export async function comparePagedViewport(c: CfOracleCase, rootDir: string): Pr
       { signal: new AbortController().signal, stamp: store.stamp as never },
     ).catch(() => undefined)
     const memory = createCfMemory()
-    const dateContext = c.clockRequirement ? {
+    // Task 39 fix round 1 (F2): a Stage 5 clock case reads the worker's own evaluation clock at the case's anchor day
+    // (`now`), as production does; a Stage 1 dateContext would disagree with it and drop the evaluation context.
+    const dateContext = c.clockRequirement && c.stage !== 5 ? {
       clockSerial: c.clockRequirement.anchorSerial,
       dateSystem: c.clockRequirement.dateSystem,
     } : undefined
+    const anchorNow = c.clockRequirement && c.stage === 5 ? () => Date.parse(`${c.clockRequirement!.anchorLocalDate}T04:00:00+08:00`) : undefined
     const result = await store.readConditionalFormatting?.({
       rects: [{ r0: rect.minRow, r1: rect.maxRow, c0: rect.minCol, c1: rect.maxCol }],
       stamp: { owner: 'compare', sheetId, workbookValueGen: store.stamp.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 },
       grantBytes: 2 * 1024 * 1024,
-    }, memory, { signal: new AbortController().signal, dateContext })
+    }, memory, { signal: new AbortController().signal, dateContext, ...(anchorNow ? { now: anchorNow } : {}) })
     if (!result) return { id: c.id, mode: 'paged', outcome: 'fail', reason: 'Paged read returned nothing', oracleRef, workbookHash, reads: 1 }
     if (result.kind === 'pending') {
       return {
@@ -568,7 +608,8 @@ export async function comparePagedViewport(c: CfOracleCase, rootDir: string): Pr
       const hasScale = s.scale?.argb !== undefined
       // A wire bar descriptor is an applied outcome (Task 23): the bar paints, though it writes no style property.
       const hasBar = s.bar !== undefined
-      if (!hasProps && !hasScale) return { applied: hasBar, unresolved, ...iconState }
+      // Task 39 fix round 1 (F2): on a Stage 5 case Excel's expectation is its DisplayFormat fill, which a bar never writes.
+      if (!hasProps && !hasScale) return { applied: hasBar && c.stage !== 5, unresolved, ...iconState }
       const style = resolveCfCellStyle(base as never, {
         properties: s.properties,
         ...(hasScale ? { visual: { colorScale: { ruleId: s.scale!.ruleId, argb: s.scale!.argb, ...(s.scale!.fraction !== undefined ? { fraction: s.scale!.fraction } : {}) } } } : {}),

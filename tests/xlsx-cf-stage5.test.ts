@@ -428,3 +428,23 @@ describe('enumerated withholding justifications are backed by the workbook (Task
     expect(stage5WithholdJustification(comp, 'B2')).toEqual([])
   })
 })
+
+describe('cf-compare interactive runs production inputs on Stage 5 cases (Task 39 fix round 1, F2)', () => {
+  it.each(['stage5-formula-authored', 'stage5-cross-sheet'])('%s: the formula cells are compared on production\'s paint, never skipped as unresolved', async id => {
+    const { compareInteractiveViewport } = await import('../scripts/cf-compare')
+    const c = manifest().cases.find(x => x.id === id)!
+    const r = await compareInteractiveViewport(c, REPO_ROOT)
+    expect(r.outcome, r.reason).toBe('pass')
+    expect(r.stage5, 'Stage 5 cell accounting').toBeDefined()
+    // Every formula cell Excel formats is painted by production, or withheld with a recorded justification.
+    expect(r.stage5!.painted, 'formula cells painted').toBeGreaterThan(0)
+    expect(r.stage5!.painted + r.stage5!.justifiedWithheld).toBe(r.stage5!.formulaMatched)
+  }, 120000)
+  it('an unresolved formula cell with a verified expectation and no recorded justification fails', async () => {
+    const { verifyCellExpectations } = await import('../scripts/cf-compare')
+    const c = manifest().cases.find(x => x.id === 'stage5-composition')!
+    // Production withholds everything: the first verified formula cell with no recorded justification fails.
+    const msg = verifyCellExpectations(c, () => ({ applied: false, unresolved: true }))
+    expect(msg).toMatch(/unresolved without a recorded justification/)
+  })
+})
