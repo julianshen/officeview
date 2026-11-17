@@ -246,6 +246,45 @@ describe('one clock per preparation on every leg (S5-M)', () => {
     })
   })
 
+  /** Dates S-2..S+2 (date-styled) in A2:A6; `=$A2=TODAY()` over C2:C6 (red) and `timePeriod="today"` over A2:A6 (green). */
+  const dualBytes = (): Uint8Array => workbookBytes(
+    Object.fromEntries([-2, -1, 0, 1, 2].map((d, i) => [`A${i + 2}`, { date: SERIAL_NOW + d }])),
+    cfBlock('C2:C6', exprRule('$A2=TODAY()', 1, 0)) + cfBlock('A2:A6', `<cfRule type="timePeriod" timePeriod="today" priority="2" dxfId="1"><formula>FLOOR(A2,1)=TODAY()</formula></cfRule>`))
+  const DUAL_REFS = ['A2', 'A3', 'A4', 'A5', 'A6', 'C2', 'C3', 'C4', 'C5', 'C6']
+  // Far from the wall clock, so a preparation that reads the wall clock anywhere cannot agree with one that does not.
+  const FAR = Date.UTC(2026, 10, 16, 12)
+  it('a TODAY() expression and a timePeriod rule of one preparation flag the same day on every route, the direct remote one included (fix round 1 #2)', async () => {
+    await withPaint(async () => {
+      const l = await load(dualBytes(), 'cached')
+      const expected = [undefined, undefined, GREEN, undefined, undefined, undefined, undefined, RED, undefined, undefined]
+      const options = { now: () => FAR }
+      const legs = { static: await staticLeg(l, DUAL_REFS, options), resident: await residentLeg(l, DUAL_REFS, options), text: await textLeg(l, DUAL_REFS, options), adapter: (await workerLeg(l, DUAL_REFS, options)).scope }
+      for (const [name, leg] of Object.entries(legs)) expect(DUAL_REFS.map(r => leg.get(r)!.fill), name).toEqual(expected)
+      // The direct route (no adapter, no date context): the same snapshot decides both rules.
+      const rules = l.sheet.conditionalFormatting!, memory = createCfMemory()
+      const stamp = { owner: 'direct', sheetId: l.sheetId, workbookValueGen: 0, cfGen: cfRulesVersion(rules), viewGen: 0, structureGen: 0, clockGen: 0 }
+      const wire = await prepareCfRemote({ rects: DUAL_REFS.map(r => { const { row, col } = rcOf(r); return { r0: row, r1: row, c0: col, c1: col } }), stamp, grantBytes: 1 << 22 }, l.sheetId,
+        residentSource(l.sheet, stamp, memory, 'cached'), rules, memory, { evaluation: { ...cfDocumentEvaluationOf(l.doc), timeZone: 'UTC' }, now: () => FAR })
+      expect(wire.kind).toBe('ready')
+      if (wire.kind === 'ready') {
+        const fill = (ref: string) => { const { row, col } = rcOf(ref); return wire.states.find(x => x.row === row && x.col === col)?.properties['fill.bg'] as string | undefined }
+        expect(DUAL_REFS.map(fill)).toEqual(expected)
+      }
+    })
+  })
+  it('a conflicting predicate date context is rejected: the formulas withhold rather than read a second clock (fix round 1 #2)', async () => {
+    await withPaint(async () => {
+      const l = await load(dualBytes(), 'cached')
+      const other = { dateSystem: '1900' as const, timeZone: 'UTC', epochNowMs: FAR + 3 * 86_400_000 } // three days later: the predicates would flag another row
+      const agreeing = { dateSystem: '1900' as const, timeZone: 'UTC', epochNowMs: FAR }
+      for (const [name, leg] of Object.entries({ static: await staticLeg(l, DUAL_REFS, { now: () => FAR, dateContext: other }), text: await textLeg(l, DUAL_REFS, { now: () => FAR, dateContext: other }) })) {
+        expect(DUAL_REFS.slice(5).map(r => leg.get(r)!.fill), `${name}: no formula cell paints on a second clock`).toEqual([undefined, undefined, undefined, undefined, undefined])
+      }
+      const same = await staticLeg(l, DUAL_REFS, { now: () => FAR, dateContext: agreeing })
+      expect(same.get('C4')!.fill, 'an agreeing override is the same clock').toBe(RED)
+    })
+  })
+
   it('a sheet without a clock-dependent formula keeps its stamp clock-free on every leg', async () => {
     await withPaint(async () => {
       const l = await load(policyBytes(), 'cached')

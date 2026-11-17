@@ -2,7 +2,7 @@ import type { XlsxSheet } from '../types'
 import { CF_ICON_SET_NAMES, type CfBarDescriptor, type CfIconDescriptor, type CfLease, type CfPrepared, type CfStamp, type SourceRect as ModelRect } from './model'
 import { CF_LIMITS, createCfMemory, createCfWorkBudget, type CfMemory } from './limits'
 import { createCfService, estimateCfPrepareBytes, type CfPaintStatistics } from './service'
-import { cfEvaluationContextFor, cfRoutePolicy, type CfDocumentEvaluation } from './formula'
+import { cfAlignClock, cfEvaluationContextFor, cfRoutePolicy, type CfDocumentEvaluation } from './formula'
 export { cfDocumentEvaluationOf, cfDocumentEvaluationOfPaged } from './formula'
 import { createCfStatistics } from './statistics'
 import { resolveCfCellStyle } from './dxf'
@@ -430,13 +430,9 @@ export async function prepareCfTextScope(
   const statisticsOptions = hiddenRows.length > 0 ? { hiddenRows } : undefined
   const sheetMerges: ModelRect[] = (sheet.mergeRanges ?? []).map(m => ({ firstRow: m.minRow, lastRow: m.maxRow, firstCol: m.minCol, lastCol: m.maxCol }))
   // Ruling S5-L: one value policy per preparation, the document's when the route is given its context.
-  const { policy: valuePolicy, evaluation } = cfRoutePolicy(request.evaluation ? cfEvaluationContextFor(request.evaluation, request.now ?? Date.now) : undefined, [request.valuePolicy, request.store?.valuePolicy], 'engine')
-  // One clock per preparation (Ruling S5-M): the predicates read the instant the formulas do.
-  const dateContext = request.dateContext ?? (sheet.semantics ? {
-    dateSystem: sheet.semantics.dateSystem,
-    timeZone: sheet.semantics.timeZone,
-    epochNowMs: evaluation?.clock.epochNowMs ?? Date.now(),
-  } : undefined)
+  const { policy: valuePolicy, evaluation: routed } = cfRoutePolicy(request.evaluation ? cfEvaluationContextFor(request.evaluation, request.now ?? Date.now) : undefined, [request.valuePolicy, request.store?.valuePolicy], 'engine')
+  // One clock per preparation (Ruling S5-M): the predicates read the instant the formulas do, or the formulas withhold.
+  const { evaluation, dateContext } = cfAlignClock(routed, request.dateContext, () => sheet.semantics ? { dateSystem: sheet.semantics.dateSystem, timeZone: sheet.semantics.timeZone, epochNowMs: Date.now() } : undefined)
     try {
       const gen = cfRulesVersion(rules)
       const workbook = cfWorkbookFor(rules, sheet.name, request.store, request.workbook, request.documentSheets, account, valuePolicy)

@@ -23,6 +23,7 @@ import { createReferenceServices } from '../formula/refs'
 import { epochToSerial } from '../formula/serial'
 import type { XlsxDocument } from '../types'
 import type { ValuePolicy } from '../view/contracts'
+import type { CfDateContext } from './predicates'
 import {
   CF_CHAR_SLOT_BYTES, CF_FLAT_ITEM_BYTES, CF_FORMULA_ATOM_BYTES, CF_FORMULA_CALL_BYTES, CF_FORMULA_FIXED_BYTES, CF_VIEW_WORKSPACE_BYTES, CF_FORMULA_NODE_BYTES,
   CF_FORMULA_TOKEN_BYTES, CF_LIMITS, CF_MATCHER_CELL_BYTES, CF_POPULATED_SLOT_BYTES, CF_SLOT_BYTES, CF_TRAVERSAL_BYTES, CF_VIEW_KEY_BYTES,
@@ -567,6 +568,24 @@ export function cfRoutePolicy(evaluation: CfEvaluationContext | undefined, decla
   if (!evaluation) return { policy: given[0] ?? routeDefault, evaluation: undefined }
   // Each authority (the route's explicit policy, its store's, the document's) is validated independently of the others.
   return { policy: given[0] ?? evaluation.valuePolicy, evaluation: given.every(p => p === evaluation.valuePolicy) ? evaluation : undefined }
+}
+/**
+ * One clock per preparation (Ruling S5-M): the predicates' date context is the evaluation snapshot's (zone, date system, instant),
+ * so a `timePeriod` rule and a `TODAY()` formula of one preparation can never read two instants. A caller's own date context is
+ * accepted only if it names that same snapshot (zone, date system, instant and, when given, the same day serial); a conflicting
+ * one is rejected by withholding the formulas (the evaluation is dropped, `cf-evaluation-context-missing`), while the predicates
+ * keep the caller's own clock as they always did. Without a context the caller's date context (or `fallback`) is unchanged.
+ */
+export function cfAlignClock(evaluation: CfEvaluationContext | undefined, dateContext: CfDateContext | undefined, fallback: () => CfDateContext | undefined): Readonly<{ evaluation: CfEvaluationContext | undefined; dateContext: CfDateContext | undefined }> {
+  if (!evaluation) return { evaluation, dateContext: dateContext ?? fallback() }
+  const derived: CfDateContext = Object.freeze({ dateSystem: evaluation.dateSystem, timeZone: evaluation.timeZone, epochNowMs: evaluation.clock.epochNowMs })
+  if (!dateContext) return { evaluation, dateContext: derived }
+  let agrees = dateContext.dateSystem === derived.dateSystem && dateContext.timeZone === derived.timeZone && dateContext.epochNowMs === derived.epochNowMs
+  if (agrees && dateContext.clockSerial !== undefined) {
+    const serial = epochToSerial(evaluation.clock.epochNowMs, evaluation.timeZone, evaluation.dateSystem)
+    agrees = typeof serial === 'number' && Math.floor(dateContext.clockSerial) === Math.floor(serial)
+  }
+  return agrees ? { evaluation, dateContext } : { evaluation: undefined, dateContext }
 }
 /** One clock snapshot from the injected `now`; `clockGen` is the local day number of that sample (the interactive
  * midnight tick keys on it). A zone the engine cannot resolve falls back to the UTC day so the generation still advances. */

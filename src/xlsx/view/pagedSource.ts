@@ -1000,7 +1000,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       pages: this.cfPages(request, account, options?.signal),
       ...(this.workbook.formatting?.styles ? { numberFormats: 'resolved' as const } : {}),
       }
-      const dateContext = options?.dateContext ?? {
+      const ownDateContext = options?.dateContext ?? {
         dateSystem: this.workbook.formatting?.dateSystem ?? '1900',
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC',
         epochNowMs: instant,
@@ -1021,7 +1021,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
         now: () => instant,
         ...(evaluation ? { evaluation } : {}),
         ...(workbook ? { workbook, sheetName: this.sheet.name } : {}),
-        dateContext,
+        ...(evaluation ? (options?.dateContext ? { dateContext: options.dateContext } : {}) : { dateContext: ownDateContext }),
         hiddenRows: (this.sheet.metadata?.hiddenRows ?? []).map(run => ({ firstRow: run.r0, lastRow: run.r1, firstCol: 0, lastCol: 16383 })),
         merges: (this.sheet.mergeRects ?? []).map(m => ({ firstRow: m.r0, lastRow: m.r1, firstCol: m.c0, lastCol: m.c1 })),
         ...(admitted ? { admittedRules: { rules: liveRules, normalized: admitted.normalized, version: admitted.version } } : {}),
@@ -1916,7 +1916,11 @@ async function prepareCfRemoteOnce(
   const depsModule = options?.workbook && rules ? await import('../cf/dependencies') : undefined
   // One clock snapshot per preparation, from the injected `now` (Ruling S5-L). Taken before anything is reserved, and only a
   // policy-carrying route loads the module.
-  const evaluation = options?.evaluation ? (await import('../cf/formula')).cfEvaluationContextFor(options.evaluation, options.now ?? Date.now) : undefined
+  const formulaRuntime = options?.evaluation ? await import('../cf/formula') : undefined
+  // One clock per preparation (Ruling S5-M): the predicates' date context is this snapshot's; a conflicting override withholds the formulas.
+  const aligned = formulaRuntime && options?.evaluation ? formulaRuntime.cfAlignClock(formulaRuntime.cfEvaluationContextFor(options.evaluation, options.now ?? Date.now), options.dateContext, () => options.dateContext) : undefined
+  const evaluation = aligned?.evaluation
+  const dateContext = aligned ? aligned.dateContext : options?.dateContext
   if (rules && rules.rules.length > limitsModule.CF_LIMITS.rules) {
     return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-scope-too-large', 'Conditional formatting exceeds the bounded rule count.'), requiredBytes: undefined }
   }
@@ -2162,7 +2166,7 @@ async function prepareCfRemoteOnce(
   // Service and its lease live inside the working hold: everything built
   // below is covered by the pre-admitted bound, and a single finally unwinds
   // in reverse order (lease, service, working hold) exactly once.
-  const service = serviceModule.createCfService(rules, memory, { budget: options?.budget, dateContext: options?.dateContext, merges: options?.merges, ...(evaluation ? { evaluation } : {}), ...(options?.hiddenRows?.length ? { statisticsOptions: { hiddenRows: options.hiddenRows } } : {}),
+  const service = serviceModule.createCfService(rules, memory, { budget: options?.budget, dateContext, merges: options?.merges, ...(evaluation ? { evaluation } : {}), ...(options?.hiddenRows?.length ? { statisticsOptions: { hiddenRows: options.hiddenRows } } : {}),
     ...(options?.workbook ? { workbook: options.workbook } : {}), ...(options?.sheetName !== undefined ? { sheetName: options.sheetName } : {}) })
   let prepared: CfLease<CfPrepared> | undefined
   try {

@@ -53,9 +53,10 @@ export const RED = 'FFFFC7CE', GREEN = 'FFC6EFCE'
 export const DXFS = `<dxfs count="3"><dxf><fill><patternFill patternType="solid"><bgColor rgb="${RED}"/></patternFill></fill></dxf>`
   + `<dxf><fill><patternFill patternType="solid"><bgColor rgb="${GREEN}"/></patternFill></fill></dxf>`
   + `<dxf><numFmt numFmtId="164" formatCode="0.00"/><fill><patternFill patternType="solid"><bgColor rgb="${RED}"/></patternFill></fill></dxf></dxfs>`
-const STYLES = `<cellXfs count="1"><xf numFmtId="0"/></cellXfs>${DXFS}`
+/** xf 0 General, xf 1 the built-in date format (numFmtId 14): the cell kinds a `timePeriod` rule reads as dates. */
+const STYLES = `<cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="14" applyNumberFormat="1"/></cellXfs>${DXFS}`
 
-export type CellSpec = number | string | boolean | { f: string; v?: number }
+export type CellSpec = number | string | boolean | { f: string; v?: number } | { date: number }
 /** `rows`: A1 notation to a value; a `{ f }` is a formula (cached `v` only when stated: an uncached formula otherwise). */
 export function sheetData(cells: Readonly<Record<string, CellSpec>>, rowHt?: number): string {
   const byRow = new Map<number, Array<[string, CellSpec]>>()
@@ -65,6 +66,7 @@ export function sheetData(cells: Readonly<Record<string, CellSpec>>, rowHt?: num
     if (typeof v === 'number') return `<c r="${ref}"><v>${v}</v></c>`
     if (typeof v === 'boolean') return `<c r="${ref}" t="b"><v>${v ? 1 : 0}</v></c>`
     if (typeof v === 'string') return `<c r="${ref}" t="inlineStr"><is><t>${v}</t></is></c>`
+    if ('date' in v) return `<c r="${ref}" s="1"><v>${v.date}</v></c>`
     return `<c r="${ref}"><f>${v.f}</f>${v.v === undefined ? '' : `<v>${v.v}</v>`}</c>`
   }).join('')}</row>`).join('')
 }
@@ -106,6 +108,8 @@ export interface LegOptions {
   /** Overrides the route's value policy (default: the route's own default, as a direct caller would get it). */
   valuePolicy?: ValuePolicy
   now?: () => number
+  /** An explicit predicate date context (a caller's own clock). */
+  dateContext?: import('../../src/xlsx/cf/predicates').CfDateContext
   /** Hosts for bar and icon announcements (the same on every scope leg). */
   hosts?: CfFrameHostSource
   /** The other sheets of the document: absent, a cross-sheet rule has no workbook. */
@@ -116,14 +120,14 @@ const now = (o: LegOptions): (() => number) => o.now ?? (() => NOW)
 export const frameHosts = (width = 200, base?: XlsxCellStyle): CfFrameHostSource => ({ cell: (row, col) => ({ box: { x: col * width, y: row * 20, width, height: 20 }, base }) })
 
 export async function staticLeg(l: Loaded, refs: readonly string[], o: LegOptions = {}): Promise<Map<string, Obs>> {
-  const batch = await prepareCfPaint(l.sheet, { memory: createCfMemory(), ...(o.valuePolicy ? { valuePolicy: o.valuePolicy } : {}), ...(policyOf(l, o) ? { evaluation: policyOf(l, o)! } : {}), now: now(o), ...(o.workbook === false ? {} : { documentSheets: l.doc.sheets }) })
+  const batch = await prepareCfPaint(l.sheet, { memory: createCfMemory(), ...(o.valuePolicy ? { valuePolicy: o.valuePolicy } : {}), ...(policyOf(l, o) ? { evaluation: policyOf(l, o)! } : {}), now: now(o), ...(o.dateContext ? { dateContext: o.dateContext } : {}), ...(o.workbook === false ? {} : { documentSheets: l.doc.sheets }) })
   const out = new Map<string, Obs>()
   try { for (const r of refs) { const { row, col } = rcOf(r); out.set(r, obsOfStyle(batch?.layer.styleAt(row, col, undefined))) } } finally { batch?.dispose() }
   return out
 }
 export async function residentLeg(l: Loaded, refs: readonly string[], o: LegOptions = {}): Promise<Map<string, Obs>> {
   const source = createObjectWorkbookSource(l.doc, `resident-${Math.random()}`)
-  const batch = await prepareCfPaint(l.sheet, { memory: createCfMemory(), store: source.store(l.sheetId), ...(o.workbook === false ? {} : { workbook: source }), ...(o.valuePolicy ? { valuePolicy: o.valuePolicy } : {}), ...(policyOf(l, o) ? { evaluation: policyOf(l, o)! } : {}), now: now(o) })
+  const batch = await prepareCfPaint(l.sheet, { memory: createCfMemory(), store: source.store(l.sheetId), ...(o.workbook === false ? {} : { workbook: source }), ...(o.valuePolicy ? { valuePolicy: o.valuePolicy } : {}), ...(policyOf(l, o) ? { evaluation: policyOf(l, o)! } : {}), now: now(o), ...(o.dateContext ? { dateContext: o.dateContext } : {}) })
   const out = new Map<string, Obs>()
   try { for (const r of refs) { const { row, col } = rcOf(r); out.set(r, obsOfStyle(batch?.layer.styleAt(row, col, undefined))) } } finally { batch?.dispose(); await source.release() }
   return out
@@ -136,7 +140,7 @@ export async function textLeg(l: Loaded, refs: readonly string[], o: LegOptions 
   const scope = await prepareCfTextScope(l.sheet, {
     rects: rectOf(refs), signal: new AbortController().signal, budget: BUDGET,
     ...(source ? { store: source.store(l.sheetId), ...(o.workbook === false ? {} : { workbook: source }) } : o.workbook === false ? {} : { documentSheets: l.doc.sheets }),
-    ...(o.valuePolicy ? { valuePolicy: o.valuePolicy } : {}), ...(policyOf(l, o) ? { evaluation: policyOf(l, o)! } : {}), now: now(o), ...(o.hosts ? { hosts: o.hosts, layoutContext: () => createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D } : {}),
+    ...(o.valuePolicy ? { valuePolicy: o.valuePolicy } : {}), ...(policyOf(l, o) ? { evaluation: policyOf(l, o)! } : {}), now: now(o), ...(o.dateContext ? { dateContext: o.dateContext } : {}), ...(o.hosts ? { hosts: o.hosts, layoutContext: () => createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D } : {}),
   } as never)
   const out = new Map<string, Obs>()
   try { for (const r of refs) { const { row, col } = rcOf(r); out.set(r, scope ? obsOfStyle(scope.effectiveStyle(row, col, undefined), scope.describe(row, col)) : {}) } } finally { scope?.dispose(); await source?.release() }
@@ -151,7 +155,7 @@ export async function workerLeg(l: Loaded, refs: readonly string[], o: LegOption
     const sheetId = source.sheets.find(s => s.name === l.sheet.name)?.sheetId ?? source.sheets[0]!.sheetId
     const store = source.store(sheetId)
     const rects = rectOf(refs)
-    const read = (rs: readonly { r0: number; r1: number; c0: number; c1: number }[]) => store.readConditionalFormatting!({ rects: rs, stamp: { owner: 'views', sheetId, workbookValueGen: store.stamp.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 }, grantBytes: 8 * 1024 * 1024 }, createCfMemory(), { signal: new AbortController().signal, now: now(o) } as never)
+    const read = (rs: readonly { r0: number; r1: number; c0: number; c1: number }[]) => store.readConditionalFormatting!({ rects: rs, stamp: { owner: 'views', sheetId, workbookValueGen: store.stamp.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 }, grantBytes: 8 * 1024 * 1024 }, createCfMemory(), { signal: new AbortController().signal, now: now(o), ...(o.dateContext ? { dateContext: o.dateContext } : {}) } as never)
     const wire = await read(rects)
     const states = new Map<string, { properties: Record<string, unknown>; unresolvedReason?: string; unresolvedWrites?: readonly string[] }>()
     if (wire.kind === 'ready') for (const s of wire.states) { states.set(refOfRc(s.row, s.col), { properties: s.properties, ...(s.unresolvedReason ? { unresolvedReason: s.unresolvedReason } : {}), ...(s.unresolvedWrites ? { unresolvedWrites: s.unresolvedWrites } : {}) }) }

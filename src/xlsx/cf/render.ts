@@ -4,7 +4,7 @@ import { createCfStatistics } from './statistics'
 import { sameCfStamp } from './cache'
 import { cfRuntimeEvidence, type CfEvidenceGate } from './predicates'
 import { createCfService, type CfPaintStatistics } from './service'
-import { cfEvaluationContextFor, cfRoutePolicy, type CfDocumentEvaluation } from './formula'
+import { cfAlignClock, cfEvaluationContextFor, cfRoutePolicy, type CfDocumentEvaluation } from './formula'
 export { cfDocumentEvaluationOf, cfDocumentEvaluationOfPaged } from './formula'
 import { CF_LIMITS, createCfMemory, createCfWorkBudget, measureCfPayload, type CfMemory, type CfWorkBudget } from './limits'
 import { resolveCfCellStyle } from './dxf'
@@ -397,7 +397,9 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
   if (hold.kind !== 'reserved') return unavailable(sheet)
   const evidence = options.evidence ?? cfRuntimeEvidence
   // Ruling S5-L: one value policy per preparation, the document's when the route is given its context.
-  const { policy: valuePolicy, evaluation } = cfRoutePolicy(options.evaluation ? cfEvaluationContextFor(options.evaluation, options.now ?? Date.now) : undefined, [options.valuePolicy, options.store?.valuePolicy], 'cached')
+  const { policy: valuePolicy, evaluation: routed } = cfRoutePolicy(options.evaluation ? cfEvaluationContextFor(options.evaluation, options.now ?? Date.now) : undefined, [options.valuePolicy, options.store?.valuePolicy], 'cached')
+  // One clock per preparation (Ruling S5-M): the predicates read the instant the formulas do, or the formulas withhold.
+  const { evaluation, dateContext } = cfAlignClock(routed, options.dateContext, () => sheet.semantics ? { dateSystem: sheet.semantics.dateSystem, timeZone: sheet.semantics.timeZone, epochNowMs: Date.now() } : undefined)
   const workbook = cfWorkbookFor(rules, sheet.name, options.store, options.workbook, options.documentSheets, memory, valuePolicy)
   const dependencyGen = cfDependencyGenOf(rules, sheet.name, workbook)
   const stamp = options.request?.stamp ?? {
@@ -409,7 +411,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
     structureGen: options.store?.structureGen ?? 0,
     // Ruling S5-M: a sheet with a clock-dependent formula stamps its preparation's one clock (the local day number); every
     // other sheet keeps the Stage 1 value, so a clock-free sheet is never invalidated by the tick.
-    clockGen: options.dateContext?.clockSerial ? Math.floor(options.dateContext.clockSerial) : evaluation && cfRulesUseClock(rules, true) ? evaluation.clock.clockGen : 0,
+    clockGen: evaluation && cfRulesUseClock(rules, true) ? evaluation.clock.clockGen : options.dateContext?.clockSerial ? Math.floor(options.dateContext.clockSerial) : 0,
     ...(dependencyGen !== 0 ? { dependencyGen } : {}),
   }
   const signal = options.request?.signal ?? new AbortController().signal
@@ -432,12 +434,6 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
     sheetStatsSessions.set(sheet, retainedStats)
   }
   const statistics: CfPaintStatistics = { session: retainedStats.session, stamp, results: new Map() }
-  // One clock per preparation (Ruling S5-M): the predicates read the instant the formulas do.
-  const dateContext = options.dateContext ?? (sheet.semantics ? {
-    dateSystem: sheet.semantics.dateSystem,
-    timeZone: sheet.semantics.timeZone,
-    epochNowMs: evaluation?.clock.epochNowMs ?? Date.now(),
-  } : undefined)
   let units = 0
   const work = async () => {
     if (signal?.aborted) throw new Error('CF cancelled')
