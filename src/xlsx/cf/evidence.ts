@@ -300,8 +300,8 @@ export function injectCfIconSelections(selections: CfIconSelectionsExport | null
 /**
  * Stage 5 (Task 35), the Stage 4 pattern: which reading the oracle matched for a formula capability whose production entry
  * is a selection (a list in `CF_FORMULA_PRODUCTION_READINGS`). Read from an optional `VERIFIED_STAGE5_FORMULA_SELECTIONS`
- * export (capability id to matched hypothesis), which no audit writes yet; without it no selection resolves and the shape
- * stays unresolved.
+ * export (capability id to matched hypothesis), which `audit --stage 5 --write --publish-stage5` renders beside the published
+ * set (Task 39); without it no selection resolves and the shape stays unresolved.
  */
 const PUBLISHED_FORMULA_SELECTIONS = Reflect.get(verifiedExports, 'VERIFIED_STAGE5_FORMULA_SELECTIONS') as Readonly<Record<string, string>> | undefined
 let testFormulaSelections: Readonly<Record<string, string>> | null = null

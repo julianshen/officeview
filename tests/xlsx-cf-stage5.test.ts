@@ -198,3 +198,30 @@ describe('formula CF files parse identically on both paths', () => {
     for (const p of paged) expect(p.cf, `${path} ${p.name}`).toEqual(resident.sheets.find(s => s.name === p.name)?.conditionalFormatting)
   }, 120000)
 })
+
+describe('the Stage 5 formula selections travel with the published set (Task 35 parked item)', () => {
+  it('renders VERIFIED_STAGE5_FORMULA_SELECTIONS sorted, in the shape evidence.ts reads', async () => {
+    const { renderFormulaSelectionsBlock } = await import('../scripts/cf-refs/audit')
+    const block = renderFormulaSelectionsBlock({ 'formula:relative-wrap': 'wrap', 'formula:cellis-operand-blank': 'blank-zero' })
+    expect(block).toBe("export const VERIFIED_STAGE5_FORMULA_SELECTIONS: Readonly<Record<string, string>> = {\n  'formula:cellis-operand-blank': 'blank-zero',\n  'formula:relative-wrap': 'wrap',\n}\n")
+    expect(renderFormulaSelectionsBlock({})).toBe('export const VERIFIED_STAGE5_FORMULA_SELECTIONS: Readonly<Record<string, string>> = {\n\n}\n')
+  })
+
+  it('a --write without --publish-stage5 carries the committed Stage 5 set and its selections verbatim, and omits both when absent', async () => {
+    const { renderVerifiedCapabilitiesSource } = await import('../scripts/cf-refs/audit')
+    const current = readFileSync(join(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts'), 'utf8')
+    const s5 = "export const VERIFIED_STAGE5_CAPABILITIES: ReadonlySet<string> = new Set([\n  'formula:relative-wrap',\n])\n"
+    const sel = "export const VERIFIED_STAGE5_FORMULA_SELECTIONS: Readonly<Record<string, string>> = {\n  'formula:relative-wrap': 'wrap',\n}\n"
+    const committed = current.replace(/export const VERIFIED_CAPABILITIES:/, `${s5}\n${sel}\nexport const VERIFIED_CAPABILITIES:`)
+    const out = renderVerifiedCapabilitiesSource(manifest(), REPO_ROOT, { committedSource: committed })
+    expect(out).toContain(s5)
+    expect(out).toContain(sel)
+    expect(out.indexOf(sel)).toBeGreaterThan(out.indexOf(s5))
+    const bare = renderVerifiedCapabilitiesSource(manifest(), REPO_ROOT, { committedSource: current })
+    expect(bare).not.toContain('VERIFIED_STAGE5_FORMULA_SELECTIONS')
+    // An incomplete audit publishes nothing, even when asked (Lesson 4).
+    if (!auditStage5Manifest(manifest(), { rootDir: REPO_ROOT }).stageComplete) {
+      expect(renderVerifiedCapabilitiesSource(manifest(), REPO_ROOT, { committedSource: current, publishStage5: true })).toBe(bare)
+    }
+  }, 120000)
+})

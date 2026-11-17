@@ -990,7 +990,8 @@ export function auditStage5Manifest(manifest: CfManifest, options: { rootDir?: s
  * The reading production implements for each Stage 5 capability (the Stage 4 `CF_STAGE4_PRODUCTION_READINGS` pattern):
  * `CF_FORMULA_PRODUCTION_READINGS` (`src/xlsx/cf/formulaReadings.ts`), the one table production gates on, added by Task 35
  * together with the code and tests that implement each reading (tests/xlsx-cf-formula-rules.test.ts pins every entry to a
- * catalog hypothesis). A list is a selection, read from `VERIFIED_STAGE5_FORMULA_SELECTIONS`, which no render writes yet.
+ * catalog hypothesis). A list is a selection, read from `VERIFIED_STAGE5_FORMULA_SELECTIONS`, which `--publish-stage5` renders
+ * beside the published set (`renderFormulaSelectionsBlock`, Task 39).
  * A capability with a matched reading but no entry (`formula:truth-range`, `formula:fn-today`, ...) is withheld.
  */
 export const CF_STAGE5_PRODUCTION_READINGS: Readonly<Record<string, string | readonly string[]>> = { ...CF_FORMULA_PRODUCTION_READINGS }
@@ -1059,6 +1060,17 @@ export function stage5Publication(report: Stage5AuditReport, readings: Readonly<
 export function renderIconSelectionsBlock(selections: Readonly<Record<string, string>>): string {
   const keys = Object.keys(selections).sort()
   return `export const VERIFIED_STAGE4_ICON_SELECTIONS: Readonly<Record<string, string>> = {\n${keys.map(k => `  '${k}': '${selections[k]}',`).join('\n')}\n}\n`
+}
+
+/** `VERIFIED_STAGE5_FORMULA_SELECTIONS` as `--publish-stage5` renders it beside the Stage 5 set (keys sorted, idempotent). */
+export function renderFormulaSelectionsBlock(selections: Readonly<Record<string, string>>): string {
+  const keys = Object.keys(selections).sort()
+  return `export const VERIFIED_STAGE5_FORMULA_SELECTIONS: Readonly<Record<string, string>> = {\n${keys.map(k => `  '${k}': '${selections[k]}',`).join('\n')}\n}\n`
+}
+
+const exportedFormulaSelections = (text: string | undefined): string | undefined => {
+  const m = text === undefined ? null : /export const VERIFIED_STAGE5_FORMULA_SELECTIONS: [^\n]* = \{\n[\s\S]*?\n?\}\n/.exec(text)
+  return m ? m[0] : undefined
 }
 
 const exportedSelections = (text: string | undefined): string | undefined => {
@@ -1153,6 +1165,8 @@ export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: 
   const stage5Report = options.publishStage5 ? auditStage5Manifest(manifest, { rootDir }) : undefined
   const stage5Gate = stage5Report?.stageComplete ? stage5Publication(stage5Report) : undefined
   const stage5Verified = stage5Gate ? stage5Gate.published : exportedSet(options.committedSource, 'VERIFIED_STAGE5_CAPABILITIES')
+  // Task 39: the matched reading of each published selection capability travels beside the set (evidence.ts reads it).
+  const formulaSelectionsBlock = stage5Gate ? renderFormulaSelectionsBlock(stage5Gate.selections) : exportedFormulaSelections(options.committedSource)
   const list = (ids: readonly string[]): string => ids.map(id => `  '${id}',`).join('\n')
   const allVerified = [...new Set([...stage1Verified, ...stage2Verified, ...(stage3Verified ?? []), ...(stage4Verified ?? []), ...(stage5Verified ?? [])])].sort()
   const block = (name: string, ids: readonly string[]): string => `export const ${name}: ReadonlySet<string> = new Set([\n${list(ids)}\n])\n`
@@ -1163,7 +1177,7 @@ export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: 
  */
 ${block('VERIFIED_STAGE1_CAPABILITIES', stage1Verified)}
 ${block('VERIFIED_STAGE2_CAPABILITIES', stage2Verified)}
-${stage3Verified !== undefined ? `${block('VERIFIED_STAGE3_CAPABILITIES', stage3Verified)}\n` : ''}${stage3Verified !== undefined && autoColoursBlock !== undefined ? `${autoColoursBlock}\n` : ''}${stage3Verified !== undefined && layoutBlock !== undefined ? `${layoutBlock}\n` : ''}${stage3Verified !== undefined && gradientBlock !== undefined ? `${gradientBlock}\n` : ''}${stage3Verified !== undefined && lengthsBlock !== undefined ? `${lengthsBlock}\n` : ''}${stage3Verified !== undefined && borderBlock !== undefined ? `${borderBlock}\n` : ''}${stage3Verified !== undefined && autoBoundsBlock !== undefined ? `${autoBoundsBlock}\n` : ''}${stage4Verified !== undefined ? `${block('VERIFIED_STAGE4_CAPABILITIES', stage4Verified)}\n` : ''}${stage4Verified !== undefined && selectionsBlock !== undefined ? `${selectionsBlock}\n` : ''}${stage5Verified !== undefined ? `${block('VERIFIED_STAGE5_CAPABILITIES', stage5Verified)}\n` : ''}${block('VERIFIED_CAPABILITIES', allVerified)}`
+${stage3Verified !== undefined ? `${block('VERIFIED_STAGE3_CAPABILITIES', stage3Verified)}\n` : ''}${stage3Verified !== undefined && autoColoursBlock !== undefined ? `${autoColoursBlock}\n` : ''}${stage3Verified !== undefined && layoutBlock !== undefined ? `${layoutBlock}\n` : ''}${stage3Verified !== undefined && gradientBlock !== undefined ? `${gradientBlock}\n` : ''}${stage3Verified !== undefined && lengthsBlock !== undefined ? `${lengthsBlock}\n` : ''}${stage3Verified !== undefined && borderBlock !== undefined ? `${borderBlock}\n` : ''}${stage3Verified !== undefined && autoBoundsBlock !== undefined ? `${autoBoundsBlock}\n` : ''}${stage4Verified !== undefined ? `${block('VERIFIED_STAGE4_CAPABILITIES', stage4Verified)}\n` : ''}${stage4Verified !== undefined && selectionsBlock !== undefined ? `${selectionsBlock}\n` : ''}${stage5Verified !== undefined ? `${block('VERIFIED_STAGE5_CAPABILITIES', stage5Verified)}\n` : ''}${stage5Verified !== undefined && formulaSelectionsBlock !== undefined ? `${formulaSelectionsBlock}\n` : ''}${block('VERIFIED_CAPABILITIES', allVerified)}`
 }
 
 /* ---------------- pressure + lifecycle scenarios ---------------- */
