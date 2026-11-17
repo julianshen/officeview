@@ -191,7 +191,10 @@ describe('every registered formula reading is the reading production implements,
           const got = await withInjectedCfEvidence(Object.keys(registry), async () => {
             injectCfFormulaSelections(selections)
             try {
-              const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
+              // A `pre:` observation is what Excel shows on opening the authored input, before any calculate; the saved file is Excel's resave
+              // (its stale values recomputed), so the input is the workbook production must reproduce it on.
+              const file = cfg.refs.some(r => r.startsWith('pre:')) ? (c as unknown as { input: string }).input : c.saved
+              const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, file)))))
               const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
               const cells = cellsOf(cfg)
               const clock = clockFor(c)

@@ -85,6 +85,9 @@ export async function load(bytes: Uint8Array, valuePolicy: ValuePolicy = 'cached
   return { doc, sheet, bytes, sheetId: sheet.sheetId ?? sheet.name }
 }
 export const fixtureBytes = (id: string): Uint8Array => new Uint8Array(readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf', `${id}.xlsx`)))
+/** The authored input of a fixture (what Excel opens before any calculate): `stage5-calc-manual` keeps its stale saved values here, while
+ * the saved file is Excel's resave with them recomputed. */
+export const inputBytes = (id: string): Uint8Array => new Uint8Array(readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/inputs', `${id}.xlsx`)))
 
 /* ------------------------------ observations ------------------------------ */
 

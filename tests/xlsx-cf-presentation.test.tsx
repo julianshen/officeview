@@ -643,12 +643,12 @@ describe('the mounted viewer forwards the context: accessible names and copy (fi
   it('manual calculation: the saved values are announced with the capability, and the rule is withheld without it', async () => {
     const h = await import('./helpers/cf-views')
     await h.withPaint(async () => {
-      const doc = (await h.load(h.fixtureBytes('stage5-calc-manual'), 'cached')).doc
+      const doc = (await h.load(h.inputBytes('stage5-calc-manual'), 'cached')).doc
       expect((await mounted(doc, 'C2')).name).toMatch(APPLIED)
       expect((await mounted(doc, 'C3')).name).not.toMatch(APPLIED)
     })
     await h.withPaint(async () => {
-      const doc = (await h.load(h.fixtureBytes('stage5-calc-manual'), 'cached')).doc
+      const doc = (await h.load(h.inputBytes('stage5-calc-manual'), 'cached')).doc
       expect((await mounted(doc, 'C2')).name).toMatch(UNAVAILABLE)
     }, h.REGISTERED.filter(id => !id.startsWith('formula:calc-manual-')))
   }, 90_000)
@@ -659,7 +659,7 @@ describe('the mounted viewer forwards the context: accessible names and copy (fi
     const { SheetTileRenderer } = await import('../src/components/xlsx/sheetTiles')
     await h.withPaint(async () => {
       // `C:C` is open-ended, so the interactive viewer prepares it per viewport (cfNeedsViewport), not through the asset lease.
-      const l = await h.load(h.workbookBytes({ A2: 1, A3: 2, A4: 3, C2: 1, C3: 2, C4: 3, B2: { f: 'A2*2' }, B3: { f: 'A3*2' }, B4: { f: 'A4*2' } }, h.cfBlock('C:C', h.exprRule('$B1&gt;3', 1, 0))), 'engine')
+      const l = await h.load(h.workbookBytes({ A2: 1, A3: 2, A4: 3, C2: 1, C3: 2, C4: 3, B2: { f: 'A2*2' }, B3: { f: 'A3*2' }, B4: { f: 'A4*2' }, ...Object.fromEntries(Array.from({ length: 300 }, (_, i) => [`B${i + 5}`, 5])) }, h.cfBlock('C:C', h.exprRule('$B1&gt;3', 1, 0))), 'engine')
       const frames: import('../src/components/xlsx/sheetTiles').SheetFrame[] = []
       const present = SheetTileRenderer.prototype.present
       const spy = vi.spyOn(SheetTileRenderer.prototype, 'present').mockImplementation(function (this: InstanceType<typeof SheetTileRenderer>, ctx, frame) { frames.push(frame); return present.call(this, ctx, frame) })
@@ -675,6 +675,14 @@ describe('the mounted viewer forwards the context: accessible names and copy (fi
         await vi.waitFor(() => expect(viewportBatches.length).toBeGreaterThan(0), { timeout: 20_000 })
         expect(viewportBatches[0]?.layer.styleAt(3, 2, undefined)?.fillColor).toBeDefined()
         expect(viewportBatches[0]?.layer.styleAt(1, 2, undefined)?.fillColor).toBeUndefined()
+        // A scroll prepares the next viewport through the component's own effect (the first batch came from the asset lease): its
+        // batch must evaluate the formula under the same context.
+        const before = viewportBatches.length
+        await act(async () => { const scroller = ui.getByTestId('officeview-sheet-scroller'); scroller.scrollTop = 2000; fireEvent.scroll(scroller); await new Promise(r => setTimeout(r, 300)) })
+        await vi.waitFor(() => expect(viewportBatches.length).toBeGreaterThan(before), { timeout: 20_000 })
+        // B holds 5 in every far row, so the rule is true down the scrolled region: the batch the scroll prepared paints some of it.
+        const scrolled = viewportBatches.at(-1)
+        expect(Array.from({ length: 150 }, (_, i) => scrolled?.layer.styleAt(40 + i, 2, undefined)?.fillColor).some(c => c !== undefined)).toBe(true)
         await vi.waitFor(() => expect(frames.some(f => f.assets?.conditionalFormatting?.layer.styleAt(3, 2, undefined)?.fillColor)).toBe(true), { timeout: 20_000 })
         expect(frames.some(f => f.assets?.conditionalFormatting?.layer.styleAt(1, 2, undefined)?.fillColor), 'C2 (B2 = 2, not > 3) never paints').toBe(false)
       } finally { ui.unmount(); spy.mockRestore(); paintSpy.mockRestore() }

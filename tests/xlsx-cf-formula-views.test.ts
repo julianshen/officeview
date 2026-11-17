@@ -18,7 +18,7 @@ import { openImportSession } from '../src/xlsx/storage/pagedImport'
 import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
 import { VERIFIED_CAPABILITIES, injectCfFormulaSelections } from '../src/xlsx/cf/evidence'
 import {
-  refOfRc, formulaBoundsBytes, GREEN, NOW, REGISTERED, firstSelections, RED, UTC_AUTO, cellIsRule, cfBlock, exprRule, fixtureBytes, frameHosts, load, rcOf, residentLeg, staticLeg, textLeg, withPaint, workbookBytes, workerLeg,
+  refOfRc, formulaBoundsBytes, GREEN, NOW, REGISTERED, firstSelections, RED, UTC_AUTO, cellIsRule, cfBlock, exprRule, fixtureBytes, inputBytes, frameHosts, load, rcOf, residentLeg, staticLeg, textLeg, withPaint, workbookBytes, workerLeg,
   type Loaded, type Obs,
 } from './helpers/cf-views'
 
@@ -146,7 +146,7 @@ describe('every route takes one evaluation context or withholds (S5-L, round-1 #
   })
 
   it('a paged manual-mode workbook reports calcMode manual and withholds exactly as the resident one does', async () => {
-    const bytes = fixtureBytes('stage5-calc-manual')
+    const bytes = inputBytes('stage5-calc-manual')
     const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(bytes)]) }, { docId: 'manual-paged', profile: 'D' })
     try {
       await session.done
@@ -347,13 +347,13 @@ describe('manual calculation withholds until measured (S5-L)', () => {
   it('without formula:calc-manual-saved-values every leg withholds; with it every leg follows the saved values', async () => {
     // Saved values 999, 0, 50, 1 against `A2>20`: rows 2 and 4. A recompute (10, 8, 2, 61) would paint row 5 instead.
     await withPaint(async () => {
-      const l = await load(fixtureBytes('stage5-calc-manual'), 'cached')
+      const l = await load(inputBytes('stage5-calc-manual'), 'cached')
       for (const [name, leg] of Object.entries(await legsOf(l, SAVED))) expect(SAVED.map(r => leg.get(r)!.fill), name).toEqual([undefined, undefined, undefined, undefined])
       const text = await textLeg(l, SAVED)
       expect(SAVED.map(r => text.get(r)!.desc)).toEqual(SAVED.map(() => UNAVAILABLE))
     }, REGISTERED_WITHOUT_MANUAL)
     await withPaint(async () => {
-      const l = await load(fixtureBytes('stage5-calc-manual'), 'cached')
+      const l = await load(inputBytes('stage5-calc-manual'), 'cached')
       const legs = await legsOf(l, SAVED)
       for (const [name, leg] of Object.entries(legs)) {
         const f = SAVED.map(r => leg.get(r)!.fill)
@@ -362,12 +362,12 @@ describe('manual calculation withholds until measured (S5-L)', () => {
       for (const leg of Object.values(legs)) expect(fills(leg)).toEqual(fills(legs.static))
     })
     // Production evidence: nothing in Stage 5 is verified, so the same cells withhold.
-    const l = await load(fixtureBytes('stage5-calc-manual'), 'cached')
+    const l = await load(inputBytes('stage5-calc-manual'), 'cached')
     for (const leg of Object.values(await legsOf(l, SAVED))) expect(SAVED.map(r => leg.get(r)!.fill)).toEqual([undefined, undefined, undefined, undefined])
   })
   it('a TODAY() rule under manual calculation stays withheld on every leg even with the saved-values reading and the capability held', async () => {
     await withPaint(async () => {
-      const l = await load(fixtureBytes('stage5-calc-manual'), 'cached')
+      const l = await load(inputBytes('stage5-calc-manual'), 'cached')
       const legs = await legsOf(l, TODAYS)
       for (const [name, leg] of Object.entries(legs)) expect(TODAYS.map(r => leg.get(r)!.fill), name).toEqual([undefined, undefined, undefined, undefined])
       for (const name of ['text', 'textResident', 'worker'] as const) expect(TODAYS.map(r => legs[name].get(r)!.desc), name).toEqual(TODAYS.map(() => UNAVAILABLE))
@@ -593,13 +593,13 @@ describe('the real consumers forward the context: asset preparation and print/ex
     const refs = ['C2', 'C3', 'C4', 'C5']
     let with_ = 0, without = 0
     await withPaint(async () => {
-      const l = await load(fixtureBytes('stage5-calc-manual'), 'cached')
+      const l = await load(inputBytes('stage5-calc-manual'), 'cached')
       const fills = await assetFills(l, refs)
       expect(fills.map(f => f !== undefined)).toEqual([true, false, true, false])
       with_ = await pagePixels(l, RED_RGB)
     })
     await withPaint(async () => {
-      const l = await load(fixtureBytes('stage5-calc-manual'), 'cached')
+      const l = await load(inputBytes('stage5-calc-manual'), 'cached')
       expect(await assetFills(l, refs)).toEqual([undefined, undefined, undefined, undefined])
       without = await pagePixels(l, RED_RGB)
     }, REGISTERED_WITHOUT_MANUAL)
