@@ -377,12 +377,20 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
   // (stage4-icon-glyph-key A1:K42) exceeds one paint batch's grant and refuses atomically (cf-resource-limit).
   const BATCH_ROWS = 8
   const leases: Awaited<ReturnType<typeof oracle.prepareCf>>[] = []
-  for (let r0 = rect.minRow; r0 <= rect.maxRow; r0 += BATCH_ROWS) {
-    leases.push(await oracle.prepareCf(
-      { stamp, sourceRects: [{ firstRow: r0, lastRow: Math.min(rect.maxRow, r0 + BATCH_ROWS - 1), firstCol: rect.minCol, lastCol: rect.maxCol }], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes },
-      source,
-      memory,
-    ))
+  try {
+    for (let r0 = rect.minRow; r0 <= rect.maxRow; r0 += BATCH_ROWS) {
+      leases.push(await oracle.prepareCf(
+        { stamp, sourceRects: [{ firstRow: r0, lastRow: Math.min(rect.maxRow, r0 + BATCH_ROWS - 1), firstCol: rect.minCol, lastCol: rect.maxCol }], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes },
+        source,
+        memory,
+      ))
+    }
+  } catch (error) {
+    // Task 39: a batch production refuses at its admitted grant withholds atomically (the viewer shows base formatting),
+    // as the paged read does; it is recorded per case instead of aborting the whole comparison run.
+    for (const l of leases) l.release()
+    if ((error as { code?: string }).code !== 'resource-limit') throw error
+    return { id: c.id, mode: 'interactive', outcome: 'recipe-pending', reason: `Interactive preparation refused at the admitted batch (${(error as Error).message}); withheld fail-closed, pixel diff awaits Excel viewport refs.`, oracleRef, workbookHash, oracleHash, reads: 1 }
   }
   const lease = {
     value: { at: (row: number, col: number) => leases[Math.floor((row - rect.minRow) / BATCH_ROWS)]!.value.at(row, col) },
