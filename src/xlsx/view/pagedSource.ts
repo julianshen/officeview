@@ -12,7 +12,6 @@
  */
 import { CF_ALL_ROWS, cfSheetNonUniformFontRows } from '../rowFont'
 import { isDateNumberStyle } from '../dateNumberFormat'
-import { cfRulesUseClock } from '../cfLoader'
 import { defaultColumnWidthPx, defaultRowPtOf } from '../columnWidth'
 import type {
   AuthoritativeCell, CellRead, ColumnEntry, ColumnQuery, DrawingAnchor, OverviewGroup, OverviewQuery, Page, PopulatedQuery, RangeCompletion,
@@ -1012,7 +1011,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
         || visualFormulaShape(rule.definition) !== undefined) === true
       const formulaModule = carriesFormula ? await import('../cf/formula') : undefined
       const evaluation = formulaModule?.cfDocumentEvaluationOfPaged(this.workbook)
-      if (formulaModule && evaluation && cfRulesUseClock(liveRules, true)) liveClockGen = formulaModule.cfEvaluationContextFor(evaluation, () => instant).clock.clockGen
+      if (formulaModule && evaluation && liveRules?.clockFree !== true) liveClockGen = formulaModule.cfEvaluationContextFor(evaluation, () => instant).clock.clockGen
       // Ruling S5-K: only a sheet whose rules name another sheet gets the workbook seam (no cross-sheet work otherwise).
       const crossSheet = carriesFormula && liveRules?.rules.some(rule => rule.definition.kind !== 'unresolved' && (rule.definition.dependencySheets?.length ?? 0) > 0) === true
       const workbook = crossSheet ? this.cfWorkbook(account) : undefined
@@ -1028,7 +1027,13 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       }
       // The adopted clock (Ruling S5-M) is part of the request's own stamp too, so the service, the source and the reply agree.
       const effective = request.stamp.clockGen === 0 && liveClockGen !== undefined ? { ...request, stamp: { ...request.stamp, clockGen: liveClockGen } } : request
-      return await prepareCfRemote(effective, this.sheet.sheetId, source, liveRules, account, remoteOptions)
+      // Ruling S5-M: a day the request names that is not the day sampled for this preparation is refused (fail closed); the
+      // viewer re-requests under its advanced stamp at the tick.
+      if (liveClockGen !== undefined && request.stamp.clockGen !== 0 && request.stamp.clockGen !== liveClockGen) {
+        return { ...cfReadError(this.sheet.sheetId, { ...request.stamp, clockGen: liveClockGen }, 'cf-stale-generation', 'cf-stale-source', 'Conditional formatting request names a different day; re-request under the live clock.'), requiredBytes: undefined }
+      }
+      const result = await prepareCfRemote(effective, this.sheet.sheetId, source, liveRules, account, remoteOptions)
+      return result.kind === 'ready' && liveRules?.clockFree === true ? { ...result, clockFree: true } : result
     } finally {
       try { hashHold.release() } catch { /* release-only path */ }
     }

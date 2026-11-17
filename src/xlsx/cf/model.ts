@@ -134,7 +134,9 @@ export interface CfCellState {
   }>
 }
 export interface CfRule { readonly id: number; readonly priority: number; readonly documentOrder: number; readonly ranges: readonly SourceRect[]; readonly stopIfTrue: boolean; readonly writes: CfWriteMask; readonly definition: CfDefinition; readonly dxf?: CfCellState['properties'] }
-export interface CfSheetRules { readonly rules: readonly CfRule[]; readonly unresolvedSheet?: Readonly<{ reason: string; writes: 'ALL' }>; readonly diagnostics: readonly CfDiagnostic[] }
+/** `clockFree`: the parse's fact that no rule reads the clock (Ruling S5-M); absent means "may read it", the safe default, so a
+ * hand-built or foreign value is simply ticked at midnight. */
+export interface CfSheetRules { readonly rules: readonly CfRule[]; readonly unresolvedSheet?: Readonly<{ reason: string; writes: 'ALL' }>; readonly diagnostics: readonly CfDiagnostic[]; readonly clockFree?: true }
 export interface CfDiagnostic { kind: 'unsupported' | 'parse'; feature: `cf-${string}`; message: string }
 export interface CfLease<T> { readonly value: T; readonly bytes: number; release(): void; transfer(memory: CfMemory): CfOutcome<CfLease<T>> }
 /** `pendingSheetIds` (Task 36): referenced sheets still importing when this preparation ran; its cells reading them are
@@ -171,6 +173,18 @@ export function cfDefinitionFormulas(definition: CfDefinition): readonly CfFormu
   const activation = definition.kind === 'colorScale' || definition.kind === 'dataBar' || definition.kind === 'iconSet' ? definition.activation : undefined
   if (bounds.length === 0 && !activation) return []
   return [...bounds.map(b => b.formula), ...(activation ? [activation] : [])]
+}
+
+/**
+ * Whether any rule reads the clock (Ruling S5-M, M2): a `timePeriod` rule or a formula that calls `TODAY()` (an expression, a
+ * `cellIs` operand, a cfvo bound or an activation). `formulasOnly` leaves the `timePeriod` rules out. Computed once at parse and
+ * published as `CfSheetRules.clockFree`; the viewer never walks the rules itself.
+ */
+export function cfRulesUseClock(rules: Readonly<{ rules: readonly Pick<CfRule, 'definition'>[] }>, formulasOnly = false): boolean {
+  for (const { definition } of rules.rules) {
+    if (definition.kind === 'timePeriod' ? !formulasOnly : cfDefinitionFormulas(definition).some(f => f.usesClock)) return true
+  }
+  return false
 }
 
 /** The formula bounds of a visual definition in cfvo order (empty for every other kind). */

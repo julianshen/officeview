@@ -413,6 +413,8 @@ export class RemoteWorkbook implements WorkbookSource {
    * held versions survive until their last release. */
   /** Ruling S5-K: how many times the sheet's CF went stale through a referenced sheet (a live-key input). */
   cfDependencyEpoch(sheetId: string): number { return this.cfCache?.dependencyEpoch(sheetId) ?? 0 }
+  /** Ruling S5-M: the sheet's rules never read the clock (learned from a ready reply; false until then). */
+  cfClockFree(sheetId: string): boolean { return this.cfCache?.clockFree(sheetId) ?? false }
   /** A live CF scope's hold on the sheets its copied states read (Task 36 fix round 2, #4); null when refused. */
   retainCfDependencies(sheetId: string, dependencies: readonly { sheetId: string }[]): (() => void) | null { return this.conditionalFormats().retainDependencies(sheetId, dependencies) }
   invalidateCf(sheetId: string, rects?: readonly SourceRect[]): void {

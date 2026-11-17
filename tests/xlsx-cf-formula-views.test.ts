@@ -15,9 +15,10 @@ import { createCfMemory } from '../src/xlsx/cf/limits'
 import { cfRulesVersion, prepareCfRemote } from '../src/xlsx/view/pagedSource'
 import { residentSource } from '../src/xlsx/cf/render'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
+import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
 import { VERIFIED_CAPABILITIES, injectCfFormulaSelections } from '../src/xlsx/cf/evidence'
 import {
-  formulaBoundsBytes, GREEN, NOW, REGISTERED, firstSelections, RED, UTC_AUTO, cellIsRule, cfBlock, exprRule, fixtureBytes, frameHosts, load, rcOf, residentLeg, staticLeg, textLeg, withPaint, workbookBytes, workerLeg,
+  refOfRc, formulaBoundsBytes, GREEN, NOW, REGISTERED, firstSelections, RED, UTC_AUTO, cellIsRule, cfBlock, exprRule, fixtureBytes, frameHosts, load, rcOf, residentLeg, staticLeg, textLeg, withPaint, workbookBytes, workerLeg,
   type Loaded, type Obs,
 } from './helpers/cf-views'
 
@@ -55,7 +56,7 @@ const REFS = [...CONTROL_CELLS, ...FORMULA_CELLS]
 /** A2:A6 = 10..50 under a Stage 1 cellIs (>25 green); B2:B6 = `A*2` formulas with NO cached value; C2:C6 holds the formula
  * rule `$B2>50` (red), whose footprint is the uncached column: true on rows 4-6 where the engine value is known. */
 const policyBytes = (): Uint8Array => workbookBytes(
-  { A2: 10, A3: 20, A4: 30, A5: 40, A6: 50, B2: { f: 'A2*2' }, B3: { f: 'A3*2' }, B4: { f: 'A4*2' }, B5: { f: 'A5*2' }, B6: { f: 'A6*2' } },
+  { A2: 10, A3: 20, A4: 30, A5: 40, A6: 50, C2: 0, C3: 0, C4: 0, C5: 0, C6: 0, B2: { f: 'A2*2' }, B3: { f: 'A3*2' }, B4: { f: 'A4*2' }, B5: { f: 'A5*2' }, B6: { f: 'A6*2' } },
   cfBlock('C2:C6', exprRule('$B2&gt;50', 1, 0)) + cfBlock('A2:A6', cellIsRule('greaterThan', '25', 2, 1)))
 
 describe('every route takes one evaluation context or withholds (S5-L, round-1 #5)', () => {
@@ -189,7 +190,7 @@ const unixDay = (epochMs: number, zone: string): number => {
 /** Rows 2-6 hold the date serials of today-2 .. today+2 (UTC date of NOW); C holds `=$A2=TODAY()`, D `=$A2<NOW()`. */
 const SERIAL_NOW = Math.floor(NOW / 86_400_000) + 25569
 const clockBytes = (): Uint8Array => workbookBytes(
-  Object.fromEntries([-2, -1, 0, 1, 2].map((d, i) => [`A${i + 2}`, SERIAL_NOW + d])),
+  { ...Object.fromEntries([-2, -1, 0, 1, 2].map((d, i) => [`A${i + 2}`, SERIAL_NOW + d])), ...Object.fromEntries([2, 3, 4, 5, 6].map(r => [`C${r}`, 0])) },
   cfBlock('C2:C6', exprRule('$A2=TODAY()', 1, 0)) + cfBlock('D2:D6', exprRule('$A2&lt;NOW()', 2, 1)))
 const CLOCK_REFS = ['C2', 'C3', 'C4', 'C5', 'C6']
 const preparedStamps: Array<{ clockGen: number; clock: { epochNowMs: number; clockGen: number } | undefined; dateEpoch: number | undefined }> = []
@@ -283,6 +284,39 @@ describe('one clock per preparation on every leg (S5-M)', () => {
       const same = await staticLeg(l, DUAL_REFS, { now: () => FAR, dateContext: agreeing })
       expect(same.get('C4')!.fill, 'an agreeing override is the same clock').toBe(RED)
     })
+  })
+
+  it('the worker refuses a request that names another day than the one it sampled, adopts an unknown one, and leaves a clock-free sheet alone (fix round 1 #3)', async () => {
+    const read = async (bytes: Uint8Array, clockGen: number, ref: string, now: number) => {
+      const l = await load(bytes, 'cached')
+      const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(l.bytes)]) }, { docId: `stale-${Math.random()}`, profile: 'D' })
+      try {
+        await session.done
+        const source = createPagedWorkbookSource(session), sheetId = source.sheets[0]!.sheetId, store = source.store(sheetId)
+        const { row, col } = rcOf(ref)
+        return await store.readConditionalFormatting!({ rects: [{ r0: row, r1: row, c0: col, c1: col }], stamp: { owner: 'v', sheetId, workbookValueGen: store.stamp.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen }, grantBytes: 8 * 1024 * 1024 }, createCfMemory(), { signal: new AbortController().signal, now: () => now } as never)
+      } finally { await session.release() }
+    }
+    await withPaint(async () => {
+      const day = unixDay(NOW, 'UTC')
+      // A TODAY() sheet: yesterday's stamp, evaluated today: refused, naming the live day (a nonzero stamp is never echoed unchecked).
+      const stale = await read(clockBytes(), day - 1, 'C4', NOW)
+      expect(stale.kind).toBe('unresolved'); expect(stale.reason).toBe('cf-stale-generation'); expect(stale.stamp.clockGen).toBe(day)
+      expect(stale.states).toEqual([])
+      const same = await read(clockBytes(), day, 'C4', NOW)
+      expect(same.kind).toBe('ready'); expect(same.stamp.clockGen).toBe(day)
+      expect((same as { clockFree?: true }).clockFree, 'a clock sheet never claims to be clock-free').toBeUndefined()
+      const unknown = await read(clockBytes(), 0, 'C4', NOW)
+      expect(unknown.kind).toBe('ready'); expect(unknown.stamp.clockGen).toBe(day)
+      // Across midnight: the same request, an instant later, names the old day and is refused; the advanced stamp reads.
+      const lateStamp = await read(clockBytes(), day, 'C4', NOW + 86_400_000)
+      expect(lateStamp.reason).toBe('cf-stale-generation'); expect(lateStamp.stamp.clockGen).toBe(day + 1)
+      expect((await read(clockBytes(), day + 1, 'C4', NOW + 86_400_000)).kind).toBe('ready')
+      // A clock-free sheet: any stamp is echoed and the reply says it never reads the clock.
+      const free = await read(policyBytes(), 12345, 'A4', NOW)
+      expect(free.kind).toBe('ready'); expect(free.stamp.clockGen).toBe(12345)
+      expect((free as { clockFree?: true }).clockFree).toBe(true)
+    }, REGISTERED_WITHOUT_MANUAL)
   })
 
   it('a sheet without a clock-dependent formula keeps its stamp clock-free on every leg', async () => {
@@ -501,4 +535,126 @@ describe('blank cells match formula rules in every view (Stage 1 B2/Z5 pattern, 
     expect(refs.map(r => worker.scope.get(r)!.desc)).toEqual([UNAVAILABLE, UNAVAILABLE])
   })
 })
+
+/* ------------------------------------------------------------------ */
+/* The real consumers (fix round 1 #5): asset preparation, print and    */
+/* export, and the worker's search; positive and withholding for policy, */
+/* manual calculation, the clock and a second sheet.                    */
+/* ------------------------------------------------------------------ */
+
+import { createCanvas } from 'canvas'
+import { getPaintables } from '../src/render/paint'
+import { DocumentSession } from '../src/worker/viewerSession'
+
+/** The CF fill a sheet's assets give each ref (`prepareSheetAssets`: the interactive and print asset path). */
+async function assetFills(l: Loaded, refs: readonly string[], sheetIndex = 0): Promise<Array<string | undefined>> {
+  const { prepareSheetAssets } = await import('../src/components/xlsx/sheetAssets')
+  const lease = await prepareSheetAssets(l.doc, { sheetIndex })
+  try { return refs.map(r => { const { row, col } = rcOf(r); return lease.assets.conditionalFormatting?.layer.styleAt(row, col, undefined)?.fillColor }) } finally { lease.dispose() }
+}
+/** How many pixels of the print/export page (`getPaintables`) carry the DXF fill `rgb`. */
+async function pagePixels(l: Loaded, rgb: readonly [number, number, number], page = 0): Promise<number> {
+  const pages = await getPaintables(l.doc)
+  try {
+    const canvas = createCanvas(pages[page]!.spec.widthPx, pages[page]!.spec.heightPx), ctx = canvas.getContext('2d')
+    pages[page]!.paint(ctx as unknown as CanvasRenderingContext2D)
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data
+    let n = 0
+    for (let i = 0; i < data.length; i += 4) if (data[i] === rgb[0] && data[i + 1] === rgb[1] && data[i + 2] === rgb[2]) n++
+    return n
+  } finally { pages.dispose() }
+}
+const RED_RGB = [0xff, 0xc7, 0xce] as const
+
+describe('the real consumers forward the context: asset preparation and print/export (fix round 1 #5)', () => {
+  it('policy: an uncached footprint evaluates under the engine policy and is withheld under the cached one, on assets and on the page', async () => {
+    await withPaint(async () => {
+      const engine = await load(policyBytes(), 'engine'), cached = await load(policyBytes(), 'cached')
+      expect(await assetFills(engine, FORMULA_CELLS)).toEqual([undefined, undefined, RED, RED, RED])
+      expect(await assetFills(cached, FORMULA_CELLS)).toEqual([undefined, undefined, undefined, undefined, undefined])
+      expect(await pagePixels(engine, RED_RGB)).toBeGreaterThan(500)
+      expect(await pagePixels(cached, RED_RGB)).toBe(0)
+    })
+  })
+  it('clock: TODAY() follows the wall clock the consumer samples, and moves with it', async () => {
+    await withPaint(async () => {
+      const l = await load(clockBytes(), 'cached')
+      vi.useFakeTimers({ toFake: ['Date'], now: NOW })
+      try {
+        expect(await assetFills(l, CLOCK_REFS), 'today').toEqual([undefined, undefined, RED, undefined, undefined])
+        const page = await pagePixels(l, RED_RGB)
+        expect(page).toBeGreaterThan(100)
+        vi.setSystemTime(NOW + 86_400_000)
+        expect(await assetFills(l, CLOCK_REFS), 'tomorrow').toEqual([undefined, undefined, undefined, RED, undefined])
+      } finally { vi.useRealTimers() }
+    }, REGISTERED_WITHOUT_MANUAL)
+  })
+  it('manual calculation: the saved values are read with the capability and the rule is withheld without it, on assets and on the page', async () => {
+    const refs = ['C2', 'C3', 'C4', 'C5']
+    let with_ = 0, without = 0
+    await withPaint(async () => {
+      const l = await load(fixtureBytes('stage5-calc-manual'), 'cached')
+      const fills = await assetFills(l, refs)
+      expect(fills.map(f => f !== undefined)).toEqual([true, false, true, false])
+      with_ = await pagePixels(l, RED_RGB)
+    })
+    await withPaint(async () => {
+      const l = await load(fixtureBytes('stage5-calc-manual'), 'cached')
+      expect(await assetFills(l, refs)).toEqual([undefined, undefined, undefined, undefined])
+      without = await pagePixels(l, RED_RGB)
+    }, REGISTERED_WITHOUT_MANUAL)
+    // The fixture's Stage 1 rule paints either way; the two formula cells on the page are the difference.
+    expect(with_ - without, 'two formula cells of the page').toBeGreaterThan(1000)
+  })
+  it('cross-sheet: the referenced sheet is read when the document carries it and the rule is withheld when it does not', async () => {
+    const id = 'stage5-cross-sheet'
+    await withPaint(async () => {
+      const l = await load(fixtureBytes(id), 'cached', 'Sheet1')
+      const refs = markedCells(id)
+      const withBook = await assetFills(l, refs)
+      expect(withBook.filter(f => f !== undefined).length).toBeGreaterThan(3)
+      const withPage = await pagePixels(l, RED_RGB)
+      // The same sheet in a document that does not carry the others: nothing to read, nothing painted.
+      const alone: Loaded = { ...l, doc: { ...l.doc, sheets: [l.sheet] } }
+      expect(await assetFills(alone, refs)).toEqual(refs.map(() => undefined))
+      expect(withPage - await pagePixels(alone, RED_RGB), 'the cross-sheet cells of the page').toBeGreaterThan(1000)
+    })
+  })
+})
+
+describe('the worker\'s search finds the text a formula rule formats, and the base text without it (fix round 1 #5)', () => {
+  /** C2:C4 hold 1, 2, 3 under `=$A2>1` (the footprint is A, cached numbers) and E2:E4 hold 1, 2, 3 under `=$B2>3` (the footprint is
+   * B, a formula column with saved values, or without them on the uncached variant); both with the 0.00 DXF. */
+  const searchBytes = (savedB: boolean): Uint8Array => workbookBytes({ A2: 1, A3: 2, A4: 3, C2: 1, C3: 2, C4: 3, E2: 1, E3: 2, E4: 3,
+    B2: { f: 'A2*2', ...(savedB ? { v: 2 } : {}) }, B3: { f: 'A3*2', ...(savedB ? { v: 4 } : {}) }, B4: { f: 'A4*2', ...(savedB ? { v: 6 } : {}) } },
+    cfBlock('C2:C4', exprRule('$A2&gt;1', 1, 2)) + cfBlock('E2:E4', exprRule('$B2&gt;3', 2, 2)))
+  const found = async (bytes: Uint8Array, text: string, now = NOW): Promise<string[]> => {
+    void now
+    {
+      const docId = `search-${Math.random()}`
+      const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(bytes)]) }, { docId, profile: 'D' })
+      try {
+        await session.done
+        const worker = new DocumentSession(docId, createPagedWorkbookSource(session))
+        try {
+          // The owner moves while the import settles its formula values: search under the live one.
+          let result = await worker.search(worker.workbookOwner(), { text, caseSensitive: false }, undefined, new AbortController().signal)
+          for (let i = 0; i < 5 && !('hits' in result) && (result as { kind?: string }).kind === 'stale'; i++) result = await worker.search(worker.workbookOwner(), { text, caseSensitive: false }, undefined, new AbortController().signal)
+          if (!('hits' in result)) throw new Error('search did not complete: ' + JSON.stringify(result).slice(0, 300))
+          return result.hits.map(h => `${refOfRc(h.source.row, h.source.col)}=${h.text}`).sort()
+        } finally { await worker.release() }
+      } finally { await session.release() }
+    }
+  }
+  it('the formatted "2.00" is found with the evidence and never without it; an uncached footprint is withheld (policy)', async () => {
+    expect(await found(searchBytes(true), '2.00'), 'production evidence: base text').toEqual([])
+    await withPaint(async () => {
+      expect(await found(searchBytes(true), '2.00'), 'cached footprint, saved values').toEqual(['C3=2.00', 'E3=2.00'])
+      expect(await found(searchBytes(true), '3.00')).toEqual(['C4=3.00', 'E4=3.00'])
+      // An uncached formula value on the cached policy: the scan batch that reads it fails closed whole (base text), never a guess.
+      expect(await found(searchBytes(false), '2.00'), 'uncached footprint on the cached policy').toEqual([])
+    })
+  })
+})
+
 void NOW; void RED; void frameHosts; void rcOf; void ({} as Loaded); void ({} as CfDocumentEvaluation); void GREEN; void cfDocumentEvaluationOfPaged

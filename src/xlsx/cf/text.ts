@@ -24,7 +24,7 @@ import { describeCfUnavailable, describeCfWin, type CfDescriptor } from './descr
 import { barPaintable, barWithheld, paintDataBars, type CfBarHost } from './dataBarPaint'
 import { admitBatchGlyphs, cfHidesText, iconPaintsOn, iconTextInset, paintIconCells, type CfAdmittedGlyphs, type CfIconGate } from './iconPaint'
 import { PackageError } from '../../core/package-error'
-import { cfRulesUseClock } from '../cfLoader'
+import { cfRulesUseClock } from './model'
 
 const refused = (message: string): PackageError => new PackageError('resource-limit', message)
 

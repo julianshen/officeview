@@ -359,3 +359,32 @@ it('delayed preparation suppresses same-key concurrency, aborts on key change, a
   await execB
   expect(published).toEqual({ key: 'B', id: 2 })
 })
+
+describe('the midnight tick reaches a worker-backed sheet only when its rules may read the clock (S5-M, fix round 1 #4)', () => {
+  /** Mounts one paged sheet under a clock 10 s before local midnight; resolves with the CF reads that name the day the clock
+   * ticked to (a settle-timeout re-read under the same day is not the tick's). */
+  async function readsAcrossMidnight(afterSheetData: string): Promise<{ today: number; tomorrow: number }> {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'], now: new Date(2026, 5, 10, 23, 59, 50) })
+    const port = workerPort()
+    const bytes = xlsxBytes({ sheetData: CF_SHEET_DATA + '<row r="2"><c r="A2"><v>2</v></c></row>', styles: CF_STYLES, afterSheetData })
+    const ui = render(<OfficeFile data={new Blob([new Uint8Array(bytes).buffer])} interactiveSheets viewerWorker={() => port} />)
+    const days = () => port.requests.filter((r: any) => r.query?.op === 'conditionalFormatting').map((r: any) => r.query.stamp.clockGen as number)
+    try {
+      await vi.waitFor(() => expect(days().length).toBeGreaterThan(1), { timeout: 30_000 })
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+      const first = days()[0]!
+      await act(async () => { await vi.advanceTimersByTimeAsync(15_000) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+      return { today: days().filter(d => d === first).length, tomorrow: days().filter(d => d !== first).length }
+    } finally { ui.unmount(); vi.useRealTimers() }
+  }
+  const FREE = '<conditionalFormatting sqref="A1:A2"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>1</formula></cfRule></conditionalFormatting>'
+  const CLOCK = '<conditionalFormatting sqref="A1:A2"><cfRule type="timePeriod" timePeriod="today" dxfId="0" priority="1"><formula>FLOOR(A1,1)=TODAY()</formula></cfRule></conditionalFormatting>'
+  it('a clock-free worker sheet issues no CF read at midnight; a timePeriod sheet reads again', async () => {
+    const free = await readsAcrossMidnight(FREE)
+    expect(free.today).toBeGreaterThan(0)
+    expect(free.tomorrow, 'zero preparations across the tick').toBe(0)
+    const clock = await readsAcrossMidnight(CLOCK)
+    expect(clock.tomorrow, 'the clock sheet re-reads under the new day').toBeGreaterThan(0)
+  }, 120_000)
+})

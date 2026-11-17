@@ -624,6 +624,44 @@ describe('CF remote cache (viewerRemoteCf)', () => {
   }
   const flush = () => new Promise(r => setTimeout(r, 0))
 
+  it('a request naming yesterday is refused by the worker and fails closed; the advanced stamp then reads (S5-M, fix round 1 #3)', async () => {
+    const STALE = 20772, LIVE = 20773
+    // A correct worker: the live day is LIVE; any other non-zero day gets the stale reply under the live stamp.
+    const host = testHost({ respond: async (command: CommandOf<'read'>) => {
+      const q = command.query as { stamp: CfReadStamp }
+      const stale = q.stamp.clockGen !== 0 && q.stamp.clockGen !== LIVE
+      const result = stale
+        ? wireResult({ kind: 'unresolved', reason: 'cf-stale-generation', stamp: { ...q.stamp, clockGen: LIVE }, states: [], definitions: [], diagnostics: [{ kind: 'resource-limit', feature: 'cf-stale-source', message: 'names a different day' }] })
+        : wireResult({ stamp: { ...q.stamp } })
+      return cfReply(result, 1024, command.requestId, identity())
+    } })
+    const cache = new RemoteCfCache(host)
+    const old = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1, { clockGen: STALE }))
+    await flush()
+    expect(old.state.state, 'a stale day never paints').not.toBe('ready')
+    expect(old.state.result?.kind === 'ready' ? old.state.result.states.length : 0).toBe(0)
+    const live = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1, { clockGen: LIVE }))
+    await flush()
+    expect(live.state.state, 'the advanced stamp reads').toBe('ready')
+    old.release(); live.release(); cache.close()
+  })
+
+  it('learns a sheet\'s clock fact from a ready reply: unknown and absent both mean the tick applies (S5-M, fix round 1 #4)', async () => {
+    let free = true
+    const host = testHost({ respond: async (command: CommandOf<'read'>) => {
+      const q = command.query as { stamp: CfReadStamp }
+      return cfReply(wireResult({ stamp: { ...q.stamp }, ...(free ? { clockFree: true as const } : {}) }), 1024, command.requestId, identity())
+    } })
+    const cache = new RemoteCfCache(host)
+    expect(cache.clockFree(SHEET), 'unknown').toBe(false)
+    const a = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1)); await flush()
+    expect(cache.clockFree(SHEET), 'a reply that says clock-free').toBe(true)
+    free = false
+    const b = cache.acquire(SHEET, [rect(1, 1)], cfStamp(1, { viewGen: 2 })); await flush()
+    expect(cache.clockFree(SHEET), 'a reply without the fact').toBe(false)
+    a.release(); b.release(); cache.close()
+  })
+
   it.each(['structure', 'grant', 'failure'] as const)('wakes a pinned waiting entry after %s without reacquiring', async reason => {
     const host=testHost(), originalGrant=host.grant
     if(reason==='grant')host.grant=()=>null

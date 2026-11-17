@@ -442,6 +442,9 @@ export interface CfReadResult {
    * 16, priced by the payload measurer with the rest of the reply). The receiver's entry is current only while each
    * listed sheet keeps that `valueGen`. Absent when no rule names another sheet. */
   readonly dependencies?: readonly Readonly<{ sheetId: string; valueGen: number }>[]
+  /** Ruling S5-M: the parse's fact that this sheet's rules never read the clock (S5-R: one bounded boolean on a ready reply, 15 B
+   * when present and none otherwise; the main thread reads no rule data). Absent means "may read it": the midnight tick applies. */
+  readonly clockFree?: true
 }
 /** Reply envelope accounted on top of every CF read reply: the kernel-added
  * command/owner/request/stamp framing around the payload (a 1,042 B empty

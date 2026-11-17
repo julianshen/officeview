@@ -281,6 +281,9 @@ export class RemoteCfCache {
   }
   /** Bumped at each dependency invalidation of a sheet: the view's live key reads it, so a held scope is replaced. */
   private readonly dependencyEpochs = new Map<string, number>()
+  private readonly clockFacts = new Map<string, boolean>()
+  /** True once a ready reply of this sheet said its rules never read the clock; false while unknown (the tick applies). */
+  clockFree(sheetId: string): boolean { return this.clockFacts.get(sheetId) === true }
   dependencyEpoch(sheetId: string): number { return this.dependencyEpochs.get(sheetId) ?? 0 }
   /**
    * Charged `dependency -> host` registrations (fix round 2, #4), each owned by the published entries and live
@@ -945,6 +948,8 @@ export class RemoteCfCache {
       entry.diagnostics = [...result.diagnostics]
       entry.pendingSheetIds = undefined
       entry.retried = false
+      // Ruling S5-M: learn the sheet's clock fact (a ready reply says it; absent means the sheet may read the clock).
+      this.clockFacts.set(sheetId, result.clockFree === true); 
       entry.state = 'ready'
       entry.gen++
       this.deferChanged(sheetId, entry.rects, 'updated')

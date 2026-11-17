@@ -109,7 +109,7 @@ import { initialOrigin, paneLogicalBoxes, paneRegions, visibleSpans } from '../.
 import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS, SIZED_DRAWING_BYTES, axisUpperBytes, cellFont, type SessionSizes } from '../../xlsx/view/axisSizes'
 import { columnWidthPx } from '../../xlsx/columnWidth'
 import { AutoFitRefusedError, autoFitSize, createFitMeasure, resizeRegion, type ResizeRequest } from './sheetResize'
-import { ensureConditionalFormatting, cfNeedsViewport, cfRulesUseClock, CF_PAINT_BATCH_CELLS } from '../../xlsx/cfLoader'
+import { ensureConditionalFormatting, cfNeedsViewport, CF_PAINT_BATCH_CELLS } from '../../xlsx/cfLoader'
 import { tileLogicalBox, tileRangeFor, TILE_PREFETCH_RING } from '../../xlsx/view/tileCache'
 import { sparklineInvalidationBox } from '../../xlsx/view/sparklineInvalidation'
 import type { ValueOverlay } from '../../xlsx/view/contracts'
@@ -1073,11 +1073,16 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // actual projected panes; the existing asset-swap path invalidates their tiles.
   const cfRules = entry?.sheet.conditionalFormatting
   const cfTextGen = useMemo(() => (!remote && cfRules ? cfRulesVersion(cfRules) : 0), [remote, cfRules])
-  // Ruling S5-M (M2): the midnight tick keys only the sheets whose rules read the clock (a `timePeriod` rule, a formula that calls
-  // TODAY()), so a clock-free sheet is never prepared again at midnight. A worker-backed sheet has no rule data on this thread and
-  // keeps the tick (a conservative re-preparation, never a stale paint).
-  const tickGen = cfRules && !cfRulesUseClock(cfRules) ? 0 : clockGen
   const hasRemoteCf = !!remote && !!activeSheetId && remote.layout(activeSheetId).hasConditionalFormatting === true
+  // Ruling S5-M (M2): the midnight tick reaches only a sheet whose rules may read the clock. The parse publishes the fact on the
+  // rules (`clockFree`, resident) and each ready worker reply carries it (remote); absent means "may read it". Every sheet holds the
+  // day its keys and stamps name; a sheet not (yet) known to be clock-free follows the clock, a clock-free one keeps its day, so
+  // learning the fact moves nothing and the tick reaches only the others.
+  const appliedDays = useRef(new Map<string, number>()).current
+  const clockFree = cfRules ? cfRules.clockFree === true : hasRemoteCf && remote!.cfClockFree(activeSheetId)
+  const dayKey = activeSheetId ?? ''
+  if (!clockFree || !appliedDays.has(dayKey)) appliedDays.set(dayKey, clockGen)
+  const tickGen = appliedDays.get(dayKey)!
   const scopedCf = cfRules ? cfNeedsViewport(entry!.sheet) : false
   const cfViewport = (scopedCf || hasRemoteCf) && entry && scroll ? { metrics: entry.metrics, boxes: paneLogicalBoxes(scroll.frozen, scroll.logicalOrigin, scroll.zoom, viewport).map(box => {
     const range = tileRangeFor({origin:box,viewport:{width:box.width*scroll.zoom,height:box.height*scroll.zoom},zoom:scroll.zoom,dpr,extent:{width:entry.metrics.cols.totalCss(),height:entry.metrics.rows.totalCss()}},TILE_PREFETCH_RING)
@@ -1180,7 +1185,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       async chunk => {
         if (!current()) return { result: undefined, release: () => {} }
         const stamp = {
-          owner: identity.docId, sheetId, workbookValueGen: identity.valueGen, cfGen: 0, viewGen: identity.viewGen, structureGen, clockGen,
+          owner: identity.docId, sheetId, workbookValueGen: identity.valueGen, cfGen: 0, viewGen: identity.viewGen, structureGen, clockGen: tickGen,
         }
         let held = remote.acquireCfPreparation(sheetId, chunk, stamp, batchSignal)
         // A failed entry never reloads on its own, so a churn-time refusal
@@ -1446,7 +1451,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const scope=currentRemotePaint?.scope
     if(!remote || !scope || !activeSheetId || !cfLiveKey || remote.isClosed)return undefined
     const id=remote.identity(activeSheetId)
-    return {key:cfLiveKey,stamp:{owner:id.docId,sheetId:activeSheetId,workbookValueGen:id.valueGen,cfGen:scope.gen,viewGen:id.viewGen,structureGen:remote.merges(activeSheetId).gen,clockGen},
+    return {key:cfLiveKey,stamp:{owner:id.docId,sheetId:activeSheetId,workbookValueGen:id.valueGen,cfGen:scope.gen,viewGen:id.viewGen,structureGen:remote.merges(activeSheetId).gen,clockGen:tickGen},
       layer:scope.paintLayer ?? {rects:scope.regions??[],retainedBytes:0,styleAt:scope.effectiveStyle},
       // The lazy scope's bar painter (Task 22): the paged view paints exactly the bars the wire carried.
       barAt:(row:number,col:number)=>scope.barAt?.(row,col),

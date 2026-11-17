@@ -57,6 +57,7 @@ import {
   type CfTimePeriod,
   type CfWriteMask,
 } from './model'
+import { cfRulesUseClock } from './model'
 import { X14_MAIN_NS } from '../tableStyles/parseStylesExtras'
 
 export const XM_MAIN_NS = 'http://schemas.microsoft.com/office/excel/2006/main'
@@ -2422,8 +2423,8 @@ function finalizeCollected(
     let diagBytes = 0
     for (const d of published) diagBytes += 192 + d.feature.length * 2 + d.message.length * 2
     let value: CfSheetRules = fin.sentinel
-      ? { rules: [], unresolvedSheet: { reason: fin.sentinel.reason, writes: 'ALL' }, diagnostics: published }
-      : { rules: fin.rules, diagnostics: published }
+      ? { rules: [], unresolvedSheet: { reason: fin.sentinel.reason, writes: 'ALL' }, diagnostics: published, clockFree: true }
+      : { rules: fin.rules, diagnostics: published, ...(cfRulesUseClock({ rules: fin.rules }) ? {} : { clockFree: true as const }) }
     // Never underprice the transfer: the adopted charge covers the computed
     // model and at least the repository's measured payload for the same value.
     // Skip outcomes have a fixed tiny shape already covered by `computed`: when
@@ -2456,7 +2457,7 @@ function finalizeCollected(
       const republished = diagHandle.entries.map(d => ({ ...d }))
       let reBytes = 0
       for (const d of republished) reBytes += 192 + d.feature.length * 2 + d.message.length * 2
-      value = { rules: [], unresolvedSheet: { reason: 'cf-resource-limit', writes: 'ALL' }, diagnostics: republished }
+      value = { rules: [], unresolvedSheet: { reason: 'cf-resource-limit', writes: 'ALL' }, diagnostics: republished, clockFree: true }
       const skipMeasured = measureCfPayload(value, memory)
       adoptBytes = Math.max(reBytes + 256, skipMeasured.kind === 'ready' ? skipMeasured.value : 0)
     }

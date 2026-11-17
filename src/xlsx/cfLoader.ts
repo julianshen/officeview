@@ -108,24 +108,3 @@ export function canRuleMatchBlanks(rule: Pick<CfRule, 'definition'>): boolean {
   return false
 }
 
-/**
- * Whether any rule of a sheet reads the clock (Ruling S5-M, M2): a formula that calls `TODAY()` (a `cellIs` operand, an
- * expression, a cfvo bound or an activation) and, unless `formulasOnly`, a `timePeriod` rule. Plain data only, so the
- * interactive midnight tick and the stamps decide it without loading the evaluator: a sheet with no such rule never sees
- * the tick, and keeps a clock-free stamp.
- */
-export function cfRulesUseClock(rules: { readonly rules: readonly Pick<CfRule, 'definition'>[] } | undefined, formulasOnly = false): boolean {
-  const clocked = (f: { readonly usesClock?: boolean } | undefined): boolean => f?.usesClock === true
-  const bound = (b: { readonly type: string; readonly formula?: { readonly usesClock?: boolean } }): boolean => b.type === 'formula' && clocked(b.formula)
-  for (const { definition: d } of rules?.rules ?? []) {
-    switch (d.kind) {
-      case 'timePeriod': if (!formulasOnly) return true; break
-      case 'expression': if (clocked(d.formula)) return true; break
-      case 'cellIs': if (d.operands.some(o => 'formula' in o && clocked(o.formula))) return true; break
-      case 'colorScale': if (d.points.some(p => bound(p.bound as never)) || clocked(d.activation)) return true; break
-      case 'dataBar': if (d.bounds.some(b => bound(b as never)) || clocked(d.activation)) return true; break
-      case 'iconSet': if (d.thresholds.some(t => bound(t.bound as never)) || clocked(d.activation)) return true; break
-    }
-  }
-  return false
-}
