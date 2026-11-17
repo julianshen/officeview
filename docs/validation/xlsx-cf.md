@@ -2345,6 +2345,38 @@ There are 2,036 rows over 17 cases: 791 formula cells, 542 painted as Excel, 0 d
 
   The worker legs cannot take a faked midnight in a browser: Playwright's clock never reaches a dedicated worker realm. Their tick stays covered by the Task 38 mounted tests.
 
+### 14.z.2 Task 39 fix round 2 (codex re-review)
+
+- **R1: a compile refusal is not self-justifying.**
+  - A covering rule the compiler refuses is excused only by an entry in `STAGE5_EXPECTED_COMPILE_REFUSALS`, which records the case, the exact formula text, the refusal code and the ruling. There is one entry: `stage5-formula-truthiness` `NA()` (OD-13 closed allow-list). A test checks that it still refuses exactly so.
+  - Codex's mutant (the compiler refusing `$A2>0`, mocked in `tests/xlsx-cf-stage5-mutants.test.ts`) now makes the composition B2 audit row and the conformance verdict disagree.
+- **R2: justifications are rule- and slot-specific.**
+  - `stage5Justifications` names the rule (marker capability and priority) and the slots it may leave unresolved:
+    - its own slots;
+    - for a stopIfTrue rule, also the lower rules' slots;
+    - for a literal Stage 3–4 gate, only the visual's slot.
+  - `stage5CellAgreement` excuses each unresolved slot separately. A cell-wide `ALL` needs every covering slot excused, and every resolved slot is compared with Excel.
+  - The audit rows, the conformance verdict and the Lesson 1 verdict share this logic. The conformance verdict reads the production service's outcome (`tests/helpers/cf-stage5-verdict.ts`). cf-compare's `verifyCaseCells` checks every Stage 5 observed cell slot by slot, and its icon branch no longer skips a Stage 5 cell.
+  - Both L3 mutants now disagree: the literal fill rule refused beside the justified icon slot, and a green fill beside an unresolved icon against Excel's red.
+  - Under the round-1 logic, 2 of the 4 mutant tests fail. The cf-compare mutant would pass only through the skip that was removed.
+- **R3: browser pixels.**
+  - The midnight test checks the canvas pixels of B4/B9 (each cell's own on-screen box): unfilled before midnight, filled after it.
+  - A kept revert-check test freezes every 2D draw call before the tick and shows the pixel check reports the stale frame.
+  - The zoom/DPR test ties pixels to each designated formula cell (applied means filled, otherwise unfilled) and compares announcements across both DPRs and all three zooms per leg.
+
+**Gates after fix round 2:**
+- `npx vitest run`: 14,369 passed, 14 failed.
+  - 13 failures are environmental (missing `corpus/` and `core-entry`).
+  - The 14th, the `xlsx-viewer-construction-memory` heap probe, failed under load and passes alone (22/22).
+- `tsc -p .`: the 3 known errors.
+- Stages 1–5 audits: ok and complete. Stage 5 case records: 2,160 rows, 0 disagreeing.
+- Publish: `--write --publish-stage5` run twice, byte-identical. The published set is unchanged at 42.
+- Chromium: 37/37, including the stale-canvas revert-check.
+- `cf-compare --stage 5`: interactive 60 pass, 6 fail; paged 62 pass, 3 fail. The only Stage 5 failure is the `stage5-cross-sheet-missing` seed.
+- Eager gzip 36,517 B; `check-eager` ok.
+- Index closure 422,487 B (environmental FAIL; the growth is recorded).
+- `git diff --check`: clean.
+
 **Gates after fix round 1:**
 - `npx vitest run`: 718 files, 14,366 passed, 13 failed (environmental: missing `corpus/` and `core-entry`).
 - `tsc -p .`: the 3 known errors.
