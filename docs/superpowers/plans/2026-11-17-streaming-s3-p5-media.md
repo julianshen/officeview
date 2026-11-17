@@ -26,7 +26,7 @@
 - **Delivery.** A finished file waits in the server's shared disk cache until the client asks for it. It is then delivered whole as `media-start` plus stored MEDIA_CHUNK (kind 9) messages.
 - **Timing.** The show plan re-ships audio records, whitelisted media commands and transition sounds. Audio ends become deterministic on the show clock (`begin + durationMs`) through one DOM-free helper, which the server classifier and the client driver share. Video nodes keep piece 4's rule (D22). The client opens remote leases through the unchanged `MediaPlayerDeps.open` and `TransitionSoundDeps.open` seams.
 
-**Tech Stack:** TypeScript, Bun server (`server/`, `node:child_process`, bun `Worker`), ffmpeg/ffprobe (external binaries, ≥ the major version that Task 1 recorded, 8), vitest, Playwright (Chromium).
+**Tech Stack:** TypeScript, Bun server (`server/`, `node:child_process`, bun `Worker`), ffmpeg/ffprobe (external binaries, major ≥ 6: the CI floor is apt's 6.1.1 on ubuntu-24.04; audio-path behaviour is pinned by tests, Task 2 ruling C1), vitest, Playwright (Chromium).
 
 **Spec:** `docs/superpowers/specs/2026-11-17-streaming-s3-piece5-design.md` (binding, as amended for the rescope). For context:
 - the parents `2026-11-11-streaming-s3-design.md` §4.5/§5 and `2026-11-07-server-streaming-design.md` §12a.6, §12a.8 (3d), §13.5 and §14;
@@ -343,7 +343,7 @@ It builds on plan commit `02b6d65a` and spec commit `a597183c` (main `a868b370`,
   - **Gating.** Gated test files use `const info = await ffmpegForTests()` at top level, then `describe.skipIf(!info)`. The sync `ffmpegAvailable()` is gone, because the probe is async and sandboxed.
   - **The absence test always runs.** `ffmpeg-probe.test.ts` calls `ffmpegForTests()` only inside its gated test, so the absence test runs even when the probe fails.
   The probe checks:
-  - the version (≥ the Task 1 major, 8);
+  - the version (major ≥ 6, the CI floor: 6.1.1 on ubuntu-24.04. Ruling C1: the major-8 floor was Task 1's video measurement; the audio path's facts are pinned by tests that run on 6.1.1);
   - the `aac` encoder (not `libx264`: a server without x264 still plays audio);
   - every D7 demuxer and the audio decoders of D7's `-codec_whitelist` (not the video decoders: the same fail-closed trap as `libx264`);
   - one sandboxed `-version` run through the D5 wrapper of the platform.

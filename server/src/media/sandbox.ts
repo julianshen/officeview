@@ -53,6 +53,8 @@ export function sandboxCommand(info: FfmpegInfo, bin: 'ffmpeg' | 'ffprobe', argv
   if (limits.stderrBytes !== 65536) throw new RangeError('sandbox stderrBytes must be 65536')
   const exe = bin === 'ffmpeg' ? info.ffmpeg : info.ffprobe
   if (info.platform === 'linux') {
+    // One `ulimit` per limit: dash (Ubuntu's /bin/sh) parses `ulimit -t a -v b -f c` as `-t a` alone and ignores
+    // the rest, which would silently drop the address-space and file-size caps (D5 correction, accepted).
     const script = `ulimit -t ${cpu} && ulimit -v ${Math.floor(mem / 1024)} && ulimit -f ${blocks} && exec "$@"`
     return { file: resolveUnshare(), args: ['--user', '--map-root-user', '--net', '/bin/sh', '-c', script, 'sh', exe, ...argv], env: SANDBOX_ENV }
   }

@@ -66,7 +66,7 @@ jobs:
         run: bun run typecheck:server
 
       # Piece 5 (plan D5/D6): the stream server's sandboxed ffmpeg. The media tests run with
-      # OV_MEDIA_REQUIRED=1, so a missing or failing probe (version < 8, codec, demuxer, sandbox) fails
+      # OV_MEDIA_REQUIRED=1, so a missing or failing probe (version < 6, codec, demuxer, sandbox) fails
       # the job instead of skipping. The sysctl lets `unshare --user --net` work on ubuntu-24.04.
       - name: Install ffmpeg for the stream server media tests
         run: |

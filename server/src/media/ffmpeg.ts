@@ -5,7 +5,8 @@
  *
  * Checks, in order: `OV_MEDIA`; platform; both binaries present and executable (`OV_FFMPEG`, default `ffmpeg` on
  * PATH; `OV_FFPROBE`, default the `ffprobe` next to the resolved ffmpeg); a sandboxed `-version` of each; the
- * version major (≥ 8, Task 1); the `aac` encoder (not libx264: audio-only piece 5); the D7 demuxers and the audio
+ * version major (≥ 6: the CI floor is apt's 6.1.1 on ubuntu-24.04; the audio path's version-sensitive facts are
+ * pinned by tests that run there); the `aac` encoder (not libx264: audio-only piece 5); the D7 demuxers and the audio
  * decoders of D7's `-codec_whitelist`; on darwin a working `ps` RSS read (the D5 watchdog); and a capped write
  * proving `ulimit -f` is applied in the expected block unit.
  */
@@ -18,7 +19,7 @@ import { MEMORY_BYTES, SANDBOX_ENV, runSandboxed, type SandboxLimits } from './s
 export interface FfmpegInfo { ffmpeg: string; ffprobe: string; version: string; platform: 'linux' | 'darwin' }
 export type FfmpegProbe = { ok: true; info: FfmpegInfo } | { ok: false; reason: 'absent' | 'version' | 'codec' | 'demuxer' | 'sandbox' | 'off' }
 
-export const MIN_MAJOR = 8
+export const MIN_MAJOR = 6
 export const REQUIRED_DEMUXERS = Object.freeze(['mov', 'avi', 'wav', 'asf', 'mp3'] as const)
 /** The audio decoders of D7's `-codec_whitelist` (its video decoders are not required: no video in piece 5). */
 export const AUDIO_DECODERS = Object.freeze(['aac', 'mp3', 'mp3float', 'pcm_s16le', 'pcm_s24le', 'pcm_u8', 'pcm_f32le', 'adpcm_ms', 'wmav2', 'alac'] as const)
