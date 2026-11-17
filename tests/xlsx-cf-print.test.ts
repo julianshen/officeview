@@ -239,7 +239,9 @@ it('Stage 5: a formula rule over an unstored cell paints on the print page and t
         return { print, viewport: [...ctx.getImageData(70, 25, 1, 1).data] }
       } finally { batch?.dispose() }
     }
-    return evidence ? withPaint(run) : run()
+    // Task 39: "without evidence" is production before --publish-stage5 (Stage 1-4 evidence only).
+    const { withoutStage5Evidence } = await import('./helpers/cf-stage5-off')
+    return evidence ? withPaint(run) : withoutStage5Evidence(run)
   }
   // 0xC6EFCE: the green DXF fill of the synthetic workbook.
   const painted = await pixel(true)

@@ -5,6 +5,7 @@
  * `cf-evaluation-context-missing`; Stage 1-4 rules are unchanged either way.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { withoutStage5Evidence } from './helpers/cf-stage5-off'
 import { readFileSync } from 'node:fs'
 import { getChildren, parseXml, type XmlNode } from '../src/core/xml'
 import { createCfMemory, createCfWorkBudget } from '../src/xlsx/cf/limits'
@@ -265,14 +266,16 @@ describe('a route given no policy leaves formula rules withheld by name; Stage 1
     expect(shape(at(0, 2) as never)).toEqual({ properties: {}, tainted: ['fill'] })
     lease.release(); service.dispose()
   })
-  it('with a context but no formula evidence (production today) the formula is withheld by capability, never evaluated as a literal', async () => {
+  it('with a context but no formula evidence (production before --publish-stage5) the formula is withheld by capability, never evaluated as a literal', async () => {
     // Task 35: the formula arm now runs; without its formula:* capabilities each rule is gated before any evaluation.
-    const { lease, service, at } = await prepare(cfEvaluationContextFor(TAIPEI, () => 0))
-    const by = outcomesByPriority()
-    expect(by.get(1)).toContainEqual({ kind: 'unresolved', reason: 'cf-unmeasured-capability' })
-    expect(by.get(3)).toContainEqual({ kind: 'unresolved', reason: 'cf-unmeasured-capability' })
-    expect(shape(at(0, 0) as never)).toEqual({ properties: {}, tainted: ['fill'] })
-    lease.release(); service.dispose()
+    await withoutStage5Evidence(async () => {
+      const { lease, service, at } = await prepare(cfEvaluationContextFor(TAIPEI, () => 0))
+      const by = outcomesByPriority()
+      expect(by.get(1)).toContainEqual({ kind: 'unresolved', reason: 'cf-unmeasured-capability' })
+      expect(by.get(3)).toContainEqual({ kind: 'unresolved', reason: 'cf-unmeasured-capability' })
+      expect(shape(at(0, 0) as never)).toEqual({ properties: {}, tainted: ['fill'] })
+      lease.release(); service.dispose()
+    })
   })
   it('a literal rule alone decides identically with and without a context', async () => {
     const plain = withExactCfEvidence([], () => parseCfSheet(parseXml(`<worksheet xmlns="${NS}">${CF_XML.split('</conditionalFormatting>')[0]}</conditionalFormatting></worksheet>`), stylesFor(), createCfMemory()).value)

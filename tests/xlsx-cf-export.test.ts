@@ -127,5 +127,7 @@ it('Stage 5: the PNG encoder retains a formula rule\'s prepared fill and carries
     } finally { pages.dispose() }
   }
   expect(await withPaint(render)).toEqual([0xc6, 0xef, 0xce, 255])
-  expect(await render()).not.toEqual([0xc6, 0xef, 0xce, 255])
+  // Task 39: "without evidence" is production before --publish-stage5 (Stage 1-4 evidence only).
+  const { withoutStage5Evidence } = await import('./helpers/cf-stage5-off')
+  expect(await withoutStage5Evidence(render)).not.toEqual([0xc6, 0xef, 0xce, 255])
 })

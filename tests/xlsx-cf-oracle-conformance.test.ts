@@ -14,6 +14,9 @@ import { fileURLToPath } from 'node:url'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx, type ParseXlsxOptions } from '../src/xlsx/parse'
 import { cfDocumentEvaluationOf, prepareCfPaint, residentSource } from '../src/xlsx/cf/render'
+import { prepareCfTextScope } from '../src/xlsx/cf/text'
+import type { CfDateContext } from '../src/xlsx/cf/predicates'
+import type { XlsxSheet } from '../src/xlsx/types'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
 import { VERIFIED_CAPABILITIES, injectCfAutoBarColours, injectCfBarGradient, injectCfBarLayout, injectCfBarAutoBounds, injectCfBarGradientBorder, injectCfBarLengths, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import * as verifiedExports from '../src/xlsx/cf/verifiedCapabilities'
@@ -101,12 +104,25 @@ function underUnevidencedBarStop(c: { markers: ReadonlyArray<{ ruleType: string;
     c.markers.some(m => m.ruleType !== 'dataBar' && m.priority !== undefined && m.priority > bar.priority! && isCellInSqref(ref, m.sqref)))
 }
 
-/**
- * Task 39: the capabilities of the formula-bearing markers (a `formula` marker: an expression, a formula operand, a formula
- * bound or activation) covering `ref` that production does not hold. Non-empty means production withholds the cell.
- */
-function stage5UnpublishedFormulaCaps(c: { markers: ReadonlyArray<{ sqref: string; capabilityId: string; formula?: unknown }> }, ref: string): string[] {
-  return c.markers.filter(m => m.formula !== undefined && isCellInSqref(ref, m.sqref) && !VERIFIED_CAPABILITIES.has(m.capabilityId)).map(m => m.capabilityId)
+/** Task 39: whether a formula-bearing marker (an expression, a formula operand, a formula bound or activation) covers `ref`. */
+function stage5FormulaCovered(c: { markers: ReadonlyArray<{ sqref: string; formula?: unknown }> }, ref: string): boolean {
+  return c.markers.some(m => m.formula !== undefined && isCellInSqref(ref, m.sqref))
+}
+
+/** Task 39: production's own announcement of one cell (the text scope over the paint path's inputs): withheld or not. */
+async function stage5WithheldAt(sheet: XlsxSheet, doc: Awaited<ReturnType<typeof parseXlsx>>, ref: string, dateContext: CfDateContext | undefined): Promise<boolean> {
+  const { row, col } = refToRowCol(ref)
+  const budget = { reserve: () => {}, release: () => {}, retain: (_t: unknown, _b: number, commit: () => void) => commit(), settle: () => {} }
+  try {
+    const scope = await prepareCfTextScope(sheet, {
+      rects: [{ r0: row, r1: row, c0: col, c1: col }], signal: new AbortController().signal, locale: 'en-US', budget: budget as never,
+      documentSheets: doc.sheets, evaluation: cfDocumentEvaluationOf(doc), ...(dateContext ? { dateContext } : {}),
+    })
+    if (!scope) return true
+    try { return scope.describe(row, col)?.text === 'Conditional formatting unavailable' } finally { scope.dispose() }
+  } catch {
+    return true // a refused preparation withholds the whole request
+  }
 }
 
 describe('production viewer conditional formatting oracle conformance (C1 & C3)', () => {
@@ -219,7 +235,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     let stage4StubCompared = 0
     let stage5Withheld = 0
     let stage5Compared = 0
-    let stage5UnpublishedCompared = 0
+    let stage5FormulaCompared = 0
 
     for (const c of manifest.cases) {
       if (c.status !== 'measured' || c.stage === 2) continue
@@ -236,7 +252,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
           dateSystem: c.clockRequirement.dateSystem,
         } : undefined
 
-        const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext, evaluation: cfDocumentEvaluationOf(doc) })
+        const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext, evaluation: cfDocumentEvaluationOf(doc), documentSheets: doc.sheets }) // Task 39: as src/render/paint.ts passes it (the cross-sheet seam, S5-K)
         expect(paint, `prepareCfPaint should succeed for ${c.id}`).toBeDefined()
         if (!paint) continue
 
@@ -255,20 +271,20 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
           // S5-STUB: withheld until its successors are verified, otherwise compared with Excel below.
           if (STAGE5_OR_DEFERRED_WITHHELD.has(cellKey) && stubOutcome(cellKey, gotMatched) === 'withheld') continue
           if (c.stage === 5) {
-            // Task 39 (dual gate, Lesson 1): a Stage 5 cell under a formula-bearing rule whose capability production does
-            // not hold is measured but unpublished, so production WITHHOLDS it (no style), whatever Excel showed. Once the
-            // capability is published (`--publish-stage5`), the cell takes the Excel comparison below. Literal twins and
-            // positive controls carry no formula and are always compared with Excel.
-            // A rule of higher priority that production holds may still write the cell (stage5-composition N: a published
-            // colour scale ahead of the unresolved expression), so such a cell is withheld OR Excel's outcome, never anything
-            // else (the S5-STUB principle).
-            const unpublished = stage5UnpublishedFormulaCaps(c, exp.ref)
-            if (unpublished.length > 0 && !gotMatched) {
-              stage5Withheld++
-              continue
-            }
-            if (unpublished.length > 0) stage5UnpublishedCompared++
-            else stage5Compared++
+            // Task 39 (dual gate, Lessons 1 and 13): a Stage 5 cell under a formula-bearing rule is WITHHELD or Excel's
+            // outcome, never anything else. A capability production does not hold (unpublished, or a reading it does not
+            // implement, e.g. a bare reference needs every truth reading) leaves the cell withheld; a rule production holds
+            // (or a higher-priority one, stage5-composition N's colour scale) paints, and is then compared with Excel below.
+            // Where production paints nothing but Excel shows a format, production must announce the cell withheld: a
+            // no-match there would be a wrong paint. Literal twins and positive controls carry no formula: always compared.
+            if (stage5FormulaCovered(c, exp.ref)) {
+              if (!gotMatched && exp.matched) {
+                expect(await stage5WithheldAt(sheet, doc, exp.ref, dateContext), `${cellKey}: Excel shows a format and production paints none, so production must withhold it`).toBe(true)
+                stage5Withheld++
+                continue
+              }
+              stage5FormulaCompared++
+            } else stage5Compared++
           }
           if (c.stage === 3) {
             stage3Checked++
@@ -420,18 +436,19 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(stage4IconOnlyWithheld).toBeGreaterThan(200)
     expect(stage4StubWithheld + stage4StubCompared).toBe(4)
     // Stage 5 (Task 39), pinned to the manifest: every expected cell of a measured Stage 5 case under a formula-bearing
-    // marker whose capability production does not hold is withheld; every other one was compared with Excel.
+    // marker is withheld or compared with Excel; every other one was compared with Excel.
     const measured5 = manifest.cases.filter(c => c.stage === 5 && c.status === 'measured')
-    const expectedStage5Withheld = measured5.flatMap(c => c.expected.cells.filter(exp => stage5UnpublishedFormulaCaps(c, exp.ref).length > 0)).length
-    const expectedStage5Compared = measured5.flatMap(c => c.expected.cells.filter(exp => stage5UnpublishedFormulaCaps(c, exp.ref).length === 0)).length
+    const expectedFormulaCells = measured5.flatMap(c => c.expected.cells.filter(exp => stage5FormulaCovered(c, exp.ref))).length
+    const expectedOtherCells = measured5.flatMap(c => c.expected.cells.filter(exp => !stage5FormulaCovered(c, exp.ref))).length
     expect(measured5.length).toBeGreaterThan(10)
-    expect(stage5Withheld + stage5UnpublishedCompared).toBe(expectedStage5Withheld)
-    expect(stage5Compared).toBe(expectedStage5Compared)
+    expect(stage5Withheld + stage5FormulaCompared).toBe(expectedFormulaCells)
+    expect(stage5Compared).toBe(expectedOtherCells)
     expect(stage5Compared).toBeGreaterThan(100)
-    // The guard applies only while unpublished: with nothing of Stage 5 published, every formula-covered cell is withheld.
-    if (!measured5.some(c => c.markers.some(m => m.formula && VERIFIED_CAPABILITIES.has(m.capabilityId)))) expect(stage5Withheld).toBeGreaterThan(100)
+    // Non-vacuous both ways: production paints formula cells Excel's way, and still withholds the unmeasured ones.
+    expect(stage5FormulaCompared).toBeGreaterThan(100)
+    expect(stage5Withheld).toBeGreaterThan(0)
     // eslint-disable-next-line no-console
-    console.log(`stage 5 conformance: withheld=${stage5Withheld} unpublishedCompared=${stage5UnpublishedCompared} compared=${stage5Compared}`)
+    process.stderr.write(`stage 5 conformance: withheld=${stage5Withheld} formulaCompared=${stage5FormulaCompared} compared=${stage5Compared}\n`)
   })
 
   it('proves all 53 previously withheld cells now paint under production evidence (C1)', async () => {

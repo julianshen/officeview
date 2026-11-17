@@ -7,6 +7,7 @@
  * identical withholding is asserted again under production evidence.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { withoutStage5Evidence } from './helpers/cf-stage5-off'
 import * as serviceModule from '../src/xlsx/cf/service'
 import * as composeModule from '../src/xlsx/cf/compose'
 import * as workbookModule from '../src/xlsx/formula/workbook'
@@ -361,9 +362,15 @@ describe('manual calculation withholds until measured (S5-L)', () => {
       }
       for (const leg of Object.values(legs)) expect(fills(leg)).toEqual(fills(legs.static))
     })
-    // Production evidence: nothing in Stage 5 is verified, so the same cells withhold.
+    // Production evidence (Task 39: formula:calc-manual-saved-values is published): every leg follows the saved values,
+    // exactly as the evidenced run; before publication the same cells withheld.
     const l = await load(inputBytes('stage5-calc-manual'), 'cached')
-    for (const leg of Object.values(await legsOf(l, SAVED))) expect(SAVED.map(r => leg.get(r)!.fill)).toEqual([undefined, undefined, undefined, undefined])
+    const prod = await legsOf(l, SAVED)
+    for (const [name, leg] of Object.entries(prod)) {
+      const f = SAVED.map(r => leg.get(r)!.fill)
+      if (VERIFIED_CAPABILITIES.has('formula:calc-manual-saved-values')) { expect(f[0], `${name} C2`).toBeDefined(); expect([f[1], f[3]], name).toEqual([undefined, undefined]); expect(f[2], `${name} C4`).toBe(f[0]) }
+      else expect(f, name).toEqual([undefined, undefined, undefined, undefined])
+    }
   })
   it('a TODAY() rule under manual calculation stays withheld on every leg even with the saved-values reading and the capability held', async () => {
     await withPaint(async () => {
@@ -423,13 +430,15 @@ describe('static, print, export, resident, worker and forced-paged agree for pai
     expect(described).toBeGreaterThan(20)
   })
 
-  it('under production evidence every leg withholds identically, and withholds what the evidenced run paints (no Stage 5 capability is verified)', async () => {
+  it('without Stage 5 evidence (production before --publish-stage5) every leg withholds identically, and withholds what the evidenced run paints', async () => {
     let withheldPaint = 0, evidencedPaint = 0
     for (const id of MATRIX) {
       const sheetName = manifest().cases.find(x => x.id === id)!.sheet
       const refs = markedCells(id), hosts = frameHosts()
-      const production = await load(fixtureBytes(id), 'cached', sheetName)
-      const legs = [await staticLeg(production, refs), await residentLeg(production, refs), await textLeg(production, refs, { hosts }), await textLeg(production, refs, { resident: true, hosts }), (await workerLeg(production, refs, { hosts })).scope]
+      const legs = await withoutStage5Evidence(async () => {
+        const production = await load(fixtureBytes(id), 'cached', sheetName)
+        return [await staticLeg(production, refs), await residentLeg(production, refs), await textLeg(production, refs, { hosts }), await textLeg(production, refs, { resident: true, hosts }), (await workerLeg(production, refs, { hosts })).scope]
+      })
       for (const leg of legs) expect(tokens(leg), id).toEqual(tokens(legs[0]!))
       expect(tokens(legs[3]!, o => o.desc ?? '-'), id).toEqual(tokens(legs[2]!, o => o.desc ?? '-'))
       expect(tokens(legs[4]!, o => o.desc ?? '-'), id).toEqual(tokens(legs[2]!, o => o.desc ?? '-'))
@@ -477,12 +486,14 @@ describe('formula cfvo bounds announce and paint the same on every scope, forced
       } finally { injectCfFormulaSelections(null) }
     }, { extra: [...VERIFIED_CAPABILITIES, ...REGISTERED, 'bar:participation-dateserial'] })
   })
-  it('under production evidence every scope announces the same unavailable formatting, and none paints', async () => {
-    const l = await load(formulaBoundsBytes(), 'cached')
-    const refs = ['B4', 'C4', 'D4'], hosts = frameHosts()
-    const text = await textLeg(l, refs, { hosts }), forced = await workerLeg(l, refs, { hosts })
-    expect(tokens(forced.scope, o => o.desc ?? '-')).toEqual(tokens(text, o => o.desc ?? '-'))
-    expect(tokens(text, o => o.desc ?? '-').every(t => t.endsWith(UNAVAILABLE) || t.endsWith(':-'))).toBe(true)
+  it('without Stage 5 evidence every scope announces the same unavailable formatting, and none paints', async () => {
+    await withoutStage5Evidence(async () => {
+      const l = await load(formulaBoundsBytes(), 'cached')
+      const refs = ['B4', 'C4', 'D4'], hosts = frameHosts()
+      const text = await textLeg(l, refs, { hosts }), forced = await workerLeg(l, refs, { hosts })
+      expect(tokens(forced.scope, o => o.desc ?? '-')).toEqual(tokens(text, o => o.desc ?? '-'))
+      expect(tokens(text, o => o.desc ?? '-').every(t => t.endsWith(UNAVAILABLE) || t.endsWith(':-'))).toBe(true)
+    })
   })
 })
 
@@ -527,12 +538,14 @@ describe('blank cells match formula rules in every view (Stage 1 B2/Z5 pattern, 
       expect(worker.states.get('Z5')!.properties['fill.bg']).toBe(GREEN)
     })
   })
-  it('the same rule is withheld identically under production evidence', async () => {
-    const l = await load(blankBytes(), 'cached')
-    const refs = ['B2', 'Z5']
-    const worker = await workerLeg(l, refs)
-    for (const leg of [await staticLeg(l, refs), await textLeg(l, refs), worker.scope]) expect(refs.map(r => leg.get(r)!.fill)).toEqual([undefined, undefined])
-    expect(refs.map(r => worker.scope.get(r)!.desc)).toEqual([UNAVAILABLE, UNAVAILABLE])
+  it('the same rule is withheld identically without Stage 5 evidence', async () => {
+    await withoutStage5Evidence(async () => {
+      const l = await load(blankBytes(), 'cached')
+      const refs = ['B2', 'Z5']
+      const worker = await workerLeg(l, refs)
+      for (const leg of [await staticLeg(l, refs), await textLeg(l, refs), worker.scope]) expect(refs.map(r => leg.get(r)!.fill)).toEqual([undefined, undefined])
+      expect(refs.map(r => worker.scope.get(r)!.desc)).toEqual([UNAVAILABLE, UNAVAILABLE])
+    })
   })
 })
 
@@ -647,7 +660,7 @@ describe('the worker\'s search finds the text a formula rule formats, and the ba
     }
   }
   it('the formatted "2.00" is found with the evidence and never without it; an uncached footprint is withheld (policy)', async () => {
-    expect(await found(searchBytes(true), '2.00'), 'production evidence: base text').toEqual([])
+    expect(await withoutStage5Evidence(() => found(searchBytes(true), '2.00')), 'without Stage 5 evidence: base text').toEqual([])
     await withPaint(async () => {
       expect(await found(searchBytes(true), '2.00'), 'cached footprint, saved values').toEqual(['C3=2.00', 'E3=2.00'])
       expect(await found(searchBytes(true), '3.00')).toEqual(['C4=3.00', 'E4=3.00'])

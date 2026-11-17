@@ -4531,7 +4531,8 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     expect(renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: published })).toBe(published)
     expect(listed(published, 'VERIFIED_STAGE3_CAPABILITIES')).toEqual(listed(committed, 'VERIFIED_STAGE3_CAPABILITIES'))
     // The union is the Stage 1-3 sets plus exactly the published Stage 4 set.
-    const s123 = ['VERIFIED_STAGE1_CAPABILITIES', 'VERIFIED_STAGE2_CAPABILITIES', 'VERIFIED_STAGE3_CAPABILITIES'].flatMap(n => listed(committed, n) ?? [])
+    // Task 39: plus the committed Stage 5 set, carried over by a Stage 4 publish.
+    const s123 = ['VERIFIED_STAGE1_CAPABILITIES', 'VERIFIED_STAGE2_CAPABILITIES', 'VERIFIED_STAGE3_CAPABILITIES', 'VERIFIED_STAGE5_CAPABILITIES'].flatMap(n => listed(committed, n) ?? [])
     expect(listed(published, 'VERIFIED_CAPABILITIES')).toEqual([...new Set([...s123, ...gate.published])].sort())
   }, 120_000)
 
@@ -5753,15 +5754,19 @@ describe('Stage 5 formula oracle (Task 31)', () => {
     }
     const first = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: committed })
     expect(renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: committed })).toBe(first)
-    // Without --publish-stage5 the Stage 5 export is carried over verbatim: absent at first, so the file is unchanged.
+    // Without --publish-stage5 the committed Stage 5 export (Task 39 published it) is carried over verbatim.
     expect(first).toBe(committed)
-    expect(listed(first, 'VERIFIED_STAGE5_CAPABILITIES')).toBeUndefined()
-    const withS5 = committed.replace(/(export const VERIFIED_CAPABILITIES)/, "export const VERIFIED_STAGE5_CAPABILITIES: ReadonlySet<string> = new Set([\n  'formula:truth-boolean',\n])\n\n$1")
+    expect(listed(first, 'VERIFIED_STAGE5_CAPABILITIES')).toEqual(listed(committed, 'VERIFIED_STAGE5_CAPABILITIES'))
+    const unpublished5 = committed
+      .replace(/export const VERIFIED_STAGE5_CAPABILITIES: [^\n]*\n[\s\S]*?\n\]\)\n\n/, '')
+      .replace(/export const VERIFIED_STAGE5_FORMULA_SELECTIONS: [^\n]*\n[\s\S]*?\n\}\n\n/, '')
+    expect(listed(unpublished5, 'VERIFIED_STAGE5_CAPABILITIES')).toBeUndefined()
+    const withS5 = unpublished5.replace(/(export const VERIFIED_CAPABILITIES)/, "export const VERIFIED_STAGE5_CAPABILITIES: ReadonlySet<string> = new Set([\n  'formula:truth-boolean',\n])\n\n$1")
     const kept = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: withS5 })
     expect(listed(kept, 'VERIFIED_STAGE5_CAPABILITIES')).toEqual(['formula:truth-boolean'])
     expect(renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: kept })).toBe(kept)
     for (const name of ['VERIFIED_STAGE1_CAPABILITIES', 'VERIFIED_STAGE2_CAPABILITIES', 'VERIFIED_STAGE3_CAPABILITIES', 'VERIFIED_STAGE4_CAPABILITIES']) expect(listed(kept, name), name).toEqual(listed(committed, name))
-    // --publish-stage5 writes the export only when the stage is complete; today nothing is captured, so it changes nothing.
+    // --publish-stage5 writes the export only when the stage is complete (Task 39: it is, and the committed file is its output).
     const report = auditStage5Manifest(manifest, { rootDir: REPO_ROOT })
     expect(report.ok, JSON.stringify(report.perCase.filter(p => !p.structuralValid))).toBe(true)
     expect(report.summary.cases).toBe(CF_STAGE5_CASES.length)
@@ -5778,7 +5783,12 @@ describe('Stage 5 formula oracle (Task 31)', () => {
     if (!report.stageComplete) {
       expect(published).toBe(committed)
       expect(renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: kept, publishStage5: true })).toBe(kept)
-    } else expect(listed(published, 'VERIFIED_STAGE5_CAPABILITIES')).toEqual(stage5Publication(report).published)
+    } else {
+      expect(listed(published, 'VERIFIED_STAGE5_CAPABILITIES')).toEqual(stage5Publication(report).published)
+      // Idempotent: publishing again over the committed (published) file reproduces it byte for byte.
+      expect(published).toBe(committed)
+      expect(renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: unpublished5, publishStage5: true })).toBe(committed)
+    }
     // Stage 1-4 exports unchanged by any Stage 5 option.
     for (const name of ['VERIFIED_STAGE1_CAPABILITIES', 'VERIFIED_STAGE2_CAPABILITIES', 'VERIFIED_STAGE3_CAPABILITIES', 'VERIFIED_STAGE4_CAPABILITIES', 'VERIFIED_CAPABILITIES']) expect(listed(published, name), name).toEqual(listed(committed, name))
     // A complete synthetic report publishes exactly its gated set, sorted.

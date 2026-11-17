@@ -16,7 +16,7 @@ import { describe, expect, it } from 'vitest'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
-import { auditStage5Manifest, CF_STAGE5_PRODUCTION_READINGS, stage5Publication, type Stage5AuditReport } from '../scripts/cf-refs/audit'
+import { auditStage5Manifest, CF_STAGE5_PRODUCTION_READINGS, renderFormulaSelectionsBlock, stage5Publication, type Stage5AuditReport } from '../scripts/cf-refs/audit'
 import { CF_STAGE5_CAPABILITIES, CF_STAGE5_NONDISCRIMINATING, CF_STAGE5_UNSUPPORTED, type CfManifest } from '../scripts/cf-refs/cases'
 import * as verifiedExports from '../src/xlsx/cf/verifiedCapabilities'
 import { VERIFIED_CAPABILITIES } from '../src/xlsx/cf/evidence'
@@ -250,7 +250,10 @@ describe('the Stage 5 formula selections travel with the published set (Task 35 
 
   it('a --write without --publish-stage5 carries the committed Stage 5 set and its selections verbatim, and omits both when absent', async () => {
     const { renderVerifiedCapabilitiesSource } = await import('../scripts/cf-refs/audit')
+    // The file without any Stage 5 export (Task 39 published one), so the carry is tested from a known absence.
     const current = readFileSync(join(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts'), 'utf8')
+      .replace(/export const VERIFIED_STAGE5_CAPABILITIES: [^\n]*\n[\s\S]*?\n\]\)\n\n/, '')
+      .replace(/export const VERIFIED_STAGE5_FORMULA_SELECTIONS: [^\n]*\n[\s\S]*?\n\}\n\n/, '')
     const s5 = "export const VERIFIED_STAGE5_CAPABILITIES: ReadonlySet<string> = new Set([\n  'formula:relative-wrap',\n])\n"
     const sel = "export const VERIFIED_STAGE5_FORMULA_SELECTIONS: Readonly<Record<string, string>> = {\n  'formula:relative-wrap': 'wrap',\n}\n"
     const committed = current.replace(/export const VERIFIED_CAPABILITIES:/, `${s5}\n${sel}\nexport const VERIFIED_CAPABILITIES:`)
@@ -260,9 +263,15 @@ describe('the Stage 5 formula selections travel with the published set (Task 35 
     expect(out.indexOf(sel)).toBeGreaterThan(out.indexOf(s5))
     const bare = renderVerifiedCapabilitiesSource(manifest(), REPO_ROOT, { committedSource: current })
     expect(bare).not.toContain('VERIFIED_STAGE5_FORMULA_SELECTIONS')
+    expect(bare).not.toContain('VERIFIED_STAGE5_CAPABILITIES')
     // An incomplete audit publishes nothing, even when asked (Lesson 4).
-    if (!auditStage5Manifest(manifest(), { rootDir: REPO_ROOT }).stageComplete) {
+    const audit = auditStage5Manifest(manifest(), { rootDir: REPO_ROOT })
+    if (!audit.stageComplete) {
       expect(renderVerifiedCapabilitiesSource(manifest(), REPO_ROOT, { committedSource: current, publishStage5: true })).toBe(bare)
+    } else {
+      // A complete audit publishes the gate's set and its selections block beside it.
+      const pub = renderVerifiedCapabilitiesSource(manifest(), REPO_ROOT, { committedSource: current, publishStage5: true })
+      expect(pub).toContain(renderFormulaSelectionsBlock(stage5Publication(audit).selections))
     }
   }, 120000)
 })

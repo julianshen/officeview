@@ -15,7 +15,8 @@ import { prepareCfPaint } from '../../src/xlsx/cf/render'
 import { prepareCfTextScope, prepareCfWireScope, type CfFrameHostSource } from '../../src/xlsx/cf/text'
 import { cfDocumentEvaluationOf, cfEvaluationContextFor, type CfDocumentEvaluation } from '../../src/xlsx/cf/formula'
 import { createCfMemory } from '../../src/xlsx/cf/limits'
-import { withInjectedCfEvidence, injectCfFormulaSelections } from '../../src/xlsx/cf/evidence'
+import { withExactCfEvidence, injectCfFormulaSelections } from '../../src/xlsx/cf/evidence'
+import { PRE_STAGE5_EVIDENCE } from './cf-stage5-off'
 import { CF_FORMULA_PRODUCTION_READINGS } from '../../src/xlsx/cf/formulaReadings'
 import { cfRulesVersion, createPagedWorkbookSource } from '../../src/xlsx/view/pagedSource'
 import { openImportSession } from '../../src/xlsx/storage/pagedImport'
@@ -38,9 +39,13 @@ export function firstSelections(extra: Readonly<Record<string, string>> = {}): R
   for (const [k, v] of Object.entries(CF_FORMULA_PRODUCTION_READINGS)) if (typeof v !== 'string') out[k] = v[0]!
   return { ...out, ...extra }
 }
-/** Runs `fn` under additive evidence (production's plus `caps`) and the given reading selections. */
+/**
+ * Runs `fn` under the Stage 1-4 evidence plus `caps` (exactly), and the given reading selections. Task 39: Stage 5 is
+ * published, so the evidence is exact (production's minus the Stage 5 set, plus `caps`): a leg that leaves a capability out
+ * really runs without it, as it did before `--publish-stage5`.
+ */
 export async function withPaint<T>(fn: () => Promise<T>, caps: readonly string[] = REGISTERED, selections: Readonly<Record<string, string>> = firstSelections()): Promise<T> {
-  return withInjectedCfEvidence(caps, async () => {
+  return withExactCfEvidence([...PRE_STAGE5_EVIDENCE, ...caps], async () => {
     injectCfFormulaSelections(selections)
     try { return await fn() } finally { injectCfFormulaSelections(null) }
   })

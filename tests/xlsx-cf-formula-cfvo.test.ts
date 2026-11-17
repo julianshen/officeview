@@ -400,11 +400,10 @@ async function assertS5I(outcome: S5IOutcome): Promise<void> {
     return
   }
   // Base form recorded, or nothing recorded yet: production keeps the x14 shape cf-unsupported-rule.
-  if (outcome.dialect === 'base') {
-    expect(outcome.reason.length, 'the recorded refusal carries its reason').toBeGreaterThan(0)
-    expect(VERIFIED_CAPABILITIES.has('scale:dialect-standalone')).toBe(false)
-  }
-  const doc = await loadFixture('stage5-x14-scale', VERIFIED_CAPABILITIES)
+  if (outcome.dialect === 'base') expect(outcome.reason.length, 'the recorded refusal carries its reason').toBeGreaterThan(0)
+  // Task 39: a base (or unrecorded) outcome would never publish scale:dialect-standalone, so production's evidence here is
+  // the published set without it (the recorded outcome is x14, and production does hold it).
+  const doc = await loadFixture('stage5-x14-scale', [...VERIFIED_CAPABILITIES].filter(id => id !== 'scale:dialect-standalone'))
   const rule = doc.sheets.find(s => s.name === 'Sheet1')!.conditionalFormatting!.rules.find(r => r.priority === 1)!
   expect(rule.definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
 }

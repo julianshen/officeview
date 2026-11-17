@@ -287,7 +287,9 @@ describe('every unresolved capability refuses atomically on both paths', () => {
     const reasons = new Set([...seen.values()].map(v => v.reason))
     expect([...reasons].sort()).toEqual(['cf-unsupported-dxf', 'cf-unsupported-rule'])
     const types = new Set([...seen.values()].map(v => v.ruleType))
-    for (const expected of ['expression', 'cellIs', 'containsText']) {
+    // Task 39: once Stage 5 publishes the formula dialect, the Stage 1 expression rules resolve, so `expression` is no
+    // longer an unresolved mechanism of these fixtures (its refusals are swept by tests/xlsx-cf-stage5.test.ts).
+    for (const expected of ['cellIs', 'containsText', ...(VERIFIED_CAPABILITIES.has('formula:dialect-base') ? [] : ['expression'])]) {
       expect(types.has(expected), `mechanism ${expected} covered`).toBe(true)
     }
   })

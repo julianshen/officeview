@@ -7,6 +7,7 @@
  * paint paths are exercised under injected evidence only.
  */
 import { describe, expect, it } from 'vitest'
+import { PRE_STAGE5_EVIDENCE } from './helpers/cf-stage5-off'
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -14,7 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { cfDocumentEvaluationOf, cfEvaluationContextFor, compileCfFormula, isCfFormulaRefusal } from '../src/xlsx/cf/formula'
-import { residentSource } from '../src/xlsx/cf/render'
+import { cfWorkbookOfDocument, residentSource } from '../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
 import { createCfService } from '../src/xlsx/cf/service'
 import { CF_LIMITS, createCfMemory } from '../src/xlsx/cf/limits'
@@ -69,10 +70,20 @@ type Token = Readonly<{ fill: string; strike: boolean }>
  * that has no DisplayFormat observation, may carry no formula-sourced property. A verified, observed cell must show
  * exactly Excel's fill and strikethrough. Returns a violation, or undefined.
  */
-export function stage5CellVerdict(cell: Readonly<{ key: string; verified: boolean; observed?: Token }>, got: Token, formulaSourced: boolean): string | undefined {
-  if (!cell.verified || !cell.observed) return formulaSourced ? `${cell.key}: a formula-sourced property paints while the cell is ${cell.verified ? 'unobserved' : 'withheld'}` : undefined
-  return got.fill === cell.observed.fill && got.strike === cell.observed.strike ? undefined
-    : `${cell.key}: production shows ${got.fill}${got.strike ? '+strike' : ''}, Excel's DisplayFormat ${cell.observed.fill}${cell.observed.strike ? '+strike' : ''}`
+/**
+ * Task 39 (Lesson 2, "exact or withheld"; the S5-STUB principle): once Stage 5 is published, a cell is Excel's observation
+ * or withheld, never anything else. A verified cell production withholds (another capability its formula needs is not
+ * held, e.g. a bare reference needs every truth reading) is allowed; a verified cell production evaluates must be Excel's.
+ * A formula-sourced paint must equal Excel's observation, so it is a violation on an unobserved cell.
+ */
+export function stage5CellVerdict(cell: Readonly<{ key: string; verified: boolean; observed?: Token }>, got: Token, formulaSourced: boolean, withheld = false): string | undefined {
+  const same = cell.observed !== undefined && got.fill === cell.observed.fill && got.strike === cell.observed.strike
+  const differs = `${cell.key}: production shows ${got.fill}${got.strike ? '+strike' : ''}, Excel's DisplayFormat ${cell.observed?.fill}${cell.observed?.strike ? '+strike' : ''}`
+  if (!cell.observed) return formulaSourced ? `${cell.key}: a formula-sourced property paints while the cell is ${cell.verified ? 'unobserved' : 'withheld'}` : undefined
+  if (same) return undefined
+  if (formulaSourced) return differs
+  if (cell.verified && !withheld) return differs
+  return undefined
 }
 
 describe('expression rule paints exactly the DisplayFormat cells (Lesson 1)', () => {
@@ -85,6 +96,11 @@ describe('expression rule paints exactly the DisplayFormat cells (Lesson 1)', ()
     expect(stage5CellVerdict({ key: 'a', verified: true, observed: none }, none, false)).toBeUndefined()
     expect(stage5CellVerdict({ key: 'a', verified: true, observed: none }, red, true)).toMatch(/Excel's DisplayFormat none/)
     expect(stage5CellVerdict({ key: 'a', verified: true, observed: red }, none, false)).toMatch(/production shows none/)
+    // Task 39: a verified cell production withholds is allowed; a no-match (not withheld) is not.
+    expect(stage5CellVerdict({ key: 'a', verified: true, observed: red }, none, false, true)).toBeUndefined()
+    // An unverified cell may paint only Excel's observation.
+    expect(stage5CellVerdict({ key: 'a', verified: false, observed: red }, red, true)).toBeUndefined()
+    expect(stage5CellVerdict({ key: 'a', verified: false, observed: none }, red, true)).toMatch(/Excel's DisplayFormat none/)
     expect(stage5CellVerdict({ key: 'a', verified: true, observed: { fill: 'none', strike: true } }, none, false)).toMatch(/\+strike/)
   })
 
@@ -107,30 +123,32 @@ describe('expression rule paints exactly the DisplayFormat cells (Lesson 1)', ()
    * One case's Lesson 1 verdicts. A sheet whose CF production dropped (no `conditionalFormatting`) shows every cell
    * unformatted, and is compared like any other: a dropped verified worksheet fails where Excel painted.
    */
-  async function lesson1Case(c: Case, sheet: XlsxSheet, observations: Observations, verified: (id: string) => boolean, evaluation: ReturnType<typeof cfEvaluationContextFor>): Promise<{ violations: string[]; compared: number; prepared: boolean }> {
+  async function lesson1Case(c: Case, sheet: XlsxSheet, observations: Observations, verified: (id: string) => boolean, evaluation: ReturnType<typeof cfEvaluationContextFor>, documentSheets?: readonly XlsxSheet[]): Promise<{ violations: string[]; compared: number; prepared: boolean; withheld: number; exact: number }> {
     const designated = designatedOf(c)
     const states = new Map<string, CfOutcome<CfCellState>>()
     const prepared = sheet.conditionalFormatting !== undefined && designated.length > 0
     if (prepared) {
       const memory = createCfMemory()
-      const service = createCfService(sheet.conditionalFormatting!, memory, { evidence: cfRuntimeEvidence, evaluation, sheetName: sheet.name })
+      // Task 39: the document's sheets as the cross-sheet seam, as production's paint passes them (render.ts).
+      const service = createCfService(sheet.conditionalFormatting!, memory, { evidence: cfRuntimeEvidence, evaluation, sheetName: sheet.name, ...(documentSheets ? { workbook: cfWorkbookOfDocument(documentSheets, memory, 'engine') } : {}) })
       const stamp = { owner: 'lesson1', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(sheet.conditionalFormatting!), viewGen: 0, structureGen: 0, clockGen: 0 }
       const lease = await service.prepareCf({ stamp, sourceRects: designated.map(e => { const { row, col } = rc(e.ref); return { firstRow: row, lastRow: row, firstCol: col, lastCol: col } }), signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, residentSource(sheet, stamp, memory, 'engine'))
       for (const e of designated) { const { row, col } = rc(e.ref); states.set(e.ref, lease.value.at(row, col)) }
       lease.release(); service.dispose()
     }
     const violations: string[] = []
-    let compared = 0
+    let compared = 0, withheld = 0, exact = 0
     for (const e of designated) {
       const outcome = states.get(e.ref) // undefined: the sheet's CF was dropped, so the cell shows unformatted
       const got = shown(outcome && outcome.kind === 'ready' ? outcome : undefined)
       const formulaSourced = outcome?.kind === 'ready' && Object.keys(outcome.value.properties).length > 0
       const isVerified = cellVerified(c, e.ref, verified), observed = observedToken(observations[e.ref])
       if (isVerified && observed) compared++
-      const v = stage5CellVerdict({ key: `${c.id}:${e.ref}`, verified: isVerified, ...(observed ? { observed } : {}) }, { fill: got.fill, strike: got.strike }, formulaSourced)
+      const v = stage5CellVerdict({ key: `${c.id}:${e.ref}`, verified: isVerified, ...(observed ? { observed } : {}) }, { fill: got.fill, strike: got.strike }, formulaSourced, got.withheld)
       if (v) violations.push(v)
+      else if (isVerified && observed) { if (got.fill === observed.fill && got.strike === observed.strike) exact++; else withheld++ }
     }
-    return { violations, compared, prepared }
+    return { violations, compared, prepared, withheld, exact }
   }
 
   it('a dropped verified worksheet\'s CF fails where Excel painted (fix round 1 #3)', async () => {
@@ -148,7 +166,7 @@ describe('expression rule paints exactly the DisplayFormat cells (Lesson 1)', ()
   it('production (the real route, with the document\'s evaluation context) matches every verified cell and withholds the rest', async () => {
     const stage5 = manifest().cases.filter(c => c.stage === 5)
     expect(stage5.length).toBeGreaterThan(20)
-    let covered = 0, compared = 0, eligible = 0, preparedSheets = 0
+    let covered = 0, compared = 0, eligible = 0, preparedSheets = 0, withheld = 0, exact = 0
     const violations: string[] = []
     const verified = (id: string): boolean => VERIFIED_CAPABILITIES.has(id)
     for (const c of stage5) {
@@ -157,9 +175,11 @@ describe('expression rule paints exactly the DisplayFormat cells (Lesson 1)', ()
       const observations = observationsOf(c)
       eligible += eligibleOf(c, observations, verified)
       covered += designatedOf(c).length
-      const out = await lesson1Case(c, sheet, observations, verified, cfEvaluationContextFor(cfDocumentEvaluationOf(doc), Date.now))
+      const out = await lesson1Case(c, sheet, observations, verified, cfEvaluationContextFor(cfDocumentEvaluationOf(doc), Date.now), doc.sheets)
       violations.push(...out.violations)
       compared += out.compared
+      withheld += out.withheld
+      exact += out.exact
       if (out.prepared) preparedSheets++
     }
     expect(violations).toEqual([])
@@ -170,6 +190,12 @@ describe('expression rule paints exactly the DisplayFormat cells (Lesson 1)', ()
     // No Stage 5 capture is published yet: nothing is eligible, everything above asserted withheld. A published capture
     // makes cells eligible, and compared, with no edit here.
     if (![...VERIFIED_CAPABILITIES].some(id => id.startsWith('formula:'))) expect(eligible).toBe(0)
+    // Task 39 (published): most verified cells are painted exactly as Excel showed; the rest are withheld, never wrong.
+    else {
+      expect(exact + withheld).toBe(compared)
+      expect(exact).toBeGreaterThan(withheld)
+      expect(exact).toBeGreaterThan(200)
+    }
   }, 180_000)
 
   it('under injected evidence a synthetic expression paints exactly where its formula is true', async () => {
@@ -390,7 +416,8 @@ describe('stub successors repaint only where Excel did (S5-STUB)', () => {
   type StubShown = Readonly<{ fill: string; strike: boolean; visual: string; properties: number }>
   /** Each stub cell's state through the real service route (evaluation context, production evidence plus `inject`). */
   async function stubStates(caseId: string, inject: readonly string[]): Promise<Map<string, StubShown>> {
-    return withInjectedCfEvidence(inject, async () => {
+    // Task 39: exactly the Stage 1-4 evidence plus `inject` (Stage 5 is published, so additive injection could not remove one).
+    return withExactCfEvidence([...PRE_STAGE5_EVIDENCE, ...inject], async () => {
       injectCfFormulaSelections(SELECTIONS)
       try {
         const c = manifest().cases.find(x => x.id === caseId)!

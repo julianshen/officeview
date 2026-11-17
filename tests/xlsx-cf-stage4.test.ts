@@ -190,7 +190,8 @@ describe('every enabled icon capability has verified evidence', () => {
     }
     for (const [id, v] of Object.entries(gate.selections)) expect(iconSelectionEvidence(id), id).toBe(v)
     const s3 = Reflect.get(verifiedExports, 'VERIFIED_STAGE3_CAPABILITIES') as ReadonlySet<string>
-    expect([...VERIFIED_CAPABILITIES].sort()).toEqual([...new Set([...VERIFIED_STAGE1_CAPABILITIES, ...VERIFIED_STAGE2_CAPABILITIES, ...s3, ...s4!])].sort())
+    // Task 39: plus the published Stage 5 set.
+    expect([...VERIFIED_CAPABILITIES].sort()).toEqual([...new Set([...VERIFIED_STAGE1_CAPABILITIES, ...VERIFIED_STAGE2_CAPABILITIES, ...s3, ...s4!, ...((Reflect.get(verifiedExports, 'VERIFIED_STAGE5_CAPABILITIES') as ReadonlySet<string> | undefined) ?? [])])].sort())
     // A withheld glyph class never paints, even with its key capability verified.
     expect(iconGlyph('3Stars' as CfIconSetName, 0)).toBeUndefined()
     expect(iconGlyph('3Arrows' as CfIconSetName, 0)).toBeDefined()

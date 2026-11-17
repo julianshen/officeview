@@ -4,6 +4,7 @@
  * Nothing here evaluates a formula: compile is static on the AST, and parse stays behind evidence.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { withoutStage5Evidence } from './helpers/cf-stage5-off'
 import { readFileSync } from 'node:fs'
 import { getChildren, parseXml, type XmlNode } from '../src/core/xml'
 import { tokenizeBytes } from '../src/core/xml-stream'
@@ -454,8 +455,8 @@ describe('expression and operand rules parse to formula definitions behind evide
       })
     }
   })
-  it('production evidence (none for formula:*) leaves every formula rule unresolved', () => {
-    const { rules, lease } = parseSheet(rule('expression', 'A1&gt;0') + rule('cellIs', '$F$1', 'B2', ' operator="greaterThan"'))
+  it('without Stage 5 evidence (production before --publish-stage5) every formula rule is unresolved', () => {
+    const { rules, lease } = withoutStage5Evidence(() => parseSheet(rule('expression', 'A1&gt;0') + rule('cellIs', '$F$1', 'B2', ' operator="greaterThan"')))
     expect(rules.map(r => r.definition.kind)).toEqual(['unresolved', 'unresolved'])
     expect(parseSpy).not.toHaveBeenCalled()
     lease.release()
@@ -514,7 +515,7 @@ describe('expression and operand rules parse to formula definitions behind evide
       r.lease.release()
     })
     // Without evidence the literal path is untouched and the formula operand is unresolved, as before.
-    const none = parseSheet(rule('cellIs', '$F$1', 'B2', ' operator="greaterThan"') + `<conditionalFormatting sqref="B3"><cfRule type="cellIs" priority="2" operator="greaterThan"><formula>100</formula></cfRule></conditionalFormatting>`)
+    const none = withoutStage5Evidence(() => parseSheet(rule('cellIs', '$F$1', 'B2', ' operator="greaterThan"') + `<conditionalFormatting sqref="B3"><cfRule type="cellIs" priority="2" operator="greaterThan"><formula>100</formula></cfRule></conditionalFormatting>`))
     expect(none.rules.map(x => x.definition.kind)).toEqual(['unresolved', 'cellIs'])
     none.lease.release()
   })
@@ -634,7 +635,7 @@ describe('blank synthesis stays on for formula rules (S5-P)', () => {
       expect(r.rules.map(x => canRuleMatchBlanks(x))).toEqual([true, true, false, true])
       r.lease.release()
     })
-    const unresolved = parseSheet(rule('expression', 'ISBLANK(D2)'))
+    const unresolved = withoutStage5Evidence(() => parseSheet(rule('expression', 'ISBLANK(D2)')))
     expect(unresolved.rules[0]!.definition).toMatchObject({ kind: 'unresolved', type: 'expression' })
     expect(canRuleMatchBlanks(unresolved.rules[0]!)).toBe(true)
     unresolved.lease.release()
