@@ -15,7 +15,7 @@
 | Reference (D10) | **R1** | R2 is never better at a passing point (§R1 vs R2) |
 | τ (D11) | 9.15, margin 3.45 | Union rule `sqrt(7.93² + 2 ln(2³¹/2¹⁶))` = 9.1476, computed in the script; `MAX_CANDIDATES · 301 ≤ 2³¹` asserted |
 | Marking fps | PNG path 3.4–7.0 fps at 1280×720 (**fails** 15 fps); raw RGBA core 2,130–2,510 fps | D10's `markLayerRgba` is required |
-| Null fit (D11) | fitted 5.20 / 5.48 / 5.27 (CRF 18/20/23) ≤ union 6.65 at M = 64·61 | 2,000 decisions per CRF, 0 false attributions |
+| Null fit (D11) | fitted 5.20 / 5.48 / 5.27 (CRF 18/20/23) ≤ union 6.65 at M = 64·61; without testsrc2 5.30 / 5.54 / 5.33 | 2,000 decisions per CRF, 0 false attributions |
 
 ## Gates at CRF 18 (the verdict CRF)
 
@@ -80,7 +80,7 @@ The qp 0 rows are the harness sanity check: through the same RGBA → yuv420p �
    At 640×360 the ceiling is 1.1× τ, so any codec noise sinks it. Even qp 0 fails q70 there (mandelbrot 44/60). This box cannot pass at the D11 window τ whatever the CRF. The 320×180 box cannot attribute even unencoded.
 2. **H.264 on a ±2 4×4-pixel pattern.** Full frame keeps z ≈ 14–19 at CRF 18, which passes, but mandelbrot drops to 10.1 at CRF 20 and 5.6 at CRF 23. At bucket 2, the 4-px page cells become 2×2 frame px, and x264 removes them: z falls from about 22 to 5.9 (mandelbrot) and 10.9 (Ken Burns) at CRF 18, and q70 removes the rest.
 3. **Saturated content.** `pedestalFor` masks every cell whose channels span more than 251. testsrc2 is saturated almost everywhere, so it keeps 3 of about 110 carriers at 640×360 and fails before any encode.
-4. **Size.** High-entropy full-frame video (mandelbrot) is about 1 MB/s at CRF 18, so a 5-minute 1280×720 encode would be 293 MiB, against 64 MiB. It is 161 MiB even at CRF 23. Ken Burns (26 MiB at CRF 18) and testsrc2 (148 MiB) bracket it.
+4. **Size.** High-entropy full-frame video (mandelbrot) is about 1 MB/s at CRF 18. A 5-minute 1280×720 encode would therefore be 293.5 MiB, against 64 MiB, and still 161 MiB at CRF 23. On the same basis (video plus the 16 kB/s AAC allowance), at CRF 18, testsrc2 is 152.5 MiB and Ken Burns is 30.5 MiB. Only Ken Burns fits.
 
 ## R1 vs R2 (D10)
 
@@ -101,6 +101,7 @@ R2 (the unmarked encode, decoded, used as the reference) was run on every bucket
   | 20 | 0 | 5.48 | 6.65 | 7.57 | 1.40 |
   | 23 | 0 | 5.27 | 6.65 | 7.57 | 1.38 |
 
+- **Without testsrc2.** A third of the decisions sit on testsrc2 cells with only 3 or 32 carriers. Refitted without them (1,333 per CRF), the fitted threshold is 5.30, 5.54 and 5.33, and the fitted margin is 1.55–1.62. Both are still below 6.65, with 0 false attributions.
 - **Reading.** Both readings of "union value" agree: the fitted threshold is below both. The tail fit supports carrying the union rule to F = 301 (τ = 9.15). The null side is GREEN; survival is what fails.
 
 ## Other measurements
@@ -116,13 +117,22 @@ R2 (the unmarked encode, decoded, used as the reference) was run on every bucket
 - **Encode wall time** (`veryfast`, `-threads 2`, 180 frames): at most 0.73 s at 1280×720 (246–611 fps) and at most 0.19 s at 640×360 (946–1,941 fps). The 6-s cap is 42 s.
 - **Browser-decoded cell (D20).** Chrome 157.0.8103.52 (`channel: 'chrome'`), the 640×360 MP4 at CRF 18, seek to (i + 0.5)/30, element screenshot at DPR 1 with `--force-color-profile=srgb`. `canPlayType` returned `probably`. Results:
 
-  | Source | Correct | Median true z (vs ffmpeg-decoded) | Geometry abstains | Screenshots nearest a neighbour frame |
+  | Source | Correct | Median true z (vs ffmpeg-decoded) | Geometry abstains | Screenshots nearest a neighbour R1 frame |
   |---|---|---|---|---|
   | testsrc2 | 0/60 | −0.32 (1.54) | 0 | 0 |
   | mandelbrot | 0/60 | 2.51 (6.76) | 9 | 0 |
   | Ken Burns | 0/60 | 5.09 (9.29) | 19 | 18 |
 
-  Chrome's displayed pixels differ from ffmpeg's bitexact decode by enough to halve z, and they exceed `GEOMETRY_ERROR_MAX` on some captures. The encode's RGB → YUV matrix was checked to be BT.709, matching the tags: RGB (200,50,50) encodes to Y = 86, the BT.709 value; BT.601 would give 97. So this is Chrome's decode and render path (chroma upsampling, conversion precision), not a tag mismatch.
+  - **Colour shift, measured.** A follow-up compared Chrome screenshots with ffmpeg's decode of the same MP4 frame, at frames 31, 91 and 151, CRF 18, 640×360. Chrome's pixels are systematically brighter:
+
+    | Source | Mean signed difference (R, G, B) | Mean absolute | MSE |
+    |---|---|---|---|
+    | mandelbrot | +4.6…5.3, +8.0…10.3, +2.4…4.1 | 6.3–6.7 | ≈ 63–65 |
+    | Ken Burns | +2.2…3.1, +2.7…3.3, +2.7…3.5 | 2.5–3.3 | 8–16 |
+
+  - **Seek is exact.** In that comparison every screenshot matched the requested frame of the ffmpeg decode best. The 18 Ken Burns "neighbour frame" offsets in the table above were measured against R1, where slow-zoom neighbours are ambiguous.
+  - **Cause.** The encode's RGB → YUV matrix is ruled out: it is BT.709, matching the tags (RGB (200,50,50) encodes to Y = 86, the BT.709 value; BT.601 would give 97). The brightness shift is larger than rounding, which points to range, transfer or colour-management handling in Chrome's path, but the cause was not isolated.
+  - **Risk.** R1, an ffmpeg bitexact decode, may not model what a viewer's browser displays. The detector would then need to rebuild its reference the browser's way, or tolerate this shift.
 
 ## Method notes (deviations, stated)
 

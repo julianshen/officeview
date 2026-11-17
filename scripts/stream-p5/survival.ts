@@ -18,7 +18,7 @@
  */
 import { createHash } from 'node:crypto'
 import { closeSync, existsSync, mkdirSync, openSync, rmSync, writeFileSync, writeSync } from 'node:fs'
-import { loadavg } from 'node:os'
+import { loadavg, tmpdir } from 'node:os'
 import path from 'node:path'
 import { createCanvas, type Canvas } from '@napi-rs/canvas'
 import { basis } from '../../server/src/mark/basis'
@@ -39,7 +39,7 @@ import { writeResult } from './results'
 import { decodeFrames, encodeRaw, ffmpegVersion, FRAMES, makeSource, PAGE, readFrame, SECONDS, SOURCE_NAMES, type EncodeSettings, type SourceName } from './sources'
 
 const REPO = path.resolve(import.meta.dir, '..', '..')
-const SCRATCH = process.env.P5_SCRATCH ?? '/private/tmp/claude-501/-Users-julianshen-prj-officeview/dc98f3a9-cd56-475c-b13a-365a9ed0478e/scratchpad/p5-t1'
+const SCRATCH = process.env.P5_SCRATCH ?? path.join(tmpdir(), 'ov-p5-t1')
 const argv = process.argv.slice(2)
 const QUICK = argv.includes('--quick')
 const BROWSER = !argv.includes('--no-browser')
