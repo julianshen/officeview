@@ -79,7 +79,7 @@ describe('R2: justifications are slot- and rule-specific', () => {
     const lit = m.c.markers.find(x => x.ruleType === 'cellIs' && x.sqref === 'L2:L7')!
     const rule = m.sheet.conditionalFormatting!.rules.find(r => r.priority === lit.priority)!
     ;(rule as { definition: unknown }).definition = { kind: 'unresolved', type: 'cellIs', reason: 'cf-resource-limit' }
-    expect(await stage5SlotVerdict(m.c, m.doc, m.sheet, 'L3', REPO_ROOT)).toMatch(/slot fill unresolved without a recorded justification/)
+    expect(await stage5SlotVerdict(m.c, m.doc, m.sheet, 'L3', REPO_ROOT)).toMatch(/fill unresolved without a recorded justification/)
     void stage5CaseRecords
   }, 120000)
   it('composition L3: a green fill beside an unresolved icon disagrees with Excel\'s red (agreement, and cf-compare)', async () => {
@@ -100,5 +100,54 @@ describe('R2: justifications are slot- and rule-specific', () => {
       return { applied: painted || strikes.get(ref) === true, unresolved: false, unresolvedSlots: [], ...(painted || strikes.get(ref) ? { style: { ...(painted ? { fillColor: f } : {}), ...(strikes.get(ref) ? { strike: true } : {}) } } : {}) }
     })
     expect(msg).toMatch(/L3.*fill FFC6EFCE vs Excel FFFFC7CE/)
+  })
+})
+
+describe('fix round 3 (S1, S2): justification scope follows the compositor\'s real effect, property by property', () => {
+  const observed = async (c: import('../scripts/cf-refs/cases').CfOracleCase) => {
+    const { stage5ObservedFills, stage5ObservedStrikes } = await import('../scripts/cf-compare')
+    return { fills: stage5ObservedFills(c, REPO_ROOT)!, strikes: stage5ObservedStrikes(c, REPO_ROOT) }
+  }
+  /** cf-compare over a case whose production is Excel's everywhere except at `ref`. */
+  async function compareWith(c: import('../scripts/cf-refs/cases').CfOracleCase, ref: string, at: import('../scripts/cf-compare').ActualCellOutcome): Promise<string | undefined> {
+    const { verifyCaseCells } = await import('../scripts/cf-compare')
+    const { fills, strikes } = await observed(c)
+    return verifyCaseCells(c, REPO_ROOT, (row, col) => {
+      const r = `${String.fromCharCode(65 + col)}${row + 1}`
+      if (r === ref) return at
+      const f = fills.get(r)
+      const painted = f !== undefined && f !== 'FFFFFFFF'
+      return { applied: painted || strikes.get(r) === true, unresolved: false, unresolvedSlots: [], ...(painted || strikes.get(r) ? { style: { ...(painted ? { fillColor: f } : {}), ...(strikes.get(r) ? { strike: true } : {}) } } : {}) }
+    })
+  }
+
+  it('S1: composition I3 with its stopping expression refused (no fill, ALL unresolved) disagrees: audit, conformance verdict, cf-compare', async () => {
+    const { stage5SlotVerdict } = await import('./helpers/cf-stage5-verdict')
+    const { stage5CaseRecords } = await import('../scripts/cf-refs/audit')
+    const { stage5CellAgreement, stage5Justifications } = await import('../scripts/cf-refs/stage5-withhold')
+    const m = await loadCase('stage5-composition')
+    expect(await stage5SlotVerdict(m.c, m.doc, m.sheet, 'I3', REPO_ROOT), 'unmutated').toBeUndefined()
+    // The missing formula:composition-stop-icon excuses the lower icon's slot only, never the stopping rule's own fill.
+    for (const j of stage5Justifications(m.c, 'I3')) { expect(j.slots, j.reason).not.toContain('fill'); expect(j.slots, j.reason).not.toContain('ALL') }
+    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['ALL'], visual: 'withheld' }, { fill: 'FFFFC7CE', strike: false }, stage5Justifications(m.c, 'I3')).agrees).toBe(false)
+    const expr = m.c.markers.find(x => x.ruleType === 'expression' && x.sqref === 'I2:I7')!
+    const rule = m.sheet.conditionalFormatting!.rules.find(r => r.priority === expr.priority)!
+    ;(rule as { definition: unknown }).definition = { kind: 'unresolved', type: 'expression', reason: 'cf-resource-limit' }
+    expect(await stage5SlotVerdict(m.c, m.doc, m.sheet, 'I3', REPO_ROOT)).toMatch(/without a recorded justification/)
+    expect(await compareWith(m.c, 'I3', { applied: false, unresolved: true, unresolvedSlots: ['ALL'] })).toMatch(/I3/)
+    void stage5CaseRecords
+  }, 120000)
+
+  it('S2: composition Q3 with only font.bold unresolved and strikethrough resolved false (Excel: struck) disagrees everywhere', async () => {
+    const { stage5CellAgreement, stage5Justifications } = await import('../scripts/cf-refs/stage5-withhold')
+    const c = manifest().cases.find(x => x.id === 'stage5-composition')!
+    const { strikes } = await observed(c)
+    expect(strikes.get('Q3'), 'Excel struck Q3').toBe(true)
+    // An unrelated bold refusal never suppresses the strikethrough comparison (property-level masks).
+    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['font.bold'], visual: 'none' }, { fill: 'none', strike: true }, stage5Justifications(c, 'Q3')).agrees).toBe(false)
+    expect(await compareWith(c, 'Q3', { applied: false, unresolved: true, unresolvedSlots: ['font.bold'] })).toMatch(/Q3/)
+    // The conformance verdict path: the same production token through its helper.
+    const { stage5VerdictOf } = await import('./helpers/cf-stage5-verdict')
+    expect(stage5VerdictOf(c, 'Q3', { fill: 'none', strike: false, unresolved: ['font.bold'], visual: 'none' }, REPO_ROOT)).toMatch(/strikethrough/)
   })
 })

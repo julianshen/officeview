@@ -2250,7 +2250,7 @@ export async function stage4CaseRecords(manifest: CfManifest, rootDir: string = 
 // Fix round 2 (R2): the agreement and the slot-specific justifications live in ./stage5-withhold (shared with
 // cf-compare and the conformance test).
 export { stage5CellAgreement, type Stage5Excel, type Stage5Production } from './stage5-withhold'
-import { stage5CellAgreement, stage5Justifications, stage5MarkerSlots, type Stage5Excel, type Stage5Justification, type Stage5Production } from './stage5-withhold'
+import { stage5CellAgreement, stage5Justifications, type Stage5Excel, type Stage5Justification, type Stage5Production } from './stage5-withhold'
 
 export interface Stage5CaseRecord {
   caseId: string
@@ -2363,7 +2363,7 @@ export async function stage5CaseRecords(manifest: CfManifest, rootDir: string = 
           if (cls) production = { ...production, visual: `icon:${cls}` }
         }
         const justification = production.unresolved.length > 0 || production.visual === 'withheld' ? stage5Justifications(c, exp.ref) : []
-        const verdict = stage5CellAgreement(production, excel, justification, k.covering.flatMap(m => stage5MarkerSlots(m as never)))
+        const verdict = stage5CellAgreement(production, excel, justification)
         out.push({
           caseId: c.id, ref: exp.ref, status: c.status, compared: true,
           evidenceKind: k.kind, capabilities: k.formulaCaps, excel, production, justification,

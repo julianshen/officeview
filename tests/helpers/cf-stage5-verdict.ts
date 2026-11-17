@@ -13,8 +13,7 @@ import { cfDocumentEvaluationOf, cfWorkbookOfDocument, residentSource } from '..
 import { cfEvaluationContextFor } from '../../src/xlsx/cf/formula'
 import { resolveCfCellStyle } from '../../src/xlsx/cf/dxf'
 import { cfRulesVersion } from '../../src/xlsx/view/pagedSource'
-import { isCellInSqref } from '../../scripts/cf-refs/verify'
-import { stage5CellAgreement, stage5Justifications, stage5MarkerSlots, type Stage5Excel, type Stage5Production } from '../../scripts/cf-refs/stage5-withhold'
+import { stage5CellAgreement, stage5Justifications, type Stage5Excel, type Stage5Production } from '../../scripts/cf-refs/stage5-withhold'
 import type { CfManifest } from '../../scripts/cf-refs/cases'
 import type { XlsxDocument, XlsxSheet } from '../../src/xlsx/types'
 
@@ -51,8 +50,10 @@ export async function stage5ProductionAt(doc: XlsxDocument, sheet: XlsxSheet, re
 
 /** The slot-specific verdict at one Stage 5 cell (undefined: Excel's reading, or every unresolved slot justified). */
 export async function stage5SlotVerdict(c: Case, doc: XlsxDocument, sheet: XlsxSheet, ref: string, rootDir: string): Promise<string | undefined> {
-  const production = await stage5ProductionAt(doc, sheet, ref)
-  const covering = c.markers.filter(m => isCellInSqref(ref, m.sqref)).flatMap(m => stage5MarkerSlots(m as never))
-  const v = stage5CellAgreement(production, stage5ExcelAt(c, rootDir, ref), production.unresolved.length > 0 ? stage5Justifications(c, ref) : [], covering)
+  return stage5VerdictOf(c, ref, await stage5ProductionAt(doc, sheet, ref), rootDir)
+}
+/** The verdict for a given production token at `ref` (fix round 3: property-level paths, compositor-scoped grants). */
+export function stage5VerdictOf(c: Case, ref: string, production: Stage5Production, rootDir: string): string | undefined {
+  const v = stage5CellAgreement(production, stage5ExcelAt(c, rootDir, ref), production.unresolved.length > 0 ? stage5Justifications(c, ref) : [])
   return v.agrees ? undefined : `${c.id}:${ref}: ${v.disagreement}`
 }

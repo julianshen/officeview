@@ -25,7 +25,7 @@ import { getPaintables } from '../src/render/paint'
 import { computeMetrics } from '../src/xlsx/render'
 import type { XlsxDocument } from '../src/xlsx/types'
 import { parseRangeA1, parseA1, type CfObservedBar, type CfObservedIcon } from './cf-refs/verify'
-import { stage5CellAgreement, stage5Justifications, stage5MarkerSlots, stage5SlotJustified } from './cf-refs/stage5-withhold'
+import { stage5CellAgreement, stage5Justifications, stage5SlotJustified } from './cf-refs/stage5-withhold'
 import type { CfManifest, CfOracleCase } from './cf-refs/cases'
 import { CF_MANIFEST_PATH } from './cf-refs/generate'
 import { ICON_NO_ICON_MEMBER, iconTwinSetMembers, isCellInSqref, observedIconClass, verifyCfCase } from './cf-refs/verify'
@@ -159,10 +159,10 @@ export function verifyCellExpectations(
       // independently recorded justification exists; Stages 1-4 keep their withheld-is-skipped rule.
       if (actual.unresolved && c.stage === 5) {
         // Fix round 2 (R2): each unresolved slot needs a justification for that slot of that rule.
+        // Fix round 3 (S1, S2): exact write paths, each excused by a compositor-scoped grant; ALL only by an ALL grant.
         const js = stage5Justifications(c, exp.ref)
-        const covering = c.markers.filter(m => isCellInSqref(exp.ref, m.sqref)).flatMap(m => stage5MarkerSlots(m as never))
         const slots = actual.unresolvedSlots ?? ['ALL']
-        const open = (slots.includes('ALL') ? covering : slots.map(w => w.split('.')[0]!)).filter(slot => !stage5SlotJustified(js, slot))
+        const open = slots.filter(path => !stage5SlotJustified(js, path))
         if (open.length > 0) return `Cell ${exp.ref} expected matched: true, but production left ${open.join('+')} unresolved without a recorded justification`
       }
       if (actual.unresolved) continue
@@ -368,8 +368,7 @@ export function verifyCaseCells(
       const slots = actual.unresolvedSlots ?? (actual.unresolved ? ['ALL'] : [])
       const production = { fill: actual.applied && actual.style?.fillColor ? String(actual.style.fillColor).toUpperCase() : 'none', strike: actual.applied && actual.style?.strike === true, unresolved: [...slots], visual: 'none' }
       const excel = { fill: want === 'FFFFFFFF' ? 'none' : want, strike: strikes.get(ref) === true }
-      const covering = c.markers.filter(m => isCellInSqref(ref, m.sqref)).flatMap(m => stage5MarkerSlots(m as never))
-      const v = stage5CellAgreement(production, excel, slots.length > 0 ? stage5Justifications(c, ref) : [], covering)
+      const v = stage5CellAgreement(production, excel, slots.length > 0 ? stage5Justifications(c, ref) : [])
       if (!v.agrees) return `Cell ${ref}: ${v.disagreement}`
       compared++
     }
@@ -540,7 +539,7 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
       const outcome = outcomes.get(`${pos.row},${pos.col}`)
       const style = scope ? scope.effectiveStyle(pos.row, pos.col, base as never) : (base as never)
       if (style && style !== base && Object.keys(style).length > 0 && (outcome?.writes.length ?? 0) === 0) stage5Stats.painted++
-      else if (stage5Justifications(c, exp.ref).some(j => j.slots.includes('fill'))) stage5Stats.justifiedWithheld++
+      else if (stage5SlotJustified(stage5Justifications(c, exp.ref), 'fill')) stage5Stats.justifiedWithheld++
     }
   }
   scope?.dispose()

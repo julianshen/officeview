@@ -333,7 +333,7 @@ describe('per-case and per-variant Stage 5 audit rows (Task 39; fix round 1, F3)
     const { stage5CellAgreement } = await import('../scripts/cf-refs/audit')
     const RED = 'FFFFC7CE', GREEN = 'FFC6EFCE'
     // Fix round 2 (R2): a justification names its rule and the slots it may leave unresolved.
-    const font = [{ rule: 'r@p1', slots: ['font'], reason: 'x' }], fill = [{ rule: 'r@p1', slots: ['fill'], reason: 'x' }]
+    const font = [{ rule: 'r@p1', slots: ['font.strike'], reason: 'x' }], fill = [{ rule: 'r@p1', slots: ['fill'], reason: 'x' }]
     const icon = [{ rule: 'icon@p2', slots: ['iconSet'], reason: 'icon:composition-dxf-fill not held' }]
     // Codex's synthetic: production paints a green fill with an unresolved font.strike; Excel shows red. Wrong paint.
     expect(stage5CellAgreement({ fill: GREEN, strike: false, unresolved: ['font.strike'], visual: 'none' }, { fill: RED, strike: false }, font).agrees).toBe(false)
@@ -345,8 +345,12 @@ describe('per-case and per-variant Stage 5 audit rows (Task 39; fix round 1, F3)
     expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['fill'], visual: 'none' }, { fill: RED, strike: false }, []).agrees).toBe(false)
     expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['fill', 'iconSet'], visual: 'withheld' }, { fill: RED, strike: false }, icon).agrees).toBe(false)
     expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['fill'], visual: 'none' }, { fill: RED, strike: false }, fill).agrees).toBe(true)
-    // A cell-wide refusal needs every covering slot excused.
-    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['ALL'], visual: 'withheld' }, { fill: RED, strike: false }, icon, ['fill', 'iconSet']).agrees).toBe(false)
+    // A cell-wide refusal needs an ALL grant (compose.ts produces ALL only for a halting rule).
+    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['ALL'], visual: 'withheld' }, { fill: RED, strike: false }, [...icon, ...fill]).agrees).toBe(false)
+    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['ALL'], visual: 'withheld' }, { fill: RED, strike: false }, [{ rule: 'stop@p1', slots: ['ALL'], reason: 'x' }]).agrees).toBe(true)
+    // Property level (S2): a bold grant never excuses, nor suppresses the comparison of, the strikethrough.
+    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['font.bold'], visual: 'none' }, { fill: 'none', strike: true }, [{ rule: 'r@p1', slots: ['font.bold'], reason: 'x' }]).agrees).toBe(false)
+    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['font.strike'], visual: 'none' }, { fill: 'none', strike: true }, [{ rule: 'r@p1', slots: ['font.bold'], reason: 'x' }]).agrees).toBe(false)
     // Visual evidence: a bar where Excel measured none (or the reverse) disagrees; unmeasured is not compared.
     expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: [], visual: 'bar' }, { fill: 'none', strike: false, visual: 'none' }, []).agrees).toBe(false)
     expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: [], visual: 'bar' }, { fill: 'none', strike: false, visual: 'bar' }, []).agrees).toBe(true)

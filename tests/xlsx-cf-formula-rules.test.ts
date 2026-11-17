@@ -7,7 +7,7 @@
  * paint paths are exercised under injected evidence only.
  */
 import { describe, expect, it } from 'vitest'
-import { stage5Justifications, stage5MarkerSlots, stage5SlotJustified } from '../scripts/cf-refs/stage5-withhold'
+import { stage5Justifications, stage5SlotJustified } from '../scripts/cf-refs/stage5-withhold'
 import { PRE_STAGE5_EVIDENCE } from './helpers/cf-stage5-off'
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
@@ -147,10 +147,10 @@ describe('expression rule paints exactly the DisplayFormat cells (Lesson 1)', ()
       if (isVerified && observed) compared++
       // Fix rounds 1-2 (F1, R2): a withheld cell counts as withheld only when EVERY unresolved slot has a justification for
       // that slot of that rule (stage5Justifications), never on production's own unavailable state.
-      const slots = outcome?.kind === 'unresolved' ? ['ALL'] : outcome?.kind === 'ready' ? [...(outcome.value.unresolvedWrites ?? [])].map(w => w.split('.')[0]!) : []
+      // Fix round 3 (S1, S2): exact write paths, each excused by a compositor-scoped grant; ALL only by an ALL grant.
+      const slots = outcome?.kind === 'unresolved' ? ['ALL'] : outcome?.kind === 'ready' ? [...(outcome.value.unresolvedWrites ?? [])] : []
       const js = stage5Justifications(c, e.ref)
-      const coveringSlots = c.markers.filter(m => isCellInSqref(e.ref, m.sqref)).flatMap(m => stage5MarkerSlots(m as never))
-      const justified = got.withheld && slots.length > 0 && (slots.includes('ALL') ? coveringSlots : slots).every(slot => stage5SlotJustified(js, slot))
+      const justified = got.withheld && slots.length > 0 && slots.every(path => stage5SlotJustified(js, path))
       const v = stage5CellVerdict({ key: `${c.id}:${e.ref}`, verified: isVerified, ...(observed ? { observed } : {}) }, { fill: got.fill, strike: got.strike }, formulaSourced, justified)
       if (v) violations.push(v)
       else if (isVerified && observed) { if (got.fill === observed.fill && got.strike === observed.strike) exact++; else withheld++ }

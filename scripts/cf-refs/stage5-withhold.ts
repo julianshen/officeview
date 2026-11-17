@@ -49,6 +49,7 @@ export const STAGE5_ENUMERATED_REFUSALS: ReadonlyArray<Readonly<{ caseId: string
  */
 export const STAGE5_EXPECTED_COMPILE_REFUSALS: ReadonlyArray<Readonly<{ caseId: string; formula: string; refused: 'cf-unsupported-rule' | 'cf-resource-limit'; reason: string }>> = [
   { caseId: 'stage5-formula-truthiness', formula: 'NA()', refused: 'cf-unsupported-rule', reason: 'OD-13 / Ruling S5-B: the closed tier-1 function allow-list holds no NA(), so the error-truth rule built on it is unresolved' },
+  { caseId: 'stage5-composition', formula: 'INDIRECT("A"&ROW())>0', refused: 'cf-unsupported-rule', reason: 'Ruling S5-O / S5-B: the composition case\'s INDIRECT expression is the one production cannot evaluate (the case\'s question; INDIRECT is a recorded unresolved shape, stage5-unresolved-shapes-indirect)' },
 ]
 
 const a1 = (ref: string): { row: number; col: number } => {
@@ -61,26 +62,45 @@ function held(capability: string, published: (id: string) => boolean): boolean {
   return Object.prototype.hasOwnProperty.call(CF_FORMULA_PRODUCTION_READINGS, capability) ? cfFormulaReading(capability, published) !== undefined : published(capability)
 }
 
-/** The write slots (compose.ts groups) a rule's marker writes: its visual slot, or its DXF's property groups. */
+/**
+ * Fix round 3 (S2): the exact write paths a rule's marker writes, as compose.ts keeps them (parse.ts rule.writes): a
+ * visual's own slot (a colour scale writes `colorScale` and `fill`), or each DXF property separately (`fill`,
+ * `font.strike`, `font.bold`, ...). Never a whole-font grant.
+ */
 export function stage5MarkerSlots(m: Marker): string[] {
-  if (m.ruleType === 'dataBar') return ['dataBar', 'showValue']
-  if (m.ruleType === 'iconSet') return ['iconSet', 'showValue']
-  if (m.ruleType === 'colorScale') return ['fill', 'colorScale']
+  if (m.ruleType === 'dataBar') return ['dataBar']
+  if (m.ruleType === 'iconSet') return ['iconSet']
+  if (m.ruleType === 'colorScale') return ['colorScale', 'fill']
   const d = m.dxf ?? {}
   const out: string[] = []
   if (d.fillRgb !== undefined) out.push('fill')
-  if (d.fontRgb !== undefined || d.bold !== undefined || d.italic !== undefined || d.underline !== undefined || d.strikethrough !== undefined) out.push('font')
+  if (d.fontRgb !== undefined) out.push('font.color')
+  if (d.bold !== undefined) out.push('font.bold')
+  if (d.italic !== undefined) out.push('font.italic')
+  if (d.underline !== undefined) out.push('font.underline')
+  if (d.strikethrough !== undefined) out.push('font.strike')
   if (d.numFmt !== undefined) out.push('numFmt')
-  if (d.borderTop !== undefined || d.borderBottom !== undefined) out.push('border')
+  if (d.borderTop !== undefined) out.push('border.top')
+  if (d.borderBottom !== undefined) out.push('border.bottom')
   return out
 }
 
 const label = (m: Marker): string => `${m.capabilityId}/${m.ruleType}${m.priority !== undefined ? `@p${m.priority}` : ''}`
 
-/** The capability reasons a formula marker is not held (empty: production holds everything it needs). */
+/** A composition gate a marker's capability names (compose.ts): a stop gate of a lower kind, or the expression-vs-scale
+ * fill arbitration. Undefined: the capability is the rule's own reading (its evaluation). */
+function compositionGate(capabilityId: string): { gate: 'stop'; kind: 'dxf' | 'scale' | 'bar' | 'icon' } | { gate: 'fill-arbitration' } | undefined {
+  const stop = /^formula:composition-(?:stop|indirect-ahead)-(dxf|scale|bar|icon)$/.exec(capabilityId)
+  if (stop) return { gate: 'stop', kind: stop[1] as 'dxf' | 'scale' | 'bar' | 'icon' }
+  if (capabilityId === 'formula:composition-expression-vs-scale') return { gate: 'fill-arbitration' }
+  return undefined
+}
+
+/** The reasons a formula marker's RULE is unresolved (its own evaluation; empty: production holds everything it needs).
+ * The marker's composition gate, if any, is not one of them (see `stage5Justifications`). */
 function formulaMarkerReasons(m: Marker, caseId: string, published: (id: string) => boolean): string[] {
   const reasons: string[] = []
-  if (!held(m.capabilityId, published)) reasons.push(`${m.capabilityId} not held`)
+  if (!compositionGate(m.capabilityId) && !held(m.capabilityId, published)) reasons.push(`${m.capabilityId} not held`)
   const ranges = m.sqref.trim().split(/\s+/)
   const use = m.formula!.kind as CfFormulaUse
   const texts = new Set(m.formulas ?? [])
@@ -113,34 +133,56 @@ function formulaMarkerReasons(m: Marker, caseId: string, published: (id: string)
   return reasons
 }
 
-/** The rule- and slot-specific justifications for `ref` of `c` (empty: no slot of the cell may be left unresolved). */
+/**
+ * The rule- and slot-specific justifications for `ref` of `c` (empty: no write of the cell may be left unresolved). Each
+ * is scoped by its real effect in compose.ts (fix round 3, S1):
+ * - the rule itself unresolved (its evaluation needs an unheld capability, a record configuration, an enumerated or an
+ *   expected compile refusal): a stopIfTrue rule halts composition, `ALL`; otherwise its own writes, plus the lower icon or
+ *   bar slot an unknown fill or bar leaves unknown (icon:composition-dxf-fill, bar:composition-dxf-fill,
+ *   icon:composition-with-bar not held);
+ * - a stop gate the rule's marker names (formula:composition-stop-<kind>, -indirect-ahead-<kind>) not held: applied AFTER
+ *   the stopping rule paints, it taints only the writes of the lower rules of that kind;
+ * - the expression-vs-scale arbitration not held: `fill` and `colorScale`;
+ * - a literal Stage 3-4 gate a twin meets (bar:bounds-num, icon:composition-dxf-fill): that visual's own slot.
+ */
 export function stage5Justifications(c: CaseLike | CfOracleCase, ref: string, published: (id: string) => boolean = id => VERIFIED_CAPABILITIES.has(id)): Stage5Justification[] {
   const cs = c as unknown as CaseLike
   const covering = cs.markers.filter(m => isCellInSqref(ref, m.sqref))
-  const lowerSlots = (m: Marker): string[] => m.stopIfTrue && m.priority !== undefined
-    ? covering.filter(o => o.priority !== undefined && o.priority > m.priority!).flatMap(stage5MarkerSlots) : []
-  const scope = (m: Marker): string[] => [...new Set([...stage5MarkerSlots(m), ...lowerSlots(m)])]
+  const lower = (m: Marker): Marker[] => m.priority === undefined ? [] : covering.filter(o => o.priority !== undefined && o.priority > m.priority!)
+  const kindOf = (m: Marker): 'dxf' | 'scale' | 'bar' | 'icon' => (m.ruleType === 'colorScale' ? 'scale' : m.ruleType === 'dataBar' ? 'bar' : m.ruleType === 'iconSet' ? 'icon' : 'dxf')
+  /** The writes an unresolved rule leaves unknown (compose.ts: its own writes, or ALL when it halts). */
+  const unresolvedScope = (m: Marker): string[] => {
+    if (m.stopIfTrue) return ['ALL']
+    const own = stage5MarkerSlots(m)
+    const out = new Set(own)
+    for (const o of lower(m)) {
+      if (o.ruleType === 'iconSet' && ((own.includes('fill') && !published('icon:composition-dxf-fill')) || (own.includes('dataBar') && !published('icon:composition-with-bar')))) out.add('iconSet')
+      if (o.ruleType === 'dataBar' && own.includes('fill') && !published('bar:composition-dxf-fill')) out.add('dataBar')
+    }
+    return [...out]
+  }
   const out: Stage5Justification[] = []
   for (const m of covering) {
     if (m.formula !== undefined) {
-      for (const reason of formulaMarkerReasons(m, cs.id, published)) out.push({ rule: label(m), slots: scope(m), reason })
+      for (const reason of formulaMarkerReasons(m, cs.id, published)) out.push({ rule: label(m), slots: unresolvedScope(m), reason })
+      const gate = compositionGate(m.capabilityId)
+      if (gate && !held(m.capabilityId, published)) {
+        const slots = gate.gate === 'fill-arbitration' ? ['fill', 'colorScale'] : [...new Set(lower(m).filter(o => kindOf(o) === gate.kind).flatMap(stage5MarkerSlots))]
+        if (slots.length > 0) out.push({ rule: label(m), slots, reason: `${m.capabilityId} not held (a composition gate)` })
+      }
     } else {
-      // Literal visual gates of Stages 3-4 that a Stage 5 twin meets (each a capability absent from the published set):
-      // a bar with a `num` bound needs bar:bounds-num (Task 37 ruling); an icon over a cell a DXF fill rule also covers
-      // needs icon:composition-dxf-fill (S4-I). Each excuses only that visual's own slot.
-      if (m.ruleType === 'dataBar' && (m.bar?.cfvo ?? []).some(b => b.type === 'num') && !published('bar:bounds-num')) out.push({ rule: label(m), slots: stage5MarkerSlots(m), reason: 'bar:bounds-num not held (a literal bar with num bounds)' })
-      if (m.ruleType === 'iconSet' && covering.some(o => o !== m && o.dxf?.fillRgb !== undefined) && !published('icon:composition-dxf-fill')) out.push({ rule: label(m), slots: stage5MarkerSlots(m), reason: 'icon:composition-dxf-fill not held (an icon over a DXF fill)' })
+      if (m.ruleType === 'dataBar' && (m.bar?.cfvo ?? []).some(b => b.type === 'num') && !published('bar:bounds-num')) out.push({ rule: label(m), slots: unresolvedScope(m), reason: 'bar:bounds-num not held (a literal bar with num bounds)' })
+      if (m.ruleType === 'iconSet' && covering.some(o => o !== m && o.dxf?.fillRgb !== undefined) && !published('icon:composition-dxf-fill')) out.push({ rule: label(m), slots: ['iconSet'], reason: 'icon:composition-dxf-fill not held (an icon over a DXF fill)' })
     }
   }
-  // A record configuration (fixed before capture: "recorded, never evidence") names its refusal: it excuses the slots
-  // of the formula rules of its capability that cover the cell.
+  // A record configuration (fixed before capture: "recorded, never evidence") names a refusal of the rules of its capability.
   for (const cfg of cs.formulaConfigurations ?? []) {
     if (!cfg.record || !cfg.refs.includes(ref)) continue
-    for (const m of covering.filter(x => x.formula !== undefined && (cfg.capabilityId === undefined || x.capabilityId === cfg.capabilityId))) out.push({ rule: label(m), slots: scope(m), reason: `${cfg.id}: ${cfg.record}` })
+    for (const m of covering.filter(x => x.formula !== undefined && (cfg.capabilityId === undefined || x.capabilityId === cfg.capabilityId))) out.push({ rule: label(m), slots: unresolvedScope(m), reason: `${cfg.id}: ${cfg.record}` })
   }
   for (const e of STAGE5_ENUMERATED_REFUSALS) {
     if (e.caseId !== cs.id || !e.refs.includes(ref)) continue
-    for (const m of covering.filter(x => x.formulas?.includes(e.formula))) out.push({ rule: label(m), slots: scope(m), reason: e.reason })
+    for (const m of covering.filter(x => x.formulas?.includes(e.formula))) out.push({ rule: label(m), slots: unresolvedScope(m), reason: e.reason })
   }
   return out
 }
@@ -150,10 +192,13 @@ export function stage5WithholdJustification(c: CaseLike | CfOracleCase, ref: str
   return [...new Set(stage5Justifications(c, ref, published).map(j => `${j.rule}: ${j.reason}`))].sort()
 }
 
-/** Whether the justifications excuse `slot` (a compose.ts write group; `ALL` needs every covering rule's slots). */
-export function stage5SlotJustified(justifications: readonly Stage5Justification[], slot: string): boolean {
-  return justifications.some(j => j.slots.includes(slot) || j.slots.includes('ALL'))
+/** Whether the justifications excuse the unresolved write `path` (fix round 3: exact paths; `ALL` only by an `ALL` grant). */
+export function stage5SlotJustified(justifications: readonly Stage5Justification[], path: string): boolean {
+  return justifications.some(j => j.slots.some(s => s === 'ALL' || s === path || (path !== 'ALL' && path.startsWith(`${s}.`))))
 }
+
+/** compose.ts `conflicts`: whether an unresolved write `a` covers the component `b`. */
+export const stage5Conflicts = (a: string, b: string): boolean => a === 'ALL' || b === 'ALL' || a === b || a.startsWith(`${b}.`) || b.startsWith(`${a}.`)
 
 /** What production shows at a cell: the resolved fill/strike, the unresolved write slots, and the visual it draws. */
 export interface Stage5Production { fill: string; strike: boolean; unresolved: string[]; visual: string }
@@ -161,27 +206,23 @@ export interface Stage5Production { fill: string; strike: boolean; unresolved: s
 export interface Stage5Excel { fill: string; strike: boolean; visual?: string }
 
 const argbClose = (a: string, b: string): boolean => a === b || (a.length === 8 && b.length === 8 && [2, 4, 6].every(k => Math.abs(parseInt(a.slice(k, k + 2), 16) - parseInt(b.slice(k, k + 2), 16)) <= 8))
-const groupOf = (w: string): string => w.split('.')[0]!
-
 /**
- * Rulings F3/R2: one cell's verdict. Every unresolved slot must be excused by a justification naming that slot; a
- * cell-wide `ALL` needs every slot of every covering rule excused (`coveringSlots`). Every slot left resolved is compared
- * with Excel: the fill (within +-8, the Stage 2 scale tolerance), the strikethrough, and a bar or icon Excel was measured
- * to draw (or not).
+ * Rulings F3/R2/S1/S2: one cell's verdict. Every unresolved write path must be excused by a justification naming it (an
+ * `ALL` only by an `ALL` grant, which compose.ts produces only for a halting rule). Every component no unresolved write
+ * covers is compared with Excel, property by property: the fill (within +-8, the Stage 2 scale tolerance), the
+ * strikethrough, and a bar or icon Excel was measured to draw (or not).
  */
-export function stage5CellAgreement(production: Stage5Production, excel: Stage5Excel | undefined, justifications: readonly Stage5Justification[], coveringSlots: readonly string[] = []): { agrees: boolean; disagreement?: string } {
-  const unresolved = new Set(production.unresolved.map(groupOf))
-  const toExcuse = unresolved.has('ALL') ? new Set([...coveringSlots, ...[...unresolved].filter(s => s !== 'ALL')]) : unresolved
-  for (const slot of toExcuse) if (!stage5SlotJustified(justifications, slot)) return { agrees: false, disagreement: `slot ${slot} unresolved without a recorded justification for it` }
-  const open = (slot: string): boolean => !unresolved.has('ALL') && !unresolved.has(slot)
+export function stage5CellAgreement(production: Stage5Production, excel: Stage5Excel | undefined, justifications: readonly Stage5Justification[]): { agrees: boolean; disagreement?: string } {
+  for (const path of production.unresolved) if (!stage5SlotJustified(justifications, path)) return { agrees: false, disagreement: `${path} unresolved without a recorded justification for it` }
+  const open = (component: string): boolean => !production.unresolved.some(u => stage5Conflicts(u, component))
   if (!excel) return { agrees: true }
   if (open('fill') && open('colorScale') && !argbClose(production.fill, excel.fill)) return { agrees: false, disagreement: `fill ${production.fill} vs Excel ${excel.fill}` }
-  if (open('font') && production.strike !== excel.strike) return { agrees: false, disagreement: `strikethrough ${production.strike} vs Excel ${excel.strike}` }
+  if (open('font.strike') && production.strike !== excel.strike) return { agrees: false, disagreement: `strikethrough ${production.strike} vs Excel ${excel.strike}` }
   if (excel.visual !== undefined) {
     const slot = excel.visual === 'bar' || production.visual === 'bar' ? 'dataBar' : 'iconSet'
     if (production.visual === 'withheld') {
       if (excel.visual !== 'none' && !stage5SlotJustified(justifications, slot)) return { agrees: false, disagreement: `visual withheld without a recorded justification (Excel ${excel.visual})` }
-    } else if (production.visual !== excel.visual) return { agrees: false, disagreement: `visual ${production.visual} vs Excel ${excel.visual}` }
+    } else if (open(slot) && production.visual !== excel.visual) return { agrees: false, disagreement: `visual ${production.visual} vs Excel ${excel.visual}` }
   }
   return { agrees: true }
 }
