@@ -28,13 +28,27 @@ import { rc, shown } from './helpers/cf-formula-rules'
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 /** Registered entries no Stage 5 configuration reproduces in full yet, with why (the cells it cannot reach withhold, never paint). */
 const UNREACHABLE: Readonly<Record<string, string>> = {
-  'formula:predicate-timeperiod-divergent': 'the divergent timePeriod formulas use TODAY(), and formula:fn-today is Task 38',
   'formula:truth-error': 'each configuration holds an NA() row, and NA is not on the allow-list (S5-B): those cells withhold, the 1/0 rows show error-no-match',
   'formula:fn-conditional-aggregate': 'its configuration\'s COUNTIF($A:$A,A2) column holds booleans and numeric text, a whole-rule hoist refusal (S5-HOIST); reproduced through the stage5-formula-hoist rows',
 }
 const REUSE_ONLY = /^formula:composition-stub-successor-/
 
 type Config = NonNullable<CfManifest['cases'][number]['formulaConfigurations']>[number]
+/** The refs of a configuration that production shows on open: a bare ref, or `pre:X` (what Excel shows before any calculate,
+ * which is what production shows: it never calculates). `calc:` and `post:` observations follow an explicit calculation and
+ * are not paint. */
+const isPaintRef = (r: string): boolean => !r.includes(':') || r.startsWith('pre:')
+const cellOfRef = (r: string): string => r.replace(/^pre:/, '')
+/** The instant a clock fixture is evaluated at: 03:00 on its anchor local date in its required zone (inside the capture window, where the
+ * local and UTC dates differ), so `TODAY()` is the anchor and the readings discriminate. */
+function clockFor(c: CfManifest['cases'][number]): { zone: string; now: number } | undefined {
+  const req = (c as unknown as { clockRequirement?: { anchorSerial?: number; requiredTimeZone?: string } }).clockRequirement
+  if (!req?.anchorSerial || !req.requiredTimeZone) return undefined
+  const midnightUtc = (req.anchorSerial - 25569) * 86_400_000
+  const wall = (epoch: number): number => { const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: req.requiredTimeZone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).formatToParts(new Date(epoch)).map(x => [x.type, Number(x.value)])); return Date.UTC(p.year!, p.month! - 1, p.day!, p.hour!, p.minute!, p.second!) }
+  const offset = wall(midnightUtc) - midnightUtc
+  return { zone: req.requiredTimeZone, now: midnightUtc + 3 * 3_600_000 - offset }
+}
 /** What production shows at one cell. */
 export type Shown = Readonly<{ fill: string; strike: boolean; visual: string; withheld: boolean
   /** A bar or icon is drawn: a visual descriptor that is not a zero-length bar (S5-WITNESS: a bar at its lower bound is empty). */
@@ -42,7 +56,7 @@ export type Shown = Readonly<{ fill: string; strike: boolean; visual: string; wi
 const tokenOf = (cfg: Config, s: Shown | undefined): string => !s ? 'missing' : s.withheld ? 'withheld' : `${s.fill}${s.strike ? '+strike' : ''}${cfg.observable === 'crop' ? `|${s.visual}` : ''}`
 /** The cells a configuration's verdict reads: its designated cells, every twin its hypotheses name, every declared witness. */
 const cellsOf = (cfg: Config): string[] => {
-  const refs = cfg.refs.filter(r => !r.includes(':'))
+  const refs = cfg.refs.filter(isPaintRef).map(cellOfRef)
   const twins = Object.values(cfg.hypotheses).flatMap(h => Object.values(h)).filter(t => t.startsWith('twin:')).map(t => t.slice(5).replace('+strike', ''))
   return [...new Set([...refs, ...twins, ...Object.keys(cfg.twinExpect ?? {})])]
 }
@@ -51,7 +65,7 @@ const cellsOf = (cfg: Config): string[] => {
  * whether the reading is reproduced in full (no designated cell withheld), and whether a rival reading is contradicted.
  */
 export function configurationVerdict(cfg: Config, reading: string, got: ReadonlyMap<string, Shown>): { violations: string[]; unusable: string[]; reproduced: boolean; discriminating: boolean } {
-  const refs = cfg.refs.filter(r => !r.includes(':')) // build-time pre:/calc:/post: observations are not paint
+  const refs = cfg.refs.filter(isPaintRef)
   const predicted = cfg.hypotheses[reading] as Readonly<Record<string, string>>
   const violations: string[] = []
   // Ruling S5-WITNESS: every declared witness is validated against its own declaration before any twin observation is
@@ -73,10 +87,10 @@ export function configurationVerdict(cfg: Config, reading: string, got: Readonly
     const twin = tokenOf(cfg, got.get(base.slice(5)))
     return cfg.observable === 'crop' ? twin : `${twin.replace('+strike', '')}${strike ? '+strike' : ''}`
   }
-  const bad = refs.filter(r => tokenOf(cfg, got.get(r)) !== 'withheld' && tokenOf(cfg, got.get(r)) !== want(predicted, r))
-  for (const r of bad) violations.push(`${cfg.id} ${reading} ${r}: production ${tokenOf(cfg, got.get(r))}, reading predicts ${want(predicted, r)}`)
-  const reproduced = witnessesHold && violations.length === 0 && refs.every(r => tokenOf(cfg, got.get(r)) !== 'withheld')
-  const discriminating = reproduced && Object.entries(cfg.hypotheses).some(([name, h]) => name !== reading && refs.some(r => want(h, r) !== tokenOf(cfg, got.get(r))))
+  const bad = refs.filter(r => tokenOf(cfg, got.get(cellOfRef(r))) !== 'withheld' && tokenOf(cfg, got.get(cellOfRef(r))) !== want(predicted, r))
+  for (const r of bad) violations.push(`${cfg.id} ${reading} ${r}: production ${tokenOf(cfg, got.get(cellOfRef(r)))}, reading predicts ${want(predicted, r)}`)
+  const reproduced = witnessesHold && violations.length === 0 && refs.every(r => tokenOf(cfg, got.get(cellOfRef(r))) !== 'withheld')
+  const discriminating = reproduced && Object.entries(cfg.hypotheses).some(([name, h]) => name !== reading && refs.some(r => want(h, r) !== tokenOf(cfg, got.get(cellOfRef(r)))))
   if (reproduced && !discriminating) violations.push(`${cfg.id}: no rival of ${reading} is contradicted (the comparison does not discriminate)`)
   return { violations, unusable, reproduced, discriminating }
 }
@@ -94,7 +108,7 @@ export function unconfirmableViolations(cfg: Config, verdict: ReturnType<typeof 
     if (!ref || !allowed.has(ref)) out.push(`${reason} (not a documented unconfirmable witness)`)
   }
   // Task 37 fix round 1: an entry whose designated cells production withholds (fail closed) accepts them withheld.
-  if (!CF_STAGE5_UNCONFIRMABLE[cfg.capabilityId]?.designatedWithheld) for (const r of cfg.refs.filter(x => !x.includes(':'))) if (got.get(r)?.withheld !== false) out.push(`${cfg.id} ${r}: withheld`)
+  if (!CF_STAGE5_UNCONFIRMABLE[cfg.capabilityId]?.designatedWithheld) for (const r of cfg.refs.filter(isPaintRef).map(cellOfRef)) if (got.get(r)?.withheld !== false) out.push(`${cfg.id} ${r}: withheld`)
   return out
 }
 
@@ -170,7 +184,7 @@ describe('every registered formula reading is the reading production implements,
         for (const reading of typeof entry === 'string' ? [entry] : entry) {
           const predicted = cfg.hypotheses[reading] as Readonly<Record<string, string>> | undefined
           expect(predicted, `${cfg.capabilityId} ${cfg.id}: ${reading} is a hypothesis`).toBeDefined()
-          const refs = cfg.refs.filter(r => !r.includes(':')) // build-time pre:/calc:/post: observations are not paint
+          const refs = cfg.refs.filter(isPaintRef)
           if (refs.length === 0) continue
           const selections = Object.fromEntries(lists.map(([k, v]) => [k, v[0]!]))
           selections[cfg.capabilityId] = reading
@@ -180,9 +194,10 @@ describe('every registered formula reading is the reading production implements,
               const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
               const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
               const cells = cellsOf(cfg)
+              const clock = clockFor(c)
               const memory = createCfMemory()
               // The document's other sheets (Task 36): cross-sheet configurations read them through the static workbook seam.
-              const service = createCfService(sheet.conditionalFormatting!, memory, { evidence: cfRuntimeEvidence, evaluation: cfEvaluationContextFor(cfDocumentEvaluationOf(doc), Date.now), sheetName: sheet.name, workbook: cfWorkbookOfDocument(doc.sheets, memory, 'engine') })
+              const service = createCfService(sheet.conditionalFormatting!, memory, { evidence: cfRuntimeEvidence, evaluation: cfEvaluationContextFor(clock ? { ...cfDocumentEvaluationOf(doc), timeZone: clock.zone } : cfDocumentEvaluationOf(doc), clock ? () => clock.now : Date.now), sheetName: sheet.name, workbook: cfWorkbookOfDocument(doc.sheets, memory, 'engine') })
               const stamp = { owner: 'readings', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(sheet.conditionalFormatting!), viewGen: 0, structureGen: 0, clockGen: 0 }
               const lease = await service.prepareCf({ stamp, sourceRects: cells.map(r => { const { row, col } = rc(r); return { firstRow: row, lastRow: row, firstCol: col, lastCol: col } }), signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, residentSource(sheet, stamp, memory, 'engine'))
               const out = new Map<string, Shown>()

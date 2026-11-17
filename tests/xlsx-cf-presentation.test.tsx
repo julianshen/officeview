@@ -6,8 +6,8 @@
  * Mounted tests drive the real component path (real budgets, real scopes,
  * blank cells, StrictMode, sheet switches).
  */
-import { describe, expect, it } from 'vitest'
-import { render } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { act, render } from '@testing-library/react'
 import React from 'react'
 import { GridSemantics } from '../src/components/xlsx/GridSemantics'
 import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
@@ -513,6 +513,46 @@ describe('regression bot P2: clockGen in cfTextKey', () => {
   it('includes clockGen in the display text scope key', () => {
     const fs = require('node:fs')
     const src = fs.readFileSync('src/components/xlsx/InteractiveSheetDoc.tsx', 'utf8')
-    expect(src).toMatch(/cfTextKeyFor\(\{[^}]*rects: cfTextRects \}\), remote\?\.merges\(activeSheetId\)\.gen \?\? -1, clockGen\]/)
+    expect(src).toMatch(/cfTextKeyFor\(\{[^}]*rects: cfTextRects \}\), remote\?\.merges\(activeSheetId\)\.gen \?\? -1, tickGen\]/)
+  })
+})
+
+describe('the midnight tick re-prepares only sheets that read the clock (S5-M, Ruling M2)', () => {
+  /** One mounted resident sheet under a clock 10 s before local midnight; resolves with how many CF paint preparations the
+   * tick caused. A formula rule is compiled from its text; no Stage 5 evidence is needed: the tick keys on what the rules read. */
+  async function preparationsAcrossMidnight(rule: CfRule): Promise<{ before: number; after: number }> {
+    const { createObjectWorkbookSource } = await import('../src/xlsx/view/source')
+    const paint = await import('../src/xlsx/cf/render')
+    const { SheetTileRenderer } = await import('../src/components/xlsx/sheetTiles')
+    const sheet = { name: 'Tick', sheetId: 's', cols: [{ min: 0, max: 0, widthChars: 12 }], merges: [], mergeRanges: [],
+      rows: Array.from({ length: 5 }, (_, r) => ({ index: r, cells: [{ row: r, col: 0, ref: `A${r + 1}`, styleIndex: 0, value: r }] })),
+      conditionalFormatting: { diagnostics: [], rules: [rule] } } as unknown as XlsxSheet
+    const doc = { sheets: [sheet] }
+    const source = createObjectWorkbookSource(doc, `tick-${Math.random()}`)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'], now: new Date(2026, 5, 10, 23, 59, 50) })
+    const actual = paint.prepareCfPaint
+    let calls = 0
+    const spy = vi.spyOn(paint, 'prepareCfPaint').mockImplementation(async (s, options) => { calls++; return actual(s, options) })
+    const presented = vi.spyOn(SheetTileRenderer.prototype, 'present')
+    const ui = render(<InteractiveSheetDoc doc={doc} source={source} />)
+    try {
+      await vi.waitFor(() => expect(presented).toHaveBeenCalled())
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+      const before = calls
+      await act(async () => { await vi.advanceTimersByTimeAsync(15_000) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+      return { before, after: calls }
+    } finally { ui.unmount(); spy.mockRestore(); presented.mockRestore(); vi.useRealTimers() }
+  }
+
+  it('a TODAY() rule sheet is prepared again once at the tick; a sheet with no clock-dependent rule is not', async () => {
+    const { formulaRule } = await import('./helpers/cf-formula')
+    const today = formulaRule('$A1=TODAY()', 'A1:A5', { dxf: { 'fill.bg': 'FFFF0000' } })
+    const plain = cellIsRule({ 'fill.bg': 'FF00FF00' }, ['fill'])
+    const clocked = await preparationsAcrossMidnight(today)
+    expect(clocked.after, 'the TODAY() sheet re-prepares at the tick').toBeGreaterThan(clocked.before)
+    const free = await preparationsAcrossMidnight(plain)
+    expect(free.before).toBeGreaterThan(0)
+    expect(free.after, 'a clock-free sheet sees no tick: zero preparations').toBe(free.before)
   })
 })

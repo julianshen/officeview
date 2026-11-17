@@ -567,12 +567,14 @@ export function cfRoutePolicy(evaluation: CfEvaluationContext | undefined, expli
   const policy = explicit ?? evaluation.valuePolicy
   return { policy, evaluation: policy === evaluation.valuePolicy ? evaluation : undefined }
 }
-/** One clock snapshot from the injected `now`; `clockGen` is the local day serial of that sample (the interactive
+/** One clock snapshot from the injected `now`; `clockGen` is the local day number of that sample (the interactive
  * midnight tick keys on it). A zone the engine cannot resolve falls back to the UTC day so the generation still advances. */
 export function cfEvaluationContextFor(policy: CfDocumentEvaluation, now: () => number): CfEvaluationContext {
   const epochNowMs = now()
   const serial = epochToSerial(epochNowMs, policy.timeZone, policy.dateSystem)
-  const clockGen = typeof serial === 'number' ? Math.floor(serial) : Number.isFinite(epochNowMs) ? Math.floor(epochNowMs / 86_400_000) : 0
+  // The unix day number of the local calendar date: the interactive midnight tick's own numbering (`localDaySerial`), so a
+  // main-thread stamp and this one name the same day. A zone the engine cannot resolve falls back to the UTC day.
+  const clockGen = typeof serial === 'number' ? Math.floor(serial) - (policy.dateSystem === '1904' ? 24_107 : 25_569) : Number.isFinite(epochNowMs) ? Math.floor(epochNowMs / 86_400_000) : 0
   return Object.freeze({ ...policy, clock: Object.freeze({ epochNowMs, clockGen }) })
 }
 

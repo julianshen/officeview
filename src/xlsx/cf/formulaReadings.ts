@@ -6,7 +6,7 @@
  *
  * A capability with no entry here is never honoured, whatever evidence holds it (`cfFormulaReading` returns undefined):
  * a rule that needs it stays unresolved. That is how `formula:truth-range`, `formula:fn-today`, `formula:cross-sheet-missing`,
- * the multi-range anchor and manual-calculation capabilities stay withheld until their own tasks implement them. Task 37
+ * the multi-range anchor and `formula:calc-manual-today` stay withheld until their own tasks implement them. Task 37
  * registered the cfvo, x14-scale and activation readings; the family ids (`scale:`/`bar:`/`icon:`) are listed here too, so the
  * Stage 5 publication gate sees one table.
  */
@@ -37,6 +37,13 @@ export const CF_FORMULA_PRODUCTION_READINGS: Readonly<Record<string, string | re
   'formula:fn-conditional-aggregate': 'documented',
   'formula:fn-date': 'documented',
   'formula:fn-row-column': 'documented',
+  // formula.ts (Ruling S5-M): TODAY() is the local calendar date of the preparation's one clock snapshot, in the document's
+  // zone: the reading `timePeriod` already uses. NOW() is not on the allow-list (OD-14).
+  'formula:fn-today': 'local-today',
+  // service.ts (Ruling S5-L): under `calcMode="manual"` a formula reads the saved values the grid shows (a resident and a paged
+  // workbook both keep the saved `<v>` under manual calculation; nothing here ever calculates). `formula:calc-manual-today`
+  // is not registered: a volatile TODAY() under manual calculation stays withheld until it is measured.
+  'formula:calc-manual-saved-values': 'saved-values',
   // statistics.ts `prepareHoists`: engine-ordered reducers and COUNTIF's plain-equality arm.
   'formula:hoist-aggregate': 'documented',
   'formula:hoist-countif-frequency': 'documented',

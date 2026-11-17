@@ -12,6 +12,7 @@
  */
 import { CF_ALL_ROWS, cfSheetNonUniformFontRows } from '../rowFont'
 import { isDateNumberStyle } from '../dateNumberFormat'
+import { cfRulesUseClock } from '../cfLoader'
 import { defaultColumnWidthPx, defaultRowPtOf } from '../columnWidth'
 import type {
   AuthoritativeCell, CellRead, ColumnEntry, ColumnQuery, DrawingAnchor, OverviewGroup, OverviewQuery, Page, PopulatedQuery, RangeCompletion,
@@ -967,6 +968,9 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       } else {
         liveCfGen = versionCfRules('[]')
       }
+    // One clock per preparation (Ruling S5-M): sampled once, shared by the predicates, the formulas and the stamp.
+    const instant = (options?.now ?? Date.now)()
+    let liveClockGen: number | undefined
     const source: CfValueSource = {
       bounds: async (_id: string) => {
         // A complete sheet with no used extent is still readable: the service
@@ -989,7 +993,9 @@ export class PagedXlsxSheetAdapter implements SourceStore {
         cfGen: liveCfGen,
         viewGen: request.stamp.viewGen,
         structureGen: request.stamp.structureGen,
-        clockGen: request.stamp.clockGen,
+        // Ruling S5-M: a main-thread stamp is echoed; an unknown one (0) on a sheet with a clock-dependent formula adopts this
+        // preparation's one clock, so a worker-side route (find, copy) names the same day the viewer's tick does.
+        clockGen: request.stamp.clockGen !== 0 || liveClockGen === undefined ? request.stamp.clockGen : liveClockGen,
       }),
       pages: this.cfPages(request, account, options?.signal),
       ...(this.workbook.formatting?.styles ? { numberFormats: 'resolved' as const } : {}),
@@ -997,19 +1003,22 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       const dateContext = options?.dateContext ?? {
         dateSystem: this.workbook.formatting?.dateSystem ?? '1900',
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC',
-        epochNowMs: Date.now(),
+        epochNowMs: instant,
       }
       // The worker owns the workbook's calculation facts: the policy comes from the same `PagedWorkbook` the values do, so
       // every worker route (paint, text, find) takes one authority. Only a sheet with a formula rule loads the module.
       const carriesFormula = liveRules?.rules.some(rule => rule.definition.kind === 'expression'
         || (rule.definition.kind === 'cellIs' && rule.definition.operands.some(operand => 'formula' in operand))
         || visualFormulaShape(rule.definition) !== undefined) === true
-      const evaluation = carriesFormula ? (await import('../cf/formula')).cfDocumentEvaluationOfPaged(this.workbook) : undefined
+      const formulaModule = carriesFormula ? await import('../cf/formula') : undefined
+      const evaluation = formulaModule?.cfDocumentEvaluationOfPaged(this.workbook)
+      if (formulaModule && evaluation && cfRulesUseClock(liveRules, true)) liveClockGen = formulaModule.cfEvaluationContextFor(evaluation, () => instant).clock.clockGen
       // Ruling S5-K: only a sheet whose rules name another sheet gets the workbook seam (no cross-sheet work otherwise).
       const crossSheet = carriesFormula && liveRules?.rules.some(rule => rule.definition.kind !== 'unresolved' && (rule.definition.dependencySheets?.length ?? 0) > 0) === true
       const workbook = crossSheet ? this.cfWorkbook(account) : undefined
       const remoteOptions: CfRemotePrepareOptions = {
         ...options,
+        now: () => instant,
         ...(evaluation ? { evaluation } : {}),
         ...(workbook ? { workbook, sheetName: this.sheet.name } : {}),
         dateContext,
@@ -1017,7 +1026,9 @@ export class PagedXlsxSheetAdapter implements SourceStore {
         merges: (this.sheet.mergeRects ?? []).map(m => ({ firstRow: m.r0, lastRow: m.r1, firstCol: m.c0, lastCol: m.c1 })),
         ...(admitted ? { admittedRules: { rules: liveRules, normalized: admitted.normalized, version: admitted.version } } : {}),
       }
-      return await prepareCfRemote(request, this.sheet.sheetId, source, liveRules, account, remoteOptions)
+      // The adopted clock (Ruling S5-M) is part of the request's own stamp too, so the service, the source and the reply agree.
+      const effective = request.stamp.clockGen === 0 && liveClockGen !== undefined ? { ...request, stamp: { ...request.stamp, clockGen: liveClockGen } } : request
+      return await prepareCfRemote(effective, this.sheet.sheetId, source, liveRules, account, remoteOptions)
     } finally {
       try { hashHold.release() } catch { /* release-only path */ }
     }

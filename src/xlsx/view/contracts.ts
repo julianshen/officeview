@@ -323,6 +323,9 @@ export interface CfReadOptions {
   readonly envelopeBytes?: number
   readonly retainOutgoing?: (release: () => void) => void
   readonly dateContext?: import('../cf/predicates').CfDateContext
+  /** The clock of this preparation (default: the wall clock), sampled once and shared by the predicates, the formulas and the
+   * stamp (Ruling S5-M). A test seam; the viewer never passes it. */
+  readonly now?: () => number
 }
 /** Absolute transient bytes of one drawing read; false when they cannot be admitted. */
 export interface DrawingMemory { set(bytes: number): boolean }

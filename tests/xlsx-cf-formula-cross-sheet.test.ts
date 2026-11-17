@@ -148,7 +148,7 @@ describe('a referenced-sheet commit makes the old batch stale synchronously (Rev
     const { s1, doc } = crossSheetDoc()
     const wb = createObjectWorkbookSource(doc, 'resident-batch')
     injectCfFormulaSelections(SELECTIONS)
-    const batch = await withExactCfEvidence(CAPS, () => prepareCfPaint(s1, { store: wb.store('sheet1'), workbook: wb, valuePolicy: 'cached', evaluation: UTC, paintRects: [rectOf('A2'), rectOf('A3')], now: () => Date.UTC(2026, 10, 16) }))
+    const batch = await withExactCfEvidence(CAPS, () => prepareCfPaint(s1, { store: wb.store('sheet1'), workbook: wb, valuePolicy: 'cached', evaluation: { ...UTC, valuePolicy: 'cached' }, paintRects: [rectOf('A2'), rectOf('A3')], now: () => Date.UTC(2026, 10, 16) }))
     injectCfFormulaSelections(null)
     expect(batch).toBeDefined()
     expect(batch!.stamp.dependencyGen ?? 0).toBe(0)
@@ -573,7 +573,7 @@ describe('Task 36 fix round 1', () => {
     try {
       await withExactCfEvidence(CAPS, async () => {
         const lease = await prepareSheetAssets(doc, { sheetIndex: 0 })
-        const exported = await prepareCfPaint(s1, { valuePolicy: 'cached', evaluation: UTC, documentSheets: doc.sheets })
+        const exported = await prepareCfPaint(s1, { valuePolicy: 'cached', evaluation: { ...UTC, valuePolicy: 'cached' }, documentSheets: doc.sheets })
         expect(exported!.layer.styleAt(0, 0, undefined)?.fillColor).toBe(GREEN)
         expect(lease.assets.conditionalFormatting?.layer.styleAt(0, 0, undefined)?.fillColor).toBe(GREEN)
         exported!.dispose(); lease.dispose()

@@ -629,7 +629,7 @@ it('clock-driven CF invalidation reaches the DISPLAYED rows of a sorted view (I1
     conditionalFormatting: { diagnostics: [], rules: [{
       id: 1, priority: 1, documentOrder: 0, stopIfTrue: false, ranges: [{ firstRow: 0, lastRow: 2, firstCol: 0, lastCol: 0 }],
       writes: new Set(['fill']), dxf: { 'fill.bg': 'FF00FF00' },
-      definition: { kind: 'predicate', type: 'timePeriod', timePeriod: 'today', dialect: 'base', formulas: [] },
+      definition: { kind: 'timePeriod', period: 'today', dialect: 'base', formulas: [] },
     }] },
   } as unknown as XlsxSheet
   // Reversed order: source rows 0..2 are DISPLAYED at slots 59..57 (tile row 2), not tile row 0.
@@ -673,7 +673,7 @@ it('clock-driven CF invalidation also covers tiles that text overflowing from th
     conditionalFormatting: { diagnostics: [], rules: [{
       id: 1, priority: 1, documentOrder: 0, stopIfTrue: false, ranges: [{ firstRow: 0, lastRow: 2, firstCol: 0, lastCol: 0 }],
       writes: new Set(['font.bold']), dxf: { 'font.bold': true },
-      definition: { kind: 'predicate', type: 'timePeriod', timePeriod: 'today', dialect: 'base', formulas: [] },
+      definition: { kind: 'timePeriod', period: 'today', dialect: 'base', formulas: [] },
     }] },
   } as unknown as XlsxSheet
   const doc = { sheets: [fontSheet] }
@@ -714,7 +714,7 @@ it('a clock tick with the lease kept invalidates the covered tiles of a tall mer
     conditionalFormatting: { diagnostics: [], rules: [{
       id: 1, priority: 1, documentOrder: 0, stopIfTrue: false, ranges: [{ firstRow: 0, lastRow: 0, firstCol: 0, lastCol: 0 }],
       writes: new Set(['fill']), dxf: { 'fill.pattern': 'solid', 'fill.bg': 'FF00FF00' },
-      definition: { kind: 'predicate', type: 'timePeriod', timePeriod: 'today', dialect: 'base', formulas: [] },
+      definition: { kind: 'timePeriod', period: 'today', dialect: 'base', formulas: [] },
     }] },
   } as unknown as XlsxSheet
   const doc = { sheets: [mergedSheet] }

@@ -360,10 +360,12 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
             await work()
             const visual = isVisualDefinition(rule.definition) ? rule.definition : undefined
             if (!visual) formulaRules.add(rule)
-            // Ruling S5-L: under manual calculation a formula rule is unresolved until formula:calc-manual-saved-values (not
-            // registered: Task 38) confirms that Excel evaluates CF against the saved values.
+            // Ruling S5-L: under manual calculation a formula rule is unresolved until formula:calc-manual-saved-values confirms
+            // that Excel evaluates CF against the saved values, and a volatile TODAY() also needs formula:calc-manual-today
+            // (not registered: its reading, live or stale, is unmeasured).
             const refused = !options.evaluation ? 'cf-evaluation-context-missing'
-              : options.evaluation.calcMode === 'manual' && cfFormulaReading('formula:calc-manual-saved-values', check) === undefined ? 'cf-unmeasured-capability'
+              : options.evaluation.calcMode === 'manual' && (cfFormulaReading('formula:calc-manual-saved-values', check) === undefined
+                || (formulas.some(f => f.usesClock) && cfFormulaReading('formula:calc-manual-today', check) === undefined)) ? 'cf-unmeasured-capability'
               : visual ? visualFormulaRefusal(rule, visual, check) : formulaRuleRefusal(rule, formulas, check)
             if (refused) { formulaGate.set(rule, { kind: 'unresolved', reason: refused }); continue }
             if (!visual) {

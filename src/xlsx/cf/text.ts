@@ -24,6 +24,7 @@ import { describeCfUnavailable, describeCfWin, type CfDescriptor } from './descr
 import { barPaintable, barWithheld, paintDataBars, type CfBarHost } from './dataBarPaint'
 import { admitBatchGlyphs, cfHidesText, iconPaintsOn, iconTextInset, paintIconCells, type CfAdmittedGlyphs, type CfIconGate } from './iconPaint'
 import { PackageError } from '../../core/package-error'
+import { cfRulesUseClock } from '../cfLoader'
 
 const refused = (message: string): PackageError => new PackageError('resource-limit', message)
 
@@ -430,10 +431,11 @@ export async function prepareCfTextScope(
   const sheetMerges: ModelRect[] = (sheet.mergeRanges ?? []).map(m => ({ firstRow: m.minRow, lastRow: m.maxRow, firstCol: m.minCol, lastCol: m.maxCol }))
   // Ruling S5-L: one value policy per preparation, the document's when the route is given its context.
   const { policy: valuePolicy, evaluation } = cfRoutePolicy(request.evaluation ? cfEvaluationContextFor(request.evaluation, request.now ?? Date.now) : undefined, request.valuePolicy ?? request.store?.valuePolicy, 'engine')
+  // One clock per preparation (Ruling S5-M): the predicates read the instant the formulas do.
   const dateContext = request.dateContext ?? (sheet.semantics ? {
     dateSystem: sheet.semantics.dateSystem,
     timeZone: sheet.semantics.timeZone,
-    epochNowMs: Date.now(),
+    epochNowMs: evaluation?.clock.epochNowMs ?? Date.now(),
   } : undefined)
     try {
       const gen = cfRulesVersion(rules)
@@ -446,7 +448,8 @@ export async function prepareCfTextScope(
         cfGen: gen,
         viewGen: 0,
         structureGen: request.store?.structureGen ?? 0,
-        clockGen: 0,
+        // Ruling S5-M: the one clock of a sheet with a clock-dependent formula; every other sheet stays clock-free.
+        clockGen: evaluation && cfRulesUseClock(rules, true) ? evaluation.clock.clockGen : 0,
         ...(dependencyGen !== 0 ? { dependencyGen } : {}),
       }
       statistics.stamp = stamp

@@ -240,14 +240,24 @@ describe('the formula arm paces between cells (S5-N round-2 #2)', () => {
 })
 
 describe('manual calculation withholds formula rules (S5-L)', () => {
-  it('under calcMode="manual" a formula rule is withheld, whatever capabilities are held; auto evaluates it', async () => {
+  it('under calcMode="manual" a formula rule is withheld until its calculation capability is held; auto evaluates it', async () => {
     const sheet = sheetOf(parseRules(expr('B1', 1, '$A1&gt;10'), FORMULA_CAPS), { A1: 11, B1: 1 })
-    const caps = [...FORMULA_CAPS, 'formula:calc-manual-saved-values', 'formula:calc-manual-today']
+    const manualPolicy = { calcMode: 'manual', valuePolicy: 'engine', dateSystem: '1900', timeZone: 'UTC' } as const
+    const caps = [...FORMULA_CAPS, 'formula:calc-manual-today']
     expect(fill((await prepare(sheet, ['B1'], caps)).get('B1'))).toBe(RED)
-    const manual = await prepare(sheet, ['B1'], caps, { evaluation: { calcMode: 'manual', valuePolicy: 'engine', dateSystem: '1900', timeZone: 'UTC' } })
-    expect(fill(manual.get('B1'))).toBe('withheld')
-    const noTable = await prepare(sheet, ['B1'], caps, { evaluation: { calcMode: 'autoNoTable', valuePolicy: 'engine', dateSystem: '1900', timeZone: 'UTC' } })
+    // Without formula:calc-manual-saved-values (and with every other capability held) it is withheld.
+    expect(fill((await prepare(sheet, ['B1'], caps, { evaluation: manualPolicy })).get('B1'))).toBe('withheld')
+    // With it (Task 38 registers its reading: the saved values) the rule evaluates.
+    expect(fill((await prepare(sheet, ['B1'], [...caps, 'formula:calc-manual-saved-values'], { evaluation: manualPolicy })).get('B1'))).toBe(RED)
+    const noTable = await prepare(sheet, ['B1'], caps, { evaluation: { ...manualPolicy, calcMode: 'autoNoTable' } })
     expect(fill(noTable.get('B1'))).toBe(RED)
+  })
+  it('a volatile TODAY() under manual calculation also needs formula:calc-manual-today, which no reading implements yet', async () => {
+    const sheet = sheetOf(parseRules(expr('B1', 1, '$A1=TODAY()'), [...FORMULA_CAPS, 'formula:fn-today']), { A1: 46342, B1: 1 })
+    const manualPolicy = { calcMode: 'manual', valuePolicy: 'engine', dateSystem: '1900', timeZone: 'UTC' } as const
+    const caps = [...FORMULA_CAPS, 'formula:fn-today', 'formula:calc-manual-saved-values', 'formula:calc-manual-today']
+    expect(fill((await prepare(sheet, ['B1'], caps)).get('B1'))).toBe(RED)
+    expect(fill((await prepare(sheet, ['B1'], caps, { evaluation: manualPolicy })).get('B1'))).toBe('withheld')
   })
 })
 
@@ -535,7 +545,7 @@ describe('every formula capability production queries is a catalog capability wi
   it('an unregistered capability is never honoured, whatever evidence holds it', () => {
     const all = (): boolean => true
     // Task 36 registered the cross-sheet readings; the missing-sheet reading stays unregistered (an unknown sheet is unresolved).
-    for (const id of ['formula:truth-range', 'formula:fn-today', 'formula:anchor-multi-range', 'formula:cross-sheet-missing']) expect(cfFormulaReading(id, all), id).toBeUndefined()
+    for (const id of ['formula:truth-range', 'formula:anchor-multi-range', 'formula:cross-sheet-missing']) expect(cfFormulaReading(id, all), id).toBeUndefined()
     expect(cfFormulaReading('formula:truth-number', all)).toBe('number-nonzero-true')
     expect(cfFormulaReading('formula:truth-number', () => false)).toBeUndefined()
     // A selection needs its matched reading: none is published, so none resolves.

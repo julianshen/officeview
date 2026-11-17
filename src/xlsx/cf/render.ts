@@ -17,7 +17,7 @@ import type { RegionStyleLayer } from '../tableStyles/regionLayer'
 import { regionStylesFor } from '../tableStyleLoader'
 import { cellSourceRow } from '../view/sheetCells'
 import { isValueUnavailable, type ValuePolicy } from '../view/values'
-import { cfNeedsViewport, cfExplicitBounds } from '../cfLoader'
+import { cfNeedsViewport, cfExplicitBounds, cfRulesUseClock } from '../cfLoader'
 import { STATIC_SHEET_BUDGET, computeMetrics, layoutCellBody, spreadsheetColor, textMeasurer, type MeasureCached } from '../render'
 import { cellTextWidth, withTextInset, type CellBodyLayout } from '../view/textLayout'
 import type { XlsxCell, XlsxCellStyle } from '../types'
@@ -407,7 +407,9 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
     cfGen: options.store ? cfRulesVersion(rules) : 1,
     viewGen: 0,
     structureGen: options.store?.structureGen ?? 0,
-    clockGen: options.dateContext?.clockSerial ? Math.floor(options.dateContext.clockSerial) : 0,
+    // Ruling S5-M: a sheet with a clock-dependent formula stamps its preparation's one clock (the local day number); every
+    // other sheet keeps the Stage 1 value, so a clock-free sheet is never invalidated by the tick.
+    clockGen: options.dateContext?.clockSerial ? Math.floor(options.dateContext.clockSerial) : evaluation && cfRulesUseClock(rules, true) ? evaluation.clock.clockGen : 0,
     ...(dependencyGen !== 0 ? { dependencyGen } : {}),
   }
   const signal = options.request?.signal ?? new AbortController().signal
@@ -430,10 +432,11 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
     sheetStatsSessions.set(sheet, retainedStats)
   }
   const statistics: CfPaintStatistics = { session: retainedStats.session, stamp, results: new Map() }
+  // One clock per preparation (Ruling S5-M): the predicates read the instant the formulas do.
   const dateContext = options.dateContext ?? (sheet.semantics ? {
     dateSystem: sheet.semantics.dateSystem,
     timeZone: sheet.semantics.timeZone,
-    epochNowMs: Date.now(),
+    epochNowMs: evaluation?.clock.epochNowMs ?? Date.now(),
   } : undefined)
   let units = 0
   const work = async () => {

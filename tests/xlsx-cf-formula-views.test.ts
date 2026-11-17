@@ -16,7 +16,7 @@ import { cfRulesVersion, prepareCfRemote } from '../src/xlsx/view/pagedSource'
 import { residentSource } from '../src/xlsx/cf/render'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
 import {
-  GREEN, NOW, RED, UTC_AUTO, cellIsRule, cfBlock, exprRule, fixtureBytes, frameHosts, load, rcOf, residentLeg, staticLeg, textLeg, withPaint, workbookBytes, workerLeg,
+  GREEN, NOW, REGISTERED, RED, UTC_AUTO, cellIsRule, cfBlock, exprRule, fixtureBytes, frameHosts, load, rcOf, residentLeg, staticLeg, textLeg, withPaint, workbookBytes, workerLeg,
   type Loaded, type Obs,
 } from './helpers/cf-views'
 
@@ -134,10 +134,12 @@ describe('every route takes one evaluation context or withholds (S5-L, round-1 #
       expect(session.workbook.calcMode).toBe('manual')
       expect(cfDocumentEvaluationOfPaged(session.workbook).calcMode).toBe('manual')
     } finally { await session.release() }
-    const l = await load(bytes, 'cached')
-    expect(cfDocumentEvaluationOf(l.doc).calcMode).toBe('manual')
     const refs = ['C2', 'C3', 'C4', 'C5']
     await withPaint(async () => {
+      // Parsed under the evidence too: the rules are resolved, so it is the manual gate that withholds them.
+      const l = await load(bytes, 'cached')
+      expect(cfDocumentEvaluationOf(l.doc).calcMode).toBe('manual')
+      expect(l.sheet.conditionalFormatting!.rules.map(r => r.definition.kind).slice(0, 2)).toEqual(['expression', 'expression'])
       const resident = await residentLeg(l, refs), worker = await workerLeg(l, refs)
       expect(fills(resident)).toEqual({ C2: undefined, C3: undefined, C4: undefined, C5: undefined })
       expect(fills(worker.scope)).toEqual(fills(resident))
@@ -155,6 +157,130 @@ describe('every route takes one evaluation context or withholds (S5-L, round-1 #
   })
 })
 
-import { REGISTERED } from './helpers/cf-views'
+
+/* ------------------------------------------------------------------ */
+/* One clock per preparation (S5-M).                                    */
+/* ------------------------------------------------------------------ */
+
 const REGISTERED_WITHOUT_MANUAL = REGISTERED.filter(id => !id.startsWith('formula:calc-manual-'))
-void NOW; void RED; void frameHosts; void rcOf; void createService; void ({} as Loaded) ; void ({} as CfDocumentEvaluation)
+/** The unix day number of the local calendar date: the interactive midnight tick's `clockGen` (`localDaySerial`). */
+const unixDay = (epochMs: number, zone: string): number => {
+  const p = new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(epochMs)).split('-').map(Number)
+  return Math.floor(Date.UTC(p[0]!, p[1]! - 1, p[2]!) / 86_400_000)
+}
+/** Rows 2-6 hold the date serials of today-2 .. today+2 (UTC date of NOW); C holds `=$A2=TODAY()`, D `=$A2<NOW()`. */
+const SERIAL_NOW = Math.floor(NOW / 86_400_000) + 25569
+const clockBytes = (): Uint8Array => workbookBytes(
+  Object.fromEntries([-2, -1, 0, 1, 2].map((d, i) => [`A${i + 2}`, SERIAL_NOW + d])),
+  cfBlock('C2:C6', exprRule('$A2=TODAY()', 1, 0)) + cfBlock('D2:D6', exprRule('$A2&lt;NOW()', 2, 1)))
+const CLOCK_REFS = ['C2', 'C3', 'C4', 'C5', 'C6']
+const preparedStamps: Array<{ clockGen: number; clock: { epochNowMs: number; clockGen: number } | undefined; dateEpoch: number | undefined }> = []
+beforeEach(async () => {
+  preparedStamps.length = 0
+  const actual = await vi.importActual<typeof import('../src/xlsx/cf/service')>('../src/xlsx/cf/service')
+  createService.mockImplementation((rules, memory, options) => {
+    const service = actual.createCfService(rules, memory, options)
+    const prepareCf = service.prepareCf.bind(service)
+    return { ...service, prepareCf: (request, ...rest) => {
+      preparedStamps.push({ clockGen: request.stamp.clockGen, clock: options?.evaluation?.clock, dateEpoch: options?.dateContext?.epochNowMs })
+      return prepareCf(request, ...rest)
+    } }
+  })
+})
+
+describe('one clock per preparation on every leg (S5-M)', () => {
+  for (const zone of ['UTC', 'Asia/Taipei']) {
+    it(`static, text, resident and worker give the same TODAY() outcome and the same clockGen (${zone})`, async () => {
+      // 20:00 UTC on Nov 16 is already Nov 17 in Taipei: the zone, not the UTC date, decides.
+      const now = zone === 'UTC' ? NOW : Date.UTC(2026, 10, 16, 20)
+      const previous = process.env.TZ
+      process.env.TZ = zone
+      try {
+        await withPaint(async () => {
+          const l = await load(clockBytes(), 'cached')
+          const policy = { ...cfDocumentEvaluationOf(l.doc) }
+          expect(policy.timeZone).toBe(zone)
+          const today = SERIAL_NOW + (zone === 'UTC' ? 0 : 1), expected = [-2, -1, 0, 1, 2].map(d => SERIAL_NOW + d === today ? RED : undefined)
+          const options = { now: () => now }
+          preparedStamps.length = 0
+          const legs = { static: await staticLeg(l, CLOCK_REFS, options), resident: await residentLeg(l, CLOCK_REFS, options), text: await textLeg(l, CLOCK_REFS, options), textResident: await textLeg(l, CLOCK_REFS, { ...options, resident: true }), worker: (await workerLeg(l, CLOCK_REFS, options)).scope }
+          for (const [name, leg] of Object.entries(legs)) expect(CLOCK_REFS.map(r => leg.get(r)!.fill), name).toEqual(expected)
+          // One clockGen on every leg: the local day number of the injected instant, in the document's zone.
+          expect(preparedStamps.length).toBeGreaterThanOrEqual(5)
+          for (const p of preparedStamps) {
+            expect(p.clock?.epochNowMs).toBe(now)
+            expect(p.clock?.clockGen).toBe(unixDay(now, zone))
+            expect(p.clockGen).toBe(unixDay(now, zone))
+          }
+        }, REGISTERED_WITHOUT_MANUAL)
+      } finally { if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous }
+    })
+  }
+
+  it('the clock a preparation hands the predicates is the clock it hands the formulas (one instant)', async () => {
+    await withPaint(async () => {
+      const l = await load(clockBytes(), 'cached')
+      preparedStamps.length = 0
+      await staticLeg(l, CLOCK_REFS, { now: () => NOW }); await residentLeg(l, CLOCK_REFS, { now: () => NOW }); await textLeg(l, CLOCK_REFS, { now: () => NOW })
+      await workerLeg(l, CLOCK_REFS, { now: () => NOW })
+      expect(preparedStamps.length).toBeGreaterThanOrEqual(4)
+      for (const p of preparedStamps) expect(p.dateEpoch, 'timePeriod rules read the formula clock').toBe(p.clock?.epochNowMs)
+    })
+  })
+
+  it('a sheet without a clock-dependent formula keeps its stamp clock-free on every leg', async () => {
+    await withPaint(async () => {
+      const l = await load(policyBytes(), 'cached')
+      preparedStamps.length = 0
+      await staticLeg(l, REFS, { now: () => NOW }); await residentLeg(l, REFS, { now: () => NOW }); await textLeg(l, REFS, { now: () => NOW }); await workerLeg(l, REFS, { now: () => NOW })
+      expect(preparedStamps.length).toBeGreaterThanOrEqual(4)
+      for (const p of preparedStamps) expect(p.clockGen).toBe(0)
+    })
+  })
+
+  it('NOW() stays refused: its rule never paints on any leg, with every registered capability held', async () => {
+    await withPaint(async () => {
+      const l = await load(clockBytes(), 'cached')
+      const refs = ['D2', 'D3', 'D4', 'D5', 'D6']
+      const legs = [await staticLeg(l, refs), await residentLeg(l, refs), await textLeg(l, refs), (await workerLeg(l, refs)).scope]
+      for (const leg of legs) expect(refs.map(r => leg.get(r)!.fill)).toEqual(refs.map(() => undefined))
+      expect(refs.map(r => legs[2]!.get(r)!.desc)).toEqual(refs.map(() => UNAVAILABLE))
+      expect(refs.map(r => legs[3]!.get(r)!.desc)).toEqual(refs.map(() => UNAVAILABLE))
+    }, REGISTERED_WITHOUT_MANUAL)
+  })
+})
+
+describe('manual calculation withholds until measured (S5-L)', () => {
+  const SAVED = ['C2', 'C3', 'C4', 'C5'], TODAYS = ['H2', 'H3', 'H4', 'H5']
+  const legsOf = async (l: Loaded, refs: string[]) => ({ static: await staticLeg(l, refs), resident: await residentLeg(l, refs), text: await textLeg(l, refs), textResident: await textLeg(l, refs, { resident: true }), worker: (await workerLeg(l, refs)).scope })
+  it('without formula:calc-manual-saved-values every leg withholds; with it every leg follows the saved values', async () => {
+    // Saved values 999, 0, 50, 1 against `A2>20`: rows 2 and 4. A recompute (10, 8, 2, 61) would paint row 5 instead.
+    await withPaint(async () => {
+      const l = await load(fixtureBytes('stage5-calc-manual'), 'cached')
+      for (const [name, leg] of Object.entries(await legsOf(l, SAVED))) expect(SAVED.map(r => leg.get(r)!.fill), name).toEqual([undefined, undefined, undefined, undefined])
+      const text = await textLeg(l, SAVED)
+      expect(SAVED.map(r => text.get(r)!.desc)).toEqual(SAVED.map(() => UNAVAILABLE))
+    }, REGISTERED_WITHOUT_MANUAL)
+    await withPaint(async () => {
+      const l = await load(fixtureBytes('stage5-calc-manual'), 'cached')
+      const legs = await legsOf(l, SAVED)
+      for (const [name, leg] of Object.entries(legs)) {
+        const f = SAVED.map(r => leg.get(r)!.fill)
+        expect(f[0], `${name} C2`).toBeDefined(); expect(f[1], `${name} C3`).toBeUndefined(); expect(f[2], `${name} C4`).toBe(f[0]); expect(f[3], `${name} C5`).toBeUndefined()
+      }
+      for (const leg of Object.values(legs)) expect(fills(leg)).toEqual(fills(legs.static))
+    })
+    // Production evidence: nothing in Stage 5 is verified, so the same cells withhold.
+    const l = await load(fixtureBytes('stage5-calc-manual'), 'cached')
+    for (const leg of Object.values(await legsOf(l, SAVED))) expect(SAVED.map(r => leg.get(r)!.fill)).toEqual([undefined, undefined, undefined, undefined])
+  })
+  it('a TODAY() rule under manual calculation stays withheld on every leg even with the saved-values reading and the capability held', async () => {
+    await withPaint(async () => {
+      const l = await load(fixtureBytes('stage5-calc-manual'), 'cached')
+      const legs = await legsOf(l, TODAYS)
+      for (const [name, leg] of Object.entries(legs)) expect(TODAYS.map(r => leg.get(r)!.fill), name).toEqual([undefined, undefined, undefined, undefined])
+      for (const name of ['text', 'textResident', 'worker'] as const) expect(TODAYS.map(r => legs[name].get(r)!.desc), name).toEqual(TODAYS.map(() => UNAVAILABLE))
+    }, [...REGISTERED, 'formula:calc-manual-today'])
+  })
+})
+void NOW; void RED; void frameHosts; void rcOf; void ({} as Loaded); void ({} as CfDocumentEvaluation); void GREEN; void cfDocumentEvaluationOfPaged

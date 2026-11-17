@@ -109,7 +109,7 @@ import { initialOrigin, paneLogicalBoxes, paneRegions, visibleSpans } from '../.
 import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS, SIZED_DRAWING_BYTES, axisUpperBytes, cellFont, type SessionSizes } from '../../xlsx/view/axisSizes'
 import { columnWidthPx } from '../../xlsx/columnWidth'
 import { AutoFitRefusedError, autoFitSize, createFitMeasure, resizeRegion, type ResizeRequest } from './sheetResize'
-import { ensureConditionalFormatting, cfNeedsViewport, CF_PAINT_BATCH_CELLS } from '../../xlsx/cfLoader'
+import { ensureConditionalFormatting, cfNeedsViewport, cfRulesUseClock, CF_PAINT_BATCH_CELLS } from '../../xlsx/cfLoader'
 import { tileLogicalBox, tileRangeFor, TILE_PREFETCH_RING } from '../../xlsx/view/tileCache'
 import { sparklineInvalidationBox } from '../../xlsx/view/sparklineInvalidation'
 import type { ValueOverlay } from '../../xlsx/view/contracts'
@@ -1073,6 +1073,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // actual projected panes; the existing asset-swap path invalidates their tiles.
   const cfRules = entry?.sheet.conditionalFormatting
   const cfTextGen = useMemo(() => (!remote && cfRules ? cfRulesVersion(cfRules) : 0), [remote, cfRules])
+  // Ruling S5-M (M2): the midnight tick keys only the sheets whose rules read the clock (a `timePeriod` rule, a formula that calls
+  // TODAY()), so a clock-free sheet is never prepared again at midnight. A worker-backed sheet has no rule data on this thread and
+  // keeps the tick (a conservative re-preparation, never a stale paint).
+  const tickGen = cfRules && !cfRulesUseClock(cfRules) ? 0 : clockGen
   const hasRemoteCf = !!remote && !!activeSheetId && remote.layout(activeSheetId).hasConditionalFormatting === true
   const scopedCf = cfRules ? cfNeedsViewport(entry!.sheet) : false
   const cfViewport = (scopedCf || hasRemoteCf) && entry && scroll ? { metrics: entry.metrics, boxes: paneLogicalBoxes(scroll.frozen, scroll.logicalOrigin, scroll.zoom, viewport).map(box => {
@@ -1088,7 +1092,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const [cfRuntime, setCfRuntime] = useState<typeof import('../../xlsx/cf/render')>()
   useEffect(() => { if (cfCross && !cfRuntime) void ensureConditionalFormatting([entry!.sheet]).then(cf => cf && setCfRuntime(cf)) }, [cfCross, cfRuntime])
   const cfDepGen = cfRules ? cfCross ? cfRuntime?.cfResidentDependencyKey(cfRules, entry!.sheet.name, source.sheets, id => source.store(id)) : '' : hasRemoteCf ? remote!.cfDependencyEpoch(activeSheetId) : 0
-  const cfLiveKey = cfRules ? cfDepGen === undefined ? undefined : JSON.stringify([source.store(activeSheetId).stamp.docId, activeSheetId, source.store(activeSheetId).stamp.valueGen, entry?.structureGen, cfTextGen, scopedCf ? entry?.revision : 0, clockGen, cfDepGen]) : hasRemoteCf ? JSON.stringify([identity.docId, activeSheetId, identity.valueGen, identity.viewGen, entry?.structureGen, remote!.merges(activeSheetId).gen, remote!.isClosed, clockGen, cfDepGen]) : undefined
+  const cfLiveKey = cfRules ? cfDepGen === undefined ? undefined : JSON.stringify([source.store(activeSheetId).stamp.docId, activeSheetId, source.store(activeSheetId).stamp.valueGen, entry?.structureGen, cfTextGen, scopedCf ? entry?.revision : 0, tickGen, cfDepGen]) : hasRemoteCf ? JSON.stringify([identity.docId, activeSheetId, identity.valueGen, identity.viewGen, entry?.structureGen, remote!.merges(activeSheetId).gen, remote!.isClosed, tickGen, cfDepGen]) : undefined
   const cfViewportKey = cfViewport ? JSON.stringify([cfLiveKey, cfViewport.boxes]) : cfLiveKey
   const [viewportCf,setViewportCf]=useState<{key:string;generation:string|undefined;boxes?:readonly LogicalCellBox[];batch:import('../../xlsx/cf/render').CfPaintBatch|undefined}|null>(null)
   const heldViewportCf=useRef<import('../../xlsx/cf/render').CfPaintBatch|undefined>(undefined)
@@ -1296,7 +1300,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // when rules actually change (per render it would dominate scrolling).
 
   const cfTextKey = cfTextRects && entry && activeSheetId
-    ? JSON.stringify([ownerKey, identityKey, nextWindowKey, cfTextKeyFor({ sheetId: activeSheetId, valueGen: identityOf(activeSheetId).valueGen, cfGen: cfTextGen, locale: entry.sheet.semantics?.locale ?? 'en-US', rects: cfTextRects }), remote?.merges(activeSheetId).gen ?? -1, clockGen])
+    ? JSON.stringify([ownerKey, identityKey, nextWindowKey, cfTextKeyFor({ sheetId: activeSheetId, valueGen: identityOf(activeSheetId).valueGen, cfGen: cfTextGen, locale: entry.sheet.semantics?.locale ?? 'en-US', rects: cfTextRects }), remote?.merges(activeSheetId).gen ?? -1, tickGen])
     : undefined
   const [cfText, setCfText] = useState<{ key: string; scope: EffectiveFormatScope | undefined; empty?: boolean } | null>(null)
   const heldCfText = useRef<EffectiveFormatScope | undefined>(undefined)
