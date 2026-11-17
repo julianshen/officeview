@@ -231,3 +231,14 @@ describe('fix round 4 (codex r3): the counterfactual compositor catches what the
     } finally { mutant.afterParse = undefined }
   }, 180000)
 })
+
+describe('fix round 5 (codex r4): cf-compare compares the visuals with the counterfactual', () => {
+  it('r4 #2: composition I2 with its resolved icon nulled (no refusal marker) fails cf-compare', async () => {
+    const { c, doc, sheet } = await loadCase('stage5-composition')
+    const { stage5ProductionAt } = await import('./helpers/cf-stage5-verdict')
+    expect((await stage5ProductionAt(doc, sheet, 'I2')).visual, 'the counterfactual and production draw an icon at I2').toMatch(/^icon:/)
+    expect(await compareProduction(c, doc, sheet), 'unmutated').toBeUndefined()
+    const msg = await compareProduction(c, doc, sheet, new Map([['I2', { applied: false, unresolved: false, unresolvedSlots: [], iconCell: true, icon: null, bar: null, properties: {} }]]))
+    expect(msg).toMatch(/I2.*visual none differs from the counterfactual's icon:/)
+  }, 120000)
+})

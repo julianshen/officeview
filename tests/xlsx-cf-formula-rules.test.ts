@@ -171,6 +171,25 @@ describe('expression rule paints exactly the DisplayFormat cells (Lesson 1)', ()
     expect(mutant.violations.filter(v => /^stage5-composition:B[2-7]:/.test(v)).length, mutant.violations.join('\n')).toBeGreaterThan(0)
   })
 
+  it('codex r4 mutants (Task 39 fix round 5): I2 with the p13 icon refused, and I3 with the p12 stopping expression refused, are Lesson 1 violations', async () => {
+    const c = manifest().cases.find(x => x.id === 'stage5-composition')!
+    const verified = (id: string): boolean => VERIFIED_CAPABILITIES.has(id)
+    const load = async () => {
+      const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
+      return { doc, sheet: doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]! }
+    }
+    const run = (doc: Awaited<ReturnType<typeof load>>['doc'], sheet: XlsxSheet) => lesson1Case(c, sheet, observationsOf(c), verified, cfEvaluationContextFor(cfDocumentEvaluationOf(doc), Date.now), doc.sheets)
+    const clean = await load()
+    expect((await run(clean.doc, clean.sheet)).violations, 'the unmutated case').toEqual([])
+    for (const [priority, type, ref] of [[13, 'iconSet', 'I2'], [12, 'expression', 'I3']] as const) {
+      const m = await load()
+      ;(m.sheet.conditionalFormatting!.rules.find(r => r.priority === priority)! as { definition: unknown }).definition = { kind: 'unresolved', type, reason: 'cf-resource-limit' }
+      const out = await run(m.doc, m.sheet)
+      expect.soft(out.violations.filter(v => v.startsWith(`stage5-composition:${ref}:`)), `p${priority} refused: ${out.violations.join('\n')}`).toHaveLength(1)
+      expect.soft(out.violations.join('\n'), `p${priority} refused`).toMatch(new RegExp(`${type}@p${priority} refused .*without a recorded justification`))
+    }
+  })
+
   it('a dropped verified worksheet\'s CF fails where Excel painted (fix round 1 #3)', async () => {
     const c = manifest().cases.find(x => x.id === 'stage5-formula-truthiness')!
     const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
