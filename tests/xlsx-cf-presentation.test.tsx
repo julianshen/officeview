@@ -653,6 +653,30 @@ describe('the mounted viewer forwards the context: accessible names and copy (fi
     }, h.REGISTERED.filter(id => !id.startsWith('formula:calc-manual-')))
   }, 90_000)
 
+  it('scrolled (viewport) paint: a whole-column formula rule evaluates under the document policy and workbook the viewer holds', async () => {
+    const h = await import('./helpers/cf-views')
+    const { createObjectWorkbookSource } = await import('../src/xlsx/view/source')
+    const { SheetTileRenderer } = await import('../src/components/xlsx/sheetTiles')
+    await h.withPaint(async () => {
+      // `C:C` is open-ended, so the interactive viewer prepares it per viewport (cfNeedsViewport), not through the asset lease.
+      const l = await h.load(h.workbookBytes({ A2: 1, A3: 2, A4: 3, C2: 1, C3: 2, C4: 3, B2: { f: 'A2*2' }, B3: { f: 'A3*2' }, B4: { f: 'A4*2' } }, h.cfBlock('C:C', h.exprRule('$B1&gt;3', 1, 0))), 'engine')
+      const frames: import('../src/components/xlsx/sheetTiles').SheetFrame[] = []
+      const present = SheetTileRenderer.prototype.present
+      const spy = vi.spyOn(SheetTileRenderer.prototype, 'present').mockImplementation(function (this: InstanceType<typeof SheetTileRenderer>, ctx, frame) { frames.push(frame); return present.call(this, ctx, frame) })
+      const paint = await import('../src/xlsx/cf/render')
+      const calls: Array<Parameters<typeof paint.prepareCfPaint>[1]> = []
+      const actual = paint.prepareCfPaint
+      const paintSpy = vi.spyOn(paint, 'prepareCfPaint').mockImplementation(async (sheet, options) => { calls.push(options); return actual(sheet, options) })
+      const ui = render(<InteractiveSheetDoc doc={l.doc} source={createObjectWorkbookSource(l.doc, `viewport-${Math.random()}`)} />)
+      try {
+        await vi.waitFor(() => expect(calls.length).toBeGreaterThan(0), { timeout: 20_000 })
+        expect(calls.some(c => c?.viewport), 'the scrolled path is the one taken').toBe(true)
+        await vi.waitFor(() => expect(frames.some(f => f.assets?.conditionalFormatting?.layer.styleAt(3, 2, undefined)?.fillColor)).toBe(true), { timeout: 20_000 })
+        expect(frames.some(f => f.assets?.conditionalFormatting?.layer.styleAt(1, 2, undefined)?.fillColor), 'C2 (B2 = 2, not > 3) never paints').toBe(false)
+      } finally { ui.unmount(); spy.mockRestore(); paintSpy.mockRestore() }
+    })
+  }, 60_000)
+
   it('cross-sheet: the other sheet is read through the workbook the viewer holds, and withheld when it is absent', async () => {
     const h = await import('./helpers/cf-views')
     await h.withPaint(async () => {
