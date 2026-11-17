@@ -1485,7 +1485,12 @@ function stage5Payload(fx: S5Fixture, anchorSerial: number): SheetPayload {
     add(r.where === 'legacy' ? legacyBlocks : x14Blocks, r.sqref, r.xml)
     if (r.x14Companion) add(x14Blocks, r.sqref, r.x14Companion)
   }
+  // Task 39: Excel renders a cell on the default style (xf 0, the Normal style) vertically centred, 3 px above the
+  // bottom-aligned frame the Stage 4 glyph key was captured in, so no Stage 5 icon crop classified. A fixture that asks
+  // for it puts every Sheet1 cell (controls included) on an explicit bottom-aligned style; date cells keep theirs.
+  const bottom = fx.cellVertical === 'bottom'
   const specs = Object.entries(sheet1).map(([ref, v]) => s5CellSpec(ref, v)).filter((c): c is CellSpec => c !== undefined)
+    .map(c => (bottom && c.s === undefined ? { ...c, s: bottomXfIndex(true) } : c))
   const caseOf = CF_CASES.find(c => c.id === fx.id)!
   return {
     dimension: caseOf.range,
@@ -1494,6 +1499,7 @@ function stage5Payload(fx: S5Fixture, anchorSerial: number): SheetPayload {
     ...(x14Blocks.length > 0 ? { x14CfXml: `<x14:conditionalFormattings>${x14Blocks.map(b => `<x14:conditionalFormatting xmlns:xm="${NS_XM}">${b.rules.join('')}<xm:sqref>${esc(b.sqref)}</xm:sqref></x14:conditionalFormatting>`).join('')}</x14:conditionalFormattings>` } : {}),
     dxfsXml: fx.dxfsXml ?? '<dxfs count="0"/>',
     dateStyle: true,
+    ...(bottom ? { stylesXml: buildStylesXml(fx.dxfsXml ?? '<dxfs count="0"/>', true, undefined, true) } : {}),
     // Fix round 2: an icon is classified against the Stage 4 glyph key, whose crops are taken from 20 pt rows; a
     // workbook with an icon rule uses the same row height so its crops have the key's size.
     ...(fx.rules.some(r => r.marker.ruleType === 'iconSet') ? { defaultRowHeightPt: 20 } : {}),
@@ -1767,7 +1773,11 @@ function buildWorksheetXml(p: SheetPayload): string {
   ].join('')
 }
 
-function buildStylesXml(dxfsXml: string, dateStyle = false, cellFillRgb?: string): string {
+/** The bottom-aligned `cellXfs` entry `buildStylesXml` appends last when asked (Stage 5 icon cases, Task 39). */
+const S5_BOTTOM_XF = '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="bottom"/></xf>'
+const bottomXfIndex = (dateStyle: boolean, cellFillRgb?: string): number => cellFillXf(dateStyle) + (cellFillRgb ? 1 : 0)
+
+function buildStylesXml(dxfsXml: string, dateStyle = false, cellFillRgb?: string, bottomXf = false): string {
   return [
     XML_DECL,
     `<styleSheet xmlns="${NS_MAIN}">`,
@@ -1789,13 +1799,14 @@ function buildStylesXml(dxfsXml: string, dateStyle = false, cellFillRgb?: string
     '<border><left/><right/><top/><bottom/><diagonal/></border>',
     '</borders>',
     '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>',
-    `<cellXfs count="${cellFillXf(dateStyle) + (cellFillRgb ? 1 : 0)}">`,
+    `<cellXfs count="${bottomXfIndex(dateStyle, cellFillRgb) + (bottomXf ? 1 : 0)}">`,
     '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>',
     '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>',
     '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>',
     '<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>',
     ...(dateStyle ? ['<xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'] : []),
     ...(cellFillRgb ? ['<xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1"/>'] : []),
+    ...(bottomXf ? [S5_BOTTOM_XF] : []),
     '</cellXfs>',
     dxfsXml,
     '</styleSheet>',

@@ -1012,8 +1012,8 @@ export const CF_STAGE5_UNCONFIRMABLE: Readonly<Record<string, Readonly<{ reason:
     witnesses: ['C2', 'C3', 'C4', 'C5', 'C6', 'C7'], designatedWithheld: true,
   },
   'formula:composition-stop-icon': {
-    reason: "stage5-composition stop-icon: its continues witnesses K3/K5/K7 (a red fill plus an icon) are withheld in production while icon:composition-dxf-fill is unpublished, so production cannot confirm the fixture's reading (S5-WITNESS)",
-    witnesses: ['K3', 'K5', 'K7'],
+    reason: "stage5-composition stop-icon: its continues witnesses L3/L5/L7 (a red fill plus an icon; column K before Task 39's re-lettering) are withheld in production while icon:composition-dxf-fill is unpublished, so production cannot confirm the fixture's reading (S5-WITNESS)",
+    witnesses: ['L3', 'L5', 'L7'],
   },
 }
 

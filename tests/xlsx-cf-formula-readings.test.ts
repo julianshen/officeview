@@ -113,47 +113,47 @@ export function unconfirmableViolations(cfg: Config, verdict: ReturnType<typeof 
 }
 
 describe('the configuration verdict validates declared witnesses (fix round 1 #4)', () => {
-  it('suppressing stop-bar E4 and its required positive twin H4 fails', () => {
+  it('suppressing stop-bar E4 and its required positive twin G4 fails (bar-only twin G since Task 39)', () => {
     const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest
     const cfg = manifest.cases.find(x => x.id === 'stage5-composition')!.formulaConfigurations!.find(x => x.id === 'stop-bar')!
-    expect(cfg.twinExpect?.['H4']).toBe('visual')
-    // An in-memory world that satisfies `halts` everywhere: on rows 3/5/7 E shows the red-only twin F, elsewhere the bar-only twin H.
+    expect(cfg.twinExpect?.['G4']).toBe('visual')
+    // An in-memory world that satisfies `halts` everywhere: on rows 3/5/7 E shows the red-only twin F, elsewhere the bar-only twin G.
     const red: Shown = { fill: 'FFFFC7CE', strike: false, visual: '', withheld: false, drawn: false }, bar: Shown = { fill: 'none', strike: false, visual: 'dataBar', withheld: false, drawn: true }
     const redBar: Shown = { fill: 'FFFFC7CE', strike: false, visual: 'dataBar', withheld: false, drawn: true }, empty: Shown = { fill: 'none', strike: false, visual: '', withheld: false, drawn: false }
-    // H2 holds the column minimum: a zero-length bar, declared empty.
+    // G2 holds the column minimum: a zero-length bar, declared empty.
     const zeroBar: Shown = { fill: 'none', strike: false, visual: 'dataBar', withheld: false, drawn: false }
     const world = new Map<string, Shown>()
     for (const r of [2, 3, 4, 5, 6, 7]) {
       const on = r % 2 === 1
-      world.set(`E${r}`, on ? red : r === 2 ? zeroBar : bar); world.set(`F${r}`, red); world.set(`G${r}`, redBar); world.set(`H${r}`, r === 2 ? zeroBar : bar)
+      world.set(`E${r}`, on ? red : r === 2 ? zeroBar : bar); world.set(`F${r}`, red); world.set(`H${r}`, redBar); world.set(`G${r}`, r === 2 ? zeroBar : bar)
     }
     expect(configurationVerdict(cfg, 'halts', world)).toMatchObject({ violations: [], unusable: [], reproduced: true, discriminating: true })
-    // Codex counterexample: E4 and H4 both suppressed. Production's twin alone would call it reproduced.
+    // Codex counterexample: E4 and G4 both suppressed. Production's twin alone would call it reproduced.
     const suppressed = new Map(world)
-    suppressed.set('E4', empty); suppressed.set('H4', empty)
+    suppressed.set('E4', empty); suppressed.set('G4', empty)
     const v = configurationVerdict(cfg, 'halts', suppressed)
     expect(v.reproduced).toBe(false)
     expect(v.discriminating).toBe(false)
-    expect(v.unusable).toEqual(['stop-bar witness H4: declared visual, production shows none|'])
+    expect(v.unusable).toEqual(['stop-bar witness G4: declared visual, production shows none|'])
   })
-  it('stop-icon: only the documented K3/K5/K7 witnesses may fail; suppressing I4 and its positive twin L4 fails (fix round 2)', () => {
+  it('stop-icon: only the documented L3/L5/L7 witnesses may fail; suppressing I4 and its positive twin K4 fails (fix round 2; letters since Task 39)', () => {
     const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest
     const cfg = manifest.cases.find(x => x.id === 'stage5-composition')!.formulaConfigurations!.find(x => x.id === 'stop-icon')!
-    expect(CF_STAGE5_UNCONFIRMABLE['formula:composition-stop-icon']?.witnesses).toEqual(['K3', 'K5', 'K7'])
+    expect(CF_STAGE5_UNCONFIRMABLE['formula:composition-stop-icon']?.witnesses).toEqual(['L3', 'L5', 'L7'])
     const red: Shown = { fill: 'FFFFC7CE', strike: false, visual: '', withheld: false, drawn: false }, icon: Shown = { fill: 'none', strike: false, visual: 'iconSet', withheld: false, drawn: true }
     const withheld: Shown = { fill: 'none', strike: false, visual: '', withheld: true, drawn: false }, empty: Shown = { fill: 'none', strike: false, visual: '', withheld: false, drawn: false }
-    // Production's world: halts everywhere, the red + icon twins K withheld (icon:composition-dxf-fill unpublished).
+    // Production's world: halts everywhere, the red + icon twins L withheld (icon:composition-dxf-fill unpublished).
     const world = new Map<string, Shown>()
-    for (const r of [2, 3, 4, 5, 6, 7]) { const on = r % 2 === 1; world.set(`I${r}`, on ? red : icon); world.set(`J${r}`, red); world.set(`K${r}`, withheld); world.set(`L${r}`, icon) }
+    for (const r of [2, 3, 4, 5, 6, 7]) { const on = r % 2 === 1; world.set(`I${r}`, on ? red : icon); world.set(`J${r}`, red); world.set(`L${r}`, withheld); world.set(`K${r}`, icon) }
     const v = configurationVerdict(cfg, 'halts', world)
     expect(v.reproduced).toBe(false)
     expect(unconfirmableViolations(cfg, v, world)).toEqual([])
-    // Codex counterexample: I4 and its required positive twin L4 both suppressed.
+    // Codex counterexample: I4 and its required positive twin K4 both suppressed.
     const suppressed = new Map(world)
-    suppressed.set('I4', empty); suppressed.set('L4', empty)
+    suppressed.set('I4', empty); suppressed.set('K4', empty)
     const sv = configurationVerdict(cfg, 'halts', suppressed)
     expect(sv.reproduced).toBe(false)
-    expect(unconfirmableViolations(cfg, sv, suppressed)).toEqual([expect.stringMatching(/witness L4: declared visual.*not a documented unconfirmable witness/)])
+    expect(unconfirmableViolations(cfg, sv, suppressed)).toEqual([expect.stringMatching(/witness K4: declared visual.*not a documented unconfirmable witness/)])
   })
 })
 

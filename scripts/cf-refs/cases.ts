@@ -5756,6 +5756,12 @@ export interface S5Fixture {
   clock?: Pick<CfClockRequirement, 'staleCacheCellRef' | 'localTodayCellRef' | 'utcTodayCellRef'>
   dynamicRefresh?: CfOracleCase['formulaDynamicRefresh']
   calcObservationSources?: CfOracleCase['calcObservationSources']
+  /**
+   * Task 39: put every Sheet1 cell on an explicit bottom-aligned style. Excel renders the default style vertically centred,
+   * which moves an icon 3 px off the bottom-aligned frame the Stage 4 glyph key was captured in (every icon crop of the
+   * first Stage 5 run was unclassifiable). Set only on a case built afresh, since it changes the workbook bytes.
+   */
+  cellVertical?: 'bottom'
 }
 
 const S5_RED = 'FFFFC7CE'
@@ -5824,13 +5830,21 @@ function s5Expr(
   }
 }
 
-/** A `cellIs` rule; `literal` operands carry no formula marker (a Stage 1 rule), others are formula operands (S5-F). */
-function s5CellIs(cap: string, sqref: string, priority: number, operator: string, operands: readonly string[], o: { dxf?: 0 | 1 | 2; stop?: boolean; literal?: boolean } = {}): S5Rule {
+/**
+ * A `cellIs` rule; `literal` operands carry no formula marker (a Stage 1 rule), others are formula operands (S5-F).
+ * `where: 'x14'` writes the form Excel 16.115 resaved a cross-sheet operand in (stage5-cross-sheet.rejected.xlsx, Task 39):
+ * `<x14:cfRule type="cellIs" priority operator id>`, one `<xm:f>` per operand, and an inline `<x14:dxf>`.
+ */
+function s5CellIs(cap: string, sqref: string, priority: number, operator: string, operands: readonly string[], o: { dxf?: 0 | 1 | 2; stop?: boolean; literal?: boolean; where?: 'legacy' | 'x14' } = {}): S5Rule {
   const dxf = o.dxf ?? 0
+  const where = o.where ?? 'legacy'
+  const stop = o.stop ? ' stopIfTrue="1"' : ''
   return {
-    where: 'legacy',
+    where,
     sqref,
-    xml: `<cfRule type="cellIs" dxfId="${dxf}" priority="${priority}"${o.stop ? ' stopIfTrue="1"' : ''} operator="${operator}">${operands.map(f => `<formula>${xe(f)}</formula>`).join('')}</cfRule>`,
+    xml: where === 'legacy'
+      ? `<cfRule type="cellIs" dxfId="${dxf}" priority="${priority}"${stop} operator="${operator}">${operands.map(f => `<formula>${xe(f)}</formula>`).join('')}</cfRule>`
+      : `<x14:cfRule type="cellIs" priority="${priority}"${stop} operator="${operator}" id="${s5Guid(priority)}">${operands.map(f => `<xm:f>${xe(f)}</xm:f>`).join('')}<x14:dxf>${S5_DXF_INLINE[dxf]}</x14:dxf></x14:cfRule>`,
     separateBlock: true,
     marker: {
       capabilityId: cap,
@@ -5840,7 +5854,7 @@ function s5CellIs(cap: string, sqref: string, priority: number, operator: string
       ...(o.stop ? { stopIfTrue: true } : {}),
       formulas: [...operands],
       dxf: S5_DXF_EXPECT[dxf]!,
-      ...(o.literal ? {} : { formula: { kind: 'operand' as const, anchor: topLeftOf(sqref), dialect: 'base' as const } }),
+      ...(o.literal ? {} : { formula: { kind: 'operand' as const, anchor: topLeftOf(sqref), dialect: dialectOf(where) } }),
     },
   }
 }
@@ -6618,25 +6632,29 @@ function compositionFixture(): S5Fixture {
     else if (lower === 'bar') rules.push(s5Bar(cap, sq, p++, mm))
     else rules.push(s5Icon(cap, sq, p++, pct3))
   }
-  // Twins (literal rules only, no formula): D scale; F red only, G red + bar, H bar only; J red only, K red + icon, L icon only; O scale.
+  // Task 39 (S5-REPAIR): Excel 16.115 merges an identical rule on adjacent columns into one sqref on resave (B2:C7, F2:G7,
+  // J2:K7, Q2:R7, S2:T7 in stage5-composition.rejected.xlsx), which the markers cannot find. The columns are therefore laid
+  // out so no two adjacent columns start with the same rule (same type, formula and format); every prediction is unchanged.
+  // Twins (literal rules only, no formula): C scale; F red only, G bar only, H red + bar; J red only, K icon only, L red + icon; O scale.
   const twinCap = 'formula:composition-twin'
   stopAhead('formula:composition-stop-dxf', 'B', P1, 'dxf')
-  stopAhead('formula:composition-stop-scale', 'C', P1, 'scale')
-  rules.push(s5Scale(twinCap, 'D2:D7', p++, mm))
+  rules.push(s5Scale(twinCap, 'C2:C7', p++, mm))
+  stopAhead('formula:composition-stop-scale', 'D', P1, 'scale')
   stopAhead('formula:composition-stop-bar', 'E', P1, 'bar')
-  rules.push(lit(twinCap, 'F2:F7', 0), lit(twinCap, 'G2:G7', 0), s5Bar(twinCap, 'G2:G7', p++, mm), s5Bar(twinCap, 'H2:H7', p++, mm))
+  rules.push(lit(twinCap, 'F2:F7', 0), s5Bar(twinCap, 'G2:G7', p++, mm), lit(twinCap, 'H2:H7', 0), s5Bar(twinCap, 'H2:H7', p++, mm))
   stopAhead('formula:composition-stop-icon', 'I', P1, 'icon')
-  rules.push(lit(twinCap, 'J2:J7', 0), lit(twinCap, 'K2:K7', 0), s5Icon(twinCap, 'K2:K7', p++, pct3), s5Icon(twinCap, 'L2:L7', p++, pct3))
+  rules.push(lit(twinCap, 'J2:J7', 0), s5Icon(twinCap, 'K2:K7', p++, pct3), lit(twinCap, 'L2:L7', 0), s5Icon(twinCap, 'L2:L7', p++, pct3))
   // An expression fill against a scale fill, both orders (M: expression first; N: scale first), twin scale O.
   rules.push(s5Expr('formula:composition-expression-vs-scale', 'M2:M7', p++, '$A2>-1'), s5Scale('formula:composition-expression-vs-scale', 'M2:M7', p++, mm))
   rules.push(s5Scale('formula:composition-expression-vs-scale', 'N2:N7', p++, mm), s5Expr('formula:composition-expression-vs-scale', 'N2:N7', p++, '$A2>-1'))
   rules.push(s5Scale(twinCap, 'O2:O7', p++, mm))
   // Two overlapping expressions (red ahead of green).
   rules.push(s5Expr('formula:composition-overlapping', 'P2:P7', p++, '$A2>0', { dxf: 0 }), s5Expr('formula:composition-overlapping', 'P2:P7', p++, '$A2>-1', { dxf: 1 }))
-  // INDIRECT (unresolved in production, evaluated by Excel) p1 stopIfTrue ahead of each kind; twins reused (D, F/G/H, J/K/L).
+  // INDIRECT (unresolved in production, evaluated by Excel) p1 stopIfTrue ahead of each kind; twins reused (C, F/G/H, J/K/L).
+  // The strikethrough (dxf 2) and red (dxf 0) heads alternate, so adjacent heads differ (Task 39).
   stopAhead('formula:composition-indirect-ahead-dxf', 'Q', IND, 'dxf')
-  stopAhead('formula:composition-indirect-ahead-scale', 'R', IND, 'scale')
-  stopAhead('formula:composition-indirect-ahead-bar', 'S', IND, 'bar')
+  stopAhead('formula:composition-indirect-ahead-bar', 'R', IND, 'bar')
+  stopAhead('formula:composition-indirect-ahead-scale', 'S', IND, 'scale')
   stopAhead('formula:composition-indirect-ahead-icon', 'T', IND, 'icon')
   const refs = (c: string): string[] => rowsOf(c, 2, 7)
   const stopDxf = (id: string, cap: string, c: string, ignoredPrediction: boolean): S5Configuration =>
@@ -6647,9 +6665,9 @@ function compositionFixture(): S5Fixture {
     })
   const stopScale = (id: string, cap: string, c: string, ignoredPrediction: boolean): S5Configuration =>
     s5Cfg(id, cap, refs(c), {
-      halts: r => (on(r) ? `${NONE}+strike` : `twin:D${rowOfRef(r)}`),
-      continues: r => (on(r) ? `twin:D${rowOfRef(r)}+strike` : `twin:D${rowOfRef(r)}`),
-      ...(ignoredPrediction ? { ignored: twinCol('D') } : {}),
+      halts: r => (on(r) ? `${NONE}+strike` : `twin:C${rowOfRef(r)}`),
+      continues: r => (on(r) ? `twin:C${rowOfRef(r)}+strike` : `twin:C${rowOfRef(r)}`),
+      ...(ignoredPrediction ? { ignored: twinCol('C') } : {}),
     })
   const stopCrop = (id: string, cap: string, c: string, twins: readonly [string, string, string], ignoredPrediction: boolean): S5Configuration =>
     s5Cfg(id, cap, refs(c), {
@@ -6663,11 +6681,13 @@ function compositionFixture(): S5Fixture {
       'S5-O: how does an expression rule compose with the other kinds? A p1 stopIfTrue expression ahead of a literal DXF, a scale, a bar and an icon; an expression fill against a scale fill in both orders; two overlapping expressions; and an INDIRECT expression (which production cannot evaluate) p1 ahead of each kind. Scale, bar and icon outcomes are compared with literal twins in the same workbook.',
     cells,
     rules,
+    cellVertical: 'bottom',
     configurations: [
       stopDxf('stop-dxf', 'formula:composition-stop-dxf', 'B', false),
-      stopScale('stop-scale', 'formula:composition-stop-scale', 'C', false),
-      stopCrop('stop-bar', 'formula:composition-stop-bar', 'E', ['F', 'G', 'H'], false),
-      stopCrop('stop-icon', 'formula:composition-stop-icon', 'I', ['J', 'K', 'L'], false),
+      stopScale('stop-scale', 'formula:composition-stop-scale', 'D', false),
+      // Twins: [red only, red + visual, visual only].
+      stopCrop('stop-bar', 'formula:composition-stop-bar', 'E', ['F', 'H', 'G'], false),
+      stopCrop('stop-icon', 'formula:composition-stop-icon', 'I', ['J', 'L', 'K'], false),
       s5Cfg('expression-vs-scale', 'formula:composition-expression-vs-scale', [...refs('M'), ...refs('N')], {
         'dxf-wins': always(S5_RED),
         'scale-wins': twinCol('O'),
@@ -6678,9 +6698,9 @@ function compositionFixture(): S5Fixture {
         'last-wins': always(S5_GREEN),
       }),
       stopDxf('indirect-dxf', 'formula:composition-indirect-ahead-dxf', 'Q', true),
-      stopScale('indirect-scale', 'formula:composition-indirect-ahead-scale', 'R', true),
-      stopCrop('indirect-bar', 'formula:composition-indirect-ahead-bar', 'S', ['F', 'G', 'H'], true),
-      stopCrop('indirect-icon', 'formula:composition-indirect-ahead-icon', 'T', ['J', 'K', 'L'], true),
+      stopScale('indirect-scale', 'formula:composition-indirect-ahead-scale', 'S', true),
+      stopCrop('indirect-bar', 'formula:composition-indirect-ahead-bar', 'R', ['F', 'H', 'G'], true),
+      stopCrop('indirect-icon', 'formula:composition-indirect-ahead-icon', 'T', ['J', 'L', 'K'], true),
     ],
   })
 }
@@ -6699,7 +6719,8 @@ function crossSheetFixture(): S5Fixture {
     rules: [
       s5Expr('formula:cross-sheet-reference', 'B2:B5', 1, 'Sheet2!A2>0', { where: S5_CROSS_SHEET_WHERE }),
       s5Expr('formula:cross-sheet-reference', 'C2:C5', 2, '$A2>Sheet2!$B$1', { where: S5_CROSS_SHEET_WHERE }),
-      { ...s5CellIs('formula:cellis-operand-cross-sheet', 'D2:D5', 3, 'greaterThan', ['Sheet2!$A$1']) },
+      // Task 39 (S5-REPAIR): the base form was an incidental generator defect; Excel moved it to x14 on resave.
+      s5CellIs('formula:cellis-operand-cross-sheet', 'D2:D5', 3, 'greaterThan', ['Sheet2!$A$1'], { where: S5_CROSS_SHEET_WHERE }),
       s5Expr('formula:cross-sheet-quoted-name', 'E2:E5', 4, "'My Sheet'!A1>0", { where: S5_CROSS_SHEET_WHERE }),
     ],
     dynamicRefresh: { sheet: 'Sheet2', edits: [{ ref: 'A3', value: 1 }, { ref: 'A5', value: 1 }], refs: ['B3', 'B5'] },

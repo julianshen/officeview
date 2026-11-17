@@ -6301,11 +6301,11 @@ describe('Stage 5 fix round 3 (codex review): permitted blanks, composition fill
   })
 
   it('#2 composition fills are compared with the bars: correct indirect-bar rendering discriminates continues', async () => {
-    // INDIRECT true on rows 3 and 5: continues -> G (red + bar), rows 2/4 -> H (bar only); ignored -> H everywhere.
-    const fills: Record<string, string> = { S3: RED_ARGB, S5: RED_ARGB, S7: RED_ARGB, ...Object.fromEntries([2, 3, 4, 5, 6, 7].flatMap(r => [[`F${r}`, RED_ARGB], [`G${r}`, RED_ARGB]])) }
+    // INDIRECT (column R) true on rows 3, 5, 7: continues -> H (red + bar), rows 2/4/6 -> G (bar only); ignored -> G everywhere.
+    const fills: Record<string, string> = { R3: RED_ARGB, R5: RED_ARGB, R7: RED_ARGB, ...Object.fromEntries([2, 3, 4, 5, 6, 7].flatMap(r => [[`F${r}`, RED_ARGB], [`H${r}`, RED_ARGB]])) }
     const len = [0, 0.2, 0.4, 0.6, 0.8, 1] // min/max over 10..60
     const ev = await evaluateWith('stage5-composition', ['indirect-bar'], fills, (ctx, box) => {
-      for (let r = 2; r <= 7; r++) for (const col of ['S', 'G', 'H']) bar(ctx, box(`${col}${r}`), len[r - 2]!)
+      for (let r = 2; r <= 7; r++) for (const col of ['R', 'G', 'H']) bar(ctx, box(`${col}${r}`), len[r - 2]!)
     })
     expect(ev['formula:composition-indirect-ahead-bar'], JSON.stringify(ev['formula:composition-indirect-ahead-bar']).slice(0, 300)).toMatchObject({ status: 'discriminating', matched: 'continues' })
   })
@@ -6314,12 +6314,13 @@ describe('Stage 5 fix round 3 (codex review): permitted blanks, composition fill
     const g = glyphs()
     // 3 icons, percent 0/33/67 over 10..60: 10, 20 -> 0; 30, 40 -> 1; 50, 60 -> 2. halts: rows 3/5/7 red, no icon; 2/4/6 icon.
     const bucket = [0, 0, 1, 1, 2, 2]
-    const fills: Record<string, string> = { I3: RED_ARGB, I5: RED_ARGB, I7: RED_ARGB, ...Object.fromEntries([2, 3, 4, 5, 6, 7].flatMap(r => [[`J${r}`, RED_ARGB], [`K${r}`, RED_ARGB]])) }
+    // Twins (Task 39 re-lettering): J red only, K icon only, L red + icon.
+    const fills: Record<string, string> = { I3: RED_ARGB, I5: RED_ARGB, I7: RED_ARGB, ...Object.fromEntries([2, 3, 4, 5, 6, 7].flatMap(r => [[`J${r}`, RED_ARGB], [`L${r}`, RED_ARGB]])) }
     const ev = await evaluateWith('stage5-composition', ['stop-icon'], fills, (_ctx, _box, put) => {
       for (let r = 2; r <= 7; r++) {
         if (r === 2 || r === 4 || r === 6) put(`I${r}`, g(bucket[r - 2]!))
-        put(`K${r}`, g(bucket[r - 2]!), RED_RGB)
-        put(`L${r}`, g(bucket[r - 2]!))
+        put(`L${r}`, g(bucket[r - 2]!), RED_RGB)
+        put(`K${r}`, g(bucket[r - 2]!))
       }
     })
     expect(ev['formula:composition-stop-icon'], JSON.stringify(ev['formula:composition-stop-icon']).slice(0, 400)).toMatchObject({ status: 'discriminating', matched: 'halts' })
