@@ -22,7 +22,7 @@ Piece 5 makes audio play during a streamed show the way it plays in a local show
   - lossless capture attributed 22 % (640×360 box), 67 % (full frame) and 30 % (full frame at bucket 2), against ≥ 90 %;
   - JPEG q70 attributed 0 %, 67 % and 0 %, against ≥ 75 %;
   - a 5-minute 1280×720 encode measured 293.5 MiB, against the 64 MiB cap;
-  - a Chrome-decoded cell attributed 0/60, because Chrome's pixels are systematically brighter than ffmpeg's decode.
+  - a Chrome-decoded cell attributed 0/60; Chrome's pixels were also systematically brighter than ffmpeg's decode (cause not isolated).
   The null side was green: 0 wrong attributions, and the fitted threshold was 5.20, under the 6.65 union value.
 - **Piece 5 ships audio only:** audio media shapes, effect sounds, transition sounds and audio-only media.
 - **Video slides keep piece 4's behaviour.** A slide whose video end could change what is drawn plays its still (reason `media`). Any other video shows its poster. No video byte is encoded or sent.
