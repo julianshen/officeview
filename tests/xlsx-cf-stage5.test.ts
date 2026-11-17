@@ -334,7 +334,7 @@ describe('per-case and per-variant Stage 5 audit rows (Task 39; fix round 1, F3)
     type Token = import('../scripts/cf-refs/stage5-withhold').Stage5Production
     const RED = 'FFFFC7CE', GREEN = 'FFC6EFCE'
     const truth = (counterfactual: Token, extra: Partial<import('../scripts/cf-refs/stage5-withhold').Stage5Truth> = {}) => ({ counterfactual, refusals: [], unjustified: [], overResolved: [], ...extra })
-    const t = (fill: string, unresolved: string[], strike = false, visual?: string): Token => ({ fill, strike, unresolved, ...(visual !== undefined ? { visual } : {}) })
+    const t = (fill: string, unresolved: string[], strike = false, visual = 'none', properties: Record<string, unknown> = {}, colorScale = 'none'): Token => ({ fill, strike, unresolved, visual, properties, colorScale })
     // No counterfactual, no verdict.
     expect(stage5CellAgreement(t(RED, []), { fill: RED, strike: false }, undefined).agrees).toBe(false)
     // Production equal to the counterfactual: an unresolved strike beside Excel's own fill agrees.
@@ -355,7 +355,15 @@ describe('per-case and per-variant Stage 5 audit rows (Task 39; fix round 1, F3)
     // Visual evidence: a bar where Excel measured none disagrees; a leg that observes no visual is not compared.
     expect(stage5CellAgreement(t('none', [], false, 'bar'), { fill: 'none', strike: false, visual: 'none' }, truth(t('none', [], false, 'bar'))).agrees).toBe(false)
     expect(stage5CellAgreement(t('none', [], false, 'bar'), { fill: 'none', strike: false, visual: 'bar' }, truth(t('none', [], false, 'bar'))).agrees).toBe(true)
-    expect(stage5CellAgreement(t('none', []), { fill: 'none', strike: false, visual: 'bar' }, truth(t('none', [], false, 'bar'))).agrees).toBe(true)
+    // Fix round 5: every component is compared with the counterfactual; a token that does not report one never agrees.
+    const bare = { fill: 'none', strike: false, unresolved: [] as string[] }
+    expect(stage5CellAgreement(bare, { fill: 'none', strike: false }, truth(t('none', []))).disagreement).toMatch(/no visual/)
+    expect(stage5CellAgreement({ ...bare, visual: 'none' }, { fill: 'none', strike: false }, truth(t('none', []))).disagreement).toMatch(/no resolved properties/)
+    expect(stage5CellAgreement({ ...bare, visual: 'none', properties: {} }, { fill: 'none', strike: false }, truth(t('none', []))).disagreement).toMatch(/no colour-scale/)
+    expect(stage5CellAgreement(t('none', [], false, 'none', { 'font.bold': true }), { fill: 'none', strike: false }, truth(t('none', []))).disagreement).toMatch(/resolved properties .*font\.bold/)
+    expect(stage5CellAgreement(t('none', [], false, 'none', { 'font.italic': true }), { fill: 'none', strike: false }, truth(t('none', [], false, 'none', { 'font.italic': false }))).agrees).toBe(false)
+    expect(stage5CellAgreement(t('FF63BE7B', [], false, 'none', {}, 'FF63BE7B'), { fill: 'FF63BE7B', strike: false }, truth(t('FF63BE7B', [], false, 'none', {}, 'FF63BE7C'))).disagreement).toMatch(/colour scale/)
+    expect(stage5CellAgreement(t('none', [], false, 'icon:a'), { fill: 'none', strike: false }, truth(t('none', [], false, 'icon:b'))).disagreement).toMatch(/visual icon:a differs/)
     expect(stage5CellAgreement(t('none', [], false, 'none'), { fill: 'none', strike: false }, truth(t('none', [], false, 'bar'))).disagreement).toMatch(/counterfactual/)
   })
 
@@ -522,6 +530,6 @@ describe('cf-compare interactive runs production inputs on Stage 5 cases (Task 3
     const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
     const truths = await stage5CounterfactualOf({ c, doc, sheet, refs: stage5CompareRefs(c, REPO_ROOT), now: Date.now })
     const msg = verifyCellExpectations(c, () => ({ applied: false, unresolved: true }), undefined, truths)
-    expect(msg).toMatch(/Cell B2 .*unresolved writes \[ALL\] differ from the counterfactual's \[\]/)
+    expect(msg).toMatch(/Cell B2: unresolved writes \[ALL\] differ from the counterfactual's \[\]/)
   }, 120000)
 })

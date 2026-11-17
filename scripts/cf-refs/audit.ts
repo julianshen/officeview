@@ -2301,7 +2301,7 @@ export async function stage5CaseRecords(manifest: CfManifest, rootDir: string = 
       const formulaCaps = [...new Set(covering.filter(m => m.formula !== undefined).map(m => m.capabilityId))].sort()
       return { covering, formulaCaps, kind: formulaCaps.length > 0 ? 'display-format' : covering.length > 0 ? 'literal' : 'control' }
     }
-    const blank: Stage5Production = { fill: 'none', strike: false, unresolved: [], visual: 'none' }
+    const blank: Stage5Production = stage5TokenOf(undefined)
     if (c.status !== 'measured') {
       // Not compared: the case holds no verified Excel evidence (a recorded outcome, a refused shape, or pending).
       const refs = c.expected.cells.length > 0 ? c.expected.cells.map(e => e.ref) : [...new Set(c.markers.map(m => m.sqref.split(/[: ]/)[0]!))]

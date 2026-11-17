@@ -15,6 +15,7 @@ import { cfRulesVersion } from '../../src/xlsx/view/pagedSource'
 import { stage5CellAgreement, stage5CounterfactualOf, stage5TokenOf, type Stage5Excel, type Stage5Production, type Stage5Truth } from '../../scripts/cf-refs/stage5-withhold'
 import type { CfManifest } from '../../scripts/cf-refs/cases'
 import type { XlsxDocument, XlsxSheet } from '../../src/xlsx/types'
+import type { CfCellState, CfOutcome } from '../../src/xlsx/cf/model'
 
 type Case = CfManifest['cases'][number]
 const rc = (ref: string) => { const m = /^([A-Z]+)(\d+)$/.exec(ref)!; return { row: Number(m[2]) - 1, col: [...m[1]!].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1 } }
@@ -28,11 +29,11 @@ export function stage5ExcelAt(c: Case, rootDir: string, ref: string): Stage5Exce
   return { fill: o.displayFormatFill.toUpperCase() === (o.baseFill ?? 'FFFFFFFF').toUpperCase() ? 'none' : o.displayFormatFill.toUpperCase(), strike: o.strikethrough === true }
 }
 
-/** Production's token at `ref` through the production service (resident, production evidence and inputs). */
-export async function stage5ProductionAt(doc: XlsxDocument, sheet: XlsxSheet, ref: string): Promise<Stage5Production> {
+/** Production's outcome at `ref` through the production service (resident, production evidence and inputs). */
+export async function stage5OutcomeAt(doc: XlsxDocument, sheet: XlsxSheet, ref: string): Promise<CfOutcome<CfCellState> | undefined> {
   const memory = createCfMemory()
   const cf = sheet.conditionalFormatting
-  if (!cf) return stage5TokenOf(undefined)
+  if (!cf) return undefined
   const service = createCfService(cf, memory, { evidence: cfRuntimeEvidence, evaluation: cfEvaluationContextFor(cfDocumentEvaluationOf(doc), Date.now), sheetName: sheet.name, workbook: cfWorkbookOfDocument(doc.sheets, memory, 'engine') })
   const stamp = { owner: 'stage5-verdict', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(cf), viewGen: 0, structureGen: 0, clockGen: 0 }
   try {
@@ -40,8 +41,13 @@ export async function stage5ProductionAt(doc: XlsxDocument, sheet: XlsxSheet, re
     const lease = await service.prepareCf({ stamp, sourceRects: [{ firstRow: row, lastRow: row, firstCol: col, lastCol: col }], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, residentSource(sheet, stamp, memory, 'engine'))
     const r = lease.value.at(row, col)
     lease.release()
-    return stage5TokenOf(r)
+    return r
   } finally { service.dispose() }
+}
+
+/** Production's token at `ref` (every component: fill, font paths, colour scale, bar, icon, unresolved writes). */
+export async function stage5ProductionAt(doc: XlsxDocument, sheet: XlsxSheet, ref: string): Promise<Stage5Production> {
+  return stage5TokenOf(await stage5OutcomeAt(doc, sheet, ref))
 }
 
 /** The counterfactual at `ref` with the same production inputs (the evaluation clock read at call time). */

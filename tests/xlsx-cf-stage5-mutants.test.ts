@@ -43,26 +43,35 @@ async function loadCase(id: string) {
   return { c, doc, sheet: doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]! }
 }
 
-type Token = import('../scripts/cf-refs/stage5-withhold').Stage5Production
 type Case = import('../scripts/cf-refs/cases').CfOracleCase
 type Doc = import('../src/xlsx/types').XlsxDocument
 type Sheet = import('../src/xlsx/types').XlsxSheet
-const refOf = (row: number, col: number) => `${String.fromCharCode(65 + col)}${row + 1}`
-const actualOf = (t: Token): import('../scripts/cf-compare').ActualCellOutcome => ({
-  applied: t.fill !== 'none' || t.strike, unresolved: t.unresolved.length > 0, unresolvedSlots: [...t.unresolved],
-  ...(t.fill !== 'none' || t.strike ? { style: { ...(t.fill !== 'none' ? { fillColor: t.fill } : {}), ...(t.strike ? { strike: true } : {}) } } : {}),
-})
+/** A1 reference, multi-letter columns included (AA = col 26). */
+const refOf = (row: number, col: number) => { let n = col + 1, l = ''; while (n > 0) { const k = (n - 1) % 26; l = String.fromCharCode(65 + k) + l; n = Math.floor((n - 1) / 26) } return `${l}${row + 1}` }
+/** A cf-compare leg's outcome from a service outcome: style, unresolved writes, and every Stage 5 component (fix round 5). */
+const actualOf = (r: import('../src/xlsx/cf/model').CfOutcome<import('../src/xlsx/cf/model').CfCellState> | undefined): import('../scripts/cf-compare').ActualCellOutcome => {
+  if (r?.kind === 'unresolved') return { applied: false, unresolved: true, unresolvedSlots: ['ALL'], icon: null, bar: null, properties: {}, scaleArgb: null }
+  if (r?.kind !== 'ready') return { applied: false, unresolved: false, unresolvedSlots: [], icon: null, bar: null, properties: {}, scaleArgb: null }
+  const slots = [...(r.value.unresolvedWrites ?? [])], v = r.value.visual
+  const fill = r.value.properties['fill.bg'] as string | undefined, scale = v?.colorScale ? (v.colorScale.argb >>> 0).toString(16).toUpperCase().padStart(8, '0') : undefined
+  const strike = r.value.properties['font.strike'] === true
+  const fillColor = scale ?? fill
+  return { applied: fillColor !== undefined || strike, unresolved: slots.length > 0, unresolvedSlots: slots,
+    ...(fillColor !== undefined || strike ? { style: { ...(fillColor !== undefined ? { fillColor } : {}), ...(strike ? { strike: true } : {}) } } : {}),
+    icon: v?.iconSet ? { set: v.iconSet.set, iconId: v.iconSet.iconId } : null, bar: v?.dataBar ? { startFraction: v.dataBar.startFraction, endFraction: v.dataBar.endFraction } : null,
+    properties: { ...r.value.properties }, scaleArgb: v?.colorScale ? v.colorScale.argb : null }
+}
 /** cf-compare's check over production's own tokens for every compared cell of `doc` (as mutated), with `override` cells
  * replaced, against the counterfactual of the same doc. */
 async function compareProduction(c: Case, doc: Doc, sheet: Sheet, override: ReadonlyMap<string, import('../scripts/cf-compare').ActualCellOutcome> = new Map()): Promise<string | undefined> {
   const { verifyCaseCells, stage5CompareRefs } = await import('../scripts/cf-compare')
-  const { stage5ProductionAt } = await import('./helpers/cf-stage5-verdict')
+  const { stage5OutcomeAt } = await import('./helpers/cf-stage5-verdict')
   const { stage5CounterfactualOf } = await import('../scripts/cf-refs/stage5-withhold')
   const refs = stage5CompareRefs(c, REPO_ROOT)
-  const tokens = new Map<string, Token>()
-  for (const ref of refs) tokens.set(ref, await stage5ProductionAt(doc, sheet, ref))
+  const actuals = new Map<string, import('../scripts/cf-compare').ActualCellOutcome>()
+  for (const ref of refs) actuals.set(ref, actualOf(await stage5OutcomeAt(doc, sheet, ref)))
   const truths = await stage5CounterfactualOf({ c, doc, sheet, refs, now: Date.now })
-  return verifyCaseCells(c, REPO_ROOT, (row, col) => override.get(refOf(row, col)) ?? actualOf(tokens.get(refOf(row, col)) ?? { fill: 'none', strike: false, unresolved: [] }), truths)
+  return verifyCaseCells(c, REPO_ROOT, (row, col) => override.get(refOf(row, col)) ?? actuals.get(refOf(row, col)) ?? actualOf(undefined), truths)
 }
 
 describe('R1: a compile refusal is no justification unless independently recorded', () => {

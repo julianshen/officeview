@@ -180,26 +180,38 @@ export function stage5WithholdJustification(c: CaseLike | CfOracleCase, ref: str
 /** compose.ts `conflicts`: whether an unresolved write `a` covers the component `b`. */
 export const stage5Conflicts = (a: string, b: string): boolean => a === 'ALL' || b === 'ALL' || a === b || a.startsWith(`${b}.`) || b.startsWith(`${a}.`)
 
-/** What production shows at a cell: the resolved fill/strike, the unresolved write paths, and the visual it draws
- * (`visual` absent: the leg does not observe visuals, so it is not compared). */
-export interface Stage5Production { fill: string; strike: boolean; unresolved: string[]; visual?: string }
+/** What production shows at a cell: the resolved fill/strike (Excel's vocabulary), the unresolved write paths, the visual it
+ * draws, every resolved DXF property (fill, each font path, numFmt, borders) and the colour-scale colour. Fix round 5: a
+ * token missing `visual`, `properties` or `colorScale` never agrees with a counterfactual (nothing is skipped). */
+export interface Stage5Production { fill: string; strike: boolean; unresolved: string[]; visual?: string; properties?: Readonly<Record<string, unknown>>; colorScale?: string }
 /** What Excel showed: its DisplayFormat fill/strike, and the bar/icon measured from the PNG where measurable. */
 export interface Stage5Excel { fill: string; strike: boolean; visual?: string }
 
 /** One cell's production token from a service outcome: a zero-length bar draws nothing (as Excel's measurement reads it),
  * an icon is named by its glyph class (the capture's vocabulary), and a withheld visual slot is `withheld`. */
+/** The visual token of a cell from its bar and icon descriptors (null: none): a zero-length bar draws nothing (as Excel's
+ * measurement reads it), an icon is named by its glyph class (the capture's vocabulary), and a withheld visual slot is
+ * `withheld`. Shared by `stage5TokenOf` and cf-compare's legs. */
+export function stage5VisualToken(bar: Readonly<{ startFraction?: number; endFraction?: number }> | null | undefined, icon: Readonly<{ set: string; iconId: number }> | null | undefined, unresolved: readonly string[]): string {
+  const drawnBar = bar != null && Math.abs((bar.endFraction ?? 0) - (bar.startFraction ?? 0)) > 1e-9
+  const iconKey = icon ? `${icon.set}:${icon.iconId}` : undefined
+  return drawnBar ? 'bar' : iconKey ? `icon:${CF_ICON_GLYPH_CLASSES[iconKey] ?? iconKey}` : unresolved.some(w => w === 'ALL' || w === 'dataBar' || w === 'iconSet') ? 'withheld' : 'none'
+}
+/** A colour-scale colour token (`none`, or the ARGB as 8 upper-case hex digits). */
+export const stage5ScaleToken = (argb: number | null | undefined): string => (argb == null ? 'none' : (argb >>> 0).toString(16).toUpperCase().padStart(8, '0'))
+
+/** One cell's production token from a service outcome. */
 export function stage5TokenOf(r: CfOutcome<CfCellState> | undefined): Stage5Production {
-  if (r?.kind === 'unresolved') return { fill: 'none', strike: false, unresolved: ['ALL'], visual: 'withheld' }
-  if (r?.kind !== 'ready') return { fill: 'none', strike: false, unresolved: [], visual: 'none' }
+  if (r?.kind === 'unresolved') return { fill: 'none', strike: false, unresolved: ['ALL'], visual: 'withheld', properties: {}, colorScale: 'none' }
+  if (r?.kind !== 'ready') return { fill: 'none', strike: false, unresolved: [], visual: 'none', properties: {}, colorScale: 'none' }
   const st = resolveCfCellStyle(undefined, r.value)
   const unresolved = [...(r.value.unresolvedWrites ?? [])].sort()
   const v = r.value.visual
-  const bar = v?.dataBar as { startFraction?: number; endFraction?: number } | undefined
-  const drawnBar = bar !== undefined && Math.abs((bar.endFraction ?? 0) - (bar.startFraction ?? 0)) > 1e-9
-  const iconKey = v?.iconSet ? `${v.iconSet.set}:${v.iconSet.iconId}` : undefined
-  const visual = drawnBar ? 'bar' : iconKey ? `icon:${CF_ICON_GLYPH_CLASSES[iconKey] ?? iconKey}` : unresolved.some(w => w === 'ALL' || w === 'dataBar' || w === 'iconSet') ? 'withheld' : 'none'
-  return { fill: st.fillColor ? st.fillColor.toUpperCase() : 'none', strike: st.strike === true, unresolved, visual }
+  return { fill: st.fillColor ? st.fillColor.toUpperCase() : 'none', strike: st.strike === true, unresolved,
+    visual: stage5VisualToken(v?.dataBar, v?.iconSet, unresolved), properties: { ...r.value.properties }, colorScale: stage5ScaleToken(v?.colorScale?.argb) }
 }
+
+const sortedJson = (o: Readonly<Record<string, unknown>>): string => JSON.stringify(Object.keys(o).sort().map(k => [k, o[k]]))
 
 /** Step 2's result at one cell. */
 export interface Stage5Truth {
@@ -300,12 +312,18 @@ export function stage5CellAgreement(production: Stage5Production, excel: Stage5E
   if (unresolved !== want) return { agrees: false, disagreement: `unresolved writes [${unresolved}] differ from the counterfactual's [${want}]${truth.overResolved.length ? ` (resolved despite a justified refusal: ${truth.overResolved.join('; ')})` : ''}` }
   if (production.fill.toUpperCase() !== cf.fill.toUpperCase()) return { agrees: false, disagreement: `fill ${production.fill} differs from the counterfactual's ${cf.fill}` }
   if (production.strike !== cf.strike) return { agrees: false, disagreement: `strikethrough ${production.strike} differs from the counterfactual's ${cf.strike}` }
-  if (production.visual !== undefined && production.visual !== cf.visual) return { agrees: false, disagreement: `visual ${production.visual} differs from the counterfactual's ${cf.visual}` }
+  // Fix round 5: every component is compared; a token that does not report one never agrees.
+  if (production.visual === undefined) return { agrees: false, disagreement: 'production reports no visual (bar and icon descriptors) to compare with the counterfactual' }
+  if (production.visual !== cf.visual) return { agrees: false, disagreement: `visual ${production.visual} differs from the counterfactual's ${cf.visual}` }
+  if (production.properties === undefined) return { agrees: false, disagreement: 'production reports no resolved properties to compare with the counterfactual' }
+  if (sortedJson(production.properties) !== sortedJson(cf.properties ?? {})) return { agrees: false, disagreement: `resolved properties ${sortedJson(production.properties)} differ from the counterfactual's ${sortedJson(cf.properties ?? {})}` }
+  if (production.colorScale === undefined) return { agrees: false, disagreement: 'production reports no colour-scale colour to compare with the counterfactual' }
+  if (production.colorScale !== cf.colorScale) return { agrees: false, disagreement: `colour scale ${production.colorScale} differs from the counterfactual's ${cf.colorScale}` }
   const open = (component: string): boolean => !production.unresolved.some(u => stage5Conflicts(u, component))
   if (!excel) return { agrees: true }
   if (open('fill') && open('colorScale') && !argbClose(production.fill.toUpperCase(), excel.fill.toUpperCase())) return { agrees: false, disagreement: `fill ${production.fill} vs Excel ${excel.fill}` }
   if (open('font.strike') && production.strike !== excel.strike) return { agrees: false, disagreement: `strikethrough ${production.strike} vs Excel ${excel.strike}` }
-  if (excel.visual !== undefined && production.visual !== undefined && production.visual !== 'withheld') {
+  if (excel.visual !== undefined && production.visual !== 'withheld') {
     const slot = excel.visual === 'bar' || production.visual === 'bar' ? 'dataBar' : 'iconSet'
     if (open(slot) && production.visual !== excel.visual) return { agrees: false, disagreement: `visual ${production.visual} vs Excel ${excel.visual}` }
   }

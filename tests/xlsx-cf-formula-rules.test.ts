@@ -146,10 +146,12 @@ describe('expression rule paints exactly the DisplayFormat cells (Lesson 1)', ()
       const formulaSourced = outcome?.kind === 'ready' && Object.keys(outcome.value.properties).length > 0
       const isVerified = cellVerified(c, e.ref, verified), observed = observedToken(observations[e.ref])
       if (isVerified && observed) compared++
-      // Fix round 4: a withheld cell counts as withheld only when production equals the counterfactual run of the real
-      // compositor with exactly the independently justified refusals forced (no unjustified refusal), never on production's
-      // own unavailable state.
-      const justified = got.withheld && stage5CellAgreement(stage5TokenOf(outcome), undefined, truths.get(e.ref)).agrees
+      // Fix round 5 (codex r4): production must equal the counterfactual run of the real compositor (every component, and
+      // no unjustified refusal). A disagreement is a violation in its own right, reported before, and regardless of, the
+      // fill/strike and unverified acceptance paths below. A withheld cell then counts as withheld (the agreement holds).
+      const agreement = stage5CellAgreement(stage5TokenOf(outcome), undefined, truths.get(e.ref))
+      if (!agreement.agrees) { violations.push(`${c.id}:${e.ref}: ${agreement.disagreement}`); continue }
+      const justified = got.withheld
       const v = stage5CellVerdict({ key: `${c.id}:${e.ref}`, verified: isVerified, ...(observed ? { observed } : {}) }, { fill: got.fill, strike: got.strike }, formulaSourced, justified)
       if (v) violations.push(v)
       else if (isVerified && observed) { if (got.fill === observed.fill && got.strike === observed.strike) exact++; else withheld++ }
