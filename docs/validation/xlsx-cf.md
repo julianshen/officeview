@@ -2599,3 +2599,24 @@ There are 2,036 rows over 17 cases: 791 formula cells, 542 painted as Excel, 0 d
 | `formula:composition-stub-successor-scale` | composition | S5-STUB | reused Stage 1-4 capture (S5-STUB) | recorded | published | none |
 | `formula:composition-stub-successor-bar` | composition | S5-STUB | reused Stage 1-4 capture (S5-STUB) | recorded | published | none |
 | `formula:composition-stub-successor-icon` | composition | S5-STUB | reused Stage 1-4 capture (S5-STUB) | recorded | published | none |
+
+### 14.z.6 Task 39 orchestrator fix (codex re-review 5; the cap is reached)
+
+The re-review of fix round 5 found one gap (P2). `stage5VisualToken` reduces every drawn bar to `bar` and every icon to its glyph class, so a descriptor field could differ from the counterfactual without any surface noticing. Codex's two mutants show this: composition E4 with `endFraction` changed from 0.40 to 0.91, and I2 with `showValue` flipped. Both agreed on the audit rows, conformance, Lesson 1 and both cf-compare legs. The five fix rounds were used up, so the orchestrator ruled and fixed it directly:
+- `stage5VisualDetail` (`scripts/cf-refs/stage5-withhold.ts`) serialises every drawn bar and icon field to one stable string:
+  - bar: axis, start, end and value fractions, the fill, border and axis colours, gradient, negative, `showValue` and direction;
+  - icon: set, id, bucket, buckets and `showValue`.
+
+  It accepts both the resident descriptor and the wire form. The rule id is left out because it is internal numbering, not what is drawn.
+- `Stage5Production.visualDetail` is compared exactly with the counterfactual, and a token without it never agrees. The coarse `visual` token remains only for Excel's captured observations.
+- `stage5TokenOf` (used by the audit rows, conformance and Lesson 1) and both cf-compare legs (`visualDetail` on `ActualCellOutcome`) supply it.
+- Mutants: `tests/xlsx-cf-stage5-mutants.test.ts` adds the E4 and I2 mutants. Under the round-5 code both were accepted (RED); with the fix, both the agreement check and cf-compare report "visual detail … differs from the counterfactual's".
+- Test-harness note: the mutants file must import `stage5-withhold` inside a test, never at file or `beforeAll` scope. An early import binds the formula compiler before the compile mutants (R1, S1) are installed.
+
+**Gates:**
+- CF vitest suites: 85 files, 1,793 passed.
+- `tsc -p .`: the 3 known errors. `tsc -p tsconfig.scripts.json`: clean.
+- Stage 5 audit: `stageComplete=true blockedCapabilities=0`. Case records: 2,160 rows, 0 disagreeing.
+- Publish run twice: byte-identical, 42.
+- cf-compare `--stage 5`: interactive 60/6/14/6, paged 62/7/14/3. The only Stage 5 failure is the `stage5-cross-sheet-missing` seed.
+- No production (`src/`) change.

@@ -25,7 +25,7 @@ import { getPaintables } from '../src/render/paint'
 import { computeMetrics } from '../src/xlsx/render'
 import type { XlsxDocument } from '../src/xlsx/types'
 import { parseRangeA1, parseA1, type CfObservedBar, type CfObservedIcon } from './cf-refs/verify'
-import { stage5CellAgreement, stage5Conflicts, stage5CounterfactualOf, stage5ScaleToken, stage5VisualToken, type Stage5Production, type Stage5Truth } from './cf-refs/stage5-withhold'
+import { stage5CellAgreement, stage5Conflicts, stage5CounterfactualOf, stage5ScaleToken, stage5VisualDetail, stage5VisualToken, type Stage5Production, type Stage5Truth } from './cf-refs/stage5-withhold'
 import type { CfManifest, CfOracleCase } from './cf-refs/cases'
 import { CF_MANIFEST_PATH } from './cf-refs/generate'
 import { ICON_NO_ICON_MEMBER, iconTwinSetMembers, isCellInSqref, observedIconClass, verifyCfCase } from './cf-refs/verify'
@@ -116,6 +116,8 @@ export interface ActualCellOutcome {
   /** Fix round 2 (R2): the write slots production left unresolved at the cell (compose.ts groups or paths; `ALL` for a
    * cell-wide refusal). Absent: derived from `unresolved` (`ALL` when true). */
   unresolvedSlots?: readonly string[]
+  /** Orchestrator ruling (codex r5): every bar and icon descriptor field (`stage5VisualDetail`); required on a Stage 5 cell. */
+  visualDetail?: string
   /** Fix round 5 (Stage 5): the leg's resolved bar descriptor (null: none), its resolved DXF properties and its colour-scale
    * colour (null: none), so equality with the counterfactual covers every component. On a Stage 5 cell `icon` is set
    * (null: none) whether or not an icon rule covers it. */
@@ -347,7 +349,7 @@ export function stage5TokenOfActual(actual: ActualCellOutcome): Stage5Production
   const slots = [...(actual.unresolvedSlots ?? (actual.unresolved ? ['ALL'] : []))]
   const visual = 'icon' in actual && 'bar' in actual ? stage5VisualToken(actual.bar, actual.icon, slots) : undefined
   return { fill: actual.applied && actual.style?.fillColor ? String(actual.style.fillColor).toUpperCase() : 'none', strike: actual.applied && actual.style?.strike === true, unresolved: slots,
-    ...(visual !== undefined ? { visual } : {}), ...(actual.properties ? { properties: actual.properties } : {}), ...('scaleArgb' in actual ? { colorScale: stage5ScaleToken(actual.scaleArgb) } : {}) }
+    ...(visual !== undefined ? { visual } : {}), ...(actual.properties ? { properties: actual.properties } : {}), ...('scaleArgb' in actual ? { colorScale: stage5ScaleToken(actual.scaleArgb) } : {}), ...(actual.visualDetail !== undefined ? { visualDetail: actual.visualDetail } : {}) }
 }
 
 /** The refs a Stage 5 case is checked at: its expected cells and Excel's observed ones. */
@@ -482,7 +484,7 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
     release: () => { for (const l of leases) l.release() },
   }
   const lines: string[] = []
-  const outcomes = new Map<string, { kind: string; properties: Record<string, unknown>; writes: string[]; icon?: { set: string; iconId: number } | null; bar?: { startFraction: number; endFraction: number } | null; scaleArgb?: number | null }>()
+  const outcomes = new Map<string, { kind: string; properties: Record<string, unknown>; writes: string[]; icon?: { set: string; iconId: number } | null; bar?: { startFraction: number; endFraction: number } | null; scaleArgb?: number | null; visualDetail?: string }>()
   try {
     for (let row = rect.minRow; row <= rect.maxRow; row++) {
       for (let col = rect.minCol; col <= rect.maxCol; col++) {
@@ -497,7 +499,7 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
           const ic = outcome.value.visual?.iconSet
           const bar = outcome.value.visual?.dataBar
           outcomes.set(`${row},${col}`, { kind: 'ready', properties: props, writes: outcome.value.unresolvedWrites ? [...outcome.value.unresolvedWrites] : [], icon: ic ? { set: ic.set, iconId: ic.iconId } : null,
-            bar: bar ? { startFraction: bar.startFraction, endFraction: bar.endFraction } : null, scaleArgb: cs ? cs.argb : null })
+            bar: bar ? { startFraction: bar.startFraction, endFraction: bar.endFraction } : null, scaleArgb: cs ? cs.argb : null, visualDetail: stage5VisualDetail(bar, ic) })
         } else {
           lines.push(`${row},${col}:${outcome.kind}:${outcome.kind === 'unresolved' ? outcome.reason : ''}`)
           outcomes.set(`${row},${col}`, { kind: outcome.kind, properties: {}, writes: [] })
@@ -558,7 +560,7 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
     const iconWithheld = outcome?.kind !== 'ready' && outcome?.kind !== 'no-match' || (outcome?.writes?.length ?? 0) > 0
     const unresolvedSlots = outcome === undefined || outcome.kind === 'unresolved' ? ['ALL'] : [...(outcome.writes ?? [])]
     // Fix round 5: a Stage 5 cell reports every component (the service outcome's descriptors, properties and scale colour).
-    const stage5Parts = stage5 ? { icon: outcome?.icon ?? null, bar: outcome?.bar ?? null, properties: outcome?.properties ?? {}, scaleArgb: outcome?.scaleArgb ?? null } : {}
+    const stage5Parts = stage5 ? { icon: outcome?.icon ?? null, bar: outcome?.bar ?? null, properties: outcome?.properties ?? {}, scaleArgb: outcome?.scaleArgb ?? null, visualDetail: outcome?.visualDetail ?? stage5VisualDetail(null, null) } : {}
     return { applied, unresolved, unresolvedSlots, style: hasStyle ? style : undefined, ...(iconCell ? { iconCell, icon: outcome?.icon ?? null, iconWithheld } : {}), ...stage5Parts }
   }, stage5Truths)
   // Task 39 fix round 1 (F2): the Stage 5 accounting of the formula cells Excel formats.
@@ -681,6 +683,7 @@ export async function comparePagedViewport(c: CfOracleCase, rootDir: string): Pr
         icon: s?.icon ? { set: CF_ICON_SET_NAMES[s.icon.set] ?? `#${s.icon.set}`, iconId: s.icon.iconId } : null,
         bar: s?.bar ? { startFraction: s.bar.startFraction, endFraction: s.bar.endFraction } : null,
         properties: s?.properties ?? {}, scaleArgb: s?.scale?.argb ?? null,
+        visualDetail: stage5VisualDetail(s?.bar, s?.icon ? { ...s.icon, set: CF_ICON_SET_NAMES[s.icon.set] ?? `#${s.icon.set}` } : null),
       } : {}
       // A cell with no state is a no-match: for an icon cell, production claims no icon.
       if (!s) return iconCell ? { applied: false, iconCell, icon: null, unresolvedSlots: [], ...stage5Parts } : { applied: false, unresolved: true, unresolvedSlots: [], ...stage5Parts }

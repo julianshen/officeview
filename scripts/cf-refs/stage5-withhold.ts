@@ -183,7 +183,10 @@ export const stage5Conflicts = (a: string, b: string): boolean => a === 'ALL' ||
 /** What production shows at a cell: the resolved fill/strike (Excel's vocabulary), the unresolved write paths, the visual it
  * draws, every resolved DXF property (fill, each font path, numFmt, borders) and the colour-scale colour. Fix round 5: a
  * token missing `visual`, `properties` or `colorScale` never agrees with a counterfactual (nothing is skipped). */
-export interface Stage5Production { fill: string; strike: boolean; unresolved: string[]; visual?: string; properties?: Readonly<Record<string, unknown>>; colorScale?: string }
+export interface Stage5Production { fill: string; strike: boolean; unresolved: string[]; visual?: string; properties?: Readonly<Record<string, unknown>>; colorScale?: string
+  /** Orchestrator ruling (codex r5): every field of the bar and icon descriptors (`stage5VisualDetail`), compared with the
+   * counterfactual exactly; `visual` stays the coarse token for Excel's captured observations only. */
+  visualDetail?: string }
 /** What Excel showed: its DisplayFormat fill/strike, and the bar/icon measured from the PNG where measurable. */
 export interface Stage5Excel { fill: string; strike: boolean; visual?: string }
 
@@ -197,18 +200,28 @@ export function stage5VisualToken(bar: Readonly<{ startFraction?: number; endFra
   const iconKey = icon ? `${icon.set}:${icon.iconId}` : undefined
   return drawnBar ? 'bar' : iconKey ? `icon:${CF_ICON_GLYPH_CLASSES[iconKey] ?? iconKey}` : unresolved.some(w => w === 'ALL' || w === 'dataBar' || w === 'iconSet') ? 'withheld' : 'none'
 }
+/** Every field of a cell's bar and icon descriptors as one stable string (null/undefined: none). Accepts the resident
+ * descriptor (`direction`) and the wire form (`rtl`, `set` already named by the caller); the rule id is left out (internal
+ * numbering, not what is drawn). Orchestrator ruling (codex r5): compared with the counterfactual exactly. */
+export function stage5VisualDetail(bar: Readonly<Record<string, unknown>> | null | undefined, icon: Readonly<Record<string, unknown>> | null | undefined): string {
+  const b = bar ? { axisFraction: bar.axisFraction, startFraction: bar.startFraction, endFraction: bar.endFraction, valueFraction: bar.valueFraction, fillColor: bar.fillColor,
+    borderColor: bar.borderColor ?? null, axisColor: bar.axisColor ?? null, isGradient: bar.isGradient, isNegative: bar.isNegative, showValue: bar.showValue,
+    rtl: bar.rtl !== undefined ? bar.rtl === true : bar.direction === 'rightToLeft' } : null
+  const i = icon ? { set: icon.set, iconId: icon.iconId, bucket: icon.bucket, buckets: icon.buckets, showValue: icon.showValue } : null
+  return JSON.stringify({ bar: b, icon: i })
+}
 /** A colour-scale colour token (`none`, or the ARGB as 8 upper-case hex digits). */
 export const stage5ScaleToken = (argb: number | null | undefined): string => (argb == null ? 'none' : (argb >>> 0).toString(16).toUpperCase().padStart(8, '0'))
 
 /** One cell's production token from a service outcome. */
 export function stage5TokenOf(r: CfOutcome<CfCellState> | undefined): Stage5Production {
-  if (r?.kind === 'unresolved') return { fill: 'none', strike: false, unresolved: ['ALL'], visual: 'withheld', properties: {}, colorScale: 'none' }
-  if (r?.kind !== 'ready') return { fill: 'none', strike: false, unresolved: [], visual: 'none', properties: {}, colorScale: 'none' }
+  if (r?.kind === 'unresolved') return { fill: 'none', strike: false, unresolved: ['ALL'], visual: 'withheld', properties: {}, colorScale: 'none', visualDetail: stage5VisualDetail(null, null) }
+  if (r?.kind !== 'ready') return { fill: 'none', strike: false, unresolved: [], visual: 'none', properties: {}, colorScale: 'none', visualDetail: stage5VisualDetail(null, null) }
   const st = resolveCfCellStyle(undefined, r.value)
   const unresolved = [...(r.value.unresolvedWrites ?? [])].sort()
   const v = r.value.visual
   return { fill: st.fillColor ? st.fillColor.toUpperCase() : 'none', strike: st.strike === true, unresolved,
-    visual: stage5VisualToken(v?.dataBar, v?.iconSet, unresolved), properties: { ...r.value.properties }, colorScale: stage5ScaleToken(v?.colorScale?.argb) }
+    visual: stage5VisualToken(v?.dataBar, v?.iconSet, unresolved), properties: { ...r.value.properties }, colorScale: stage5ScaleToken(v?.colorScale?.argb), visualDetail: stage5VisualDetail(v?.dataBar, v?.iconSet) }
 }
 
 const sortedJson = (o: Readonly<Record<string, unknown>>): string => JSON.stringify(Object.keys(o).sort().map(k => [k, o[k]]))
@@ -319,6 +332,8 @@ export function stage5CellAgreement(production: Stage5Production, excel: Stage5E
   if (sortedJson(production.properties) !== sortedJson(cf.properties ?? {})) return { agrees: false, disagreement: `resolved properties ${sortedJson(production.properties)} differ from the counterfactual's ${sortedJson(cf.properties ?? {})}` }
   if (production.colorScale === undefined) return { agrees: false, disagreement: 'production reports no colour-scale colour to compare with the counterfactual' }
   if (production.colorScale !== cf.colorScale) return { agrees: false, disagreement: `colour scale ${production.colorScale} differs from the counterfactual's ${cf.colorScale}` }
+  if (production.visualDetail === undefined) return { agrees: false, disagreement: 'production reports no bar/icon descriptors to compare with the counterfactual' }
+  if (production.visualDetail !== cf.visualDetail) return { agrees: false, disagreement: `visual detail ${production.visualDetail} differs from the counterfactual's ${cf.visualDetail}` }
   const open = (component: string): boolean => !production.unresolved.some(u => stage5Conflicts(u, component))
   if (!excel) return { agrees: true }
   if (open('fill') && open('colorScale') && !argbClose(production.fill.toUpperCase(), excel.fill.toUpperCase())) return { agrees: false, disagreement: `fill ${production.fill} vs Excel ${excel.fill}` }

@@ -33,6 +33,10 @@ vi.mock('../src/xlsx/cf/formula', async importOriginal => {
   }
 })
 
+/** Loaded inside a test (never at file or beforeAll scope: an early import binds the compiler before a mutant needs it). */
+let stage5VisualDetail: typeof import('../scripts/cf-refs/stage5-withhold').stage5VisualDetail
+const _lazy = async () => { stage5VisualDetail = (await import('../scripts/cf-refs/stage5-withhold')).stage5VisualDetail }
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const manifest = () => JSON.parse(readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as import('../scripts/cf-refs/cases').CfManifest
 async function loadCase(id: string) {
@@ -50,8 +54,8 @@ type Sheet = import('../src/xlsx/types').XlsxSheet
 const refOf = (row: number, col: number) => { let n = col + 1, l = ''; while (n > 0) { const k = (n - 1) % 26; l = String.fromCharCode(65 + k) + l; n = Math.floor((n - 1) / 26) } return `${l}${row + 1}` }
 /** A cf-compare leg's outcome from a service outcome: style, unresolved writes, and every Stage 5 component (fix round 5). */
 const actualOf = (r: import('../src/xlsx/cf/model').CfOutcome<import('../src/xlsx/cf/model').CfCellState> | undefined): import('../scripts/cf-compare').ActualCellOutcome => {
-  if (r?.kind === 'unresolved') return { applied: false, unresolved: true, unresolvedSlots: ['ALL'], icon: null, bar: null, properties: {}, scaleArgb: null }
-  if (r?.kind !== 'ready') return { applied: false, unresolved: false, unresolvedSlots: [], icon: null, bar: null, properties: {}, scaleArgb: null }
+  if (r?.kind === 'unresolved') return { applied: false, unresolved: true, unresolvedSlots: ['ALL'], icon: null, bar: null, properties: {}, scaleArgb: null, visualDetail: stage5VisualDetail(null, null) }
+  if (r?.kind !== 'ready') return { applied: false, unresolved: false, unresolvedSlots: [], icon: null, bar: null, properties: {}, scaleArgb: null, visualDetail: stage5VisualDetail(null, null) }
   const slots = [...(r.value.unresolvedWrites ?? [])], v = r.value.visual
   const fill = r.value.properties['fill.bg'] as string | undefined, scale = v?.colorScale ? (v.colorScale.argb >>> 0).toString(16).toUpperCase().padStart(8, '0') : undefined
   const strike = r.value.properties['font.strike'] === true
@@ -59,7 +63,7 @@ const actualOf = (r: import('../src/xlsx/cf/model').CfOutcome<import('../src/xls
   return { applied: fillColor !== undefined || strike, unresolved: slots.length > 0, unresolvedSlots: slots,
     ...(fillColor !== undefined || strike ? { style: { ...(fillColor !== undefined ? { fillColor } : {}), ...(strike ? { strike: true } : {}) } } : {}),
     icon: v?.iconSet ? { set: v.iconSet.set, iconId: v.iconSet.iconId } : null, bar: v?.dataBar ? { startFraction: v.dataBar.startFraction, endFraction: v.dataBar.endFraction } : null,
-    properties: { ...r.value.properties }, scaleArgb: v?.colorScale ? v.colorScale.argb : null }
+    properties: { ...r.value.properties }, scaleArgb: v?.colorScale ? v.colorScale.argb : null, visualDetail: stage5VisualDetail(v?.dataBar, v?.iconSet) }
 }
 /** cf-compare's check over production's own tokens for every compared cell of `doc` (as mutated), with `override` cells
  * replaced, against the counterfactual of the same doc. */
@@ -67,6 +71,7 @@ async function compareProduction(c: Case, doc: Doc, sheet: Sheet, override: Read
   const { verifyCaseCells, stage5CompareRefs } = await import('../scripts/cf-compare')
   const { stage5OutcomeAt } = await import('./helpers/cf-stage5-verdict')
   const { stage5CounterfactualOf } = await import('../scripts/cf-refs/stage5-withhold')
+  await _lazy()
   const refs = stage5CompareRefs(c, REPO_ROOT)
   const actuals = new Map<string, import('../scripts/cf-compare').ActualCellOutcome>()
   for (const ref of refs) actuals.set(ref, actualOf(await stage5OutcomeAt(doc, sheet, ref)))
@@ -250,4 +255,31 @@ describe('fix round 5 (codex r4): cf-compare compares the visuals with the count
     const msg = await compareProduction(c, doc, sheet, new Map([['I2', { applied: false, unresolved: false, unresolvedSlots: [], iconCell: true, icon: null, bar: null, properties: {} }]]))
     expect(msg).toMatch(/I2.*visual none differs from the counterfactual's icon:/)
   }, 120000)
+})
+
+describe('orchestrator ruling (codex r5): bar and icon descriptors are compared with the counterfactual field by field', () => {
+  type Outcome = import('../src/xlsx/cf/model').CfOutcome<import('../src/xlsx/cf/model').CfCellState>
+  const withVisual = (o: Outcome | undefined, f: (v: NonNullable<import('../src/xlsx/cf/model').CfCellState['visual']>) => object): Outcome => {
+    if (o?.kind !== 'ready' || !o.value.visual) throw new Error('mutant premise: a ready cell with a visual')
+    return { ...o, value: { ...o.value, visual: { ...o.value.visual, ...f(o.value.visual) } } } as Outcome
+  }
+  const mutants: ReadonlyArray<[string, (v: NonNullable<import('../src/xlsx/cf/model').CfCellState['visual']>) => object]> = [
+    ['E4', v => { expect(v.dataBar, 'E4 draws a bar').toBeDefined(); return { dataBar: { ...v.dataBar!, endFraction: 0.91 } } }],
+    ['I2', v => { expect(v.iconSet, 'I2 draws an icon').toBeDefined(); return { iconSet: { ...v.iconSet!, showValue: !v.iconSet!.showValue } } }],
+  ]
+  for (const [ref, mutate] of mutants) {
+    it(`composition ${ref}: a descriptor field changed while the coarse visual token stays the same disagrees (agreement, cf-compare)`, async () => {
+      await _lazy()
+      const { c, doc, sheet } = await loadCase('stage5-composition')
+      const { stage5OutcomeAt, stage5TruthAt, stage5VerdictOf } = await import('./helpers/cf-stage5-verdict')
+      const { stage5TokenOf } = await import('../scripts/cf-refs/stage5-withhold')
+      const clean = await stage5OutcomeAt(doc, sheet, ref)
+      const truth = await stage5TruthAt(c, doc, sheet, ref)
+      expect(stage5VerdictOf(c, ref, stage5TokenOf(clean), REPO_ROOT, truth), 'unmutated').toBeUndefined()
+      const bad = withVisual(clean, mutate)
+      expect(stage5TokenOf(bad).visual, 'the coarse token cannot see the mutation').toBe(stage5TokenOf(clean).visual)
+      expect.soft(stage5VerdictOf(c, ref, stage5TokenOf(bad), REPO_ROOT, truth), 'agreement').toMatch(new RegExp(`${ref}: visual detail .* differs from the counterfactual's`))
+      expect.soft(await compareProduction(c, doc, sheet, new Map([[ref, actualOf(bad)]])), 'cf-compare').toMatch(new RegExp(`${ref}.*visual detail .* differs from the counterfactual's`))
+    }, 120000)
+  }
 })
