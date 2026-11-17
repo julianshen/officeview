@@ -329,32 +329,34 @@ describe('reuse-only capabilities keep their recorded reading whatever the ownin
 })
 
 describe('per-case and per-variant Stage 5 audit rows (Task 39; fix round 1, F3)', () => {
-  it('a resolved paint is compared even when another slot is unresolved; a visual is compared where Excel measured one', async () => {
+  it('production must equal the counterfactual compositor, and each resolved component Excel (fix round 4)', async () => {
     const { stage5CellAgreement } = await import('../scripts/cf-refs/audit')
+    type Token = import('../scripts/cf-refs/stage5-withhold').Stage5Production
     const RED = 'FFFFC7CE', GREEN = 'FFC6EFCE'
-    // Fix round 2 (R2): a justification names its rule and the slots it may leave unresolved.
-    const font = [{ rule: 'r@p1', slots: ['font.strike'], reason: 'x' }], fill = [{ rule: 'r@p1', slots: ['fill'], reason: 'x' }]
-    const icon = [{ rule: 'icon@p2', slots: ['iconSet'], reason: 'icon:composition-dxf-fill not held' }]
-    // Codex's synthetic: production paints a green fill with an unresolved font.strike; Excel shows red. Wrong paint.
-    expect(stage5CellAgreement({ fill: GREEN, strike: false, unresolved: ['font.strike'], visual: 'none' }, { fill: RED, strike: false }, font).agrees).toBe(false)
-    // The same unresolved strike with Excel's own fill is fine only with a justification for the font slot.
-    expect(stage5CellAgreement({ fill: RED, strike: false, unresolved: ['font.strike'], visual: 'none' }, { fill: RED, strike: false }, font).agrees).toBe(true)
-    expect(stage5CellAgreement({ fill: RED, strike: false, unresolved: ['font.strike'], visual: 'none' }, { fill: RED, strike: false }, fill).agrees).toBe(false)
-    expect(stage5CellAgreement({ fill: RED, strike: false, unresolved: ['font.strike'], visual: 'none' }, { fill: RED, strike: false }, []).agrees).toBe(false)
-    // A wholly withheld fill needs a justification for the fill slot; an icon justification does not excuse it (R2).
-    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['fill'], visual: 'none' }, { fill: RED, strike: false }, []).agrees).toBe(false)
-    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['fill', 'iconSet'], visual: 'withheld' }, { fill: RED, strike: false }, icon).agrees).toBe(false)
-    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['fill'], visual: 'none' }, { fill: RED, strike: false }, fill).agrees).toBe(true)
-    // A cell-wide refusal needs an ALL grant (compose.ts produces ALL only for a halting rule).
-    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['ALL'], visual: 'withheld' }, { fill: RED, strike: false }, [...icon, ...fill]).agrees).toBe(false)
-    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['ALL'], visual: 'withheld' }, { fill: RED, strike: false }, [{ rule: 'stop@p1', slots: ['ALL'], reason: 'x' }]).agrees).toBe(true)
-    // Property level (S2): a bold grant never excuses, nor suppresses the comparison of, the strikethrough.
-    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['font.bold'], visual: 'none' }, { fill: 'none', strike: true }, [{ rule: 'r@p1', slots: ['font.bold'], reason: 'x' }]).agrees).toBe(false)
-    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['font.strike'], visual: 'none' }, { fill: 'none', strike: true }, [{ rule: 'r@p1', slots: ['font.bold'], reason: 'x' }]).agrees).toBe(false)
-    // Visual evidence: a bar where Excel measured none (or the reverse) disagrees; unmeasured is not compared.
-    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: [], visual: 'bar' }, { fill: 'none', strike: false, visual: 'none' }, []).agrees).toBe(false)
-    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: [], visual: 'bar' }, { fill: 'none', strike: false, visual: 'bar' }, []).agrees).toBe(true)
-    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: [], visual: 'bar' }, { fill: 'none', strike: false }, []).agrees).toBe(true)
+    const truth = (counterfactual: Token, extra: Partial<import('../scripts/cf-refs/stage5-withhold').Stage5Truth> = {}) => ({ counterfactual, refusals: [], unjustified: [], overResolved: [], ...extra })
+    const t = (fill: string, unresolved: string[], strike = false, visual?: string): Token => ({ fill, strike, unresolved, ...(visual !== undefined ? { visual } : {}) })
+    // No counterfactual, no verdict.
+    expect(stage5CellAgreement(t(RED, []), { fill: RED, strike: false }, undefined).agrees).toBe(false)
+    // Production equal to the counterfactual: an unresolved strike beside Excel's own fill agrees.
+    expect(stage5CellAgreement(t(RED, ['font.strike']), { fill: RED, strike: false }, truth(t(RED, ['font.strike']))).agrees).toBe(true)
+    // Codex's synthetic: a green fill beside an unresolved font.strike, against the counterfactual's red (and Excel's).
+    expect(stage5CellAgreement(t(GREEN, ['font.strike']), { fill: RED, strike: false }, truth(t(RED, ['font.strike']))).disagreement).toMatch(/counterfactual/)
+    // Equal to the counterfactual is not enough: the resolved fill is still compared with Excel.
+    expect(stage5CellAgreement(t(GREEN, ['font.strike']), { fill: RED, strike: false }, truth(t(GREEN, ['font.strike']))).disagreement).toMatch(/vs Excel/)
+    // A different set of unresolved writes (ALL where the compositor leaves only the icon) disagrees.
+    expect(stage5CellAgreement(t('none', ['ALL'], false, 'withheld'), { fill: RED, strike: false }, truth(t(RED, ['iconSet'], false, 'withheld'))).agrees).toBe(false)
+    // A rule refused outside the justified set is a failure even when the outputs agree.
+    expect(stage5CellAgreement(t('none', ['fill']), { fill: RED, strike: false }, truth(t('none', ['fill']), { unjustified: ['cellIs@p2 refused (cf-resource-limit)'] })).disagreement).toMatch(/without a recorded justification/)
+    // A whole-cell refusal is accepted only from the evidence-gated multi-positive guards.
+    expect(stage5CellAgreement(t('none', ['ALL'], false, 'withheld'), { fill: RED, strike: false }, truth(t('none', ['ALL'], false, 'withheld'), { cellRefusal: 'cf-unmeasured-capability' })).agrees).toBe(true)
+    expect(stage5CellAgreement(t('none', ['ALL'], false, 'withheld'), { fill: RED, strike: false }, truth(t('none', ['ALL'], false, 'withheld'), { cellRefusal: 'cf-resource-limit' })).agrees).toBe(false)
+    // Property level: an unresolved bold never suppresses the comparison of the strikethrough.
+    expect(stage5CellAgreement(t('none', ['font.bold']), { fill: 'none', strike: true }, truth(t('none', ['font.bold']))).disagreement).toMatch(/strikethrough false vs Excel true/)
+    // Visual evidence: a bar where Excel measured none disagrees; a leg that observes no visual is not compared.
+    expect(stage5CellAgreement(t('none', [], false, 'bar'), { fill: 'none', strike: false, visual: 'none' }, truth(t('none', [], false, 'bar'))).agrees).toBe(false)
+    expect(stage5CellAgreement(t('none', [], false, 'bar'), { fill: 'none', strike: false, visual: 'bar' }, truth(t('none', [], false, 'bar'))).agrees).toBe(true)
+    expect(stage5CellAgreement(t('none', []), { fill: 'none', strike: false, visual: 'bar' }, truth(t('none', [], false, 'bar'))).agrees).toBe(true)
+    expect(stage5CellAgreement(t('none', [], false, 'none'), { fill: 'none', strike: false }, truth(t('none', [], false, 'bar'))).disagreement).toMatch(/counterfactual/)
   })
 
   it('rows for every Stage 5 case: measured cases compared cell by cell, the others say why they are not', async () => {
@@ -452,10 +454,16 @@ describe('cf-compare interactive runs production inputs on Stage 5 cases (Task 3
     expect(r.stage5!.painted + r.stage5!.justifiedWithheld).toBe(r.stage5!.formulaMatched)
   }, 120000)
   it('an unresolved formula cell with a verified expectation and no recorded justification fails', async () => {
-    const { verifyCellExpectations } = await import('../scripts/cf-compare')
+    const { verifyCellExpectations, stage5CompareRefs } = await import('../scripts/cf-compare')
+    const { stage5CounterfactualOf } = await import('../scripts/cf-refs/stage5-withhold')
     const c = manifest().cases.find(x => x.id === 'stage5-composition')!
-    // Production withholds everything: the first verified formula cell with no recorded justification fails.
-    const msg = verifyCellExpectations(c, () => ({ applied: false, unresolved: true }))
-    expect(msg).toMatch(/unresolved without a recorded justification/)
-  })
+    // Without a counterfactual nothing verifies.
+    expect(verifyCellExpectations(c, () => ({ applied: false, unresolved: true }))).toMatch(/no counterfactual/)
+    // Production withholds everything: the first verified formula cell fails against the counterfactual (fix round 4).
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
+    const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+    const truths = await stage5CounterfactualOf({ c, doc, sheet, refs: stage5CompareRefs(c, REPO_ROOT), now: Date.now })
+    const msg = verifyCellExpectations(c, () => ({ applied: false, unresolved: true }), undefined, truths)
+    expect(msg).toMatch(/Cell B2 .*unresolved writes \[ALL\] differ from the counterfactual's \[\]/)
+  }, 120000)
 })

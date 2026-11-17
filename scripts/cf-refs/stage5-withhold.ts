@@ -1,21 +1,37 @@
 /**
- * Task 39 fix rounds 1-2 (rulings F1, R1, R2): a Stage 5 cell may leave a write slot unresolved only where an
- * independently recorded justification exists for THAT slot of THAT rule, keyed per cell from evidence, never from
- * production's own unavailable state. A justification names the rule (its marker: capability and priority) and the
- * slots it may leave unresolved: the rule's own slots, plus, for a stopIfTrue rule, the slots of the lower rules covering
- * the cell (the stop's downstream effect). Its reason is one of:
- * - a capability absent from the published set (or a reading production does not implement) that the rule needs: its
- *   marker capability, every parse and evaluation capability its formula text requires (compiled here from the
- *   manifest's marker), a formula bound's family, or a literal Stage 3-4 gate a twin meets;
- * - a record configuration fixed before capture ("recorded, never evidence") covering the cell;
- * - an enumerated refusal (`STAGE5_ENUMERATED_REFUSALS`), keyed by case, cell and exact formula text.
- * A compile refusal is NOT a justification by itself (R1): the compiler cannot vouch for its own refusal. Only an
- * enumerated expectation (`STAGE5_EXPECTED_COMPILE_REFUSALS`: case, formula text, refusal reason) can.
+ * Task 39 fix round 4 (orchestrator ruling on codex r3): a Stage 5 cell may differ from a fully evaluated composition
+ * only by what independently recorded evidence predicts, and the compositor itself decides what that prediction leaves
+ * unresolved. Two steps, shared by the audit rows, the conformance and Lesson 1 helpers and cf-compare:
+ * 1. `stage5JustifiedRefusals`: the rules (markers) whose refusal is justified by independent evidence only, never by
+ *    production's own unavailable state:
+ *    - a capability the rule's own evaluation needs that the published set does not hold: its marker capability, every
+ *      parse and evaluation capability its formula text requires (compiled here from the manifest's marker), a formula
+ *      bound's family, or a literal Stage 3 bar's `bar:bounds-num`;
+ *    - a record configuration fixed before capture ("recorded, never evidence") covering the cell;
+ *    - an expected compile refusal (`STAGE5_EXPECTED_COMPILE_REFUSALS`) or the enumerated S5-HOIST refusal
+ *      (`STAGE5_ENUMERATED_REFUSALS`). A compile refusal is never self-justifying (R1).
+ *    Composition gates (stop-<kind>, indirect-ahead-<kind>, expression-vs-scale, coexistence, stub successors, the
+ *    halting of a stopIfTrue visual) are NOT in the set: the compositor applies them itself.
+ * 2. `stage5CounterfactualOf`: the production service and compositor (the real src/xlsx/cf code, through the
+ *    validation-only `cellOutcomes` seam) run again with every rule in that set forced unresolved and every other rule at
+ *    its real evaluated state. A rule outside the set whose real state is unresolved is an unjustified refusal.
+ * `stage5CellAgreement` then requires production's output to equal the counterfactual exactly (the resolved components
+ * and the set of unresolved write paths), and compares the resolved components with Excel's capture.
  */
 import { compileCfFormula, formulaRequiredCapabilities, isCfFormulaRefusal, type CfFormulaUse } from '../../src/xlsx/cf/formula'
 import { CF_FORMULA_PRODUCTION_READINGS, cfFormulaReading } from '../../src/xlsx/cf/formulaReadings'
 import { createCfMemory } from '../../src/xlsx/cf/limits'
 import { VERIFIED_CAPABILITIES } from '../../src/xlsx/cf/evidence'
+import { createCfService } from '../../src/xlsx/cf/service'
+import { CF_LIMITS } from '../../src/xlsx/cf/limits'
+import { cfRuntimeEvidence } from '../../src/xlsx/cf/predicates'
+import { cfDocumentEvaluationOf, cfWorkbookOfDocument, residentSource } from '../../src/xlsx/cf/render'
+import { cfEvaluationContextFor, type CfEvaluationContext } from '../../src/xlsx/cf/formula'
+import { resolveCfCellStyle } from '../../src/xlsx/cf/dxf'
+import { CF_ICON_GLYPH_CLASSES } from '../../src/xlsx/cf/iconGlyphs'
+import { cfRulesVersion } from '../../src/xlsx/view/pagedSource'
+import type { CfCellState, CfOutcome, CfRule } from '../../src/xlsx/cf/model'
+import type { XlsxDocument, XlsxSheet } from '../../src/xlsx/types'
 import { isCellInSqref } from './verify'
 import type { CfOracleCase } from './cases'
 
@@ -26,8 +42,8 @@ type Marker = Readonly<{ sqref: string; capabilityId: string; ruleType: string; 
   scale?: Readonly<{ cfvo?: readonly Cfvo[] }>; bar?: Readonly<{ cfvo?: readonly Cfvo[] }>; icon?: Readonly<{ cfvo?: readonly Cfvo[] }> }>
 type CaseLike = Readonly<{ id: string; markers: readonly Marker[]; formulaConfigurations?: ReadonlyArray<Readonly<{ id: string; capabilityId?: string; refs: readonly string[]; record?: string }>> }>
 
-/** One rule-and-slot-specific justification. */
-export interface Stage5Justification { rule: string; slots: readonly string[]; reason: string }
+/** One justified refusal: the rule (its marker label), the evidence that predicts it, and the refusal production gives. */
+export interface Stage5Refusal { rule: string; ruleType: string; priority?: number; sqref: string; reason: string; refused: 'cf-unmeasured-capability' | 'cf-unsupported-rule' | 'cf-resource-limit' }
 
 /** The family capability a `type="formula"` bound needs (service.ts VISUAL_FORMULA_CAPABILITY, Ruling S5-H). */
 const FORMULA_BOUND_FAMILY: Readonly<Record<string, string>> = { colorScale: 'scale:thresholds-formula', dataBar: 'bar:bounds-formula', iconSet: 'icon:thresholds-formula' }
@@ -62,45 +78,21 @@ function held(capability: string, published: (id: string) => boolean): boolean {
   return Object.prototype.hasOwnProperty.call(CF_FORMULA_PRODUCTION_READINGS, capability) ? cfFormulaReading(capability, published) !== undefined : published(capability)
 }
 
-/**
- * Fix round 3 (S2): the exact write paths a rule's marker writes, as compose.ts keeps them (parse.ts rule.writes): a
- * visual's own slot (a colour scale writes `colorScale` and `fill`), or each DXF property separately (`fill`,
- * `font.strike`, `font.bold`, ...). Never a whole-font grant.
- */
-export function stage5MarkerSlots(m: Marker): string[] {
-  if (m.ruleType === 'dataBar') return ['dataBar']
-  if (m.ruleType === 'iconSet') return ['iconSet']
-  if (m.ruleType === 'colorScale') return ['colorScale', 'fill']
-  const d = m.dxf ?? {}
-  const out: string[] = []
-  if (d.fillRgb !== undefined) out.push('fill')
-  if (d.fontRgb !== undefined) out.push('font.color')
-  if (d.bold !== undefined) out.push('font.bold')
-  if (d.italic !== undefined) out.push('font.italic')
-  if (d.underline !== undefined) out.push('font.underline')
-  if (d.strikethrough !== undefined) out.push('font.strike')
-  if (d.numFmt !== undefined) out.push('numFmt')
-  if (d.borderTop !== undefined) out.push('border.top')
-  if (d.borderBottom !== undefined) out.push('border.bottom')
-  return out
-}
-
 const label = (m: Marker): string => `${m.capabilityId}/${m.ruleType}${m.priority !== undefined ? `@p${m.priority}` : ''}`
 
-/** A composition gate a marker's capability names (compose.ts): a stop gate of a lower kind, or the expression-vs-scale
- * fill arbitration. Undefined: the capability is the rule's own reading (its evaluation). */
-function compositionGate(capabilityId: string): { gate: 'stop'; kind: 'dxf' | 'scale' | 'bar' | 'icon' } | { gate: 'fill-arbitration' } | undefined {
-  const stop = /^formula:composition-(?:stop|indirect-ahead)-(dxf|scale|bar|icon)$/.exec(capabilityId)
-  if (stop) return { gate: 'stop', kind: stop[1] as 'dxf' | 'scale' | 'bar' | 'icon' }
-  if (capabilityId === 'formula:composition-expression-vs-scale') return { gate: 'fill-arbitration' }
-  return undefined
+/** A composition gate a marker's capability names (compose.ts applies it from the evidence): a stop gate of a lower kind,
+ * or the expression-vs-scale fill arbitration. Undefined: the capability is the rule's own reading (its evaluation). */
+function compositionGate(capabilityId: string): boolean {
+  return /^formula:composition-(?:stop|indirect-ahead)-(dxf|scale|bar|icon)$/.test(capabilityId) || capabilityId === 'formula:composition-expression-vs-scale'
 }
 
-/** The reasons a formula marker's RULE is unresolved (its own evaluation; empty: production holds everything it needs).
- * The marker's composition gate, if any, is not one of them (see `stage5Justifications`). */
-function formulaMarkerReasons(m: Marker, caseId: string, published: (id: string) => boolean): string[] {
-  const reasons: string[] = []
-  if (!compositionGate(m.capabilityId) && !held(m.capabilityId, published)) reasons.push(`${m.capabilityId} not held`)
+type Reason = Pick<Stage5Refusal, 'reason' | 'refused'>
+/** The reasons a formula marker's RULE is refused by its own evaluation (empty: production holds everything it needs).
+ * A composition gate the marker names is not one of them: the compositor applies it. */
+function formulaMarkerReasons(m: Marker, caseId: string, published: (id: string) => boolean): Reason[] {
+  const reasons: Reason[] = []
+  const unheld = (reason: string): void => { reasons.push({ reason, refused: 'cf-unmeasured-capability' }) }
+  if (!compositionGate(m.capabilityId) && !held(m.capabilityId, published)) unheld(`${m.capabilityId} not held`)
   const ranges = m.sqref.trim().split(/\s+/)
   const use = m.formula!.kind as CfFormulaUse
   const texts = new Set(m.formulas ?? [])
@@ -111,8 +103,8 @@ function formulaMarkerReasons(m: Marker, caseId: string, published: (id: string)
       const text = b.f ?? b.val
       if (isLiteralNumber(text)) continue
       texts.add(text!)
-      if (b.type === 'formula' && FORMULA_BOUND_FAMILY[m.ruleType] && !held(FORMULA_BOUND_FAMILY[m.ruleType]!, published)) reasons.push(`${FORMULA_BOUND_FAMILY[m.ruleType]} not held (a formula bound)`)
-      if (m.ruleType === 'colorScale' && b.type === 'num' && !published('scale:thresholds-num-val-reference')) reasons.push('scale:thresholds-num-val-reference not held')
+      if (b.type === 'formula' && FORMULA_BOUND_FAMILY[m.ruleType] && !held(FORMULA_BOUND_FAMILY[m.ruleType]!, published)) unheld(`${FORMULA_BOUND_FAMILY[m.ruleType]} not held (a formula bound)`)
+      if (m.ruleType === 'colorScale' && b.type === 'num' && !published('scale:thresholds-num-val-reference')) unheld('scale:thresholds-num-val-reference not held')
     }
   }
   for (const text of texts) {
@@ -120,109 +112,177 @@ function formulaMarkerReasons(m: Marker, caseId: string, published: (id: string)
     if (isCfFormulaRefusal(out)) {
       // R1: only an independently recorded expectation of exactly this refusal justifies it.
       const expected = STAGE5_EXPECTED_COMPILE_REFUSALS.find(e => e.caseId === caseId && e.formula === text && e.refused === out.refused)
-      if (expected) reasons.push(`${text}: expected compile refusal (${expected.reason})`)
+      if (expected) reasons.push({ reason: `${text}: expected compile refusal (${expected.reason})`, refused: expected.refused })
       continue
     }
     try {
       const caps = formulaRequiredCapabilities(out.value, use, { dialect: m.formula!.dialect, rangeCount: ranges.length, sourceType: m.ruleType as never })
       const needed = [...caps.parse, ...caps.evaluation]
       if (use === 'cfvo') needed.push(out.value.ast.type === 'cell' ? 'formula:cfvo-reference' : 'formula:cfvo-expression')
-      for (const cap of needed) if (!held(cap, published)) reasons.push(`${cap} not held (needed by ${text})`)
+      for (const cap of needed) if (!held(cap, published)) unheld(`${cap} not held (needed by ${text})`)
     } finally { out.release() }
   }
   return reasons
 }
 
-/**
- * The rule- and slot-specific justifications for `ref` of `c` (empty: no write of the cell may be left unresolved). Each
- * is scoped by its real effect in compose.ts (fix round 3, S1):
- * - the rule itself unresolved (its evaluation needs an unheld capability, a record configuration, an enumerated or an
- *   expected compile refusal): a stopIfTrue rule halts composition, `ALL`; otherwise its own writes, plus the lower icon or
- *   bar slot an unknown fill or bar leaves unknown (icon:composition-dxf-fill, bar:composition-dxf-fill,
- *   icon:composition-with-bar not held);
- * - a stop gate the rule's marker names (formula:composition-stop-<kind>, -indirect-ahead-<kind>) not held: applied AFTER
- *   the stopping rule paints, it taints only the writes of the lower rules of that kind;
- * - the expression-vs-scale arbitration not held: `fill` and `colorScale`;
- * - a literal Stage 3-4 gate a twin meets (bar:bounds-num, icon:composition-dxf-fill): that visual's own slot.
- */
-export function stage5Justifications(c: CaseLike | CfOracleCase, ref: string, published: (id: string) => boolean = id => VERIFIED_CAPABILITIES.has(id)): Stage5Justification[] {
+/** Step 1: the justified-refusal set at `ref` of `c`, from independent evidence only (see the module comment). */
+export function stage5JustifiedRefusals(c: CaseLike | CfOracleCase, ref: string, published: (id: string) => boolean = id => VERIFIED_CAPABILITIES.has(id)): Stage5Refusal[] {
   const cs = c as unknown as CaseLike
   const covering = cs.markers.filter(m => isCellInSqref(ref, m.sqref))
-  const lower = (m: Marker): Marker[] => m.priority === undefined ? [] : covering.filter(o => o.priority !== undefined && o.priority > m.priority!)
-  const kindOf = (m: Marker): 'dxf' | 'scale' | 'bar' | 'icon' => (m.ruleType === 'colorScale' ? 'scale' : m.ruleType === 'dataBar' ? 'bar' : m.ruleType === 'iconSet' ? 'icon' : 'dxf')
-  /** The writes an unresolved rule leaves unknown (compose.ts: its own writes, or ALL when it halts). */
-  const unresolvedScope = (m: Marker): string[] => {
-    if (m.stopIfTrue) return ['ALL']
-    const own = stage5MarkerSlots(m)
-    const out = new Set(own)
-    for (const o of lower(m)) {
-      if (o.ruleType === 'iconSet' && ((own.includes('fill') && !published('icon:composition-dxf-fill')) || (own.includes('dataBar') && !published('icon:composition-with-bar')))) out.add('iconSet')
-      if (o.ruleType === 'dataBar' && own.includes('fill') && !published('bar:composition-dxf-fill')) out.add('dataBar')
-    }
-    return [...out]
-  }
-  const out: Stage5Justification[] = []
+  const out: Stage5Refusal[] = []
+  const add = (m: Marker, r: Reason): void => { out.push({ rule: label(m), ruleType: m.ruleType, ...(m.priority !== undefined ? { priority: m.priority } : {}), sqref: m.sqref, ...r }) }
   for (const m of covering) {
-    if (m.formula !== undefined) {
-      for (const reason of formulaMarkerReasons(m, cs.id, published)) out.push({ rule: label(m), slots: unresolvedScope(m), reason })
-      const gate = compositionGate(m.capabilityId)
-      if (gate && !held(m.capabilityId, published)) {
-        const slots = gate.gate === 'fill-arbitration' ? ['fill', 'colorScale'] : [...new Set(lower(m).filter(o => kindOf(o) === gate.kind).flatMap(stage5MarkerSlots))]
-        if (slots.length > 0) out.push({ rule: label(m), slots, reason: `${m.capabilityId} not held (a composition gate)` })
-      }
-    } else {
-      if (m.ruleType === 'dataBar' && (m.bar?.cfvo ?? []).some(b => b.type === 'num') && !published('bar:bounds-num')) out.push({ rule: label(m), slots: unresolvedScope(m), reason: 'bar:bounds-num not held (a literal bar with num bounds)' })
-      if (m.ruleType === 'iconSet' && covering.some(o => o !== m && o.dxf?.fillRgb !== undefined) && !published('icon:composition-dxf-fill')) out.push({ rule: label(m), slots: ['iconSet'], reason: 'icon:composition-dxf-fill not held (an icon over a DXF fill)' })
-    }
+    if (m.formula !== undefined) for (const r of formulaMarkerReasons(m, cs.id, published)) add(m, r)
+    else if (m.ruleType === 'dataBar' && (m.bar?.cfvo ?? []).some(b => b.type === 'num') && !published('bar:bounds-num')) add(m, { reason: 'bar:bounds-num not held (a literal bar with num bounds)', refused: 'cf-unmeasured-capability' })
   }
   // A record configuration (fixed before capture: "recorded, never evidence") names a refusal of the rules of its capability.
   for (const cfg of cs.formulaConfigurations ?? []) {
     if (!cfg.record || !cfg.refs.includes(ref)) continue
-    for (const m of covering.filter(x => x.formula !== undefined && (cfg.capabilityId === undefined || x.capabilityId === cfg.capabilityId))) out.push({ rule: label(m), slots: unresolvedScope(m), reason: `${cfg.id}: ${cfg.record}` })
+    for (const m of covering.filter(x => x.formula !== undefined && (cfg.capabilityId === undefined || x.capabilityId === cfg.capabilityId))) add(m, { reason: `${cfg.id}: ${cfg.record}`, refused: 'cf-unmeasured-capability' })
   }
   for (const e of STAGE5_ENUMERATED_REFUSALS) {
     if (e.caseId !== cs.id || !e.refs.includes(ref)) continue
-    for (const m of covering.filter(x => x.formulas?.includes(e.formula))) out.push({ rule: label(m), slots: unresolvedScope(m), reason: e.reason })
+    for (const m of covering.filter(x => x.formulas?.includes(e.formula))) add(m, { reason: e.reason, refused: 'cf-resource-limit' })
   }
   return out
 }
 
-/** Backward-compatible flat list of reasons (any slot); prefer `stage5Justifications`. */
+/** Flat, sorted list of the justified-refusal reasons at `ref` (diagnostics and the enumerated-refusal test). */
 export function stage5WithholdJustification(c: CaseLike | CfOracleCase, ref: string, published?: (id: string) => boolean): string[] {
-  return [...new Set(stage5Justifications(c, ref, published).map(j => `${j.rule}: ${j.reason}`))].sort()
-}
-
-/** Whether the justifications excuse the unresolved write `path` (fix round 3: exact paths; `ALL` only by an `ALL` grant). */
-export function stage5SlotJustified(justifications: readonly Stage5Justification[], path: string): boolean {
-  return justifications.some(j => j.slots.some(s => s === 'ALL' || s === path || (path !== 'ALL' && path.startsWith(`${s}.`))))
+  return [...new Set(stage5JustifiedRefusals(c, ref, published).map(j => `${j.rule}: ${j.reason}`))].sort()
 }
 
 /** compose.ts `conflicts`: whether an unresolved write `a` covers the component `b`. */
 export const stage5Conflicts = (a: string, b: string): boolean => a === 'ALL' || b === 'ALL' || a === b || a.startsWith(`${b}.`) || b.startsWith(`${a}.`)
 
-/** What production shows at a cell: the resolved fill/strike, the unresolved write slots, and the visual it draws. */
-export interface Stage5Production { fill: string; strike: boolean; unresolved: string[]; visual: string }
+/** What production shows at a cell: the resolved fill/strike, the unresolved write paths, and the visual it draws
+ * (`visual` absent: the leg does not observe visuals, so it is not compared). */
+export interface Stage5Production { fill: string; strike: boolean; unresolved: string[]; visual?: string }
 /** What Excel showed: its DisplayFormat fill/strike, and the bar/icon measured from the PNG where measurable. */
 export interface Stage5Excel { fill: string; strike: boolean; visual?: string }
 
-const argbClose = (a: string, b: string): boolean => a === b || (a.length === 8 && b.length === 8 && [2, 4, 6].every(k => Math.abs(parseInt(a.slice(k, k + 2), 16) - parseInt(b.slice(k, k + 2), 16)) <= 8))
+/** One cell's production token from a service outcome: a zero-length bar draws nothing (as Excel's measurement reads it),
+ * an icon is named by its glyph class (the capture's vocabulary), and a withheld visual slot is `withheld`. */
+export function stage5TokenOf(r: CfOutcome<CfCellState> | undefined): Stage5Production {
+  if (r?.kind === 'unresolved') return { fill: 'none', strike: false, unresolved: ['ALL'], visual: 'withheld' }
+  if (r?.kind !== 'ready') return { fill: 'none', strike: false, unresolved: [], visual: 'none' }
+  const st = resolveCfCellStyle(undefined, r.value)
+  const unresolved = [...(r.value.unresolvedWrites ?? [])].sort()
+  const v = r.value.visual
+  const bar = v?.dataBar as { startFraction?: number; endFraction?: number } | undefined
+  const drawnBar = bar !== undefined && Math.abs((bar.endFraction ?? 0) - (bar.startFraction ?? 0)) > 1e-9
+  const iconKey = v?.iconSet ? `${v.iconSet.set}:${v.iconSet.iconId}` : undefined
+  const visual = drawnBar ? 'bar' : iconKey ? `icon:${CF_ICON_GLYPH_CLASSES[iconKey] ?? iconKey}` : unresolved.some(w => w === 'ALL' || w === 'dataBar' || w === 'iconSet') ? 'withheld' : 'none'
+  return { fill: st.fillColor ? st.fillColor.toUpperCase() : 'none', strike: st.strike === true, unresolved, visual }
+}
+
+/** Step 2's result at one cell. */
+export interface Stage5Truth {
+  /** The real compositor's output with exactly the justified refusals forced. */
+  counterfactual: Stage5Production
+  /** The justified-refusal set at the cell (step 1). */
+  refusals: Stage5Refusal[]
+  /** Rules outside the set whose real evaluated state is unresolved: each is an unjustified refusal. */
+  unjustified: string[]
+  /** Rules in the set that production evaluated to a resolved state (forced unresolved in the counterfactual). */
+  overResolved: string[]
+  /** A whole-cell refusal before composition (the multi-positive guards, pending data, resource limits): its reason. */
+  cellRefusal?: string
+}
+
+const rc = (ref: string): { row: number; col: number } => a1(ref)
+const refOf = (row: number, col: number): string => { let n = col + 1, s = ''; while (n > 0) { const k = (n - 1) % 26; s = String.fromCharCode(65 + k) + s; n = Math.floor((n - 1) / 26) } return `${s}${row + 1}` }
+const ruleTypeOf = (r: CfRule): string => { const d = r.definition as { kind: string; type?: string }; return d.kind === 'unresolved' ? d.type ?? 'unresolved' : d.kind }
+const ruleLabel = (r: CfRule): string => `${ruleTypeOf(r)}@p${r.priority}`
+
+/** The sheet rule a justified marker names at a cell: by priority, or (a priority-less x14 marker) by its rule type among
+ * the rules covering the cell. Anything else is a validation error, never a silent miss. */
+function ruleOf(refusal: Stage5Refusal, rules: readonly CfRule[], caseId: string, ref: string): CfRule {
+  const candidates = refusal.priority !== undefined ? rules.filter(r => r.priority === refusal.priority) : rules.filter(r => ruleTypeOf(r) === refusal.ruleType)
+  if (candidates.length !== 1) throw new Error(`${caseId}:${ref}: justified refusal ${refusal.rule} maps to ${candidates.length} covering rules`)
+  return candidates[0]!
+}
+
 /**
- * Rulings F3/R2/S1/S2: one cell's verdict. Every unresolved write path must be excused by a justification naming it (an
- * `ALL` only by an `ALL` grant, which compose.ts produces only for a halting rule). Every component no unresolved write
- * covers is compared with Excel, property by property: the fill (within +-8, the Stage 2 scale tolerance), the
- * strikethrough, and a bar or icon Excel was measured to draw (or not).
+ * Step 2: the counterfactual at each of `refs`, through a fresh production service (its own memory and cache, so the
+ * production run's prepared result is never reused) with production's inputs: the document's evaluation context at
+ * `now`, its sheets as the cross-sheet seam, production's runtime evidence.
  */
-export function stage5CellAgreement(production: Stage5Production, excel: Stage5Excel | undefined, justifications: readonly Stage5Justification[]): { agrees: boolean; disagreement?: string } {
-  for (const path of production.unresolved) if (!stage5SlotJustified(justifications, path)) return { agrees: false, disagreement: `${path} unresolved without a recorded justification for it` }
+export async function stage5CounterfactualOf(input: { c: CaseLike | CfOracleCase; sheet: XlsxSheet; refs: readonly string[]; published?: (id: string) => boolean }
+  & ({ doc: XlsxDocument; now: () => number } | { evaluation: CfEvaluationContext; sheets?: readonly XlsxSheet[] })): Promise<Map<string, Stage5Truth>> {
+  const { c, sheet } = input
+  const evaluation = 'doc' in input ? cfEvaluationContextFor(cfDocumentEvaluationOf(input.doc), input.now) : input.evaluation
+  const sheets = 'doc' in input ? input.doc.sheets : input.sheets
+  const cs = c as unknown as CaseLike
+  const out = new Map<string, Stage5Truth>()
+  const cf = sheet.conditionalFormatting
+  if (!cf) {
+    for (const ref of input.refs) out.set(ref, { counterfactual: stage5TokenOf(undefined), refusals: stage5JustifiedRefusals(c, ref, input.published), unjustified: [], overResolved: [] })
+    return out
+  }
+  let current: { ref: string; forced: Map<CfRule, Stage5Refusal>; unjustified: string[]; overResolved: string[] } | undefined
+  const memory = createCfMemory()
+  const service = createCfService(cf, memory, { evidence: cfRuntimeEvidence, evaluation, sheetName: sheet.name,
+    ...(sheets ? { workbook: cfWorkbookOfDocument(sheets, memory, 'engine') } : {}),
+    cellOutcomes: (row, col, rules, outcomes) => {
+      if (!current || refOf(row, col) !== current.ref) throw new Error(`${cs.id}: counterfactual reached ${refOf(row, col)} outside ${current?.ref}`)
+      for (let i = 0; i < rules.length; i++) {
+        const rule = rules[i]!, outcome = outcomes[i]
+        const refusal = current.forced.get(rule)
+        if (refusal) {
+          if (outcome?.kind !== 'unresolved') current.overResolved.push(`${ruleLabel(rule)} (${refusal.reason}) evaluated ${outcome?.kind ?? 'nothing'}`)
+          outcomes[i] = { kind: 'unresolved', reason: refusal.refused }
+        } else if (!outcome || outcome.kind === 'unresolved') {
+          current.unjustified.push(`${ruleLabel(rule)} refused (${outcome?.kind === 'unresolved' ? outcome.reason : 'no outcome'})`)
+        }
+      }
+    } })
+  const stamp = { owner: 'stage5-counterfactual', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(cf), viewGen: 0, structureGen: 0, clockGen: 0 }
+  try {
+    const source = residentSource(sheet, stamp, memory, 'engine')
+    for (const ref of input.refs) {
+      const refusals = stage5JustifiedRefusals(c, ref, input.published)
+      const forced = new Map<CfRule, Stage5Refusal>()
+      for (const r of refusals) { const rule = ruleOf(r, cf.rules.filter(x => x.ranges.some(g => { const p = rc(ref); return p.row >= g.firstRow && p.row <= g.lastRow && p.col >= g.firstCol && p.col <= g.lastCol })), cs.id, ref); if (!forced.has(rule)) forced.set(rule, r) }
+      current = { ref, forced, unjustified: [], overResolved: [] }
+      const { row, col } = rc(ref)
+      const lease = await service.prepareCf({ stamp, sourceRects: [{ firstRow: row, lastRow: row, firstCol: col, lastCol: col }], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, source)
+      const r = lease.value.at(row, col)
+      lease.release()
+      out.set(ref, { counterfactual: stage5TokenOf(r), refusals, unjustified: current.unjustified, overResolved: current.overResolved, ...(r.kind === 'unresolved' ? { cellRefusal: r.reason } : {}) })
+      current = undefined
+    }
+  } finally { service.dispose() }
+  return out
+}
+
+const argbClose = (a: string, b: string): boolean => a === b || (a.length === 8 && b.length === 8 && [2, 4, 6].every(k => Math.abs(parseInt(a.slice(k, k + 2), 16) - parseInt(b.slice(k, k + 2), 16)) <= 8))
+/** The one whole-cell refusal the counterfactual accepts: the multi-positive guards, which are evidence gates. */
+const GATED_CELL_REFUSAL = 'cf-unmeasured-capability'
+
+/**
+ * Step 3: one cell's verdict. The counterfactual must hold no unjustified refusal (and only a gated whole-cell one);
+ * production's output must equal it exactly (each resolved component and the set of unresolved write paths); every
+ * component no unresolved write covers is then compared with Excel: the fill (within +-8, the Stage 2 scale tolerance),
+ * the strikethrough, and a bar or icon Excel was measured to draw (or not).
+ */
+export function stage5CellAgreement(production: Stage5Production, excel: Stage5Excel | undefined, truth: Stage5Truth | undefined): { agrees: boolean; disagreement?: string } {
+  if (!truth) return { agrees: false, disagreement: 'no counterfactual for the cell' }
+  if (truth.unjustified.length > 0) return { agrees: false, disagreement: `${truth.unjustified.join('; ')} without a recorded justification` }
+  if (truth.cellRefusal !== undefined && truth.cellRefusal !== GATED_CELL_REFUSAL) return { agrees: false, disagreement: `whole cell refused (${truth.cellRefusal}) without a recorded justification` }
+  const cf = truth.counterfactual
+  const unresolved = [...production.unresolved].sort().join('+'), want = [...cf.unresolved].sort().join('+')
+  if (unresolved !== want) return { agrees: false, disagreement: `unresolved writes [${unresolved}] differ from the counterfactual's [${want}]${truth.overResolved.length ? ` (resolved despite a justified refusal: ${truth.overResolved.join('; ')})` : ''}` }
+  if (production.fill.toUpperCase() !== cf.fill.toUpperCase()) return { agrees: false, disagreement: `fill ${production.fill} differs from the counterfactual's ${cf.fill}` }
+  if (production.strike !== cf.strike) return { agrees: false, disagreement: `strikethrough ${production.strike} differs from the counterfactual's ${cf.strike}` }
+  if (production.visual !== undefined && production.visual !== cf.visual) return { agrees: false, disagreement: `visual ${production.visual} differs from the counterfactual's ${cf.visual}` }
   const open = (component: string): boolean => !production.unresolved.some(u => stage5Conflicts(u, component))
   if (!excel) return { agrees: true }
-  if (open('fill') && open('colorScale') && !argbClose(production.fill, excel.fill)) return { agrees: false, disagreement: `fill ${production.fill} vs Excel ${excel.fill}` }
+  if (open('fill') && open('colorScale') && !argbClose(production.fill.toUpperCase(), excel.fill.toUpperCase())) return { agrees: false, disagreement: `fill ${production.fill} vs Excel ${excel.fill}` }
   if (open('font.strike') && production.strike !== excel.strike) return { agrees: false, disagreement: `strikethrough ${production.strike} vs Excel ${excel.strike}` }
-  if (excel.visual !== undefined) {
+  if (excel.visual !== undefined && production.visual !== undefined && production.visual !== 'withheld') {
     const slot = excel.visual === 'bar' || production.visual === 'bar' ? 'dataBar' : 'iconSet'
-    if (production.visual === 'withheld') {
-      if (excel.visual !== 'none' && !stage5SlotJustified(justifications, slot)) return { agrees: false, disagreement: `visual withheld without a recorded justification (Excel ${excel.visual})` }
-    } else if (open(slot) && production.visual !== excel.visual) return { agrees: false, disagreement: `visual ${production.visual} vs Excel ${excel.visual}` }
+    if (open(slot) && production.visual !== excel.visual) return { agrees: false, disagreement: `visual ${production.visual} vs Excel ${excel.visual}` }
   }
   return { agrees: true }
 }

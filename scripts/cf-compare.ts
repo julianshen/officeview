@@ -25,7 +25,7 @@ import { getPaintables } from '../src/render/paint'
 import { computeMetrics } from '../src/xlsx/render'
 import type { XlsxDocument } from '../src/xlsx/types'
 import { parseRangeA1, parseA1, type CfObservedBar, type CfObservedIcon } from './cf-refs/verify'
-import { stage5CellAgreement, stage5Justifications, stage5SlotJustified } from './cf-refs/stage5-withhold'
+import { stage5CellAgreement, stage5Conflicts, stage5CounterfactualOf, type Stage5Production, type Stage5Truth } from './cf-refs/stage5-withhold'
 import type { CfManifest, CfOracleCase } from './cf-refs/cases'
 import { CF_MANIFEST_PATH } from './cf-refs/generate'
 import { ICON_NO_ICON_MEMBER, iconTwinSetMembers, isCellInSqref, observedIconClass, verifyCfCase } from './cf-refs/verify'
@@ -131,6 +131,8 @@ export function verifyCellExpectations(
   actualAt: (row: number, col: number) => ActualCellOutcome,
   /** Task 30 fix round: Excel's observed icon class per ref (`observedIconClass`: a class, a twin set, or null). */
   iconObserved?: ReadonlyMap<string, string | null>,
+  /** Fix round 4: on a Stage 5 case, the counterfactual of the real compositor per ref (`stage5CounterfactualOf`). */
+  stage5Truths?: ReadonlyMap<string, Stage5Truth>,
 ): string | undefined {
   for (const exp of c.expected.cells) {
     const pos = parseA1(exp.ref)
@@ -158,12 +160,10 @@ export function verifyCellExpectations(
       // Task 39 fix round 1 (F2): on a Stage 5 case an unresolved cell under a formula rule is a failure unless an
       // independently recorded justification exists; Stages 1-4 keep their withheld-is-skipped rule.
       if (actual.unresolved && c.stage === 5) {
-        // Fix round 2 (R2): each unresolved slot needs a justification for that slot of that rule.
-        // Fix round 3 (S1, S2): exact write paths, each excused by a compositor-scoped grant; ALL only by an ALL grant.
-        const js = stage5Justifications(c, exp.ref)
-        const slots = actual.unresolvedSlots ?? ['ALL']
-        const open = slots.filter(path => !stage5SlotJustified(js, path))
-        if (open.length > 0) return `Cell ${exp.ref} expected matched: true, but production left ${open.join('+')} unresolved without a recorded justification`
+        // Fix round 4: production must equal the counterfactual run of the real compositor with exactly the
+        // independently justified refusals forced (stage5CounterfactualOf).
+        const v = stage5CellAgreement(stage5TokenOfActual(actual), undefined, stage5Truths?.get(exp.ref))
+        if (!v.agrees) return `Cell ${exp.ref} expected matched: true, but production left it unresolved: ${v.disagreement}`
       }
       if (actual.unresolved) continue
       if (!actual.applied) {
@@ -330,11 +330,25 @@ export function stage4ObservedIcons(c: CfOracleCase, rootDir: string): Map<strin
   return out
 }
 
+/** A leg's Stage 5 token (it observes no visual, so none is compared). */
+function stage5TokenOfActual(actual: ActualCellOutcome): Stage5Production {
+  const slots = actual.unresolvedSlots ?? (actual.unresolved ? ['ALL'] : [])
+  return { fill: actual.applied && actual.style?.fillColor ? String(actual.style.fillColor).toUpperCase() : 'none', strike: actual.applied && actual.style?.strike === true, unresolved: [...slots] }
+}
+
+/** The refs a Stage 5 case is checked at: its expected cells and Excel's observed ones. */
+export function stage5CompareRefs(c: CfOracleCase, rootDir: string): string[] {
+  return [...new Set([...c.expected.cells.map(e => e.ref), ...(c.status === 'measured' ? stage5ObservedFills(c, rootDir)?.keys() ?? [] : [])])]
+}
+
 export function verifyCaseCells(
   c: CfOracleCase,
   rootDir: string,
   actualAt: (row: number, col: number) => ActualCellOutcome,
+  /** Fix round 4: required on a Stage 5 case, the counterfactual per ref (`stage5CounterfactualOf` over `stage5CompareRefs`). */
+  stage5Truths?: ReadonlyMap<string, Stage5Truth>,
 ): string | undefined {
+  if (c.stage === 5 && !stage5Truths) return `Stage 5 case ${c.id}: no counterfactual to verify against`
   const observed = stage2ObservedFills(c, rootDir) ?? (c.status === 'measured' ? stage5ObservedFills(c, rootDir) : undefined)
   // Fail closed (final review I4): a measured Stage 2 case is verified against Excel-observed fills only. A missing
   // sidecar, a sidecar with no trusted fills, or a run that compared zero non-withheld cells verified NOTHING and
@@ -347,28 +361,28 @@ export function verifyCaseCells(
   }
   const icons = c.stage === 4 ? stage4ObservedIcons(c, rootDir) : undefined
   const iconObserved = icons ? new Map([...icons].map(([ref, o]) => [ref.toUpperCase(), observedIconClass(o)] as const)) : undefined
-  if (!observed) return verifyCellExpectations(c, actualAt, iconObserved)
+  if (!observed) return verifyCellExpectations(c, actualAt, iconObserved, stage5Truths)
   const contradicted = new Set(
     c.expected.cells.filter(e => e.matched && e.scaleApplied && observed.get(e.ref) === 'FFFFFFFF').map(e => e.ref),
   )
   const mismatch = verifyCellExpectations(
     { ...c, expected: { ...c.expected, cells: c.expected.cells.filter(e => !contradicted.has(e.ref)) } },
     actualAt,
+    undefined,
+    stage5Truths,
   )
   if (mismatch) return mismatch
   let compared = 0
   if (c.stage === 5) {
-    // Fix round 2 (R2): every Stage 5 observed cell is checked slot by slot, never skipped as unresolved: each resolved
-    // slot is Excel's (fill, strikethrough), each unresolved slot has a justification for that slot of that rule.
+    // Fix round 4: every Stage 5 observed cell, never skipped as unresolved, must equal the counterfactual run of the real
+    // compositor (the resolved components and the set of unresolved write paths), and each resolved component is Excel's.
     const strikes = stage5ObservedStrikes(c, rootDir)
     for (const [ref, want] of observed) {
       const pos = parseA1(ref)
       if (!pos) return `Invalid observed cell reference: ${ref}`
-      const actual = actualAt(pos.row, pos.col)
-      const slots = actual.unresolvedSlots ?? (actual.unresolved ? ['ALL'] : [])
-      const production = { fill: actual.applied && actual.style?.fillColor ? String(actual.style.fillColor).toUpperCase() : 'none', strike: actual.applied && actual.style?.strike === true, unresolved: [...slots], visual: 'none' }
+      const production = stage5TokenOfActual(actualAt(pos.row, pos.col))
       const excel = { fill: want === 'FFFFFFFF' ? 'none' : want, strike: strikes.get(ref) === true }
-      const v = stage5CellAgreement(production, excel, slots.length > 0 ? stage5Justifications(c, ref) : [])
+      const v = stage5CellAgreement(production, excel, stage5Truths!.get(ref))
       if (!v.agrees) return `Cell ${ref}: ${v.disagreement}`
       compared++
     }
@@ -509,6 +523,7 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
     }
   }
   const peakBytes = peak()
+  const stage5Truths = stage5 ? await stage5CounterfactualOf({ c, doc, sheet, refs: stage5CompareRefs(c, rootDir), now: anchorNow }) : undefined
   const mismatch = verifyCaseCells(c, rootDir, (row, col) => {
     const outcome = outcomes.get(`${row},${col}`)
     const style = scope ? scope.effectiveStyle(row, col, base as never) : (base as never)
@@ -527,7 +542,7 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
     const iconWithheld = outcome?.kind !== 'ready' && outcome?.kind !== 'no-match' || (outcome?.writes?.length ?? 0) > 0
     const unresolvedSlots = outcome === undefined || outcome.kind === 'unresolved' ? ['ALL'] : [...(outcome.writes ?? [])]
     return { applied, unresolved, unresolvedSlots, style: hasStyle ? style : undefined, ...(iconCell ? { iconCell, icon: outcome?.icon ?? null, iconWithheld } : {}) }
-  })
+  }, stage5Truths)
   // Task 39 fix round 1 (F2): the Stage 5 accounting of the formula cells Excel formats.
   let stage5Stats: CfCompareResult['stage5']
   if (stage5) {
@@ -539,7 +554,8 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
       const outcome = outcomes.get(`${pos.row},${pos.col}`)
       const style = scope ? scope.effectiveStyle(pos.row, pos.col, base as never) : (base as never)
       if (style && style !== base && Object.keys(style).length > 0 && (outcome?.writes.length ?? 0) === 0) stage5Stats.painted++
-      else if (stage5SlotJustified(stage5Justifications(c, exp.ref), 'fill')) stage5Stats.justifiedWithheld++
+      // Withheld under the counterfactual's own fill refusal (a mismatch with it already failed above).
+      else if (stage5Truths?.get(exp.ref)?.counterfactual.unresolved.some(u => stage5Conflicts(u, 'fill'))) stage5Stats.justifiedWithheld++
     }
   }
   scope?.dispose()
@@ -637,6 +653,8 @@ export async function comparePagedViewport(c: CfOracleCase, rootDir: string): Pr
     const base = {}
     const stateMap = new Map<string, (typeof result.states)[number]>()
     for (const s of result.states) stateMap.set(`${s.row},${s.col}`, s)
+    // Fix round 4: the counterfactual on the worker's clock (the anchor day for a clock case).
+    const stage5Truths = c.stage === 5 && sheet ? await stage5CounterfactualOf({ c, doc, sheet, refs: stage5CompareRefs(c, rootDir), now: anchorNow ?? Date.now }) : undefined
     const mismatch = verifyCaseCells(c, rootDir, (row, col) => {
       const s = stateMap.get(`${row},${col}`)
       const iconCell = c.markers.some(m => m.ruleType === 'iconSet' && isCellInSqref(`${String.fromCharCode(65 + col)}${row + 1}`, m.sqref))
@@ -656,7 +674,7 @@ export async function comparePagedViewport(c: CfOracleCase, rootDir: string): Pr
         ...(hasScale ? { visual: { colorScale: { ruleId: s.scale!.ruleId, argb: s.scale!.argb, ...(s.scale!.fraction !== undefined ? { fraction: s.scale!.fraction } : {}) } } } : {}),
       }, colors)
       return { applied: true, unresolved, unresolvedSlots, style, ...iconState }
-    })
+    }, stage5Truths)
     const outputHash = sha256Hex(lines)
     if (mismatch) {
       return { id: c.id, mode: 'paged', outcome: 'fail', reason: mismatch, outputHash, workbookHash, oracleRef, oracleHash, reads: 1 }

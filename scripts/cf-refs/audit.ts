@@ -2249,8 +2249,9 @@ export async function stage4CaseRecords(manifest: CfManifest, rootDir: string = 
 }
 // Fix round 2 (R2): the agreement and the slot-specific justifications live in ./stage5-withhold (shared with
 // cf-compare and the conformance test).
+// Fix round 4: the verdict follows a counterfactual run of the real compositor (stage5CounterfactualOf).
 export { stage5CellAgreement, type Stage5Excel, type Stage5Production } from './stage5-withhold'
-import { stage5CellAgreement, stage5Justifications, type Stage5Excel, type Stage5Justification, type Stage5Production } from './stage5-withhold'
+import { stage5CellAgreement, stage5CounterfactualOf, stage5TokenOf, type Stage5Excel, type Stage5Production, type Stage5Refusal, type Stage5Truth } from './stage5-withhold'
 
 export interface Stage5CaseRecord {
   caseId: string
@@ -2266,9 +2267,11 @@ export interface Stage5CaseRecord {
   capabilities: string[]
   excel: Stage5Excel | undefined
   production: Stage5Production
-  /** The rule- and slot-specific justifications for the cell's unresolved slots (stage5Justifications). */
-  justification: Stage5Justification[]
-  /** Every resolved slot is Excel's, every unresolved slot is justified for that slot, a measured visual agrees. */
+  /** The justified-refusal set at the cell, from independent evidence only (stage5JustifiedRefusals). */
+  justification: Stage5Refusal[]
+  /** The real compositor's output with exactly those refusals forced (stage5CounterfactualOf); absent when not compared. */
+  counterfactual?: Pick<Stage5Truth, 'counterfactual' | 'unjustified' | 'overResolved' | 'cellRefusal'>
+  /** Production equals the counterfactual (no unjustified refusal), and every resolved component is Excel's. */
   agrees: boolean
   disagreement?: string
   mode: 'resident'
@@ -2287,7 +2290,6 @@ export async function stage5CaseRecords(manifest: CfManifest, rootDir: string = 
   const { cfRuntimeEvidence } = await import('../../src/xlsx/cf/predicates')
   const { cfWorkbookOfDocument, cfDocumentEvaluationOf } = await import('../../src/xlsx/cf/render')
   const { cfEvaluationContextFor } = await import('../../src/xlsx/cf/formula')
-  const { resolveCfCellStyle } = await import('../../src/xlsx/cf/dxf')
   const { cfRulesVersion } = await import('../../src/xlsx/view/pagedSource')
   const { formulaObservationOf, decodePngSync, computeWorksheetRangeGeometry, readZipPartsSync, stage5IconKey, describeS5Visual } = await import('./verify')
   const refRC = (ref: string) => { const m = /^([A-Z]+)(\d+)$/.exec(ref)!; return { row: Number(m[2]) - 1, col: [...m[1]!].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1 } }
@@ -2329,6 +2331,7 @@ export async function stage5CaseRecords(manifest: CfManifest, rootDir: string = 
       evaluation: cfEvaluationContextFor(cfDocumentEvaluationOf(doc), now), sheetName: sheet.name, workbook: cfWorkbookOfDocument(doc.sheets, memory, 'engine') }) : undefined
     const stamp = { owner: 'audit-records', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cf ? cfRulesVersion(cf) : 0, viewGen: 0, structureGen: 0, clockGen: 0 }
     const source = residentSource(sheet, stamp, memory, 'engine')
+    const truths = await stage5CounterfactualOf({ c, doc, sheet, refs: c.expected.cells.map(e => e.ref), now })
     try {
       for (const exp of c.expected.cells) {
         const k = kindOf(exp.ref)
@@ -2341,32 +2344,16 @@ export async function stage5CaseRecords(manifest: CfManifest, rootDir: string = 
         if (service) {
           const { row, col } = refRC(exp.ref)
           const lease = await service.prepareCf({ stamp, sourceRects: [{ firstRow: row, lastRow: row, firstCol: col, lastCol: col }], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, source)
-          const r = lease.value.at(row, col)
+          production = stage5TokenOf(lease.value.at(row, col))
           lease.release()
-          if (r.kind === 'unresolved') production = { fill: 'none', strike: false, unresolved: ['ALL'], visual: 'withheld' }
-          else if (r.kind === 'ready') {
-            const st = resolveCfCellStyle(undefined, r.value)
-            const unresolved = [...(r.value.unresolvedWrites ?? [])].sort()
-            const v = r.value.visual
-            // A zero-length bar (the column minimum) draws nothing, as Excel's measurement reads it; a withheld visual slot
-            // (`dataBar`/`iconSet` unresolved) is `withheld`.
-            const bar = v?.dataBar as { startFraction?: number; endFraction?: number } | undefined
-            const drawnBar = bar !== undefined && Math.abs((bar.endFraction ?? 0) - (bar.startFraction ?? 0)) > 1e-9
-            const visual = drawnBar ? 'bar' : v?.iconSet ? `icon:${v.iconSet.set}:${v.iconSet.iconId}` : unresolved.some(w => w === 'ALL' || w === 'dataBar' || w === 'iconSet') ? 'withheld' : 'none'
-            production = { fill: st.fillColor ?? 'none', strike: st.strike === true, unresolved, visual }
-          }
         }
-        // Production names icons by family:id, the capture by glyph class; map through the published class table.
-        if (production.visual.startsWith('icon:') && excel?.visual?.startsWith('icon:')) {
-          const { CF_ICON_GLYPH_CLASSES } = await import('../../src/xlsx/cf/iconGlyphs')
-          const cls = CF_ICON_GLYPH_CLASSES[production.visual.slice(5)]
-          if (cls) production = { ...production, visual: `icon:${cls}` }
-        }
-        const justification = production.unresolved.length > 0 || production.visual === 'withheld' ? stage5Justifications(c, exp.ref) : []
-        const verdict = stage5CellAgreement(production, excel, justification)
+        const truth = truths.get(exp.ref)
+        const justification = truth?.refusals ?? []
+        const verdict = stage5CellAgreement(production, excel, truth)
         out.push({
           caseId: c.id, ref: exp.ref, status: c.status, compared: true,
           evidenceKind: k.kind, capabilities: k.formulaCaps, excel, production, justification,
+          ...(truth ? { counterfactual: { counterfactual: truth.counterfactual, unjustified: truth.unjustified, overResolved: truth.overResolved, ...(truth.cellRefusal !== undefined ? { cellRefusal: truth.cellRefusal } : {}) } } : {}),
           agrees: verdict.agrees, ...(verdict.disagreement ? { disagreement: verdict.disagreement } : {}),
           mode: 'resident', stamp: { cfGen: stamp.cfGen, workbookValueGen: stamp.workbookValueGen }, bytePeak: 0, workUnits: 0,
         })

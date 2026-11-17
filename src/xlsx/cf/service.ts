@@ -192,7 +192,10 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
     /** Task 36 (Ruling S5-K): the workbook's other sheets, values and generations from one overlay-aware store. The
      * source the service reads is wrapped so its `stamp()` carries the live `dependencyGen`; absent, cross-sheet rules
      * withhold and no stamp is touched. */
-    workbook?: CfWorkbookSource } = {}) {
+    workbook?: CfWorkbookSource
+    /** Validation-only seam (Task 39 fix round 4): the Stage 5 counterfactual reads, and may replace, a cell's per-rule
+     * outcomes before the multi-positive guards and the compositor run on them. The viewer never passes it. */
+    cellOutcomes?: (row: number, col: number, rules: readonly CfRule[], outcomes: CfOutcome<unknown>[]) => void } = {}) {
   const cache = createCfCache(memory)
   const evidence = options.evidence ?? cfRuntimeEvidence
   async function prepareCf(request: CfPrepareRequest, hostSource: CfValueSource, account = memory): Promise<CfLease<CfPrepared>> {
@@ -614,6 +617,7 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
               // Stage 1 multi-positive guards apply to every NON-scale positive, independent of whether a scale
               // also matched or where it sorts (final review M6). Scale-vs-DXF precedence is composeCell's job
               // (scale:composition-* evidence); only DXF-vs-DXF ties and stacking are guarded here.
+              options.cellOutcomes?.(row, col, matching, outcomes)
               let dxfPositives = 0, formulaPositives = 0
               const priorities = new Set<number>()
               for (let i = 0; i < outcomes.length; i++) {

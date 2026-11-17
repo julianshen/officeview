@@ -7,7 +7,7 @@
  * paint paths are exercised under injected evidence only.
  */
 import { describe, expect, it } from 'vitest'
-import { stage5Justifications, stage5SlotJustified } from '../scripts/cf-refs/stage5-withhold'
+import { stage5CellAgreement, stage5CounterfactualOf, stage5TokenOf } from '../scripts/cf-refs/stage5-withhold'
 import { PRE_STAGE5_EVIDENCE } from './helpers/cf-stage5-off'
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
@@ -137,6 +137,7 @@ describe('expression rule paints exactly the DisplayFormat cells (Lesson 1)', ()
       for (const e of designated) { const { row, col } = rc(e.ref); states.set(e.ref, lease.value.at(row, col)) }
       lease.release(); service.dispose()
     }
+    const truths = await stage5CounterfactualOf({ c, sheet, refs: designated.map(e => e.ref), evaluation, ...(documentSheets ? { sheets: documentSheets } : {}) })
     const violations: string[] = []
     let compared = 0, withheld = 0, exact = 0
     for (const e of designated) {
@@ -145,12 +146,10 @@ describe('expression rule paints exactly the DisplayFormat cells (Lesson 1)', ()
       const formulaSourced = outcome?.kind === 'ready' && Object.keys(outcome.value.properties).length > 0
       const isVerified = cellVerified(c, e.ref, verified), observed = observedToken(observations[e.ref])
       if (isVerified && observed) compared++
-      // Fix rounds 1-2 (F1, R2): a withheld cell counts as withheld only when EVERY unresolved slot has a justification for
-      // that slot of that rule (stage5Justifications), never on production's own unavailable state.
-      // Fix round 3 (S1, S2): exact write paths, each excused by a compositor-scoped grant; ALL only by an ALL grant.
-      const slots = outcome?.kind === 'unresolved' ? ['ALL'] : outcome?.kind === 'ready' ? [...(outcome.value.unresolvedWrites ?? [])] : []
-      const js = stage5Justifications(c, e.ref)
-      const justified = got.withheld && slots.length > 0 && slots.every(path => stage5SlotJustified(js, path))
+      // Fix round 4: a withheld cell counts as withheld only when production equals the counterfactual run of the real
+      // compositor with exactly the independently justified refusals forced (no unjustified refusal), never on production's
+      // own unavailable state.
+      const justified = got.withheld && stage5CellAgreement(stage5TokenOf(outcome), undefined, truths.get(e.ref)).agrees
       const v = stage5CellVerdict({ key: `${c.id}:${e.ref}`, verified: isVerified, ...(observed ? { observed } : {}) }, { fill: got.fill, strike: got.strike }, formulaSourced, justified)
       if (v) violations.push(v)
       else if (isVerified && observed) { if (got.fill === observed.fill && got.strike === observed.strike) exact++; else withheld++ }

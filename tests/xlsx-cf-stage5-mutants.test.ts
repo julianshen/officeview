@@ -1,6 +1,8 @@
 // @vitest-environment node
 /**
- * Task 39 fix round 2 (codex re-review, rulings R1 and R2): in-memory mutants that the Stage 5 validation must catch.
+ * Task 39 fix rounds 2-4 (codex re-reviews): in-memory mutants that the Stage 5 validation must catch. Since fix round 4
+ * every surface (audit rows, the conformance helper, cf-compare) requires production to equal a counterfactual run of the
+ * real compositor with exactly the independently justified refusals forced (scripts/cf-refs/stage5-withhold.ts).
  * - R1: the CF compiler refuses the supported `$A2>0` (cf-resource-limit). A compile refusal justifies nothing unless an
  *   independently recorded expectation names it, so stage5-composition B2's lost fill must make the audit rows and the
  *   conformance verdict disagree.
@@ -41,6 +43,28 @@ async function loadCase(id: string) {
   return { c, doc, sheet: doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]! }
 }
 
+type Token = import('../scripts/cf-refs/stage5-withhold').Stage5Production
+type Case = import('../scripts/cf-refs/cases').CfOracleCase
+type Doc = import('../src/xlsx/types').XlsxDocument
+type Sheet = import('../src/xlsx/types').XlsxSheet
+const refOf = (row: number, col: number) => `${String.fromCharCode(65 + col)}${row + 1}`
+const actualOf = (t: Token): import('../scripts/cf-compare').ActualCellOutcome => ({
+  applied: t.fill !== 'none' || t.strike, unresolved: t.unresolved.length > 0, unresolvedSlots: [...t.unresolved],
+  ...(t.fill !== 'none' || t.strike ? { style: { ...(t.fill !== 'none' ? { fillColor: t.fill } : {}), ...(t.strike ? { strike: true } : {}) } } : {}),
+})
+/** cf-compare's check over production's own tokens for every compared cell of `doc` (as mutated), with `override` cells
+ * replaced, against the counterfactual of the same doc. */
+async function compareProduction(c: Case, doc: Doc, sheet: Sheet, override: ReadonlyMap<string, import('../scripts/cf-compare').ActualCellOutcome> = new Map()): Promise<string | undefined> {
+  const { verifyCaseCells, stage5CompareRefs } = await import('../scripts/cf-compare')
+  const { stage5ProductionAt } = await import('./helpers/cf-stage5-verdict')
+  const { stage5CounterfactualOf } = await import('../scripts/cf-refs/stage5-withhold')
+  const refs = stage5CompareRefs(c, REPO_ROOT)
+  const tokens = new Map<string, Token>()
+  for (const ref of refs) tokens.set(ref, await stage5ProductionAt(doc, sheet, ref))
+  const truths = await stage5CounterfactualOf({ c, doc, sheet, refs, now: Date.now })
+  return verifyCaseCells(c, REPO_ROOT, (row, col) => override.get(refOf(row, col)) ?? actualOf(tokens.get(refOf(row, col)) ?? { fill: 'none', strike: false, unresolved: [] }), truths)
+}
+
 describe('R1: a compile refusal is no justification unless independently recorded', () => {
   it('the unmutated composition B2 agrees; with $A2>0 refused at compile, the audit row and the conformance verdict disagree', async () => {
     const { stage5SlotVerdict } = await import('./helpers/cf-stage5-verdict')
@@ -75,71 +99,48 @@ describe('R1: a compile refusal is no justification unless independently recorde
 describe('R2: justifications are slot- and rule-specific', () => {
   it('composition L3: the literal fill rule refused beside the justified icon slot disagrees (audit and conformance verdict)', async () => {
     const { stage5SlotVerdict } = await import('./helpers/cf-stage5-verdict')
-    const { stage5Justifications } = await import('../scripts/cf-refs/stage5-withhold')
+    const { stage5JustifiedRefusals } = await import('../scripts/cf-refs/stage5-withhold')
     const { stage5CaseRecords } = await import('../scripts/cf-refs/audit')
     const m = await loadCase('stage5-composition')
     expect(await stage5SlotVerdict(m.c, m.doc, m.sheet, 'L3', REPO_ROOT), 'unmutated').toBeUndefined()
-    // The only justification at L3 excuses the icon rule's slots.
-    for (const j of stage5Justifications(m.c, 'L3')) expect(j.slots, j.reason).not.toContain('fill')
+    // No independent evidence predicts a refusal of the literal fill rule at L3.
+    expect(stage5JustifiedRefusals(m.c, 'L3').map(j => j.priority)).not.toContain(16)
     const lit = m.c.markers.find(x => x.ruleType === 'cellIs' && x.sqref === 'L2:L7')!
     const rule = m.sheet.conditionalFormatting!.rules.find(r => r.priority === lit.priority)!
     ;(rule as { definition: unknown }).definition = { kind: 'unresolved', type: 'cellIs', reason: 'cf-resource-limit' }
-    expect(await stage5SlotVerdict(m.c, m.doc, m.sheet, 'L3', REPO_ROOT)).toMatch(/fill unresolved without a recorded justification/)
+    expect(await stage5SlotVerdict(m.c, m.doc, m.sheet, 'L3', REPO_ROOT)).toMatch(/cellIs@p16 refused .*without a recorded justification/)
     void stage5CaseRecords
   }, 120000)
   it('composition L3: a green fill beside an unresolved icon disagrees with Excel\'s red (agreement, and cf-compare)', async () => {
-    const { stage5CellAgreement, stage5Justifications } = await import('../scripts/cf-refs/stage5-withhold')
-    const { verifyCaseCells } = await import('../scripts/cf-compare')
-    const c = manifest().cases.find(x => x.id === 'stage5-composition')!
+    const { stage5CellAgreement } = await import('../scripts/cf-refs/stage5-withhold')
+    const { stage5TruthAt } = await import('./helpers/cf-stage5-verdict')
+    const { c, doc, sheet } = await loadCase('stage5-composition')
     const RED = 'FFFFC7CE', GREEN = 'FFC6EFCE'
-    expect(stage5CellAgreement({ fill: GREEN, strike: false, unresolved: ['iconSet'], visual: 'withheld' }, { fill: RED, strike: false }, stage5Justifications(c, 'L3')).agrees).toBe(false)
-    // cf-compare: production is Excel's everywhere except L3, which shows green with the icon slot unresolved.
-    const { stage5ObservedFills, stage5ObservedStrikes } = await import('../scripts/cf-compare')
-    const fills = stage5ObservedFills(c, REPO_ROOT)!, strikes = stage5ObservedStrikes(c, REPO_ROOT)
-    const refOf = (row: number, col: number) => `${String.fromCharCode(65 + col)}${row + 1}`
-    const msg = verifyCaseCells(c, REPO_ROOT, (row, col) => {
-      const ref = refOf(row, col)
-      if (ref === 'L3') return { applied: true, unresolved: true, unresolvedSlots: ['iconSet'], style: { fillColor: GREEN } }
-      const f = fills.get(ref)
-      const painted = f !== undefined && f !== 'FFFFFFFF'
-      return { applied: painted || strikes.get(ref) === true, unresolved: false, unresolvedSlots: [], ...(painted || strikes.get(ref) ? { style: { ...(painted ? { fillColor: f } : {}), ...(strikes.get(ref) ? { strike: true } : {}) } } : {}) }
-    })
-    expect(msg).toMatch(/L3.*fill FFC6EFCE vs Excel FFFFC7CE/)
-  })
+    expect(stage5CellAgreement({ fill: GREEN, strike: false, unresolved: ['iconSet'], visual: 'withheld' }, { fill: RED, strike: false }, await stage5TruthAt(c, doc, sheet, 'L3')).agrees).toBe(false)
+    // cf-compare: production everywhere except L3, which shows green with the icon slot unresolved.
+    expect(await compareProduction(c, doc, sheet), 'unmutated').toBeUndefined()
+    const msg = await compareProduction(c, doc, sheet, new Map([['L3', { applied: true, unresolved: true, unresolvedSlots: ['iconSet'], style: { fillColor: GREEN } }]]))
+    expect(msg).toMatch(/L3.*fill FFC6EFCE differs from the counterfactual's FFFFC7CE/)
+  }, 120000)
 })
 
 describe('fix round 3 (S1, S2): justification scope follows the compositor\'s real effect, property by property', () => {
-  const observed = async (c: import('../scripts/cf-refs/cases').CfOracleCase) => {
-    const { stage5ObservedFills, stage5ObservedStrikes } = await import('../scripts/cf-compare')
-    return { fills: stage5ObservedFills(c, REPO_ROOT)!, strikes: stage5ObservedStrikes(c, REPO_ROOT) }
-  }
-  /** cf-compare over a case whose production is Excel's everywhere except at `ref`. */
-  async function compareWith(c: import('../scripts/cf-refs/cases').CfOracleCase, ref: string, at: import('../scripts/cf-compare').ActualCellOutcome): Promise<string | undefined> {
-    const { verifyCaseCells } = await import('../scripts/cf-compare')
-    const { fills, strikes } = await observed(c)
-    return verifyCaseCells(c, REPO_ROOT, (row, col) => {
-      const r = `${String.fromCharCode(65 + col)}${row + 1}`
-      if (r === ref) return at
-      const f = fills.get(r)
-      const painted = f !== undefined && f !== 'FFFFFFFF'
-      return { applied: painted || strikes.get(r) === true, unresolved: false, unresolvedSlots: [], ...(painted || strikes.get(r) ? { style: { ...(painted ? { fillColor: f } : {}), ...(strikes.get(r) ? { strike: true } : {}) } } : {}) }
-    })
-  }
-
   it('S1: composition I3 with its stopping expression refused (no fill, ALL unresolved) disagrees: audit, conformance verdict, cf-compare', async () => {
     const { stage5SlotVerdict } = await import('./helpers/cf-stage5-verdict')
     const { stage5CaseRecords } = await import('../scripts/cf-refs/audit')
-    const { stage5CellAgreement, stage5Justifications } = await import('../scripts/cf-refs/stage5-withhold')
+    const { stage5CellAgreement, stage5JustifiedRefusals } = await import('../scripts/cf-refs/stage5-withhold')
+    const { stage5TruthAt } = await import('./helpers/cf-stage5-verdict')
     const m = await loadCase('stage5-composition')
     expect(await stage5SlotVerdict(m.c, m.doc, m.sheet, 'I3', REPO_ROOT), 'unmutated').toBeUndefined()
-    // The missing formula:composition-stop-icon excuses the lower icon's slot only, never the stopping rule's own fill.
-    for (const j of stage5Justifications(m.c, 'I3')) { expect(j.slots, j.reason).not.toContain('fill'); expect(j.slots, j.reason).not.toContain('ALL') }
-    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['ALL'], visual: 'withheld' }, { fill: 'FFFFC7CE', strike: false }, stage5Justifications(m.c, 'I3')).agrees).toBe(false)
+    // No independent evidence refuses the stopping expression; the missing stop gate is the compositor's to apply.
+    expect(stage5JustifiedRefusals(m.c, 'I3').map(j => j.priority)).not.toContain(12)
+    const truth = await stage5TruthAt(m.c, m.doc, m.sheet, 'I3')
+    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['ALL'], visual: 'withheld' }, { fill: 'FFFFC7CE', strike: false }, truth).agrees).toBe(false)
+    expect(await compareProduction(m.c, m.doc, m.sheet, new Map([['I3', { applied: false, unresolved: true, unresolvedSlots: ['ALL'] }]]))).toMatch(/I3/)
     const expr = m.c.markers.find(x => x.ruleType === 'expression' && x.sqref === 'I2:I7')!
     const rule = m.sheet.conditionalFormatting!.rules.find(r => r.priority === expr.priority)!
     ;(rule as { definition: unknown }).definition = { kind: 'unresolved', type: 'expression', reason: 'cf-resource-limit' }
     expect(await stage5SlotVerdict(m.c, m.doc, m.sheet, 'I3', REPO_ROOT)).toMatch(/without a recorded justification/)
-    expect(await compareWith(m.c, 'I3', { applied: false, unresolved: true, unresolvedSlots: ['ALL'] })).toMatch(/I3/)
     // The audit rows on production's own parse with the expression refused (the compiler mocked to refuse $A2>0).
     mutant.refuse = '$A2>0'
     try {
@@ -151,40 +152,22 @@ describe('fix round 3 (S1, S2): justification scope follows the compositor\'s re
   }, 120000)
 
   it('S2: composition Q3 with only font.bold unresolved and strikethrough resolved false (Excel: struck) disagrees everywhere', async () => {
-    const { stage5CellAgreement, stage5Justifications } = await import('../scripts/cf-refs/stage5-withhold')
-    const c = manifest().cases.find(x => x.id === 'stage5-composition')!
-    const { strikes } = await observed(c)
-    expect(strikes.get('Q3'), 'Excel struck Q3').toBe(true)
+    const { stage5CellAgreement } = await import('../scripts/cf-refs/stage5-withhold')
+    const { stage5ObservedStrikes } = await import('../scripts/cf-compare')
+    const { stage5TruthAt, stage5VerdictOf } = await import('./helpers/cf-stage5-verdict')
+    const { c, doc, sheet } = await loadCase('stage5-composition')
+    expect(stage5ObservedStrikes(c, REPO_ROOT).get('Q3'), 'Excel struck Q3').toBe(true)
+    const truth = await stage5TruthAt(c, doc, sheet, 'Q3')
     // An unrelated bold refusal never suppresses the strikethrough comparison (property-level masks).
-    expect(stage5CellAgreement({ fill: 'none', strike: false, unresolved: ['font.bold'], visual: 'none' }, { fill: 'none', strike: true }, stage5Justifications(c, 'Q3')).agrees).toBe(false)
-    expect(await compareWith(c, 'Q3', { applied: false, unresolved: true, unresolvedSlots: ['font.bold'] })).toMatch(/Q3/)
+    const token = { fill: 'none', strike: false, unresolved: ['font.bold'], visual: 'none' }
+    expect(stage5CellAgreement(token, { fill: 'none', strike: true }, truth).agrees).toBe(false)
+    expect(await compareProduction(c, doc, sheet, new Map([['Q3', { applied: false, unresolved: true, unresolvedSlots: ['font.bold'] }]]))).toMatch(/Q3/)
     // The conformance verdict path: the same production token through its helper.
-    const { stage5VerdictOf } = await import('./helpers/cf-stage5-verdict')
-    expect(stage5VerdictOf(c, 'Q3', { fill: 'none', strike: false, unresolved: ['font.bold'], visual: 'none' }, REPO_ROOT)).toMatch(/strikethrough/)
-  })
+    expect(stage5VerdictOf(c, 'Q3', token, REPO_ROOT, truth)).toMatch(/Q3/)
+  }, 120000)
 })
 
 describe('fix round 4 (codex r3): the counterfactual compositor catches what the hand-mirrored grants accepted', () => {
-  type Token = import('../scripts/cf-refs/stage5-withhold').Stage5Production
-  type Case = import('../scripts/cf-refs/cases').CfOracleCase
-  type Doc = import('../src/xlsx/types').XlsxDocument
-  type Sheet = import('../src/xlsx/types').XlsxSheet
-  const refOf = (row: number, col: number) => `${String.fromCharCode(65 + col)}${row + 1}`
-  const actualOf = (t: Token): import('../scripts/cf-compare').ActualCellOutcome => ({
-    applied: t.fill !== 'none' || t.strike, unresolved: t.unresolved.length > 0, unresolvedSlots: [...t.unresolved],
-    ...(t.fill !== 'none' || t.strike ? { style: { ...(t.fill !== 'none' ? { fillColor: t.fill } : {}), ...(t.strike ? { strike: true } : {}) } } : {}),
-  })
-  /** cf-compare's Stage 5 check over production's own tokens for every expected and observed cell of the (mutated) doc. */
-  async function compareProduction(c: Case, doc: Doc, sheet: Sheet): Promise<string | undefined> {
-    const { verifyCaseCells, stage5ObservedFills } = await import('../scripts/cf-compare')
-    const { stage5ProductionAt } = await import('./helpers/cf-stage5-verdict')
-    const { stage5CounterfactualOf } = await import('../scripts/cf-refs/stage5-withhold') as { stage5CounterfactualOf?: (input: unknown) => Promise<unknown> }
-    const refs = [...new Set([...c.expected.cells.map(e => e.ref), ...(stage5ObservedFills(c, REPO_ROOT)?.keys() ?? [])])]
-    const tokens = new Map<string, Token>()
-    for (const ref of refs) tokens.set(ref, await stage5ProductionAt(doc, sheet, ref))
-    const truths = stage5CounterfactualOf ? await stage5CounterfactualOf({ c, doc, sheet, refs, now: Date.now }) : undefined
-    return (verifyCaseCells as (...a: unknown[]) => string | undefined)(c, REPO_ROOT, (row: number, col: number) => actualOf(tokens.get(refOf(row, col)) ?? { fill: 'none', strike: false, unresolved: [], visual: 'none' }), truths)
-  }
   const refuseRule = (sheet: Sheet, priority: number, type: string) => {
     const rule = sheet.conditionalFormatting!.rules.find(r => r.priority === priority)!
     ;(rule as { definition: unknown }).definition = { kind: 'unresolved', type, reason: 'cf-resource-limit' }
@@ -200,8 +183,8 @@ describe('fix round 4 (codex r3): the counterfactual compositor catches what the
     const m = await loadCase('stage5-composition')
     refuseRule(m.sheet, 13, 'iconSet')
     expect((await stage5ProductionAt(m.doc, m.sheet, 'I2')).unresolved, 'the mutant reaches production').toEqual(['iconSet'])
-    expect.soft(await stage5SlotVerdict(m.c, m.doc, m.sheet, 'I2', REPO_ROOT), 'conformance helper').toMatch(/I2/)
-    expect.soft(await compareProduction(m.c, m.doc, m.sheet), 'cf-compare').toMatch(/I2/)
+    expect.soft(await stage5SlotVerdict(m.c, m.doc, m.sheet, 'I2', REPO_ROOT), 'conformance helper').toMatch(/I2: iconSet@p13 refused .*without a recorded justification/)
+    expect.soft(await compareProduction(m.c, m.doc, m.sheet), 'cf-compare').toMatch(/Cell I\d.*iconSet@p13 refused .*without a recorded justification/)
     mutant.afterParse = doc => refuseRule(doc.sheets.find(s => s.name === m.c.sheet) ?? doc.sheets[0]!, 13, 'iconSet')
     try {
       const rows = await stage5CaseRecords({ ...manifest(), cases: [m.c] }, REPO_ROOT)
