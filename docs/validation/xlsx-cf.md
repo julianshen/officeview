@@ -2383,6 +2383,65 @@ There are 2,036 rows over 17 cases: 791 formula cells, 542 painted as Excel, 0 d
   - cf-compare's per-cell check, the Lesson 1 verdict and the conformance helper drop the "every covering slot" expansion of `ALL`;
   - the visual comparison is skipped only when its own slot is unresolved.
 
+### 14.z.4 Task 39 fix round 4 (codex re-review 3; orchestrator rulings)
+
+- **Ruling: a counterfactual run of the real compositor replaces the hand-mirrored grant scopes.** Codex r3 found two places where the round-3 mirror was wider than compose.ts:
+  - I2: the stop-gate and DXF-coexistence grants applied while the gate was inactive;
+  - `halts`: a stopIfTrue rule always got `ALL`, but compose.ts ignores the stop flag of a visual whose capability is held.
+
+  The verdict now has three steps (`scripts/cf-refs/stage5-withhold.ts`):
+  1. **`stage5JustifiedRefusals`** builds, from independent evidence only, the rules whose refusal is predicted:
+     - an unheld capability the rule's own evaluation needs, which covers its marker capability, the parse and evaluation capabilities its formula requires, a formula bound's family and a literal bar's `bar:bounds-num`;
+     - a record configuration;
+     - an expected compile refusal (`NA()` and the composition `INDIRECT`);
+     - the enumerated S5-HOIST refusal.
+
+     Composition gates (stop, indirect-ahead, expression-vs-scale, coexistence, stub successors, a visual's halting) are not in the set, because the compositor applies them itself.
+  2. **`stage5CounterfactualOf`** runs a fresh production service (src/xlsx/cf, not a copy) with production's inputs.
+     - Every rule in the set is forced unresolved. Every other rule keeps its real evaluated state, and any real refusal among them is an unjustified refusal.
+     - A whole-cell refusal is accepted only from the evidence-gated multi-positive guards.
+     - The rules are forced through a validation-only `cellOutcomes` option of `createCfService`. It is called just before the multi-positive guards and `composeCellAsync`, because the guards read the outcomes too. The viewer never passes it.
+  3. **`stage5CellAgreement`** requires production to equal the counterfactual exactly: the set of unresolved write paths, fill, strikethrough, and the visual where the leg observes one. The resolved components are then compared with Excel as before: fill within ±8, strikethrough, and measured bars and icons.
+
+  One implementation serves the audit rows, the conformance helper, the Lesson 1 helper and cf-compare (interactive and paged legs, each on its own clock).
+- **Mutants:** codex's two r3 mutants were written first and were accepted by the round-3 code on every surface. All 8 mutants now disagree in the audit rows, the conformance helper and cf-compare:
+  - B2 compile refusal;
+  - L3 refused fill;
+  - L3 green-vs-red;
+  - I3 stop refusal;
+  - Q3 bold/strike;
+  - I2 with the p13 icon refused while the stop expression is false;
+  - the K2:K9 relative scale made stopIfTrue over a lower strike rule. Unmutated it gives `[colorScale, fill]` with strike kept; the mutant also loses strike.
+- **Ruling (option d): `STAGE5_EXPECTED_RESOLUTIONS`.** On the unmodified fixtures the counterfactual exposed 72 rows in `stage5-formula-hoist`: B2:B20, B23:B40 (`A2>AVERAGE($A:$A)`) and C2:C18, C23:C40 (`A2=MAX($A:$A)`).
+  - **Why they were exposed.** Their marker, `formula:hoist-aggregate-errors`, is unpublished, but no production code gates on it. Production evaluates the propagated `#DIV/0!` through held readings to no-match, and that equals Excel's capture on every cell.
+  - **The entry.** It is the mirror of `STAGE5_EXPECTED_COMPILE_REFUSALS`. It names the case, the exact formula texts and ranges, the marker (an evidence label), and the held capabilities: `formulaRequiredCapabilities` plus `formula:truth-error`. For those rules only, the marker-based refusal no longer counts; every other justification and the Excel comparison still apply.
+  - **The test** (`tests/xlsx-cf-stage5.test.ts`) checks that:
+    - every listed capability is published, and covers what the formula requires;
+    - nothing in `src` names the marker;
+    - the text and range are exact;
+    - production resolves and equals Excel's capture on every listed cell;
+    - the entry stops counting once a listed capability is unpublished.
+  - Production behaviour is unchanged.
+- **Follow-up (a future stage):** register Excel's `error-propagates` reading of `formula:hoist-aggregate-errors` (an error in a hoisted aggregate's range propagates to every cell) and publish it from its own discriminating case. It stays unregistered and unpublished in Stage 5.
+- **Bytes (accepted):**
+  - The seam lives in the lazy `service` chunk: 28,287 → 28,299 B gzip -9 (+12 B).
+  - `check-eager` is ok.
+  - The eager gzip moved by +2 B (36,517 → 36,519). That is chunk-hash churn: `dist/index.js` is 125,364 B in both builds and byte-identical once the eight-character chunk hashes in the lazy-chunk filenames are normalised. Only those names, which change with the service chunk's content, differ.
+- **Known limit (accepted):** step 1 derives a formula's own needs from production's static `formulaRequiredCapabilities`. If that function regresses, the justification set regresses with it.
+- **Known limit:** the counterfactual reuses production's evaluator and compositor, so a defect inside them is caught only by the Excel comparison of the resolved components.
+
+**Gates after fix round 4:**
+- `npx vitest run`: 719 files, 14,375 passed, 13 failed, all environmental (missing `corpus/`, `core-entry`, stream, pivots, slideshow-morph). The fix round 4 known red is cleared.
+- `tsc -p .`: the 3 known errors. `tsc -p tsconfig.scripts.json`: clean.
+- Stages 1–4 audits: ok and complete.
+- Stage 5: `ok=true structural=31/31 unsupported=9 pending=5 unverifiedNonDiscriminating=9 stageComplete=true blockedCapabilities=0`.
+- Case records: 2,160 rows. 542 of 791 formula cells paint as Excel, 268 have justified unresolved slots, 57 visual comparisons were made, and 0 disagree.
+- Publish: `--write --publish-stage5` run twice, byte-identical (`git diff --exit-code`). The published set is unchanged at 42.
+- Chromium (scratch config): 37/37. WebKit is a blocked gate.
+- `cf-compare --stage 5`: interactive 60 pass, 6 pending, 14 unsupported, 6 fail; paged 62 pass, 7 pending, 14 unsupported, 3 fail. The only Stage 5 failure is the `stage5-cross-sheet-missing` seed, as before.
+- Eager gzip 36,519 B (hash churn, see above); `check-eager` ok.
+- `git diff --check`: clean.
+
 **Gates after fix round 3:**
 - `npx vitest run`: 14,372 passed, 13 failed, all environmental (missing `corpus/` and `core-entry`).
 - `tsc -p .`: the 3 known errors.
