@@ -1305,13 +1305,10 @@ test('Stage 5 print capture paints formula rules', async ({ context }) => {
 // expects A2 painted and announced: the dependent rule must read the COMMITTED overlay value of the other sheet, on the resident,
 // worker and forced-paged legs alike (no reopen, no forced rerender; the evidence seam is the debug one above).
 //
-// What this cannot show, and why: keeping the dependent sheet ON SCREEN while the referenced sheet commits needs a control on the
-// dependent sheet that drives another sheet's pivot, i.e. a slicer or timeline; those actions are gated off ("This slicer action has
-// not been measured in Excel and is not available", src/xlsx/pivots/slicers/controller.ts:13, announced at :127 and :189), and this
-// task does not fake a pivot capability. A sheet switch re-prepares the sheet it lands on, so the dependency-epoch and tile-eviction
-// subscriptions are not what this test exercises: removing them leaves it green (checked). They stay covered by
-// tests/xlsx-cf-live.test.tsx, tests/xlsx-cf-formula-cross-sheet.test.ts and the remote-cache dependency tests; the revert-checks that
-// do fail this test are dropping the resident CF workbook (sheetAssets) and the worker's cross-sheet seam (pagedSource cfWorkbook).
+// This test goes through a sheet switch, which re-prepares the sheet it lands on, so it does not exercise the dependency subscriptions
+// (reverting `cfResidentDependencyKey` or `cfDependencyEpoch` leaves it green, checked). The test after it does: it keeps the
+// dependent sheet on screen while a slicer on that sheet commits another sheet's pivot. The revert-checks that fail THIS one are
+// dropping the resident CF workbook (sheetAssets) and the worker's cross-sheet seam (pagedSource cfWorkbook).
 const PIVOTS = fileURLToPath(new URL('../fixtures/xlsx-pivots/', import.meta.url))
 async function crossSheetPivotBytes(): Promise<Buffer> {
   const zip = await JSZip.loadAsync(readFileSync(`${PIVOTS}engine/baseline.xlsx`))
@@ -1355,6 +1352,77 @@ test('Stage 5 cross-sheet commit in the same live session repaints the dependent
         const after = await settledCfGrid(page, 0)
         await expect.poll(async () => exact(await settledCfGrid(page, 0)), { timeout: 30_000, message: `${leg.name}: A2's fill paints after the commit` }).toBeGreaterThan(fillBefore + 300)
         void after
+        await expect(page.getByRole('alert')).toHaveCount(0)
+      } finally { await page.close() }
+    })
+  }
+})
+
+
+// ---- the dependent sheet stays on screen while the referenced sheet commits (fix round 3) ----
+//
+// controls/controls-seed.xlsx (Excel): the pivot on "工作表1" is filtered by a "Product" slicer that starts at All. The slicer's
+// drawing is moved from that sheet to "Data", so the slicer lives on the dependent sheet and its click commits the pivot on another
+// sheet (InteractiveSheetDoc applyLinked) while Data stays displayed. Data!A2 carries `'工作表1'!$C$8>50`: C8 is Bananas' column
+// (20) at All and the Total column (90) once Apples alone is selected. The measured single-item click from All and Clear Filter are
+// the actions the slicer controller allows (src/xlsx/pivots/slicers/controller.ts:177-184 and :166 for clear); nothing is injected.
+// No sheet switch, no reopen, no forced rerender: the sheet's own subscriptions must repaint and re-announce A2 after each commit.
+async function slicerOnDataBytes(): Promise<Buffer> {
+  const zip = await JSZip.loadAsync(readFileSync(`${PIVOTS}controls/controls-seed.xlsx`))
+  const s1 = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+  const moved = /<drawing r:id="rId2"\/><extLst>.*<\/extLst>/s.exec(s1)
+  if (!moved) throw new Error('controls-seed drawing/extLst anchor not found')
+  zip.file('xl/worksheets/sheet1.xml', s1.replace(moved[0], ''))
+  const rels1 = await zip.file('xl/worksheets/_rels/sheet1.xml.rels')!.async('string')
+  const keep = (id: string) => new RegExp(`<Relationship Id="${id}"[^>]*/>`).exec(rels1)![0]
+  zip.file('xl/worksheets/_rels/sheet1.xml.rels', rels1.replace(keep('rId2'), '').replace(keep('rId3'), '').replace(keep('rId4'), ''))
+  zip.file('xl/worksheets/_rels/sheet2.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${keep('rId2')}${keep('rId3')}${keep('rId4')}</Relationships>`)
+  const s2 = await zip.file('xl/worksheets/sheet2.xml')!.async('string')
+  const rule = `<conditionalFormatting sqref="A2"><cfRule type="expression" dxfId="0" priority="1"><formula>'工作表1'!$C$8&gt;50</formula></cfRule></conditionalFormatting>`
+  zip.file('xl/worksheets/sheet2.xml', s2.replace('<pageMargins', `${rule}<pageMargins`).replace('</worksheet>', `${moved[0]}</worksheet>`))
+  const styles = await zip.file('xl/styles.xml')!.async('string')
+  zip.file('xl/styles.xml', styles.replace('<dxfs count="0"/>', '<dxfs count="1"><dxf><fill><patternFill patternType="solid"><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf></dxfs>'))
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }) as unknown as Promise<Buffer>
+}
+
+test('Stage 5 slicer commit on another sheet repaints the visible dependent sheet without a switch', async ({ context }) => {
+  const bytes = await slicerOnDataBytes()
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      const page = await context.newPage()
+      try {
+        await openCf(page, 'stage5-slicer-controls', bytes, leg, { cfev: true })
+        await page.getByRole('combobox', { name: 'Worksheet' }).selectOption({ label: 'Data' })
+        await expect(cell(page, 'A2')).toContainText('2023', { timeout: 30_000 })
+        const exact = (img: Img): number => countColor(img, 0, 0, img.width, img.height, 0xff, 0xc7, 0xce, 2)
+        const a2 = async (): Promise<string> => (await namesOf(page, ['A2']))[0]!
+        await expect.poll(a2, { timeout: 15_000, message: `${leg.name}: A2 settles at All` }).not.toMatch(/Conditional formatting applied/)
+        const fillAll = exact(await settledCfGrid(page, 0))
+        expect(fillAll, `${leg.name}: the rule's fill is absent at All`).toBeLessThan(100)
+        // Commit 1, Data on screen throughout: All -> Apples alone.
+        await page.getByRole('button', { name: 'Apples, selected' }).click()
+        if (leg.paged) {
+          // The forced-paged leg has no such commit in this harness, and it is not faked. Two independent facts, both observed:
+          // (1) the slicer's target is resolved against the pivot definitions of the sheets the viewer holds loaded ("paged shells
+          // carry no pivot definitions", src/components/xlsx/InteractiveSheetDoc.tsx:2300-2308); with the pivot's own sheet not
+          // loaded while Data is displayed the click is refused ("This slicer target is missing or ambiguous", :2308); and
+          // (2) the slicer transaction chunk (src/xlsx/pivots/slicers/transaction.ts) is a lazy import the strict-fs harness server
+          // answers 403 to on this leg (vite.harness.config.ts:131-134, the "Failed to fetch dynamically imported module" notice).
+          // Either way nothing commits, so the leg pins the invariant: no commit, no change, Data stays selected.
+          await page.waitForTimeout(5000)
+          expect(await a2(), `${leg.name}: A2 is unchanged after the click`).not.toMatch(/Conditional formatting applied/)
+          expect(exact(await settledCfGrid(page, 0)), `${leg.name}: no fill after the click`).toBeLessThan(100)
+          await expect(page.getByRole('combobox', { name: 'Worksheet' }).locator('option:checked')).toHaveText('Data')
+          return
+        }
+        // Data is still the selected worksheet: nothing below switches sheets.
+        await expect(page.getByRole('combobox', { name: 'Worksheet' }).locator('option:checked')).toHaveText('Data')
+        await expect.poll(a2, { timeout: 30_000, message: `${leg.name}: A2 announces the rule after the slicer commit` }).toMatch(/Conditional formatting applied/)
+        await expect.poll(async () => exact(await settledCfGrid(page, 0)), { timeout: 30_000, message: `${leg.name}: A2's fill paints after the commit` }).toBeGreaterThan(fillAll + 300)
+        // Commit 2, still on Data: Clear Filter restores All, and the rule goes away again.
+        await page.getByRole('button', { name: 'Clear Filter' }).click()
+        await expect.poll(a2, { timeout: 30_000, message: `${leg.name}: A2 withdraws the rule after Clear Filter` }).not.toMatch(/Conditional formatting applied/)
+        await expect.poll(async () => exact(await settledCfGrid(page, 0)), { timeout: 30_000, message: `${leg.name}: A2's fill is gone after Clear Filter` }).toBeLessThan(100)
         await expect(page.getByRole('alert')).toHaveCount(0)
       } finally { await page.close() }
     })
