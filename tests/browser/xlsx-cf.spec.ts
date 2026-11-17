@@ -1294,3 +1294,60 @@ test('Stage 5 print capture paints formula rules', async ({ context }) => {
   // The fixture also holds a literal rule with the same fill, which both runs print; the formula rules are the difference.
   expect(totals.evidence!, 'the print page carries the formula fill only with the evidence').toBeGreaterThan(totals.production! + 200)
 })
+
+// ---- Stage 5: a referenced-sheet commit in the SAME live session (fix round 2, finding 6) ----
+//
+// The viewer is view-only, but a pivot click is a real in-session commit: it replaces the pivot's displayed cells (an overlay on the
+// pivot's sheet) without reopening anything. The Excel-saved pivot workbook tests/fixtures/xlsx-pivots/engine/baseline.xlsx has the
+// pivot on "Pivot" and its source data on "Data"; this spec adds one cross-sheet rule to "Data"!A2, `Pivot!$B$7>5000`. East's
+// first child row is B7 = 1234.5 (false); collapsing East moves the next region's 6497.84 into B7 (true). The test goes to Data,
+// returns to Pivot, clicks Collapse East, goes back to Data and expects A2 to have repainted and re-announced: a dependent sheet's
+// cached tiles and subscriptions that did not follow the commit would still show the old state. No reopen, no forced rerender.
+const PIVOTS = fileURLToPath(new URL('../fixtures/xlsx-pivots/', import.meta.url))
+async function crossSheetPivotBytes(): Promise<Buffer> {
+  const zip = await JSZip.loadAsync(readFileSync(`${PIVOTS}engine/baseline.xlsx`))
+  const sheet = await zip.file('xl/worksheets/sheet2.xml')!.async('string')
+  const rule = '<conditionalFormatting sqref="A2"><cfRule type="expression" dxfId="0" priority="1"><formula>Pivot!$B$7&gt;5000</formula></cfRule></conditionalFormatting>'
+  if (!sheet.includes('<pageMargins')) throw new Error('Data sheet has no pageMargins anchor')
+  zip.file('xl/worksheets/sheet2.xml', sheet.replace('<pageMargins', `${rule}<pageMargins`))
+  const styles = await zip.file('xl/styles.xml')!.async('string')
+  if (!styles.includes('<dxfs count="0"/>')) throw new Error('unexpected dxfs')
+  zip.file('xl/styles.xml', styles.replace('<dxfs count="0"/>', '<dxfs count="1"><dxf><fill><patternFill patternType="solid"><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf></dxfs>'))
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }) as unknown as Promise<Buffer>
+}
+
+test('Stage 5 cross-sheet commit in the same live session repaints the dependent sheet', async ({ context }) => {
+  const bytes = await crossSheetPivotBytes()
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      const page = await context.newPage()
+      try {
+        await openCf(page, 'stage5-pivot-cross', bytes, leg, { cfev: true })
+        const sheets = page.getByRole('combobox', { name: 'Worksheet' })
+        const collapse = page.getByRole('button', { name: /^Collapse East/ })
+        await expect(collapse).toBeAttached({ timeout: 30_000 })
+        // Visit the dependent sheet first: its tiles and CF scope are prepared and cached under the pre-commit pivot.
+        await sheets.selectOption({ label: 'Data' })
+        await expect(cell(page, 'A2')).toContainText('East', { timeout: 30_000 })
+        await expect.poll(async () => (await namesOf(page, ['A2']))[0], { timeout: 15_000, message: 'A2 settles before the commit' }).not.toMatch(/Conditional formatting applied/)
+        const before = await settledCfGrid(page, 0)
+        // The Data sheet's own styling is pinkish at the default tolerance, so the rule's fill (FFC7CE) is counted exactly.
+        const exact = (img: Img): number => countColor(img, 0, 0, img.width, img.height, 0xff, 0xc7, 0xce, 2)
+        const fillBefore = exact(before)
+        expect(fillBefore, `${leg.name}: the rule's fill is absent before the commit`).toBeLessThan(100)
+        // The commit: collapse East on the pivot's own sheet, in this session.
+        await sheets.selectOption({ label: 'Pivot' })
+        await expect(collapse).toBeAttached({ timeout: 30_000 })
+        await collapse.click()
+        await expect(page.getByRole('button', { name: 'Expand East (Region)' })).toBeAttached({ timeout: 30_000 })
+        // Back on the dependent sheet: it must show the committed state, announced and painted.
+        await sheets.selectOption({ label: 'Data' })
+        await expect.poll(async () => (await namesOf(page, ['A2']))[0], { timeout: 30_000, message: `${leg.name}: A2 announces the rule after the pivot commit` }).toMatch(/Conditional formatting applied/)
+        const after = await settledCfGrid(page, 0)
+        await expect.poll(async () => exact(await settledCfGrid(page, 0)), { timeout: 30_000, message: `${leg.name}: A2's fill paints after the commit` }).toBeGreaterThan(fillBefore + 300)
+        void after
+        await expect(page.getByRole('alert')).toHaveCount(0)
+      } finally { await page.close() }
+    })
+  }
+})
