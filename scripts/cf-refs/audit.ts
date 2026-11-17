@@ -21,9 +21,9 @@
  * algorithmic bounds. No timing assertion gates any outcome.
  */
 import { CF_FORMULA_PRODUCTION_READINGS } from '../../src/xlsx/cf/formulaReadings'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   BAR_AUTO_COLOUR_CAPABILITIES,
@@ -2502,6 +2502,17 @@ export function auditEagerBoundary(rootDir: string = REPO_ROOT): EagerBoundary {
   return { checked: true, passed: out.status === 0, reason: out.status === 0 ? 'eager graph clean' : String(out.stderr ?? out.stdout).slice(0, 500) }
 }
 
+/** Task 39 fix round 1 (F4): writes `content` to a temporary sibling, then renames it over `target` (one atomic step). */
+export function writeFileAtomic(target: string, content: string): void {
+  const tmp = `${target}.tmp-${process.pid}-${Date.now()}`
+  try {
+    writeFileSync(tmp, content, 'utf8')
+    renameSync(tmp, target)
+  } finally {
+    if (existsSync(tmp)) rmSync(tmp, { force: true })
+  }
+}
+
 /* ---------------- CLI ---------------- */
 
 function printCase(entry: { id: string; status: string; structuralValid: boolean; code?: string; reason?: string }): void {
@@ -2530,22 +2541,26 @@ async function main(): Promise<void> {
         : stage === 4
           ? auditStage4Manifest(manifest, { rootDir: REPO_ROOT })
           : auditStage5Manifest(manifest, { rootDir: REPO_ROOT })
+  // Task 39 fix round 1 (F4): `--write` renders now and writes only after every check below has passed, atomically
+  // (a temporary sibling and one rename). Any failure (a thrown scenario, ok=false, an incomplete stage) leaves the
+  // target byte-unchanged. `--target` redirects the write (tests); CF_AUDIT_INJECT_FAILURE=after-render is a test seam.
+  let pendingWrite: { target: string; content: string; summary: string } | undefined
   if (args.includes('--write')) {
-    const target = resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts')
+    const target = args.includes('--target') ? resolve(args[args.indexOf('--target') + 1]!) : resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts')
+    const committed = resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts')
     const content = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, {
-      committedSource: existsSync(target) ? readFileSync(target, 'utf8') : undefined,
+      committedSource: existsSync(committed) ? readFileSync(committed, 'utf8') : undefined,
       publishStage3: args.includes('--publish-stage3'),
       publishStage4: args.includes('--publish-stage4'),
       publishStage5: args.includes('--publish-stage5'),
     })
-    writeFileSync(target, content, 'utf8')
+    if (process.env.CF_AUDIT_INJECT_FAILURE === 'after-render') throw new Error('injected failure after render (test seam)')
     const count = (name: string): number => (new RegExp(`export const ${name}: ReadonlySet<string> = new Set\\(\\[([\\s\\S]*?)\\]\\)`).exec(content)?.[1]?.match(/'[^']+'/g) ?? []).length
     const s3 = content.includes('VERIFIED_STAGE3_CAPABILITIES') ? `, ${count('VERIFIED_STAGE3_CAPABILITIES')} S3${args.includes('--publish-stage3') ? ' published' : ' as committed'}` : ', S3 unpublished'
     const s4 = content.includes('VERIFIED_STAGE4_CAPABILITIES') ? `, ${count('VERIFIED_STAGE4_CAPABILITIES')} S4${args.includes('--publish-stage4') ? ' published' : ' as committed'}` : ', S4 unpublished'
     const s5 = content.includes('VERIFIED_STAGE5_CAPABILITIES') ? `, ${count('VERIFIED_STAGE5_CAPABILITIES')} S5${args.includes('--publish-stage5') ? ' published' : ' as committed'}` : ', S5 unpublished'
     const detail = ` (${count('VERIFIED_STAGE1_CAPABILITIES')} S1, ${count('VERIFIED_STAGE2_CAPABILITIES')} S2${s3}${s4}${s5})`
-    // eslint-disable-next-line no-console
-    console.log(`wrote ${count('VERIFIED_CAPABILITIES')} verified capabilities${detail} to src/xlsx/cf/verifiedCapabilities.ts`)
+    pendingWrite = { target, content, summary: `${count('VERIFIED_CAPABILITIES')} verified capabilities${detail}` }
   }
   const cases = only ? report.perCase.filter(c => c.id === only) : report.perCase
   for (const entry of cases) printCase(entry)
@@ -2765,6 +2780,16 @@ async function main(): Promise<void> {
     writeFileSync(join(outDir, `stage${stage}-audit.json`), JSON.stringify(outData, null, 2))
   }
 
+  if (pendingWrite) {
+    if (ok && report.stageComplete) {
+      writeFileAtomic(pendingWrite.target, pendingWrite.content)
+      // eslint-disable-next-line no-console
+      console.log(`wrote ${pendingWrite.summary} to ${relative(REPO_ROOT, pendingWrite.target)}`)
+    } else {
+      // eslint-disable-next-line no-console
+      console.log(`not written: the audit failed, ${relative(REPO_ROOT, pendingWrite.target)} is unchanged`)
+    }
+  }
   if (!ok) process.exit(1)
   if (!report.stageComplete) {
     // eslint-disable-next-line no-console
