@@ -967,8 +967,11 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       } else {
         liveCfGen = versionCfRules('[]')
       }
-    // One clock per preparation (Ruling S5-M): sampled once, shared by the predicates, the formulas and the stamp.
-    const instant = (options?.now ?? Date.now)()
+    // One clock per preparation (Ruling S5-M): sampled once, shared by the predicates, the formulas and the stamp. Final
+    // review F3: sampled at its first read (memoised), as the resident evaluation context is, so a preparation whose rules
+    // never read the clock (a literal-only sheet) takes no clock sample.
+    let sampledInstant: number | undefined
+    const instant = (): number => (sampledInstant ??= (options?.now ?? Date.now)())
     let liveClockGen: number | undefined
     const source: CfValueSource = {
       bounds: async (_id: string) => {
@@ -999,11 +1002,10 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       pages: this.cfPages(request, account, options?.signal),
       ...(this.workbook.formatting?.styles ? { numberFormats: 'resolved' as const } : {}),
       }
-      const ownDateContext = options?.dateContext ?? {
+      const ownDateContext: import('../cf/predicates').CfDateContext = options?.dateContext ?? Object.defineProperty({
         dateSystem: this.workbook.formatting?.dateSystem ?? '1900',
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC',
-        epochNowMs: instant,
-      }
+      } as import('../cf/predicates').CfDateContext, 'epochNowMs', { get: instant, enumerable: true })
       // The worker owns the workbook's calculation facts: the policy comes from the same `PagedWorkbook` the values do, so
       // every worker route (paint, text, find) takes one authority. Only a sheet with a formula rule loads the module.
       const carriesFormula = liveRules?.rules.some(rule => rule.definition.kind === 'expression'
@@ -1011,13 +1013,13 @@ export class PagedXlsxSheetAdapter implements SourceStore {
         || visualFormulaShape(rule.definition) !== undefined) === true
       const formulaModule = carriesFormula ? await import('../cf/formula') : undefined
       const evaluation = formulaModule?.cfDocumentEvaluationOfPaged(this.workbook)
-      if (formulaModule && evaluation && liveRules?.clockFree !== true) liveClockGen = formulaModule.cfEvaluationContextFor(evaluation, () => instant).clock.clockGen
+      if (formulaModule && evaluation && liveRules?.clockFree !== true) liveClockGen = formulaModule.cfEvaluationContextFor(evaluation, instant).clock.clockGen
       // Ruling S5-K: only a sheet whose rules name another sheet gets the workbook seam (no cross-sheet work otherwise).
       const crossSheet = carriesFormula && liveRules?.rules.some(rule => rule.definition.kind !== 'unresolved' && (rule.definition.dependencySheets?.length ?? 0) > 0) === true
       const workbook = crossSheet ? this.cfWorkbook(account) : undefined
       const remoteOptions: CfRemotePrepareOptions = {
         ...options,
-        now: () => instant,
+        now: instant,
         ...(evaluation ? { evaluation } : {}),
         ...(workbook ? { workbook, sheetName: this.sheet.name } : {}),
         ...(evaluation ? (options?.dateContext ? { dateContext: options.dateContext } : {}) : { dateContext: ownDateContext }),
