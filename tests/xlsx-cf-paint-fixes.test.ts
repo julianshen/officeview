@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { createCanvas } from 'canvas'
 import { prepareCfPaint } from '../src/xlsx/cf/render'
 import { createCfMemory } from '../src/xlsx/cf/limits'
@@ -143,7 +143,7 @@ it('whole-row coverage uses the static renderer column ceiling', async () => {
   try { expect(b?.layer.styleAt(0, 1100, undefined)?.fillColor).toBe('FF00FF00') } finally { b?.dispose() }
 })
 
-it('a timePeriod=lastWeek rule whose stored formula is wrong/off-by-one still paints exactly lastWeek', async () => {
+it('a timePeriod=lastWeek rule paints from Excel\'s own formula and withholds an off-by-one one (S5-G, was R1c)', async () => {
   const { parseXml } = await import('../src/core/xml')
   const { parseCfSheet } = await import('../src/xlsx/cf/parse')
   const xmlCanonical = `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
@@ -159,19 +159,28 @@ it('a timePeriod=lastWeek rule whose stored formula is wrong/off-by-one still pa
   const styles = { colors: {}, dxfNodes: [parseXml('<dxf><fill><patternFill patternType="solid"><bgColor rgb="FF00FF00"/></patternFill></fill></dxf>')] }
   const memory1 = createCfMemory()
   const memory2 = createCfMemory()
+  const lastWeekSerial = Math.round((Date.UTC(2026, 10, 13) - Date.UTC(1899, 11, 30)) / 86_400_000)
   const parsedCanonical = parseCfSheet(parseXml(xmlCanonical), styles, memory1)
   const parsedOffByOne = parseCfSheet(parseXml(xmlOffByOne), styles, memory2)
   try {
-    // R1c: both resolve to timePeriod=lastWeek from the attribute
+    // S5-G: Excel's formula resolves the attribute predicate; the off-by-one formula is divergent and unresolved, so it never
+    // reaches the attribute predicate (it replaces Stage 1 ruling R1c, which trusted the attribute over a disagreeing formula).
     expect(parsedCanonical.value.rules[0]!.definition).toMatchObject({ kind: 'timePeriod', period: 'lastWeek' })
-    expect(parsedOffByOne.value.rules[0]!.definition).toMatchObject({ kind: 'timePeriod', period: 'lastWeek' })
-    // Both produce identical paint batches (evaluating the attribute, not stored formulas)
-    const sheetCanonical: XlsxSheet = { name: 'S1', sheetId: '1', merges: [], mergeRanges: [], cols: [], rows: [{ index: 1, cells: [{ row: 1, col: 6, ref: 'G2', value: 46325, styleIndex: 0 }] }], conditionalFormatting: parsedCanonical.value }
-    const sheetOffByOne: XlsxSheet = { name: 'S2', sheetId: '2', merges: [], mergeRanges: [], cols: [], rows: [{ index: 1, cells: [{ row: 1, col: 6, ref: 'G2', value: 46325, styleIndex: 0 }] }], conditionalFormatting: parsedOffByOne.value }
-    const batchCanonical = await prepareCfPaint(sheetCanonical)
-    const batchOffByOne = await prepareCfPaint(sheetOffByOne)
+    expect(parsedOffByOne.value.rules[0]!.definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+    // The withheld rule paints nothing, where the canonical one paints its DXF fill.
+    const sheetCanonical: XlsxSheet = { name: 'S1', sheetId: '1', merges: [], mergeRanges: [], cols: [], rows: [{ index: 1, cells: [{ row: 1, col: 6, ref: 'G2', value: lastWeekSerial, styleIndex: 0 }] }], conditionalFormatting: parsedCanonical.value }
+    const sheetOffByOne: XlsxSheet = { name: 'S2', sheetId: '2', merges: [], mergeRanges: [], cols: [], rows: [{ index: 1, cells: [{ row: 1, col: 6, ref: 'G2', value: lastWeekSerial, styleIndex: 0 }] }], conditionalFormatting: parsedOffByOne.value }
+    // Pin the clock (as the conformance suite does): Wednesday 2026-11-18, so Friday 2026-11-13 is inside lastWeek.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-18T04:00:00+08:00'))
+    let batchCanonical: Awaited<ReturnType<typeof prepareCfPaint>>, batchOffByOne: Awaited<ReturnType<typeof prepareCfPaint>>
     try {
-      expect(batchOffByOne?.layer.styleAt(1, 6, undefined)).toEqual(batchCanonical?.layer.styleAt(1, 6, undefined))
+      batchCanonical = await prepareCfPaint(sheetCanonical)
+      batchOffByOne = await prepareCfPaint(sheetOffByOne)
+    } finally { vi.useRealTimers() }
+    try {
+      expect(batchCanonical?.layer.styleAt(1, 6, undefined)?.fillColor).toBe('FF00FF00')
+      expect(batchOffByOne?.layer.styleAt(1, 6, undefined)?.fillColor).toBeUndefined()
     } finally {
       batchCanonical?.dispose()
       batchOffByOne?.dispose()

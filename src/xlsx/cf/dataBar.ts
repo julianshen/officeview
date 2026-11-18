@@ -32,11 +32,14 @@ const unmeasured = (): CfOutcome<never> => ({ kind: 'unresolved', reason: 'cf-un
 function boundCapability(bound: CfBarBound): string {
   switch (bound.type) {
     case 'min': case 'max': return 'bar:bounds-min-max'
-    case 'num': return 'bar:bounds-num'
+    // A formula-resolved threshold is authorised by its own formula capability (fix round 1, ruling 2).
+    case 'num': return bound.resolved === 'formula' ? 'bar:bounds-formula' : 'bar:bounds-num'
     case 'percent': return 'bar:bounds-percent'
     case 'percentile': return 'bar:bounds-percentile'
     case 'autoMin': return 'bar:bounds-automin'
     case 'autoMax': return 'bar:bounds-automax'
+    // Stage 5 (Ruling S5-H): reached only by a definition whose formula bound the service has not substituted.
+    case 'formula': return 'bar:bounds-formula'
   }
 }
 
@@ -83,6 +86,8 @@ export function resolveBarThresholds(
   options: { hasEvidence?: (cap: string) => boolean } = {},
 ): CfOutcome<readonly [number, number]> {
   const checkEvidence = options.hasEvidence ?? defaultHasEvidence
+  // A formula bound is never a threshold: the service substitutes its evaluated number first (Ruling S5-H).
+  if (def.bounds.some(b => b.type === 'formula')) return { kind: 'unresolved', reason: 'cf-formula-unevaluated' }
   for (const b of def.bounds) if (!checkEvidence(boundCapability(b))) return unmeasured()
   const delegated: { bound: CfScaleBound }[] = []
   for (const b of def.bounds) {

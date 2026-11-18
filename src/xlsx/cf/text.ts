@@ -2,9 +2,12 @@ import type { XlsxSheet } from '../types'
 import { CF_ICON_SET_NAMES, type CfBarDescriptor, type CfIconDescriptor, type CfLease, type CfPrepared, type CfStamp, type SourceRect as ModelRect } from './model'
 import { CF_LIMITS, createCfMemory, createCfWorkBudget, type CfMemory } from './limits'
 import { createCfService, estimateCfPrepareBytes, type CfPaintStatistics } from './service'
+import { cfAlignClock, cfEvaluationContextFor, cfRoutePolicy, type CfDocumentEvaluation } from './formula'
+export { cfDocumentEvaluationOf, cfDocumentEvaluationOfPaged } from './formula'
 import { createCfStatistics } from './statistics'
 import { resolveCfCellStyle } from './dxf'
-import { cfRowPtOfSheet, cfRowUniformOfSheet, frameBarHosts, layoutCfCell, residentBarHosts, residentSource, storeCfSource, type CfFrameHostSource } from './render'
+import { cfRowPtOfSheet, cfRowUniformOfSheet, cfWorkbookFor, frameBarHosts, layoutCfCell, residentBarHosts, residentSource, storeCfSource, type CfFrameHostSource, type CfWorkbookStores } from './render'
+import { cfDependencyGenOf, withCfDependencyGen } from './dependencies'
 export type { CfFrameHostSource } from './render'
 import { regionStylesFor } from '../tableStyleLoader'
 import type { XlsxCellStyle } from '../types'
@@ -21,6 +24,7 @@ import { describeCfUnavailable, describeCfWin, type CfDescriptor } from './descr
 import { barPaintable, barWithheld, paintDataBars, type CfBarHost } from './dataBarPaint'
 import { admitBatchGlyphs, cfHidesText, iconPaintsOn, iconTextInset, paintIconCells, type CfAdmittedGlyphs, type CfIconGate } from './iconPaint'
 import { PackageError } from '../../core/package-error'
+import { cfRulesUseClock } from './model'
 
 const refused = (message: string): PackageError => new PackageError('resource-limit', message)
 
@@ -35,7 +39,14 @@ export interface CfTextScopeRequest {
   readonly valuePolicy?: ValuePolicy
   readonly workbookValueGen?: number
   readonly store?: SourceStore
+  /** Task 36 (Ruling S5-K): the workbook's canonical stores (with `store`), or the document's sheets (without one). */
+  readonly workbook?: CfWorkbookStores
+  readonly documentSheets?: readonly XlsxSheet[]
   readonly dateContext?: import('./predicates').CfDateContext
+  /** Stage 5 (Ruling S5-L): the document's evaluation policy; this scope takes one clock snapshot from `now` (default: the
+   * wall clock). Absent: formula rules are unresolved, Stage 1-4 rules unchanged. */
+  readonly evaluation?: CfDocumentEvaluation
+  readonly now?: () => number
   /** The measuring context resident icon hosts use (Ruling S4-L; default: an offscreen canvas, or none: withheld). */
   readonly layoutContext?: () => CanvasRenderingContext2D | null | undefined
   /** Final review I3: the frame's live hosts (`createFrameHostSource`). Given, the scope decides bars and icons on the
@@ -418,13 +429,14 @@ export async function prepareCfTextScope(
   for (const r of sheet.rows) if (r.hidden) hiddenRows.push({ firstRow: r.index, lastRow: r.index, firstCol: 0, lastCol: 16383 })
   const statisticsOptions = hiddenRows.length > 0 ? { hiddenRows } : undefined
   const sheetMerges: ModelRect[] = (sheet.mergeRanges ?? []).map(m => ({ firstRow: m.minRow, lastRow: m.maxRow, firstCol: m.minCol, lastCol: m.maxCol }))
-  const dateContext = request.dateContext ?? (sheet.semantics ? {
-    dateSystem: sheet.semantics.dateSystem,
-    timeZone: sheet.semantics.timeZone,
-    epochNowMs: Date.now(),
-  } : undefined)
+  // Ruling S5-L: one value policy per preparation, the document's when the route is given its context.
+  const { policy: valuePolicy, evaluation: routed } = cfRoutePolicy(request.evaluation ? cfEvaluationContextFor(request.evaluation, request.now ?? Date.now) : undefined, [request.valuePolicy, request.store?.valuePolicy], 'engine')
+  // One clock per preparation (Ruling S5-M): the predicates read the instant the formulas do, or the formulas withhold.
+  const { evaluation, dateContext } = cfAlignClock(routed, request.dateContext, () => sheet.semantics ? { dateSystem: sheet.semantics.dateSystem, timeZone: sheet.semantics.timeZone, epochNowMs: Date.now() } : undefined)
     try {
       const gen = cfRulesVersion(rules)
+      const workbook = cfWorkbookFor(rules, sheet.name, request.store, request.workbook, request.documentSheets, account, valuePolicy)
+      const dependencyGen = cfDependencyGenOf(rules, sheet.name, workbook)
       const stamp: CfStamp = {
         owner: request.store?.stamp.docId ?? 'cf-text',
         sheetId: sheet.sheetId ?? sheet.name,
@@ -432,15 +444,19 @@ export async function prepareCfTextScope(
         cfGen: gen,
         viewGen: 0,
         structureGen: request.store?.structureGen ?? 0,
-        clockGen: 0,
+        // Ruling S5-M: the one clock of a sheet with a clock-dependent formula; every other sheet stays clock-free.
+        clockGen: evaluation && cfRulesUseClock(rules, true) ? evaluation.clock.clockGen : 0,
+        ...(dependencyGen !== 0 ? { dependencyGen } : {}),
       }
       statistics.stamp = stamp
-      const source = request.store ? storeCfSource(request.store, stamp, account) : residentSource(sheet, stamp, account, request.valuePolicy ?? 'engine')
+      // The scope's liveness reads the live `dependencyGen` too (S5-K).
+      const source = withCfDependencyGen(request.store ? storeCfSource(request.store, stamp, account) : residentSource(sheet, stamp, account, valuePolicy), rules, sheet.name, workbook)
       const colors = request.colors ?? { theme: sheet.drawingTheme?.palette ?? sheet.tableStyleSource?.colors.theme, indexed: sheet.tableStyleSource?.colors.indexed }
       const locale = request.locale ?? 'en-US'
       for (const chunk of modelChunks) {
         if (request.signal.aborted) { closeAccount(); return fail() }
-        const service = createCfService(rules, account, { evidence: cfRuntimeEvidence, dateContext, statistics, statisticsOptions, merges: sheetMerges })
+        const service = createCfService(rules, account, { evidence: cfRuntimeEvidence, dateContext, statistics, statisticsOptions, merges: sheetMerges, ...(evaluation ? { evaluation } : {}),
+          sheetName: sheet.name, ...(workbook ? { workbook } : {}) })
         let lease: CfLease<CfPrepared>
         try {
           lease = await service.prepareCf(
@@ -502,7 +518,8 @@ export async function prepareCfTextScope(
         disposed = true
         request.budget.release(bytes + hostBytes)
       }
-    }, () => source.stamp(stamp.sheetId).workbookValueGen === stamp.workbookValueGen && source.stamp(stamp.sheetId).structureGen === stamp.structureGen,
+    }, () => source.stamp(stamp.sheetId).workbookValueGen === stamp.workbookValueGen && source.stamp(stamp.sheetId).structureGen === stamp.structureGen
+      && (source.stamp(stamp.sheetId).dependencyGen ?? 0) === (stamp.dependencyGen ?? 0),
     undefined, request.hosts ? styleAt => frameBarHosts(request.hosts!, styleAt) : styleAt => residentBarHosts(sheet, (row, col, own) => styleAt(row, col, base?.styleAt(row, col, own) ?? own), admitHosts),
     request.hosts ? styleAt => frameBarHosts(request.hosts!, styleAt) : styleAt => residentBarHosts(sheet, (row, col, own) => styleAt(row, col, base?.styleAt(row, col, own) ?? own), admitHosts, { layoutContext: request.layoutContext }),
     createCfMemory({ limitBytes: CF_LIMITS.scratchBytes, context: budgetAllocationContext(request.budget) }), cfRowPtOfSheet(sheet), cfRowUniformOfSheet(sheet))
@@ -631,9 +648,17 @@ export async function prepareCfWireScope(
     /** Ruling S4-ROW-UNIFORM: each row's font uniformity (`cfRowUniformOfLayout` of the paged layout's
      * `nonUniformFontRows`); absent, every bottom-anchored icon frame withholds. */
     rowUniformOf?: (row: number) => boolean | undefined
+    /** Task 36 (fix round 1, #2): the receiver's live value generation of a sheet. Given, the scope paints only while
+     * every sheet its replies list (`CfReadResult.dependencies`) keeps the generation it was read at, whatever the cache
+     * has evicted since. */
+    identityOf?: (sheetId: string) => number | undefined
+    /** Fix round 2 (#4): holds the receiver's dependency registration for the scope's life (released on dispose), so a
+     * commit of a sheet it read still invalidates its host after the cache evicts the reply. Null refuses the scope. */
+    retainDependencies?: (dependencies: readonly { sheetId: string }[]) => (() => void) | null
   },
 ): Promise<EffectiveFormatScope | undefined> {
   if (!rects.length) return undefined
+  const dependencies = new Map<string, number>()
   const chunks = chunkRects(rects)
   let bytes = DESCRIPTOR_WORKSPACE_BYTES + rects.length * 128 + (options.base?.rects.length ?? 0) * 8
   const states = new Map<number, CopiedState>()
@@ -675,6 +700,11 @@ export async function prepareCfWireScope(
           return fail()
         }
         if (result.kind !== 'ready') throw refused(`CF wire preparation is ${result.kind}`)
+        for (const d of result.dependencies ?? []) {
+          // Two chunks read at different generations of one sheet are never published together.
+          if (dependencies.has(d.sheetId) && dependencies.get(d.sheetId) !== d.valueGen) throw refused('CF wire preparation crossed a dependency generation')
+          dependencies.set(d.sheetId, d.valueGen)
+        }
         if (first) {
           first = false
           gen = result.stamp.cfGen
@@ -713,12 +743,20 @@ export async function prepareCfWireScope(
     const colors = options.colors ?? {}
     const locale = options.locale ?? 'en-US'
     let disposed = false
+    const identityOf = options.identityOf
+    const deps = [...dependencies]
+    const releaseDependencies = deps.length > 0 && options.retainDependencies ? options.retainDependencies(deps.map(([sheetId]) => ({ sheetId }))) : undefined
+    if (releaseDependencies === null) throw refused('CF wire preparation could not register its dependencies')
+    const current = identityOf && deps.length > 0
+      ? () => (options.current?.() ?? true) && deps.every(([id, gen]) => identityOf(id) === gen)
+      : options.current
     const scope = assembleScope(gen, states, colors, locale, bytes, () => {
       if (!disposed) {
         disposed = true
+        releaseDependencies?.()
         options.budget.release(bytes)
       }
-    }, options.current, regions, options.hosts ? styleAt => frameBarHosts(options.hosts!, styleAt) : undefined,
+    }, current, regions, options.hosts ? styleAt => frameBarHosts(options.hosts!, styleAt) : undefined,
     options.hosts ? styleAt => frameBarHosts(options.hosts!, styleAt) : undefined,
     createCfMemory({ limitBytes: CF_LIMITS.scratchBytes, context: budgetAllocationContext(options.budget) }), options.rowPtOf, options.rowUniformOf)
     const paintLayer: import('../tableStyles/regionLayer').RegionStyleLayer = {

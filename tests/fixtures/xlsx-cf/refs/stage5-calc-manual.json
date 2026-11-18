@@ -1,0 +1,182 @@
+{
+  "excelVersion": "16.115",
+  "route": "copy-picture",
+  "appearance": "screen",
+  "scale": 1,
+  "pxPerPt": 1,
+  "width": 1429,
+  "height": 109,
+  "colWidthsPt": [
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84
+  ],
+  "rowHeightsPt": [
+    18,
+    18,
+    18,
+    18,
+    18,
+    18
+  ],
+  "geometrySource": "excel-measured",
+  "resavedByExcel": true,
+  "resaveSavedSha256": "f4e43145569b28867d5d8b6c6df1cb9b069e8b6db4ef32ff2c6110a374a9a80b",
+  "sheet": "Sheet1",
+  "range": "A1:Q6",
+  "hostTimeZone": "Asia/Taipei",
+  "savedSha256": "f4e43145569b28867d5d8b6c6df1cb9b069e8b6db4ef32ff2c6110a374a9a80b",
+  "pngSha256": "f7c94b41aac9cd2f15f99b3b9c7cd2cd9fc93d304b990b9f79d08f80e2a8adf0",
+  "capturedAt": "2026-11-17T16:12:49.932Z",
+  "excelTodaySerial": 46344,
+  "staleTodayCacheRefreshed": true,
+  "observedTodayBranch": "local",
+  "lockBefore": "unlocked",
+  "lockAfter": "unlocked",
+  "formulaObservations": {
+    "C2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "C3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "C4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "C5": {
+      "displayFormatFill": "FFFFC7CE",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B6": {
+      "displayFormatFill": "FFFFC7CE",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "H2": {
+      "displayFormatFill": "FFFFC7CE",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "H3": {
+      "displayFormatFill": "FFFFC7CE",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "H4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "H5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "L2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "L3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "L4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "L5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "K6": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Q2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Q3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Q4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Q5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    }
+  },
+  "formulaEvaluation": {
+    "formula:calc-manual-saved-values": {
+      "status": "discriminating",
+      "reason": "saved-values matches every designated cell; every required visual and empty cell is validated, and each rival is contradicted at >= 2 decisive cells of every replication group (Ruling S5-WITNESS)",
+      "matched": "saved-values",
+      "survivors": [
+        "saved-values"
+      ],
+      "observed": {
+        "manual-saved": {
+          "pre:C2": "FFFFC7CE",
+          "pre:C3": "none",
+          "pre:C4": "FFFFC7CE",
+          "pre:C5": "none"
+        },
+        "manual-after-calculate": {
+          "calc:C2": "none",
+          "calc:C3": "none",
+          "calc:C4": "none",
+          "calc:C5": "FFFFC7CE"
+        }
+      }
+    },
+    "formula:calc-manual-today": {
+      "status": "discriminating",
+      "reason": "cf-today-live matches every designated cell; every required visual and empty cell is validated, and each rival is contradicted at >= 2 decisive cells of every replication group (Ruling S5-WITNESS)",
+      "matched": "cf-today-live",
+      "survivors": [
+        "cf-today-live"
+      ],
+      "observed": {
+        "manual-today": {
+          "pre:H2": "FFFFC7CE",
+          "pre:H3": "FFFFC7CE",
+          "pre:H4": "none",
+          "pre:H5": "none"
+        }
+      }
+    }
+  }
+}

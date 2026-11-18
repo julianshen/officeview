@@ -1,0 +1,121 @@
+{
+  "excelVersion": "16.115",
+  "route": "copy-picture",
+  "appearance": "screen",
+  "scale": 1,
+  "pxPerPt": 1,
+  "width": 757,
+  "height": 109,
+  "colWidthsPt": [
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84
+  ],
+  "rowHeightsPt": [
+    18,
+    18,
+    18,
+    18,
+    18,
+    18
+  ],
+  "geometrySource": "excel-measured",
+  "resavedByExcel": true,
+  "resaveSavedSha256": "1b2c6a530510c798e843089f17da4c57f057c850ea5ef7ee1ae0b4b36f817e4a",
+  "sheet": "Sheet1",
+  "range": "A1:I6",
+  "hostTimeZone": "Asia/Taipei",
+  "savedSha256": "1b2c6a530510c798e843089f17da4c57f057c850ea5ef7ee1ae0b4b36f817e4a",
+  "pngSha256": "799d461ec64e9176bb7b123f83dcd2c75098688d91b1106a119600aecf1c3a3e",
+  "capturedAt": "2026-11-17T15:00:43.328Z",
+  "lockBefore": "unlocked",
+  "lockAfter": "unlocked",
+  "formulaObservations": {
+    "A3": {
+      "displayFormatFill": "FFFFC7CE",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "A4": {
+      "displayFormatFill": "FFFFC7CE",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B5": {
+      "displayFormatFill": "FFFFC7CE",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "C1": {
+      "displayFormatFill": "FFC6EFCE",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D1": {
+      "displayFormatFill": "FFC6EFCE",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B6": {
+      "displayFormatFill": "FFC6EFCE",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "G5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "H1": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "I1": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "G6": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    }
+  },
+  "formulaEvaluation": {
+    "formula:relative-wrap": {
+      "status": "discriminating",
+      "reason": "wrap matches every designated cell; every required visual and empty cell is validated, and each rival is contradicted at >= 2 decisive cells of every replication group (Ruling S5-WITNESS)",
+      "matched": "wrap",
+      "survivors": [
+        "wrap"
+      ],
+      "observed": {
+        "wrap-rows": {
+          "A3": "FFFFC7CE",
+          "A4": "FFFFC7CE"
+        },
+        "wrap-cols": {
+          "C1": "FFC6EFCE",
+          "D1": "FFC6EFCE"
+        }
+      }
+    }
+  }
+}

@@ -6,8 +6,8 @@
  * Mounted tests drive the real component path (real budgets, real scopes,
  * blank cells, StrictMode, sheet switches).
  */
-import { describe, expect, it } from 'vitest'
-import { render } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render } from '@testing-library/react'
 import React from 'react'
 import { GridSemantics } from '../src/components/xlsx/GridSemantics'
 import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
@@ -510,9 +510,194 @@ describe('format budget refusal releases descriptor workspace', () => {
 })
 
 describe('regression bot P2: clockGen in cfTextKey', () => {
-  it('includes clockGen in the display text scope key', () => {
+  it('includes clockGen (and, PR #81 bot P2, the dependency generation) in the display text scope key', () => {
     const fs = require('node:fs')
     const src = fs.readFileSync('src/components/xlsx/InteractiveSheetDoc.tsx', 'utf8')
-    expect(src).toMatch(/cfTextKeyFor\(\{[^}]*rects: cfTextRects \}\), remote\?\.merges\(activeSheetId\)\.gen \?\? -1, clockGen\]/)
+    expect(src).toMatch(/cfTextKeyFor\(\{[^}]*rects: cfTextRects \}\), remote\?\.merges\(activeSheetId\)\.gen \?\? -1, tickGen, cfDepGen \?\? null\]/)
   })
+})
+
+describe('the midnight tick re-prepares only sheets that read the clock (S5-M, Ruling M2)', () => {
+  /** One mounted resident sheet (parsed, so the parse's `clockFree` fact is real) under a clock 10 s before local midnight;
+   * resolves with how many CF paint preparations the tick caused. */
+  async function preparationsAcrossMidnight(doc: XlsxDocument): Promise<{ before: number; after: number }> {
+    const { createObjectWorkbookSource } = await import('../src/xlsx/view/source')
+    const paint = await import('../src/xlsx/cf/render')
+    const { SheetTileRenderer } = await import('../src/components/xlsx/sheetTiles')
+    const source = createObjectWorkbookSource(doc, `tick-${Math.random()}`)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'], now: new Date(2026, 5, 10, 23, 59, 50) })
+    const actual = paint.prepareCfPaint
+    let calls = 0
+    const spy = vi.spyOn(paint, 'prepareCfPaint').mockImplementation(async (s, options) => { calls++; return actual(s, options) })
+    const presented = vi.spyOn(SheetTileRenderer.prototype, 'present')
+    const ui = render(<InteractiveSheetDoc doc={doc} source={source} />)
+    try {
+      await vi.waitFor(() => expect(presented).toHaveBeenCalled())
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+      const before = calls
+      await act(async () => { await vi.advanceTimersByTimeAsync(15_000) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+      return { before, after: calls }
+    } finally { ui.unmount(); spy.mockRestore(); presented.mockRestore(); vi.useRealTimers() }
+  }
+
+  it('a TODAY() or timePeriod rule sheet is prepared again once at the tick; a sheet with no clock-dependent rule is not', async () => {
+    const { load, withPaint, workbookBytes, cfBlock, exprRule, cellIsRule } = await import('./helpers/cf-views')
+    const cells = { A1: 1, A2: 2, A3: 3 }
+    // Parsed under evidence, the TODAY() expression compiles and reports that it reads the clock; a timePeriod rule always does.
+    const today = await withPaint(() => load(workbookBytes(cells, cfBlock('A1:A3', exprRule('$A1=TODAY()', 1, 0))), 'cached'))
+    const period = await load(workbookBytes(cells, cfBlock('A1:A3', '<cfRule type="timePeriod" timePeriod="today" priority="1" dxfId="1"><formula>FLOOR(A1,1)=TODAY()</formula></cfRule>')), 'cached')
+    const plain = await load(workbookBytes(cells, cfBlock('A1:A3', cellIsRule('greaterThan', '1', 1, 0))), 'cached')
+    expect(today.sheet.conditionalFormatting?.clockFree).toBeUndefined()
+    expect(period.sheet.conditionalFormatting?.clockFree).toBeUndefined()
+    expect(plain.sheet.conditionalFormatting?.clockFree).toBe(true)
+    for (const [name, l] of [['TODAY()', today], ['timePeriod', period]] as const) {
+      const r = await preparationsAcrossMidnight(l.doc)
+      expect(r.after, `${name} sheet re-prepares at the tick`).toBeGreaterThan(r.before)
+    }
+    const free = await preparationsAcrossMidnight(plain.doc)
+    expect(free.before).toBeGreaterThan(0)
+    expect(free.after, 'a clock-free sheet sees no tick: zero preparations').toBe(free.before)
+  })
+})
+
+describe('a formula rule announces what its Stage 1 twin announces and adds no tab stop (S5-Q, Lesson 10)', () => {
+  it('the accessible name and the focus order are the twin\'s, with no formula text', async () => {
+    const { load, withPaint, workbookBytes, cfBlock, exprRule, cellIsRule, textLeg, frameHosts } = await import('./helpers/cf-views')
+    const bytes = workbookBytes({ A2: 1, A3: 2, C2: 1, C3: 2, E2: 1, E3: 2 }, cfBlock('C2:C3', exprRule('$A2&gt;1', 1, 0)) + cfBlock('E2:E3', cellIsRule('greaterThan', '1', 2, 0)))
+    await withPaint(async () => {
+      const l = await load(bytes, 'cached')
+      const legs = await textLeg(l, ['C3', 'E3'], { hosts: frameHosts() })
+      const formula = legs.get('C3')!.desc!, twin = legs.get('E3')!.desc!
+      expect(formula).toBe(twin)
+      const text = formula.split('|')[1]!
+      expect(text).toBe('Conditional formatting applied: fill')
+      expect(text).not.toMatch(/[=$]|[A-Z]\d|\(/)
+      const tabbableOf = (name: string): string[] => {
+        const ui = render(<GridSemantics {...gridFixture({ cellPresentation: () => ({ text: withCfDescription('2', name) }) })} />)
+        try { return [...ui.container.querySelectorAll('[tabindex]')].filter(node => node.getAttribute('tabindex') !== '-1').map(node => node.getAttribute('role') ?? '') } finally { ui.unmount() }
+      }
+      expect(tabbableOf(text)).toEqual(['grid'])
+      expect(tabbableOf(text)).toEqual(tabbableOf(undefined as unknown as string))
+    })
+  })
+})
+
+describe('the mounted viewer forwards the context: accessible names and copy (fix round 1 #5)', () => {
+  const NOW = Date.UTC(2026, 10, 16, 12), SERIAL = Math.floor(NOW / 86_400_000) + 25569
+  type Helpers = typeof import('./helpers/cf-views')
+  /** Mounts `doc` (resident store), waits until the cell's accessible name carries a CF state, returns it and the copy text of `copyAt`. */
+  async function mounted(doc: XlsxDocument, ref: string, options: { copyAt?: string } = {}): Promise<{ name: string; copied?: string }> {
+    const { createObjectWorkbookSource } = await import('../src/xlsx/view/source')
+    const source = createObjectWorkbookSource(doc, `mounted-${Math.random()}`)
+    let copied: string | undefined
+    const writeText = vi.fn(async (text: string) => { copied = text })
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    const ui = render(<InteractiveSheetDoc doc={doc} source={source} />)
+    try {
+      const cell = () => ui.queryAllByRole('gridcell', { name: new RegExp(`^${ref}, value `) })[0] ?? null
+      await vi.waitFor(() => expect(cell()?.getAttribute('aria-label') ?? cell()?.textContent ?? '').toMatch(/Conditional formatting|value \S/), { timeout: 20_000 })
+      // CF preparation is asynchronous: settle on the first name that carries a CF state, or after a bounded wait.
+      await vi.waitFor(() => expect(cell()?.textContent ?? '').toMatch(/Conditional formatting/), { timeout: 6000 }).catch(() => undefined)
+      const name = cell()?.getAttribute('aria-label') ?? cell()?.textContent ?? ''
+      if (options.copyAt) {
+        fireEvent.change(ui.getByRole('textbox', { name: 'Go To cell' }), { target: { value: options.copyAt } })
+        fireEvent.click(ui.getByRole('button', { name: 'Go To' }))
+        fireEvent.click(ui.getByRole('button', { name: 'Copy selection' }))
+        await vi.waitFor(() => expect(writeText).toHaveBeenCalled(), { timeout: 10_000 })
+      }
+      return { name, ...(copied !== undefined ? { copied } : {}) }
+    } finally { ui.unmount(); Reflect.deleteProperty(navigator, 'clipboard') }
+  }
+  const APPLIED = /Conditional formatting applied/, UNAVAILABLE = /unavailable/i
+  const policyDoc = async (h: Helpers, policy: 'cached' | 'engine') => (await h.load(h.workbookBytes(
+    { A2: 1, A3: 2, A4: 3, C2: 1, C3: 2, C4: 3, B2: { f: 'A2*2' }, B3: { f: 'A3*2' }, B4: { f: 'A4*2' } }, h.cfBlock('C2:C4', h.exprRule('$B2&gt;3', 1, 2))), policy)).doc
+
+  it('policy: an uncached footprint is announced and copied formatted under the engine policy, and withheld (base text) under the cached one', async () => {
+    const h = await import('./helpers/cf-views')
+    await h.withPaint(async () => {
+      const engine = await mounted(await policyDoc(h, 'engine'), 'C4', { copyAt: 'C4' })
+      expect(engine.name).toMatch(APPLIED); expect(engine.copied).toBe('3.00')
+      const cached = await mounted(await policyDoc(h, 'cached'), 'C4', { copyAt: 'C4' })
+      // The batch that reads an uncached formula value fails closed whole: base text, nothing applied.
+      expect(cached.name).not.toMatch(APPLIED); expect(cached.copied).toBe('3')
+    })
+  }, 90_000)
+
+  it('clock: TODAY() is announced for the day the consumer samples and not for the next', async () => {
+    const h = await import('./helpers/cf-views')
+    await h.withPaint(async () => {
+      const bytes = h.workbookBytes({ ...Object.fromEntries([-1, 0, 1].map((d, i) => [`A${i + 2}`, SERIAL + d])), C2: 0, C3: 0, C4: 0 }, h.cfBlock('C2:C4', h.exprRule('$A2=TODAY()', 1, 0)))
+      const doc = (await h.load(bytes, 'cached')).doc
+      vi.useFakeTimers({ toFake: ['Date'], now: NOW })
+      try {
+        expect((await mounted(doc, 'C3')).name, 'today').toMatch(APPLIED)
+        expect((await mounted(doc, 'C2')).name, 'yesterday is not today').not.toMatch(APPLIED)
+        vi.setSystemTime(NOW + 86_400_000)
+        expect((await mounted(doc, 'C3')).name, 'a day later').not.toMatch(APPLIED)
+        expect((await mounted(doc, 'C4')).name, 'tomorrow is today a day later').toMatch(APPLIED)
+      } finally { vi.useRealTimers() }
+    }, (await import('./helpers/cf-views')).REGISTERED.filter(id => !id.startsWith('formula:calc-manual-')))
+  }, 120_000)
+
+  it('manual calculation: the saved values are announced with the capability, and the rule is withheld without it', async () => {
+    const h = await import('./helpers/cf-views')
+    await h.withPaint(async () => {
+      const doc = (await h.load(h.inputBytes('stage5-calc-manual'), 'cached')).doc
+      expect((await mounted(doc, 'C2')).name).toMatch(APPLIED)
+      expect((await mounted(doc, 'C3')).name).not.toMatch(APPLIED)
+    })
+    await h.withPaint(async () => {
+      const doc = (await h.load(h.inputBytes('stage5-calc-manual'), 'cached')).doc
+      expect((await mounted(doc, 'C2')).name).toMatch(UNAVAILABLE)
+    }, h.REGISTERED.filter(id => !id.startsWith('formula:calc-manual-')))
+  }, 90_000)
+
+  it('scrolled (viewport) paint: a whole-column formula rule evaluates under the document policy and workbook the viewer holds', async () => {
+    const h = await import('./helpers/cf-views')
+    const { createObjectWorkbookSource } = await import('../src/xlsx/view/source')
+    const { SheetTileRenderer } = await import('../src/components/xlsx/sheetTiles')
+    await h.withPaint(async () => {
+      // `C:C` is open-ended, so the interactive viewer prepares it per viewport (cfNeedsViewport), not through the asset lease.
+      const l = await h.load(h.workbookBytes({ A2: 1, A3: 2, A4: 3, C2: 1, C3: 2, C4: 3, B2: { f: 'A2*2' }, B3: { f: 'A3*2' }, B4: { f: 'A4*2' }, ...Object.fromEntries(Array.from({ length: 300 }, (_, i) => [`B${i + 5}`, 5])) }, h.cfBlock('C:C', h.exprRule('$B1&gt;3', 1, 0))), 'engine')
+      const frames: import('../src/components/xlsx/sheetTiles').SheetFrame[] = []
+      const present = SheetTileRenderer.prototype.present
+      const spy = vi.spyOn(SheetTileRenderer.prototype, 'present').mockImplementation(function (this: InstanceType<typeof SheetTileRenderer>, ctx, frame) { frames.push(frame); return present.call(this, ctx, frame) })
+      const paint = await import('../src/xlsx/cf/render')
+      const calls: Array<Parameters<typeof paint.prepareCfPaint>[1]> = [], viewportBatches: Array<Awaited<ReturnType<typeof paint.prepareCfPaint>>> = []
+      const actual = paint.prepareCfPaint
+      const paintSpy = vi.spyOn(paint, 'prepareCfPaint').mockImplementation(async (sheet, options) => { calls.push(options); const out = await actual(sheet, options); if (options?.viewport) viewportBatches.push(out); return out })
+      const ui = render(<InteractiveSheetDoc doc={l.doc} source={createObjectWorkbookSource(l.doc, `viewport-${Math.random()}`)} />)
+      try {
+        await vi.waitFor(() => expect(calls.length).toBeGreaterThan(0), { timeout: 20_000 })
+        expect(calls.some(c => c?.viewport), 'the scrolled path is the one taken').toBe(true)
+        // The batch the viewport path itself prepared (not the asset lease's) evaluates the formula: C4 (B4 = 6 > 3) paints, C2 does not.
+        await vi.waitFor(() => expect(viewportBatches.length).toBeGreaterThan(0), { timeout: 20_000 })
+        expect(viewportBatches[0]?.layer.styleAt(3, 2, undefined)?.fillColor).toBeDefined()
+        expect(viewportBatches[0]?.layer.styleAt(1, 2, undefined)?.fillColor).toBeUndefined()
+        // A scroll prepares the next viewport through the component's own effect (the first batch came from the asset lease): its
+        // batch must evaluate the formula under the same context.
+        const before = viewportBatches.length
+        await act(async () => { const scroller = ui.getByTestId('officeview-sheet-scroller'); scroller.scrollTop = 2000; fireEvent.scroll(scroller); await new Promise(r => setTimeout(r, 300)) })
+        await vi.waitFor(() => expect(viewportBatches.length).toBeGreaterThan(before), { timeout: 20_000 })
+        // B holds 5 in every far row, so the rule is true down the scrolled region: the batch the scroll prepared paints some of it.
+        const scrolled = viewportBatches.at(-1)
+        expect(Array.from({ length: 150 }, (_, i) => scrolled?.layer.styleAt(40 + i, 2, undefined)?.fillColor).some(c => c !== undefined)).toBe(true)
+        await vi.waitFor(() => expect(frames.some(f => f.assets?.conditionalFormatting?.layer.styleAt(3, 2, undefined)?.fillColor)).toBe(true), { timeout: 20_000 })
+        expect(frames.some(f => f.assets?.conditionalFormatting?.layer.styleAt(1, 2, undefined)?.fillColor), 'C2 (B2 = 2, not > 3) never paints').toBe(false)
+      } finally { ui.unmount(); spy.mockRestore(); paintSpy.mockRestore() }
+    })
+  }, 60_000)
+
+  it('cross-sheet: the other sheet is read through the workbook the viewer holds, and withheld when it is absent', async () => {
+    const h = await import('./helpers/cf-views')
+    await h.withPaint(async () => {
+      const l = await h.load(h.fixtureBytes('stage5-cross-sheet'), 'cached', 'Sheet1')
+      const names = await Promise.all(['B2', 'B3', 'B4', 'B5'].map(async ref => (await mounted(l.doc, ref)).name))
+      expect(names.some(n => APPLIED.test(n)), 'the cross-sheet rule paints from Sheet2').toBe(true)
+      const alone = { ...l.doc, sheets: [l.sheet] } as XlsxDocument
+      const lonely = await Promise.all(['B2', 'B3', 'B4', 'B5'].map(async ref => (await mounted(alone, ref)).name))
+      expect(lonely.some(n => APPLIED.test(n))).toBe(false)
+    })
+  }, 120_000)
 })

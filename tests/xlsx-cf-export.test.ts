@@ -112,3 +112,22 @@ it('PNG encoder retains the prepared CF icons (injected stubs); with no glyph ta
   const withheld = await withIcons(() => sample(iconSheet([10, 50, 90])), { glyphs: () => undefined })
   for (const px of withheld) expect(px).toEqual([255, 255, 255, 255])
 })
+
+it('Stage 5: the PNG encoder retains a formula rule\'s prepared fill and carries nothing without evidence', async () => {
+  const { load, withPaint, workbookBytes, cfBlock, exprRule } = await import('./helpers/cf-views')
+  const bytes = workbookBytes({}, cfBlock('B2', exprRule('ISBLANK(B2)', 1, 1)))
+  const render = async (): Promise<number[]> => {
+    const pages = await getPaintables((await load(bytes, 'cached')).doc)
+    try {
+      const c = createCanvas(pages[0].spec.widthPx, pages[0].spec.heightPx)
+      pages[0].paint(c.getContext('2d') as unknown as CanvasRenderingContext2D)
+      const decoded = await loadImage(c.toBuffer('image/png')), copy = createCanvas(decoded.width, decoded.height)
+      copy.getContext('2d').drawImage(decoded, 0, 0)
+      return [...copy.getContext('2d').getImageData(70, 25, 1, 1).data]
+    } finally { pages.dispose() }
+  }
+  expect(await withPaint(render)).toEqual([0xc6, 0xef, 0xce, 255])
+  // Task 39: "without evidence" is production before --publish-stage5 (Stage 1-4 evidence only).
+  const { withoutStage5Evidence } = await import('./helpers/cf-stage5-off')
+  expect(await withoutStage5Evidence(render)).not.toEqual([0xc6, 0xef, 0xce, 255])
+})

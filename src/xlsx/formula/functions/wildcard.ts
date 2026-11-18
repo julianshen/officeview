@@ -25,7 +25,8 @@ import {
 } from './wildcard-contracts'
 
 const DEFAULT_MAX_PATTERN_LENGTH = 8192
-const DEFAULT_MAX_DP_CELLS = 4_000_000
+/** The matcher's DP-cell policy (checked before allocation). Exported so CF hoisting (Ruling S5-HOIST) mirrors it. */
+export const DEFAULT_MAX_DP_CELLS = 4_000_000
 
 type Tok =
   | { t: 'lit'; ch: string } // literal (case-folded at compare time)

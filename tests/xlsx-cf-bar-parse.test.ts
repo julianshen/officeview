@@ -539,3 +539,27 @@ describe('Ruling S3-LEN-X14: the parsed bar records its pairing form (Task 22b p
     })
   })
 })
+
+describe('Stage 5 formula bounds and activation (Task 37)', () => {
+  const FX = ['formula:dialect-base', 'formula:dialect-x14', 'formula:anchor-single', 'formula:anchor-mixed-abs', 'formula:cfvo-reference', 'bar:bounds-formula', 'formula:active-present-bar']
+  const G = '{00000000-0000-4000-8000-0000000000B1}'
+  const paired = baseBar('B2:B6', 1, '<cfvo type="formula" val="$F$1"/><cfvo type="formula" val="$F$2"/>' + BLUE, G)
+    + x14Block(companion('B2:B6', G, ' minLength="0" maxLength="100" gradient="0"', '<x14:cfvo type="formula"><xm:f>$F$1</xm:f></x14:cfvo><x14:cfvo type="formula"><xm:f>$F$2</xm:f></x14:cfvo>'))
+  it('a paired bar compiles its effective (x14) formula bounds only, identically on both paths', async () => {
+    const def = withExactCfEvidence([...BAR_PARSE_CAPS, ...FX], () => bar(only(parse(paired).value.rules).definition))
+    expect(def.bounds.map(b => b.type === 'formula' ? b.cfvo : b.type)).toEqual(['formula', 'formula'])
+    const streamed = await withExactCfEvidence([...BAR_PARSE_CAPS, ...FX], () => stream(paired))
+    expect(streamed.value.rules.map(r => r.definition)).toEqual([def])
+  })
+  it('without bar:bounds-formula or the formula dialect, main\'s cf-unsupported-rule', () => {
+    // A paired bar is a base rule: its companion's cfvo compile under the base dialect.
+    for (const missing of ['bar:bounds-formula', 'formula:dialect-base']) {
+      const def = withExactCfEvidence([...BAR_PARSE_CAPS, ...FX].filter(c => c !== missing), () => only(parse(paired).value.rules).definition)
+      expect(def, missing).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+    }
+  })
+  it('a paired companion\'s activePresent stays cf-unsupported-rule even with the activation capability', () => {
+    const xml = baseBar('B2:B6', 1, MINMAX + BLUE, G) + x14Block(companion('B2:B6', G, ' minLength="0" maxLength="100" gradient="0"', '<x14:cfvo type="min"/><x14:cfvo type="max"/>', ' activePresent="1"'))
+    expect(withExactCfEvidence([...BAR_PARSE_CAPS, ...FX], () => only(parse(xml).value.rules).definition)).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+  })
+})

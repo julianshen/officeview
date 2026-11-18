@@ -323,6 +323,9 @@ export interface CfReadOptions {
   readonly envelopeBytes?: number
   readonly retainOutgoing?: (release: () => void) => void
   readonly dateContext?: import('../cf/predicates').CfDateContext
+  /** The clock of this preparation (default: the wall clock), sampled once and shared by the predicates, the formulas and the
+   * stamp (Ruling S5-M). A test seam; the viewer never passes it. */
+  readonly now?: () => number
 }
 /** Absolute transient bytes of one drawing read; false when they cannot be admitted. */
 export interface DrawingMemory { set(bytes: number): boolean }
@@ -435,6 +438,13 @@ export interface CfReadResult {
   readonly pendingSheetIds?: readonly string[]
   /** Exact estimate when the receiver grant was too small; retry with at least this. */
   readonly requiredBytes?: number
+  /** Task 36 (Ruling S5-K): the other sheets these states were read from, each with the value generation read (at most
+   * 16, priced by the payload measurer with the rest of the reply). The receiver's entry is current only while each
+   * listed sheet keeps that `valueGen`. Absent when no rule names another sheet. */
+  readonly dependencies?: readonly Readonly<{ sheetId: string; valueGen: number }>[]
+  /** Ruling S5-M: the parse's fact that this sheet's rules never read the clock (S5-R: one bounded boolean on a ready reply, 15 B
+   * when present and none otherwise; the main thread reads no rule data). Absent means "may read it": the midnight tick applies. */
+  readonly clockFree?: true
 }
 /** Reply envelope accounted on top of every CF read reply: the kernel-added
  * command/owner/request/stamp framing around the payload (a 1,042 B empty

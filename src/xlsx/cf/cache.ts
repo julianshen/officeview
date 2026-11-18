@@ -5,6 +5,7 @@ import type { CfLease, CfPrepared, CfStamp } from './model'
 export function sameCfStamp(a: CfStamp, b: CfStamp): boolean {
   return a.owner === b.owner && a.sheetId === b.sheetId && a.workbookValueGen === b.workbookValueGen && a.cfGen === b.cfGen
     && a.viewGen === b.viewGen && a.structureGen === b.structureGen && a.clockGen === b.clockGen
+    && (a.dependencyGen ?? 0) === (b.dependencyGen ?? 0)
 }
 const cancelled = () => new PackageError('cancelled', 'CF preparation is no longer current')
 const quota = () => new PackageError('resource-limit', 'CF preparation admission refused')
@@ -41,7 +42,8 @@ export function createCfCache(memory: CfMemory, maxEntries = 16) {
     entry.refs++
     let released = false
     const release = () => { if (!released) { released = true; hold.release(); drop(entry) } }
-    const value: CfPrepared = Object.freeze({ stamp: entry.stamp,
+    const pending = entry.lease.value.pendingSheetIds
+    const value: CfPrepared = Object.freeze({ stamp: entry.stamp, ...(pending ? { pendingSheetIds: pending } : {}),
       at: (row: number, col: number) => released || !isCurrent(entry.stamp)
         ? { kind: 'unresolved' as const, reason: 'cf-stale-generation' } : entry.lease.value.at(row, col), dispose: release })
     return { value, bytes: entry.lease.bytes, release,
@@ -54,7 +56,10 @@ export function createCfCache(memory: CfMemory, maxEntries = 16) {
     if (key.length > 65536) return Promise.reject(quota())
     const waiterHold = memory.reserve(256)
     if (waiterHold.kind !== 'reserved') return Promise.reject(quota())
-    const cached = ready.get(key)
+    let cached = ready.get(key)
+    // A preparation pending on a referenced sheet (Task 36, fix round 1 #5) is never reused: that sheet's completion
+    // moves no generation, so a cache hit would stay pending forever. It is re-prepared on the next request.
+    if (cached?.lease.value.pendingSheetIds?.length) { ready.delete(key); drop(cached); cached = undefined }
     if (cached) { ready.delete(key); ready.set(key, cached); return Promise.resolve(borrow(cached, waiterHold)) }
     let job = jobs.get(key), start = false
     if (job && job.controller.signal.aborted) { jobs.delete(key); job = undefined }

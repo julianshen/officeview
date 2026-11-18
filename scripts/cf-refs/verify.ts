@@ -8,7 +8,7 @@ import { resolve } from 'node:path'
 import { inflateRawSync, inflateSync } from 'node:zlib'
 import { parseXml } from '../../src/core/xml'
 import { columnWidthPx, maxDigitWidthPx } from '../../src/xlsx/columnWidth'
-import { CF_STAGE3_NONDISCRIMINATING, CF_STAGE3_UNSUPPORTED, CF_STAGE4_CAPABILITIES, CF_STAGE4_NONDISCRIMINATING, CF_STAGE4_UNSUPPORTED, barCapabilityKind, iconCapabilityKind } from './cases'
+import { CF_STAGE3_NONDISCRIMINATING, CF_STAGE3_UNSUPPORTED, CF_STAGE4_CAPABILITIES, CF_STAGE4_NONDISCRIMINATING, CF_STAGE4_UNSUPPORTED, CF_STAGE5_CAPABILITIES, CF_STAGE5_CASES, CF_STAGE5_NONDISCRIMINATING, CF_STAGE5_UNSUPPORTED, barCapabilityKind, iconCapabilityKind } from './cases'
 import type {
   CfDxfExpectation,
   CfManifest,
@@ -16,6 +16,7 @@ import type {
   CfPartMarker,
   CfRefusalCode,
   Refusal,
+  S5Configuration,
   VerifiedEvidence,
 } from './cases'
 
@@ -60,6 +61,7 @@ const textOf = (node: unknown): string | undefined => {
 }
 
 const normalizeSqref = (s: string | undefined): string => (s ?? '').trim().replace(/\s+/g, ' ').toUpperCase()
+const normalizeSqrefRaw = normalizeSqref
 
 /**
  * Deliberate formula operand normalization:
@@ -67,6 +69,48 @@ const normalizeSqref = (s: string | undefined): string => (s ?? '').trim().repla
  * operand tokens, string literals, function names, and numeric thresholds (`"100"` !== `"1000"`).
  */
 export const normalizeFormulaOperand = (s: string): string => s.trim().replace(/^=/, '').trim()
+
+/**
+ * Stage 5 formula semantics for markers (Ruling S5-A): Excel's canonical spelling, not raw text. Folds case, drops the
+ * leading `=`, removes whitespace next to an operator, parenthesis or separator (a space between two references, the
+ * intersection operator, is kept as one space) and removes sheet quotes that the name does not need. String literals are
+ * kept byte for byte; `$`, operators and operand order are never folded.
+ */
+export function normalizeCfFormula(formula: string): string {
+  const src = formula.trim().replace(/^=/, '')
+  const out: string[] = []
+  let i = 0
+  while (i < src.length) {
+    const ch = src[i]!
+    if (ch === '"') {
+      let j = i + 1
+      while (j < src.length && !(src[j] === '"' && src[j + 1] !== '"')) j += src[j] === '"' ? 2 : 1
+      out.push(src.slice(i, j + 1))
+      i = j + 1
+      continue
+    }
+    if (ch === "'") {
+      let j = i + 1
+      while (j < src.length && !(src[j] === "'" && src[j + 1] !== "'")) j += src[j] === "'" ? 2 : 1
+      const name = src.slice(i + 1, j).replace(/''/g, "'")
+      const plain = /^[A-Za-z_][A-Za-z0-9_.]*$/.test(name) && !/^[A-Za-z]{1,3}\d+$/.test(name) && !/^R\d*C\d*$/i.test(name)
+      out.push(plain ? name.toUpperCase() : `'${name.replace(/'/g, "''").toUpperCase()}'`)
+      i = j + 1
+      continue
+    }
+    if (/\s/.test(ch)) {
+      if (out.length > 0 && out[out.length - 1] !== ' ') out.push(' ')
+      i++
+      continue
+    }
+    out.push(ch.toUpperCase())
+    i++
+  }
+  const SEP = new Set(['+', '-', '*', '/', '^', '&', '=', '<', '>', '(', ')', ',', ';', ':', '%', '{', '}', '!'])
+  return out
+    .filter((tok, k) => tok !== ' ' || (k > 0 && k < out.length - 1 && !SEP.has(out[k - 1]!.slice(-1)) && !SEP.has(out[k + 1]![0]!)))
+    .join('')
+}
 
 /** Synchronous ZIP reader that extracts all stored/deflated entries from an `.xlsx` buffer. */
 export function readZipPartsSync(zipBytes: Uint8Array): Map<string, Uint8Array> | null {
@@ -356,14 +400,22 @@ function ruleMatchesAttributes(rule: XmlNode, marker: CfPartMarker): boolean {
 
   // Exact ordered operand list check (pins arity, operand values, and absence when formulas === [])
   // Per Ruling R1b: timePeriod matches on type/timePeriod/sqref/priority/dxf, not the formula string
-  if (marker.ruleType !== 'timePeriod') {
+  if (marker.ruleType !== 'timePeriod' || marker.formula !== undefined) {
     const actualFormulas = extractOrderedFormulas(rule, marker.extension)
     const expectedFormulas = marker.formulas.map(normalizeFormulaOperand)
     if (actualFormulas.length !== expectedFormulas.length) return false
+    // Stage 5 markers compare formula semantics (Excel's canonical spelling); Stages 1-4 keep the exact operand text.
+    const same = marker.formula !== undefined ? (a: string, b: string): boolean => normalizeCfFormula(a) === normalizeCfFormula(b) : (a: string, b: string): boolean => a === b
     for (let i = 0; i < expectedFormulas.length; i++) {
-      if (actualFormulas[i] !== expectedFormulas[i]) return false
+      if (!same(actualFormulas[i]!, expectedFormulas[i]!)) return false
     }
   }
+  if (marker.formula !== undefined && marker.formula.dialect !== (marker.extension === 'x14' ? 'x14' : 'base')) return false
+  if (marker.activePresent !== undefined) {
+    const ap = attr(rule, 'activePresent')
+    if ((ap === '1' || ap === 'true') !== marker.activePresent) return false
+  }
+  if (marker.scale?.dialect !== undefined && marker.scale.dialect !== (marker.extension === 'x14' ? 'x14' : 'base')) return false
 
   // Exact ordered cfvo and color scale sequence
   if (marker.scale !== undefined) {
@@ -380,7 +432,11 @@ function ruleMatchesAttributes(rule: XmlNode, marker: CfPartMarker): boolean {
       const actualType = attr(actual, 'type') ?? ''
       if (actualType !== exp.type) return false
       const actualVal = attr(actual, 'val')
-      if (exp.val !== undefined) {
+      if (exp.f !== undefined) {
+        // Stage 5: a formula bound, base `@val` or x14 `<xm:f>`, by formula semantics.
+        const actualF = actualVal ?? textOf(actual.f) ?? textOf(actual['xm:f'])
+        if (actualF === undefined || normalizeCfFormula(actualF) !== normalizeCfFormula(exp.f)) return false
+      } else if (exp.val !== undefined) {
         if (actualVal !== exp.val) {
           // Excel drops val on min and max when canonicalizing (e.g. min val="0")
           if (!((exp.type === 'min' || exp.type === 'max') && actualVal === undefined)) {
@@ -457,8 +513,8 @@ function iconRuleMatches(rule: XmlNode, marker: CfPartMarker): boolean {
     const exp = spec.cfvo[i]!
     const node = cfvoNodes[i]!
     if ((attr(node, 'type') ?? '') !== exp.type) return false
-    if (!sameBarBound(attr(node, 'val'), exp.val)) return false
-    if (!sameBarBound(textOf(node.f), exp.f)) return false
+    if (!sameBound(marker, attr(node, 'val'), exp.val)) return false
+    if (!sameBound(marker, textOf(node.f), exp.f)) return false
     if (normIconBool(attr(node, 'gte'), '1') !== (exp.gte === false ? '0' : '1')) return false
   }
   return true
@@ -522,6 +578,12 @@ function sameBarBound(actual: string | undefined, want: string | undefined): boo
   return a !== '' && w !== '' && Number.isFinite(na) && Number.isFinite(nw) && na === nw
 }
 
+/** A cfvo bound: Stage 5 formula markers compare formula semantics (`normalizeCfFormula`), Stages 3-4 the literal value. */
+function sameBound(marker: CfPartMarker, actual: string | undefined, want: string | undefined): boolean {
+  if (sameBarBound(actual, want)) return true
+  return marker.formula !== undefined && actual !== undefined && want !== undefined && normalizeCfFormula(actual) === normalizeCfFormula(want)
+}
+
 export function barColorMatches(node: XmlNode | undefined, expected: string): boolean {
   if (!node) return false
   if (expected.startsWith('theme:')) {
@@ -555,9 +617,9 @@ function barRuleMatches(rule: XmlNode, marker: CfPartMarker): boolean {
     const actualVal = attr(actual, 'val')
     if (exp.val !== undefined) {
       // Excel drops val on min and max when canonicalizing (e.g. min val="0")
-      if (!sameBarBound(actualVal, exp.val) && !((exp.type === 'min' || exp.type === 'max') && actualVal === undefined)) return false
+      if (!sameBound(marker, actualVal, exp.val) && !((exp.type === 'min' || exp.type === 'max') && actualVal === undefined)) return false
     } else if (actualVal !== undefined) return false
-    if (!sameBarBound(textOf(actual.f), exp.f)) return false
+    if (!sameBound(marker, textOf(actual.f), exp.f)) return false
   }
   const elements = BAR_COLOR_ELEMENT[marker.extension]
   for (const [key, want] of Object.entries(spec.colors)) {
@@ -651,6 +713,9 @@ function verifyBarPairing(root: XmlNode, rule: XmlNode, marker: CfPartMarker): s
 }
 
 function findMatchedRuleInRoot(root: XmlNode, marker: CfPartMarker): XmlNode | undefined {
+  // Stage 5: an unpinned multi-range order compares the ranges as a set (Excel may re-sort them on resave).
+  const order = (s: string): string => (marker.sqrefOrder === 'any' ? s.split(' ').sort().join(' ') : s)
+  const normalizeSqref = (s: string | undefined): string => order(normalizeSqrefRaw(s))
   const targetSqref = normalizeSqref(marker.sqref)
   const docRoot = asNode(root.worksheet) ?? asNode(root.workbook) ?? root
   if (marker.extension === 'x14') {
@@ -710,7 +775,7 @@ function hasStandaloneX14Bar(parts: Map<string, Uint8Array>, sqref: string): boo
   return false
 }
 
-function verifyMarkerInArchive(
+export function verifyMarkerInArchive(
   parts: Map<string, Uint8Array>,
   authoredMarker: CfPartMarker,
 ): { ok: true; canonicalised?: 'x14-as-legacy' } | { ok: false; code: CfRefusalCode; reason: string } {
@@ -5058,10 +5123,11 @@ export const ICON_GEOMETRY_RULES_VERSION = 3
  * per configuration (a configuration is one rule shape: one column of the case). Returns why the refs fall short, or
  * undefined when every configuration present has at least `min` of them.
  */
-export function replicationShortfall(refs: readonly string[], min = 2): string | undefined {
+export function replicationShortfall(refs: readonly string[], min = 2, keyOf?: (ref: string) => string): string | undefined {
   const byCol = new Map<string, number>()
   for (const ref of refs) {
-    const col = /^[A-Z]+/.exec(ref.toUpperCase())?.[0] ?? ref
+    // Stage 5: a configuration key (one rule shape spanning columns, such as A1:D1) groups its refs explicitly.
+    const col = keyOf ? keyOf(ref) : /^[A-Z]+/.exec(ref.toUpperCase())?.[0] ?? ref
     byCol.set(col, (byCol.get(col) ?? 0) + 1)
   }
   for (const [col, n] of byCol) if (n < min) return `S4-REPLICATE: configuration ${col} has ${n} decisive cell${n === 1 ? '' : 's'}, fewer than ${min}`
@@ -5540,6 +5606,523 @@ export function classifyIconCapture(c: CfOracleCase, evaluation: Readonly<Record
   return out
 }
 
+/* ---------------- Stage 5: semantic DisplayFormat route (Ruling S5-A, Task 31) ---------------- */
+
+/** What a capture observed, abstracted for the evaluator (synthetic sidecars in tests, the real sidecar and PNG here). */
+export interface FormulaObservation {
+  /** DisplayFormat at a ref (`pre:`/`calc:`/`post:` prefixes select the build-time or live-edit observations). */
+  fill(ref: string): { fill: string; strike: boolean } | undefined
+  /**
+   * Fix round 2: what a bar or icon cell shows, measured by the Stage 3/4 machinery (`S5Visual`); undefined when
+   * unmeasurable. Crop configurations compare these, never raw crops.
+   */
+  visual?(ref: string, kind: 'bar' | 'icon'): S5Visual | undefined
+}
+
+export interface FormulaCapabilityEvaluation {
+  status: 'discriminating' | 'non-discriminating' | 'none' | 'no-hypotheses' | 'refused'
+  reason: string
+  matched?: string
+  code?: CfRefusalCode
+  /** Hypotheses consistent with every live configuration. */
+  survivors?: string[]
+  /** Configuration id -> ref -> the observed token (record configurations included). */
+  observed?: Record<string, Record<string, string>>
+}
+
+const S5_REF_PREFIX = /^(pre|calc|post):/
+const s5PrefixOf = (ref: string): string => S5_REF_PREFIX.exec(ref)?.[0] ?? ''
+const s5Bare = (ref: string): string => ref.replace(S5_REF_PREFIX, '')
+const fillToken = (o: { fill: string; strike: boolean }): string => `${o.fill}${o.strike ? '+strike' : ''}`
+
+/**
+ * Ruling S5-A / Lesson 3: evaluates every capability of a case's configurations against what Excel showed. A capability
+ * verifies only when exactly one hypothesis matches every designated cell of every live configuration, each rival is
+ * eliminated by at least two decisive cells of one configuration (S4-REPLICATE, keyed by configuration), every
+ * designated cell and its control were observed, and every control shows no format. Record configurations are evaluated
+ * and kept, never evidence.
+ */
+/**
+ * Ruling S5-WITNESS: the one witness rule every configuration goes through, once the winner is the sole surviving
+ * reading. Each designated cell's role comes from the winner's prediction, fixed before capture (a literal token, or the
+ * twin's `twinExpect`):
+ * - required-visual: the cell must render a validated visual (a Stage 3 bar, a Stage 4 icon class, or a fill checked
+ *   against its unformatted control), else `formula-twin-missing`;
+ * - required-empty: the cell must be validated empty by the same measurement, else `formula-unexpected-visual`.
+ * A cell is decisive only when its observation matches the winner and contradicts, beyond tolerance, every rival whose
+ * prediction there differs from the winner's (fix round 6: a cell within tolerance of any of them decides nothing, so
+ * cells that each reject a different rival never add up); every replication group a configuration designs to separate a
+ * rival needs >= 2 decisive cells. A bar or icon configuration also needs >= 2 required-visual witnesses. Before any of
+ * this, every live configuration's positive controls (twins expected to render, literal `positiveControls`) are validated.
+ */
+function s5Witness(
+  evidence: readonly S5Configuration[],
+  winner: string,
+  ctx: {
+    cfgRefuse: (code: CfRefusalCode, reason: string, observed?: Record<string, Record<string, string>>) => FormulaCapabilityEvaluation
+    observed: Record<string, Record<string, string>>
+    matches: (cfg: S5Configuration, ref: string, token: string) => boolean | undefined
+    stateOf: (cfg: S5Configuration, ref: string) => 'visual' | 'empty' | undefined
+    kindOf: (cfg: S5Configuration) => 'bar' | 'icon'
+  },
+): FormulaCapabilityEvaluation | undefined {
+  const { cfgRefuse: refuse, observed, matches, stateOf } = ctx
+  const roleOf = (cfg: S5Configuration, token: string): 'visual' | 'empty' | 'either' => {
+    const t = /^twin:([A-Z]+\d+)/.exec(token)?.[1]
+    if (t) return cfg.twinExpect?.[t] ?? 'either'
+    return token === 'none' ? 'empty' : 'visual'
+  }
+  for (const cfg of evidence) {
+    const a = cfg.hypotheses[winner]
+    if (!a) continue
+    let witnesses = 0
+    for (const ref of cfg.refs) {
+      const role = roleOf(cfg, a[ref]!)
+      if (role === 'either') continue
+      const got = stateOf(cfg, ref)
+      if (got === undefined) return refuse('missing-capture', `${cfg.id}: ${ref} cannot be measured`, observed)
+      if (role === 'visual' && got !== 'visual') return refuse('formula-twin-missing', `${cfg.id}: ${winner} requires a visual at ${ref}, which renders none`, observed)
+      if (role === 'empty' && got !== 'empty') return refuse('formula-unexpected-visual', `${cfg.id}: ${winner} requires ${ref} to be empty, but it shows a visual`, observed)
+      if (role === 'visual') witnesses++
+    }
+    if (cfg.observable === 'crop' && witnesses < 2) return refuse('formula-twin-blank', `${cfg.id}: ${witnesses} validated non-empty ${ctx.kindOf(cfg)} witness${witnesses === 1 ? '' : 'es'} for ${winner}, fewer than 2 (S4-REPLICATE): empty cells alone prove nothing`, observed)
+    const keyOf = (ref: string): string => (cfg.replicateBy === 'column' ? /^[A-Z]+/.exec(s5Bare(ref))![0] : cfg.id)
+    // Fix round 6 (codex P1 #2): a cell is decisive only when it matches the winner and contradicts, beyond tolerance,
+    // every rival whose prediction there differs from the winner's (a rival predicting the winner's own token at a cell
+    // cannot be contradicted there by any rendering). The predicate is computed once per cell, then each rival the
+    // configuration separates needs >= 2 decisive cells in each replication group where it differs.
+    const rivals = Object.keys(cfg.hypotheses).filter(n => n !== winner)
+    const differing = (ref: string): string[] => rivals.filter(r => cfg.hypotheses[r]![ref] !== a[ref])
+    const decisive = new Set(cfg.refs.filter(ref => {
+      const d = differing(ref)
+      return d.length > 0 && matches(cfg, ref, a[ref]!) === true && d.every(r => matches(cfg, ref, cfg.hypotheses[r]![ref]!) === false)
+    }))
+    for (const rival of rivals) {
+      const designed = cfg.refs.filter(ref => differing(ref).includes(rival))
+      for (const key of new Set(designed.map(keyOf))) {
+        const n = designed.filter(ref => keyOf(ref) === key && decisive.has(ref)).length
+        if (n < 2) return refuse('formula-replication-shortfall', `S4-REPLICATE: configuration ${cfg.replicateBy === 'column' ? key : cfg.id} has ${n} decisive cell${n === 1 ? '' : 's'} against ${rival}, fewer than 2 (${winner}: a decisive cell contradicts every rival that differs there, beyond tolerance; a cell rejecting one rival while another matches it decides nothing)`, observed)
+      }
+    }
+  }
+  return undefined
+}
+
+export function evaluateFormulaCapabilities(
+  configs: readonly S5Configuration[],
+  controls: Readonly<Record<string, string>>,
+  obs: FormulaObservation,
+  options: { kindOf?: (cfg: S5Configuration) => 'bar' | 'icon' } = {},
+): Record<string, FormulaCapabilityEvaluation> {
+  const byCap = new Map<string, S5Configuration[]>()
+  for (const cfg of configs) byCap.set(cfg.capabilityId, [...(byCap.get(cfg.capabilityId) ?? []), cfg])
+  const out: Record<string, FormulaCapabilityEvaluation> = {}
+  for (const [cap, cfgs] of byCap) {
+    const refuse = (code: CfRefusalCode, reason: string, observed?: Record<string, Record<string, string>>): FormulaCapabilityEvaluation => ({ status: 'refused', code, reason, ...(observed ? { observed } : {}) })
+    const observed: Record<string, Record<string, string>> = {}
+    let failure: FormulaCapabilityEvaluation | undefined
+    const kindOf = (cfg: S5Configuration): 'bar' | 'icon' => options.kindOf?.(cfg) ?? 'bar'
+    const visual = (cfg: S5Configuration, ref: string): S5Visual | undefined => obs.visual?.(ref, kindOf(cfg))
+    // concrete(cfg, ref, token): what the token predicts, resolved through the twin's observation.
+    const concrete = (cfg: S5Configuration, ref: string, token: string): string | undefined => {
+      const m = /^twin:([A-Z]+\d+)(\+strike)?$/.exec(token)
+      if (cfg.observable === 'crop') return m ? m[1]! : undefined
+      if (!m) return token
+      const twin = obs.fill(`${s5PrefixOf(ref)}${m[1]!}`)
+      return twin ? `${twin.fill}${m[2] ?? ''}` : undefined
+    }
+    const matches = (cfg: S5Configuration, ref: string, token: string): boolean | undefined => {
+      const want = concrete(cfg, ref, token)
+      if (want === undefined) return undefined
+      if (cfg.observable === 'crop') {
+        // Fix round 3 #2: the visual and the cell's DisplayFormat fill/strike (a composition fill) both have to agree.
+        const a = visual(cfg, ref)
+        const b = visual(cfg, want)
+        const fa = obs.fill(`${s5PrefixOf(ref)}${s5Bare(ref)}`)
+        const fb = obs.fill(`${s5PrefixOf(ref)}${want}`)
+        return a && b && fa && fb ? sameS5Visual(a, b) && fillToken(fa) === fillToken(fb) : undefined
+      }
+      return observed[cfg.id]![ref] === want
+    }
+    for (const cfg of cfgs) {
+      observed[cfg.id] = {}
+      for (const ref of cfg.refs) {
+        const o = obs.fill(ref)
+        const ctrl = controls[s5Bare(ref)]
+        const co = ctrl !== undefined ? obs.fill(`${s5PrefixOf(ref)}${ctrl}`) : undefined
+        if (!o || !co) { failure ??= refuse('fill-unobserved', `${cfg.id}: ${o ? `control ${ctrl ?? '(none)'} of ${ref}` : ref} has no DisplayFormat observation`); continue }
+        if (cfg.observable === 'crop') {
+          const v = visual(cfg, ref)
+          observed[cfg.id]![ref] = `${v ? describeS5Visual(v) : 'unmeasurable'}|${fillToken(o)}`
+        } else observed[cfg.id]![ref] = fillToken(o)
+        if (co.fill !== 'none' || co.strike) failure ??= refuse('formula-control-formatted', `${cfg.id}: the same-content control ${ctrl} of ${ref} shows ${fillToken(co)}, so the format is not the rule's (Lesson 3)`)
+      }
+    }
+    if (failure) { out[cap] = { ...failure, observed }; continue }
+    // Ruling S5-WITNESS: a cell's rendered state, by the same measurement for formula cells and twins alike.
+    const stateOf = (cfg: S5Configuration, ref: string): 'visual' | 'empty' | undefined => {
+      if (cfg.observable === 'crop') {
+        const v = visual(cfg, s5Bare(ref))
+        return v === undefined ? undefined : v.kind === 'none' ? 'empty' : 'visual'
+      }
+      const f = obs.fill(ref)
+      return f === undefined ? undefined : f.fill !== 'none' || f.strike ? 'visual' : 'empty'
+    }
+    // Positive (and negative) controls: every twin a live reading names renders what was fixed for it before capture,
+    // before its observation is used as a prediction.
+    let control: FormulaCapabilityEvaluation | undefined
+    for (const cfg of cfgs.filter(c => c.record === undefined)) {
+      const named = new Set(Object.values(cfg.hypotheses).flatMap(h => Object.values(h).map(t => /^twin:([A-Z]+\d+)/.exec(t)?.[1]).filter((t): t is string => t !== undefined)))
+      for (const t of named) {
+        const want = cfg.twinExpect?.[t]
+        if (want === undefined) { control ??= refuse('formula-twin-missing', `${cfg.id}: twin ${t} has no expected rendering fixed before capture (Ruling S5-WITNESS)`, observed); continue }
+        if (want === 'either') continue
+        const prefix = s5PrefixOf(cfg.refs[0] ?? '')
+        const got = stateOf(cfg, `${prefix}${t}`)
+        if (got === undefined) control ??= refuse('missing-capture', `${cfg.id}: twin ${t} cannot be measured`, observed)
+        else if (want === 'visual' && got !== 'visual') control ??= refuse('formula-twin-missing', `${cfg.id}: the positive control ${t} renders nothing against its unformatted control, so it predicts nothing`, observed)
+        else if (want === 'empty' && got !== 'empty') control ??= refuse('formula-unexpected-visual', `${cfg.id}: twin ${t} should render nothing but shows a visual`, observed)
+      }
+    }
+    // Fix round 6 (codex P1 #1): every live configuration holds at least one functioning positive control, validated
+    // here before any reading is judged, even when the winning reading predicts only empty cells. A twin expected to
+    // render (validated above) is one; a literal control must show exactly its fixed DisplayFormat token in the
+    // configuration's own observation table, and its same-content control nothing.
+    for (const cfg of cfgs.filter(c => c.record === undefined)) {
+      if (control) break
+      const twins = Object.entries(cfg.twinExpect ?? {}).filter(([, e]) => e === 'visual').length
+      const literal = Object.entries(cfg.positiveControls ?? {})
+      if (twins + literal.length === 0) { control = refuse('formula-positive-control-missing', `${cfg.id}: no positive control (a twin expected to render or a literal-rule control) was fixed before capture, so blank evidence cannot be told from a failed readback`, observed); break }
+      // Each DXF component a reading predicts (a literal fill colour; a strikethrough on any token) needs a literal
+      // control showing it: a readback blind to one component would otherwise read as that component's absence.
+      const tokens = Object.values(cfg.hypotheses).flatMap(h => Object.values(h))
+      const fills = new Set(tokens.filter(t => !t.startsWith('twin:')).map(t => t.replace('+strike', '')).filter(f => f !== 'none'))
+      const unvouched = [...[...fills].filter(f => !literal.some(([, w]) => w.replace('+strike', '') === f)), ...(tokens.some(t => t.endsWith('+strike')) && !literal.some(([, w]) => w.endsWith('+strike')) ? ['+strike'] : [])]
+      if (unvouched.length > 0) { control = refuse('formula-positive-control-missing', `${cfg.id}: its readings predict ${unvouched.join(', ')}, but no literal positive control shows ${unvouched.length === 1 ? 'it' : 'them'}`, observed); break }
+      for (const [ref, want] of literal) {
+        const o = obs.fill(ref)
+        const ctrl = controls[s5Bare(ref)]
+        const co = ctrl !== undefined ? obs.fill(`${s5PrefixOf(ref)}${ctrl}`) : undefined
+        if (!o || !co) { control = refuse('fill-unobserved', `${cfg.id}: positive control ${ref}${o ? ` (its control ${ctrl ?? '(none)'})` : ''} has no DisplayFormat observation`, observed); break }
+        if (fillToken(o) !== want) { control = refuse('formula-positive-control-failed', `${cfg.id}: the literal positive control ${ref} shows ${fillToken(o)}, not ${want}: the readback does not show the rule's format, so no reading is judged`, observed); break }
+        if (co.fill !== 'none' || co.strike) { control = refuse('formula-control-formatted', `${cfg.id}: the same-content control ${ctrl} of positive control ${ref} shows ${fillToken(co)}`, observed); break }
+      }
+    }
+    if (control) { out[cap] = control; continue }
+    // Live configurations decide; a negative control must agree with the winner but never bears evidence (fix round 1 #3).
+    const live = cfgs.filter(c => c.record === undefined)
+    const evidence = live.filter(c => c.role !== 'negative-control')
+    if (evidence.length === 0) { out[cap] = { status: 'no-hypotheses', reason: `record only: ${cfgs.map(c => c.record ?? c.role).join('; ')}`, observed }; continue }
+    const names = [...new Set(evidence.flatMap(c => Object.keys(c.hypotheses)))]
+    const unmeasurable: string[] = []
+    const fits = (h: string): boolean => live.every(cfg => {
+      const preds = cfg.hypotheses[h]
+      if (!preds) return true
+      return cfg.refs.every(ref => {
+        const m = matches(cfg, ref, preds[ref]!)
+        if (m === undefined) unmeasurable.push(`${cfg.id}:${ref}`)
+        return m === true
+      })
+    })
+    const survivors = names.filter(fits)
+    if (unmeasurable.length > 0) { out[cap] = refuse('missing-capture', `unmeasurable cells (crop or twin): ${[...new Set(unmeasurable)].slice(0, 6).join(', ')}`, observed); continue }
+    if (survivors.length === 0) { out[cap] = { ...refuse('formula-hypothesis-none', `no hypothesis matches what Excel showed (${names.join(', ')}): a finding, never fitted`, observed), survivors }; continue }
+    // Fix round 1 #2: two readings that predict the same tokens in every evidence configuration cannot be told apart.
+    const coincide = (a: string, b: string): boolean => evidence.every(cfg => !cfg.hypotheses[a] || !cfg.hypotheses[b] || cfg.refs.every(r => cfg.hypotheses[a]![r] === cfg.hypotheses[b]![r]))
+    const twin = survivors.flatMap(h => names.filter(n => n !== h && coincide(h, n)).map(n => `${h} and ${n}`))
+    if (twin.length > 0) { out[cap] = { status: 'non-discriminating', reason: `readings ${twin[0]} coincide at every designated cell (indistinguishable readings are never published as distinct)`, survivors, observed }; continue }
+    if (survivors.length > 1) { out[cap] = { status: 'non-discriminating', reason: `hypotheses ${survivors.join(', ')} all match every designated cell`, survivors, observed }; continue }
+    const winner = survivors[0]!
+    const verdict = s5Witness(evidence, winner, { cfgRefuse: refuse, observed, matches, stateOf, kindOf })
+    if (verdict) { out[cap] = { ...verdict, survivors }; continue }
+    out[cap] = { status: 'discriminating', reason: `${winner} matches every designated cell; every required visual and empty cell is validated, and each rival is contradicted at >= 2 decisive cells of every replication group (Ruling S5-WITNESS)`, matched: winner, survivors, observed }
+  }
+  return out
+}
+
+type S5FillRecord = Readonly<Record<string, { displayFormatFill?: string; baseFill?: string; strikethrough?: boolean }>>
+
+/** The observation source of a measured Stage 5 case: its sidecar fills, the build-time manual observations and the PNG. */
+export function formulaObservationOf(
+  c: CfOracleCase,
+  sidecar: Record<string, unknown>,
+  png: DecodedPng | undefined,
+  geom: WorksheetRangeGeometry | undefined,
+  iconKey?: IconGlyphKey,
+): FormulaObservation {
+  const tables: Record<string, S5FillRecord | undefined> = {
+    '': sidecar.formulaObservations as S5FillRecord | undefined,
+    'post:': sidecar.formulaDynamicRefresh as S5FillRecord | undefined,
+    'pre:': c.manualObservation?.pre,
+    'calc:': c.manualObservation?.calc,
+  }
+  return {
+    fill(ref) {
+      const rec = tables[s5PrefixOf(ref)]?.[s5Bare(ref)]
+      if (!rec || typeof rec.displayFormatFill !== 'string') return undefined
+      const base = typeof rec.baseFill === 'string' ? rec.baseFill : 'FFFFFFFF'
+      return { fill: rec.displayFormatFill.toUpperCase() === base.toUpperCase() ? 'none' : rec.displayFormatFill.toUpperCase(), strike: rec.strikethrough === true }
+    },
+    visual(ref, kind) {
+      if (!png || !geom) return undefined
+      const ctrl = c.expected.cells.find(e => e.ref === ref)?.controlRef
+      if (!ctrl) return undefined
+      return kind === 'bar' ? s5BarVisual(png, geom, ref, ctrl) : s5IconVisual(png, geom, ref, ctrl, iconKey)
+    },
+  }
+}
+
+/**
+ * Fix round 2: what a bar or icon cell shows, measured by the Stage 3/4 machinery, never a raw pixel delta. A bar is the
+ * Stage 3 column scan (`measureBarGeometry`: three scanlines that agree, the control's text masked) whose box is at least
+ * half filled with ink; an icon is a Stage 4 glyph-key class (`classifyIconCrop` on the left `ICON_CROP_WIDTH_PX` px, twin
+ * sets included) at the frame position `measureIconGeometry` locates, the control's text excluded. Positions are relative
+ * to the cell's own box, so a 73 px and a 74 px cell compare equal. `undefined` is unmeasurable (fail closed).
+ */
+export type S5Visual = { kind: 'none' } | { kind: 'bar'; left: number; right: number } | { kind: 'icon'; cls: string; left: number; top: number }
+
+export const describeS5Visual = (v: S5Visual): string => (v.kind === 'none' ? 'none' : v.kind === 'bar' ? `bar:${v.left}-${v.right}` : `icon:${v.cls}@${v.left},${v.top}`)
+
+/** Two measured visuals agree: both empty, bars within +-1 px at each edge, or icons of agreeing classes within +-1 px. */
+export function sameS5Visual(a: S5Visual, b: S5Visual): boolean {
+  if (a.kind !== b.kind) return false
+  if (a.kind === 'none') return true
+  if (a.kind === 'bar' && b.kind === 'bar') return Math.abs(a.left - b.left) <= 1 && Math.abs(a.right - b.right) <= 1
+  if (a.kind === 'icon' && b.kind === 'icon') {
+    const ma = iconTwinSetMembers(a.cls) ?? [a.cls]
+    const mb = iconTwinSetMembers(b.cls) ?? [b.cls]
+    return ma.some(x => mb.includes(x)) && Math.abs(a.left - b.left) <= 1 && Math.abs(a.top - b.top) <= 1
+  }
+  return false
+}
+
+function s5BarVisual(png: DecodedPng, geom: WorksheetRangeGeometry, ref: string, ctrl: string): S5Visual | undefined {
+  const res = measureBarGeometry(png, geom, [ref], { controlOf: () => ctrl, axisArgb: 'FF000000', tolerancePx: 1 })
+  if ('kind' in res) return undefined
+  const o = (res as ReadonlyMap<string, CfObservedBar>).get(ref)
+  if (!o) return undefined
+  if (!o.bar) return { kind: 'none' }
+  // Fill coverage: a bar is a filled box, so at least half of its pixels differ strongly from the control's.
+  const box = cellPixelBox(png, geom, ref)
+  const cbox = cellPixelBox(png, geom, ctrl)
+  if (!box || !cbox) return undefined
+  let ink = 0
+  let all = 0
+  for (let y = o.bar.topPx; y <= o.bar.bottomPx; y++) {
+    for (let x = o.bar.leftPx; x <= o.bar.rightPx; x++) {
+      all++
+      const cx = cbox.x0 + (x - box.x0)
+      const cy = cbox.y0 + (y - box.y0)
+      if (cx < cbox.x1 && cy < cbox.y1 && rgbMaxDelta(pixelAt(png, x, y), pixelAt(png, cx, cy)) >= BAR_STRONG_DELTA) ink++
+    }
+  }
+  if (all < 4 || ink * 2 < all) return undefined
+  return { kind: 'bar', left: o.bar.leftPx - o.cellLeftPx, right: o.bar.rightPx - o.cellLeftPx }
+}
+
+/**
+ * Classifies a glyph drawn on a filled cell against the white-background glyph key (fix round 3 #3). For each key class,
+ * the key's crop is split into three zones: background (within +-8 of white), opaque ink (at least 128 below white on some
+ * channel), and anti-aliased edge (anything between, ignored). The cell matches a class when every background pixel
+ * equals the measured fill and every ink pixel equals the key, both within +-8. Exactly one match is the class; several
+ * that are all recorded twins of each other form the twin set; anything else is unclassified.
+ */
+export function classifyIconOnFill(png: DecodedPng, rect: { x: number; y: number; width: number; height: number }, key: IconGlyphKey, bg: readonly [number, number, number]): { glyphClass: string; referenceClass?: string } | undefined {
+  const sample = cropPng(png, rect)
+  if (!sample) return undefined
+  const fits = (k: DecodedPng): boolean => {
+    if (k.width !== sample.width || k.height !== sample.height) return false
+    let ink = 0
+    for (let i = 0; i < k.width * k.height; i++) {
+      const kp = [k.data[i * 4]!, k.data[i * 4 + 1]!, k.data[i * 4 + 2]!]
+      const sp = [sample.data[i * 4]!, sample.data[i * 4 + 1]!, sample.data[i * 4 + 2]!]
+      const fromWhite = Math.max(...kp.map(v => 255 - v))
+      if (fromWhite <= ICON_CLASS_TOLERANCE) { if (Math.max(...sp.map((v, c) => Math.abs(v - bg[c]!))) > ICON_CLASS_TOLERANCE) return false }
+      else if (fromWhite >= 128) { ink++; if (Math.max(...sp.map((v, c) => Math.abs(v - kp[c]!))) > ICON_CLASS_TOLERANCE) return false }
+    }
+    return ink > 0
+  }
+  const matches = [...key.classes].filter(([, k]) => fits(k)).map(([cls]) => cls)
+  if (matches.length === 1) return { glyphClass: matches[0]! }
+  if (matches.length > 1 && matches.every(a => matches.every(b => a === b || key.twins.get(a)?.has(b)))) return { glyphClass: iconTwinSetClass(matches), referenceClass: matches[0]! }
+  return undefined
+}
+
+function s5IconVisual(png: DecodedPng, geom: WorksheetRangeGeometry, ref: string, ctrl: string, key: IconGlyphKey | undefined): S5Visual | undefined {
+  const rect = iconCropRect(png, geom, ref)
+  if (!rect) return undefined
+  // Fix round 3 #3: on a filled cell the white-background key cannot match pixel for pixel, so the glyph is matched with
+  // a key-referenced ink mask against the measured background.
+  const bg = perimeterBackground(png, rect)
+  const onFill = bg.some(ch => 255 - ch > ICON_CLASS_TOLERANCE)
+  const cls = key ? (onFill ? classifyIconOnFill(png, rect, key, bg) : classifyIconCrop(png, rect, key.classes, { tolerance: ICON_CLASS_TOLERANCE, twins: key.twins, faint: key.faint })) : undefined
+  const glyph = cls && 'glyphClass' in cls ? cls : undefined
+  const reference = glyph && key ? key.classes.get(glyph.referenceClass ?? glyph.glyphClass) : undefined
+  const res = measureIconGeometry(png, geom, [ref], { controlOf: () => ctrl, tolerancePx: 1, unstable: 'record', ...(reference ? { referenceOf: () => reference } : {}) })
+  if ('kind' in res) return undefined
+  const o = (res as ReadonlyMap<string, CfObservedIcon>).get(ref)
+  if (!o) return undefined
+  if (!o.icon) return glyph && iconTwinSetMembers(glyph.glyphClass)?.includes(ICON_NO_ICON_MEMBER) ? undefined : { kind: 'none' }
+  // Ink that classifies to no key class (or two) is not an icon witness: unmeasurable, never a match.
+  if (!glyph || !key || o.edgeStable === false) return undefined
+  return { kind: 'icon', cls: glyph.glyphClass, left: o.icon.leftPx - o.cellLeftPx, top: o.icon.topPx - o.cellTopPx }
+}
+
+/**
+ * Fix round 1 #2: the sqref order Excel retained for each marker whose order is unpinned (`sqrefOrder: 'any'`), read from
+ * the saved XML: the permutation of its ranges under which the rule matches exactly.
+ */
+export function s5RetainedSqrefs(c: CfOracleCase, parts: Map<string, Uint8Array>): Record<string, string> {
+  const out: Record<string, string> = {}
+  const raw = parts.get('xl/worksheets/sheet1.xml')
+  if (!raw) return out
+  const root = parseXml(new TextDecoder().decode(raw))
+  const perms = (xs: string[]): string[][] => (xs.length <= 1 ? [xs] : xs.flatMap((x, i) => perms([...xs.slice(0, i), ...xs.slice(i + 1)]).map(p => [x, ...p])))
+  for (const m of c.markers) {
+    if (m.sqrefOrder !== 'any') continue
+    for (const order of perms(m.sqref.trim().split(/\s+/))) {
+      const sq = order.join(' ')
+      const { sqrefOrder: _any, ...pinned } = m
+      if (findMatchedRuleInRoot(root, { ...pinned, sqref: sq })) { out[m.capabilityId] = sq; break }
+    }
+  }
+  return out
+}
+
+/** A case's configurations with order-dependent hypotheses resolved against the retained sqref order (fix round 1 #2). */
+export function resolveFormulaConfigurations(c: CfOracleCase, parts?: Map<string, Uint8Array>): S5Configuration[] {
+  const retained = c.retainedSqrefs ?? (parts ? s5RetainedSqrefs(c, parts) : {})
+  return (c.formulaConfigurations ?? []).map(cfg => {
+    if (!cfg.orderedHypotheses) return cfg
+    const order = retained[cfg.orderedHypotheses.capabilityId]
+    if (order === undefined) return cfg
+    const table = cfg.orderedHypotheses.tables[order]
+    return table ? { ...cfg, hypotheses: table } : { ...cfg, hypotheses: {}, record: `no hypotheses were fixed for the retained sqref order ${order}` }
+  })
+}
+
+/** Whether a crop configuration measures bars or icons: the visual rule covering its first designated cell. */
+export function visualKindOf(c: CfOracleCase): (cfg: S5Configuration) => 'bar' | 'icon' {
+  return cfg => (c.markers.some(m => m.ruleType === 'iconSet' && cfg.refs.some(r => isCellInSqref(s5Bare(r), m.sqref))) ? 'icon' : 'bar')
+}
+
+/**
+ * Fix round 1 #6: a pre-calculate observation is valid only when it was made on this input, with one workbook open in
+ * manual calculation, the stale sources still holding their saved values before the explicit calculation and their
+ * recomputed values after it. An input that already looks recalculated on open is refused, never reinterpreted.
+ */
+export function validateManualObservation(c: CfOracleCase, m: CfOracleCase['manualObservation'], inputSha256: string): string | undefined {
+  if (!m) return 'no build-time manual observation'
+  if (m.inputSha256 !== inputSha256) return `the manual observation was made on input ${m.inputSha256.slice(0, 12)}, not ${inputSha256.slice(0, 12)}`
+  if (m.workbookCount !== 1) return `${m.workbookCount} workbooks were open during the manual observation (exactly one required)`
+  if (!/manual/i.test(m.calculationMode)) return `the application calculation mode was ${m.calculationMode}, not manual`
+  const anchor = c.clockRequirement?.anchorSerial
+  const resolve = (v: string): number => (v === 'anchor' ? anchor ?? NaN : v === 'anchor-5' ? (anchor ?? NaN) - 5 : Number(v))
+  const same = (got: string | undefined, want: string): boolean => got !== undefined && got.trim() !== '' && Math.abs(Number(got) - resolve(want)) < 1e-9
+  for (const [ref, src] of Object.entries(c.calcObservationSources ?? {})) {
+    if (!same(m.pre[ref]?.value, src.saved)) return `source ${ref} read ${m.pre[ref]?.value ?? 'nothing'} before any calculation, not its saved ${src.saved}: the input was recalculated on open, so it cannot test saved values`
+    if (!same(m.calc[ref]?.value, src.recomputed)) return `source ${ref} read ${m.calc[ref]?.value ?? 'nothing'} after the explicit calculation, not the recomputed ${src.recomputed}`
+  }
+  return undefined
+}
+
+/** Designated ref -> its same-content control, from the case's expected cells. */
+export function formulaControlsOf(c: CfOracleCase): Record<string, string> {
+  const negatives = new Set(c.expected.negativeRefs.map(r => r.toUpperCase()))
+  return Object.fromEntries(c.expected.cells.filter(e => !negatives.has(e.ref.toUpperCase())).map(e => [e.ref, e.controlRef]))
+}
+
+/** Evaluates a Stage 5 case's configurations against a sidecar and PNG (capture writes exactly this into the sidecar). */
+export function evaluateFormulaCase(c: CfOracleCase, sidecar: Record<string, unknown>, png?: DecodedPng, geom?: WorksheetRangeGeometry, parts?: Map<string, Uint8Array>, iconKey?: IconGlyphKey): Record<string, FormulaCapabilityEvaluation> {
+  return evaluateFormulaCapabilities(resolveFormulaConfigurations(c, parts), formulaControlsOf(c), formulaObservationOf(c, sidecar, png, geom, iconKey), { kindOf: visualKindOf(c) })
+}
+
+/** The glyph key a Stage 5 icon measurement classifies against (the Stage 4 key capture), or undefined. */
+export function stage5IconKey(rootDir: string): IconGlyphKey | undefined {
+  const key = loadIconGlyphKey(rootDir)
+  return key && !('kind' in key) ? key : undefined
+}
+
+interface FormulaCaptureOutcome {
+  verified: string[]
+  nonDiscriminating: string[]
+  refused: Array<{ capabilityId: string; code: CfRefusalCode; reason: string }>
+  notes: Record<string, string>
+  matched: Record<string, string>
+}
+
+function verifyFormulaCapture(
+  c: CfOracleCase,
+  sidecar: Record<string, unknown>,
+  decoded: DecodedPng,
+  geom: WorksheetRangeGeometry,
+  inputSha256: string,
+  parts: Map<string, Uint8Array>,
+  rootDir: string,
+): { ok: true; outcome: FormulaCaptureOutcome } | { ok: false; code: CfRefusalCode; reason: string } {
+  const fail = (code: CfRefusalCode, reason: string): { ok: false; code: CfRefusalCode; reason: string } => ({ ok: false, code, reason })
+  if (sidecar.lockBefore !== 'unlocked' || sidecar.lockAfter !== 'unlocked') return fail('display-locked', `Capture lock state before="${String(sidecar.lockBefore)}" after="${String(sidecar.lockAfter)}": a capture is valid only when the display was unlocked before and after it`)
+  // Lesson 14: the hypotheses are the catalogue's, fixed before capture; a manifest that edits them after seeing Excel refuses.
+  const template = CF_STAGE5_CASES.find(t => t.id === c.id)
+  if (template && JSON.stringify(template.formulaConfigurations ?? []) !== JSON.stringify(c.formulaConfigurations ?? [])) return fail('unobserved-expectation', `Case ${c.id}'s configurations differ from the catalogue's: hypotheses are fixed before capture (Lesson 14)`)
+  if (!sidecar.formulaObservations || typeof sidecar.formulaObservations !== 'object') return fail('fill-unobserved', `Stage 5 sidecar for ${c.id} records no formulaObservations (DisplayFormat readback)`)
+  if (c.calcObservation === 'pre-calculate') {
+    const why = validateManualObservation(c, c.manualObservation, inputSha256)
+    if (why) return fail('formula-manual-observation-invalid', `Case ${c.id}: ${why}`)
+  }
+  // Fix round 1 #2: an unpinned multi-range order must have been recorded from the resaved XML before the capture.
+  for (const m of c.markers) {
+    if (m.sqrefOrder === 'any' && c.retainedSqrefs?.[m.capabilityId] === undefined) return fail('unobserved-expectation', `Case ${c.id}: the retained sqref order of ${m.capabilityId} was not recorded at build`)
+  }
+  if (c.formulaDynamicRefresh && (!sidecar.formulaDynamicRefresh || typeof sidecar.formulaDynamicRefresh !== 'object')) return fail('fill-unobserved', `Case ${c.id} declares a dynamic refresh but its sidecar records no formulaDynamicRefresh observation`)
+  const evaluation = evaluateFormulaCase(c, sidecar, decoded, geom, parts, stage5IconKey(rootDir))
+  if (JSON.stringify(sidecar.formulaEvaluation ?? null) !== JSON.stringify(evaluation)) return fail('sidecar-mismatch', `Sidecar formulaEvaluation for ${c.id} differs from the evaluation the verifier recomputes`)
+  // A cell's claimed DisplayFormat outcome must be what the sidecar recorded.
+  const obs = formulaObservationOf(c, sidecar, decoded, geom)
+  for (const cell of c.expected.cells) {
+    if (cell.fillSource !== 'excel-display-format') continue
+    const o = obs.fill(cell.ref)
+    if (!o || (o.fill !== 'none' || o.strike) !== cell.matched) return fail('cell-expectation-mismatch', `Cell ${cell.ref} claims matched=${String(cell.matched)} from DisplayFormat but the sidecar records ${o ? fillToken(o) : 'nothing'}`)
+  }
+  const outcome: FormulaCaptureOutcome = { verified: [], nonDiscriminating: [], refused: [], notes: {}, matched: {} }
+  for (const [cap, rec] of Object.entries(evaluation)) {
+    if (CF_STAGE5_NONDISCRIMINATING[cap] !== undefined) { outcome.nonDiscriminating.push(cap); continue }
+    if (rec.status === 'discriminating') { outcome.verified.push(cap); if (rec.matched) outcome.matched[cap] = rec.matched }
+    else if (rec.status === 'non-discriminating') outcome.nonDiscriminating.push(cap)
+    else if (rec.status === 'refused') outcome.refused.push({ capabilityId: cap, code: rec.code ?? 'formula-hypothesis-none', reason: rec.reason })
+    else outcome.notes[cap] = `${rec.status}: ${rec.reason}`
+  }
+  return { ok: true, outcome }
+}
+
+/**
+ * Stage 5 cross-capability gates (Ruling S5-D): every formula capability rests on Excel reading a boolean result as a
+ * truth value (formula:truth-boolean, reading `boolean`), and the anchor capabilities whose expressions return numbers
+ * (=$A2, =A$2, =$A$2) also on formula:truth-number; the edge wrap reads a #REF! result as no format
+ * (formula:truth-error not `error-true`). Readings are the matched hypotheses of the owning cases.
+ */
+export const S5_CAPABILITY_GATES: Readonly<Record<string, ReadonlyArray<{ capabilityId: string; readings?: readonly string[] }>>> = {
+  'formula:anchor-mixed-abs': [{ capabilityId: 'formula:truth-number', readings: ['number-nonzero-true', 'number-positive-true'] }],
+  'formula:relative-wrap': [{ capabilityId: 'formula:truth-error', readings: ['error-no-match', 'error-halts'] }],
+}
+
+function matchedReadingOf(capabilityId: string, manifest: CfManifest, options: VerifyCfOptions): string | undefined {
+  const owner = manifest.cases.find(c => c.markers.some(m => m.capabilityId === capabilityId) || (c.formulaConfigurations ?? []).some(x => x.capabilityId === capabilityId))
+  if (!owner) return undefined
+  const res = verifyCfCase(owner, options)
+  return res.kind === 'verified' ? res.matchedHypotheses?.[capabilityId] : undefined
+}
+
+export function stage5GatesHold(capabilityId: string, manifest: CfManifest, options: VerifyCfOptions): boolean {
+  if (CF_STAGE5_NONDISCRIMINATING[capabilityId] !== undefined || CF_STAGE5_UNSUPPORTED[capabilityId] !== undefined) return false
+  const gates = [...(capabilityId !== 'formula:truth-boolean' ? [{ capabilityId: 'formula:truth-boolean', readings: ['boolean'] as readonly string[] }] : []), ...(S5_CAPABILITY_GATES[capabilityId] ?? [])]
+  for (const g of gates) {
+    if (!isCapabilityVerified(g.capabilityId, manifest, options)) return false
+    if (g.readings && !g.readings.includes(matchedReadingOf(g.capabilityId, manifest, options) ?? '')) return false
+  }
+  return true
+}
+
 export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): VerifiedEvidence | Refusal {
   const rootDir = options.rootDir ?? process.cwd()
   const savedAbs = resolve(rootDir, c.saved)
@@ -5608,8 +6191,14 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     }
   }
 
-  for (const marker of c.markers) {
+  for (const authored of c.markers) {
+    // Fix round 1 #2: once build recorded the order Excel retained, that order is pinned.
+    const retained = authored.sqrefOrder === 'any' ? c.retainedSqrefs?.[authored.capabilityId] : undefined
+    const marker: CfPartMarker = retained !== undefined ? (({ sqrefOrder: _o, ...m }) => ({ ...m, sqref: retained }))(authored) : authored
     const check = verifyMarkerInArchive(parts, marker)
+    if (!check.ok && retained !== undefined) {
+      return { kind: 'refusal', id: c.id, status: c.status, code: check.code, reason: `${authored.capabilityId}: the saved XML no longer carries the retained sqref order ${retained} (${check.reason})`, structuralValid: false }
+    }
     if (!check.ok) {
       return {
         kind: 'refusal',
@@ -5842,6 +6431,9 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
   // Stage 4: icon capabilities come ONLY from the icon branch (never from the Stage 1 contrast path below).
   const isIconCase = c.stage === 4 && c.status === 'measured'
   let iconOutcome: IconCaptureOutcome | undefined
+  // Stage 5: formula capabilities come ONLY from the semantic DisplayFormat route (Ruling S5-A), never the contrast path.
+  const isFormulaCase = c.stage === 5 && c.status === 'measured'
+  let formulaOutcome: FormulaCaptureOutcome | undefined
   const captureHashes: Record<string, string> = {}
   const passingCellRefs = new Set<string>()
   let positiveContrastMaxDelta = 0
@@ -6107,6 +6699,13 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
         notes: { ...(iconOutcome?.notes ?? {}), ...iconRes.outcome.notes },
         matched: { ...(iconOutcome?.matched ?? {}), ...iconRes.outcome.matched },
       }
+      continue
+    }
+
+    if (isFormulaCase) {
+      const res = verifyFormulaCapture(c, sidecar, decoded, activeGeom, inputSha256, parts, rootDir)
+      if (!res.ok) return { kind: 'refusal', id: c.id, status: c.status, code: res.code, reason: res.reason, structuralValid: true }
+      formulaOutcome = res.outcome
       continue
     }
 
@@ -6558,6 +7157,26 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     }
   }
 
+  if (isFormulaCase) {
+    if (!formulaOutcome) return { kind: 'refusal', id: c.id, status: c.status, code: 'missing-capture', reason: `Stage 5 case ${c.id} has no capture to recompute`, structuralValid: true }
+    return {
+      kind: 'verified',
+      id: c.id,
+      status: 'measured',
+      savedSha256,
+      inputSha256,
+      captureHashes,
+      positiveContrastMaxDelta: 0,
+      minPositiveContrastDelta: 0,
+      matchedRules: c.markers.length,
+      verifiedCapabilities: formulaOutcome.verified,
+      nonDiscriminatingCapabilities: formulaOutcome.nonDiscriminating,
+      refusedCapabilities: formulaOutcome.refused,
+      capabilityNotes: formulaOutcome.notes,
+      matchedHypotheses: formulaOutcome.matched,
+    }
+  }
+
   if (isBarCase && barOutcome) {
     return {
       kind: 'verified',
@@ -6616,7 +7235,9 @@ export function isCapabilityVerified(
 ): boolean {
   // Stage 4 case-level capabilities (icon:glyph-key) carry no marker: their owner is the registry's case.
   const registryCase = CF_STAGE4_CAPABILITIES.find(e => e.capabilityId === capabilityId)?.caseId
-  const owningCase = manifest.cases.find(c => c.markers.some(m => m.capabilityId === capabilityId)) ?? (registryCase ? manifest.cases.find(c => c.id === registryCase) : undefined)
+  const stage5Registry = CF_STAGE5_CAPABILITIES.find(e => e.capabilityId === capabilityId)
+  // Stage 5: the owner is the registry's case (a configuration capability may carry no marker of its own).
+  const owningCase = (stage5Registry ? manifest.cases.find(c => c.id === stage5Registry.caseId) : undefined) ?? manifest.cases.find(c => c.markers.some(m => m.capabilityId === capabilityId)) ?? (registryCase ? manifest.cases.find(c => c.id === registryCase) : undefined)
   if (!owningCase) return false
   // The cross-case gates ask for the same few cases again and again; one manifest object's cases are verified once.
   const key = `${options.rootDir ?? process.cwd()}\u0000${owningCase.id}`
@@ -6625,6 +7246,10 @@ export function isCapabilityVerified(
   let res = cache.get(key)
   if (!res) cache.set(key, (res = verifyCfCase(owningCase, options)))
   if (res.kind !== 'verified' || !res.verifiedCapabilities.includes(capabilityId)) return false
+  // Stage 5 capabilities (formula:*, and the scale:/bar:/icon: formula-bound ids) pass the Stage 5 gates only; the
+  // Stage 2-4 visual gates below still apply to the visual-family ids, since their twins are Stage 2-4 renderings.
+  if (stage5Registry && !stage5GatesHold(capabilityId, manifest, options)) return false
+  if (stage5Registry && capabilityId.startsWith('formula:')) return true
 
   // Stage 3: a registry-flagged non-discriminating capability is never verified, whatever a capture shows (Lesson 3).
   if (CF_STAGE3_NONDISCRIMINATING[capabilityId] !== undefined) return false

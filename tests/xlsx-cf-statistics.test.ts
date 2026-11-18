@@ -1475,6 +1475,7 @@ describe('CF statistics preparation', () => {
     const inner = frozenBudget()
     const budget: CfWorkBudget = {
       get units() { return inner.units },
+      get remaining() { return inner.remaining },
       spend(n: number) { attempted += n; return inner.spend(n) },
       resume() { inner.resume() },
     }

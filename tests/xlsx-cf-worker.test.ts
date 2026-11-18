@@ -624,6 +624,44 @@ describe('CF remote cache (viewerRemoteCf)', () => {
   }
   const flush = () => new Promise(r => setTimeout(r, 0))
 
+  it('a request naming yesterday is refused by the worker and fails closed; the advanced stamp then reads (S5-M, fix round 1 #3)', async () => {
+    const STALE = 20772, LIVE = 20773
+    // A correct worker: the live day is LIVE; any other non-zero day gets the stale reply under the live stamp.
+    const host = testHost({ respond: async (command: CommandOf<'read'>) => {
+      const q = command.query as { stamp: CfReadStamp }
+      const stale = q.stamp.clockGen !== 0 && q.stamp.clockGen !== LIVE
+      const result = stale
+        ? wireResult({ kind: 'unresolved', reason: 'cf-stale-generation', stamp: { ...q.stamp, clockGen: LIVE }, states: [], definitions: [], diagnostics: [{ kind: 'resource-limit', feature: 'cf-stale-source', message: 'names a different day' }] })
+        : wireResult({ stamp: { ...q.stamp } })
+      return cfReply(result, 1024, command.requestId, identity())
+    } })
+    const cache = new RemoteCfCache(host)
+    const old = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1, { clockGen: STALE }))
+    await flush()
+    expect(old.state.state, 'a stale day never paints').not.toBe('ready')
+    expect(old.state.result?.kind === 'ready' ? old.state.result.states.length : 0).toBe(0)
+    const live = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1, { clockGen: LIVE }))
+    await flush()
+    expect(live.state.state, 'the advanced stamp reads').toBe('ready')
+    old.release(); live.release(); cache.close()
+  })
+
+  it('learns a sheet\'s clock fact from a ready reply: unknown and absent both mean the tick applies (S5-M, fix round 1 #4)', async () => {
+    let free = true
+    const host = testHost({ respond: async (command: CommandOf<'read'>) => {
+      const q = command.query as { stamp: CfReadStamp }
+      return cfReply(wireResult({ stamp: { ...q.stamp }, ...(free ? { clockFree: true as const } : {}) }), 1024, command.requestId, identity())
+    } })
+    const cache = new RemoteCfCache(host)
+    expect(cache.clockFree(SHEET), 'unknown').toBe(false)
+    const a = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1)); await flush()
+    expect(cache.clockFree(SHEET), 'a reply that says clock-free').toBe(true)
+    free = false
+    const b = cache.acquire(SHEET, [rect(1, 1)], cfStamp(1, { viewGen: 2 })); await flush()
+    expect(cache.clockFree(SHEET), 'a reply without the fact').toBe(false)
+    a.release(); b.release(); cache.close()
+  })
+
   it.each(['structure', 'grant', 'failure'] as const)('wakes a pinned waiting entry after %s without reacquiring', async reason => {
     const host=testHost(), originalGrant=host.grant
     if(reason==='grant')host.grant=()=>null
@@ -2789,6 +2827,404 @@ describe('CF fix round 5 (review-t7-r5)', () => {
     expect(cache.retainedBytes).toBe(0)
     expect(ledger.size).toBe(0)
     cache.close()
+  })
+})
+
+
+describe('remote cache entries follow their reply\'s dependencies (Task 36, Ruling S5-K)', () => {
+  const S1 = 'sheet1', S2 = 'sheet2', WHOLE = { r0: 0, r1: 1048575, c0: 0, c1: 16383 }
+  const stampOf = (): CfReadStamp => ({ owner: 'doc', sheetId: S1, workbookValueGen: 1, cfGen: 7, viewGen: 0, structureGen: 0, clockGen: 0 })
+  function depHost() {
+    const gens = new Map<string, number>([[S1, 1], [S2, 3]])
+    const loads = new Map<string, 'complete' | 'loading' | 'incomplete'>()
+    const changed: { sheetId: string; rects: readonly SourceRect[] }[] = []
+    const requests: CommandOf<'read'>[] = []
+    let pendingOn: string | undefined
+    let n = 0
+    const identityOf = (sheetId: string): CacheIdentity => ({ docId: 'doc', sheetId, valueGen: gens.get(sheetId) ?? 0, fontGen: 0, viewGen: 0 })
+    const host: CfReadHost = {
+      identity: identityOf,
+      loadState: id => ({ completeness: loads.get(id) ?? 'complete' }),
+      hasConditionalFormatting: () => true,
+      grant: () => 1 << 20, releaseGrant: () => {},
+      nextRequestId: () => `d${++n}`,
+      release: () => {},
+      admitEntry: () => () => {},
+      changed: (sheetId, rects) => { changed.push({ sheetId, rects }) },
+      request: async command => {
+        requests.push(command)
+        const q = command.query as { stamp: CfReadStamp }
+        const result: CfReadResult = pendingOn
+          ? { sheetId: S1, stamp: { ...q.stamp }, kind: 'pending', reason: 'cf-pending-data', states: [], definitions: [], definitionsVersion: 7,
+              diagnostics: [{ kind: 'pending', feature: 'cf-source-pending', message: 'pending' }], pendingSheetIds: [pendingOn] }
+          : { sheetId: S1, stamp: { ...q.stamp }, kind: 'ready', states: [{ row: 0, col: 0, properties: { 'fill.pattern': 'solid' } }], definitions: [], definitionsVersion: 7,
+              diagnostics: [], dependencies: [{ sheetId: S2, valueGen: gens.get(S2)! }] }
+        return { commandKind: 'read', requestId: command.requestId, owner: identityOf(S1), diagnostics: [], replyBytes: 1024, kind: 'complete',
+          result: { kind: 'read', result: { op: 'conditionalFormatting', result } } } as WorkerReply<'read'>
+      },
+    }
+    return { host, gens, loads, changed, requests, setPending: (id: string | undefined) => { pendingOn = id } }
+  }
+  const flush = () => new Promise(r => setTimeout(r, 0))
+
+  it('a reply listing {Sheet2, valueGen 3} is current until Sheet2 moves to 4; then get() is stale and every tile of Sheet1 is invalidated', async () => {
+    const t = depHost()
+    const cache = new RemoteCfCache(t.host)
+    cache.get(S1, [rect(0, 0)], stampOf())
+    await flush()
+    const ready = cache.get(S1, [rect(0, 0)], stampOf())
+    expect(ready.state).toBe('ready')
+    expect(ready.result?.dependencies).toEqual([{ sheetId: S2, valueGen: 3 }])
+    expect(t.requests).toHaveLength(1)
+    // An unrelated identity change leaves it current.
+    t.gens.set('sheet9', 5)
+    expect(cache.get(S1, [rect(0, 0)], stampOf()).state).toBe('ready')
+    t.changed.length = 0
+    t.gens.set(S2, 4)
+    const stale = cache.get(S1, [rect(0, 0)], stampOf())
+    expect(stale.state).not.toBe('ready')
+    expect(stale.result).toBeUndefined()
+    await flush()
+    expect(t.changed.filter(c => c.sheetId === S1).flatMap(c => c.rects)).toContainEqual(WHOLE)
+    const fresh = cache.get(S1, [rect(0, 0)], stampOf())
+    expect(fresh.state).toBe('ready')
+    expect(fresh.result?.dependencies).toEqual([{ sheetId: S2, valueGen: 4 }])
+    cache.close()
+  })
+
+  it('invalidateDependents drops every scope of each sheet whose reply lists the committed sheet, and no other', async () => {
+    const t = depHost()
+    const cache = new RemoteCfCache(t.host)
+    cache.get(S1, [rect(0, 0)], stampOf()); cache.get(S1, [rect(5, 5)], stampOf())
+    await flush()
+    expect(cache.get(S1, [rect(5, 5)], stampOf()).state).toBe('ready')
+    t.changed.length = 0
+    cache.invalidateDependents('sheet9')
+    await flush()
+    expect(t.changed).toEqual([])
+    cache.invalidateDependents(S2)
+    expect(cache.get(S1, [rect(0, 0)], stampOf()).result).toBeUndefined()
+    await flush()
+    expect(t.changed.filter(c => c.sheetId === S1).flatMap(c => c.rects)).toContainEqual(WHOLE)
+    cache.close()
+  })
+
+  it('a reply pending on Sheet2 waits for it: no request while it loads, exactly one when it completes; incomplete fails once', async () => {
+    const t = depHost()
+    t.setPending(S2)
+    t.loads.set(S2, 'loading')
+    const cache = new RemoteCfCache(t.host)
+    const held = cache.acquire(S1, [rect(0, 0)], stampOf())
+    await flush()
+    expect(held.state.state).toBe('waiting')
+    expect(held.state.pendingSheetIds).toEqual([S2])
+    expect(t.requests).toHaveLength(1)
+    for (let i = 0; i < 3; i++) { cache.wakeWaiting(); await flush() }
+    expect(t.requests).toHaveLength(1)
+    t.setPending(undefined)
+    t.loads.set(S2, 'complete')
+    t.changed.length = 0
+    cache.wakeWaiting(); await flush()
+    cache.wakeWaiting(); await flush()
+    expect(t.requests).toHaveLength(2)
+    expect(held.state.state).toBe('ready')
+    expect(t.changed.filter(c => c.sheetId === S1)).toHaveLength(1)
+    held.release(); cache.close()
+    // A Sheet2 that ends incomplete: cf-read-failed, once, with no further request.
+    const u = depHost()
+    u.setPending(S2); u.loads.set(S2, 'loading')
+    const other = new RemoteCfCache(u.host)
+    const h2 = other.acquire(S1, [rect(0, 0)], stampOf())
+    await flush()
+    u.loads.set(S2, 'incomplete')
+    other.wakeWaiting(); await flush()
+    other.wakeWaiting(); await flush()
+    expect(h2.state.state).toBe('failed')
+    expect(h2.state.diagnostics.map(d => d.feature)).toEqual(['cf-read-failed'])
+    expect(u.requests).toHaveLength(1)
+    h2.release(); other.close()
+  })
+
+  it('a pivot commit (:706, through invalidateRegionStyles) and a pivot release (:752) both reach invalidateDependents', async () => {
+    const { RemoteWorkbook } = await import('../src/worker/viewerRemoteSource')
+    const calls: string[] = []
+    const cfCache = { invalidate: () => {}, invalidateDependents: (id: string) => { calls.push(id) } }
+    const proto = RemoteWorkbook.prototype as unknown as Record<string, (...a: unknown[]) => void>
+    proto.invalidateCf!.call({ cfCache }, S2)
+    const fake = {
+      closed: false, sheets: [{ sheetId: S2 }], identities: new Map(), owner: { workbookValueGen: 1, sheetVector: [{ sheetId: S2, valueGen: 3 }] }, stores: new Map(), cfCache,
+      identity: (id: string) => ({ docId: 'doc', sheetId: id, valueGen: 3, fontGen: 0, viewGen: 0 }), notify: () => {},
+    }
+    proto.adoptPivotReleaseValueGen!.call(fake, S2, 4)
+    expect(calls).toEqual([S2, S2])
+  })
+})
+
+describe('Task 36 fix round 1: remote dependency validation, registrations, pending wake-up', () => {
+  const S1 = 'sheet1', S2 = 'sheet2', WHOLE = { r0: 0, r1: 1048575, c0: 0, c1: 16383 }
+  const stampOf = (): CfReadStamp => ({ owner: 'doc', sheetId: S1, workbookValueGen: 1, cfGen: 7, viewGen: 0, structureGen: 0, clockGen: 0 })
+  const flush = () => new Promise(r => setTimeout(r, 0))
+  function gatedHost() {
+    const gens = new Map<string, number>([[S1, 1], [S2, 3]])
+    const loads = new Map<string, 'complete' | 'loading' | 'incomplete'>()
+    const changed: { sheetId: string; rects: readonly SourceRect[] }[] = []
+    const requests: CommandOf<'read'>[] = []
+    const gates: Array<() => void> = []
+    let gated = false, pendingOn: string | undefined, n = 0
+    const identityOf = (sheetId: string): CacheIdentity => ({ docId: 'doc', sheetId, valueGen: gens.get(sheetId) ?? 0, fontGen: 0, viewGen: 0 })
+    const host: CfReadHost = {
+      identity: identityOf, loadState: id => ({ completeness: loads.get(id) ?? 'complete' }), hasConditionalFormatting: () => true,
+      grant: () => 1 << 20, releaseGrant: () => {}, nextRequestId: () => `g${++n}`, release: () => {}, admitEntry: () => () => {},
+      changed: (sheetId, rects) => { changed.push({ sheetId, rects }) },
+      request: async command => {
+        requests.push(command)
+        // The worker reads Sheet2's generation when it prepares (before the gate), as a real worker does.
+        const dep = gens.get(S2)!, pending = pendingOn
+        if (gated) await new Promise<void>(resolve => gates.push(resolve))
+        const q = command.query as { stamp: CfReadStamp }
+        const result: CfReadResult = pending
+          ? { sheetId: S1, stamp: { ...q.stamp }, kind: 'pending', reason: 'cf-pending-data', states: [], definitions: [], definitionsVersion: 7, diagnostics: [], pendingSheetIds: [pending] }
+          : { sheetId: S1, stamp: { ...q.stamp }, kind: 'ready', states: [{ row: 0, col: 0, properties: { 'fill.bg': 'FF00FF00' } }], definitions: [], definitionsVersion: 7, diagnostics: [], dependencies: [{ sheetId: S2, valueGen: dep }] }
+        return { commandKind: 'read', requestId: command.requestId, owner: identityOf(S1), diagnostics: [], replyBytes: 1024, kind: 'complete', result: { kind: 'read', result: { op: 'conditionalFormatting', result } } } as WorkerReply<'read'>
+      },
+    }
+    return { host, gens, loads, changed, requests, gates, gate: (on: boolean) => { gated = on }, setPending: (id: string | undefined) => { pendingOn = id } }
+  }
+
+  it('#1: a reply read at Sheet2 generation 3 that arrives after Sheet2 moved to 4 is never published; the host sheet is invalidated and reloaded', async () => {
+    const t = gatedHost()
+    t.gate(true)
+    const cache = new RemoteCfCache(t.host)
+    const held = cache.acquire(S1, [rect(0, 0)], stampOf())
+    await flush()
+    expect(t.requests).toHaveLength(1)
+    t.gens.set(S2, 4)
+    t.gate(false)
+    const epoch = cache.dependencyEpoch(S1)
+    t.gates.shift()!()
+    await flush(); await flush()
+    expect(t.changed.filter(c => c.sheetId === S1).flatMap(c => c.rects)).toContainEqual(WHOLE)
+    expect(cache.dependencyEpoch(S1)).toBeGreaterThan(epoch)
+    // The bounded retry re-read at generation 4 and published that, never generation 3.
+    expect(t.requests).toHaveLength(2)
+    expect(held.state.state).toBe('ready')
+    expect(held.state.result?.dependencies).toEqual([{ sheetId: S2, valueGen: 4 }])
+    held.release(); cache.close()
+  })
+
+  it('#2: a dependency registration outlives its entry: after eviction a Sheet2 commit still invalidates every tile of Sheet1', async () => {
+    const t = gatedHost()
+    const cache = new RemoteCfCache(t.host)
+    cache.get(S1, [rect(0, 0)], stampOf())
+    await flush()
+    expect(cache.get(S1, [rect(0, 0)], stampOf()).state).toBe('ready')
+    // A live scope keeps its own hold (fix round 2, #4: registrations are owned by live subscriptions).
+    const hold = cache.retainDependencies(S1, [{ sheetId: S2 }])
+    for (let i = 1; i <= 70; i++) cache.get('other', [rect(i, i)], { ...stampOf(), sheetId: 'other' })
+    await flush()
+    t.changed.length = 0
+    const epoch = cache.dependencyEpoch(S1)
+    cache.invalidateDependents(S2)
+    await flush()
+    expect(cache.dependencyEpoch(S1)).toBe(epoch + 1)
+    expect(t.changed.filter(c => c.sheetId === S1).flatMap(c => c.rects)).toContainEqual(WHOLE)
+    hold!()
+    cache.close()
+  })
+
+  it('#2: a wire scope whose dependency identity moves stops painting at once (no cache lease needed)', async () => {
+    const { prepareCfWireScope } = await import('../src/xlsx/cf/text')
+    const gens = new Map([[S2, 3]])
+    const wire: CfReadResult = { sheetId: S1, stamp: stampOf(), kind: 'ready', states: [{ row: 0, col: 0, properties: { 'fill.pattern': 'solid', 'fill.bg': 'FF00FF00' } }], definitions: [], definitionsVersion: 7, diagnostics: [], dependencies: [{ sheetId: S2, valueGen: 3 }] }
+    const scope = (await prepareCfWireScope(async () => ({ result: structuredClone(wire), release() {} }), [rect(0, 0)], { budget: { reserve() {}, release() {} }, identityOf: id => gens.get(id) }))!
+    expect(scope.effectiveStyle(0, 0, undefined)?.fillColor).toBe('FF00FF00')
+    gens.set(S2, 4)
+    expect(scope.effectiveStyle(0, 0, undefined)?.fillColor).toBeUndefined()
+    scope.dispose()
+  })
+
+  it('#6: Sheet2 completes while the pending request is in flight: the pending reply schedules the retry at once', async () => {
+    const t = gatedHost()
+    t.setPending(S2); t.loads.set(S2, 'loading'); t.gate(true)
+    const cache = new RemoteCfCache(t.host)
+    const held = cache.acquire(S1, [rect(0, 0)], stampOf())
+    await flush()
+    // Completion lands mid-flight: the wake-up sees a loading entry and does nothing.
+    t.loads.set(S2, 'complete'); cache.wakeWaiting()
+    t.setPending(undefined); t.gate(false)
+    t.gates.shift()!()
+    await flush(); await flush()
+    expect(t.requests).toHaveLength(2)
+    expect(held.state.state).toBe('ready')
+    held.release(); cache.close()
+  })
+})
+
+describe('Task 36 fix round 2: terminal rejection, adoption order, owned registrations', () => {
+  const S1 = 'sheet1', S2 = 'sheet2'
+  const stampOf = (cfGen = 7): CfReadStamp => ({ owner: 'doc', sheetId: S1, workbookValueGen: 1, cfGen, viewGen: 0, structureGen: 0, clockGen: 0 })
+  const flush = () => new Promise(r => setTimeout(r, 0))
+  function host(opts: { depGen: () => number; version?: () => number; depSheet?: () => string; ledger?: { limit: number; used: number } }) {
+    const gens = new Map<string, number>([[S1, 1], [S2, 3]])
+    const requests: CfReadStamp[] = [], changed: string[] = []
+    let n = 0, onChanged: (() => void) | undefined
+    const identityOf = (sheetId: string): CacheIdentity => ({ docId: 'doc', sheetId, valueGen: gens.get(sheetId) ?? 0, fontGen: 0, viewGen: 0 })
+    const h: CfReadHost = {
+      identity: identityOf, loadState: () => ({ completeness: 'complete' }), hasConditionalFormatting: () => true,
+      grant: () => 1 << 20, releaseGrant: () => {}, nextRequestId: () => `q${++n}`, release: () => {},
+      admitEntry: (_k, bytes) => {
+        const l = opts.ledger
+        if (!l) return () => {}
+        if (l.used + bytes > l.limit) return null
+        l.used += bytes
+        let done = false
+        return () => { if (!done) { done = true; l.used -= bytes } }
+      },
+      changed: sheetId => { changed.push(sheetId); onChanged?.() },
+      request: async command => {
+        const q = command.query as { stamp: CfReadStamp }
+        requests.push(q.stamp)
+        const result: CfReadResult = { sheetId: S1, stamp: { ...q.stamp, cfGen: opts.version?.() ?? q.stamp.cfGen }, kind: 'ready', states: [{ row: 0, col: 0, properties: { 'fill.bg': 'FF00FF00' } }],
+          definitions: [], definitionsVersion: 7, diagnostics: [], dependencies: [{ sheetId: opts.depSheet?.() ?? S2, valueGen: opts.depGen() }] }
+        return { commandKind: 'read', requestId: command.requestId, owner: identityOf(S1), diagnostics: [], replyBytes: 1024, kind: 'complete', result: { kind: 'read', result: { op: 'conditionalFormatting', result } } } as WorkerReply<'read'>
+      },
+    }
+    return { h, gens, requests, changed, observe: (f: () => void) => { onChanged = f } }
+  }
+
+  it('#2: an exhausted dependency rejection is terminal until an identity changes (bounded requests with unchanged identities)', async () => {
+    const t = host({ depGen: () => 9 }) // the worker keeps answering a generation the main thread never has
+    const cache = new RemoteCfCache(t.h)
+    t.observe(() => { cache.get(S1, [rect(0, 0)], stampOf()) })
+    cache.get(S1, [rect(0, 0)], stampOf())
+    for (let i = 0; i < 20; i++) await flush()
+    expect(t.requests.length).toBeLessThanOrEqual(2)
+    expect(cache.get(S1, [rect(0, 0)], stampOf()).state).toBe('failed')
+    expect(cache.dependencyEpoch(S1)).toBeLessThanOrEqual(1)
+    // An external identity change ends it.
+    const before = t.requests.length
+    t.gens.set(S2, 9)
+    cache.get(S1, [rect(0, 0)], stampOf())
+    for (let i = 0; i < 5; i++) await flush()
+    expect(t.requests.length).toBe(before + 1)
+    expect(cache.get(S1, [rect(0, 0)], stampOf()).state).toBe('ready')
+    cache.close()
+  })
+
+  it('#3: a cold reply rejected for stale dependencies does not consume the cfGen adoption', async () => {
+    let version = 8, dep = 2
+    const t = host({ depGen: () => dep, version: () => version })
+    // First reply: version 8, stale dependency (2 != 3). The retry meets version 9 with a current dependency.
+    const real = t.h.request
+    let calls = 0
+    t.h.request = async (c, s) => { if (++calls === 2) { version = 9; dep = 3 } return real(c, s) }
+    const cache = new RemoteCfCache(t.h)
+    const held = cache.acquire(S1, [rect(0, 0)], stampOf(0))
+    for (let i = 0; i < 10; i++) await flush()
+    // Both requests are cold: the rejected version 8 was never adopted.
+    expect(t.requests.map(r => r.cfGen)).toEqual([0, 0])
+    expect(held.state.state).toBe('ready')
+    expect(held.state.result?.stamp.cfGen).toBe(9)
+    held.release(); cache.close()
+  })
+
+  it('#4: superseded registrations are pruned once their consumers finish, and are counted in the cache bytes', async () => {
+    let sheet = 'd0'
+    const ledger = { limit: 8000, used: 0 }
+    const t = host({ depGen: () => 0, depSheet: () => sheet, ledger })
+    const cache = new RemoteCfCache(t.h)
+    for (let i = 0; i < 25; i++) {
+      sheet = `dep-${i}`
+      const held = cache.acquire(S1, [rect(0, 0)], stampOf(7 + i))
+      for (let k = 0; k < 3; k++) await flush()
+      expect(held.state.state, `round ${i}`).toBe('ready')
+      expect(cache.retainedBytes).toBeGreaterThan(0)
+      held.release()
+      cache.invalidate(S1)
+    }
+    expect(cache.retainedBytes).toBe(0)
+    expect(ledger.used).toBe(0)
+    cache.close()
+  })
+
+  it('#4: a live subscription keeps its registration through eviction; its release prunes it', async () => {
+    const t = host({ depGen: () => 3 })
+    const cache = new RemoteCfCache(t.h)
+    const release = cache.retainDependencies(S1, [{ sheetId: S2, valueGen: 3 }])
+    expect(release).not.toBeNull()
+    // The registration is cache-owned memory: counted with no entry at all.
+    expect(cache.retainedEntries).toBe(0)
+    expect(cache.retainedBytes).toBeGreaterThan(0)
+    const epoch = cache.dependencyEpoch(S1)
+    cache.invalidateDependents(S2)
+    expect(cache.dependencyEpoch(S1)).toBe(epoch + 1)
+    release!()
+    cache.invalidateDependents(S2)
+    expect(cache.dependencyEpoch(S1)).toBe(epoch + 1)
+    expect(cache.retainedBytes).toBe(0)
+    cache.close()
+  })
+
+  it('#4: a held entry whose reply is superseded (reset by an owner change) releases the old reply\'s registrations', async () => {
+    let sheet = 'dep-a'
+    const t = host({ depGen: () => 0, depSheet: () => sheet })
+    const cache = new RemoteCfCache(t.h)
+    const held = cache.acquire(S1, [rect(0, 0)], stampOf())
+    for (let k = 0; k < 3; k++) await flush()
+    expect(held.state.state).toBe('ready')
+    sheet = 'dep-b'
+    t.gens.set(S1, 2) // the host's owner moves: the held entry is reset and reloads
+    cache.get(S1, [rect(0, 0)], stampOf())
+    // At the reset, before any new reply is published, the old reply's registration is already gone.
+    const epoch = cache.dependencyEpoch(S1)
+    cache.invalidateDependents('dep-a')
+    expect(cache.dependencyEpoch(S1)).toBe(epoch)
+    for (let k = 0; k < 3; k++) await flush()
+    expect(held.state.result?.dependencies).toEqual([{ sheetId: 'dep-b', valueGen: 0 }])
+    held.release(); cache.close()
+  })
+
+  it('round 3 #1: a terminal rejection recovers on a genuine dependency identity change without an explicit get()', async () => {
+    const t = host({ depGen: () => 9 }) // main holds Sheet2 at 3; the worker answers 9
+    const cache = new RemoteCfCache(t.h)
+    const held = cache.acquire(S1, [rect(0, 0)], stampOf())
+    for (let i = 0; i < 10; i++) await flush()
+    expect(held.state.state).toBe('failed')
+    expect(t.requests).toHaveLength(2)
+    const epoch = cache.dependencyEpoch(S1)
+    // Unchanged identities stay terminal.
+    cache.invalidateDependents(S2); cache.wakeWaiting()
+    for (let i = 0; i < 5; i++) await flush()
+    expect(held.state.state).toBe('failed')
+    expect(t.requests).toHaveLength(2)
+    // The genuine change: Sheet2 reaches 9 on the main thread.
+    t.gens.set(S2, 9)
+    t.changed.length = 0
+    cache.invalidateDependents(S2); cache.wakeWaiting()
+    for (let i = 0; i < 5; i++) await flush()
+    expect(cache.dependencyEpoch(S1)).toBeGreaterThan(epoch)
+    expect(t.changed).toContain(S1)
+    expect(t.requests).toHaveLength(3)
+    expect(held.state.state).toBe('ready')
+    held.release(); cache.close()
+  })
+
+  it.each(['invalidateDependents', 'wakeWaiting'] as const)('round 3 #1: either trigger alone (%s) revives a lifted terminal rejection; unchanged stays terminal', async trigger => {
+    const t = host({ depGen: () => 9 })
+    const cache = new RemoteCfCache(t.h)
+    const held = cache.acquire(S1, [rect(0, 0)], stampOf())
+    for (let i = 0; i < 10; i++) await flush()
+    expect(held.state.state).toBe('failed')
+    const fire = () => (trigger === 'wakeWaiting' ? cache.wakeWaiting() : cache.invalidateDependents(S2))
+    fire()
+    for (let i = 0; i < 5; i++) await flush()
+    expect(t.requests).toHaveLength(2)
+    t.gens.set(S2, 9)
+    fire()
+    for (let i = 0; i < 5; i++) await flush()
+    expect(t.requests).toHaveLength(3)
+    expect(held.state.state).toBe('ready')
+    held.release(); cache.close()
   })
 })
 

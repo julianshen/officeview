@@ -36,6 +36,8 @@ function typeCapability(type: CfIconSetDefinition['thresholds'][number]['bound']
     case 'percent': return 'icon:thresholds-percent'
     case 'percentile': return PERCENTILE
     case 'min': case 'max': return 'icon:thresholds-min-max'
+    // Stage 5 (Ruling S5-H): reached only by a definition whose formula bound the service has not substituted.
+    case 'formula': return 'icon:thresholds-formula'
   }
 }
 
@@ -93,6 +95,8 @@ export function resolveIconThresholds(
   options: IconOptions = {},
 ): CfOutcome<readonly number[]> {
   const check = options.hasEvidence ?? defaultHasEvidence
+  // A formula threshold is never a threshold: the service substitutes its evaluated number first (Ruling S5-H).
+  if (def.thresholds.some(t => t.bound.type === 'formula')) return unresolved('cf-formula-unevaluated')
   if (!gated(def, check)) return unmeasured()
   const k = def.custom?.length ?? familySize(def.set)
   if (def.thresholds.length !== k) return unresolved('cf-invalid-rule')
@@ -122,6 +126,7 @@ export function resolveIconThresholds(
     else if (b.type === 'min') value = stats?.min
     else if (b.type === 'max') value = stats?.max
     else if (b.type === 'percent') value = stats && stats.min !== undefined && stats.max !== undefined ? lerp(stats.min, stats.max, b.value / 100) : undefined
+    else if (b.type === 'formula') return unresolved('cf-formula-unevaluated')
     else value = stats && variant ? percentileOrderStatistic(stats.sortedAsc, b.value, variant) : undefined
     if (value === undefined) return unresolved('cf-no-numeric-values')
     if (!Number.isFinite(value)) return unresolved('cf-non-finite-value')
@@ -168,6 +173,8 @@ export function evaluateIconSet(
   options: IconOptions = {},
 ): CfOutcome<Omit<CfIconDescriptor, 'ruleId'>> {
   const check = options.hasEvidence ?? defaultHasEvidence
+  // A formula threshold is never a threshold: the service substitutes its evaluated number first (Ruling S5-H).
+  if (def.thresholds.some(t => t.bound.type === 'formula')) return unresolved('cf-formula-unevaluated')
   if (!gated(def, check)) return unmeasured()
   // Ruling S4-M: the viewer lays out no RTL sheet (parse already refuses; kept so the evaluator is closed alone).
   if (def.sheetRightToLeft !== false) return unmeasured()

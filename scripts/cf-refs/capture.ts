@@ -34,6 +34,9 @@ import {
   type WorksheetRangeGeometry,
   computeWorksheetRangeGeometry,
   decodePngSync,
+  evaluateFormulaCase,
+  formulaObservationOf,
+  stage5IconKey,
   type BarCapabilityEvaluation,
   evaluateBarCapabilities,
   isCellInSqref,
@@ -59,16 +62,7 @@ function probeLiveExcelClockState(
   if (!req) return null
   const name = openWorkbook(savedAbs)
   try {
-    const out = runScript(
-      [
-        `set wb to workbook "${q(name)}"`,
-        `set ws to worksheet "${q(c.sheet)}" of wb`,
-        `calculate`,
-        `set v to value of range "${q(req.staleCacheCellRef)}" of ws`,
-        `return v as string`,
-      ],
-      20_000,
-    )
+    const out = runScript(buildClockProbeScript(c, name), 20_000)
     const num = Number(out.trim())
     const serial = Number.isFinite(num) ? Math.floor(num) : req.anchorSerial
     return {
@@ -421,6 +415,130 @@ export function parseDataBarSettingsReadback(out: string): BarSettingsRow[] {
     })
   }
   return rows
+}
+
+/* ---------------- Stage 5: semantic DisplayFormat route (Ruling S5-A, round-1 #4) ---------------- */
+
+/** One cell's DisplayFormat readback lines: value, DisplayFormat interior colour, base interior colour, DisplayFormat strike. */
+function s5CellReadLines(r: string): string[] {
+  return [
+    `set AppleScript's text item delimiters to ","`,
+    `set vVal to ""`,
+    `try`,
+    `  set vVal to ((value of range "${q(r)}" of ws) as string)`,
+    `end try`,
+    `set dfColor to "missing value"`,
+    `try`,
+    `  set dfColor to (color of interior object of display format of range "${q(r)}" of ws as string)`,
+    `end try`,
+    `set baseColor to "missing value"`,
+    `try`,
+    `  set baseColor to (color of interior object of range "${q(r)}" of ws as string)`,
+    `end try`,
+    `set sVal to "missing value"`,
+    `try`,
+    `  set sVal to (strikethrough of font object of display format of range "${q(r)}" of ws as string)`,
+    `end try`,
+    `set end of outList to (vVal & ":::" & dfColor & ":::" & baseColor & ":::" & sVal)`,
+  ]
+}
+
+function s5ObservationScript(workbookName: string, sheetName: string, refs: readonly string[], calculateFirst: boolean): string[] {
+  return [
+    `set wb to workbook "${q(workbookName)}"`,
+    `set ws to worksheet "${q(sheetName)}" of wb`,
+    `set calcMode to "unknown"`,
+    `try`,
+    `  set calcMode to (calculation as string)`,
+    `end try`,
+    `set wbCount to ((count of workbooks) as string)`,
+    ...(calculateFirst ? [`calculate`] : []),
+    `set outList to {}`,
+    ...refs.flatMap(s5CellReadLines),
+    `set AppleScript's text item delimiters to "|||"`,
+    `return calcMode & "###" & wbCount & "###" & (outList as string)`,
+  ]
+}
+
+/**
+ * Round-1 #4: the manual-calculation observation, run on the build's input copy right after it opens and before anything
+ * else: the application calculation mode, the open workbook count, then each cell's value and DisplayFormat. It carries no
+ * `calculate`, so Excel shows what it shows from the saved values.
+ */
+export function buildManualObservationScript(workbookName: string, sheetName: string, refs: readonly string[]): string[] {
+  return s5ObservationScript(workbookName, sheetName, refs, false)
+}
+
+/** The separate, later observation: exactly one explicit `calculate`, then the same reads (recorded apart from the first). */
+export function buildExplicitCalculationObservationScript(workbookName: string, sheetName: string, refs: readonly string[]): string[] {
+  return s5ObservationScript(workbookName, sheetName, refs, true)
+}
+
+export interface S5CellRead { value: string; displayFormatFill?: string; baseFill?: string; strikethrough?: boolean }
+
+/** Parses a manual / explicit-calculation / dynamic-refresh observation (refs in script order). */
+export function parseS5Observation(out: string, refs: readonly string[]): { calculationMode: string; workbookCount: number; cells: Record<string, S5CellRead> } {
+  const [mode = 'unknown', count = '0', rest = ''] = out.trim().split('###')
+  const items = rest.split('|||')
+  const cells: Record<string, S5CellRead> = {}
+  refs.forEach((ref, i) => {
+    const [value = '', df, base, strike] = (items[i] ?? '').split(':::')
+    const dfArgb = parseExcelColorToArgb(df)
+    const baseArgb = parseExcelColorToArgb(base)
+    cells[ref] = { value, ...(dfArgb ? { displayFormatFill: dfArgb } : {}), ...(baseArgb ? { baseFill: baseArgb } : {}), ...(strike === 'true' || strike === 'false' ? { strikethrough: strike === 'true' } : {}) }
+  })
+  return { calculationMode: mode.trim(), workbookCount: Number(count), cells }
+}
+
+/** The clock probe (stale TODAY() cell after a calculate); a `pre-calculate` case skips the calculate (round-1 #4). */
+export function buildClockProbeScript(c: CfOracleCase, workbookName: string): string[] {
+  const req = c.clockRequirement
+  if (!req) return []
+  return [
+    `set wb to workbook "${q(workbookName)}"`,
+    `set ws to worksheet "${q(c.sheet)}" of wb`,
+    ...(c.calcObservation === 'pre-calculate' ? [] : [`calculate`]),
+    `set v to value of range "${q(req.staleCacheCellRef)}" of ws`,
+    `return v as string`,
+  ]
+}
+
+/**
+ * The cells a dynamic refresh reads: every `post:` ref, every `post:` literal positive control (fix round 6) and their
+ * same-content controls (the evaluator checks all of them).
+ */
+export function dynamicRefreshRefs(c: CfOracleCase): string[] {
+  const out = new Set<string>()
+  const controls = (c.formulaConfigurations ?? []).flatMap(cfg => Object.keys(cfg.positiveControls ?? {}).filter(r => r.startsWith('post:')).map(r => r.slice(5)))
+  for (const ref of [...(c.formulaDynamicRefresh?.refs ?? []), ...controls]) {
+    out.add(ref)
+    const ctrl = c.expected.cells.find(e => e.ref === ref)?.controlRef
+    if (ctrl) out.add(ctrl)
+  }
+  return [...out]
+}
+
+/** The live edit of a referenced sheet without saving, then the DisplayFormat reads of the refreshed cells and their controls. */
+export function buildDynamicRefreshScript(workbookName: string, sheetName: string, spec: NonNullable<CfOracleCase['formulaDynamicRefresh']>, refs: readonly string[] = spec.refs): string[] {
+  return [
+    `set wb to workbook "${q(workbookName)}"`,
+    `set ws to worksheet "${q(sheetName)}" of wb`,
+    ...spec.edits.map(e => `set value of range "${q(e.ref)}" of worksheet "${q(spec.sheet)}" of wb to ${e.value}`),
+    `set calcMode to "unknown"`,
+    `set wbCount to ((count of workbooks) as string)`,
+    `set outList to {}`,
+    ...refs.flatMap(s5CellReadLines),
+    `set AppleScript's text item delimiters to "|||"`,
+    `return calcMode & "###" & wbCount & "###" & (outList as string)`,
+  ]
+}
+
+/** The Stage 5 scripts the capture runs for a case (exported so the no-premature-calculate rule is tested on text). */
+export function buildStage5CaptureScripts(c: CfOracleCase, workbookName: string): { clock: string[]; dynamicRefresh: string[][] } {
+  return {
+    clock: buildClockProbeScript(c, workbookName),
+    dynamicRefresh: c.formulaDynamicRefresh ? [buildDynamicRefreshScript(workbookName, c.sheet, c.formulaDynamicRefresh, dynamicRefreshRefs(c))] : [],
+  }
 }
 
 /**
@@ -793,6 +911,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const isBarCase = c.stage === 3 && c.markers.some(m => m.ruleType === 'dataBar')
     // Stage 4: icon cases take the icon branch only (Ruling S4-A); never the Stage 1 contrast observation.
     const isIconCase = c.stage === 4
+    // Stage 5: formula cases take the semantic DisplayFormat route only (Ruling S5-A); never the Stage 1 contrast observation.
+    const isFormulaCase = c.stage === 5
+    let formulaObservations: Record<string, Omit<S5CellRead, 'value'>> | undefined
+    let formulaDynamic: Record<string, S5CellRead> | undefined
     let iconObserved: ReadonlyMap<string, CfObservedIcon> | undefined
     let iconEvaluation: Record<string, IconCapabilityEvaluation> | undefined
     let iconRefusal: string | undefined
@@ -830,6 +952,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
           if (Array.isArray(sc.barSettingsReadback)) barReadback = sc.barSettingsReadback as BarSettingsRow[]
           if (Array.isArray(sc.iconOmReachability)) iconOm = sc.iconOmReachability as ReturnType<typeof parseIconOmReachability>
           if (typeof sc.iconCopyText === 'string') iconCopyText = sc.iconCopyText
+          if (sc.formulaObservations && typeof sc.formulaObservations === 'object') formulaObservations = sc.formulaObservations as Record<string, Omit<S5CellRead, 'value'>>
+          if (sc.formulaDynamicRefresh && typeof sc.formulaDynamicRefresh === 'object') formulaDynamic = sc.formulaDynamicRefresh as Record<string, S5CellRead>
           if (sc.lockBefore === 'unlocked' || sc.lockBefore === 'locked') sidecarLockBefore = sc.lockBefore
           if (sc.lockAfter === 'unlocked' || sc.lockAfter === 'locked') sidecarLockAfter = sc.lockAfter
           if (typeof sc.excelTodaySerial === 'number') {
@@ -880,6 +1004,24 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       cellColors = liveObs?.cellColors
       colorScaleCriteria = liveObs?.colorScaleCriteria
       barReadback = liveObs?.barSettingsReadback
+      if (isFormulaCase) {
+        // Ruling S5-A: Excel's own DisplayFormat per designated cell, twin and control (interior colour and strikethrough).
+        formulaObservations = Object.fromEntries(c.expected.cells.map(e => {
+          const col = cellColors?.[e.ref]
+          const dec = cellDecorations?.[e.ref]
+          return [e.ref, { ...(col?.displayFormatFill ? { displayFormatFill: col.displayFormatFill } : {}), ...(col?.baseFill ? { baseFill: col.baseFill } : {}), ...(dec?.strikethrough !== undefined ? { strikethrough: dec.strikethrough } : {}) }]
+        }))
+        if (c.formulaDynamicRefresh) {
+          // A live edit of the referenced sheet, never saved (the close discards it), in its own owned open/close.
+          const name = openWorkbook(savedAbs)
+          try {
+            const refs = dynamicRefreshRefs(c)
+            formulaDynamic = parseS5Observation(runScript(buildDynamicRefreshScript(name, c.sheet, c.formulaDynamicRefresh, refs), 30_000), refs).cells
+          } finally {
+            if (!preExisting.has(name)) closeOwnedWorkbook(name, preExisting)
+          }
+        }
+      }
       // Record-only Excel observations of two Stage 4 cases (Rulings S4-A and S4-N), each in its own owned open/close.
       if (c.id === 'stage4-icon-om-reachability' || c.id === 'stage4-icon-showvalue') {
         const name = openWorkbook(savedAbs)
@@ -965,7 +1107,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       }
 
       const observedCells =
-        isBarCase || isIconCase
+        isBarCase || isIconCase || isFormulaCase
           ? null
           : decoded && capGeom
           ? observeCellsFromCapture(decoded, capGeom, cWithUpdatedExpected, {
@@ -986,7 +1128,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       }) ?? observedCells
 
       let observedTodayBranch = observedTodayBranchFromSidecar
-      if (c.clockRequirement && finalObservedCells) {
+      if (isFormulaCase && c.clockRequirement && clockState) {
+        // Stage 5: the branch is Excel's own TODAY() serial (the refreshed stale cell), not a formatted cell.
+        observedTodayBranch = clockState.excelTodaySerial === c.clockRequirement.anchorSerial ? 'local' : clockState.excelTodaySerial === c.clockRequirement.anchorSerial - 1 ? 'utc' : undefined
+      }
+      if (c.clockRequirement && finalObservedCells && !isFormulaCase) {
         const localObs = finalObservedCells.find(
           o => o.ref.toUpperCase() === c.clockRequirement!.localTodayCellRef.toUpperCase(),
         )
@@ -1030,6 +1176,12 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
               ...(colorScaleCriteria ? { colorScaleCriteria } : {}),
               ...(barExtra ? barExtra.extras : {}),
               ...(iconExtra ? iconExtra.extras : {}),
+              ...(isFormulaCase
+                ? (() => {
+                    const recorded = { formulaObservations: formulaObservations ?? {}, ...(formulaDynamic ? { formulaDynamicRefresh: formulaDynamic } : {}) }
+                    return { lockBefore: sidecarLockBefore, lockAfter: sidecarLockAfter, ...recorded, formulaEvaluation: evaluateFormulaCase(cWithUpdatedExpected, recorded, decoded ?? undefined, capGeom ?? undefined, parts ?? undefined, stage5IconKey(REPO_ROOT)) }
+                  })()
+                : {}),
             },
             null,
             2,
@@ -1054,7 +1206,13 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
 
     const barLabels = isBarCase && barObserved ? classifyBarCapture(cWithUpdatedExpected, barEvaluation ?? {}) : undefined
     const iconLabels = isIconCase && iconObserved ? classifyIconCapture(cWithUpdatedExpected, iconEvaluation ?? {}) : undefined
+    const formulaFills = isFormulaCase ? formulaObservationOf(cWithUpdatedExpected, { formulaObservations: formulaObservations ?? {} }, undefined, undefined) : undefined
     const populatedExpectedCells = currentExpected.cells.map(exp => {
+      if (formulaFills) {
+        // Observed truth, never a guess: matched follows Excel's DisplayFormat (a fill other than the base, or a strike).
+        const o = formulaFills.fill(exp.ref)
+        return o ? { ...exp, matched: o.fill !== 'none' || o.strike, fillSource: 'excel-display-format' as const } : exp
+      }
       if (iconLabels && exp.matched && exp.iconApplied !== undefined) {
         // Observed truth, never a guess: iconApplied follows the PNG and iconEvidence the verifier's own rules.
         const measured = iconObserved?.get(exp.ref)

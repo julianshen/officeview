@@ -71,6 +71,9 @@ function lazyPagedChunks(): Plugin {
         '/src/components/xlsx/pivot/PivotButtonLayer.tsx',
         // Task 30's pivot chart gate, which the pivot client imports for a pivot with linked charts.
         '/src/xlsx/pivots/session/charts.ts',
+        // The linked-control transaction (slicer/timeline apply and commit), the worker's
+        // controlApply dynamic import in the viewer worker (src/worker/viewerSession.ts).
+        '/src/xlsx/pivots/slicers/transaction.ts',
         '/src/xlsx/pivots/load.ts',
         '/src/xlsx/storage/pagedDrawings.ts',
         '/src/xlsx/tableStyles/regionLayer.ts',

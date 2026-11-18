@@ -12,7 +12,7 @@
  * additionally passes through the evidence gate and stays unresolved until
  * `stage1-blanks-errors` is measured.
  */
-import type { CfLiteral, CfOperator, CfOutcome, CfRule, CfTimePeriod } from './model'
+import { isCfFormulaOperand, type CfLiteral, type CfOperator, type CfOutcome, type CfRule, type CfTimePeriod } from './model'
 import { hasEvidence } from './evidence'
 import { cfValueKey, type CfRangeStatistics } from './statistics'
 import { decodeSerial, epochToSerial, weekdayOf } from '../formula/serial'
@@ -453,6 +453,17 @@ function evaluateTimePeriod(
 }
 
 /**
+ * Stage 5 operand path (Ruling S5-F): a `cellIs` whose formula operands the evaluator has already turned into literals
+ * for this cell. The comparison is the Stage 1 `evaluateCellIs`, under the same `cellIs:*` capabilities, unchanged.
+ */
+export function evaluateCellIsOperands(rule: CfRule, sourceAddress: CfSourceAddress, value: CfLiteral, operands: readonly CfLiteral[], evidence: CfEvidenceGate): CfOutcome<boolean> {
+  if (!inRanges(sourceAddress.row, sourceAddress.col, rule)) return { kind: 'no-match' }
+  const definition = rule.definition
+  if (definition.kind !== 'cellIs' || operands.length !== definition.operands.length) return unmeasured('cf-unsupported-rule')
+  return evaluateCellIs(definition.operator, operands, value, evidence)
+}
+
+/**
  * Decide one rule on one cell. `stats` carries the prepared range statistics
  * for rules that need them (top10/aboveAverage/duplicateValues/uniqueValues);
  * `evidence` gates measurement-pending semantics. Never reads the wall clock
@@ -470,8 +481,18 @@ export function evaluatePredicate(
   const definition = rule.definition
   if (definition.kind === 'unresolved') return { kind: 'unresolved', reason: definition.reason }
   switch (definition.kind) {
-    case 'cellIs':
-      return evaluateCellIs(definition.operator, definition.operands, value, evidence)
+    case 'cellIs': {
+      // A formula operand is evaluated per cell by the formula evaluator (Stage 5), never by comparing against a literal.
+      const literals: CfLiteral[] = []
+      for (const operand of definition.operands) {
+        if (isCfFormulaOperand(operand)) return unmeasured('cf-formula-unevaluated')
+        literals.push(operand)
+      }
+      return evaluateCellIs(definition.operator, literals, value, evidence)
+    }
+    case 'expression':
+      // Formula rules are decided by the formula evaluator only; reaching the literal predicates withholds.
+      return unmeasured('cf-formula-unevaluated')
     case 'text':
       return evaluateText(definition.type, definition.needle, value, evidence)
     case 'predicate':

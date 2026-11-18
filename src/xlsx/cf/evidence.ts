@@ -297,6 +297,25 @@ export function injectCfIconSelections(selections: CfIconSelectionsExport | null
   testIconSelections = selections ? Object.freeze({ ...selections }) : null
 }
 
+/**
+ * Stage 5 (Task 35), the Stage 4 pattern: which reading the oracle matched for a formula capability whose production entry
+ * is a selection (a list in `CF_FORMULA_PRODUCTION_READINGS`). Read from an optional `VERIFIED_STAGE5_FORMULA_SELECTIONS`
+ * export (capability id to matched hypothesis), which `audit --stage 5 --write --publish-stage5` renders beside the published
+ * set (Task 39); without it no selection resolves and the shape stays unresolved.
+ */
+const PUBLISHED_FORMULA_SELECTIONS = Reflect.get(verifiedExports, 'VERIFIED_STAGE5_FORMULA_SELECTIONS') as Readonly<Record<string, string>> | undefined
+let testFormulaSelections: Readonly<Record<string, string>> | null = null
+/** Test injection of matched formula hypotheses (capability id to hypothesis id); null clears. Gated by evidence too. */
+export function injectCfFormulaSelections(selections: Readonly<Record<string, string>> | null): void {
+  testFormulaSelections = selections ? Object.freeze({ ...selections }) : null
+}
+/** The matched reading of one formula capability, only when the capability passes `check` and a selection names one. */
+export function formulaSelectionEvidence(capability: string, check: (capability: string) => boolean = id => hasEvidence(id)): string | undefined {
+  if (!check(capability)) return undefined
+  const v = (testFormulaSelections ?? PUBLISHED_FORMULA_SELECTIONS)?.[capability]
+  return typeof v === 'string' ? v : undefined
+}
+
 /** The matched reading of one icon capability, only when the capability passes `check` and a selection names one. */
 export function iconSelectionEvidence(capability: string, check: (capability: string) => boolean = id => hasEvidence(id)): string | undefined {
   if (!check(capability)) return undefined

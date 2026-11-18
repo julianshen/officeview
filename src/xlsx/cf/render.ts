@@ -4,17 +4,21 @@ import { createCfStatistics } from './statistics'
 import { sameCfStamp } from './cache'
 import { cfRuntimeEvidence, type CfEvidenceGate } from './predicates'
 import { createCfService, type CfPaintStatistics } from './service'
+import { cfAlignClock, cfEvaluationContextFor, cfRoutePolicy, type CfDocumentEvaluation } from './formula'
+export { cfDocumentEvaluationOf, cfDocumentEvaluationOfPaged } from './formula'
 import { CF_LIMITS, createCfMemory, createCfWorkBudget, measureCfPayload, type CfMemory, type CfWorkBudget } from './limits'
 import { resolveCfCellStyle } from './dxf'
 import { barPaintable, barWithheld, CF_BAR_RENDER_MODEL, paintDataBars, type CfBarHost, type CfBarScale } from './dataBarPaint'
 import { admitBatchGlyphs, cfHidesText, iconPaintsOn, iconTextInset, paintIconCells, type CfAdmittedGlyphs, type CfIconGate } from './iconPaint'
 import type { CfBarDescriptor, CfCellState, CfIconDescriptor, CfLiteral, CfPrepareRequest, CfStamp, CfValueSource, SourceRect } from './model'
+import { cfAdmittedSheetNames, cfDependencyGenOf, cfReferencedSheetNames, withCfDependencyGen, type CfWorkbookSheet, type CfWorkbookSource } from './dependencies'
 import type { XlsxSheet } from '../types'
 import type { RegionStyleLayer } from '../tableStyles/regionLayer'
 import { regionStylesFor } from '../tableStyleLoader'
 import { cellSourceRow } from '../view/sheetCells'
 import { isValueUnavailable, type ValuePolicy } from '../view/values'
 import { cfNeedsViewport, cfExplicitBounds } from '../cfLoader'
+import { cfRulesUseClock } from './model'
 import { STATIC_SHEET_BUDGET, computeMetrics, layoutCellBody, spreadsheetColor, textMeasurer, type MeasureCached } from '../render'
 import { cellTextWidth, withTextInset, type CellBodyLayout } from '../view/textLayout'
 import type { XlsxCell, XlsxCellStyle } from '../types'
@@ -133,6 +137,82 @@ export function storeCfSource(store: SourceStore, stamp: CfStamp, memory: CfMemo
       ? { firstRow: used.r0, lastRow: used.r1, firstCol: used.c0, lastCol: used.c1 }
       : { firstRow: 0, lastRow: 0, firstCol: 0, lastCol: 0 } },
     pages: pagedStoreCfPages(store, memory),
+  }
+}
+/**
+ * Task 36 (Ruling S5-K): the workbook seam over canonical, overlay-aware stores (the resident `source.store`, the worker's
+ * `PagedXlsxSheetAdapter`s). Each referenced sheet's values (`storeCfSource`) and its generation (`store.stamp.valueGen`)
+ * come from the same store object, resolved lazily per name; a store whose import has not completed is pending, one that
+ * ended incomplete has failed.
+ */
+export function cfWorkbookOfStores(sheets: readonly Readonly<{ sheetId: string; name: string }>[], storeOf: (sheetId: string) => SourceStore | undefined, memory: CfMemory): CfWorkbookSource {
+  const byName = new Map(sheets.map(s => [s.name.toLowerCase(), s] as const))
+  const made = new Map<string, CfWorkbookSheet>()
+  return {
+    sheetIdOf: name => byName.get(name.toLowerCase())?.sheetId,
+    sheet(sheetId) {
+      const known = made.get(sheetId)
+      if (known) return known
+      const entry = sheets.find(s => s.sheetId === sheetId)
+      const store = entry ? storeOf(sheetId) : undefined
+      if (!entry || !store) return undefined
+      const stub: CfStamp = { owner: store.stamp.docId, sheetId, workbookValueGen: 0, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 }
+      const sheet: CfWorkbookSheet = {
+        sheetId, name: entry.name, values: storeCfSource(store, stub, memory),
+        state: () => (store.completeness === 'complete' ? 'ready' : store.completeness === 'incomplete' ? 'failed' : 'pending'),
+        valueGen: () => store.stamp.valueGen,
+      }
+      made.set(sheetId, sheet)
+      return sheet
+    },
+  }
+}
+/**
+ * Task 36 (Ruling S5-K, fix rounds 2-3): the resident live key's dependency part, over the preparation's own admitted set
+ * (`cfAdmittedSheetNames`: the first 16 distinct referenced names, host excluded). Each admitted sheet's current value
+ * generation and completeness join the key; an unknown name reads `-1`. One store read per admitted sheet. Lazy: the
+ * interactive view calls it on every render once the CF runtime is loaded, and withholds resident CF until then.
+ */
+export function cfResidentDependencyKey(rules: import('./model').CfSheetRules | undefined, hostName: string, sheets: readonly Readonly<{ sheetId: string; name: string }>[],
+  storeOf: (sheetId: string) => Readonly<{ stamp: Readonly<{ valueGen: number }>; completeness?: string }>): string {
+  const parts: Array<string | number> = []
+  for (const name of cfAdmittedSheetNames(rules, hostName)) {
+    const s = sheets.find(x => x.name.toLowerCase() === name.toLowerCase()), t = s && storeOf(s.sheetId)
+    parts.push(t ? `${t.stamp.valueGen}${t.completeness}` : -1)
+  }
+  return parts.join()
+}
+/** The canonical stores of a workbook (the resident `WorkbookSource` shape). */
+export type CfWorkbookStores = Readonly<{ sheets: readonly Readonly<{ sheetId: string; name: string }>[]; store(sheetId: string): SourceStore }>
+/**
+ * One preparation's workbook seam (Rulings S5-K, S5-P), or undefined when the host's rules name no other sheet (no
+ * cross-sheet work at all). A host store reads its referenced sheets from the same workbook's stores; a host without a
+ * store reads the document's sheets; a host store offered only document sheets gets none (cross-sheet rules withhold).
+ */
+export function cfWorkbookFor(rules: import('./model').CfSheetRules, hostName: string, hostStore: SourceStore | undefined, stores: CfWorkbookStores | undefined,
+  documentSheets: readonly XlsxSheet[] | undefined, memory: CfMemory, policy: ValuePolicy): CfWorkbookSource | undefined {
+  if (cfReferencedSheetNames(rules, hostName).length === 0) return undefined
+  if (stores) return cfWorkbookOfStores(stores.sheets, id => (stores.sheets.some(s => s.sheetId === id) ? stores.store(id) : undefined), memory)
+  if (documentSheets && !hostStore) return cfWorkbookOfDocument(documentSheets, memory, policy)
+  return undefined
+}
+/** Static, print and export legs (Ruling S5-K): the document's own sheets, which carry no overlay and never commit, read
+ * through the same resident reader the host uses (one value policy). */
+export function cfWorkbookOfDocument(sheets: readonly XlsxSheet[], memory: CfMemory, policy: ValuePolicy): CfWorkbookSource {
+  const idOf = (sheet: XlsxSheet, index: number): string => sheet.sheetId ?? String(index + 1)
+  const made = new Map<string, CfWorkbookSheet>()
+  return {
+    sheetIdOf: name => { const i = sheets.findIndex(s => s.name.toLowerCase() === name.toLowerCase()); return i < 0 ? undefined : idOf(sheets[i]!, i) },
+    sheet(sheetId) {
+      const known = made.get(sheetId)
+      if (known) return known
+      const i = sheets.findIndex((s, j) => idOf(s, j) === sheetId)
+      if (i < 0) return undefined
+      const stub: CfStamp = { owner: 'static', sheetId, workbookValueGen: 0, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 }
+      const sheet: CfWorkbookSheet = { sheetId, name: sheets[i]!.name, values: residentSource(sheets[i]!, stub, memory, policy), state: () => 'ready', valueGen: () => 0 }
+      made.set(sheetId, sheet)
+      return sheet
+    },
   }
 }
 /** One diagnostic surface for initial and late refusals, with the sheet cap. */
@@ -290,8 +370,16 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
   viewport?: { metrics: import('../view/contracts').SheetMetrics; boxes: readonly import('../view/contracts').LogicalCellBox[] };
   statisticsBudget?: () => CfWorkBudget;
   statisticsMaxUnits?: number;
+  /** Stage 5 (Ruling S5-L): the document's evaluation policy (`cfDocumentEvaluationOf(doc)`); this preparation takes one
+   * clock snapshot from `now` (default: the wall clock). Absent: formula rules are unresolved, Stage 1-4 rules unchanged. */
+  evaluation?: CfDocumentEvaluation; now?: () => number;
   /** The measuring context resident icon hosts use for `iconAt` (default: an offscreen canvas, or none: withheld). */
   layoutContext?: () => CanvasRenderingContext2D | null | undefined;
+  /** Task 36 (Ruling S5-K): the workbook's canonical stores (the resident `source`), for a host `store`. */
+  workbook?: CfWorkbookStores;
+  /** The static leg's document sheets (no overlay), for a host without a store. A host store with only document sheets
+   * withholds cross-sheet rules: the two never mix. */
+  documentSheets?: readonly XlsxSheet[];
 } = {}): Promise<CfPaintBatch | undefined> {
   const rules = sheet.conditionalFormatting
   if (!rules) return undefined
@@ -309,6 +397,12 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
   const hold = memory.reserve(2048 + Math.max(rangeCount, requested?.length ?? 0) * 512)
   if (hold.kind !== 'reserved') return unavailable(sheet)
   const evidence = options.evidence ?? cfRuntimeEvidence
+  // Ruling S5-L: one value policy per preparation, the document's when the route is given its context.
+  const { policy: valuePolicy, evaluation: routed } = cfRoutePolicy(options.evaluation ? cfEvaluationContextFor(options.evaluation, options.now ?? Date.now) : undefined, [options.valuePolicy, options.store?.valuePolicy], 'cached')
+  // One clock per preparation (Ruling S5-M): the predicates read the instant the formulas do, or the formulas withhold.
+  const { evaluation, dateContext } = cfAlignClock(routed, options.dateContext, () => sheet.semantics ? { dateSystem: sheet.semantics.dateSystem, timeZone: sheet.semantics.timeZone, epochNowMs: Date.now() } : undefined)
+  const workbook = cfWorkbookFor(rules, sheet.name, options.store, options.workbook, options.documentSheets, memory, valuePolicy)
+  const dependencyGen = cfDependencyGenOf(rules, sheet.name, workbook)
   const stamp = options.request?.stamp ?? {
     owner: options.store?.stamp.docId ?? 'static',
     sheetId: sheet.sheetId ?? sheet.name,
@@ -316,10 +410,15 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
     cfGen: options.store ? cfRulesVersion(rules) : 1,
     viewGen: 0,
     structureGen: options.store?.structureGen ?? 0,
-    clockGen: options.dateContext?.clockSerial ? Math.floor(options.dateContext.clockSerial) : 0,
+    // Ruling S5-M: a sheet with a clock-dependent formula stamps its preparation's one clock (the local day number); every
+    // other sheet keeps the Stage 1 value, so a clock-free sheet is never invalidated by the tick.
+    clockGen: evaluation && cfRulesUseClock(rules, true) ? evaluation.clock.clockGen : options.dateContext?.clockSerial ? Math.floor(options.dateContext.clockSerial) : 0,
+    ...(dependencyGen !== 0 ? { dependencyGen } : {}),
   }
   const signal = options.request?.signal ?? new AbortController().signal
-  const source = options.source ?? (options.store ? storeCfSource(options.store, stamp, memory) : residentSource(sheet, stamp, memory, options.valuePolicy ?? 'cached'))
+  // The batch's own liveness checks (`styleAt`, bars, icons) read the live `dependencyGen` too (S5-K): a referenced sheet's
+  // commit stops this batch painting synchronously, as a host commit does.
+  const source = withCfDependencyGen(options.source ?? (options.store ? storeCfSource(options.store, stamp, memory) : residentSource(sheet, stamp, memory, valuePolicy)), rules, sheet.name, workbook)
   const hiddenRows: SourceRect[] = []
   for (const r of sheet.rows) {
     if (r.hidden) hiddenRows.push({ firstRow: r.index, lastRow: r.index, firstCol: 0, lastCol: 16383 })
@@ -336,11 +435,6 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
     sheetStatsSessions.set(sheet, retainedStats)
   }
   const statistics: CfPaintStatistics = { session: retainedStats.session, stamp, results: new Map() }
-  const dateContext = options.dateContext ?? (sheet.semantics ? {
-    dateSystem: sheet.semantics.dateSystem,
-    timeZone: sheet.semantics.timeZone,
-    epochNowMs: Date.now(),
-  } : undefined)
   let units = 0
   const work = async () => {
     if (signal?.aborted) throw new Error('CF cancelled')
@@ -467,7 +561,8 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
         // Ruling S3-I1-UNITS: the batch is capped at CF_LIMITS.activeUnits work units, not wall time.
         const batchBudget = createCfWorkBudget({ signal })
         const statsBudgetFactory = options.statisticsBudget ?? (() => createCfWorkBudget({ signal, scan: true, maxUnits: options.statisticsMaxUnits ?? 10_000_000 }))
-        const service = createCfService(rules, memory, { evidence, budget: () => batchBudget, statisticsBudget: statsBudgetFactory, statistics, statisticsOptions, dateContext, merges: sheetMerges })
+        const service = createCfService(rules, memory, { evidence, budget: () => batchBudget, statisticsBudget: statsBudgetFactory, statistics, statisticsOptions, dateContext, merges: sheetMerges, ...(evaluation ? { evaluation } : {}),
+          sheetName: sheet.name, ...(workbook ? { workbook } : {}) })
         try {
           const lease = await service.prepareCf({ stamp, sourceRects: [rect], signal, grantBytes: options.request?.grantBytes ?? CF_LIMITS.scratchBytes }, source)
           try {

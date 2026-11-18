@@ -12,6 +12,28 @@ in git history.
 
 ### Added
 
+- **Excel formula conditional formatting rules (view-only).** "Use a formula" rules, `cellIs` rules whose value is a
+  reference or a formula, and text, blank and error rules whose formula differs from the one Excel writes are now
+  evaluated per cell by a bounded formula evaluator, compose with the other rule kinds, and paint wherever Excel 16.115's
+  own rendering verifies them (42 Stage 5 capabilities): the formula dialects, relative and pinned anchors and the edge
+  wrap, number/boolean/blank/error truth, the logical, information, text, math, aggregate, conditional-aggregate, date,
+  row/column and `TODAY()` functions, hoisted whole-column aggregates and `COUNTIF` frequency, reference, relative,
+  expression and blank `cellIs` operands, divergent predicates, saved values under manual calculation, stopIfTrue and
+  priority composition with fills, scales and bars, references to other sheets (also as a `cellIs` operand), formula
+  colour-scale bounds and the x14 standalone colour scale. On Excel's own oracle workbooks every formula cell is
+  Excel's reading or withheld. Everything else keeps its base formatting and is announced as unavailable: shapes Excel
+  rewrites or refuses (`activePresent` on scales, bars and icon sets; a time-period formula that differs from its
+  period; a reference to a missing sheet; a non-numeric formula bound), readings production does not implement (text and
+  range truth, error operands, a relative cfvo bound), formula bar and icon bounds, and stopIfTrue ahead of an icon set.
+
+- **Excel time-period rules (view-only): a rule's formula is classified, not ignored.** A conditional formatting
+  "dates occurring" rule whose `<formula>` is the one Excel itself writes for its period (today, yesterday, tomorrow,
+  last 7 days, this/last/next week, this/last/next month) is evaluated as before. A rule whose formula disagrees with its
+  `timePeriod` attribute used to paint from the attribute; it is now withheld, because Excel evaluates the formula and which
+  of the two it follows is measured only in Stage 5 (`formula:predicate-timeperiod-divergent`). Every Stage 1 clock
+  measurement is unchanged. A time-period rule on several ranges also stays withheld while multi-range anchoring is
+  unmeasured.
+
 - **Excel icon sets (view-only).** Conditional formatting icon sets now evaluate and paint in resident, worker-backed
   and paged views, in print and export, wherever Excel 16.115's own rendering verifies them. Buckets follow Excel's
   readings for every built-in family (base and x14), num, percent, percentile and mixed thresholds, `gte`, `reverse`,
@@ -187,6 +209,15 @@ in git history.
     `docs/validation/xlsx-pivots.md`.
 
 ### Fixed
+
+- **Formula conditional formatting reads text the way the worksheet does.** A formula rule used to count characters
+  under a different Unicode compatibility version from the workbook's own formulas, so `LEN` of an emoji was 1 in a
+  rule but 2 on the sheet, and `=LEN($A$1)=1` painted where Excel's worksheet semantics say it is false. Rules now
+  evaluate under the workbook's own compatibility version (a parsed workbook: UTF-16 code units, as its formulas).
+
+- **The worker-backed view no longer reads the clock for sheets whose rules never use it.** Conditional formatting
+  in the worker sampled the clock on every preparation; it now samples it once, only when a rule reads it (`TODAY()`,
+  a time-period rule), as the resident view already did.
 
 - **The forced-paged view announces its painted data bars** ("Data bar, N% of range") instead of "Conditional formatting unavailable", deciding each bar from the host the frame paints it in.
 
