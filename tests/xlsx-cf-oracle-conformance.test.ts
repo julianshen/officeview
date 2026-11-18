@@ -910,7 +910,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(s4, 'Task 30 publishes the Stage 4 set').toBeDefined()
     const stage4 = manifest.cases.filter(c => c.stage === 4)
     expect(stage4.map(c => c.id)).toEqual(CF_CASES.filter(c => c.stage === 4).map(c => c.id))
-    expect(stage4).toHaveLength(19)
+    expect(stage4).toHaveLength(20)
     let checked = 0, iconCells = 0, preparedSheets = 0, agreedIcon = 0, agreedNone = 0, withheld = 0, unclassified = 0, unobserved = 0, controls = 0
     const violations: string[] = []
     const shownBy = new Map<string, number>()
@@ -980,7 +980,9 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(violations).toEqual([])
     // The publication is not vacuous: production evaluates Excel's icon on most icon cells, across the bucket cases.
     // Pinned at publication (Task 30): any change in what production evaluates moves these.
-    expect({ checked, agreedIcon, agreedNone, withheld, unclassified, unobserved, controls }).toEqual({ checked: 1506, agreedIcon: 549, agreedNone: 25, withheld: 111, unclassified: 86, unobserved: 21, controls: 714 })
+    // Centred-key follow-up: stage4-icon-glyph-key-centred (recipe-pending) adds 152 cells, its 75 key cells unobserved
+    // and 77 controls (the 75 key controls, K2 and its control); every agreement count is unchanged.
+    expect({ checked, agreedIcon, agreedNone, withheld, unclassified, unobserved, controls }).toEqual({ checked: 1658, agreedIcon: 549, agreedNone: 25, withheld: 111, unclassified: 86, unobserved: 96, controls: 791 })
     for (const id of ['stage4-icon-families', 'stage4-icon-thresholds', 'stage4-icon-degenerate', 'stage4-icon-reverse-custom', 'stage4-icon-participation', 'stage4-icon-scope', 'stage4-icon-composition', 'stage4-icon-glyph-key', 'stage4-icon-rows-bottom', 'stage4-icon-authored']) {
       expect(shownBy.get(id) ?? 0, id).toBeGreaterThan(0)
     }

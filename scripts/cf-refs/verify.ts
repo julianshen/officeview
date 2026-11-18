@@ -8,7 +8,7 @@ import { resolve } from 'node:path'
 import { inflateRawSync, inflateSync } from 'node:zlib'
 import { parseXml } from '../../src/core/xml'
 import { columnWidthPx, maxDigitWidthPx } from '../../src/xlsx/columnWidth'
-import { CF_STAGE3_NONDISCRIMINATING, CF_STAGE3_UNSUPPORTED, CF_STAGE4_CAPABILITIES, CF_STAGE4_NONDISCRIMINATING, CF_STAGE4_UNSUPPORTED, CF_STAGE5_CAPABILITIES, CF_STAGE5_CASES, CF_STAGE5_NONDISCRIMINATING, CF_STAGE5_UNSUPPORTED, barCapabilityKind, iconCapabilityKind } from './cases'
+import { CF_ICON_KEY_CASES, CF_STAGE3_NONDISCRIMINATING, CF_STAGE3_UNSUPPORTED, CF_STAGE4_CAPABILITIES, CF_STAGE4_NONDISCRIMINATING, CF_STAGE4_UNSUPPORTED, CF_STAGE5_CAPABILITIES, CF_STAGE5_CASES, CF_STAGE5_NONDISCRIMINATING, CF_STAGE5_UNSUPPORTED, barCapabilityKind, iconCapabilityKind } from './cases'
 import type {
   CfDxfExpectation,
   CfManifest,
@@ -4908,24 +4908,25 @@ export function buildIconScenarioHypotheses(
 const iconKeyCache = new Map<string, IconGlyphKey | Refusal | undefined>()
 
 /**
- * The glyph key of the committed `stage4-icon-glyph-key` capture under `rootDir`, if that capture exists and builds, and
+ * The glyph key of the committed `caseId` capture under `rootDir` (by default the Stage 4 key `stage4-icon-glyph-key`; the
+ * centred key `stage4-icon-glyph-key-centred` is loaded the same way), if that capture exists and builds, and
  * only when the key sidecar records exactly the classes (`glyphClasses`) and the twin relation (`glyphTwins`, Ruling
  * S4-NEARTWIN) the PNG recomputes: the key is restored from what the sidecar persisted, and a key sidecar that predates
  * the current key build (for example one written while the key refused) restores no key (`sidecar-mismatch`). Every
  * dependent case is then classified against the key its own sidecar was derived with, until `capture --verify-only`
  * re-derives the key sidecar first and the dependents after it.
  */
-export function loadIconGlyphKey(rootDir: string): IconGlyphKey | Refusal | undefined {
+export function loadIconGlyphKey(rootDir: string, caseId: string = CF_ICON_KEY_CASES.bottom): IconGlyphKey | Refusal | undefined {
   const manifestAbs = resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json')
   if (!existsSync(manifestAbs)) return undefined
   const manifest = JSON.parse(readFileSync(manifestAbs, 'utf8')) as CfManifest
-  const keyCase = manifest.cases.find(c => c.id === 'stage4-icon-glyph-key')
+  const keyCase = manifest.cases.find(c => c.id === caseId)
   const cap = keyCase?.captures.find(x => x.appearance === 'screen')
   if (!keyCase || !cap?.pngSha256) return undefined
   const sidecarAbs = resolve(rootDir, cap.sidecarPath)
   const sidecarText = existsSync(sidecarAbs) ? readFileSync(sidecarAbs, 'utf8') : ''
   const sidecarSha = createHash('sha256').update(sidecarText).digest('hex')
-  const cacheKey = `${rootDir}\u0000${cap.pngSha256}\u0000${keyCase.expected.savedSha256}\u0000${sidecarSha}`
+  const cacheKey = `${rootDir}\u0000${caseId}\u0000${cap.pngSha256}\u0000${keyCase.expected.savedSha256}\u0000${sidecarSha}`
   if (iconKeyCache.has(cacheKey)) return iconKeyCache.get(cacheKey)
   const capture = loadBarScreenCapture(keyCase, rootDir)
   const built = capture ? buildIconGlyphKey(keyCase, capture.parts, capture.png, capture.geom) : undefined
@@ -5848,7 +5849,7 @@ export function formulaObservationOf(
   sidecar: Record<string, unknown>,
   png: DecodedPng | undefined,
   geom: WorksheetRangeGeometry | undefined,
-  iconKey?: IconGlyphKey,
+  iconKeyOf?: (ref: string) => IconGlyphKey | undefined,
 ): FormulaObservation {
   const tables: Record<string, S5FillRecord | undefined> = {
     '': sidecar.formulaObservations as S5FillRecord | undefined,
@@ -5867,7 +5868,7 @@ export function formulaObservationOf(
       if (!png || !geom) return undefined
       const ctrl = c.expected.cells.find(e => e.ref === ref)?.controlRef
       if (!ctrl) return undefined
-      return kind === 'bar' ? s5BarVisual(png, geom, ref, ctrl) : s5IconVisual(png, geom, ref, ctrl, iconKey)
+      return kind === 'bar' ? s5BarVisual(png, geom, ref, ctrl) : s5IconVisual(png, geom, ref, ctrl, iconKeyOf?.(s5Bare(ref)))
     },
   }
 }
@@ -6033,14 +6034,103 @@ export function formulaControlsOf(c: CfOracleCase): Record<string, string> {
 }
 
 /** Evaluates a Stage 5 case's configurations against a sidecar and PNG (capture writes exactly this into the sidecar). */
-export function evaluateFormulaCase(c: CfOracleCase, sidecar: Record<string, unknown>, png?: DecodedPng, geom?: WorksheetRangeGeometry, parts?: Map<string, Uint8Array>, iconKey?: IconGlyphKey): Record<string, FormulaCapabilityEvaluation> {
-  return evaluateFormulaCapabilities(resolveFormulaConfigurations(c, parts), formulaControlsOf(c), formulaObservationOf(c, sidecar, png, geom, iconKey), { kindOf: visualKindOf(c) })
+/**
+ * Evaluates a Stage 5 case's configurations against a sidecar and PNG (capture writes exactly this into the sidecar). Each
+ * icon crop is classified against the key its saved cell's placement selects (`stage5IconKeyOf`); a single key is the
+ * bottom-placed (Stage 4) key.
+ */
+export function evaluateFormulaCase(c: CfOracleCase, sidecar: Record<string, unknown>, png?: DecodedPng, geom?: WorksheetRangeGeometry, parts?: Map<string, Uint8Array>, iconKeys?: IconGlyphKey | Stage5IconKeys): Record<string, FormulaCapabilityEvaluation> {
+  const keys: Stage5IconKeys = iconKeys === undefined ? {} : 'classes' in iconKeys ? { bottom: iconKeys } : iconKeys
+  return evaluateFormulaCapabilities(resolveFormulaConfigurations(c, parts), formulaControlsOf(c), formulaObservationOf(c, sidecar, png, geom, stage5IconKeyOf(keys, parts)), { kindOf: visualKindOf(c) })
 }
 
-/** The glyph key a Stage 5 icon measurement classifies against (the Stage 4 key capture), or undefined. */
-export function stage5IconKey(rootDir: string): IconGlyphKey | undefined {
-  const key = loadIconGlyphKey(rootDir)
-  return key && !('kind' in key) ? key : undefined
+/**
+ * Where Excel places a cell's icon, by the rule fixed before the centred-key capture (owner decision 2026-11-19): the
+ * vertical alignment of the cell's own `cellXfs` entry in the saved workbook (an entry without `<alignment>`, or without
+ * `vertical`, is bottom, as Excel drew the Stage 4 key's ;;; cells) and its row's height (the row's `ht`, else the
+ * sheet's `defaultRowHeight`). `center-20` and `bottom-20` are the two placements a glyph key was captured at; anything
+ * else (another alignment, another height, a cell the sheet does not hold, a workbook without styles) has none.
+ */
+export type IconKeyPlacement = 'bottom-20' | 'center-20'
+
+const ICON_KEY_ROW_PT = 20
+
+/** A reader of `IconKeyPlacement` for one workbook's parts (the XML is parsed once). */
+export function iconKeyPlacementReader(parts: Map<string, Uint8Array>): (ref: string) => IconKeyPlacement | undefined {
+  const dec = new TextDecoder()
+  const stylesRaw = parts.get('xl/styles.xml')
+  const sheetRaw = parts.get('xl/worksheets/sheet1.xml')
+  if (!stylesRaw || !sheetRaw) return () => undefined
+  const st = (() => { const root = parseXml(dec.decode(stylesRaw)); return asNode(root.styleSheet) ?? root })()
+  const verticals = asArray(asNode(st?.cellXfs)?.xf).map(asNode).map(xf => attr(asNode(xf?.alignment), 'vertical') ?? 'bottom')
+  const ws = (() => { const root = parseXml(dec.decode(sheetRaw)); return asNode(root.worksheet) ?? root })()
+  const defaultHt = Number(attr(asNode(ws?.sheetFormatPr), 'defaultRowHeight') ?? NaN)
+  const cells = new Map<string, { s: number; ht: number }>()
+  for (const row of asArray(asNode(ws?.sheetData)?.row).map(asNode)) {
+    const htAttr = attr(row, 'ht')
+    const ht = htAttr !== undefined ? Number(htAttr) : defaultHt
+    for (const cell of asArray(row?.c).map(asNode)) {
+      const ref = attr(cell, 'r')?.toUpperCase()
+      if (ref) cells.set(ref, { s: Number(attr(cell, 's') ?? '0'), ht })
+    }
+  }
+  return ref => {
+    const cell = cells.get(ref.toUpperCase())
+    if (!cell || cell.ht !== ICON_KEY_ROW_PT) return undefined
+    const v = verticals[cell.s]
+    return v === 'center' ? 'center-20' : v === 'bottom' ? 'bottom-20' : undefined
+  }
+}
+
+/** `IconKeyPlacement` of one cell (see `iconKeyPlacementReader`). */
+export function iconKeyPlacement(parts: Map<string, Uint8Array>, ref: string): IconKeyPlacement | undefined {
+  return iconKeyPlacementReader(parts)(ref)
+}
+
+/** The glyph keys a Stage 5 icon crop may be classified against: the Stage 4 (bottom-placed) key and the centred key. */
+export interface Stage5IconKeys { bottom?: IconGlyphKey; centre?: IconGlyphKey }
+
+/** The key for one placement: centre at 20 pt takes the centred key, bottom at 20 pt the Stage 4 key; never a fallback. */
+export function selectStage5IconKey(keys: Stage5IconKeys, placement: IconKeyPlacement | undefined): IconGlyphKey | undefined {
+  return placement === 'center-20' ? keys.centre : placement === 'bottom-20' ? keys.bottom : undefined
+}
+
+/** Per cell of the saved workbook `parts`, the key its placement selects (no parts: no placement, so no key). */
+export function stage5IconKeyOf(keys: Stage5IconKeys, parts: Map<string, Uint8Array> | undefined): (ref: string) => IconGlyphKey | undefined {
+  if (!parts) return () => undefined
+  const placementOf = iconKeyPlacementReader(parts)
+  return ref => selectStage5IconKey(keys, placementOf(ref))
+}
+
+/**
+ * The glyph keys Stage 5 icon measurements classify against: each restored from its committed capture
+ * (`loadIconGlyphKey`), and admitted only when every one of its own key cells reads, in its saved workbook, the
+ * placement it stands for (a key Excel resaved at another placement is no key at all).
+ */
+export function stage5IconKeys(rootDir: string): Stage5IconKeys {
+  const out: Stage5IconKeys = {}
+  for (const [slot, placement] of [['bottom', 'bottom-20'], ['centre', 'center-20']] as const) {
+    const caseId = CF_ICON_KEY_CASES[slot]
+    const key = loadIconGlyphKey(rootDir, caseId)
+    if (!key || 'kind' in key) continue
+    if (iconKeyCasePlacement(rootDir, caseId) !== placement) continue
+    out[slot] = key
+  }
+  return out
+}
+
+/** The one placement every key cell of a key case's saved workbook reads, or undefined when they disagree or cannot be read. */
+function iconKeyCasePlacement(rootDir: string, caseId: string): IconKeyPlacement | undefined {
+  const manifestAbs = resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json')
+  if (!existsSync(manifestAbs)) return undefined
+  const keyCase = (JSON.parse(readFileSync(manifestAbs, 'utf8')) as CfManifest).cases.find(c => c.id === caseId)
+  const savedAbs = keyCase ? resolve(rootDir, keyCase.saved) : undefined
+  if (!keyCase || !savedAbs || !existsSync(savedAbs)) return undefined
+  const parts = readZipPartsSync(new Uint8Array(readFileSync(savedAbs)))
+  if (!parts) return undefined
+  const placementOf = iconKeyPlacementReader(parts)
+  const seen = new Set(keyCase.markers.filter(m => m.capabilityId.startsWith('icon:glyph-')).map(m => placementOf(m.sqref)))
+  return seen.size === 1 ? [...seen][0] : undefined
 }
 
 interface FormulaCaptureOutcome {
@@ -6075,7 +6165,7 @@ function verifyFormulaCapture(
     if (m.sqrefOrder === 'any' && c.retainedSqrefs?.[m.capabilityId] === undefined) return fail('unobserved-expectation', `Case ${c.id}: the retained sqref order of ${m.capabilityId} was not recorded at build`)
   }
   if (c.formulaDynamicRefresh && (!sidecar.formulaDynamicRefresh || typeof sidecar.formulaDynamicRefresh !== 'object')) return fail('fill-unobserved', `Case ${c.id} declares a dynamic refresh but its sidecar records no formulaDynamicRefresh observation`)
-  const evaluation = evaluateFormulaCase(c, sidecar, decoded, geom, parts, stage5IconKey(rootDir))
+  const evaluation = evaluateFormulaCase(c, sidecar, decoded, geom, parts, stage5IconKeys(rootDir))
   if (JSON.stringify(sidecar.formulaEvaluation ?? null) !== JSON.stringify(evaluation)) return fail('sidecar-mismatch', `Sidecar formulaEvaluation for ${c.id} differs from the evaluation the verifier recomputes`)
   // A cell's claimed DisplayFormat outcome must be what the sidecar recorded.
   const obs = formulaObservationOf(c, sidecar, decoded, geom)
