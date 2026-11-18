@@ -24,6 +24,12 @@ describe('config', () => {
     expect(loadConfig({ OV_STREAM_KEY: key(32), OV_AUDIT_DB: '/var/ov/audit.db' }, []).auditDb).toBe('/var/ov/audit.db')
     expect(loadConfig({ OV_AUDIT_DB: '/var/ov/audit.db' }, ['--demo']).auditDb).toBe(':memory:')
   })
+  it('animation.strictMarks: off by default; --strict-marks or OV_STRICT_MARKS=1 turns it on; another value refuses', () => {
+    expect(loadConfig({}, ['--demo']).animation).toEqual({ strictMarks: false })
+    expect(loadConfig({}, ['--demo', '--strict-marks']).animation).toEqual({ strictMarks: true })
+    expect(loadConfig({ OV_STRICT_MARKS: '1' }, ['--demo']).animation).toEqual({ strictMarks: true })
+    try { loadConfig({ OV_STRICT_MARKS: 'yes' }, ['--demo']); throw new Error('no throw') } catch (e) { expect((e as ConfigError).code).toBe('bad-arg') }
+  })
   it('a supplied key is used and not ephemeral', () => {
     const c = loadConfig({ OV_STREAM_KEY: key(32), OV_AUDIT_DB: ':memory:' }, [])
     expect(c.ephemeral).toBe(false)

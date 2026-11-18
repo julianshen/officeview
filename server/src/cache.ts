@@ -103,3 +103,26 @@ export class DocumentLedger {
   get size() { return this.lru.size }
   get evictions() { return this.lru.evictions }
 }
+
+/**
+ * Piece 4 D6: the show-plan cache. L1 holds what no mark touches (the classification, the plan and the
+ * unmarked layer rasters), shared across viewers; L2 adds the visible mark settings and `strictMarks` and
+ * holds the visibly marked assets and the §7 validation verdict. Layer-1 is applied per session at send time,
+ * after both. `unitId` is additive to D6's tuple: one entry per slide.
+ */
+export interface ShowPlanL1Fields { docRef: string; contentPolicyId: string; layoutFingerprint: string; scaleBucket: number; motion: 'full' | 'reduced'; unitId: number }
+const SHOW_L1_ORDER: Array<keyof ShowPlanL1Fields> = ['docRef', 'contentPolicyId', 'layoutFingerprint', 'scaleBucket', 'motion', 'unitId']
+
+export function showPlanL1Key(f: ShowPlanL1Fields): string {
+  const h = createHash('sha256')
+  h.update('show-plan-l1@1\n')
+  for (const k of SHOW_L1_ORDER) h.update(`${k}=${canonical(f[k])}\n`)
+  return h.digest('hex')
+}
+
+/** `validation`: an optional extra (the hex of the validation basis key, when the caller supplies one). */
+export function showPlanL2Key(l1: string, markSettings: RenderKeyFields['markSettings'], strictMarks: boolean, validation = ''): string {
+  const h = createHash('sha256')
+  h.update(`show-plan-l2@1\nl1=${l1}\nmarkSettings=${canonical(markSettings)}\nstrictMarks=${strictMarks}\nvalidation=${validation}\n`)
+  return h.digest('hex')
+}

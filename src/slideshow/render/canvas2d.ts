@@ -130,6 +130,11 @@ export function createCanvas2DCompositor(
   workspace: SlideShowWorkspace,
   /** Additive to the brief: where degraded-effect diagnostics go. */
   sink?: DiagnosticSink,
+  /**
+   * Additive (PR #78 round 13b, the server's composers): `adopt` draws each uploaded layer from its own canvas
+   * instead of a copy (no texture bytes: the caller keeps the raster, which is only ever read here).
+   */
+  options: { adopt?: boolean } = {},
 ): Compositor {
   const out = canvas.getContext('2d') as unknown as Ctx
   const textures = new Map<number, Texture>()
@@ -464,6 +469,11 @@ export function createCanvas2DCompositor(
       if (disposed) return { refused: 'workspace' }
       const w = layer.canvas.width, h = layer.canvas.height
       if (!(w >= 1 && h >= 1) || w > CANVAS2D_MAX_TEXTURE_SIZE || h > CANVAS2D_MAX_TEXTURE_SIZE) return { refused: 'texture-size' }
+      if (options.adopt) {
+        const id = nextId++
+        textures.set(id, { canvas: layer.canvas, bounds: { ...layer.bounds }, lease })
+        return { id }
+      }
       const texBytes = w * h * 4
       if (!lease.grow(texBytes)) return { refused: 'workspace' }
       let tex: AnyCanvas

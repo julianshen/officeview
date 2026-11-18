@@ -20,6 +20,11 @@ import type { DiagnosticSink, Iterate, TargetKey, TargetRef, TimeNode, TimingTre
 export interface TextTiming extends IteratedTiming {
   /** Iterated target key → its items, for `buildRenderPlan`. */
   splits: ReadonlyMap<TargetKey, readonly TextItem[]>
+  /**
+   * Additive (piece 4 D22): the word groups passed to `expandIterations` for each fanned target built by word
+   * and by letter, so a server can send `iterate` and the client re-runs the same fan-out.
+   */
+  groups?: ReadonlyMap<TargetKey, Partial<Record<'wd' | 'lt', TargetKey[][]>>>
 }
 
 export interface TextTimingOptions {
@@ -106,7 +111,8 @@ export function textTimingFor(slide: PptxSlide, tree: TimingTree, options: TextT
   const x = expandIterations(tree, keys, { sink: options.sink, slideIndex: options.slideIndex, charge: options.charge, groups })
   // Only targets that fanned out are split; a refused fan-out leaves the text in its shape (PR #19 review 9).
   const fanned = new Map([...splits].filter(([k]) => x.items.has(k)))
-  return { ...x, splits: fanned }
+  const grouped = new Map([...groups].filter(([k]) => x.items.has(k)))
+  return { ...x, splits: fanned, ...(grouped.size ? { groups: grouped } : {}) }
 }
 
 /**

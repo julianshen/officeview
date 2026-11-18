@@ -32,7 +32,7 @@ export async function start(o: { policy?: AuthDecision['policy']; viewerId?: str
 }
 
 export type Msg = { text: Record<string, any>; /** UTF-8 bytes as received. */ bytes?: number } | { binary: { kind: number; reqId: number; payload: Uint8Array } }
-const CAPS: Record<number, [number, number]> = { 1: [256 << 10, 256 << 10], 2: [1 << 20, 8 << 20], 3: [8 << 20, 64 << 20], 4: [8 << 20, 8 << 20], 7: [8 << 20, 64 << 20], 8: [8 << 20, 64 << 20] }
+const CAPS: Record<number, [number, number]> = { 1: [256 << 10, 256 << 10], 2: [1 << 20, 8 << 20], 3: [8 << 20, 64 << 20], 4: [8 << 20, 8 << 20], 6: [8 << 20, 32 << 20], 7: [8 << 20, 64 << 20], 8: [8 << 20, 64 << 20] }
 
 export class Client {
   ws: WebSocket
@@ -140,5 +140,29 @@ export class Client {
     }
   }
   private notesSeq = 0
+  /**
+   * Piece 4: sends a show op (`show-plan`, `show-track`, `show-morph`) and collects its reqId: the `*-start`, then
+   * every kind-6 payload up to `start.messages`, or the refusal (`{type: 'error'}`) as `end`. Any other text on the
+   * reqId (`diag`) is kept in `extra`.
+   */
+  async show(msg: { type: string } & Record<string, unknown>, o: { reqId?: number; token?: string; ms?: number } = {}) {
+    const reqId = o.reqId ?? 900 + (this.showSeq++)
+    this.send({ reqId, token: o.token ?? this.manifest!.session.token, ...msg })
+    let start: Record<string, any> | undefined
+    const messages: Uint8Array[] = []
+    const extra: Array<Record<string, any>> = []
+    for (;;) {
+      if (start && messages.length >= start.messages) return { reqId, start, messages, extra }
+      const m = await this.next((m) => ('text' in m && m.text.reqId === reqId) || ('binary' in m && m.binary.reqId === reqId), o.ms)
+      if ('binary' in m) { if (m.binary.kind !== 6) throw new Error(`unexpected kind ${m.binary.kind} on ${msg.type}`); messages.push(m.binary.payload); continue }
+      if (m.text.type === `${msg.type}-start` && !start) { start = m.text; continue }
+      if (m.text.type === 'error') return { reqId, start, messages, extra, end: m.text }
+      extra.push(m.text)
+    }
+  }
+  showPlan(unit: unknown, scale: unknown, motion: unknown, o: { reqId?: number; token?: string; ms?: number } = {}) { return this.show({ type: 'show-plan', unit, scale, motion }, o) }
+  showTrack(unit: unknown, step: unknown, scale: unknown, motion: unknown, o: { reqId?: number; token?: string; ms?: number } = {}) { return this.show({ type: 'show-track', unit, step, scale, motion }, o) }
+  showMorph(from: unknown, to: unknown, fromStep: unknown, scale: unknown, motion: unknown, o: { reqId?: number; token?: string; ms?: number } = {}) { return this.show({ type: 'show-morph', from, to, fromStep, scale, motion }, o) }
+  private showSeq = 0
   close() { this.ws.close() }
 }

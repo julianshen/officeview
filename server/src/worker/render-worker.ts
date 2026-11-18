@@ -1,6 +1,8 @@
 /** Render worker (§9.2): one DocumentHost per Bun Worker; one job at a time. */
-import { markRaster } from '../mark/mark-raster'
+import { markLayerRaster, markRaster, type LayerCrop } from '../mark/mark-raster'
 import { DocumentHost, RenderRefusal, type MarkSpec, type NotesJob, type Projection } from '../render'
+import type { ShowPlanJob } from '../show/build'
+import type { MorphJob } from '../show/morph'
 import type { TextJob } from '../text/served'
 
 export type WorkerRequest =
@@ -13,6 +15,14 @@ export type WorkerRequest =
   | { type: 'text'; id: number; docKey: string; job: TextJob; /** Admission bytes reserved for a prepare. */ grant?: number }
   /** Layer-1 encode job (§9.4): canonical PNG → session-marked PNG. */
   | { type: 'encode'; id: number; png: Uint8Array; w: number; h: number; kBasis: Uint8Array; code: Int8Array; hangMs?: number; crash?: boolean }
+  /** Piece 4: one slide's show-plan bundle (plan, entry frame, visibly marked layers). */
+  | { type: 'show-plan'; id: number; docKey: string; job: ShowPlanJob; /** The admitted bytes the build's ledger holds (PR #78 round 13). */ grant?: number; hangMs?: number; crash?: boolean }
+  /** Piece 4: the keyframe track of one composited step. */
+  | { type: 'show-track'; id: number; docKey: string; job: ShowPlanJob & { step: number }; grant?: number; hangMs?: number; crash?: boolean }
+  /** Piece 4 Task 7: one Morph pair (`from`, `to`, `fromStep`): its record and assets, or its composited frames. */
+  | { type: 'show-morph'; id: number; docKey: string; job: MorphJob; grant?: number; hangMs?: number; crash?: boolean }
+  /** Piece 4 D7: a show-plan layer's per-session Layer-1 (the page basis cropped to its rest). */
+  | { type: 'mark-layer'; id: number; png: Uint8Array; w: number; h: number; kBasis: Uint8Array; code: Int8Array; crop: LayerCrop; hangMs?: number; crash?: boolean }
 export type WorkerReply = { id: number; ok: true; result: unknown; stats: { parses: number; pages: number; docs: number } } | { id: number; ok: false; error: string; refusal?: string; stats: { parses: number; pages: number; docs: number } }
 
 declare const self: Worker
@@ -32,7 +42,13 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
       // Test hook: the worker dies mid-job (Bun defers a worker exit, so never reply).
       if (m.crash) { process.exit(1); await new Promise(() => {}) }
       if (m.hangMs) { const until = performance.now() + m.hangMs; while (performance.now() < until) { /* test hook: a wedged paint */ } }
-      result = m.type === 'encode' ? markRaster(m) : host.render(m.docKey, m)
+      // A bundle's PNGs are nested (and the worker's cache keeps them): they are copied, never transferred.
+      result = m.type === 'encode' ? markRaster(m)
+        : m.type === 'mark-layer' ? markLayerRaster(m)
+        : m.type === 'show-plan' ? await host.showPlan(m.docKey, m.job, m.grant)
+        : m.type === 'show-track' ? await host.showTrack(m.docKey, m.job, m.grant)
+        : m.type === 'show-morph' ? await host.showMorph(m.docKey, m.job, m.grant)
+        : host.render(m.docKey, m)
     }
     const transfer: ArrayBuffer[] = []
     const r = result as { png?: Uint8Array; ops?: Uint8Array } | null
