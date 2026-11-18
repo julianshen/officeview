@@ -291,7 +291,8 @@ describe('regression bot P2: paged CF dateContext', () => {
     const src = fs.readFileSync('src/xlsx/view/pagedSource.ts', 'utf8')
     expect(src).toMatch(/timeZone: Intl\.DateTimeFormat\(\)\.resolvedOptions\(\)\.timeZone \?\? 'UTC'/)
     // Ruling S5-M: the instant is sampled once per preparation (default: the wall clock) and shared by predicates and formulas.
-    expect(src).toMatch(/const instant = \(options\?\.now \?\? Date\.now\)\(\)/)
-    expect(src).toMatch(/epochNowMs: instant/)
+    // Final review F3: the sample is memoised at its first read, and the date context reads it through a getter.
+    expect(src).toMatch(/const instant = \(\): number => \(sampledInstant \?\?= \(options\?\.now \?\? Date\.now\)\(\)\)/)
+    expect(src).toMatch(/'epochNowMs', \{ get: instant, enumerable: true \}/)
   })
 })
