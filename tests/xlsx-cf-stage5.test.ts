@@ -273,7 +273,8 @@ describe('the Stage 5 formula selections travel with the published set (Task 35 
       const pub = renderVerifiedCapabilitiesSource(manifest(), REPO_ROOT, { committedSource: current, publishStage5: true })
       expect(pub).toContain(renderFormulaSelectionsBlock(stage5Publication(audit).selections))
     }
-  }, 120000)
+  // A full Stage 5 audit: 63 s on the CI runner.
+  }, 300_000)
 })
 
 describe('Stage 5 pressure scenarios and resource bounds (zero unowned live bytes)', () => {

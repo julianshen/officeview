@@ -5794,7 +5794,8 @@ describe('Stage 5 formula oracle (Task 31)', () => {
     // A complete synthetic report publishes exactly its gated set, sorted.
     const complete: Stage5AuditReport = { ...report, ok: true, stageComplete: true, blocked: [], blockedCapabilities: [], perCapability: [{ capabilityId: 'formula:truth-range', caseId: 'stage5-formula-truthiness', disposition: 'verified' }], matchedReadings: { 'formula:truth-range': 'range-implicit' } }
     expect(stage5Publication(complete, { 'formula:truth-range': 'range-implicit' }).published).toEqual(['formula:truth-range'])
-  }, 120_000)
+  // Two full Stage 5 audits (counterfactual case rows, worker baseline): 109 s and 131 s on the CI runner.
+  }, 600_000)
 
   it('a publication requires production\'s reading to equal Excel\'s matched reading', () => {
     const base: Stage5AuditReport = { ...auditStage5Manifest({ ...loadManifest(), cases: [] }, { rootDir: REPO_ROOT }), ok: true, stageComplete: true, blocked: [], blockedCapabilities: [] }
