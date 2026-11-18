@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { stage5CellAgreement, stage5CounterfactualOf, stage5TokenOf } from '../scripts/cf-refs/stage5-withhold'
+import { caseEvaluationOf } from '../scripts/cf-refs/case-clock'
 import { PRE_STAGE5_EVIDENCE } from './helpers/cf-stage5-off'
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
@@ -164,7 +165,7 @@ describe('expression rule paints exactly the DisplayFormat cells (Lesson 1)', ()
     const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
     const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
     const verified = (id: string): boolean => VERIFIED_CAPABILITIES.has(id)
-    const run = () => lesson1Case(c, sheet, observationsOf(c), verified, cfEvaluationContextFor(cfDocumentEvaluationOf(doc), Date.now), doc.sheets)
+    const run = () => lesson1Case(c, sheet, observationsOf(c), verified, caseEvaluationOf(c, doc), doc.sheets)
     expect((await run()).violations, 'the unmutated case').toEqual([])
     const marker = c.markers.find(m => m.capabilityId === 'formula:composition-stop-dxf' && m.ruleType === 'expression')!
     const rule = sheet.conditionalFormatting!.rules.find(r => r.priority === marker.priority)!
@@ -180,7 +181,7 @@ describe('expression rule paints exactly the DisplayFormat cells (Lesson 1)', ()
       const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
       return { doc, sheet: doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]! }
     }
-    const run = (doc: Awaited<ReturnType<typeof load>>['doc'], sheet: XlsxSheet) => lesson1Case(c, sheet, observationsOf(c), verified, cfEvaluationContextFor(cfDocumentEvaluationOf(doc), Date.now), doc.sheets)
+    const run = (doc: Awaited<ReturnType<typeof load>>['doc'], sheet: XlsxSheet) => lesson1Case(c, sheet, observationsOf(c), verified, caseEvaluationOf(c, doc), doc.sheets)
     const clean = await load()
     expect((await run(clean.doc, clean.sheet)).violations, 'the unmutated case').toEqual([])
     for (const [priority, type, ref] of [[13, 'iconSet', 'I2'], [12, 'expression', 'I3']] as const) {
@@ -199,7 +200,7 @@ describe('expression rule paints exactly the DisplayFormat cells (Lesson 1)', ()
     const ref = designatedOf(c)[0]!.ref
     // As if a capture had landed: the case measured, its capabilities verified, Excel's DisplayFormat red at one cell.
     const measured = { ...c, status: 'measured' } as Case
-    const out = await lesson1Case(measured, sheet, { [ref]: { displayFormatFill: RED, baseFill: 'FFFFFFFF' } }, () => true, cfEvaluationContextFor(cfDocumentEvaluationOf(doc), Date.now))
+    const out = await lesson1Case(measured, sheet, { [ref]: { displayFormatFill: RED, baseFill: 'FFFFFFFF' } }, () => true, caseEvaluationOf(measured, doc))
     expect(out.compared).toBe(1)
     expect(out.violations).toEqual([`${c.id}:${ref}: production shows none, Excel's DisplayFormat ${RED}`])
   })
@@ -216,7 +217,7 @@ describe('expression rule paints exactly the DisplayFormat cells (Lesson 1)', ()
       const observations = observationsOf(c)
       eligible += eligibleOf(c, observations, verified)
       covered += designatedOf(c).length
-      const out = await lesson1Case(c, sheet, observations, verified, cfEvaluationContextFor(cfDocumentEvaluationOf(doc), Date.now), doc.sheets)
+      const out = await lesson1Case(c, sheet, observations, verified, caseEvaluationOf(c, doc), doc.sheets)
       violations.push(...out.violations)
       compared += out.compared
       withheld += out.withheld

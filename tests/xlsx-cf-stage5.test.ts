@@ -531,7 +531,7 @@ describe('cf-compare interactive runs production inputs on Stage 5 cases (Task 3
     // Production withholds everything: the first verified formula cell fails against the counterfactual (fix round 4).
     const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
     const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
-    const truths = await stage5CounterfactualOf({ c, doc, sheet, refs: stage5CompareRefs(c, REPO_ROOT), now: Date.now })
+    const truths = await stage5CounterfactualOf({ c, doc, sheet, refs: stage5CompareRefs(c, REPO_ROOT), now: (await import('../scripts/cf-refs/case-clock')).caseNowOf(c) })
     const msg = verifyCellExpectations(c, () => ({ applied: false, unresolved: true }), undefined, truths)
     expect(msg).toMatch(/Cell B2: unresolved writes \[ALL\] differ from the counterfactual's \[\]/)
   }, 120000)

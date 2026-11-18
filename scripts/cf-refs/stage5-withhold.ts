@@ -27,8 +27,9 @@ import { VERIFIED_CAPABILITIES } from '../../src/xlsx/cf/evidence'
 import { createCfService } from '../../src/xlsx/cf/service'
 import { CF_LIMITS } from '../../src/xlsx/cf/limits'
 import { cfRuntimeEvidence } from '../../src/xlsx/cf/predicates'
-import { cfDocumentEvaluationOf, cfWorkbookOfDocument, residentSource } from '../../src/xlsx/cf/render'
+import { cfWorkbookOfDocument, residentSource } from '../../src/xlsx/cf/render'
 import { cfEvaluationContextFor, type CfEvaluationContext } from '../../src/xlsx/cf/formula'
+import { caseDocumentEvaluationOf, type CaseClockLike } from './case-clock'
 import { resolveCfCellStyle } from '../../src/xlsx/cf/dxf'
 import { CF_ICON_GLYPH_CLASSES } from '../../src/xlsx/cf/iconGlyphs'
 import { cfRulesVersion } from '../../src/xlsx/view/pagedSource'
@@ -261,7 +262,8 @@ function ruleOf(refusal: Stage5Refusal, rules: readonly CfRule[], caseId: string
 export async function stage5CounterfactualOf(input: { c: CaseLike | CfOracleCase; sheet: XlsxSheet; refs: readonly string[]; published?: (id: string) => boolean }
   & ({ doc: XlsxDocument; now: () => number } | { evaluation: CfEvaluationContext; sheets?: readonly XlsxSheet[] })): Promise<Map<string, Stage5Truth>> {
   const { c, sheet } = input
-  const evaluation = 'doc' in input ? cfEvaluationContextFor(cfDocumentEvaluationOf(input.doc), input.now) : input.evaluation
+  // Final review F2: a clock case's zone is pinned (case-clock.ts), whatever zone the document was parsed under.
+  const evaluation = 'doc' in input ? cfEvaluationContextFor(caseDocumentEvaluationOf(input.c as CaseClockLike, input.doc), input.now) : input.evaluation
   const sheets = 'doc' in input ? input.doc.sheets : input.sheets
   const cs = c as unknown as CaseLike
   const out = new Map<string, Stage5Truth>()

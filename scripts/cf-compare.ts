@@ -30,6 +30,7 @@ import type { CfManifest, CfOracleCase } from './cf-refs/cases'
 import { CF_MANIFEST_PATH } from './cf-refs/generate'
 import { ICON_NO_ICON_MEMBER, iconTwinSetMembers, isCellInSqref, observedIconClass, verifyCfCase } from './cf-refs/verify'
 import { CF_ICON_SET_NAMES } from '../src/xlsx/cf/model'
+import { caseDocumentEvaluationOf, caseNowOf, caseParseOptionsOf, withCaseZone } from './cf-refs/case-clock'
 import {
   COMPARE_SCALE,
   CSS_PX_PER_PT,
@@ -435,7 +436,8 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
   const { cfRulesVersion } = await import('../src/xlsx/view/pagedSource')
   const savedAbs = resolve(rootDir, c.saved)
   const pkg = await OfficePackage.load(new Uint8Array(readFileSync(savedAbs)))
-  const doc = await parseXlsx(pkg)
+  // Final review F2: a Stage 5 clock case is parsed and prepared at its anchor instant in its required zone (case-clock.ts).
+  const doc = await parseXlsx(pkg, c.stage === 5 ? caseParseOptionsOf(c) : {})
   const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]
   if (!sheet) return fail(`Sheet ${c.sheet} missing`)
   const rect = parseRangeA1(c.range)
@@ -451,10 +453,10 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
     clockSerial: c.clockRequirement.anchorSerial,
     dateSystem: c.clockRequirement.dateSystem,
   } : undefined
-  const { cfDocumentEvaluationOf, cfWorkbookOfDocument } = await import('../src/xlsx/cf/render')
+  const { cfWorkbookOfDocument } = await import('../src/xlsx/cf/render')
   const { cfEvaluationContextFor } = await import('../src/xlsx/cf/formula')
-  const anchorNow = c.clockRequirement ? () => Date.parse(`${c.clockRequirement!.anchorLocalDate}T04:00:00+08:00`) : Date.now
-  const documentEvaluation = cfDocumentEvaluationOf(doc)
+  const anchorNow = caseNowOf(c)
+  const documentEvaluation = caseDocumentEvaluationOf(c, doc)
   const oracle = createCfService(sheet.conditionalFormatting, memory, { evidence: cfRuntimeEvidence, dateContext,
     ...(stage5 ? { evaluation: cfEvaluationContextFor(documentEvaluation, anchorNow), sheetName: sheet.name, workbook: cfWorkbookOfDocument(doc.sheets, memory, 'engine') } : {}) })
   const gen = cfRulesVersion(sheet.conditionalFormatting)
@@ -602,6 +604,11 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
  * tests/browser/xlsx-cf.spec.ts (including forced-paged legs).
  */
 export async function comparePagedViewport(c: CfOracleCase, rootDir: string): Promise<CfCompareResult> {
+  // Final review F2: the worker takes the viewer's ambient zone (production semantics), so a Stage 5 clock case runs as a
+  // viewer in its required zone: the zone is set before the session opens (the paged policy is built once per workbook).
+  return c.stage === 5 ? withCaseZone(c, () => comparePagedViewportIn(c, rootDir)) : comparePagedViewportIn(c, rootDir)
+}
+async function comparePagedViewportIn(c: CfOracleCase, rootDir: string): Promise<CfCompareResult> {
   const oracleRef = `${c.id} [${c.status}]`
   const workbookHash = c.expected.savedSha256
   const { openImportSession } = await import('../src/xlsx/storage/pagedImport')
@@ -633,7 +640,7 @@ export async function comparePagedViewport(c: CfOracleCase, rootDir: string): Pr
       clockSerial: c.clockRequirement.anchorSerial,
       dateSystem: c.clockRequirement.dateSystem,
     } : undefined
-    const anchorNow = c.clockRequirement && c.stage === 5 ? () => Date.parse(`${c.clockRequirement!.anchorLocalDate}T04:00:00+08:00`) : undefined
+    const anchorNow = c.clockRequirement && c.stage === 5 ? caseNowOf(c) : undefined
     const result = await store.readConditionalFormatting?.({
       rects: [{ r0: rect.minRow, r1: rect.maxRow, c0: rect.minCol, c1: rect.maxCol }],
       stamp: { owner: 'compare', sheetId, workbookValueGen: store.stamp.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 },
@@ -667,7 +674,7 @@ export async function comparePagedViewport(c: CfOracleCase, rootDir: string): Pr
       })
     const { resolveCfCellStyle } = await import('../src/xlsx/cf/dxf')
     const pkg = await OfficePackage.load(saved)
-    const doc = await parseXlsx(pkg)
+    const doc = await parseXlsx(pkg, c.stage === 5 ? caseParseOptionsOf(c) : {})
     const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]
     const colors = { theme: sheet?.drawingTheme?.palette ?? sheet?.tableStyleSource?.colors.theme, indexed: sheet?.tableStyleSource?.colors.indexed }
     const base = {}

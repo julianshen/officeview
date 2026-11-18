@@ -9,8 +9,8 @@ import { join } from 'node:path'
 import { createCfService } from '../../src/xlsx/cf/service'
 import { createCfMemory, CF_LIMITS } from '../../src/xlsx/cf/limits'
 import { cfRuntimeEvidence } from '../../src/xlsx/cf/predicates'
-import { cfDocumentEvaluationOf, cfWorkbookOfDocument, residentSource } from '../../src/xlsx/cf/render'
-import { cfEvaluationContextFor } from '../../src/xlsx/cf/formula'
+import { cfWorkbookOfDocument, residentSource } from '../../src/xlsx/cf/render'
+import { caseEvaluationOf, caseNowOf } from '../../scripts/cf-refs/case-clock'
 import { cfRulesVersion } from '../../src/xlsx/view/pagedSource'
 import { stage5CellAgreement, stage5CounterfactualOf, stage5TokenOf, type Stage5Excel, type Stage5Production, type Stage5Truth } from '../../scripts/cf-refs/stage5-withhold'
 import type { CfManifest } from '../../scripts/cf-refs/cases'
@@ -29,12 +29,13 @@ export function stage5ExcelAt(c: Case, rootDir: string, ref: string): Stage5Exce
   return { fill: o.displayFormatFill.toUpperCase() === (o.baseFill ?? 'FFFFFFFF').toUpperCase() ? 'none' : o.displayFormatFill.toUpperCase(), strike: o.strikethrough === true }
 }
 
-/** Production's outcome at `ref` through the production service (resident, production evidence and inputs). */
-export async function stage5OutcomeAt(doc: XlsxDocument, sheet: XlsxSheet, ref: string): Promise<CfOutcome<CfCellState> | undefined> {
+/** Production's outcome at `ref` through the production service (resident, production evidence and inputs). Final review
+ * F2: `c`'s clock (its anchor instant and required zone) when it has one, whatever the host's zone and day. */
+export async function stage5OutcomeAt(doc: XlsxDocument, sheet: XlsxSheet, ref: string, c: Pick<Case, 'clockRequirement'> = {}): Promise<CfOutcome<CfCellState> | undefined> {
   const memory = createCfMemory()
   const cf = sheet.conditionalFormatting
   if (!cf) return undefined
-  const service = createCfService(cf, memory, { evidence: cfRuntimeEvidence, evaluation: cfEvaluationContextFor(cfDocumentEvaluationOf(doc), Date.now), sheetName: sheet.name, workbook: cfWorkbookOfDocument(doc.sheets, memory, 'engine') })
+  const service = createCfService(cf, memory, { evidence: cfRuntimeEvidence, evaluation: caseEvaluationOf(c, doc), sheetName: sheet.name, workbook: cfWorkbookOfDocument(doc.sheets, memory, 'engine') })
   const stamp = { owner: 'stage5-verdict', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(cf), viewGen: 0, structureGen: 0, clockGen: 0 }
   try {
     const { row, col } = rc(ref)
@@ -46,18 +47,18 @@ export async function stage5OutcomeAt(doc: XlsxDocument, sheet: XlsxSheet, ref: 
 }
 
 /** Production's token at `ref` (every component: fill, font paths, colour scale, bar, icon, unresolved writes). */
-export async function stage5ProductionAt(doc: XlsxDocument, sheet: XlsxSheet, ref: string): Promise<Stage5Production> {
-  return stage5TokenOf(await stage5OutcomeAt(doc, sheet, ref))
+export async function stage5ProductionAt(doc: XlsxDocument, sheet: XlsxSheet, ref: string, c: Pick<Case, 'clockRequirement'> = {}): Promise<Stage5Production> {
+  return stage5TokenOf(await stage5OutcomeAt(doc, sheet, ref, c))
 }
 
 /** The counterfactual at `ref` with the same production inputs (the evaluation clock read at call time). */
 export async function stage5TruthAt(c: Case, doc: XlsxDocument, sheet: XlsxSheet, ref: string): Promise<Stage5Truth | undefined> {
-  return (await stage5CounterfactualOf({ c, doc, sheet, refs: [ref], now: Date.now })).get(ref)
+  return (await stage5CounterfactualOf({ c, doc, sheet, refs: [ref], now: caseNowOf(c) })).get(ref)
 }
 
 /** The verdict at one Stage 5 cell (undefined: production equals the counterfactual and its resolved components Excel's). */
 export async function stage5SlotVerdict(c: Case, doc: XlsxDocument, sheet: XlsxSheet, ref: string, rootDir: string): Promise<string | undefined> {
-  return stage5VerdictOf(c, ref, await stage5ProductionAt(doc, sheet, ref), rootDir, await stage5TruthAt(c, doc, sheet, ref))
+  return stage5VerdictOf(c, ref, await stage5ProductionAt(doc, sheet, ref, c), rootDir, await stage5TruthAt(c, doc, sheet, ref))
 }
 /** The verdict for a given production token and counterfactual at `ref`. */
 export function stage5VerdictOf(c: Case, ref: string, production: Stage5Production, rootDir: string, truth: Stage5Truth | undefined): string | undefined {

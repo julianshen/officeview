@@ -74,8 +74,8 @@ async function compareProduction(c: Case, doc: Doc, sheet: Sheet, override: Read
   await _lazy()
   const refs = stage5CompareRefs(c, REPO_ROOT)
   const actuals = new Map<string, import('../scripts/cf-compare').ActualCellOutcome>()
-  for (const ref of refs) actuals.set(ref, actualOf(await stage5OutcomeAt(doc, sheet, ref)))
-  const truths = await stage5CounterfactualOf({ c, doc, sheet, refs, now: Date.now })
+  for (const ref of refs) actuals.set(ref, actualOf(await stage5OutcomeAt(doc, sheet, ref, c)))
+  const truths = await stage5CounterfactualOf({ c, doc, sheet, refs, now: (await import('../scripts/cf-refs/case-clock')).caseNowOf(c) })
   return verifyCaseCells(c, REPO_ROOT, (row, col) => override.get(refOf(row, col)) ?? actuals.get(refOf(row, col)) ?? actualOf(undefined), truths)
 }
 

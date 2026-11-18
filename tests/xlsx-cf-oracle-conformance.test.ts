@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx, type ParseXlsxOptions } from '../src/xlsx/parse'
 import { cfDocumentEvaluationOf, prepareCfPaint, residentSource } from '../src/xlsx/cf/render'
+import { caseClockOf, caseDocumentEvaluationOf, caseParseOptionsOf, type CaseClockLike } from '../scripts/cf-refs/case-clock'
 import { prepareCfTextScope } from '../src/xlsx/cf/text'
 import { stage5SlotVerdict } from './helpers/cf-stage5-verdict'
 import type { CfDateContext } from '../src/xlsx/cf/predicates'
@@ -50,10 +51,9 @@ function refToRowCol(ref: string): { row: number; col: number } {
 
 /** The viewer evaluates TODAY() in the workbook/viewer time zone (host default). The Excel observation was taken in
  * `requiredTimeZone`, so a conformance run evaluates in that zone instead of inheriting the CI host's (UTC). */
-function parseOptionsFor(c: { clockRequirement?: { requiredTimeZone: string } }): ParseXlsxOptions {
-  // `evaluation` is spread into evaluateWorkbookFormulas at runtime, which honours timeZone; the public type only
-  // advertises the array caps, hence the cast.
-  return (c.clockRequirement ? { evaluation: { timeZone: c.clockRequirement.requiredTimeZone } } : {}) as ParseXlsxOptions
+function parseOptionsFor(c: CaseClockLike): ParseXlsxOptions {
+  // Final review F2: the case's zone and anchor instant (case-clock.ts); the load-time evaluator honours both.
+  return caseParseOptionsOf(c)
 }
 
 
@@ -112,12 +112,12 @@ function stage5FormulaCovered(c: { markers: ReadonlyArray<{ sqref: string; formu
 
 /** Task 39: production's own announcement of one cell (the text scope over the paint path's inputs): withheld or not.
  * Fix round 1 (F1): any exception is a failure (it propagates), never accepted as withholding. */
-async function stage5WithheldAt(sheet: XlsxSheet, doc: Awaited<ReturnType<typeof parseXlsx>>, ref: string, dateContext: CfDateContext | undefined): Promise<boolean> {
+async function stage5WithheldAt(c: CfManifest['cases'][number], sheet: XlsxSheet, doc: Awaited<ReturnType<typeof parseXlsx>>, ref: string, dateContext: CfDateContext | undefined): Promise<boolean> {
   const { row, col } = refToRowCol(ref)
   const budget = { reserve: () => {}, release: () => {}, retain: (_t: unknown, _b: number, commit: () => void) => commit(), settle: () => {} }
   const scope = await prepareCfTextScope(sheet, {
     rects: [{ r0: row, r1: row, c0: col, c1: col }], signal: new AbortController().signal, locale: 'en-US', budget: budget as never,
-    documentSheets: doc.sheets, evaluation: cfDocumentEvaluationOf(doc), ...(dateContext ? { dateContext } : {}),
+    documentSheets: doc.sheets, evaluation: caseDocumentEvaluationOf(c, doc), ...(dateContext ? { dateContext } : {}),
   })
   if (!scope) throw new Error(`${ref}: no text scope for a sheet with conditional formatting`)
   try { return scope.describe(row, col)?.text === 'Conditional formatting unavailable' } finally { scope.dispose() }
@@ -134,7 +134,7 @@ async function stage5CellVerdict5(c: CfManifest['cases'][number], exp: { ref: st
   const slot = await stage5SlotVerdict(c, doc, sheet, exp.ref, REPO_ROOT)
   if (slot) return { withheld: false, violation: slot }
   if (gotMatched) return { withheld: false }
-  const withheld = await stage5WithheldAt(sheet, doc, exp.ref, dateContext)
+  const withheld = await stage5WithheldAt(c, sheet, doc, exp.ref, dateContext)
   if (!withheld && exp.matched) return { withheld, violation: `${key}: Excel shows a format and production paints none (a no-match, not withheld)` }
   return { withheld }
 }
@@ -255,7 +255,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       if (c.status !== 'measured' || c.stage === 2) continue
       if (c.clockRequirement) {
         vi.useFakeTimers({ toFake: ['Date'] })
-        vi.setSystemTime(new Date(`${c.clockRequirement.anchorLocalDate}T04:00:00+08:00`))
+        vi.setSystemTime(caseClockOf(c)!.epochMs)
       }
       try {
         const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
@@ -266,7 +266,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
           dateSystem: c.clockRequirement.dateSystem,
         } : undefined
 
-        const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext, evaluation: cfDocumentEvaluationOf(doc), documentSheets: doc.sheets }) // Task 39: as src/render/paint.ts passes it (the cross-sheet seam, S5-K)
+        const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext, evaluation: caseDocumentEvaluationOf(c, doc), documentSheets: doc.sheets }) // Final review F2: the case zone pinned. Task 39: as src/render/paint.ts passes it (the cross-sheet seam, S5-K)
         expect(paint, `prepareCfPaint should succeed for ${c.id}`).toBeDefined()
         if (!paint) continue
 
@@ -535,7 +535,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       const c = manifest.cases.find(x => x.id === caseId)!
       if (c.clockRequirement) {
         vi.useFakeTimers({ toFake: ['Date'] })
-        vi.setSystemTime(new Date(`${c.clockRequirement.anchorLocalDate}T04:00:00+08:00`))
+        vi.setSystemTime(caseClockOf(c)!.epochMs)
       }
       try {
         const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
@@ -545,7 +545,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
           clockSerial: c.clockRequirement.anchorSerial,
           dateSystem: c.clockRequirement.dateSystem,
         } : undefined
-        const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext, evaluation: cfDocumentEvaluationOf(doc) })
+        const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext, evaluation: caseDocumentEvaluationOf(c, doc) })
         expect(paint).toBeDefined()
 
         for (const targetKey of expectedWithheldRecovered.filter(k => k.startsWith(`${caseId}:`))) {
@@ -1580,7 +1580,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       for (const id of ['stage1-timeperiod-today-clock', 'stage1-timeperiod-today-clock-2']) {
         const c = manifest.cases.find(x => x.id === id)!
         vi.useFakeTimers({ toFake: ['Date'] })
-        vi.setSystemTime(new Date(`${c.clockRequirement!.anchorLocalDate}T04:00:00+08:00`))
+        vi.setSystemTime(caseClockOf(c)!.epochMs)
         try {
           const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))), parseOptionsFor(c))
           const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!

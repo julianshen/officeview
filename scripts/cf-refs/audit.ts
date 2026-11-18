@@ -2288,8 +2288,8 @@ export async function stage5CaseRecords(manifest: CfManifest, rootDir: string = 
   const { createCfService } = await import('../../src/xlsx/cf/service')
   const { CF_LIMITS } = await import('../../src/xlsx/cf/limits')
   const { cfRuntimeEvidence } = await import('../../src/xlsx/cf/predicates')
-  const { cfWorkbookOfDocument, cfDocumentEvaluationOf } = await import('../../src/xlsx/cf/render')
-  const { cfEvaluationContextFor } = await import('../../src/xlsx/cf/formula')
+  const { cfWorkbookOfDocument } = await import('../../src/xlsx/cf/render')
+  const { caseEvaluationOf, caseNowOf, caseParseOptionsOf } = await import('./case-clock')
   const { cfRulesVersion } = await import('../../src/xlsx/view/pagedSource')
   const { formulaObservationOf, decodePngSync, computeWorksheetRangeGeometry, readZipPartsSync, stage5IconKey, describeS5Visual } = await import('./verify')
   const refRC = (ref: string) => { const m = /^([A-Z]+)(\d+)$/.exec(ref)!; return { row: Number(m[2]) - 1, col: [...m[1]!].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1 } }
@@ -2313,7 +2313,9 @@ export async function stage5CaseRecords(manifest: CfManifest, rootDir: string = 
       continue
     }
     const savedBytes = new Uint8Array(readFileSync(resolve(rootDir, c.saved)))
-    const doc = await parseXlsx(await OfficePackage.load(savedBytes))
+    // Final review F2: a clock case is parsed, prepared and counterfactually checked at its anchor instant in its required
+    // zone (case-clock.ts), whatever the host's zone and day.
+    const doc = await parseXlsx(await OfficePackage.load(savedBytes), caseParseOptionsOf(c))
     const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
     const cap = c.captures.find(x => x.appearance === 'screen') ?? c.captures[0]
     const sidecar = cap && existsSync(resolve(rootDir, cap.sidecarPath)) ? JSON.parse(readFileSync(resolve(rootDir, cap.sidecarPath), 'utf8')) as Record<string, unknown> : undefined
@@ -2326,9 +2328,9 @@ export async function stage5CaseRecords(manifest: CfManifest, rootDir: string = 
     const budget = (scan: boolean) => () => { const b = createCfWorkBudget(scan ? { scan: true } : {}); budgets.push(b); return b }
     const cf = sheet.conditionalFormatting
     // The clock cases were measured on their anchor day; production reads the same day through the evaluation clock.
-    const now = c.clockRequirement ? () => Date.parse(`${c.clockRequirement!.anchorLocalDate}T04:00:00+08:00`) : Date.now
+    const now = caseNowOf(c)
     const service = cf ? createCfService(cf, memory, { evidence: cfRuntimeEvidence, budget: budget(false), statisticsBudget: budget(true),
-      evaluation: cfEvaluationContextFor(cfDocumentEvaluationOf(doc), now), sheetName: sheet.name, workbook: cfWorkbookOfDocument(doc.sheets, memory, 'engine') }) : undefined
+      evaluation: caseEvaluationOf(c, doc, now), sheetName: sheet.name, workbook: cfWorkbookOfDocument(doc.sheets, memory, 'engine') }) : undefined
     const stamp = { owner: 'audit-records', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cf ? cfRulesVersion(cf) : 0, viewGen: 0, structureGen: 0, clockGen: 0 }
     const source = residentSource(sheet, stamp, memory, 'engine')
     const truths = await stage5CounterfactualOf({ c, doc, sheet, refs: c.expected.cells.map(e => e.ref), now })
