@@ -106,10 +106,10 @@ describe('paged CF capture', () => {
         expect(result.lease.value).toEqual(expected)
         result.lease.release(); expect(result.memory.currentBytes).toBe(0)
       }
-    // One streamed parse per byte split point: Stage 5 compiles formulas on each, which took 8 s on the CI runner
-    // (2.6 s locally), past the 5 s default.
-    }, 60_000)
-  })
+    })
+  // One streamed parse per byte split point: Stage 5 compiles formulas on each, which took 8 s on the CI runner
+  // (2.6 s locally), past the 5 s default.
+  }, 60_000)
   it('resident and streamed formula rules are deep equal at every chunk boundary', async () => {
     // Stage 5 (Task 32): an expression, a formula operand, a divergent predicate, a quoted cross-sheet name and a standalone x14
     // `<xm:f>`, with boundaries falling inside each `<formula>` and `<xm:f>`; unresolved shapes ride along unchanged.
