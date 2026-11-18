@@ -2620,3 +2620,56 @@ The re-review of fix round 5 found one gap (P2). `stage5VisualToken` reduces eve
 - Publish run twice: byte-identical, 42.
 - cf-compare `--stage 5`: interactive 60/6/14/6, paged 62/7/14/3. The only Stage 5 failure is the `stage5-cross-sheet-missing` seed.
 - No production (`src/`) change.
+
+### 14.z.7 Stage 5 final-review fixes (codex whole-branch review)
+
+The final whole-branch codex review requested changes on four findings. The orchestrator's rulings are in `.superpowers/sdd/2026-11-06-xlsx-conditional-formatting/final-fix-brief.md`. Each fix below starts from a test that failed first.
+
+**F1 (Important): CF evaluated under a forced Unicode compatibility version.**
+- `cfFormulaSemantics` hard-coded version 2 (`standalone-default`) at its introduction (`4fc5dcf0`, Task 34 slice 1). Neither the ledger, the Task 34 brief and report, nor this section records a reason, and no Stage 5 fixture holds a non-BMP character, so no Excel evidence supported it.
+- Worse, the CF evaluation context never set `excelTextLengthVersion`, the flag `textChars` actually reads (formula/evaluator.ts). So CF counted code points whatever the semantics said, while the worksheet evaluator (formula/workbook.ts) counts UTF-16 code units for a parsed workbook (version 1).
+- Codex's repro: `A1="😀"`. Worksheet `LEN(A1)` is 2, but CF `LEN($A$1)=1` painted red and was announced as applied.
+- Fix (src/xlsx/cf/formula.ts):
+  - `CfDocumentEvaluation` carries `unicode`. `cfDocumentEvaluationOf` resolves it exactly as `resolveSemantics` does with no explicit option: verified metadata, else the entry default (a parsed workbook is version 1; a document with no semantics is version 2).
+  - `cfDocumentEvaluationOfPaged` is a parsed workbook, so version 1.
+  - `cfFormulaSemantics` passes the version on, and the CF evaluation context sets `excelTextLengthVersion` from it, as the workbook evaluator does. Every `textChars` reader therefore agrees with the sheet, and nothing needs withholding.
+- Test: `tests/xlsx-cf-unicode-compat.test.ts`. Worksheet `LEN` is 2. The policy carries version 1 on both the resident and the paged route. `LEN($A$1)=1` paints nothing and `LEN($A$1)=2` paints, on the static, resident, text, resident-text, worker and forced-paged legs, under both the engine and the cached value policy. It was RED before the fix.
+- The published set is unchanged: 42, byte-identical.
+
+**F2 (Important): the Stage 5 audit depended on the host time zone.**
+- The audit pinned the clock cases' instant (`04:00 +08:00` on the anchor day), but the CF policy took its zone from `doc.semantics.timeZone`, which `parseXlsx` reads from the host. Under `TZ=UTC` the anchor instant falls on the previous calendar day, so `stage5-clock-today` B3, B4, B9 and B10 disagreed and the audit exited 1. The Lesson 1 helper, the verdict helper and the mutants also passed `Date.now`. They passed only because today is the anchor day.
+- Fix: `scripts/cf-refs/case-clock.ts`, used by every surface that evaluates a clock case:
+  - **Parse:** `caseParseOptionsOf` pins the load-time evaluator's zone and instant. `ParseXlsxOptions.evaluation`'s type now admits `timeZone` and `now`. The evaluator already honoured both at runtime, and no production caller passes them.
+  - **Resident production and the counterfactual:** `caseDocumentEvaluationOf` and `caseEvaluationOf` take the document's policy with the case's `requiredTimeZone`, at the anchor instant (`caseNowOf`), whatever zone the document was parsed under.
+  - **Worker (paged) route:** this route has no policy seam (production reads the viewer's ambient zone). `withCaseZone` sets `TZ` to the case zone before the session opens, checks that `Intl` adopted it, and restores it afterwards.
+- Users: the audit rows, `stage5CounterfactualOf`, cf-compare (interactive and paged), the conformance test (which now uses the case clock instead of the former cast), the Lesson 1 helper, `tests/helpers/cf-stage5-verdict.ts` (`stage5OutcomeAt` and `stage5ProductionAt` take the case), the mutants and the cf-compare helper test.
+- Production semantics are unchanged: CF still evaluates in the viewer's local time.
+- Test: `tests/xlsx-cf-stage5-host-zone.test.ts`. It runs under `TZ=UTC` and `TZ=America/Los_Angeles` with the host clock faked to 2027-03-01. The audit rows and the verdict helper agree with Excel on every measured clock-case cell. It was RED before the fix.
+
+**F3 (Minor): the worker sampled the clock unconditionally.**
+- `PagedXlsxSheetAdapter`'s CF preparation took `(options?.now ?? Date.now)()` on every preparation, literal-only sheets included.
+- Fix (src/xlsx/view/pagedSource.ts): the instant is memoised at its first read. The predicates' own date context reads it through a getter, and the formulas' evaluation context and the adopted stamp share the same sample (S5-M). A literal-only sheet takes no sample; a clock-reading sheet takes exactly one per preparation.
+- Tests:
+  - `tests/xlsx-cf-worker-clock.test.ts`. Literal `cellIs`: 0 samples, painted. Expression rule: 1. `timePeriod`: 1. It was RED before the fix.
+  - The no-formula baseline (`pressureNoFormulaBaseline`, `audit --stage 5`, `tests/xlsx-cf-stage5.test.ts`) gains the worker route: three paged preparations count injected `now` calls plus the context's counter. The literal case shows 0 compiles, 0 snapshots and 0 clock reads, and paints 6. The control shows compiles 1, snapshots 3 and clock reads 6. It was RED before the fix.
+  - The source-text check in `tests/xlsx-cf-paged-parse.test.ts` follows the new shape.
+
+**F4 (Minor): PR body overclaims.**
+- The independent Excel comparison now claims only fill, strikethrough and the measured bar and icon visuals. Every other component is compared only with the counterfactual (§14.z.5).
+- The zero-clock-read claim now covers both routes, since F3.
+- The orchestrator's codex-r5 fix (`ea0c0efd`, §14.z.6) is listed.
+
+**Gates:**
+- **CF vitest suites:** 88 files, 1,805 passed, 3 skipped. The same result under the host zone (Asia/Taipei) and under `TZ=UTC`.
+- **Audits:**
+  - Stages 1–4: ok and complete.
+  - Stage 5: `ok=true structural=31/31 unsupported=9 pending=5 unverifiedNonDiscriminating=9 stageComplete=true blockedCapabilities=0`.
+  - Case records: 2,160 rows, 542 painted as Excel, 268 with justified unresolved slots, 0 disagreeing. The result is identical under the host zone, `TZ=UTC` and `TZ=America/Los_Angeles`.
+- **Publish:** run under `TZ=UTC`, `TZ=America/Los_Angeles` and Asia/Taipei. Each run wrote 42 Stage 5 capabilities and left the tree byte-identical.
+- **cf-compare `--stage 5`:** interactive 60/6/14/6 and paged 62/7/14/3, under both the host zone and `TZ=UTC`. The only Stage 5 failure is the `stage5-cross-sheet-missing` seed.
+- **Eager:** `check-eager` ok (158 modules); eager gzip 36,519 B (limit 38,720).
+- **Full vitest:** 14,390 passed, 12 failed. All 12 failures are environmental: the missing `corpus/` (pivots, stream recorder and local-load, and the slideshow morph `tdf149588` file).
+- **tsc:** `-p .` shows the 3 known `@napi-rs/canvas` errors; `tsconfig.scripts.json` is clean.
+- **Chromium `xlsx-cf.spec.ts`:** 37/37, using the scratch Playwright config. WebKit is not installed (blocked gate).
+- **`git diff --check`:** clean.
+- **Production changes:** the type of `ParseXlsxOptions.evaluation` (type only), F1 in `src/xlsx/cf/formula.ts`, and F3 in `src/xlsx/view/pagedSource.ts`.

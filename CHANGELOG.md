@@ -210,6 +210,15 @@ in git history.
 
 ### Fixed
 
+- **Formula conditional formatting reads text the way the worksheet does.** A formula rule used to count characters
+  under a different Unicode compatibility version from the workbook's own formulas, so `LEN` of an emoji was 1 in a
+  rule but 2 on the sheet, and `=LEN($A$1)=1` painted where Excel's worksheet semantics say it is false. Rules now
+  evaluate under the workbook's own compatibility version (a parsed workbook: UTF-16 code units, as its formulas).
+
+- **The worker-backed view no longer reads the clock for sheets whose rules never use it.** Conditional formatting
+  in the worker sampled the clock on every preparation; it now samples it once, only when a rule reads it (`TODAY()`,
+  a time-period rule), as the resident view already did.
+
 - **The forced-paged view announces its painted data bars** ("Data bar, N% of range") instead of "Conditional formatting unavailable", deciding each bar from the host the frame paints it in.
 
 - **Conditional-formatting cell text recovers instead of sticking on base formatting.**
