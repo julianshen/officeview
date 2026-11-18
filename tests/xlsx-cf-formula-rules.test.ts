@@ -309,7 +309,7 @@ describe('the formula arm paces between cells (S5-N round-2 #2)', () => {
 describe('manual calculation withholds formula rules (S5-L)', () => {
   it('under calcMode="manual" a formula rule is withheld until its calculation capability is held; auto evaluates it', async () => {
     const sheet = sheetOf(parseRules(expr('B1', 1, '$A1&gt;10'), FORMULA_CAPS), { A1: 11, B1: 1 })
-    const manualPolicy = { calcMode: 'manual', valuePolicy: 'engine', dateSystem: '1900', timeZone: 'UTC' } as const
+    const manualPolicy = { calcMode: 'manual', valuePolicy: 'engine', dateSystem: '1900', timeZone: 'UTC', unicode: { version: 1, source: 'workbook-default' } } as const
     const caps = [...FORMULA_CAPS, 'formula:calc-manual-today']
     expect(fill((await prepare(sheet, ['B1'], caps)).get('B1'))).toBe(RED)
     // Without formula:calc-manual-saved-values (and with every other capability held) it is withheld.
@@ -321,7 +321,7 @@ describe('manual calculation withholds formula rules (S5-L)', () => {
   })
   it('a volatile TODAY() under manual calculation also needs formula:calc-manual-today, which no reading implements yet', async () => {
     const sheet = sheetOf(parseRules(expr('B1', 1, '$A1=TODAY()'), [...FORMULA_CAPS, 'formula:fn-today']), { A1: 46342, B1: 1 })
-    const manualPolicy = { calcMode: 'manual', valuePolicy: 'engine', dateSystem: '1900', timeZone: 'UTC' } as const
+    const manualPolicy = { calcMode: 'manual', valuePolicy: 'engine', dateSystem: '1900', timeZone: 'UTC', unicode: { version: 1, source: 'workbook-default' } } as const
     const caps = [...FORMULA_CAPS, 'formula:fn-today', 'formula:calc-manual-saved-values', 'formula:calc-manual-today']
     expect(fill((await prepare(sheet, ['B1'], caps)).get('B1'))).toBe(RED)
     expect(fill((await prepare(sheet, ['B1'], caps, { evaluation: manualPolicy })).get('B1'))).toBe('withheld')

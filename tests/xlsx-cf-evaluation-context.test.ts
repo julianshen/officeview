@@ -51,7 +51,7 @@ const shape = (outcome: { kind: string; value?: { properties: object; unresolved
 const NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 const DXF_FILL = '<dxf><fill><patternFill patternType="solid"><fgColor rgb="FFFFC7CE"/></patternFill></fill></dxf>'
 const PARSE_SET = ['formula:dialect-base', 'formula:anchor-single', 'formula:anchor-mixed-abs'] as const
-const TAIPEI: CfDocumentEvaluation = Object.freeze({ calcMode: 'auto', valuePolicy: 'engine', dateSystem: '1900', timeZone: 'Asia/Taipei' })
+const TAIPEI: CfDocumentEvaluation = Object.freeze({ calcMode: 'auto', valuePolicy: 'engine', dateSystem: '1900', timeZone: 'Asia/Taipei', unicode: { version: 1 as const, source: 'workbook-default' as const } })
 
 const stylesFor = (): CfStylesSource => {
   const root = parseXml(`<styleSheet xmlns="${NS}"><dxfs count="1">${DXF_FILL}</dxfs></styleSheet>`)
@@ -89,8 +89,8 @@ describe('the document policy is built once and resolves its defaults', () => {
     const a = cfDocumentEvaluationOf(doc), b = cfDocumentEvaluationOf(doc)
     expect(a).toEqual(b)
     expect(Object.isFrozen(a)).toBe(true)
-    expect(a).toEqual({ calcMode: 'auto', valuePolicy: 'engine', dateSystem: '1904', timeZone: 'Asia/Taipei' })
-    expect(cfDocumentEvaluationOf({} as XlsxDocument)).toEqual({ calcMode: 'auto', valuePolicy: 'engine', dateSystem: '1900', timeZone: '' })
+    expect(a).toEqual({ calcMode: 'auto', valuePolicy: 'engine', dateSystem: '1904', timeZone: 'Asia/Taipei', unicode: { version: 1, source: 'workbook-default' } })
+    expect(cfDocumentEvaluationOf({} as XlsxDocument)).toEqual({ calcMode: 'auto', valuePolicy: 'engine', dateSystem: '1900', timeZone: '', unicode: { version: 2, source: 'standalone-default' } })
   })
   it('follows the workbook value policy and calculation mode exactly', () => {
     for (const valuePolicy of [undefined, 'engine', 'cached'] as const) {

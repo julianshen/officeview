@@ -11,7 +11,8 @@
  * The CF engine stays out of the eager and paged-worker closures; this file imports the formula engine modules directly
  * (never the `../formula` barrel) and no eager site imports it.
  */
-import type { AstNode, CellRef, ElementValue, EvaluationContext, EvaluationValue, FormulaError, MaterializationBudget, MatrixValue, ModeFrameStores, ReferenceIssue, ResolvedSemantics } from '../formula/types'
+import type { AstNode, CellRef, ElementValue, EvaluationContext, EvaluationValue, FormulaError, MaterializationBudget, MatrixValue, ModeFrameStores, ReferenceIssue, ResolvedSemantics, UnicodeSettings } from '../formula/types'
+import { resolveUnicodeSettings, unicodeVersionOf } from '../formula/unicode'
 import { parseFormula } from '../formula/parser'
 // functions.ts before evaluator.ts and cond.ts: the engine modules import each other, and functions.ts must finish
 // evaluating before the conditional table is read.
@@ -528,8 +529,9 @@ export function formulaRequiredCapabilities(f: CfFormula, use: CfFormulaUse, rul
 /* The evaluation context contract (Ruling S5-L, S5-M; round-2 #3).     */
 /* ------------------------------------------------------------------ */
 
-/** Built once per document: the policy every preparation of that document shares. */
-export type CfDocumentEvaluation = Readonly<{ calcMode: 'auto' | 'manual' | 'autoNoTable'; valuePolicy: ValuePolicy; dateSystem: '1900' | '1904'; timeZone: string }>
+/** Built once per document: the policy every preparation of that document shares. `unicode` is the workbook's own text
+ * compatibility version (final review F1): a CF formula reads text exactly as the worksheet's formulas do. */
+export type CfDocumentEvaluation = Readonly<{ calcMode: 'auto' | 'manual' | 'autoNoTable'; valuePolicy: ValuePolicy; dateSystem: '1900' | '1904'; timeZone: string; unicode: Readonly<UnicodeSettings> }>
 /** One preparation's context: the document policy plus one clock snapshot (never shared between preparations). */
 export type CfEvaluationContext = CfDocumentEvaluation & Readonly<{ clock: Readonly<{ epochNowMs: number; clockGen: number }> }>
 
@@ -545,6 +547,9 @@ export function cfDocumentEvaluationOf(doc: Pick<XlsxDocument, 'calc' | 'valuePo
     valuePolicy: doc.valuePolicy === 'cached' ? 'cached' as const : 'engine' as const,
     dateSystem: doc.semantics?.dateSystem ?? '1900',
     timeZone: doc.semantics?.timeZone ?? '',
+    // `resolveSemantics` (formula/workbook.ts) restated with no explicit option: verified metadata, else the entry default
+    // (a parsed workbook is version 1, a document with no semantics the standalone version 2).
+    unicode: Object.freeze({ ...resolveUnicodeSettings(undefined, doc.semantics?.unicode, doc.semantics ? 'workbook-default' : 'standalone-default') }),
   }))
 }
 /** One frozen policy per document or workbook, built the first time it is asked for and reused: the policy is never
@@ -565,7 +570,9 @@ export function cfDocumentEvaluationOfPaged(workbook: Readonly<{ calcMode?: 'aut
       const resolved = Intl.DateTimeFormat().resolvedOptions().timeZone
       if (typeof resolved === 'string' && resolved !== '') timeZone = resolved
     } catch { /* keep UTC */ }
-    return Object.freeze({ calcMode: workbook.calcMode ?? 'auto', valuePolicy: 'cached' as const, dateSystem: workbook.formatting?.dateSystem ?? '1900', timeZone })
+    // A paged workbook is a parsed workbook with no verified Unicode metadata: version 1, as `parseXlsx` resolves it.
+    return Object.freeze({ calcMode: workbook.calcMode ?? 'auto', valuePolicy: 'cached' as const, dateSystem: workbook.formatting?.dateSystem ?? '1900', timeZone,
+      unicode: Object.freeze({ ...resolveUnicodeSettings(undefined, undefined, 'workbook-default') }) })
   })
 }
 /**
@@ -1417,9 +1424,10 @@ export type CfFormulaContext = Readonly<{
   /** Observes the store work a call actually metered (view build, reads, enumeration, sort, lookups) against its bound. */
   onSettled?: (spent: number, breakdown: CfCallWorkBreakdown) => void
 }>
-/** The semantics a CF formula reads: the document's date system and zone, and this preparation's clock (S5-M). */
+/** The semantics a CF formula reads: the document's date system, zone and Unicode compatibility version (final review F1:
+ * never a substituted version), and this preparation's clock (S5-M). */
 export function cfFormulaSemantics(evaluation: CfEvaluationContext): ResolvedSemantics {
-  return Object.freeze({ dateSystem: evaluation.dateSystem, timeZone: evaluation.timeZone, epochNowMs: evaluation.clock.epochNowMs, locale: 'en-US', unicode: Object.freeze({ version: 2 as const, source: 'standalone-default' as const }) })
+  return Object.freeze({ dateSystem: evaluation.dateSystem, timeZone: evaluation.timeZone, epochNowMs: evaluation.clock.epochNowMs, locale: 'en-US', unicode: Object.freeze({ ...evaluation.unicode }) })
 }
 const literalNode = (v: ElementValue): AstNode => {
   if (typeof v === 'number') return { type: 'number', value: v }
@@ -1683,6 +1691,8 @@ function invoke(f: CfFormula, tree: AstNode, at: Readonly<{ row: number; col: nu
     const currentCell: CellRef = { row: at.row, col: at.col, absRow: false, absCol: false }
     const ctx: EvaluationContext = {
       typedValues: true, currentSheet: context.sheetName, currentCell, semantics: context.semantics, references,
+      // As the workbook evaluator sets it (formula/workbook.ts): the text functions read the version from here (final review F1).
+      excelTextLengthVersion: unicodeVersionOf(context.semantics.unicode),
       unsupportedFeatures: features, reportFormulaIssue: issue => { issues.push(issue) }, hasCycle: false,
       mode: 'scalar', modeStores: stores, nodeValues: stores.scalar.nodeValues, flatArgs: stores.scalar.flatArgs, functionWork: stores.scalar.functionWork,
       materializationBudget: context.materialization,

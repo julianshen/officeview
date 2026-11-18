@@ -30,7 +30,7 @@ export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', 
 /** 2026-11-16 12:00 UTC: the injected clock of every leg. */
 export const NOW = Date.UTC(2026, 10, 16, 12)
 /** The document policy of the synthetic workbooks (the tests never read the ambient zone). */
-export const UTC_AUTO: CfDocumentEvaluation = Object.freeze({ calcMode: 'auto', valuePolicy: 'cached', dateSystem: '1900', timeZone: 'UTC' })
+export const UTC_AUTO: CfDocumentEvaluation = Object.freeze({ calcMode: 'auto', valuePolicy: 'cached', dateSystem: '1900', timeZone: 'UTC', unicode: { version: 1 as const, source: 'workbook-default' as const } })
 
 /** Every Stage 5 reading production registers, as additive evidence (what each leg is compared under: real paint). */
 export const REGISTERED = Object.keys(CF_FORMULA_PRODUCTION_READINGS)

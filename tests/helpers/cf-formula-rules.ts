@@ -23,7 +23,7 @@ export const stylesFor = (): CfStylesSource => {
   const root = parseXml(`<styleSheet xmlns="${NS}">${DXFS}</styleSheet>`)
   return { colors: {}, dxfNodes: getChildren(getChildren(root, 'dxfs')[0] as XmlNode, 'dxf') }
 }
-export const UTC: CfDocumentEvaluation = Object.freeze({ calcMode: 'auto', valuePolicy: 'engine', dateSystem: '1900', timeZone: 'UTC' })
+export const UTC: CfDocumentEvaluation = Object.freeze({ calcMode: 'auto', valuePolicy: 'engine', dateSystem: '1900', timeZone: 'UTC', unicode: { version: 1 as const, source: 'workbook-default' as const } })
 
 /** Every capability a same-sheet DXF formula rule of these tests needs, with production's readings. */
 export const FORMULA_CAPS: readonly string[] = [
