@@ -2759,6 +2759,11 @@ async function main(): Promise<void> {
     console.log(`no-formula baseline (literal CF kept): compiles=${noFormula.literal.compiles} snapshots=${noFormula.literal.snapshots} clockReads=${noFormula.literal.clockReads} painted=${noFormula.literal.painted}; control (one expression): compiles=${noFormula.control.compiles} snapshots=${noFormula.control.snapshots} clockReads=${noFormula.control.clockReads}`)
     if (noFormula.literal.compiles + noFormula.literal.snapshots + noFormula.literal.clockReads !== 0 || noFormula.literal.painted === 0) fail('the no-formula baseline did formula work (or painted nothing)')
     if (noFormula.control.compiles === 0 || noFormula.control.snapshots === 0 || noFormula.control.clockReads === 0) fail('the no-formula positive control moved no counter')
+    // Final review F3: the same baseline on the worker (paged) route.
+    const wl = noFormula.workerLiteral, wc = noFormula.workerControl
+    console.log(`no-formula baseline, worker route (literal CF kept): compiles=${wl.compiles} snapshots=${wl.snapshots} clockReads=${wl.clockReads} painted=${wl.painted}; control (one expression): compiles=${wc.compiles} snapshots=${wc.snapshots} clockReads=${wc.clockReads}`)
+    if (wl.compiles + wl.snapshots + wl.clockReads !== 0 || wl.painted === 0) fail('the worker no-formula baseline did formula work (or painted nothing)')
+    if (wc.compiles === 0 || wc.snapshots === 0 || wc.clockReads === 0) fail('the worker no-formula positive control moved no counter')
     stage5Pressure = { shared, hoists, cap, sheets, beside, cyc, caseRecords: caseRecords5, noFormula }
   } else {
     const scaleShared = await pressureScale1MRowSharedStatistics()

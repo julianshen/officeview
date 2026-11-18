@@ -430,6 +430,15 @@ describe('the no-formula baseline keeps literal CF and does no formula work (Tas
     expect(control.snapshots, 'positive control: snapshots').toBeGreaterThan(0)
     expect(control.clockReads, 'positive control: clock reads').toBeGreaterThan(0)
   }, 120000)
+  it('the worker (paged) route too: literal cellIs CF does no formula work and reads no clock; one expression rule moves all three (final review F3)', async () => {
+    const { pressureNoFormulaBaseline } = await import('../scripts/cf-refs/pressure-stage5')
+    const { workerLiteral, workerControl } = await pressureNoFormulaBaseline()
+    expect(workerLiteral.painted, 'the worker still paints the literal CF').toBeGreaterThan(0)
+    expect({ compiles: workerLiteral.compiles, snapshots: workerLiteral.snapshots, clockReads: workerLiteral.clockReads }).toEqual({ compiles: 0, snapshots: 0, clockReads: 0 })
+    expect(workerControl.compiles, 'worker positive control: compiles').toBeGreaterThan(0)
+    expect(workerControl.snapshots, 'worker positive control: snapshots').toBeGreaterThan(0)
+    expect(workerControl.clockReads, 'worker positive control: clock reads').toBeGreaterThan(0)
+  }, 120000)
 })
 
 describe('enumerated withholding justifications are backed by the workbook (Task 39 fix round 1, F1)', () => {

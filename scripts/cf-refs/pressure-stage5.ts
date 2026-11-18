@@ -256,7 +256,8 @@ export const CHECKPOINT_UNITS: number = CF_LIMITS.checkpointUnits
  * policy and sheets, and the text scope. It counts formula compiles, dependency-snapshot preparations and clock reads
  * (`cfFormulaActivity`), which must all stay 0. The positive control (one expression rule added) must move all three.
  */
-export async function pressureNoFormulaBaseline(): Promise<{ literal: { compiles: number; snapshots: number; clockReads: number; painted: number }; control: { compiles: number; snapshots: number; clockReads: number; painted: number } }> {
+type NoFormulaCounts = { compiles: number; snapshots: number; clockReads: number; painted: number }
+export async function pressureNoFormulaBaseline(): Promise<{ literal: NoFormulaCounts; control: NoFormulaCounts; workerLiteral: NoFormulaCounts; workerControl: NoFormulaCounts }> {
   const { cfFormulaActivity } = await import('../../src/xlsx/cf/formula')
   const { workbookBytes, cfBlock, cellIsRule, exprRule, load } = await import('../../tests/helpers/cf-views')
   const { prepareCfPaint } = await import('../../src/xlsx/cf/render')
@@ -278,8 +279,35 @@ export async function pressureNoFormulaBaseline(): Promise<{ literal: { compiles
     const after = cfFormulaActivity()
     return { compiles: after.compiles - before.compiles, snapshots: after.snapshots - before.snapshots, clockReads: after.clockReads - before.clockReads, painted }
   }
+  // Final review F3: the worker (paged) route, three preparations through the real paged session. A clock read is any call
+  // of the injected `now` (the worker's only clock) plus the evaluation context's own counter.
+  const { openImportSession } = await import('../../src/xlsx/storage/pagedImport')
+  const { createPagedWorkbookSource } = await import('../../src/xlsx/view/pagedSource')
+  const { createCfMemory } = await import('../../src/xlsx/cf/limits')
+  const measureWorker = async (bytes: Uint8Array): Promise<NoFormulaCounts> => {
+    const before = cfFormulaActivity()
+    let nowCalls = 0, painted = 0
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(bytes)]) }, { docId: `no-formula-${Math.random()}`, profile: 'D' })
+    const source = createPagedWorkbookSource(session)
+    try {
+      await session.done
+      const sheetId = source.sheets[0]!.sheetId
+      const store = source.store(sheetId)
+      for (let i = 0; i < 3; i++) {
+        const result = await store.readConditionalFormatting!({ rects: [{ r0: 1, r1: 3, c0: 1, c1: 1 }], stamp: { owner: 'no-formula', sheetId, workbookValueGen: store.stamp.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 }, grantBytes: 8 * 1024 * 1024 },
+          createCfMemory(), { signal: new AbortController().signal, now: () => { nowCalls++; return Date.UTC(2026, 10, 16) } } as never)
+        if (result?.kind === 'ready') painted += result.states.filter(s => s.properties['fill.bg'] !== undefined).length
+      }
+    } finally { await source.release() }
+    const after = cfFormulaActivity()
+    return { compiles: after.compiles - before.compiles, snapshots: after.snapshots - before.snapshots, clockReads: after.clockReads - before.clockReads + nowCalls, painted }
+  }
   const cells = { A2: 1, A3: 2, A4: 3, B2: 1, B3: 5, B4: 9 }
-  const literal = await measure(workbookBytes(cells, cfBlock('B2:B4', cellIsRule('greaterThan', '4', 1, 0))))
-  const control = await measure(workbookBytes(cells, cfBlock('B2:B4', cellIsRule('greaterThan', '4', 1, 0)) + cfBlock('C2:C4', exprRule('$A2&gt;1', 2, 1))))
-  return { literal, control }
+  const literalBytes = workbookBytes(cells, cfBlock('B2:B4', cellIsRule('greaterThan', '4', 1, 0)))
+  const controlBytes = workbookBytes(cells, cfBlock('B2:B4', cellIsRule('greaterThan', '4', 1, 0)) + cfBlock('C2:C4', exprRule('$A2&gt;1', 2, 1)))
+  const literal = await measure(literalBytes)
+  const control = await measure(controlBytes)
+  const workerLiteral = await measureWorker(literalBytes)
+  const workerControl = await measureWorker(controlBytes)
+  return { literal, control, workerLiteral, workerControl }
 }
