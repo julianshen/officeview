@@ -1301,11 +1301,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   })()
   // Live CF generation for the display key: a changed rule set must invalidate
   // the held scope even when value generations and rects are unchanged.
+  // The dependency generation (cross-sheet reads) is part of it too, as in the paint key (PR #81 bot P2): a
+  // referenced sheet's commit must not leave a scope the dependency-liveness check rejects held under a matching key.
   // Memoized on the parsed rules object so the JSON normalization runs only
   // when rules actually change (per render it would dominate scrolling).
 
   const cfTextKey = cfTextRects && entry && activeSheetId
-    ? JSON.stringify([ownerKey, identityKey, nextWindowKey, cfTextKeyFor({ sheetId: activeSheetId, valueGen: identityOf(activeSheetId).valueGen, cfGen: cfTextGen, locale: entry.sheet.semantics?.locale ?? 'en-US', rects: cfTextRects }), remote?.merges(activeSheetId).gen ?? -1, tickGen])
+    ? JSON.stringify([ownerKey, identityKey, nextWindowKey, cfTextKeyFor({ sheetId: activeSheetId, valueGen: identityOf(activeSheetId).valueGen, cfGen: cfTextGen, locale: entry.sheet.semantics?.locale ?? 'en-US', rects: cfTextRects }), remote?.merges(activeSheetId).gen ?? -1, tickGen, cfDepGen ?? null])
     : undefined
   const [cfText, setCfText] = useState<{ key: string; scope: EffectiveFormatScope | undefined; empty?: boolean } | null>(null)
   const heldCfText = useRef<EffectiveFormatScope | undefined>(undefined)

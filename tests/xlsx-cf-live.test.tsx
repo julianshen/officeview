@@ -779,3 +779,29 @@ it('Task 36 (S5-K, Review Focus 4): a mounted resident sheet reading Sheet2 stop
     } finally { ui.unmount(); cleanup(); spy.mockRestore(); injectCfFormulaSelections(null) }
   })
 })
+
+it('PR #81 bot P2: a commit to a referenced sheet re-prepares the CF text scope (dependency generation in its key)', async () => {
+  const text = await import('../src/xlsx/cf/text')
+  const { withExactCfEvidence, injectCfFormulaSelections } = await import('../src/xlsx/cf/evidence')
+  const { FORMULA_CAPS, SELECTIONS, parseRules, sheetOf } = await import('./helpers/cf-formula-rules')
+  const caps = [...FORMULA_CAPS, 'formula:cross-sheet-reference']
+  const rules = parseRules('<conditionalFormatting sqref="A1"><cfRule type="expression" priority="1" dxfId="1"><formula>Sheet2!A1&gt;0</formula></cfRule></conditionalFormatting>', caps)
+  const s1 = { ...sheetOf(rules, { A1: 1 }), name: 'Sheet1', sheetId: 's1' } as XlsxSheet
+  const s2 = { ...sheetOf(rules, { A1: 5 }), name: 'Sheet2', sheetId: 's2', conditionalFormatting: undefined } as XlsxSheet
+  const doc = { sheets: [s1, s2] }, source = createObjectWorkbookSource(doc, 'cross-text')
+  const actual = text.prepareCfTextScope
+  let calls = 0
+  const spy = vi.spyOn(text, 'prepareCfTextScope').mockImplementation(((...args: Parameters<typeof actual>) => { calls++; return actual(...args) }) as typeof actual)
+  injectCfFormulaSelections(SELECTIONS)
+  await withExactCfEvidence(caps, async () => {
+    const ui = render(<InteractiveSheetDoc doc={doc} source={source} />)
+    try {
+      await waitFor(() => expect(calls).toBeGreaterThan(0))
+      await act(async () => { await new Promise(r => setTimeout(r, 50)) })
+      const before = calls
+      const overlay = { rects: [{ r0: 0, r1: 0, c0: 0, c1: 0 }], protectedRects: [{ r0: 0, r1: 0, c0: 0, c1: 0 }], merges: [], cell: () => ({ value: -1 }) }
+      act(() => { (source.store('s2') as unknown as { setValueOverlay(o: unknown): void }).setValueOverlay(overlay); ui.rerender(<InteractiveSheetDoc doc={doc} source={source} />) })
+      await waitFor(() => expect(calls, 'the text scope is prepared again after Sheet2 commits').toBeGreaterThan(before))
+    } finally { ui.unmount(); cleanup(); spy.mockRestore(); injectCfFormulaSelections(null) }
+  })
+})

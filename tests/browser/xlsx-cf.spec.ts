@@ -1376,7 +1376,7 @@ test('Stage 5 cross-sheet commit in the same live session repaints the dependent
 // needed here. The slicer publication also advances Data's drawing generation, whose tile invalidation repaints Data on its own:
 // removing the CF-key invalidation alone leaves this test green, removing both fails it (checked). The announcements follow the CF
 // evaluation, not the tiles.
-async function slicerOnDataBytes(): Promise<Buffer> {
+async function slicerOnDataBytes(dxf = '<dxf><fill><patternFill patternType="solid"><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf>'): Promise<Buffer> {
   const zip = await JSZip.loadAsync(readFileSync(`${PIVOTS}controls/controls-seed.xlsx`))
   const s1 = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
   const moved = /<drawing r:id="rId2"\/><extLst>.*<\/extLst>/s.exec(s1)
@@ -1390,7 +1390,7 @@ async function slicerOnDataBytes(): Promise<Buffer> {
   const rule = `<conditionalFormatting sqref="A2"><cfRule type="expression" dxfId="0" priority="1"><formula>'工作表1'!$C$8&gt;50</formula></cfRule></conditionalFormatting>`
   zip.file('xl/worksheets/sheet2.xml', s2.replace('<pageMargins', `${rule}<pageMargins`).replace('</worksheet>', `${moved[0]}</worksheet>`))
   const styles = await zip.file('xl/styles.xml')!.async('string')
-  zip.file('xl/styles.xml', styles.replace('<dxfs count="0"/>', '<dxfs count="1"><dxf><fill><patternFill patternType="solid"><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf></dxfs>'))
+  zip.file('xl/styles.xml', styles.replace('<dxfs count="0"/>', `<dxfs count="1">${dxf}</dxfs>`))
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }) as unknown as Promise<Buffer>
 }
 
@@ -1437,6 +1437,33 @@ test('Stage 5 slicer commit on another sheet repaints the visible dependent shee
         await expect.poll(a2, { timeout: 30_000, message: `${leg.name}: A2 withdraws the rule after Clear Filter` }).not.toMatch(/Conditional formatting applied/)
         await expect.poll(async () => exact(await settledCfGrid(page, 0)), { timeout: 30_000, message: `${leg.name}: A2's fill is gone after Clear Filter` }).toBeLessThan(100)
         await expect(page.getByRole('alert')).toHaveCount(0)
+      } finally { await page.close() }
+    })
+  }
+})
+
+// PR #81 bot P2: the dependent sheet's CF TEXT scope (conditional number formats, hidden values, descriptions) must also be
+// prepared again when only a referenced sheet commits. The rule's dxf carries a number format, so A2's displayed text comes from
+// the text scope alone; the dependency generation was in the paint key but not in the text-scope key.
+test('Stage 5 slicer commit on another sheet re-prepares the dependent sheet\'s conditional number format without a switch', async ({ context }) => {
+  const bytes = await slicerOnDataBytes('<dxf><numFmt numFmtId="200" formatCode="&quot;HIT&quot;"/></dxf>')
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      const page = await context.newPage()
+      try {
+        await openCf(page, 'stage5-slicer-numfmt', bytes, leg, { cfev: true })
+        const sheets = page.getByRole('combobox', { name: 'Worksheet' })
+        await expect(sheets.locator('option:checked')).toHaveText('工作表1')
+        await expect(page.getByRole('button', { name: /^Filter and sort / }).first()).toBeAttached({ timeout: 30_000 })
+        await sheets.selectOption({ label: 'Data' })
+        await expect(cell(page, 'A2')).toContainText('2023', { timeout: 30_000 })
+        await page.getByRole('button', { name: 'Apples, selected' }).click()
+        await expect(page.getByRole('button', { name: 'Bananas, not selected' })).toBeAttached({ timeout: 30_000 })
+        await expect(sheets.locator('option:checked')).toHaveText('Data')
+        await expect(cell(page, 'A2'), `${leg.name}: A2 shows the rule's number format after the commit`).toContainText('HIT', { timeout: 30_000 })
+        await page.getByRole('button', { name: 'Clear Filter' }).click()
+        await expect(page.getByRole('button', { name: 'Bananas, selected' })).toBeAttached({ timeout: 30_000 })
+        await expect(cell(page, 'A2'), `${leg.name}: A2 drops the number format after Clear Filter`).toContainText('2023', { timeout: 30_000 })
       } finally { await page.close() }
     })
   }
