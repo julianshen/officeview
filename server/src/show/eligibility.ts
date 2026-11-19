@@ -46,7 +46,7 @@ import type { PreparedSlide } from '../../../src/slideshow/prepare'
 import type { PlanLayer } from '../../../src/slideshow/render/plan'
 import { createRng } from '../../../src/slideshow/rng'
 import { targetKey } from '../../../src/slideshow/target'
-import type { Affine, BehaviourNode, Condition, ContainerNode, DiagnosticSink, TimeNode, LayerBitmap, RenderState, TargetState } from '../../../src/slideshow/types'
+import type { Affine, AudioBehaviour, BehaviourNode, Condition, ContainerNode, DiagnosticSink, TimeNode, LayerBitmap, RenderState, TargetState } from '../../../src/slideshow/types'
 import { SHOW_PLAN_LIMITS, type Rect } from '../../../src/stream/show-plan'
 import { releaseCanvas, showCanvasBackend } from './canvas'
 import { createSlideComposer, deviceMatrix, drawsAt, maskedRaster, slideStateAt, type DrawnLayer } from './compose'
@@ -723,6 +723,22 @@ export function holdsMedia(ps: PreparedSlide): boolean {
  * or over 20,000 nodes, and (round 12d) any timing on a dependent node outside the allowlist (`timingModelled`).
  */
 export function mediaEndAffectsDrawing(root: TimeNode): boolean {
+  return analyseMediaEnds(root, 'all').result !== 'none'
+}
+
+/**
+ * The analysis behind `mediaEndAffectsDrawing`. `seed`: which media nodes' ends are analysed (`C`): all of them (the
+ * classifier, with media on or off: Task 5 controller ruling), or only video (D22: which audio nodes' begins depend
+ * on a video end, `begins`, so their records ship refused). `result`: `affects` when such an end can reach drawing,
+ * `unresolved` when the analysis fails closed, else `none`.
+ *
+ * Task 5 fix round 1 (conservative, more stills): a later child of a `seq` that begins at a dependent time cuts
+ * every earlier child still running (the scheduler's sequence rule), so it marks them `C` (C4.1: that cut is what a
+ * late media child in a `seq` does, so `lateBelow` keeps skipping media); and every ancestor of a dependent node must hold the default easing, reversal and
+ * repeat (`ANCESTOR_DEFAULT_ONLY`), which reshape its local time.
+ */
+function analyseMediaEnds(root: TimeNode, seed: 'all' | 'video'): { result: 'none' | 'affects' | 'unresolved'; begins: Set<TimeNode> } {
+  const unresolved = { result: 'unresolved' as const, begins: new Set<TimeNode>() }
   const nodes: TimeNode[] = []
   const parent = new Map<TimeNode, ContainerNode | undefined>()
   const byId = new Map<number, TimeNode[]>()
@@ -737,10 +753,10 @@ export function mediaEndAffectsDrawing(root: TimeNode): boolean {
     if ('children' in n) for (const c of n.children) walk(c, n, depth + 1)
   }
   walk(root, undefined, 0)
-  if (over) return true
+  if (over) return unresolved
   const conds = (n: TimeNode): Condition[] => [...n.ctn.start, ...n.ctn.end, ...(n.ctn.endSync ? [n.ctn.endSync] : [])]
   // Unresolved references, then cycles among them (a node waits on another's begin or end).
-  for (const n of nodes) for (const c of conds(n)) if (c.tn !== undefined && !byId.has(c.tn)) return true
+  for (const n of nodes) for (const c of conds(n)) if (c.tn !== undefined && !byId.has(c.tn)) return unresolved
   const state = new Map<TimeNode, 1 | 2>()
   const cyclic = (n: TimeNode): boolean => {
     const st = state.get(n)
@@ -751,10 +767,11 @@ export function mediaEndAffectsDrawing(root: TimeNode): boolean {
     state.set(n, 2)
     return false
   }
-  for (const n of nodes) if (cyclic(n)) return true
+  for (const n of nodes) if (cyclic(n)) return unresolved
 
   const B = new Set<TimeNode>(), C = new Set<TimeNode>(), E = new Set<TimeNode>()
   const isMedia = (n: TimeNode) => n.kind === 'audio' || n.kind === 'video'
+  const seeded = (n: TimeNode) => (seed === 'all' ? isMedia(n) : n.kind === 'video')
   // Any reference, whatever its event: a node that begins again has later begins that follow its end.
   const refDep = (c: Condition) => c.tn !== undefined && byId.get(c.tn)!.some(m => B.has(m) || E.has(m))
   const repeats = (n: TimeNode) => n.ctn.repeatCount !== undefined || n.ctn.repeatDurMs !== undefined || n.ctn.autoRev
@@ -770,7 +787,9 @@ export function mediaEndAffectsDrawing(root: TimeNode): boolean {
       const exclDep = p?.kind === 'excl' && sibs.some(o => o !== n && (B.has(o) || E.has(o)))
       const b = (!!p && B.has(p)) || n.ctn.start.some(refDep) || (!!prev && E.has(prev) && chained(n)) ||
         (!!p && repeats(p) && E.has(p)) || exclDep
-      const c = isMedia(n) || n.ctn.end.some(refDep) || (!!n.ctn.endSync && refDep(n.ctn.endSync)) || (!!p && C.has(p)) ||
+      // Fix round 1: a later `seq` sibling that begins at a dependent time cuts this one short.
+      const cutByLater = p?.kind === 'seq' && sibs.slice(k + 1).some(o => B.has(o))
+      const c = seeded(n) || cutByLater || n.ctn.end.some(refDep) || (!!n.ctn.endSync && refDep(n.ctn.endSync)) || (!!p && C.has(p)) ||
         (!!p && !!p.ctn.endSync && sibs.some(o => E.has(o))) || exclDep
       const follows = 'children' in n && (n.ctn.durMs === undefined || !!n.ctn.endSync) && n.children.some(o => E.has(o))
       const e = b || c || follows || (!!n.ctn.endSync && refDep(n.ctn.endSync))
@@ -780,7 +799,14 @@ export function mediaEndAffectsDrawing(root: TimeNode): boolean {
     }
   }
   // Round 12d: a media-dependent node carries only timing the model handles (`timingModelled`).
-  for (const n of nodes) if ((B.has(n) || C.has(n) || E.has(n)) && !timingModelled(n)) return true
+  for (const n of nodes) if ((B.has(n) || C.has(n) || E.has(n)) && !timingModelled(n)) return unresolved
+  // Fix round 1 (C3b): an ancestor that eases, reverses or repeats reshapes a dependent node's local time.
+  for (const n of nodes) {
+    if (!(B.has(n) || C.has(n) || E.has(n))) continue
+    for (let a = parent.get(n); a; a = parent.get(a)) {
+      for (const [k, ok] of Object.entries(ANCESTOR_DEFAULT_ONLY)) if (!ok((a.ctn as unknown as Record<string, unknown>)[k])) return unresolved
+    }
+  }
   // Round 12e: "drawn" is any leaf whose activity a renderer observes (`ACTIVITY_CONSUMERS`): a behaviour with render
   // edits (not media, not `cmd`), or any leaf on a shape target with an own or inherited `presetClass`, which
   // `timingTargets` may put in an entrance set that the entrance gate reads (media and `cmd` included).
@@ -794,14 +820,24 @@ export function mediaEndAffectsDrawing(root: TimeNode): boolean {
   // A begin that is not a fixed offset into its parent: it may come after the container's client-side end.
   const late = (n: TimeNode) => n.ctn.start.some(c => c.evt !== undefined || c.tn !== undefined || c.delayMs === 'indefinite')
   const lateBelow = (n: TimeNode): boolean => 'children' in n ? n.children.some(o => (!isMedia(o) && late(o)) || lateBelow(o)) : false
+  const affects = { result: 'affects' as const, begins: B }
   for (const n of nodes) {
-    if (drawn(n) && (B.has(n) || C.has(n))) return true
+    if (drawn(n) && (B.has(n) || C.has(n))) return affects
     if (!('children' in n) || !E.has(n) || !drawnBelow(n)) continue
-    if (n.ctn.fill !== 'hold' && n.ctn.fill !== 'freeze') return true
-    if (n.ctn.start.some(c => c.evt !== undefined) || (n.ctn.restart !== undefined && n.ctn.restart !== 'never')) return true
-    if (lateBelow(n)) return true
+    if (n.ctn.fill !== 'hold' && n.ctn.fill !== 'freeze') return affects
+    if (n.ctn.start.some(c => c.evt !== undefined) || (n.ctn.restart !== undefined && n.ctn.restart !== 'never')) return affects
+    if (lateBelow(n)) return affects
   }
-  return false
+  return { result: 'none', begins: B }
+}
+
+/** Fix round 1: what every ancestor of a media-dependent node must hold at its default. */
+const ANCESTOR_DEFAULT_ONLY: Readonly<Record<string, (v: unknown) => boolean>> = {
+  accel: v => v === undefined || v === 0,
+  decel: v => v === undefined || v === 0,
+  autoRev: v => v === undefined || v === false,
+  repeatCount: v => v === undefined,
+  repeatDurMs: v => v === undefined,
 }
 
 /**
@@ -934,4 +970,42 @@ function toggleOnly(base: readonly DrawnLayer[], list: readonly DrawnLayer[]): b
     if (!b && differs(stateMatrix(s), [1, 0, 0, 1, 0, 0], 1e-6)) return false
   }
   return true
+}
+
+// ---------------------------------------------------------------------------
+// Piece 5: which audio records ship refused (D22; Task 5 fix round 1)
+// ---------------------------------------------------------------------------
+
+function holdsKind(root: TimeNode, kind: 'audio' | 'video'): boolean {
+  const walk = (n: TimeNode, depth: number): boolean => {
+    if (depth > 256) return false
+    if ('children' in n) return n.children.some(c => walk(c, depth + 1))
+    return n.kind === kind
+  }
+  return walk(root, 0)
+}
+
+/**
+ * The audio nodes of `root` whose records ship refused `media-unavailable` with media on (the classification never
+ * depends on them: Task 5 controller ruling):
+ * - D22: its begin may depend on a video end (the video-seeded analysis' `B`; every audio node when it cannot
+ *   resolve): the client would start it at the synthetic, frame-timed video end;
+ * - fix round 1 (C3a): an ancestor reverses or repeats (`autoRev`, `repeatCount`, `repeatDurMs`): the activation
+ *   query reads a mirrored local time there, so the sound's clock is not trusted.
+ */
+export function refusedAudio(root: TimeNode): AudioBehaviour[] {
+  const out: AudioBehaviour[] = []
+  if (!holdsKind(root, 'audio')) return out
+  const a = holdsKind(root, 'video') ? analyseMediaEnds(root, 'video') : { result: 'none' as const, begins: new Set<TimeNode>() }
+  const walk = (n: TimeNode, depth: number, repeated: boolean) => {
+    if (depth > 256) return
+    if ('children' in n) {
+      const r = repeated || n.ctn.autoRev || n.ctn.repeatCount !== undefined || n.ctn.repeatDurMs !== undefined
+      for (const c of n.children) walk(c, depth + 1, r)
+      return
+    }
+    if (n.kind === 'audio' && (repeated || a.result === 'unresolved' || a.begins.has(n))) out.push(n)
+  }
+  walk(root, 0, false)
+  return out
 }

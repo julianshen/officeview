@@ -49,7 +49,7 @@ import { decodePng, encodePng } from '../mark/png'
 import { markOptions, paintMark, type MarkSpec } from '../mark/visible'
 import { tauFor } from '../detect/tau'
 import { classifiedRasters, createSlideComposer, drawsAt, maskedRaster, slideStateAt, type DrawnLayer } from './compose'
-import { allocateFrames, classifySlide, stepDurations, videoChainedAudio, type Classification } from './eligibility'
+import { allocateFrames, classifySlide, refusedAudio, stepDurations, type Classification } from './eligibility'
 import { burnVisibleMark, compareMarkContribution, MARK_FIDELITY } from './marks'
 import { compareFrames } from '../../../src/slideshow/compare'
 
@@ -286,10 +286,11 @@ function streamedMeta(meta: ShowSlide, unit: number, media?: MediaInputs): { met
     transition = kept && (kept.start || kept.end) ? { ...rest, sound: kept } : rest
   }
   // D22: an audio use whose begin may depend on a video end would start at the client's synthetic (frame-timed)
-  // video end: its record ships refused `media-unavailable` (a spid-less record if any of its uses is chained, X13).
+  // video end; fix round 1: one under a reversing or repeating ancestor has no trusted clock. Its record ships
+  // refused `media-unavailable` (a spid-less record if any of its uses is, X13).
   const chained = new Set<string>()
   if (mp && media?.on && meta.timing && !('refused' in meta.timing)) {
-    for (const n of videoChainedAudio(meta.timing.root)) {
+    for (const n of refusedAudio(meta.timing.root)) {
       const t = n.target
       if ('snd' in t) { const ph = mp.snd.get(t.snd); if (ph) chained.add(ph) }
       else if ('spid' in t) for (const r of mp.records) if (r.spid === t.spid) chained.add(r.placeholder)
@@ -649,10 +650,8 @@ export function trackInputs(show: ShowDoc, job: ShowPlanJob): { ps: PreparedSlid
 function classificationOf(e: L1Entry, job: ShowPlanJob): Classification {
   const have = e.classes.get(job.strictMarks)
   if (have) return have
-  // Piece 5 (D18, X5): with can.media the classifier evaluates its histories with the computed audio ends of the
-  // records this plan ships (the client's own); without it, piece 4.
-  const media = job.media === true ? { media: { records: e.record!.media ?? [] } } : {}
-  const c = classifySlide({ ps: e.ps!, timeline: e.timeline!, scale: job.scale, rasters: e.rasters!, strictMarks: job.strictMarks, triggers: e.timeline!.triggers(), resolveFont, ...media })
+  // Task 5 controller ruling: media on classifies exactly as media off (every media end seeded, `mediaRefused`).
+  const c = classifySlide({ ps: e.ps!, timeline: e.timeline!, scale: job.scale, rasters: e.rasters!, strictMarks: job.strictMarks, triggers: e.timeline!.triggers(), resolveFont })
   e.classes.set(job.strictMarks, c)
   return c
 }
