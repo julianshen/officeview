@@ -1180,16 +1180,19 @@
       }
     },
     "formula:composition-stop-icon": {
-      "status": "refused",
-      "code": "missing-capture",
-      "reason": "stop-icon: twin K2 cannot be measured",
+      "status": "discriminating",
+      "reason": "halts matches every designated cell; every required visual and empty cell is validated, and each rival is contradicted at >= 2 decisive cells of every replication group (Ruling S5-WITNESS)",
+      "matched": "halts",
+      "survivors": [
+        "halts"
+      ],
       "observed": {
         "stop-icon": {
-          "I2": "unmeasurable|none",
+          "I2": "icon:3Arrows:0@2,4|none",
           "I3": "none|FFFFC7CE",
-          "I4": "unmeasurable|none",
+          "I4": "icon:3Arrows:1@2,4|none",
           "I5": "none|FFFFC7CE",
-          "I6": "unmeasurable|none",
+          "I6": "icon:3Arrows:2@2,4|none",
           "I7": "none|FFFFC7CE"
         }
       }
@@ -1291,16 +1294,19 @@
       }
     },
     "formula:composition-indirect-ahead-icon": {
-      "status": "refused",
-      "code": "missing-capture",
-      "reason": "indirect-icon: twin K2 cannot be measured",
+      "status": "discriminating",
+      "reason": "halts matches every designated cell; every required visual and empty cell is validated, and each rival is contradicted at >= 2 decisive cells of every replication group (Ruling S5-WITNESS)",
+      "matched": "halts",
+      "survivors": [
+        "halts"
+      ],
       "observed": {
         "indirect-icon": {
-          "T2": "unmeasurable|none",
+          "T2": "icon:3Arrows:0@2,4|none",
           "T3": "none|FFFFC7CE",
-          "T4": "unmeasurable|none",
+          "T4": "icon:3Arrows:1@2,4|none",
           "T5": "none|FFFFC7CE",
-          "T6": "unmeasurable|none",
+          "T6": "icon:3Arrows:2@2,4|none",
           "T7": "none|FFFFC7CE"
         }
       }

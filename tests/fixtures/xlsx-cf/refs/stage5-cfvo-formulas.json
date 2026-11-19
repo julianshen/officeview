@@ -2106,19 +2106,22 @@
       }
     },
     "icon:thresholds-formula": {
-      "status": "refused",
-      "code": "missing-capture",
-      "reason": "cfvo-icon-formula: twin Z2 cannot be measured",
+      "status": "discriminating",
+      "reason": "evaluated matches every designated cell; every required visual and empty cell is validated, and each rival is contradicted at >= 2 decisive cells of every replication group (Ruling S5-WITNESS)",
+      "matched": "evaluated",
+      "survivors": [
+        "evaluated"
+      ],
       "observed": {
         "cfvo-icon-formula": {
-          "J2": "unmeasurable|none",
-          "J3": "unmeasurable|none",
-          "J4": "unmeasurable|none",
-          "J5": "unmeasurable|none",
-          "J6": "unmeasurable|none",
-          "J7": "unmeasurable|none",
-          "J8": "unmeasurable|none",
-          "J9": "unmeasurable|none"
+          "J2": "icon:3Arrows:0@2,4|none",
+          "J3": "icon:3Arrows:0@2,4|none",
+          "J4": "icon:3Arrows:1@2,4|none",
+          "J5": "icon:3Arrows:1@2,4|none",
+          "J6": "icon:3Arrows:1@2,4|none",
+          "J7": "icon:3Arrows:1@2,4|none",
+          "J8": "icon:3Arrows:2@2,4|none",
+          "J9": "icon:3Arrows:2@2,4|none"
         }
       }
     },

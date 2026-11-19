@@ -44,9 +44,9 @@ const RECORDED_EXCEL_REFUSALS = [
   'formula:predicate-timeperiod-divergent',
   'formula:cross-sheet-missing',
   'formula:cfvo-nonnumeric',
-  // Re-deferred after the composition rebuild: the icon-only twin K2 is unmeasurable (icon drawn at cell top + 4 px).
-  'formula:composition-stop-icon',
-  'formula:composition-indirect-ahead-icon',
+  // Centred glyph key (2026-11-19): with the icon twins measurable, no scope reading matched Excel (a finding). The
+  // composition stop-icon and indirect-ahead-icon re-deferrals are lifted: their icon twins now classify (both halt).
+  'formula:cfvo-scope-multi-range',
 ]
 
 describe('every enabled formula capability has verified evidence', () => {

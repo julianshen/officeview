@@ -7323,14 +7323,8 @@ export const CF_STAGE5_UNSUPPORTED: Readonly<Record<string, string>> = {
     'Finding (S4-MINMAX precedent): no hypothesis (withheld, zero, skipped) matched what Excel showed for a text, blank or error formula bound in stage5-cfvo-formulas L..N; recorded, never fitted. Production keeps a non-numeric formula bound unresolved.',
   'bar:bounds-formula':
     'Re-deferred (Task 39): the stage5-cfvo-formulas bar fixture holds 5..100 against formula bounds 20..80 (a whole-scope cf-value-beyond-bounds, Ruling S3-E) and its twin W7 cannot be measured, so the capture cannot evidence it (CF_STAGE5_UNCONFIRMABLE). Fixing the fixture is a new case version; production keeps formula bar bounds unresolved.',
-  'icon:thresholds-formula':
-    'Re-deferred (Task 39): every icon crop of stage5-cfvo-formulas is unclassifiable (icon-class-none). Its cells sit on the default style, which Excel draws vertically centred, 3 px above the bottom-aligned frame of the Stage 4 glyph key, so twin Z2 cannot be measured. A rebuild with bottom-aligned cells is a new case version; production keeps formula icon thresholds unresolved.',
-  'formula:composition-stop-icon':
-    'Re-deferred (Task 39, after the rebuild 26a648e1): every icon crop of stage5-composition is unclassifiable (icon-class-none), so the icon-only twin K2 cannot be measured. Excel 16.115 folded the explicit bottom-aligned style into the Normal style on resave and drew each icon at cell top + 4 px, against + 7 px in the Stage 4 glyph key (whose cells carry a number format), so the position-exact key matches nothing. Measuring it needs a key captured at this placement, not a verifier change after the capture. Also CF_STAGE5_UNCONFIRMABLE. Production keeps a formula stopIfTrue ahead of an icon set unresolved.',
-  'formula:composition-indirect-ahead-icon':
-    'Re-deferred (Task 39, after the rebuild 26a648e1): the indirect-icon configuration needs the same icon-only twin K2, which is unmeasurable (icon-class-none: Excel 16.115 draws the icon at cell top + 4 px, the Stage 4 glyph key at + 7 px). Production cannot evaluate INDIRECT and names no reading for it, so the capability is withheld either way.',
   'formula:cfvo-scope-multi-range':
-    'Re-deferred (Task 39): the scope-icon configuration of stage5-cfvo-scope cannot be measured (twin P12 is an unclassifiable icon crop: default style, vertically centred, 3 px off the glyph key frame), so the capability cannot verify. Production keeps a multi-range formula bound unresolved.',
+    'Finding (centred glyph key, 2026-11-19; S4-MINMAX precedent): with the icon twins measurable at last (P12..T15 classify against stage4-icon-glyph-key-centred at the centred frame, cell top + 4 px), no hypothesis (rule-wide, per-range) matches what Excel showed for the relative bound =MAX(B2:B5) on sqref "B2:B5 D2:D5 F2:F5": Excel drew the top colour (FF63BE7B) on every cell of the scale and the top icon (3Arrows:2) on every cell of the icon set, in the control range B as in D and F. Recorded, never fitted. Production keeps a multi-range formula bound unresolved.',
 }
 
 /**
