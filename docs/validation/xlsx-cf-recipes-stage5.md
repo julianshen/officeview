@@ -104,7 +104,7 @@ bun scripts/cf-refs/capture.ts --stage 5 --verify-only
 npx tsx scripts/cf-refs/audit.ts --stage 5
 ```
 
-- **Expected:** a repair-free open, with Excel keeping both relative formulas as authored (`MAX(B2:B7)`, `MAX(B16:B21)`, `MAX(I2:I7)`), as it did on `stage5-cfvo-scope`. `formulaEvaluation['formula:cfvo-scope-multi-range']` is `discriminating`, matching one of the twelve readings. The capability stays in `CF_STAGE5_UNSUPPORTED` whatever the result, and production keeps it unresolved.
+- **Expected:** a repair-free open, with Excel keeping the three relative formulas as authored (`MAX(B2:B7)`, `MAX(B16:B21)`, `MAX(I2:I7)`), as it did on `stage5-cfvo-scope`. `formulaEvaluation['formula:cfvo-scope-multi-range']` is `discriminating`, matching one of the twelve readings. The capability stays in `CF_STAGE5_UNSUPPORTED` whatever the result, and production keeps it unresolved.
 - **Stop and record** (never retried, never refitted): a repair, strip or rewritten formula (keep `<id>.rejected.xlsx`); `missing-capture` or an unclassifiable icon crop; `formula-hypothesis-none`; `non-discriminating`; `formula-replication-shortfall`; a failed negative control.
 
 ## 3. Unresolved shapes (record only)

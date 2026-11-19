@@ -268,6 +268,27 @@ describe('stage5-cfvo-scope-v2: every reading discriminates on a synthetic obser
     }, 300_000)
   }
 
+  // The single-range control is recorded only (it never bears evidence), so its reading is fixed here, before the capture:
+  // it is read by the same evaluator on that configuration alone, and names the class of readings that coincide on one range.
+  const SINGLE_CLASSES: ReadonlyArray<readonly Reading[]> = [
+    ['rule-wide', 'per-range', 'anchor-last', 'max-fallback'],
+    ['a1-frame-top-left', 'a1-frame-per-range', 'a1-frame-last'],
+    ['anchor-cell'], ['anchor-a1'], ['a1-frame-cell'], ['zero'], ['ignored'],
+  ]
+  for (const reading of READINGS) {
+    const cls = SINGLE_CLASSES.find(x => x.includes(reading))!
+    it(`planted ${reading}: the single-range control alone comes back as ${cls.join(' / ')}`, () => {
+      const c = caseOf(ID)
+      const { xml, parts } = sheetOf(c)
+      const cfg = resolveFormulaConfigurations(c, parts).find(x => x.id === 'scope2-single-range')!
+      expect(cfg.record).toBeDefined()
+      const { record: _record, ...live } = cfg
+      const ev = evaluateFormulaCapabilities([live], formulaControlsOf(c), plant(c, valuesOf(xml), reading), { kindOf: visualKindOf(c) })['formula:cfvo-relative']!
+      expect([...(ev.survivors ?? [])].sort(), ev.reason).toEqual([...cls].sort())
+      expect(ev.status, ev.reason).toBe(cls.length === 1 ? 'discriminating' : 'non-discriminating')
+    }, 300_000)
+  }
+
   it('every pair of readings differs at >= 2 cells of every range where it differs at all (colour), and at >= 2 cells overall', () => {
     const values = valuesOf(sheetOf(caseOf(ID)).xml)
     const scale = boundsOf(values, SCALE_COLS, 2, N)
