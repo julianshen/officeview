@@ -67,3 +67,99 @@ test('a still with audio plays its narration (or takes the media-codec path with
   await expect(surface(page).locator('audio[data-officeview-show-effect-sound]')).toHaveCount(0)
   expect(await page.evaluate(() => (window as unknown as { __ovCloses: number[] }).__ovCloses)).not.toContain(4008)
 })
+
+// ---------------------------------------------------------------------------
+// Task 14 (plan D20, D22): the media smoke, on `?deck=narration|transition-sound|video` (server/test/app.ts).
+// ---------------------------------------------------------------------------
+
+const CONTROL = `http://127.0.0.1:${P + 1}`
+/** Opens `deck`, waits for the painted unit, and records `canPlayType` for AAC (D20): `''` is the no-codec branch. */
+async function openDeck(page: Page, deck: string, sent: string[]): Promise<string> {
+  page.on('websocket', (ws) => ws.on('framesent', (f) => { if (typeof f.payload === 'string') { const m = /"type":"([a-z-]+)"/.exec(f.payload); if (m) sent.push(m[1]!) } }))
+  await page.goto(`/src/debug/stream-viewer.html?port=${P}&deck=${deck}&backend=canvas2d`)
+  await expect(page.locator('[data-unit-wrap]')).toHaveCount(1)
+  await expect(page.locator('canvas[data-painted="1"]').first()).toBeVisible()
+  const aac = await page.evaluate(() => document.createElement('audio').canPlayType('audio/mp4; codecs="mp4a.40.2"'))
+  test.info().annotations.push({ type: 'D20', description: aac === '' ? 'no AAC: the media-codec path' : `AAC: ${aac}` })
+  return aac
+}
+async function startPresent(page: Page): Promise<void> {
+  await page.locator('[data-debug-present]').click()
+  await expect.poll(async () => (await stream(page)).present).toBe('started')
+  await expect(surface(page)).toHaveAttribute('data-slide', '0')
+}
+/** The largest `currentTime` (s) of the elements `selector` matches in the document (0 when none). */
+const playedSeconds = (page: Page, selector: string) =>
+  page.evaluate((sel) => Math.max(0, ...[...document.querySelectorAll<HTMLMediaElement>(sel)].map((e) => e.currentTime)), selector)
+
+test('no-codec Chromium: poster + media-codec notice + clock end', async ({ page }) => {
+  const sent: string[] = []
+  const aac = await openDeck(page, 'narration', sent)
+  test.skip(aac !== '', `this Chromium decodes AAC (canPlayType ${JSON.stringify(aac)}): the playback cases run instead`)
+  await startPresent(page)
+  // Refused before any byte is asked for; the typed notice; no element plays; the slide still ends on the clock and
+  // a click leaves it.
+  await expect.poll(async () => (await stream(page)).showDiagnostics.some((d) => /media-codec/.test(`${d.code} ${d.message}`)), { timeout: 10_000 }).toBe(true)
+  expect(sent.filter((t) => t === 'media-request')).toEqual([])
+  expect(await playedSeconds(page, 'audio, video')).toBe(0)
+  await surface(page).click({ position: { x: 20, y: 20 } })
+  await expect(surface(page)).toHaveAttribute('data-slide', 'end')
+})
+
+test('transition sound and narration play (media element currentTime advances)', async ({ page }) => {
+  test.setTimeout(60_000)
+  const sent: string[] = []
+  const aac = await openDeck(page, 'transition-sound', sent)
+  test.skip(aac === '', 'D20: this Chromium has no AAC; the no-codec case covers it')
+  await startPresent(page)
+  // The start sound (`a.m4a`) is asked for once and plays in the audience surface.
+  await expect.poll(() => sent.filter((t) => t === 'media-request').length, { timeout: 10_000 }).toBe(1)
+  await expect.poll(() => playedSeconds(page, '[data-officeview-show-surface=""] audio[data-officeview-show-sound]'), { timeout: 10_000 }).toBeGreaterThan(0.2)
+
+  const sent2: string[] = []
+  await openDeck(page, 'narration', sent2)
+  await startPresent(page)
+  const narration = surface(page).locator('audio[data-officeview-show-media-spid="3"]')
+  await expect.poll(() => sent2.filter((t) => t === 'media-request').length, { timeout: 10_000 }).toBe(1)
+  await expect(narration).toHaveCount(1, { timeout: 10_000 })
+  const a = await playedSeconds(page, 'audio[data-officeview-show-media-spid="3"]')
+  await expect.poll(() => playedSeconds(page, 'audio[data-officeview-show-media-spid="3"]'), { timeout: 10_000 }).toBeGreaterThan(a + 0.2)
+  expect(await page.evaluate(() => (window as unknown as { __ovCloses: number[] }).__ovCloses)).not.toContain(4008)
+})
+
+test('a video slide shows its piece-4 still, and no media-request is sent for it', async ({ page }) => {
+  const sent: string[] = []
+  await openDeck(page, 'video', sent)
+  await startPresent(page)
+  // D22: the still (drawn as the unit image, diagnosed `still`); no video element, no request, with or without AAC.
+  await expect(surface(page)).toHaveAttribute('data-officeview-show-frame', 'image')
+  await expect.poll(async () => (await stream(page)).showDiagnostics.some((d) => d.code === 'still')).toBe(true)
+  await page.waitForTimeout(1500)
+  expect(sent.filter((t) => t === 'media-request')).toEqual([])
+  await expect(page.locator('video, audio')).toHaveCount(0)
+  await surface(page).click({ position: { x: 20, y: 20 } })
+  await expect(surface(page)).toHaveAttribute('data-slide', 'end')
+})
+
+test('revocation mid-narration exits; no element plays after ended', async ({ page }) => {
+  test.setTimeout(60_000)
+  const sent: string[] = []
+  const aac = await openDeck(page, 'narration', sent)
+  test.skip(aac === '', 'D20: this Chromium has no AAC; nothing plays to revoke mid-way')
+  await startPresent(page)
+  // Mid-narration: the element is playing (the fixture runs 2–4 s).
+  await expect.poll(() => playedSeconds(page, 'audio[data-officeview-show-media-spid="3"]'), { timeout: 10_000 }).toBeGreaterThan(0.1)
+  const sids = (await (await page.request.get(`${CONTROL}/sessions`)).json() as Array<{ sid: string; status: string }>).filter((s) => s.status === 'stream')
+  expect(sids.length).toBeGreaterThan(0)
+  for (const { sid } of sids) await page.request.post(`${CONTROL}/revoke?sid=${sid}`)
+  await expect.poll(async () => (await stream(page)).present).toBe('ended')
+  await expect(surface(page)).toHaveCount(0)
+  // After ended: every media element left in the document is paused, and none advances.
+  const media = () => page.evaluate(() => [...document.querySelectorAll<HTMLMediaElement>('audio, video')].map((e) => ({ paused: e.paused, t: e.currentTime })))
+  const m0 = await media()
+  await page.waitForTimeout(500)
+  const m1 = await media()
+  expect(m0.every((x) => x.paused)).toBe(true)
+  expect(m1).toEqual(m0)
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __ovCloses: number[] }).__ovCloses)).toContain(4005)
+})

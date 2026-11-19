@@ -17,6 +17,8 @@
  *   ?notes=off sets the session's notes policy to false (Stage 3c); absent = the demo default (on).
  *   ?deck=fly|morph|cube|nav|stillsound opens a synthetic show deck (piece 4 Task 14: `flyInDeck`, `morphDeck`, `cubeDeck` from
  *          src/testdata/show-decks.ts) instead of `?doc=`.
+ *   ?deck=video|narration|transition-sound (piece 5 Task 14): `videoDeck` (the D22 still check only), `narrationDeck`,
+ *          `transitionSoundDeck`.
  *   P + 1  controls: POST /drop|/revoke|/oversize?sid=&srv=short, GET /sessions,
  *          GET /fontpack/* (CORS), GET /__stream-harness (identity; `media`: the ffmpeg probe passed)
  *
@@ -29,7 +31,7 @@ import { deriveKeys } from '../src/keys'
 import { createMediaServices, MEDIA_ENABLED_DEFAULT } from '../src/media/services'
 import { Pool } from '../src/pool'
 import { createStreamServer } from '../src/ws'
-import { cubeDeck, flyInDeck, morphDeck, navDeck, stillSoundDeck } from '../../src/testdata/show-decks'
+import { cubeDeck, flyInDeck, morphDeck, narrationDeck, navDeck, stillSoundDeck, transitionSoundDeck, videoDeck } from '../../src/testdata/show-decks'
 
 const P = Number(process.env.OV_STREAM_PORT ?? 4181)
 const ORIGINS = [`http://127.0.0.1:${process.env.IV_HARNESS_PORT ?? 4173}`, `http://localhost:${process.env.IV_HARNESS_PORT ?? 4173}`]
@@ -49,7 +51,11 @@ const PRINT = { on: true, off: false, cap2: { maxPages: 2 }, session3: { maxPage
 const ROLE = { presenter: 'presenter', audience: 'audience' } as const
 const NOTES = { off: false } as const
 /** TEST-ONLY `?deck=` (piece 4 Task 14): the synthetic show decks, built once. */
-const DECKS = { fly: flyInDeck(), morph: morphDeck(), cube: cubeDeck(), nav: navDeck(), stillsound: stillSoundDeck('audio-end') } as const
+const DECKS = {
+  fly: flyInDeck(), morph: morphDeck(), cube: cubeDeck(), nav: navDeck(), stillsound: stillSoundDeck('audio-end'),
+  // Piece 5 Task 14 (X26): `video` is kept only for the D22 still check.
+  video: videoDeck(), narration: narrationDeck(), 'transition-sound': transitionSoundDeck(),
+} as const
 const pick = <T extends object>(table: T, v: string | null): T[keyof T] | undefined => (v !== null && v in table ? table[v as keyof T] : undefined)
 const hooks = {
   ...demo,

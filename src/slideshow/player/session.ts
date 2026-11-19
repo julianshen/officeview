@@ -140,6 +140,11 @@ export const sessionDeps = {
   /** Epoch ms for Presenter View's wall clock (S2-5). */
   wall: (): number => Date.now(),
   workspace: (profile: SlideShowProfile): SlideShowWorkspace => createSlideShowWorkspace(profile),
+  /**
+   * Additive (piece 5 Task 14): the driver's slide source, as built. The stream parity harness wraps it with a
+   * `mediaClock` from the server plan's records (spec §5.5); a show never replaces it (local media ends on `ended`).
+   */
+  source: (slides: SlideSource): SlideSource => slides,
 }
 
 /**
@@ -701,7 +706,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
       get textTiming() { return st.textTiming && ((i: number, meta: ShowSlide, charge: (bytes: number, tag: string) => boolean) => st.textTiming!(i, meta, charge)) },
     }
     driver = createShowDriver({
-      source: slides, stage: engine, clock, sink, reducedMotion: motion, kiosk,
+      source: sessionDeps.source(slides), stage: engine, clock, sink, reducedMotion: motion, kiosk,
       hooks: { ...hooks, media: (slide, now) => mp.enter(slide, now) },
     })
     cursorHider = createCursorHider(surface.root, sessionDeps.timer(win))
