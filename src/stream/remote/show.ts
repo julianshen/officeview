@@ -119,6 +119,11 @@ export const remoteShowDeps = {
   backend: undefined as 'canvas2d' | undefined,
   /** Piece 4: the per-show byte budget (spec §5: 128 MiB of plan records, assets and track frames). */
   get showBytes(): number { return SHOW_PLAN_LIMITS.showDecoded },
+  /**
+   * Piece 5 Task 14, TEST-ONLY: the media ends in each cursor the driver reports (`onCursor`), so a browser test can see
+   * a computed end on the show clock. Never set by a show (no show option reaches it); absent, nothing is traced.
+   */
+  mediaEnds: undefined as ((slide: number, ends: ReadonlyArray<{ nodeId: number; t: number }>) => void) | undefined,
 }
 
 /** A show refusal that plays the piece-3 still (Task 10), or a transient one that is not a failed slide. */
@@ -1415,7 +1420,11 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
         // The visit's cursor now exists: what Next is (a build or the next slide) can be told.
         syncPresenter()
       },
-      onCursor() { syncPresenter() },
+      onCursor(v) {
+        syncPresenter()
+        const trace = remoteShowDeps.mediaEnds
+        if (trace && v.cursor) trace(v.index, v.cursor.events.flatMap((e) => (e.kind === 'mediaEnd' ? [{ nodeId: e.nodeId, t: e.t }] : [])))
+      },
       runLink(link, v) {
         runLink(link, { goTo, next, previous, first: firstSlide, last: lastSlide, exit }, win ?? (globalThis as unknown as Window), { sink, slideIndex: v.index })
       },

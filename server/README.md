@@ -663,9 +663,13 @@ video shows its poster and ends at its first live frame.
 | `OV_FFMPEG` | `ffmpeg` on `PATH` | the ffmpeg binary. The floor is major version 6. |
 | `OV_FFPROBE` | the `ffprobe` next to the resolved ffmpeg | the ffprobe binary, which measures durations. |
 
-The startup probe runs each binary once under its sandbox. It checks the
-version, the AAC encoder, the demuxer allowlist (`mov`, `avi`, `wav`,
-`asf`, `mp3`), the audio decoders, and that every limit below applies.
+The startup probe runs several sandboxed capability probes:
+- `-version` of ffmpeg and ffprobe, with a floor of major version 6;
+- ffmpeg's encoder, decoder and demuxer lists, which must include the AAC
+  encoder, the audio decoders and the demuxer allowlist (`mov`, `avi`,
+  `wav`, `asf`, `mp3`);
+- on macOS, a working `ps` RSS read for the watchdog;
+- a capped-write check that the file-size limit really applies.
 If any check fails, the manifest offers `can.media: false` and every
 record is `media-unavailable`. The server still starts.
 
@@ -702,8 +706,10 @@ checked again just before the spawn and after the run.
   session's own bound plan before the cache is consulted, so a foreign id
   or a cache key answers `invalid-media`.
 - `unit` names the slide the use is on: one part can be playable on one
-  slide and refused on another. Without it, the request is for the slide
-  of the last `media-show` or `media-cursor`.
+  slide and refused on another. Without it, the server looks on the
+  cursor's slide (the last `media-show` or `media-cursor`) first, then
+  searches the following slides cyclically, in show order, for the first
+  one that uses that `mediaId` (a look-ahead request).
 - Kind 9 is sent stored, never compressed, and every other kind stays
   compressed (D14). Each chunk carries 1 MiB − 64 B (D13). Chunks go out
   under the 4 MiB send high-water mark (`PRINT_SEND_HIGH_WATER`).
@@ -743,7 +749,9 @@ request joins it.
 
 **Audit.** `media_deliveries (sid, unit_index, media_id, kind,
 source_hash, out_bytes, duration_ms, reason, at, ffmpeg_version,
-encode_params_sha, cache_state)` has one row per delivery and per refusal.
+encode_params_sha, cache_state)` has one row per delivery and per refusal of
+an eligible use: a `mediaId` the session's own plan binds, on a slide that
+uses it. A foreign or unknown id answers `invalid-media` with no row.
 - `kind` is always `audio`.
 - `cache_state` is `hit`, `joined` or `miss`. It is empty on a refusal
   that never reached the cache.

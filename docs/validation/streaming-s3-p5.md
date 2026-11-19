@@ -48,7 +48,7 @@ Parent §12a.8 3d reads "transcoded playback carries the burned-in mark; no orig
 | §8 hostile: every refusal reason | `media-wire.test.ts` "refusal media-too-long", "… media-too-large", "… media-timeout", "… media-busy", "… media-unreadable", "… media-linked", "… media-unavailable"; "7th media-request in 60 s → rate-limited; never closes 4008; unit budget untouched" |
 | §8 lifecycle: close kills ffmpeg when no one waits; nothing left behind | `lifecycle.test.ts` "close mid-delivery: ledgers empty, no pid, no file", "media-end cancels queued encodes and releases references", "session expiry releases the session's references; …", "server shutdown removes the per-process temp dir and every cache entry", and the worker-retirement cases (no probe group, zombie or staged file) |
 | Revocation mid-playback in the browser | browser "revocation mid-narration exits; no element plays after ended" |
-| §4.4 no-AAC browser (D20) | browser "no-codec Chromium: poster + media-codec notice + clock end" (skipped here: this Chromium decodes AAC, see §Browser smoke); `tests/stream/remote-show-media.test.tsx` (the no-AAC show raises `media-codec` and keeps the clock end, `f0efe734`) |
+| §4.4 no-AAC browser (D20) | browser "no-codec Chromium: poster + media-codec notice + clock end" (skipped in the gate: this Chromium decodes AAC; it passed in a forced run with `canPlayType` stubbed to `''`, which observed the clock end at 2000 ms through the `?trace=media` trace; see §Browser smoke); `tests/stream/remote-show-media.test.tsx` (the no-AAC show raises `media-codec` and keeps the clock end, `f0efe734`) |
 | Audit `media_deliveries` columns and `cache_state` | `media-wire.test.ts` "media_deliveries row has exactly the twelve columns; …"; wire audit "every delivery has a media_deliveries row with a cache_state"; "services row records media on/off" |
 
 ## Wire audit
@@ -140,12 +140,19 @@ Run under `IV_HARNESS_PORT=4391 npm run test:browser:stream`, against `server/te
 | Test | Result |
 |---|---|
 | a still with audio plays its narration (or takes the media-codec path without AAC); a click advances (Task 11b) | pass |
-| no-codec Chromium: poster + media-codec notice + clock end | skipped (AAC present) |
+| no-codec Chromium: poster + media-codec notice + clock end | skipped in the gate (AAC present). **Forced run** (fix round 1): a scratch copy of the spec stubs `HTMLMediaElement.prototype.canPlayType` to `''`, and it passes, together with the 11b still test on its no-codec path. It asserts the `media-codec` notice, no `media-request`, and no element played. It also asserts the clock end through the TEST-ONLY `?trace=media` trace (`remoteShowDeps.mediaEnds`, see below): there is no end for the narration (`cTn` 3) at 1 s, and then exactly one, recorded at show time 2000 ms (`a.m4a`'s `durationMs`) and first seen at least 1750 ms of wall time after the show started. |
 | transition sound and narration play (media element currentTime advances) | pass: one `media-request` each; the start sound's element passes 0.2 s; the narration's `currentTime` advances by more than 0.2 s; no 4008 |
 | a video slide shows its piece-4 still, and no media-request is sent for it | pass: drawn as the image, diagnosed `still`; no `media-request` in 1.5 s; no `audio` or `video` element; a click ends the show |
-| revocation mid-narration exits; no element plays after ended | pass: revoked while the narration plays; `ended`, the surface is gone, every media element left is paused and does not advance in 500 ms, close 4005 |
+| revocation mid-narration exits; no element plays after ended | pass. Before the revocation, the test holds references to the page's media elements and shows the narration playing: unpaused, with `currentTime` advancing between two samples 250 ms apart. After `ended`, the surface is gone and the close code is 4005, and **the same elements, attached or detached,** are paused and do not advance in 500 ms. See the mutation note below. |
 
 RED first: with the new decks removed from `app.ts`, the three playback and D22 tests failed (the decks fell back to the demo document), and the 11b test passed.
+
+**Mutation checks on the revocation test** (fix round 1; scratch edits of `src/slideshow/media/player.ts` `teardown`, none committed). A scratch trace showed that revocation reaches `teardown` with the narration still unpaused.
+- **Removing the teardown's `pause()` keeps the test green.** So does removing `pause()`, the `src` reset and `load()` together. The teardown still calls `el.remove()`, and HTML's removal steps pause a media element that leaves its document. The test therefore cannot tell `pause()` from `remove()`. It proves the outcome, that no held element plays after `ended`, and not one line.
+- **A teardown that moves the element into `document.body` and plays it fails the test,** at `paused` for element 0. A playing element left behind is caught.
+- **A teardown that detaches the element and then calls `play()` passes.** The element still ended up paused, most likely because the released lease's URL no longer plays; this was not traced further.
+
+**The clock-end trace.** `remoteShowDeps.mediaEnds` in `src/stream/remote/show.ts` is an `@internal`, TEST-ONLY seam, undefined by default. The remote show's `onCursor` hook hands it the `mediaEnd` events of each cursor the driver reports. Only the debug page sets it, and only under `?trace=media`, which loads the remote show module just for this. No show option reaches it.
 
 ## Sandbox per platform
 
@@ -207,7 +214,8 @@ Against the brief's expectation (red, with Δ ≤ 4 B against 421,385 B): the me
 
 - **Real-world codecs outside the fixtures.** The fixtures are ffmpeg `sine` tones: AAC/M4A, MP3, PCM WAV, WMA v2, and AAC inside `av.mp4`. ALAC, ADPCM, 24-bit or float PCM, odd sample rates, VBR MP3 with damaged headers, and long real narrations are allowlisted but untested. The corpus's real media (`lo-narration.m4a`, `lo-tdf44223`'s WAVs) go through the probe tests only.
 - **Playback outside Chromium.** The browser smoke runs Playwright Chromium. Safari and Firefox playback, their `canPlayType` answers and autoplay policies are unchecked.
-- **The no-AAC browser branch** (D20) did not run here, because this Chromium answered `probably`. It is covered at unit level (`f0efe734`), and the browser case runs wherever `canPlayType` returns `''`.
+- **The no-AAC browser branch** (D20) did not run in the gate, because this Chromium answered `probably`. It ran once, forced: `canPlayType` was stubbed to `''` in a scratch copy of the spec, and it passed (above). A real AAC-less Chromium, whose lease refuses `media-codec` and whose player shows `media-refused (media-codec)`, was not run. Unit coverage: `f0efe734`.
+- **Revocation teardown, line by line.** The browser test proves that no held element plays after `ended`, not which teardown line stops it (`remove()` alone pauses).
 - **Linux locally.** The Linux sandbox is proven only in CI.
 - **Untested branches parked from earlier tasks:**
   - *transcode's pre-spawn abort.* Now tested (`a2da6a5f`, comment fixed in `38f142cf`): an aborted signal rejects with its reason, deletes the output and leaves no marker. It pins the outcome only. With the guard line removed, the test stays green: `runSandboxed` spawns and kills the group at once, usually before the script runs, and `transcode` still rethrows. The guard line itself is not machine-checked.

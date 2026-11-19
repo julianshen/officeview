@@ -257,7 +257,7 @@ These record where the build differs from the text above, or settles something t
 
   The queue runs in slide order from `unit` to the last slide, then through the slides before `unit`.
 - **`media-request` carries `token`,** as every request does: `media-request {reqId, token, mediaId, unit?}` (§4.3 shows only `{reqId, mediaId}`).
-- **A `unit` field on `media-request`** (Task 9 review). One part can be playable on one slide and refused on another, and refusal and audit are per use, keyed `(mediaId, unit)`. The field is optional; a request without it is for the slide of the last `media-show` or `media-cursor`. Without it, a refusal recorded on one slide would have silenced the same part on another, and the audit row would have named the wrong slide.
+- **A `unit` field on `media-request`** (Task 9 review). One part can be playable on one slide and refused on another, and refusal and audit are per use, keyed `(mediaId, unit)`. The field is optional. Without it, the server looks on the cursor's slide (the last `media-show` or `media-cursor`) first, then searches the following slides cyclically, in show order, for the first one that uses that `mediaId` (a look-ahead request). Without it, a refusal recorded on one slide would have silenced the same part on another, and the audit row would have named the wrong slide.
 - **D14, kind 9 is stored only.** Kind 9 must have the compressed flag clear, and every other kind must still have it set. A compressed kind-9 message is rejected (`flags`), and so is a stored message of any other kind. This narrows §4.3's "may be sent stored", so that no kind has two encodings to test.
 - **D13, chunk size.** Each MEDIA_CHUNK payload is 1 MiB − 64 B, sent as one fragment, so the 5 s reassembly window never covers a multi-fragment chunk on a slow link. The 4 MiB cap stays as the admission bound. The parent §14 table and its amendment carry kind 9, this size and the `'media'` rate class.
 
@@ -279,7 +279,7 @@ These record where the build differs from the text above, or settles something t
 ### Transcoder (§4.2, §8)
 
 - **D5, the sandbox per platform (owner ruling 2026-11-17).**
-  - Linux: `unshare --user --map-root-user --net`, then `sh -c 'ulimit -t … -v 2097152 -f … && exec "$@"'`, so the address space is capped at 2 GiB.
+  - Linux: `unshare --user --map-root-user --net`, then `sh -c 'ulimit -t <cpu> && ulimit -v 2097152 && ulimit -f <blocks> && exec "$@"'`: three separate commands, each checked by `&&` before the exec, so the address space is capped at 2 GiB (`server/src/media/sandbox.ts`). The combined form `ulimit -t a -v b -f c` must not be used: dash (Ubuntu's `/bin/sh`) parses it as the CPU limit alone and silently drops the address-space and file-size caps.
   - macOS: `sandbox-exec -p '(version 1)(allow default)(deny network*)'` around the same `sh -c` with `-t` and `-f` only. macOS rejects `ulimit -v` and `-d`, so the address-space cap is replaced by an RSS watchdog: it reads the group's RSS every 100 ms and kills the group above 1 GiB.
   - A platform that cannot apply a limit fails closed with `media-unavailable`.
 - **The audio filter is `asetpts=N/SR/TB,apad`, not `apad`** (Task 7). The `wma` decoder's start delay left the encode short of `durationMs` under `-t`, which cut the tail of the source. Re-stamping the samples from zero first keeps every output exactly `durationMs`. Cost: a real gap or late start in the source is closed up.

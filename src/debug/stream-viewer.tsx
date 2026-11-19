@@ -23,8 +23,18 @@ if (q.get('backend') === 'canvas2d') {
 const P = Number(q.get('port') ?? 4181)
 const wsPort = q.get('srv') === 'short' ? P + 2 : P
 const params = new URLSearchParams({ doc: q.get('doc') ?? 'pypptx-test.pptx', ...(q.get('relaxed') ? { relaxed: '1' } : {}), ...(q.get('copy') ? { copy: q.get('copy')! } : {}), ...(q.get('a11y') ? { a11y: q.get('a11y')! } : {}), ...(q.get('print') ? { print: q.get('print')! } : {}), ...(q.get('role') ? { role: q.get('role')! } : {}), ...(q.get('notes') ? { notes: q.get('notes')! } : {}), ...(q.get('deck') ? { deck: q.get('deck')! } : {}) })
-const state = { notices: [] as StreamNotice[], error: undefined as string | undefined, present: undefined as string | undefined, endedAt: undefined as number | undefined, showDiagnostics: [] as Array<{ code: string; message: string }> }
+const state = { notices: [] as StreamNotice[], error: undefined as string | undefined, present: undefined as string | undefined, endedAt: undefined as number | undefined, showDiagnostics: [] as Array<{ code: string; message: string }>, mediaEnds: [] as Array<{ slide: number; nodeId: number; t: number; wall: number }>, mediaTrace: false }
 ;(window as unknown as { __ovStream: typeof state }).__ovStream = state
+// TEST-ONLY `?trace=media` (piece 5 Task 14): each computed media end the remote show's driver records (its node and
+// show-clock time), with the wall time it was first seen. Loads the remote show module only when asked.
+if (q.get('trace') === 'media') {
+  void import('../stream/remote/show').then((m) => {
+    m.remoteShowDeps.mediaEnds = (slide, ends) => {
+      for (const e of ends) if (!state.mediaEnds.some((x) => x.slide === slide && x.nodeId === e.nodeId && x.t === e.t)) state.mediaEnds.push({ slide, ...e, wall: performance.now() })
+    }
+    state.mediaTrace = true
+  })
+}
 
 function App() {
   const source = useMemo(() => ({ kind: 'stream' as const, url: `ws://127.0.0.1:${wsPort}/stream?${params}` }), [])
