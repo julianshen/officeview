@@ -128,7 +128,7 @@ describe('the shared encode cache (D12, D23)', () => {
     expect(c.peek(key('A', '2'))).toBeUndefined()
     expect(c.inflight(key('A', '3'))).toBe(false)
     expect(f.state.aborted).toBe(true)
-    expect(await done(inflight)).toEqual({ ok: false, reason: 'media-unavailable' })
+    expect(await done(inflight)).toEqual({ ok: false, reason: 'media-unavailable', revoked: true })
     expect('path' in a1 && existsSync(a1.path)).toBe(false)
     expect(c.peek(key('B', '1'))).toBeDefined()
     expect(c.referencesOf('s1')).toBe(0)

@@ -45,7 +45,9 @@ export type EncodeOrigin = 'hit' | 'joined' | 'miss'
 /** slot + part + transcode, built by the queue; called only on a miss. `file`: the output's ledger handle, which the
  * cache takes over (absent: the cache adopts `path`). */
 export type EncodeRun = (signal: AbortSignal /* fires when the last waiter is gone */) => Promise<{ ok: true; path: string; result: EncodeResult & { ok: true }; file?: MediaFile } | { ok: false; reason: MediaRefusal }>
-export type EncodeOutcome = { ok: true; media: CachedMedia } | { ok: false; reason: MediaRefusal }
+/** `revoked`: the document was dropped (`dropDocument`) while this waited; its queue sees media-unavailable for the
+ * rest of the show (D12). */
+export type EncodeOutcome = { ok: true; media: CachedMedia } | { ok: false; reason: MediaRefusal; revoked?: true }
 export type Acquired = { wait: true /* ahead only: no room under the look-ahead or the server cap */ } | { origin: EncodeOrigin; done: Promise<EncodeOutcome> }
 
 export interface EncodeCache {
@@ -64,6 +66,9 @@ export interface EncodeCache {
   /** Revocation or close: deletes every entry with this docId at once, referenced or not; aborts its in-flight encodes
    * (resolves once they have settled); a delivery in flight then fails media-unavailable. */
   dropDocument(docId: string): Promise<void>
+  /** Resolves once every abandoned flight (aborted: no waiter left, dropped or closed) has settled, its child gone and
+   * its files disposed. A queue's `end()` awaits it after `dropSession`. */
+  quiesce(): Promise<void>
   /** Resolves on the next release, settle or eviction, for waiting encode-ahead. */
   room(): Promise<void>
   /** Deletes expired entries now (the timer and every public call run it too). */
@@ -96,7 +101,7 @@ export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; se
   const ttl = o.idleTtlMs ?? MEDIA_IDLE_TTL_MS
   const entries = new Map<string, Entry>()
   const sessions = new Map<string, Map<string, Ref>>()
-  const runs = new Map<Promise<void>, string /* docId */>()
+  const runs = new Map<Promise<void>, { docId: string; signal: AbortSignal }>()
   let rooms: Array<() => void> = []
   let seq = 0
   let closed = false
@@ -115,13 +120,13 @@ export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; se
     if (e) { e.refs.delete(sid); e.touched = Math.max(e.touched, now()) }
   }
   /** Removes `e` from the map and every session; its waiters get `reason`; its flight is aborted. */
-  const remove = (e: Entry, reason: MediaRefusal): Promise<void> => {
+  const remove = (e: Entry, reason: MediaRefusal, revoked = false): Promise<void> => {
     if (entries.get(e.id) !== e) return Promise.resolve()
     entries.delete(e.id)
     for (const sid of e.refs) { const m = sessions.get(sid); m?.delete(e.id); if (m && !m.size) sessions.delete(sid) }
     e.refs.clear()
     const ws = [...e.waiters]; e.waiters.clear()
-    for (const w of ws) w.settle({ ok: false, reason })
+    for (const w of ws) w.settle(revoked ? { ok: false, reason, revoked: true } : { ok: false, reason })
     e.ctl?.abort(new DOMException('media: encode abandoned', 'AbortError'))
     notify()
     return disposeFile(e)
@@ -191,7 +196,7 @@ export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; se
       for (const w of ws) w.settle({ ok: false, reason })
       notify()
     })()
-    runs.set(p, e.key.docId)
+    runs.set(p, { docId: e.key.docId, signal: ctl.signal })
     void p.finally(() => runs.delete(p))
   }
 
@@ -275,10 +280,11 @@ export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; se
       notify()
     },
     async dropDocument(docId) {
-      const gone = [...entries.values()].filter((e) => e.key.docId === docId).map((e) => remove(e, 'media-unavailable'))
-      const flights = [...runs].filter(([, d]) => d === docId).map(([p]) => p)
+      const gone = [...entries.values()].filter((e) => e.key.docId === docId).map((e) => remove(e, 'media-unavailable', true))
+      const flights = [...runs].filter(([, r]) => r.docId === docId).map(([p]) => p)
       await Promise.all([...gone, ...flights])
     },
+    async quiesce() { await Promise.all([...runs].filter(([, r]) => r.signal.aborted).map(([p]) => p)) },
     room() { return new Promise<void>((ok) => { rooms.push(ok) }) },
     sweep,
     stats() {
