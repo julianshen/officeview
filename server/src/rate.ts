@@ -15,14 +15,16 @@ export class Window {
   }
 }
 
-export type RateClass = 'message' | 'unit' | 'text' | 'print' | 'notes'
+export type RateClass = 'message' | 'unit' | 'text' | 'print' | 'notes' | 'media'
+/** Piece 5 (spec §4.3): `media-request`s per minute per session; refuse-only, never toward 4008, apart from `unit`. */
+export const MEDIA_RATE_PER_MIN = 6
 
 /** Per-sid gates: 120 msgs/10 s with a 20/s burst, 60 unit requests/min,
  * 60 text ops/min (R5: search, copy, a11y). A breach is an op refusal; the
  * third breach inside 60 s is a CLOSE (4008). A `'text'` overflow is only a
  * refusal: it never counts toward the breach window. `'print'` (Stage 3b):
  * 10 jobs/min, refuse-only like `'text'`. `'notes'` (Stage 3c): 30 notes
- * images/min, refuse-only. */
+ * images/min, refuse-only. `'media'` (piece 5): 6 `media-request`s/min, refuse-only. */
 export class SessionRates {
   private messages = new Window(120, 10_000)
   private burst = new Window(20, 1_000)
@@ -30,12 +32,14 @@ export class SessionRates {
   private texts = new Window(60, 60_000)
   private prints = new Window(PRINT_RATE_PER_MIN, 60_000)
   private notes = new Window(NOTES_RATE_PER_MIN, 60_000)
+  private media = new Window(MEDIA_RATE_PER_MIN, 60_000)
   private breaches = new Window(2, 60_000)
   /** 'ok' | 'refuse' | 'close' */
   check(kind: RateClass, now: number): 'ok' | 'refuse' | 'close' {
     if (kind === 'text') return this.texts.hit(now) ? 'ok' : 'refuse'
     if (kind === 'print') return this.prints.hit(now) ? 'ok' : 'refuse'
     if (kind === 'notes') return this.notes.hit(now) ? 'ok' : 'refuse'
+    if (kind === 'media') return this.media.hit(now) ? 'ok' : 'refuse'
     const ok = kind === 'unit' ? this.units.hit(now) : (this.burst.hit(now) && this.messages.hit(now))
     if (ok) return 'ok'
     return this.breaches.hit(now) ? 'refuse' : 'close'

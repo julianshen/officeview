@@ -69,7 +69,7 @@ describe('resume: notes is mutable, role is not', () => {
     expect(m2.can.present).toBe(true)
     const row = h.stream.audit.get(m.session.sid)!
     expect(row.services.notes).toBe(true)
-    expect(row.servicesChanged).toEqual([{ copy: false, textA11y: 'off', print: { maxPages: null, maxSessionPages: null }, notes: false, at: expect.any(Number) }])
+    expect(row.servicesChanged).toEqual([{ copy: false, textA11y: 'off', print: { maxPages: null, maxSessionPages: null }, notes: false, media: false, at: expect.any(Number) }])
     // Turning it back on is a change too; a resume that changes nothing records nothing.
     decision = presenter()
     const c = new Client(h.url)

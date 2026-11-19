@@ -30,7 +30,7 @@ export async function startServer(argv: readonly string[], env: Record<string, s
   // pool gets no media config, so its workers never probe.
   const media = await createMediaServices({ env: config.media, enabled: MEDIA_ENABLED_DEFAULT })
   const pool = new Pool(media.info ? { media: { info: media.info, dir: media.temp.dir } } : {})
-  const stream = createStreamServer({ keys, originAllowlist: origins, pool, audit, animation: config.animation, media: { enabled: MEDIA_ENABLED_DEFAULT, ...(media.info ? { info: media.info } : {}) }, ...demoHooks(config) })
+  const stream = createStreamServer({ keys, originAllowlist: origins, pool, audit, animation: config.animation, media: { enabled: MEDIA_ENABLED_DEFAULT, ...(media.info ? { info: media.info } : {}), services: media }, ...demoHooks(config) })
   const server = Bun.serve({ port: config.port, fetch: stream.fetch as never, websocket: stream.websocket as never })
   return {
     server, stream, pool, origins, media,
