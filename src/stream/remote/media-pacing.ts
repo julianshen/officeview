@@ -23,8 +23,9 @@ export class MediaSendLog {
   record(reqId: number, ahead: boolean) { this.sends.delete(reqId); this.sends.set(reqId, { at: undefined, ahead }) }
   /** True when this was the send's first reply. */
   answered(reqId: number): boolean { const s = this.sends.get(reqId); if (!s || s.at !== undefined) return false; s.at = this.now(); return true }
-  /** The stale-token re-send `to` takes over `from`'s slot, unanswered, aging only from `to`'s reply. */
-  transfer(from: number, to: number) { const s = this.sends.get(from); if (!s) return; this.sends.delete(from); this.sends.set(to, s) }
+  /** The stale-token re-send `to` takes over `from`'s slot, unanswered, aging only from `to`'s reply (the server
+   * never counted `from`). */
+  transfer(from: number, to: number) { const s = this.sends.get(from); if (!s) return; this.sends.delete(from); this.sends.set(to, { at: undefined, ahead: s.ahead }) }
   has(reqId: number) { this.prune(this.now()); return this.sends.has(reqId) }
   /** Every unanswered send is taken as received now (resume, media-end). */
   settleAll() { const t = this.now(); for (const s of this.sends.values()) if (s.at === undefined) s.at = t }

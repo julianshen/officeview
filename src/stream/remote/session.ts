@@ -273,8 +273,6 @@ export const MEDIA_SPAN_MS = 62_000
 /** Ruling 3: look-ahead requests (a slide other than the viewer's) hold at most this many of the 6 slots; the rest
  * are the current slide's. */
 export const MEDIA_AHEAD_CAP = 4
-/** Ruling 4: a request waiting for workspace or admission room retries this often (nothing notifies room). */
-export const MEDIA_ROOM_POLL_MS = 250
 /** D1: `media-cursor` is coalesced to at most one per this many ms (the latest unit wins). */
 export const MEDIA_CURSOR_MS = 200
 /** After `media-start`, a delivery fails when no chunk arrived for this long (a 1 MiB chunk on a slow link). Before
@@ -296,6 +294,9 @@ export interface MediaRoom {
   fit(start: MediaStart): void
   /** Settled without a delivery: return the reservation (idempotent). */
   release(): void
+  /** Calls `wake` after room may have come back (the workspace's `onFree`); returns the unsubscribe. Without it, a
+   * request short of room is retried only on the session's own events (a settlement, a reply, a cursor move). */
+  onFree?(wake: () => void): () => void
 }
 
 interface MediaReq {
@@ -316,6 +317,8 @@ interface MediaReq {
   grant?: () => void
   /** Its workspace room is reserved (`room.reserve`), until settled or delivered. */
   reserved: boolean
+  /** Subscribed to `room.onFree` while it waits for room (review round 1: woken by events, never polled). */
+  unwake?: () => void
   /** After `media-start`, while no chunk is in reassembly, it fails at this time (`now()`). */
   deadline: number
   readonly room: MediaRoom
@@ -386,6 +389,8 @@ export class StreamSession {
   private readonly mediaLog = new MediaSendLog(() => this.now(), MEDIA_REQUEST_CAP, MEDIA_AHEAD_CAP, MEDIA_SPAN_MS)
   /** Ruling 3: the viewer's slide (the last `mediaShow` or `mediaCursor` unit, before coalescing). */
   private mediaCurrent?: number
+  /** Set while `drainMedia` runs: what it frees itself (a grant it could not use) wakes nothing. */
+  private mediaDraining = false
   private mediaDrainTimer?: ReturnType<typeof setTimeout>
   /** `media-show`s by their current reqId. */
   private readonly mediaShows = new Map<number, MediaShowReq>()
@@ -405,6 +410,8 @@ export class StreamSession {
 
   private constructor(private readonly source: StreamSource, private readonly o: SessionOptions) {
     this.ended = new Promise((r) => { this.settleEnded = r })
+    // A released admission grant may let a media request waiting for one go out.
+    this.admission.onFree = () => this.mediaWake()
   }
 
   /** Calls `cb` after a resume has replaced `manifest`; returns the unsubscribe. */
@@ -747,6 +754,7 @@ export class StreamSession {
         signal?.removeEventListener('abort', onAbort)
         if (req.reqId) this.reasm.drop(req.reqId)
         if (req.grant) { const r = req.grant; req.grant = undefined; void this.inbox.then(r) }
+        if (req.unwake) { const u = req.unwake; req.unwake = undefined; u() }
         if (req.reserved && !delivered) { req.reserved = false; try { room.release() } catch { /* the caller's */ } }
         done()
         // A slot, a grant or room may have come free for a waiting request.
@@ -1184,7 +1192,8 @@ export class StreamSession {
   }
   private onMediaShowText(req: MediaShowReq, m: Record<string, unknown>, data: string) {
     if (m.type === 'error' || m.type === 'refused') {
-      if (m.code === 'session-rotated' && !req.rotatedRetry) { req.rotatedRetry = true; return this.issueMediaShow(req) }
+      // The server's shared `refused session-rotated` (ws.ts mediaOp): re-sent once.
+      if (m.type === 'refused' && m.code === 'session-rotated' && !req.rotatedRetry) { req.rotatedRetry = true; return this.issueMediaShow(req) }
       return req.resolve({ refused: m.code === 'rate-limited' || m.code === 'session-rotated' ? m.code : 'policy-refused' })
     }
     try {
@@ -1222,13 +1231,25 @@ export class StreamSession {
     if (!req.reserved) {
       let ok = false
       try { ok = req.room.reserve(MEDIA_WIRE_LIMITS.audioBytes) === true } catch { ok = false }
-      if (!ok) { const r = req.grant; req.grant = undefined; r(); return false }
+      if (!ok) {
+        const r = req.grant; req.grant = undefined; r()
+        // Woken when the workspace gives bytes back, never polled.
+        if (!req.unwake) { try { req.unwake = req.room.onFree?.(() => this.mediaWake()) } catch { req.unwake = undefined } }
+        return false
+      }
       req.reserved = true
+      if (req.unwake) { const u = req.unwake; req.unwake = undefined; u() }
     }
     return true
   }
+  /** An event that may have freed a slot, a grant or room: drain once, soon (coalesced). */
+  private mediaWake() {
+    if (this.mediaDraining || !this.mediaWaiting.size) return
+    this.scheduleMediaDrain(0)
+  }
   private transmitMedia(req: MediaReq, charged: boolean) {
     this.mediaWaiting.delete(req)
+    if (req.unwake) { const u = req.unwake; req.unwake = undefined; u() }
     try {
       this.send({ reqId: req.reqId, type: 'media-request', token: this.token, mediaId: req.mediaId, ...(req.unit !== undefined ? { unit: req.unit } : {}) })
     } catch { return req.resolve({ refused: 'policy-refused' }) }
@@ -1245,21 +1266,26 @@ export class StreamSession {
   private drainMedia() {
     if (this.mediaDrainTimer) { clearTimeout(this.mediaDrainTimer); this.mediaDrainTimer = undefined }
     if (this.state !== 'open' || !this.sock || this.sock.readyState !== 1) return
-    let roomShort = false
-    const order = [...this.mediaWaiting].sort((a, b) => Number(this.mediaAhead(a)) - Number(this.mediaAhead(b)))
-    for (const req of order) {
-      if (this.mediaReqs.get(req.reqId) !== req) { this.mediaWaiting.delete(req); continue }
-      const ahead = this.mediaAhead(req)
-      if (!this.mediaLog.room(ahead)) { if (!ahead) break; continue }
-      if (!this.mediaReserve(req)) { roomShort = true; continue }
-      this.transmitMedia(req, true)
-    }
-    if (!this.mediaWaiting.size) return
+    this.mediaDraining = true
+    try {
+      const order = [...this.mediaWaiting].sort((a, b) => Number(this.mediaAhead(a)) - Number(this.mediaAhead(b)))
+      for (const req of order) {
+        if (this.mediaReqs.get(req.reqId) !== req) { this.mediaWaiting.delete(req); continue }
+        const ahead = this.mediaAhead(req)
+        if (!this.mediaLog.room(ahead)) { if (!ahead) break; continue }
+        // Short of a grant or room: it waits for the event that frees them (`mediaWake`).
+        if (!this.mediaReserve(req)) continue
+        this.transmitMedia(req, true)
+      }
+    } finally { this.mediaDraining = false }
+    // A timer only for a request waiting on a pacing slot that will age out; one short of room or a grant has a slot
+    // now and waits for its event, and a slot still awaiting its reply is freed by `mediaAnswered`.
     let ms = Infinity
-    for (const req of this.mediaWaiting) ms = Math.min(ms, this.mediaLog.waitMs(this.mediaAhead(req)))
-    // Nothing notifies workspace or admission room: a request short of it retries on a poll.
-    if (roomShort || !Number.isFinite(ms)) ms = Math.min(Number.isFinite(ms) ? ms : Infinity, MEDIA_ROOM_POLL_MS)
-    this.scheduleMediaDrain(Math.max(ms, 0))
+    for (const req of this.mediaWaiting) {
+      const ahead = this.mediaAhead(req)
+      if (!this.mediaLog.room(ahead)) ms = Math.min(ms, this.mediaLog.waitMs(ahead))
+    }
+    if (Number.isFinite(ms)) this.scheduleMediaDrain(Math.max(ms, 0))
   }
   private scheduleMediaDrain(ms: number) {
     if (!this.mediaWaiting.size) return
@@ -1287,8 +1313,9 @@ export class StreamSession {
   /** The text messages of a media request: `media-start`, `media-refused`, the shared stale-token refusal. */
   private onMediaText(req: MediaReq, m: Record<string, unknown>, data: string) {
     if (m.type === 'error' || m.type === 'refused') {
-      // A RENEW race (stale jti, refused before the media rate): re-sent once on the same pacing slot.
-      if (m.code === 'session-rotated' && !req.start && !req.rotatedRetry) { req.rotatedRetry = true; return this.issueMedia(req, false) }
+      // A RENEW race (stale jti, refused before the media rate): the server's shared `refused session-rotated`
+      // (ws.ts mediaOp), re-sent once on the same pacing slot. The same test as `mediaRotatedResend`.
+      if (this.mediaRotatedResend(m)) { req.rotatedRetry = true; return this.issueMedia(req, false) }
       return req.resolve({ refused: m.code === 'rate-limited' || m.code === 'session-rotated' ? m.code : 'policy-refused' })
     }
     const hostile = () => req.resolve({ refused: 'policy-refused' })

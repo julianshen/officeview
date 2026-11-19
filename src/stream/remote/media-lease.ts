@@ -56,12 +56,16 @@ export async function openRemoteMediaLease(
   // returns it on any settlement without a delivery; a delivery leaves it to this lease.
   let lease: Lease | undefined
   const tag = `media:${rec.rId}`
+  // `evict` runs once, at the first attempt that finds no room, before the request waits (review round 1).
+  let evicted = false
   const room: MediaRoom = {
     reserve(bytes) {
+      if (lease) return true
       lease = ws.lease(bytes, tag)
-      if (!lease && o.evict?.()) lease = ws.lease(bytes, tag)
+      if (!lease && !evicted) { evicted = true; if (o.evict?.()) lease = ws.lease(bytes, tag) }
       return lease !== undefined
     },
+    ...(ws.onFree ? { onFree: (wake: () => void) => ws.onFree!(wake) } : {}),
     fit(start) { if (lease && lease.bytes > start.bytes) lease.shrink(lease.bytes - start.bytes) },
     release() { lease?.release(); lease = undefined },
   }

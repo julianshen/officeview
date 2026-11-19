@@ -315,7 +315,8 @@ describe('remote media lease (spec §4.4)', () => {
     await settle(400)
     expect(sock.of('media-request')).toHaveLength(6)
     expect(ws.used()).toBe(0)
-    void p
+    s.mediaEnd()
+    expect(await p).toEqual({ refused: 'media-unavailable' })
   })
 
   it('workspace room frees: the waiting request goes out without a slot spent while it waited', async () => {
@@ -347,7 +348,58 @@ describe('remote media lease (spec §4.4)', () => {
     await settle()
     expect(evicted).toBe(1)
     expect(sock.of('media-request')).toHaveLength(1)
-    void p
+    s.mediaEnd()
+    expect(await p).toEqual({ refused: 'media-unavailable' })
+    expect(ws.used()).toBe(0)
+  })
+
+  it('a request waiting for room is woken by events, never a timer loop; evict runs once (review round 1)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance', 'Date'] })
+    const { s, sock } = await opened({ now: () => Date.now() })
+    const ws = watched(MEDIA_WIRE_LIMITS.audioBytes + 1000), r = realm()
+    const filler = ws.lease(2000, 'filler')!
+    let evicted = 0, leased = 0
+    const lease = ws.lease.bind(ws)
+    ws.lease = (n, t) => { if (t.startsWith('media:')) leased++; return lease(n, t) }
+    const p = openRemoteMediaLease(s, rec(), ws, r.win, new AbortController().signal, { evict: () => { evicted++; return false } })
+    await settle()
+    const tries = leased
+    expect(sock.of('media-request')).toHaveLength(0)
+    // Ten seconds of waiting: no retries, no timers beyond the session's own sweeper.
+    await settle(10_000)
+    expect(leased).toBe(tries)
+    expect(evicted).toBe(1)
+    expect(vi.getTimerCount()).toBeLessThanOrEqual(1)
+    // Room comes back: the release wakes it.
+    filler.release()
+    await settle()
+    expect(sock.of('media-request')).toHaveLength(1)
+    expect(evicted).toBe(1)
+    s.mediaEnd()
+    expect(await p).toEqual({ refused: 'media-unavailable' })
+  })
+
+  it('a request waiting for admission (8 outstanding) is woken when one settles, with no timer loop', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance', 'Date'] })
+    const { s, sock } = await opened({ now: () => Date.now() })
+    const acs = Array.from({ length: 8 }, () => new AbortController())
+    for (const ac of acs) void s.unit(0, 1, ac.signal).catch(() => {})
+    await settle()
+    const rm = room()
+    let tries = 0
+    const reserve = rm.reserve
+    rm.reserve = (n) => { tries++; return reserve(n) }
+    const p = s.mediaRequest(MID, new AbortController().signal, rm)
+    await settle(10_000)
+    expect(sock.of('media-request')).toHaveLength(0)
+    expect(tries).toBeLessThanOrEqual(1)
+    expect(vi.getTimerCount()).toBeLessThanOrEqual(1)
+    acs[0]!.abort()
+    await settle()
+    expect(sock.of('media-request')).toHaveLength(1)
+    s.mediaEnd()
+    expect(await p).toEqual({ refused: 'media-unavailable' })
+    for (const ac of acs) ac.abort()
   })
 
   it('room for the chunks but not the Blob beside them (2 × bytes): resource-limit, a defensive path', async () => {
@@ -448,6 +500,15 @@ describe('media transport (D1, D12)', () => {
     await settle()
     sock.text({ reqId: sock.of('media-request')[3]!.reqId, type: 'refused', code: 'session-rotated' })
     expect(await q).toEqual({ refused: 'session-rotated' })
+  })
+
+  it('only the server shape `refused session-rotated` is a retry: an `error session-rotated` is a refusal', async () => {
+    const { s, sock } = await opened()
+    const p = s.mediaRequest(MID, new AbortController().signal, room())
+    await settle()
+    sock.text({ reqId: sock.of('media-request')[0]!.reqId, type: 'error', code: 'session-rotated' })
+    expect(await p).toEqual({ refused: 'session-rotated' })
+    expect(sock.of('media-request')).toHaveLength(1)
   })
 
   it('media-refused mid-delivery releases what was charged', async () => {
@@ -678,7 +739,6 @@ describe('media transport (D1, D12)', () => {
     expect(s.stats().reassemblyBytes).toBe(0)
     // Admitted, the same fragment is buffered (the check above is not vacuous).
     const q = openRemoteMediaLease(s, rec(), watched(), realm().win, new AbortController().signal)
-    void q
     await settle()
     const id2 = sock.of('media-request')[1]!.reqId
     sock.text(startOf(id2, 3 << 20))
@@ -687,6 +747,7 @@ describe('media transport (D1, D12)', () => {
     await settle()
     expect(s.stats().reassemblyBytes).toBeGreaterThan(0)
     s.mediaEnd()
+    expect(await q).toEqual({ refused: 'media-unavailable' })
     await settle()
     expect(s.stats().reassemblyBytes).toBe(0)
   })
