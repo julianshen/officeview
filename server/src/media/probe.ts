@@ -45,12 +45,16 @@ export type DocMediaEntry = ProbedMedia | { k: number; partPath: string; refused
 export interface DocMediaTable {
   entry(partPath: string, rec: { external: boolean }): Promise<DocMediaEntry>
   /** Probes in k order every unprobed part up to the unit's highest k, before a sync build. Needs the unit's metadata
-   * in `show.metas` (the host's `loadShow` reads it first); a unit with none loads nothing. */
+   * in `show.metas` (the host's `loadShow` reads it first): a deck unit without it throws (Task 4: never read as
+   * "no media"). */
   load(unit: number): Promise<void>
   /** Sync; what the build reads. */
   peek(partPath: string): DocMediaEntry | undefined
-  /** Over entries 0…(unit's highest k), for the L1 key; stable once loaded. */
+  /** Over entries 0…(unit's highest k), for the L1 key; stable once loaded. Throws unless `load(unit)` completed:
+   * the unit's metadata missing, the part listing not read, or an entry up to its highest k unprobed (Task 4). */
   digest(unit: number): string
+  /** Sync, after a `load`: the number of media parts (synthetic k for a part-less sound start here, Task 4). */
+  readonly partCount: number
   readonly spentMs: number
   /** The projected package's sorted media part paths (index = k). */
   parts(): Promise<readonly string[]>
@@ -184,9 +188,11 @@ export function createDocMediaTable(doc: { show?: ShowDoc }, info: FfmpegInfo | 
     return listing
   }
 
-  /** The highest k the unit's media records use (-1: none, or its metadata is not loaded). */
+  /** The highest k the unit's media records use (-1: none). A deck unit whose metadata is not loaded throws. */
   const maxK = (unit: number, ps: readonly string[]) => {
-    const slide = doc.show?.metas.get(unit)?.slide
+    const loaded = doc.show?.metas.get(unit)
+    if (doc.show && !loaded) throw new Error(`media: slide ${unit} metadata not loaded`)
+    const slide = loaded?.slide
     let m = -1
     for (const r of slide?.media ?? []) m = Math.max(m, ps.indexOf(r.partPath))
     return m
@@ -263,12 +269,21 @@ export function createDocMediaTable(doc: { show?: ShowDoc }, info: FfmpegInfo | 
     peek: (partPath) => entries.get(partPath),
     digest(unit) {
       const h = createHash('sha256').update('officeview media digest@1\n')
+      if (doc.show && !sorted) throw new Error('media: digest before the part listing was read')
       const ps = sorted ?? []
       const m = maxK(unit, ps)
-      for (let i = 0; i <= m; i++) h.update(`${JSON.stringify(entries.get(ps[i]!) ?? { k: i, partPath: ps[i], unprobed: true })}\n`)
+      for (let i = 0; i <= m; i++) {
+        const e = entries.get(ps[i]!)
+        if (!e) throw new Error(`media: digest of slide ${unit} before part ${i} was probed`)
+        h.update(`${JSON.stringify(e)}\n`)
+      }
       return h.digest('hex')
     },
     get spentMs() { return spent },
+    get partCount() {
+      if (doc.show && !sorted) throw new Error('media: partCount before the part listing was read')
+      return sorted?.length ?? 0
+    },
     parts: () => list(),
     get probes() { return probes },
   }

@@ -34,7 +34,7 @@ import { createUnderlayReader } from '../../src/slideshow/read/underlay'
 import { readSlideTiming } from '../../src/slideshow/read/timing'
 import type { Lease, SlideShowWorkspace } from '../../src/slideshow/types'
 import { gateBackend } from './show/canvas'
-import { buildShowPlan, createShowDoc, type BuiltShowPlan, type ShowBuildOptions, type ShowDoc, type ShowPlanJob, type ShowRefusal } from './show/build'
+import { buildShowPlan, createShowDoc, NO_MEDIA_CONTEXT, planSlideMedia, type BuiltShowPlan, type ShowBuildOptions, type ShowDoc, type ShowPlanJob, type ShowRefusal, type SlideMediaContext } from './show/build'
 import { renderTrack } from './show/tracks'
 import { buildMorphPlan, MorphInvalid, morphReference, type BuiltMorph, type MorphJob } from './show/morph'
 import { asAudioUse, createDocMediaTable, MediaPartRefused, writePart, type DocMediaEntry, type DocMediaTable, type MediaTableSeams } from './media/probe'
@@ -98,7 +98,7 @@ export function layoutFingerprint(contentPolicyId: string): string {
  * original, which holds withheld content), its metadata store and the show-plan caches. `anim` (D5): the shown
  * units with timing, a transition or both.
  */
-export interface OpenDoc { key: string; docRef: string; show?: ShowDoc; /** Piece 5 (D21): the probe table, over the projected package. */ media: DocMediaTable; anim: number[]; morph: number[]; paintables: PaintableArray; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
+export interface OpenDoc { key: string; docRef: string; show?: ShowDoc; /** Piece 5 (D21): the probe table, over the projected package. */ media: DocMediaTable; anim: number[]; morph: number[]; /** Piece 5 (D19): the shown units whose plan ships an audio record or a transition sound. */ mediaUnits: number[]; paintables: PaintableArray; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
 /** Piece 5 (D22): a unit's AUDIO uses (an audio node, a `p:sndTgt` sound, a transition sound) and their probed entries.
  * Video nodes are never listed. `spid`: the shape an audio node plays on (none for a sound). */
 export interface MediaUnitRefs { unit: number; hidden: boolean; refs: Array<{ k: number; partPath: string; spid?: string; hiddenShape: boolean; entry: DocMediaEntry }> }
@@ -109,7 +109,9 @@ export type NotesRaster = RenderedUnit & { kind: 'raster'; truncated: boolean; c
 /** `hidden`: unit indices of hidden slides (pptx under `'full'` only; elsewhere they are not units). */
 /** `anim` (piece 4 D5): shown units with timing, a transition or both (a plan is requested only for these).
  * `morph` (Task 7): the shown units entered by a Morph transition (a `show-morph` names one as its `to`). */
-export interface OpenResult { docKey: string; units: UnitSize[]; hidden: number[]; anim: number[]; morph: number[]; layoutFingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; diagnostics: PolicyDiagnostic[]; fontDiagnostics: number }
+/** `media` (piece 5, D19): the shown units whose plan ships an audio record or a transition sound (structural: from
+ * the slide's metadata and package, no probe), so the manifest marks them `media` and a show asks for their plan. */
+export interface OpenResult { docKey: string; units: UnitSize[]; hidden: number[]; anim: number[]; morph: number[]; media: number[]; layoutFingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; diagnostics: PolicyDiagnostic[]; fontDiagnostics: number }
 
 const registerFont = () => { throw new Error('stream server: embedded fonts are not registered in Stage 1') }
 
@@ -198,16 +200,25 @@ export class DocumentHost {
       original.dropCache()
       const units = raw.map((r) => ({ w: sizeCeil(Math.max(1, r.widthPx)), h: sizeCeil(Math.max(1, r.heightPx)) }))
       let show: ShowDoc | undefined
-      const anim: number[] = [], morph: number[] = []
+      const anim: number[] = [], morph: number[] = [], mediaUnits: number[] = []
       if (handle && handle.slideParts.length === paintables.length) {
         try {
           show = await openShow(docRef, key, projected.contentPolicyId, fingerprint, parsed as PptxDocument, handle, units, hidden)
           for (let i = 0; i < units.length; i++) {
             if (hidden.includes(i)) continue
             const h = await show.acquire(i)
-            if ((h.slide.timing && !('refused' in h.slide.timing)) || h.slide.transition) anim.push(i)
-            if (h.slide.transition?.element === 'morph') morph.push(i)
-            h.release()
+            try {
+              if ((h.slide.timing && !('refused' in h.slide.timing)) || h.slide.transition) anim.push(i)
+              if (h.slide.transition?.element === 'morph') morph.push(i)
+              // D19: structural (no probe; any k will do): does the plan ship a record or a transition sound?
+              // A slide whose package cannot be read for it is not flagged (media only; its animation is untouched).
+              if (audioUses(h.slide).length) {
+                try {
+                  const planned = planSlideMedia(h.slide, await slideMediaContext(show, i, projected.contentPolicyId), () => 0, 0)
+                  if (planned.records.length || planned.transitionStart) mediaUnits.push(i)
+                } catch { /* not flagged */ }
+              }
+            } finally { h.release() }
           }
         } catch {
           // No readable show index or metadata: every slide stays a piece-3 still (fail closed).
@@ -215,14 +226,16 @@ export class DocumentHost {
           show = undefined
           anim.length = 0
           morph.length = 0
+          mediaUnits.length = 0
         }
       }
-      const opened = { key, docRef, paintables, raw, hidden, anim, morph, ...(notes ? { notes } : {}), ...(show ? { show } : {}), units, fingerprint, contentPolicyId: projected.contentPolicyId, diagnostics: projected.diagnostics, format: admitted.format } as Omit<OpenDoc, 'media'> as OpenDoc
+      const opened = { key, docRef, paintables, raw, hidden, anim, morph, mediaUnits, ...(notes ? { notes } : {}), ...(show ? { show } : {}), units, fingerprint, contentPolicyId: projected.contentPolicyId, diagnostics: projected.diagnostics, format: admitted.format } as Omit<OpenDoc, 'media'> as OpenDoc
       opened.media = this.mediaTableFor(opened)
+      if (show) show.media = opened.media
       doc = opened
       this.docs.set(key, doc)
     }
-    return { docKey: key, units: doc.units, hidden: doc.hidden, anim: [...doc.anim], morph: [...doc.morph], layoutFingerprint: doc.fingerprint, contentPolicyId: doc.contentPolicyId, format: doc.format, diagnostics: doc.diagnostics, fontDiagnostics: doc.paintables.fontDiagnostics?.length ?? 0 }
+    return { docKey: key, units: doc.units, hidden: doc.hidden, anim: [...doc.anim], morph: [...doc.morph], media: [...doc.mediaUnits], layoutFingerprint: doc.fingerprint, contentPolicyId: doc.contentPolicyId, format: doc.format, diagnostics: doc.diagnostics, fontDiagnostics: doc.paintables.fontDiagnostics?.length ?? 0 }
   }
 
   has(docKey: string) { return this.docs.has(docKey) }
@@ -414,6 +427,7 @@ export class DocumentHost {
     if (!Number.isInteger(job.unitIndex) || job.unitIndex < 0 || job.unitIndex >= doc.units.length || doc.hidden.includes(job.unitIndex)) throw new RenderRefusal('unit-range')
     if (job.scale !== 1 && job.scale !== 2) throw new RenderRefusal('scale')
     if (job.kBasis !== undefined && !(job.kBasis instanceof Uint8Array && job.kBasis.length === 32)) throw new RenderRefusal('bad-job')
+    if (job.media !== undefined && typeof job.media !== 'boolean') throw new RenderRefusal('bad-job')
     return doc
   }
 
@@ -431,6 +445,8 @@ export class DocumentHost {
       show.images = await Promise.all(show.doc.images.map((a) => decodeImageAsset(a as never, (b, mime) => backend.decodeImage(b, mime) as Promise<CanvasImageSource>).catch(() => undefined)))
     }
     await doc.media.load(unit)
+    // Piece 5: the slide's hidden shapes and external media links, which the synchronous build cannot read.
+    if (!show.mediaCtx.has(unit)) show.mediaCtx.set(unit, audioUses(show.metas.get(unit)!.slide).length ? await slideMediaContext(show, unit, doc.contentPolicyId) : NO_MEDIA_CONTEXT)
   }
 
   /** Stage 3c notes: unit i's notes slide read from the original package
@@ -554,6 +570,22 @@ export class DocumentHost {
 
 const MEDIA_REL_TYPE = /\/(audio|video|media)$/
 const MAX_TIMING_DEPTH = 64
+
+/**
+ * Piece 5: what the build needs of slide `unit`'s package: its hidden shapes (under `full`; the projection drops them
+ * otherwise, as `mediaRefs` reads them), its external media relationships and the shapes they play on.
+ */
+async function slideMediaContext(show: ShowDoc, unit: number, contentPolicyId: string): Promise<SlideMediaContext> {
+  const part = show.handle.slideParts[unit]!
+  let xml: string | undefined
+  const slideXml = async () => (xml ??= (await show.handle.pkg.entry(part)?.async('string')) ?? '')
+  const rels = await readRelationships(show.handle, part).catch(() => [])
+  const linkedRIds = new Set(rels.filter((r) => r.external && MEDIA_REL_TYPE.test(r.type)).map((r) => r.id))
+  const linkedSpids = new Set<string>()
+  if (linkedRIds.size) for (const [id, spids] of mediaShapes(parseXml(await slideXml()))) if (linkedRIds.has(id)) for (const sp of spids) linkedSpids.add(sp)
+  const hiddenSpids = contentPolicyId.startsWith('full') ? new Set<string>(hiddenShapeIds(readTree(await slideXml()))) : new Set<string>()
+  return { hiddenSpids, linkedRIds, linkedSpids }
+}
 
 /** D22: a slide's audio uses, in timing order then the transition sound: audio nodes (on a shape, or a `p:sndTgt`
  * sound by relationship id) and the transition's start sound. Video nodes are not uses. */

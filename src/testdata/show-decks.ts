@@ -792,3 +792,178 @@ export async function loadShowDeck(bytes: Uint8Array): Promise<LoadedShowDeck> {
     charge: async (i) => { const h = await store.acquire(i); return (b, t) => h.attach(b, t) },
   }
 }
+
+// ---------------------------------------------------------------------------
+// Piece 5: audio media decks (plan D17, D22)
+// ---------------------------------------------------------------------------
+
+/** A Task 3 fixture under `server/test/fixtures/media/` (D17): 2–4 s each; `av.mp4` is the only one with video. */
+export type MediaFixture = 'a.m4a' | 'a.mp3' | 'a.wav' | 'a.wma' | 'av.mp4'
+/** A media shape (a `p:sp` carrying `a:audioFile`/`a:videoFile`, as PowerPoint writes it). `hidden`: `cNvPr hidden="1"`. */
+export interface MediaShapeSpec { spid: number; file: MediaFixture; kind?: 'audio' | 'video'; hidden?: boolean; x?: number; y?: number }
+/** A spid-less sound part (an effect's `p:sndTgt` or the transition's `p:snd`), under relationship id `rId`. */
+export interface MediaSoundSpec { rId: string; file: MediaFixture }
+export interface MediaSlideSpec {
+  media?: MediaShapeSpec[]
+  sounds?: MediaSoundSpec[]
+  /** Plain boxes (static, or targets of the timing). */
+  boxes?: PptxShapeSpec[]
+  /** Raw timing nodes, wrapped in the timing root (`timingXmlOf`). */
+  timing?: string
+  /** Raw `p:transition` XML. */
+  transition?: string
+}
+export interface MediaDeckSpec { slides: MediaSlideSpec[] }
+
+const MEDIA_FIXTURES = new URL('../../server/test/fixtures/media/', import.meta.url)
+const MEDIA_TYPES: Record<string, string> = { m4a: 'audio/mp4', mp3: 'audio/mpeg', wav: 'audio/wav', wma: 'audio/x-ms-wma', mp4: 'video/mp4' }
+async function fixtureBytes(name: MediaFixture): Promise<Uint8Array> {
+  const [{ readFileSync }, { fileURLToPath }] = await Promise.all([import('node:fs'), import('node:url')])
+  return new Uint8Array(readFileSync(fileURLToPath(new URL(name, MEDIA_FIXTURES))))
+}
+
+/**
+ * A deck over the Task 3 fixture bytes (D17). Shape media goes through `buildPptxDeck`'s `media` (one part per shape,
+ * relationship `rIdShow<n>`); sounds are added as `ppt/media/sound<n>.<ext>` parts under the given rIds; hidden
+ * shapes get `cNvPr hidden="1"`.
+ */
+export async function mediaDeck(spec: MediaDeckSpec): Promise<Uint8Array> {
+  const slides: PptxSlideSpec[] = []
+  for (const s of spec.slides) {
+    const media = s.media ?? []
+    const shapes: PptxShapeSpec[] = [
+      ...(s.boxes ?? []),
+      ...media.map((m, i) => rect(m.spid, `Media ${m.spid}`, m.x ?? 40 + 120 * i, m.y ?? 560, 100, 80, 'F4B183')),
+    ]
+    slides.push({
+      bg: { solid: 'FFFFFF' }, shapes,
+      media: await Promise.all(media.map(async (m) => ({ kind: m.kind ?? (m.file === 'av.mp4' ? 'video' as const : 'audio' as const), data: await fixtureBytes(m.file), ext: m.file.split('.').pop()!, shapeId: m.spid }))),
+      ...(s.timing ? { timingXml: timingXmlOf(s.timing) } : {}),
+      ...(s.transition ? { transition: { xml: s.transition } } : {}),
+    })
+  }
+  const bytes = await buildPptxDeck({ slides })
+  const needs = spec.slides.some(s => s.sounds?.length || s.media?.some(m => m.hidden))
+  if (!needs) return bytes
+  const { default: JSZip } = await import('jszip')
+  const zip = await JSZip.loadAsync(bytes)
+  let types = await zip.file('[Content_Types].xml')!.async('string')
+  let n = 0
+  for (let i = 0; i < spec.slides.length; i++) {
+    const s = spec.slides[i]!
+    const slidePath = `ppt/slides/slide${i + 1}.xml`, relsPath = `ppt/slides/_rels/slide${i + 1}.xml.rels`
+    if (s.sounds?.length) {
+      let rels = await zip.file(relsPath)!.async('string')
+      for (const snd of s.sounds) {
+        const ext = snd.file.split('.').pop()!
+        const name = `sound${++n}.${ext}`
+        zip.file(`ppt/media/${name}`, await fixtureBytes(snd.file))
+        types = types.replace('</Types>', `<Override PartName="/ppt/media/${name}" ContentType="${MEDIA_TYPES[ext]}"/></Types>`)
+        rels = rels.replace('</Relationships>', `<Relationship Id="${snd.rId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/audio" Target="../media/${name}"/></Relationships>`)
+      }
+      zip.file(relsPath, rels)
+    }
+    const hidden = s.media?.filter(m => m.hidden) ?? []
+    if (hidden.length) {
+      let xml = await zip.file(slidePath)!.async('string')
+      for (const m of hidden) xml = xml.replace(new RegExp(`<p:cNvPr id="${m.spid}"([^>]*?)(/?)>`), `<p:cNvPr id="${m.spid}"$1 hidden="1"$2>`)
+      zip.file(slidePath, xml)
+    }
+  }
+  zip.file('[Content_Types].xml', types)
+  return new Uint8Array(await zip.generateAsync({ type: 'uint8array' }))
+}
+
+/** Media timing nodes (`p:audio` / `p:video` over `p:cMediaNode`). */
+const mediaNode = (kind: 'audio' | 'video', id: number, target: string, o: { narration?: boolean; numSld?: number; repeat?: number | 'indefinite'; start?: string; dur?: number } = {}) =>
+  `<p:${kind}${o.narration ? ' isNarration="1"' : ''}><p:cMediaNode vol="80000"${o.numSld ? ` numSld="${o.numSld}"` : ''}>` +
+  `<p:cTn id="${id}" fill="hold"${o.dur ? ` dur="${o.dur}"` : ''}${o.repeat === undefined ? '' : ` repeatCount="${o.repeat === 'indefinite' ? 'indefinite' : o.repeat * 1000}"`}>` +
+  `<p:stCondLst>${o.start ?? '<p:cond delay="0"/>'}</p:stCondLst></p:cTn><p:tgtEl>${target}</p:tgtEl></p:cMediaNode></p:${kind}>`
+const spTgt = (spid: number) => `<p:spTgt spid="${spid}"/>`
+const sndTgt = (rId: string, name = 'sound.wav') => `<p:sndTgt r:embed="${rId}" name="${name}"/>`
+/** A media command (`p:cmd`) on `target` (a shape target, or the slide). */
+const cmdNode = (id: number, type: 'call' | 'evt' | 'verb', cmd: string, target = '<p:sldTgt/>') =>
+  `<p:cmd type="${type}" cmd="${cmd}"><p:cBhvr><p:cTn id="${id}" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl>${target}</p:tgtEl></p:cBhvr></p:cmd>`
+/** A click effect par holding raw behaviours (`mediacall` class, as PowerPoint writes media effects). */
+const mediaEffect = (id: () => number, kids: string, cls = 'mediacall') =>
+  `<p:par><p:cTn id="${id()}" presetID="1" presetClass="${cls}" presetSubtype="0" fill="hold" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${kids}</p:childTnLst></p:cTn></p:par>`
+const mediaClick = (id: () => number, kids: string, cls?: string) => {
+  const outer = id(), inner = id()
+  return `<p:par><p:cTn id="${outer}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>` +
+    `<p:par><p:cTn id="${inner}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${mediaEffect(id, kids, cls)}</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>`
+}
+const BOX = rect(2, 'Box', 380, 260, 200, 200, '336699')
+
+/** One slide (D22 still checks): a video on `av.mp4` (shape 3) begins with the slide; box 2 appears on its end. */
+export function videoDeck(): Promise<Uint8Array> {
+  const reveal = `<p:par><p:cTn id="5" presetID="1" presetClass="entr" presetSubtype="0" fill="hold" nodeType="afterEffect"><p:stCondLst><p:cond evt="onEnd" delay="0"><p:tn val="3"/></p:cond></p:stCondLst><p:childTnLst>${setVisibility(ids(6), 2, 'visible')}</p:childTnLst></p:cTn></p:par>`
+  return mediaDeck({ slides: [{ boxes: [rect(2, 'Ink', 400, 300, 160, 120, HIDDEN_INK)], media: [{ spid: 3, file: 'av.mp4', kind: 'video' }], timing: mediaNode('video', 3, spTgt(3)) + reveal }] })
+}
+
+/** One slide: a narration (`isNarration`, `a.m4a` on shape 3) begins with the slide; nothing else animates. */
+export function narrationDeck(): Promise<Uint8Array> {
+  return mediaDeck({ slides: [{ boxes: [BOX], media: [{ spid: 3, file: 'a.m4a' }], timing: mediaNode('audio', 3, spTgt(3), { narration: true }) }] })
+}
+
+/** One slide: click 1 fades box 2 in with an effect sound (`a.wav`, relationship `rIdSnd1`). */
+export function effectSoundDeck(): Promise<Uint8Array> {
+  const id = ids(3)
+  const fade = (n: () => number) => setVisibility(n, 2, 'visible') + animEffect(n, 2, 'in', 'fade', 500)
+  return mediaDeck({ slides: [{ boxes: [BOX], sounds: [{ rId: 'rIdSnd1', file: 'a.wav' }], timing: mainSeqXml([mediaClick(id, fade(id) + mediaNode('audio', 90, sndTgt('rIdSnd1')), 'entr')]) }] })
+}
+
+/** One slide entered with a fade and a start sound (`a.m4a`, `rIdSnd1`, no loop); box 2 is static. */
+export function transitionSoundDeck(): Promise<Uint8Array> {
+  return mediaDeck({ slides: [{ boxes: [BOX], sounds: [{ rId: 'rIdSnd1', file: 'a.m4a' }], transition: '<p:transition spd="med"><p:fade/><p:sndAc><p:stSnd loop="0"><p:snd r:embed="rIdSnd1" name="chime.m4a"/></p:stSnd></p:sndAc></p:transition>' }] })
+}
+
+/** Three slides: slide 1's audio (`a.mp3` on shape 3) plays across 3 slides (`numSld="3"`); slides 2 and 3 are plain. */
+export function crossSlideSoundDeck(): Promise<Uint8Array> {
+  return mediaDeck({ slides: [{ boxes: [BOX], media: [{ spid: 3, file: 'a.mp3' }], timing: mediaNode('audio', 3, spTgt(3), { numSld: 3 }) }, { boxes: [BOX] }, { boxes: [BOX] }] })
+}
+
+/** One slide: the audio on shape 3 (`a.m4a`) begins with the slide; clicking it (an interactive sequence) toggles pause. */
+export function togglePauseDeck(): Promise<Uint8Array> {
+  const cond = `<p:cond evt="onClick" delay="0">${tgt(3)}</p:cond>`
+  const seq = `<p:seq concurrent="1" nextAc="seek"><p:cTn id="4" restart="whenNotActive" fill="hold" evtFilter="cancelBubble" nodeType="interactiveSeq"><p:stCondLst>${cond}</p:stCondLst><p:endSync evt="end" delay="0"><p:rtn val="all"/></p:endSync><p:childTnLst>` +
+    `<p:par><p:cTn id="5" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+    `<p:par><p:cTn id="6" presetID="2" presetClass="mediacall" presetSubtype="0" fill="hold" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${cmdNode(7, 'call', 'togglePause', spTgt(3))}</p:childTnLst></p:cTn></p:par>` +
+    `</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn><p:nextCondLst>${cond}</p:nextCondLst></p:seq>`
+  return mediaDeck({ slides: [{ boxes: [BOX], media: [{ spid: 3, file: 'a.m4a' }], timing: mediaNode('audio', 3, spTgt(3)) + seq }] })
+}
+
+/** One slide: the audio on shape 3 (`a.m4a`) is still until click 1 plays it from `seconds` (`playFrom`). */
+export function playFromDeck(seconds: number | string): Promise<Uint8Array> {
+  const id = ids(4)
+  return mediaDeck({ slides: [{ boxes: [BOX], media: [{ spid: 3, file: 'a.m4a' }], timing: mediaNode('audio', 3, spTgt(3), { start: '<p:cond delay="indefinite"/>' }) + mainSeqXml([mediaClick(id, cmdNode(90, 'call', `playFrom(${seconds})`, spTgt(3)))]) }] })
+}
+
+/** One slide: the audio on shape 3 (`a.wav`) begins with the slide and repeats `n` times (or indefinitely). */
+export function repeatDeck(n: number | 'indefinite'): Promise<Uint8Array> {
+  return mediaDeck({ slides: [{ boxes: [BOX], media: [{ spid: 3, file: 'a.wav' }], timing: mediaNode('audio', 3, spTgt(3), { repeat: n }) }] })
+}
+
+/** One slide: one audio part (`a.m4a`) on two audio shapes (3 and 4), each begun with the slide. */
+export async function twoShapeAudioDeck(): Promise<Uint8Array> {
+  const bytes = await mediaDeck({ slides: [{ boxes: [BOX], media: [{ spid: 3, file: 'a.m4a' }, { spid: 4, file: 'a.wav' }], timing: mediaNode('audio', 3, spTgt(3)) + mediaNode('audio', 4, spTgt(4)) }] })
+  // Point shape 4's relationship at shape 3's part, and drop its own: one part, two shapes.
+  const { default: JSZip } = await import('jszip')
+  const zip = await JSZip.loadAsync(bytes)
+  const relsPath = 'ppt/slides/_rels/slide1.xml.rels'
+  const rels = await zip.file(relsPath)!.async('string')
+  const targets = [...rels.matchAll(/Target="(\.\.\/media\/showMedia\d+\.\w+)"/g)].map(m => m[1]!)
+  const [first, second] = [...new Set(targets)]
+  if (!first || !second) throw new Error('twoShapeAudioDeck: expected two media parts')
+  zip.file(relsPath, rels.split(second).join(first))
+  zip.remove(`ppt/media/${second.split('/').pop()}`)
+  let types = await zip.file('[Content_Types].xml')!.async('string')
+  types = types.replace(new RegExp(`<Override PartName="/ppt/media/${second.split('/').pop()!.replace('.', '\\.')}"[^>]*/>`), '')
+  zip.file('[Content_Types].xml', types)
+  return new Uint8Array(await zip.generateAsync({ type: 'uint8array' }))
+}
+
+/** The media decks by name (Task 4's leak audit plays each). */
+export const MEDIA_DECKS: Record<string, () => Promise<Uint8Array>> = {
+  videoDeck, narrationDeck, effectSoundDeck, transitionSoundDeck, crossSlideSoundDeck, togglePauseDeck,
+  playFromDeck: () => playFromDeck(1.5), repeatDeck: () => repeatDeck(2), twoShapeAudioDeck,
+}

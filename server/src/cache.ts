@@ -110,8 +110,10 @@ export class DocumentLedger {
  * holds the visibly marked assets and the §7 validation verdict. Layer-1 is applied per session at send time,
  * after both. `unitId` is additive to D6's tuple: one entry per slide.
  */
-export interface ShowPlanL1Fields { docRef: string; contentPolicyId: string; layoutFingerprint: string; scaleBucket: number; motion: 'full' | 'reduced'; unitId: number }
-const SHOW_L1_ORDER: Array<keyof ShowPlanL1Fields> = ['docRef', 'contentPolicyId', 'layoutFingerprint', 'scaleBucket', 'motion', 'unitId']
+/** Piece 5 (D2, D21): `mediaOn` (`can.media`) and `mediaDigest` (`DocMediaTable.digest(unit)`, the slide's probe
+ * entries) change classification and the records, so both key L1. Absent (a caller with no media table) = off / none. */
+export interface ShowPlanL1Fields { docRef: string; contentPolicyId: string; layoutFingerprint: string; scaleBucket: number; motion: 'full' | 'reduced'; unitId: number; mediaOn?: boolean; mediaDigest?: string }
+const SHOW_L1_ORDER: Array<keyof ShowPlanL1Fields> = ['docRef', 'contentPolicyId', 'layoutFingerprint', 'scaleBucket', 'motion', 'unitId', 'mediaOn', 'mediaDigest']
 
 export function showPlanL1Key(f: ShowPlanL1Fields): string {
   const h = createHash('sha256')
