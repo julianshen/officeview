@@ -49,6 +49,10 @@ Parent §12a.8 3d reads "transcoded playback carries the burned-in mark; no orig
 | §8 lifecycle: close kills ffmpeg when no one waits; nothing left behind | `lifecycle.test.ts` "close mid-delivery: ledgers empty, no pid, no file", "media-end cancels queued encodes and releases references", "session expiry releases the session's references; …", "server shutdown removes the per-process temp dir and every cache entry", and the worker-retirement cases (no probe group, zombie or staged file) |
 | Revocation mid-playback in the browser | browser "revocation mid-narration exits; no element plays after ended" |
 | §4.4 no-AAC browser (D20) | browser "no-codec Chromium: poster + media-codec notice + clock end" (skipped in the gate: this Chromium decodes AAC; it passed in a forced run with `canPlayType` stubbed to `''`, which observed the clock end at 2000 ms through the `?trace=media` trace; see §Browser smoke); `tests/stream/remote-show-media.test.tsx` (the no-AAC show raises `media-codec` and keeps the clock end, `f0efe734`) |
+| Final review F1: late narration joins at its command-aware position (§10) | `tests/slideshow-media.test.ts` "F1: bytes that arrive during a deck-command pause join at the paused position, and play from it on resume" (4 s narration, pause 1000, bytes 3000, resume 4000 → `currentTime` 1, end 7000 from `mediaEndOf` over the same events); "F1: a pause longer than the clip still joins at the paused position (raw slide time is past the duration)"; "F1: a resume that lands while the bytes are still on their way continues the activation (no restart)"; "F1: a mid-play playFrom before the bytes arrive is an absolute seek on the same clock"; "F1: bytes whose position is at or past the duration never play, and the lease is released"; "F1: without clocked (local shows) commands and late bytes behave as before" |
+| Final review F2: `playFrom(x)` is an absolute seek (§5.1, §10) | `tests/slideshow-media-ends.test.ts` "playFrom(x) is an absolute seek (§10 F2): what remains is durationMs − x from the command" (4 s clip, `playFrom(1.5)` at 1000 → 3500; `playFrom(0)` at 2500 → 6500; while paused; within a repeat's current iteration) |
+| Final review F3: late transition sounds join the show clock (§10) | `tests/slideshow-media.test.ts` "clocked transition sound": "a sound delivered 1 s late joins at offset 1 s", "a non-looping sound delivered after its duration never plays, and its lease is released", "a looping sound delivered late joins at its offset within the loop, plays on past the slide change, and stops at the next sound", "a non-looping sound delivered late still stops at slide exit", "without a clock (local shows) a late sound still plays from 0"; end to end, `tests/stream/remote-show-media.test.tsx` "F3: a transition sound delivered 1 s late joins at offset 1 s; one delivered after its duration never plays" |
+| Final review F4: a session above its look-ahead after dropping unpinned references is refused (D12, §10) | `server/test/media/cache.test.ts` "a request drops only unpinned own references, and re-checks the look-ahead after dropping: still over is media-busy" (existing; F4 was documentation only) |
 | Audit `media_deliveries` columns and `cache_state` | `media-wire.test.ts` "media_deliveries row has exactly the twelve columns; …"; wire audit "every delivery has a media_deliveries row with a cache_state"; "services row records media on/off" |
 
 ## Wire audit
@@ -209,6 +213,21 @@ Attribution:
 - **This task, 0 B.** The `sessionDeps.source` seam is in the lazy show chunk.
 
 Against the brief's expectation (red, with Δ ≤ 4 B against 421,385 B): the measured Δ is +1,279 B. Of that, +1,008 B came before the merge base and +271 B is Task 3's.
+
+### Final review fix pass (2026-11-20)
+
+Four findings were fixed: `56adaa39` (F2), `12538ce4` (F1), `395c9d61` (F3) and `8cdff349` (F4, docs only). Each counterexample became a failing test first, and the tests are in the table above.
+- F2 went red on `expected { at: 2500 } to deeply equal { at: 3500 }`.
+- F1 went red on `currentTime` 3 (expected 1), 6 (expected 1) and 1 (expected 2), and on `play()` called for a position past the duration.
+- F3 went red on `currentTime` 0 (expected 1 and 0.5), and on `play()` called after the duration. The end-to-end test went red on a start position of 0 (expected ≥ 0.9).
+
+The gates on the final tree:
+- `npx vitest run tests/stream tests/slideshow*`: 95 files, 1863 pass, 2 skipped.
+- `cd server && OV_MEDIA_REQUIRED=1 bun test`: 1327 pass, 0 fail, 80 files (834 s).
+- `IV_HARNESS_PORT=4391 npm run test:browser:stream`: 41 pass, 1 skipped.
+- `bun scripts/stream-show-compare.ts --deck all`: exit 0. 402 pass, 24 skipped-mark, 52 unit stills, and the same four known unit-still failures. These are the counts recorded above, both after F2 alone and at the final tree.
+- `tsc`, `typecheck:server` and `lint`: green.
+- `bun run gates:core`: red, at 422,665 B (+1 B over 422,664 B at `8500545c`, measured in a temporary detached worktree). The module set is unchanged (+ `src/xlsx/rowFont.ts`, as before), and every eager chunk's raw size is unchanged. Only the lazy `show` and `sounds` chunks grew, so the 1 B is gzip noise from their renamed hashes inside eager chunks.
 
 ## Not machine-checked
 
