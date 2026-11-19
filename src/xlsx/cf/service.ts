@@ -377,8 +377,10 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
             }
             // A bound is evaluated at its scope anchors only, wherever this preparation's rects lie; the activation at every
             // covered cell, like an expression.
-            const perRange = rule.ranges.length > 1 && cfFormulaReading('formula:cfvo-scope-multi-range', check) === 'per-range'
-            const anchors = (perRange ? rule.ranges : rule.ranges.slice(0, 1)).map(r => Object.freeze({ row: r.firstRow, col: r.firstCol }))
+            const scope = rule.ranges.length > 1 ? cfFormulaReading('formula:cfvo-scope-multi-range', check) : undefined
+            // `anchor-a1`: one scope, its bound evaluated at A1 (the stored references shifted from the first range's top-left).
+            const anchors = scope === 'anchor-a1' ? [Object.freeze({ row: 0, col: 0 })]
+              : (scope === 'per-range' ? rule.ranges : rule.ranges.slice(0, 1)).map(r => Object.freeze({ row: r.firstRow, col: r.firstCol }))
             visualAnchors.set(rule, anchors)
             const targets = anchors.map(a => Object.freeze({ firstRow: a.row, lastRow: a.row, firstCol: a.col, lastCol: a.col }))
             for (const b of cfVisualFormulaBounds(visual)) { taskOf.set(b.formula, formulaTasks.length); formulaTasks.push({ rule, formula: b.formula, targets }) }

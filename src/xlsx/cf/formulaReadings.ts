@@ -92,7 +92,9 @@ export const CF_FORMULA_PRODUCTION_READINGS: Readonly<Record<string, string | re
   'formula:cfvo-expression': 'evaluated',
   'formula:cfvo-relative': 'anchor-top-left',
   'formula:cfvo-nonnumeric': Object.freeze(['withheld', 'zero', 'skipped']),
-  'formula:cfvo-scope-multi-range': Object.freeze(['rule-wide', 'per-range']),
+  // `anchor-a1` (the cfvo-scope follow-up): the bound written on the first range's top-left is evaluated at A1, the reading
+  // stage5-cfvo-scope-v2 pre-registered (fdae467d) before its capture; a window that leaves the sheet follows the edge reading.
+  'formula:cfvo-scope-multi-range': Object.freeze(['rule-wide', 'per-range', 'anchor-a1']),
   // parse.ts (Ruling S5-I): a standalone <x14:colorScale> resolves through the Stage 2 point model. Its parse gate is the
   // bare evidence; this entry is what lets the audit publish it only for the reading production implements.
   'scale:dialect-standalone': 'standalone-evaluated',

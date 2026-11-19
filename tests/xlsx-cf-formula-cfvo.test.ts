@@ -208,7 +208,8 @@ describe('a formula bound resolves once per measured scope (S5-H, round-1 #10)',
     }
     const scaleTwins = ['P', 'Q', 'R', 'S', 'T'].flatMap(c => rows(c, 2, 5))
     it('is unresolved without formula:cfvo-scope-multi-range', async () => {
-      const caps = capsWith('formula:cfvo-relative', 'scale:scope-disjoint')
+      // Published since stage5-cfvo-scope-v2 (anchor-a1): removed here to test its gate.
+      const caps = capsWith('formula:cfvo-relative', 'scale:scope-disjoint').filter(c => c !== 'formula:cfvo-scope-multi-range')
       const doc = await loadFixture('stage5-cfvo-scope', caps)
       expect(doc.sheets[0]!.conditionalFormatting!.rules.find(r => r.priority === 1)!.definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
       // Parsed with it, but the service lacks it: still unresolved.
@@ -228,6 +229,51 @@ describe('a formula bound resolves once per measured scope (S5-H, round-1 #10)',
         twinsAgree(out, designated.map(r => [r, twinsOf(reading === 'per-range')(r)] as const))
       })
     }
+
+    // The cfvo-scope follow-up: `anchor-a1` (pre-registered in stage5-cfvo-scope-v2, fdae467d, before its capture) reads the
+    // relative bound written on the first range's top-left as if evaluated at A1: =MAX(B2:B7) reads A1:A6. The expectation
+    // is the case's own literal twins, resolved by production (never the capture).
+    describe('under anchor-a1 (stage5-cfvo-scope-v2)', () => {
+      const v2 = (JSON.parse(readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest).cases.find(c => c.id === 'stage5-cfvo-scope-v2')!
+      const pairsOf = (cfgId: string): Array<readonly [string, string]> => {
+        const cfg = v2.formulaConfigurations!.find(x => x.id === cfgId)!
+        return cfg.refs.map(r => [r, cfg.hypotheses['anchor-a1']![r]!.replace('twin:', '')] as const)
+      }
+      const v2Caps = capsWith('formula:cfvo-scope-multi-range', 'formula:cfvo-relative', 'scale:scope-disjoint', 'icon:scope-disjoint')
+      it('the bound is evaluated once, at A1, and every scale, icon and absolute-control cell follows its anchor-a1 twin', async () => {
+        const doc = await loadFixture('stage5-cfvo-scope-v2', v2Caps)
+        const pairs = [...pairsOf('scope2-scale'), ...pairsOf('scope2-icon'), ...pairsOf('scope2-scale-absolute')]
+        evaluateSpy.mockClear()
+        const { out } = await prepareSheet(doc.sheets[0]!, pairs.flat(), v2Caps, { selections: { 'formula:cfvo-scope-multi-range': 'anchor-a1' } })
+        twinsAgree(out, pairs)
+        // One evaluation per multi-range bound (scale, icon, absolute control) and one for the single-range control.
+        const at = evaluateSpy.mock.calls.map(call => call[1] as { row: number; col: number })
+        expect(at.filter(a => a.row === 0 && a.col === 0)).toHaveLength(3)
+      })
+      it('with production\'s own evidence (published anchor-a1), a multi-range icon set with an absolute formula threshold paints like its literal twin', async () => {
+        const caps = [...VERIFIED_CAPABILITIES]
+        expect(cfFormulaReading('formula:cfvo-scope-multi-range', c => caps.includes(c))).toBe('anchor-a1')
+        const xml = icon('B2:B4 D2:D4', 1, '<cfvo type="percent" val="0"/><cfvo type="formula" val="$F$1"/><cfvo type="num" val="50"/>')
+          + icon('H2:H4 J2:J4', 2, '<cfvo type="percent" val="0"/><cfvo type="num" val="20"/><cfvo type="num" val="50"/>')
+        const values = [10, 30, 60]
+        const sheet = sheetOf(parseRules(xml, caps), { F1: 20, ...col('B', values), ...col('D', values), ...col('H', values), ...col('J', values) })
+        const refs = [...rows('B', 2, 4), ...rows('D', 2, 4)]
+        const { out } = await prepareSheet(sheet, [...refs, ...rows('H', 2, 4), ...rows('J', 2, 4)], caps)
+        twinsAgree(out, refs.map(r => [r, `${r[0] === 'B' ? 'H' : 'J'}${r.slice(1)}`] as const))
+      })
+      it('the window is shifted from the first range\'s top-left to A1; one that would leave the sheet is withheld (no edge reading)', async () => {
+        // On C3: =MAX(C3:C4) reads A1:A2 (max 9) from A1, like its literal twin num 9; =MAX(B3:B4) would read the column left of A.
+        const cells = { A1: 5, A2: 9, ...col('C', [1, 2, 4, 7], 3), ...col('E', [3, 8], 3), ...col('G', [1, 2, 4, 7], 3), ...col('I', [3, 8], 3), ...col('K', [1, 2, 4, 7], 3) }
+        const xml = scale('C3:C6 E3:E4', 1, '<cfvo type="min"/><cfvo type="formula" val="MAX(C3:C4)"/>')
+          + scale('G3:G6 I3:I4', 2, '<cfvo type="min"/><cfvo type="formula" val="MAX(B3:B4)"/>')
+          + scale('K3:K6', 3, '<cfvo type="num" val="1"/><cfvo type="num" val="9"/>')
+        const caps = v2Caps.filter(c => c !== 'formula:relative-wrap')
+        const sheet = sheetOf(parseRules(xml, caps), cells)
+        const { out } = await prepareSheet(sheet, [...rows('C', 3, 6), ...rows('G', 3, 6), ...rows('K', 3, 6)], caps, { selections: { 'formula:cfvo-scope-multi-range': 'anchor-a1' } })
+        twinsAgree(out, rows('C', 3, 6).map(r => [r, `K${r.slice(1)}`] as const))
+        for (const r of rows('G', 3, 6)) expect(visualOf(out.get(r)), r).toMatch(WITHHELD)
+      })
+    })
   })
 })
 
