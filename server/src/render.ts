@@ -315,7 +315,8 @@ export class DocumentHost {
     const uses = slideAudioUses(slide, unit, show.mediaCtx.get(unit)!, kOf, table.partCount)
     const refs: MediaUnitRefs['refs'] = uses.records.map((r) => ({
       k: r.ref.k, partPath: r.partPath ?? '', ...(r.spid !== undefined ? { spid: r.spid } : {}), hiddenShape: r.hiddenShape,
-      entry: r.partPath !== undefined ? asAudioUse(table.peek(r.partPath)!) : { k: r.ref.k, partPath: '', refused: r.refused ?? 'media-unreadable' },
+      // A use the slide refuses (`slideAudioUses`: no part, a link, a chain on a video end) is refused here too.
+      entry: r.partPath !== undefined && r.refused === undefined ? asAudioUse(table.peek(r.partPath)!) : { k: r.ref.k, partPath: '', refused: r.refused ?? 'media-unreadable' },
       identity: mediaIdentity(r.ref), placeholder: r.placeholder,
     }))
     return { unit, hidden, refs }

@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import JSZip from 'jszip'
 import { decodeShowMessage, MEDIA_ID, SHOW_PLAN_LIMITS, type ShowPlanRecord } from '../../../src/stream/show-plan'
 import { MEDIA_WIRE_LIMITS, parseMediaCursor, parseMediaRefused, parseMediaRequest, parseMediaShow, parseMediaShowOk, parseMediaStart } from '../../../src/stream/media-wire'
-import { mixedMediaDeck, narrationDeck } from '../../../src/testdata/show-decks'
+import { mediaDeck, mixedMediaDeck, narrationDeck } from '../../../src/testdata/show-decks'
 import { encodeKeyId } from '../../src/media/params'
 import { Client, disposePool, start, type Harness, type HarnessMedia } from '../harness'
 import { ffmpegForTests } from './ffmpeg-gate'
@@ -37,6 +37,37 @@ async function withPart(deck: Uint8Array, bytes: Uint8Array): Promise<Uint8Array
 let noisy: Promise<Uint8Array> | undefined
 /** ~150 s of noise: its 128 kb/s encode is about 2.4 MB, three chunks. */
 const noiseDeck = () => (noisy ??= (async () => withPart(await narrationDeck(), await source('noise.m4a', 'anoisesrc=c=pink:r=48000:a=0.5', 150)))())
+
+const box = { id: 2, name: 'Box', prst: 'rect', off: ['3619500', '2476500'] as [string, string], ext: ['1905000', '1905000'] as [string, string], fill: '336699' }
+const sndNode = (id: number, start = '<p:cond delay="0"/>') => `<p:audio><p:cMediaNode vol="80000"><p:cTn id="${id}" fill="hold"><p:stCondLst>${start}</p:stCondLst></p:cTn><p:tgtEl><p:sndTgt r:embed="rIdSnd1" name="a.wav"/></p:tgtEl></p:cMediaNode></p:audio>`
+const videoNode = (id: number, spid: number) => `<p:video><p:cMediaNode vol="80000"><p:cTn id="${id}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl></p:cMediaNode></p:video>`
+/**
+ * One sound part (spid-less, identity `audio|k`: one mediaId on both slides). Slide 0: the sound begins on a video's
+ * end (D22: refused media-unavailable there). Slide 1: the same part begins with the slide (playable).
+ */
+async function sharedSoundDeck(): Promise<Uint8Array> {
+  const bytes = await mediaDeck({ slides: [
+    { boxes: [box], media: [{ spid: 3, file: 'av.mp4', kind: 'video' }], sounds: [{ rId: 'rIdSnd1', file: 'a.wav' }], timing: videoNode(3, 3) + sndNode(4, '<p:cond evt="onEnd" delay="0"><p:tn val="3"/></p:cond>') },
+    { boxes: [box], sounds: [{ rId: 'rIdSnd1', file: 'a.wav' }], timing: sndNode(3) },
+  ] })
+  const zip = await JSZip.loadAsync(bytes)
+  const rels = 'ppt/slides/_rels/slide2.xml.rels'
+  zip.file(rels, (await zip.file(rels)!.async('string')).replace('../media/sound2.wav', '../media/sound1.wav'))
+  zip.remove('ppt/media/sound2.wav')
+  zip.file('[Content_Types].xml', (await zip.file('[Content_Types].xml')!.async('string')).replace(/<Override PartName="\/ppt\/media\/sound2\.wav"[^>]*\/>/, ''))
+  return new Uint8Array(await zip.generateAsync({ type: 'uint8array' }))
+}
+/** A transport that holds every kind-9 send after the first under backpressure while `held()`. */
+function heldTransport(held: () => boolean, onFirst: () => void = () => {}) {
+  let sent = 0
+  return {
+    sent: () => sent,
+    transport: {
+      sendBinary: (ws: unknown, f: Uint8Array) => { const n = (ws as { sendBinary(f: Uint8Array): number }).sendBinary(f); if (f[5] === 9 && ++sent === 1) onFirst(); return n },
+      bufferedAmount: (ws: unknown) => (sent >= 1 && held() ? 64 << 20 : (ws as { getBufferedAmount(): number }).getBufferedAmount()),
+    },
+  }
+}
 
 async function harness(doc: Uint8Array, media: HarnessMedia = {}, extra: Parameters<typeof start>[0] = {}): Promise<Harness> {
   return await start({ doc, media, ...extra })
@@ -110,8 +141,10 @@ describe.skipIf(!info)('media wire through the harness (Task 9)', () => {
       // Nothing more on that reqId.
       await Bun.sleep(100)
       expect(c.msgs.filter((m) => ('text' in m ? m.text.reqId : m.binary.reqId) === r.reqId)).toHaveLength(0)
-      // Delivered: the pin is released (the reference stays only as look-ahead, never pinned).
-      expect(Object.values(h.media!.cache.inspect().sessions).flatMap((s) => s.refs).every((x) => x.pins === 0)).toBe(true)
+      // Delivered: the pin, and with it the session's reference, is released (D12: a delivery releases it).
+      expect(h.media!.cache.pinsOf(sidOf(c), { docId: c.manifest!.docRef, sourceHash: h.stream.audit.mediaDeliveries(sidOf(c))[0]!.sourceHash!, paramsSha: h.stream.audit.mediaDeliveries(sidOf(c))[0]!.encodeParamsSha!, ffmpegVersion: info!.version })).toBe(0)
+      expect(h.media!.cache.referencesOf(sidOf(c))).toBe(0)
+      expect(h.media!.cache.stats().entries).toBe(1)
     } finally { c.close(); await h.stop() }
   }, 120_000)
 
@@ -397,6 +430,112 @@ describe.skipIf(!info)('media wire through the harness (Task 9)', () => {
       expect(h.media!.admission.snapshot().running).toBe(0)
     } finally { a.close(); b.close(); await h.stop() }
   }, 60_000)
+
+  it('a use the build refuses on every slide is never encoded ahead, and is refused whatever the order of show-plan and media-request', async () => {
+    const h = await harness(await mixedMediaDeck('chain'))
+    const a = await session(h)
+    let resumed: Client | undefined
+    try {
+      const rec = (await planMedia(a)).find((r) => r.refused)!
+      // A second session that never fetched the plan learns nothing new: use A's resume to request before show-plan.
+      expect(parseMediaShowOk(await a.mediaShow(0)).queued).toBe(0)
+      await Bun.sleep(300)
+      expect(h.media!.cache.stats()).toMatchObject({ entries: 0, inflight: 0 })
+      const m0 = a.manifest!
+      const ws = a.ws as WebSocket & { terminate?: () => void }
+      if (ws.terminate) ws.terminate(); else ws.close(1001)
+      await a.closed; await Bun.sleep(50)
+      resumed = new Client(h.url)
+      await resumed.hello({ resume: { sid: m0.session.sid, resumeProof: m0.session.token } }); await resumed.ready()
+      await resumed.mediaShow(0)
+      // No show-plan on this socket: still refused, no bytes.
+      expect(refusal(await resumed.mediaRequest(rec.mediaId))).toBe('media-unavailable')
+      expect(h.media!.cache.stats()).toMatchObject({ entries: 0, inflight: 0 })
+    } finally { resumed?.close(); a.close(); await h.stop() }
+  }, 60_000)
+
+  it('a refusal is per (mediaId, slide): a sound refused on slide 0 plays on slide 1; the row records the slide requested', async () => {
+    const h = await harness(await sharedSoundDeck())
+    const c = await session(h)
+    try {
+      const [r0] = await planMedia(c, 0), [r1] = await planMedia(c, 1)
+      expect(r0!.mediaId).toBe(r1!.mediaId)
+      expect(r0!.refused).toBe('media-unavailable')
+      expect(r1!.refused).toBeUndefined()
+      const id = r0!.mediaId
+      expect(parseMediaShowOk(await c.mediaShow(1)).queued).toBe(1)
+      // On the cursor's slide (1, no unit given): delivered.
+      const ok = await c.mediaRequest(id, { ms: 60_000 })
+      expect(ok.end).toBeUndefined()
+      // Named slide 0: refused; named slide 1: delivered.
+      expect(refusal(await c.mediaRequest(id, { unit: 0 }))).toBe('media-unavailable')
+      expect((await c.mediaRequest(id, { unit: 1, ms: 60_000 })).end).toBeUndefined()
+      // A slide that does not use it: invalid-media.
+      expect(refusal(await c.mediaRequest(id, { unit: 5 }))).toBe('invalid-media')
+      // The cursor moves to slide 0: refused there.
+      c.mediaCursor(0); await Bun.sleep(100)
+      expect(refusal(await c.mediaRequest(id))).toBe('media-unavailable')
+      expect(h.stream.audit.mediaDeliveries(sidOf(c)).map((r) => [r.unitIndex, r.reason ?? 'ok'])).toEqual([[1, 'ok'], [0, 'media-unavailable'], [1, 'ok'], [0, 'media-unavailable']])
+    } finally { c.close(); await h.stop() }
+  }, 60_000)
+
+  it('a revocation under backpressure answers media-refused media-unavailable at once and releases the pin', async () => {
+    let held = true
+    const t = heldTransport(() => held)
+    const h = await harness(await noiseDeck(), {}, { transport: t.transport })
+    const c = await session(h)
+    try {
+      const id = await idOf(c)
+      await c.mediaShow(0)
+      c.send({ reqId: 4100, type: 'media-request', token: c.manifest!.session.token, mediaId: id })
+      await until(() => t.sent() === 1, 60_000)
+      await Bun.sleep(200) // parked in the high-water wait
+      expect(h.stream.stats().media.deliveries).toBe(1)
+      const at = Date.now()
+      await h.media!.cache.dropDocument(c.manifest!.docRef)
+      const r = await c.mediaRequest(id, { reqId: 4100, send: false, ms: 2000 })
+      expect(Date.now() - at).toBeLessThan(1000)
+      expect(parseMediaRefused(r.end).reason).toBe('media-unavailable')
+      expect(r.chunks).toHaveLength(1)
+      await until(() => h.stream.stats().media.deliveries === 0, 1000)
+      expect(t.sent()).toBe(1)
+    } finally { held = false; c.close(); await h.stop() }
+  }, 120_000)
+
+  it('media-end under backpressure ends the delivery at once', async () => {
+    const t = heldTransport(() => true)
+    const h = await harness(await noiseDeck(), {}, { transport: t.transport })
+    const c = await session(h)
+    try {
+      const id = await idOf(c)
+      await c.mediaShow(0)
+      c.send({ reqId: 4200, type: 'media-request', token: c.manifest!.session.token, mediaId: id })
+      await until(() => t.sent() === 1, 60_000)
+      await Bun.sleep(200)
+      expect(h.stream.stats().media.deliveries).toBe(1)
+      c.mediaEnd()
+      await until(() => h.stream.stats().media.deliveries === 0, 1000)
+      expect(h.media!.cache.referencesOf(sidOf(c))).toBe(0)
+      expect(t.sent()).toBe(1)
+    } finally { c.close(); await h.stop() }
+  }, 120_000)
+
+  it('a server-initiated close (revoke) ends the media queue at once, before the peer answers the close', async () => {
+    const t = heldTransport(() => true)
+    const h = await harness(await noiseDeck(), {}, { transport: t.transport })
+    const c = await session(h)
+    try {
+      const id = await idOf(c)
+      await c.mediaShow(0)
+      c.send({ reqId: 4300, type: 'media-request', token: c.manifest!.session.token, mediaId: id })
+      await until(() => t.sent() === 1, 60_000)
+      expect(h.media!.cache.referencesOf(sidOf(c))).toBeGreaterThan(0)
+      h.stream.revoke(sidOf(c))
+      // Synchronously: the queue has ended (dropSession), before any close handshake.
+      expect(h.media!.cache.referencesOf(sidOf(c))).toBe(0)
+      await until(() => h.stream.stats().media.deliveries === 0, 1000)
+    } finally { c.close(); await h.stop() }
+  }, 120_000)
 
   it('the only session closes and the same deck reopens: a media-request is served again', async () => {
     const h = await harness(await narrationDeck())

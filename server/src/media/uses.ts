@@ -14,11 +14,16 @@
  *   placeholder, and an identity scoped to its slide and source key (`audio|-|unit|<source>`), so two part-less uses
  *   never share a `mediaId` (a real part, `0 ≤ k < partCount`, keeps its document-global identity: one encode).
  * - A video node is no use (D22): its spid is listed in `videoSpids`, which keeps its commands blanked.
+ * - A use whose begin may depend on a video end, or under a reversing or repeating ancestor (`refusedAudio`, D22 and
+ *   Task 5 fix round 1), is refused `media-unavailable` on this slide (a spid-less record if any of its uses is, X13),
+ *   whatever else refuses it. The plan's record and `mediaRefs` both read it here (Task 9 fix round 1), so nothing
+ *   encodes or delivers a use the plan refuses. The refusal is per slide: the same `audio|k` may play on another.
  *
  * The walk is bounded at the reader's nesting limit (64).
  */
 import type { Condition, ShowSlide, TargetRef, TimeNode } from '../../../src/slideshow/types'
 import type { PlanMediaRecord } from '../../../src/stream/show-plan'
+import { refusedAudio } from '../show/eligibility'
 import { placeholderOf, type MediaRef } from './bind'
 
 /** The reader's own timing nesting limit (`READER_LIMITS.nesting`). */
@@ -105,5 +110,12 @@ export function slideAudioUses(meta: ShowSlide, unit: number, ctx: SlideMediaCon
     },
   })
   if (start) transitionStart = sound(start.rId)
+  if (meta.timing && !('refused' in meta.timing)) {
+    for (const n of refusedAudio(meta.timing.root)) {
+      const t = n.target
+      if ('snd' in t) { const ph = snd.get(t.snd); const r = ph ? records.get(ph) : undefined; if (r) r.refused = 'media-unavailable' }
+      else if ('spid' in t) for (const r of records.values()) if (r.spid === t.spid) r.refused = 'media-unavailable'
+    }
+  }
   return { records: [...records.values()], snd, shapeAudio, videoSpids, ...(transitionStart ? { transitionStart } : {}) }
 }

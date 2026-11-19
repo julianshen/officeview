@@ -49,7 +49,7 @@ import { decodePng, encodePng } from '../mark/png'
 import { markOptions, paintMark, type MarkSpec } from '../mark/visible'
 import { tauFor } from '../detect/tau'
 import { classifiedRasters, createSlideComposer, drawsAt, maskedRaster, slideStateAt, type DrawnLayer } from './compose'
-import { allocateFrames, classifySlide, refusedAudio, stepDurations, type Classification } from './eligibility'
+import { allocateFrames, classifySlide, stepDurations, type Classification } from './eligibility'
 import { burnVisibleMark, compareMarkContribution, MARK_FIDELITY } from './marks'
 import { compareFrames } from '../../../src/slideshow/compare'
 
@@ -285,20 +285,11 @@ function streamedMeta(meta: ShowSlide, unit: number, media?: MediaInputs): { met
     const kept = media?.on ? { ...(start ? { start: { rId: start, loop: sound.start!.loop } } : {}), ...(sound.end ? { end: true as const } : {}) } : undefined
     transition = kept && (kept.start || kept.end) ? { ...rest, sound: kept } : rest
   }
-  // D22: an audio use whose begin may depend on a video end would start at the client's synthetic (frame-timed)
-  // video end; fix round 1: one under a reversing or repeating ancestor has no trusted clock. Its record ships
-  // refused `media-unavailable` (a spid-less record if any of its uses is, X13).
-  const chained = new Set<string>()
-  if (mp && media?.on && meta.timing && !('refused' in meta.timing)) {
-    for (const n of refusedAudio(meta.timing.root)) {
-      const t = n.target
-      if ('snd' in t) { const ph = mp.snd.get(t.snd); if (ph) chained.add(ph) }
-      else if ('spid' in t) for (const r of mp.records) if (r.spid === t.spid) chained.add(r.placeholder)
-    }
-  }
+  // D22: an audio use whose begin may depend on a video end, or under a reversing or repeating ancestor, comes
+  // refused `media-unavailable` from `slideAudioUses` (the single definition `mediaRefs` reads too, Task 9 fix round 1).
   const records = mp && media ? mp.records.map((r): PlanMediaRecord => {
     const base = { mediaId: r.placeholder, kind: 'audio' as const, ...(r.spid !== undefined ? { spid: r.spid } : {}) }
-    if (!media.on || chained.has(r.placeholder)) return { ...base, durationMs: 0, refused: 'media-unavailable' }
+    if (!media.on) return { ...base, durationMs: 0, refused: 'media-unavailable' }
     if (r.refused || r.partPath === undefined) return { ...base, durationMs: 0, refused: r.refused ?? 'media-unreadable' }
     const e = media.entry(r.partPath)
     if (!e) throw new Error('show: media part not probed')

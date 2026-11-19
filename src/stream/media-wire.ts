@@ -86,12 +86,14 @@ export function parseMediaCursor(m: unknown): { unit: number } {
   return { unit: u32(o.unit, 'unit') }
 }
 
-/** Server: `media-request {reqId, token, mediaId}`. `mediaId` is any short string: the server answers anything that
- * is not one of the session's own ids (another session's, a cache key, a placeholder) `invalid-media`. */
-export function parseMediaRequest(m: unknown): { reqId: number; token: string; mediaId: string } {
-  const o = record(m, 'media-request', ['reqId', 'token', 'mediaId'])
+/** Server: `media-request {reqId, token, mediaId, unit?}`. `mediaId` is any short string: the server answers anything
+ * that is not one of the session's own ids (another session's, a cache key, a placeholder) `invalid-media`. `unit`
+ * (fix round 1): the slide the request is for (a spid-less sound is one mediaId on every slide using its part, and
+ * may be refused on one); absent, the server takes the cursor's slide, then the next one in show order using it. */
+export function parseMediaRequest(m: unknown): { reqId: number; token: string; mediaId: string; unit?: number } {
+  const o = record(m, 'media-request', ['reqId', 'token', 'mediaId'], ['unit'])
   const mediaId = typeof o.mediaId === 'string' && o.mediaId.length >= 1 && o.mediaId.length <= 256 ? o.mediaId : fail('mediaId')
-  return { reqId: reqIdOf(o.reqId), token: tokenOf(o.token), mediaId }
+  return { reqId: reqIdOf(o.reqId), token: tokenOf(o.token), mediaId, ...(o.unit !== undefined ? { unit: u32(o.unit, 'unit') } : {}) }
 }
 
 /** Server: `media-end {}` (D1; no reply). */

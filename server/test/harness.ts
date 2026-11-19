@@ -206,9 +206,9 @@ export class Client {
    * Piece 5: sends `media-request` and collects its reqId: the `media-start`, then every kind-9 payload up to
    * `start.chunks`, or a refusal (`media-refused` after the start, too, as a delivery the server stopped) as `end`.
    */
-  async mediaRequest(mediaId: unknown, o: { reqId?: number; token?: string; ms?: number; send?: boolean } = {}) {
+  async mediaRequest(mediaId: unknown, o: { reqId?: number; token?: string; ms?: number; send?: boolean; unit?: number } = {}) {
     const reqId = o.reqId ?? 1600 + (this.mediaSeq++)
-    if (o.send !== false) this.send({ reqId, type: 'media-request', token: o.token ?? this.manifest!.session.token, mediaId })
+    if (o.send !== false) this.send({ reqId, type: 'media-request', token: o.token ?? this.manifest!.session.token, mediaId, ...(o.unit !== undefined ? { unit: o.unit } : {}) })
     let start: Record<string, any> | undefined
     const chunks: Uint8Array[] = []
     for (;;) {
