@@ -6,7 +6,9 @@ Spec: `docs/superpowers/specs/2026-11-17-streaming-s3-piece5-design.md`, with it
 
 Piece 5 ships audio only: shape audio, narration, effect sounds and transition sounds. Video keeps piece 4's behaviour until piece 6.
 
-Every gate is green except the eager size gate. That gate was already red at the merge base, and this branch adds 271 B to it (§Size gate).
+Every gate is green except two:
+- **The eager size gate.** It was already red at the merge base, and this branch adds 271 B to it (§Size gate).
+- **The browser stream suite.** 2 of 42 fail on a Morph re-request count that Task 13's `8435707c` made stale (§Verification).
 
 ## The feasibility gate and the rescope
 
@@ -155,7 +157,7 @@ RED first: with the new decks removed from `app.ts`, the three playback and D22 
 | Linux | Green in CI (PR #83, ubuntu runner, ffmpeg 6.1.1). `unshare --user --map-root-user --net` needs `kernel.apparmor_restrict_unprivileged_userns=0`. dash `ulimit` is applied one limit at a time. ffprobe 6.1's `vendor_id` led to the `PROBE_REPORTED_OPTIONAL` allowance. Not run locally. |
 | Anything else (Windows, BSD) | Fails closed: the startup probe reports `sandbox`, so `can.media: false` and `media-unavailable`. |
 
-Neither wrapper confines file reads (Task 2 note). Confinement comes from the inputs: a fixed demuxer, `-protocol_whitelist file`, and only the staged 0600 temp path. Probes run on the main thread. The staged file must be a regular file owned by the server's uid with one link, and its identity is checked again before the spawn (Task 13).
+Neither wrapper confines file reads (Task 2 note). Confinement comes from the inputs: a fixed demuxer, `-protocol_whitelist file`, and only the staged 0600 temp path. Probes run on the main thread. The staged file must be a regular file owned by the server's uid with one link. Its device and inode are checked again just before the spawn and again after the run, and a change fails the probe closed (Task 13).
 
 ## Verification
 
@@ -165,7 +167,7 @@ Every gate of the plan's Task 14 Step 4, run on the final tree (2026-11-20). Log
 |---|---|
 | `cd server && OV_MEDIA_REQUIRED=1 bun test` | **green**: 1327 pass, 0 fail, 80 files (814 s) |
 | `npx vitest run tests/stream tests/slideshow*` | **green**: 95 files, 1850 pass, 2 skipped |
-| `IV_HARNESS_PORT=4391 npm run test:browser:stream` | **red, 2 of 42**: 39 pass, 1 skipped (D20 no-codec), 2 fail. Both failures are `stream-present-anim.spec.ts` "holding → (300 key events, ~10 s): socket stays open (no 4008)" (webgl2 and canvas2d), at `expect(w.count('show-morph')).toBeGreaterThanOrEqual(10)`, which received 1. Task 13's `8435707c` ("← / → back and forth asks for no Morph pair or track again once settled") stopped those re-requests on purpose, so the assertion is stale; Task 13 did not run the browser suite. With that one line logged instead, both cases pass: 300 presses, no close code, no `rate-limited`, and charged peaks of 5 per 60 s. Not changed here; reported. |
+| `IV_HARNESS_PORT=4391 npm run test:browser:stream` | **red, 2 of 42**: 39 pass, 1 skipped (D20 no-codec), 2 fail. Both failures are `stream-present-anim.spec.ts` "holding → (300 key events, ~10 s): socket stays open (no 4008)" (webgl2 and canvas2d), at `expect(w.count('show-morph')).toBeGreaterThanOrEqual(10)`, which received 1. The cause is inferred, not bisected (the test was not run at `c2b68dc1`). Task 13's `8435707c` ("← / → back and forth asks for no Morph pair or track again once settled") stops exactly these re-requests on purpose, Task 13 did not run the browser suite, and this task changed no remote-show source (its only `src/` change is the local `sessionDeps.source` seam). With that one line logged instead, both cases pass: 300 presses, no close code, no `rate-limited`, and charged peaks of 5 per 60 s. Not changed here; reported. |
 | `bun scripts/stream-show-compare.ts --deck all` | **green**: exit 0 (above) |
 | `npx tsc --noEmit -p .` | **green** |
 | `npm run -s typecheck:server` | **green** |
@@ -189,11 +191,11 @@ No limit or baseline was changed. Three measurements:
 | final HEAD (this task) | **422,664 B** | + `src/xlsx/rowFont.ts` |
 
 Attribution:
-- **Main, after the piece-4 measurement, +1,008 B.** It was already red at the merge base. `src/xlsx/rowFont.ts` came in with `8f85309c` (xlsx-cf Task 30, an ancestor of `a868b370`), not with this branch, so the module-set failure was already there at the merge base. The linked `node_modules` also listed the package modules under their real path, which is a measuring artifact; the only `src/` difference is `rowFont.ts`.
+- **Before the merge base, +1,008 B over the piece-4 measurement.** The gate was already red at `a868b370`. The growth accrued on main, which includes piece 4's own later fix rounds, and it is traced no further than one module: `src/xlsx/rowFont.ts` came in with `8f85309c` (xlsx-cf Task 30, an ancestor of `a868b370`), not with this branch. So the module-set failure was already there at the merge base. The linked `node_modules` also listed the package modules under their real path, which is a measuring artifact; the only `src/` difference is `rowFont.ts`.
 - **This branch, +271 B.** Per chunk, `office-worker.js` grew 384,701 → 384,974 B (+273 B), and `index.js` shrank 36,521 → 36,519 B (−2 B, hash noise). The two module sets are equal. Of the closure's `src/` modules, only `src/core/zip.ts` changed between `a868b370` and HEAD, in `ff595ecf` (Task 3: media sniffing and the bounded part reads). So the +271 B is Task 3's `zip.ts` change, and Tasks 4–13 and this task add nothing to the eager closure.
 - **This task, 0 B.** The `sessionDeps.source` seam is in the lazy show chunk.
 
-Against the brief's expectation (red, with Δ ≤ 4 B against 421,385 B): the measured Δ is +1,279 B, of which +1,008 B is main's and +271 B is Task 3's.
+Against the brief's expectation (red, with Δ ≤ 4 B against 421,385 B): the measured Δ is +1,279 B. Of that, +1,008 B came before the merge base and +271 B is Task 3's.
 
 ## Not machine-checked
 
@@ -207,4 +209,6 @@ Against the brief's expectation (red, with Δ ≤ 4 B against 421,385 B): the me
 ## Proven since the earlier tasks
 
 - **transcode's `hasAudio` branch** (Task 7's parked minor). Now tested (`a2da6a5f`): a part with no audio stream is `media-unreadable`, its output is deleted and nothing is spawned. Removing the guard turns the test red.
-- **The external-rel `mediaRefs` fallback** in `server/src/render.ts` `mediaRefs` (Task 3's parked minor, then at lines 302–310). It is covered by `server/test/show-build-media.test.ts` "B: mediaRefs and the bound plan agree on k, identity and refusal for an external link" and "C: a condition-only snd on an external link is refused media-linked", both added in Task 4's fix (`ea306609`). Mutation check: replacing `r.refused ?? 'media-unreadable'` with `'media-unreadable'` turns both red.
+- **The external-rel `mediaRefs` fallback** (Task 3's parked minor). The branch Task 3 parked (`ff595ecf` `render.ts`: "No record: an external link (`media-linked`)") no longer exists. Task 4's fix (`ea306609`) moved every audio use into `slideAudioUses` (`uses.ts`), and `mediaRefs` now maps a refused use to its entry (`refused: r.refused ?? 'media-unreadable'`). The behaviour is covered at two levels:
+  - at the document host, by `server/test/show-build-media.test.ts` "B: mediaRefs and the bound plan agree on k, identity and refusal for an external link" and "C: a condition-only snd on an external link is refused media-linked". Mutation check on today's line: replacing `r.refused ?? 'media-unreadable'` with `'media-unreadable'` turns both red;
+  - end to end over the socket, by `server/test/media/media-wire.test.ts` "refusal media-linked" (plan record and `media-request` both `media-linked`).

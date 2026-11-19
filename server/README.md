@@ -685,8 +685,8 @@ Neither wrapper confines file reads. Confinement comes from the inputs: the
 part is staged into the server's 0700 media temp dir as a 0600 file, and
 ffmpeg reads only that `file:` path through a fixed demuxer. Probes run on
 the main thread at the render worker's request. The staged file must be a
-regular file owned by the server's uid with one link, and its identity is
-checked again before the spawn.
+regular file owned by the server's uid with one link. Its identity is
+checked again just before the spawn and after the run.
 
 **Wire** (client → server text, each ≤ 64 KiB):
 
