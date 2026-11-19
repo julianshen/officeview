@@ -183,8 +183,12 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
    */
   const planned = !!show?.showPlan && unitOf.some((u) => planUnit(list[u]))
   const animated = (unit: number) => planned && planUnit(list[unit])
-  /** Piece 5 (D18): audio plays when the server offers it (`can.media`) and the session carries the transport. */
-  const mediaOn = planned && doc.manifest.can.media === true && !!show?.mediaShow && !!show.mediaCursor && !!show.mediaRequest && !!show.mediaEnd
+  /**
+   * Piece 5 (D18, D19): audio plays when the server offers it (`can.media`), the session carries the transport, and a
+   * shown slide ships audio or a transition sound (`ManifestUnit.media`). A deck without one sends no media message
+   * at all (no `media-show`, no `media-cursor` on its navigation).
+   */
+  const mediaOn = planned && doc.manifest.can.media === true && unitOf.some((u) => !!list[u]!.media) && !!show?.mediaShow && !!show.mediaCursor && !!show.mediaRequest && !!show.mediaEnd
 
   const seen = createDiagnosticSink()
   const sink: DiagnosticSink = {

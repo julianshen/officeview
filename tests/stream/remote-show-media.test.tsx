@@ -297,7 +297,16 @@ describe('remote show plays audio (Task 11)', () => {
   }, DRIVES)
 
   it("mediaEndRevealDeck('unrelated') with media on: the player opens nothing for the video, raises no notice and creates no element", async () => {
-    const fx = mediaFixture('unrelated')
+    // As shipped, the deck has no `media` unit (D19: video never sets it), so the show sends no media message at all.
+    const plain = mediaDoc(mediaFixture('unrelated'))
+    const p = await show(plain)
+    await run(300)
+    p.s.next(); await run(300)
+    expect(plain.log.filter((l) => l.startsWith('media-'))).toEqual([])
+    p.s.exit()
+    // Forced `media` (the player mounted): it is still never handed the video node.
+    const base = mediaFixture('unrelated')
+    const fx = { ...base, list: base.list.map((u) => ({ ...u, media: true as const })) }
     const fd = mediaDoc(fx)
     const { s, root, log } = await show(fd)
     await run(300)
@@ -307,6 +316,7 @@ describe('remote show plays audio (Task 11)', () => {
     expect(audios(root)).toEqual([])
     expect(elements().plays).toEqual([])
     expect(diagCodes(log).filter((d) => d.startsWith('diag:media'))).toEqual([])
+    expect(fd.log).toContain('media-show:0')
     // The video ends as piece 4 ends it: at its first live frame.
     expect(mediaEnds(s).map(([id]) => id)).toEqual([3])
     s.exit()
