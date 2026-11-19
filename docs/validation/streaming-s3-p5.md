@@ -6,9 +6,7 @@ Spec: `docs/superpowers/specs/2026-11-17-streaming-s3-piece5-design.md`, with it
 
 Piece 5 ships audio only: shape audio, narration, effect sounds and transition sounds. Video keeps piece 4's behaviour until piece 6.
 
-Every gate is green except two:
-- **The eager size gate.** It was already red at the merge base, and this branch adds 271 B to it (§Size gate).
-- **The browser stream suite.** 2 of 42 fail on a Morph re-request count that Task 13's `8435707c` made stale (§Verification).
+Every gate is green except the eager size gate. That gate was already red at the merge base, and this branch adds 271 B to it (§Size gate). The browser stream suite was red on a stale assertion; the assertion was replaced by controller ruling (§Verification).
 
 ## The feasibility gate and the rescope
 
@@ -167,12 +165,20 @@ Every gate of the plan's Task 14 Step 4, run on the final tree (2026-11-20). Log
 |---|---|
 | `cd server && OV_MEDIA_REQUIRED=1 bun test` | **green**: 1327 pass, 0 fail, 80 files (814 s) |
 | `npx vitest run tests/stream tests/slideshow*` | **green**: 95 files, 1850 pass, 2 skipped |
-| `IV_HARNESS_PORT=4391 npm run test:browser:stream` | **red, 2 of 42**: 39 pass, 1 skipped (D20 no-codec), 2 fail. Both failures are `stream-present-anim.spec.ts` "holding → (300 key events, ~10 s): socket stays open (no 4008)" (webgl2 and canvas2d), at `expect(w.count('show-morph')).toBeGreaterThanOrEqual(10)`, which received 1. The cause is inferred, not bisected (the test was not run at `c2b68dc1`). Task 13's `8435707c` ("← / → back and forth asks for no Morph pair or track again once settled") stops exactly these re-requests on purpose, Task 13 did not run the browser suite, and this task changed no remote-show source (its only `src/` change is the local `sessionDeps.source` seam). With that one line logged instead, both cases pass: 300 presses, no close code, no `rate-limited`, and charged peaks of 5 per 60 s. Not changed here; reported. |
+| `IV_HARNESS_PORT=4391 npm run test:browser:stream` | **green**: 41 pass, 1 skipped (D20 no-codec, AAC present). See the hold-test note below. |
 | `bun scripts/stream-show-compare.ts --deck all` | **green**: exit 0 (above) |
 | `npx tsc --noEmit -p .` | **green** |
 | `npm run -s typecheck:server` | **green** |
 | `npm run -s lint` | **green** |
 | `bun run gates:core` | **red**, as at the merge base: index closure 422,664 B against the 420,540 B limit; module set + `src/xlsx/rowFont.ts`. Core closure, engine modules and purity: ok. |
+
+**The hold test** (`stream-present-anim.spec.ts`, "holding → (300 key events, ~10 s): socket stays open (no 4008)"). The first gate run failed 2 of 42: both backends, at `expect(w.count('show-morph')).toBeGreaterThanOrEqual(10)`, which received 1. What happened next:
+- **Cause confirmed.** In a temporary detached worktree at `bc4e4f0d` (before Task 13's `8435707c`), the whole spec passed 8/8, and the hold test logged 40 `show-morph` requests in 300 presses. `8435707c` stops those re-asks on purpose, so the assertion checked the opposite of the intended behaviour.
+- **Assertion replaced** (controller ruling). The test keeps its purpose: holding ← / → never ends in 4008 or `rate-limited`. It now asserts:
+  - the presses navigated. A page-side observer counts the surface's `data-slide` changes, and the test requires at least 150 of the 300 presses (half, as margin under load) and both slides visited. Measured: 300 changes.
+  - `show-morph` is bounded by the Morph pairs, not the presses. The deck has 1 pair, and the bound is ≤ 2: one fetch per pair, plus one re-ask in case a press aborts it in flight. It must also be ≥ 1. Measured: 1.
+  - no close code and no `rate-limited`. These checks are unchanged.
+- **Fails on revert.** With `8435707c`'s `dropExtras` change reverted in a scratch edit (not committed), the new assertion failed on both backends: `show-morph` was 40, against ≤ 2.
 
 TDD:
 - The parity test failed first on `r.media` being undefined, once the decks were added but before the clock wrap.
