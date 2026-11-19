@@ -44,7 +44,7 @@ import { createShowDriver, type DriverHooks, type DriverStage, type ShowDriver, 
 import { createGestureState, gestureToInput, keyToInput, MODIFIER_KEYS } from '../../slideshow/player/keys'
 import { runLink } from '../../slideshow/player/links'
 import type { SlideCursor } from '../../slideshow/engine/steps'
-import { nextVisible } from '../../slideshow/player/order'
+import { nextVisible, previousVisible } from '../../slideshow/player/order'
 import type { SessionClock, SessionController, SessionState, ShowInput } from '../../slideshow/player/session'
 import { createAudienceSurface, END_OF_SHOW, type AudienceSurface } from '../../slideshow/player/surface'
 import type { ImageNotes } from '../../slideshow/presenter/notes'
@@ -447,6 +447,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
    */
   function yieldTrack(except: string | undefined): boolean {
     if (slide === 'end') return false
+    // A track kept from the slide left (`dropExtras`) gives way first.
+    for (const [key, t] of tracks) if (key !== except && t.index !== slide && typeof t.state === 'object') { dropTrack(key); return true }
     const playing = build - 1
     let best: { key: string; d: number } | undefined
     for (const [key, t] of tracks) {
@@ -495,10 +497,25 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     p.result?.release()
     p.result = undefined
   }
-  /** A slide change: the tracks of every other slide go, and every Morph pair not into `p`. */
-  function dropExtras(p: number | 'end' | undefined): void {
-    for (const [k, t] of [...tracks]) if (t.index !== p) dropTrack(k)
-    for (const q of [...pairs.values()]) if (q.to !== p) dropPair(q)
+  /**
+   * A slide change into `p` from `left`: the tracks of every other slide go, and every Morph pair neither into nor out
+   * of `p`. Task 13 (carried from Task 11): `left`'s tracks stay, and so do the pairs out of `p` until its visit says
+   * which the show asks for next (`keepOutgoing`), so ← / → back and forth across a boundary asks for nothing again
+   * once settled (each re-ask was a charged send: ~15 a second, beside media-cursor, breached the message burst). The
+   * left slide's tracks are the first to give way to the show budget (`yieldTrack`) and go on the next change.
+   */
+  function dropExtras(p: number | 'end' | undefined, left?: number | 'end'): void {
+    for (const [k, t] of [...tracks]) if (t.index !== p && (t.index !== left || p === undefined)) dropTrack(k)
+    for (const q of [...pairs.values()]) if (q.to !== p && q.from !== p) dropPair(q)
+  }
+  /** Task 13: of the pairs out of the visited slide, only those asked next stay: the successor's at its last step (the
+   * prefetch), and the predecessor's at step 0 (Previous leaves a slide only from there). */
+  function keepOutgoing(i: number, steps: number | undefined): void {
+    const succ = nextVisible(order, i) ?? (loop ? order[0] : undefined), pred = previousVisible(order, i)
+    for (const q of [...pairs.values()]) {
+      if (q.from !== i || q.to === i) continue
+      if (!((q.to === succ && steps !== undefined && q.fromStep === steps) || (q.to === pred && q.fromStep === 0))) dropPair(q)
+    }
   }
   const codeOf = (e: unknown) => (e instanceof StreamSessionError ? e.code : undefined)
 
@@ -965,6 +982,7 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
 
   /** A slide change (the driver's, before the slide's model is in): what piece 3's enter did, but navigation. */
   function entered(p: number | 'end'): void {
+    const left = slide
     slide = p
     screen = 'slide'
     build = 0
@@ -972,7 +990,7 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     surface?.show({ slide: p, count, screen })
     if (p === 'end') surface?.root.removeAttribute('data-unit')
     else surface?.root.setAttribute('data-unit', String(unitOf[p]))
-    dropExtras(p)
+    dropExtras(p, left)
     refusedAt.clear()
     gapShown = undefined
     // An animated slide whose bundle failed long enough ago is asked for again by `want`: its visit waits for it
@@ -1389,6 +1407,7 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
         media?.sounds.start(v.index)
         media?.want()
         if (v.cursor) tracksOnEntry(v.index, v.cursor.step)
+        keepOutgoing(v.index, v.timeline?.steps)
         prefetchMorph()
         render(false)
         // The visit's cursor now exists: what Next is (a build or the next slide) can be told.

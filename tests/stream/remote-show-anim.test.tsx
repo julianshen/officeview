@@ -497,6 +497,46 @@ describe('remote show on the driver (piece 4 Task 11)', () => {
     s.exit()
   }, 60_000)
 
+  it('← / → back and forth across a slide boundary asks for no Morph pair or track again once settled (piece 5 Task 13, carried from Task 11)', async () => {
+    // ~15 show requests a second of oscillation, beside media-cursor's 5/s, would breach the 20/s message burst (4008
+    // after three breaches). A slide already settled sends nothing new.
+    {
+      // Previous into the Morph slide asks for its own pair once (2 → 1 at 0); Next back out keeps it.
+      const fd = animDoc(['fly', 'morphTo', 'fly'])
+      const { s } = await show(fd, { from: 2 })
+      await run(1_500)
+      s.previous(); await run(800)
+      expect(s.state.slide).toBe(1)
+      const pairs = sent(fd, 'morph:'), tracks = sent(fd, 'track:'), plans = sent(fd, 'plan:')
+      expect(pairs).toEqual(['morph:2>1@0'])
+      for (let n = 0; n < 4; n++) { s.next(); await run(150); s.previous(); await run(150) }
+      expect(s.state.slide).toBe(1)
+      expect(sent(fd, 'morph:')).toEqual(pairs)
+      expect(sent(fd, 'track:')).toEqual(tracks)
+      expect(sent(fd, 'plan:')).toEqual(plans)
+      s.exit()
+    }
+    {
+      // Two composited slides: entering one asks for its first tracks once; going back and forth asks for none again.
+      const three = { messages: (u: number) => bundleOf(FLY, u, compositedFly(3)) }
+      const fd = animDoc([three, three])
+      const { s } = await show(fd)
+      await run(300)
+      for (let k = 1; k <= 4; k++) { s.next(); await run(800) }
+      expect([s.state.slide, s.state.build]).toEqual([1, 0])
+      s.previous(); await run(800)
+      expect(s.state.slide).toBe(0)
+      s.next(); await run(800)
+      expect(s.state.slide).toBe(1)
+      const tracks = sent(fd, 'track:')
+      expect(tracks.filter((t) => t.startsWith('track:1:')).length).toBeGreaterThan(0)
+      for (let n = 0; n < 4; n++) { s.previous(); await run(300); s.next(); await run(300) }
+      expect(s.state.slide).toBe(1)
+      expect(sent(fd, 'track:')).toEqual(tracks)
+      s.exit()
+    }
+  }, 60_000)
+
   it('Previous across an evicted track asks for it again and shows its end frame (round 6)', async () => {
     const ten = { messages: (u: number) => bundleOf(FLY, u, compositedFly(10)) }
     const fd = animDoc([ten], { tracks: hdTrack })
