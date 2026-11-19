@@ -509,6 +509,12 @@ describe('the hoist-errors rules are plain resolved cells (the expected-resoluti
     for (const r of RULES) {
       const markers = c.markers.filter(m => m.capabilityId === ID && m.sqref === r.sqref)
       expect(markers.map(m => m.formulas), r.sqref).toEqual([[r.formula]])
+      // The parsed workbook holds the rule exactly once, on exactly its range (codex review): Excel formats none of these cells,
+      // so without this a missing rule would satisfy every cell comparison below.
+      const parsed = sheet.conditionalFormatting!.rules.filter(x => (x.definition as { formulas?: readonly string[] }).formulas?.[0] === r.formula)
+      expect(parsed.length, r.formula).toBe(1)
+      expect(parsed[0]!.definition.kind, r.formula).toBe('expression')
+      expect(parsed[0]!.ranges.map(g => `${String.fromCharCode(65 + g.firstCol)}${g.firstRow + 1}:${String.fromCharCode(65 + g.lastCol)}${g.lastRow + 1}`), r.formula).toEqual([r.sqref])
       const refs = c.expected.cells.map(x => x.ref).filter(ref => isCellInSqref(ref, r.sqref))
       expect(refs.length, r.sqref).toBeGreaterThan(30)
       let compared = 0
