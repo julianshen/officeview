@@ -50,7 +50,7 @@ export type PoolTextJob = { docRef: string; contentPolicy: 'visible-only' | 'ful
  * every prepare it needs is charged separately (`prepareWorkspace`). */
 export const TEXT_JOB_BYTES = TEXT_PREPARE_ALLOWANCE
 /** `servedCacheBytes`: the worker's served-index bound per document (R6 default 32 MiB). */
-export interface PoolOptions { /** Piece 4 (tests shorten it): the show-plan job deadline, default `SHOW_PLAN_DEADLINE_MS`. */ showDeadlineMs?: number; workers?: number; caps?: Caps; recyclePages?: number; now?: () => number; testHooks?: boolean; openDeadlineMs?: number; servedCacheBytes?: number; /** Piece 5 (D21): ffmpeg and the media temp dir, forwarded in each worker's init. */ media?: { info: FfmpegInfo; dir: string } }
+export interface PoolOptions { /** Piece 4 (tests shorten it): the show-plan job deadline, default `SHOW_PLAN_DEADLINE_MS`. */ showDeadlineMs?: number; workers?: number; caps?: Caps; recyclePages?: number; now?: () => number; testHooks?: boolean; openDeadlineMs?: number; servedCacheBytes?: number; /** Piece 5 (D21): ffmpeg and the media temp dir, forwarded in each worker's init. */ media?: { info: FfmpegInfo; dir: string }; /** TEST-ONLY (honoured with `testHooks`): every media probe is held this long (`MediaTableSeams.hangMs`). */ mediaHoldMs?: number }
 
 const WORKER_URL = resolve(import.meta.dir, 'worker/render-worker.ts')
 const PRELOAD = resolve(import.meta.dir, '../../scripts/stream-s0/napi-preload.ts')
@@ -95,6 +95,7 @@ export class Pool {
   private readonly servedCacheBytes?: number
   private readonly showDeadlineMs: number
   private readonly media?: { info: FfmpegInfo; dir: string }
+  private readonly mediaHoldMs?: number
   /**
    * Piece 4 (controller ruling): show-plan refusals by slide (`docRef|policy|unit|scale|motion|strictMarks`: the
    * L1 tuple; the fingerprint is per process). A slide that timed out retired its worker, and with it the worker's
@@ -142,6 +143,7 @@ export class Pool {
     this.servedCacheBytes = opts.servedCacheBytes
     this.showDeadlineMs = opts.showDeadlineMs ?? SHOW_PLAN_DEADLINE_MS
     this.media = opts.media
+    this.mediaHoldMs = this.testHooks ? opts.mediaHoldMs : undefined
     for (let i = 0; i < (opts.workers ?? defaultWorkers()); i++) {
       const slot = { index: i, busy: false, queue: [], pending: new Map(), docs: new Map(), pages: 0, parses: 0, probes: 0, generation: 0, closed: false, prep: 0 } as unknown as Slot
       this.attach(slot)
@@ -176,7 +178,7 @@ export class Pool {
     }
     // The init goes first (messages are ordered), so every later job sees the media config. Its reply is unawaited;
     // a worker whose init fails has media off (every entry `media-unavailable`).
-    worker.postMessage({ type: 'init', id: this.nextId++, ...(this.media ? { media: this.media } : {}) } satisfies WorkerRequest)
+    worker.postMessage({ type: 'init', id: this.nextId++, ...(this.media ? { media: this.media } : {}), ...(this.mediaHoldMs ? { mediaHoldMs: this.mediaHoldMs } : {}) } satisfies WorkerRequest)
     worker.addEventListener('close', () => {
       markClosed()
       if (slot.worker !== worker) return
@@ -307,6 +309,7 @@ export class Pool {
     const key = [docRef, contentPolicy, show.unitIndex, show.scale, show.motion, show.strictMarks, show.media === true].join('|')
     const known = this.showRefusals.get(key)
     if (known) return known
+    if (!(await this.warmMedia(sessionId, docRef, contentPolicy, [show.unitIndex], signal))) return { refused: 'show-plan-timeout', diagnostics: [{ code: 'show-plan-timeout' }] }
     let r: BuiltShowPlan | ShowRefusal
     try {
       r = await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-plan', id: this.nextId++, docKey, job: show, grant: bytesEstimate, ...this.hooks(hangMs, crash) }), signal) as BuiltShowPlan | ShowRefusal
@@ -324,6 +327,7 @@ export class Pool {
     const plan = [docRef, contentPolicy, show.unitIndex, show.scale, show.motion, show.strictMarks, show.media === true].join('|')
     // A slide whose bundle is refused has no track.
     if (this.showRefusals.has(plan)) return []
+    if (!(await this.warmMedia(sessionId, docRef, contentPolicy, [show.unitIndex], signal))) throw new RenderTimeout()
     return await this.remembered(docRef, `${plan}|track|${show.step}`, async () => await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-track', id: this.nextId++, docKey, job: show, grant: bytesEstimate, ...this.hooks(hangMs, crash) }), signal) as Array<{ assetId: number; w: number; h: number; png: Uint8Array }>)
   }
 
@@ -331,6 +335,7 @@ export class Pool {
   async showMorph(sessionId: string, job: PoolMorphJob, bytesEstimate: number, signal?: AbortSignal): Promise<BuiltMorph> {
     const { docRef, contentPolicy, hangMs, crash, ...morph } = job
     const key = [docRef, contentPolicy, 'morph', morph.from, morph.to, morph.fromStep, morph.scale, morph.motion, morph.strictMarks === true].join('|')
+    if (!(await this.warmMedia(sessionId, docRef, contentPolicy, [morph.from, morph.to], signal))) throw new RenderTimeout()
     return await this.remembered(docRef, key, async () => await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-morph', id: this.nextId++, docKey, job: morph, grant: bytesEstimate, ...this.hooks(hangMs, crash) }), signal) as BuiltMorph)
   }
 
@@ -386,6 +391,27 @@ export class Pool {
     } finally {
       if (admitted.state === 'running') this.finish(admitted)
     }
+  }
+
+  /**
+   * Piece 5 (Task 8; the deadline risk carried from Task 3). A show job's `loadShow` probes the slide's media parts
+   * (up to the 10 s deck budget) before its build, and would share the 10 s show deadline with them: a cold,
+   * media-heavy deck could time out, retire the worker, and have the timeout remembered as the slide's refusal. So
+   * when the pool has media, the probes run first as a media read job under its own deadline
+   * (`MEDIA_JOB_DEADLINE_MS`), and the show deadline then covers the build alone (the table is warm). A warm-up that
+   * times out answers this request only (false): the caller refuses or throws without remembering it. Any other
+   * warm-up failure is left to the show job itself to report. Without media nothing runs (piece 4 unchanged).
+   */
+  private async warmMedia(sessionId: string, docRef: string, contentPolicy: 'visible-only' | 'full', units: readonly number[], signal?: AbortSignal): Promise<boolean> {
+    if (!this.media) return true
+    for (const unit of units) {
+      try { await this.mediaRefs(sessionId, docRef, contentPolicy, unit, signal) } catch (e) {
+        if (e instanceof RenderTimeout) return false
+        if (e instanceof ShowCancelled) throw e
+        return true
+      }
+    }
+    return true
   }
 
   private hooks(hangMs?: number, crash?: boolean) { return { ...(this.testHooks && hangMs ? { hangMs } : {}), ...(this.testHooks && crash ? { crash: true } : {}) } }

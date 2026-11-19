@@ -8,7 +8,7 @@ import type { TextJob } from '../text/served'
 
 export type WorkerRequest =
   /** Piece 5 (D21): the worker's init, posted first. `media`: ffmpeg and the pool's media temp dir; absent = media off. */
-  | { type: 'init'; id: number; media?: { info: FfmpegInfo; dir: string } }
+  | { type: 'init'; id: number; media?: { info: FfmpegInfo; dir: string }; /** TEST-ONLY (the pool sends it only with `testHooks`): each probe's hold. */ mediaHoldMs?: number }
   /** Piece 5 (D21, D22): a unit's audio uses and their probed entries (a short read job). */
   | { type: 'media-refs'; id: number; docKey: string; unit: number }
   /** Piece 5 (D21): the projected part written 0600 into `dir` (the media dir); the caller adopts it. */
@@ -41,7 +41,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
   const m = e.data
   try {
     let result: unknown
-    if (m.type === 'init') { host.configureMedia(m.media); result = null }
+    if (m.type === 'init') { host.configureMedia(m.media); if (m.mediaHoldMs) host.mediaSeams = { hangMs: m.mediaHoldMs }; result = null }
     else if (m.type === 'media-refs') result = await host.mediaRefs(m.docKey, m.unit)
     else if (m.type === 'media-part') result = await host.mediaPart(m.docKey, m.partPath, m.dir)
     else if (m.type === 'open') { if (m.servedCacheBytes !== undefined) host.setServedCacheBytes(m.servedCacheBytes); result = await host.open(m.docRef, m.bytes, m.contentPolicy) }
