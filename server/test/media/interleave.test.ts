@@ -22,8 +22,11 @@ import type { transcode } from '../../src/media/transcode'
 
 const MiB = 1 << 20
 const INFO: FfmpegInfo = { ffmpeg: '/x', ffprobe: '/x', version: '8.1.1', platform: 'darwin' }
-const SESSION_BYTES = 70 * MiB, SERVER_BYTES = 100 * MiB
-const SIZES: Record<string, number> = { p0: 10 * MiB, p1: 20 * MiB, p2: 30 * MiB, p3: 15 * MiB, p4: 25 * MiB }
+// Fix round 3: sizes from small up to the 32 MiB output cap (a real encode never settles larger than its
+// reservation), against a 64 MiB look-ahead and a 112 MiB server, so dropFarthest and eviction fire with three or
+// more references held.
+const SESSION_BYTES = 64 * MiB, SERVER_BYTES = 112 * MiB
+const SIZES: Record<string, number> = { p0: 8 * MiB, p1: 16 * MiB, p2: 24 * MiB, p3: 30 * MiB, p4: 32 * MiB }
 /** Three slides per document; `#` marks a second use (another mediaId) of the same part. */
 const DECK = [['p0', 'p1'], ['p2', 'p0#2'], ['p3', 'p4', 'p1#2']]
 const DOCS = ['D0', 'D1']
@@ -43,17 +46,20 @@ type Op =
   | { t: 'burst'; s: number; is: number[] }
   /** Two ops in the same turn, no flush between (cross-session interleavings). */
   | { t: 'together'; a: Op; b: Op }
+/** `at`: the microtask offset (0–8) within its step at which the op starts (fix round 3). */
+type TimedOp = Op & { at: number }
 
 function genOps(seed: number, n: number): Op[] {
   const r = rng(seed)
   const pick = <T>(xs: readonly T[]) => xs[Math.floor(r() * xs.length)]!
+  const at = () => Math.floor(r() * 9)
   const one = (): Op => {
     const x = r(), s = Math.floor(r() * SESSIONS)
-    if (x < 0.1) return { t: 'burst', s, is: Array.from({ length: 2 + Math.floor(r() * 2) }, () => Math.floor(r() * 7)) }
-    if (x < 0.2) return { t: 'together', a: plain(), b: plain() }
+    if (x < 0.1) return { t: 'burst', s, is: Array.from({ length: 2 + Math.floor(r() * 2) }, () => Math.floor(r() * 7)), at: at() } as TimedOp
+    if (x < 0.2) return { t: 'together', a: plain(), b: plain(), at: 0 } as TimedOp
     return plain()
   }
-  const plain = (): Op => { const o: Op[] = []; gen1(o); return o[0]! }
+  const plain = (): Op => { const o: Op[] = []; gen1(o); return { ...o[0]!, at: at() } as TimedOp }
   const gen1 = (ops: Op[]) => {
     const x = r(), s = Math.floor(r() * SESSIONS)
     if (x < 0.12) ops.push({ t: 'start', s, u: Math.floor(r() * DECK.length) })
@@ -74,11 +80,15 @@ const flush = () => new Promise<void>((ok) => setImmediate(ok))
 const totals = { encodes: 0, answers: new Map<string, number>() }
 
 /** One schedule. Resolves with the first violated invariant (undefined: all held). */
-async function runSchedule(ops: readonly Op[]): Promise<string | undefined> {
+/** `seed`: the schedule's own seed, for the fakes' microtask delays (so a replay or a shrink is deterministic). */
+async function runSchedule(ops: readonly Op[], seed: number): Promise<string | undefined> {
+  const delayRng = rng(seed ^ 0x5bd1e995)
+  /** 0–6 microtasks, from the schedule's seed: `part()` and `dispose()` resolve after them (fix round 3). */
+  const lag = async () => { for (let n = Math.floor(delayRng() * 7); n > 0; n--) await Promise.resolve() }
   // In-memory temp: a path exists while its handle is undisposed.
   const files = new Set<string>()
   let nextFile = 0
-  const handle = (path: string): MediaFile => { files.add(path); return { path, dispose: async () => { files.delete(path) } } }
+  const handle = (path: string): MediaFile => { files.add(path); return { path, dispose: async () => { await lag(); files.delete(path) } } }
   const temp: MediaTemp = {
     dir: '/mem', create: async () => handle(`/mem/c${nextFile++}`), adopt: (p) => handle(p), reserve: () => handle(`/mem/o${nextFile++}.m4a`),
     live: () => files.size, bytes: () => 0, remove: async () => { files.clear() },
@@ -151,7 +161,16 @@ async function runSchedule(ops: readonly Op[]): Promise<string | undefined> {
     const s: Sess = { sid: `s${i}`, docId, answered: [], pending: [], ended: false }
     s.q = createSessionMediaQueue({
       sid: s.sid, units: DECK.length, info: INFO, temp, admission, cache, transcode: fake,
-      part: async () => ({ path: '/mem/part', dispose: async () => {} }),
+      part: async () => { await lag(); return { path: '/mem/part', dispose: async () => { await lag() } } },
+      observe: (e) => {
+        // An ok answer is confirmed in the step that resolves it: session live, document unrevoked, file cached and
+        // pinned by this session (fix round 3).
+        if (e.type !== 'answer' || !e.result.ok) return
+        const snap = cache.inspect()
+        const ent = snap.entries.find((x) => x.path === (e.result as { path: string }).path)
+        const pins = ent ? snap.sessions[s.sid]?.refs.find((x) => x.id === ent.id)?.pins ?? 0 : 0
+        if (s.ended || revokedAt.has(docId) || !ent || ent.state !== 'done' || !files.has(ent.path!) || pins < 1) violations.push(`${s.sid}: ${e.mediaId} answered ok but ${s.ended ? 'the session had ended' : revokedAt.has(docId) ? 'the document was revoked' : !ent ? 'its file is no longer cached' : 'it is not pinned'}`)
+      },
       items: async (u) => items(s.sid, docId, u), quiesceMs: 50,
     })
     return s
@@ -219,12 +238,14 @@ async function runSchedule(ops: readonly Op[]): Promise<string | undefined> {
         case 'drop': { const d = DOCS[op.d]!; revokedAt.set(d, step); for (const x of sess) if (x.docId === d) x.answered = []; void cache.dropDocument(d); return }
         case 'sweep': t += MEDIA_IDLE_TTL_MS; return cache.sweep()
         case 'complete': { const open = calls.filter((c) => !c.done); if (open.length) open[op.i % open.length]!.settle(op.outcome); return }
-        case 'together': { const x = exec(op.a), y = exec(op.b); return Promise.all([x, y]) }
+        case 'together': return Promise.all([timed(op.a), timed(op.b)])
       }
     }
+    /** The op, started `at` microtasks into its step. */
+    const timed = async (op: Op) => { for (let n = (op as TimedOp).at ?? 0; n > 0; n--) await Promise.resolve(); await exec(op) }
     for (const op of ops) {
       step++
-      await exec(op)
+      await timed(op)
       { const q = inner.snapshot().queue; for (const r of pendingTickets) if (!placedBy.get(r) && q.includes(sidOf.get(r)!)) placedBy.set(r, true) }
       await flush(); await flush()
       watchCalls()
@@ -276,26 +297,26 @@ async function runSchedule(ops: readonly Op[]): Promise<string | undefined> {
 }
 
 /** Removes ops one at a time while the schedule still fails. */
-async function shrink(ops: Op[]): Promise<Op[]> {
+async function shrink(ops: Op[], seed: number): Promise<Op[]> {
   let cur = ops
   for (let i = 0; i < cur.length;) {
     const cand = cur.slice(0, i).concat(cur.slice(i + 1))
-    if (await runSchedule(cand)) cur = cand; else i++
+    if (await runSchedule(cand, seed)) cur = cand; else i++
   }
   return cur
 }
 
-describe('queue + cache + admission under random interleavings (fix round 2)', () => {
+describe('queue + cache + admission under random interleavings (fix rounds 2–3)', () => {
   it('every invariant holds after every step, across seeded schedules', async () => {
     const one = process.env.OV_FUZZ_SEED
     const seeds = one ? [Number(one)] : Array.from({ length: Number(process.env.OV_FUZZ_SCHEDULES ?? 3000) }, (_, i) => i + 1)
     const failures: string[] = []
     for (const seed of seeds) {
       const ops = genOps(seed, 40)
-      const bad = await runSchedule(ops)
+      const bad = await runSchedule(ops, seed)
       if (!bad) continue
-      const min = await shrink(ops)
-      failures.push(`seed ${seed}: ${await runSchedule(min)}\n  trace: ${JSON.stringify(min)}`)
+      const min = await shrink(ops, seed)
+      failures.push(`seed ${seed}: ${await runSchedule(min, seed)}\n  trace: ${JSON.stringify(min)}`)
       if (failures.length >= 5) break
     }
     console.log(`[interleave] ${seeds.length} schedules · ${totals.encodes} encodes · answers ${JSON.stringify(Object.fromEntries(totals.answers))}`)
