@@ -57,6 +57,8 @@ const lockSidecar = (id: string): void => {
 }
 
 afterEach(() => fsOverrides.clear())
+// Each admission runs a full verifyCfCase of one or both key cases: 6-11 s per test on the CI runner (under 1 s locally).
+vi.setConfig({ testTimeout: 120_000 })
 
 describe('ruling 1: a key is admitted only when its own case fully verifies', () => {
   it('the committed keys verify and are both admitted (baseline)', () => {

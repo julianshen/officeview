@@ -12,7 +12,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createCanvas } from 'canvas'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { CF_CASES, CF_STAGE4_CAPABILITIES, CF_STAGE4_CASES, CF_STAGE5_CASES, CF_ICON_KEY_CASES, CF_STAGE5_UNSUPPORTED, type CfOracleCase } from '../scripts/cf-refs/cases'
 import { generateCaseArchive } from '../scripts/cf-refs/generate'
 import { CF_STAGE5_UNCONFIRMABLE } from '../scripts/cf-refs/audit'
@@ -51,6 +51,9 @@ function placementFacts(parts: Map<string, Uint8Array>, ref: string) {
 
 const archive = async (id: string) => readZipPartsSync(await generateCaseArchive(id))!
 const saved = (id: string) => readZipPartsSync(new Uint8Array(readFileSync(resolve(ROOT, CF_CASES.find(c => c.id === id)!.saved))))!
+
+// Each admission runs a full verifyCfCase of one or both key cases: 6-11 s per test on the CI runner (under 1 s locally).
+vi.setConfig({ testTimeout: 120_000 })
 
 describe('the centred glyph key case', () => {
   it('is a Stage 4 key case with the same 75 single-pair rules as the Stage 4 key, appended after every other Stage 4 case', () => {
