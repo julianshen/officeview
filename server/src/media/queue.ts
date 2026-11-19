@@ -105,7 +105,10 @@ export function createSessionMediaQueue(o: SessionMediaQueueOptions): SessionMed
   const note = (id: string, origin: EncodeOrigin) => { if (!origins.has(id)) origins.set(id, origin) }
   let docId: string | undefined
   const revoked = () => dead || (docId !== undefined && cache.revoked(docId))
-  const stop = () => { dead = true; failAll(); poke() }
+  /** A revoked queue runs nothing more: its signal aborts at once (Task 13, carried from Task 8), so a pending admission
+   * ticket (a queue place, or parked) is given back now rather than at `end()`. */
+  const abandon = () => { if (!ctl.signal.aborted) ctl.abort(new DOMException('media: document revoked', 'AbortError')) }
+  const stop = () => { dead = true; failAll(); abandon(); poke() }
   /** One pending `cache.revocation(docId)` per queue (it fires once: the docId stays revoked). */
   let revP: Promise<void> | undefined
   /** Only this queue's own document wakes it (fix round 2). Before the items load there is no docId: never fires. */
@@ -256,7 +259,7 @@ export function createSessionMediaQueue(o: SessionMediaQueueOptions): SessionMed
       if (!r.ok && r.revoked) { stop(); break }
     }
     dropLease()
-    if (revoked()) { dead = true; failAll() }
+    if (revoked()) { dead = true; failAll(); abandon() }
   }
   const kick = () => { loop ??= pump(); poke() }
 
