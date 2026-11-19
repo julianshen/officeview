@@ -35,7 +35,8 @@ import { targetKey } from '../../../src/slideshow/target'
 import type { Condition, DiagnosticSink, MetadataHandle, CanvasFactory, LayerBitmap, Lease, ShowIndex, ShowSlide, SlideMetadataStore, SlideShowWorkspace, TargetRef, TimeNode, TimingTree, TransitionSpec } from '../../../src/slideshow/types'
 import { encodeShowMessage, PLAN_MEDIA_REFUSALS, PlanRejected, SHOW_DIAGNOSTIC_CODES, SHOW_PLAN_ITERATE_ITEMS, SHOW_PLAN_LIMITS, SHOW_PLAN_MEDIA_LIMITS, type PlanContainerRecord, type PlanLayerRecord, type PlanMediaRecord, type PlanStepRecord, type PlanTransition, type Rect, type ShowPlanRecord } from '../../../src/stream/show-plan'
 import { canonicalMediaCommand, parseMediaCommand } from '../../../src/slideshow/media/commands'
-import { bindMedia, placeholderOf } from '../media/bind'
+import { bindMedia, mediaIdentity, type MediaRef } from '../media/bind'
+import { slideAudioUses, type SlideMediaContext } from '../media/uses'
 import { asAudioUse, type DocMediaTable } from '../media/probe'
 import { LruBytes, showPlanL1Key, showPlanL2Key } from '../cache'
 import { basis } from '../mark/basis'
@@ -80,7 +81,8 @@ export interface ShowAsset { tag: 2 | 3; assetId: number; w: number; h: number; 
  * `assets`: the entry frame first, then the layers in z order (D1). `decodedBytes`: Σ `w·h·4` of the assets plus
  * the plan record's bytes.
  */
-export interface BuiltShowPlan { plan: ShowPlanRecord; assets: ShowAsset[]; decodedBytes: number }
+/** `mediaRefs` (piece 5, server-only): each media placeholder's ref, which `bindMedia` hashes per session. */
+export interface BuiltShowPlan { plan: ShowPlanRecord; assets: ShowAsset[]; decodedBytes: number; mediaRefs: Array<{ placeholder: string; ref: MediaRef }> }
 /**
  * Task 6 decision. `show-limits` (over 64 steps, an iterate over 128 keys, a record the codec would refuse),
  * `show-budget` (over 128 MiB, or one asset over 64 MiB), `show-plan-timeout` (over `SHOW_PLAN_DEADLINE_MS`).
@@ -138,6 +140,7 @@ interface L1Entry {
   timeline?: SlideTimeline
   record?: Omit<ShowPlanRecord, 'layers' | 'steps' | 'entry' | 'diagnostics'>
   extraDiagnostics?: Array<{ code: string }>
+  mediaRefs?: Array<{ placeholder: string; ref: MediaRef }>
   rasters?: Map<PlanLayer, LayerBitmap>
   classes: Map<boolean, Classification>
   /**
@@ -176,14 +179,6 @@ export interface ShowDoc {
   /** Piece 5: each loaded slide's media context (hidden shapes, external links), filled by the host's `loadShow`. */
   mediaCtx: Map<number, SlideMediaContext>
 }
-
-/**
- * Piece 5: what the synchronous build needs to know of a slide's package beyond its metadata. `hiddenSpids`: its
- * hidden shapes (under `full`; projected away otherwise); `linkedRIds`: its external media relationships;
- * `linkedSpids`: the shapes they play on.
- */
-export interface SlideMediaContext { hiddenSpids: ReadonlySet<string>; linkedRIds: ReadonlySet<string>; linkedSpids: ReadonlySet<string> }
-export const NO_MEDIA_CONTEXT: SlideMediaContext = Object.freeze({ hiddenSpids: new Set<string>(), linkedRIds: new Set<string>(), linkedSpids: new Set<string>() })
 
 /** The `OpenDoc` view the build needs: its show inputs. */
 export interface ShowHost { show?: ShowDoc }
@@ -244,66 +239,6 @@ export function inertCommands(tree: TimingTree, o: { keepMedia?: (node: Extract<
   return { tree: root === tree.root ? tree : { ...tree, root }, stripped }
 }
 
-/** One audio record a slide ships, before binding: its placeholder, its part (none: refused unread) and spid. */
-export interface PlannedMedia { placeholder: string; spid?: string; partPath?: string; refused?: PlanMediaRecord['refused'] }
-/**
- * Piece 5 (spec §4.1, D2, D3, D22, X13): the audio records slide `meta` ships and how its sounds are renamed.
- * - A shape audio node (not on a hidden shape) on a part: `@a<k>.<spid>`; on an external link: refused
- *   `media-linked`; with neither, nothing to play (no record, as `mediaRefs`).
- * - A sound (`target.snd`, behaviour or condition target, or the transition's start): its part's `@a<k>`, one record
- *   per part however often it is used; a `builtIn:` sound is refused `media-unreadable` (no part), an external one
- *   `media-linked`, and one naming no relationship `media-unreadable`, each under a synthetic `k` at or past
- *   `partCount` (distinct per sound within the slide). No rId or `builtIn:` name survives.
- * - A video node ships nothing (D22): its spid is listed in `videoSpids`, which keeps its commands blanked.
- * `kOf(partPath)` is the part's `k` (the build reads the probe table; it throws for an unprobed part).
- */
-export function planSlideMedia(meta: ShowSlide, ctx: SlideMediaContext, kOf: (partPath: string) => number, partCount: number): { records: PlannedMedia[]; snd: Map<string, string>; shapeAudio: Set<string>; videoSpids: Set<string>; transitionStart?: string } {
-  const records = new Map<string, PlannedMedia>()
-  const snd = new Map<string, string>()
-  const shapeAudio = new Set<string>(), videoSpids = new Set<string>()
-  const synthetic = new Map<string, number>()
-  const synth = (key: string) => { let k = synthetic.get(key); if (k === undefined) synthetic.set(key, k = partCount + synthetic.size); return k }
-  const add = (r: PlannedMedia) => { if (!records.has(r.placeholder)) records.set(r.placeholder, r); return r.placeholder }
-  const sound = (rId: string): string => {
-    const have = snd.get(rId)
-    if (have) return have
-    let ph: string
-    if (rId.startsWith('builtIn:')) ph = add({ placeholder: placeholderOf({ k: synth(`builtin|${rId}`) }), refused: 'media-unreadable' })
-    else {
-      const rec = meta.media.find(m => m.rId === rId)
-      if (rec) ph = add({ placeholder: placeholderOf({ k: kOf(rec.partPath) }), partPath: rec.partPath })
-      else ph = add({ placeholder: placeholderOf({ k: synth(`snd|${rId}`) }), refused: ctx.linkedRIds.has(rId) ? 'media-linked' : 'media-unreadable' })
-    }
-    snd.set(rId, ph)
-    return ph
-  }
-  const onTarget = (t: TargetRef | undefined) => { if (t && 'snd' in t) sound(t.snd) }
-  const conds = (cs: readonly Condition[] | undefined) => { for (const c of cs ?? []) onTarget(c.target) }
-  const timing = meta.timing
-  if (timing && !('refused' in timing)) {
-    const walk = (n: TimeNode, depth: number) => {
-      if (depth > 256) return
-      conds(n.ctn.start); conds(n.ctn.end); if (n.ctn.endSync) conds([n.ctn.endSync])
-      if ('children' in n) { for (const c of n.children) walk(c, depth + 1); return }
-      if (n.kind === 'video' && 'spid' in n.target) videoSpids.add(n.target.spid)
-      if (n.kind !== 'audio') { onTarget(n.target); return }
-      const t = n.target
-      if ('snd' in t) { sound(t.snd); return }
-      if (!('spid' in t) || ctx.hiddenSpids.has(t.spid) || !/^\d{1,10}$/.test(t.spid)) return
-      const spid = t.spid
-      const rec = meta.media.find(m => m.spid === spid)
-      if (rec) add({ placeholder: placeholderOf({ k: kOf(rec.partPath), spid }), spid, partPath: rec.partPath })
-      else if (ctx.linkedSpids.has(spid)) add({ placeholder: placeholderOf({ k: synth(`shape|${spid}`), spid }), spid, refused: 'media-linked' })
-      else return
-      shapeAudio.add(spid)
-    }
-    walk(timing.root, 0)
-  }
-  const start = meta.transition?.sound?.start
-  const transitionStart = start ? sound(start.rId) : undefined
-  return { records: [...records.values()], snd, shapeAudio, videoSpids, ...(transitionStart ? { transitionStart } : {}) }
-}
-
 /** `tree` with every `snd` target (behaviour and condition targets) renamed by `snd`. */
 function renameSounds(tree: TimingTree, snd: ReadonlyMap<string, string>): TimingTree {
   if (snd.size === 0) return tree
@@ -327,9 +262,11 @@ interface MediaInputs { on: boolean; ctx: SlideMediaContext; kOf: (partPath: str
  * with `media.on` media commands are kept (`inertCommands` with `keepMedia`) and the transition sound stays, naming
  * its record; with it off both are as in piece 4 (D18), and every record is refused `media-unavailable`.
  */
-function streamedMeta(meta: ShowSlide, media?: MediaInputs): { meta: ShowSlide; cmdDropped: boolean; records?: PlanMediaRecord[] } {
+function streamedMeta(meta: ShowSlide, unit: number, media?: MediaInputs): { meta: ShowSlide; cmdDropped: boolean; records?: PlanMediaRecord[]; refs?: Array<{ placeholder: string; ref: MediaRef }> } {
   let timing = meta.timing, cmdDropped = false
-  const mp = media ? planSlideMedia(meta, media.ctx, media.kOf, media.partCount) : undefined
+  const uses = media ? slideAudioUses(meta, unit, media.ctx, media.kOf, media.partCount) : undefined
+  // A hidden shape's use ships nothing.
+  const mp = uses && { ...uses, records: uses.records.filter(r => !r.hiddenShape) }
   if (timing && !('refused' in timing)) {
     const keep = mp && media!.on ? (n: Extract<TimeNode, { kind: 'cmd' }>) => {
       if (n.cmdType === 'evt') return true
@@ -358,7 +295,7 @@ function streamedMeta(meta: ShowSlide, media?: MediaInputs): { meta: ShowSlide; 
     if ('refused' in used) return { ...base, durationMs: 0, refused: (PLAN_MEDIA_REFUSALS as readonly string[]).includes(used.refused) ? used.refused as PlanMediaRecord['refused'] : 'media-unreadable' }
     return { ...base, durationMs: used.durationMs }
   }) : undefined
-  return { meta: { ...meta, timing, ...(transition ? { transition } : {}), notes: [], links: meta.links, media: [] }, cmdDropped, ...(records ? { records } : {}) }
+  return { meta: { ...meta, timing, ...(transition ? { transition } : {}), notes: [], links: meta.links, media: [] }, cmdDropped, ...(records ? { records, refs: mp!.records.map(r => ({ placeholder: r.placeholder, ref: r.ref })) } : {}) }
 }
 
 /** The shipped transition: its start sound's `rId` slot (a placeholder) becomes `mediaId` (D3, X12). */
@@ -460,10 +397,10 @@ function stepTriggers(tree: TimingTree | undefined, steps: number): PlanStepReco
  * and its timeline under `motion`, with no raster. The bundle build (`prepareL1`) and the Morph pair build
  * (`morph.ts`) share it, so both classify the same show.
  */
-export function prepareShowSlide(show: ShowDoc, unit: number, motion: 'full' | 'reduced', media?: { on: boolean }): { ps: PreparedSlide; timeline: SlideTimeline; cmdDropped: boolean; sink: DiagnosticSink; records?: PlanMediaRecord[] } {
+export function prepareShowSlide(show: ShowDoc, unit: number, motion: 'full' | 'reduced', media?: { on: boolean }): { ps: PreparedSlide; timeline: SlideTimeline; cmdDropped: boolean; sink: DiagnosticSink; records?: PlanMediaRecord[]; refs?: Array<{ placeholder: string; ref: MediaRef }> } {
   const loaded = show.metas.get(unit)
   if (!loaded) throw new Error(`show: slide ${unit} metadata not loaded`)
-  const { meta, cmdDropped, records } = streamedMeta(loaded.slide, media ? mediaInputs(show, unit, media.on) : undefined)
+  const { meta, cmdDropped, records, refs } = streamedMeta(loaded.slide, unit, media ? mediaInputs(show, unit, media.on) : undefined)
   const slide = show.doc.slides[unit]!
   const sink = createDiagnosticSink()
   const ps = prepareSlide({ index: unit, slide, meta, watermark: false, charge: loaded.charge, sink })
@@ -471,12 +408,12 @@ export function prepareShowSlide(show: ShowDoc, unit: number, motion: 'full' | '
   const tt = ps.textTiming
   const settings = show.index.settings
   const timeline = createSlideTimeline(tt?.tree ?? meta.timing, { showAnimation: settings.showAnimation, reducedMotion: motion === 'reduced', ...(tt ? { orderOf: tt.orderOf } : {}) })
-  return { ps, timeline, cmdDropped, sink, ...(records ? { records } : {}) }
+  return { ps, timeline, cmdDropped, sink, ...(records ? { records, refs: refs ?? [] } : {}) }
 }
 
 function prepareL1(show: ShowDoc, job: ShowPlanJob): L1Entry {
   const unit = job.unitIndex
-  const { ps, timeline, cmdDropped, sink, records: media = [] } = prepareShowSlide(show, unit, job.motion, { on: job.media === true })
+  const { ps, timeline, cmdDropped, sink, records: media = [], refs: mediaRefs = [] } = prepareShowSlide(show, unit, job.motion, { on: job.media === true })
   const meta = ps.meta, slide = ps.slide
   const measure = measureCtx()
   const tt = ps.textTiming
@@ -570,7 +507,7 @@ function prepareL1(show: ShowDoc, job: ShowPlanJob): L1Entry {
     iterate: { keys, groups },
   }
   const extraDiagnostics = [...(cmdDropped ? [{ code: 'cmd-dropped' }] : []), ...(withheld ? [{ code: 'link-withheld' }] : [])]
-  return { ps, timeline, record, extraDiagnostics, rasters, classes, refusals: new Map() }
+  return { ps, timeline, record, extraDiagnostics, mediaRefs, rasters, classes, refusals: new Map() }
 }
 
 const L1_OVERHEAD = 64 * 1024
@@ -892,7 +829,7 @@ function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOp
     // (22), so `decodedBytes` is exact for every session.
     const planBytes = (plan: ShowPlanRecord): number | undefined => {
       const seen = new Map<string, string>()
-      const sized = bindMedia(plan, (ref) => { const key = `${ref.k}|${ref.spid ?? ''}`; let id = seen.get(key); if (!id) seen.set(key, id = `m${String(seen.size).padStart(21, '0')}`); return id })
+      const sized = bindMedia(plan, (ref) => { const key = mediaIdentity(ref); let id = seen.get(key); if (!id) seen.set(key, id = `m${String(seen.size).padStart(21, '0')}`); return id }, e.mediaRefs ?? [])
       try { return encodeShowMessage({ tag: 1, plan: sized }).length - 1 } catch (err) { if (err instanceof PlanRejected) return undefined; throw err }
     }
     const limits = (): ShowRefusal => ({ refused: 'show-limits', diagnostics: [{ code: 'show-limits' }] })
@@ -936,7 +873,7 @@ function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOp
       }
     }
     const entry: ShowAsset = { tag: 3, assetId: ENTRY_ASSET_ID, w: PW, h: PH, png: encodePng(PW, PH, entryRgba), rest: { x: 0, y: 0, scale: 1 } }
-    return { plan, assets: [entry, ...layerAssets], decodedBytes: size.bytes }
+    return { plan, assets: [entry, ...layerAssets], decodedBytes: size.bytes, mediaRefs: e.mediaRefs ?? [] }
   } finally {
     composer.dispose()
   }

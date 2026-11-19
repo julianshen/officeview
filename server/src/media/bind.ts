@@ -4,18 +4,21 @@
  * The show-plan caches (L1/L2) are shared across sessions, so a cached plan names its media by document-level
  * placeholders: `@a<k>` for a spid-less audio use (an effect sound, the transition sound) and `@a<k>.<spid>` for a
  * shape's own audio, `k` being the part's index in the document's sorted media part paths (D21; a part-less sound,
- * a `builtIn:` one or an external link, gets a synthetic `k` at or past the part count, refused). At send time
- * `bindMedia` replaces each one with the session's `mediaId = base64url(HMAC-SHA256(sessionMediaKey, identity))[0, 22)`,
+ * a `builtIn:` one or an external link, gets a synthetic `k` at or past the part count, refused; see `uses.ts`). At send
+ * time `bindMedia` replaces each one (looked up in the build's `mediaRefs`, never parsed back) with the session's `mediaId = base64url(HMAC-SHA256(sessionMediaKey, identity))[0, 22)`,
  * in the records, every `target.snd` (condition targets included) and the transition's `sound.start.mediaId`.
  *
- * Identity: `audio|k` (spid-less: a reused effect sound is one encode and one record per slide, X13) or
- * `audio|k|unit|spid` (a shape audio: the player keys shape media by spid). `unit` is the plan's own slide.
+ * Identity: `audio|k` (spid-less: a reused effect sound is one encode and one record per slide, X13),
+ * `audio|k|unit|spid` (a shape audio: the player keys shape media by spid) or, for a part-less use,
+ * `audio|-|unit|<source>` (its slide and source key: two never collide). `unit` is the plan's own slide.
  */
 import { createHmac } from 'node:crypto'
 import { MEDIA_PLACEHOLDER, type ShowPlanRecord } from '../../../src/stream/show-plan'
 import type { TimeNode } from '../../../src/slideshow/types'
 
-export type MediaRef = { kind: 'audio'; k: number; unit?: number; spid?: string /* a shape audio's own record */ }
+/** `spid`: a shape audio's own record. `source` (with `unit`): a part-less use's source key (`snd:<rId>`, a `builtIn:`
+ * name, `shape:<spid>`); its `k` is synthetic (≥ the part count) and never names a part. */
+export type MediaRef = { kind: 'audio'; k: number; unit?: number; spid?: string; source?: string }
 
 /** The placeholder a cached plan holds for `ref` (the unit is the plan's own). Throws past the D2 grammar. */
 export function placeholderOf(ref: Pick<MediaRef, 'k' | 'spid'>): string {
@@ -24,15 +27,15 @@ export function placeholderOf(ref: Pick<MediaRef, 'k' | 'spid'>): string {
   return s
 }
 
-/** The ref a placeholder of slide `unit` names; undefined for anything else. */
-export function parsePlaceholder(s: string, unit: number): MediaRef | undefined {
-  if (!MEDIA_PLACEHOLDER.test(s)) return undefined
-  const [k, spid] = s.slice(2).split('.')
-  return spid === undefined ? { kind: 'audio', k: Number(k) } : { kind: 'audio', k: Number(k), unit, spid }
-}
-
-/** D2's identity string, over `k` (D21), so `ws.ts` binds without knowing part paths. */
+/**
+ * D2's identity string, over `k` (D21), so `ws.ts` binds without knowing part paths. A part-less use (fix round 1) is
+ * scoped to its slide and source key, so two never collide; a real part stays document-global (one encode).
+ */
 export function mediaIdentity(ref: MediaRef): string {
+  if (ref.source !== undefined) {
+    if (ref.unit === undefined) throw new RangeError('media: a part-less identity needs its unit')
+    return `audio|-|${ref.unit}|${ref.source}`
+  }
   if (ref.spid === undefined) return `audio|${ref.k}`
   if (ref.unit === undefined) throw new RangeError('media: a shape audio identity needs its unit')
   return `audio|${ref.k}|${ref.unit}|${ref.spid}`
@@ -44,17 +47,18 @@ export function sessionMediaId(key: Uint8Array, identity: string): string {
 }
 
 /**
- * `plan` with every placeholder replaced by `ids(ref)` (pure: `plan` is not changed). Throws on a media id or
- * `snd` target that is not a placeholder: an unbound plan never reaches a session.
+ * `plan` with every placeholder replaced by `ids(ref)` (pure: `plan` is not changed). `refs`: the build's ref for each
+ * placeholder (`BuiltShowPlan.mediaRefs`, server-only; a part-less use's source key is not in its placeholder).
+ * Throws on a media id or `snd` target that is not one of them: an unbound plan never reaches a session.
  */
-export function bindMedia(plan: ShowPlanRecord, ids: (ref: MediaRef) => string): ShowPlanRecord {
-  const unit = plan.slide.index
+export function bindMedia(plan: ShowPlanRecord, ids: (ref: MediaRef) => string, refs: ReadonlyArray<{ placeholder: string; ref: MediaRef }>): ShowPlanRecord {
+  const byPlaceholder = new Map(refs.map((r) => [r.placeholder, r.ref]))
   const memo = new Map<string, string>()
   const bind = (s: string): string => {
     let id = memo.get(s)
     if (id === undefined) {
-      const ref = parsePlaceholder(s, unit)
-      if (!ref) throw new Error('media: not a placeholder')
+      const ref = byPlaceholder.get(s)
+      if (!ref || !MEDIA_PLACEHOLDER.test(s)) throw new Error('media: not a placeholder of this plan')
       memo.set(s, id = ids(ref))
     }
     return id

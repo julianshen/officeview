@@ -34,7 +34,9 @@ import { createUnderlayReader } from '../../src/slideshow/read/underlay'
 import { readSlideTiming } from '../../src/slideshow/read/timing'
 import type { Lease, SlideShowWorkspace } from '../../src/slideshow/types'
 import { gateBackend } from './show/canvas'
-import { buildShowPlan, createShowDoc, NO_MEDIA_CONTEXT, planSlideMedia, type BuiltShowPlan, type ShowBuildOptions, type ShowDoc, type ShowPlanJob, type ShowRefusal, type SlideMediaContext } from './show/build'
+import { buildShowPlan, createShowDoc, type BuiltShowPlan, type ShowBuildOptions, type ShowDoc, type ShowPlanJob, type ShowRefusal } from './show/build'
+import { hasAudioUse, NO_MEDIA_CONTEXT, slideAudioUses, type SlideMediaContext } from './media/uses'
+import { mediaIdentity } from './media/bind'
 import { renderTrack } from './show/tracks'
 import { buildMorphPlan, MorphInvalid, morphReference, type BuiltMorph, type MorphJob } from './show/morph'
 import { asAudioUse, createDocMediaTable, MediaPartRefused, writePart, type DocMediaEntry, type DocMediaTable, type MediaTableSeams } from './media/probe'
@@ -45,7 +47,6 @@ import { readTree } from './policy/tree'
 import { readRelationships } from '../../src/slideshow/read/deck'
 import { mediaShapes } from '../../src/slideshow/read/media'
 import { parseXml } from '../../src/core/xml'
-import type { ShowSlide, TimeNode } from '../../src/slideshow/types'
 import { answerText, buildServedUnit, OBSERVER_BUDGET, prepareWorkspace, recordSpans, ServedCache, TEXT_RECORD_BUDGET, TextBudgetExceeded, TextRefusal, type ServedUnit, type TextJob, type TextReply } from './text/served'
 
 export const MAX_UNIT_PX = 8192
@@ -101,7 +102,10 @@ export function layoutFingerprint(contentPolicyId: string): string {
 export interface OpenDoc { key: string; docRef: string; show?: ShowDoc; /** Piece 5 (D21): the probe table, over the projected package. */ media: DocMediaTable; anim: number[]; morph: number[]; /** Piece 5 (D19): the shown units whose plan ships an audio record or a transition sound. */ mediaUnits: number[]; paintables: PaintableArray; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
 /** Piece 5 (D22): a unit's AUDIO uses (an audio node, a `p:sndTgt` sound, a transition sound) and their probed entries.
  * Video nodes are never listed. `spid`: the shape an audio node plays on (none for a sound). */
-export interface MediaUnitRefs { unit: number; hidden: boolean; refs: Array<{ k: number; partPath: string; spid?: string; hiddenShape: boolean; entry: DocMediaEntry }> }
+/** Fix round 1: derived from `slideAudioUses`, the same definition as the plan's records. `identity`: what the plan's
+ * `mediaId` hashes (`mediaIdentity`); `placeholder`: its placeholder in the cached plan. A part-less use (refused
+ * `media-linked` or `media-unreadable`) has a synthetic `k` (≥ the part count) and `partPath: ''`. */
+export interface MediaUnitRefs { unit: number; hidden: boolean; refs: Array<{ k: number; partPath: string; spid?: string; hiddenShape: boolean; entry: DocMediaEntry; identity: string; placeholder: string }> }
 /** A notes job (Stage 3c): `draw: false` plans only (size, truncation, characters drawn); `true` draws with the visible mark. */
 export interface NotesJob { unitIndex: number; scale: number; mark: MarkSpec; draw: boolean }
 export interface NotesPlan { kind: 'notes-plan'; w: number; h: number; truncated: boolean; chars: number }
@@ -212,10 +216,10 @@ export class DocumentHost {
               if (h.slide.transition?.element === 'morph') morph.push(i)
               // D19: structural (no probe; any k will do): does the plan ship a record or a transition sound?
               // A slide whose package cannot be read for it is not flagged (media only; its animation is untouched).
-              if (audioUses(h.slide).length) {
+              if (hasAudioUse(h.slide)) {
                 try {
-                  const planned = planSlideMedia(h.slide, await slideMediaContext(show, i, projected.contentPolicyId), () => 0, 0)
-                  if (planned.records.length || planned.transitionStart) mediaUnits.push(i)
+                  const planned = slideAudioUses(h.slide, i, await slideMediaContext(show, i, projected.contentPolicyId), () => 0, 0)
+                  if (planned.records.some((r) => !r.hiddenShape)) mediaUnits.push(i)
                 } catch { /* not flagged */ }
               }
             } finally { h.release() }
@@ -306,36 +310,14 @@ export class DocumentHost {
     await this.loadShow(doc, unit)
     const show = doc.show
     const slide = show.metas.get(unit)!.slide
-    const part = show.handle.slideParts[unit]!
-    const uses = audioUses(slide)
-    if (uses.length === 0) return { unit, hidden, refs: [] }
-    // Lazily: the slide's relationships (an external link is dropped from `slide.media`) and its shape tree.
-    let rels: Awaited<ReturnType<typeof readRelationships>> | undefined
-    let xml: string | undefined
-    const slideXml = async () => (xml ??= (await show.handle.pkg.entry(part)?.async('string')) ?? '')
-    const relsOf = async () => (rels ??= await readRelationships(show.handle, part).catch(() => []))
-    const hiddenIds = doc.contentPolicyId.startsWith('full') ? hiddenShapeIds(readTree(await slideXml())) : new Set<string>()
-    const refs: MediaUnitRefs['refs'] = []
-    const seen = new Set<string>()
-    for (const u of uses) {
-      const rec = 'spid' in u ? slide.media.find((m) => m.spid === u.spid) : slide.media.find((m) => m.rId === u.rId)
-      let entry: DocMediaEntry
-      if (rec) entry = asAudioUse(await doc.media.entry(rec.partPath, { external: false }))
-      else {
-        // No record: an external link (`media-linked`), else nothing to play (not listed).
-        let ids: string[] = []
-        if ('spid' in u) { for (const [id, spids] of mediaShapes(parseXml(await slideXml()))) if (spids.includes(u.spid)) ids.push(id) }
-        else ids = [u.rId]
-        const ext = (await relsOf()).find((r) => ids.includes(r.id) && r.external && MEDIA_REL_TYPE.test(r.type))
-        if (!ext) continue
-        entry = await doc.media.entry(ext.target, { external: true })
-      }
-      const spid = 'spid' in u ? u.spid : undefined
-      const key = `${entry.partPath}|${spid ?? ''}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      refs.push({ k: entry.k, partPath: entry.partPath, ...(spid !== undefined ? { spid } : {}), hiddenShape: spid !== undefined && hiddenIds.has(spid), entry })
-    }
+    const table = doc.media
+    const kOf = (partPath: string) => { const e = table.peek(partPath); if (!e) throw new Error('media: part not probed'); return e.k }
+    const uses = slideAudioUses(slide, unit, show.mediaCtx.get(unit)!, kOf, table.partCount)
+    const refs: MediaUnitRefs['refs'] = uses.records.map((r) => ({
+      k: r.ref.k, partPath: r.partPath ?? '', ...(r.spid !== undefined ? { spid: r.spid } : {}), hiddenShape: r.hiddenShape,
+      entry: r.partPath !== undefined ? asAudioUse(table.peek(r.partPath)!) : { k: r.ref.k, partPath: '', refused: r.refused ?? 'media-unreadable' },
+      identity: mediaIdentity(r.ref), placeholder: r.placeholder,
+    }))
     return { unit, hidden, refs }
   }
 
@@ -446,7 +428,7 @@ export class DocumentHost {
     }
     await doc.media.load(unit)
     // Piece 5: the slide's hidden shapes and external media links, which the synchronous build cannot read.
-    if (!show.mediaCtx.has(unit)) show.mediaCtx.set(unit, audioUses(show.metas.get(unit)!.slide).length ? await slideMediaContext(show, unit, doc.contentPolicyId) : NO_MEDIA_CONTEXT)
+    if (!show.mediaCtx.has(unit)) show.mediaCtx.set(unit, hasAudioUse(show.metas.get(unit)!.slide) ? await slideMediaContext(show, unit, doc.contentPolicyId) : NO_MEDIA_CONTEXT)
   }
 
   /** Stage 3c notes: unit i's notes slide read from the original package
@@ -569,8 +551,6 @@ export class DocumentHost {
 }
 
 const MEDIA_REL_TYPE = /\/(audio|video|media)$/
-const MAX_TIMING_DEPTH = 64
-
 /**
  * Piece 5: what the build needs of slide `unit`'s package: its hidden shapes (under `full`; the projection drops them
  * otherwise, as `mediaRefs` reads them), its external media relationships and the shapes they play on.
@@ -585,25 +565,4 @@ async function slideMediaContext(show: ShowDoc, unit: number, contentPolicyId: s
   if (linkedRIds.size) for (const [id, spids] of mediaShapes(parseXml(await slideXml()))) if (linkedRIds.has(id)) for (const sp of spids) linkedSpids.add(sp)
   const hiddenSpids = contentPolicyId.startsWith('full') ? new Set<string>(hiddenShapeIds(readTree(await slideXml()))) : new Set<string>()
   return { hiddenSpids, linkedRIds, linkedSpids }
-}
-
-/** D22: a slide's audio uses, in timing order then the transition sound: audio nodes (on a shape, or a `p:sndTgt`
- * sound by relationship id) and the transition's start sound. Video nodes are not uses. */
-function audioUses(slide: ShowSlide): Array<{ spid: string } | { rId: string }> {
-  const out: Array<{ spid: string } | { rId: string }> = []
-  const timing = slide.timing
-  if (timing && !('refused' in timing)) {
-    const walk = (n: TimeNode, depth: number) => {
-      if (depth > MAX_TIMING_DEPTH) return
-      if ('children' in n) { for (const c of n.children) walk(c, depth + 1); return }
-      if (n.kind !== 'audio') return
-      const t = n.target
-      if ('spid' in t) out.push({ spid: t.spid })
-      else if ('snd' in t && t.snd) out.push({ rId: t.snd })
-    }
-    walk(timing.root, 0)
-  }
-  const start = slide.transition?.sound?.start
-  if (start) out.push({ rId: start.rId })
-  return out
 }

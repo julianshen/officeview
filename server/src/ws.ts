@@ -801,7 +801,7 @@ export function createStreamServer(o: StreamServerOptions) {
         if (!alive()) return
         if ('refused' in built) return deny(reqId, built.refused)
         // D2: the cached plan's placeholders become this session's media ids.
-        head = { tag: 1, plan: bindMedia(built.plan, (ref) => sessionMediaId(sd.mediaKey, mediaIdentity(ref))) }
+        head = { tag: 1, plan: bindMedia(built.plan, (ref) => sessionMediaId(sd.mediaKey, mediaIdentity(ref)), built.mediaRefs) }
         assets = built.assets
         const entry = built.assets.find((x) => x.tag === 3)
         if (!entry) return deny(reqId, 'policy-refused')

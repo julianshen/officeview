@@ -31,7 +31,9 @@ const poolOn = () => (mediaPool ??= new Pool({ workers: 1, media: { info: info!,
 afterAll(async () => { mediaPool?.dispose(); disposePool(); await temp.remove(); rmSync(root, { recursive: true, force: true }) })
 
 const job = (over: Partial<ShowPlanJob> = {}): ShowPlanJob => ({ unitIndex: 0, scale: 1, motion: 'full', mark: { kind: 'fixed' }, strictMarks: false, media: true, ...over })
-const built = (r: BuiltShowPlan | ShowRefusal): BuiltShowPlan => { if ('refused' in r) throw new Error(`refused: ${r.refused}`); return r }
+/** Each built plan's server-only media refs, which `bindMedia` needs (`BuiltShowPlan.mediaRefs`). */
+const refsOf = new WeakMap<ShowPlanRecord, BuiltShowPlan['mediaRefs']>()
+const built = (r: BuiltShowPlan | ShowRefusal): BuiltShowPlan => { if ('refused' in r) throw new Error(`refused: ${r.refused}`); refsOf.set(r.plan, r.mediaRefs); return r }
 function host() { const h = new DocumentHost(); h.configureMedia({ info: info!, dir: temp.dir }); return h }
 async function plan(bytes: Uint8Array, o: Partial<ShowPlanJob> = {}, policy: 'visible-only' | 'full' = 'visible-only') {
   const h = host()
@@ -39,7 +41,7 @@ async function plan(bytes: Uint8Array, o: Partial<ShowPlanJob> = {}, policy: 'vi
   return { h, docKey, r: await h.showPlan(docKey, job(o)) }
 }
 const key = () => new Uint8Array(randomBytes(32))
-const bind = (p: ShowPlanRecord, k = key()) => bindMedia(p, (ref) => sessionMediaId(k, mediaIdentity(ref)))
+const bind = (p: ShowPlanRecord, k = key(), refs = refsOf.get(p)!) => bindMedia(p, (ref) => sessionMediaId(k, mediaIdentity(ref)), refs)
 /** The bound plan as a client decodes it. */
 const viaClient = (p: ShowPlanRecord) => (decodeShowMessage(encodeShowMessage({ tag: 1, plan: p }), { unit: p.slide.index, maxDecoded: SHOW_PLAN_LIMITS.showDecoded }) as { plan: ShowPlanRecord }).plan
 function leaves(p: ShowPlanRecord): BehaviourNode[] {
@@ -170,7 +172,7 @@ describe.skipIf(!info)('show plans carry audio media (Task 4)', () => {
           continue
         }
         shipped.push(`${name}#${u}`)
-        const json = JSON.stringify(viaClient(bind(r.plan)))
+        const json = JSON.stringify(viaClient(bind(r.plan, key(), r.mediaRefs)))
         clean(json)
         expect(json).not.toContain('@a')
       }
@@ -200,6 +202,53 @@ describe.skipIf(!info)('show plans carry audio media (Task 4)', () => {
     const json = JSON.stringify(viaClient(bind(p)))
     expect(json).not.toContain('example.com')
     expect(json).not.toContain('rIdSnd1')
+  })
+
+  // Fix round 1 (review Important): one definition of a unit's audio uses, and part-less identities scoped to their slide.
+  it('A: part-less sounds on two slides bind different mediaIds in one session', async () => {
+    const builtIn = (id: number, name: string) => audioNode(id, `<p:sndTgt name="${name}"/>`)
+    const bytes = await mediaDeck({ slides: [{ boxes: [box], timing: builtIn(3, 'chime.wav') }, { boxes: [box], timing: builtIn(3, 'wind.wav') }] })
+    const h = host()
+    const { docKey } = await h.open('A', bytes, 'visible-only')
+    const k = key()
+    const ids = [] as string[]
+    for (const u of [0, 1]) {
+      const b = built(await h.showPlan(docKey, job({ unitIndex: u })))
+      expect(b.plan.media).toHaveLength(1)
+      ids.push(viaClient(bindMedia(b.plan, (ref) => sessionMediaId(k, mediaIdentity(ref)), b.mediaRefs)).media![0]!.mediaId)
+    }
+    expect(ids[0]).not.toBe(ids[1])
+  })
+
+  it('B: mediaRefs and the bound plan agree on k, identity and refusal for an external link', async () => {
+    const timing = audioNode(3, tgt(3)) + audioNode(4, '<p:sndTgt r:embed="rIdSnd1" name="a.wav"/>') + audioNode(5, '<p:sndTgt name="chime.wav"/>')
+    const zip = await JSZip.loadAsync(await mediaDeck({ slides: [{ boxes: [box], media: [{ spid: 3, file: 'a.m4a' }], sounds: [{ rId: 'rIdSnd1', file: 'a.wav' }], timing }] }))
+    const relsPath = 'ppt/slides/_rels/slide1.xml.rels'
+    zip.file(relsPath, (await zip.file(relsPath)!.async('string')).replace(/(Id="rIdSnd1"[^>]*?)Target="\.\.\/media\/[^"]+"/, '$1Target="https://example.com/x.wav" TargetMode="External"'))
+    const h = host()
+    const { docKey } = await h.open('B', new Uint8Array(await zip.generateAsync({ type: 'uint8array' })), 'visible-only')
+    const b = built(await h.showPlan(docKey, job()))
+    const refs = await h.mediaRefs(docKey, 0)
+    const fromPlan = b.plan.media!.map((r) => { const m = b.mediaRefs.find((x) => x.placeholder === r.mediaId)!; return [mediaIdentity(m.ref), m.ref.k, r.refused ?? 'ok'] })
+    const fromRefs = refs.refs.map((r) => [r.identity, r.k, 'refused' in r.entry ? r.entry.refused : 'ok'])
+    expect(fromRefs).toEqual(fromPlan)
+    expect(fromPlan.map((x) => x[2])).toEqual(['ok', 'media-linked', 'media-unreadable'])
+    expect(refs.refs.every((r) => r.k >= 0)).toBe(true)
+  })
+
+  it('C: a condition-only snd on an external link is refused media-linked', async () => {
+    const cond = '<p:cond evt="onBegin" delay="0"><p:tgtEl><p:sndTgt r:embed="rIdSnd1" name="a.wav"/></p:tgtEl></p:cond>'
+    const timing = `<p:set><p:cBhvr><p:cTn id="3" dur="1" fill="hold"><p:stCondLst>${cond}</p:stCondLst></p:cTn><p:tgtEl>${tgt(2)}</p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>`
+    const zip = await JSZip.loadAsync(await mediaDeck({ slides: [{ boxes: [box], sounds: [{ rId: 'rIdSnd1', file: 'a.wav' }], timing }] }))
+    const relsPath = 'ppt/slides/_rels/slide1.xml.rels'
+    zip.file(relsPath, (await zip.file(relsPath)!.async('string')).replace(/(Id="rIdSnd1"[^>]*?)Target="\.\.\/media\/[^"]+"/, '$1Target="https://example.com/x.wav" TargetMode="External"'))
+    const h = host()
+    const { docKey } = await h.open('C', new Uint8Array(await zip.generateAsync({ type: 'uint8array' })), 'visible-only')
+    const r = await h.showPlan(docKey, job())
+    const p = 'refused' in r ? undefined : r.plan
+    const records = p?.media ?? prepareShowSlide((h as unknown as { docs: Map<string, { show: Parameters<typeof prepareShowSlide>[0] }> }).docs.get(docKey)!.show, 0, 'full', { on: true }).records
+    expect(records!.map((x) => x.refused)).toEqual(['media-linked'])
+    expect((await h.mediaRefs(docKey, 0)).refs.map((x) => 'refused' in x.entry && x.entry.refused)).toEqual(['media-linked'])
   })
 
   it('builtIn sound → refused media-unreadable', async () => {
@@ -252,6 +301,51 @@ describe.skipIf(!info)('show plans carry audio media (Task 4)', () => {
       // Stable within a session.
       expect(await idOf(a)).toBe(ia)
     } finally { a.close(); b.close(); h.stop() }
+  }, 60_000)
+
+  it('a resume keeps the session media key: the same mediaId before and after', async () => {
+    const h = await start({ doc: await narrationDeck(), pool: poolOn(), media: { enabled: true, info } })
+    const idOf = async (c: Client) => {
+      const r = await c.showPlan(0, 1, 'full')
+      expect(r.end).toBeUndefined()
+      return (decodeShowMessage(r.messages[0]!, { unit: 0, maxDecoded: SHOW_PLAN_LIMITS.showDecoded }) as { plan: ShowPlanRecord }).plan.media![0]!.mediaId
+    }
+    const c0 = new Client(h.url)
+    try {
+      const m0 = await c0.hello(); await c0.ready()
+      const before = await idOf(c0)
+      const ws = c0.ws as WebSocket & { terminate?: () => void }
+      if (ws.terminate) ws.terminate(); else ws.close(1001)
+      await c0.closed; await Bun.sleep(50)
+      const c1 = new Client(h.url)
+      try {
+        const m1 = await c1.hello({ resume: { sid: m0.session.sid, resumeProof: m0.session.token } })
+        expect(m1.session.sid).toBe(m0.session.sid)
+        await c1.ready()
+        expect(await idOf(c1)).toBe(before)
+      } finally { c1.close() }
+    } finally { h.stop() }
+  }, 60_000)
+
+  it('D19: a unit the manifest marks media but not anim is served a show-plan only with can.media', async () => {
+    // No deck yields media without anim (an audio node is timing), so the pool's open result is edited: unit 0 keeps
+    // `media` and loses `anim`. Without `|| (canMedia && d.media.has(u))` the request is invalid-unit.
+    const real = poolOn()
+    const pool = new Proxy(real, { get(t, k) {
+      if (k === 'open') return async (...a: Parameters<Pool['open']>) => ({ ...(await t.open(...a)), anim: [] })
+      const v = Reflect.get(t, k, t); return typeof v === 'function' ? v.bind(t) : v
+    } }) as Pool
+    for (const enabled of [true, false]) {
+      const h = await start({ doc: await narrationDeck(), pool, media: { enabled, info } }), c = new Client(h.url)
+      try {
+        const m = await c.hello(); await c.ready()
+        expect(m.units.list[0]!.anim).toBeUndefined()
+        expect(m.units.list[0]!.media).toBe(enabled ? true : undefined)
+        const r = await c.showPlan(0, 1, 'full')
+        if (enabled) expect(r.end).toBeUndefined()
+        else expect(r.end?.code).toBe('invalid-unit')
+      } finally { c.close(); h.stop() }
+    }
   }, 60_000)
 
   it('one audio part on two audio shapes of one slide binds two distinct mediaIds', async () => {
