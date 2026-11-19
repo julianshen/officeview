@@ -3,7 +3,7 @@
  * for XLSX Conditional Formatting Stage 1 oracle cases.
  */
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { inflateRawSync, inflateSync } from 'node:zlib'
 import { parseXml } from '../../src/core/xml'
@@ -6108,6 +6108,21 @@ export function stage5IconKeyOf(keys: Stage5IconKeys, parts: Map<string, Uint8Ar
  * placement it stands for (a key Excel resaved at another placement is no key at all).
  */
 export function stage5IconKeys(rootDir: string): Stage5IconKeys {
+  // Called once per verified Stage 5 case: the manifest, both key sidecars and saved workbooks are only re-read when one
+  // of them changed on disk (a verify-only run rewrites a key sidecar before its dependents).
+  const stamp = ['tests/fixtures/xlsx-cf/manifest.json', ...Object.values(CF_ICON_KEY_CASES).flatMap(id => [`tests/fixtures/xlsx-cf/refs/${id}.json`, `tests/fixtures/xlsx-cf/refs/${id}.png`, `tests/fixtures/xlsx-cf/${id}.xlsx`])]
+    .map(f => { const abs = resolve(rootDir, f); if (!existsSync(abs)) return '-'; const st = statSync(abs); return `${st.size}:${st.mtimeMs}` })
+    .join('|')
+  const cached = stage5IconKeysCache.get(rootDir)
+  if (cached && cached.stamp === stamp) return cached.keys
+  const keys = readStage5IconKeys(rootDir)
+  stage5IconKeysCache.set(rootDir, { stamp, keys })
+  return keys
+}
+
+const stage5IconKeysCache = new Map<string, { stamp: string; keys: Stage5IconKeys }>()
+
+function readStage5IconKeys(rootDir: string): Stage5IconKeys {
   const out: Stage5IconKeys = {}
   for (const [slot, placement] of [['bottom', 'bottom-20'], ['centre', 'center-20']] as const) {
     const caseId = CF_ICON_KEY_CASES[slot]

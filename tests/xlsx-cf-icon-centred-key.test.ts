@@ -13,12 +13,14 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createCanvas } from 'canvas'
 import { describe, expect, it } from 'vitest'
-import { CF_CASES, CF_STAGE4_CAPABILITIES, CF_STAGE4_CASES, CF_STAGE5_CASES, CF_ICON_KEY_CASES } from '../scripts/cf-refs/cases'
+import { CF_CASES, CF_STAGE4_CAPABILITIES, CF_STAGE4_CASES, CF_STAGE5_CASES, CF_ICON_KEY_CASES, CF_STAGE5_UNSUPPORTED, type CfOracleCase } from '../scripts/cf-refs/cases'
 import { generateCaseArchive } from '../scripts/cf-refs/generate'
+import { CF_STAGE5_UNCONFIRMABLE } from '../scripts/cf-refs/audit'
+import { CF_FORMULA_PRODUCTION_READINGS } from '../src/xlsx/cf/formulaReadings'
 import { verifyOnlyCaseOrder } from '../scripts/cf-refs/capture'
 import {
-  ICON_CROP_WIDTH_PX, type DecodedPng, type IconGlyphKey, computeWorksheetRangeGeometry, decodePngSync, evaluateFormulaCase, formulaObservationOf, iconKeyPlacement,
-  loadIconGlyphKey, parseA1, readZipPartsSync, selectStage5IconKey, stage5IconKeyOf, stage5IconKeys,
+  ICON_CROP_WIDTH_PX, type CfObservedIcon, type DecodedPng, type IconGlyphKey, computeWorksheetRangeGeometry, decodePngSync, evaluateFormulaCase, formulaObservationOf, iconKeyPlacement,
+  loadIconGlyphKey, parseA1, readZipPartsSync, selectStage5IconKey, stage5IconKeyOf, stage5IconKeys, verifyCfCase,
 } from '../scripts/cf-refs/verify'
 
 const ROOT = resolve(__dirname, '..')
@@ -176,11 +178,55 @@ describe('key selection: the vertical alignment and row height of the cell\'s st
     expect(stage5IconKeyOf({ bottom, centre }, undefined)('P12')).toBeUndefined()
   })
 
-  it('the committed captures restore the Stage 4 key; the uncaptured centred key restores nothing', () => {
+  it('the committed captures restore both keys, each admitted at its own placement', () => {
     const keys = stage5IconKeys(ROOT)
-    expect(keys.bottom?.classes.size).toBeGreaterThan(0)
-    expect(keys.centre).toBeUndefined()
-    expect(loadIconGlyphKey(ROOT, CENTRED)).toBeUndefined()
+    expect(keys.bottom?.classes.size).toBe(54)
+    expect(keys.centre?.classes.size).toBe(54)
+    expect(keys.centre).not.toBe(keys.bottom)
+    const centredSaved = saved(CENTRED)
+    const c = CF_STAGE4_CASES.find(x => x.id === CENTRED)!
+    for (const m of c.markers.filter(x => x.capabilityId.startsWith('icon:glyph-'))) expect(iconKeyPlacement(centredSaved, m.sqref), m.sqref).toBe('center-20')
+    // A second call is served from the cache (nothing on disk changed).
+    expect(stage5IconKeys(ROOT)).toBe(keys)
+  })
+})
+
+describe('the centred key self-check (Excel 16.115 capture, 6d13e093)', () => {
+  const manifest = () => JSON.parse(readFileSync(resolve(ROOT, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as { cases: CfOracleCase[] }
+  const sidecar = (id: string) => JSON.parse(readFileSync(resolve(ROOT, `tests/fixtures/xlsx-cf/refs/${id}.json`), 'utf8')) as {
+    glyphClasses: Record<string, string>; glyphTwins: Record<string, string[]>; glyphFaint: string[]; observedIcons: CfObservedIcon[]
+  }
+
+  it('verifies as a key: calibration, icon:glyph-key and all 75 pairs, classified into distinct classes', () => {
+    const c = manifest().cases.find(x => x.id === CENTRED)!
+    expect(c.status).toBe('measured')
+    const res = verifyCfCase(c, { rootDir: ROOT })
+    expect(res.kind).toBe('verified')
+    const caps = res.kind === 'verified' ? res.verifiedCapabilities : []
+    expect(caps).toContain('icon:pixel-calibration')
+    expect(caps).toContain('icon:glyph-key')
+    expect(caps.filter(x => x.startsWith('icon:glyph-') && x !== 'icon:glyph-key')).toHaveLength(75)
+    expect(Object.keys(sidecar(CENTRED).glyphClasses)).toHaveLength(75)
+  })
+
+  it('partitions the 75 pairs exactly as the Stage 4 key does: the same class names, twins and faint class', () => {
+    const a = sidecar(CENTRED), b = sidecar('stage4-icon-glyph-key')
+    expect(a.glyphClasses).toEqual(b.glyphClasses)
+    expect(a.glyphTwins).toEqual(b.glyphTwins)
+    expect(a.glyphFaint).toEqual(b.glyphFaint)
+  })
+
+  it('every key glyph sits exactly 3 px higher than in the Stage 4 key (top + 4 at its frame), its left edge unchanged', () => {
+    const a = sidecar(CENTRED), b = sidecar('stage4-icon-glyph-key')
+    const keyRefs = CF_STAGE4_CASES.find(x => x.id === CENTRED)!.markers.filter(m => m.capabilityId.startsWith('icon:glyph-')).map(m => m.sqref)
+    for (const ref of keyRefs) {
+      const oa = a.observedIcons.find(o => o.ref === ref)!, ob = b.observedIcons.find(o => o.ref === ref)!
+      // The faint 5Boxes:0 (B21) holds no measurable frame in either key (Ruling S4-FAINT); every other cell does.
+      expect(oa.icon === null, ref).toBe(ob.icon === null)
+      if (!oa.icon || !ob.icon) { expect(ref).toBe('B21'); continue }
+      expect(oa.icon!.topPx - oa.cellTopPx, ref).toBe(ob.icon!.topPx - ob.cellTopPx - 3)
+      expect(oa.icon!.leftPx - oa.cellLeftPx, ref).toBe(ob.icon!.leftPx - ob.cellLeftPx)
+    }
   })
 })
 
@@ -233,3 +279,34 @@ describe('a missing centred key fails closed (unmeasurable, never a Stage 4 matc
   })
 })
 
+
+describe('Stage 5 re-evaluated with the centred key (the four Task 39 re-deferrals)', () => {
+  const evaluation = (id: string) => (JSON.parse(readFileSync(resolve(ROOT, `tests/fixtures/xlsx-cf/refs/${id}.json`), 'utf8')) as { formulaEvaluation: Record<string, { status: string; matched?: string; code?: string; observed?: Record<string, Record<string, string>> }> }).formulaEvaluation
+
+  it('the three icon readings Excel now shows classify at the centred frame and match production: the re-deferrals are lifted', () => {
+    const f = evaluation('stage5-cfvo-formulas')['icon:thresholds-formula']!
+    expect(f).toMatchObject({ status: 'discriminating', matched: 'evaluated' })
+    expect(CF_FORMULA_PRODUCTION_READINGS['icon:thresholds-formula']).toBe('evaluated')
+    const comp = evaluation('stage5-composition')
+    expect(comp['formula:composition-stop-icon']).toMatchObject({ status: 'discriminating', matched: 'halts' })
+    expect(CF_FORMULA_PRODUCTION_READINGS['formula:composition-stop-icon']).toBe('halts')
+    expect(comp['formula:composition-indirect-ahead-icon']).toMatchObject({ status: 'discriminating', matched: 'halts' })
+    // Every icon witness is a classified glyph at cell-relative (2, 4): the centred frame.
+    for (const obs of [f.observed!['cfvo-icon-formula']!, comp['formula:composition-stop-icon']!.observed!['stop-icon']!]) {
+      for (const v of Object.values(obs)) if (v.startsWith('icon:')) expect(v).toMatch(/^icon:3Arrows:[012]@2,4\|/)
+    }
+    for (const id of ['icon:thresholds-formula', 'formula:composition-stop-icon', 'formula:composition-indirect-ahead-icon']) expect(CF_STAGE5_UNSUPPORTED[id], id).toBeUndefined()
+    // Lifting the measurement re-deferral does not lift the publication gates: stop-icon stays fixture-unconfirmable and
+    // indirect-ahead-icon names no production reading.
+    expect(CF_STAGE5_UNCONFIRMABLE['formula:composition-stop-icon']).toBeDefined()
+    expect(CF_FORMULA_PRODUCTION_READINGS['formula:composition-indirect-ahead-icon']).toBeUndefined()
+  })
+
+  it('formula:cfvo-scope-multi-range now measures and matches neither reading: kept deferred as a finding', () => {
+    const e = evaluation('stage5-cfvo-scope')['formula:cfvo-scope-multi-range']!
+    expect(e).toMatchObject({ status: 'refused', code: 'formula-hypothesis-none' })
+    // Excel drew the top icon (3Arrows:2) on all twelve designated cells and the top colour on every scale cell.
+    expect(new Set(Object.values(e.observed!['scope-icon']!))).toEqual(new Set(['icon:3Arrows:2@2,4|none']))
+    expect(CF_STAGE5_UNSUPPORTED['formula:cfvo-scope-multi-range']).toMatch(/no hypothesis/)
+  })
+})
