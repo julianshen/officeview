@@ -38,4 +38,24 @@ describe.skipIf(!info)('show jobs and the media probe deadline (Task 3 carry)', 
       expect(pool.stats().workers[0]!.probes).toBe(4) // one table per document: probed once
     } finally { pool.dispose() }
   }, 30_000)
+
+  it('a warm-up past the media deadline answers that request show-plan-timeout and is never remembered', async () => {
+    // Probes held 900 ms against a 300 ms media deadline (test-only): the warm-up times out every time.
+    const pool = new Pool({ workers: 1, media: { info: info!, dir: temp.dir }, testHooks: true, mediaHoldMs: 900, mediaDeadlineMs: 300 })
+    try {
+      const bytes = await mediaDeck({ slides: [{ boxes: [box], media: [{ spid: 3, file: 'a.m4a' }], timing: audioNode(3, 3) }] })
+      await pool.open('slow', bytes, 'visible-only')
+      const job = { docRef: 'slow', contentPolicy: 'visible-only' as const, unitIndex: 0, scale: 1 as const, motion: 'full' as const, mark: { kind: 'fixed' as const }, strictMarks: false, media: true }
+      const r1 = await pool.showPlan('s1', job, SHOW_BUILD_BYTES)
+      expect('refused' in r1 && r1.refused).toBe('show-plan-timeout')
+      const retired = pool.stats().retired
+      const r2 = await pool.showPlan('s2', job, SHOW_BUILD_BYTES) // runs again: not answered from a remembered refusal
+      expect('refused' in r2 && r2.refused).toBe('show-plan-timeout')
+      expect(pool.stats().retired).toBe(retired + 1)
+      // The track and morph jobs time out the same way, and are not remembered either.
+      await expect(pool.showTrack('s3', { ...job, step: 0 }, SHOW_BUILD_BYTES)).rejects.toThrow(/deadline/)
+      await expect(pool.showTrack('s3', { ...job, step: 0 }, SHOW_BUILD_BYTES)).rejects.toThrow(/deadline/)
+      expect(pool.stats().retired).toBe(retired + 3)
+    } finally { pool.dispose() }
+  }, 30_000)
 })
