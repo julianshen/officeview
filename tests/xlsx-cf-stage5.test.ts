@@ -488,62 +488,50 @@ describe('enumerated withholding justifications are backed by the workbook (Task
   })
 })
 
-describe('expected resolutions are backed by evidence (Task 39 fix round 4, ruling option d)', () => {
-  it('each entry: listed capabilities published and sufficient, no src gate on the marker, exact text and range, production equals Excel on every cell', async () => {
-    const { STAGE5_EXPECTED_RESOLUTIONS, stage5ExpectedResolution, stage5JustifiedRefusals } = await import('../scripts/cf-refs/stage5-withhold')
+describe('the hoist-errors rules are plain resolved cells (the expected-resolution stopgap is retired)', () => {
+  const ID = 'formula:hoist-aggregate-errors'
+  const RULES = [{ formula: 'A2>AVERAGE($A:$A)', sqref: 'B2:B40' }, { formula: 'A2=MAX($A:$A)', sqref: 'C2:C40' }]
+
+  it('the stopgap table and its lookup no longer exist', async () => {
+    const mod = await import('../scripts/cf-refs/stage5-withhold') as Record<string, unknown>
+    expect(mod.STAGE5_EXPECTED_RESOLUTIONS).toBeUndefined()
+    expect(mod.stage5ExpectedResolution).toBeUndefined()
+  })
+
+  it('B2:B40 and C2:C40: the marker is published, every cell resolves with no refusal to justify, and production equals Excel', async () => {
+    const { stage5JustifiedRefusals } = await import('../scripts/cf-refs/stage5-withhold')
     const { stage5ProductionAt, stage5ExcelAt } = await import('./helpers/cf-stage5-verdict')
-    const { compileCfFormula, formulaRequiredCapabilities, isCfFormulaRefusal } = await import('../src/xlsx/cf/formula')
-    const { createCfMemory } = await import('../src/xlsx/cf/limits')
     const { isCellInSqref } = await import('../scripts/cf-refs/verify')
-    expect(STAGE5_EXPECTED_RESOLUTIONS.length).toBe(1)
-    const srcFiles = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap(d => d.isDirectory() ? srcFiles(join(dir, d.name)) : /\.(ts|tsx)$/.test(d.name) ? [join(dir, d.name)] : [])
-    const src = srcFiles(join(REPO_ROOT, 'src'))
-    expect(src.length).toBeGreaterThan(100)
-    for (const e of STAGE5_EXPECTED_RESOLUTIONS) {
-      // (1) every capability production's evaluation needs is published.
-      for (const cap of e.heldCapabilities) expect(VERIFIED_CAPABILITIES.has(cap), cap).toBe(true)
-      expect(VERIFIED_CAPABILITIES.has(e.marker), 'the marker itself stays unpublished').toBe(false)
-      // (2) nothing in src gates on the marker id.
-      for (const f of src) expect(readFileSync(f, 'utf8').includes(e.marker), f).toBe(false)
-      const c = manifest().cases.find(x => x.id === e.caseId)!
-      const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
-      const sheet = doc.sheets.find(x => x.name === c.sheet) ?? doc.sheets[0]!
-      for (const r of e.rules) {
-        // (3) exact formula text and range: one marker, one parsed rule.
-        const markers = c.markers.filter(m => m.capabilityId === e.marker && m.sqref === r.sqref)
-        expect(markers.map(m => m.formulas), r.sqref).toEqual([[r.formula]])
-        expect(stage5ExpectedResolution(markers[0]! as never, c.id, id => VERIFIED_CAPABILITIES.has(id)), r.sqref).toBeDefined()
-        const rules = sheet.conditionalFormatting!.rules.filter(x => (x.definition as { formulas?: readonly string[] }).formulas?.[0] === r.formula)
-        expect(rules.length, r.formula).toBe(1)
-        expect(rules[0]!.ranges.map(g => `${String.fromCharCode(65 + g.firstCol)}${g.firstRow + 1}:${String.fromCharCode(65 + g.lastCol)}${g.lastRow + 1}`)).toEqual([r.sqref])
-        // The listed capabilities cover what production's static requirements name for the formula (plus truth-error).
-        const out = compileCfFormula(r.formula, { row: 1, col: 1 }, createCfMemory())
-        if (isCfFormulaRefusal(out)) throw new Error(`${r.formula} refused at compile`)
-        try {
-          const caps = formulaRequiredCapabilities(out.value, 'expression', { dialect: 'base', rangeCount: 1, sourceType: 'expression' as never })
-          for (const cap of [...caps.parse, ...caps.evaluation]) expect(e.heldCapabilities, `${r.formula} needs ${cap}`).toContain(cap)
-        } finally { out.release() }
-        expect(e.heldCapabilities).toContain('formula:truth-error')
-        // (4) on every listed cell, production resolves and its output equals Excel's capture.
-        const refs = c.expected.cells.map(x => x.ref).filter(ref => isCellInSqref(ref, r.sqref))
-        expect(refs.length, r.sqref).toBeGreaterThan(30)
-        let compared = 0
-        for (const ref of refs) {
-          const got = await stage5ProductionAt(doc, sheet, ref), excel = stage5ExcelAt(c, REPO_ROOT, ref)
-          expect(got.unresolved, ref).toEqual([])
-          if (!excel) continue
-          compared++
-          expect({ fill: got.fill, strike: got.strike }, ref).toEqual(excel)
-          expect(stage5JustifiedRefusals(c, ref).filter(j => j.reason.startsWith(e.marker)), ref).toEqual([])
-        }
-        expect(compared, r.sqref).toBeGreaterThan(30)
+    expect(VERIFIED_CAPABILITIES.has(ID), 'the marker is a published capability now').toBe(true)
+    const c = manifest().cases.find(x => x.id === 'stage5-formula-hoist')!
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
+    const sheet = doc.sheets.find(x => x.name === c.sheet) ?? doc.sheets[0]!
+    for (const r of RULES) {
+      const markers = c.markers.filter(m => m.capabilityId === ID && m.sqref === r.sqref)
+      expect(markers.map(m => m.formulas), r.sqref).toEqual([[r.formula]])
+      const refs = c.expected.cells.map(x => x.ref).filter(ref => isCellInSqref(ref, r.sqref))
+      expect(refs.length, r.sqref).toBeGreaterThan(30)
+      let compared = 0
+      for (const ref of refs) {
+        const got = await stage5ProductionAt(doc, sheet, ref), excel = stage5ExcelAt(c, REPO_ROOT, ref)
+        expect(got.unresolved, ref).toEqual([])
+        // No justification of any kind is needed: the cell is a plain resolved cell, not an exception.
+        expect(stage5JustifiedRefusals(c, ref), ref).toEqual([])
+        if (!excel) continue
+        compared++
+        expect({ fill: got.fill, strike: got.strike }, ref).toEqual(excel)
       }
-      // The entry stops counting when a listed capability is unpublished.
-      const m0 = c.markers.find(m => m.capabilityId === e.marker)!
-      expect(stage5ExpectedResolution(m0 as never, c.id, id => id !== 'formula:truth-error' && VERIFIED_CAPABILITIES.has(id))).toBeUndefined()
-      expect(stage5JustifiedRefusals(c, 'B2', id => id !== 'formula:truth-error' && VERIFIED_CAPABILITIES.has(id)).some(j => j.reason.startsWith(e.marker))).toBe(true)
+      expect(compared, r.sqref).toBeGreaterThan(30)
     }
   }, 120000)
+
+  it('the marker is a real gate again: without it the rules are refused by the marker capability (mutation)', async () => {
+    const { stage5JustifiedRefusals } = await import('../scripts/cf-refs/stage5-withhold')
+    const c = manifest().cases.find(x => x.id === 'stage5-formula-hoist')!
+    for (const ref of ['B2', 'C2']) {
+      expect(stage5JustifiedRefusals(c, ref, id => id !== ID && VERIFIED_CAPABILITIES.has(id)).some(j => j.reason.startsWith(ID)), ref).toBe(true)
+    }
+  })
 })
 
 describe('cf-compare interactive runs production inputs on Stage 5 cases (Task 39 fix round 1, F2)', () => {

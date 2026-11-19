@@ -10,8 +10,9 @@
  *    - a record configuration fixed before capture ("recorded, never evidence") covering the cell;
  *    - an expected compile refusal (`STAGE5_EXPECTED_COMPILE_REFUSALS`) or the enumerated S5-HOIST refusal
  *      (`STAGE5_ENUMERATED_REFUSALS`). A compile refusal is never self-justifying (R1).
- *    A marker capability listed in `STAGE5_EXPECTED_RESOLUTIONS` (an evidence label no production gate names) does not
- *    count for the exact rules listed there.
+ *    A marker capability that production holds (published, with its registered reading) never refuses its rule; a marker that
+ *    is an evidence label with no registered reading would (the hoist-errors stopgap table was retired once
+ *    `formula:hoist-aggregate-errors` registered and published its `error-propagates` reading).
  *    Composition gates (stop-<kind>, indirect-ahead-<kind>, expression-vs-scale, coexistence, stub successors, the
  *    halting of a stopIfTrue visual) are NOT in the set: the compositor applies them itself.
  * 2. `stage5CounterfactualOf`: the production service and compositor (the real src/xlsx/cf code, through the
@@ -71,29 +72,6 @@ export const STAGE5_EXPECTED_COMPILE_REFUSALS: ReadonlyArray<Readonly<{ caseId: 
   { caseId: 'stage5-composition', formula: 'INDIRECT("A"&ROW())>0', refused: 'cf-unsupported-rule', reason: 'Ruling S5-O / S5-B: the composition case\'s INDIRECT expression is the one production cannot evaluate (the case\'s question; INDIRECT is a recorded unresolved shape, stage5-unresolved-shapes-indirect)' },
 ]
 
-/**
- * Fix round 4 (orchestrator ruling, option d): the mirror of `STAGE5_EXPECTED_COMPILE_REFUSALS`. A marker capability that is
- * only an evidence label (no production gate names it) does not by itself predict a refusal of the rules listed here, which
- * production evaluates through held readings. Each entry counts only while its formula text and range are exact and every
- * listed capability is published (checked here); tests/xlsx-cf-stage5.test.ts also checks that nothing in src gates on the
- * marker id and that production's resolved output equals Excel's capture on every listed cell. It drops only the
- * marker-based refusal; every other justification and the comparison with Excel still apply.
- */
-export const STAGE5_EXPECTED_RESOLUTIONS: ReadonlyArray<Readonly<{ caseId: string; marker: string; rules: ReadonlyArray<Readonly<{ formula: string; sqref: string }>>; heldCapabilities: readonly string[]; reason: string }>> = [{
-  caseId: 'stage5-formula-hoist', marker: 'formula:hoist-aggregate-errors',
-  rules: [{ formula: 'A2>AVERAGE($A:$A)', sqref: 'B2:B40' }, { formula: 'A2=MAX($A:$A)', sqref: 'C2:C40' }],
-  heldCapabilities: ['formula:dialect-base', 'formula:anchor-single', 'formula:anchor-mixed-abs', 'formula:fn-aggregate', 'formula:truth-boolean', 'formula:truth-error'],
-  reason: 'Orchestrator ruling (Task 39 fix round 4, option d): formula:hoist-aggregate-errors is the case\'s evidence label (Excel\'s error-propagates reading), not a production gate; production evaluates the propagated #DIV/0! through held readings (fn-aggregate, truth-error) to no-match, as Excel shows. The error-propagates reading itself stays unregistered and unpublished (a §14 follow-up)',
-}]
-
-/** The expected resolution that lifts `m`'s marker-capability refusal, if it still counts (exact text and range, every
- * listed capability published). */
-export function stage5ExpectedResolution(m: Marker, caseId: string, published: (id: string) => boolean): (typeof STAGE5_EXPECTED_RESOLUTIONS)[number] | undefined {
-  return STAGE5_EXPECTED_RESOLUTIONS.find(e => e.caseId === caseId && e.marker === m.capabilityId
-    && e.rules.some(r => r.sqref === m.sqref.trim() && (m.formulas ?? []).length === 1 && m.formulas![0] === r.formula)
-    && e.heldCapabilities.every(cap => held(cap, published)))
-}
-
 const a1 = (ref: string): { row: number; col: number } => {
   const m = /^([A-Z]+)(\d+)$/.exec(ref)!
   return { row: Number(m[2]) - 1, col: [...m[1]!].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1 }
@@ -118,7 +96,7 @@ type Reason = Pick<Stage5Refusal, 'reason' | 'refused'>
 function formulaMarkerReasons(m: Marker, caseId: string, published: (id: string) => boolean): Reason[] {
   const reasons: Reason[] = []
   const unheld = (reason: string): void => { reasons.push({ reason, refused: 'cf-unmeasured-capability' }) }
-  if (!compositionGate(m.capabilityId) && !held(m.capabilityId, published) && !stage5ExpectedResolution(m, caseId, published)) unheld(`${m.capabilityId} not held`)
+  if (!compositionGate(m.capabilityId) && !held(m.capabilityId, published)) unheld(`${m.capabilityId} not held`)
   const ranges = m.sqref.trim().split(/\s+/)
   const use = m.formula!.kind as CfFormulaUse
   const texts = new Set(m.formulas ?? [])
