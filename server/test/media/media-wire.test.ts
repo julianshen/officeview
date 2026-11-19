@@ -397,4 +397,22 @@ describe.skipIf(!info)('media wire through the harness (Task 9)', () => {
       expect(h.media!.admission.snapshot().running).toBe(0)
     } finally { a.close(); b.close(); await h.stop() }
   }, 60_000)
+
+  it('the only session closes and the same deck reopens: a media-request is served again', async () => {
+    const h = await harness(await narrationDeck())
+    try {
+      for (let round = 0; round < 2; round++) {
+        const c = await session(h)
+        try {
+          const id = await idOf(c)
+          await c.mediaShow(0)
+          const r = await c.mediaRequest(id, { ms: 60_000 })
+          expect(r.end).toBeUndefined()
+          expect(parseMediaStart(r.start).mediaId).toBe(id)
+        } finally { c.close(); await c.closed }
+        // Closing the document (its last session) deletes its entries at once.
+        await until(() => h.media!.cache.stats().entries === 0)
+      }
+    } finally { await h.stop() }
+  }, 120_000)
 })

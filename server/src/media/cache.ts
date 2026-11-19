@@ -29,7 +29,8 @@
  *   `delivered`; each answered mediaId holds its own pin. A pinned reference is never dropped by pressure or `passed`,
  *   so its entry is never evicted or expired mid-delivery; only `dropSession` and `dropDocument` override it.
  * - **Revocation.** `dropDocument` deletes every entry of the document at once, referenced or not, aborts its
- *   flights, and answers their waiters `media-unavailable`. The docId stays revoked: every later `acquire` for it
+ *   flights, and answers their waiters `media-unavailable`. The docId stays revoked until `reopen(docId)` (Task 9: the
+ *   closed document opened again): every later `acquire` for it
  *   answers `{ revoked: true }` media-unavailable, and `revocation(docId)` wakes that document's queues only. A delivery already reading a done file must check
  *   `peek(key)` between chunks: once dropped it answers undefined, and the delivery fails `media-unavailable`.
  *
@@ -83,6 +84,10 @@ export interface EncodeCache {
   revoked(docId: string): boolean
   /** Resolves when `dropDocument(docId)` runs (at once if it already ran), so that document's queues stop. */
   revocation(docId: string): Promise<void>
+  /** Task 9: the document was opened again after its close (`dropDocument`; the docId is its bytes' docRef, so a
+   * reopen has the same one): clears the revoked mark, so its new sessions encode afresh. Its old queues have all
+   * ended (a document closes with its last session); its dropped entries and flights stay gone. */
+  reopen(docId: string): void
   /** Resolves once every abandoned flight (aborted: no waiter left, dropped or closed) has settled, its child gone and
    * its files disposed. A queue's `end()` awaits it after `dropSession`. */
   quiesce(): Promise<void>
@@ -350,6 +355,7 @@ export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; se
       await Promise.all([...gone, ...flights])
     },
     revoked: (docId) => revokedDocs.has(docId),
+    reopen(docId) { revokedDocs.delete(docId) },
     revocation(docId) {
       if (revokedDocs.has(docId)) return Promise.resolve()
       return new Promise<void>((ok) => { let l = revocations.get(docId); if (!l) revocations.set(docId, l = []); l.push(ok) })

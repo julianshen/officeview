@@ -266,6 +266,31 @@ describe('the shared encode cache (D12, D23)', () => {
     await c.close()
   })
 
+  it('reopen(docId) after dropDocument (a closed document opened again): acquire encodes afresh; a pending revocation is not woken', async () => {
+    const { c } = cacheWith()
+    await fill(c, 's1', key('A', '1'), 1 * MiB)
+    await c.dropDocument('A')
+    c.reopen('A')
+    expect(c.revoked('A')).toBe(false)
+    let woke = false
+    void c.revocation('A').then(() => { woke = true })
+    const f = fakeRun(1 * MiB)
+    const a = c.acquire('s2', 0, key('A', '1'), f.run, request)
+    if ('wait' in a) throw new Error('unexpected wait')
+    expect(a.origin).toBe('miss')
+    f.finish()
+    expect((await a.done).ok).toBe(true)
+    expect(f.state.calls).toBe(1)
+    await Bun.sleep(0)
+    expect(woke).toBe(false)
+    // A second close revokes it again.
+    await c.dropDocument('A')
+    await Bun.sleep(0)
+    expect(woke).toBe(true)
+    expect(c.revoked('A')).toBe(true)
+    await c.close()
+  })
+
   it('a pinned reference survives passed and eviction until delivered, and two pins need two deliveries', async () => {
     const { c } = cacheWith({ serverBytes: 64 * MiB })
     const a = await fill(c, 's1', key('d', 'a'), 30 * MiB, 2)

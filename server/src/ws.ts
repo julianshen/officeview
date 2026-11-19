@@ -245,7 +245,10 @@ export function createStreamServer(o: StreamServerOptions) {
   /** Document references across sessions; the last release forgets it in the pool. */
   function acquireDoc(docRef: string): void {
     const d = docs.get(docRef)
-    if (d) d.refs++; else docs.set(docRef, { docRef, refs: 1 } as DocState)
+    if (d) { d.refs++; return }
+    docs.set(docRef, { docRef, refs: 1 } as DocState)
+    // A document opened again after its close (the same docRef): its media is served afresh (Task 9).
+    o.media?.services?.cache.reopen(docRef)
   }
   /** The last release closes the document: the pool forgets it, and its media entries are deleted at once (D12, D23). */
   function releaseDoc(docRef: string): void {
