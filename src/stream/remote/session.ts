@@ -87,6 +87,8 @@ export const CAPS: Partial<Record<Kind, [encoded: number, decoded: number]>> = {
   [Kind.NOTES_RASTER]: [NOTES_ENCODED_CAP, 64 << 20],
   // SHOW_PLAN (piece 4): one message ≤ 8 MiB encoded / 32 MiB decoded (parent §14); a bundle is several messages.
   [Kind.SHOW_PLAN]: [8 << 20, 32 << 20],
+  // MEDIA_CHUNK (piece 5, D14): stored, so its decoded cap equals its encoded cap. No request expects one yet.
+  [Kind.MEDIA_CHUNK]: [4 << 20, 4 << 20],
 }
 /** The notes image (twins of server/src/notes.ts): exactly 720 × scale device px
  * wide, 1..NOTES_MAX_PX device px tall. */

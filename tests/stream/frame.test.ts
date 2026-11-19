@@ -21,7 +21,7 @@ describe('OVSD rejection battery', () => {
   it('pins constants', () => expect([FRAGMENT_CAP, MAX_FRAGMENTS, REASSEMBLY_MS, HEADER_BYTES, EXT01_BYTES]).toEqual([1048576, 256, 5000, 23, 10]))
   it('magic', async () => { const [b] = encode(); b[0] ^= 1; await refused(make(), b, 'magic') })
   it('version', async () => { const [b] = encode(); b[4] = 2; await refused(make(), b, 'version') })
-  it.each([0, 9])('kind %i', async kind => { const [b] = encode(); b[5] = kind; await refused(make(), b, 'kind') })
+  it.each([0, 10])('kind %i', async kind => { const [b] = encode(); b[5] = kind; await refused(make(), b, 'kind') })
   it('unexpected-reqId never creates a pending entry', async () => {
     const r = make({ expects: () => false })
     // Observe the actual insertion, not only the post-rejection byte count.
