@@ -292,13 +292,17 @@ export function createDocMediaTable(doc: { show?: ShowDoc }, info: FfmpegInfo | 
 /**
  * D21 `mediaPart`: writes the projected part to a fresh 0600 file directly in `dir` (the media temp directory), so
  * part bytes never cross the worker boundary. The caller adopts the file into its ledger. Removed on failure.
+ * `name` (Task 13): the file name the pool chose (`PART_NAME`), so it can delete the file if the worker never
+ * answers; default a fresh random one.
  */
-export async function writePart(doc: { show?: ShowDoc }, partPath: string, dir: string): Promise<{ path: string; bytes: number; sourceHash: string }> {
+export const PART_NAME = /^[0-9a-f]{32}\.bin$/
+export async function writePart(doc: { show?: ShowDoc }, partPath: string, dir: string, name?: string): Promise<{ path: string; bytes: number; sourceHash: string }> {
+  if (name !== undefined && (typeof name !== 'string' || !PART_NAME.test(name))) throw new Refused('media-unavailable')
   if (!doc.show) throw new Refused('media-unavailable')
   const declared = doc.show.handle.pkg.declaredSize(partPath)
   if (declared === undefined) throw new Refused('media-unreadable')
   if (declared > PART_MAX_BYTES) throw new Refused('media-too-large')
-  const path = join(dir, `${randomBytes(16).toString('hex')}.bin`)
+  const path = join(dir, name ?? `${randomBytes(16).toString('hex')}.bin`)
   try {
     const r = await stagePart(doc.show.handle.pkg, partPath, path, 'wx')
     return { path, ...r }

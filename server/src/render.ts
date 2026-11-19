@@ -275,8 +275,8 @@ export class DocumentHost {
   mediaSeams: MediaTableSeams = {}
   /** Sets ffmpeg and the media dir (a view over the pool's directory: a worker never claims one). Documents opened
    * afterwards get a table over them; with no config every entry is `media-unavailable`. */
-  configureMedia(media: { info: FfmpegInfo; dir: string } | undefined): void {
-    this.mediaConfig = media ? { ...media, temp: attachMediaTemp(media.dir) } : undefined
+  configureMedia(media: { info: FfmpegInfo; dir: string; prefix?: string } | undefined): void {
+    this.mediaConfig = media ? { info: media.info, dir: media.dir, temp: attachMediaTemp(media.dir, media.prefix) } : undefined
   }
   /** With no media config: a temp that is never used (no ffmpeg means no probe stages a file). */
   private static readonly NO_TEMP: MediaTemp = {
@@ -326,13 +326,13 @@ export class DocumentHost {
    * Piece 5 (D21): writes the projected part to a fresh 0600 file directly in the media dir (`dir` must be the one
    * configured), so part bytes never cross the worker boundary. Only a media part of the projection is written.
    */
-  async mediaPart(docKey: string, partPath: string, dir: string): Promise<{ path: string; bytes: number; sourceHash: string }> {
+  async mediaPart(docKey: string, partPath: string, dir: string, name?: string): Promise<{ path: string; bytes: number; sourceHash: string }> {
     const doc = this.docs.get(docKey)
     if (!doc) throw new RenderRefusal('unknown-doc')
     const m = this.mediaConfig
     if (!m || typeof dir !== 'string' || dir !== m.dir) throw new RenderRefusal('media-part', 'not the media directory')
     if (typeof partPath !== 'string' || !(await doc.media.parts()).includes(partPath)) throw new RenderRefusal('media-part', 'not a media part of the projection')
-    try { return await writePart(doc, partPath, dir) } catch (e) {
+    try { return await writePart(doc, partPath, dir, name) } catch (e) {
       if (e instanceof MediaPartRefused) throw new RenderRefusal('media-part', e.reason)
       throw e
     }

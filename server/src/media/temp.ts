@@ -4,7 +4,7 @@
  * bytes, so a caller can assert it is empty after every path.
  */
 import { randomBytes } from 'node:crypto'
-import { closeSync, fchmodSync, lstatSync, openSync, statSync } from 'node:fs'
+import { closeSync, fchmodSync, lstatSync, openSync, readdirSync, statSync, unlinkSync } from 'node:fs'
 import { chmod, lstat, mkdir, open, rm, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -66,8 +66,14 @@ export async function createMediaTemp(root: string = tmpdir()): Promise<MediaTem
  * Workers share `process.pid` but not module state, so a worker must never call `createMediaTemp`: its empty
  * `claimed` set would reclaim, and empty, the live directory. The view claims nothing; `remove()` disposes only the
  * files it holds and leaves the directory to its owner.
+ *
+ * `prefix` (Task 13, carried from Task 3): every file the view creates is named `<prefix><random>.<ext>`. The pool
+ * gives each worker its own prefix and, when that worker is terminated or dies (its ledger and its `remove()` die
+ * with it), deletes the files that bear it (`sweepPrefixed`).
  */
-export function attachMediaTemp(dir: string): MediaTemp {
+export const WORKER_PREFIX = /^w[0-9a-f]{12}-$/
+export function attachMediaTemp(dir: string, prefix = ''): MediaTemp {
+  if (prefix && !WORKER_PREFIX.test(prefix)) throw new Error(`media temp: bad prefix ${JSON.stringify(prefix)}`)
   const abs = resolve(dir)
   const st = lstatSync(abs)
   if (!st.isDirectory() || st.isSymbolicLink() || (st.mode & 0o777) !== 0o700 || (uid() !== undefined && st.uid !== uid())) throw new Error(`media temp: ${abs} is not our 0700 directory`)
@@ -75,12 +81,26 @@ export function attachMediaTemp(dir: string): MediaTemp {
     const paths = [...ledger.values()].map((e) => e.path)
     ledger.clear()
     await Promise.all(paths.map((p) => unlink(p).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'ENOENT') throw e })))
-  })
+  }, prefix)
+}
+
+/** Deletes every regular file in `dir` whose name starts with `prefix` (a gone worker's files). Synchronous: the pool
+ * runs it in the worker's `close` event, before anything waiting on the close resumes. */
+export function sweepPrefixed(dir: string, prefix: string): number {
+  if (!WORKER_PREFIX.test(prefix)) throw new Error(`media temp: bad prefix ${JSON.stringify(prefix)}`)
+  let n = 0
+  let names: string[] = []
+  try { names = readdirSync(dir) } catch { return 0 }
+  for (const name of names) {
+    if (!name.startsWith(prefix)) continue
+    try { if (lstatSync(join(dir, name)).isFile()) { unlinkSync(join(dir, name)); n++ } } catch { /* gone */ }
+  }
+  return n
 }
 
 type Ledger = Map<symbol, { path: string; bytes?: number }>
 
-function tempOver(dir: string, removeAll: (ledger: Ledger) => Promise<void>): MediaTemp {
+function tempOver(dir: string, removeAll: (ledger: Ledger) => Promise<void>, prefix = ''): MediaTemp {
   /** Ledger: one entry per live handle; `bytes` undefined means "reserved, size read when asked". */
   const ledger: Ledger = new Map()
 
@@ -99,7 +119,7 @@ function tempOver(dir: string, removeAll: (ledger: Ledger) => Promise<void>): Me
   }
   const fresh = (ext: string) => {
     if (!EXT.test(ext)) throw new Error(`media temp: bad extension ${JSON.stringify(ext)}`)
-    return join(dir, `${randomBytes(16).toString('hex')}.${ext}`)
+    return join(dir, `${prefix}${randomBytes(16).toString('hex')}.${ext}`)
   }
 
   return {

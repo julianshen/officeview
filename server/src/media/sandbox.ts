@@ -29,6 +29,19 @@ const WATCHDOG_MAX_FAILS = 3
 /** After exit, how long `done` waits for stderr to close (a stray holder must not hang it). */
 const STDERR_GRACE_MS = 1000
 
+/**
+ * The sandbox's pid log (Task 13): every run's process group leader, as it spawns, with the promise of its exit.
+ * Per thread: a render worker has its own module state, so its ffprobe runs reach only that worker's observers. The
+ * pool uses it to kill a terminated worker's children (`render-worker.ts`); tests count spawns with it. No observer,
+ * no cost. An observer that throws is ignored.
+ */
+export interface SandboxSpawn { pid: number; bin: 'ffmpeg' | 'ffprobe'; exited: Promise<void> }
+const spawnObservers = new Set<(s: SandboxSpawn) => void>()
+export function observeSpawns(f: (s: SandboxSpawn) => void): () => void {
+  spawnObservers.add(f)
+  return () => { spawnObservers.delete(f) }
+}
+
 /** `ulimit -f` block size of `/bin/sh`: dash (linux) counts 512-byte blocks, macOS bash 3.2 counts 1024 (measured).
  * The startup probe verifies it with a capped write and fails closed on a mismatch. */
 export const SH_FILE_BLOCK = { linux: 512, darwin: 1024 } as const
@@ -81,6 +94,10 @@ export function runSandboxed(info: FfmpegInfo, bin: 'ffmpeg' | 'ffprobe', argv: 
   const cmd = sandboxCommand(info, bin, argv, limits)
   const child = spawn(cmd.file, cmd.args, { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...cmd.env }, cwd: '/' })
   const pid = child.pid ?? -1
+  if (pid > 1 && spawnObservers.size) {
+    const exited = new Promise<void>((ok) => { child.once('exit', () => ok()); child.once('error', () => ok()) })
+    for (const f of [...spawnObservers]) try { f({ pid, bin, exited }) } catch { /* an observer never stops a run */ }
+  }
   let killed: SandboxResult['killed']
   let exited = false
   let settled = false

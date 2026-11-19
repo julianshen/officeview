@@ -8,8 +8,10 @@
  * fonts (the throwing registrar in render.ts), so the 64 MiB font-budget
  * recycle trigger cannot fire yet; the page trigger is live.
  */
+import { randomBytes } from 'node:crypto'
+import { unlinkSync } from 'node:fs'
 import { availableParallelism } from 'node:os'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { AdmissionModel, DEFAULT_CAPS, type Caps, type Job } from './admission'
 import type { LayerCrop, MarkLayerResult, MarkRasterResult } from './mark/mark-raster'
 import { SHOW_BUILD_BYTES, showRequestBytes } from './show/grant'
@@ -18,6 +20,7 @@ import type { BuiltMorph, MorphJob } from './show/morph'
 import type { MarkSpec, MediaUnitRefs, NotesJob, NotesPlan, NotesRaster, OpenResult, Projection, RenderedUnit } from './render'
 import type { FfmpegInfo } from './media/ffmpeg'
 import { PROBE_DECK_MS, PROBE_PART_MS } from './media/probe'
+import { sweepPrefixed } from './media/temp'
 import type { WorkerReply, WorkerRequest } from './worker/render-worker'
 import { prepareWorkspace, TEXT_PREPARE_ALLOWANCE, type TextJob, type TextReply } from './text/served'
 
@@ -77,6 +80,10 @@ interface Slot {
   /** The preparation grant of the show job holding this slot (0: none). */
   prep: number
 }
+
+/** Task 13: how many sandboxed runs a worker can list at once for the pool to kill if it is terminated (its runs are
+ * serial: one job per worker, one probe at a time). */
+const WORKER_CHILD_SLOTS = 8
 
 /** Round 13d: show requests a session may have waiting for its show slot (one more is running). */
 export const showQueueBound = (caps: Caps) => caps.perSessionOutstanding + caps.perSessionQueue - 1
@@ -182,14 +189,29 @@ export class Pool {
     }
     // The init goes first (messages are ordered), so every later job sees the media config. Its reply is unawaited;
     // a worker whose init fails has media off (every entry `media-unavailable`).
-    worker.postMessage({ type: 'init', id: this.nextId++, ...(this.media ? { media: this.media } : {}), ...(this.mediaHoldMs ? { mediaHoldMs: this.mediaHoldMs } : {}) } satisfies WorkerRequest)
+    // Task 13 (carried from Task 3): what this worker leaves if it is terminated mid-job (its ledger, timers and
+    // watchdog die with it): the sandboxed runs it lists in `pids`, and the files named with its `prefix`.
+    const leftovers = this.media ? { prefix: `w${randomBytes(6).toString('hex')}-`, pids: new Int32Array(new SharedArrayBuffer(4 * WORKER_CHILD_SLOTS)) } : undefined
+    worker.postMessage({ type: 'init', id: this.nextId++, ...(this.media && leftovers ? { media: { ...this.media, prefix: leftovers.prefix }, pids: leftovers.pids.buffer as SharedArrayBuffer } : {}), ...(this.mediaHoldMs ? { mediaHoldMs: this.mediaHoldMs } : {}) } satisfies WorkerRequest)
     worker.addEventListener('close', () => {
+      // First, before anything awaiting the close (`replace`, a dying job's refund) resumes.
+      if (leftovers) this.reap(leftovers)
       markClosed()
       if (slot.worker !== worker) return
       slot.closed = true
       slot.docs.clear()
       this.settle(slot, 'worker died')
     })
+  }
+
+  /** A gone worker's leftovers: SIGKILL each listed group (it was the worker's own child, its exit unobserved), then
+   * delete the files bearing its prefix. Synchronous. */
+  private reap(l: { prefix: string; pids: Int32Array }): void {
+    for (let i = 0; i < l.pids.length; i++) {
+      const pid = Atomics.exchange(l.pids, i, 0)
+      if (pid > 1) try { process.kill(-pid, 'SIGKILL') } catch { /* ESRCH: already gone */ }
+    }
+    if (this.media) sweepPrefixed(this.media.dir, l.prefix)
   }
 
   /** Runs `fn` when the slot is idle; one in-flight message per worker. */
@@ -373,7 +395,14 @@ export class Pool {
    * never cross the worker boundary; the caller adopts it into its `MediaTemp` ledger. A short read job like `text`.
    */
   async mediaPart(sessionId: string, docRef: string, contentPolicy: 'visible-only' | 'full', partPath: string, dir: string, signal?: AbortSignal): Promise<{ path: string; bytes: number; sourceHash: string }> {
-    return await this.mediaJob(sessionId, docRef, contentPolicy, (docKey) => ({ type: 'media-part', id: this.nextId++, docKey, partPath, dir }), signal) as { path: string; bytes: number; sourceHash: string }
+    // Task 13: the pool names the file, so a job with no reply (a timeout or death retires the worker first) leaves none.
+    const name = `${randomBytes(16).toString('hex')}.bin`
+    try {
+      return await this.mediaJob(sessionId, docRef, contentPolicy, (docKey) => ({ type: 'media-part', id: this.nextId++, docKey, partPath, dir, name }), signal) as { path: string; bytes: number; sourceHash: string }
+    } catch (e) {
+      try { unlinkSync(join(dir, name)) } catch { /* never written, or removed by the worker */ }
+      throw e
+    }
   }
 
   private async mediaJob(sessionId: string, docRef: string, contentPolicy: 'visible-only' | 'full', msg: (docKey: string) => WorkerRequest, signal?: AbortSignal): Promise<unknown> {
