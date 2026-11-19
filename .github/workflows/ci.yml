@@ -32,7 +32,9 @@ jobs:
   check:
     name: typecheck, test, build, corpus
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The suite outgrew 30 min (PR #85: the test step alone ran 29 min); the CF oracle and Stage 5 audit
+    # suites verify full Excel captures, which takes minutes on this runner.
+    timeout-minutes: 45
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
