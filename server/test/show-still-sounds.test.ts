@@ -179,3 +179,44 @@ describe.skipIf(!info)('the still sound-only plan on the wire (Task 11b)', () =>
     }
   }, 120_000)
 })
+
+/**
+ * Task 11b fix round (controller ruling): nothing delivers a use the plan refuses, sound-only still plans included.
+ * Each plan bound for a session records its (mediaId, unit) answers; `media-request` for a refused pair answers the
+ * plan's reason, and one for a unit no plan was sent for answers `media-unavailable`.
+ */
+describe.skipIf(!info)('a plan-refused use is never delivered (Task 11b fix round)', () => {
+  const planOf = (r: Awaited<ReturnType<Client['showPlan']>>, unit: number) => (decodeShowMessage(r.messages[0]!, { unit, maxDecoded: SHOW_PLAN_LIMITS.showDecoded }) as { plan: ShowPlanRecord }).plan
+  const reason = (r: Awaited<ReturnType<Client['mediaRequest']>>) => (r.start ? 'delivered' : r.end?.type === 'media-refused' ? r.end.reason : JSON.stringify(r.end))
+
+  it("a still's click sound requested by id is refused; the animated slide's playable use of the same part is served", async () => {
+    const h = await start({ doc: await stillSoundDeck('shared'), media: {} }), c = new Client(h.url)
+    try {
+      await c.hello(); await c.ready()
+      const still = planOf(await c.showPlan(0, 1, 'full'), 0)
+      expect(still.fallback).toBe('still')
+      const clicked = still.media!.find(x => x.refused)!
+      expect(clicked.refused).toBe('media-unavailable')
+      const live = planOf(await c.showPlan(1, 1, 'full'), 1)
+      expect(live.fallback).toBeUndefined()
+      // One part, identity audio|k: the same mediaId on both slides, refused on the still only.
+      expect(live.media).toEqual([{ mediaId: clicked.mediaId, kind: 'audio', durationMs: expect.any(Number) }])
+      expect((await c.mediaShow(0)).type).toBe('media-show-ok')
+      expect(reason(await c.mediaRequest(clicked.mediaId, { unit: 0, ms: 60_000 }))).toBe('media-unavailable')
+      expect(reason(await c.mediaRequest(clicked.mediaId, { unit: 1, ms: 60_000 }))).toBe('delivered')
+    } finally { c.close(); h.stop() }
+  }, 120_000)
+
+  it('a request before show-plan for that unit is refused media-unavailable', async () => {
+    const h = await start({ doc: await stillSoundDeck('shared'), media: {} }), c = new Client(h.url)
+    try {
+      await c.hello(); await c.ready()
+      const id = planOf(await c.showPlan(0, 1, 'full'), 0).media!.find(x => x.refused)!.mediaId
+      expect((await c.mediaShow(1)).type).toBe('media-show-ok')
+      // No plan was sent for unit 1 yet: never served because of ordering.
+      expect(reason(await c.mediaRequest(id, { unit: 1, ms: 60_000 }))).toBe('media-unavailable')
+      await c.showPlan(1, 1, 'full')
+      expect(reason(await c.mediaRequest(id, { unit: 1, ms: 60_000 }))).toBe('delivered')
+    } finally { c.close(); h.stop() }
+  }, 120_000)
+})

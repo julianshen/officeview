@@ -34,7 +34,7 @@ import { docRefOf, type Keys } from './keys'
 import { admit } from './policy'
 import { AdmissionRefused, RenderFailed, RenderTimeout, type Pool } from './pool'
 import { showBuildGrant, showMorphGrant } from './show/grant'
-import { encodeShowMessage, PlanRejected, SHOW_TRACK_WINDOW, type ShowMessage } from '../../src/stream/show-plan'
+import { encodeShowMessage, PlanRejected, SHOW_TRACK_WINDOW, type PlanMediaRecord, type ShowMessage, type ShowPlanRecord } from '../../src/stream/show-plan'
 import type { TestOnlyOptions } from './config'
 import type { ShowDeliveryRecord } from './audit-store'
 import { encodeNotesBody, NOTES_ENCODED_CAP, notesBasisLabel } from './notes'
@@ -139,6 +139,12 @@ interface MediaUse { unit: number; refused?: MediaRefusal; item?: MediaItem }
 interface MediaSlot {
   queue?: SessionMediaQueue; started?: Promise<void>; uses: Map<string, Map<number, MediaUse>>
   refs: Map<number, MediaUnitRefs>; cursor?: number; wakes: Set<() => void>; revocationHooked?: boolean
+  /**
+   * Task 11b fix round (controller ruling): per unit, the media answers of the last plan bound for this session
+   * (mediaId → its plan refusal, `undefined` when it plays). A use is delivered only when a plan sent for its unit
+   * ships it playable; a unit no plan was sent for delivers nothing (`media-unavailable`).
+   */
+  plans: Map<number, Map<string, PlanMediaRecord['refused']>>
 }
 
 interface Conn {
@@ -343,7 +349,7 @@ export function createStreamServer(o: StreamServerOptions) {
         audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, services: { copy: policy.copy, textA11y: policy.textA11y, print: policy.print, notes: canNotes(policy), media: canMedia }, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, docRef, contentPolicy: policy.contentPolicy, visibleMark: markOf(policy, decision) })
       } catch { return close(ws, 'policy-refused') }
       table.create({ sid, docRef, ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), role: policy.role, effectivePolicy: policy, activeSocket: ws as never, jti: token.jti, startedAt })
-      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, hidden: new Set(opened.hidden), anim: new Set(opened.anim.filter((i) => !opened.hidden.includes(i))), morph: new Set(opened.morph.filter((i) => !opened.hidden.includes(i))), media: new Set((opened.media ?? []).filter((i) => !opened.hidden.includes(i))), fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, copiedParagraphs: 0, printedPages: 0, mediaKey: new Uint8Array(randomBytes(32)), media: { uses: new Map(), refs: new Map(), wakes: new Set() }, ...(forensic ? { forensic } : {}) })
+      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, hidden: new Set(opened.hidden), anim: new Set(opened.anim.filter((i) => !opened.hidden.includes(i))), morph: new Set(opened.morph.filter((i) => !opened.hidden.includes(i))), media: new Set((opened.media ?? []).filter((i) => !opened.hidden.includes(i))), fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, copiedParagraphs: 0, printedPages: 0, mediaKey: new Uint8Array(randomBytes(32)), media: { uses: new Map(), refs: new Map(), wakes: new Set(), plans: new Map() }, ...(forensic ? { forensic } : {}) })
       sessionRates.set(sid, ws.data.rates)
       ws.data.sid = sid
       committed = true
@@ -812,6 +818,11 @@ export function createStreamServer(o: StreamServerOptions) {
    * 9. `diag` text (forensic-unmarked, Morph diagnostics), `*-start`, then the kind-6 messages, each one sent only
    *    while the session lives.
    */
+  /** Task 11b fix round: the session's record of what the plan bound for `unit` ships, and how (`MediaSlot.plans`). */
+  const planned = (sd: { media: MediaSlot }, unit: number, plan: ShowPlanRecord) => {
+    sd.media.plans.set(unit, new Map((plan.media ?? []).map((r) => [r.mediaId, r.refused])))
+  }
+
   async function onShow(ws: WS, msg: Record<string, unknown>, kind: ShowDeliveryRecord['kind']) {
     const deny = (reqId: unknown, code: ShowErrorCode) => send(ws, { reqId: isU32(reqId) ? reqId : 0, type: 'error', code })
     const a = await textOp(ws, msg, undefined, deny)
@@ -860,12 +871,14 @@ export function createStreamServer(o: StreamServerOptions) {
           // still and sounds. Any other refusal, or a still without audio (or media off), is piece 4's error.
           if (!built.sounds) return deny(reqId, built.refused)
           head = { tag: 1, plan: bindMedia(built.sounds.plan, (ref) => sessionMediaId(sd.mediaKey, mediaIdentity(ref)), built.sounds.mediaRefs) }
+          planned(sd, unit, head.plan)
           assets = []
           page = { w: 0, h: 0 }
           decoded = built.sounds.decodedBytes
         } else {
           // D2: the cached plan's placeholders become this session's media ids.
           head = { tag: 1, plan: bindMedia(built.plan, (ref) => sessionMediaId(sd.mediaKey, mediaIdentity(ref)), built.mediaRefs) }
+          planned(sd, unit, head.plan)
           assets = built.assets
           const entry = built.assets.find((x) => x.tag === 3)
           if (!entry) return deny(reqId, 'policy-refused')
@@ -1000,6 +1013,8 @@ export function createStreamServer(o: StreamServerOptions) {
             for (const it of items) { const use = uses.get(it.mediaId)?.get(u); if (use) use.item = it }
             return items
           },
+          // Task 11b fix round: encode-ahead skips a use the plan sent for its unit refuses (a request is refused too).
+          ahead: (it) => !sd.media.plans.get(it.unit)?.get(it.mediaId),
           part: async (partPath) => {
             if (!ledger.touch(docRef, policy, sd.doc.bytes.length)) throw new Error('document cache full')
             const r = await o.pool.mediaPart(s.sid, docRef, policy, partPath, svc.temp.dir)
@@ -1085,6 +1100,11 @@ export function createStreamServer(o: StreamServerOptions) {
     }
     const refused = (reason: MediaReason) => (row({ reason }) ? deny(reason) : deny('policy-refused'))
     if (!rated) return refused('rate-limited')
+    // Task 11b fix round: only what a plan sent for the use's unit ships playable; its refusal is the plan's own.
+    const sent = sd.media.plans.get(use.unit)
+    if (!sent || !sent.has(mediaId)) return refused('media-unavailable')
+    const byPlan = sent.get(mediaId)
+    if (byPlan) return refused(byPlan)
     if (use.refused || !use.item || !key) return refused(use.refused ?? 'media-unavailable')
     const r = await q.request(mediaId)
     if (!r.ok) return alive() ? refused(revoked() ? 'media-unavailable' : r.reason) : undefined

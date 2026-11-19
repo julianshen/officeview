@@ -24,7 +24,7 @@ export const MEDIA_ENABLED_DEFAULT = true
 
 /** TEST-ONLY. `root`: the parent of the media temp directory (default the OS temp dir). */
 export interface MediaTestOnly { maxBytes?: number; wallCapMs?: number; slots?: number; queue?: number; root?: string }
-export type MediaQueueOptions = Pick<SessionMediaQueueOptions, 'sid' | 'items' | 'part' | 'units'>
+export type MediaQueueOptions = Pick<SessionMediaQueueOptions, 'sid' | 'items' | 'part' | 'units' | 'ahead'>
 export interface MediaServices {
   readonly info: FfmpegInfo | undefined
   readonly temp: MediaTemp

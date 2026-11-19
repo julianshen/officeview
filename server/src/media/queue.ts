@@ -38,6 +38,11 @@ export interface SessionMediaQueue {
 export interface SessionMediaQueueOptions {
   sid: string
   items: (unit: number) => Promise<MediaItem[]>
+  /**
+   * Task 11b fix round: whether encode-ahead may ready `item` now (default: always). False skips it ahead (no encode
+   * and no look-ahead reference); a request for it is the caller's to refuse, never this queue's to encode ahead.
+   */
+  ahead?: (item: MediaItem) => boolean
   part: (partPath: string) => Promise<{ path: string; dispose(): Promise<void> }>
   units: number
   info: FfmpegInfo
@@ -181,7 +186,7 @@ export function createSessionMediaQueue(o: SessionMediaQueueOptions): SessionMed
   const nextAhead = (): Pick | undefined => {
     for (const u of order) for (const item of byUnit.get(u) ?? []) {
       const id = encodeKeyId(item.key)
-      if (!keys.get(id)!.readied && !aheadFailed.has(id)) return { item, id }
+      if (!keys.get(id)!.readied && !aheadFailed.has(id) && (o.ahead?.(item) ?? true)) return { item, id }
     }
     return undefined
   }
@@ -265,7 +270,7 @@ export function createSessionMediaQueue(o: SessionMediaQueueOptions): SessionMed
       const seen = new Set<string>()
       for (const u of order) for (const item of byUnit.get(u) ?? []) {
         const id = encodeKeyId(item.key)
-        if (seen.has(id)) continue
+        if (seen.has(id) || !(o.ahead?.(item) ?? true)) continue
         seen.add(id)
         const ks = keys.get(id)!
         if (ks.readied) continue

@@ -1011,7 +1011,8 @@ export function clickPauseVideoDeck(): Promise<Uint8Array> {
  * - `transition`: a video (`av.mp4`, shape 3) begins with the slide and the ink box enters on its end (the still, as
  *   `videoDeck`); the slide is entered with a fade and a start sound (`a.m4a`, `rIdSnd2`, no loop).
  */
-export function stillSoundDeck(kind: 'audio-end' | 'transition'): Promise<Uint8Array> {
+export function stillSoundDeck(kind: 'audio-end' | 'transition' | 'shared'): Promise<Uint8Array> {
+  if (kind === 'shared') return sharedStillSoundDeck()
   const reveal = `<p:par><p:cTn id="5" presetID="1" presetClass="entr" presetSubtype="0" fill="hold" nodeType="afterEffect"><p:stCondLst><p:cond evt="onEnd" delay="0"><p:tn val="3"/></p:cond></p:stCondLst><p:childTnLst>${setVisibility(ids(6), 2, 'visible')}</p:childTnLst></p:cTn></p:par>`
   const ink = rect(2, 'Ink', 400, 300, 160, 120, HIDDEN_INK)
   if (kind === 'transition') {
@@ -1027,6 +1028,31 @@ export function stillSoundDeck(kind: 'audio-end' | 'transition'): Promise<Uint8A
     boxes: [ink, rect(4, 'Box', 80, 80, 120, 120, '336699')], media: [{ spid: 3, file: 'a.m4a' }], sounds: [{ rId: 'rIdSnd1', file: 'a.wav' }],
     timing: mediaNode('audio', 3, spTgt(3), { narration: true, start: '<p:cond delay="250"/>' }) + reveal + mainSeqXml([mediaClick(id, fade(id) + mediaNode('audio', 90, sndTgt('rIdSnd1')), 'entr')]),
   }] })
+}
+
+/**
+ * Task 11b fix round (controller ruling): slide 1 is `stillSoundDeck('audio-end')`; slide 2 plays the same effect-sound
+ * part (`a.wav`, one `ppt/media/sound1.wav` for both slides' `rIdSnd1`) with the slide, and animates. The part's
+ * identity is `audio|k` (one mediaId in a session): refused on the still (click-started), playable on slide 2.
+ */
+async function sharedStillSoundDeck(): Promise<Uint8Array> {
+  const reveal = `<p:par><p:cTn id="5" presetID="1" presetClass="entr" presetSubtype="0" fill="hold" nodeType="afterEffect"><p:stCondLst><p:cond evt="onEnd" delay="0"><p:tn val="3"/></p:cond></p:stCondLst><p:childTnLst>${setVisibility(ids(6), 2, 'visible')}</p:childTnLst></p:cTn></p:par>`
+  const id = ids(20)
+  const fade = (n: () => number) => setVisibility(n, 4, 'visible') + animEffect(n, 4, 'in', 'fade', 500)
+  const bytes = await mediaDeck({ slides: [
+    {
+      boxes: [rect(2, 'Ink', 400, 300, 160, 120, HIDDEN_INK), rect(4, 'Box', 80, 80, 120, 120, '336699')], media: [{ spid: 3, file: 'a.m4a' }], sounds: [{ rId: 'rIdSnd1', file: 'a.wav' }],
+      timing: mediaNode('audio', 3, spTgt(3), { narration: true, start: '<p:cond delay="250"/>' }) + reveal + mainSeqXml([mediaClick(id, fade(id) + mediaNode('audio', 90, sndTgt('rIdSnd1')), 'entr')]),
+    },
+    { boxes: [BOX], sounds: [{ rId: 'rIdSnd1', file: 'a.wav' }], timing: mediaNode('audio', 3, sndTgt('rIdSnd1')) },
+  ] })
+  const { default: JSZip } = await import('jszip')
+  const zip = await JSZip.loadAsync(bytes)
+  const rels = 'ppt/slides/_rels/slide2.xml.rels'
+  zip.file(rels, (await zip.file(rels)!.async('string')).replace('../media/sound2.wav', '../media/sound1.wav'))
+  zip.remove('ppt/media/sound2.wav')
+  zip.file('[Content_Types].xml', (await zip.file('[Content_Types].xml')!.async('string')).replace(/<Override PartName="\/ppt\/media\/sound2\.wav"[^>]*\/>/, ''))
+  return new Uint8Array(await zip.generateAsync({ type: 'uint8array' }))
 }
 
 /** The media decks by name (Task 4's leak audit plays each). */

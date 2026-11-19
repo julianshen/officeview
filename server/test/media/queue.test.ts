@@ -178,6 +178,17 @@ describe('the session queue (D1, D12)', () => {
     await q.end(); await w.cache.close()
   })
 
+  it('Task 11b fix round: encode-ahead skips an item `ahead` declines; a request still encodes it', async () => {
+    const w = world(), tc = fakeTranscode()
+    const q = synthQueue(w, 's', 'd-ahead', [['u0'], ['u1'], ['u2']], tc, fakePart, { ahead: (it) => it.unit !== 1 })
+    expect(await q.start(0)).toBe(2)
+    await until(() => tc.s.count === 2 && q.running === undefined, 'two encodes')
+    expect(tc.calls.map((c) => c.name)).toEqual(['u0', 'u2'])
+    ok(await q.request(q.id(1, 'u1')))
+    expect(tc.calls.map((c) => c.name)).toEqual(['u0', 'u2', 'u1'])
+    await q.end(); await w.cache.close()
+  })
+
   it('one key awaited at a time per session', async () => {
     const w = world(), tc = fakeTranscode({ manual: true })
     const q = synthQueue(w, 's', 'd-one', [['a', 'b'], ['c'], ['d']], tc)
