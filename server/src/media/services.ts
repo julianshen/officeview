@@ -22,8 +22,9 @@ import { transcode } from './transcode'
 /** D18: media in streamed shows is on now that the client plays it (Task 11); the startup probe still fails closed. */
 export const MEDIA_ENABLED_DEFAULT = true
 
-/** TEST-ONLY. `root`: the parent of the media temp directory (default the OS temp dir). */
-export interface MediaTestOnly { maxBytes?: number; wallCapMs?: number; slots?: number; queue?: number; root?: string }
+/** TEST-ONLY. `root`: the parent of the media temp directory (default the OS temp dir). `now`, `idleTtlMs`: the
+ * cache's clock and idle TTL (Task 13 lifecycle). */
+export interface MediaTestOnly { maxBytes?: number; wallCapMs?: number; slots?: number; queue?: number; root?: string; now?: () => number; idleTtlMs?: number }
 export type MediaQueueOptions = Pick<SessionMediaQueueOptions, 'sid' | 'items' | 'part' | 'units' | 'ahead'>
 export interface MediaServices {
   readonly info: FfmpegInfo | undefined
@@ -56,7 +57,7 @@ export async function createMediaServices(o: { env: Record<string, string | unde
     } else console.warn(`[media] unavailable: ffmpeg probe ${probe.reason}`)
   }
   const admission = createMediaAdmission({ slots: t?.slots ?? mediaSlots(), queue: t?.queue ?? MEDIA_QUEUE })
-  const cache = createEncodeCache({ temp, sessionBytes: MEDIA_SESSION_LOOKAHEAD, serverBytes: MEDIA_SERVER_CACHE })
+  const cache = createEncodeCache({ temp, sessionBytes: MEDIA_SESSION_LOOKAHEAD, serverBytes: MEDIA_SERVER_CACHE, ...(t?.now ? { now: t.now } : {}), ...(t?.idleTtlMs !== undefined ? { idleTtlMs: t.idleTtlMs } : {}) })
   const queues = new Set<SessionMediaQueue>()
   const seams = t && (t.maxBytes !== undefined || t.wallCapMs !== undefined) ? { ...(t.maxBytes !== undefined ? { maxBytes: t.maxBytes } : {}), ...(t.wallCapMs !== undefined ? { wallCapMs: t.wallCapMs } : {}) } : undefined
   let closing: Promise<void> | undefined
