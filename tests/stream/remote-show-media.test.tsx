@@ -322,6 +322,20 @@ describe('remote show plays audio (Task 11)', () => {
     s.exit()
   }, DRIVES)
 
+  it('no AAC in the browser (D20): media-codec notice, nothing requested, and the clock end (D4)', async () => {
+    vi.spyOn(HTMLMediaElement.prototype, 'canPlayType').mockImplementation(() => '')
+    const fd = mediaDoc(NARRATION)
+    const { s, diags, root } = await show(fd)
+    await run(300)
+    expect(diags.map((d) => d.code)).toContain('media-codec')
+    expect(fd.requests()).toEqual([])
+    expect(root.getAttribute('data-officeview-show-frame')).toBe('image')
+    expect(mediaEnds(s)).toEqual([])
+    await run(NARRATION_MS)
+    expect(mediaEnds(s)).toEqual([[NARRATION_NODE, NARRATION_MS]])
+    s.exit()
+  }, DRIVES)
+
   it('media off (D18): no player, no request, and media nodes end at once as in piece 4', async () => {
     const fd = mediaDoc(NARRATION, { media: false })
     const { s, root } = await show(fd)

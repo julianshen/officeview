@@ -343,7 +343,8 @@ async function fetchWire(bytes: Uint8Array, marks: MarkSpec, testOnly: HarnessTe
   const { decodeShowMessage, SHOW_PLAN_LIMITS } = await import('../src/stream/show-plan')
   const visibleMark = marks.kind
   // Piece 5 (Task 11): the streamed side runs with media on (the server's default), its own media services and
-  // ffmpeg probe; `OV_MEDIA=off` runs D18's off path. On, a failed probe is an error, never a silent off.
+  // ffmpeg probe; `OV_MEDIA=off` runs D18's off path. A failed probe runs the off path with a warning, and is an
+  // error under `OV_MEDIA_REQUIRED=1` (the server tests' ffmpeg-gate convention).
   const mediaWanted = process.env.OV_MEDIA !== 'off'
   const h = await start({ doc: bytes, policy: { contentPolicy: 'full', visibleMark, forensicMark: false }, testOnly: { forensicOff: true }, media: { enabled: mediaWanted }, ...(marks.kind === 'viewer' ? { viewerId: marks.text } : {}) })
   let c = new Client(h.url)
@@ -357,7 +358,10 @@ async function fetchWire(bytes: Uint8Array, marks: MarkSpec, testOnly: HarnessTe
   }
   try {
     const m = await c.hello(); await c.ready()
-    if (mediaWanted && m.can.media !== true) throw new Error('media is on but the server offers none (the ffmpeg probe failed?); set OV_MEDIA=off for the off path')
+    if (mediaWanted && m.can.media !== true) {
+      if (process.env.OV_MEDIA_REQUIRED === '1') throw new Error('OV_MEDIA_REQUIRED=1 but the server offers no media (the ffmpeg probe failed)')
+      console.warn('[compare] media is on but the server offers none (the ffmpeg probe failed): the streamed side runs media off')
+    }
     const list = m.units.list
     const unitOf = list.map((u, i) => (u.hidden ? -1 : i)).filter((i) => i >= 0)
     const w: Wire = { manifest: m, unitOf, plans: new Map(), refused: new Map(), tracks: new Map(), morphs: new Map(), stills: new Map(), diagnostics: [] }
