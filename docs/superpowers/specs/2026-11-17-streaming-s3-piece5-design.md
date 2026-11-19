@@ -1,6 +1,6 @@
 # Server streaming — Stage 3 piece 5: audio in streamed shows (video deferred to piece 6)
 
-Status: draft for owner review, 2026-11-17. Amended 2026-11-17 after the feasibility gate (audio only) and again for shared audio encodes (§1).
+Status: draft for owner review, 2026-11-17. Amended 2026-11-17 after the feasibility gate (audio only) and again for shared audio encodes (§1). As-built amendments, 2026-11-20: §10.
 Parents:
 - Stage 3 design `2026-11-11-streaming-s3-design.md` §4.5 and §5.
 - Server streaming design `2026-11-07-server-streaming-design.md` §12a.6, §12a.8 (3d), §13 and §14.
@@ -243,3 +243,66 @@ The video rows (≤ 5 min, ≤ 64 MiB, ≤ 1280×720 and ≤ 30 fps) are deferre
 - The exact demuxer allowlist and AAC bitrate.
 - The wire field names beyond those above, and their refusal codes.
 - How the rlimits and sandbox are applied on macOS and Linux. If a limit can't be set on a platform, that platform fails closed with `media-unavailable`.
+
+## 10. Amendments (2026-11-20, as built)
+
+These record where the build differs from the text above, or settles something the text leaves open. Each has its reason. The plan is `docs/superpowers/plans/2026-11-17-streaming-s3-p5-media.md`, and the controller's rulings are in the piece-5 ledger. The rescope itself (audio only, D22, the dropped audit columns, the deferred memory budget) is already in the body (`20ac875b`). So are shared encodes (`b7661275`).
+
+### Wire
+
+- **The show messages (plan D1).** §4.4's "when the show starts, the server queues" needs the server to know that a show started. Three client→server text messages, each ≤ 64 KiB, are charged to the message budget only:
+  - `media-show {reqId, token, unit}` at show start. It answers `media-show-ok {reqId, queued}` or `media-refused {reqId, reason}`. No scale bucket is sent: only video's crop needed one (piece 6).
+  - `media-cursor {unit}` on each slide change, coalesced to one per 200 ms. A cursor outside `[current, next]` re-queues from `unit` (§4.4's jump).
+  - `media-end {}` at show end. A socket close, session expiry or revocation counts as one.
+
+  The queue runs in slide order from `unit` to the last slide, then through the slides before `unit`.
+- **`media-request` carries `token`,** as every request does: `media-request {reqId, token, mediaId, unit?}` (§4.3 shows only `{reqId, mediaId}`).
+- **A `unit` field on `media-request`** (Task 9 review). One part can be playable on one slide and refused on another, and refusal and audit are per use, keyed `(mediaId, unit)`. The field is optional; a request without it is for the slide of the last `media-show` or `media-cursor`. Without it, a refusal recorded on one slide would have silenced the same part on another, and the audit row would have named the wrong slide.
+- **D14, kind 9 is stored only.** Kind 9 must have the compressed flag clear, and every other kind must still have it set. A compressed kind-9 message is rejected (`flags`), and so is a stored message of any other kind. This narrows §4.3's "may be sent stored", so that no kind has two encodings to test.
+- **D13, chunk size.** Each MEDIA_CHUNK payload is 1 MiB − 64 B, sent as one fragment, so the 5 s reassembly window never covers a multi-fragment chunk on a slow link. The 4 MiB cap stays as the admission bound. The parent §14 table and its amendment carry kind 9, this size and the `'media'` rate class.
+
+### Timing (§5)
+
+- **D4, ends for failures found after classification.** §5 rule 3's fallback end (the finite `dur`, else at once) applies only to records the plan ships as `refused`, because only those were known when the slide was classified. Every refusal or failure after the plan was sent keeps the clock end `begin + durationMs`, and the node shows its poster and raises the typed notice. This covers `media-too-large`, `media-timeout` and `media-busy` from the encode, `rate-limited`, client `media-codec`, workspace pressure, and bytes that arrive after the node ended. It is §5 rule 2's "buffering stalls don't move the end" applied to failures, and it keeps drawn frames equal to the classified history. (Controller ruling, pre-flight, 2026-11-17.)
+- **The classification ruling (Task 5).** With media on, slides classify exactly as with media off. Every media node, audio included, seeds the end analysis. An end that "affects" drawing, or is "unresolved", sends the slide to its still. Computed audio ends drive playback only.
+  - This replaces §5 rule 4's narrower list ("a slide stays a still only when…") and goal 5's "audio no longer has to refuse slides wholesale". A slide where drawing waits on a sound's end stays a still, as in piece 4.
+  - Why: the hand-written proof that computed ends are safe needed 13 review rounds on PR #78 and still broke. An on/off equivalence test over every deck replaces the proof.
+  - Cost: some audio slides with reveals on an audio end play as stills (and, by the next amendment, still sound).
+- **Still slides play their sounds (owner decision 2026-11-19, Task 11b).**
+  - The plan text left a still silent. A classifier still (`still`) that has audio now ships an inert, sound-only plan (`fallback: 'still'`). It has no layers, steps, transition visual or triggers, and its timing tree holds only the audio leaves and the whitelisted commands, at the times the server computed.
+  - The server replays that schedule on the client's own timeline and ships it only if every begin, end and command matches. Otherwise the still stays silent (fail closed).
+  - Only classifier stills get sounds. A still from `show-budget`, `show-limits` or `show-plan-timeout` stays silent, because its plan was never built.
+  - A `(mediaId, unit)` pair the plan refuses is recorded for the session and refused at request time. Encode-ahead never encodes it.
+- **D22, video ends.** A video node ships no record and ends at its first live frame, which is piece 4's synthetic end. That is not §5 rule 3's "finite `dur`, else at once". It is sound only because the classifier stills every slide on which a video end could change what is drawn. An audio node chained after a video end would start at slide start instead. If a drawn behaviour depends on it, the slide is a still; otherwise its record ships `refused: 'media-unavailable'`.
+- **A piece-4 soundness fix included in this branch: the `seq` backward-cut rule (C4.1 in the Task 5 records).** A non-concurrent `seq` whose later child begins on a media end cuts an earlier child, and that cut can hide drawn ink. Piece 4's dependency analysis returned `none` for it, so with media off such a slide was planned from layers and could draw differently from local mode. **The bug is on `main` (piece 4, PR #78) and is fixed on this branch:** the rule marks the earlier siblings as affected. It only adds stills.
+
+### Transcoder (§4.2, §8)
+
+- **D5, the sandbox per platform (owner ruling 2026-11-17).**
+  - Linux: `unshare --user --map-root-user --net`, then `sh -c 'ulimit -t … -v 2097152 -f … && exec "$@"'`, so the address space is capped at 2 GiB.
+  - macOS: `sandbox-exec -p '(version 1)(allow default)(deny network*)'` around the same `sh -c` with `-t` and `-f` only. macOS rejects `ulimit -v` and `-d`, so the address-space cap is replaced by an RSS watchdog: it reads the group's RSS every 100 ms and kills the group above 1 GiB.
+  - A platform that cannot apply a limit fails closed with `media-unavailable`.
+- **The audio filter is `asetpts=N/SR/TB,apad`, not `apad`** (Task 7). The `wma` decoder's start delay left the encode short of `durationMs` under `-t`, which cut the tail of the source. Re-stamping the samples from zero first keeps every output exactly `durationMs`. Cost: a real gap or late start in the source is closed up.
+- **The X4 tag allowlist.** §3 goal 3 and §8 say "no tags". The mp4 muxer always writes `major_brand`, `minor_version`, `compatible_brands`, `language=und` and `handler_name=SoundHandler`. These are muxer constants, not source metadata, so the wire audit allows exactly these keys at their pinned values (`MUXER_TAG_ALLOWLIST`) and nothing else. This narrows the literal "no tags" to its intent. Two more measured muxer constants are allowed:
+  - **ffprobe `vendor_id`.** ffprobe 6.1 (the CI runner's) reports `vendor_id` at `'[0][0][0][0]'`. It is accepted only at that value (`PROBE_REPORTED_OPTIONAL`), and its absence is accepted too, as ffprobe 8 omits it.
+  - **The empty `moov/udta` box.** The muxer writes a 61-byte empty `udta { meta { hdlr mdir/appl, ilst {} } }` in every output. The 64-byte-window audit allows exactly those bytes.
+- **Probes run on the main thread (Task 13).** The pool's probe host spawns, kills and reaps every ffprobe child, at the render worker's request, so a terminated or retired worker can leave no child behind. Before each spawn, the staged file must be a regular file owned by the server's uid with `nlink` 1, and its device and inode are checked again. This replaces worker-side spawning, which plan D21 had kept.
+
+### Delivery (§4.3)
+
+- **D12 and D23.** The shared-encode amendment (`b7661275`) already carries the cache, single flight and budgets. As built, the plan adds two details:
+  - A `media-request` that would exceed the session's 256 MiB look-ahead first drops that session's own farthest-ahead undelivered references, in queue order. The entries stay cached, and stay pinned while another session references them.
+  - An encode in flight reserves 32 MiB against the 2 GiB server cache.
+
+  Together these mean a request needs at most 32 MiB of the session's look-ahead, so a backward jump cannot deadlock. Only a fully referenced server cache refuses it, with `media-busy`.
+- **`docId` is an HMAC of the document's content** (Task 7 ruling). §4.3's "the document identity the session opened" is computed from the bytes, so two byte-identical uploads share one encode. There is still no sharing across different documents.
+  - Accepted cost: a timing channel. Someone who already holds the identical file can tell from a fast answer that someone else has it open.
+  - Closing a document (its last session leaving) deletes its entries, like revocation (Task 9 ruling).
+
+### Client (§4.4)
+
+- **The two `media-codec` notices.** The browser can fail AAC in two places, and each raises its own notice:
+  - when the player's own `canPlayType('audio/mp4')` returns `''`, the notice code is `media-codec`;
+  - when the browser accepts `audio/mp4` but not `codecs="mp4a.40.2"`, the remote lease refuses with `media-codec` before any byte is requested. The player then raises `media-refused`, with "(media-codec)" in its message.
+
+  The record's `contentType` is fixed at `audio/mp4` (D16), so the second path is the likely one on an AAC-less Chromium. A test that expects the code `media-codec` has to accept either form.

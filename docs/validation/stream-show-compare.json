@@ -9,7 +9,7 @@
       "family": "latin",
       "meanAbs": 0.003265,
       "rowMax": 0.154171,
-      "slides": 55,
+      "slides": 65,
       "over": false
     }
   ],
@@ -108,6 +108,86 @@
       "family": "latin",
       "layers": 3,
       "meanAbs": 0.0000021843228031953523,
+      "rowMax": 0.0004003267973856209
+    },
+    {
+      "deck": "narrationDeck",
+      "slide": 1,
+      "family": "latin",
+      "layers": 2,
+      "meanAbs": 0.0000020708514887436455,
+      "rowMax": 0.0004003267973856209
+    },
+    {
+      "deck": "effectSoundDeck",
+      "slide": 1,
+      "family": "latin",
+      "layers": 2,
+      "meanAbs": 9.928740014524328e-7,
+      "rowMax": 0.0004003267973856209
+    },
+    {
+      "deck": "transitionSoundDeck",
+      "slide": 1,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 9.758533042846768e-7,
+      "rowMax": 0.0003921568627450981
+    },
+    {
+      "deck": "crossSlideSoundDeck",
+      "slide": 1,
+      "family": "latin",
+      "layers": 2,
+      "meanAbs": 0.0000020708514887436455,
+      "rowMax": 0.0004003267973856209
+    },
+    {
+      "deck": "crossSlideSoundDeck",
+      "slide": 2,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 9.758533042846768e-7,
+      "rowMax": 0.0003921568627450981
+    },
+    {
+      "deck": "crossSlideSoundDeck",
+      "slide": 3,
+      "family": "latin",
+      "layers": 1,
+      "meanAbs": 9.758533042846768e-7,
+      "rowMax": 0.0003921568627450981
+    },
+    {
+      "deck": "repeatDeck",
+      "slide": 1,
+      "family": "latin",
+      "layers": 2,
+      "meanAbs": 0.0000020708514887436455,
+      "rowMax": 0.0004003267973856209
+    },
+    {
+      "deck": "mixedNarrationDeck",
+      "slide": 1,
+      "family": "latin",
+      "layers": 4,
+      "meanAbs": 0.000003279320987654321,
+      "rowMax": 0.0008006535947712418
+    },
+    {
+      "deck": "videoDeck",
+      "slide": 1,
+      "family": "latin",
+      "layers": 3,
+      "meanAbs": 0.0000021843228031953523,
+      "rowMax": 0.0004003267973856209
+    },
+    {
+      "deck": "stillSoundDeck",
+      "slide": 1,
+      "family": "latin",
+      "layers": 4,
+      "meanAbs": 0.000003177196804647785,
       "rowMax": 0.0004003267973856209
     },
     {
@@ -587,6 +667,162 @@
       }
     },
     {
+      "deck": "crossSlideSoundDeck",
+      "marks": "off",
+      "slide": 2,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 9.758533042846768e-7,
+      "rowMax": 0.0003921568627450981,
+      "tol": {
+        "meanAbs": 0.020002070851488744,
+        "rowMax": 0.10040032679738563
+      }
+    },
+    {
+      "deck": "crossSlideSoundDeck",
+      "marks": "off",
+      "slide": 3,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 9.758533042846768e-7,
+      "rowMax": 0.0003921568627450981,
+      "tol": {
+        "meanAbs": 0.020002070851488744,
+        "rowMax": 0.10040032679738563
+      }
+    },
+    {
+      "deck": "crossSlideSoundDeck",
+      "marks": "fixed",
+      "slide": 2,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0037806826434277417,
+      "rowMax": 0.006764705882352942,
+      "tol": {
+        "meanAbs": 0.020002070851488744,
+        "rowMax": 0.10040032679738563
+      }
+    },
+    {
+      "deck": "crossSlideSoundDeck",
+      "marks": "fixed",
+      "slide": 3,
+      "source": "unanimated",
+      "pass": true,
+      "meanAbs": 0.0037806826434277417,
+      "rowMax": 0.006764705882352942,
+      "tol": {
+        "meanAbs": 0.020002070851488744,
+        "rowMax": 0.10040032679738563
+      }
+    },
+    {
+      "deck": "repeatDeck",
+      "marks": "off",
+      "slide": 1,
+      "source": "refused:still",
+      "pass": true,
+      "meanAbs": 0.0000020538307915758894,
+      "rowMax": 0.0003921568627450981,
+      "tol": {
+        "meanAbs": 0.020002070851488744,
+        "rowMax": 0.10040032679738563
+      }
+    },
+    {
+      "deck": "repeatDeck",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "refused:still",
+      "pass": true,
+      "meanAbs": 0.003781760620915033,
+      "rowMax": 0.006764705882352942,
+      "tol": {
+        "meanAbs": 0.020002070851488744,
+        "rowMax": 0.10040032679738563
+      }
+    },
+    {
+      "deck": "mixedNarrationDeck",
+      "marks": "off",
+      "slide": 1,
+      "source": "refused:still",
+      "pass": true,
+      "meanAbs": 0.0000032282588961510527,
+      "rowMax": 0.0007843137254901962,
+      "tol": {
+        "meanAbs": 0.020003279320987655,
+        "rowMax": 0.10080065359477125
+      }
+    },
+    {
+      "deck": "mixedNarrationDeck",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "refused:still",
+      "pass": true,
+      "meanAbs": 0.0038863981935366738,
+      "rowMax": 0.006764705882352942,
+      "tol": {
+        "meanAbs": 0.020003279320987655,
+        "rowMax": 0.10080065359477125
+      }
+    },
+    {
+      "deck": "videoDeck",
+      "marks": "off",
+      "slide": 1,
+      "source": "refused:still",
+      "pass": true,
+      "meanAbs": 0.0000021502814088598404,
+      "rowMax": 0.0003921568627450981,
+      "tol": {
+        "meanAbs": 0.020002184322803197,
+        "rowMax": 0.10040032679738563
+      }
+    },
+    {
+      "deck": "videoDeck",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "refused:still",
+      "pass": true,
+      "meanAbs": 0.0038856265885984023,
+      "rowMax": 0.006764705882352942,
+      "tol": {
+        "meanAbs": 0.020002184322803197,
+        "rowMax": 0.10040032679738563
+      }
+    },
+    {
+      "deck": "stillSoundDeck",
+      "marks": "off",
+      "slide": 1,
+      "source": "refused:still",
+      "pass": true,
+      "meanAbs": 0.000003126134713144517,
+      "rowMax": 0.0003921568627450981,
+      "tol": {
+        "meanAbs": 0.02000317719680465,
+        "rowMax": 0.10040032679738563
+      }
+    },
+    {
+      "deck": "stillSoundDeck",
+      "marks": "fixed",
+      "slide": 1,
+      "source": "refused:still",
+      "pass": true,
+      "meanAbs": 0.0038712838144517067,
+      "rowMax": 0.006764705882352942,
+      "tol": {
+        "meanAbs": 0.02000317719680465,
+        "rowMax": 0.10040032679738563
+      }
+    },
+    {
       "deck": "lo-bnc591147.pptx",
       "marks": "off",
       "slide": 1,
@@ -1019,6 +1255,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 6
       },
@@ -1088,6 +1328,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 3,
         "skipped-mark": 3
@@ -1175,6 +1419,10 @@
         ":backend-fallback",
         "1:transition-approximate"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1,
         "pass": 5
@@ -1290,6 +1538,10 @@
         ":backend-fallback",
         "1:transition-approximate"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1,
         "pass": 5
@@ -1393,6 +1645,10 @@
         ":backend-fallback",
         "1:transition-approximate"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1,
         "pass": 5
@@ -1496,6 +1752,10 @@
         ":backend-fallback",
         "1:transition-approximate"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1,
         "pass": 5
@@ -1642,6 +1902,10 @@
         ":backend-fallback",
         "1:transition-approximate"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1,
         "pass": 5
@@ -1788,6 +2052,10 @@
         ":backend-fallback",
         "1:transition-approximate"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1,
         "pass": 5
@@ -1886,6 +2154,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 6
       },
@@ -1957,6 +2229,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 3,
         "skipped-mark": 3
@@ -2028,6 +2304,10 @@
         ":backend-fallback",
         "0:harness-steps"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 2
       },
@@ -2098,6 +2378,10 @@
         ":backend-fallback",
         "0:harness-steps"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 2
       },
@@ -2171,6 +2455,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1,
         "pass": 5
@@ -2274,6 +2562,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1,
         "pass": 5
@@ -2379,6 +2671,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1
       },
@@ -2459,6 +2755,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1
       },
@@ -2487,6 +2787,1424 @@
             "source": "refused:still"
           },
           "meanAbs": 0.0038853202160493826,
+          "rowMax": 0.006764705882352942,
+          "detail": "unit still (refused:still): meanAbs 0.0039 rowMax 0.0068 (row 48)"
+        }
+      ]
+    },
+    {
+      "deck": "narrationDeck",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0000020708514887436455,
+        "rowMax": 0.0004003267973856209
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "media": {
+        "local": [
+          "0:3"
+        ],
+        "streamed": [
+          "0:3"
+        ]
+      },
+      "frames": {
+        "pass": 1
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 100,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "layers",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.020002070851488744,
+          "rowMax": 0.10040032679738563
+        },
+        "hash": {
+          "local": "3bbe3bb8",
+          "streamed": "38c36bdb"
+        },
+        "status": "pass",
+        "meanAbs": 0.0000020708514887436455,
+        "rowMax": 0.0004003267973856209,
+        "detail": "meanAbs 0.0000 rowMax 0.0004 (row 640)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "narrationDeck",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0000020708514887436455,
+        "rowMax": 0.0004003267973856209
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "media": {
+        "local": [
+          "0:3"
+        ],
+        "streamed": [
+          "0:3"
+        ]
+      },
+      "frames": {
+        "pass": 1
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 100,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "layers",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.020002070851488744,
+          "rowMax": 0.10040032679738563
+        },
+        "hash": {
+          "local": "5336059e",
+          "streamed": "ad1071e6"
+        },
+        "status": "pass",
+        "meanAbs": 0.0037801606753812634,
+        "rowMax": 0.006760620915032679,
+        "detail": "meanAbs 0.0038 rowMax 0.0068 (row 48)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "effectSoundDeck",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 9.928740014524328e-7,
+        "rowMax": 0.0004003267973856209
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 1,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "media": {
+        "local": [
+          "0:90"
+        ],
+        "streamed": [
+          "0:90"
+        ]
+      },
+      "frames": {
+        "pass": 6
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 1,
+        "pct": 100,
+        "ms": 500,
+        "streamedMs": 500,
+        "kind": "layers",
+        "rows": [
+          "preset:entr:1"
+        ],
+        "tol": {
+          "meanAbs": 0.08,
+          "rowMax": 0.3
+        },
+        "hash": {
+          "local": "b516f68f",
+          "streamed": "5cb65a4a"
+        },
+        "status": "pass",
+        "meanAbs": 9.928740014524328e-7,
+        "rowMax": 0.0004003267973856209,
+        "detail": "meanAbs 0.0000 rowMax 0.0004 (row 460)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "effectSoundDeck",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 9.928740014524328e-7,
+        "rowMax": 0.0004003267973856209
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 1,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "media": {
+        "local": [
+          "0:90"
+        ],
+        "streamed": [
+          "0:90"
+        ]
+      },
+      "frames": {
+        "pass": 6
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 100,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "layers",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.020000992874001453,
+          "rowMax": 0.10040032679738563
+        },
+        "hash": {
+          "local": "4606db85",
+          "streamed": "b423dd18"
+        },
+        "status": "pass",
+        "meanAbs": 0.0038919696350762528,
+        "rowMax": 0.006858660130718955,
+        "detail": "meanAbs 0.0039 rowMax 0.0069 (row 397)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "transitionSoundDeck",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 9.758533042846768e-7,
+        "rowMax": 0.0003921568627450981
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "p:fade"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "p:fade"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
+      "frames": {
+        "pass": 5
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 100,
+        "ms": 750,
+        "streamedMs": 750,
+        "kind": "transition",
+        "rows": [
+          "transition:p:fade"
+        ],
+        "tol": {
+          "meanAbs": 0.020000975853304286,
+          "rowMax": 0.10039215686274511
+        },
+        "hash": {
+          "local": "b516f68f",
+          "streamed": "526bb12d"
+        },
+        "status": "pass",
+        "meanAbs": 9.758533042846768e-7,
+        "rowMax": 0.0003921568627450981,
+        "detail": "meanAbs 0.0000 rowMax 0.0004 (row 460)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "transitionSoundDeck",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 9.758533042846768e-7,
+        "rowMax": 0.0003921568627450981
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "p:fade"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "p:fade"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
+      "frames": {
+        "pass": 5
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 0,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "transition",
+        "rows": [
+          "transition:p:fade"
+        ],
+        "tol": {
+          "meanAbs": 0.020000975853304286,
+          "rowMax": 0.10039215686274511
+        },
+        "hash": {
+          "local": "c86940cb",
+          "streamed": "309d7dc5"
+        },
+        "status": "pass",
+        "meanAbs": 0.0044194353667392884,
+        "rowMax": 0.006968954248366013,
+        "detail": "meanAbs 0.0044 rowMax 0.0070 (row 506)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "crossSlideSoundDeck",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0000020708514887436455,
+        "rowMax": 0.0004003267973856209
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "none",
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 3
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "none",
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 3
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "media": {
+        "local": [
+          "0:3"
+        ],
+        "streamed": [
+          "0:3"
+        ]
+      },
+      "frames": {
+        "pass": 1,
+        "unit-still": 2
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 100,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "layers",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.020002070851488744,
+          "rowMax": 0.10040032679738563
+        },
+        "hash": {
+          "local": "3bbe3bb8",
+          "streamed": "38c36bdb"
+        },
+        "status": "pass",
+        "meanAbs": 0.0000020708514887436455,
+        "rowMax": 0.0004003267973856209,
+        "detail": "meanAbs 0.0000 rowMax 0.0004 (row 640)"
+      },
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 2,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020002070851488744,
+            "rowMax": 0.10040032679738563
+          },
+          "hash": {
+            "local": "b516f68f",
+            "streamed": "526bb12d"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 9.758533042846768e-7,
+          "rowMax": 0.0003921568627450981,
+          "detail": "unit still (unanimated): meanAbs 0.0000 rowMax 0.0004 (row 460)"
+        },
+        {
+          "slide": 3,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020002070851488744,
+            "rowMax": 0.10040032679738563
+          },
+          "hash": {
+            "local": "b516f68f",
+            "streamed": "526bb12d"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 9.758533042846768e-7,
+          "rowMax": 0.0003921568627450981,
+          "detail": "unit still (unanimated): meanAbs 0.0000 rowMax 0.0004 (row 460)"
+        }
+      ]
+    },
+    {
+      "deck": "crossSlideSoundDeck",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0000020708514887436455,
+        "rowMax": 0.0004003267973856209
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0,
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "none",
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 3
+        },
+        "streamed": {
+          "steps": [
+            0,
+            0,
+            0
+          ],
+          "transitions": [
+            "none",
+            "none",
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 3
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "media": {
+        "local": [
+          "0:3"
+        ],
+        "streamed": [
+          "0:3"
+        ]
+      },
+      "frames": {
+        "pass": 1,
+        "unit-still": 2
+      },
+      "gate": [],
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 100,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "layers",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.020002070851488744,
+          "rowMax": 0.10040032679738563
+        },
+        "hash": {
+          "local": "5336059e",
+          "streamed": "ad1071e6"
+        },
+        "status": "pass",
+        "meanAbs": 0.0037801606753812634,
+        "rowMax": 0.006760620915032679,
+        "detail": "meanAbs 0.0038 rowMax 0.0068 (row 48)"
+      },
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 2,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020002070851488744,
+            "rowMax": 0.10040032679738563
+          },
+          "hash": {
+            "local": "20e478b5",
+            "streamed": "0c167c36"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0037806826434277417,
+          "rowMax": 0.006764705882352942,
+          "detail": "unit still (unanimated): meanAbs 0.0038 rowMax 0.0068 (row 48)"
+        },
+        {
+          "slide": 3,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020002070851488744,
+            "rowMax": 0.10040032679738563
+          },
+          "hash": {
+            "local": "20e478b5",
+            "streamed": "0c167c36"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "unanimated"
+          },
+          "meanAbs": 0.0037806826434277417,
+          "rowMax": 0.006764705882352942,
+          "detail": "unit still (unanimated): meanAbs 0.0038 rowMax 0.0068 (row 48)"
+        }
+      ]
+    },
+    {
+      "deck": "repeatDeck",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0000020708514887436455,
+        "rowMax": 0.0004003267973856209
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": [
+          {
+            "slide": 1,
+            "code": "still",
+            "localSteps": 0
+          }
+        ]
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "media": {
+        "local": [
+          "0:3"
+        ],
+        "streamed": []
+      },
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020002070851488744,
+            "rowMax": 0.10040032679738563
+          },
+          "hash": {
+            "local": "3bbe3bb8",
+            "streamed": "dfdc20d4"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "refused:still"
+          },
+          "meanAbs": 0.0000020538307915758894,
+          "rowMax": 0.0003921568627450981,
+          "detail": "unit still (refused:still): meanAbs 0.0000 rowMax 0.0004 (row 460)"
+        }
+      ]
+    },
+    {
+      "deck": "repeatDeck",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0000020708514887436455,
+        "rowMax": 0.0004003267973856209
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": [
+          {
+            "slide": 1,
+            "code": "still",
+            "localSteps": 0
+          }
+        ]
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "media": {
+        "local": [
+          "0:3"
+        ],
+        "streamed": []
+      },
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020002070851488744,
+            "rowMax": 0.10040032679738563
+          },
+          "hash": {
+            "local": "5336059e",
+            "streamed": "ef0c8d8b"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "refused:still"
+          },
+          "meanAbs": 0.003781760620915033,
+          "rowMax": 0.006764705882352942,
+          "detail": "unit still (refused:still): meanAbs 0.0038 rowMax 0.0068 (row 48)"
+        }
+      ]
+    },
+    {
+      "deck": "mixedNarrationDeck",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.000003279320987654321,
+        "rowMax": 0.0008006535947712418
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": [
+          {
+            "slide": 1,
+            "code": "still",
+            "localSteps": 0
+          }
+        ]
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "media": {
+        "local": [
+          "0:4"
+        ],
+        "streamed": []
+      },
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020003279320987655,
+            "rowMax": 0.10080065359477125
+          },
+          "hash": {
+            "local": "5714e5ff",
+            "streamed": "d304a22d"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "refused:still"
+          },
+          "meanAbs": 0.0000032282588961510527,
+          "rowMax": 0.0007843137254901962,
+          "detail": "unit still (refused:still): meanAbs 0.0000 rowMax 0.0008 (row 640)"
+        }
+      ]
+    },
+    {
+      "deck": "mixedNarrationDeck",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.000003279320987654321,
+        "rowMax": 0.0008006535947712418
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": [
+          {
+            "slide": 1,
+            "code": "still",
+            "localSteps": 0
+          }
+        ]
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "media": {
+        "local": [
+          "0:4"
+        ],
+        "streamed": []
+      },
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020003279320987655,
+            "rowMax": 0.10080065359477125
+          },
+          "hash": {
+            "local": "c8dd55ec",
+            "streamed": "745f3801"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "refused:still"
+          },
+          "meanAbs": 0.0038863981935366738,
+          "rowMax": 0.006764705882352942,
+          "detail": "unit still (refused:still): meanAbs 0.0039 rowMax 0.0068 (row 48)"
+        }
+      ]
+    },
+    {
+      "deck": "videoDeck",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0000021843228031953523,
+        "rowMax": 0.0004003267973856209
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": [
+          {
+            "slide": 1,
+            "code": "still",
+            "localSteps": 0
+          }
+        ]
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020002184322803197,
+            "rowMax": 0.10040032679738563
+          },
+          "hash": {
+            "local": "ea3150b4",
+            "streamed": "0078db80"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "refused:still"
+          },
+          "meanAbs": 0.0000021502814088598404,
+          "rowMax": 0.0003921568627450981,
+          "detail": "unit still (refused:still): meanAbs 0.0000 rowMax 0.0004 (row 420)"
+        }
+      ]
+    },
+    {
+      "deck": "videoDeck",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0000021843228031953523,
+        "rowMax": 0.0004003267973856209
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": [
+          {
+            "slide": 1,
+            "code": "still",
+            "localSteps": 0
+          }
+        ]
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.020002184322803197,
+            "rowMax": 0.10040032679738563
+          },
+          "hash": {
+            "local": "aeffd79b",
+            "streamed": "4e318ddf"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "refused:still"
+          },
+          "meanAbs": 0.0038856265885984023,
+          "rowMax": 0.006764705882352942,
+          "detail": "unit still (refused:still): meanAbs 0.0039 rowMax 0.0068 (row 48)"
+        }
+      ]
+    },
+    {
+      "deck": "stillSoundDeck",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.000003177196804647785,
+        "rowMax": 0.0004003267973856209
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": false,
+        "equalExceptStills": true,
+        "stills": [
+          {
+            "slide": 1,
+            "code": "still",
+            "localSteps": 1
+          }
+        ]
+      },
+      "fallback": {
+        "steps": 1,
+        "composited": 1,
+        "rate": 1
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "media": {
+        "local": [
+          "0:3"
+        ],
+        "streamed": []
+      },
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.02000317719680465,
+            "rowMax": 0.10040032679738563
+          },
+          "hash": {
+            "local": "8b79e6ea",
+            "streamed": "fc46da88"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "refused:still"
+          },
+          "meanAbs": 0.000003126134713144517,
+          "rowMax": 0.0003921568627450981,
+          "detail": "unit still (refused:still): meanAbs 0.0000 rowMax 0.0004 (row 200)"
+        }
+      ]
+    },
+    {
+      "deck": "stillSoundDeck",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.000003177196804647785,
+        "rowMax": 0.0004003267973856209
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            0
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 1
+        },
+        "equal": false,
+        "equalExceptStills": true,
+        "stills": [
+          {
+            "slide": 1,
+            "code": "still",
+            "localSteps": 1
+          }
+        ]
+      },
+      "fallback": {
+        "steps": 1,
+        "composited": 1,
+        "rate": 1
+      },
+      "diagnostics": [
+        ":backend-fallback"
+      ],
+      "media": {
+        "local": [
+          "0:3"
+        ],
+        "streamed": []
+      },
+      "frames": {
+        "unit-still": 1
+      },
+      "gate": [],
+      "failures": [],
+      "stillFrames": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.02000317719680465,
+            "rowMax": 0.10040032679738563
+          },
+          "hash": {
+            "local": "c505ad77",
+            "streamed": "c7fe5bed"
+          },
+          "status": "unit-still",
+          "unitStill": {
+            "pass": true,
+            "source": "refused:still"
+          },
+          "meanAbs": 0.0038712838144517067,
           "rowMax": 0.006764705882352942,
           "detail": "unit still (refused:still): meanAbs 0.0039 rowMax 0.0068 (row 48)"
         }
@@ -2534,6 +4252,10 @@
         ":backend-fallback",
         "0:transition-approximate"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 5
       },
@@ -2606,6 +4328,10 @@
         ":backend-fallback",
         "0:transition-approximate"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 5
       },
@@ -2688,6 +4414,10 @@
         ":backend-fallback",
         "1:harness-steps"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1,
         "pass": 2
@@ -2795,6 +4525,10 @@
         ":backend-fallback",
         "1:harness-steps"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1,
         "pass": 2
@@ -2891,6 +4625,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 6
       },
@@ -2962,6 +4700,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 6
       },
@@ -3033,6 +4775,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 5
       },
@@ -3102,6 +4848,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 5
       },
@@ -3171,6 +4921,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1
       },
@@ -3245,6 +4999,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1
       },
@@ -3340,6 +5098,10 @@
         ":backend-fallback",
         ":behaviour-unsupported"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 5,
         "pass": 31
@@ -3559,6 +5321,10 @@
         ":backend-fallback",
         ":behaviour-unsupported"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 5,
         "pass": 16,
@@ -3758,6 +5524,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 11
       },
@@ -3827,6 +5597,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 11
       },
@@ -3896,6 +5670,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1
       },
@@ -3970,6 +5748,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1
       },
@@ -4060,6 +5842,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 25
       },
@@ -4147,6 +5933,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 25
       },
@@ -4218,6 +6008,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1
       },
@@ -4292,6 +6086,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1
       },
@@ -4370,6 +6168,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 3
       },
@@ -4443,6 +6245,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 3
       },
@@ -4516,6 +6322,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 10
       },
@@ -4591,6 +6401,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 10
       },
@@ -4664,6 +6478,10 @@
         "0:transition-approximate",
         "0:transition-approximate"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 5
       },
@@ -4737,6 +6555,10 @@
         "0:transition-approximate",
         "0:transition-approximate"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 5
       },
@@ -4808,6 +6630,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 5
       },
@@ -4879,6 +6705,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 5
       },
@@ -4954,6 +6784,14 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [
+          "0:-1"
+        ],
+        "streamed": [
+          "0:-1"
+        ]
+      },
       "frames": {
         "pass": 11
       },
@@ -5029,6 +6867,14 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [
+          "0:-1"
+        ],
+        "streamed": [
+          "0:-1"
+        ]
+      },
       "frames": {
         "pass": 8,
         "skipped-mark": 3
@@ -5101,6 +6947,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 11
       },
@@ -5172,6 +7022,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 11
       },
@@ -5243,6 +7097,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1
       },
@@ -5317,6 +7175,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1
       },
@@ -5399,6 +7261,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 15
       },
@@ -5476,6 +7342,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 15
       },
@@ -5557,6 +7427,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 20
       },
@@ -5638,6 +7512,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 20
       },
@@ -5707,6 +7585,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 1
       },
@@ -5776,6 +7658,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "pass": 1
       },
@@ -5845,6 +7731,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1
       },
@@ -5919,6 +7809,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1
       },
@@ -6069,6 +7963,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1
       },
@@ -6143,6 +8041,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1
       },
@@ -6217,6 +8119,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1
       },
@@ -6291,6 +8197,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1
       },
@@ -6365,6 +8275,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1
       },
@@ -6439,6 +8353,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1
       },
@@ -6513,6 +8431,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1
       },
@@ -6587,6 +8509,10 @@
       "diagnostics": [
         ":backend-fallback"
       ],
+      "media": {
+        "local": [],
+        "streamed": []
+      },
       "frames": {
         "unit-still": 1
       },
