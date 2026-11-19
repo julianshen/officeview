@@ -44,7 +44,8 @@ const finiteDur = (n: { ctn: { durMs: number | 'indefinite' | undefined } }): nu
  * nodes and events before the begin: only those at or after `beganAt` count, in time order (stable).
  *
  * 1. A playing record ends at `beganAt + durationMs`.
- * 2. `playFrom(x)` subtracts `x·1000` from what remains (clamped at 0), and plays.
+ * 2. `playFrom(x)` is an absolute seek, as the player's `currentTime = x` is: the node's position in its current
+ *    iteration becomes `x·1000` (clamped at `durationMs`), so `durationMs − x·1000` remains of it, and it plays.
  * 3. `pause` and `resume` (`play`, `togglePause` by the clock's state) stop and restart the node's clock.
  * 4. `repeatCount = N` plays `N × durationMs`; an indefinite repeat, a loop (the transition sound's) or "until next
  *    sound" is open until an event below ends it.
@@ -73,27 +74,81 @@ export function mediaEndOf(node: AudioBehaviour, rec: MediaClockRecord | undefin
     const first = later.find(ends)
     return done(first ? Math.min(first.at, dur === undefined ? beganAt : bound) : dur === undefined ? beganAt : bound)
   }
+  const { total, d } = extent(node, rec.durationMs, loop)
+  const h: Head = { pos: 0, running: true, at: beganAt }
+  for (const e of later) {
+    // The clock runs out before this event.
+    const out = advance(h, e.at, total)
+    if (out !== undefined) return done(out)
+    if (ends(e)) return done(e.at)
+    if (e.type === 'cmd' && e.nodeId === self) command(h, e.cmd, d)
+  }
+  if (h.running && Number.isFinite(total)) return done(h.at + total - h.pos)
+  return Number.isFinite(bound) ? { at: bound } : { open: true }
+}
+
+/** A node's own playback clock (rules 1–4): `pos` ms played into its playback (across repeats), at show time `at`. */
+interface Head { pos: number; running: boolean; at: number }
+
+/** `total`: the playback's length (`Infinity` when open); `d`: one iteration's. */
+function extent(node: Pick<AudioBehaviour, 'ctn'>, durationMs: number | undefined, loop: { transitionLoop?: boolean; untilNextSound?: boolean }): { total: number; d: number | undefined } {
   const rc = node.ctn.repeatCount
   const open = rc === 'indefinite' || !!loop.transitionLoop || !!loop.untilNextSound
   const times = typeof rc === 'number' && Number.isFinite(rc) && rc > 0 ? rc : 1
-  let remaining = open ? Infinity : Math.max(0, rec.durationMs) * times
-  let running = true
-  let now = beganAt
-  for (const e of later) {
-    // The clock runs out before this event.
-    if (running && now + remaining <= e.at) return done(now + remaining)
-    if (running) remaining -= e.at - now
-    now = e.at
-    if (ends(e)) return done(e.at)
-    if (e.type !== 'cmd' || e.nodeId !== self) continue
-    const c = e.cmd
-    if (c.verb === 'pause') running = false
-    else if (c.verb === 'resume' || c.verb === 'play') running = true
-    else if (c.verb === 'togglePause') running = !running
-    else if (c.verb === 'playFrom') { remaining = Math.max(0, remaining - c.seconds * 1000); running = true }
+  const d = durationMs !== undefined && Number.isFinite(durationMs) ? Math.max(0, durationMs) : undefined
+  return { total: open || d === undefined ? Infinity : d * times, d }
+}
+
+/** Runs the clock to `to`; the time it ran out, when that is at or before `to` (the head is left as it was then). */
+function advance(h: Head, to: number, total: number): number | undefined {
+  if (h.running) {
+    if (h.at + (total - h.pos) <= to) return h.at + (total - h.pos)
+    h.pos += to - h.at
   }
-  if (running && Number.isFinite(remaining)) return done(now + remaining)
-  return Number.isFinite(bound) ? { at: bound } : { open: true }
+  h.at = to
+  return undefined
+}
+
+/** Rules 2–3: one of the node's own commands. */
+function command(h: Head, c: MediaCommand, d: number | undefined): void {
+  if (c.verb === 'pause') h.running = false
+  else if (c.verb === 'resume' || c.verb === 'play') h.running = true
+  else if (c.verb === 'togglePause') h.running = !h.running
+  else if (c.verb === 'playFrom') {
+    // An absolute seek within the current iteration (the player keeps its iteration count).
+    const x = Math.max(0, c.seconds * 1000)
+    if (d === undefined) h.pos = x
+    else {
+      const iter = d > 0 ? Math.floor(h.pos / d) : 0
+      h.pos = iter * d + Math.min(x, d)
+    }
+    h.running = true
+  }
+}
+
+/**
+ * Where `node`'s playback is at show time `t`, on the clock `mediaEndOf` runs (rules 1–4): its begin, `durationMs`
+ * (undefined: unknown, never runs out) and its own commands among `events` (others are ignored, as are stops and
+ * slide exits: the caller ends the node on those). The streamed player seeks late bytes here (spec §5.2), so the
+ * element and the computed end cannot disagree.
+ *
+ * - `pos`: ms into the playback, across repeats (`offset` and `iteration` fold it onto one clip).
+ * - `done`: the clock ran out by `t` (it never plays).
+ */
+export function mediaPlayheadAt(node: Pick<AudioBehaviour, 'ctn'>, durationMs: number | undefined, beganAt: number, events: readonly MediaEvent[], t: number, loop: { transitionLoop?: boolean; untilNextSound?: boolean } = {}): { pos: number; offset: number; iteration: number; running: boolean; done: boolean } {
+  const self = node.ctn.id
+  const { total, d } = extent(node, durationMs, loop)
+  const h: Head = { pos: 0, running: true, at: beganAt }
+  const later = events.map((e, i) => ({ e, i })).filter(x => x.e.at >= beganAt && x.e.at <= t).sort((a, b) => a.e.at - b.e.at || a.i - b.i).map(x => x.e)
+  let done = false
+  for (const e of later) {
+    if (advance(h, e.at, total) !== undefined) { done = true; break }
+    if (e.type === 'cmd' && e.nodeId === self) command(h, e.cmd, d)
+  }
+  if (!done && t >= h.at && advance(h, t, total) !== undefined) done = true
+  if (done) h.pos = total
+  const iteration = d !== undefined && d > 0 && Number.isFinite(h.pos) ? Math.floor(h.pos / d) : 0
+  return { pos: h.pos, offset: d !== undefined && d > 0 ? h.pos - iteration * d : h.pos, iteration, running: h.running, done }
 }
 
 /** The most computed ends one `settle` call records (a guard: past it the call stops and says so). */

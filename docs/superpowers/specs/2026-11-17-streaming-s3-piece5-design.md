@@ -170,7 +170,7 @@ The manifest gains:
 
 Piece 4 refuses a slide when a media end could change what is drawn, because the end time depended on the client. Piece 5 makes the end time deterministic:
 
-1. In a streamed show, a media node ends at its begin plus its media's `durationMs`, measured on the show clock. Its `ended` event never decides the end. A `playFrom(x)` command shortens the remaining time by x. A deck-command pause stops that node's clock until resume.
+1. In a streamed show, a media node ends at its begin plus its media's `durationMs`, measured on the show clock. Its `ended` event never decides the end. A `playFrom(x)` command is an absolute seek to x within the current iteration, so `durationMs − x` remains of it from the command (§10, `playFrom`). A deck-command pause stops that node's clock until resume.
    - **Repeats and loops** (*my call*, the same rule on the server and the client):
      - `repeatCount = N` plays for N × `durationMs`.
      - An indefinite repeat, a looping transition sound and "loop until next sound" never end on the clock. They end only on `stop`, on `onstopaudio`, on the next sound or on slide exit.
@@ -274,6 +274,7 @@ These record where the build differs from the text above, or settles something t
   - Only classifier stills get sounds. A still from `show-budget`, `show-limits` or `show-plan-timeout` stays silent.
   - A `(mediaId, unit)` pair the plan refuses is recorded for the session and refused at request time. Encode-ahead never encodes it.
 - **D22, video ends.** A video node ships no record and ends at its first live frame, which is piece 4's synthetic end. That is not §5 rule 3's "finite `dur`, else at once". It is sound only because the classifier stills every slide on which a video end could change what is drawn. An audio node chained after a video end would start at slide start instead. If a drawn behaviour depends on it, the slide is a still; otherwise its record ships `refused: 'media-unavailable'`.
+- **`playFrom(x)` is an absolute seek (final review F2, controller ruling 2026-11-20).** §5 rule 1 said `playFrom(x)` shortens the remaining time by x. The player seeks the element to `currentTime = x`, as PowerPoint's `playFrom(x)` does, so the two agreed only for a command at the node's begin. A 4 s clip given `playFrom(1.5)` at 1000 ms plays 2.5 s more and ends at 3500 ms, but the rule ended it at 2500 ms and the streamed driver cut a second of audio. The clock now does what the player does: the position in the current iteration becomes x (clamped at `durationMs`), `durationMs − x` remains of that iteration, and later repeats still play, because the player keeps its iteration count. `playFrom(0)` mid-play restarts the clip. Classification is unchanged, because computed audio ends drive playback only (the Task 5 ruling above).
 - **A piece-4 soundness fix included in this branch: the `seq` backward-cut rule (C4.1 in the Task 5 records).** A non-concurrent `seq` whose later child begins on a media end cuts an earlier child, and that cut can hide drawn ink. Piece 4's dependency analysis returned `none` for it, so with media off such a slide was planned from layers and could draw differently from local mode. **The bug is on `main` (piece 4, PR #78) and is fixed on this branch:** the rule marks the earlier siblings as affected. It only adds stills.
 
 ### Transcoder (§4.2, §8)

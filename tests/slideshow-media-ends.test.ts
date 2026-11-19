@@ -18,12 +18,24 @@ describe('mediaEndOf (spec §5)', () => {
     expect(mediaEndOf(audio(3), rec(4000), 100, [])).toEqual({ at: 4100 })
   })
 
-  it('playFrom(1.5) on 4000 ms ends at 2500', () => {
+  it('playFrom(1.5) on 4000 ms at the begin ends at 2500', () => {
     expect(mediaEndOf(audio(3), rec(4000), 0, [cmd(0, 3, { verb: 'playFrom', seconds: 1.5 })])).toEqual({ at: 2500 })
-    // Mid-play (the brief's wording): the offset comes off what remains (3000 at 1000 → 1500 left → 2500).
-    expect(mediaEndOf(audio(3), rec(4000), 0, [cmd(1000, 3, { verb: 'playFrom', seconds: 1.5 })])).toEqual({ at: 2500 })
-    // Clamped at 0: an offset past the remaining time ends the node at the command.
+    // Clamped at the duration: an offset past the clip ends the node at the command.
     expect(mediaEndOf(audio(3), rec(4000), 0, [cmd(1000, 3, { verb: 'playFrom', seconds: 9 })])).toEqual({ at: 1000 })
+  })
+
+  it('playFrom(x) is an absolute seek (§10 F2): what remains is durationMs − x from the command', () => {
+    // A 4 s clip, playFrom(1.5) at 1000: the player seeks to 1.5 s, so 2.5 s remain → 3500 (not 2500).
+    expect(mediaEndOf(audio(3), rec(4000), 0, [cmd(1000, 3, { verb: 'playFrom', seconds: 1.5 })])).toEqual({ at: 3500 })
+    // playFrom(0) mid-play restarts the clip: the whole 4 s from the command.
+    expect(mediaEndOf(audio(3), rec(4000), 0, [cmd(2500, 3, { verb: 'playFrom', seconds: 0 })])).toEqual({ at: 6500 })
+    // While paused: the seek also resumes (pause at 1000, playFrom(1) at 3000 → 3 s left → 6000).
+    expect(mediaEndOf(audio(3), rec(4000), 0, [cmd(1000, 3, { verb: 'pause' }), cmd(3000, 3, { verb: 'playFrom', seconds: 1 })])).toEqual({ at: 6000 })
+    // Repeats: the seek is within the current iteration, as the player sets currentTime and keeps its iteration count
+    // (repeatCount 2 on 4 s; playFrom(1) at 5000, in the second iteration → 3 s left → 8000).
+    expect(mediaEndOf(audio(3, { repeatCount: 2 }), rec(4000), 0, [cmd(5000, 3, { verb: 'playFrom', seconds: 1 })])).toEqual({ at: 8000 })
+    // In the first iteration the remaining repeats still play (playFrom(1) at 1000 → 3 s + 4 s → 8000).
+    expect(mediaEndOf(audio(3, { repeatCount: 2 }), rec(4000), 0, [cmd(1000, 3, { verb: 'playFrom', seconds: 1 })])).toEqual({ at: 8000 })
   })
 
   it('pause 1000 ms mid-play delays the end by 1000', () => {
