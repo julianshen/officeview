@@ -183,7 +183,8 @@ export class Pool {
     // Task 13 (carried from Task 3; fix rounds 1–2): this worker's file prefix (every file it stages bears it; swept
     // when it goes), and its probes, which run on this thread (`probe-host.ts`): killed when it goes, reaped here.
     const prefix = this.media ? `w${randomBytes(6).toString('hex')}-` : undefined
-    const probes = this.media && prefix ? createWorkerProbes(this.media.info, this.media.dir, prefix, (r) => worker.postMessage(r)) : undefined
+    // Released from the registry when retired with no run left (fix round 3), never by a stats() read.
+    const probes: WorkerProbes | undefined = this.media && prefix ? createWorkerProbes(this.media.info, this.media.dir, prefix, (r) => worker.postMessage(r), () => { if (probes) this.probeSets.delete(probes) }) : undefined
     if (probes) this.probeSets.add(probes)
     slot.retire = () => probes?.retire()
     worker.onmessage = (e: MessageEvent<WorkerReply | ProbeRunRequest | ProbeKillRequest>) => {
@@ -216,13 +217,16 @@ export class Pool {
     })
   }
 
-  /** Every worker's probe handles, until a retired worker's last run has exited. */
+  /** Every worker's probe handles, until a retired worker's last run has settled (its host removes itself). */
   private probeSets = new Set<WorkerProbes>()
+  /** Read-only. */
   private probesRunning(): number {
     let n = 0
-    for (const p of this.probeSets) { if (p.retired && p.running === 0) this.probeSets.delete(p); else n += p.running }
+    for (const p of this.probeSets) n += p.running
     return n
   }
+  /** TEST-ONLY, side-effect free: how many probe hosts the registry holds. */
+  probeHostsForTests(): number { return this.probeSets.size }
 
   /** Runs `fn` when the slot is idle; one in-flight message per worker. */
   private async exclusive<T>(slot: Slot, fn: () => Promise<T>): Promise<T> {

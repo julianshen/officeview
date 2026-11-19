@@ -8,7 +8,7 @@
  * render worker terminated mid-probe (Task 3).
  */
 import { afterAll, describe, expect, it } from 'bun:test'
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -395,6 +395,91 @@ describe.skipIf(!info)('a render worker terminated mid-job (Task 3 carry; fix ro
       await done()
     }
   }, 30_000)
+
+  describe('staged-file identity (fix round 3)', () => {
+    const prefix = 'w0123456789ab-'
+    const name = (p = prefix, n = 0) => `${p}${String(n).padStart(32, '0')}.bin`
+    async function probeDir() {
+      const root = mkdtempSync(join(scratch, 'root-'))
+      const temp = await createMediaTemp(root)
+      const fx = new Uint8Array(readFileSync(join(import.meta.dir, '../fixtures/media/a.m4a')))
+      return { root, temp, fx, done: async () => { await temp.remove(); rmSync(root, { recursive: true, force: true }) } }
+    }
+    const cases: Array<[string, (dir: string, root: string, fx: Uint8Array) => string]> = [
+      ["a valid-prefix symlink to another worker's staged file", (dir, _r, fx) => { const other = join(dir, name('wffffffffffff-')); writeFileSync(other, fx, { mode: 0o600 }); const p = join(dir, name()); symlinkSync(other, p); return p }],
+      ['a valid-prefix symlink to a file outside the media dir', (dir, root, fx) => { const out = join(root, 'outside.m4a'); writeFileSync(out, fx, { mode: 0o600 }); const p = join(dir, name()); symlinkSync(out, p); return p }],
+      ['a valid-prefix directory', (dir) => { const p = join(dir, name()); mkdirSync(p); return p }],
+      ['a valid-prefix hard link (nlink 2)', (dir, root, fx) => { const out = join(root, 'linked.m4a'); writeFileSync(out, fx, { mode: 0o600 }); const p = join(dir, name()); linkSync(out, p); return p }],
+    ]
+    for (const [what, make] of cases) {
+      it(`${what} is refused and spawns nothing`, async () => {
+        const { root, temp, fx, done } = await probeDir()
+        const log = spawnLog()
+        const posted: ProbeRunReply[] = []
+        try {
+          const path = make(temp.dir, root, fx)
+          const w = createWorkerProbes(info!, temp.dir, prefix, (r) => posted.push(r))
+          w.request({ kind: 'probe-run', id: 1, path, demuxer: 'mov', wallMs: 1000 })
+          await Bun.sleep(50)
+          expect(log.spawns).toHaveLength(0)
+          expect(posted).toEqual([{ type: 'probe-result', id: 1, ok: false, error: expect.stringMatching(/staged file/) }])
+          expect(w.running).toBe(0)
+        } finally { log.stop(); await done() }
+      }, 30_000)
+    }
+    it('a staged file replaced while its probe runs fails the result closed', async () => {
+      const { temp, fx, done } = await probeDir()
+      const posted: ProbeRunReply[] = []
+      try {
+        const path = join(temp.dir, name())
+        writeFileSync(path, fx, { mode: 0o600 })
+        // The stand-in never answers: the 300 ms wall cap ends it. Meanwhile the entry is swapped (a new inode).
+        const w = createWorkerProbes({ ...info!, ffprobe: sleeper('ffprobe') }, temp.dir, prefix, (r) => posted.push(r))
+        w.request({ kind: 'probe-run', id: 1, path, demuxer: 'mov', wallMs: 300 })
+        expect(w.running).toBe(1)
+        const swap = join(temp.dir, 'swap.tmp')
+        writeFileSync(swap, fx, { mode: 0o600 })
+        renameSync(swap, path)
+        await until(() => posted.length === 1, 5000, 'the result')
+        expect(posted[0]).toEqual({ type: 'probe-result', id: 1, ok: false, error: expect.stringMatching(/changed/) })
+      } finally { await done() }
+    }, 30_000)
+  })
+
+  it('a retired probe host is released as soon as it has no run: at once, or when its last run settles (fix round 3)', async () => {
+    const root = mkdtempSync(join(scratch, 'root-'))
+    const temp = await createMediaTemp(root)
+    const prefix = 'w0123456789ab-'
+    const path = join(temp.dir, `${prefix}${'0'.repeat(32)}.bin`)
+    writeFileSync(path, new Uint8Array(readFileSync(join(import.meta.dir, '../fixtures/media/a.m4a'))), { mode: 0o600 })
+    try {
+      let idleGone = 0, busyGone = 0
+      const idle = createWorkerProbes(info!, temp.dir, prefix, () => {}, () => { idleGone++ })
+      idle.retire()
+      expect(idleGone).toBe(1)
+      const busy = createWorkerProbes({ ...info!, ffprobe: sleeper('ffprobe') }, temp.dir, prefix, () => {}, () => { busyGone++ })
+      busy.request({ kind: 'probe-run', id: 1, path, demuxer: 'mov', wallMs: 2000 })
+      busy.retire()
+      expect(busy.running).toBe(1) // killed, not yet reaped
+      expect(busyGone).toBe(0)
+      await until(() => busy.running === 0, 3000, 'the run to settle')
+      expect(busyGone).toBe(1)
+      busy.retire()
+      expect(busyGone).toBe(1) // once
+    } finally { await temp.remove(); rmSync(root, { recursive: true, force: true }) }
+  }, 30_000)
+
+  it('ten worker replacements with no stats() call leave no more probe hosts than live workers (fix round 3)', async () => {
+    const { pool, done } = await hungPool(300)
+    try {
+      for (let i = 0; i < 10; i++) {
+        const out = await pool.showPlan(`s${i}`, job('hung'), SHOW_BUILD_BYTES)
+        expect('refused' in out && out.refused).toBe('show-plan-timeout')
+      }
+      await until(() => pool.probeHostsForTests() <= 1, 3000, 'the retired hosts to go').catch(() => {})
+      expect(pool.probeHostsForTests()).toBeLessThanOrEqual(1)
+    } finally { await done() }
+  }, 60_000)
 
   it('a probe request after its worker is retired spawns nothing; a result for a retired worker is dropped', async () => {
     const root = mkdtempSync(join(scratch, 'root-'))
