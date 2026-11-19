@@ -165,6 +165,22 @@ describe('the shared encode cache (D12, D23)', () => {
     await c.close()
   })
 
+  it('encode-ahead evicts unreferenced entries oldest use first, never a referenced one, and proceeds', async () => {
+    const { c, advance } = cacheWith({ serverBytes: 96 * MiB })
+    await fill(c, 's1', key('d', 'old'), 30 * MiB); c.delivered('s1', key('d', 'old')); advance(10)
+    await fill(c, 's1', key('d', 'mid'), 30 * MiB); c.delivered('s1', key('d', 'mid')); advance(10)
+    await fill(c, 's2', key('d', 'held'), 30 * MiB) // referenced
+    // 90 + 32 > 96: encode-ahead evicts the oldest unreferenced entry (not the referenced one) and starts.
+    const f = fakeRun(1 * MiB)
+    const a = c.acquire('s3', 0, key('d', 'new'), f.run, ahead)
+    expect('origin' in a && a.origin).toBe('miss')
+    f.finish(); expect((await done(a)).ok).toBe(true)
+    expect(c.peek(key('d', 'old'))).toBeUndefined()
+    expect(c.peek(key('d', 'mid'))).toBeDefined()
+    expect(c.peek(key('d', 'held'))).toBeDefined()
+    await c.close()
+  })
+
   it('server cache wholly referenced: ahead gets wait, a request gets media-busy', async () => {
     const { c } = cacheWith({ serverBytes: 64 * MiB })
     await fill(c, 's1', key('d', 'a'), 32 * MiB)

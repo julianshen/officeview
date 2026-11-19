@@ -16,8 +16,10 @@
  *   drop under pressure, or `dropSession`. A cached refusal takes none (nothing to deliver). A shared entry counts in
  *   full against every referencing session's look-ahead (`sessionBytes`); an entry in flight counts its 32 MiB
  *   reservation there and against the server total (`serverBytes`) until it settles to its real size.
- * - **Pressure** (D12). Encode-ahead never drops or evicts: over its look-ahead, or (on a miss) without server room,
- *   it gets `{ wait: true }`. A request first drops the session's own farthest-ahead references to done entries
+ * - **Pressure** (D12; controller ruling, Task 8). Encode-ahead never drops references, but on a miss it may evict
+ *   unreferenced done entries, least-recently-used first, as a request does (a cache full of idle entries must not
+ *   stall the show-start queue for the idle TTL); over its look-ahead, or with the server cap wholly referenced, it
+ *   gets `{ wait: true }`. A request first drops the session's own farthest-ahead references to done entries
  *   (distance from `cursor` along `order`; ties: the latest-taken first; never the requested key), then, on a miss,
  *   evicts unreferenced done entries least-recently-used first, then answers `media-busy`. A request still over its
  *   look-ahead after dropping everything droppable proceeds: only the server cap refuses (D12 "no deadlock").
@@ -234,7 +236,7 @@ export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; se
         dropFarthest(sid, need, a.cursor, a.order, id)
       }
       if (!e && serverTotal() + MEDIA_INFLIGHT_RESERVE > o.serverBytes) {
-        if (a.mode === 'request') evict(MEDIA_INFLIGHT_RESERVE)
+        evict(MEDIA_INFLIGHT_RESERVE) // either mode (controller ruling, Task 8): never a referenced entry
         if (serverTotal() + MEDIA_INFLIGHT_RESERVE > o.serverBytes) {
           if (!m.size) sessions.delete(sid)
           return a.mode === 'ahead' ? { wait: true } : { origin: 'miss', done: Promise.resolve({ ok: false, reason: 'media-busy' }) }
