@@ -2,7 +2,8 @@
 import { markLayerRaster, markRaster, type LayerCrop } from '../mark/mark-raster'
 import { DocumentHost, RenderRefusal, type MarkSpec, type NotesJob, type Projection } from '../render'
 import type { FfmpegInfo } from '../media/ffmpeg'
-import { setAfterSpawnForTests } from '../media/sandbox'
+import type { ProbeKillRequest, ProbeRunReply, ProbeRunRequest } from '../media/probe-host'
+import type { ProbeRunner, ProbeRunResult } from '../media/probe'
 import type { ShowPlanJob } from '../show/build'
 import type { MorphJob } from '../show/morph'
 import type { TextJob } from '../text/served'
@@ -11,13 +12,12 @@ export type WorkerRequest =
   /** Piece 5 (D21): the worker's init, posted first. `media`: ffmpeg and the pool's media temp dir; absent = media off. */
   | {
     type: 'init'; id: number
-    /** `prefix`: this worker's file-name prefix in `dir` (Task 13). Every file it stages bears it, and so does the argv
-     * of every probe it runs (the staged input): the pool deletes the files and kills the runs when the worker goes. */
+    /** `prefix`: this worker's file-name prefix in `dir` (Task 13): every file it stages bears it, and the pool deletes
+     * them when the worker goes. Its probes run on the pool's thread (fix round 2): asked for by `probe-run`. */
     media?: { info: FfmpegInfo; dir: string; prefix?: string }
     /** TEST-ONLY (the pool sends it only with `testHooks`): each probe's hold. */ mediaHoldMs?: number
-    /** TEST-ONLY (the pool sends it only with `testHooks`): `after-spawn`, every sandboxed run is withheld from the pid
-     * log; `after-part`, `mediaPart` never returns once it wrote its file (fix round 1: retirement at those points). */
-    testWedge?: 'after-spawn' | 'after-part'
+    /** TEST-ONLY (the pool sends it only with `testHooks`): `mediaPart` never returns once it wrote its file. */
+    testWedge?: 'after-part'
   }
   /** Piece 5 (D21, D22): a unit's audio uses and their probed entries (a short read job). */
   | { type: 'media-refs'; id: number; docKey: string; unit: number }
@@ -41,22 +41,44 @@ export type WorkerRequest =
   | { type: 'show-morph'; id: number; docKey: string; job: MorphJob; grant?: number; hangMs?: number; crash?: boolean }
   /** Piece 4 D7: a show-plan layer's per-session Layer-1 (the page basis cropped to its rest). */
   | { type: 'mark-layer'; id: number; png: Uint8Array; w: number; h: number; kBasis: Uint8Array; code: Int8Array; crop: LayerCrop; hangMs?: number; crash?: boolean }
+  /** Fix round 2: the pool's answer to this worker's `probe-run` (not a job: no reply). */
+  | ProbeRunReply
 export type WorkerReply = { id: number; ok: true; result: unknown; stats: WorkerStats } | { id: number; ok: false; error: string; refusal?: string; stats: WorkerStats }
 export interface WorkerStats { parses: number; pages: number; docs: number; /** Piece 5: media probes run. */ probes: number }
 
 declare const self: Worker
 const host = new DocumentHost()
+
+/**
+ * Fix round 2 (controller ruling): this worker spawns nothing. A probe is asked of the pool, whose thread spawns,
+ * supervises and reaps it and outlives this worker. Aborting the signal asks the pool to kill the run.
+ */
+const probes = new Map<number, { ok: (r: ProbeRunResult) => void; fail: (e: Error) => void }>()
+let probeSeq = 0
+const poolProbe: ProbeRunner = (req, signal) => new Promise<ProbeRunResult>((ok, fail) => {
+  const id = ++probeSeq
+  probes.set(id, { ok, fail })
+  signal.addEventListener('abort', () => { postMessage({ kind: 'probe-kill', id } satisfies ProbeKillRequest) }, { once: true })
+  postMessage({ kind: 'probe-run', id, ...req } satisfies ProbeRunRequest)
+})
+/** A result for a run no longer awaited is dropped. */
+function probeAnswered(r: ProbeRunReply): void {
+  const p = probes.get(r.id)
+  if (!p) return
+  probes.delete(r.id)
+  if (r.ok) p.ok(r.result); else p.fail(new Error(`probe: ${r.error}`))
+}
 const stats = (): WorkerStats => ({ parses: host.parses, pages: host.pages, docs: host.docCount, probes: host.mediaProbes })
 
 self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
   const m = e.data
+  if (m.type === 'probe-result') { probeAnswered(m); return }
   try {
     let result: unknown
     if (m.type === 'init') {
-      host.configureMedia(m.media)
+      host.configureMedia(m.media, m.media ? poolProbe : undefined)
       if (m.mediaHoldMs) host.mediaSeams = { hangMs: m.mediaHoldMs }
-      // Bun (1.3.10, measured) terminates a worker only once its JS yields: the wedges await, never spin.
-      if (m.testWedge === 'after-spawn') setAfterSpawnForTests(() => 'unobserved')
+      // Bun (1.3.10, measured) terminates a worker only once its JS yields: the wedge awaits, never spins.
       if (m.testWedge === 'after-part') host.afterPartForTests = () => new Promise<void>(() => {})
       result = null
     }

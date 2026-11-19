@@ -8,18 +8,19 @@
  * render worker terminated mid-probe (Task 3).
  */
 import { afterAll, describe, expect, it } from 'bun:test'
-import { chmodSync, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
 import { parseMediaShowOk, parseMediaStart } from '../../../src/stream/media-wire'
 import { mediaDeck, narrationDeck } from '../../../src/testdata/show-decks'
+import { createWorkerProbes, type ProbeRunReply } from '../../src/media/probe-host'
 import { createMediaTemp } from '../../src/media/temp'
 import { Pool } from '../../src/pool'
 import { SHOW_BUILD_BYTES } from '../../src/show/build'
 import { disposePool, start, type HarnessMedia } from '../harness'
-import { alive, childPids, groupOf, planOf, processes, running, session, settled, sidOf, source, spawnLog, until, withPart, type AuditClient } from './battery'
+import { alive, childPids, groupOf, planOf, processes, running, zombieChildren, session, settled, sidOf, source, spawnLog, until, withPart, type AuditClient } from './battery'
 import { ffmpegForTests } from './ffmpeg-gate'
 
 const info = await ffmpegForTests()
@@ -298,85 +299,136 @@ describe.skipIf(!info)('media lifecycle (Task 13)', () => {
   }, 60_000)
 })
 
-describe.skipIf(!info)('a render worker terminated mid-job (Task 3 carry; fix round 1)', () => {
-  /**
-   * A stand-in ffprobe that never answers, as a group of three: the leader (`/bin/sh <script> <argv>`, so its command
-   * line keeps the probe's argv and with it the staged path) and two sleeping descendants in its group. A leader-only
-   * kill leaves the descendants (reparented), which the tests see.
-   */
-  function hungProbe(): string {
+describe.skipIf(!info)('a render worker terminated mid-job (Task 3 carry; fix rounds 1–2)', () => {
+  /** A script that never ends, as a group of three: the leader (`/bin/sh <script> <args>`, so its command line keeps
+   * its arguments) and two sleeping descendants in its group. A leader-only kill leaves the descendants. */
+  function sleeper(name: string): string {
     const bin = mkdtempSync(join(scratch, 'bin-'))
-    const fake = join(bin, 'ffprobe')
-    writeFileSync(fake, '#!/bin/sh\n/bin/sleep 31 </dev/null >/dev/null 2>&1 &\n/bin/sleep 30 </dev/null >/dev/null 2>&1\n')
-    chmodSync(fake, 0o755)
-    return fake
+    const path = join(bin, name)
+    writeFileSync(path, '#!/bin/sh\n/bin/sleep 31 </dev/null >/dev/null 2>&1 &\n/bin/sleep 30 </dev/null >/dev/null 2>&1\n')
+    chmodSync(path, 0o755)
+    return path
   }
   const job = (docRef: string) => ({ docRef, contentPolicy: 'visible-only' as const, unitIndex: 0, scale: 1 as const, motion: 'full' as const, mark: { kind: 'fixed' as const }, strictMarks: false, media: true })
-  /** A pool over its own media dir, with the stand-in probe, the 1.5 s media deadline (test-only; long enough to see the group) and `o`. */
-  async function hungPool(o: Partial<ConstructorParameters<typeof Pool>[0]> = {}) {
+  /** A pool over its own media dir, with a stand-in ffprobe that never answers, the given media deadline (test-only)
+   * and `o`. */
+  async function hungPool(deadlineMs = 1500, o: Partial<ConstructorParameters<typeof Pool>[0]> = {}) {
     const root = mkdtempSync(join(scratch, 'root-'))
     const temp = await createMediaTemp(root)
-    const pool = new Pool({ workers: 1, media: { info: { ...info!, ffprobe: hungProbe() }, dir: temp.dir }, testHooks: true, mediaDeadlineMs: 1500, ...o })
+    const pool = new Pool({ workers: 1, media: { info: { ...info!, ffprobe: sleeper('ffprobe') }, dir: temp.dir }, testHooks: true, mediaDeadlineMs: deadlineMs, ...o })
     await pool.open('hung', await narrationDeck(), 'visible-only')
     return { pool, temp, done: async () => { pool.dispose(); await temp.remove(); rmSync(root, { recursive: true, force: true }) } }
   }
   /** The probe's group, once all three are up: our direct child whose input is a staged file in the media dir. */
   async function probeGroup(dir: string) {
-    let leader: { pid: number; ppid: number; pgid: number; command: string } | undefined
-    await until(() => { leader = processes().find((p) => p.command.includes(`file:${dir}/`) && p.ppid === process.pid); return !!leader && groupOf(leader.pid).length >= 3 }, 5000, 'the stand-in probe group')
+    let leader: ReturnType<typeof processes>[number] | undefined
+    await until(() => { leader = processes().find((p) => p.command.includes(`file:${dir}/`) && p.ppid === process.pid && !p.stat.startsWith('Z')); return !!leader && groupOf(leader.pid).length >= 3 }, 5000, 'the stand-in probe group')
     return leader!
   }
 
-  it('a worker retired mid-probe leaves no ffprobe group (leader and descendants) and no staged file', async () => {
+  it('a worker retired mid-probe leaves no probe group (leader and descendants), no zombie and no staged file', async () => {
     const { pool, temp, done } = await hungPool()
     try {
       const r = pool.showPlan('s1', job('hung'), SHOW_BUILD_BYTES)
       const leader = await probeGroup(temp.dir)
-      // Measured (fix round 1): a child a worker thread spawns is this process's child (threads share the pid).
       expect(leader.ppid).toBe(process.pid)
       expect(leader.pgid).toBe(leader.pid) // its own group (detached)
       const members = groupOf(leader.pid)
       const out = await r
       expect('refused' in out && out.refused).toBe('show-plan-timeout')
       expect(pool.stats().retired).toBe(1)
-      await until(() => groupOf(leader.pid).length === 0 && readdirSync(temp.dir).length === 0, 2000, 'the probe group and its staged file to go').catch(() => {})
+      // Gone, zombies included: the leader is reaped by the thread that spawned it, which outlives the worker.
+      await until(() => groupOf(leader.pid).length === 0 && zombieChildren().length === 0 && readdirSync(temp.dir).length === 0, 3000, 'the probe group to be killed and reaped').catch(() => {})
       expect(members.filter(running)).toEqual([])
       expect(groupOf(leader.pid)).toEqual([])
-      expect(readdirSync(temp.dir)).toEqual([])
+      expect(zombieChildren()).toEqual([])
       expect(childPids()).toEqual([])
+      expect(readdirSync(temp.dir)).toEqual([])
+      expect(pool.stats().probesRunning).toBe(0)
     } finally { await done() }
   }, 30_000)
 
-  it('a worker retired between spawn() and anything after it leaves no probe group', async () => {
-    // Test-only wedge: the worker never runs a statement past spawn() (nothing it would publish is published).
-    const { pool, temp, done } = await hungPool({ mediaWedge: 'after-spawn' })
+  it('twenty retirements mid-probe: no zombie and no probe handle left', async () => {
+    const { pool, temp, done } = await hungPool(300)
     try {
-      const r = pool.showPlan('s1', job('hung'), SHOW_BUILD_BYTES)
-      const leader = await probeGroup(temp.dir)
-      const members = groupOf(leader.pid)
-      expect('refused' in (await r)).toBe(true)
-      await until(() => groupOf(leader.pid).length === 0, 2000, 'the probe group to go').catch(() => {})
-      expect(members.filter(running)).toEqual([])
+      for (let i = 0; i < 20; i++) {
+        const out = await pool.showPlan(`s${i}`, job('hung'), SHOW_BUILD_BYTES)
+        expect('refused' in out && out.refused).toBe('show-plan-timeout')
+      }
+      expect(pool.stats().retired).toBe(20)
+      await until(() => zombieChildren().length === 0 && childPids().length === 0 && pool.stats().probesRunning === 0, 5000, 'every probe reaped').catch(() => {})
+      expect(zombieChildren()).toEqual([])
       expect(childPids()).toEqual([])
+      expect(pool.stats().probesRunning).toBe(0)
       expect(readdirSync(temp.dir)).toEqual([])
     } finally { await done() }
-  }, 30_000)
+  }, 60_000)
 
-  it("retirement kills only its own worker's runs: an unrelated child group of this process survives", async () => {
-    // Our child too, in its own group, its command line naming the media dir under another worker's prefix.
+  it("retirement kills only its own worker's runs: unrelated child groups of this process survive", async () => {
+    // Our children too, each in its own group, their command lines kept alive through the check: one names the media
+    // dir under another worker's prefix, one mentions the retiring probe's own staged input.
     const { pool, temp, done } = await hungPool()
-    const other = spawn('/bin/sh', ['-c', '/bin/sleep 30 </dev/null >/dev/null 2>&1 & exec /bin/sleep 30', 'sh', join(temp.dir, 'w000000000000-0123456789abcdef0123456789abcdef.bin')], { detached: true, stdio: 'ignore' })
+    const script = sleeper('bystander')
+    const alt = join(temp.dir, 'w000000000000-0123456789abcdef0123456789abcdef.bin')
+    const others: ReturnType<typeof spawn>[] = []
     try {
-      await until(() => groupOf(other.pid!).length >= 2, 5000, 'the unrelated group')
-      const bystanders = groupOf(other.pid!)
+      others.push(spawn(script, [alt], { detached: true, stdio: 'ignore' }))
       const r = pool.showPlan('s1', job('hung'), SHOW_BUILD_BYTES)
       const leader = await probeGroup(temp.dir)
-      expect(leader.pid).not.toBe(other.pid)
+      const staged = /file:(\S+)/.exec(leader.command)![1]!
+      others.push(spawn(script, [`--note=${staged}`], { detached: true, stdio: 'ignore' }))
+      await until(() => others.every((o) => groupOf(o.pid!).length >= 3), 5000, 'the unrelated groups')
+      const bystanders = others.flatMap((o) => groupOf(o.pid!))
+      const lines = () => others.map((o) => processes().find((p) => p.pid === o.pid)?.command ?? '')
+      expect(lines()[0]).toContain(alt)
+      expect(lines()[1]).toContain(staged)
+      expect(others.every((o) => processes().find((p) => p.pid === o.pid)?.ppid === process.pid)).toBe(true)
       expect('refused' in (await r)).toBe(true)
-      await until(() => groupOf(leader.pid).length === 0, 2000, 'the probe group to go').catch(() => {})
+      await until(() => groupOf(leader.pid).length === 0, 3000, 'the probe group to go').catch(() => {})
       expect(groupOf(leader.pid)).toEqual([])
       expect(bystanders.every(running)).toBe(true)
-    } finally { try { process.kill(-other.pid!, 'SIGKILL') } catch { /* gone */ } await done() }
+      // Still carrying their arguments after the retirement.
+      expect(lines()[0]).toContain(alt)
+      expect(lines()[1]).toContain(staged)
+    } finally {
+      for (const o of others) { try { process.kill(-o.pid!, 'SIGKILL') } catch { /* gone */ } }
+      await done()
+    }
+  }, 30_000)
+
+  it('a probe request after its worker is retired spawns nothing; a result for a retired worker is dropped', async () => {
+    const root = mkdtempSync(join(scratch, 'root-'))
+    const temp = await createMediaTemp(root)
+    const prefix = 'w0123456789ab-'
+    const staged = join(temp.dir, `${prefix}${'0'.repeat(32)}.bin`)
+    writeFileSync(staged, new Uint8Array(readFileSync(join(import.meta.dir, '../fixtures/media/a.m4a'))), { mode: 0o600 })
+    const log = spawnLog()
+    const posted: ProbeRunReply[] = []
+    try {
+      // Refused before any spawn: not this worker's file, another dir, a bad demuxer or wall cap.
+      const live = createWorkerProbes({ ...info!, ffprobe: sleeper('ffprobe') }, temp.dir, prefix, (r) => posted.push(r))
+      live.request({ kind: 'probe-run', id: 1, path: join(temp.dir, `w999999999999-${'0'.repeat(32)}.bin`), demuxer: 'mov', wallMs: 1000 })
+      live.request({ kind: 'probe-run', id: 2, path: join(root, `${prefix}${'0'.repeat(32)}.bin`), demuxer: 'mov', wallMs: 1000 })
+      live.request({ kind: 'probe-run', id: 3, path: staged, demuxer: 'hls' as never, wallMs: 1000 })
+      live.request({ kind: 'probe-run', id: 4, path: staged, demuxer: 'mov', wallMs: 60_000 })
+      expect(posted.map((r) => [r.id, r.ok])).toEqual([[1, false], [2, false], [3, false], [4, false]])
+      expect(log.spawns).toEqual([])
+      // A live run, then retirement: it is killed and reaped, and its result is never posted.
+      live.request({ kind: 'probe-run', id: 5, path: staged, demuxer: 'mov', wallMs: 2000 })
+      expect(log.spawns).toHaveLength(1)
+      expect(live.running).toBe(1)
+      live.retire()
+      await until(() => live.running === 0, 3000, 'the run to be reaped')
+      await Bun.sleep(50)
+      expect(posted.map((r) => r.id)).toEqual([1, 2, 3, 4])
+      expect(zombieChildren()).toEqual([])
+      // After retirement: refused silently, nothing spawned.
+      live.request({ kind: 'probe-run', id: 6, path: staged, demuxer: 'mov', wallMs: 1000 })
+      expect(log.spawns).toHaveLength(1)
+      expect(live.running).toBe(0)
+      expect(posted).toHaveLength(4)
+      expect(childPids()).toEqual([])
+    } finally { log.stop(); await temp.remove(); rmSync(root, { recursive: true, force: true }) }
   }, 30_000)
 
   it('a worker retired after mediaPart wrote its file leaves no file and no child', async () => {

@@ -39,7 +39,7 @@ import { hasAudioUse, NO_MEDIA_CONTEXT, slideAudioUses, type SlideMediaContext }
 import { mediaIdentity } from './media/bind'
 import { renderTrack } from './show/tracks'
 import { buildMorphPlan, MorphInvalid, morphReference, type BuiltMorph, type MorphJob } from './show/morph'
-import { asAudioUse, createDocMediaTable, MediaPartRefused, writePart, type DocMediaEntry, type DocMediaTable, type MediaTableSeams } from './media/probe'
+import { asAudioUse, createDocMediaTable, localProbeRunner, MediaPartRefused, writePart, type DocMediaEntry, type DocMediaTable, type MediaTableSeams, type ProbeRunner } from './media/probe'
 import { attachMediaTemp, type MediaTemp } from './media/temp'
 import type { FfmpegInfo } from './media/ffmpeg'
 import { hiddenShapeIds } from './policy/pptx'
@@ -270,13 +270,14 @@ export class DocumentHost {
   }
 
   /** Piece 5 (D21): ffmpeg and the media temp directory, from the worker init; undefined = media off. */
-  private mediaConfig?: { info: FfmpegInfo; dir: string; temp: MediaTemp }
+  /** `runner`: how a probe is run (a render worker's asks the pool; default this thread, fix round 2). */
+  private mediaConfig?: { info: FfmpegInfo; dir: string; temp: MediaTemp; runner?: ProbeRunner }
   /** TEST-ONLY seams for the probe table (a clock, a held probe, a run observer); empty in production. */
   mediaSeams: MediaTableSeams = {}
   /** Sets ffmpeg and the media dir (a view over the pool's directory: a worker never claims one). Documents opened
    * afterwards get a table over them; with no config every entry is `media-unavailable`. */
-  configureMedia(media: { info: FfmpegInfo; dir: string; prefix?: string } | undefined): void {
-    this.mediaConfig = media ? { info: media.info, dir: media.dir, temp: attachMediaTemp(media.dir, media.prefix) } : undefined
+  configureMedia(media: { info: FfmpegInfo; dir: string; prefix?: string } | undefined, runner?: ProbeRunner): void {
+    this.mediaConfig = media ? { info: media.info, dir: media.dir, temp: attachMediaTemp(media.dir, media.prefix), ...(runner ? { runner } : {}) } : undefined
   }
   /** With no media config: a temp that is never used (no ffmpeg means no probe stages a file). */
   private static readonly NO_TEMP: MediaTemp = {
@@ -285,7 +286,7 @@ export class DocumentHost {
   }
   private mediaTableFor(doc: OpenDoc): DocMediaTable {
     const m = this.mediaConfig
-    return createDocMediaTable(doc, m?.info, m?.temp ?? DocumentHost.NO_TEMP, this.mediaSeams)
+    return createDocMediaTable(doc, m?.info, m?.temp ?? DocumentHost.NO_TEMP, this.mediaSeams, m?.runner ?? (m?.info && localProbeRunner(m.info)))
   }
   /** The document's probe table (tests, stats). */
   mediaTable(docKey: string): DocMediaTable {

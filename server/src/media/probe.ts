@@ -35,7 +35,7 @@ export const PROBE_PART_MS = 2000, PROBE_DECK_MS = 10_000, AUDIO_MAX_MS = 1_800_
 /** D7, verbatim. */
 export const CODEC_WHITELIST = 'h264,mpeg4,mjpeg,wmv1,wmv2,wmv3,vc1,msmpeg4v3,aac,mp3,mp3float,pcm_s16le,pcm_s24le,pcm_u8,pcm_f32le,adpcm_ms,wmav2,alac'
 export const PROBE_SIZE = 5_000_000, ANALYZE_DURATION = 5_000_000
-/** ffprobe's CPU seconds (`ulimit -t`; it also bounds a probe orphaned by a terminated worker) and stdout cap. */
+/** ffprobe's CPU seconds (`ulimit -t`) and stdout cap. */
 export const PROBE_CPU_SECONDS = 2
 export const PROBE_STDOUT_CAP = 1 << 20
 export const MEDIA_REL = /\/(audio|video|media)$/
@@ -144,14 +144,30 @@ export async function stagePart(pkg: ShowDoc['handle']['pkg'], partPath: string,
   }
 }
 
+/** A probe run's outcome: the sandbox result, ffprobe's stdout (capped at `PROBE_STDOUT_CAP`) and whether it overran. */
+export interface ProbeRunResult { code: number | null; signal: string | null; killed?: 'wall' | 'memory' | 'abort'; stderr: string; stdout: string; over: boolean }
+/** Runs one probe (`path`: the staged input; `wallMs`: its wall cap). Aborting `signal` kills its group. */
+export type ProbeRunner = (req: { path: string; demuxer: Demuxer; wallMs: number }, signal: AbortSignal) => Promise<ProbeRunResult>
+
+/** The sandbox limits of one probe. */
+export function probeLimits(info: FfmpegInfo, wallMs: number): SandboxLimits {
+  return { cpuSeconds: PROBE_CPU_SECONDS, fileBytes: 1 << 16, memoryBytes: MEMORY_BYTES[info.platform], wallMs, stderrBytes: 65536 }
+}
 /** Reads ffprobe's stdout (capped) after BOTH exit and the stream's end: `done` does not imply stdout drained. */
-async function collect(run: ReturnType<typeof runSandboxed>) {
+export async function collectProbe(run: ReturnType<typeof runSandboxed>): Promise<ProbeRunResult> {
   const parts: Buffer[] = []
   let n = 0, over = false
   run.stdout.on('data', (b: Buffer) => { if (n + b.length > PROBE_STDOUT_CAP) { over = true; return } parts.push(b); n += b.length })
   const drained = new Promise<void>((ok) => { run.stdout.once('end', ok); run.stdout.once('close', ok); run.stdout.once('error', () => ok()) })
   const [res] = await Promise.all([run.done, drained])
-  return { res, over, stdout: Buffer.concat(parts).toString('utf8') }
+  return { code: res.code, signal: res.signal, ...(res.killed ? { killed: res.killed } : {}), stderr: res.stderr, stdout: Buffer.concat(parts).toString('utf8'), over }
+}
+/**
+ * The probe run on this thread (a `DocumentHost` used directly, as tests do). A render worker never uses it: it asks
+ * the pool, whose thread spawns and reaps the run (`probe-host.ts`, fix round 2).
+ */
+export function localProbeRunner(info: FfmpegInfo): ProbeRunner {
+  return (req, signal) => collectProbe(runSandboxed(info, 'ffprobe', probeArgv(req.demuxer, req.path), probeLimits(info, req.wallMs), signal))
 }
 
 export interface MediaTableSeams {
@@ -162,7 +178,7 @@ export interface MediaTableSeams {
   observe?: (r: { argv: string[]; stdout: string; stderr: string; code: number | null; killed?: string }) => void
 }
 
-export function createDocMediaTable(doc: { show?: ShowDoc }, info: FfmpegInfo | undefined, temp: MediaTemp, seams: MediaTableSeams = {}): DocMediaTable {
+export function createDocMediaTable(doc: { show?: ShowDoc }, info: FfmpegInfo | undefined, temp: MediaTemp, seams: MediaTableSeams = {}, runner: ProbeRunner | undefined = info && localProbeRunner(info)): DocMediaTable {
   const now = seams.now ?? (() => performance.now())
   const entries = new Map<string, DocMediaEntry>()
   let sorted: string[] | undefined
@@ -200,7 +216,7 @@ export function createDocMediaTable(doc: { show?: ShowDoc }, info: FfmpegInfo | 
 
   async function probeOne(k: number, partPath: string): Promise<DocMediaEntry> {
     const base = { k, partPath }
-    if (!info || !doc.show) return { ...base, refused: 'media-unavailable' }
+    if (!info || !runner || !doc.show) return { ...base, refused: 'media-unavailable' }
     const pkg = doc.show.handle.pkg
     const declared = pkg.declaredSize(partPath)
     if (declared === undefined) return { ...base, refused: 'media-unreadable' }
@@ -216,18 +232,17 @@ export function createDocMediaTable(doc: { show?: ShowDoc }, info: FfmpegInfo | 
       if (!demuxer) return { ...base, refused: 'media-unreadable' }
       const wallMs = Math.floor(Math.min(PROBE_PART_MS, PROBE_DECK_MS - spent - (now() - t0)))
       if (wallMs < 1) return { ...base, refused: 'media-unreadable' }
-      const limits: SandboxLimits = { cpuSeconds: PROBE_CPU_SECONDS, fileBytes: 1 << 16, memoryBytes: MEMORY_BYTES[info.platform], wallMs, stderrBytes: 65536 }
       const argv = probeArgv(demuxer, file.path)
-      const run = runSandboxed(info, 'ffprobe', argv, limits, new AbortController().signal)
-      // Listen at once: a stream whose listeners attach after it closed never reports its end.
-      const collected = collect(run)
+      const ctl = new AbortController()
+      const collected = runner({ path: file.path, demuxer, wallMs }, ctl.signal)
       // The test hold stands for a wedged probe: held to its wall cap, it is killed and counts as timed out even if
       // ffprobe itself had already finished.
       const held = seams.hangMs ? Math.min(seams.hangMs, wallMs) : 0
       if (held) await new Promise((ok) => setTimeout(ok, held))
       const wedged = held >= wallMs
-      if (wedged) run.kill()
-      const { res, over, stdout } = await collected
+      if (wedged) ctl.abort()
+      const res = await collected
+      const { over, stdout } = res
       seams.observe?.({ argv, stdout, stderr: res.stderr, code: res.code, ...(res.killed ? { killed: res.killed } : {}) })
       if (wedged || res.code !== 0 || res.killed || over) return { ...base, refused: 'media-unreadable' }
       const p = parseProbe(stdout)
