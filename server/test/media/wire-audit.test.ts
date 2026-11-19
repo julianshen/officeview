@@ -111,13 +111,12 @@ describe.skipIf(!info)('the media wire audit (Task 13)', () => {
   })
 
   /** The first 64-byte window of a source part (one with at least 32 distinct byte values) found in `out`. */
-  function leak(out: Buffer, parts: Map<string, Uint8Array>, o: { udta: boolean }): { path: string; at: number } | undefined {
-    // Task 7 ruling: the empty moov/udta box is a muxer constant (it carries no source byte). Its bytes are not
-    // indexed, so a source window made of the same constant (an ffmpeg-made m4a part holds it too) is never
-    // reported as a leak. Every other output byte is.
-    const at = o.udta ? out.indexOf(EMPTY_UDTA) : -1
+  function leak(out: Buffer, parts: Map<string, Uint8Array>): { path: string; at: number } | undefined {
+    // Task 7 ruling: the empty moov/udta box (61 bytes) is a muxer constant, allowed in every output. The allowance
+    // exempts only windows lying wholly inside it, and since a window (64 bytes) is longer than the box there are
+    // none (fix round 1): every output window is indexed, so source bytes against either edge are still caught.
     const windows = new Set<string>()
-    for (let i = 0; i + 64 <= out.length; i++) if (at < 0 || i + 64 <= at || i >= at + EMPTY_UDTA.length) windows.add(out.toString('latin1', i, i + 64))
+    for (let i = 0; i + 64 <= out.length; i++) windows.add(out.toString('latin1', i, i + 64))
     for (const [path, bytes] of parts) {
       const src = Buffer.from(bytes)
       for (let i = 0; i + 64 <= src.length; i++) {
@@ -129,16 +128,31 @@ describe.skipIf(!info)('the media wire audit (Task 13)', () => {
     return undefined
   }
 
+  it('the window audit catches source bytes against either edge of the muxer\'s empty udta (positive controls)', () => {
+    // Fix round 1: the 61-byte box is shorter than a window, so every window over it holds bytes from outside it.
+    // An output with the constant between two runs of high-entropy bytes; a source holding 64 bytes that cross
+    // its left edge (63 before + the first box byte), or its right edge (the last box byte + 63 after), is a leak.
+    let x = 0x2545f491
+    const noise = (n: number) => Buffer.from(Array.from({ length: n }, () => { x ^= x << 13; x ^= x >>> 17; x ^= x << 5; return (x >>> 0) & 0xff }))
+    const out = Buffer.concat([noise(200), EMPTY_UDTA, noise(200)])
+    const at = out.indexOf(EMPTY_UDTA)
+    const left = out.subarray(at - 63, at + 1), right = out.subarray(at + EMPTY_UDTA.length - 1, at + EMPTY_UDTA.length + 63)
+    for (const [edge, w] of [['left', left], ['right', right]] as const) {
+      expect(new Set(w).size, edge).toBeGreaterThanOrEqual(32)
+      expect(leak(out, new Map([[`ppt/media/${edge}.m4a`, new Uint8Array(w)]])), edge).toEqual({ path: `ppt/media/${edge}.m4a`, at: 0 })
+    }
+  })
+
   it('no MEDIA_CHUNK contains any 64-byte window of any source part', () => {
     let outputs = 0
     for (const p of played) {
       for (const d of p.deliveries) {
         const out = Buffer.from(d.bytes)
-        // Every output holds the muxer's empty udta exactly once (the allowance is for that box alone).
+        // Every output holds the muxer's empty udta exactly once.
         const at = out.indexOf(EMPTY_UDTA)
         expect(at, `${p.name}: the muxer's empty udta`).toBeGreaterThan(0)
         expect(out.indexOf(EMPTY_UDTA, at + 1)).toBe(-1)
-        const hit = leak(out, p.pkg.parts, { udta: true })
+        const hit = leak(out, p.pkg.parts)
         if (hit) throw new Error(`${p.name}: ${hit.path} window at ${hit.at} appears in ${d.mediaId}'s output`)
         outputs++
       }
@@ -147,7 +161,7 @@ describe.skipIf(!info)('the media wire audit (Task 13)', () => {
     // Positive control: a part delivered verbatim is caught.
     const fx = played.find((p) => p.name === 'fixturesDeck')!
     const [path, bytes] = [...fx.pkg.parts].find(([k]) => k.endsWith('.wav'))!
-    expect(leak(Buffer.from(bytes), fx.pkg.parts, { udta: true })?.path).toBe(path)
+    expect(leak(Buffer.from(bytes), fx.pkg.parts)?.path).toBe(path)
   })
 
   it('reassembled outputs show no metadata under ffprobe -show_format -show_streams', async () => {
