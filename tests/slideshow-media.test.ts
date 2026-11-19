@@ -16,6 +16,8 @@ import { createDiagnosticSink } from '../src/slideshow/diagnostics'
 import { createScheduler } from '../src/slideshow/engine/scheduler'
 import { createSlideTimeline, type SlideCursor, type SlideTimeline } from '../src/slideshow/engine/steps'
 import type { MediaLease, MediaLeaseResult } from '../src/slideshow/media/lease'
+import { parseMediaCommand } from '../src/slideshow/media/commands'
+import { mediaEndOf, mediaPlayheadAt, type MediaEvent } from '../src/slideshow/engine/media-ends'
 import { createMediaPlayer, type FrameBox, type MediaBox, type MediaController, type MediaPlayer } from '../src/slideshow/media/player'
 import { createTransitionSound } from '../src/slideshow/media/sounds'
 import { readMedia } from '../src/slideshow/read/media'
@@ -1027,6 +1029,100 @@ describe('clocked (streaming piece 5, spec §5.2)', () => {
     d.deliver(); await flush()
     expect(d.el.currentTime).toBeCloseTo(0.8, 5)
     expect(d.el.play).toHaveBeenCalledTimes(1)
+  })
+
+  /**
+   * Final review F1: a 4 s narration on shape 7 with deck commands at fixed times, its bytes delivered by hand. The
+   * element's position is checked against `mediaPlayheadAt`/`mediaEndOf` over the same tree and events.
+   */
+  const commanded = (cmds: Array<[number, string]>, opts: { clocked?: boolean; durationMs?: number } = { clocked: true, durationMs: 4000 }) => {
+    const r = rig()
+    let resolve!: (v: MediaLeaseResult) => void
+    const lease = fakeLease(rec('7', 'audio/mp4'))
+    const el = Object.assign(document.createElement('audio'), { canPlayType: () => 'maybe', play: vi.fn(() => Promise.resolve()), pause: vi.fn(), load: vi.fn() })
+    const now = { t: 0 }
+    const player = createMediaPlayer({
+      root: r.root, sink: r.sink, open: () => new Promise((res) => { resolve = res }), create: () => el,
+      ...(opts.clocked !== undefined ? { clocked: opts.clocked } : {}),
+      ...(opts.durationMs !== undefined ? { durationOf: () => opts.durationMs } : {}),
+    })
+    const cmdNodes = cmds.map(([ms, text], i) => {
+      const c = cmd(20 + i, '7', text)
+      return { ...c, ctn: { ...c.ctn, start: [at(ms)] } }
+    })
+    const t = tree(mainSeq([]), media('audio', 10, '7'), ...cmdNodes)
+    const tl = createSlideTimeline(t, { showAnimation: true, reducedMotion: false })
+    const ctl = player.enter(slideOf(t, [rec('7', 'audio/mp4')]), () => now.t)
+    const cursor: SlideCursor = tl.initial()
+    const sync = (ms: number) => { now.t = ms; ctl.sync(tl.stateAt(cursor, ms), ms) }
+    const events: MediaEvent[] = cmds.map(([ms, text]) => ({ at: ms, type: 'cmd', nodeId: 10, cmd: parseMediaCommand('call', text)! }))
+    const node = (t.root as ContainerNode).children[1] as AudioBehaviour
+    return { el, lease, sync, deliver: () => resolve(lease), events, node }
+  }
+
+  it('F1: bytes that arrive during a deck-command pause join at the paused position, and play from it on resume', async () => {
+    // A 4 s narration, pause at 1000, bytes at 3000, resume at 4000: the element resumes at 1 s, the end is 7000.
+    const d = commanded([[1000, 'pause'], [4000, 'resume']])
+    d.sync(0); d.sync(1000); d.sync(3000)
+    d.deliver(); await flush()
+    expect(d.el.currentTime).toBeCloseTo(1, 5)
+    expect(d.el.play).not.toHaveBeenCalled()
+    d.sync(4000); await flush()
+    expect(d.el.currentTime).toBeCloseTo(1, 5)
+    expect(d.el.play).toHaveBeenCalledTimes(1)
+    expect(d.lease.released).toBe(false)
+    // The element and the computed end agree: 1 s played before the pause, 3 s after the resume.
+    expect(mediaPlayheadAt(d.node, 4000, 0, d.events, 3000).pos).toBe(1000)
+    expect(mediaEndOf(d.node, { mediaId: 'm', kind: 'audio', durationMs: 4000 }, 0, d.events)).toEqual({ at: 7000 })
+  })
+
+  it('F1: a pause longer than the clip still joins at the paused position (raw slide time is past the duration)', async () => {
+    // Pause at 1000, bytes at 6000 (6 s of slide time > 4 s), resume at 7000: still 1 s, not 6 s; the end is 10000.
+    const d = commanded([[1000, 'pause'], [7000, 'resume']])
+    d.sync(0); d.sync(1000); d.sync(6000)
+    d.deliver(); await flush()
+    expect(d.el.currentTime).toBeCloseTo(1, 5)
+    expect(d.lease.released).toBe(false)
+    d.sync(7000); await flush()
+    expect(d.el.play).toHaveBeenCalledTimes(1)
+    expect(mediaEndOf(d.node, { mediaId: 'm', kind: 'audio', durationMs: 4000 }, 0, d.events)).toEqual({ at: 10000 })
+  })
+
+  it('F1: a resume that lands while the bytes are still on their way continues the activation (no restart)', async () => {
+    // Pause at 1000, resume at 2000, bytes at 3000: 1 s before the pause + 1 s after the resume = 2 s.
+    const d = commanded([[1000, 'pause'], [2000, 'resume']])
+    d.sync(0); d.sync(1000); d.sync(2000); d.sync(3000)
+    d.deliver(); await flush()
+    expect(d.el.currentTime).toBeCloseTo(2, 5)
+    expect(d.el.play).toHaveBeenCalledTimes(1)
+    expect(mediaPlayheadAt(d.node, 4000, 0, d.events, 3000).pos).toBe(2000)
+  })
+
+  it('F1: a mid-play playFrom before the bytes arrive is an absolute seek on the same clock', async () => {
+    // playFrom(1.5) at 1000, bytes at 2000: 1.5 s + 1 s = 2.5 s; the end is 3500 (F2).
+    const d = commanded([[1000, 'playFrom(1.5)']])
+    d.sync(0); d.sync(1000); d.sync(2000)
+    d.deliver(); await flush()
+    expect(d.el.currentTime).toBeCloseTo(2.5, 5)
+    expect(mediaEndOf(d.node, { mediaId: 'm', kind: 'audio', durationMs: 4000 }, 0, d.events)).toEqual({ at: 3500 })
+  })
+
+  it('F1: bytes whose position is at or past the duration never play, and the lease is released', async () => {
+    // playFrom(3.5) at 1000 → the clip runs out at 1500; the bytes arrive at 1600 (the timeline has not ended the node).
+    const d = commanded([[1000, 'playFrom(3.5)']])
+    d.sync(0); d.sync(1000)
+    d.sync(1600)
+    d.deliver(); await flush()
+    expect(d.el.play).not.toHaveBeenCalled()
+    expect(d.lease.released).toBe(true)
+    expect(d.el.getAttribute('src')).toBeNull()
+  })
+
+  it('F1: without clocked (local shows) commands and late bytes behave as before', async () => {
+    const d = commanded([[1000, 'pause'], [4000, 'resume']], {})
+    d.sync(0); d.sync(1000); d.sync(3000)
+    d.deliver(); await flush()
+    expect(d.el.currentTime).toBe(0)
   })
 
   it('without it (local shows) late bytes still start at 0', async () => {

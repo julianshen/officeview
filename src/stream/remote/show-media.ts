@@ -228,6 +228,8 @@ export function createShowMedia(o: ShowMediaOptions): ShowMedia {
     root: o.root,
     sink: o.sink,
     clocked: true,
+    // F1: the plan's duration, so a late join folds onto the clip and an elapsed one never plays.
+    durationOf: (rec) => remoteRecordOf(rec)?.record.durationMs,
     open,
     relieve: () => sounds.release(),
     stopTransitionSound: (onlyLooping) => sounds.release(onlyLooping),
