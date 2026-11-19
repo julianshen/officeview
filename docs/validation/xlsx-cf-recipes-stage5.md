@@ -106,6 +106,10 @@ npx tsx scripts/cf-refs/audit.ts --stage 5
 
 - **Expected:** a repair-free open, with Excel keeping the three relative formulas as authored (`MAX(B2:B7)`, `MAX(B16:B21)`, `MAX(I2:I7)`), as it did on `stage5-cfvo-scope`. `formulaEvaluation['formula:cfvo-scope-multi-range']` is `discriminating`, matching one of the twelve readings. The capability stays in `CF_STAGE5_UNSUPPORTED` whatever the result, and production keeps it unresolved.
 - **Stop and record** (never retried, never refitted): a repair, strip or rewritten formula (keep `<id>.rejected.xlsx`); `missing-capture` or an unclassifiable icon crop; `formula-hypothesis-none`; `non-discriminating`; `formula-replication-shortfall`; a failed negative control.
+- **Run of 2026-11-20 (5dc2fe9e, Excel 16.115):** a repair-free open, all three formulas kept as authored, and a 4789 × 841 px capture.
+  - `formula:cfvo-scope-multi-range` is `discriminating`, matched `anchor-a1`, sole survivor. Excel reads `=MAX(B2:B7)` and `=MAX(B16:B21)` from A1, so both read the window A1:A6 (max 15). For example, B2..B7 = F8696B D0806F 9A9F75 7FAE78 63BE7B 63BE7B.
+  - The negative control matched its b20 twins.
+  - The single-range control I2..I7 = F8696B C28770 9A9F75 76B378 63BE7B 63BE7B. Read by its pre-registered method (the configuration alone, record removed), this is `anchor-a1` too: the window is A1:A6, not I2:I7 (45) and not H1:H6 (20). The A1 anchor is a property of every relative cfvo, not of the multi-range scope. See `docs/validation/xlsx-cf.md` §14.z.11.
 
 ## 3. Unresolved shapes (record only)
 

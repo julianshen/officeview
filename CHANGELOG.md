@@ -15,7 +15,7 @@ in git history.
 - **Excel formula conditional formatting rules (view-only).** "Use a formula" rules, `cellIs` rules whose value is a
   reference or a formula, and text, blank and error rules whose formula differs from the one Excel writes are now
   evaluated per cell by a bounded formula evaluator, compose with the other rule kinds, and paint wherever Excel 16.115's
-  own rendering verifies them (45 Stage 5 capabilities): the formula dialects, relative and pinned anchors and the edge
+  own rendering verifies them (46 Stage 5 capabilities): the formula dialects, relative and pinned anchors and the edge
   wrap, number/boolean/blank/error truth, the logical, information, text, math, aggregate, conditional-aggregate, date,
   row/column and `TODAY()` functions, hoisted whole-column aggregates (an error in the column propagates, as Excel shows) and `COUNTIF` frequency, reference, relative,
   expression and blank `cellIs` operands, divergent predicates, saved values under manual calculation, stopIfTrue and
@@ -26,6 +26,14 @@ in git history.
   rewrites or refuses (`activePresent` on scales, bars and icon sets; a time-period formula that differs from its
   period; a reference to a missing sheet; a non-numeric formula bound), readings production does not implement (text and
   range truth, error operands, a relative cfvo bound, a relative formula bound across several ranges), and stopIfTrue ahead of an icon set.
+
+- **Excel formula conditional formatting: a formula bound on a rule over several ranges.** An icon set or data bar whose
+  `sqref` lists several ranges and whose threshold or bound is an absolute formula (`=$H$1`) now paints, with the bound
+  evaluated once for the whole rule. Excel 16.115 reads a cfvo formula as if it sat in A1 (`formula:cfvo-scope-multi-range`,
+  reading `anchor-a1`, the 46th Stage 5 capability; 339 verified in total). A relative cfvo bound, single-range or
+  multi-range, stays withheld: Excel reads `=MAX(B2:B7)` written on B2 as `MAX(A1:A6)`, and production does not yet
+  implement that for single ranges. Colour scales over several ranges stay withheld (`scale:scope-disjoint`). Evidence:
+  `docs/validation/xlsx-cf.md` §14.z.11.
 
 - **Excel formula conditional formatting: an error in a whole-column aggregate propagates.** A rule such as
   `A2>AVERAGE($A:$A)` or `A2=MAX($A:$A)` over a column that holds an error (`#DIV/0!`) formats no cell, which is what
