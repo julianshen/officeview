@@ -6954,6 +6954,169 @@ function cfvoScopeFixture(): S5Fixture {
   })
 }
 
+/**
+ * The formula:cfvo-scope-multi-range follow-up (orchestrator ruling 2026-11-20): stage5-cfvo-scope-v2. On stage5-cfvo-scope
+ * Excel drew the top colour and the top icon on every cell of =MAX(B2:B5) over "B2:B5 D2:D5 F2:F5", contradicting both
+ * registered readings. Its values are all positive and every window outside its data is blank, so a zero bound, a bound
+ * read from an empty window and an ignored bound paint alike there. This version pre-registers twelve readings of the
+ * relative bound MAX(<first range>): the stored window, written relative to a frame (the sqref's top-left, the documented
+ * convention, or A1), shifted to an evaluation anchor (A1, the sqref's top-left, each range's top-left, the cell itself,
+ * the last range's top-left; frame A1 at A1 is the written window, rule-wide again); zero; ignored (every value meets the
+ * bound); and max-fallback (the bound falls back to the scope's maximum). The data holds negatives, and every window a
+ * reading can read is seeded with known values (spikes and negatives), so each reading predicts its own rendering
+ * (tests/xlsx-cf-cfvo-scope-v2.test.ts plants each one and requires it back as the one match).
+ */
+const SCOPE2_READINGS = [
+  'rule-wide', 'per-range', 'anchor-cell', 'anchor-last', 'anchor-a1',
+  'a1-frame-top-left', 'a1-frame-per-range', 'a1-frame-cell', 'a1-frame-last',
+  'zero', 'ignored', 'max-fallback',
+] as const
+const SCOPE2_N = 6
+/** The icon set's num threshold: every finite bound of every reading lies at or above it (no inverted thresholds). */
+const SCOPE2_T1 = -20
+/** Twin blocks (six cells each, a copy of one data block's values): from column S, in six bands of rows. */
+const SCOPE2_TWIN_COL = 19
+const SCOPE2_TWIN_BANDS = [2, 9, 16, 23, 30, 37] as const
+
+/** The bound each reading takes at each cell of a rule `MAX(<cols[0]><r0>:<cols[0]><r0+n-1>)` on `cols` x rows r0.. . */
+function scope2Bounds(cells: Readonly<Record<string, S5Value>>, cols: readonly string[], r0: number): Record<string, Record<string, number>> {
+  const first = colIndex(cols[0]!)
+  const last = colIndex(cols.at(-1)!)
+  const refs = cols.flatMap(c => rowsOf(c, r0, r0 + SCOPE2_N - 1))
+  const maxAt = (row: number, col: number): number => {
+    const vs = Array.from({ length: SCOPE2_N }, (_, i) => cells[`${colLetter(col)}${row + i}`])
+    if (!vs.every((v): v is number => typeof v === 'number')) throw new Error(`stage5-cfvo-scope-v2: the window at ${colLetter(col)}${row} is not fully seeded`)
+    return Math.max(...vs)
+  }
+  // The window is the written one shifted by anchor - frame: (r0, first) + (anchor - frame).
+  const at = (frame: readonly [number, number], anchor: (ref: string) => readonly [number, number]) => (ref: string): number => {
+    const [ar, ac] = anchor(ref)
+    return maxAt(r0 + ar - frame[0], first + ac - frame[1])
+  }
+  const TL = [r0, first] as const
+  const A1 = [1, 1] as const
+  const anchors = {
+    a1: () => A1,
+    tl: () => TL,
+    range: (ref: string) => [r0, colIndex(colOfRef(ref))] as const,
+    cell: (ref: string) => [rowOfRef(ref), colIndex(colOfRef(ref))] as const,
+    last: () => [r0, last] as const,
+  }
+  const scopeMax = Math.max(...refs.map(r => cells[r] as number))
+  const fns: Record<(typeof SCOPE2_READINGS)[number], (ref: string) => number> = {
+    'rule-wide': at(TL, anchors.tl),
+    'per-range': at(TL, anchors.range),
+    'anchor-cell': at(TL, anchors.cell),
+    'anchor-last': at(TL, anchors.last),
+    'anchor-a1': at(TL, anchors.a1),
+    'a1-frame-top-left': at(A1, anchors.tl),
+    'a1-frame-per-range': at(A1, anchors.range),
+    'a1-frame-cell': at(A1, anchors.cell),
+    'a1-frame-last': at(A1, anchors.last),
+    zero: () => 0,
+    ignored: () => -Infinity,
+    'max-fallback': () => scopeMax,
+  }
+  return Object.fromEntries(SCOPE2_READINGS.map(h => [h, Object.fromEntries(refs.map(r => [r, fns[h](r)]))]))
+}
+
+function cfvoScopeV2Fixture(): S5Fixture {
+  const CAP = 'formula:cfvo-scope-multi-range'
+  const TWIN = 'formula:cfvo-scope-v2-twin'
+  const S: Record<string, readonly number[]> = { B: [-40, -25, -5, 5, 20, 35], D: [-40, -15, 2, 10, 30, 75], F: [-40, -30, -8, 8, 25, 55] }
+  const I: Record<string, readonly number[]> = { B: [-30, -10, 5, 10, 25, 25], D: [-30, -10, 5, 10, 60, 60], F: [-30, -10, 5, 10, 40, 40] }
+  const SINGLE: readonly number[] = [-40, -20, -5, 8, 22, 45]
+  const fill = (n: number, v = -30): number[] => Array(n).fill(v)
+  const cells: Record<string, S5Value> = {
+    // anchor-a1: A1:A6 (max 15), the window from A1 for every rule.
+    ...colValues('A', [-35, 15, -30, 5, -20, 10], 1),
+    // The scale (rows 2..7), its anchor-cell windows below each range, its A1-frame windows one column right (rows 3..13).
+    ...colValues('B', S.B!), ...colValues('D', S.D!), ...colValues('F', S.F!),
+    ...colValues('B', [95, ...fill(4)], 8), ...colValues('D', [-30, -30, 90, -30, -30], 8), ...colValues('F', [-30, -30, -30, 99, -30], 8),
+    ...colValues('C', [50, ...fill(5), 60, ...fill(4)], 3), ...colValues('E', [-30, -30, -30, 85, ...fill(7)], 3), ...colValues('G', [...fill(4), 45, -30, 65, ...fill(4)], 3),
+    // The icon set (rows 16..21), its anchor-cell windows (rows 22..26) and A1-frame windows (rows 31..41).
+    ...colValues('B', I.B!, 16), ...colValues('D', I.D!, 16), ...colValues('F', I.F!, 16),
+    ...colValues('B', fill(5), 22), ...colValues('D', fill(5), 22), ...colValues('F', fill(5), 22),
+    ...colValues('C', fill(11, 30), 31), ...colValues('E', fill(11, 20), 31), ...colValues('G', fill(11, 50), 31),
+    // The absolute negative control ($H$1 = 20) on the scale's values, and the single-range control with its windows.
+    H1: 20, ...colValues('K', S.B!), ...colValues('M', S.D!), ...colValues('O', S.F!),
+    ...colValues('I', SINGLE), ...colValues('I', [-30, 90, -30, -30, -30], 8), ...colValues('Q', [...fill(2), 55, ...fill(8)], 3),
+  }
+  const num = (v: number): S5Cfvo => ({ type: 'num', val: String(v) })
+  const scaleBounds = scope2Bounds(cells, ['B', 'D', 'F'], 2)
+  const iconBounds = scope2Bounds(cells, ['B', 'D', 'F'], 16)
+  const singleBounds = scope2Bounds(cells, ['I'], 2)
+  // The twin bank: one block per predicted rendering of a data block (canonical, so equal renderings share one twin ref).
+  const blocks: Array<{ col: string; r0: number; values: readonly number[]; kind: 'scale' | 'icon'; cfvo: S5Cfvo[] }> = []
+  const slots = new Map<string, { col: string; r0: number }>()
+  const block = (key: string, values: readonly number[], kind: 'scale' | 'icon', cfvo: S5Cfvo[]): { col: string; r0: number } => {
+    const hit = slots.get(key)
+    if (hit) return hit
+    const i = blocks.length
+    const slot = { col: colLetter(SCOPE2_TWIN_COL + Math.floor(i / SCOPE2_TWIN_BANDS.length)), r0: SCOPE2_TWIN_BANDS[i % SCOPE2_TWIN_BANDS.length]! }
+    slots.set(key, slot)
+    blocks.push({ ...slot, values, kind, cfvo })
+    return slot
+  }
+  const dataOf = (ref: string, r0: number): readonly number[] => rowsOf(colOfRef(ref), r0, r0 + SCOPE2_N - 1).map(r => cells[r] as number)
+  /** A scale twin: the top colour (both bounds below every value), the bottom colour (both above), or num lo / num b. */
+  const scaleTwin = (ref: string, r0: number, lo: number, b: number): string => {
+    const values = dataOf(ref, r0)
+    const v = cells[ref] as number
+    const id = `${colOfRef(ref)}${r0}`
+    const lowest = Math.min(...values), highest = Math.max(...values)
+    const s = v >= b
+      ? block(`scale:${id}:top`, values, 'scale', [num(lowest - 20), num(lowest - 10)])
+      : v <= lo
+        ? block(`scale:${id}:bottom`, values, 'scale', [num(highest + 10), num(highest + 20)])
+        : block(`scale:${id}:${b}`, values, 'scale', [num(lo), num(b)])
+    return `twin:${s.col}${s.r0 + rowOfRef(ref) - r0}`
+  }
+  /** An icon twin: the class the Stage 4 threshold rule gives (v >= b: 2; v >= T1: 1; else 0), drawn by a num/num set. */
+  const iconTwin = (ref: string, r0: number, b: number): string => {
+    const v = cells[ref] as number
+    const k = v >= b ? 2 : v >= SCOPE2_T1 ? 1 : 0
+    const t = [[-100, -90], [-100, 100], [100, 110]][2 - k]!
+    const s = block(`icon:${colOfRef(ref)}${r0}:${k}`, dataOf(ref, r0), 'icon', [{ type: 'percent', val: '0' }, num(t[0]!), num(t[1]!)])
+    return `twin:${s.col}${s.r0 + rowOfRef(ref) - r0}`
+  }
+  const lowOf = (cols: readonly string[], r0: number): number => Math.min(...cols.flatMap(c => dataOf(`${c}${r0}`, r0)))
+  const scaleRefs = ['B', 'D', 'F'].flatMap(c => rowsOf(c, 2, 1 + SCOPE2_N))
+  const iconRefs = ['B', 'D', 'F'].flatMap(c => rowsOf(c, 16, 15 + SCOPE2_N))
+  const absRefs = ['K', 'M', 'O'].flatMap(c => rowsOf(c, 2, 1 + SCOPE2_N))
+  const singleRefs = rowsOf('I', 2, 1 + SCOPE2_N)
+  const L = lowOf(['B', 'D', 'F'], 2)
+  const per = (fn: (h: string) => (ref: string) => string) => Object.fromEntries(SCOPE2_READINGS.map(h => [h, fn(h)]))
+  const configurations: S5Configuration[] = [
+    { ...s5Cfg('scope2-scale', CAP, scaleRefs, per(h => ref => scaleTwin(ref, 2, L, scaleBounds[h]![ref]!))), replicateBy: 'column' },
+    { ...s5Cfg('scope2-icon', CAP, iconRefs, per(h => ref => iconTwin(ref, 16, iconBounds[h]![ref]!)), { observable: 'crop' }), replicateBy: 'column' },
+    {
+      ...s5Cfg('scope2-scale-absolute', CAP, absRefs, per(() => ref => scaleTwin(ref, 2, lowOf(['K', 'M', 'O'], 2), cells.H1 as number)), { note: 'Negative control: an absolute bound ($H$1) reads the same value under every reading' }),
+      role: 'negative-control',
+    },
+    s5Cfg('scope2-single-range', 'formula:cfvo-relative', singleRefs, per(h => ref => scaleTwin(ref, 2, lowOf(['I'], 2), singleBounds[h]![ref]!)), {
+      record: 'Recorded only: the single-range control (=MAX(I2:I7) on I2:I7) shows whether the multi-range scope causes the behaviour or a relative cfvo always does it; it never bears evidence for the multi-range capability',
+    }),
+  ]
+  for (const b of blocks) Object.assign(cells, colValues(b.col, b.values, b.r0))
+  let p = 1
+  const rules: S5Rule[] = [
+    s5Scale(CAP, 'B2:B7 D2:D7 F2:F7', p++, [{ type: 'min' }, { type: 'formula', val: 'MAX(B2:B7)' }]),
+    s5Icon(CAP, 'B16:B21 D16:D21 F16:F21', p++, [{ type: 'percent', val: '0' }, num(SCOPE2_T1), { type: 'formula', val: 'MAX(B16:B21)' }]),
+    s5Scale(CAP, 'K2:K7 M2:M7 O2:O7', p++, [{ type: 'min' }, { type: 'formula', val: '$H$1' }]),
+    s5Scale('formula:cfvo-relative', 'I2:I7', p++, [{ type: 'min' }, { type: 'formula', val: 'MAX(I2:I7)' }]),
+    ...blocks.map(b => (b.kind === 'scale' ? s5Scale : s5Icon)(TWIN, `${b.col}${b.r0}:${b.col}${b.r0 + SCOPE2_N - 1}`, p++, b.cfvo)),
+  ]
+  return s5rect({
+    id: 'stage5-cfvo-scope-v2',
+    question:
+      'S5-H (the cfvo-scope follow-up): on sqref="B2:B7 D2:D7 F2:F7" a scale [min, =MAX(B2:B7)] (and on rows 16-21 an icon set [percent 0, num -20, =MAX(B16:B21)]) over data with negatives, every window a reading can read seeded: which bound does Excel read? Twelve readings: the written window under the sqref-top-left or the A1 frame, evaluated at A1, the sqref\'s top-left, each range\'s top-left, the cell or the last range\'s top-left; zero; ignored; max-fallback. Literal num/num twins on the same values, one per predicted rendering; an absolute-bound negative control ($H$1) and a recorded single-range control (=MAX(I2:I7)).',
+    cells,
+    rules,
+    configurations,
+  })
+}
+
 function x14ScaleFixture(): S5Fixture {
   const Dv = [5, 15, 30, 45, 60, 75, 90, 100]
   return s5rect({
@@ -7195,6 +7358,8 @@ export const CF_STAGE5_FIXTURES: readonly S5Fixture[] = ([
   ...S5_UNRESOLVED.map(unresolvedFixture),
   // Appended last, like every later case version; it owns bar:bounds-formula through CF_STAGE5_OWNERS.
   barBoundsFormulaFixture(),
+  // Appended last (the cfvo-scope follow-up); it owns formula:cfvo-scope-multi-range through CF_STAGE5_OWNERS.
+  cfvoScopeV2Fixture(),
 ] as const satisfies readonly S5Fixture[]).map(withEmptyTwins).map(withPositiveControls)
 
 /** The brief's matrix rows -> the workbooks that answer them ("one workbook each" rows and clock splits have several). */
@@ -7212,7 +7377,7 @@ export const CF_STAGE5_GROUPS: Readonly<Record<string, readonly string[]>> = {
   'stage5-composition': ['stage5-composition'],
   'stage5-cross-sheet': ['stage5-cross-sheet', 'stage5-cross-sheet-missing'],
   'stage5-cfvo-formulas': ['stage5-bar-bounds-formula', 'stage5-cfvo-formulas'],
-  'stage5-cfvo-scope': ['stage5-cfvo-scope'],
+  'stage5-cfvo-scope': ['stage5-cfvo-scope', 'stage5-cfvo-scope-v2'],
   'stage5-x14-scale': ['stage5-x14-scale'],
   'stage5-active-present': ['stage5-active-present-scale', 'stage5-active-present-bar', 'stage5-active-present-icon'],
   'stage5-unresolved-shapes': S5_UNRESOLVED.map(u => `stage5-unresolved-shapes-${u.id}`),
@@ -7401,6 +7566,7 @@ export const CF_STAGE5_NONDISCRIMINATING: Readonly<Record<string, string>> = {
   'formula:cfvo-twin': 'Literal twin rules of stage5-cfvo-formulas: comparison references for the formula bounds, never a question themselves.',
   'formula:cfvo-bar-twin': 'Literal twin rules of stage5-bar-bounds-formula: comparison references for the formula bar bounds, never a question themselves.',
   'formula:cfvo-scope-twin': 'Literal twin rules of stage5-cfvo-scope: comparison references for the scope readings, never a question themselves.',
+  'formula:cfvo-scope-v2-twin': 'Literal twin rules of stage5-cfvo-scope-v2 (num/num scales and icon sets, one per predicted rendering): comparison references for the scope readings, never a question themselves.',
   'formula:x14-scale-twin': 'The base literal twin of stage5-x14-scale: a comparison reference, never a question itself.',
   'formula:active-present-scale-twin': 'The non-activated twin of stage5-active-present-scale: a comparison reference.',
   'formula:active-present-bar-twin': 'The non-activated twin of stage5-active-present-bar: a comparison reference.',
@@ -7408,9 +7574,13 @@ export const CF_STAGE5_NONDISCRIMINATING: Readonly<Record<string, string>> = {
   'formula:positive-control': 'Literal positive controls (fix round 6): a cellIs rule on each predicted dxf, proving the DisplayFormat readback shows a format before any reading is judged; never a question itself.',
 }
 
-/** Capabilities owned by a later case version (the bar:bounds-formula follow-up, 2026-11-19; see CF_STAGE3_OWNERS). */
+/**
+ * Capabilities owned by a later case version (the bar:bounds-formula follow-up, 2026-11-19, and the cfvo-scope follow-up,
+ * 2026-11-20; see CF_STAGE3_OWNERS). The old case keeps its markers, configurations and capture as a cross-check.
+ */
 export const CF_STAGE5_OWNERS: Readonly<Record<string, string>> = {
   'bar:bounds-formula': 'stage5-bar-bounds-formula',
+  'formula:cfvo-scope-multi-range': 'stage5-cfvo-scope-v2',
 }
 
 /** Complete capability registry for every Stage 5 marker, configuration and reused capture (one entry per id). */

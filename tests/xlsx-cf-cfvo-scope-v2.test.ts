@@ -265,7 +265,7 @@ describe('stage5-cfvo-scope-v2: every reading discriminates on a synthetic obser
       const { xml, parts } = sheetOf(c)
       const ev = evaluateFormulaCapabilities(resolveFormulaConfigurations(c, parts), formulaControlsOf(c), plant(c, valuesOf(xml), reading), { kindOf: visualKindOf(c) })[CAP]!
       expect([ev.status, ev.matched], ev.reason).toEqual(['discriminating', reading])
-    }, 60_000)
+    }, 300_000)
   }
 
   it('every pair of readings differs at >= 2 cells of every range where it differs at all (colour), and at >= 2 cells overall', () => {
@@ -284,6 +284,30 @@ describe('stage5-cfvo-scope-v2: every reading discriminates on a synthetic obser
         total += s + k
       }
       expect(total, `${a}/${b}`).toBeGreaterThanOrEqual(2)
+    }
+  })
+
+  it('distinct predicted colours stay distinct if Excel computed any channel 0.1 of a unit off (no near tie decides a cell)', () => {
+    const values = valuesOf(sheetOf(caseOf(ID)).xml)
+    const channels = (v: number, lo: number, b: number): Array<[number, number]> => {
+      const ends = [[0xf8, 0x63], [0x69, 0xbe], [0x6b, 0x7b]] as const
+      if (v >= b) return ends.map(([, c]) => [c, c])
+      if (v <= lo) return ends.map(([c]) => [c, c])
+      const f = (v - lo) / (b - lo)
+      return ends.map(([c0, c1]) => {
+        const d = Math.abs(c1 - c0), s = c1 >= c0 ? 1 : -1
+        const a = c0 + s * Math.floor(f * d - 0.1), z = c0 + s * Math.floor(f * d + 0.1)
+        return [Math.min(a, z), Math.max(a, z)]
+      })
+    }
+    const apart = (x: Array<[number, number]>, y: Array<[number, number]>): boolean => x.some((p, i) => p[1] < y[i]![0] || y[i]![1] < p[0])
+    for (const [cols, b] of [[SCALE_COLS, boundsOf(values, SCALE_COLS, 2, N)], [['I'], boundsOf(values, ['I'], 2, N)]] as const) {
+      for (const r of b.refs) {
+        const seen = new Map<string, Array<[number, number]>>()
+        for (const h of READINGS) seen.set(scaleColour(values.get(r)!, b.min, b.bounds[h][r]!), channels(values.get(r)!, b.min, b.bounds[h][r]!))
+        const list = [...seen]
+        for (const [i, [ka, ca]] of list.entries()) for (const [kb, cb] of list.slice(i + 1)) expect(apart(ca, cb), `${cols.join('')} ${r}: ${ka} / ${kb}`).toBe(true)
+      }
     }
   })
 

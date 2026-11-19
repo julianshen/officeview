@@ -7244,19 +7244,21 @@ const EXPECTED_DISJOINT_UNBUILT: Readonly<Record<string, readonly string[]>> = {
 /** Fix round 7: (configuration, rival, replication group) triples whose refutations cannot be cut below 2, by reason. */
 const EXPECTED_SINGLE_UNBUILT: Readonly<Record<string, number>> = { 'literal-vs-literal': 370, 'twin-expectation-locked': 38, 'strike-on-one-token': 4 }
 // The bar:bounds-formula follow-up adds one crop:bar configuration of three readings (zero unbuilt, as in stage5-cfvo-formulas).
-const EXPECTED_COVERAGE = { triples: 172, built: 167, 'blank-twins': 49, 'required-empty-visuals': 95, 'blank-twin-controls': 49, 'blank-dxf-controls': 126, 'strike-blind': 10, 'tolerance-shift': 6, 'disjoint-rivals': 32, 'single-refuter': 66 }
+// The cfvo-scope follow-up (stage5-cfvo-scope-v2) adds twelve readings, every one built (+12 triples), and +12 blank twins
+// and twin controls, +24 disjoint rivals and +608 single refuters, every one refused.
+const EXPECTED_COVERAGE = { triples: 184, built: 179, 'blank-twins': 61, 'required-empty-visuals': 95, 'blank-twin-controls': 61, 'blank-dxf-controls': 126, 'strike-blind': 10, 'tolerance-shift': 6, 'disjoint-rivals': 56, 'single-refuter': 674 }
 /** How each corruption refuses (a corruption can also eliminate the winner or leave two readings standing). */
 const EXPECTED_OUTCOMES: Readonly<Record<string, number>> = {
-  'blank-twins -> formula-twin-missing': 49,
+  'blank-twins -> formula-twin-missing': 61,
   'required-empty-visuals -> formula-hypothesis-none': 79,
   'required-empty-visuals -> formula-unexpected-visual': 16,
-  'blank-twin-controls -> formula-twin-missing': 49,
+  'blank-twin-controls -> formula-twin-missing': 61,
   'blank-dxf-controls -> formula-positive-control-failed': 126,
   'strike-blind -> formula-positive-control-failed': 10,
   'tolerance-shift -> formula-replication-shortfall': 3,
   'tolerance-shift -> non-discriminating': 3,
-  'disjoint-rivals -> formula-replication-shortfall': 18,
-  'disjoint-rivals -> non-discriminating': 14,
-  'single-refuter -> formula-replication-shortfall': 64,
+  'disjoint-rivals -> formula-replication-shortfall': 35,
+  'disjoint-rivals -> non-discriminating': 21,
+  'single-refuter -> formula-replication-shortfall': 672,
   'single-refuter -> non-discriminating': 2,
 }

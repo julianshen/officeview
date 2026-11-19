@@ -86,6 +86,27 @@ npx tsx scripts/cf-refs/audit.ts --stage 5
 - Expected `formulaEvaluation['bar:bounds-formula']`: discriminating, matched `evaluated`, B2..B9 `bar:2-12/16/21/29/36/40/44/58`. Run of 2026-11-19 (6a83cbe2): exactly that.
 - `missing-capture`, `formula-hypothesis-none`, or an `ignored`/`zero` match is a finding: record it, never refit. A `zero` reading cannot verify (its twin is degenerate: `formula-twin-blank`).
 
+### 2b. The multi-range relative bound, version 2 (the cfvo-scope follow-up, 2026-11-20)
+
+`stage5-cfvo-scope-v2` owns `formula:cfvo-scope-multi-range` (through `CF_STAGE5_OWNERS`, appended last); `stage5-cfvo-scope` keeps its capture and finding. Its rules:
+
+- a scale `[min, =MAX(B2:B7)]` on `B2:B7 D2:D7 F2:F7` over -40..75;
+- an icon set `3Arrows [percent 0, num -20, =MAX(B16:B21)]` on `B16:B21 D16:D21 F16:F21`;
+- an absolute negative control `[min, =$H$1]` (H1 = 20) on `K2:K7 M2:M7 O2:O7`;
+- a recorded single-range control `[min, =MAX(I2:I7)]` on `I2:I7`.
+
+Every window a reading can read is seeded: A1:A6, below each range (rows 8-12 and 22-26), and one column right of each range (rows 3-13 and 31-41); for the single-range control, I8:I12 and Q3:Q13. There are 58 literal num/num twin blocks of six cells in columns S..AB, one per predicted rendering. The sheet is A1:BE42, with 20 pt rows and the default (centred) style, so the icons are classified against `stage4-icon-glyph-key-centred`.
+
+```
+bun scripts/cf-refs/build.ts   --stage 5 --case stage5-cfvo-scope-v2
+bun scripts/cf-refs/capture.ts --stage 5 --case stage5-cfvo-scope-v2
+bun scripts/cf-refs/capture.ts --stage 5 --verify-only
+npx tsx scripts/cf-refs/audit.ts --stage 5
+```
+
+- **Expected:** a repair-free open, with Excel keeping both relative formulas as authored (`MAX(B2:B7)`, `MAX(B16:B21)`, `MAX(I2:I7)`), as it did on `stage5-cfvo-scope`. `formulaEvaluation['formula:cfvo-scope-multi-range']` is `discriminating`, matching one of the twelve readings. The capability stays in `CF_STAGE5_UNSUPPORTED` whatever the result, and production keeps it unresolved.
+- **Stop and record** (never retried, never refitted): a repair, strip or rewritten formula (keep `<id>.rejected.xlsx`); `missing-capture` or an unclassifiable icon crop; `formula-hypothesis-none`; `non-discriminating`; `formula-replication-shortfall`; a failed negative control.
+
 ## 3. Unresolved shapes (record only)
 
 ```
