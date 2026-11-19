@@ -188,7 +188,10 @@ describe('audio argv (D7 input rules, D8)', () => {
 
 /**
  * Task 14 (Task 7 minor, parked): the two branches before any spawn. They run everywhere (no ffmpeg needed): the
- * binaries are a marker script, so a spawn would leave the marker behind.
+ * binaries are a marker script, so a spawn that runs would leave the marker behind. The no-audio case pins its
+ * guard (removing it turns the test red). The abort case does not: without the guard `runSandboxed` spawns and kills
+ * the group at once (`if (signal.aborted) kill('abort')`), usually before the script runs, and `transcode` still
+ * rethrows the reason, so the test pins the outcome only.
  */
 describe('transcode before any spawn (no ffmpeg needed)', () => {
   const dir = mkdtempSync(join(root, 'prespawn-'))
