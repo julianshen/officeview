@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest'
 import { ManualClock } from '../src/slideshow/clock'
 import { createDiagnosticSink } from '../src/slideshow/diagnostics'
+import { mediaClockOf } from '../src/slideshow/engine/media-ends'
 import { createShowDriver, type DriverHooks, type DriverStage, type HitResult, type SlideSource } from '../src/slideshow/player/driver'
 import type { AudioBehaviour, BehaviourNode, CTn, Condition, ContainerNode, ShowSlide, TimeNode, TimingTree, TransitionSpec, VideoBehaviour } from '../src/slideshow/types'
 
@@ -72,6 +73,8 @@ interface RigOptions {
   hooks?: Partial<DriverHooks>
   /** Additive members of the stage (Task 11: `hitRegions`). */
   stage?: Partial<DriverStage>
+  /** Piece 5: the source's media clock. */
+  mediaClock?: SlideSource['mediaClock']
 }
 
 function rig(o: RigOptions): Rig {
@@ -95,6 +98,7 @@ function rig(o: RigOptions): Rig {
       if (held.has(i)) await new Promise<void>((resolve) => gates.set(i, resolve))
       return { slide: o.slides[i]!, charge: () => true, release: () => { released.push(i) } }
     },
+    ...(o.mediaClock ? { mediaClock: o.mediaClock } : {}),
   }
   const stage: DriverStage = {
     prepare(i) { log.push(`prepare:${i}`) },
@@ -478,6 +482,56 @@ describe('show driver', () => {
     expect(r.driver.visit!.cursor!.events.some((e) => e.kind === 'mediaEnd')).toBe(false)
     onEnd!(3, false, 150)
     expect(r.driver.visit!.cursor!.events.filter((e) => e.kind === 'mediaEnd')).toEqual([{ kind: 'mediaEnd', nodeId: 3, t: 150, synthetic: false }])
+  })
+
+  it('with a mediaClock, an audio node ends at begin+durationMs on the show clock, not at its first frame', async () => {
+    const t = tree(media('audio', 3, '4'), successor(5, 3))
+    const r = rig({ slides: [slideOf(0, { timing: t })], mediaClock: () => mediaClockOf([t.root], [{ mediaId: '@a0.4', kind: 'audio', durationMs: 3000, spid: '4' }]) })
+    await r.driver.start(0)
+    const ends = () => r.driver.visit!.cursor!.events.filter((e) => e.kind === 'mediaEnd')
+    r.clock.advance(100)
+    r.driver.tick()
+    expect(ends()).toEqual([])
+    r.clock.advance(2899)
+    r.driver.tick()
+    expect(ends()).toEqual([])
+    r.clock.advance(41)
+    r.driver.tick()
+    expect(ends()).toEqual([{ kind: 'mediaEnd', nodeId: 3, t: 3000, synthetic: false }])
+    expect(r.hooks).toContain('cursor:0:0')
+    r.clock.advance(100)
+    r.driver.tick()
+    expect(ends()).toHaveLength(1)
+  })
+
+  it('with a mediaClock, an end due before a click is recorded at its clock time, before the click', async () => {
+    const t: TimingTree = { root: par(1, [media('audio', 3, '4'), successor(5, 3), mainSeq([clickStep(10, '100')])], { durMs: 'indefinite', restart: 'never', nodeType: 'tmRoot', fill: undefined }), build: [] }
+    const r = rig({ slides: [slideOf(0, { timing: t })], mediaClock: () => mediaClockOf([t.root], [{ mediaId: '@a0.4', kind: 'audio', durationMs: 3000, spid: '4' }]) })
+    await r.driver.start(0)
+    r.clock.advance(2990)
+    r.driver.tick()
+    r.clock.advance(13)
+    r.driver.next()
+    const events = r.driver.visit!.cursor!.events
+    expect(events[0]).toEqual({ kind: 'mediaEnd', nodeId: 3, t: 3000, synthetic: false })
+    expect(events.slice(1).every((e) => e.kind === 'next' && e.t === 3003)).toBe(true)
+  })
+
+  it('without a clock or player, media nodes end synthetically (unchanged)', async () => {
+    const r = rig({ slides: [slideOf(0, { timing: tree(media('audio', 3, '4'), successor(5, 3)) })] })
+    await r.driver.start(0)
+    r.clock.advance(100)
+    r.driver.tick()
+    expect(r.driver.visit!.cursor!.events.filter((e) => e.kind === 'mediaEnd')).toEqual([{ kind: 'mediaEnd', nodeId: 3, t: 100, synthetic: true }])
+  })
+
+  it('with a mediaClock, a video node still ends at its first live frame', async () => {
+    const t = tree(media('video', 3, '4'), successor(5, 3))
+    const r = rig({ slides: [slideOf(0, { timing: t })], mediaClock: () => mediaClockOf([t.root], []) })
+    await r.driver.start(0)
+    r.clock.advance(100)
+    r.driver.tick()
+    expect(r.driver.visit!.cursor!.events.filter((e) => e.kind === 'mediaEnd')).toEqual([{ kind: 'mediaEnd', nodeId: 3, t: 100, synthetic: true }])
   })
 
   it('dispose releases the shown slide and stops navigation', async () => {
