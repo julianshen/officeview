@@ -17,7 +17,7 @@
  * for a bundle, pinning it while the slide is shown and charging the text fan are the show's
  * (show.ts), which wraps `acquire`.
  *
- * Package-free (D25): type imports only.
+ * Package-free (D25): type imports, plus `localTransition` from the DOM-free wire codec (`show-plan.ts`).
  */
 import type { SlideSource } from '../../slideshow/player/driver'
 import type { ShowSlide } from '../../slideshow/types'

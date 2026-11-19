@@ -143,7 +143,7 @@ describe.skipIf(!info)('show plans carry audio media (Task 4)', () => {
     const decks: Array<[string, Uint8Array]> = []
     for (const [name, f] of Object.entries(MEDIA_DECKS)) decks.push([name, await f()])
     decks.push(['builtIn', await mediaEndRevealDeck('effectSound')])
-    let shipped = 0
+    const shipped: string[] = [], streamedOnly: string[] = []
     for (const [name, bytes] of decks) {
       const zip = await JSZip.loadAsync(bytes)
       const relIds = new Set<string>(), parts = new Set<string>()
@@ -155,18 +155,29 @@ describe.skipIf(!info)('show plans carry audio media (Task 4)', () => {
       const units = (await h.open('again', bytes, 'visible-only')).units.length
       for (let u = 0; u < units; u++) {
         const r = await h.showPlan(docKey, job({ unitIndex: u }))
-        if ('refused' in r) continue
-        shipped++
+        const clean = (json: string) => {
+          for (const id of relIds) expect(json.includes(`"${id}"`), `${name}: ${id}`).toBe(false)
+          for (const p of parts) expect(json.includes(p), `${name}: ${p}`).toBe(false)
+          expect(json).not.toContain('builtIn')
+          expect(json).not.toContain('/media/')
+        }
+        if ('refused' in r) {
+          // A slide refused to its still ships no plan; what it would stream (its prepared meta and records) is clean too.
+          const show = (h as unknown as { docs: Map<string, { show: Parameters<typeof prepareShowSlide>[0] }> }).docs.get(docKey)!.show
+          const st = prepareShowSlide(show, u, 'full', { on: true })
+          clean(JSON.stringify({ timing: st.ps.meta.timing, transition: st.ps.meta.transition, records: st.records }))
+          streamedOnly.push(`${name}#${u}`)
+          continue
+        }
+        shipped.push(`${name}#${u}`)
         const json = JSON.stringify(viaClient(bind(r.plan)))
-        for (const id of relIds) expect(json.includes(`"${id}"`), `${name}: ${id}`).toBe(false)
-        for (const p of parts) expect(json.includes(p), `${name}: ${p}`).toBe(false)
-        expect(json).not.toContain('builtIn')
-        expect(json).not.toContain('/media/')
+        clean(json)
         expect(json).not.toContain('@a')
       }
     }
-    // Every deck but videoDeck (a video end reveals its box: the still, D22) ships slide 1's plan.
-    expect(shipped).toBeGreaterThanOrEqual(decks.length - 1)
+    // Piece 4 stills (Task 5 owns them): a video end that reveals a box (D22), a trigger cut, a repeating audio.
+    expect(streamedOnly.sort()).toEqual(['repeatDeck#0', 'togglePauseDeck#0', 'videoDeck#0'])
+    expect(shipped.sort()).toEqual(['builtIn#0', 'crossSlideSoundDeck#0', 'crossSlideSoundDeck#1', 'crossSlideSoundDeck#2', 'effectSoundDeck#0', 'narrationDeck#0', 'playFromDeck#0', 'transitionSoundDeck#0', 'twoShapeAudioDeck#0'])
   }, 120_000)
 
   it("hidden shape's media is not shipped", async () => {
@@ -176,6 +187,19 @@ describe.skipIf(!info)('show plans carry audio media (Task 4)', () => {
     expect(p.media!.map(r => r.spid)).toEqual(['4'])
     // Its command targets no shipped audio: blanked.
     expect(cmds(p)).toEqual([''])
+  })
+
+  it('an external media link ships refused media-linked (shape audio and effect sound)', async () => {
+    const timing = audioNode(3, tgt(3)) + audioNode(4, '<p:sndTgt r:embed="rIdSnd1" name="a.wav"/>')
+    const zip = await JSZip.loadAsync(await mediaDeck({ slides: [{ boxes: [box], media: [{ spid: 3, file: 'a.m4a' }], sounds: [{ rId: 'rIdSnd1', file: 'a.wav' }], timing }] }))
+    const relsPath = 'ppt/slides/_rels/slide1.xml.rels'
+    const rels = (await zip.file(relsPath)!.async('string')).replace(/Target="\.\.\/media\/[^"]+"/g, 'Target="https://example.com/x.m4a" TargetMode="External"')
+    zip.file(relsPath, rels)
+    const p = built((await plan(new Uint8Array(await zip.generateAsync({ type: 'uint8array' })))).r).plan
+    expect(p.media!.map(r => [r.spid, r.refused, r.durationMs])).toEqual([['3', 'media-linked', 0], [undefined, 'media-linked', 0]])
+    const json = JSON.stringify(viaClient(bind(p)))
+    expect(json).not.toContain('example.com')
+    expect(json).not.toContain('rIdSnd1')
   })
 
   it('builtIn sound → refused media-unreadable', async () => {
@@ -217,6 +241,9 @@ describe.skipIf(!info)('show plans carry audio media (Task 4)', () => {
         expect(r.end).toBeUndefined()
         const p = (decodeShowMessage(r.messages[0]!, { unit: 0, maxDecoded: SHOW_PLAN_LIMITS.showDecoded }) as { plan: ShowPlanRecord }).plan
         expect(new TextEncoder().encode(JSON.stringify(p)).length).toBe(r.messages[0]!.length - 1)
+        // `decodedBytes` (measured on the unbound plan with 22-character stand-ins) is exact for the bound plan.
+        const assets = r.messages.slice(1).map((m) => decodeShowMessage(m, { unit: 0, maxDecoded: SHOW_PLAN_LIMITS.assetDecoded }) as { w: number; h: number })
+        expect(r.start!.decodedBytes).toBe(assets.reduce((n, x) => n + x.w * x.h * 4, 0) + r.messages[0]!.length - 1)
         return p.media![0]!.mediaId
       }
       const ia = await idOf(a), ib = await idOf(b)
