@@ -1502,7 +1502,7 @@ function stage5Payload(fx: S5Fixture, anchorSerial: number): SheetPayload {
     ...(bottom ? { stylesXml: buildStylesXml(fx.dxfsXml ?? '<dxfs count="0"/>', true, undefined, true) } : {}),
     // Fix round 2: an icon is classified against the Stage 4 glyph key, whose crops are taken from 20 pt rows; a
     // workbook with an icon rule uses the same row height so its crops have the key's size.
-    ...(fx.rules.some(r => r.marker.ruleType === 'iconSet') ? { defaultRowHeightPt: 20 } : {}),
+    ...(fx.rules.some(r => r.marker.ruleType === 'iconSet') || fx.defaultRowHeightPt === 20 ? { defaultRowHeightPt: 20 } : {}),
     ...(fx.tableXml ? { tablePartXml: `${XML_DECL}${fx.tableXml}` } : {}),
     ...(fx.sheets ? { extraSheets: fx.sheets.map(sh => ({ name: sh.name, xml: s5SheetXml(sh.cells) })) } : {}),
     ...(fx.definedNames ? { definedNames: fx.definedNames } : {}),

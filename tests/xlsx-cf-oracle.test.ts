@@ -3277,6 +3277,8 @@ describe('CF oracle verifier', () => {
       'stage3-bar-unresolved-shapes',
       // Task 19b: the automatic colours Excel writes on resave (Ruling S3-F as amended), recipe-pending until captured.
       'stage3-bar-auto-colors',
+      // The bar:bounds-num follow-up (2026-11-19): a later case version, appended last, recipe-pending until captured.
+      'stage3-bar-bounds-num',
     ])
     for (const c of manifest.cases.filter(x => x.stage === 3)) {
       // Invariants that hold before, during and after capture, as the harness writes the manifest.
@@ -3863,7 +3865,7 @@ describe('CF oracle verifier', () => {
     expect(report.ok).toBe(true)
     // Capture run 8 (stage3-bar-auto-bounds) completes Stage 3 again: nothing is blocked or unaccounted.
     expect(report.stageComplete).toBe(true)
-    expect(report.summary.cases).toBe(15)
+    expect(report.summary.cases).toBe(16) // 16 since stage3-bar-bounds-num (recipe-pending until captured)
     expect(report.summary.capabilities).toBe(CF_STAGE3_CAPABILITIES.length)
     expect(report.blockedCapabilities).toEqual([])
     expect(report.perCapability.filter(p => p.disposition === 'verified')).toHaveLength(51)
@@ -4134,8 +4136,9 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     expect(CF_STAGE3_CAPABILITIES).toHaveLength(73)
     expect(CF_STAGE1_CASES).toHaveLength(13)
     expect(CF_STAGE2_CASES).toHaveLength(8)
-    expect(CF_STAGE3_CASES).toHaveLength(15)
-    expect(CF_CASES.slice(0, 36).map(c => c.id)).toEqual([...CF_STAGE1_CASES, ...CF_STAGE2_CASES, ...CF_STAGE3_CASES].map(c => c.id))
+    // 16 since stage3-bar-bounds-num (the bar:bounds-num follow-up, appended last).
+    expect(CF_STAGE3_CASES).toHaveLength(16)
+    expect(CF_CASES.slice(0, 37).map(c => c.id)).toEqual([...CF_STAGE1_CASES, ...CF_STAGE2_CASES, ...CF_STAGE3_CASES].map(c => c.id))
     expect(CF_CAPABILITIES.length).toBe(CF_STAGE1_CAPABILITIES.length + CF_STAGE2_CAPABILITIES.length + CF_STAGE3_CAPABILITIES.length + CF_STAGE4_CAPABILITIES.length + CF_STAGE5_CAPABILITIES.length)
     expect(new Set(CF_CAPABILITIES.map(c => c.capabilityId)).size).toBe(CF_CAPABILITIES.length)
     for (const c of manifest.cases.filter(x => x.stage < 4)) expect(c.markers.some(m => m.icon !== undefined), c.id).toBe(false)
@@ -5442,17 +5445,19 @@ describe('Stage 5 formula oracle (Task 31)', () => {
     expect(manifest.cases.map(c => c.id)).toEqual(CF_CASES.map(c => c.id))
     // Stage 1-4 catalogues and capability ids are exactly what Stage 4 shipped.
     expect([CF_STAGE1_CAPABILITIES.length, CF_STAGE2_CAPABILITIES.length, CF_STAGE3_CAPABILITIES.length, CF_STAGE4_CAPABILITIES.length]).toEqual([115, 46, 73, 145])
-    expect([CF_STAGE1_CASES.length, CF_STAGE2_CASES.length, CF_STAGE3_CASES.length, CF_STAGE4_CASES.length]).toEqual([13, 8, 15, 20])
-    expect(CF_CASES.slice(0, 56).map(c => c.id)).toEqual([...CF_STAGE1_CASES, ...CF_STAGE2_CASES, ...CF_STAGE3_CASES, ...CF_STAGE4_CASES].map(c => c.id))
-    expect(CF_CASES.slice(56).map(c => c.id)).toEqual(CF_STAGE5_CASES.map(c => c.id))
+    expect([CF_STAGE1_CASES.length, CF_STAGE2_CASES.length, CF_STAGE3_CASES.length, CF_STAGE4_CASES.length]).toEqual([13, 8, 16, 20])
+    expect(CF_CASES.slice(0, 57).map(c => c.id)).toEqual([...CF_STAGE1_CASES, ...CF_STAGE2_CASES, ...CF_STAGE3_CASES, ...CF_STAGE4_CASES].map(c => c.id))
+    expect(CF_CASES.slice(57).map(c => c.id)).toEqual(CF_STAGE5_CASES.map(c => c.id))
     expect(CF_CAPABILITIES.length).toBe(CF_STAGE1_CAPABILITIES.length + CF_STAGE2_CAPABILITIES.length + CF_STAGE3_CAPABILITIES.length + CF_STAGE4_CAPABILITIES.length + CF_STAGE5_CAPABILITIES.length)
     expect(new Set(CF_CAPABILITIES.map(c => c.capabilityId)).size).toBe(CF_CAPABILITIES.length)
     // Stage 1-4 generated inputs are byte-identical to fc61c6c6's generator (digest of every case's archive hash).
     const all = createHash('sha256')
-    // The centred glyph key (appended after them) is pinned on its own, so the earlier digest still holds.
-    for (const c of CF_CASES.filter(x => x.stage < 5 && x.id !== 'stage4-icon-glyph-key-centred')) all.update(`${c.id}:${sha256(await generateCaseArchive(c.id))}\n`)
+    // The centred glyph key (appended after them) and stage3-bar-bounds-num (a later case version) are pinned on their
+    // own, so the earlier digest still holds.
+    const later = ['stage4-icon-glyph-key-centred', 'stage3-bar-bounds-num']
+    for (const c of CF_CASES.filter(x => x.stage < 5 && !later.includes(x.id))) all.update(`${c.id}:${sha256(await generateCaseArchive(c.id))}\n`)
     expect(all.digest('hex')).toBe('c1daae80753c0dea2a10f782ac118a221f2df7fe1de83156e1a4bc08bcd89b36')
-    expect(sha256(await generateCaseArchive('stage4-icon-glyph-key-centred'))).toBe(sha256(new Uint8Array(readFileSync(resolve(REPO_ROOT, 'tests/fixtures/xlsx-cf/inputs/stage4-icon-glyph-key-centred.xlsx')))))
+    for (const id of later) expect(sha256(await generateCaseArchive(id)), id).toBe(sha256(new Uint8Array(readFileSync(resolve(REPO_ROOT, `tests/fixtures/xlsx-cf/inputs/${id}.xlsx`)))))
 
     // The brief's matrix, row by row (CF_STAGE5_GROUPS maps a row to its workbooks).
     const required: Record<string, string[]> = {
@@ -6986,6 +6991,8 @@ const EXPECTED_UNBUILT: readonly string[] = [
   'stage5-formula-anchor-multi|formula:anchor-multi-range|B2:B4 D5:D8|bounding-box: non-discriminating',
   'stage5-cfvo-formulas|bar:bounds-formula|-|zero: refused formula-twin-blank',
   'stage5-cfvo-formulas|icon:thresholds-formula|-|ignored: refused formula-twin-blank',
+  // The bar:bounds-formula follow-up keeps the same degenerate num 0/0 twin for its zero reading.
+  'stage5-bar-bounds-formula|bar:bounds-formula|-|zero: refused formula-twin-blank',
 ]
 /**
  * Fix round 7: the (triple|configuration) pairs for which the disjoint-rival corruption cannot be built, by reason. It is
@@ -7233,19 +7240,20 @@ const EXPECTED_DISJOINT_UNBUILT: Readonly<Record<string, readonly string[]>> = {
 }
 /** Fix round 7: (configuration, rival, replication group) triples whose refutations cannot be cut below 2, by reason. */
 const EXPECTED_SINGLE_UNBUILT: Readonly<Record<string, number>> = { 'literal-vs-literal': 370, 'twin-expectation-locked': 38, 'strike-on-one-token': 4 }
-const EXPECTED_COVERAGE = { triples: 169, built: 165, 'blank-twins': 47, 'required-empty-visuals': 94, 'blank-twin-controls': 47, 'blank-dxf-controls': 126, 'strike-blind': 10, 'tolerance-shift': 4, 'disjoint-rivals': 30, 'single-refuter': 62 }
+// The bar:bounds-formula follow-up adds one crop:bar configuration of three readings (zero unbuilt, as in stage5-cfvo-formulas).
+const EXPECTED_COVERAGE = { triples: 172, built: 167, 'blank-twins': 49, 'required-empty-visuals': 95, 'blank-twin-controls': 49, 'blank-dxf-controls': 126, 'strike-blind': 10, 'tolerance-shift': 6, 'disjoint-rivals': 32, 'single-refuter': 66 }
 /** How each corruption refuses (a corruption can also eliminate the winner or leave two readings standing). */
 const EXPECTED_OUTCOMES: Readonly<Record<string, number>> = {
-  'blank-twins -> formula-twin-missing': 47,
+  'blank-twins -> formula-twin-missing': 49,
   'required-empty-visuals -> formula-hypothesis-none': 79,
-  'required-empty-visuals -> formula-unexpected-visual': 15,
-  'blank-twin-controls -> formula-twin-missing': 47,
+  'required-empty-visuals -> formula-unexpected-visual': 16,
+  'blank-twin-controls -> formula-twin-missing': 49,
   'blank-dxf-controls -> formula-positive-control-failed': 126,
   'strike-blind -> formula-positive-control-failed': 10,
-  'tolerance-shift -> formula-replication-shortfall': 2,
-  'tolerance-shift -> non-discriminating': 2,
-  'disjoint-rivals -> formula-replication-shortfall': 16,
+  'tolerance-shift -> formula-replication-shortfall': 3,
+  'tolerance-shift -> non-discriminating': 3,
+  'disjoint-rivals -> formula-replication-shortfall': 18,
   'disjoint-rivals -> non-discriminating': 14,
-  'single-refuter -> formula-replication-shortfall': 60,
+  'single-refuter -> formula-replication-shortfall': 64,
   'single-refuter -> non-discriminating': 2,
 }

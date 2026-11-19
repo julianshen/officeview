@@ -3937,6 +3937,12 @@ const AUTO_POS: readonly S3Value[] = [20, 40, 60, 80, 100]
 const AUTO_NEG: readonly S3Value[] = [-100, -80, -60, -40, -20]
 const AUTO_MIXED: readonly S3Value[] = [-50, -25, 0, 50, 100]
 const AUTO_CFVO: readonly CfBarCfvo[] = [{ type: 'autoMin' }, { type: 'autoMax' }]
+/**
+ * The bar:bounds-num follow-up (orchestrator ruling 2026-11-19): data strictly inside num 20/80 (no cell beyond a bound,
+ * Ruling S3-E) whose own min/max (25/75) differ from the num bounds, with no predicted edge on a half pixel under either
+ * reading (tests/xlsx-cf-bar-bounds-num.test.ts pins the separation).
+ */
+const NUM_INSIDE: readonly S3Value[] = [25, 36, 45, 56, 75]
 const VALUES_11: readonly S3Value[] = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 /** Ruling S3-GRAD-BORDER: 0..100 by 10, plus two short bars that separate an outer-length ramp from an inner one. */
 const VALUES_BORDERED: readonly S3Value[] = [...VALUES_11, 3, 5]
@@ -4468,6 +4474,18 @@ export const CF_STAGE3_FIXTURES: readonly S3Fixture[] = [
       ],
     },
   ),
+  // 17. stage3-bar-bounds-num (the bar:bounds-num follow-up, orchestrator ruling 2026-11-19): the owning case of
+  // bar:bounds-num through CF_STAGE3_OWNERS (stage3-bar-lengths E, 20..80 under num 20/80, stays a cross-check). It is
+  // appended last: a Stage 3 bar GUID carries its fixture's index, so an insertion would change every later input.
+  rect(
+    'stage3-bar-bounds-num',
+    'Num bounds against min/max. stage3-bar-lengths E holds 20..80 under num 20/80, so the num bounds equal its data\'s min and max and the two readings predict the same px. Here every value lies strictly inside num 20/80 ({25,36,45,56,75}: no cell beyond a bound, Ruling S3-E), so a num reading (20/80) and a min/max reading (25/75) put the bar edges apart: a 15 px bar against none at 25, 15 px at 75. One paired solid bar, x14 minLength 0 / maxLength 100, left to right, no border, on the 180 pt column and 30 pt rows of stage3-bar-lengths.',
+    {
+      n: 5,
+      cols: [col('B', 'Num2080Inside', NUM_INSIDE)],
+      rules: [bar('bar:bounds-num', 'B2:B6', 1, { baseCfvo: [{ type: 'num', val: '20' }, { type: 'num', val: '80' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE } })],
+    },
+  ),
 ]
 
 // ---- fixture -> oracle case ----
@@ -4751,6 +4769,15 @@ export const CF_STAGE3_UNSUPPORTED: Readonly<Record<string, string>> = {
     'Unsupported in Stage 3 per S3-CLOSE: Excel 16.114 always resaves a standalone x14 bar in its canonical paired form (stage3-bar-pairing.rejected.xlsx), so no capture of a saved workbook can show the standalone shape; it stays withheld (cf-unsupported-rule).',
 }
 
+/**
+ * Capabilities owned by a later case version rather than by the first case carrying their marker (the bar:bounds-num
+ * follow-up, 2026-11-19). The new case is appended to keep every earlier input byte-identical; the old case keeps its
+ * marker and capture as a cross-check.
+ */
+export const CF_STAGE3_OWNERS: Readonly<Record<string, string>> = {
+  'bar:bounds-num': 'stage3-bar-bounds-num',
+}
+
 /** Complete capability-to-evidence registry for all Stage 3 markers (one entry per distinct capability id). */
 export const CF_STAGE3_CAPABILITIES: readonly CfCapabilityEntry[] = (() => {
   const seen = new Set<string>()
@@ -4758,6 +4785,7 @@ export const CF_STAGE3_CAPABILITIES: readonly CfCapabilityEntry[] = (() => {
   for (const c of CF_STAGE3_CASES) {
     for (const m of c.markers) {
       if (seen.has(m.capabilityId)) continue
+      if (CF_STAGE3_OWNERS[m.capabilityId] !== undefined && CF_STAGE3_OWNERS[m.capabilityId] !== c.id) continue
       seen.add(m.capabilityId)
       const cfvo = m.bar?.cfvo ?? m.scale?.cfvo
       out.push({
@@ -5790,6 +5818,11 @@ export interface S5Fixture {
    * first Stage 5 run was unclassifiable). Set only on a case built afresh, since it changes the workbook bytes.
    */
   cellVertical?: 'bottom'
+  /**
+   * 20 pt rows on a fixture without an icon rule (which gets them anyway): the row height every measured Stage 5 bar crop
+   * was taken at (stage5-bar-bounds-formula). Set only on a case built afresh, since it changes the workbook bytes.
+   */
+  defaultRowHeightPt?: 20
 }
 
 const S5_RED = 'FFFFC7CE'
@@ -6773,6 +6806,40 @@ function crossSheetMissingFixture(): S5Fixture {
   })
 }
 
+/**
+ * The bar:bounds-formula follow-up (orchestrator ruling 2026-11-19), a new version of stage5-cfvo-formulas' bar
+ * configuration, which holds 5..100 against formula bounds 20/80 (a whole-scope cf-value-beyond-bounds, Ruling S3-E) and
+ * whose twin W7 is unmeasurable. Here every value lies strictly inside 20..80, and every bar edge under either reading
+ * (20/80, or the data's own 28/62) is at most 58 px or full width, clear of the right-aligned value text, which hid the
+ * 73 and 75 px edges of the old capture, and none sits on a half pixel (tests/xlsx-cf-bar-bounds-formula.test.ts
+ * calibrates both on it). The same
+ * default columns and 20 pt rows as stage5-cfvo-formulas, and the same literal twins (their own registry id): num 20/80 (evaluated), num 0/0 (zero), min/max
+ * (ignored).
+ */
+const S5_BAR_BOUNDS_VALUES: readonly number[] = [28, 31, 35, 41, 46, 49, 52, 62]
+
+function barBoundsFormulaFixture(): S5Fixture {
+  const sq = (c: string): string => `${c}2:${c}9`
+  const num = (v: number): S5Cfvo => ({ type: 'num', val: String(v) })
+  let p = 1
+  return s5rect({
+    id: 'stage5-bar-bounds-formula',
+    question:
+      'S5-H: how does a data bar resolve formula bounds? A paired bar with formula min/max ($F$1 = 20, $F$2 = 80) over values strictly inside them (28..62), compared by crop with literal twins of its competing readings on the same values: num 20/80 (the formula evaluated), num 0/0 (read as zero) and min/max (ignored).',
+    cells: { F1: 20, F2: 80, ...Object.assign({}, ...['B', 'C', 'D', 'E'].map(c => colValues(c, S5_BAR_BOUNDS_VALUES))) },
+    rules: [
+      s5Bar('bar:bounds-formula', sq('B'), p++, [{ type: 'formula', val: '$F$1' }, { type: 'formula', val: '$F$2' }]),
+      s5Bar('formula:cfvo-bar-twin', sq('C'), p++, [num(20), num(80)]),
+      s5Bar('formula:cfvo-bar-twin', sq('D'), p++, [num(0), num(0)]),
+      s5Bar('formula:cfvo-bar-twin', sq('E'), p++, [{ type: 'min' }, { type: 'max' }]),
+    ],
+    defaultRowHeightPt: 20,
+    configurations: [
+      s5Cfg('bar-bounds-formula', 'bar:bounds-formula', rowsOf('B', 2, 9), { evaluated: twinCol('C'), zero: twinCol('D'), ignored: twinCol('E') }, { observable: 'crop' }),
+    ],
+  })
+}
+
 function cfvoFormulasFixture(): S5Fixture {
   const Dv = [5, 15, 30, 45, 60, 75, 90, 100]
   const Av = [10, 15, 30, 45, 60, 75, 90, 100]
@@ -7128,6 +7195,8 @@ export const CF_STAGE5_FIXTURES: readonly S5Fixture[] = ([
   activePresentFixture('bar'),
   activePresentFixture('icon'),
   ...S5_UNRESOLVED.map(unresolvedFixture),
+  // Appended last, like every later case version; it owns bar:bounds-formula through CF_STAGE5_OWNERS.
+  barBoundsFormulaFixture(),
 ] as const satisfies readonly S5Fixture[]).map(withEmptyTwins).map(withPositiveControls)
 
 /** The brief's matrix rows -> the workbooks that answer them ("one workbook each" rows and clock splits have several). */
@@ -7144,7 +7213,7 @@ export const CF_STAGE5_GROUPS: Readonly<Record<string, readonly string[]>> = {
   'stage5-calc-manual': ['stage5-calc-manual'],
   'stage5-composition': ['stage5-composition'],
   'stage5-cross-sheet': ['stage5-cross-sheet', 'stage5-cross-sheet-missing'],
-  'stage5-cfvo-formulas': ['stage5-cfvo-formulas'],
+  'stage5-cfvo-formulas': ['stage5-bar-bounds-formula', 'stage5-cfvo-formulas'],
   'stage5-cfvo-scope': ['stage5-cfvo-scope'],
   'stage5-x14-scale': ['stage5-x14-scale'],
   'stage5-active-present': ['stage5-active-present-scale', 'stage5-active-present-bar', 'stage5-active-present-icon'],
@@ -7334,6 +7403,7 @@ export const CF_STAGE5_UNSUPPORTED: Readonly<Record<string, string>> = {
 export const CF_STAGE5_NONDISCRIMINATING: Readonly<Record<string, string>> = {
   'formula:composition-twin': 'Literal twin rules of stage5-composition: comparison references for the formula configurations, never a question themselves.',
   'formula:cfvo-twin': 'Literal twin rules of stage5-cfvo-formulas: comparison references for the formula bounds, never a question themselves.',
+  'formula:cfvo-bar-twin': 'Literal twin rules of stage5-bar-bounds-formula: comparison references for the formula bar bounds, never a question themselves.',
   'formula:cfvo-scope-twin': 'Literal twin rules of stage5-cfvo-scope: comparison references for the scope readings, never a question themselves.',
   'formula:x14-scale-twin': 'The base literal twin of stage5-x14-scale: a comparison reference, never a question itself.',
   'formula:active-present-scale-twin': 'The non-activated twin of stage5-active-present-scale: a comparison reference.',
@@ -7342,12 +7412,18 @@ export const CF_STAGE5_NONDISCRIMINATING: Readonly<Record<string, string>> = {
   'formula:positive-control': 'Literal positive controls (fix round 6): a cellIs rule on each predicted dxf, proving the DisplayFormat readback shows a format before any reading is judged; never a question itself.',
 }
 
+/** Capabilities owned by a later case version (the bar:bounds-formula follow-up, 2026-11-19; see CF_STAGE3_OWNERS). */
+export const CF_STAGE5_OWNERS: Readonly<Record<string, string>> = {
+  'bar:bounds-formula': 'stage5-bar-bounds-formula',
+}
+
 /** Complete capability registry for every Stage 5 marker, configuration and reused capture (one entry per id). */
 export const CF_STAGE5_CAPABILITIES: readonly CfCapabilityEntry[] = (() => {
   const seen = new Set<string>()
   const out: CfCapabilityEntry[] = []
   const push = (capabilityId: string, caseId: string, category: string, description: string, policy: string): void => {
     if (seen.has(capabilityId)) return
+    if (CF_STAGE5_OWNERS[capabilityId] !== undefined && CF_STAGE5_OWNERS[capabilityId] !== caseId) return
     seen.add(capabilityId)
     out.push({ capabilityId, caseId, category, description, absentOrDivergentFormulaPolicy: policy, failClosedDisposition: s5Ruling(capabilityId) })
   }
