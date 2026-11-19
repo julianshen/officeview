@@ -499,13 +499,15 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
   }
   /**
    * A slide change into `p` from `left`: the tracks of every other slide go, and every Morph pair neither into nor out
-   * of `p`. Task 13 (carried from Task 11): `left`'s tracks stay, and so do the pairs out of `p` until its visit says
+   * of `p`. Task 13 (carried from Task 11): `left`'s playable tracks stay, and so do the pairs out of `p` until its visit says
    * which the show asks for next (`keepOutgoing`), so ← / → back and forth across a boundary asks for nothing again
    * once settled (each re-ask was a charged send: ~15 a second, beside media-cursor, breached the message burst). The
    * left slide's tracks are the first to give way to the show budget (`yieldTrack`) and go on the next change.
    */
   function dropExtras(p: number | 'end' | undefined, left?: number | 'end'): void {
-    for (const [k, t] of [...tracks]) if (t.index !== p && (t.index !== left || p === undefined)) dropTrack(k)
+    // A failed slot never carries over (fix round 1): `requestTrack` skips a key it holds, so a refusal kept past its
+    // visit (a disconnect's `session-rotated`, a budget refusal) would block the track on every later visit.
+    for (const [k, t] of [...tracks]) if (t.state === 'failed' || (t.index !== p && (t.index !== left || p === undefined))) dropTrack(k)
     for (const q of [...pairs.values()]) if (q.to !== p && q.from !== p) dropPair(q)
   }
   /** Task 13: of the pairs out of the visited slide, only those asked next stay: the successor's at its last step (the

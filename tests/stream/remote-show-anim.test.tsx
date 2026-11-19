@@ -537,6 +537,35 @@ describe('remote show on the driver (piece 4 Task 11)', () => {
     }
   }, 60_000)
 
+  it('a track refused by a disconnect (session-rotated) is asked again on the next visit once the session is back (Task 13 fix round 1)', async () => {
+    // The kept tracks of the slide left are the playable ones only: a failed slot carried over would block the request
+    // (`requestTrack` skips a key it holds) on every later visit, and the step would cut to its end with a healthy
+    // session.
+    const three = { messages: (u: number) => bundleOf(FLY, u, compositedFly(3)) }
+    const fd = animDoc([three, three])
+    // The socket drops while slide 1's first track is on its way: the session rejects it `session-rotated`.
+    fd.rules.set('track:1:0', 'session-rotated')
+    const { s } = await show(fd)
+    await run(300)
+    for (let k = 1; k <= 4; k++) { s.next(); await run(800) }
+    expect([s.state.slide, s.state.build]).toEqual([1, 0])
+    expect(sent(fd, 'track:1:0')).toEqual(['track:1:0'])
+    expect(fd.held('track:1:0')).toEqual([])
+    // The session resumes; the viewer goes back and returns to slide 1.
+    fd.rules.delete('track:1:0')
+    s.previous(); await run(800)
+    expect(s.state.slide).toBe(0)
+    s.next(); await run(800)
+    expect(s.state.slide).toBe(1)
+    expect(sent(fd, 'track:1:0')).toEqual(['track:1:0', 'track:1:0'])
+    // A playable track this time (its reply is held, decoded).
+    expect(fd.held('track:1:0')).toEqual(['track:1:0'])
+    // Previous and Next again: the playable track carries over, asked for no more.
+    s.previous(); await run(800); s.next(); await run(800)
+    expect(sent(fd, 'track:1:0')).toHaveLength(2)
+    s.exit()
+  }, 60_000)
+
   it('Previous across an evicted track asks for it again and shows its end frame (round 6)', async () => {
     const ten = { messages: (u: number) => bundleOf(FLY, u, compositedFly(10)) }
     const fd = animDoc([ten], { tracks: hdTrack })
