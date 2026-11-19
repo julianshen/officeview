@@ -36,6 +36,9 @@ describe('mediaEndOf (spec §5)', () => {
     expect(mediaEndOf(audio(3, { repeatCount: 2 }), rec(4000), 0, [cmd(5000, 3, { verb: 'playFrom', seconds: 1 })])).toEqual({ at: 8000 })
     // In the first iteration the remaining repeats still play (playFrom(1) at 1000 → 3 s + 4 s → 8000).
     expect(mediaEndOf(audio(3, { repeatCount: 2 }), rec(4000), 0, [cmd(1000, 3, { verb: 'playFrom', seconds: 1 })])).toEqual({ at: 8000 })
+    // A fractional repeat: a seek past the playback's end ends the node at the command, never before it
+    // (repeatCount 2.5 on 4 s = 10 s; playFrom(3) at 9000, in the last half pass → ends at 9000).
+    expect(mediaEndOf(audio(3, { repeatCount: 2.5 }), rec(4000), 0, [cmd(9000, 3, { verb: 'playFrom', seconds: 3 })])).toEqual({ at: 9000 })
   })
 
   it('pause 1000 ms mid-play delays the end by 1000', () => {

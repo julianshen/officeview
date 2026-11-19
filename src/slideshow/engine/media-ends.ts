@@ -81,7 +81,7 @@ export function mediaEndOf(node: AudioBehaviour, rec: MediaClockRecord | undefin
     const out = advance(h, e.at, total)
     if (out !== undefined) return done(out)
     if (ends(e)) return done(e.at)
-    if (e.type === 'cmd' && e.nodeId === self) command(h, e.cmd, d)
+    if (e.type === 'cmd' && e.nodeId === self) command(h, e.cmd, d, total)
   }
   if (h.running && Number.isFinite(total)) return done(h.at + total - h.pos)
   return Number.isFinite(bound) ? { at: bound } : { open: true }
@@ -110,7 +110,7 @@ function advance(h: Head, to: number, total: number): number | undefined {
 }
 
 /** Rules 2–3: one of the node's own commands. */
-function command(h: Head, c: MediaCommand, d: number | undefined): void {
+function command(h: Head, c: MediaCommand, d: number | undefined, total: number): void {
   if (c.verb === 'pause') h.running = false
   else if (c.verb === 'resume' || c.verb === 'play') h.running = true
   else if (c.verb === 'togglePause') h.running = !h.running
@@ -122,6 +122,8 @@ function command(h: Head, c: MediaCommand, d: number | undefined): void {
       const iter = d > 0 ? Math.floor(h.pos / d) : 0
       h.pos = iter * d + Math.min(x, d)
     }
+    // Never past the playback's end (a fractional repeat's last pass is shorter than `d`).
+    h.pos = Math.min(h.pos, total)
     h.running = true
   }
 }
@@ -143,7 +145,7 @@ export function mediaPlayheadAt(node: Pick<AudioBehaviour, 'ctn'>, durationMs: n
   let done = false
   for (const e of later) {
     if (advance(h, e.at, total) !== undefined) { done = true; break }
-    if (e.type === 'cmd' && e.nodeId === self) command(h, e.cmd, d)
+    if (e.type === 'cmd' && e.nodeId === self) command(h, e.cmd, d, total)
   }
   if (!done && t >= h.at && advance(h, t, total) !== undefined) done = true
   if (done) h.pos = total
