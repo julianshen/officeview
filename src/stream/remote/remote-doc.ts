@@ -10,7 +10,8 @@ import type { Manifest } from '../manifest'
 import { replayUnit } from '../replay'
 import { StreamSessionError } from './errors'
 import type { PrintedPage } from './print-wire'
-import type { NotesLease, PrintOptions, ShowMotion, ShowReply, ShowRequestOptions, StreamNotice, UnitLease, UnitPayload } from './session'
+import type { MediaStart } from '../media-wire'
+import type { MediaDelivery, MediaShowAnswer, NotesLease, PrintOptions, ShowMotion, ShowReply, ShowRequestOptions, StreamNotice, UnitLease, UnitPayload } from './session'
 import type { RemoteRange, TextMessage, TextRequest } from './text-wire'
 import type { UnitBudgetView } from './unit-budget'
 
@@ -33,6 +34,11 @@ export interface SessionLike {
   showPlan?(unit: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions): Promise<ShowReply>
   showTrack?(unit: number, step: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions): Promise<ShowReply>
   showMorph?(from: number, to: number, fromStep: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions): Promise<ShowReply>
+  /** Piece 5 (D1, D12; see StreamSession.mediaShow and friends); absent ⇒ no media in streamed shows. */
+  mediaShow?(unit: number): Promise<MediaShowAnswer>
+  mediaCursor?(unit: number): void
+  mediaRequest?(mediaId: string, signal: AbortSignal, onStart: (s: MediaStart) => boolean, unit?: number): Promise<MediaDelivery>
+  mediaEnd?(): void
   close(): void
   readonly ended?: Promise<StreamSessionError | undefined>
   /** Calls `cb` after a resume has replaced `manifest`; returns the unsubscribe. */
