@@ -102,3 +102,35 @@ describe('show plan media records', () => {
     expect(localTransition(plain)).toBe(plain)
   })
 })
+
+/**
+ * Task 11b (owner decision 2026-11-19): a still slide's sound-only plan. `fallback: 'still'` (the refusal the slide
+ * plays as) carries the records, the transition (its sound) and the no-input audio schedule; nothing drawn.
+ */
+describe('a still sound-only plan (Task 11b)', () => {
+  const still = (over: Partial<ShowPlanRecord> = {}): ShowPlanRecord => ({ ...plan(), fallback: 'still', ...over })
+  it('round-trips with fallback "still" and no layers, steps, base, triggers, links or iterations', () => {
+    const p = still()
+    expect(decodeShowMessage(encodeShowMessage({ tag: 1, plan: p }), E)).toEqual({ tag: 1, plan: p })
+  })
+  it.each([
+    ['fallback', { fallback: 'show-budget' }],
+    ['fallback', { fallback: true }],
+    ['layers', { layers: [{ id: 0, bounds: { x: 0, y: 0, w: 10, h: 10 }, z: 0, assetId: 1, decodedBytes: 400, scale: 1 }] }],
+    ['steps', { steps: [{ trigger: 'click', eligibility: 'layers' }] }],
+    ['base', { base: [['3', { x: 0, y: 0, w: 1, h: 1, rot: 0 }]] }],
+    ['triggers', { triggers: [{ spid: '3', rects: [] }] }],
+    ['linkRegions', { linkRegions: [{ rect: { x: 0, y: 0, w: 1, h: 1 }, action: { kind: 'withheld' } }] }],
+    ['iterate', { iterate: { keys: [['3', ['3/p0']]], groups: [] } }],
+  ])('rejects a still plan with %s', (path, over) => {
+    expect(rej({ ...still(), ...over })).toBe(path)
+  })
+  it('rejects a still plan with builds', () => {
+    const p = still()
+    expect(rej({ ...p, show: { ...p.show, builds: [{ spid: '3', mode: 'whole', ranges: [], animBg: false, body: '' }] } })).toBe('show.builds')
+  })
+  it('a plan without fallback is unchanged (piece 4 / Task 4 plans)', () => {
+    expect(rej(plan())).toBe('accepted')
+    expect('fallback' in (decodeShowMessage(encodeShowMessage({ tag: 1, plan: plan() }), E) as { plan: ShowPlanRecord }).plan).toBe(false)
+  })
+})

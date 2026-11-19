@@ -9,7 +9,8 @@
  * - then exactly one tag-2 asset per raster layer, none missing, none twice, none unnamed, each
  *   no larger than its layer's `decodedBytes` (`w·h·4`); no keyframe or Morph record;
  * - every asset for the unit asked, and the decoded bitmap the asset's size;
- * - Σ decoded (the plan record's bytes and every asset's `w·h·4`) within the 128 MiB show budget.
+ * - Σ decoded (the plan record's bytes and every asset's `w·h·4`) within the 128 MiB show budget;
+ * - Task 11b: a still's sound-only plan (`fallback: 'still'`) is the reply's only message (no asset follows).
  * The plan record is charged at its message bytes for the bundle's life (fix round 1), and each
  * bitmap at `w·h·4` before it is decoded, so the workspace holds exactly `decodedBytes`; no room rejects
  * `workspace-full`. On any failure every bitmap decoded so far is closed and every lease released.
@@ -105,6 +106,11 @@ export async function decodeBundle(unit: number, reply: readonly Uint8Array[] | 
     const record = workspace.lease(messages[0]!.length, 'remote-show:plan')
     if (!record) throw new StreamSessionError('workspace-full', 'no workspace room for a show plan record')
     held.set(-1, { lease: record, bytes: 0 })
+    // Task 11b: a still's sound-only plan is the reply's one message (no entry frame, no layer: nothing drawn).
+    if (plan.fallback === 'still') {
+      if (messages.length !== 1) reject('a still sound-only plan has assets')
+      return { unit, plan, assets: { bitmap: () => undefined, bytes: () => 0 }, decodedBytes: messages[0]!.length, release }
+    }
     // assetId → the decoded bytes its layer allows; the entry frame is bounded by the codec's per-asset cap.
     const want = new Map<number, number>([[plan.entry, SHOW_PLAN_LIMITS.assetDecoded]])
     for (const l of plan.layers) if (isRasterLayer(l)) want.set(l.assetId, l.decodedBytes)

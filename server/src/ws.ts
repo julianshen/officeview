@@ -855,14 +855,23 @@ export function createStreamServer(o: StreamServerOptions) {
       if (kind === 'plan') {
         const built = await o.pool.showPlan(s.sid, { ...base, unitIndex: unit }, estimate, ws.data.gone.signal)
         if (!alive()) return
-        if ('refused' in built) return deny(reqId, built.refused)
-        // D2: the cached plan's placeholders become this session's media ids.
-        head = { tag: 1, plan: bindMedia(built.plan, (ref) => sessionMediaId(sd.mediaKey, mediaIdentity(ref)), built.mediaRefs) }
-        assets = built.assets
-        const entry = built.assets.find((x) => x.tag === 3)
-        if (!entry) return deny(reqId, 'policy-refused')
-        page = { w: entry.w, h: entry.h }
-        decoded = built.decodedBytes
+        if ('refused' in built) {
+          // Task 11b: a still with audio answers its sound-only plan (one message, no asset): it plays its piece-3
+          // still and sounds. Any other refusal, or a still without audio (or media off), is piece 4's error.
+          if (!built.sounds) return deny(reqId, built.refused)
+          head = { tag: 1, plan: bindMedia(built.sounds.plan, (ref) => sessionMediaId(sd.mediaKey, mediaIdentity(ref)), built.sounds.mediaRefs) }
+          assets = []
+          page = { w: 0, h: 0 }
+          decoded = built.sounds.decodedBytes
+        } else {
+          // D2: the cached plan's placeholders become this session's media ids.
+          head = { tag: 1, plan: bindMedia(built.plan, (ref) => sessionMediaId(sd.mediaKey, mediaIdentity(ref)), built.mediaRefs) }
+          assets = built.assets
+          const entry = built.assets.find((x) => x.tag === 3)
+          if (!entry) return deny(reqId, 'policy-refused')
+          page = { w: entry.w, h: entry.h }
+          decoded = built.decodedBytes
+        }
       } else if (kind === 'track') {
         const frames = await o.pool.showTrack(s.sid, { ...base, unitIndex: unit, step: msg.step as number }, estimate, ws.data.gone.signal)
         if (!alive()) return

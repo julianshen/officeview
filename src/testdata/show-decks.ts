@@ -1003,6 +1003,32 @@ export function clickPauseVideoDeck(): Promise<Uint8Array> {
   return mediaDeck({ slides: [{ boxes: [BOX], media: [{ spid: 3, file: 'av.mp4', kind: 'video' }], timing: mediaNode('video', 3, spTgt(3)) + mainSeqXml([clickStep(id, [appear(3)])]) + seq }] })
 }
 
+/**
+ * Task 11b (owner decision 2026-11-19): a still that sounds. One slide, a piece-3 still with media on as off:
+ * - `audio-end`: the narration on shape 3 (`a.m4a`, `cTn` 3) begins 250 ms after entry; the ink box (id 2) enters on
+ *   its end (an audio end that reaches drawing: the still). Click 1 fades box 4 in with an effect sound (`a.wav`,
+ *   `rIdSnd1`, `cTn` 90): on a still the click advances, so that sound never plays.
+ * - `transition`: a video (`av.mp4`, shape 3) begins with the slide and the ink box enters on its end (the still, as
+ *   `videoDeck`); the slide is entered with a fade and a start sound (`a.m4a`, `rIdSnd2`, no loop).
+ */
+export function stillSoundDeck(kind: 'audio-end' | 'transition'): Promise<Uint8Array> {
+  const reveal = `<p:par><p:cTn id="5" presetID="1" presetClass="entr" presetSubtype="0" fill="hold" nodeType="afterEffect"><p:stCondLst><p:cond evt="onEnd" delay="0"><p:tn val="3"/></p:cond></p:stCondLst><p:childTnLst>${setVisibility(ids(6), 2, 'visible')}</p:childTnLst></p:cTn></p:par>`
+  const ink = rect(2, 'Ink', 400, 300, 160, 120, HIDDEN_INK)
+  if (kind === 'transition') {
+    return mediaDeck({ slides: [{
+      boxes: [ink], media: [{ spid: 3, file: 'av.mp4', kind: 'video' }], sounds: [{ rId: 'rIdSnd2', file: 'a.m4a' }],
+      timing: mediaNode('video', 3, spTgt(3)) + reveal,
+      transition: '<p:transition spd="med"><p:fade/><p:sndAc><p:stSnd loop="0"><p:snd r:embed="rIdSnd2" name="chime.m4a"/></p:stSnd></p:sndAc></p:transition>',
+    }] })
+  }
+  const id = ids(20)
+  const fade = (n: () => number) => setVisibility(n, 4, 'visible') + animEffect(n, 4, 'in', 'fade', 500)
+  return mediaDeck({ slides: [{
+    boxes: [ink, rect(4, 'Box', 80, 80, 120, 120, '336699')], media: [{ spid: 3, file: 'a.m4a' }], sounds: [{ rId: 'rIdSnd1', file: 'a.wav' }],
+    timing: mediaNode('audio', 3, spTgt(3), { narration: true, start: '<p:cond delay="250"/>' }) + reveal + mainSeqXml([mediaClick(id, fade(id) + mediaNode('audio', 90, sndTgt('rIdSnd1')), 'entr')]),
+  }] })
+}
+
 /** The media decks by name (Task 4's leak audit plays each). */
 export const MEDIA_DECKS: Record<string, () => Promise<Uint8Array>> = {
   videoDeck, narrationDeck, effectSoundDeck, transitionSoundDeck, crossSlideSoundDeck, togglePauseDeck,

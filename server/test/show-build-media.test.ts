@@ -388,13 +388,18 @@ describe.skipIf(!info)('show plans carry audio media (Task 4)', () => {
       } finally { c.close(); h.stop() }
     }
     // Piece 4's stills stay stills: a video end reveals a box (D22), an audio repeats; with media on and off.
-    for (const doc of [await mediaEndRevealDeck('onEnd'), await videoDeck(), await repeatDeck(2)]) {
+    // Task 11b: with media on, the audio still (repeatDeck) answers its sound-only plan (`fallback: 'still'`, nothing
+    // drawn) in place of the error; it still plays its still.
+    for (const [doc, sounds] of [[await mediaEndRevealDeck('onEnd'), false], [await videoDeck(), false], [await repeatDeck(2), true]] as const) {
       for (const media of [undefined, { enabled: true, info }]) {
         const h = await start({ doc, pool: poolOn(), ...(media ? { media } : {}) }), c = new Client(h.url)
         try {
           await c.hello(); await c.ready()
           const r = await c.showPlan(0, 1, 'full')
-          expect(r.end).toEqual({ reqId: r.reqId, type: 'error', code: 'still' })
+          if (sounds && media) {
+            expect(r.end).toBeUndefined()
+            expect((decodeShowMessage(r.messages[0]!, { unit: 0, maxDecoded: SHOW_PLAN_LIMITS.showDecoded }) as { plan: ShowPlanRecord }).plan.fallback).toBe('still')
+          } else expect(r.end).toEqual({ reqId: r.reqId, type: 'error', code: 'still' })
         } finally { c.close(); h.stop() }
       }
     }

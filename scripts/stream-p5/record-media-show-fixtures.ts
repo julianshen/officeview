@@ -102,10 +102,16 @@ const WHICH: Array<[string, () => Promise<Uint8Array>]> = [
   ['unrelated', () => decks.mediaEndRevealDeck('unrelated')],
   ['eight-parts', eightPartsDeck],
   ['refused', refusedNarrationDeck],
+  // Task 11b: stills that sound (their show-plan answer is the sound-only plan; the still raster is the rig's paint).
+  ['still-sound', () => decks.stillSoundDeck('audio-end')],
+  ['still-transition', () => decks.stillSoundDeck('transition')],
 ]
 
 mkdirSync(OUT, { recursive: true })
+// `bun … record-media-show-fixtures.ts still-sound still-transition` records only those (default: all).
+const only = new Set(process.argv.slice(2))
 for (const [name, deck] of WHICH) {
+  if (only.size && !only.has(name)) continue
   const bytes = await record(name, await deck())
   writeFileSync(resolve(OUT, `media-${name}.bin`), bytes)
   console.log(`media-${name}.bin: ${bytes.length} B`)

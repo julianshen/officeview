@@ -54,7 +54,7 @@ import { createElapsedTimer, type ElapsedTimer } from '../../slideshow/presenter
 import { adoptPresenterWindow, type PresenterWindow } from '../../slideshow/presenter/window'
 import type { DiagnosticSink, Lease, ShowSlide, SlideShowWorkspace, TerminalReserve } from '../../slideshow/types'
 import { admitShow, backingFor, createSlideShowWorkspace, surfaceBytes, type Backing, type SlideShowProfile } from '../../slideshow/workspace'
-import { SHOW_PLAN_LIMITS } from '../show-plan'
+import { localTransition, SHOW_PLAN_LIMITS, type ShowPlanRecord } from '../show-plan'
 import { StreamSessionError } from './errors'
 import { createPlanSource, planUnit } from './plan-source'
 import { createPlanStage, type PlanSlideData, type PlanStage, type PlanTrack } from './plan-stage'
@@ -295,6 +295,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
   const maxCached = Math.max(1, Math.min(8, slots))
   /** Neighbours prefetched besides the target: at most 3 (2 next + 1 previous), always fewer than the cache holds. */
   const neighbours = Math.max(0, Math.min(3, maxCached - 2))
+  /** Task 11b: the sound-only plans the server answered for stills (server unit → plan; set before the still path runs). */
+  const stillPlans = new Map<number, ShowPlanRecord>()
   const fetcher: ShowFetcher = createShowFetcher({
     async paint(unit, scale, dpr, sig, charge) {
       // The destination's bytes first: no room is a typed refusal, and nothing is requested.
@@ -339,6 +341,13 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
       // The fetch's signal owns the decode too (finding 2): an abort mid-decode gives everything back at once.
       const b = await decodeBundle(unit, reply, workspace, remoteShowDeps.decode, sig)
       if (sig.aborted || exited) { b.release(); throw new StreamSessionError('closed', 'the bundle is no longer wanted') }
+      // Task 11b: a still's sound-only plan. The slide takes the still path unchanged (the fetcher re-asks for the
+      // piece-3 still); only its records and audio schedule are kept, for the media player and the transition sound.
+      if (b.plan.fallback) {
+        stillPlans.set(unit, b.plan)
+        b.release()
+        throw new StreamSessionError(b.plan.fallback, `the slide plays as its still image (${b.plan.fallback}); its sounds play`)
+      }
       const p = pinnable(b)
       scaleOf.set(p, scale)
       return p
@@ -381,6 +390,11 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
   const bundleFor = (i: number): ShowBundle | undefined => held.get(i) ?? (unitOf[i] !== undefined && animated(unitOf[i]!) ? fetcher.bundle(unitOf[i]!) : undefined)
   /** Animated units refused a bundle with a still code: they play their piece-3 still. */
   const stillOnly = new Set<number>()
+  /** Task 11b: a still slide's sound-only plan (server unit → plan), used only with media on. */
+  const stillPlanOf = (i: number): ShowPlanRecord | undefined => {
+    const unit = unitOf[i]
+    return mediaOn && unit !== undefined && stillOnly.has(unit) ? stillPlans.get(unit) : undefined
+  }
 
   // ---------------------------------------------------------------------
   // Keyframe tracks (D4) and Morph pairs (D11): held for the slide on screen; their bytes count against the
@@ -1257,14 +1271,19 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     frameText.style.cssText = HIDDEN
     surface.root.append(live, frameText)
     // The driver over the plan-backed source, on PlanStage (an animated deck) or piece 3's still stage.
-    const planSource = createPlanSource({ manifest: doc.manifest, unitOf, bundles: bundleFor, loop, kiosk, media: mediaOn })
+    const planSource = createPlanSource({ manifest: doc.manifest, unitOf, bundles: bundleFor, stills: stillPlanOf, loop, kiosk, media: mediaOn })
     if (mediaOn) {
       const s = show!
       media = createShowMedia({
         transport: { mediaShow: (u) => s.mediaShow!(u), mediaCursor: (u) => s.mediaCursor!(u), mediaRequest: (id, sig, room, u) => s.mediaRequest!(id, sig, room, u), mediaEnd: () => s.mediaEnd!() },
         root: surface.root, win: win ?? (globalThis as unknown as Window), workspace, sink, unitOf,
-        records: (i) => bundleFor(i)?.plan.media,
-        slide: (i) => (driver?.visit?.index === i ? driver.visit.slide : undefined),
+        records: (i) => bundleFor(i)?.plan.media ?? stillPlanOf(i)?.media,
+        slide: (i) => {
+          const v = driver?.visit?.index === i ? driver.visit.slide : undefined
+          // Task 11b: a still draws no transition (its driver slide has none); its transition sound plays on entry.
+          const t = v && !v.transition ? stillPlanOf(i)?.show.transition : undefined
+          return t?.sound ? { ...v!, transition: localTransition(t) } : v
+        },
         onResume: (cb) => doc.onManifestChange(cb),
       })
     }

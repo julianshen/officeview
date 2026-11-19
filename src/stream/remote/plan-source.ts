@@ -12,7 +12,9 @@
  *   record, `{rId: mediaId, partPath: 'remote:' + mediaId, contentType: 'audio/mp4', declaredBytes: 0, spid}`; the
  *   transition's start sound names its record by `rId = mediaId` (`localTransition`), so the unchanged
  *   `TransitionSoundDeps.open(rec)` finds it; `mediaClock(i)` is the plan's records on the show clock (no record is
- *   ever a video's, D22). Built from any bundle's plan, so a still's sound-only plan would play unchanged. Media off:
+ *   ever a video's, D22). Built from any bundle's plan; Task 11b: a still's sound-only plan (`stills(i)`, media on
+ *   only) gives the still slide its records, its no-input audio schedule as `timing` and its clock, and no
+ *   transition, build or step (the still is drawn and advanced as piece 3's; show.ts plays its transition sound). Media off:
  *   `media: []` and no clock (the driver ends media nodes as piece 4 does, D18).
  * - The deck's show settings (`showAnimation`, `useTimings`) are the plan's `options` (D13), read
  *   through getters: the driver reads them after a slide is acquired, so the first plan sets them.
@@ -29,7 +31,7 @@ import { mediaClockOf, type MediaClock } from '../../slideshow/engine/media-ends
 import type { SlideSource } from '../../slideshow/player/driver'
 import type { MediaRecord, ShowSlide } from '../../slideshow/types'
 import type { Manifest } from '../manifest'
-import { localTransition, type PlanMediaRecord } from '../show-plan'
+import { localTransition, type PlanMediaRecord, type ShowPlanRecord } from '../show-plan'
 import type { ShowBundle } from './show-bundle'
 
 /** What a remote media record stands for (`remoteRecordOf`): its server unit and the plan's record. */
@@ -48,7 +50,7 @@ export function remoteMediaRecord(r: PlanMediaRecord, unit: number): MediaRecord
 /** D19: a unit the show asks for a plan bundle (an animated slide, or one that ships audio or a transition sound). */
 export const planUnit = (u: { anim?: true; media?: true } | undefined): boolean => !!u?.anim || !!u?.media
 
-export function createPlanSource(o: { manifest: Manifest; unitOf: readonly number[]; bundles: (streamed: number) => ShowBundle | undefined; loop: boolean; kiosk: boolean; media?: boolean }): SlideSource {
+export function createPlanSource(o: { manifest: Manifest; unitOf: readonly number[]; bundles: (streamed: number) => ShowBundle | undefined; stills?: (streamed: number) => ShowPlanRecord | undefined; loop: boolean; kiosk: boolean; media?: boolean }): SlideSource {
   /** The deck's show settings, from the last plan acquired (every plan carries the same deck settings). */
   let options: { showAnimation: boolean; useTimings: boolean } | undefined
   const settings: SlideSource['settings'] = {
@@ -71,9 +73,16 @@ export function createPlanSource(o: { manifest: Manifest; unitOf: readonly numbe
     records.set(i, { plan, media })
     return media
   }
+  /** Task 11b: a still's sound-only plan (media on only): its audio schedule and records, nothing drawn. */
+  const stillOf = (i: number) => (o.media && !bundleOf(i) ? o.stills?.(i) : undefined)
   const slideOf = (i: number): ShowSlide => {
     const bundle = bundleOf(i)
-    if (!bundle) return { index: i, hidden: false, timing: undefined, notes: [], links: [], media: [], builds: [] }
+    if (!bundle) {
+      const still = stillOf(i)
+      // No transition, no build and no step: the still is drawn and advanced as piece 3's, and only sounds.
+      if (still) return { index: i, hidden: false, timing: still.show.timing, notes: [], links: [], media: mediaOf(i, still), builds: [] }
+      return { index: i, hidden: false, timing: undefined, notes: [], links: [], media: [], builds: [] }
+    }
     const { plan } = bundle
     options = plan.options
     const { timing, transition, builds } = plan.show
@@ -90,8 +99,9 @@ export function createPlanSource(o: { manifest: Manifest; unitOf: readonly numbe
     },
     ...(o.media ? {
       mediaClock(i: number): MediaClock | undefined {
-        const plan = bundleOf(i)?.plan
-        // A slide with no plan (a still) has no media node to end; one with a plan always gets a clock, even empty.
+        const plan = bundleOf(i)?.plan ?? stillOf(i)
+        // A slide with no plan (a silent still) has no media node to end; one with a plan (a still's sound-only plan
+        // included, Task 11b) always gets a clock, even empty.
         if (!plan) return undefined
         const timing = plan.show.timing
         return mediaClockOf([timing && !('refused' in timing) ? timing.root : undefined], plan.media ?? [])

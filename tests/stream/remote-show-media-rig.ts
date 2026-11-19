@@ -24,7 +24,7 @@ import type { SlideShowWorkspace } from '../../src/slideshow/types'
 // The recorded media decks
 // ---------------------------------------------------------------------------
 
-export type MediaFixtureName = 'narration' | 'effect-sound' | 'transition-sound' | 'cross-slide' | 'video' | 'unrelated' | 'eight-parts' | 'refused'
+export type MediaFixtureName = 'narration' | 'effect-sound' | 'transition-sound' | 'cross-slide' | 'video' | 'unrelated' | 'eight-parts' | 'refused' | 'still-sound' | 'still-transition'
 export interface MediaFixture { list: ManifestUnit[]; plans: Map<number, Uint8Array[]>; plan(unit: number): ShowPlanRecord }
 export function mediaFixture(name: MediaFixtureName): MediaFixture {
   const buf = new Uint8Array(readFileSync(resolve(__dirname, '../fixtures/show-plan', `media-${name}.bin`)))

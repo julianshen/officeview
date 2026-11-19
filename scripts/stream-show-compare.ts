@@ -377,9 +377,12 @@ async function fetchWire(bytes: Uint8Array, marks: MarkSpec, testOnly: HarnessTe
         if (forced) r.end = forced
         for (const x of r.extra) if (x.type === 'diag') w.diagnostics.push(`${u}:${x.code}${x.reason ? `/${x.reason}` : ''}`)
         if (r.end && !SHOW_STILL_CODES.has(String(r.end.code))) throw new Error(`unit ${u}: show-plan refused ${String(r.end.code)}, which production does not play as a still`)
+        // Task 11b: a still's sound-only plan (`fallback`) plays its still, as the refusal it names.
+        const head = r.end ? undefined : (decodeShowMessage(r.messages[0]!, { unit: u, maxDecoded: SHOW_PLAN_LIMITS.showDecoded }) as { plan: NonNullable<typeof plan> }).plan
         if (r.end) w.refused.set(u, String(r.end.code))
+        else if (head!.fallback) w.refused.set(u, head!.fallback)
         else {
-          plan = (decodeShowMessage(r.messages[0]!, { unit: u, maxDecoded: SHOW_PLAN_LIMITS.showDecoded }) as { plan: typeof plan }).plan!
+          plan = head!
           w.plans.set(u, { reply: r.messages })
           for (const [k, s] of plan.steps.entries()) {
             if (s.eligibility !== 'composited') continue

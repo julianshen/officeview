@@ -108,6 +108,14 @@ export interface ShowPlanRecord {
   iterate: { keys: Array<[string, string[]]>; groups: Array<[string, { wd?: string[][]; lt?: string[][] }]> }
   entry: number
   diagnostics: Array<{ code: string; step?: number }>
+  /**
+   * Task 11b (owner decision 2026-11-19): a still's sound-only plan. The slide plays as its piece-3 still (the
+   * refusal named here), and the plan carries only what it sounds: `media`, `show.transition` (its sound; the client
+   * draws no transition for a still) and `show.timing`, the server's no-input audio schedule (audio leaves at their
+   * computed begins, and the media commands that fire without input). No layer, step, base, trigger, link region,
+   * iteration or build, and no asset follows it (`entry` names none). Absent on every other plan.
+   */
+  fallback?: 'still'
 }
 /**
  * One side of a Morph item. `geometry`: the object's base box (slide px), which the Morph interpolates. `bounds`
@@ -439,8 +447,16 @@ function mediaRecords(v: unknown, snds: ReadonlyArray<[string, string]>, placeho
 
 function validatePlan(v: unknown, expect: ShowExpect): ShowPlanRecord {
   if (!isObj(v)) return fail('plan')
-  const o = obj(v, '', PLAN_KEYS, ['media'])
+  const o = obj(v, '', PLAN_KEYS, ['media', 'fallback'])
   if (o.v !== 1) fail('v')
+  // Task 11b: a still's sound-only plan draws nothing.
+  if (has(o, 'fallback')) {
+    if (o.fallback !== 'still') fail('fallback')
+    const empty = (x: unknown) => Array.isArray(x) && x.length === 0
+    for (const k of ['layers', 'steps', 'base', 'triggers', 'linkRegions']) if (!empty(o[k])) fail(k)
+    if (!isObj(o.iterate) || !empty(o.iterate.keys) || !empty(o.iterate.groups)) fail('iterate')
+    if (!isObj(o.show) || !empty(o.show.builds)) fail('show.builds')
+  }
   const sl = obj(o.slide, 'slide', ['index', 'w', 'h'])
   const index = u32(sl.index, 'slide.index'), W = num(sl.w, 'slide.w', 1e-6, MAX_PX), H = num(sl.h, 'slide.h', 1e-6, MAX_PX)
   if (index !== expect.unit) fail('slide.index')
