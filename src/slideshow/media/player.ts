@@ -56,6 +56,7 @@
 import type { SchedulerEntry, SchedulerSnapshot } from '../engine/scheduler'
 import type { AudioBehaviour, CmdBehaviour, DiagnosticSink, MediaRecord, ShowSlide, TimeNode, VideoBehaviour } from '../types'
 import type { MediaLease, MediaLeaseResult } from './lease'
+import { parseMediaCommand } from './commands'
 
 /** A shape's box in CSS px relative to the audience surface root. */
 export interface MediaBox { left: number; top: number; width: number; height: number }
@@ -580,7 +581,8 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
 
     function command(c: CmdBehaviour, t: number): void {
       const text = c.cmd.trim()
-      if (c.cmdType === 'evt' && text.toLowerCase() === 'onstopaudio') {
+      const parsed = parseMediaCommand(c.cmdType, c.cmd)
+      if (parsed?.verb === 'onstopaudio') {
         // "Stop previous sound": every audio of the slide, and the transition sound.
         for (const st of nodes.values()) if (st.node.kind === 'audio') stop(st.id)
         for (const live of [...carried]) if (live.sound) teardown(live, true)
@@ -591,9 +593,9 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       const st = spid === undefined ? undefined : bySpid.get(spid)
       if (c.cmdType !== 'call') { diagnose('media-command', { spid: spid ?? String(c.ctn.id) }, `cmd type="${c.cmdType}" cmd="${text}" is not supported`); return }
       if (!st) { diagnose('media-command', { spid: spid ?? String(c.ctn.id) }, `cmd "${text}" targets no media node`); return }
-      const from = /^playFrom\(\s*([0-9]+(?:\.[0-9]+)?)\s*\)$/.exec(text)
-      if (from) { resumeOrStart(st, t, Number(from[1])); return }
-      switch (text) {
+      if (!parsed) { diagnose('media-command', st, `cmd "${text}" is not supported`); return }
+      switch (parsed.verb) {
+        case 'playFrom': resumeOrStart(st, t, parsed.seconds); return
         case 'play': case 'resume': resumeOrStart(st, t); return
         case 'pause': pause(st.id); return
         case 'stop': stop(st.id); return
