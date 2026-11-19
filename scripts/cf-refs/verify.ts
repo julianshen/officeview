@@ -3,7 +3,7 @@
  * for XLSX Conditional Formatting Stage 1 oracle cases.
  */
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { inflateRawSync, inflateSync } from 'node:zlib'
 import { parseXml } from '../../src/core/xml'
@@ -4917,16 +4917,16 @@ const iconKeyCache = new Map<string, IconGlyphKey | Refusal | undefined>()
  * re-derives the key sidecar first and the dependents after it.
  */
 export function loadIconGlyphKey(rootDir: string, caseId: string = CF_ICON_KEY_CASES.bottom): IconGlyphKey | Refusal | undefined {
-  const manifestAbs = resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json')
-  if (!existsSync(manifestAbs)) return undefined
-  const manifest = JSON.parse(readFileSync(manifestAbs, 'utf8')) as CfManifest
-  const keyCase = manifest.cases.find(c => c.id === caseId)
-  const cap = keyCase?.captures.find(x => x.appearance === 'screen')
-  if (!keyCase || !cap?.pngSha256) return undefined
+  const inputs = iconKeyCaseInputs(rootDir, caseId)
+  if (!inputs) return undefined
+  const { keyCase, digest } = inputs
+  const cap = keyCase.captures.find(x => x.appearance === 'screen')
+  if (!cap?.pngSha256) return undefined
   const sidecarAbs = resolve(rootDir, cap.sidecarPath)
   const sidecarText = existsSync(sidecarAbs) ? readFileSync(sidecarAbs, 'utf8') : ''
-  const sidecarSha = createHash('sha256').update(sidecarText).digest('hex')
-  const cacheKey = `${rootDir}\u0000${caseId}\u0000${cap.pngSha256}\u0000${keyCase.expected.savedSha256}\u0000${sidecarSha}`
+  // Review fix round 1 #2: keyed on the bytes the key is derived from (manifest, sidecar, PNG, saved workbook), the same
+  // digest `stage5IconKeys` caches on, so a vanished, replaced or restored input is re-evaluated by both layers.
+  const cacheKey = `${rootDir}\u0000${caseId}\u0000${digest}`
   if (iconKeyCache.has(cacheKey)) return iconKeyCache.get(cacheKey)
   const capture = loadBarScreenCapture(keyCase, rootDir)
   const built = capture ? buildIconGlyphKey(keyCase, capture.parts, capture.png, capture.geom) : undefined
@@ -4947,6 +4947,23 @@ export function loadIconGlyphKey(rootDir: string, caseId: string = CF_ICON_KEY_C
   }
   iconKeyCache.set(cacheKey, key)
   return key
+}
+
+const sha256OfFile = (abs: string): string => (existsSync(abs) ? createHash('sha256').update(readFileSync(abs)).digest('hex') : '-')
+
+/**
+ * A key case's manifest entry and the content digest of everything its key is derived from: the manifest text and the
+ * case's sidecar, PNG and saved workbook (a missing file digests as `-`). Undefined without a manifest or the case.
+ */
+function iconKeyCaseInputs(rootDir: string, caseId: string, manifestText?: string): { keyCase: CfOracleCase; digest: string } | undefined {
+  const manifestAbs = resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json')
+  const text = manifestText ?? (existsSync(manifestAbs) ? readFileSync(manifestAbs, 'utf8') : undefined)
+  if (text === undefined) return undefined
+  const keyCase = (JSON.parse(text) as CfManifest).cases.find(c => c.id === caseId)
+  if (!keyCase) return undefined
+  const cap = keyCase.captures.find(x => x.appearance === 'screen')
+  const files = [cap?.sidecarPath, cap?.pngPath, keyCase.saved].map(f => (f ? sha256OfFile(resolve(rootDir, f)) : '-'))
+  return { keyCase, digest: [createHash('sha256').update(text).digest('hex'), ...files].join(':') }
 }
 
 /**
@@ -6108,39 +6125,38 @@ export function stage5IconKeyOf(keys: Stage5IconKeys, parts: Map<string, Uint8Ar
  * placement it stands for (a key Excel resaved at another placement is no key at all).
  */
 export function stage5IconKeys(rootDir: string): Stage5IconKeys {
-  // Called once per verified Stage 5 case: the manifest, both key sidecars and saved workbooks are only re-read when one
-  // of them changed on disk (a verify-only run rewrites a key sidecar before its dependents).
-  const stamp = ['tests/fixtures/xlsx-cf/manifest.json', ...Object.values(CF_ICON_KEY_CASES).flatMap(id => [`tests/fixtures/xlsx-cf/refs/${id}.json`, `tests/fixtures/xlsx-cf/refs/${id}.png`, `tests/fixtures/xlsx-cf/${id}.xlsx`])]
-    .map(f => { const abs = resolve(rootDir, f); if (!existsSync(abs)) return '-'; const st = statSync(abs); return `${st.size}:${st.mtimeMs}` })
-    .join('|')
+  // Called once per verified Stage 5 case. Review fix round 1 #2: cached on the same content digest as
+  // `loadIconGlyphKey` (manifest, and each key's sidecar, PNG and saved workbook), so the two layers always agree.
+  const manifestAbs = resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json')
+  if (!existsSync(manifestAbs)) return {}
+  const text = readFileSync(manifestAbs, 'utf8')
+  const inputs = { bottom: iconKeyCaseInputs(rootDir, CF_ICON_KEY_CASES.bottom, text), centre: iconKeyCaseInputs(rootDir, CF_ICON_KEY_CASES.centre, text) }
+  const stamp = `${inputs.bottom?.digest ?? '-'}|${inputs.centre?.digest ?? '-'}`
   const cached = stage5IconKeysCache.get(rootDir)
   if (cached && cached.stamp === stamp) return cached.keys
-  const keys = readStage5IconKeys(rootDir)
-  stage5IconKeysCache.set(rootDir, { stamp, keys })
-  return keys
+  const out: Stage5IconKeys = {}
+  for (const [slot, placement] of [['bottom', 'bottom-20'], ['centre', 'center-20']] as const) {
+    const keyCase = inputs[slot]?.keyCase
+    if (!keyCase) continue
+    // Review fix round 1 #1: the key's own case must pass full verification (lock states, resave receipt, calibration,
+    // the capture checks and the key build), not only rebuild its glyph table from the PNG.
+    const res = verifyCfCase(keyCase, { rootDir })
+    if (res.kind !== 'verified' || !res.verifiedCapabilities.includes('icon:glyph-key')) continue
+    const key = loadIconGlyphKey(rootDir, keyCase.id)
+    if (!key || 'kind' in key) continue
+    if (iconKeyCasePlacement(rootDir, keyCase) !== placement) continue
+    out[slot] = key
+  }
+  stage5IconKeysCache.set(rootDir, { stamp, keys: out })
+  return out
 }
 
 const stage5IconKeysCache = new Map<string, { stamp: string; keys: Stage5IconKeys }>()
 
-function readStage5IconKeys(rootDir: string): Stage5IconKeys {
-  const out: Stage5IconKeys = {}
-  for (const [slot, placement] of [['bottom', 'bottom-20'], ['centre', 'center-20']] as const) {
-    const caseId = CF_ICON_KEY_CASES[slot]
-    const key = loadIconGlyphKey(rootDir, caseId)
-    if (!key || 'kind' in key) continue
-    if (iconKeyCasePlacement(rootDir, caseId) !== placement) continue
-    out[slot] = key
-  }
-  return out
-}
-
 /** The one placement every key cell of a key case's saved workbook reads, or undefined when they disagree or cannot be read. */
-function iconKeyCasePlacement(rootDir: string, caseId: string): IconKeyPlacement | undefined {
-  const manifestAbs = resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json')
-  if (!existsSync(manifestAbs)) return undefined
-  const keyCase = (JSON.parse(readFileSync(manifestAbs, 'utf8')) as CfManifest).cases.find(c => c.id === caseId)
-  const savedAbs = keyCase ? resolve(rootDir, keyCase.saved) : undefined
-  if (!keyCase || !savedAbs || !existsSync(savedAbs)) return undefined
+function iconKeyCasePlacement(rootDir: string, keyCase: CfOracleCase): IconKeyPlacement | undefined {
+  const savedAbs = resolve(rootDir, keyCase.saved)
+  if (!existsSync(savedAbs)) return undefined
   const parts = readZipPartsSync(new Uint8Array(readFileSync(savedAbs)))
   if (!parts) return undefined
   const placementOf = iconKeyPlacementReader(parts)
