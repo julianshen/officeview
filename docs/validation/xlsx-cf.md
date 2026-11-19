@@ -376,7 +376,7 @@ Every row is `unverified` (or refused) until the orchestrator's captures land; "
 | `bar:lengths-default-10-90` | `stage3-bar-lengths-default` (since Task 22b; `stage3-bar-lengths` B is a one-width cross-check) | pixel-measured | S3-B | recipe-pending: blocked until the case is captured (Task 22b) |
 | `bar:lengths-explicit-0-100` | `stage3-bar-lengths` | pixel-measured | S3-B | recipe-pending (unverified) |
 | `bar:bounds-min-max` | `stage3-bar-lengths` | pixel-measured | S3-C and S3-B | recipe-pending (unverified) |
-| `bar:bounds-num` | `stage3-bar-lengths` | pixel-measured | S3-C and S3-B | recipe-pending (unverified) |
+| `bar:bounds-num` | `stage3-bar-bounds-num` (since §14.z.10; `stage3-bar-lengths` E is a cross-check) | pixel-measured | S3-C and S3-B | verified (num; §14.z.10) |
 | `bar:bounds-percent` | `stage3-bar-lengths` | pixel-measured | S3-C and S3-B | recipe-pending (unverified) |
 | `bar:bounds-percentile` | `stage3-bar-lengths` | pixel-measured | S3-C and S3-B | recipe-pending (unverified) |
 | `bar:bounds-automin` | `stage3-bar-lengths` | pixel-measured | S3-C | recipe-pending (unverified) |
@@ -1033,7 +1033,7 @@ the capability lifts):
 | `bar:bounds-automax` | `stage3-bar-auto-bounds` | S3-C | pixel-measured | verified | — |
 | `bar:lengths-explicit-0-100` | `stage3-bar-lengths` | S3-B | pixel-measured | verified | — |
 | `bar:bounds-min-max` | `stage3-bar-lengths` | S3-C and S3-B | pixel-measured | verified | — |
-| `bar:bounds-num` | `stage3-bar-lengths` | S3-C and S3-B | pixel-measured, non-discriminating | unverified-nondiscriminating | withheld (`cf-unmeasured-capability` or unresolved): The fixture's num 20/80 bounds equal its data's min/max (20..80), so num and min/max predict identical px (largest separation 0 px; Task 18b recomputation). Re-measure with data spanning beyond the num bounds, for example 0..100 under num 20/80. |
+| `bar:bounds-num` | `stage3-bar-bounds-num` (§14.z.10) | S3-C and S3-B | pixel-measured | verified | — (num 20/80 over 25..75: Excel drew the num reading on every cell; until §14.z.10 non-discriminating, num 20/80 equalling the data's min/max in `stage3-bar-lengths` E) |
 | `bar:bounds-percent` | `stage3-bar-lengths` | S3-C and S3-B | pixel-measured, non-discriminating | unverified-nondiscriminating | withheld (`cf-unmeasured-capability` or unresolved): On 0..100 data percent 25/75 and num 25/75 give the same bounds, so a pixel measurement cannot tell percent from a literal reading (largest separation 0 px; Task 18b recomputation). Re-measure with data whose range is not 0..100. |
 | `bar:bounds-percentile` | `stage3-bar-lengths` | S3-C and S3-B | pixel-measured | verified | — |
 | `bar:lengths-all-negative` | `stage3-bar-lengths` | S3-B and S3-L | pixel-measured | verified | — |
@@ -2571,7 +2571,7 @@ There are 2,036 rows over 17 cases: 791 formula cells, 542 painted as Excel, 0 d
 | `scale:thresholds-formula` | cfvo-formulas | S5-H | DisplayFormat / PNG measurement | evaluated | published | none |
 | `formula:cfvo-expression` | cfvo-formulas | S5-H | DisplayFormat / PNG measurement | evaluated | published | none |
 | `formula:cfvo-reference` | cfvo-formulas | S5-H | DisplayFormat / PNG measurement | evaluated | published | none |
-| `bar:bounds-formula` | cfvo-formulas | S5-H | recorded Excel outcome | — | withheld: refused-unsupported | Re-deferred (Task 39): the stage5-cfvo-formulas bar fixture holds 5..100 against formula bounds 20..80 (a whole-scope cf-value-beyond-bounds, Rulin... |
+| `bar:bounds-formula` | bar-bounds-formula (§14.z.10) | S5-H | PNG measurement (crop against literal twins) | evaluated | published | none (Task 39 re-deferred it on the stage5-cfvo-formulas fixture, which stays recorded as unconfirmable for that case only) |
 | `icon:thresholds-formula` | cfvo-formulas | S5-H | recorded Excel outcome | — | withheld: refused-unsupported | Re-deferred (Task 39): every icon crop of stage5-cfvo-formulas is unclassifiable (icon-class-none). Its cells sit on the default style, which Excel... |
 | `formula:cfvo-relative` | cfvo-formulas | S5-H | DisplayFormat / PNG measurement | zero | withheld: reading-mismatch: Excel matched zero, production implements anchor-top-left | withheld (gate) |
 | `formula:cfvo-nonnumeric` | cfvo-formulas | S5-H | recorded Excel outcome | — | withheld: refused-unsupported | Finding (S4-MINMAX precedent): no hypothesis (withheld, zero, skipped) matched what Excel showed for a text, blank or error formula bound in stage5... |
@@ -2798,3 +2798,34 @@ The comment on the registration cites these commits.
 - `tsc`: only the 3 known `@napi-rs/canvas` errors; `tsconfig.scripts.json` is clean.
 - `OV_MODULE_MAP=1 vite build` then `check-eager`: eager graph ok.
 - `git diff --check`: clean.
+
+### 14.z.10 Discriminating evidence for `bar:bounds-num` and `bar:bounds-formula` (follow-up, 2026-11-19)
+
+**Why.** `bar:bounds-num` was unverified-nondiscriminating: `stage3-bar-lengths` E holds 20..80 under num 20/80, so the num bounds equal the data's min/max and the two readings predict the same px. `bar:bounds-formula` was re-deferred in Task 39: `stage5-cfvo-formulas` I holds 5..100 against formula bounds 20/80 (a whole-scope cf-value-beyond-bounds, Ruling S3-E), its num twin W needed `bar:bounds-num`, and W7 was unmeasurable. Both old cases stay as they were, captures included.
+
+**Two new case versions** (orchestrator ruling; hypotheses fixed before capture, tests written first):
+- `stage3-bar-bounds-num`: one paired solid 0/100 bar on B2:B6, num 20/80, over {25,36,45,56,75}: every value inside the bounds, own min/max 25/75, no predicted edge on a half pixel. The `numAs` family predicts num 15/47/74/106/162 px against min/max none/39/71/110/177 px of the 177 px span: a bar against no bar at 25 and 8/3/4/15 px elsewhere (at least the 3 px the ±1 px tolerance needs). Same 180 pt column and 30 pt rows as `stage3-bar-lengths`.
+- `stage5-bar-bounds-formula`: B2:B9 a paired bar with formula bounds `$F$1`/`$F$2` = 20/80 over {28,31,35,41,46,49,52,62}, with literal twins on the same values: C num 20/80 (`evaluated`), D num 0/0 (`zero`), E min/max (`ignored`); twin id `formula:cfvo-bar-twin` (non-discriminating registry). Default 84 px columns, 20 pt rows (new `S5Fixture.defaultRowHeightPt`, the height every measured Stage 5 bar crop was taken at). Every edge under either reading is at most 58 px or full width and off half pixels; the margin was calibrated on the committed `stage5-cfvo-formulas` capture (61 px measurable, 73 and 75 px hidden by the value text, a 13.5 px tie drawn as 13 px). `evaluated` and `ignored` differ by at least 3 px or bar against no bar at all 8 cells. `zero` can never verify (its twin is degenerate, `formula-twin-blank`), as in the old case.
+
+**Ownership.** Both cases are appended last: a Stage 3 bar GUID carries its fixture's index, so an insertion would have changed every later input (the pinned Stage 1–4 digest caught it). They own their capability through `CF_STAGE3_OWNERS` / `CF_STAGE5_OWNERS`, and `capabilityOwnerCase` (verify.ts) now drives `isCapabilityVerified`, so a capability is judged on its owner, not on the first case carrying its marker. Until its capture, a registered non-discriminating capability whose owner is `recipe-pending` reported `unverified-nondiscriminating` (ruling 5).
+
+**The capture** (orchestrator, Excel 16.114, 6a83cbe2; both opened repair-free, resaved, contrast 0/0):
+- `stage3-bar-bounds-num`: right edges B2..B6 = 100/132/159/191/247 px, the num reading at every cell (min/max: none/124/156/195/262). `bar:bounds-num` verifies, discriminating, matched `num`.
+- `stage5-bar-bounds-formula`: B2..B9 `bar:2-12/16/21/29/36/40/44/58`, equal to C; E differs; D drew `bar:43-82` everywhere, as X did. `bar:bounds-formula` verifies, discriminating, matched `evaluated` (the reading production registers).
+
+**Retired.** `CF_STAGE3_NONDISCRIMINATING['bar:bounds-num']`, `CF_STAGE5_UNSUPPORTED['bar:bounds-formula']`, and the new case's scope in `CF_STAGE5_UNCONFIRMABLE`. That registry is now per case (`cases`, `stage5UnconfirmableScope`): `stage5-cfvo-formulas` keeps its W2..W9 / designated-withheld scope as unconfirmable evidence for that case only, still refusing its own misreadings (tested), and `stage5Publication` refuses a capability only through its owner's scope (ruling 4).
+
+**Composition (code, not the brief's guess).** A formula bound resolved to a number keeps `resolved: 'formula'` (service.ts) and is gated by `bar:bounds-formula` alone (dataBar.ts `boundCapability`); the formula bar never needs `bar:bounds-num`. Only its literal num twin did (stage5-withhold.ts, and the S5-WITNESS check in the readings test), so `bar:bounds-num` publishes first: in the same audit run (ruling 6).
+
+**S3-E refusals are now recorded, not borrowed.** With both capabilities held, five Stage 5 bars are still refused by production's own Ruling S3-E, which until now hid behind "bar:bounds-num/-formula not held": `stage5-formula-authored` J2:J9 (formula 4/7 over 1..8) and `stage5-cfvo-formulas` I2:I9 and W2:W9 (20/80 over 5..100) beyond their bounds, `stage5-cfvo-formulas` X2:X9 and the new zero twin D2:D9 (num 0/0) degenerate. They are `STAGE5_BAR_SCOPE_REFUSALS` (stage5-withhold.ts), justified with their real refusal code; tests/xlsx-cf-stage5.test.ts derives the list from every measured saved workbook (bounds and scope values) and requires exactly these five. The zero twin D therefore stays a crop-only rival: Excel draws 43–82, production withholds it, and the audit row is a justified refusal, not a disagreement.
+
+**Publication.** `npx tsx scripts/cf-refs/audit.ts --stage 5 --write --publish-stage3 --publish-stage5` ran twice, byte-identical (sha-256 `1be0d313…`): 338 ids (110 S1, 34 S2, 52 S3 published, 97 S4 as committed, 45 S5 published), up from 336. The only diff in `verifiedCapabilities.ts` is `bar:bounds-num` (S3 set and combined set) and `bar:bounds-formula` (S5 set and combined set), written by the audit.
+
+**Production effect.** No `src/` behaviour changed; only the published set. Data bars with literal `num` bounds now paint where every other capability they need is held, and so do bars with formula bounds (their formula evaluated, then painted as a num bound). On the Stage 3 oracle the Lesson 1 conformance now compares 555 painted bars with Excel's px (was 472; 498 of them on pixel-measured cells, 250 gradient bars also in geometry), every one within 1 px: the num-bounded bars of `stage3-bar-rendering`, `-geometry`, `-showvalue` and `stage3-bar-lengths` E. Still withheld, by S3-E: values beyond num bounds (`stage3-bar-degenerate` E), inverted num bounds (D), and all-equal scopes even under num 0/100 (`stage3-bar-geometry` H and I, whose values are all 100; Excel draws full bars there, a recorded finding).
+
+**Audits** (all ok, complete, 0 blocked):
+- Stage 3: `structural=16/16 unsupported=1 pending=0 unverifiedNonDiscriminating=6`.
+- Stage 5: `structural=32/32 unsupported=9 pending=5 unverifiedNonDiscriminating=10`; 2,224 records over 32 cases (18 measured), 799 formula cells, 559 painted as Excel, 267 with justified unresolved slots, 161 with visual evidence compared, 0 disagreeing.
+- Stages 1, 2 and 4 unchanged.
+
+**Pinned counts moved:** Stage 3 cases 15→16 and published 51→52; Stage 5 cases 31→32 and published 44→45; the S5-WITNESS adversarial coverage (one more crop:bar configuration, every corruption still refuses); the Lesson 1 painted counts above. The Stage 1–4 input digest is unchanged; the new Stage 3 input is pinned on its own.

@@ -181,6 +181,21 @@ What to check afterwards:
 - If the 10/90 rule ever stops being `half-min@x14`, the audit keeps both bounds unverified (their hypotheses assume it).
 - Never run `--write` here. The rules are published only by Task 23 (`--write --publish-stage3`), as `VERIFIED_STAGE3_BAR_AUTO_BOUNDS`.
 
+## 2e. The num-bounds case (the bar:bounds-num follow-up, 2026-11-19)
+
+`stage3-bar-bounds-num` owns `bar:bounds-num` (through `CF_STAGE3_OWNERS`; it is appended last, so no earlier input changes). `stage3-bar-lengths` E holds 20..80 under num 20/80, so num and min/max predict the same px there. This case has one paired solid 0/100 bar on B2:B6, num 20/80, over {25,36,45,56,75}: every value inside the bounds (no S3-E cell), the data's own min/max 25/75.
+
+```
+bun scripts/cf-refs/build.ts   --stage 3 --case stage3-bar-bounds-num --refresh-clock-date
+bun scripts/cf-refs/capture.ts --stage 3 --case stage3-bar-bounds-num
+bun scripts/cf-refs/capture.ts --stage 3 --verify-only
+npx tsx scripts/cf-refs/audit.ts --stage 3
+```
+
+- The resave keeps the bar paired, with base and x14 cfvo num 20/80.
+- `observedBars` right edges B2..B6 (cell from 84 px, bar from 86 px): num predicts 100/132/159/191/247, min/max none/124/156/195/262. Run of 2026-11-19 (6a83cbe2): 100/132/159/191/247, the num reading.
+- `bar-hypothesis-none` or a `min-max` match is a finding: record the px, never refit.
+
 ## 3. The unresolved-shapes case (named explicitly)
 
 `stage3-bar-unresolved-shapes` is `unsupported` and lifts no capability, so `build.ts` skips it unless it is named:

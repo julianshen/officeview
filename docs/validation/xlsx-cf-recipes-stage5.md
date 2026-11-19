@@ -72,6 +72,20 @@ done
   The implementer then lists the affected capabilities in `CF_STAGE5_UNSUPPORTED` with that reason.
 - **`stage5-x14-scale`:** if Excel writes the cross-sheet scale in the base dialect, the build rejects it and `scale:dialect-standalone` becomes `refused-unsupported` (Ruling S5-I).
 
+### 2a. The formula-bar-bounds case (the bar:bounds-formula follow-up, 2026-11-19)
+
+`stage5-bar-bounds-formula` owns `bar:bounds-formula` (through `CF_STAGE5_OWNERS`, appended last). B2:B9 is a paired bar with formula bounds `$F$1`/`$F$2` = 20/80 over {28,31,35,41,46,49,52,62}, every value strictly inside; its twins on the same values are C num 20/80 (`evaluated`), D num 0/0 (`zero`) and E min/max (`ignored`). Default 84 px columns and 20 pt rows; every bar edge under either reading is at most 58 px or full width, clear of the value text.
+
+```
+bun scripts/cf-refs/build.ts   --stage 5 --case stage5-bar-bounds-formula
+bun scripts/cf-refs/capture.ts --stage 5 --case stage5-bar-bounds-formula
+bun scripts/cf-refs/capture.ts --stage 5 --verify-only
+npx tsx scripts/cf-refs/audit.ts --stage 5
+```
+
+- Expected `formulaEvaluation['bar:bounds-formula']`: discriminating, matched `evaluated`, B2..B9 `bar:2-12/16/21/29/36/40/44/58`. Run of 2026-11-19 (6a83cbe2): exactly that.
+- `missing-capture`, `formula-hypothesis-none`, or an `ignored`/`zero` match is a finding: record it, never refit. A `zero` reading cannot verify (its twin is degenerate: `formula-twin-blank`).
+
 ## 3. Unresolved shapes (record only)
 
 ```
