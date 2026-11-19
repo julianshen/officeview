@@ -18,12 +18,15 @@
  *   ?deck=fly|morph|cube|nav opens a synthetic show deck (piece 4 Task 14: `flyInDeck`, `morphDeck`, `cubeDeck` from
  *          src/testdata/show-decks.ts) instead of `?doc=`.
  *   P + 1  controls: POST /drop|/revoke|/oversize?sid=&srv=short, GET /sessions,
- *          GET /fontpack/* (CORS), GET /__stream-harness (identity)
+ *          GET /fontpack/* (CORS), GET /__stream-harness (identity; `media`: the ffmpeg probe passed)
+ *
+ * Piece 5 (Task 11): media is on as in production (`MEDIA_ENABLED_DEFAULT`, the startup probe failing closed).
  */
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { demoHooks } from '../src/demo-hooks'
 import { deriveKeys } from '../src/keys'
+import { createMediaServices, MEDIA_ENABLED_DEFAULT } from '../src/media/services'
 import { Pool } from '../src/pool'
 import { createStreamServer } from '../src/ws'
 import { cubeDeck, flyInDeck, morphDeck, navDeck } from '../../src/testdata/show-decks'
@@ -32,7 +35,9 @@ const P = Number(process.env.OV_STREAM_PORT ?? 4181)
 const ORIGINS = [`http://127.0.0.1:${process.env.IV_HARNESS_PORT ?? 4173}`, `http://localhost:${process.env.IV_HARNESS_PORT ?? 4173}`]
 const root = resolve(import.meta.dir, '../..')
 const keys = await deriveKeys(crypto.getRandomValues(new Uint8Array(32)))
-const pool = new Pool({ workers: 2 })
+const media = await createMediaServices({ env: process.env, enabled: MEDIA_ENABLED_DEFAULT })
+const pool = new Pool({ workers: 2, ...(media.info ? { media: { info: media.info, dir: media.temp.dir } } : {}) })
+const streamMedia = { enabled: MEDIA_ENABLED_DEFAULT, ...(media.info ? { info: media.info } : {}), services: media }
 const demo = demoHooks({ docDir: resolve(root, 'corpus'), demo: true })
 /** TEST-ONLY `?copy=full|cap3|off` (Stage 3a): the session's copy policy; absent = the demo default. */
 const COPY = { full: 'full', cap3: { maxParagraphs: 3 }, off: false } as const
@@ -66,8 +71,8 @@ const hooks = {
 }
 
 const servers = {
-  normal: createStreamServer({ keys, originAllowlist: ORIGINS, pool, ...hooks }),
-  short: createStreamServer({ keys, originAllowlist: ORIGINS, pool, ...hooks, tokenTtlSec: 8, renewLeadSec: 5 }),
+  normal: createStreamServer({ keys, originAllowlist: ORIGINS, pool, media: streamMedia, ...hooks }),
+  short: createStreamServer({ keys, originAllowlist: ORIGINS, pool, media: streamMedia, ...hooks, tokenTtlSec: 8, renewLeadSec: 5 }),
 }
 Bun.serve({ port: P, fetch: servers.normal.fetch as never, websocket: servers.normal.websocket as never })
 Bun.serve({ port: P + 2, fetch: servers.short.fetch as never, websocket: servers.short.websocket as never })
@@ -80,7 +85,7 @@ Bun.serve({
     const url = new URL(req.url)
     const srv = servers[url.searchParams.get('srv') === 'short' ? 'short' : 'normal']
     const sid = url.searchParams.get('sid') ?? ''
-    if (url.pathname === '/__stream-harness') return Response.json({ ok: true, root }, { headers: cors })
+    if (url.pathname === '/__stream-harness') return Response.json({ ok: true, root, media: !!media.info }, { headers: cors })
     if (url.pathname === '/sessions') return Response.json(srv.table.sids().map((s) => ({ sid: s, status: srv.table.get(s)!.status })), { headers: cors })
     if (url.pathname.startsWith('/fontpack/')) {
       const name = url.pathname.slice('/fontpack/'.length)

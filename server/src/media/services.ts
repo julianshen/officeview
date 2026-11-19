@@ -2,7 +2,7 @@
  * Piece 5 (plan X8, D12, D18, D23): the one media object a process holds. `main.ts` builds it at startup and hands
  * its `info` and `temp.dir` to the pool; `ws.ts` (Task 9) holds it for the session queues.
  *
- * Fails closed. With `enabled` false (D18: until Task 11) or a failed ffmpeg probe (`probeFfmpeg`: `OV_MEDIA=off`,
+ * Fails closed. With `enabled` false (D18's off path) or a failed ffmpeg probe (`probeFfmpeg`: `OV_MEDIA=off`,
  * a missing binary, a sandbox limit the platform cannot apply), `info` is undefined, nothing touches the disk, and
  * `temp` is an inert stub; every media record is then `media-unavailable`. Otherwise it claims the process's one
  * media temp directory (`createMediaTemp`), the admission class (⌈cores / 4⌉ slots, queue 16) and the shared cache
@@ -19,8 +19,8 @@ import { createSessionMediaQueue, type SessionMediaQueue, type SessionMediaQueue
 import { createMediaTemp, type MediaTemp } from './temp'
 import { transcode } from './transcode'
 
-/** D18: media in streamed shows stays off until the client can play it (Task 11 turns it on). */
-export const MEDIA_ENABLED_DEFAULT = false
+/** D18: media in streamed shows is on now that the client plays it (Task 11); the startup probe still fails closed. */
+export const MEDIA_ENABLED_DEFAULT = true
 
 /** TEST-ONLY. `root`: the parent of the media temp directory (default the OS temp dir). */
 export interface MediaTestOnly { maxBytes?: number; wallCapMs?: number; slots?: number; queue?: number; root?: string }

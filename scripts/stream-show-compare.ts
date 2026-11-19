@@ -342,7 +342,10 @@ async function fetchWire(bytes: Uint8Array, marks: MarkSpec, testOnly: HarnessTe
   const { Client, start } = await import('../server/test/harness')
   const { decodeShowMessage, SHOW_PLAN_LIMITS } = await import('../src/stream/show-plan')
   const visibleMark = marks.kind
-  const h = await start({ doc: bytes, policy: { contentPolicy: 'full', visibleMark, forensicMark: false }, testOnly: { forensicOff: true }, ...(marks.kind === 'viewer' ? { viewerId: marks.text } : {}) })
+  // Piece 5 (Task 11): the streamed side runs with media on (the server's default), its own media services and
+  // ffmpeg probe; `OV_MEDIA=off` runs D18's off path. On, a failed probe is an error, never a silent off.
+  const mediaWanted = process.env.OV_MEDIA !== 'off'
+  const h = await start({ doc: bytes, policy: { contentPolicy: 'full', visibleMark, forensicMark: false }, testOnly: { forensicOff: true }, media: { enabled: mediaWanted }, ...(marks.kind === 'viewer' ? { viewerId: marks.text } : {}) })
   let c = new Client(h.url)
   let sends = 0
   /** The server's unit window is 60 charged sends a minute per session: a fresh session every 40. */
@@ -354,6 +357,7 @@ async function fetchWire(bytes: Uint8Array, marks: MarkSpec, testOnly: HarnessTe
   }
   try {
     const m = await c.hello(); await c.ready()
+    if (mediaWanted && m.can.media !== true) throw new Error('media is on but the server offers none (the ffmpeg probe failed?); set OV_MEDIA=off for the off path')
     const list = m.units.list
     const unitOf = list.map((u, i) => (u.hidden ? -1 : i)).filter((i) => i >= 0)
     const w: Wire = { manifest: m, unitOf, plans: new Map(), refused: new Map(), tracks: new Map(), morphs: new Map(), stills: new Map(), diagnostics: [] }
@@ -361,7 +365,8 @@ async function fetchWire(bytes: Uint8Array, marks: MarkSpec, testOnly: HarnessTe
     let reqId = 100
     for (const [si, u] of unitOf.entries()) {
       let plan: import('../src/stream/show-plan').ShowPlanRecord | undefined
-      if (list[u]!.anim) {
+      // D19: a unit with `anim` or `media` is fetched as a plan.
+      if (list[u]!.anim || list[u]!.media) {
         await fresh()
         const r = await c.showPlan(u, 1, 'full', { ms: 60_000 })
         const forced = testOnly.showPlanEnd?.(u)
@@ -399,7 +404,7 @@ async function fetchWire(bytes: Uint8Array, marks: MarkSpec, testOnly: HarnessTe
       }
     }
     return w
-  } finally { c.close(); h.stop() }
+  } finally { c.close(); await h.stop() }
 }
 
 // ---------------------------------------------------------------------------
@@ -589,7 +594,8 @@ export async function compareStreamDeck(deck: string, o: { marks: MarkSpec; rows
           return { record: m.record, assets: m.assets, ...(m.track ? { track: m.track } : {}) }
         },
       })
-      const planSource = createPlanSource({ manifest: wire.manifest, unitOf, bundles: (i) => bundles.get(unitOf[i]!), loop: false, kiosk: false })
+      // Piece 5: with media on, audio ends on the show clock (the plan's records), as the remote show plays it.
+      const planSource = createPlanSource({ manifest: wire.manifest, unitOf, bundles: (i) => bundles.get(unitOf[i]!), loop: false, kiosk: false, media: wire.manifest.can.media === true })
       const source = {
         ...planSource, settings: planSource.settings, count: planSource.count, hidden: planSource.hidden,
         async acquire(i: number, sig: AbortSignal) {

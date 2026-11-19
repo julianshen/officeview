@@ -114,8 +114,9 @@ export interface StreamServerOptions {
   /** TEST-ONLY (`config.ts` `TestOnlyOptions`): never read from an `AuthDecision`. */
   testOnly?: TestOnlyOptions
   /**
-   * Piece 5 (D18): audio media in shows. `enabled` defaults to `false` until the client can play it (Task 11);
-   * `can.media` is `enabled && info !== undefined` (ffmpeg probed). Off, shows behave exactly as in piece 4.
+   * Piece 5 (D18): audio media in shows. `enabled` defaults to `true` (Task 11: the client plays it); `can.media` is
+   * `enabled && info !== undefined` (ffmpeg probed: no `info` is media unavailable, fail closed). Off
+   * (`enabled: false`), shows behave exactly as in piece 4.
    */
   /** TEST-ONLY: awaited inside a media delivery, after the file is opened and checked, and after each chunk read. */
   mediaTestHooks?: { afterOpen?(): void | Promise<void>; afterRead?(chunk: number): void | Promise<void> }
@@ -173,7 +174,7 @@ export function createStreamServer(o: StreamServerOptions) {
   const reapers = new Map<string, ReturnType<typeof setTimeout>>()
   const fingerprintOf = o.fingerprint ?? layoutFingerprint
   /** Piece 5 (D18): `can.media`, for every session of this server. */
-  const canMedia = o.media?.enabled === true && o.media.info !== undefined
+  const canMedia = (o.media?.enabled ?? true) && o.media?.info !== undefined
   /** Media deliveries in progress (ok answers, until their pin is released): `stats().media`. */
   let mediaDeliveries = 0
   /** Task 9: `media-show` / `media-request` are served only with `can.media` and the media services. */

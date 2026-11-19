@@ -26,8 +26,8 @@ export async function startServer(argv: readonly string[], env: Record<string, s
   expire()
   const expiry = setInterval(() => { try { expire() } catch (e) { console.error('[audit] expiry failed', e) } }, 3600_000); expiry.unref()
   // Piece 5: the ffmpeg startup probe and the process's one media temp dir, admission class and encode cache. Fails
-  // closed (no `info`: media unavailable). Off (D18, until Task 11) it probes nothing and touches no disk, and the
-  // pool gets no media config, so its workers never probe.
+  // closed (no `info`: media unavailable). Off (D18's off path) it probes nothing and touches no disk, and the pool
+  // gets no media config, so its workers never probe.
   const media = await createMediaServices({ env: config.media, enabled: MEDIA_ENABLED_DEFAULT })
   const pool = new Pool(media.info ? { media: { info: media.info, dir: media.temp.dir } } : {})
   const stream = createStreamServer({ keys, originAllowlist: origins, pool, audit, animation: config.animation, media: { enabled: MEDIA_ENABLED_DEFAULT, ...(media.info ? { info: media.info } : {}), services: media }, ...demoHooks(config) })
