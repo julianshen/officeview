@@ -10,6 +10,7 @@ import { AuditStore } from './audit-store'
 import { loadConfig } from './config'
 import { demoHooks } from './demo-hooks'
 import { deriveKeys } from './keys'
+import { createMediaServices, MEDIA_ENABLED_DEFAULT } from './media/services'
 import { Pool } from './pool'
 import { createStreamServer } from './ws'
 
@@ -24,10 +25,18 @@ export async function startServer(argv: readonly string[], env: Record<string, s
   const expire = () => audit.expire(Math.floor(Date.now() / 1000))
   expire()
   const expiry = setInterval(() => { try { expire() } catch (e) { console.error('[audit] expiry failed', e) } }, 3600_000); expiry.unref()
-  const pool = new Pool()
-  const stream = createStreamServer({ keys, originAllowlist: origins, pool, audit, animation: config.animation, ...demoHooks(config) })
+  // Piece 5: the ffmpeg startup probe and the process's one media temp dir, admission class and encode cache. Fails
+  // closed (no `info`: media unavailable). Off (D18, until Task 11) it probes nothing and touches no disk, and the
+  // pool gets no media config, so its workers never probe.
+  const media = await createMediaServices({ env: config.media, enabled: MEDIA_ENABLED_DEFAULT })
+  const pool = new Pool(media.info ? { media: { info: media.info, dir: media.temp.dir } } : {})
+  const stream = createStreamServer({ keys, originAllowlist: origins, pool, audit, animation: config.animation, media: { enabled: MEDIA_ENABLED_DEFAULT, ...(media.info ? { info: media.info } : {}) }, ...demoHooks(config) })
   const server = Bun.serve({ port: config.port, fetch: stream.fetch as never, websocket: stream.websocket as never })
-  return { server, stream, pool, origins, stop() { server.stop(true); pool.dispose(); clearInterval(expiry); store.close() } }
+  return {
+    server, stream, pool, origins, media,
+    /** Stops serving at once; the returned promise settles once the media queues, cache and temp dir are gone. */
+    stop(): Promise<void> { server.stop(true); pool.dispose(); clearInterval(expiry); store.close(); return media.close() },
+  }
 }
 
 if (import.meta.main) {

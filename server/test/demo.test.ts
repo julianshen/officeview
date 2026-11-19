@@ -58,6 +58,15 @@ describe('demo server end to end', () => {
       s.stop()
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
+  it('media services are wired at startup and fail closed while media is off (D18): no probe, no temp dir, no pool media', async () => {
+    const s = await startServer(['--demo', '--port', '0', '--doc-dir', corpusDir], {})
+    try {
+      expect(s.media.info).toBeUndefined()
+      expect(s.media.temp.dir).toBe('')
+      expect(s.media.cache.stats()).toEqual({ entries: 0, bytes: 0, referenced: 0, inflight: 0 })
+      expect(() => s.media.createQueue({ sid: 'x', units: 1, items: async () => [], part: async () => { throw new Error('no') } })).toThrow()
+    } finally { await s.stop() }
+  })
   it('streams every unit of one file per format at scale 1, protected and relaxed', async () => {
     const s = await startServer(['--demo', '--port', '0', '--doc-dir', corpusDir], {}); servers.push(s)
     const base = `ws://localhost:${s.server.port}/stream`
