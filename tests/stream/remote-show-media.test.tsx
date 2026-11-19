@@ -210,6 +210,36 @@ describe('remote show plays audio (Task 11)', () => {
     s.exit()
   }, DRIVES)
 
+  it('F3: a transition sound delivered 1 s late joins at offset 1 s; one delivered after its duration never plays', async () => {
+    const fx = mediaFixture('transition-sound')
+    const rec = fx.plan(0).media![0]!
+    const fd = mediaDoc(fx)
+    fd.rules.set(rec.mediaId, 'hold')
+    const { s, root } = await show(fd)
+    await run(1000)
+    expect(elements().plays).toEqual([])
+    fd.deliver(rec.mediaId)
+    await run(32)
+    const sound = root.querySelector<HTMLMediaElement>('audio[data-officeview-show-sound]')
+    expect(elements().plays.map((p) => p.el)).toEqual([sound])
+    // On the show clock: the delivery came about 1 s after the slide was entered.
+    expect(elements().plays[0]!.at).toBeGreaterThanOrEqual(0.9)
+    expect(elements().plays[0]!.at).toBeLessThanOrEqual(clockNow() / 1000)
+    s.exit()
+
+    // A second show: the bytes arrive after the (non-looping) sound's duration. It never plays.
+    const fd2 = mediaDoc(fx)
+    fd2.rules.set(rec.mediaId, 'hold')
+    const before = elements().plays.length
+    const b = await show(fd2)
+    await run(rec.durationMs + 300)
+    fd2.deliver(rec.mediaId)
+    await run(200)
+    expect(elements().plays.length).toBe(before)
+    expect(b.root.querySelector('audio[data-officeview-show-sound]')).toBeNull()
+    b.s.exit()
+  }, DRIVES)
+
   it("effect sound plays through the snd target's mediaId", async () => {
     const fx = mediaFixture('effect-sound')
     const id = fx.plan(0).media![0]!.mediaId

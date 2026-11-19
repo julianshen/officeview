@@ -1310,6 +1310,7 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
           return t?.sound ? { ...v!, transition: localTransition(t) } : v
         },
         onResume: (cb) => doc.onManifestChange(cb),
+        now: () => showClock.now(),
       })
     }
     const slides: SlideSource = {

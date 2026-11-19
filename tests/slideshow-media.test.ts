@@ -1136,3 +1136,103 @@ describe('clocked (streaming piece 5, spec §5.2)', () => {
     }
   })
 })
+
+describe('clocked transition sound (streaming piece 5, final review F3)', () => {
+  /** A 2 s transition sound on slide 0 (loop or not), its lease delivered by hand on the show clock `now`. */
+  const delayed = (loop: boolean, clocked = true) => {
+    const r = rig()
+    const now = { t: 10_000 }
+    const pending: Array<(v: MediaLeaseResult) => void> = []
+    const leases: FakeLease[] = []
+    const sound = (rId: string, l: boolean) => ({ element: 'fade', ns: 'p' as const, attrs: {}, durationMs: 0, advClick: true, sound: { start: { rId, loop: l } } })
+    const slides = [
+      slideOf(undefined, [rec('a', 'audio/mp4', 'rIdS1')], 0, sound('rIdS1', loop)),
+      slideOf(undefined, [], 1),
+      slideOf(undefined, [rec('b', 'audio/mp4', 'rIdS2')], 2, sound('rIdS2', false)),
+    ]
+    const sounds = createTransitionSound({
+      root: r.root, sink: r.sink, slide: (i) => slides[i],
+      open: (m) => new Promise((res) => { pending.push(res); void m }),
+      create: (k) => {
+        const el = r.root.ownerDocument.createElement(k) as Fake
+        el.play = vi.fn(() => Promise.resolve()); el.pause = vi.fn(); el.load = vi.fn(); el.canPlayType = vi.fn(() => 'maybe' as CanPlayTypeResult)
+        r.elements.push(el)
+        return el
+      },
+      ...(clocked ? { clock: { now: () => now.t, durationOf: () => 2000 } } : {}),
+    })
+    const deliver = async (i: number, at: number) => {
+      now.t = at
+      const l = fakeLease(rec(String(i), 'audio/mp4'))
+      leases.push(l)
+      pending[i]!(l)
+      await flush()
+      return l
+    }
+    return { r, sounds, deliver, now, leases }
+  }
+
+  it('a sound delivered 1 s late joins at offset 1 s', async () => {
+    const d = delayed(false)
+    d.sounds.start(0)
+    const lease = await d.deliver(0, 11_000)
+    const el = d.r.elements[0]!
+    expect(el.play).toHaveBeenCalledTimes(1)
+    expect(el.currentTime).toBeCloseTo(1, 5)
+    expect(lease.released).toBe(false)
+  })
+
+  it('a non-looping sound delivered after its duration never plays, and its lease is released', async () => {
+    const d = delayed(false)
+    d.sounds.start(0)
+    const lease = await d.deliver(0, 12_500)
+    const el = d.r.elements[0]!
+    expect(el.play).not.toHaveBeenCalled()
+    expect(el.getAttribute('src')).toBeNull()
+    expect(el.isConnected).toBe(false)
+    expect(lease.released).toBe(true)
+    // Nothing is playing: a release or a slide change finds nothing to stop.
+    expect(d.sounds.release()).toBe(false)
+  })
+
+  it('a looping sound delivered late joins at its offset within the loop, plays on past the slide change, and stops at the next sound', async () => {
+    const d = delayed(true)
+    d.sounds.start(0)
+    // 5 s late on a 2 s loop: 1 s into its third pass.
+    const lease = await d.deliver(0, 15_000)
+    const el = d.r.elements[0]!
+    expect(el.loop).toBe(true)
+    expect(el.play).toHaveBeenCalledTimes(1)
+    expect(el.currentTime).toBeCloseTo(1, 5)
+    // The slide change keeps a looping sound, as locally; the next slide's own sound stops it.
+    d.sounds.stopAt(0)
+    d.sounds.start(1)
+    expect(el.pause).not.toHaveBeenCalled()
+    expect(lease.released).toBe(false)
+    d.sounds.stopAt(1)
+    d.sounds.start(2)
+    expect(el.pause).toHaveBeenCalled()
+    expect(el.getAttribute('src')).toBeNull()
+    expect(lease.released).toBe(true)
+  })
+
+  it('a non-looping sound delivered late still stops at slide exit', async () => {
+    const d = delayed(false)
+    d.sounds.start(0)
+    const lease = await d.deliver(0, 10_500)
+    const el = d.r.elements[0]!
+    expect(el.currentTime).toBeCloseTo(0.5, 5)
+    d.sounds.stopAt(0)
+    expect(el.pause).toHaveBeenCalled()
+    expect(lease.released).toBe(true)
+  })
+
+  it('without a clock (local shows) a late sound still plays from 0', async () => {
+    const d = delayed(false, false)
+    d.sounds.start(0)
+    await d.deliver(0, 12_500)
+    const el = d.r.elements[0]!
+    expect(el.play).toHaveBeenCalledTimes(1)
+    expect(el.currentTime).toBe(0)
+  })
+})

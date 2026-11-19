@@ -4,7 +4,7 @@
  *
  * - **The player.** The unchanged media player (`createMediaPlayer`) on the audience surface, `clocked` (§5.2: late
  *   bytes join the node at its clock offset), and the transition sound (`createTransitionSound`) over the same
- *   opener. Audio plays only in the audience window (Presenter View mirrors no element, as locally). The driver
+ *   opener, on the show clock (late bytes join at the elapsed offset; a finished sound never plays). Audio plays only in the audience window (Presenter View mirrors no element, as locally). The driver
  *   never takes an end from it: a streamed slide's audio ends on the show clock (the source's `mediaClock`), so a
  *   refusal or failure after the plan was sent raises the player's typed notice and keeps the clock end (D4).
  * - **Video (D22).** The player is never handed a video node: `enter` gives it the slide without video nodes and
@@ -51,6 +51,8 @@ export interface ShowMediaOptions {
   slide(i: number): ShowSlide | undefined
   /** Calls `cb` after a resume replaced the session's manifest; returns the unsubscribe. */
   onResume(cb: () => void): () => void
+  /** The show clock (the driver's; it stops while the show is paused): a late transition sound joins on it (F3). */
+  now(): number
 }
 
 export interface ShowMedia {
@@ -234,7 +236,11 @@ export function createShowMedia(o: ShowMediaOptions): ShowMedia {
     relieve: () => sounds.release(),
     stopTransitionSound: (onlyLooping) => sounds.release(onlyLooping),
   })
-  const sounds: TransitionSoundController = createTransitionSound({ root: o.root, sink: o.sink, slide: o.slide, open: (rec, s) => player.open(rec, s) })
+  const sounds: TransitionSoundController = createTransitionSound({
+    root: o.root, sink: o.sink, slide: o.slide, open: (rec, s) => player.open(rec, s),
+    // F3: late bytes join at the elapsed offset, and a finished non-looping sound never plays.
+    clock: { now: o.now, durationOf: (rec) => remoteRecordOf(rec)?.record.durationMs },
+  })
   const stripped = new WeakMap<ShowSlide, ShowSlide>()
 
   function want(): void {
