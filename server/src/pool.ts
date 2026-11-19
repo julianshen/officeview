@@ -20,6 +20,7 @@ import type { BuiltMorph, MorphJob } from './show/morph'
 import type { MarkSpec, MediaUnitRefs, NotesJob, NotesPlan, NotesRaster, OpenResult, Projection, RenderedUnit } from './render'
 import type { FfmpegInfo } from './media/ffmpeg'
 import { PROBE_DECK_MS, PROBE_PART_MS } from './media/probe'
+import { ownChildrenNaming } from './media/sandbox'
 import { sweepPrefixed } from './media/temp'
 import type { WorkerReply, WorkerRequest } from './worker/render-worker'
 import { prepareWorkspace, TEXT_PREPARE_ALLOWANCE, type TextJob, type TextReply } from './text/served'
@@ -55,7 +56,7 @@ export type PoolTextJob = { docRef: string; contentPolicy: 'visible-only' | 'ful
  * every prepare it needs is charged separately (`prepareWorkspace`). */
 export const TEXT_JOB_BYTES = TEXT_PREPARE_ALLOWANCE
 /** `servedCacheBytes`: the worker's served-index bound per document (R6 default 32 MiB). */
-export interface PoolOptions { /** Piece 4 (tests shorten it): the show-plan job deadline, default `SHOW_PLAN_DEADLINE_MS`. */ showDeadlineMs?: number; workers?: number; caps?: Caps; recyclePages?: number; now?: () => number; testHooks?: boolean; openDeadlineMs?: number; servedCacheBytes?: number; /** Piece 5 (D21): ffmpeg and the media temp dir, forwarded in each worker's init. */ media?: { info: FfmpegInfo; dir: string }; /** TEST-ONLY (honoured with `testHooks`): every media probe is held this long (`MediaTableSeams.hangMs`). */ mediaHoldMs?: number; /** TEST-ONLY (honoured with `testHooks`): the media warm-up deadline, default `MEDIA_JOB_DEADLINE_MS`. */ mediaDeadlineMs?: number }
+export interface PoolOptions { /** Piece 4 (tests shorten it): the show-plan job deadline, default `SHOW_PLAN_DEADLINE_MS`. */ showDeadlineMs?: number; workers?: number; caps?: Caps; recyclePages?: number; now?: () => number; testHooks?: boolean; openDeadlineMs?: number; servedCacheBytes?: number; /** Piece 5 (D21): ffmpeg and the media temp dir, forwarded in each worker's init. */ media?: { info: FfmpegInfo; dir: string }; /** TEST-ONLY (honoured with `testHooks`): every media probe is held this long (`MediaTableSeams.hangMs`). */ mediaHoldMs?: number; /** TEST-ONLY (honoured with `testHooks`): the media warm-up and media job deadline, default `MEDIA_JOB_DEADLINE_MS`. */ mediaDeadlineMs?: number; /** TEST-ONLY (honoured with `testHooks`): `after-spawn`, a worker's sandboxed runs are withheld from its pid log; `after-part`, `mediaPart` never answers once it wrote its file. */ mediaWedge?: 'after-spawn' | 'after-part' }
 
 const WORKER_URL = resolve(import.meta.dir, 'worker/render-worker.ts')
 const PRELOAD = resolve(import.meta.dir, '../../scripts/stream-s0/napi-preload.ts')
@@ -81,10 +82,6 @@ interface Slot {
   prep: number
 }
 
-/** Task 13: how many sandboxed runs a worker can list at once for the pool to kill if it is terminated (its runs are
- * serial: one job per worker, one probe at a time). */
-const WORKER_CHILD_SLOTS = 8
-
 /** Round 13d: show requests a session may have waiting for its show slot (one more is running). */
 export const showQueueBound = (caps: Caps) => caps.perSessionOutstanding + caps.perSessionQueue - 1
 
@@ -105,6 +102,7 @@ export class Pool {
   private readonly showDeadlineMs: number
   private readonly media?: { info: FfmpegInfo; dir: string }
   private readonly mediaHoldMs?: number
+  private readonly mediaWedge?: 'after-spawn' | 'after-part'
   private readonly mediaDeadlineMs: number
   /**
    * Piece 4 (controller ruling): show-plan refusals by slide (`docRef|policy|unit|scale|motion|strictMarks`: the
@@ -154,6 +152,7 @@ export class Pool {
     this.showDeadlineMs = opts.showDeadlineMs ?? SHOW_PLAN_DEADLINE_MS
     this.media = opts.media
     this.mediaHoldMs = this.testHooks ? opts.mediaHoldMs : undefined
+    this.mediaWedge = this.testHooks ? opts.mediaWedge : undefined
     this.mediaDeadlineMs = (this.testHooks ? opts.mediaDeadlineMs : undefined) ?? MEDIA_JOB_DEADLINE_MS
     for (let i = 0; i < (opts.workers ?? defaultWorkers()); i++) {
       const slot = { index: i, busy: false, queue: [], pending: new Map(), docs: new Map(), pages: 0, parses: 0, probes: 0, generation: 0, closed: false, prep: 0 } as unknown as Slot
@@ -189,10 +188,10 @@ export class Pool {
     }
     // The init goes first (messages are ordered), so every later job sees the media config. Its reply is unawaited;
     // a worker whose init fails has media off (every entry `media-unavailable`).
-    // Task 13 (carried from Task 3): what this worker leaves if it is terminated mid-job (its ledger, timers and
-    // watchdog die with it): the sandboxed runs it lists in `pids`, and the files named with its `prefix`.
-    const leftovers = this.media ? { prefix: `w${randomBytes(6).toString('hex')}-`, pids: new Int32Array(new SharedArrayBuffer(4 * WORKER_CHILD_SLOTS)) } : undefined
-    worker.postMessage({ type: 'init', id: this.nextId++, ...(this.media && leftovers ? { media: { ...this.media, prefix: leftovers.prefix }, pids: leftovers.pids.buffer as SharedArrayBuffer } : {}), ...(this.mediaHoldMs ? { mediaHoldMs: this.mediaHoldMs } : {}) } satisfies WorkerRequest)
+    // Task 13 (carried from Task 3; fix round 1): what this worker leaves if it is terminated mid-job (its ledger,
+    // timers and watchdog die with it) bears its `prefix`: the files it staged, and the argv of the probes it runs.
+    const leftovers = this.media ? { prefix: `w${randomBytes(6).toString('hex')}-` } : undefined
+    worker.postMessage({ type: 'init', id: this.nextId++, ...(this.media && leftovers ? { media: { ...this.media, prefix: leftovers.prefix } } : {}), ...(this.mediaHoldMs ? { mediaHoldMs: this.mediaHoldMs } : {}), ...(this.mediaWedge ? { testWedge: this.mediaWedge } : {}) } satisfies WorkerRequest)
     worker.addEventListener('close', () => {
       // First, before anything awaiting the close (`replace`, a dying job's refund) resumes.
       if (leftovers) this.reap(leftovers)
@@ -204,14 +203,20 @@ export class Pool {
     })
   }
 
-  /** A gone worker's leftovers: SIGKILL each listed group (it was the worker's own child, its exit unobserved), then
-   * delete the files bearing its prefix. Synchronous. */
-  private reap(l: { prefix: string; pids: Int32Array }): void {
-    for (let i = 0; i < l.pids.length; i++) {
-      const pid = Atomics.exchange(l.pids, i, 0)
-      if (pid > 1) try { process.kill(-pid, 'SIGKILL') } catch { /* ESRCH: already gone */ }
-    }
-    if (this.media) sweepPrefixed(this.media.dir, l.prefix)
+  /**
+   * A gone worker's leftovers (fix round 1), synchronously: SIGKILL the group of each child of this process whose
+   * command line names a file in the media dir with the worker's prefix (`ownChildrenNaming`: ownership proven at
+   * kill time, whether or not anything was told of the spawn), then delete the files bearing the prefix. A listing
+   * that fails kills nothing (fail closed) and is logged. The killed leaders stay zombies: Bun reaps a child on the
+   * event loop that spawned it, which died with the worker.
+   */
+  private reap(l: { prefix: string }): void {
+    if (!this.media) return
+    const token = join(resolve(this.media.dir), l.prefix)
+    let pids: number[] = []
+    try { pids = ownChildrenNaming(token) } catch (e) { console.error(`[media] a retired worker's runs could not be listed; none killed: ${(e as Error).message}`) }
+    for (const pid of pids) try { process.kill(-pid, 'SIGKILL') } catch { /* ESRCH: already gone */ }
+    sweepPrefixed(this.media.dir, l.prefix)
   }
 
   /** Runs `fn` when the slot is idle; one in-flight message per worker. */
@@ -415,7 +420,7 @@ export class Pool {
         try {
           const { docKey } = await this.ensureOpen(slot, docRef, contentPolicy)
           if (signal?.aborted) throw new ShowCancelled()
-          return await this.runJob(slot, admitted, msg(docKey), MEDIA_JOB_DEADLINE_MS)
+          return await this.runJob(slot, admitted, msg(docKey), this.mediaDeadlineMs)
         } finally {
           if (slot.generation === generation && !slot.closed && slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
         }

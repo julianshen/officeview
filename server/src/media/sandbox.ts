@@ -10,7 +10,7 @@
  * The child sees a fixed minimal env (no server secret, no `FFREPORT`) and `cwd: '/'`. stdin is closed. stderr is
  * drained always and the last `stderrBytes` are kept; it is for logs only and never reaches a client.
  */
-import { execFile, spawn } from 'node:child_process'
+import { execFile, execFileSync, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import type { Readable, Writable } from 'node:stream'
 import type { FfmpegInfo } from './ffmpeg'
@@ -31,9 +31,9 @@ const STDERR_GRACE_MS = 1000
 
 /**
  * The sandbox's pid log (Task 13): every run's process group leader, as it spawns, with the promise of its exit.
- * Per thread: a render worker has its own module state, so its ffprobe runs reach only that worker's observers. The
- * pool uses it to kill a terminated worker's children (`render-worker.ts`); tests count spawns with it. No observer,
- * no cost. An observer that throws is ignored.
+ * Per thread: a render worker has its own module state, so its ffprobe runs reach only that worker's observers. Tests
+ * count spawns with it (fix round 1: nothing in production relies on it; a terminated worker's runs are found by
+ * `ownChildrenNaming`). No observer, no cost. An observer that throws is ignored.
  */
 export interface SandboxSpawn { pid: number; bin: 'ffmpeg' | 'ffprobe'; exited: Promise<void> }
 const spawnObservers = new Set<(s: SandboxSpawn) => void>()
@@ -41,6 +41,34 @@ export function observeSpawns(f: (s: SandboxSpawn) => void): () => void {
   spawnObservers.add(f)
   return () => { spawnObservers.delete(f) }
 }
+
+/**
+ * Task 13 fix round 1: the pids of this process's own children whose command line contains `token`, listed now with
+ * `ps -A -ww -o pid=,ppid=,command=` (every platform's ps; `-ww`: never truncated). A sandboxed run's argv names its
+ * staged input, so a token in that path proves at kill time that the run is ours: a child of this process (worker
+ * threads share its pid; measured on Bun 1.3.10) carrying that path. A pid reused by an unrelated process has neither.
+ * Throws when the listing cannot be had: the caller then kills nothing it cannot prove its own (fail closed).
+ */
+export function ownChildrenNaming(token: string): number[] {
+  if (!token) throw new Error('sandbox: an empty token proves nothing')
+  const out = execFileSync('/bin/ps', ['-A', '-ww', '-o', 'pid=,ppid=,command='], { env: SANDBOX_ENV, encoding: 'utf8', timeout: 5000, maxBuffer: 16 << 20 })
+  const pids: number[] = []
+  let rows = 0
+  for (const line of out.split('\n')) {
+    const m = /^\s*(\d+)\s+(\d+)\s(.*)$/.exec(line)
+    if (!m) continue
+    rows++
+    if (Number(m[2]) === process.pid && m[3]!.includes(token) && Number(m[1]) > 1) pids.push(Number(m[1]))
+  }
+  if (rows === 0) throw new Error('sandbox: ps listed no process')
+  return pids
+}
+
+/** TEST-ONLY (fix round 1): runs synchronously right after `spawn()` returns. Returning `'unobserved'` withholds the
+ * run from the pid log (a stand-in for a spawn nothing was told of). A render worker sets it only from an init the
+ * pool sends with `testHooks` (never from production config). */
+let afterSpawnForTests: (() => 'unobserved' | void) | undefined
+export function setAfterSpawnForTests(f: (() => 'unobserved' | void) | undefined): void { afterSpawnForTests = f }
 
 /** `ulimit -f` block size of `/bin/sh`: dash (linux) counts 512-byte blocks, macOS bash 3.2 counts 1024 (measured).
  * The startup probe verifies it with a capped write and fails closed on a mismatch. */
@@ -94,7 +122,8 @@ export function runSandboxed(info: FfmpegInfo, bin: 'ffmpeg' | 'ffprobe', argv: 
   const cmd = sandboxCommand(info, bin, argv, limits)
   const child = spawn(cmd.file, cmd.args, { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...cmd.env }, cwd: '/' })
   const pid = child.pid ?? -1
-  if (pid > 1 && spawnObservers.size) {
+  const unobserved = afterSpawnForTests?.() === 'unobserved'
+  if (pid > 1 && spawnObservers.size && !unobserved) {
     const exited = new Promise<void>((ok) => { child.once('exit', () => ok()); child.once('error', () => ok()) })
     for (const f of [...spawnObservers]) try { f({ pid, bin, exited }) } catch { /* an observer never stops a run */ }
   }

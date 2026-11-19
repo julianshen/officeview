@@ -94,12 +94,29 @@ export function spawnLog() {
   return { spawns, ffmpeg: () => spawns.filter((s) => s.bin === 'ffmpeg'), stop }
 }
 export function alive(pid: number): boolean { try { process.kill(pid, 0); return true } catch { return false } }
-/** This process's child processes (the sandboxed runs are its direct children: sandbox-exec execs sh, which execs the binary). */
-export function childPids(): string[] {
-  let out = ''
-  try { out = execFileSync('/usr/bin/pgrep', ['-l', '-P', String(process.pid)], { encoding: 'utf8' }) } catch { /* none */ }
-  return out.split('\n').map((l) => l.trim()).filter((l) => l && !/\s(ps|pgrep)$/.test(l))
+/** `cmd`'s stdout, failing closed: any failure to run it, or a non-zero exit, throws, so a broken enumeration can
+ * never read as "no process" (`ps -A` always lists at least itself). */
+function listing(cmd: string, args: string[]): string {
+  try { return execFileSync(cmd, args, { encoding: 'utf8', maxBuffer: 16 << 20 }) } catch (e) { throw new Error(`${cmd} failed: ${(e as Error).message}`) }
 }
+/** This process's running child processes (the sandboxed runs are its direct children: sandbox-exec execs sh, which
+ * execs the binary), as `pid command`; zombies are not running (`processes`). */
+export function childPids(): string[] {
+  return processes().filter((p) => p.ppid === process.pid && !/^(\/bin\/)?ps\b/.test(p.command)).map((p) => `${p.pid} ${p.command}`)
+}
+/** Every process but zombies: pid, parent, process group and full command line. A zombie has exited and holds
+ * nothing but its table slot (and so its pid and pgid, which cannot be reused while it stays). A child of a
+ * terminated worker stays one: Bun reaps a child on the event loop that spawned it, which died with the worker. */
+export function processes(): Array<{ pid: number; ppid: number; pgid: number; command: string }> {
+  const out = listing('/bin/ps', ['-A', '-ww', '-o', 'pid=,ppid=,pgid=,stat=,command='])
+  const rows = out.split('\n').flatMap((l) => { const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(l); return m ? [{ pid: Number(m[1]), ppid: Number(m[2]), pgid: Number(m[3]), stat: m[4]!, command: m[5]! }] : [] })
+  if (!rows.length) throw new Error('ps listed no process')
+  return rows.filter((r) => !r.stat.startsWith('Z')).map(({ stat: _s, ...r }) => r)
+}
+/** The running members of process group `pgid` (the leader and every descendant that stayed in it). */
+export const groupOf = (pgid: number) => processes().filter((p) => p.pgid === pgid).map((p) => p.pid)
+/** Whether `pid` is a running (not zombie) process. */
+export const running = (pid: number) => processes().some((p) => p.pid === pid)
 
 /**
  * The after-each invariants (Task 13), read while the harness is still up (its `stop()` zeroes everything): no slot

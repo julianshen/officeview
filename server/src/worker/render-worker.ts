@@ -2,7 +2,7 @@
 import { markLayerRaster, markRaster, type LayerCrop } from '../mark/mark-raster'
 import { DocumentHost, RenderRefusal, type MarkSpec, type NotesJob, type Projection } from '../render'
 import type { FfmpegInfo } from '../media/ffmpeg'
-import { observeSpawns } from '../media/sandbox'
+import { setAfterSpawnForTests } from '../media/sandbox'
 import type { ShowPlanJob } from '../show/build'
 import type { MorphJob } from '../show/morph'
 import type { TextJob } from '../text/served'
@@ -11,11 +11,13 @@ export type WorkerRequest =
   /** Piece 5 (D21): the worker's init, posted first. `media`: ffmpeg and the pool's media temp dir; absent = media off. */
   | {
     type: 'init'; id: number
-    /** `prefix`: this worker's file-name prefix in `dir` (Task 13); the pool deletes what bears it when the worker goes. */
+    /** `prefix`: this worker's file-name prefix in `dir` (Task 13). Every file it stages bears it, and so does the argv
+     * of every probe it runs (the staged input): the pool deletes the files and kills the runs when the worker goes. */
     media?: { info: FfmpegInfo; dir: string; prefix?: string }
-    /** Task 13: slots the pool shares with this worker, holding the pid of each sandboxed run in progress. */
-    pids?: SharedArrayBuffer
     /** TEST-ONLY (the pool sends it only with `testHooks`): each probe's hold. */ mediaHoldMs?: number
+    /** TEST-ONLY (the pool sends it only with `testHooks`): `after-spawn`, every sandboxed run is withheld from the pid
+     * log; `after-part`, `mediaPart` never returns once it wrote its file (fix round 1: retirement at those points). */
+    testWedge?: 'after-spawn' | 'after-part'
   }
   /** Piece 5 (D21, D22): a unit's audio uses and their probed entries (a short read job). */
   | { type: 'media-refs'; id: number; docKey: string; unit: number }
@@ -42,22 +44,6 @@ export type WorkerRequest =
 export type WorkerReply = { id: number; ok: true; result: unknown; stats: WorkerStats } | { id: number; ok: false; error: string; refusal?: string; stats: WorkerStats }
 export interface WorkerStats { parses: number; pages: number; docs: number; /** Piece 5: media probes run. */ probes: number }
 
-/**
- * Task 13 (carried from Task 3): every sandboxed run of this worker is listed, by its group leader's pid, in memory the
- * pool shares, from its spawn to its exit. A terminated worker's wall timers and watchdog die with it; the pool then
- * kills each listed group. Written synchronously in the spawning step, so no message can be lost on the way. With
- * every slot taken a run goes unlisted (the pool's runs are serial per worker; it is bounded by its CPU limit).
- */
-function trackChildren(slots: Int32Array): void {
-  observeSpawns(({ pid, exited }) => {
-    for (let i = 0; i < slots.length; i++) {
-      if (Atomics.compareExchange(slots, i, 0, pid) !== 0) continue
-      void exited.then(() => { Atomics.compareExchange(slots, i, pid, 0) })
-      return
-    }
-  })
-}
-
 declare const self: Worker
 const host = new DocumentHost()
 const stats = (): WorkerStats => ({ parses: host.parses, pages: host.pages, docs: host.docCount, probes: host.mediaProbes })
@@ -66,7 +52,14 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
   const m = e.data
   try {
     let result: unknown
-    if (m.type === 'init') { if (m.pids) trackChildren(new Int32Array(m.pids)); host.configureMedia(m.media); if (m.mediaHoldMs) host.mediaSeams = { hangMs: m.mediaHoldMs }; result = null }
+    if (m.type === 'init') {
+      host.configureMedia(m.media)
+      if (m.mediaHoldMs) host.mediaSeams = { hangMs: m.mediaHoldMs }
+      // Bun (1.3.10, measured) terminates a worker only once its JS yields: the wedges await, never spin.
+      if (m.testWedge === 'after-spawn') setAfterSpawnForTests(() => 'unobserved')
+      if (m.testWedge === 'after-part') host.afterPartForTests = () => new Promise<void>(() => {})
+      result = null
+    }
     else if (m.type === 'media-refs') result = await host.mediaRefs(m.docKey, m.unit)
     else if (m.type === 'media-part') result = await host.mediaPart(m.docKey, m.partPath, m.dir, m.name)
     else if (m.type === 'open') { if (m.servedCacheBytes !== undefined) host.setServedCacheBytes(m.servedCacheBytes); result = await host.open(m.docRef, m.bytes, m.contentPolicy) }

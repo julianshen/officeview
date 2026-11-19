@@ -332,12 +332,18 @@ export class DocumentHost {
     const m = this.mediaConfig
     if (!m || typeof dir !== 'string' || dir !== m.dir) throw new RenderRefusal('media-part', 'not the media directory')
     if (typeof partPath !== 'string' || !(await doc.media.parts()).includes(partPath)) throw new RenderRefusal('media-part', 'not a media part of the projection')
-    try { return await writePart(doc, partPath, dir, name) } catch (e) {
+    try {
+      const r = await writePart(doc, partPath, dir, name)
+      await this.afterPartForTests?.()
+      return r
+    } catch (e) {
       if (e instanceof MediaPartRefused) throw new RenderRefusal('media-part', e.reason)
       throw e
     }
   }
 
+  /** TEST-ONLY (set by the worker from a `testHooks` init): runs once `mediaPart` has written its file. */
+  afterPartForTests?: () => Promise<void>
   /** TEST-ONLY seams for the show-plan build (a forced budget or composite mismatch, a ledger); empty in production. */
   showOptions: ShowBuildOptions = {}
   /** The seams plus the job's admitted grant (PR #78 round 13), when the pool sent one. */
