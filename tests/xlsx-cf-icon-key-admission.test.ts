@@ -111,9 +111,9 @@ describe('ruling 1: a key is admitted only when its own case fully verifies', ()
     fsOverrides.clear()
     const committed = new Set(stage5Publication(auditStage5Manifest(manifest() as never, { rootDir: ROOT })).published)
     expect(committed.has('icon:thresholds-formula')).toBe(true)
-    // 44 since formula:hoist-aggregate-errors registered its error-propagates reading (it was 43 before; the id is a plain
-    // published Stage 5 capability the icon key does not touch).
-    expect(committed.size).toBe(44)
+    // 44 since formula:hoist-aggregate-errors registered its error-propagates reading (it was 43 before), 45 since
+    // bar:bounds-formula (stage5-bar-bounds-formula); neither is a capability the icon key touches.
+    expect(committed.size).toBe(45)
     for (const id of gate.published) expect(committed.has(id), id).toBe(true)
   }, 600_000)
 })

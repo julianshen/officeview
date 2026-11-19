@@ -92,7 +92,7 @@ describe('every enabled bar capability has verified evidence', () => {
     for (const p of audit.perCapability) {
       expect(['verified', 'unverified-nondiscriminating', 'refused-unsupported', 'supported-structural'], p.capabilityId).toContain(p.disposition)
     }
-    expect(by('verified')).toHaveLength(51)
+    expect(by('verified')).toHaveLength(52) // 52 since bar:bounds-num (stage3-bar-bounds-num)
     expect(by('unverified-nondiscriminating')).toEqual(Object.keys(CF_STAGE3_NONDISCRIMINATING).sort())
     expect(by('refused-unsupported')).toEqual([...CF_STAGE3_CAPABILITIES.filter(c => c.capabilityId.startsWith('bar:unresolved-')).map(c => c.capabilityId), ...Object.keys(CF_STAGE3_UNSUPPORTED)].sort())
     expect(by('supported-structural')).toEqual([])
@@ -306,7 +306,7 @@ describe('published bars agree on the resident and the paged worker paths', () =
       compared++
       bars += resident.size
     }
-    expect(compared).toBe(14)
+    expect(compared).toBe(15) // 15 since stage3-bar-bounds-num
     expect(bars).toBeGreaterThan(400)
   }, 300000)
 })

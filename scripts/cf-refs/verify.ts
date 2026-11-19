@@ -8,7 +8,7 @@ import { resolve } from 'node:path'
 import { inflateRawSync, inflateSync } from 'node:zlib'
 import { parseXml } from '../../src/core/xml'
 import { columnWidthPx, maxDigitWidthPx } from '../../src/xlsx/columnWidth'
-import { CF_ICON_KEY_CASES, CF_STAGE3_NONDISCRIMINATING, CF_STAGE3_UNSUPPORTED, CF_STAGE4_CAPABILITIES, CF_STAGE4_NONDISCRIMINATING, CF_STAGE4_UNSUPPORTED, CF_STAGE5_CAPABILITIES, CF_STAGE5_CASES, CF_STAGE5_NONDISCRIMINATING, CF_STAGE5_UNSUPPORTED, barCapabilityKind, iconCapabilityKind } from './cases'
+import { CF_ICON_KEY_CASES, CF_STAGE3_NONDISCRIMINATING, CF_STAGE3_OWNERS, CF_STAGE3_UNSUPPORTED, CF_STAGE4_CAPABILITIES, CF_STAGE4_NONDISCRIMINATING, CF_STAGE4_UNSUPPORTED, CF_STAGE5_CAPABILITIES, CF_STAGE5_CASES, CF_STAGE5_NONDISCRIMINATING, CF_STAGE5_UNSUPPORTED, barCapabilityKind, iconCapabilityKind } from './cases'
 import type {
   CfDxfExpectation,
   CfManifest,
@@ -7349,17 +7349,27 @@ export function primeVerifiedCases(manifest: CfManifest, options: VerifyCfOption
   for (const [id, res] of results) cache.set(`${options.rootDir ?? process.cwd()}\u0000${id}`, res)
 }
 
+/**
+ * The case whose capture decides a capability: the Stage 5 registry's case (a configuration capability may carry no
+ * marker of its own), a later Stage 3 case version named by `CF_STAGE3_OWNERS`, else the first case carrying its marker,
+ * else the Stage 4 registry's case (icon:glyph-key carries no marker).
+ */
+export function capabilityOwnerCase(capabilityId: string, manifest: CfManifest): CfOracleCase | undefined {
+  const registryCase = CF_STAGE4_CAPABILITIES.find(e => e.capabilityId === capabilityId)?.caseId
+  const stage5Registry = CF_STAGE5_CAPABILITIES.find(e => e.capabilityId === capabilityId)
+  const stage3Owner = CF_STAGE3_OWNERS[capabilityId]
+  const named = stage5Registry?.caseId ?? stage3Owner
+  return (named !== undefined ? manifest.cases.find(c => c.id === named) : undefined) ?? manifest.cases.find(c => c.markers.some(m => m.capabilityId === capabilityId)) ?? (registryCase ? manifest.cases.find(c => c.id === registryCase) : undefined)
+}
+
 /** Returns true only when the capability's owning oracle case is fully `verified` (`status: 'measured'`). */
 export function isCapabilityVerified(
   capabilityId: string,
   manifest: CfManifest,
   options: VerifyCfOptions = {},
 ): boolean {
-  // Stage 4 case-level capabilities (icon:glyph-key) carry no marker: their owner is the registry's case.
-  const registryCase = CF_STAGE4_CAPABILITIES.find(e => e.capabilityId === capabilityId)?.caseId
   const stage5Registry = CF_STAGE5_CAPABILITIES.find(e => e.capabilityId === capabilityId)
-  // Stage 5: the owner is the registry's case (a configuration capability may carry no marker of its own).
-  const owningCase = (stage5Registry ? manifest.cases.find(c => c.id === stage5Registry.caseId) : undefined) ?? manifest.cases.find(c => c.markers.some(m => m.capabilityId === capabilityId)) ?? (registryCase ? manifest.cases.find(c => c.id === registryCase) : undefined)
+  const owningCase = capabilityOwnerCase(capabilityId, manifest)
   if (!owningCase) return false
   // The cross-case gates ask for the same few cases again and again; one manifest object's cases are verified once.
   const key = `${options.rootDir ?? process.cwd()}\u0000${owningCase.id}`

@@ -15,18 +15,17 @@ in git history.
 - **Excel formula conditional formatting rules (view-only).** "Use a formula" rules, `cellIs` rules whose value is a
   reference or a formula, and text, blank and error rules whose formula differs from the one Excel writes are now
   evaluated per cell by a bounded formula evaluator, compose with the other rule kinds, and paint wherever Excel 16.115's
-  own rendering verifies them (44 Stage 5 capabilities): the formula dialects, relative and pinned anchors and the edge
+  own rendering verifies them (45 Stage 5 capabilities): the formula dialects, relative and pinned anchors and the edge
   wrap, number/boolean/blank/error truth, the logical, information, text, math, aggregate, conditional-aggregate, date,
   row/column and `TODAY()` functions, hoisted whole-column aggregates (an error in the column propagates, as Excel shows) and `COUNTIF` frequency, reference, relative,
   expression and blank `cellIs` operands, divergent predicates, saved values under manual calculation, stopIfTrue and
   priority composition with fills, scales and bars, references to other sheets (also as a `cellIs` operand), formula
-  colour-scale bounds, formula icon-set thresholds (measured against a glyph key captured at the centred placement
+  colour-scale bounds, formula data-bar bounds, formula icon-set thresholds (measured against a glyph key captured at the centred placement
   Excel gives Normal-style cells) and the x14 standalone colour scale. On Excel's own oracle workbooks every formula cell is
   Excel's reading or withheld. Everything else keeps its base formatting and is announced as unavailable: shapes Excel
   rewrites or refuses (`activePresent` on scales, bars and icon sets; a time-period formula that differs from its
   period; a reference to a missing sheet; a non-numeric formula bound), readings production does not implement (text and
-  range truth, error operands, a relative cfvo bound, a relative formula bound across several ranges), formula bar
-  bounds, and stopIfTrue ahead of an icon set.
+  range truth, error operands, a relative cfvo bound, a relative formula bound across several ranges), and stopIfTrue ahead of an icon set.
 
 - **Excel formula conditional formatting: an error in a whole-column aggregate propagates.** A rule such as
   `A2>AVERAGE($A:$A)` or `A2=MAX($A:$A)` over a column that holds an error (`#DIV/0!`) formats no cell, which is what
@@ -56,13 +55,13 @@ in git history.
 
 - **Excel data bars (view-only).** Conditional formatting data bars now paint in resident, worker-backed and paged
   views, in print and export, wherever Excel's own rendering verifies them: solid and gradient fills (gradient toward
-  white over the bar's length, with or without a border), borders, min/max and automatic bounds (percentile bounds
+  white over the bar's length, with or without a border), borders, min/max, number (`num`) and automatic bounds (percentile bounds
   when every value lies within them), Excel's default 10/90 lengths, the dotted axis with negative bars, left-to-right and right-to-left, theme/indexed colours,
   automatic axis and negative colours, `showValue="0"`, and composition with fills and colour scales. Every geometry
-  was measured from Excel 16.114 captures and the painter reproduces them (472 painted bars compared with Excel's
-  pixels, edges within 1 px; 255 gradient bars compared in colour within 8 per channel, 246 of them also in geometry). Shapes whose captures could not discriminate
-  the question (num and percent bounds, positional bounds, merged hosts, minimum visible width, copy text and the
-  default negative border), equal or single-value scopes, values beyond num/percentile bounds, stop-if-true bars,
+  was measured from Excel 16.114 captures and the painter reproduces them (555 painted bars compared with Excel's
+  pixels, edges within 1 px; 255 gradient bars compared in colour within 8 per channel, 250 of them also in geometry). Shapes whose captures could not discriminate
+  the question (percent bounds, positional bounds, merged hosts, minimum visible width, copy text and the
+  default negative border), equal or single-value scopes, values beyond num/percentile/formula bounds, stop-if-true bars,
   standalone x14 bars and every unresolved shape stay withheld
   with their base formatting and announce "Conditional formatting unavailable". A painted bar announces
   "Data bar, N% of range" (「資料橫條 N%」 in zh-TW). Conditional formatting preparation is bounded by a deterministic work-unit cap instead of a

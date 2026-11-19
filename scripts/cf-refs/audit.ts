@@ -532,7 +532,10 @@ export function auditStage3Manifest(manifest: CfManifest, options: { rootDir?: s
       else {
         disposition = 'supported-structural'
         const res = evidence.get(entry.caseId)
-        if (res?.kind === 'verified') {
+        // A registered non-discriminating capability stays so while its owning case awaits its first capture (the
+        // bar:bounds-num follow-up case owns it before Excel has run): no capture has discriminated it yet.
+        if (CF_STAGE3_NONDISCRIMINATING[entry.capabilityId] !== undefined && owning.status === 'recipe-pending') disposition = 'unverified-nondiscriminating'
+        else if (res?.kind === 'verified') {
           if (CF_STAGE3_NONDISCRIMINATING[entry.capabilityId] !== undefined || res.nonDiscriminatingCapabilities?.includes(entry.capabilityId)) {
             disposition = 'unverified-nondiscriminating'
           } else if (res.verifiedCapabilities.includes(entry.capabilityId) && isCapabilityVerified(entry.capabilityId, manifest, { rootDir })) {
@@ -1002,13 +1005,28 @@ export const CF_STAGE5_PRODUCTION_READINGS: Readonly<Record<string, string | rea
  * Task 35 fix round 2 (ruling a): capabilities whose Stage 5 fixture production cannot confirm, with the only witnesses
  * that may fail there. The publication gate refuses them whatever the audit verified (tests/xlsx-cf-formula-readings.test.ts).
  */
-export const CF_STAGE5_UNCONFIRMABLE: Readonly<Record<string, Readonly<{ reason: string; witnesses: readonly string[]
+export interface Stage5UnconfirmableScope {
+  reason: string
+  witnesses: readonly string[]
   /** Task 37 fix round 1: production withholds the configuration's designated cells (fail closed) rather than painting them,
    * so the narrow check accepts withheld cells; it still refuses any painted cell that contradicts the reading. */
-  designatedWithheld?: true }>>> = {
+  designatedWithheld?: true
+}
+
+export const CF_STAGE5_UNCONFIRMABLE: Readonly<Record<string, Stage5UnconfirmableScope & {
+  /** Per-case scopes: when present, only the listed cases are unconfirmable, each under its own scope. */
+  cases?: Readonly<Record<string, Stage5UnconfirmableScope>> }>> = {
+  // The bar:bounds-formula follow-up: stage5-bar-bounds-formula (the owner) is confirmed by production, so only the
+  // old fixture stays recorded as unconfirmable, for its own configuration (orchestrator ruling 4, 2026-11-19).
   'bar:bounds-formula': {
-    reason: 'stage5-cfvo-formulas cfvo-bar-formula: the bar column holds 5..100 against formula bounds 20..80, a whole-scope cf-value-beyond-bounds (Ruling S3-E), and its num twin W needs bar:bounds-num (CF_STAGE3_NONDISCRIMINATING), so production cannot reproduce the fixture (Task 37 fix round 1)',
-    witnesses: ['W2', 'W3', 'W4', 'W5', 'W6', 'W7', 'W8', 'W9'], designatedWithheld: true,
+    reason: 'only stage5-cfvo-formulas, a superseded case version, cannot be confirmed: see its scope',
+    witnesses: [],
+    cases: {
+      'stage5-cfvo-formulas': {
+        reason: 'stage5-cfvo-formulas cfvo-bar-formula: the bar column holds 5..100 against formula bounds 20..80, a whole-scope cf-value-beyond-bounds (Ruling S3-E), and its num twin W needs bar:bounds-num (CF_STAGE3_NONDISCRIMINATING), so production cannot reproduce the fixture (Task 37 fix round 1)',
+        witnesses: ['W2', 'W3', 'W4', 'W5', 'W6', 'W7', 'W8', 'W9'], designatedWithheld: true,
+      },
+    },
   },
   'formula:active-present-bar': {
     reason: 'stage5-active-present-bar: a standalone x14 bar, and bar:pairing-standalone is CF_STAGE3_UNSUPPORTED, so the activated bar and its twin withhold in production (Task 37 fix round 1)',
@@ -1018,6 +1036,13 @@ export const CF_STAGE5_UNCONFIRMABLE: Readonly<Record<string, Readonly<{ reason:
     reason: "stage5-composition stop-icon: its continues witnesses L3/L5/L7 (a red fill plus an icon; column K before Task 39's re-lettering) are withheld in production while icon:composition-dxf-fill is unpublished, so production cannot confirm the fixture's reading (S5-WITNESS)",
     witnesses: ['L3', 'L5', 'L7'],
   },
+}
+
+/** The unconfirmable scope of a capability's configurations in one case, or undefined when production must confirm them. */
+export function stage5UnconfirmableScope(capabilityId: string, caseId: string): Stage5UnconfirmableScope | undefined {
+  const entry = CF_STAGE5_UNCONFIRMABLE[capabilityId]
+  if (!entry) return undefined
+  return entry.cases ? entry.cases[caseId] : entry
 }
 
 export interface Stage5Publication {
@@ -1040,7 +1065,9 @@ export function stage5Publication(report: Stage5AuditReport, readings: Readonly<
   for (const p of report.perCapability) {
     const id = p.capabilityId
     if (p.disposition !== 'verified') { withheld[id] = p.disposition; continue }
-    const unconfirmable = CF_STAGE5_UNCONFIRMABLE[id]
+    // A per-case entry refuses publication only through the owning case's own scope; a superseded case version's scope
+    // stays recorded for that case alone (orchestrator ruling 4 on the bar:bounds-formula follow-up).
+    const unconfirmable = stage5UnconfirmableScope(id, p.caseId)
     if (unconfirmable) { withheld[id] = `fixture-unconfirmable: ${unconfirmable.reason}`; continue }
     const matched = report.matchedReadings[id]
     const prod = Object.prototype.hasOwnProperty.call(readings, id) ? readings[id] : undefined

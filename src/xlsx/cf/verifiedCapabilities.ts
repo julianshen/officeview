@@ -160,6 +160,7 @@ export const VERIFIED_STAGE3_CAPABILITIES: ReadonlySet<string> = new Set([
   'bar:bounds-automax',
   'bar:bounds-automin',
   'bar:bounds-min-max',
+  'bar:bounds-num',
   'bar:bounds-out-of-domain',
   'bar:bounds-percentile',
   'bar:color-auto-axis',
@@ -344,6 +345,7 @@ export const VERIFIED_STAGE4_ICON_SELECTIONS: Readonly<Record<string, string>> =
 }
 
 export const VERIFIED_STAGE5_CAPABILITIES: ReadonlySet<string> = new Set([
+  'bar:bounds-formula',
   'formula:anchor-mixed-abs',
   'formula:anchor-single',
   'formula:calc-manual-saved-values',
@@ -413,7 +415,9 @@ export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set([
   'bar:axis-none',
   'bar:bounds-automax',
   'bar:bounds-automin',
+  'bar:bounds-formula',
   'bar:bounds-min-max',
+  'bar:bounds-num',
   'bar:bounds-out-of-domain',
   'bar:bounds-percentile',
   'bar:color-auto-axis',

@@ -28518,6 +28518,211 @@
       }
     },
     {
+      "id": "stage3-bar-bounds-num",
+      "stage": 3,
+      "question": "Num bounds against min/max. stage3-bar-lengths E holds 20..80 under num 20/80, so the num bounds equal its data's min and max and the two readings predict the same px. Here every value lies strictly inside num 20/80 ({25,36,45,56,75}: no cell beyond a bound, Ruling S3-E), so a num reading (20/80) and a min/max reading (25/75) put the bar edges apart: a 15 px bar against none at 25, 15 px at 75. One paired solid bar, x14 minLength 0 / maxLength 100, left to right, no border, on the 180 pt column and 30 pt rows of stage3-bar-lengths.",
+      "input": "tests/fixtures/xlsx-cf/inputs/stage3-bar-bounds-num.xlsx",
+      "saved": "tests/fixtures/xlsx-cf/stage3-bar-bounds-num.xlsx",
+      "sheet": "Sheet1",
+      "range": "A1:B12",
+      "requiredAppearances": [
+        "screen"
+      ],
+      "markers": [
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:bounds-num",
+          "sqref": "B2:B6",
+          "ruleType": "dataBar",
+          "priority": 1,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "20"
+              },
+              {
+                "type": "num",
+                "val": "80"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:bounds-num",
+          "sqref": "B2:B6",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "20"
+              },
+              {
+                "type": "num",
+                "f": "80"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {}
+          }
+        }
+      ],
+      "expected": {
+        "inputSha256": "11ba3f2d302a39197ad59aee7059c08df478563fa0bb8cb8bf09d72fd86dc79e",
+        "savedSha256": "57b479602da52b67f9455889134a71ca6454f1bf7282353f659980a92d30ee61",
+        "provenance": "excel-observed",
+        "positiveRefs": [
+          "B2",
+          "B3",
+          "B4",
+          "B5",
+          "B6"
+        ],
+        "negativeRefs": [
+          "B8",
+          "B9",
+          "B10",
+          "B11",
+          "B12"
+        ],
+        "cells": [
+          {
+            "ref": "B2",
+            "controlRef": "B8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "pixel-measured"
+            }
+          },
+          {
+            "ref": "B3",
+            "controlRef": "B9",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "pixel-measured"
+            }
+          },
+          {
+            "ref": "B4",
+            "controlRef": "B10",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "pixel-measured"
+            }
+          },
+          {
+            "ref": "B5",
+            "controlRef": "B11",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "pixel-measured"
+            }
+          },
+          {
+            "ref": "B6",
+            "controlRef": "B12",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "pixel-measured"
+            }
+          },
+          {
+            "ref": "B8",
+            "controlRef": "B2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B9",
+            "controlRef": "B3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B10",
+            "controlRef": "B4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B11",
+            "controlRef": "B5",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B12",
+            "controlRef": "B6",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          }
+        ]
+      },
+      "captures": [
+        {
+          "appearance": "screen",
+          "pngPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-bounds-num.png",
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-bounds-num.json",
+          "pngSha256": "216638c46662af05cfa1a20876747897db42fa4aa134eaf6eff56e372108bc1d"
+        }
+      ],
+      "status": "measured",
+      "tolerance": {
+        "meanAbs": 0.015,
+        "rowMax": 0.08,
+        "strong": 12
+      },
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-19T14:03:36.029Z",
+        "excelVersion": "16.115",
+        "inputSha256": "11ba3f2d302a39197ad59aee7059c08df478563fa0bb8cb8bf09d72fd86dc79e",
+        "savedSha256": "57b479602da52b67f9455889134a71ca6454f1bf7282353f659980a92d30ee61",
+        "openedRepairFree": true
+      }
+    },
+    {
       "id": "stage4-icon-om-reachability",
       "stage": 4,
       "question": "S4-A one-shot probe: is `icon set format condition` reachable from AppleScript? Reads format condition 1 of the range and its properties, icon criteria, reverse icon set order and show icon only. Record only: an answer, or an error, lifts no capability, and an unexpected success becomes an owner question, never an evidence kind.",
@@ -85386,6 +85591,805 @@
         "strong": 12
       },
       "resavedByExcel": false
+    },
+    {
+      "id": "stage5-bar-bounds-formula",
+      "stage": 5,
+      "question": "S5-H: how does a data bar resolve formula bounds? A paired bar with formula min/max ($F$1 = 20, $F$2 = 80) over values strictly inside them (28..62), compared by crop with literal twins of its competing readings on the same values: num 20/80 (the formula evaluated), num 0/0 (read as zero) and min/max (ignored).",
+      "input": "tests/fixtures/xlsx-cf/inputs/stage5-bar-bounds-formula.xlsx",
+      "saved": "tests/fixtures/xlsx-cf/stage5-bar-bounds-formula.xlsx",
+      "sheet": "Sheet1",
+      "range": "A1:L9",
+      "requiredAppearances": [
+        "screen"
+      ],
+      "markers": [
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B2:B9",
+          "capabilityId": "bar:bounds-formula",
+          "ruleType": "dataBar",
+          "priority": 1,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "formula",
+                "val": "$F$1"
+              },
+              {
+                "type": "formula",
+                "val": "$F$2"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "B2",
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "B2:B9",
+          "extension": "x14",
+          "capabilityId": "bar:bounds-formula",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "formula",
+                "f": "$F$1"
+              },
+              {
+                "type": "formula",
+                "f": "$F$2"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "B2",
+            "dialect": "x14"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "C2:C9",
+          "capabilityId": "formula:cfvo-bar-twin",
+          "ruleType": "dataBar",
+          "priority": 2,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "20"
+              },
+              {
+                "type": "num",
+                "val": "80"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "C2:C9",
+          "extension": "x14",
+          "capabilityId": "formula:cfvo-bar-twin",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "20"
+              },
+              {
+                "type": "num",
+                "f": "80"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "D2:D9",
+          "capabilityId": "formula:cfvo-bar-twin",
+          "ruleType": "dataBar",
+          "priority": 3,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "0"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "D2:D9",
+          "extension": "x14",
+          "capabilityId": "formula:cfvo-bar-twin",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "0"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "E2:E9",
+          "capabilityId": "formula:cfvo-bar-twin",
+          "ruleType": "dataBar",
+          "priority": 4,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "E2:E9",
+          "extension": "x14",
+          "capabilityId": "formula:cfvo-bar-twin",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "inputSha256": "c9aa3a2623b92b3464bdb3d568a9cce034dbc57d19ebd028b691d7fbede4f55f",
+        "savedSha256": "bd74a60f289e78631670b6150b3e190b518aebe43e4bc4a0c6fbf5087acb8cf6",
+        "provenance": "excel-observed",
+        "positiveRefs": [],
+        "negativeRefs": [
+          "I2",
+          "I3",
+          "I4",
+          "I5",
+          "I6",
+          "I7",
+          "I8",
+          "I9",
+          "J2",
+          "J3",
+          "J4",
+          "J5",
+          "J6",
+          "J7",
+          "J8",
+          "J9",
+          "K2",
+          "K3",
+          "K4",
+          "K5",
+          "K6",
+          "K7",
+          "K8",
+          "K9",
+          "L2",
+          "L3",
+          "L4",
+          "L5",
+          "L6",
+          "L7",
+          "L8",
+          "L9"
+        ],
+        "cells": [
+          {
+            "ref": "B2",
+            "controlRef": "I2",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B3",
+            "controlRef": "I3",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B4",
+            "controlRef": "I4",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B5",
+            "controlRef": "I5",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B6",
+            "controlRef": "I6",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B7",
+            "controlRef": "I7",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B8",
+            "controlRef": "I8",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "B9",
+            "controlRef": "I9",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C2",
+            "controlRef": "J2",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C3",
+            "controlRef": "J3",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C4",
+            "controlRef": "J4",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C5",
+            "controlRef": "J5",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C6",
+            "controlRef": "J6",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C7",
+            "controlRef": "J7",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C8",
+            "controlRef": "J8",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "C9",
+            "controlRef": "J9",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D2",
+            "controlRef": "K2",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D3",
+            "controlRef": "K3",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D4",
+            "controlRef": "K4",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D5",
+            "controlRef": "K5",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D6",
+            "controlRef": "K6",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D7",
+            "controlRef": "K7",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D8",
+            "controlRef": "K8",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "D9",
+            "controlRef": "K9",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E2",
+            "controlRef": "L2",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E3",
+            "controlRef": "L3",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E4",
+            "controlRef": "L4",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E5",
+            "controlRef": "L5",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E6",
+            "controlRef": "L6",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E7",
+            "controlRef": "L7",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E8",
+            "controlRef": "L8",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "E9",
+            "controlRef": "L9",
+            "matched": false,
+            "fillSource": "excel-display-format"
+          },
+          {
+            "ref": "I2",
+            "controlRef": "B2",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "I3",
+            "controlRef": "B3",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "I4",
+            "controlRef": "B4",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "I5",
+            "controlRef": "B5",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "I6",
+            "controlRef": "B6",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "I7",
+            "controlRef": "B7",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "I8",
+            "controlRef": "B8",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "I9",
+            "controlRef": "B9",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "J2",
+            "controlRef": "C2",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "J3",
+            "controlRef": "C3",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "J4",
+            "controlRef": "C4",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "J5",
+            "controlRef": "C5",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "J6",
+            "controlRef": "C6",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "J7",
+            "controlRef": "C7",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "J8",
+            "controlRef": "C8",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "J9",
+            "controlRef": "C9",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "K2",
+            "controlRef": "D2",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "K3",
+            "controlRef": "D3",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "K4",
+            "controlRef": "D4",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "K5",
+            "controlRef": "D5",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "K6",
+            "controlRef": "D6",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "K7",
+            "controlRef": "D7",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "K8",
+            "controlRef": "D8",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "K9",
+            "controlRef": "D9",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "L2",
+            "controlRef": "E2",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "L3",
+            "controlRef": "E3",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "L4",
+            "controlRef": "E4",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "L5",
+            "controlRef": "E5",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "L6",
+            "controlRef": "E6",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "L7",
+            "controlRef": "E7",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "L8",
+            "controlRef": "E8",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "L9",
+            "controlRef": "E9",
+            "matched": false,
+            "fillSource": "excel-display-format",
+            "note": "same-content unformatted control"
+          }
+        ]
+      },
+      "formulaConfigurations": [
+        {
+          "id": "bar-bounds-formula",
+          "capabilityId": "bar:bounds-formula",
+          "observable": "crop",
+          "refs": [
+            "B2",
+            "B3",
+            "B4",
+            "B5",
+            "B6",
+            "B7",
+            "B8",
+            "B9"
+          ],
+          "hypotheses": {
+            "evaluated": {
+              "B2": "twin:C2",
+              "B3": "twin:C3",
+              "B4": "twin:C4",
+              "B5": "twin:C5",
+              "B6": "twin:C6",
+              "B7": "twin:C7",
+              "B8": "twin:C8",
+              "B9": "twin:C9"
+            },
+            "zero": {
+              "B2": "twin:D2",
+              "B3": "twin:D3",
+              "B4": "twin:D4",
+              "B5": "twin:D5",
+              "B6": "twin:D6",
+              "B7": "twin:D7",
+              "B8": "twin:D8",
+              "B9": "twin:D9"
+            },
+            "ignored": {
+              "B2": "twin:E2",
+              "B3": "twin:E3",
+              "B4": "twin:E4",
+              "B5": "twin:E5",
+              "B6": "twin:E6",
+              "B7": "twin:E7",
+              "B8": "twin:E8",
+              "B9": "twin:E9"
+            }
+          },
+          "twinExpect": {
+            "C2": "visual",
+            "C3": "visual",
+            "C4": "visual",
+            "C5": "visual",
+            "C6": "visual",
+            "C7": "visual",
+            "C8": "visual",
+            "C9": "visual",
+            "D2": "either",
+            "D3": "either",
+            "D4": "either",
+            "D5": "either",
+            "D6": "either",
+            "D7": "either",
+            "D8": "either",
+            "D9": "either",
+            "E2": "empty",
+            "E3": "visual",
+            "E4": "visual",
+            "E5": "visual",
+            "E6": "visual",
+            "E7": "visual",
+            "E8": "visual",
+            "E9": "visual"
+          }
+        }
+      ],
+      "captures": [
+        {
+          "appearance": "screen",
+          "pngPath": "tests/fixtures/xlsx-cf/refs/stage5-bar-bounds-formula.png",
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage5-bar-bounds-formula.json",
+          "pngSha256": "e7a61cc393ddc9c73c6a811774c12f4e843bfdb2d127e3370988508ebd33a34d"
+        }
+      ],
+      "status": "measured",
+      "tolerance": {
+        "meanAbs": 0.015,
+        "rowMax": 0.08,
+        "strong": 12
+      },
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-19T14:04:11.009Z",
+        "excelVersion": "16.115",
+        "inputSha256": "c9aa3a2623b92b3464bdb3d568a9cce034dbc57d19ebd028b691d7fbede4f55f",
+        "savedSha256": "bd74a60f289e78631670b6150b3e190b518aebe43e4bc4a0c6fbf5087acb8cf6",
+        "openedRepairFree": true
+      }
     }
   ]
 }
