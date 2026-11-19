@@ -502,6 +502,31 @@ describe.skipIf(!info)('media wire through the harness (Task 9)', () => {
     } finally { held = false; c.close(); await h.stop() }
   }, 120_000)
 
+  for (const at of ['open', 'read'] as const) {
+    it(`a revocation during the file ${at === 'open' ? 'open and stat' : 'read of a chunk'} answers media-refused media-unavailable and releases the pin`, async () => {
+      let revoke: (() => Promise<void>) | undefined
+      const hook = async () => { const r = revoke; revoke = undefined; await r?.() }
+      const h = await harness(await noiseDeck(), {}, { mediaTestHooks: at === 'open' ? { afterOpen: hook } : { afterRead: (i) => (i === 1 ? hook() : undefined) } })
+      const c = await session(h)
+      try {
+        const id = await idOf(c)
+        await c.mediaShow(0)
+        const docRef = c.manifest!.docRef
+        revoke = () => h.media!.cache.dropDocument(docRef)
+        const r = await c.mediaRequest(id, { ms: 60_000 })
+        expect(parseMediaRefused(r.end).reason).toBe('media-unavailable')
+        expect(r.end!.mediaId).toBe(id)
+        if (at === 'open') expect(r.start).toBeUndefined()
+        else { expect(r.start!.chunks).toBeGreaterThan(2); expect(r.chunks).toHaveLength(1) }
+        await until(() => h.stream.stats().media.deliveries === 0, 1000)
+        expect(h.media!.cache.referencesOf(sidOf(c))).toBe(0)
+        expect(Object.values(h.media!.cache.inspect().sessions).flatMap((x) => x.refs)).toEqual([])
+        // Rows: the refusal before media-start is recorded as a refusal; a stopped delivery keeps its delivery row.
+        expect(h.stream.audit.mediaDeliveries(sidOf(c)).map((x) => x.reason ?? 'ok')).toEqual([at === 'open' ? 'media-unavailable' : 'ok'])
+      } finally { c.close(); await h.stop() }
+    }, 120_000)
+  }
+
   it('media-end under backpressure ends the delivery at once', async () => {
     const t = heldTransport(() => true)
     const h = await harness(await noiseDeck(), {}, { transport: t.transport })

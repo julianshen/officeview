@@ -117,6 +117,8 @@ export interface StreamServerOptions {
    * Piece 5 (D18): audio media in shows. `enabled` defaults to `false` until the client can play it (Task 11);
    * `can.media` is `enabled && info !== undefined` (ffmpeg probed). Off, shows behave exactly as in piece 4.
    */
+  /** TEST-ONLY: awaited inside a media delivery, after the file is opened and checked, and after each chunk read. */
+  mediaTestHooks?: { afterOpen?(): void | Promise<void>; afterRead?(chunk: number): void | Promise<void> }
   media?: { enabled?: boolean; info?: FfmpegInfo; /** Task 9: the process's media services (queues, the shared cache); without them `media-show` and `media-request` answer `media-unavailable`. */ services?: MediaServices }
 }
 
@@ -1050,8 +1052,10 @@ export function createStreamServer(o: StreamServerOptions) {
     if (!q) return deny('invalid-media')
     await sd.media.started
     const revoked = () => svc.cache.revoked(sd.doc.docRef)
-    const alive = () => textAlive(ws, s.sid, sd)() && sd.media.queue === q && !revoked()
-    if (!textAlive(ws, s.sid, sd)() || sd.media.queue !== q) return
+    // Socket-and-queue liveness only (fix round 2): a dead socket or an ended queue sends nothing, while a revoked
+    // document is checked on its own and answers media-refused media-unavailable.
+    const alive = () => textAlive(ws, s.sid, sd)() && sd.media.queue === q
+    if (!alive()) return
     // The use on the slide named by `unit`, else on the cursor's slide, else the next slide in show order using it
     // (a look-ahead request). A refusal is per (mediaId, slide): fix round 1.
     const byUnit = sd.media.uses.get(mediaId)
@@ -1073,7 +1077,7 @@ export function createStreamServer(o: StreamServerOptions) {
     if (!rated) return refused('rate-limited')
     if (use.refused || !use.item || !key) return refused(use.refused ?? 'media-unavailable')
     const r = await q.request(mediaId)
-    if (!r.ok) return textAlive(ws, s.sid, sd)() && sd.media.queue === q ? refused(revoked() ? 'media-unavailable' : r.reason) : undefined
+    if (!r.ok) return alive() ? refused(revoked() ? 'media-unavailable' : r.reason) : undefined
     // The answer is pinned for this session: released exactly once below, unless the queue has ended (dropSession
     // already released it, and a late release could hit a later show's references).
     let fh: Awaited<ReturnType<typeof openFile>> | undefined
@@ -1081,10 +1085,13 @@ export function createStreamServer(o: StreamServerOptions) {
     mediaDeliveries++
     try {
       if (!alive()) return
-      try { fh = await openFile(r.path, 'r') } catch { return refused('media-unavailable') }
+      if (revoked()) return refused('media-unavailable')
+      try { fh = await openFile(r.path, 'r') } catch { return alive() ? refused('media-unavailable') : undefined }
       const bytes = r.result.bytes
       if ((await fh.stat()).size !== bytes || bytes < 1 || bytes > MEDIA_WIRE_LIMITS.audioBytes) return refused('media-unavailable')
+      await o.mediaTestHooks?.afterOpen?.()
       if (!alive()) return
+      if (revoked()) return refused('media-unavailable')
       if (!row({ outBytes: bytes, durationMs: r.result.durationMs, cacheState: r.origin, ffmpegVersion: r.result.ffmpegVersion, encodeParamsSha: r.result.paramsSha })) return deny('policy-refused')
       const chunks = Math.ceil(bytes / MEDIA_WIRE_LIMITS.sendChunk)
       send(ws, { reqId, type: 'media-start', mediaId, contentType: 'audio/mp4', durationMs: r.result.durationMs, bytes, chunks })
@@ -1092,16 +1099,17 @@ export function createStreamServer(o: StreamServerOptions) {
       wake = () => { job.wake?.() }
       sd.media.wakes.add(wake)
       for (let i = 0; i < chunks; i++) {
-        await belowHighWater(ws, job, alive)
-        if (revoked() && textAlive(ws, s.sid, sd)() && sd.media.queue === q) return deny('media-unavailable')
+        await belowHighWater(ws, job, () => alive() && !revoked())
         if (!alive()) return
+        if (revoked()) return deny('media-unavailable')
         const now = svc.cache.peek(key)
         if (!now || !('path' in now) || now.path !== r.path) return deny('media-unavailable')
         const n = Math.min(MEDIA_WIRE_LIMITS.sendChunk, bytes - i * MEDIA_WIRE_LIMITS.sendChunk)
         const buf = new Uint8Array(n)
         const got = await fh.read(buf, 0, n, i * MEDIA_WIRE_LIMITS.sendChunk)
-        if (got.bytesRead !== n) return alive() ? deny('media-unavailable') : undefined
+        await o.mediaTestHooks?.afterRead?.(i)
         if (!alive()) return
+        if (revoked() || got.bytesRead !== n) return deny('media-unavailable')
         const f = frameChunk(reqId, buf)
         if (!f || !sendFrames(ws, [f])) return
       }
