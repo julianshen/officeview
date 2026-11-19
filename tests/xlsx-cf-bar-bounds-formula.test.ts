@@ -18,6 +18,7 @@ import { describe, expect, it } from 'vitest'
 import { CF_STAGE5_CAPABILITIES, CF_STAGE5_CASES, CF_STAGE5_GROUPS, CF_STAGE5_OWNERS, type CfManifest } from '../scripts/cf-refs/cases'
 import { CF_MANIFEST_PATH } from '../scripts/cf-refs/generate'
 import {
+  capabilityOwnerCase,
   computeWorksheetRangeGeometry,
   decodePngSync,
   describeS5Visual,
@@ -63,6 +64,7 @@ describe('stage5-bar-bounds-formula: the case', () => {
     expect(CF_STAGE5_OWNERS[CAP]).toBe(ID)
     expect(CF_STAGE5_CAPABILITIES.find(e => e.capabilityId === CAP)!.caseId).toBe(ID)
     expect(CF_STAGE5_CASES.at(-1)!.id).toBe(ID)
+    expect(capabilityOwnerCase(CAP, manifest)?.id).toBe(ID)
     expect(CF_STAGE5_CASES.find(x => x.id === 'stage5-cfvo-formulas')!.formulaConfigurations!.some(x => x.id === 'cfvo-bar-formula' && x.capabilityId === CAP)).toBe(true)
     expect(Object.values(CF_STAGE5_GROUPS).flat()).toContain(ID)
   })

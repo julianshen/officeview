@@ -532,11 +532,11 @@ export function auditStage3Manifest(manifest: CfManifest, options: { rootDir?: s
       else {
         disposition = 'supported-structural'
         const res = evidence.get(entry.caseId)
-        // A registered non-discriminating capability stays so while its owning case awaits a capture (the bar:bounds-num
-        // follow-up case owns it before Excel has run): no capture has discriminated it yet.
-        if (CF_STAGE3_NONDISCRIMINATING[entry.capabilityId] !== undefined) disposition = 'unverified-nondiscriminating'
+        // A registered non-discriminating capability stays so while its owning case awaits its first capture (the
+        // bar:bounds-num follow-up case owns it before Excel has run): no capture has discriminated it yet.
+        if (CF_STAGE3_NONDISCRIMINATING[entry.capabilityId] !== undefined && owning.status === 'recipe-pending') disposition = 'unverified-nondiscriminating'
         else if (res?.kind === 'verified') {
-          if (res.nonDiscriminatingCapabilities?.includes(entry.capabilityId)) {
+          if (CF_STAGE3_NONDISCRIMINATING[entry.capabilityId] !== undefined || res.nonDiscriminatingCapabilities?.includes(entry.capabilityId)) {
             disposition = 'unverified-nondiscriminating'
           } else if (res.verifiedCapabilities.includes(entry.capabilityId) && isCapabilityVerified(entry.capabilityId, manifest, { rootDir })) {
             disposition = 'verified'

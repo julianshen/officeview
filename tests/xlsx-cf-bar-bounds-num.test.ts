@@ -20,6 +20,7 @@ import {
   evaluateBarCapabilities,
   measureCaseBars,
   readBarSheetFacts,
+  capabilityOwnerCase,
   readZipPartsSync,
   type DecodedPng,
 } from '../scripts/cf-refs/verify'
@@ -80,6 +81,12 @@ describe('stage3-bar-bounds-num (synthetic capture)', () => {
     expect(c.expected.cells.filter(x => x.matched).map(x => x.ref)).toEqual(['B2', 'B3', 'B4', 'B5', 'B6'])
     // The registry entry retires only once a capture verifies and discriminates (task 5), never before.
     expect(CF_STAGE3_NONDISCRIMINATING[CAP]).toBeDefined()
+  })
+
+  it('isCapabilityVerified asks the owner, not the first case carrying the marker (stage3-bar-lengths, listed first)', () => {
+    expect(capabilityOwnerCase(CAP, manifest)?.id).toBe(ID)
+    // Everything else keeps its owner: the registry's case for every Stage 3 capability.
+    for (const e of CF_STAGE3_CAPABILITIES) expect(capabilityOwnerCase(e.capabilityId, manifest)?.id, e.capabilityId).toBe(e.caseId)
   })
 
   it('every value lies strictly inside the num bounds (no S3-E beyond-bounds cell), and min/max differ from them', () => {
