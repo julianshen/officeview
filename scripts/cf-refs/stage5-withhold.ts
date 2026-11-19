@@ -51,6 +51,8 @@ export interface Stage5Refusal { rule: string; ruleType: string; priority?: numb
 
 /** The family capability a `type="formula"` bound needs (service.ts VISUAL_FORMULA_CAPABILITY, Ruling S5-H). */
 const FORMULA_BOUND_FAMILY: Readonly<Record<string, string>> = { colorScale: 'scale:thresholds-formula', dataBar: 'bar:bounds-formula', iconSet: 'icon:thresholds-formula' }
+/** The family prefix of a visual rule's scope capabilities (service.ts blockScope). */
+const VISUAL_FAMILY: Readonly<Record<string, string>> = { colorScale: 'scale', dataBar: 'bar', iconSet: 'icon' }
 const isLiteralNumber = (v: string | undefined): boolean => v === undefined || /^-?\d+(\.\d+)?$/.test(v.trim())
 
 /**
@@ -153,6 +155,10 @@ export function stage5JustifiedRefusals(c: CaseLike | CfOracleCase, ref: string,
   for (const m of covering) {
     if (m.formula !== undefined) for (const r of formulaMarkerReasons(m, cs.id, published)) add(m, r)
     else if (m.ruleType === 'dataBar' && (m.bar?.cfvo ?? []).some(b => b.type === 'num') && !published('bar:bounds-num')) add(m, { reason: 'bar:bounds-num not held (a literal bar with num bounds)', refused: 'cf-unmeasured-capability' })
+    // A visual over more than one range needs its family's scope-disjoint capability (service.ts blockScope, Rulings S2-H,
+    // S3-H, S4-H): scale:scope-disjoint is unverified (Ruling F-2), so every multi-range colour scale withholds.
+    const family = VISUAL_FAMILY[m.ruleType]
+    if (family && m.sqref.trim().split(/\s+/).length > 1 && !published(`${family}:scope-disjoint`)) add(m, { reason: `${family}:scope-disjoint not held (a visual over more than one range)`, refused: 'cf-unmeasured-capability' })
   }
   // A record configuration (fixed before capture: "recorded, never evidence") names a refusal of the rules of its capability.
   for (const cfg of cs.formulaConfigurations ?? []) {

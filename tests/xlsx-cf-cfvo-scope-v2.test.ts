@@ -28,6 +28,7 @@ import { CF_MANIFEST_PATH } from '../scripts/cf-refs/generate'
 import {
   evaluateFormulaCapabilities,
   formulaControlsOf,
+  formulaObservationOf,
   readZipPartsSync,
   resolveFormulaConfigurations,
   visualKindOf,
@@ -134,9 +135,9 @@ const ICON_R0 = 16
 const T1 = -20
 
 describe('stage5-cfvo-scope-v2: the case', () => {
-  it('owns formula:cfvo-scope-multi-range (appended last); stage5-cfvo-scope keeps its configurations, capture and finding', () => {
+  it('owns formula:cfvo-scope-multi-range (appended last); stage5-cfvo-scope keeps its configurations and capture', () => {
     const c = caseOf(ID)
-    expect(c.status).toBe('recipe-pending')
+    expect(c.status).toBe('measured')
     expect(CF_STAGE5_OWNERS[CAP]).toBe(ID)
     expect(CF_STAGE5_CAPABILITIES.find(e => e.capabilityId === CAP)!.caseId).toBe(ID)
     expect(CF_STAGE5_CASES.at(-1)!.id).toBe(ID)
@@ -145,8 +146,8 @@ describe('stage5-cfvo-scope-v2: the case', () => {
     expect(old.formulaConfigurations!.map(x => x.id)).toEqual(['scope-scale', 'scope-scale-absolute', 'scope-icon'])
     expect(old.status).toBe('recipe-pending')
     expect(caseOf('stage5-cfvo-scope').status).toBe('measured')
-    // The finding stays as it is until the capture of this case (task 5); production keeps the bound unresolved.
-    expect(CF_STAGE5_UNSUPPORTED[CAP]).toMatch(/no hypothesis \(rule-wide, per-range\) matches/)
+    // The capture (5dc2fe9e) matched anchor-a1, the reading pre-registered here: the old finding is explained, no longer a refusal.
+    expect(CF_STAGE5_UNSUPPORTED[CAP]).toBeUndefined()
     expect(CF_STAGE5_NONDISCRIMINATING[TWIN]).toBeDefined()
   })
 
@@ -179,7 +180,9 @@ describe('stage5-cfvo-scope-v2: the case', () => {
   })
 
   it('20 pt rows and the default (vertically centred) style, the frame of the centred glyph key', () => {
-    const { xml } = sheetOf(caseOf(ID))
+    // The generated input (Excel's resave rewrites the sheet XML).
+    const c = caseOf(ID)
+    const xml = new TextDecoder().decode(readZipPartsSync(new Uint8Array(readFileSync(resolve(REPO_ROOT, c.input))))!.get('xl/worksheets/sheet1.xml')!)
     expect(/<sheetFormatPr defaultRowHeight="20"/.test(xml)).toBe(true)
     expect(xml).not.toMatch(/ s="\d+"/)
     // Every value is at most three characters, so the centred number stays clear of the 28 px icon crop.
@@ -375,5 +378,23 @@ describe('retrodiction: what the two committed captures already say about each r
     const fits = Object.keys(lower).filter(h => K.every(r => scaleColour(values.get(r)!, lower[h]!(r), max) === side.formulaObservations[r]!.displayFormatFill))
     expect(fits).toEqual(['zero'])
     // anchor-a1 there reads ten columns left of A1 (off the sheet: a wrap or #REF!), which the case cannot model.
+  })
+})
+
+describe('stage5-cfvo-scope-v2: the capture (5dc2fe9e)', () => {
+  const c = (): CfOracleCase => caseOf(ID)
+  const sidecar = (): Record<string, unknown> => JSON.parse(readFileSync(resolve(REPO_ROOT, c().captures[0]!.sidecarPath), 'utf8')) as Record<string, unknown>
+  it('Excel matched anchor-a1 on the multi-range scale and icon set, every rival contradicted', () => {
+    expect(c().status).toBe('measured')
+    const ev = (sidecar().formulaEvaluation as Record<string, { status: string; matched?: string; survivors?: string[] }>)[CAP]!
+    expect([ev.status, ev.matched, ev.survivors]).toEqual(['discriminating', 'anchor-a1', ['anchor-a1']])
+  })
+  it('the single-range control, read by its pre-registered method (the configuration alone, record removed), is anchor-a1 too', () => {
+    const { parts } = sheetOf(c())
+    const cfg = resolveFormulaConfigurations(c(), parts).find(x => x.id === 'scope2-single-range')!
+    const { record: _record, ...live } = cfg
+    const ev = evaluateFormulaCapabilities([live], formulaControlsOf(c()), formulaObservationOf(c(), sidecar(), undefined, undefined), { kindOf: visualKindOf(c()) })['formula:cfvo-relative']!
+    // I2..I7 = FFF8696B FFC28770 FF9A9F75 FF76B378 FF63BE7B FF63BE7B: the window A1:A6 (max 15), not I2:I7 (45) nor H1:H6.
+    expect([ev.status, ev.matched, ev.survivors], ev.reason).toEqual(['discriminating', 'anchor-a1', ['anchor-a1']])
   })
 })

@@ -44,9 +44,8 @@ const RECORDED_EXCEL_REFUSALS = [
   'formula:predicate-timeperiod-divergent',
   'formula:cross-sheet-missing',
   'formula:cfvo-nonnumeric',
-  // Centred glyph key (2026-11-19): with the icon twins measurable, no scope reading matched Excel (a finding). The
-  // composition stop-icon and indirect-ahead-icon re-deferrals are lifted: their icon twins now classify (both halt).
-  'formula:cfvo-scope-multi-range',
+  // formula:cfvo-scope-multi-range left this list with stage5-cfvo-scope-v2 (5dc2fe9e): Excel matched the pre-registered
+  // anchor-a1 reading, which explains the old all-top finding.
 ]
 
 describe('every enabled formula capability has verified evidence', () => {

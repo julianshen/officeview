@@ -7553,8 +7553,6 @@ export const CF_STAGE5_UNSUPPORTED: Readonly<Record<string, string>> = {
     'Ruling S5-REPAIR / S5-K: Excel reads =Gone!A1>0 (no such sheet) as an external-workbook reference; opening the workbook prompted to update links (answered Don\'t update), so no capture exists. Production keeps a formula naming an unknown sheet unresolved; its #REF! reading is never registered.',
   'formula:cfvo-nonnumeric':
     'Finding (S4-MINMAX precedent): no hypothesis (withheld, zero, skipped) matched what Excel showed for a text, blank or error formula bound in stage5-cfvo-formulas L..N; recorded, never fitted. Production keeps a non-numeric formula bound unresolved.',
-  'formula:cfvo-scope-multi-range':
-    'Finding (centred glyph key, 2026-11-19; S4-MINMAX precedent): with the icon twins measurable at last (P12..T15 classify against stage4-icon-glyph-key-centred at the centred frame, cell top + 4 px), no hypothesis (rule-wide, per-range) matches what Excel showed for the relative bound =MAX(B2:B5) on sqref "B2:B5 D2:D5 F2:F5": Excel drew the top colour (FF63BE7B) on every cell of the scale and the top icon (3Arrows:2) on every cell of the icon set, in the control range B as in D and F. Recorded, never fitted. Production keeps a multi-range formula bound unresolved.',
 }
 
 /**

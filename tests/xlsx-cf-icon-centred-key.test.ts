@@ -305,11 +305,13 @@ describe('Stage 5 re-evaluated with the centred key (the four Task 39 re-deferra
     expect(CF_FORMULA_PRODUCTION_READINGS['formula:composition-indirect-ahead-icon']).toBeUndefined()
   })
 
-  it('formula:cfvo-scope-multi-range now measures and matches neither reading: kept deferred as a finding', () => {
+  it('formula:cfvo-scope-multi-range measures on stage5-cfvo-scope and matches neither of its readings (explained by stage5-cfvo-scope-v2)', () => {
     const e = evaluation('stage5-cfvo-scope')['formula:cfvo-scope-multi-range']!
     expect(e).toMatchObject({ status: 'refused', code: 'formula-hypothesis-none' })
     // Excel drew the top icon (3Arrows:2) on all twelve designated cells and the top colour on every scale cell.
     expect(new Set(Object.values(e.observed!['scope-icon']!))).toEqual(new Set(['icon:3Arrows:2@2,4|none']))
-    expect(CF_STAGE5_UNSUPPORTED['formula:cfvo-scope-multi-range']).toMatch(/no hypothesis/)
+    // The finding is explained by the later case version stage5-cfvo-scope-v2 (5dc2fe9e: Excel matched its pre-registered
+    // anchor-a1, whose blank window A1:A4 reads 0 here), so it is no longer a recorded refusal.
+    expect(CF_STAGE5_UNSUPPORTED['formula:cfvo-scope-multi-range']).toBeUndefined()
   })
 })
