@@ -68,12 +68,14 @@ export interface Scheduler {
    */
   endTimeOf(nodeId: number, events: readonly ShowEvent[]): number | 'indefinite' | undefined
   /**
-   * Additive (piece 5, spec §5): every activation, begun by `t`, of each audio, video and `cmd` leaf in its current
-   * frame (its parent's current activation and iteration), in absolute time and document order: `begin` is the
-   * first absolute time it is active, `end` the last (`lastAbs`, `Infinity` when open). The media clock reads exact
-   * begins here, never the frame that first samples a node.
+   * Additive (piece 5, spec §5): every activation, begun by `t`, of each audio, video and `cmd` leaf, in every
+   * ancestor activation and iteration of its history (the syncbase window `endTimeOf` reads), in absolute time:
+   * `begin` is the first absolute time it is active, `end` the last (`Infinity` when open). The media clock reads
+   * exact begins here, never the frame that first samples a node, and the answer at a later `t` still holds every
+   * earlier activation. `truncated`: a node's history was past the window or the query budget (activations are
+   * missing).
    */
-  activations(events: readonly ShowEvent[], t: number): MediaActivation[]
+  activations(events: readonly ShowEvent[], t: number): { activations: MediaActivation[]; truncated: boolean }
 }
 
 /** One activation of a media or `cmd` leaf (`Scheduler.activations`). */
@@ -1037,16 +1039,20 @@ class Run {
     }
   }
 
-  /** `activations`, inside `drive`: the activations of `node` begun by now in its current frame, in absolute time. */
-  activationsOf(node: TimeNode): Array<{ begin: number; end: number }> {
-    const f = this.currentFrame(node)
-    if (!f) return []
-    const out: Array<{ begin: number; end: number }> = []
-    for (const iv of this.intervalsIn(node, f)) {
-      if (!(iv.begin <= f.tau)) continue
-      out.push({ begin: toAbsFirst(f, iv.begin), end: lastAbs(f, iv.begin, iv.end) })
+  /** `activations`, inside `drive`: the activations of leaf `node` begun by now, in every frame of its history, in absolute time. */
+  activationsOf(node: TimeNode): { list: Array<{ begin: number; end: number }>; truncated: boolean } {
+    const list: Array<{ begin: number; end: number }> = []
+    const top = this.stateOf(this.ix.root)?.child
+    if (!top || node === this.ix.root) return { list, truncated: false }
+    const { frames, truncated } = this.historyFor(node, top)
+    for (const f of frames) {
+      if (this.exhausted) break
+      for (const iv of this.intervalsIn(node, f)) {
+        if (!(iv.begin <= f.tau)) continue
+        list.push({ begin: toAbsFirst(f, iv.begin), end: lastAbs(f, iv.begin, iv.end) })
+      }
     }
-    return out
+    return { list, truncated: truncated || this.exhausted }
   }
 
   /** `endTimeOf`, inside `drive`: the end of the last activation, in whichever ancestor iteration it happened. */
@@ -1119,13 +1125,16 @@ export function createScheduler(tree: TimingTree, options: SchedulerOptions = {}
     },
     activations(events, t) {
       const out: MediaActivation[] = []
-      if (Number.isNaN(t)) return out
+      let truncated = false
+      if (Number.isNaN(t)) return { activations: out, truncated }
       const run = new Run(ix, prepare(events, t), t, report)
       for (const node of ix.list) {
         if (isContainer(node) || (node.kind !== 'audio' && node.kind !== 'video' && node.kind !== 'cmd')) continue
-        for (const a of run.drive(() => run.activationsOf(node))) out.push({ node, begin: a.begin, end: a.end })
+        const got = run.drive(() => run.activationsOf(node))
+        if (got.truncated) truncated = true
+        for (const a of got.list) out.push({ node, begin: a.begin, end: a.end })
       }
-      return out
+      return { activations: out, truncated }
     },
     endTimeOf(nodeId, events) {
       const node = ix.byId.get(nodeId)

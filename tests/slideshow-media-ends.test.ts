@@ -133,6 +133,18 @@ describe('slideMediaEnds: the shared loop over a history', () => {
     expect(once.events.map(e => [e.kind, 'nodeId' in e ? e.nodeId : -1, e.t])).toEqual([['mediaEnd', 3, 1000], ['mediaEnd', 6, 1700]])
   })
 
+  it('every activation counts, in every iteration of a repeating parent, whenever the history is read', () => {
+    const rep: ContainerNode = { kind: 'par', ctn: ctnOf(20, { durMs: 2000, repeatCount: 2 }), children: [audio(3)] }
+    const r = root(rep)
+    const tl = timelineOf(r)
+    const ends = slideMediaEnds([r], mediaClockOf([r], [shapeRec(500)]))
+    const once = ends.settle(tl, tl.initial(), 10_000)
+    expect(once.ends).toEqual([{ nodeId: 3, at: 500 }, { nodeId: 3, at: 2500 }])
+    let step = tl.initial()
+    for (let t = 0; t <= 10_000; t += 47) step = ends.settle(tl, step, t).cursor
+    expect(ends.settle(tl, step, 10_000).cursor.events).toEqual(once.cursor.events)
+  })
+
   it('deck commands drive the clock: pause and resume, stop, and onstopaudio', () => {
     const paused = root(audio(3), cmdAt(10, 1000, 'pause'), cmdAt(11, 2000, 'resume'))
     const tlp = timelineOf(paused)

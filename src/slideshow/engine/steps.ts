@@ -91,10 +91,10 @@ export interface SlideTimeline {
   keyTimes(cursor: SlideCursor, from: number, to: number): number[]
   /**
    * Additive (piece 5, spec §5): for this history at `t`, every activation begun by then of each audio, video and
-   * `cmd` leaf, in absolute time (`Scheduler.activations`). A checkpoint is read at its settle time; a static slide
+   * `cmd` leaf, in every frame of its history, in absolute time (`Scheduler.activations`). A checkpoint is read at its settle time; a static slide
    * has none.
    */
-  activations(cursor: SlideCursor, t: number): readonly MediaActivation[]
+  activations(cursor: SlideCursor, t: number): { activations: readonly MediaActivation[]; truncated: boolean }
 }
 
 export interface SlideTimelineOptions {
@@ -205,7 +205,7 @@ const staticTimeline: SlideTimeline = Object.freeze({
   busyUntil: () => -INF,
   mediaEnd: (cursor: SlideCursor) => cursor,
   keyTimes: () => [],
-  activations: () => [],
+  activations: () => ({ activations: [], truncated: false }),
 })
 
 export function createSlideTimeline(tree: TimingTree | { refused: string } | undefined, options: SlideTimelineOptions): SlideTimeline {
@@ -435,7 +435,7 @@ export function createSlideTimeline(tree: TimingTree | { refused: string } | und
       return [...out].sort((x, y) => x - y)
     },
     activations(cursor, t) {
-      if (cursor.mode === 'static') return []
+      if (cursor.mode === 'static') return { activations: [], truncated: false }
       return scheduler.activations(cursor.events, cursor.mode === 'checkpoint' ? settledTime() : t)
     },
     mediaEnd(cursor, nodeId, t, synthetic) {

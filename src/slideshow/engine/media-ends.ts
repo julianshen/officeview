@@ -144,7 +144,8 @@ export interface SlideMediaEnds {
    * (ties by node id), each found again after the last one was recorded, as an end can begin another node. A
    * checkpoint (or a static cursor) is returned as it is: a settled checkpoint carries no media end, on either side.
    * An end due before the history's last event is recorded at that event's time (the timeline takes no event out
-   * of order); it is recorded only while its activation is still open then. `truncated`: `MAX_SETTLED_ENDS` ran out.
+   * of order); it is recorded only while its activation is still open then. `truncated`: `MAX_SETTLED_ENDS` ran out, or the scheduler's
+   * history window did (nothing more is recorded).
    */
   settle(timeline: SlideTimeline, cursor: SlideCursor, t: number): { cursor: SlideCursor; ends: SettledEnd[]; truncated: boolean }
 }
@@ -165,7 +166,10 @@ export function slideMediaEnds(roots: ReadonlyArray<TimeNode | undefined>, clock
       if (audio.size === 0 || cursor.mode === 'checkpoint' || cursor.mode === 'static' || !(t >= 0)) return { cursor, ends, truncated: false }
       let cur = cursor
       for (let n = 0; n < MAX_SETTLED_ENDS; n++) {
-        const acts = timeline.activations(cur, t)
+        const got = timeline.activations(cur, t)
+        // Activations past the scheduler's history window are unknown: nothing more is recorded, on either side.
+        if (got.truncated) return { cursor: cur, ends, truncated: true }
+        const acts = got.activations
         const events: MediaEvent[] = []
         for (const a of acts) {
           const node = a.node
