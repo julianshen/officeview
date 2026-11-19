@@ -25,8 +25,12 @@
  *   look-ahead after dropping everything droppable proceeds: only the server cap refuses (D12 "no deadlock").
  * - **Idle TTL.** A done entry with no reference is deleted `idleTtlMs` after its last use or release, on the injected
  *   clock. The sweep runs at the top of every public call and on an unref'd timer; referenced entries never expire.
+ * - **Pins** (fix round 1). A `request` answered for delivery pins the session's reference (`pin`) until its
+ *   `delivered`; each answered mediaId holds its own pin. A pinned reference is never dropped by pressure or `passed`,
+ *   so its entry is never evicted or expired mid-delivery; only `dropSession` and `dropDocument` override it.
  * - **Revocation.** `dropDocument` deletes every entry of the document at once, referenced or not, aborts its
- *   flights, and answers their waiters `media-unavailable`. A delivery already reading a done file must check
+ *   flights, and answers their waiters `media-unavailable`. The docId stays revoked: every later `acquire` for it
+ *   answers `{ revoked: true }` media-unavailable, and `revocation()` wakes queues parked on admission or room. A delivery already reading a done file must check
  *   `peek(key)` between chunks: once dropped it answers undefined, and the delivery fails `media-unavailable`.
  *
  * Every entry file is one `MediaTemp` ledger row, owned by the cache (`EncodeRun`'s `file`, else adopted).
@@ -59,15 +63,22 @@ export interface EncodeCache {
   peek(key: EncodeKey): CachedMedia | undefined
   /** Whether the key is encoding now (a later `acquire` joins it). */
   inflight(key: EncodeKey): boolean
-  /** Releases that session's reference. */
+  /** One delivery of a done entry to the session is starting (a `request` answered): pins its reference until the
+   * matching `delivered`. Takes the reference if the session holds none. False: no done file for the key. */
+  pin(sid: string, key: EncodeKey): boolean
+  /** One delivery ended: unpins one pin; the session's reference is released when no pin is left. */
   delivered(sid: string, key: EncodeKey): void
-  /** Releases references of slides the viewer has passed (`unit < beforeUnit`). */
+  /** Releases unpinned references of slides the viewer has passed (`unit < beforeUnit`). */
   passed(sid: string, beforeUnit: number): void
   /** Releases every reference and waiter of the session; aborts encodes left with no waiter; leaves entries cached. */
   dropSession(sid: string): void
   /** Revocation or close: deletes every entry with this docId at once, referenced or not; aborts its in-flight encodes
    * (resolves once they have settled); a delivery in flight then fails media-unavailable. */
   dropDocument(docId: string): Promise<void>
+  /** Whether `dropDocument(docId)` ran: every later `acquire` for it answers `{ revoked: true }` media-unavailable. */
+  revoked(docId: string): boolean
+  /** Resolves on the next `dropDocument`, so a queue parked on admission or room can stop at once. */
+  revocation(): Promise<void>
   /** Resolves once every abandoned flight (aborted: no waiter left, dropped or closed) has settled, its child gone and
    * its files disposed. A queue's `end()` awaits it after `dropSession`. */
   quiesce(): Promise<void>
@@ -96,7 +107,8 @@ interface Entry {
   waiters: Set<Waiter>
   ctl?: AbortController
 }
-interface Ref { unit: number; seq: number }
+/** `pins`: deliveries in progress (D12, fix round 1): a pinned reference is never dropped by pressure or `passed`. */
+interface Ref { unit: number; seq: number; pins: number }
 
 export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; serverBytes: number; idleTtlMs?: number /* default MEDIA_IDLE_TTL_MS */; now?: () => number /* test seam; the sweep runs on it */ }): EncodeCache {
   const now = o.now ?? Date.now
@@ -105,6 +117,8 @@ export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; se
   const sessions = new Map<string, Map<string, Ref>>()
   const runs = new Map<Promise<void>, { docId: string; signal: AbortSignal }>()
   let rooms: Array<() => void> = []
+  let revocations: Array<() => void> = []
+  const revokedDocs = new Set<string>()
   let seq = 0
   let closed = false
 
@@ -151,7 +165,7 @@ export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; se
     const at = order.indexOf(cursor)
     const dist = (unit: number) => { const i = order.indexOf(unit); return i < 0 || at < 0 ? Number.POSITIVE_INFINITY : (i - at + n) % n }
     const cands = [...m.entries()]
-      .filter(([id]) => id !== except && entries.get(id)?.state === 'done' && entries.get(id)!.bytes > 0)
+      .filter(([id, r]) => id !== except && r.pins === 0 && entries.get(id)?.state === 'done' && entries.get(id)!.bytes > 0)
       .sort(([, a], [, b]) => (dist(b.unit) - dist(a.unit)) || (b.seq - a.seq))
     for (const [id] of cands) {
       if (sessionTotal(sid) + need <= o.sessionBytes) break
@@ -209,7 +223,10 @@ export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; se
     const leave = (r: EncodeOutcome) => {
       if (!e.waiters.delete(w)) return
       w.settle(r)
-      if (e.state === 'inflight' && e.waiters.size === 0) void remove(e, 'media-unavailable')
+      if (e.state !== 'inflight') return
+      if (e.waiters.size === 0) { void remove(e, 'media-unavailable'); return }
+      // The session's last waiter left an encode others still wait on: its reference goes with it.
+      if (![...e.waiters].some((x) => x.sid === sid)) { release(sid, e.id); notify() }
     }
     if (signal.aborted) { ok({ ok: false, reason: 'media-unavailable' }); return }
     e.waiters.add(w)
@@ -225,15 +242,21 @@ export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; se
     acquire(sid, unit, key, run, a) {
       void sweep()
       if (closed) return { origin: 'miss', done: Promise.resolve({ ok: false, reason: 'media-unavailable' }) }
+      if (revokedDocs.has(key.docId)) return { origin: 'miss', done: Promise.resolve({ ok: false, reason: 'media-unavailable', revoked: true }) }
+      // An aborted caller is no waiter: it takes no reference and starts nothing.
+      if (a.signal.aborted) return { origin: 'miss', done: Promise.resolve({ ok: false, reason: 'media-unavailable' }) }
       const id = encodeKeyId(key)
       let e = entries.get(id)
       if (e?.state === 'done' && 'refused' in e.media!) { e.touched = Math.max(e.touched, now()); return { origin: 'hit', done: Promise.resolve(outcome(e)) } }
-      const m = refsOf(sid)
+      let m = refsOf(sid)
       const held = m.has(id)
       const need = held ? 0 : (e ? e.bytes : MEDIA_INFLIGHT_RESERVE)
       if (sessionTotal(sid) + need > o.sessionBytes) {
         if (a.mode === 'ahead') { if (!m.size) sessions.delete(sid); return { wait: true } }
         dropFarthest(sid, need, a.cursor, a.order, id)
+        m = refsOf(sid) // a release that emptied the map dropped it from `sessions`
+        // Still over (pinned deliveries, own flights): refused, so a session never exceeds its look-ahead.
+        if (sessionTotal(sid) + need > o.sessionBytes) { if (!m.size) sessions.delete(sid); return { origin: e?.state === 'done' ? 'hit' : e ? 'joined' : 'miss', done: Promise.resolve({ ok: false, reason: 'media-busy' }) } }
       }
       if (!e && serverTotal() + MEDIA_INFLIGHT_RESERVE > o.serverBytes) {
         evict(MEDIA_INFLIGHT_RESERVE) // either mode (controller ruling, Task 8): never a referenced entry
@@ -249,14 +272,11 @@ export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; se
         entries.set(id, e)
         origin = 'miss'
       } else origin = e.state === 'done' ? 'hit' : 'joined'
-      if (!held) { m.set(id, { unit, seq: ++seq }); e.refs.add(sid) }
+      if (!held) { m.set(id, { unit, seq: ++seq, pins: 0 }); e.refs.add(sid) }
       e.touched = Math.max(e.touched, now())
       if (e.state === 'done') return { origin, done: Promise.resolve(outcome(e)) }
       const done = addWaiter(e, sid, a.signal)
-      if (fresh) {
-        if (a.signal.aborted) void remove(e, 'media-unavailable')
-        else start(e, run)
-      }
+      if (fresh) start(e, run)
       return { origin, done }
     },
     peek(key) {
@@ -265,10 +285,29 @@ export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; se
       return e?.state === 'done' ? e.media : undefined
     },
     inflight(key) { return entries.get(encodeKeyId(key))?.state === 'inflight' },
-    delivered(sid, key) { void sweep(); release(sid, encodeKeyId(key)); notify() },
+    pin(sid, key) {
+      void sweep()
+      const id = encodeKeyId(key)
+      const e = entries.get(id)
+      if (!e || e.state !== 'done' || !e.media || 'refused' in e.media) return false
+      const m = refsOf(sid)
+      let r = m.get(id)
+      if (!r) { m.set(id, r = { unit: -1, seq: ++seq, pins: 0 }); e.refs.add(sid) }
+      r.pins++
+      e.touched = Math.max(e.touched, now())
+      return true
+    },
+    delivered(sid, key) {
+      void sweep()
+      const id = encodeKeyId(key)
+      const r = sessions.get(sid)?.get(id)
+      if (r && r.pins > 0 && --r.pins > 0) return
+      release(sid, id)
+      notify()
+    },
     passed(sid, beforeUnit) {
       void sweep()
-      for (const [id, r] of [...(sessions.get(sid)?.entries() ?? [])]) if (r.unit < beforeUnit) release(sid, id)
+      for (const [id, r] of [...(sessions.get(sid)?.entries() ?? [])]) if (r.unit < beforeUnit && r.pins === 0) release(sid, id)
       notify()
     },
     dropSession(sid) {
@@ -282,10 +321,14 @@ export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; se
       notify()
     },
     async dropDocument(docId) {
+      revokedDocs.add(docId)
+      const r = revocations; revocations = []; for (const f of r) f()
       const gone = [...entries.values()].filter((e) => e.key.docId === docId).map((e) => remove(e, 'media-unavailable', true))
       const flights = [...runs].filter(([, r]) => r.docId === docId).map(([p]) => p)
       await Promise.all([...gone, ...flights])
     },
+    revoked: (docId) => revokedDocs.has(docId),
+    revocation() { return new Promise<void>((ok) => { revocations.push(ok) }) },
     async quiesce() { await Promise.all([...runs].filter(([, r]) => r.signal.aborted).map(([p]) => p)) },
     room() { return new Promise<void>((ok) => { rooms.push(ok) }) },
     sweep,

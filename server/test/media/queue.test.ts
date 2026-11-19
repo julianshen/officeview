@@ -69,9 +69,10 @@ function fakeTranscode(o: { manual?: boolean; size?: (name: string) => number; a
 }
 
 const entryOf = (name: string, durationMs = 2000): ProbedMedia => ({ k: 0, partPath: `/ppt/media/${name}`, kind: 'audio', hasAudio: true, durationMs, sourceHash: `hash-${name}`, demuxer: 'mov' })
-/** A synthetic item: session `sid`, document `docId`, slide `unit`, part `name` (its bytes are `name`'s). */
+/** A synthetic item: session `sid`, document `docId`, slide `unit`, part `name` (its bytes are `name`'s). `a#1` and
+ * `a#2` are two uses (two mediaIds) of part `a`: one key. */
 function itemOf(sid: string, docId: string, unit: number, name: string): MediaItem {
-  const e = entryOf(name)
+  const e = entryOf(name.split('#')[0]!)
   return { mediaId: `${sid}~${unit}~${name}`, unit, ref: { kind: 'audio', k: 0 }, key: encodeKeyOf(docId, e, FAKE_INFO), partPath: e.partPath, job: (out, src) => ({ entry: e, src, out }) }
 }
 interface World { cache: EncodeCache; admission: MediaAdmission; advance(ms: number): void }
@@ -403,7 +404,7 @@ describe('the session queue (D1, D12)', () => {
     await until(() => w.admission.queued === 1, 'b takes the place')
     const c = synthQueue(w, 'sc', 'd-busy', [['c']], tc)
     await c.start(0)
-    await until(() => c.running !== undefined, 'c waits')
+    await Bun.sleep(5) // c's encode-ahead parks on admission
     expect(w.admission.queued).toBe(1) // parked silently, no place
     const d = synthQueue(w, 'sd', 'd-busy', [['d']], tc)
     expect(await d.request(d.id(0, 'd'))).toEqual({ ok: false, reason: 'media-busy' })
@@ -421,7 +422,7 @@ describe('the session queue (D1, D12)', () => {
     await w.cache.close()
   })
 
-  it('end(): queued items cancelled, references dropped, entries remain cached until the TTL; services.close() empties the temp dir', async () => {
+  it('end(): queued items cancelled, references dropped, entries remain cached until the TTL', async () => {
     const w = world(), tc = fakeTranscode({ manual: true })
     const live0 = temp.live()
     const q = synthQueue(w, 's', 'd-end', [['a'], ['b'], ['c']], tc)
@@ -463,6 +464,102 @@ describe('the session queue (D1, D12)', () => {
     expect(Date.now() - t0).toBeLessThan(5000)
     unstick()
     await w.cache.quiesce()
+    await w.cache.close()
+  })
+
+  it('a request never waits behind a parked encode-ahead: with the admission queue full it answers media-busy, and no one joins the parked flight', async () => {
+    const w = world({ slots: 1, queue: 1 })
+    const tc = fakeTranscode({ manual: true })
+    const a = synthQueue(w, 'sa', 'd-park', [['a']], tc), b = synthQueue(w, 'sb', 'd-park', [['b']], tc)
+    await a.start(0)
+    await until(() => tc.calls.length === 1, 'a runs')
+    await b.start(0)
+    await until(() => w.admission.queued === 1, 'b takes the place')
+    const c = synthQueue(w, 'sc', 'd-park', [['c']], tc)
+    await c.start(0) // its encode-ahead parks
+    await Bun.sleep(5)
+    expect(await c.request(c.id(0, 'c'))).toEqual({ ok: false, reason: 'media-busy' })
+    const d = synthQueue(w, 'sd', 'd-park', [['c']], tc) // another session of the document, the same key
+    expect(await d.request(d.id(0, 'c'))).toEqual({ ok: false, reason: 'media-busy' })
+    expect(w.cache.inflight(itemOf('x', 'd-park', 0, 'c').key)).toBe(false) // a parked encode-ahead holds no flight
+    tc.calls[0]!.finish()
+    for (let i = 1; i < 3; i++) { await until(() => tc.calls.length === i + 1, `call ${i}`); tc.calls[i]!.finish() }
+    expect(tc.calls.map((x) => x.name)).toEqual(['a', 'b', 'c']) // c's encode-ahead still ran
+    await until(() => w.admission.running === 0, 'drain')
+    for (const q of [a, b, c, d]) await q.end()
+    await w.cache.close()
+  })
+
+  it('revocation stops a queue parked on room and an idle one: no encode for the revoked document, and requests answer media-unavailable', async () => {
+    const w = world(), tc = fakeTranscode({ size: () => 25 * MiB })
+    const names = Array.from({ length: 12 }, (_, i) => `n${i}`)
+    const parked = synthQueue(w, 's', 'doc-R', [names], tc)
+    await parked.start(0)
+    await until(() => parked.running === undefined && tc.s.count === 9, 'the look-ahead fills')
+    const idle = synthQueue(w, 'i', 'doc-R2', [['x']], tc)
+    ok(await idle.request(idle.id(0, 'x')))
+    const n = tc.s.count
+    await w.cache.dropDocument('doc-R')
+    await w.cache.dropDocument('doc-R2')
+    await Bun.sleep(10)
+    expect(tc.s.count).toBe(n)
+    expect(w.cache.stats().entries).toBe(0)
+    expect(await parked.request(parked.id(0, 'n10'))).toEqual({ ok: false, reason: 'media-unavailable' })
+    expect(await idle.request(idle.id(0, 'x'))).toEqual({ ok: false, reason: 'media-unavailable' })
+    expect(tc.s.count).toBe(n)
+    await parked.end(); await idle.end(); await w.cache.close()
+  })
+
+  it('an answered request is pinned until delivered: pipelined requests never evict it, and two mediaIds of one key hold a pin each', async () => {
+    const w = world({ serverBytes: 256 * MiB }), tc = fakeTranscode({ size: () => 25 * MiB })
+    const names = Array.from({ length: 12 }, (_, i) => `n${i}`)
+    const q = synthQueue(w, 's', 'd-pin', [names], tc)
+    await q.start(0)
+    await until(() => q.running === undefined && tc.s.count === 9, 'the look-ahead fills')
+    const r9 = ok(await q.request(q.id(0, 'n9')))
+    const r10 = ok(await q.request(q.id(0, 'n10'))) // before n9 is delivered
+    expect(existsSync(r9.path)).toBe(true)
+    expect(w.cache.peek(itemOf('s', 'd-pin', 0, 'n9').key)).toBeDefined()
+    expect(existsSync(r10.path)).toBe(true)
+    await q.end(); await w.cache.close()
+    const w2 = world(), tc2 = fakeTranscode()
+    const two = synthQueue(w2, 't', 'd-pin2', [['a#1', 'a#2']], tc2)
+    const [x, y] = [ok(await two.request(two.id(0, 'a#1'))), ok(await two.request(two.id(0, 'a#2')))]
+    expect(x.path).toBe(y.path)
+    expect(tc2.s.count).toBe(1)
+    const k = itemOf('t', 'd-pin2', 0, 'a').key
+    w2.cache.delivered('t', k)
+    expect(w2.cache.referencesOf('t')).toBe(1) // the second delivery still holds it
+    w2.cache.delivered('t', k)
+    expect(w2.cache.referencesOf('t')).toBe(0)
+    await two.end(); await w2.cache.close()
+  })
+
+  it('media-busy and media-timeout leave the key unreadied and record no origin', async () => {
+    const w = world({ serverBytes: 64 * MiB }), tc = fakeTranscode({ manual: true, size: (n) => (n === 'x' || n === 'y' ? 32 * MiB : 1) })
+    // The server cache wholly referenced by another session (2 × 32 MiB, pinned by undelivered requests).
+    const p = synthQueue(w, 'p', 'd-poison', [['x'], ['y']], tc)
+    const px = p.request(p.id(0, 'x')); await until(() => tc.calls.length === 1, 'x'); tc.calls[0]!.finish(); ok(await px)
+    const py = p.request(p.id(1, 'y')); await until(() => tc.calls.length === 2, 'y'); tc.calls[1]!.finish(); ok(await py)
+    const s1 = synthQueue(w, 's1', 'd-poison', [['k']], tc)
+    expect(await s1.request(s1.id(0, 'k'))).toEqual({ ok: false, reason: 'media-busy' })
+    w.cache.delivered('p', itemOf('p', 'd-poison', 0, 'x').key) // x is now evictable
+    // Another session encodes k; s1 then reports a hit, not a stale miss.
+    const s2 = synthQueue(w, 's2', 'd-poison', [['k']], tc)
+    const r2 = s2.request(s2.id(0, 'k')); await until(() => tc.calls.length === 3, 'k'); tc.calls[2]!.finish(); ok(await r2)
+    expect(await s1.start(0)).toBe(0)
+    expect(ok(await s1.request(s1.id(0, 'k'))).origin).toBe('hit')
+    for (const [sid, u, n] of [['p', 1, 'y'], ['s1', 0, 'k'], ['s2', 0, 'k']] as const) w.cache.delivered(sid, itemOf(sid, 'd-poison', u, n).key)
+    // A timed-out encode-ahead is not readied (a request encodes again) and does not loop.
+    const t = synthQueue(w, 't', 'd-poison', [['z']], tc)
+    await t.start(0)
+    await until(() => tc.calls.length === 4, 'z'); tc.calls[3]!.fail('media-timeout')
+    await Bun.sleep(10)
+    expect(tc.calls.length).toBe(4)
+    const again = t.request(t.id(0, 'z'))
+    await until(() => tc.calls.length === 5, 'z again'); tc.calls[4]!.finish()
+    expect(ok(await again).origin).toBe('miss')
+    for (const q of [p, s1, s2, t]) await q.end()
     await w.cache.close()
   })
 

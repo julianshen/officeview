@@ -229,6 +229,88 @@ describe('the shared encode cache (D12, D23)', () => {
     await c.close()
   })
 
+  it('a joiner that is already aborted takes no reference; one aborting while another session waits releases its own', async () => {
+    const { c } = cacheWith()
+    const f = fakeRun(1 * MiB)
+    const a1 = c.acquire('s1', 0, key('d', 'k'), f.run, ahead)
+    const gone = new AbortController(); gone.abort()
+    expect(await done(c.acquire('s2', 0, key('d', 'k'), fakeRun(1).run, { ...request, signal: gone.signal }))).toEqual({ ok: false, reason: 'media-unavailable' })
+    expect(c.referencesOf('s2')).toBe(0)
+    const later = new AbortController()
+    const a3 = c.acquire('s3', 0, key('d', 'k'), fakeRun(1).run, { ...request, signal: later.signal })
+    expect(c.referencesOf('s3')).toBe(1)
+    later.abort()
+    expect(await done(a3)).toEqual({ ok: false, reason: 'media-unavailable' })
+    expect(c.referencesOf('s3')).toBe(0)
+    expect(c.inflight(key('d', 'k'))).toBe(true) // s1 still waits
+    f.finish(); expect((await done(a1)).ok).toBe(true)
+    c.delivered('s1', key('d', 'k'))
+    expect(c.stats()).toMatchObject({ entries: 1, referenced: 0 })
+    await c.close()
+  })
+
+  it('after dropDocument, acquire for that docId answers revoked media-unavailable and starts nothing', async () => {
+    const { c } = cacheWith()
+    await fill(c, 's1', key('A', '1'), 1 * MiB)
+    const woke = c.revocation()
+    await c.dropDocument('A')
+    await woke
+    expect(c.revoked('A')).toBe(true)
+    const f = fakeRun(1)
+    expect(await done(c.acquire('s1', 0, key('A', '2'), f.run, ahead))).toEqual({ ok: false, reason: 'media-unavailable', revoked: true })
+    expect(await done(c.acquire('s1', 0, key('A', '1'), f.run, request))).toEqual({ ok: false, reason: 'media-unavailable', revoked: true })
+    expect(f.state.calls).toBe(0)
+    expect(c.referencesOf('s1')).toBe(0)
+    expect(c.revoked('B')).toBe(false)
+    expect((await fill(c, 's2', key('B', '1'), 1 * MiB)).bytes).toBe(1 * MiB)
+    await c.close()
+  })
+
+  it('a pinned reference survives passed and eviction until delivered, and two pins need two deliveries', async () => {
+    const { c } = cacheWith({ serverBytes: 64 * MiB })
+    const a = await fill(c, 's1', key('d', 'a'), 30 * MiB, 2)
+    expect(c.pin('s1', key('d', 'a'))).toBe(true)
+    expect(c.pin('s1', key('d', 'a'))).toBe(true) // a second mediaId of the same key
+    c.passed('s1', 10)
+    expect(c.referencesOf('s1')).toBe(1)
+    await fill(c, 's2', key('d', 'c'), 30 * MiB); c.delivered('s2', key('d', 'c'))
+    const f = fakeRun(1 * MiB)
+    const x = c.acquire('s3', 0, key('d', 'x'), f.run, request) // 60 + 32 > 64: evicts c, never the pinned a
+    f.finish(); expect((await done(x)).ok).toBe(true)
+    expect(c.peek(key('d', 'c'))).toBeUndefined()
+    expect('path' in a && existsSync(a.path)).toBe(true)
+    c.delivered('s1', key('d', 'a'))
+    expect(c.referencesOf('s1')).toBe(1)
+    c.delivered('s1', key('d', 'a'))
+    expect(c.referencesOf('s1')).toBe(0)
+    expect(c.pin('s1', key('d', 'gone'))).toBe(false)
+    await c.close()
+  })
+
+  it('a request drops only unpinned own references, and re-checks the look-ahead after dropping: still over is media-busy', async () => {
+    const { c } = cacheWith({ sessionBytes: 60 * MiB })
+    await fill(c, 's1', key('d', 'a'), 30 * MiB, 5)
+    expect(c.pin('s1', key('d', 'a'))).toBe(true)
+    const f = fakeRun(1)
+    // 30 (pinned) + 32 > 60: nothing droppable.
+    expect(await done(c.acquire('s1', 0, key('d', 'b'), f.run, request))).toEqual({ ok: false, reason: 'media-busy' })
+    expect(f.state.calls).toBe(0)
+    expect(c.referencesOf('s1')).toBe(1)
+    c.delivered('s1', key('d', 'a')) // unpinned and released
+    await fill(c, 's1', key('d', 'a'), 30 * MiB, 5) // held again, unpinned
+    const g = fakeRun(1 * MiB)
+    const b = c.acquire('s1', 0, key('d', 'b'), g.run, request) // drops a and fits
+    g.finish(); expect((await done(b)).ok).toBe(true)
+    expect(c.referencesOf('s1')).toBe(1)
+    // Two of this session's own requests in flight reserve all of a 64 MiB look-ahead: a third is busy.
+    const { c: c2 } = cacheWith({ sessionBytes: 64 * MiB })
+    const r1 = fakeRun(1), r2 = fakeRun(1)
+    const p1 = c2.acquire('s', 0, key('d', 'p1'), r1.run, request), p2 = c2.acquire('s', 0, key('d', 'p2'), r2.run, request)
+    expect(await done(c2.acquire('s', 0, key('d', 'p3'), fakeRun(1).run, request))).toEqual({ ok: false, reason: 'media-busy' })
+    r1.finish(); r2.finish(); await done(p1); await done(p2)
+    await c.close(); await c2.close()
+  })
+
   it('hit, joined and miss are reported for finished, in-flight and absent keys', async () => {
     const { c } = cacheWith()
     await fill(c, 's0', key('d', 'fin'), 1 * MiB)
