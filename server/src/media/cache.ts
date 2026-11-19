@@ -68,6 +68,8 @@ export interface EncodeCache {
    * the reference if the session holds none, only within the look-ahead (`busy` otherwise, nothing changed);
    * `gone`: no done file for the key. */
   pin(sid: string, key: EncodeKey): 'ok' | 'busy' | 'gone'
+  /** The pins the session holds on the key's entry (0: none, or no entry). Read in the step that answers. */
+  pinsOf(sid: string, key: EncodeKey): number
   /** One delivery ended: unpins one pin; the session's reference is released when no pin is left. */
   delivered(sid: string, key: EncodeKey): void
   /** Releases unpinned references of slides the viewer has passed (`unit < beforeUnit`). */
@@ -301,6 +303,8 @@ export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; se
       void sweep()
       const id = encodeKeyId(key)
       const e = entries.get(id)
+      // A request joining a flight the session already references pins it at once (fix round 3).
+      if (e?.state === 'inflight') { const held = sessions.get(sid)?.get(id); if (!held) return 'gone'; held.pins++; return 'ok' }
       if (!e || e.state !== 'done' || !e.media || 'refused' in e.media) return 'gone'
       let r = sessions.get(sid)?.get(id)
       if (!r) {
@@ -310,6 +314,10 @@ export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; se
       r.pins++
       e.touched = Math.max(e.touched, now())
       return 'ok'
+    },
+    pinsOf(sid, key) {
+      const id = encodeKeyId(key)
+      return entries.has(id) ? sessions.get(sid)?.get(id)?.pins ?? 0 : 0
     },
     delivered(sid, key) {
       void sweep()

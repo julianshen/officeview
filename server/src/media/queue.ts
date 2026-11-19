@@ -18,7 +18,7 @@
  */
 import type { MediaRefusal } from '../../../src/stream/media-types'
 import type { MediaAdmission } from './admission'
-import type { EncodeCache, EncodeOrigin, EncodeOutcome, EncodeRun } from './cache'
+import type { CachedMedia, EncodeCache, EncodeOrigin, EncodeOutcome, EncodeRun } from './cache'
 import type { FfmpegInfo } from './ffmpeg'
 import type { MediaItem } from './jobs'
 import { encodeKeyId, type EncodeKey } from './params'
@@ -48,6 +48,8 @@ export interface SessionMediaQueueOptions {
   seams?: TranscodeSeams
   /** How long `end()` waits for abandoned encodes to settle (default `MEDIA_QUIESCE_MS`). */
   quiesceMs?: number
+  /** TEST-ONLY: sees every answer and every start count in the synchronous step that resolves it. */
+  observe?: (e: { type: 'answer'; mediaId: string; result: MediaRequestResult } | { type: 'start'; count: number }) => void
 }
 
 /** `end()`'s bound on waiting for abandoned encodes: one session's end never hangs on a stuck encode (any session's).
@@ -66,7 +68,7 @@ export function createSessionMediaQueue(o: SessionMediaQueueOptions): SessionMed
   const byId = new Map<string, MediaItem>()
   const keys = new Map<string, KeyState>()
   const origins = new Map<string, EncodeOrigin>()
-  const requests = new Map<string, { item: MediaItem; waiting: Array<(r: MediaRequestResult) => void> }>()
+  const requests = new Map<string, { item: MediaItem; waiting: Waiter[] }>()
   let order: number[] = []
   let cur = 0
   let ended = false, dead = false
@@ -101,25 +103,42 @@ export function createSessionMediaQueue(o: SessionMediaQueueOptions): SessionMed
   let revP: Promise<void> | undefined
   /** Only this queue's own document wakes it (fix round 2). Before the items load there is no docId: never fires. */
   const revocation = () => (docId === undefined ? new Promise<void>(() => {}) : (revP ??= cache.revocation(docId)))
+  /** A requester: its own mediaId and whether it already holds a pin (taken when it joined a flight). */
+  interface Waiter { mediaId: string; ok: (r: MediaRequestResult) => void; pinned: boolean }
   /**
-   * One requester's answer. An ok answer holds a pin on the session's reference until its `delivered` (one pin
-   * each): `pinned` (a request-mode acquire pinned it in the same step) or a further pin, taken within the look-ahead.
+   * The answer's final step (fix round 3): in the same synchronous step that resolves it, an ok answer is confirmed:
+   * the session is live, the document unrevoked, and the entry still done, cached and pinned by this session. A
+   * confirmation that fails releases the pin and answers media-unavailable. No pinned flag crosses an `await`.
    */
-  const answer = (id: string, key: EncodeKey, r: EncodeOutcome, pinned: boolean): MediaRequestResult => {
-    if (!r.ok) return { ok: false, reason: r.reason }
-    if (!('path' in r.media)) return { ok: false, reason: r.media.refused }
-    if (!pinned) {
+  const deliver = (mediaId: string, id: string, key: EncodeKey, media: CachedMedia, hasPin: boolean): MediaRequestResult => {
+    if (!('path' in media)) { if (hasPin) cache.delivered(sid, key); return out(mediaId, { ok: false, reason: media.refused }) }
+    if (!hasPin) {
       const p = cache.pin(sid, key)
-      if (p !== 'ok') return p === 'busy' ? { ok: false, reason: 'media-busy' } : unavailable
+      if (p !== 'ok') return out(mediaId, p === 'busy' ? { ok: false, reason: 'media-busy' } : unavailable)
     }
-    return { ok: true, path: r.media.path, result: r.media.result, origin: origins.get(id) ?? 'hit' }
+    const now = cache.peek(key)
+    if (ended || revoked() || !now || !('path' in now) || now.path !== media.path || cache.pinsOf(sid, key) < 1) {
+      cache.delivered(sid, key)
+      return out(mediaId, unavailable)
+    }
+    return out(mediaId, { ok: true, path: media.path, result: media.result, origin: origins.get(id) ?? 'hit' })
   }
-  /** Settles every requester of `id`; `pinned`: the first one holds the acquisition's own pin. */
-  const settleRequests = (id: string, key: EncodeKey, r: EncodeOutcome | undefined, pinned = false) => {
+  const out = (mediaId: string, r: MediaRequestResult): MediaRequestResult => { o.observe?.({ type: 'answer', mediaId, result: r }); return r }
+  /** Settles every requester of `id` with `r`; `spare`: pins the acquisition itself took for them (0 or 1). */
+  const settleRequests = (id: string, key: EncodeKey, r: EncodeOutcome | undefined, spare = 0) => {
     const q = requests.get(id)
-    if (!q) return
     requests.delete(id)
-    q.waiting.forEach((f, i) => f(r ? answer(id, key, r, pinned && i === 0) : unavailable))
+    for (const w of q?.waiting ?? []) {
+      if (!r || !r.ok) {
+        if (w.pinned) cache.delivered(sid, key)
+        w.ok(out(w.mediaId, r && !r.ok ? { ok: false, reason: r.reason } : unavailable))
+        continue
+      }
+      let hasPin = w.pinned
+      if (!hasPin && spare > 0) { spare--; hasPin = true }
+      w.ok(deliver(w.mediaId, id, key, r.media, hasPin))
+    }
+    for (; spare > 0; spare--) cache.delivered(sid, key) // a pin no requester took
   }
   const failAll = () => { for (const [id, q] of [...requests]) settleRequests(id, q.item.key, undefined) }
   /** Whether a settled acquisition left the key cached (ok or a cached refusal): only then is it readied and its
@@ -212,7 +231,9 @@ export function createSessionMediaQueue(o: SessionMediaQueueOptions): SessionMed
       if (!miss) dropLease() // a hit or a join needs no slot
       const held = miss && lease ? { lease, used: false } : undefined
       if (held) lease = undefined
+      const pinsBefore = cache.pinsOf(sid, ks.key)
       const a = cache.acquire(sid, pick.item.unit, ks.key, runFor(pick.item, mode, held), { mode, signal: ctl.signal, cursor: cur, order })
+      const gained = cache.pinsOf(sid, ks.key) - pinsBefore // a request-mode acquire pins in the same step (0 or 1)
       if (held && !held.used) lease = held.lease // not started: kept for what runs next
       if ('wait' in a) {
         dropLease() // nothing can run until room appears
@@ -224,7 +245,7 @@ export function createSessionMediaQueue(o: SessionMediaQueueOptions): SessionMed
       running = undefined
       if (ended) break
       if (cached(ks.key, r)) { note(pick.id, a.origin); ks.readied = true } else if (mode === 'ahead' && !r.ok && r.reason !== 'media-busy') aheadFailed.add(pick.id)
-      settleRequests(pick.id, ks.key, r, mode === 'request')
+      settleRequests(pick.id, ks.key, r, gained > 0 && cache.pinsOf(sid, ks.key) > 0 ? gained : 0)
       if (!r.ok && r.revoked) { stop(); break }
     }
     dropLease()
@@ -249,15 +270,15 @@ export function createSessionMediaQueue(o: SessionMediaQueueOptions): SessionMed
         const ks = keys.get(id)!
         if (ks.readied) continue
         if (cache.peek(ks.key)) {
-          // Cached: take the reference now (within the look-ahead), never enqueued.
+          // Cached: take the reference now (within the look-ahead), never enqueued. Synchronous: a hit is decided here.
           const a = cache.acquire(sid, u, ks.key, runFor(item, 'ahead'), { mode: 'ahead', signal: ctl.signal, cursor: cur, order })
-          if (!('wait' in a)) {
-            const r = await a.done // a hit: settled
-            if (cached(ks.key, r)) { note(id, a.origin); ks.readied = true }
-          }
+          if (!('wait' in a)) { note(id, a.origin); ks.readied = true }
         } else if (!cache.inflight(ks.key)) enqueued++
       }
+      // Confirmed in the step that returns it (fix round 3): a revoked document or an ended queue counts nothing.
+      if (ended || revoked()) { o.observe?.({ type: 'start', count: 0 }); return 0 }
       kick()
+      o.observe?.({ type: 'start', count: enqueued })
       return enqueued
     },
     cursor(unit) {
@@ -277,19 +298,28 @@ export function createSessionMediaQueue(o: SessionMediaQueueOptions): SessionMed
       if (!item || ended || revoked()) return unavailable
       const id = encodeKeyId(item.key)
       const ks = keys.get(id)!
-      if (cache.peek(ks.key) && !requests.has(id)) {
+      const media = cache.peek(ks.key)
+      if (media && !requests.has(id)) {
+        // Cached: acquired, pinned and answered in this one synchronous step (nothing awaited in between).
+        const before = cache.pinsOf(sid, ks.key)
         const a = cache.acquire(sid, item.unit, ks.key, runFor(item, 'request'), { mode: 'request', signal: ctl.signal, cursor: cur, order })
         if (!('wait' in a)) {
-          const r = await a.done
-          if (cached(ks.key, r)) { note(id, a.origin); ks.readied = true }
+          if (cache.pinsOf(sid, ks.key) > before || 'refused' in media) {
+            note(id, a.origin); ks.readied = true
+            return deliver(mediaId, id, ks.key, media, !('refused' in media))
+          }
+          const r = await a.done // refused before a pin (busy, revoked): its reason
           if (!r.ok && r.revoked) stop()
-          return answer(id, ks.key, r, true) // the request-mode acquire pinned it
+          return out(mediaId, r.ok ? unavailable : { ok: false, reason: r.reason })
         }
       }
       return await new Promise<MediaRequestResult>((ok) => {
+        // Joining a flight this session already references pins it now, so nothing can drop it before the answer.
+        const pinned = cache.inflight(ks.key) && cache.pin(sid, ks.key) === 'ok'
+        const w: Waiter = { mediaId, ok, pinned }
         const q = requests.get(id)
-        if (q) q.waiting.push(ok)
-        else requests.set(id, { item, waiting: [ok] })
+        if (q) q.waiting.push(w)
+        else requests.set(id, { item, waiting: [w] })
         kick()
       })
     },

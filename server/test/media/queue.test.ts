@@ -18,7 +18,7 @@ import type { FfmpegInfo } from '../../src/media/ffmpeg'
 import { mediaJobsFor, type MediaItem } from '../../src/media/jobs'
 import { encodeKeyId, encodeKeyOf } from '../../src/media/params'
 import type { ProbedMedia } from '../../src/media/probe'
-import { createSessionMediaQueue, type SessionMediaQueue } from '../../src/media/queue'
+import { createSessionMediaQueue, type SessionMediaQueue, type SessionMediaQueueOptions } from '../../src/media/queue'
 import { createMediaServices } from '../../src/media/services'
 import { createMediaTemp } from '../../src/media/temp'
 import { transcode, type EncodeResult } from '../../src/media/transcode'
@@ -86,10 +86,11 @@ function world(o: { slots?: number; queue?: number; sessionBytes?: number; serve
 }
 const fakePart = async () => temp.create(new Uint8Array([1, 2, 3]))
 /** A queue over `deck[unit]` = part names on that slide (synthetic items). */
-function synthQueue(w: World, sid: string, docId: string, deck: string[][], tc: ReturnType<typeof fakeTranscode>): SessionMediaQueue & { id(unit: number, name: string): string } {
+function synthQueue(w: World, sid: string, docId: string, deck: string[][], tc: ReturnType<typeof fakeTranscode>, part: SessionMediaQueueOptions['part'] = fakePart, extra: Partial<SessionMediaQueueOptions> = {}): SessionMediaQueue & { id(unit: number, name: string): string } {
   const q = createSessionMediaQueue({
-    sid, units: deck.length, info: FAKE_INFO, temp, admission: w.admission, cache: w.cache, transcode: tc.fn, part: fakePart,
+    sid, units: deck.length, info: FAKE_INFO, temp, admission: w.admission, cache: w.cache, transcode: tc.fn, part,
     items: async (u) => deck[u]!.map((n) => itemOf(sid, docId, u, n)),
+    ...extra,
   })
   return Object.assign(q, { id: (unit: number, name: string) => `${sid}~${unit}~${name}` })
 }
@@ -658,6 +659,72 @@ describe('the session queue (D1, D12)', () => {
     await Bun.sleep(5)
     expect(tc.s.count).toBe(0)
     await q.end(); await w.cache.close()
+  })
+
+  // --- fix round 3: answers are confirmed in the step that resolves them --------------------------------------
+
+  const ticks = async (n: number) => { for (let i = 0; i < n; i++) await Promise.resolve() }
+
+  it('a cached answer is confirmed when it resolves: a revocation or end() in the window answers media-unavailable, never ok', async () => {
+    for (const which of ['drop', 'end'] as const) for (let k = 0; k <= 6; k++) {
+      const w = world(), tc = fakeTranscode()
+      const o = synthQueue(w, 'o', 'd-win', [['a']], tc)
+      ok(await o.request(o.id(0, 'a'))); w.cache.delivered('o', itemOf('o', 'd-win', 0, 'a').key)
+      // Checked in the step that resolves the answer (the observe seam), so the caller's own await adds no window.
+      const bad: unknown[] = []
+      let ended = false
+      const q = synthQueue(w, 's', 'd-win', [['a']], tc, fakePart, {
+        observe: (e) => {
+          if (e.type !== 'answer' || !e.result.ok) return
+          const k2 = itemOf('s', 'd-win', 0, 'a').key
+          if (ended || w.cache.revoked('d-win') || !w.cache.peek(k2) || w.cache.pinsOf('s', k2) < 1 || !existsSync(e.result.path)) bad.push({ which, k })
+        },
+      })
+      await q.request('not-an-id') // loads the items
+      await Promise.all([q.request(q.id(0, 'a')), ticks(k).then(() => { if (which === 'drop') return w.cache.dropDocument('d-win'); ended = true; return q.end() })])
+      expect(bad).toEqual([])
+      await q.end(); await o.end(); await w.cache.close()
+    }
+  })
+
+  it('a request joining an in-flight encode-ahead is pinned at once: a request in the settle window never drops it', async () => {
+    for (let k = 0; k <= 12; k++) {
+      const w = world({ sessionBytes: 50 * MiB, serverBytes: 128 * MiB }), tc = fakeTranscode({ manual: true, size: () => 30 * MiB })
+      const memPart = async () => ({ path: '/mem/part', dispose: async () => {} }) // microtask-only, so the window is addressable
+      const s1 = synthQueue(w, 's1', 'd-join', [['a'], ['b']], tc, memPart)
+      await s1.start(0) // encode-ahead runs a
+      await until(() => tc.calls.length === 1, 'a runs')
+      // Another session caches b (delivered: unreferenced).
+      const o = synthQueue(w, 'o', 'd-join', [['a'], ['b']], tc, memPart)
+      const rbo = o.request(o.id(1, 'b')); await until(() => tc.calls.length === 2, 'b'); tc.calls[1]!.finish(); ok(await rbo)
+      w.cache.delivered('o', itemOf('o', 'd-join', 1, 'b').key)
+      const ra = s1.request(s1.id(0, 'a')) // joins the running encode-ahead
+      await Bun.sleep(1)
+      tc.calls[0]!.finish()
+      const rb = ticks(k).then(() => s1.request(s1.id(1, 'b'))) // in the window after a settles
+      const [a, b] = await Promise.all([ra, rb])
+      void b
+      expect({ k, a: a.ok ? 'ok' : a.reason }).toEqual({ k, a: 'ok' })
+      await s1.end(); await o.end(); await w.cache.close()
+    }
+  })
+
+  it('start() counts nothing when the document is revoked or the queue ends while it takes cached references', async () => {
+    for (const which of ['drop', 'end'] as const) for (let k = 0; k <= 6; k++) {
+      const w = world(), tc = fakeTranscode()
+      const o = synthQueue(w, 'o', 'd-cnt', [['a', 'b']], tc)
+      ok(await o.request(o.id(0, 'a'))); w.cache.delivered('o', itemOf('o', 'd-cnt', 0, 'a').key)
+      const bad: unknown[] = []
+      let ended = false
+      const q = synthQueue(w, 's', 'd-cnt', [['a', 'b']], tc, fakePart, {
+        observe: (e) => { if (e.type === 'start' && e.count > 0 && (ended || w.cache.revoked('d-cnt'))) bad.push({ which, k, n: e.count }) },
+      })
+      await q.request('not-an-id')
+      const [n] = await Promise.all([q.start(0), ticks(k).then(() => { if (which === 'drop') return w.cache.dropDocument('d-cnt'); ended = true; return q.end() })])
+      expect(bad).toEqual([])
+      expect([0, 1]).toContain(n)
+      await q.end(); await o.end(); await w.cache.close()
+    }
   })
 
   it('MEDIA_SERVER_CACHE is 2 GiB and positive', () => {
