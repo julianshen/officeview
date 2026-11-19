@@ -3,12 +3,14 @@
  * shared-cache key.
  *
  * Amendment to D8 (Task 7, for the controller): the audio filter is `asetpts=N/SR/TB,apad`, not `apad` alone.
- * `-t` cuts on timestamps, and a source whose timestamps run ahead of its samples loses its tail before `apad`
- * engages: `a.wma` (asf stores pts in whole ms, 0.046 s per 1024-sample packet at 22050 Hz, so its pts end near
- * 2.04 s while its samples total 1.997 s) encoded to 1.942 s under the literal D8 argv on ffmpeg 8.1.1, 58 ms short
- * of its probed 1999 ms and outside the one-AAC-frame bound. Restamping by sample count first makes every fixture
- * exactly `durationMs`. The cost: a real timestamp gap or late start in a source is collapsed (samples play
- * back to back from 0), as most players already do for a gapless audio part.
+ * `-t` cuts on timestamps, so a source whose first decoded frame is stamped after the container start loses its
+ * tail before `apad` engages. Measured on ffmpeg 8.1.1 (2026-11-19): `a.wma` has 44 packets from pts 0.000, but
+ * wmav2 decodes them to 43 frames (44032 samples, 1.997 s) and its first decoded frame is stamped 0.092 s; under the
+ * literal D8 argv it encoded to 1.942 s, 57 ms short of its probed 1999 ms and outside the one-AAC-frame bound.
+ * The other fixtures (m4a, mp3 at 3000 ms, wav, av.mp4) give the same duration under either filter. Restamping by
+ * sample count first makes every fixture exactly `durationMs`. Any demuxer can be affected (decoder delay, or a
+ * stream that starts late). The cost: a real timestamp gap or late start in a source is collapsed (samples play
+ * back to back from 0).
  */
 import { createHash } from 'node:crypto'
 import { isAbsolute } from 'node:path'

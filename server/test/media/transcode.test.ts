@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { MEMORY_BYTES, runSandboxed, type SandboxRun } from '../../src/media/sandbox'
@@ -324,6 +324,7 @@ describe.skipIf(!info)('transcode (sandboxed ffmpeg)', () => {
       const { r, out } = await encode(s)
       try {
         expect(r.ok).toBe(true)
+        expect(statSync(out.path).mode & 0o777).toBe(0o600) // Global Constraints: temp files are 0600
         expect(sha(new Uint8Array(readFileSync(out.path)))).toBe(sha(ok(n).bytes))
       } finally { await out.dispose() }
     }
@@ -337,6 +338,16 @@ describe.skipIf(!info)('transcode (sandboxed ffmpeg)', () => {
       expect(big.r.ok).toBe(true)
       if (big.r.ok) expect(big.r.bytes).toBeGreaterThan(256 << 10)
       await big.out.dispose()
+      if (!big.r.ok) throw new Error('positive control failed')
+      // The final-size branch (under the fsize slack, so no SIGXFSZ): one byte under the real size is refused…
+      const under = await encode(s, { maxBytes: big.r.bytes - 1 })
+      expect(under.r).toEqual({ ok: false, reason: 'media-too-large' })
+      expect(existsSync(under.out.path)).toBe(false)
+      await under.out.dispose()
+      // …and exactly the real size is not.
+      const exact = await encode(s, { maxBytes: big.r.bytes })
+      expect(exact.r.ok).toBe(true)
+      await exact.out.dispose()
       const { r, out } = await encode(s, { maxBytes: 256 << 10 })
       expect(r).toEqual({ ok: false, reason: 'media-too-large' })
       expect(existsSync(out.path)).toBe(false)
