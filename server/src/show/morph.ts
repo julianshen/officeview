@@ -49,12 +49,13 @@ import { decodePng, encodePng } from '../mark/png'
 import type { MarkSpec } from '../mark/visible'
 import { jobLedger, markFrame, rasterOne, prepareShowSlide, SHOW_BUNDLE_BUDGET, VALIDATION_MESSAGE_KEY, type ShowBuildOptions, type ShowHost } from './build'
 import { slideStateAt } from './compose'
-import { CLASSIFY_BUDGET, mediaRefused, proveItems, SAMPLES_PER_INTERVAL, TRACK_FPS, TRACK_MAX_FRAMES, type ProofItem } from './eligibility'
+import { CLASSIFY_BUDGET, mediaRefused, mediaUnprovable, proveItems, SAMPLES_PER_INTERVAL, TRACK_FPS, TRACK_MAX_FRAMES, type ProofItem } from './eligibility'
 import { burnVisibleMark, compareMarkContribution, MARK_FIDELITY } from './marks'
 import { compareFrames } from '../../../src/slideshow/compare'
 import { trackTimes } from './tracks'
 
-export interface MorphJob { from: number; to: number; fromStep: number; scale: 1 | 2; motion: 'full' | 'reduced'; mark: MarkSpec; strictMarks?: boolean }
+/** `media` (piece 5, additive): `can.media`. Absent or false: piece 4's media rule (`mediaRefused`). */
+export interface MorphJob { from: number; to: number; fromStep: number; scale: 1 | 2; motion: 'full' | 'reduced'; mark: MarkSpec; strictMarks?: boolean; media?: boolean }
 /** `rest` (additive to the brief): the Layer-1 crop, as `ShowAsset.rest` (page device px at the bucket; the frames rest at 0, 0). */
 export interface MorphAsset { assetId: number; w: number; h: number; png: Uint8Array; rest: { x: number; y: number; scale: number } }
 /**
@@ -162,7 +163,11 @@ function pairInputs(doc: ShowHost, job: MorphJob, ws: SlideShowWorkspace): PairI
   // PR #78 round 12 (12c): a slide whose drawing a media end can reach plays its still, as the classifier refuses it
   // (`mediaRefused`); its pair would rest on a history without the client's synthetic media ends, so the
   // captured-frame fade plays. Media no drawing depends on leaves the pair as it is.
-  if (mediaRefused(from.ps) || mediaRefused(to.ps)) return { refused: 'morph-fallback' }
+  // Piece 5 (media on): `mediaUnprovable` too (a click-timed audio pause, an unresolvable audio end, a video end that
+  // reaches drawing). Piece 4's rule stays: the pair rests on the from-slide's checkpoint and the to-slide's state at
+  // 0, neither of which carries a computed end, so any media end that reaches drawing still refuses the pair.
+  const refuse = (ps: typeof from.ps) => mediaRefused(ps) || (job.media === true && mediaUnprovable(ps, []))
+  if (refuse(from.ps) || refuse(to.ps)) return { refused: 'morph-fallback' }
   const scale = job.scale
   const sink = createDiagnosticSink()
   const fromState = slideStateAt(from.ps, from.timeline, from.timeline.checkpoint(job.fromStep), 0, createRng(0x5eed + job.from), sink)

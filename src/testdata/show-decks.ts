@@ -386,11 +386,14 @@ export const MEDIA_END_REVEAL = Object.freeze({ videoId: 3, finiteMs: 5000, soun
  *   its effect (`evt="begin"`); click 2 fades the media shape (id 3) in. Nothing waits on the sound's end.
  */
 export type MediaEndKind = 'onEnd' | 'afterPrevious' | 'afterIndefinite' | 'unrelated' | 'endCondition' | 'endSync' | 'unresolved' | 'cycle' | 'effectSound'
-export function mediaEndRevealDeck(kind: MediaEndKind = 'onEnd'): Promise<Uint8Array> {
+export function mediaEndRevealDeck(kind: MediaEndKind = 'onEnd', o: { media?: 'video' | 'audio' } = {}): Promise<Uint8Array> {
   const v = MEDIA_END_REVEAL.videoId
   const id = ids(v + 1)
   const dur = kind === 'afterPrevious' ? ` dur="${MEDIA_END_REVEAL.finiteMs}"` : ''
-  const video = `<p:video><p:cMediaNode vol="80000"><p:cTn id="${v}"${dur} fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn>${tgt(3)}</p:cMediaNode></p:video>`
+  // Piece 5 (Task 5): `media: 'audio'` plays the same node as audio on the media shape (the plan's record is the
+  // test's: no part). The default is today's deck, byte for byte.
+  const el = o.media === 'audio' ? 'audio' : 'video'
+  const video = `<p:${el}><p:cMediaNode vol="80000"><p:cTn id="${v}"${dur} fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn>${tgt(3)}</p:cMediaNode></p:${el}>`
   let nodes: string
   const entr = (own: number, attrs: string, conds: string, kids: string) =>
     `<p:par><p:cTn id="${own}" presetID="1" presetClass="entr" presetSubtype="0"${attrs} nodeType="afterEffect">${conds}<p:childTnLst>${kids}</p:childTnLst></p:cTn></p:par>`
@@ -960,6 +963,44 @@ export async function twoShapeAudioDeck(): Promise<Uint8Array> {
   types = types.replace(new RegExp(`<Override PartName="/ppt/media/${second.split('/').pop()!.replace('.', '\\.')}"[^>]*/>`), '')
   zip.file('[Content_Types].xml', types)
   return new Uint8Array(await zip.generateAsync({ type: 'uint8array' }))
+}
+
+/**
+ * Piece 5 (D22): one slide with a video (`av.mp4`, shape 3, `cTn` 3) and a narration (`a.m4a`, shape 4, `cTn` 4);
+ * the ink box (id 2) appears on a media end.
+ * - `video`: both begin with the slide; the box enters on the video's end (a video end gates a build: the still).
+ * - `none`: both begin with the slide; the box enters on the narration's end (no video end gates anything: the
+ *   audio ends on the clock).
+ * - `chain`: the narration begins on the video's end; nothing waits on the narration (its record ships refused
+ *   `media-unavailable`, and the slide animates).
+ * - `chain-build`: as `chain`, and the box enters on the narration's end (the still).
+ */
+export function mixedMediaDeck(gate: 'video' | 'none' | 'chain' | 'chain-build'): Promise<Uint8Array> {
+  const chained = gate === 'chain' || gate === 'chain-build'
+  const narration = mediaNode('audio', 4, spTgt(4), { narration: true, ...(chained ? { start: '<p:cond evt="onEnd" delay="0"><p:tn val="3"/></p:cond>' } : {}) })
+  const on = gate === 'video' ? 3 : gate === 'none' || gate === 'chain-build' ? 4 : undefined
+  const reveal = on === undefined ? '' : `<p:par><p:cTn id="5" presetID="1" presetClass="entr" presetSubtype="0" fill="hold" nodeType="afterEffect"><p:stCondLst><p:cond evt="onEnd" delay="0"><p:tn val="${on}"/></p:cond></p:stCondLst><p:childTnLst>${setVisibility(ids(6), 2, 'visible')}</p:childTnLst></p:cTn></p:par>`
+  return mediaDeck({ slides: [{
+    boxes: [rect(2, 'Ink', 400, 300, 160, 120, HIDDEN_INK)],
+    media: [{ spid: 3, file: 'av.mp4', kind: 'video' }, { spid: 4, file: 'a.m4a' }],
+    timing: mediaNode('video', 3, spTgt(3)) + narration + reveal,
+  }] })
+}
+
+/**
+ * Piece 5 (D22): an animated slide: its video (shape 3, `av.mp4`) begins with the slide, the video's shape appears
+ * on click 1, and a click on it (an interactive sequence) toggles the video's pause. A video command stays blanked,
+ * so the click changes nothing a server history misses. (The shape enters on a click so the slide's static ink under
+ * it is observed: a trigger slide with a mask plays its still, rule 6a.)
+ */
+export function clickPauseVideoDeck(): Promise<Uint8Array> {
+  const id = ids(20)
+  const cond = `<p:cond evt="onClick" delay="0">${tgt(3)}</p:cond>`
+  const pause = `<p:par><p:cTn id="12" presetID="2" presetClass="mediacall" presetSubtype="0" fill="hold" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${cmdNode(13, 'call', 'togglePause', spTgt(3))}</p:childTnLst></p:cTn></p:par>`
+  const seq = `<p:seq concurrent="1" nextAc="seek"><p:cTn id="10" restart="whenNotActive" fill="hold" evtFilter="cancelBubble" nodeType="interactiveSeq"><p:stCondLst>${cond}</p:stCondLst><p:endSync evt="end" delay="0"><p:rtn val="all"/></p:endSync><p:childTnLst>` +
+    `<p:par><p:cTn id="11" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${pause}</p:childTnLst></p:cTn></p:par>` +
+    `</p:childTnLst></p:cTn><p:nextCondLst>${cond}</p:nextCondLst></p:seq>`
+  return mediaDeck({ slides: [{ boxes: [BOX], media: [{ spid: 3, file: 'av.mp4', kind: 'video' }], timing: mediaNode('video', 3, spTgt(3)) + mainSeqXml([clickStep(id, [appear(3)])]) + seq }] })
 }
 
 /** The media decks by name (Task 4's leak audit plays each). */

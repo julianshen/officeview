@@ -41,12 +41,14 @@
 import { invert, stateMatrix } from '../../../src/slideshow/affine'
 import type { SchedulerSnapshot } from '../../../src/slideshow/engine/scheduler'
 import type { SlideCursor, SlideTimeline } from '../../../src/slideshow/engine/steps'
+import { mediaClockOf, slideMediaEnds, type MediaClockRecord } from '../../../src/slideshow/engine/media-ends'
+import { parseMediaCommand } from '../../../src/slideshow/media/commands'
 import type { FontResolver } from '../../../src/core/fonts/register'
 import type { PreparedSlide } from '../../../src/slideshow/prepare'
 import type { PlanLayer } from '../../../src/slideshow/render/plan'
 import { createRng } from '../../../src/slideshow/rng'
 import { targetKey } from '../../../src/slideshow/target'
-import type { Affine, BehaviourNode, Condition, ContainerNode, DiagnosticSink, TimeNode, LayerBitmap, RenderState, TargetState } from '../../../src/slideshow/types'
+import type { Affine, AudioBehaviour, BehaviourNode, Condition, ContainerNode, DiagnosticSink, TimeNode, LayerBitmap, RenderState, TargetState } from '../../../src/slideshow/types'
 import { SHOW_PLAN_LIMITS, type Rect } from '../../../src/stream/show-plan'
 import { releaseCanvas, showCanvasBackend } from './canvas'
 import { createSlideComposer, deviceMatrix, drawsAt, maskedRaster, slideStateAt, type DrawnLayer } from './compose'
@@ -63,6 +65,13 @@ export interface ClassifyInput {
   triggers: readonly string[]
   /** Additive to the brief: the font resolver the rasters used (it measures a paragraph range's mask box). Default: identity. */
   resolveFont?: FontResolver
+  /**
+   * Piece 5 (D18, X5): `can.media` true, with the records the plan ships. Absent: piece 4 (`mediaRefused`, every
+   * history without a media end, as the client's synthetic ends leave drawing). Present: `mediaUnprovable` stills the
+   * slide, and every history is evaluated with the computed audio ends (`classifierTimeline`), as the client driver
+   * evaluates it with the same records.
+   */
+  media?: { records: readonly MediaClockRecord[] }
 }
 export interface StepClass { eligibility: 'layers' | 'composited'; reason?: 'colour' | 'mask' | 'emphasis' | 'budget' | 'swept' | 'strict-marks' | 'mark-rest' | 'limits' | 'media'; frames?: number }
 export interface Classification {
@@ -320,7 +329,10 @@ interface Planned {
 }
 
 export function classifySlide(input: ClassifyInput): Classification {
-  const { ps, timeline, scale, rasters, strictMarks } = input
+  const { ps, scale, rasters, strictMarks } = input
+  // Piece 5: with media on, every history the classifier reads carries the computed audio ends (the plain timeline
+  // when media is off, or the slide has no audio: piece 4 exactly).
+  const timeline = classifierTimeline(ps, input.timeline, input.media)
   const n = timeline.steps
   const out: Classification = { drop: new Set(), masks: new Map(), steps: [], triggers: new Map(), compositions: 0, diagnostics: [] }
   const shipped = ps.layers.filter(l => l.kind !== 'watermark')
@@ -468,7 +480,14 @@ export function classifySlide(input: ClassifyInput): Classification {
     // it is active (`syntheticEnds` in the shared driver), at a frame-dependent time and only on a live cursor.
     // Every history built here has no media end. Round 12c: when a media end can reach drawing (a structural
     // dependency analysis, `mediaRefused`), what that end starts or cuts short is unproven: the still.
-    if (mediaRefused(ps)) throw new Still('media')
+    // Piece 5 (media on): video as piece 4 (D22); audio ends on the clock (`mediaUnprovable`, `computedAudio`).
+    let computed: { until: number } | undefined
+    if (input.media) {
+      if (mediaUnprovable(ps, input.media.records)) throw new Still('media')
+      const c = computedAudio(ps, timeline, n, input.triggers.length)
+      if (c === 'still') throw new Still('media')
+      computed = c
+    } else if (mediaRefused(ps)) throw new Still('media')
 
     // ---- Plan every state, before any composition -------------------------------------------------------
     const boundaries = Array.from({ length: n + 1 }, (_, k) => draws(stateAt(timeline.checkpoint(k), 0)))
@@ -523,7 +542,9 @@ export function classifySlide(input: ClassifyInput): Classification {
 
     // Autoplay (fix round 1, ruling 1): the interval before the first click is proven like a step, or the slide is its still.
     const init = timeline.initial()
-    const pre = startTime(timeline)
+    // An audio end that reaches drawing (no click step, no trigger: `computedAudio`): the autoplay interval runs on
+    // to the last effect its computed ends start, so its samples see what they reveal.
+    const pre = computed ? Math.max(startTime(timeline), computed.until) : startTime(timeline)
     const init0 = timeline.stateAt(init, 0)
     const autoKeys = timeline.keyTimes(init, 0, Number.POSITIVE_INFINITY)
     const auto = pre > 0 || autoKeys.length > 0 || init0.active.length > 0 || init0.frozen.length > 0
@@ -722,7 +743,22 @@ export function holdsMedia(ps: PreparedSlide): boolean {
  * Fail closed (true): a reference to a node not in the tree, a cycle among the references, a tree deeper than 256
  * or over 20,000 nodes, and (round 12d) any timing on a dependent node outside the allowlist (`timingModelled`).
  */
-export function mediaEndAffectsDrawing(root: TimeNode): boolean {
+export function mediaEndAffectsDrawing(root: TimeNode, o: { only?: 'video' | 'audio' } = {}): boolean {
+  return analyseMediaEnds(root, o.only ?? 'all').result !== 'none'
+}
+
+/**
+ * The analysis behind `mediaEndAffectsDrawing`. `seed`: which media nodes' ends are analysed (`C`): all of them
+ * (piece 4), only video (D22: piece 5 plays no video, so a video end is still the client's synthetic one), or only
+ * audio (its computed end). `result`: `affects` when such an end can reach drawing, `unresolved` when the analysis
+ * fails closed (an unresolved reference, a cycle, the bounds, unmodelled timing on a dependent node), else `none`.
+ * `begins`: the nodes whose begin may depend on such an end (`B`; D22's "audio chained to a video end").
+ *
+ * With the audio seed, a seeded audio node's own `repeatCount` is modelled (rule 4 of the media clock: it plays
+ * N × `durationMs`, or is open), so it does not fail the timing allowlist; nothing else is relaxed.
+ */
+function analyseMediaEnds(root: TimeNode, seed: 'all' | 'video' | 'audio'): { result: 'none' | 'affects' | 'unresolved'; begins: Set<TimeNode> } {
+  const unresolved = { result: 'unresolved' as const, begins: new Set<TimeNode>() }
   const nodes: TimeNode[] = []
   const parent = new Map<TimeNode, ContainerNode | undefined>()
   const byId = new Map<number, TimeNode[]>()
@@ -737,10 +773,10 @@ export function mediaEndAffectsDrawing(root: TimeNode): boolean {
     if ('children' in n) for (const c of n.children) walk(c, n, depth + 1)
   }
   walk(root, undefined, 0)
-  if (over) return true
+  if (over) return unresolved
   const conds = (n: TimeNode): Condition[] => [...n.ctn.start, ...n.ctn.end, ...(n.ctn.endSync ? [n.ctn.endSync] : [])]
   // Unresolved references, then cycles among them (a node waits on another's begin or end).
-  for (const n of nodes) for (const c of conds(n)) if (c.tn !== undefined && !byId.has(c.tn)) return true
+  for (const n of nodes) for (const c of conds(n)) if (c.tn !== undefined && !byId.has(c.tn)) return unresolved
   const state = new Map<TimeNode, 1 | 2>()
   const cyclic = (n: TimeNode): boolean => {
     const st = state.get(n)
@@ -751,10 +787,11 @@ export function mediaEndAffectsDrawing(root: TimeNode): boolean {
     state.set(n, 2)
     return false
   }
-  for (const n of nodes) if (cyclic(n)) return true
+  for (const n of nodes) if (cyclic(n)) return unresolved
 
   const B = new Set<TimeNode>(), C = new Set<TimeNode>(), E = new Set<TimeNode>()
   const isMedia = (n: TimeNode) => n.kind === 'audio' || n.kind === 'video'
+  const seeded = (n: TimeNode) => (seed === 'all' ? isMedia(n) : n.kind === seed)
   // Any reference, whatever its event: a node that begins again has later begins that follow its end.
   const refDep = (c: Condition) => c.tn !== undefined && byId.get(c.tn)!.some(m => B.has(m) || E.has(m))
   const repeats = (n: TimeNode) => n.ctn.repeatCount !== undefined || n.ctn.repeatDurMs !== undefined || n.ctn.autoRev
@@ -770,7 +807,7 @@ export function mediaEndAffectsDrawing(root: TimeNode): boolean {
       const exclDep = p?.kind === 'excl' && sibs.some(o => o !== n && (B.has(o) || E.has(o)))
       const b = (!!p && B.has(p)) || n.ctn.start.some(refDep) || (!!prev && E.has(prev) && chained(n)) ||
         (!!p && repeats(p) && E.has(p)) || exclDep
-      const c = isMedia(n) || n.ctn.end.some(refDep) || (!!n.ctn.endSync && refDep(n.ctn.endSync)) || (!!p && C.has(p)) ||
+      const c = seeded(n) || n.ctn.end.some(refDep) || (!!n.ctn.endSync && refDep(n.ctn.endSync)) || (!!p && C.has(p)) ||
         (!!p && !!p.ctn.endSync && sibs.some(o => E.has(o))) || exclDep
       const follows = 'children' in n && (n.ctn.durMs === undefined || !!n.ctn.endSync) && n.children.some(o => E.has(o))
       const e = b || c || follows || (!!n.ctn.endSync && refDep(n.ctn.endSync))
@@ -780,7 +817,7 @@ export function mediaEndAffectsDrawing(root: TimeNode): boolean {
     }
   }
   // Round 12d: a media-dependent node carries only timing the model handles (`timingModelled`).
-  for (const n of nodes) if ((B.has(n) || C.has(n) || E.has(n)) && !timingModelled(n)) return true
+  for (const n of nodes) if ((B.has(n) || C.has(n) || E.has(n)) && !timingModelled(n, seed === 'audio' && n.kind === 'audio')) return unresolved
   // Round 12e: "drawn" is any leaf whose activity a renderer observes (`ACTIVITY_CONSUMERS`): a behaviour with render
   // edits (not media, not `cmd`), or any leaf on a shape target with an own or inherited `presetClass`, which
   // `timingTargets` may put in an entrance set that the entrance gate reads (media and `cmd` included).
@@ -794,14 +831,15 @@ export function mediaEndAffectsDrawing(root: TimeNode): boolean {
   // A begin that is not a fixed offset into its parent: it may come after the container's client-side end.
   const late = (n: TimeNode) => n.ctn.start.some(c => c.evt !== undefined || c.tn !== undefined || c.delayMs === 'indefinite')
   const lateBelow = (n: TimeNode): boolean => 'children' in n ? n.children.some(o => (!isMedia(o) && late(o)) || lateBelow(o)) : false
+  const affects = { result: 'affects' as const, begins: B }
   for (const n of nodes) {
-    if (drawn(n) && (B.has(n) || C.has(n))) return true
+    if (drawn(n) && (B.has(n) || C.has(n))) return affects
     if (!('children' in n) || !E.has(n) || !drawnBelow(n)) continue
-    if (n.ctn.fill !== 'hold' && n.ctn.fill !== 'freeze') return true
-    if (n.ctn.start.some(c => c.evt !== undefined) || (n.ctn.restart !== undefined && n.ctn.restart !== 'never')) return true
-    if (lateBelow(n)) return true
+    if (n.ctn.fill !== 'hold' && n.ctn.fill !== 'freeze') return affects
+    if (n.ctn.start.some(c => c.evt !== undefined) || (n.ctn.restart !== undefined && n.ctn.restart !== 'never')) return affects
+    if (lateBelow(n)) return affects
   }
-  return false
+  return { result: 'none', begins: B }
 }
 
 /**
@@ -849,9 +887,10 @@ export const TIMING_DEFAULT_ONLY: Readonly<Record<string, (v: unknown) => boolea
 }
 export const TIMING_IGNORED: ReadonlySet<string> = new Set(['syncBehavior', 'masterRel', 'afterEffect'])
 
-function timingModelled(n: TimeNode): boolean {
+function timingModelled(n: TimeNode, repeatModelled = false): boolean {
   for (const [k, v] of Object.entries(n.ctn)) {
     if (TIMING_MODELLED.has(k) || TIMING_IGNORED.has(k)) continue
+    if (repeatModelled && k === 'repeatCount') continue
     const ok = TIMING_DEFAULT_ONLY[k]
     if (!ok || !ok(v)) return false
   }
@@ -934,4 +973,153 @@ function toggleOnly(base: readonly DrawnLayer[], list: readonly DrawnLayer[]): b
     if (!b && differs(stateMatrix(s), [1, 0, 0, 1, 0, 0], 1e-6)) return false
   }
   return true
+}
+
+// ---------------------------------------------------------------------------
+// Piece 5: media on (spec §5; plan D18, D22, X5)
+// ---------------------------------------------------------------------------
+
+/** The slide's timing trees: the streamed one and the scheduled one (text builds fanned out). */
+function timingRoots(ps: PreparedSlide): TimeNode[] {
+  const timing = ps.meta.timing
+  return [timing && !('refused' in timing) ? timing.root : undefined, ps.textTiming?.tree.root].filter((r): r is TimeNode => !!r)
+}
+
+function holdsKind(root: TimeNode, kind: 'audio' | 'video'): boolean {
+  const walk = (n: TimeNode, depth: number): boolean => {
+    if (depth > 256) return false
+    if ('children' in n) return n.children.some(c => walk(c, depth + 1))
+    return n.kind === kind
+  }
+  return walk(root, 0)
+}
+
+/** A start that waits on a click on a shape (an interactive sequence), as `triggersMoveGeometry` reads it. */
+const interactiveNode = (n: TimeNode) => n.ctn.nodeType === 'interactiveSeq' || n.ctn.start.some(c => c.evt !== undefined && c.target !== undefined)
+
+/** A `togglePause`, `pause` or `resume` aimed at an audio shape, reached from an interactive sequence. */
+function interactiveAudioPause(root: TimeNode, audioSpids: ReadonlySet<string>): boolean {
+  const walk = (n: TimeNode, depth: number, inside: boolean): boolean => {
+    if (depth > 256) return true
+    const within = inside || interactiveNode(n)
+    if ('children' in n) return n.children.some(c => walk(c, depth + 1, within))
+    if (!within || n.kind !== 'cmd' || !('spid' in n.target) || !audioSpids.has(n.target.spid)) return false
+    const c = parseMediaCommand(n.cmdType, n.cmd)
+    return c?.verb === 'togglePause' || c?.verb === 'pause' || c?.verb === 'resume'
+  }
+  return walk(root, 0, false)
+}
+
+/**
+ * Piece 5 (spec §5.4, D22): with media on, the slide plays its still (reason `media`) when what it draws can depend
+ * on something the server cannot know:
+ * - a `togglePause`, `pause` or `resume` on an audio target (a shape an audio node or a record plays on), reached
+ *   from an interactive (trigger) sequence: a click times it;
+ * - an audio end condition the piece-4 dependency analysis cannot resolve (`unresolved` with the audio seed);
+ * - a video end that can change what is drawn: piece 4's analysis with only video nodes seeded (D22: video is not
+ *   played, so its end is still the client's synthetic, frame-timed one).
+ * `records`: the plan's audio records (their `spid`s are audio targets too).
+ */
+export function mediaUnprovable(ps: PreparedSlide, records: readonly MediaClockRecord[]): boolean {
+  for (const root of timingRoots(ps)) {
+    if (holdsKind(root, 'video') && analyseMediaEnds(root, 'video').result !== 'none') return true
+    if (!holdsKind(root, 'audio')) continue
+    if (analyseMediaEnds(root, 'audio').result === 'unresolved') return true
+    const spids = new Set(records.flatMap(r => (r.spid !== undefined ? [r.spid] : [])))
+    const walk = (n: TimeNode, depth: number) => {
+      if (depth > 256) return
+      if ('children' in n) { for (const c of n.children) walk(c, depth + 1); return }
+      if (n.kind === 'audio' && 'spid' in n.target) spids.add(n.target.spid)
+    }
+    walk(root, 0)
+    if (interactiveAudioPause(root, spids)) return true
+  }
+  return false
+}
+
+/**
+ * D22: the audio nodes whose begin may depend on a video end (the video-seeded analysis' `B`), in `root`. Their
+ * records ship `refused: 'media-unavailable'`: the client would start them at a frame-timed synthetic video end.
+ * On a tree the analysis cannot resolve, every audio node (the slide is a still then anyway).
+ */
+export function videoChainedAudio(root: TimeNode): AudioBehaviour[] {
+  const out: AudioBehaviour[] = []
+  if (!holdsKind(root, 'video') || !holdsKind(root, 'audio')) return out
+  const a = analyseMediaEnds(root, 'video')
+  const walk = (n: TimeNode, depth: number) => {
+    if (depth > 256) return
+    if ('children' in n) { for (const c of n.children) walk(c, depth + 1); return }
+    if (n.kind === 'audio' && (a.result === 'unresolved' || a.begins.has(n))) out.push(n)
+  }
+  walk(root, 0)
+  return out
+}
+
+type ComputedAudio = { until: number } | 'still'
+
+/**
+ * Piece 5, the classifier's proof obligation for a computed audio end that reaches drawing (the audio-seeded
+ * analysis says `affects`; `undefined` when none does: every history then draws as without the ends).
+ *
+ * The ends are on the show clock from each node's begin, and the classifier's click-step histories replay from a
+ * settled checkpoint at the step's start: an end that lands after a click, at an offset the viewer's click timing
+ * picks, is in no sampled history (as rule 6a's trigger interleavings). So such a slide is proven only when its one
+ * live history is the autoplay from `initial()`: no click step, no trigger, no main-sequence effect a Next could
+ * settle; otherwise the still (reason `media`; reported as a finding, Task 5). `until`: the last time the computed
+ * history starts or ends anything (its last end and key time), which the autoplay interval then covers.
+ */
+function computedAudio(ps: PreparedSlide, timeline: SlideTimeline, steps: number, triggers: number): ComputedAudio | undefined {
+  if (!timingRoots(ps).some(r => holdsKind(r, 'audio') && analyseMediaEnds(r, 'audio').result === 'affects')) return undefined
+  if (steps > 0 || triggers > 0) return 'still'
+  const init = timeline.initial()
+  const ends = (timeline as ClassifierTimeline).mediaEndsOf?.(init)
+  if (!ends || ends.truncated) return 'still'
+  if (Number.isFinite(timeline.busyUntil(ends.cursor))) return 'still'
+  const keys = timeline.keyTimes(init, 0, Number.POSITIVE_INFINITY)
+  const until = Math.max(0, ...keys, ...ends.ends.map(e => e.at))
+  return Number.isFinite(until) ? { until } : 'still'
+}
+
+/** The classifier's timeline with media on: every read carries the computed audio ends. */
+interface ClassifierTimeline extends SlideTimeline {
+  /** The ends `settle` records on `cursor` through the end of time. */
+  mediaEndsOf?(cursor: SlideCursor): { cursor: SlideCursor; ends: Array<{ nodeId: number; at: number }>; truncated: boolean }
+}
+
+/**
+ * Piece 5 (spec §5.4, X5): the timeline the classifier evaluates. Without `media` (can.media false), or on a slide
+ * with no audio node, `timeline` itself: piece 4. With it, the same timeline whose `stateAt(cursor, t)` and
+ * `keyTimes(cursor, from, to)` read `cursor` with every computed audio end due by then recorded
+ * (`busyUntil`, which places the step windows, reads the plain history, as piece 4) (`slideMediaEnds`
+ * over the plan's records): the history the client driver plays with the same records and the same clock.
+ */
+export function classifierTimeline(ps: PreparedSlide, timeline: SlideTimeline, media?: { records: readonly MediaClockRecord[] }): SlideTimeline {
+  if (!media) return timeline
+  const roots = timingRoots(ps)
+  const me = slideMediaEnds(roots, mediaClockOf(roots, media.records))
+  if (!me.audio) return timeline
+  const memo = new WeakMap<SlideCursor, Map<number, ReturnType<typeof me.settle>>>()
+  const settled = (cursor: SlideCursor, t: number) => {
+    let byT = memo.get(cursor)
+    if (!byT) memo.set(cursor, byT = new Map())
+    let r = byT.get(t)
+    if (!r) byT.set(t, r = me.settle(timeline, cursor, t))
+    return r
+  }
+  const out: ClassifierTimeline = {
+    get steps() { return timeline.steps },
+    stateAt: (c, t) => timeline.stateAt(settled(c, Math.max(0, t)).cursor, t),
+    next: (c, t) => timeline.next(c, t),
+    checkpoint: (k) => timeline.checkpoint(k),
+    trigger: (c, spid, t) => timeline.trigger(c, spid, t),
+    triggers: () => timeline.triggers(),
+    initial: () => timeline.initial(),
+    // Piece 4's step windows (where samples go) stay as they were: only what a history draws carries the ends.
+    busyUntil: (c) => timeline.busyUntil(c),
+    mediaEnd: (c, id, t, synthetic) => timeline.mediaEnd(c, id, t, synthetic),
+    keyTimes: (c, from, to) => timeline.keyTimes(settled(c, to).cursor, from, to),
+    activations: (c, t) => timeline.activations(c, t),
+    mediaEndsOf: (c) => settled(c, Number.POSITIVE_INFINITY),
+  }
+  return out
 }

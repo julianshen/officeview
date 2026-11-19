@@ -49,7 +49,7 @@ import { decodePng, encodePng } from '../mark/png'
 import { markOptions, paintMark, type MarkSpec } from '../mark/visible'
 import { tauFor } from '../detect/tau'
 import { classifiedRasters, createSlideComposer, drawsAt, maskedRaster, slideStateAt, type DrawnLayer } from './compose'
-import { allocateFrames, classifySlide, stepDurations, type Classification } from './eligibility'
+import { allocateFrames, classifySlide, stepDurations, videoChainedAudio, type Classification } from './eligibility'
 import { burnVisibleMark, compareMarkContribution, MARK_FIDELITY } from './marks'
 import { compareFrames } from '../../../src/slideshow/compare'
 
@@ -285,9 +285,19 @@ function streamedMeta(meta: ShowSlide, unit: number, media?: MediaInputs): { met
     const kept = media?.on ? { ...(start ? { start: { rId: start, loop: sound.start!.loop } } : {}), ...(sound.end ? { end: true as const } : {}) } : undefined
     transition = kept && (kept.start || kept.end) ? { ...rest, sound: kept } : rest
   }
+  // D22: an audio use whose begin may depend on a video end would start at the client's synthetic (frame-timed)
+  // video end: its record ships refused `media-unavailable` (a spid-less record if any of its uses is chained, X13).
+  const chained = new Set<string>()
+  if (mp && media?.on && meta.timing && !('refused' in meta.timing)) {
+    for (const n of videoChainedAudio(meta.timing.root)) {
+      const t = n.target
+      if ('snd' in t) { const ph = mp.snd.get(t.snd); if (ph) chained.add(ph) }
+      else if ('spid' in t) for (const r of mp.records) if (r.spid === t.spid) chained.add(r.placeholder)
+    }
+  }
   const records = mp && media ? mp.records.map((r): PlanMediaRecord => {
     const base = { mediaId: r.placeholder, kind: 'audio' as const, ...(r.spid !== undefined ? { spid: r.spid } : {}) }
-    if (!media.on) return { ...base, durationMs: 0, refused: 'media-unavailable' }
+    if (!media.on || chained.has(r.placeholder)) return { ...base, durationMs: 0, refused: 'media-unavailable' }
     if (r.refused || r.partPath === undefined) return { ...base, durationMs: 0, refused: r.refused ?? 'media-unreadable' }
     const e = media.entry(r.partPath)
     if (!e) throw new Error('show: media part not probed')
@@ -639,7 +649,10 @@ export function trackInputs(show: ShowDoc, job: ShowPlanJob): { ps: PreparedSlid
 function classificationOf(e: L1Entry, job: ShowPlanJob): Classification {
   const have = e.classes.get(job.strictMarks)
   if (have) return have
-  const c = classifySlide({ ps: e.ps!, timeline: e.timeline!, scale: job.scale, rasters: e.rasters!, strictMarks: job.strictMarks, triggers: e.timeline!.triggers(), resolveFont })
+  // Piece 5 (D18, X5): with can.media the classifier evaluates its histories with the computed audio ends of the
+  // records this plan ships (the client's own); without it, piece 4.
+  const media = job.media === true ? { media: { records: e.record!.media ?? [] } } : {}
+  const c = classifySlide({ ps: e.ps!, timeline: e.timeline!, scale: job.scale, rasters: e.rasters!, strictMarks: job.strictMarks, triggers: e.timeline!.triggers(), resolveFont, ...media })
   e.classes.set(job.strictMarks, c)
   return c
 }
