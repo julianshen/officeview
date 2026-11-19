@@ -14,7 +14,7 @@
  *   re-acquires; `request` returns it.
  * - **`end()`**: cancels the session's queued items and requests, `cache.dropSession(sid)` (an encode another
  *   session waits on keeps running), and resolves once every encode left with no waiter has settled (its child gone,
- *   its part and output files disposed: `cache.quiesce()`). Cache entries remain.
+ *   its part and output files disposed: `cache.quiesce()`), waiting at most `MEDIA_QUIESCE_MS`. Cache entries remain.
  */
 import type { MediaRefusal } from '../../../src/stream/media-types'
 import type { MediaAdmission } from './admission'
@@ -46,7 +46,13 @@ export interface SessionMediaQueueOptions {
   cache: EncodeCache /* the shared one */
   transcode: typeof transcode
   seams?: TranscodeSeams
+  /** How long `end()` waits for abandoned encodes to settle (default `MEDIA_QUIESCE_MS`). */
+  quiesceMs?: number
 }
+
+/** `end()`'s bound on waiting for abandoned encodes: one session's end never hangs on a stuck encode (any session's).
+ * A killed group settles in milliseconds; a run still unsettled past this is left to finish (and clean up) alone. */
+export const MEDIA_QUIESCE_MS = 5000
 
 interface KeyState { key: EncodeKey; readied: boolean }
 interface Pick { item: MediaItem; id: string }
@@ -214,7 +220,9 @@ export function createSessionMediaQueue(o: SessionMediaQueueOptions): SessionMed
       poke()
       await loop
       // Every encode left with no waiter (this session's departure included): wait until it has settled and cleaned up.
-      await cache.quiesce()
+      let timer: ReturnType<typeof setTimeout> | undefined
+      await Promise.race([cache.quiesce(), new Promise<void>((ok) => { timer = setTimeout(ok, o.quiesceMs ?? MEDIA_QUIESCE_MS) })])
+      clearTimeout(timer)
     },
     get running() { return running },
   }

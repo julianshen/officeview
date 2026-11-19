@@ -444,6 +444,28 @@ describe('the session queue (D1, D12)', () => {
     await w.cache.close()
   })
 
+  it("end() is bounded: one session's end never hangs on another session's stuck, abandoned encode", async () => {
+    const w = world()
+    let unstick!: () => void
+    const stuck = new Promise<void>((ok) => { unstick = ok })
+    // A transcode that ignores its abort until released (a wedged child).
+    let started = 0
+    const wedged: typeof transcode = async (_i, job) => { started++; writeFileSync(job.out, 'x'); await stuck; unlinkSync(job.out); throw new Error('aborted late') }
+    const mk = (sid: string, name: string) => createSessionMediaQueue({ sid, units: 1, info: FAKE_INFO, temp, admission: w.admission, cache: w.cache, transcode: wedged, part: fakePart, items: async (u) => [itemOf(sid, 'd-stuck', u, name)], quiesceMs: 50 })
+    const s1 = mk('s1', 'a'), s2 = mk('s2', 'b')
+    await s1.start(0)
+    await until(() => started === 1, 's1 encodes')
+    const t0 = Date.now()
+    await s1.end() // its own flight is abandoned and stuck: bounded
+    await s2.start(0)
+    await until(() => started === 2, 's2 encodes')
+    await s2.end() // waits on the server's abandoned flights, s1's stuck one included: bounded
+    expect(Date.now() - t0).toBeLessThan(5000)
+    unstick()
+    await w.cache.quiesce()
+    await w.cache.close()
+  })
+
   it('MEDIA_SERVER_CACHE is 2 GiB and positive', () => {
     expect(MEDIA_SERVER_CACHE).toBe(2147483648)
     expect(MEDIA_SERVER_CACHE).toBeGreaterThan(0)
