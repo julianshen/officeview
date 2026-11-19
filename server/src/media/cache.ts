@@ -22,7 +22,11 @@
  *   gets `{ wait: true }`. A request first drops the session's own farthest-ahead references to done entries
  *   (distance from `cursor` along `order`; ties: the latest-taken first; never the requested key), then, on a miss,
  *   evicts unreferenced done entries least-recently-used first, then answers `media-busy`. A request still over its
- *   look-ahead after dropping everything droppable proceeds: only the server cap refuses (D12 "no deadlock").
+ *   256 MiB look-ahead after dropping everything droppable is refused `media-busy` too: pinned deliveries and the
+ *   session's own flights cannot be dropped, and the hard cap holds (final review F4). D12's "no deadlock" is that
+ *   serial delivery releases each pin when it is delivered and pressure drops every eligible reference, so a request
+ *   needs at most its 32 MiB of look-ahead once earlier deliveries finish; it is no promise of admission past the
+ *   session's pinned capacity. A full server cache, wholly referenced, also answers `media-busy`.
  * - **Idle TTL.** A done entry with no reference is deleted `idleTtlMs` after its last use or release, on the injected
  *   clock. The sweep runs at the top of every public call and on an unref'd timer; referenced entries never expire.
  * - **Pins** (fix round 1). A `request` answered for delivery pins the session's reference (`pin`) until its

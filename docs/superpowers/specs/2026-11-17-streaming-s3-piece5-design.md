@@ -297,7 +297,11 @@ These record where the build differs from the text above, or settles something t
   - A `media-request` that would exceed the session's 256 MiB look-ahead first drops that session's own farthest-ahead undelivered references, in queue order. The entries stay cached, and stay pinned while another session references them.
   - An encode in flight reserves 32 MiB against the 2 GiB server cache.
 
-  Together these mean a request needs at most 32 MiB of the session's look-ahead, so a backward jump cannot deadlock. Only a fully referenced server cache refuses it, with `media-busy`.
+  Together these mean a request needs at most 32 MiB of the session's look-ahead once earlier deliveries have finished, so a backward jump cannot deadlock: delivery is serial, and each delivery releases its pin when it is delivered. Two cases refuse a request with `media-busy`:
+  - the server cache is full and wholly referenced;
+  - the session is still above its 256 MiB look-ahead after dropping every unpinned reference. Pinned deliveries (and the session's own encodes in flight) cannot be dropped, so slow concurrent deliveries that hold pins near the cap refuse a new request even when the server has room. The hard cap holds (final review F4).
+
+  The no-deadlock claim is about serial delivery releasing pins and pressure dropping every eligible reference. It does not promise admission past the session's pinned capacity.
 - **`docId` is an HMAC of the document's content** (Task 7 ruling). §4.3's "the document identity the session opened" is computed from the bytes, so two byte-identical uploads share one encode. There is still no sharing across different documents.
   - Accepted cost: a timing channel. Someone who already holds the identical file can tell from a fast answer that someone else has it open.
   - Closing a document (its last session leaving) deletes its entries, like revocation (Task 9 ruling).
