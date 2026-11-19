@@ -504,6 +504,25 @@ describe('show driver', () => {
     expect(ends()).toHaveLength(1)
   })
 
+  it('with a mediaClock, the player is handed the exact activation history (R1); without one, none', async () => {
+    const late = media('audio', 3, '4')
+    const t = tree({ ...late, ctn: { ...late.ctn, start: [at(250)] } } as BehaviourNode)
+    const seen: Array<Array<[number, number]> | undefined> = []
+    const player = () => ({ wants: true, sync: (_s: unknown, _t: number, _q?: boolean, h?: () => ReadonlyArray<{ node: { ctn: { id: number } }; begin: number }>) => { seen.push(h?.().map((a) => [a.node.ctn.id, a.begin])) }, onEnd: () => {}, leave: () => {} })
+    const r = rig({ slides: [slideOf(0, { timing: t })], mediaClock: () => mediaClockOf([t.root], [{ mediaId: '@a0.4', kind: 'audio', durationMs: 3000, spid: '4' }]), hooks: { media: player } })
+    await r.driver.start(0)
+    r.clock.advance(900)
+    r.driver.tick()
+    expect(seen.at(-1)).toEqual([[3, 250]])
+    seen.length = 0
+    const local = rig({ slides: [slideOf(0, { timing: t })], hooks: { media: player } })
+    await local.driver.start(0)
+    local.clock.advance(900)
+    local.driver.tick()
+    expect(seen.length).toBeGreaterThan(0)
+    expect(seen.every((h) => h === undefined)).toBe(true)
+  })
+
   it('with a mediaClock, an end due before a click is recorded at its clock time, before the click', async () => {
     const t: TimingTree = { root: par(1, [media('audio', 3, '4'), successor(5, 3), mainSeq([clickStep(10, '100')])], { durMs: 'indefinite', restart: 'never', nodeType: 'tmRoot', fill: undefined }), build: [] }
     const r = rig({ slides: [slideOf(0, { timing: t })], mediaClock: () => mediaClockOf([t.root], [{ mediaId: '@a0.4', kind: 'audio', durationMs: 3000, spid: '4' }]) })

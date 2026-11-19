@@ -1054,7 +1054,8 @@ describe('clocked (streaming piece 5, spec §5.2)', () => {
     const tl = createSlideTimeline(t, { showAnimation: true, reducedMotion: false })
     const ctl = player.enter(slideOf(t, [rec('7', 'audio/mp4')]), () => now.t)
     const cursor: SlideCursor = tl.initial()
-    const sync = (ms: number) => { now.t = ms; ctl.sync(tl.stateAt(cursor, ms), ms) }
+    // As the driver's computed path does: the snapshot, and the exact activation history `slideMediaEnds` reads.
+    const sync = (ms: number) => { now.t = ms; ctl.sync(tl.stateAt(cursor, ms), ms, false, () => tl.activations(cursor, ms).activations) }
     const events: MediaEvent[] = cmds.map(([ms, text]) => ({ at: ms, type: 'cmd', nodeId: 10, cmd: parseMediaCommand('call', text)! }))
     const node = (t.root as ContainerNode).children[1] as AudioBehaviour
     return { el, lease, sync, deliver: () => resolve(lease), events, node }
@@ -1116,6 +1117,29 @@ describe('clocked (streaming piece 5, spec §5.2)', () => {
     expect(d.el.play).not.toHaveBeenCalled()
     expect(d.lease.released).toBe(true)
     expect(d.el.getAttribute('src')).toBeNull()
+  })
+
+  it('F1 (re-review R1): a pause stepped over by a frame is logged at its exact begin, not at the frame', async () => {
+    // Ticks 0, 1500, 3000; the 1 ms pause at 1000 has ended by the 1500 frame. Bytes at 3000 → offset 1 s, paused.
+    const d = commanded([[1000, 'pause']])
+    d.sync(0); d.sync(1500); d.sync(3000)
+    d.deliver(); await flush()
+    expect(d.el.currentTime).toBeCloseTo(1, 5)
+    expect(d.el.play).not.toHaveBeenCalled()
+    expect(d.lease.released).toBe(false)
+    expect(mediaPlayheadAt(d.node, 4000, 0, d.events, 3000)).toMatchObject({ pos: 1000, running: false, done: false })
+  })
+
+  it('F1 (re-review R1): a pause and a resume both stepped over join at 1.5 s, running, and are not released', async () => {
+    // Ticks 0, 4500 (a long main-thread task); pause at 1000, resume at 4000; bytes at 4500 → 1.5 s, running; end 7000.
+    const d = commanded([[1000, 'pause'], [4000, 'resume']])
+    d.sync(0); d.sync(4500)
+    d.deliver(); await flush()
+    expect(d.lease.released).toBe(false)
+    expect(d.el.currentTime).toBeCloseTo(1.5, 5)
+    expect(d.el.play).toHaveBeenCalledTimes(1)
+    expect(mediaPlayheadAt(d.node, 4000, 0, d.events, 4500)).toMatchObject({ pos: 1500, running: true, done: false })
+    expect(mediaEndOf(d.node, { mediaId: 'm', kind: 'audio', durationMs: 4000 }, 0, d.events)).toEqual({ at: 7000 })
   })
 
   it('F1: without clocked (local shows) commands and late bytes behave as before', async () => {

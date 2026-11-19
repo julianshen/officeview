@@ -53,7 +53,7 @@
  *   built-in sound (`builtIn:<name>`, not in the package), or media on no
  *   shape and no sound, has no part: diagnosed `media-missing`.
  */
-import type { SchedulerEntry, SchedulerSnapshot } from '../engine/scheduler'
+import type { MediaActivation, SchedulerEntry, SchedulerSnapshot } from '../engine/scheduler'
 import type { AudioBehaviour, CmdBehaviour, DiagnosticSink, MediaRecord, ShowSlide, TimeNode, VideoBehaviour } from '../types'
 import type { MediaLease, MediaLeaseResult } from './lease'
 import { parseMediaCommand } from './commands'
@@ -110,8 +110,13 @@ export interface MediaController {
   retry(nodeId: number): void
   /** Additive: the slide has media nodes or media commands (otherwise `sync` is never needed). */
   readonly wants: boolean
-  /** Additive: follows the timeline at slide time `t`; `quiet` records what has begun without acting (a checkpoint entry). */
-  sync(snap: SchedulerSnapshot, t: number, quiet?: boolean): void
+  /**
+   * Additive: follows the timeline at slide time `t`; `quiet` records what has begun without acting (a checkpoint entry).
+   * `history` (streamed, with `clocked`): the slide's exact activations by `t` (`SlideTimeline.activations`, the
+   * history `slideMediaEnds` reads), so a media node or command a frame stepped over begins at its own time, not at
+   * the frame that observed it (final review R1). Absent, or without `clocked`: begins are sampled from the snapshot.
+   */
+  sync(snap: SchedulerSnapshot, t: number, quiet?: boolean, history?: () => readonly MediaActivation[]): void
   /** Additive: the slide is left. */
   leave(): void
 }
@@ -642,8 +647,17 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       for (const st of nodes.values()) if (st.due !== undefined && t >= st.due && !st.ended) endNow(st, true, st.due)
     }
 
-    function sync(snap: SchedulerSnapshot, t: number, quiet = false): void {
+    function sync(snap: SchedulerSnapshot, t: number, quiet = false, history?: () => readonly MediaActivation[]): void {
       if (left) return
+      // Streamed: exact begins from the timeline history (R1); read once per sync, only when something begins.
+      let acts: readonly MediaActivation[] | undefined
+      const exact = (id: number, sampled: number): number => {
+        if (!deps.clocked || !history) return sampled
+        acts ??= history()
+        let best: number | undefined
+        for (const a of acts) if (a.node.ctn.id === id && a.begin <= t && (best === undefined || a.begin > best)) best = a.begin
+        return best ?? sampled
+      }
       fireDue(t)
       if (nodes.size === 0 && cmds.length === 0) return
       const active = new Map<number, SchedulerEntry>()
@@ -654,7 +668,7 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
         const e = active.get(st.id)
         const seen = !!e || frozen.has(st.id)
         // Begun: active, or already settled when first sampled (reduced motion enters each step settled) - it plays to its clip end.
-        if (seen && !st.seen && !quiet) start(st, beginOf(e, t))
+        if (seen && !st.seen && !quiet) start(st, exact(st.id, beginOf(e, t)))
         else if (!e && st.wasActive && !st.ended) {
           // The node's own timing ended it (dur, an end condition, a Next that settles its step): the clip stops with it.
           stopElement(st)
@@ -668,14 +682,18 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       if (cmds.length) {
         const seen = new Set<number>(active.keys())
         for (const e of snap.frozen) seen.add(e.node.ctn.id)
+        const fired: Array<{ c: CmdBehaviour; at: number }> = []
         for (const c of cmds) {
           const id = c.ctn.id
           const now = seen.has(id) || snap.ended.has(id)
           if (now && !begun.has(id)) {
             begun.add(id)
-            if (!quiet) command(c, beginOf(active.get(id), t))
+            if (!quiet) fired.push({ c, at: exact(id, beginOf(active.get(id), t)) })
           } else if (!now) begun.delete(id)
         }
+        // Streamed: commands a frame stepped over run in the order they began (stable: tree order on ties).
+        if (deps.clocked && history) fired.sort((a, b) => a.at - b.at)
+        for (const f of fired) command(f.c, f.at)
       }
       fireDue(t)
     }

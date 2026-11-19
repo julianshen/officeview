@@ -23,7 +23,7 @@
 import { createAutoAdvance, createKioskTimer, type AutoAdvance, type KioskTimer } from '../engine/advance'
 import { slideMediaEnds, type MediaClock, type SlideMediaEnds } from '../engine/media-ends'
 import { createSlideTimeline, type SlideCursor, type SlideTimeline } from '../engine/steps'
-import type { SchedulerSnapshot } from '../engine/scheduler'
+import type { MediaActivation, SchedulerSnapshot } from '../engine/scheduler'
 import type { DiagnosticSink, LinkSpec, RenderState, ShowSettings, ShowSlide, TimeNode } from '../types'
 import { nextVisible, previousVisible } from './order'
 import type { SessionClock } from './session'
@@ -74,7 +74,8 @@ export interface DriverStage {
 /** What the driver needs of a media player for one slide (`MediaController`'s following part). */
 export interface DriverMedia {
   readonly wants: boolean
-  sync(snap: SchedulerSnapshot, t: number, quiet?: boolean): void
+  /** `history`: the slide's exact activations by `t` (piece 5, the computed path only; see `MediaController.sync`). */
+  sync(snap: SchedulerSnapshot, t: number, quiet?: boolean, history?: () => readonly MediaActivation[]): void
   onEnd(cb: (nodeId: number, synthetic: boolean, t: number) => void): void
   leave(): void
 }
@@ -388,7 +389,11 @@ export function createShowDriver(o: { source: SlideSource; stage: DriverStage; c
         computedEnds(m)
         if (m.synthetic && m.cursor && m.cursor.mode !== 'checkpoint') syntheticEnds(m)
         const st = slideTime()
-        if (m.media?.wants && m.cursor && st >= 0) m.media.sync(m.timeline.stateAt(m.cursor, st), st, m.cursor.mode === 'checkpoint')
+        if (m.media?.wants && m.cursor && st >= 0) {
+          const tl = m.timeline, cur = m.cursor
+          // R1: the player's late-join clock reads the same exact history as the computed ends.
+          m.media.sync(tl.stateAt(cur, st), st, cur.mode === 'checkpoint', () => tl.activations(cur, st).activations)
+        }
       } else if (m.media?.wants) {
         const st = slideTime()
         if (st >= 0) m.media.sync(m.timeline.stateAt(m.cursor, st), st, m.cursor.mode === 'checkpoint')
