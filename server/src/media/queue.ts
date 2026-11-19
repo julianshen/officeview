@@ -97,21 +97,29 @@ export function createSessionMediaQueue(o: SessionMediaQueueOptions): SessionMed
   let docId: string | undefined
   const revoked = () => dead || (docId !== undefined && cache.revoked(docId))
   const stop = () => { dead = true; failAll(); poke() }
-  /** One pending `cache.revocation()` per queue (renewed after it fires), so waits do not pile up resolvers. */
+  /** One pending `cache.revocation(docId)` per queue (it fires once: the docId stays revoked). */
   let revP: Promise<void> | undefined
-  const revocation = () => (revP ??= cache.revocation().then(() => { revP = undefined }))
-  /** One requester's answer. An ok answer pins the session's reference until its `delivered` (one pin each). */
-  const answer = (id: string, key: EncodeKey, r: EncodeOutcome): MediaRequestResult => {
+  /** Only this queue's own document wakes it (fix round 2). Before the items load there is no docId: never fires. */
+  const revocation = () => (docId === undefined ? new Promise<void>(() => {}) : (revP ??= cache.revocation(docId)))
+  /**
+   * One requester's answer. An ok answer holds a pin on the session's reference until its `delivered` (one pin
+   * each): `pinned` (a request-mode acquire pinned it in the same step) or a further pin, taken within the look-ahead.
+   */
+  const answer = (id: string, key: EncodeKey, r: EncodeOutcome, pinned: boolean): MediaRequestResult => {
     if (!r.ok) return { ok: false, reason: r.reason }
     if (!('path' in r.media)) return { ok: false, reason: r.media.refused }
-    if (!cache.pin(sid, key)) return unavailable
+    if (!pinned) {
+      const p = cache.pin(sid, key)
+      if (p !== 'ok') return p === 'busy' ? { ok: false, reason: 'media-busy' } : unavailable
+    }
     return { ok: true, path: r.media.path, result: r.media.result, origin: origins.get(id) ?? 'hit' }
   }
-  const settleRequests = (id: string, key: EncodeKey, r: EncodeOutcome | undefined) => {
+  /** Settles every requester of `id`; `pinned`: the first one holds the acquisition's own pin. */
+  const settleRequests = (id: string, key: EncodeKey, r: EncodeOutcome | undefined, pinned = false) => {
     const q = requests.get(id)
     if (!q) return
     requests.delete(id)
-    for (const f of q.waiting) f(r ? answer(id, key, r) : unavailable)
+    q.waiting.forEach((f, i) => f(r ? answer(id, key, r, pinned && i === 0) : unavailable))
   }
   const failAll = () => { for (const [id, q] of [...requests]) settleRequests(id, q.item.key, undefined) }
   /** Whether a settled acquisition left the key cached (ok or a cached refusal): only then is it readied and its
@@ -149,7 +157,7 @@ export function createSessionMediaQueue(o: SessionMediaQueueOptions): SessionMed
   }
 
   /** Keys whose encode-ahead failed uncached (timeout, unavailable): not readied (a request encodes again), but not
-   * retried by encode-ahead either, which would loop. */
+   * retried by encode-ahead either, which would loop. `media-busy` is never sticky (fix round 2). */
   const aheadFailed = new Set<string>()
   const nextAhead = (): Pick | undefined => {
     for (const u of order) for (const item of byUnit.get(u) ?? []) {
@@ -160,25 +168,22 @@ export function createSessionMediaQueue(o: SessionMediaQueueOptions): SessionMed
   }
 
   /**
-   * Encode-ahead's slot for a likely miss, taken BEFORE the flight exists (fix round 1): a parked encode-ahead holds
-   * no cache entry, so a request (this session's or another's) never waits behind it or joins it past admission. The
-   * wait gives way to a request, a cursor move or a revocation (undefined).
+   * The session's admission (fix round 2): at most one pending `ticket` (a queue place, or parked) or one granted
+   * `lease` at a time. Every miss, ahead or request, takes its slot BEFORE its flight enters the cache, so a refused
+   * request creates, drops and evicts nothing, and a parked encode-ahead holds no flight. A request arriving while the
+   * ticket is pending switches it to the request (`admission.upgrade`): a held place is never given up. A granted
+   * lease runs whatever the session should run next; it is released only when nothing to run needs it.
    */
-  const aheadSlot = async (): Promise<{ release(): void } | undefined> => {
-    const give = new AbortController()
-    const onEnd = () => give.abort()
-    ctl.signal.addEventListener('abort', onEnd, { once: true })
-    const s = o.admission.slot(sid, 'ahead', give.signal)
-    if ('refused' in s) return undefined // never for 'ahead'
-    const lease = s.then((l) => l, () => undefined)
-    const won = await Promise.race([lease, woken.then(() => 'yield' as const), revocation().then(() => 'yield' as const)])
-    ctl.signal.removeEventListener('abort', onEnd)
-    if (won === 'yield' || won === undefined) {
-      give.abort()
-      void lease.then((l) => l?.release()) // granted meanwhile: hand it back
-      return undefined
-    }
-    return won
+  let ticket: Promise<{ release(): void }> | undefined
+  let ticketDone: Promise<void> | undefined
+  let lease: { release(): void } | undefined
+  const dropLease = () => { const l = lease; lease = undefined; l?.release() }
+  const takeTicket = (mode: 'ahead' | 'request'): boolean => {
+    const s = o.admission.slot(sid, mode, ctl.signal)
+    if ('refused' in s) return false
+    ticket = s
+    ticketDone = s.then((l) => { if (ended || revoked()) l.release(); else lease = l }, () => {}).finally(() => { ticket = undefined; ticketDone = undefined })
+    return true
   }
 
   const pump = async () => {
@@ -186,27 +191,42 @@ export function createSessionMediaQueue(o: SessionMediaQueueOptions): SessionMed
       const g = gen
       const req = requests.entries().next().value as [string, { item: MediaItem }] | undefined
       const pick: Pick | undefined = req ? { item: req[1].item, id: req[0] } : nextAhead()
-      if (!pick) { if (gen === g) await Promise.race([woken, revocation()]); continue }
+      if (!pick) {
+        dropLease()
+        if (gen === g) await Promise.race([woken, revocation()])
+        continue
+      }
       const mode = req ? 'request' : 'ahead'
       const ks = keys.get(pick.id)!
-      let held: { lease: { release(): void }; used: boolean } | undefined
-      if (mode === 'ahead' && !cache.peek(ks.key) && !cache.inflight(ks.key)) {
-        const lease = await aheadSlot()
-        if (!lease) continue // a request, cursor move, revocation or end comes first
-        if (gen !== g) { lease.release(); continue } // poked while the slot was granted: pick again
-        held = { lease, used: false }
+      const miss = !cache.peek(ks.key) && !cache.inflight(ks.key)
+      if (miss && !lease) {
+        if (!ticket) {
+          if (!takeTicket(mode)) { settleRequests(pick.id, ks.key, { ok: false, reason: 'media-busy' }); continue }
+        } else if (mode === 'request' && o.admission.upgrade(ticket) === 'busy') {
+          settleRequests(pick.id, ks.key, { ok: false, reason: 'media-busy' }); continue
+        }
+        if (gen === g && ticketDone) await Promise.race([ticketDone, woken, revocation()])
+        continue
       }
+      if (!miss) dropLease() // a hit or a join needs no slot
+      const held = miss && lease ? { lease, used: false } : undefined
+      if (held) lease = undefined
       const a = cache.acquire(sid, pick.item.unit, ks.key, runFor(pick.item, mode, held), { mode, signal: ctl.signal, cursor: cur, order })
-      if (held && !held.used) held.lease.release() // not a miss after all
-      if ('wait' in a) { if (gen === g) await Promise.race([cache.room(), woken, revocation()]); continue }
+      if (held && !held.used) lease = held.lease // not started: kept for what runs next
+      if ('wait' in a) {
+        dropLease() // nothing can run until room appears
+        if (gen === g) await Promise.race([cache.room(), woken, revocation()])
+        continue
+      }
       running = pick.item.mediaId
       const r = await a.done
       running = undefined
       if (ended) break
-      if (cached(ks.key, r)) { note(pick.id, a.origin); ks.readied = true } else if (mode === 'ahead') aheadFailed.add(pick.id)
-      if (!r.ok && r.revoked) { settleRequests(pick.id, ks.key, r); stop(); break }
-      settleRequests(pick.id, ks.key, r)
+      if (cached(ks.key, r)) { note(pick.id, a.origin); ks.readied = true } else if (mode === 'ahead' && !r.ok && r.reason !== 'media-busy') aheadFailed.add(pick.id)
+      settleRequests(pick.id, ks.key, r, mode === 'request')
+      if (!r.ok && r.revoked) { stop(); break }
     }
+    dropLease()
     if (revoked()) { dead = true; failAll() }
   }
   const kick = () => { loop ??= pump(); poke() }
@@ -218,7 +238,7 @@ export function createSessionMediaQueue(o: SessionMediaQueueOptions): SessionMed
       cur = unit
       order = rotate(unit)
       await load()
-      if (ended) return 0
+      if (ended || revoked()) return 0
       let enqueued = 0
       const seen = new Set<string>()
       for (const u of order) for (const item of byUnit.get(u) ?? []) {
@@ -262,7 +282,7 @@ export function createSessionMediaQueue(o: SessionMediaQueueOptions): SessionMed
           const r = await a.done
           if (cached(ks.key, r)) { note(id, a.origin); ks.readied = true }
           if (!r.ok && r.revoked) stop()
-          return answer(id, ks.key, r)
+          return answer(id, ks.key, r, true) // the request-mode acquire pinned it
         }
       }
       return await new Promise<MediaRequestResult>((ok) => {

@@ -30,7 +30,7 @@
  *   so its entry is never evicted or expired mid-delivery; only `dropSession` and `dropDocument` override it.
  * - **Revocation.** `dropDocument` deletes every entry of the document at once, referenced or not, aborts its
  *   flights, and answers their waiters `media-unavailable`. The docId stays revoked: every later `acquire` for it
- *   answers `{ revoked: true }` media-unavailable, and `revocation()` wakes queues parked on admission or room. A delivery already reading a done file must check
+ *   answers `{ revoked: true }` media-unavailable, and `revocation(docId)` wakes that document's queues only. A delivery already reading a done file must check
  *   `peek(key)` between chunks: once dropped it answers undefined, and the delivery fails `media-unavailable`.
  *
  * Every entry file is one `MediaTemp` ledger row, owned by the cache (`EncodeRun`'s `file`, else adopted).
@@ -63,9 +63,11 @@ export interface EncodeCache {
   peek(key: EncodeKey): CachedMedia | undefined
   /** Whether the key is encoding now (a later `acquire` joins it). */
   inflight(key: EncodeKey): boolean
-  /** One delivery of a done entry to the session is starting (a `request` answered): pins its reference until the
-   * matching `delivered`. Takes the reference if the session holds none. False: no done file for the key. */
-  pin(sid: string, key: EncodeKey): boolean
+  /** One more delivery of a done entry to the session (a second requester of a key): pins its reference until the
+   * matching `delivered`. A request-mode `acquire` pins its own reference atomically; this is for the others. Takes
+   * the reference if the session holds none, only within the look-ahead (`busy` otherwise, nothing changed);
+   * `gone`: no done file for the key. */
+  pin(sid: string, key: EncodeKey): 'ok' | 'busy' | 'gone'
   /** One delivery ended: unpins one pin; the session's reference is released when no pin is left. */
   delivered(sid: string, key: EncodeKey): void
   /** Releases unpinned references of slides the viewer has passed (`unit < beforeUnit`). */
@@ -77,8 +79,8 @@ export interface EncodeCache {
   dropDocument(docId: string): Promise<void>
   /** Whether `dropDocument(docId)` ran: every later `acquire` for it answers `{ revoked: true }` media-unavailable. */
   revoked(docId: string): boolean
-  /** Resolves on the next `dropDocument`, so a queue parked on admission or room can stop at once. */
-  revocation(): Promise<void>
+  /** Resolves when `dropDocument(docId)` runs (at once if it already ran), so that document's queues stop. */
+  revocation(docId: string): Promise<void>
   /** Resolves once every abandoned flight (aborted: no waiter left, dropped or closed) has settled, its child gone and
    * its files disposed. A queue's `end()` awaits it after `dropSession`. */
   quiesce(): Promise<void>
@@ -117,7 +119,7 @@ export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; se
   const sessions = new Map<string, Map<string, Ref>>()
   const runs = new Map<Promise<void>, { docId: string; signal: AbortSignal }>()
   let rooms: Array<() => void> = []
-  let revocations: Array<() => void> = []
+  const revocations = new Map<string, Array<() => void>>()
   const revokedDocs = new Set<string>()
   let seq = 0
   let closed = false
@@ -273,6 +275,8 @@ export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; se
         origin = 'miss'
       } else origin = e.state === 'done' ? 'hit' : 'joined'
       if (!held) { m.set(id, { unit, seq: ++seq, pins: 0 }); e.refs.add(sid) }
+      // A request pins its reference in the same step (fix round 2): nothing can drop it before the answer.
+      if (a.mode === 'request') m.get(id)!.pins++
       e.touched = Math.max(e.touched, now())
       if (e.state === 'done') return { origin, done: Promise.resolve(outcome(e)) }
       const done = addWaiter(e, sid, a.signal)
@@ -289,13 +293,15 @@ export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; se
       void sweep()
       const id = encodeKeyId(key)
       const e = entries.get(id)
-      if (!e || e.state !== 'done' || !e.media || 'refused' in e.media) return false
-      const m = refsOf(sid)
-      let r = m.get(id)
-      if (!r) { m.set(id, r = { unit: -1, seq: ++seq, pins: 0 }); e.refs.add(sid) }
+      if (!e || e.state !== 'done' || !e.media || 'refused' in e.media) return 'gone'
+      let r = sessions.get(sid)?.get(id)
+      if (!r) {
+        if (sessionTotal(sid) + e.bytes > o.sessionBytes) return 'busy'
+        refsOf(sid).set(id, r = { unit: -1, seq: ++seq, pins: 0 }); e.refs.add(sid)
+      }
       r.pins++
       e.touched = Math.max(e.touched, now())
-      return true
+      return 'ok'
     },
     delivered(sid, key) {
       void sweep()
@@ -307,7 +313,7 @@ export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; se
     },
     passed(sid, beforeUnit) {
       void sweep()
-      for (const [id, r] of [...(sessions.get(sid)?.entries() ?? [])]) if (r.unit < beforeUnit && r.pins === 0) release(sid, id)
+      for (const [id, r] of [...(sessions.get(sid)?.entries() ?? [])]) if (r.unit < beforeUnit && r.pins === 0 && entries.get(id)?.state === 'done') release(sid, id)
       notify()
     },
     dropSession(sid) {
@@ -322,13 +328,16 @@ export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; se
     },
     async dropDocument(docId) {
       revokedDocs.add(docId)
-      const r = revocations; revocations = []; for (const f of r) f()
+      const r = revocations.get(docId) ?? []; revocations.delete(docId); for (const f of r) f()
       const gone = [...entries.values()].filter((e) => e.key.docId === docId).map((e) => remove(e, 'media-unavailable', true))
       const flights = [...runs].filter(([, r]) => r.docId === docId).map(([p]) => p)
       await Promise.all([...gone, ...flights])
     },
     revoked: (docId) => revokedDocs.has(docId),
-    revocation() { return new Promise<void>((ok) => { revocations.push(ok) }) },
+    revocation(docId) {
+      if (revokedDocs.has(docId)) return Promise.resolve()
+      return new Promise<void>((ok) => { let l = revocations.get(docId); if (!l) revocations.set(docId, l = []); l.push(ok) })
+    },
     async quiesce() { await Promise.all([...runs].filter(([, r]) => r.signal.aborted).map(([p]) => p)) },
     room() { return new Promise<void>((ok) => { rooms.push(ok) }) },
     sweep,

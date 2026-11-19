@@ -563,6 +563,103 @@ describe('the session queue (D1, D12)', () => {
     await w.cache.close()
   })
 
+  // --- fix round 2: the re-review's scenarios -----------------------------------------------------------------
+
+  it('a request arriving while its session holds a queue place keeps that place: no abort, no media-busy; an unrelated revocation disturbs nothing', async () => {
+    const w = world({ slots: 1, queue: 1 })
+    const tc = fakeTranscode({ manual: true })
+    const a = synthQueue(w, 'sa', 'd-keep', [['a']], tc), b = synthQueue(w, 'sb', 'd-keep', [['b']], tc), c = synthQueue(w, 'sc', 'd-keep', [['c']], tc)
+    await a.start(0)
+    await until(() => tc.calls.length === 1, 'a runs')
+    await b.start(0)
+    await until(() => w.admission.queued === 1, 'b holds the place')
+    await c.start(0) // parked
+    await Bun.sleep(5)
+    await w.cache.dropDocument('some-other-doc')
+    await Bun.sleep(5)
+    expect(w.admission.queued).toBe(1)
+    const rb = b.request(b.id(0, 'b'))
+    await Bun.sleep(5)
+    expect(w.admission.queued).toBe(1) // still b's
+    tc.calls[0]!.finish()
+    await until(() => tc.calls.length === 2, 'the next encode')
+    expect(tc.calls[1]!.name).toBe('b') // b's place, used for its request
+    tc.calls[1]!.finish()
+    expect((await rb).ok).toBe(true)
+    await until(() => tc.calls.length === 3, 'c'); tc.calls[2]!.finish()
+    await until(() => w.admission.running === 0 && w.admission.queued === 0, 'drain')
+    for (const q of [a, b, c]) await q.end()
+    await w.cache.close()
+  })
+
+  it('pipelined requests pin atomically: a cached answer is never dropped or evicted by the next request, and pins never exceed the look-ahead', async () => {
+    // A: 'a' (50 MiB) cached; requesting a and the uncached b together.
+    const w = world({ serverBytes: 60 * MiB, sessionBytes: 60 * MiB }), tc = fakeTranscode({ size: () => 50 * MiB })
+    const o = synthQueue(w, 'o', 'd-atomic', [['a', 'b']], tc)
+    ok(await o.request(o.id(0, 'a'))); w.cache.delivered('o', itemOf('o', 'd-atomic', 0, 'a').key)
+    const q = synthQueue(w, 's', 'd-atomic', [['a', 'b']], tc)
+    const [ra, rb] = await Promise.all([q.request(q.id(0, 'a')), q.request(q.id(0, 'b'))])
+    expect(ra.ok).toBe(true)
+    expect(ra.ok && existsSync(ra.path)).toBe(true)
+    expect(rb).toEqual({ ok: false, reason: 'media-busy' }) // 50 pinned + 32 > 60
+    await q.end(); await o.end(); await w.cache.close()
+    // B: a, b, c (50 MiB each) cached; three requests together never hold more than the look-ahead.
+    const w2 = world({ serverBytes: 200 * MiB, sessionBytes: 60 * MiB }), tc2 = fakeTranscode({ size: () => 50 * MiB })
+    const o2 = synthQueue(w2, 'o', 'd-atomic2', [['a', 'b', 'c']], tc2)
+    for (const n of ['a', 'b', 'c']) { ok(await o2.request(o2.id(0, n))); w2.cache.delivered('o', itemOf('o', 'd-atomic2', 0, n).key) }
+    const q2 = synthQueue(w2, 's', 'd-atomic2', [['a', 'b', 'c']], tc2)
+    const rs = await Promise.all(['a', 'b', 'c'].map((n) => q2.request(q2.id(0, n))))
+    expect(rs.filter((r) => r.ok)).toHaveLength(1)
+    expect(w2.cache.referencesOf('s')).toBe(1)
+    for (const r of rs) if (r.ok) expect(existsSync(r.path)).toBe(true)
+    await q2.end(); await o2.end(); await w2.cache.close()
+  })
+
+  it('passed() never releases an in-flight reference: a request on a slide the cursor leaves still answers and holds its reference', async () => {
+    const w = world(), tc = fakeTranscode({ manual: true })
+    const q = synthQueue(w, 's', 'd-pass', [['a'], ['b']], tc)
+    const ra = q.request(q.id(0, 'a'))
+    await until(() => tc.calls.length === 1, 'a')
+    q.cursor(1)
+    expect(w.cache.referencesOf('s')).toBe(1)
+    tc.calls[0]!.finish()
+    expect((await ra).ok).toBe(true)
+    expect(w.cache.referencesOf('s')).toBeGreaterThanOrEqual(1)
+    await q.end(); await w.cache.close()
+  })
+
+  it('a request miss takes its admission slot before it enters the cache: refused, it evicts and creates nothing, and a joining encode-ahead is not disabled', async () => {
+    const w = world({ slots: 1, queue: 1, serverBytes: 64 * MiB }), tc = fakeTranscode({ manual: true, size: (n) => (n === 'old' ? 30 * MiB : 1) })
+    const o = synthQueue(w, 'o', 'd-adm', [['old']], tc)
+    const ro = o.request(o.id(0, 'old')); await until(() => tc.calls.length === 1, 'old'); tc.calls[0]!.finish(); ok(await ro)
+    w.cache.delivered('o', itemOf('o', 'd-adm', 0, 'old').key) // unreferenced, evictable
+    const a = synthQueue(w, 'sa', 'd-adm', [['a']], tc), b = synthQueue(w, 'sb', 'd-adm', [['b']], tc)
+    await a.start(0); await until(() => tc.calls.length === 2, 'a runs')
+    await b.start(0); await until(() => w.admission.queued === 1, 'b queued')
+    const s1 = synthQueue(w, 's1', 'd-adm', [['c']], tc), s2 = synthQueue(w, 's2', 'd-adm', [['c']], tc)
+    const [r1] = await Promise.all([s1.request(s1.id(0, 'c')), s2.start(0)])
+    expect(r1).toEqual({ ok: false, reason: 'media-busy' })
+    expect(w.cache.peek(itemOf('x', 'd-adm', 0, 'old').key)).toBeDefined() // nothing evicted for it
+    expect(w.cache.inflight(itemOf('x', 'd-adm', 0, 'c').key)).toBe(false)
+    tc.calls[1]!.finish()
+    await until(() => tc.calls.length === 3, 'b'); tc.calls[2]!.finish()
+    await until(() => tc.calls.some((x) => x.name === 'c'), "s2's encode-ahead of c")
+    tc.calls.find((x) => x.name === 'c')!.finish()
+    await until(() => w.admission.running === 0, 'drain')
+    for (const q of [o, a, b, s1, s2]) await q.end()
+    await w.cache.close()
+  })
+
+  it('start() after the document was revoked enqueues nothing', async () => {
+    const w = world(), tc = fakeTranscode()
+    await w.cache.dropDocument('d-gone')
+    const q = synthQueue(w, 's', 'd-gone', [['a'], ['b']], tc)
+    expect(await q.start(0)).toBe(0)
+    await Bun.sleep(5)
+    expect(tc.s.count).toBe(0)
+    await q.end(); await w.cache.close()
+  })
+
   it('MEDIA_SERVER_CACHE is 2 GiB and positive', () => {
     expect(MEDIA_SERVER_CACHE).toBe(2147483648)
     expect(MEDIA_SERVER_CACHE).toBeGreaterThan(0)

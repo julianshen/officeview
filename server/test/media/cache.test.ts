@@ -252,7 +252,7 @@ describe('the shared encode cache (D12, D23)', () => {
   it('after dropDocument, acquire for that docId answers revoked media-unavailable and starts nothing', async () => {
     const { c } = cacheWith()
     await fill(c, 's1', key('A', '1'), 1 * MiB)
-    const woke = c.revocation()
+    const woke = c.revocation('A')
     await c.dropDocument('A')
     await woke
     expect(c.revoked('A')).toBe(true)
@@ -269,8 +269,8 @@ describe('the shared encode cache (D12, D23)', () => {
   it('a pinned reference survives passed and eviction until delivered, and two pins need two deliveries', async () => {
     const { c } = cacheWith({ serverBytes: 64 * MiB })
     const a = await fill(c, 's1', key('d', 'a'), 30 * MiB, 2)
-    expect(c.pin('s1', key('d', 'a'))).toBe(true)
-    expect(c.pin('s1', key('d', 'a'))).toBe(true) // a second mediaId of the same key
+    expect(c.pin('s1', key('d', 'a'))).toBe('ok')
+    expect(c.pin('s1', key('d', 'a'))).toBe('ok') // a second mediaId of the same key
     c.passed('s1', 10)
     expect(c.referencesOf('s1')).toBe(1)
     await fill(c, 's2', key('d', 'c'), 30 * MiB); c.delivered('s2', key('d', 'c'))
@@ -283,14 +283,14 @@ describe('the shared encode cache (D12, D23)', () => {
     expect(c.referencesOf('s1')).toBe(1)
     c.delivered('s1', key('d', 'a'))
     expect(c.referencesOf('s1')).toBe(0)
-    expect(c.pin('s1', key('d', 'gone'))).toBe(false)
+    expect(c.pin('s1', key('d', 'gone'))).toBe('gone')
     await c.close()
   })
 
   it('a request drops only unpinned own references, and re-checks the look-ahead after dropping: still over is media-busy', async () => {
     const { c } = cacheWith({ sessionBytes: 60 * MiB })
     await fill(c, 's1', key('d', 'a'), 30 * MiB, 5)
-    expect(c.pin('s1', key('d', 'a'))).toBe(true)
+    expect(c.pin('s1', key('d', 'a'))).toBe('ok')
     const f = fakeRun(1)
     // 30 (pinned) + 32 > 60: nothing droppable.
     expect(await done(c.acquire('s1', 0, key('d', 'b'), f.run, request))).toEqual({ ok: false, reason: 'media-busy' })
