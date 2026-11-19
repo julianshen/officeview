@@ -767,3 +767,23 @@ describe('showValue=0 value still copies and finds (S4-N)', () => {
     }, SUPPRESS)
   })
 })
+
+describe('Stage 5: copy and find read a formula rule\'s effective number format on every scope (S5-Q)', () => {
+  it('the text a formula-rule cell copies and finds equals its literal twin\'s, on the static, resident and forced-paged scopes', async () => {
+    const { load, withPaint, workbookBytes, cfBlock, exprRule, cellIsRule, textLeg, workerLeg, frameHosts } = await import('./helpers/cf-views')
+    // C: `=$A2>1` with the 0.00 DXF; E: the literal twin `>1`. Rows 3-4 match; row 2 keeps the base format.
+    const bytes = workbookBytes({ A2: 1, A3: 2, A4: 3, C2: 1, C3: 2, C4: 3, E2: 1, E3: 2, E4: 3 },
+      cfBlock('C2:C4', exprRule('$A2&gt;1', 1, 2)) + cfBlock('E2:E4', cellIsRule('greaterThan', '1', 2, 2)))
+    await withPaint(async () => {
+      const l = await load(bytes, 'cached')
+      const refs = ['C2', 'C3', 'C4', 'E2', 'E3', 'E4'], hosts = frameHosts()
+      const worker = await workerLeg(l, refs, { hosts })
+      const cell = (ref: string) => l.sheet.rows.flatMap(r => r.cells).find(c => c.ref === ref)!
+      const copied = (leg: Map<string, { fmt?: string }>) => refs.map(r => cellDisplayText(l.sheet, { value: cell(r).value, style: { ...(cell(r).style ?? { numFmtId: 0 }), ...(leg.get(r)!.fmt ? { formatCode: leg.get(r)!.fmt!, numFmtId: 164 } : {}) } } as never))
+      const text = copied(await textLeg(l, refs, { hosts })), resident = copied(await textLeg(l, refs, { hosts, resident: true })), paged = copied(worker.scope)
+      expect(text).toEqual(['1', '2.00', '3.00', '1', '2.00', '3.00'])
+      expect(resident).toEqual(text)
+      expect(paged).toEqual(text)
+    })
+  })
+})

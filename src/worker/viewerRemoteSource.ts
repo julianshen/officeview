@@ -411,7 +411,17 @@ export class RemoteWorkbook implements WorkbookSource {
   acquireCfPreparation(sheetId: string, rects: readonly SourceRect[], stamp: CfReadStamp, signal?: AbortSignal): { state: PagedCfState; release(): void } { return this.conditionalFormats().acquire(sheetId, rects, stamp, signal) }
   /** Drops the sheet's cached CF preparations (scoped to rects when given);
    * held versions survive until their last release. */
-  invalidateCf(sheetId: string, rects?: readonly SourceRect[]): void { this.cfCache?.invalidate(sheetId, rects) }
+  /** Ruling S5-K: how many times the sheet's CF went stale through a referenced sheet (a live-key input). */
+  cfDependencyEpoch(sheetId: string): number { return this.cfCache?.dependencyEpoch(sheetId) ?? 0 }
+  /** Ruling S5-M: the sheet's rules never read the clock (learned from a ready reply; false until then). */
+  cfClockFree(sheetId: string): boolean { return this.cfCache?.clockFree(sheetId) ?? false }
+  /** A live CF scope's hold on the sheets its copied states read (Task 36 fix round 2, #4); null when refused. */
+  retainCfDependencies(sheetId: string, dependencies: readonly { sheetId: string }[]): (() => void) | null { return this.conditionalFormats().retainDependencies(sheetId, dependencies) }
+  invalidateCf(sheetId: string, rects?: readonly SourceRect[]): void {
+    this.cfCache?.invalidate(sheetId, rects)
+    // Ruling S5-K: every sheet whose CF reads this one goes stale too, whole sheet (Lesson 5).
+    this.cfCache?.invalidateDependents(sheetId)
+  }
   /** Drops the sheet's table/pivot region layer and its pivot display layer (banding, header and subtotal
    * styles of the paged pivots): both are keyed on the pivot's placement, which a commit moves. */
   invalidateRegionStyles(sheetId: string): void { this.invalidateCf(sheetId); this.regionStyleCache.invalidate(sheetId); this.pivotDisplayCache.invalidate(sheetId) }
@@ -751,6 +761,8 @@ export class RemoteWorkbook implements WorkbookSource {
     this.identities.set(sheetId, { ...old, valueGen })
     this.owner = { ...this.owner, workbookValueGen: this.owner.workbookValueGen + 1, sheetVector: this.owner.sheetVector.map(item => item.sheetId === sheetId ? { ...item, valueGen } : item) }
     this.stores.get(sheetId)?.clear()
+    // Ruling S5-K: the released sheet's values moved, so every sheet whose CF reads it is stale (whole sheet).
+    this.cfCache?.invalidateDependents(sheetId)
     this.notify()
   }
   private refreshPivotMerges(sheetId: string, entry: { merges: readonly XlsxMergeRange[]; sourceMerges?: readonly XlsxMergeRange[] }): void {

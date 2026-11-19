@@ -31,7 +31,12 @@ import type {
 } from './model'
 import type { XlsxCell } from '../types'
 import type { CfMemory, CfWorkBudget } from './limits'
-import { CF_LIMITS } from './limits'
+import { CF_FREQUENCY_ENTRY_BYTES, CF_LIMITS } from './limits'
+import type { AstNode, ElementValue } from '../formula/types'
+import { finiteOrNum } from '../formula/evaluator'
+import { cfCountifDpRefused, cfCountifKey, cfCountifRangeKey, cfLiteralToElement, type CfHoist, type CfHoisted } from './formula'
+import type { CfRule } from './model'
+import { measurePayloadBytes } from '../view/payloadBytes'
 import { isDateNumberStyle } from '../dateNumberFormat'
 
 /** Stable, type-tagged frequency key. Blanks and errors are never counted in numeric stats. */
@@ -117,6 +122,14 @@ export interface CfStatisticsSession {
     budget: CfWorkBudget,
     options?: Omit<CfStatisticsOptions, 'maxEntries'>,
   ): Promise<Array<CfOutcome<CfLease<CfRangeStatistics>>>>
+  /**
+   * Ruling S5-HOIST: the rule's hoisted aggregates, scanned once per (rule, range, valueGen, dependencyGen) with
+   * engine-ordered reducers on `budget` (a scan budget, never the per-cell ceiling), memoised in this session and
+   * invalidated with the sheet's generation. A refused or cancelled scan publishes nothing and holds nothing. The lease
+   * is refcounted: its bytes stay charged until both the session has dropped the entry and every lease is released.
+   */
+  prepareHoists(rule: CfRule, hoists: readonly CfHoist[], stamp: CfStamp, source: CfValueSource, budget: CfWorkBudget,
+    options?: CfStatisticsOptions): Promise<CfOutcome<CfLease<CfHoisted>>>
   readonly size: number
   dispose(): void
 }
@@ -264,6 +277,7 @@ function isBudgetRefusal(error: unknown): boolean {
 
 function stampsMatch(live: CfStamp, requested: CfStamp): boolean {
   return (
+    (live.dependencyGen ?? 0) === (requested.dependencyGen ?? 0) &&
     live.sheetId === requested.sheetId &&
     live.owner === requested.owner &&
     live.structureGen === requested.structureGen &&
@@ -420,10 +434,16 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
     if (retainedHeld < 0) retainedHeld = 0
   }
 
-  function evict(): void {
+  function evict(keepHoist?: string): void {
+    // Hoist entries count with the statistics entries (round 3, finding 3); the older hoists go first, never the one
+    // just inserted.
+    for (const [key, entry] of [...hoistCache]) {
+      if (cache.size + hoistCache.size <= maxEntries && retainedHeld <= sessionCap) break
+      if (key !== keepHoist) dropHoist(key, entry)
+    }
     // LRU: Map preserves insertion order; the first key is the least recently used.
     for (const [key, entry] of cache.entries()) {
-      if (cache.size <= maxEntries && retainedHeld <= sessionCap) break
+      if (cache.size + hoistCache.size <= maxEntries && retainedHeld <= sessionCap) break
       dropEntry(key, entry)
     }
   }
@@ -435,6 +455,78 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
     cache.clear()
     refusalCache.clear()
     boundsMemo.clear()
+    for (const [key, entry] of [...hoistCache]) dropHoist(key, entry)
+  }
+
+  // Hoisted aggregates (S5-HOIST): one entry per (sheet, generation, rule, hoists); a generation change drops the sheet's
+  // entries (whole-sheet invalidation, Lesson 5). Ownership (fix round 2, findings 3-4): each entry adopts one charge
+  // and hands out refcounted leases; a drop (generation, overwrite, retirement, LRU eviction, dispose) removes only the
+  // key, and the charge is released when the last live lease is. Hoist entries count against `maxEntries` and the
+  // session byte cap with the statistics entries, and a replaced rule object retires its older entries.
+  interface HoistEntry { sheet: string; gen: string; rule: CfRule; lease: CfLease<CfHoisted>; bytes: number; refs: number; cached: boolean }
+  const hoistCache = new Map<string, HoistEntry>()
+  const settleHoist = (entry: HoistEntry): void => {
+    if (entry.cached || entry.refs > 0) return
+    try { entry.lease.release() } catch { /* release-only path */ }
+    trackRelease(entry.bytes)
+  }
+  const dropHoist = (key: string, entry: HoistEntry): void => {
+    if (hoistCache.get(key) === entry) hoistCache.delete(key)
+    entry.cached = false
+    settleHoist(entry)
+  }
+  const leaseHoist = (entry: HoistEntry): CfLease<CfHoisted> => {
+    entry.refs++
+    let settled = false
+    return {
+      value: entry.lease.value, bytes: entry.bytes,
+      release() { if (settled) return; settled = true; entry.refs--; settleHoist(entry) },
+      transfer: () => ({ kind: 'unresolved', reason: 'cf-borrowed-hoist' }),
+    }
+  }
+  async function prepareHoists(rule: CfRule, hoists: readonly CfHoist[], stamp: CfStamp, source: CfValueSource, budget: CfWorkBudget,
+    options: CfStatisticsOptions = {}): Promise<CfOutcome<CfLease<CfHoisted>>> {
+    const signal = options.signal ?? new AbortController().signal
+    if (signal.aborted) throw cancelled()
+    const sheet = `${stamp.owner}\u0000${stamp.sheetId}`
+    // cfGen too: a rule set rebuilt from the document retires the old rule objects' entries.
+    const gen = `${stamp.structureGen}:${stamp.workbookValueGen}:${stamp.dependencyGen ?? 0}:${stamp.cfGen}`
+    for (const [key, entry] of hoistCache) if (entry.sheet === sheet && entry.gen !== gen) dropHoist(key, entry)
+    // The key names each hoist's node and criterion, so two same-function, same-range hoists never share a slot.
+    const key = `${sheet}\u0000${gen}\u0000${rule.id}\u0000${hoists.map(h => `${h.kind}:${h.fn}:${scopeKey([h.range.rect])}:${hoistNodeId(h.node)}:${h.criterion ? hoistNodeId(h.criterion) : ''}`).join('|')}`
+    const hit = hoistCache.get(key)
+    // A hit serves only when the cached record holds every planned node; otherwise it is a miss.
+    if (hit && hit.rule === rule && hoists.every(h => hoistedHas(hit.lease.value, h))) {
+      hoistCache.delete(key); hoistCache.set(key, hit) // LRU: most recently used last
+      return { kind: 'ready', value: leaseHoist(hit) }
+    }
+    // The scan's workspace counts against the session cap beside the retained entries and concurrent workspaces.
+    const token = {}
+    // The workspace entry tracks the reservation's high-water mark (round 4, finding 3): `CfReservation.grow` never
+    // shrinks, so a smaller later request (after a finished table folds into `held`) must not lower what other
+    // concurrent scans see as charged. It leaves the cap only when the scan's reservation is adopted or released.
+    const fits = (bytes: number): boolean => {
+      const current = workspaces.get(token) ?? 0
+      if (bytes <= current) return true
+      if (withinCap(bytes - current) > sessionCap) return false
+      workspaces.set(token, bytes)
+      return true
+    }
+    let built: CfOutcome<CfLease<CfHoisted>>
+    try { built = await scanHoists(hoists, stamp, source, budget, signal, memory, fits) } finally { workspaces.delete(token) }
+    if (built.kind !== 'ready') return built
+    // Publication re-checks the cap: an entry that would not fit beside what the session holds is refused, not cached.
+    if (!checkCap(built.value.bytes)) { built.value.release(); return { kind: 'unresolved', reason: 'cf-resource-limit' } }
+    // Recheck the source generation after the scan, before adoption (S5-K): a commit during the scan cancels it.
+    if (signal.aborted || !stampsMatch(source.stamp(stamp.sheetId), stamp)) { built.value.release(); throw cancelled() }
+    // An overwritten entry, and every entry of an older object of the same rule, is dropped (never leaked).
+    for (const [k, entry] of hoistCache) if (k === key || (entry.sheet === sheet && entry.rule.id === rule.id && entry.rule !== rule)) dropHoist(k, entry)
+    const entry: HoistEntry = { sheet, gen, rule, lease: built.value, bytes: built.value.bytes, refs: 0, cached: true }
+    retainedHeld += entry.bytes
+    hoistCache.set(key, entry)
+    const out = leaseHoist(entry)
+    evict(key)
+    return { kind: 'ready', value: out }
   }
 
   function dropEntry(key: string, entry: CacheEntry): void {
@@ -873,7 +965,7 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
         if (entry === undefined) {
           entry = { stats: built.value.stats, bytes: built.value.bytes, lease: built.value.candidate, refs: 0 }
           cache.set(key, entry)
-          if (cache.size > maxEntries) evict()
+          if (cache.size + hoistCache.size > maxEntries) evict()
         } else {
           // Same key completed twice (inflight dedupe should prevent this):
           // prefer the cached entry and release the duplicate candidate.
@@ -1136,7 +1228,175 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
     return out
   }
 
-  return { prepareStatistics, get size() { return cache.size }, dispose }
+  return { prepareStatistics, prepareHoists, get size() { return cache.size + hoistCache.size }, dispose }
+}
+
+/** A per-session identity for AST nodes (the hoist cache key names nodes, not their spelling). */
+const hoistNodeIds = new WeakMap<object, number>()
+let nextHoistNodeId = 1
+const hoistNodeId = (node: object): number => {
+  let id = hoistNodeIds.get(node)
+  if (id === undefined) { id = nextHoistNodeId++; hoistNodeIds.set(node, id) }
+  return id
+}
+const hoistedHas = (value: CfHoisted, h: CfHoist): boolean =>
+  h.kind === 'countif-frequency' ? value.frequencies.has(h.node) && value.longest.has(h.node) : value.scalars.has(h.node)
+/** The empty hoist record's own bytes, DERIVED from the payload measurer. */
+const HOIST_BASE_BYTES: number = measurePayloadBytes({ scalars: new Map(), frequencies: new Map(), longest: new Map() })!
+/** One hoisted scalar or longest-string entry (a map slot holding the widest scalar: an error object). */
+const HOIST_SCALAR_BYTES: number = measurePayloadBytes(new Map([[0, { kind: 'formula-error', code: '#DIV/0!' }]]))! - measurePayloadBytes(new Map())!
+const FREQUENCY_INITIAL_CAPACITY = 16
+
+/**
+ * One engine-ordered reducer per hoist (Ruling S5-HOIST, round-3 #3). Cells arrive row-major (asserted), and each
+ * reducer applies the engine's own rules for its function over reference items (functions.ts SUM/AVERAGE/MIN/MAX/
+ * COUNT/COUNTA: numbers only from references, the first error in order wins, `finiteOrNum` at the end, the empty
+ * result), and for COUNTIF/SUMIF the plain-equality arm only, through `cfCountifKey` / `cfCountifRangeKey`. Never the
+ * statistics totals: those are compensated (Neumaier) and differ from the engine's sequential sum.
+ */
+async function scanHoists(hoists: readonly CfHoist[], stamp: CfStamp, source: CfValueSource, budget: CfWorkBudget, signal: AbortSignal,
+  memory: CfMemory, fits: (bytes: number) => boolean = () => true): Promise<CfOutcome<CfLease<CfHoisted>>> {
+  const spend: SpendState = { pending: 0, signal, budget }
+  const refuse = (reason = 'cf-resource-limit'): CfOutcome<never> => ({ kind: 'unresolved', reason })
+  let bounds: SourceRect | undefined
+  try { bounds = await source.bounds(stamp.sheetId, budget, signal) } catch (error) {
+    if (signal.aborted || isCancel(error)) throw cancelled()
+    if (isBudgetRefusal(error)) return refuse()
+    throw error
+  }
+  if (signal.aborted) throw cancelled()
+  if (!bounds) return refuse('cf-pending-data')
+  // Every reservation is first checked against the session byte cap (round 3, finding 3), then made on the ledger.
+  if (!fits(HOIST_BASE_BYTES)) return refuse()
+  const hold = memory.reserve(HOIST_BASE_BYTES)
+  if (hold.kind !== 'reserved') return refuse()
+  // `held` is what the record retains (base, scalars, keys, finished tables); `table` the frequency table being built.
+  // A growth reserves held + old table + new table before it happens (the peak), then keeps only the new table.
+  let held = HOIST_BASE_BYTES, table = 0, adopted = false
+  const grow = (bytes: number): boolean => { if (!fits(held + table + bytes) || !hold.grow(held + table + bytes)) return false; held += bytes; return true }
+  const growTable = (next: number): boolean => { if (!fits(held + table + next) || !hold.grow(held + table + next)) return false; table = next; return true }
+  const scalars = new Map<AstNode, ElementValue>(), frequencies = new Map<AstNode, ReadonlyMap<string, number>>(), longest = new Map<AstNode, number>()
+  /** Stream one rect's stored cells in row-major order, spending one unit plus the string units of each cell first. */
+  const stream = async (rect: SourceRect, visit: (literal: CfLiteral) => boolean | 'refuse'): Promise<CfOutcome<void>> => {
+    let prev = -1
+    try {
+      for await (const page of source.pages(stamp.sheetId, [rect], budget, signal)) {
+        try {
+          const { rows, cols, values } = page.value
+          for (let i = 0; i < values.length; i++) {
+            const row = rows[i]!, col = cols[i]!
+            if (row < rect.firstRow || row > rect.lastRow || col < rect.firstCol || col > rect.lastCol) continue
+            const literal = values[i]!
+            if (!(await spendUnits(spend, 1 + (literal.kind === 'string' ? literal.value.length : 0)))) return refuse()
+            // Engine order is row-major within the area (refs.ts sparse cursor); a source out of order refuses the hoist.
+            const position = row * 16384 + col
+            if (position <= prev) return refuse('cf-unmeasured-capability')
+            prev = position
+            const verdict = visit(literal)
+            if (verdict === 'refuse') return refuse('cf-formula-unsupported')
+            if (!verdict) return refuse()
+          }
+        } finally { page.release() }
+      }
+    } catch (error) {
+      if (signal.aborted || isCancel(error) || (error instanceof Error && error.message === 'CF cancelled')) throw cancelled()
+      if (isBudgetRefusal(error)) return refuse()
+      return refuse('cf-formula-dependency') // e.g. an unavailable cached value: never approximated
+    }
+    if (!(await flushSpend(spend))) return refuse()
+    return { kind: 'ready', value: undefined }
+  }
+  /** The value of an invariant criterion: a literal, or an absolute cell read from the source. */
+  const criterionOf = async (node: AstNode): Promise<CfOutcome<CfLiteral>> => {
+    if (node.type === 'number') return { kind: 'ready', value: { kind: 'number', value: node.value } }
+    if (node.type === 'string') return { kind: 'ready', value: { kind: 'string', value: node.value } }
+    if (node.type !== 'cell') return refuse('cf-formula-unsupported')
+    let found: CfLiteral = { kind: 'blank' }
+    const out = await stream({ firstRow: node.ref.row, lastRow: node.ref.row, firstCol: node.ref.col, lastCol: node.ref.col }, literal => { found = literal; return true })
+    return out.kind === 'ready' ? { kind: 'ready', value: found } : out
+  }
+  try {
+    for (const h of hoists) {
+      if (signal.aborted) throw cancelled()
+      if (h.range.sheet !== undefined) return refuse('cf-formula-dependency')
+      if (!grow(HOIST_SCALAR_BYTES * 2)) return refuse()
+      const rect = clampRect(h.range.rect, bounds)
+      const each = (visit: (literal: CfLiteral) => boolean | 'refuse') => rect ? stream(rect, visit) : Promise.resolve({ kind: 'ready', value: undefined } as CfOutcome<void>)
+      if (h.kind === 'countif-frequency') {
+        const counts = new Map<string, number>()
+        let capacity = FREQUENCY_INITIAL_CAPACITY, longestString = 0
+        if (!growTable(capacity * CF_FREQUENCY_ENTRY_BYTES)) return refuse()
+        const out = await each(literal => {
+          if (literal.kind === 'string') longestString = Math.max(longestString, literal.value.length)
+          const k = cfCountifRangeKey(literal)
+          if (k === 'refuse-rule') return 'refuse'
+          if (k === undefined) return true
+          const n = counts.get(k)
+          if (n !== undefined) { counts.set(k, n + 1); return true }
+          // A new key: its characters, and at the growth peak the old table plus the new one, reserved before it grows.
+          if (counts.size + 1 > capacity) { if (!growTable(capacity * 2 * CF_FREQUENCY_ENTRY_BYTES)) return false; capacity *= 2 }
+          if (!grow(k.length * 2)) return false
+          counts.set(k, 1)
+          return true
+        })
+        if (out.kind !== 'ready') return out
+        frequencies.set(h.node, counts)
+        longest.set(h.node, longestString)
+        held += table; table = 0
+        continue
+      }
+      if (h.fn === 'COUNTIF' || h.fn === 'SUMIF') {
+        const crit = await criterionOf(h.criterion!)
+        if (crit.kind !== 'ready') return crit
+        const critKey = cfCountifKey(crit.value)
+        if (critKey === 'refuse') return refuse('cf-formula-unsupported')
+        let count = 0, total = 0, longestString = 0
+        const out = await each(literal => {
+          if (literal.kind === 'string') longestString = Math.max(longestString, literal.value.length)
+          const k = cfCountifRangeKey(literal)
+          if (k === 'refuse-rule') return 'refuse'
+          if (k !== critKey) return true
+          count++
+          // A matched cell is its own target (the sum range is omitted or identical): only numbers add (cond.ts runRows).
+          if (literal.kind === 'number') total += literal.value
+          return true
+        })
+        if (out.kind !== 'ready') return out
+        if (cfCountifDpRefused(crit.value, longestString)) return refuse('cf-formula-unsupported')
+        scalars.set(h.node, h.fn === 'COUNTIF' ? count : finiteOrNum(total))
+        continue
+      }
+      // SUM, COUNT, COUNTA, AVERAGE, MIN, MAX over reference items, in the engine's order.
+      let error: ElementValue | undefined, sum = 0, count = 0, extreme: number | undefined, counted = 0
+      const out = await each(literal => {
+        const v = cfLiteralToElement(literal)
+        if (v === undefined) return 'refuse'
+        const isError = typeof v === 'object' && v !== null
+        if (isError) { if (h.fn === 'COUNTA') counted++; else if (h.fn !== 'COUNT' && error === undefined) error = v; return true }
+        if (v !== null) counted++
+        if (typeof v !== 'number') return true
+        sum += v; count++
+        extreme = extreme === undefined ? v : h.fn === 'MIN' ? Math.min(extreme, v) : Math.max(extreme, v)
+        return true
+      })
+      if (out.kind !== 'ready') return out
+      let value: ElementValue
+      if (h.fn === 'COUNT') value = count
+      else if (h.fn === 'COUNTA') value = counted
+      else if (error !== undefined) value = error
+      else if (h.fn === 'SUM') value = finiteOrNum(sum)
+      else if (h.fn === 'AVERAGE') value = count === 0 ? { kind: 'formula-error', code: '#DIV/0!' } : finiteOrNum(sum / count)
+      else value = extreme === undefined ? 0 : finiteOrNum(extreme)
+      scalars.set(h.node, value)
+    }
+    if (signal.aborted) throw cancelled()
+    const value: CfHoisted = Object.freeze({ scalars, frequencies, longest })
+    const lease = hold.adopt(value, held)
+    adopted = true
+    return { kind: 'ready', value: lease }
+  } finally {
+    if (!adopted) hold.release()
+  }
 }
 
 /** Resident adapter: array-backed cells behind the shared CfValueSource contract. */

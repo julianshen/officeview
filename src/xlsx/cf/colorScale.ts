@@ -291,6 +291,9 @@ export function resolveScaleThresholds(
     return { kind: 'unresolved', reason: 'cf-invalid-rule' }
   }
 
+  // A formula bound is never a threshold: the service substitutes its evaluated number first (Ruling S5-H).
+  if (points.some(p => p.bound.type === 'formula')) return { kind: 'unresolved', reason: 'cf-formula-unevaluated' }
+
   // Feature gates for bounds
   for (const p of points) {
     const b = p.bound

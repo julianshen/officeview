@@ -32,6 +32,15 @@ export function visualSlotOf(rule: CfRule): VisualSlot | undefined {
   return undefined
 }
 
+/** A Stage 5 formula rule (Ruling S5-O): an expression, or a `cellIs` with a formula operand. Allocation-free (per cell). */
+function isFormulaRule(rule: CfRule): boolean {
+  const d = rule.definition
+  if (d.kind === 'expression') return true
+  if (d.kind !== 'cellIs') return false
+  for (const operand of d.operands) if ('formula' in operand) return true
+  return false
+}
+
 /** A ready icon outcome carries its evaluated descriptor (without the rule id composition adds). */
 function iconDescriptorOf(value: unknown): Omit<CfIconDescriptor, 'ruleId'> | undefined {
   return typeof value === 'object' && value !== null && 'buckets' in value && 'iconId' in value ? value as Omit<CfIconDescriptor, 'ruleId'> : undefined
@@ -59,10 +68,33 @@ interface MatchingFill {
  * Caller admits bounded matching-rule and output workspace before invoking this pure helper. */
 function* steps(
   orderedRules: readonly CfRule[],
-  outcomes: readonly (CfOutcome<unknown> | undefined)[],
+  givenOutcomes: readonly (CfOutcome<unknown> | undefined)[],
   options?: ComposeCellOptions,
 ): Generator<void, CfCellState> {
   const checkEvidence = options?.hasEvidence ?? defaultHasEvidence
+  // Ruling S5-STUB (Task 35 fix round 1 #1): a stopIfTrue formula rule ahead of a lower rule of kind K that contributes on
+  // this cell is the stub shape the Stage 1-4 captures recorded. It composes only with formula:composition-stub-successor-K;
+  // otherwise the formula rule is unresolved, so (as an unresolved stopIfTrue) it and everything after it are withheld.
+  // Decided lazily, once per rule, where a loop first reaches it (both loops already checkpoint per rule), so a cell with
+  // no such rule spends nothing extra.
+  let outcomes = givenOutcomes
+  const gated = new Set<number>()
+  function* gateStub(i: number): Generator<void, void> {
+    if (gated.has(i)) return
+    gated.add(i)
+    if (outcomes[i]?.kind === 'unresolved') return
+    for (let j = i + 1; j < orderedRules.length; j++) {
+      yield
+      const lower = outcomes[j]
+      if (lower?.kind === 'no-match' || (lower?.kind === 'ready' && !lower.value)) continue
+      const lowerSlot = visualSlotOf(orderedRules[j]!)
+      const kind = lowerSlot === 'colorScale' ? 'scale' : lowerSlot === 'dataBar' ? 'bar' : lowerSlot === 'iconSet' ? 'icon' : 'dxf'
+      if (checkEvidence(`formula:composition-stub-successor-${kind}`)) continue
+      if (outcomes === givenOutcomes) outcomes = [...givenOutcomes]
+      ;(outcomes as (CfOutcome<unknown> | undefined)[])[i] = { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
+      return
+    }
+  }
   const properties: Record<string, string | number | boolean | null> = Object.create(null)
   const tainted = new Set<string>(), won = new Set<string>()
   let visualColorScale: { ruleId: number; argb: number } | undefined
@@ -95,6 +127,7 @@ function* steps(
   for (let i = 0; i < orderedRules.length; i++) {
     yield
     const rule = orderedRules[i]!
+    if (rule.stopIfTrue && isFormulaRule(rule)) yield* gateStub(i)
     const outcome = outcomes[i]
     const slot = visualSlotOf(rule)
     const isScale = slot === 'colorScale'
@@ -185,7 +218,13 @@ function* steps(
       const scaleFill = scaleFills[0]!
       const dxfFill = dxfFills[0]!
 
-      if (dxfFill.rule.priority < scaleFill.rule.priority) {
+      // Ruling S5-O: an expression fill against a scale fill is its own measured pair; the Stage 2 orders below apply
+      // to it only with formula:composition-expression-vs-scale (priority-wins).
+      if (dxfFills.some(f => isFormulaRule(f.rule)) && !checkEvidence('formula:composition-expression-vs-scale')) {
+        fillsWithheld = true
+        tainted.add('fill')
+        tainted.add('colorScale')
+      } else if (dxfFill.rule.priority < scaleFill.rule.priority) {
         // DXF p1, Scale p2
         if (checkEvidence('scale:composition-dxf-p1-scale-p2')) {
           fillWinnerIndex = dxfFill.index
@@ -222,6 +261,7 @@ function* steps(
   for (let i = 0; i < orderedRules.length; i++) {
     yield
     const rule = orderedRules[i]!
+    if (rule.stopIfTrue && isFormulaRule(rule)) yield* gateStub(i)
     const outcome = outcomes[i]
     const slot = visualSlotOf(rule)
     const isScale = slot === 'colorScale'
@@ -320,7 +360,22 @@ function* steps(
       for (const slot of added) won.add(slot)
     }
 
-    if (halts(rule, slot)) break
+    if (halts(rule, slot)) {
+      // Ruling S5-O: a matching stopIfTrue formula rule halts a lower rule of each kind only with
+      // formula:composition-stop-<kind>; otherwise that lower rule's contribution is withheld (its writes tainted).
+      if (slot === undefined && isFormulaRule(rule)) {
+        for (let j = i + 1; j < orderedRules.length; j++) {
+          yield
+          const lower = orderedRules[j]!, lowerOutcome = outcomes[j]
+          if (lowerOutcome?.kind === 'no-match' || (lowerOutcome?.kind === 'ready' && !lowerOutcome.value)) continue
+          const lowerSlot = visualSlotOf(lower)
+          const kind = lowerSlot === 'colorScale' ? 'scale' : lowerSlot === 'dataBar' ? 'bar' : lowerSlot === 'iconSet' ? 'icon' : 'dxf'
+          if (checkEvidence(`formula:composition-stop-${kind}`)) continue
+          for (const path of lower.writes) { yield; tainted.add(path) }
+        }
+      }
+      break
+    }
   }
 
   // S4-I: a painted bar and a painted icon that disagree on showValue keep both descriptors, but whether the text is

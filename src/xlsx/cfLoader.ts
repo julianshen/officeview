@@ -100,6 +100,10 @@ export function cfNeedsViewport(sheet: Pick<XlsxSheet, 'conditionalFormatting'>)
 export function canRuleMatchBlanks(rule: Pick<CfRule, 'definition'>): boolean {
   const def = rule.definition
   if (def.kind === 'predicate') return def.type === 'containsBlanks'
+  // Stage 5 (Ruling S5-P): a formula can match a blank cell (`ISBLANK(D2)`, a reference operand to an empty cell), so every
+  // resolved formula-bearing kind keeps blank synthesis on, as the unresolved expression always did.
+  if (def.kind === 'expression') return true
+  if (def.kind === 'cellIs') return def.operands.some(operand => 'formula' in operand)
   if (def.kind === 'unresolved') return def.type === 'expression'
   return false
 }

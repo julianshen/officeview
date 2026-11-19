@@ -182,6 +182,24 @@
       ],
       "removed": [],
       "gzipDelta": 2612
+    },
+    {
+      "reason": "xlsx CF Stage 5 Task 32 (Lesson 7, S5-L/S5-P): the evaluation-context call sites (paint.ts, sheetAssets.ts and the interactive paint and text scopes pass `evaluation: cf.cfDocumentEvaluationOf(doc)` through the module they already hold from the lazy loader) and the widened canRuleMatchBlanks arms. No module added; no eager module imports a CF value. Measured 422389 \u2192 422419 B (+30; chunk-name hashes in the index chunk move it by a few bytes between builds) on this checkout.",
+      "added": [],
+      "removed": [],
+      "gzipDelta": 30
+    },
+    {
+      "reason": "xlsx CF Stage 5 Task 38 (S5-M, Ruling M2, fix round 1): the midnight tick's applied-day map and the worker reply's clock fact (CfSheetRules.clockFree published by the lazy parse, CfReadResult.clockFree on a ready reply, RemoteCfCache.clockFree/RemoteWorkbook.cfClockFree) replace the eager rule traversal; CfReadOptions.now is a type only. No module added; no eager module imports a CF value. Measured 422489 -> 422494 B (+5) on this checkout (BASE 17d4a4da).",
+      "added": [],
+      "removed": [],
+      "gzipDelta": 5
+    },
+    {
+      "reason": "xlsx CF Stage 5 Tasks 34, 36 and 37 (recorded at Task 39, Lesson 7): the index-closure growth those tasks measured but did not record (ledger: Task 34 fix 1 at 422473 B, +54 over Task 32's 422419; Tasks 36 and 37 together +16 to 422489, Task 36's eager helper having moved into the lazy CF runtime). No module added; check-eager ok (no eager module imports a CF value). Stage 5 total over PR 4 (422389) is +105 = 30 + 70 + 5, measured on this checkout.",
+      "added": [],
+      "removed": [],
+      "gzipDelta": 70
     }
   ]
 }

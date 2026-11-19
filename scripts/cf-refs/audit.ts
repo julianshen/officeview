@@ -20,9 +20,10 @@
  * wall-clock durations are recorded as context only, never as proof of
  * algorithmic bounds. No timing assertion gates any outcome.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { CF_FORMULA_PRODUCTION_READINGS } from '../../src/xlsx/cf/formulaReadings'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   BAR_AUTO_COLOUR_CAPABILITIES,
@@ -43,6 +44,7 @@ import {
   measuredBarForms,
   readZipPartsSync,
   primeVerifiedCases,
+  stage5GatesHold,
   judgeBarGradient,
   sampleBarAutoColours,
   sampleBarGradients,
@@ -64,6 +66,11 @@ import {
   CF_STAGE4_CASES,
   CF_STAGE4_NONDISCRIMINATING,
   CF_STAGE4_UNSUPPORTED,
+  CF_STAGE5_CAPABILITIES,
+  CF_STAGE5_CASES,
+  CF_STAGE5_NONDISCRIMINATING,
+  CF_STAGE5_REUSED_CAPTURES,
+  CF_STAGE5_UNSUPPORTED,
   iconCapabilityKind,
   type CfManifest,
   type CfOracleCase,
@@ -525,7 +532,10 @@ export function auditStage3Manifest(manifest: CfManifest, options: { rootDir?: s
       else {
         disposition = 'supported-structural'
         const res = evidence.get(entry.caseId)
-        if (res?.kind === 'verified') {
+        // A registered non-discriminating capability stays so while its owning case awaits its first capture (the
+        // bar:bounds-num follow-up case owns it before Excel has run): no capture has discriminated it yet.
+        if (CF_STAGE3_NONDISCRIMINATING[entry.capabilityId] !== undefined && owning.status === 'recipe-pending') disposition = 'unverified-nondiscriminating'
+        else if (res?.kind === 'verified') {
           if (CF_STAGE3_NONDISCRIMINATING[entry.capabilityId] !== undefined || res.nonDiscriminatingCapabilities?.includes(entry.capabilityId)) {
             disposition = 'unverified-nondiscriminating'
           } else if (res.verifiedCapabilities.includes(entry.capabilityId) && isCapabilityVerified(entry.capabilityId, manifest, { rootDir })) {
@@ -853,10 +863,243 @@ export function stage4Publication(report: Stage4AuditReport): Stage4Publication 
   return { published, withheld, selections }
 }
 
+/* ---------------- Stage 5 audit and publication gate (Task 31) ---------------- */
+
+export type Stage5CaseAudit = Stage1CaseAudit
+export type Stage5CapabilityAudit = Stage1CapabilityAudit
+/** Stage 5 (formulas): the per-capability dispositions, like Stage 4's, plus the reused Stage 1-4 captures (S5-STUB). */
+export interface Stage5AuditReport extends Stage1AuditReport {
+  /** The Produces name of `blockedCapabilities` (the same list). */
+  blocked: readonly string[]
+  /** The reading Excel matched for each verified capability (the hypothesis its configurations selected). */
+  matchedReadings: Readonly<Record<string, string>>
+  /** `CF_STAGE5_REUSED_CAPTURES` entry (`caseId:capabilityId`) -> whether its measured capture evidences every ref. */
+  reused: Readonly<Record<string, 'evidenced' | 'pending'>>
+}
+
+/**
+ * Fix round 1 #7: whether a reused Stage 1-4 case is verified and its capture records evidence at each named cell, read in
+ * that stage's own representation (no Stage 1-4 fixture is rewritten):
+ * - Stage 1/2: the sidecar's `observedCells` row; an Excel DisplayFormat fill must equal the expected fill, otherwise the
+ *   Stage 1 pixel contrast against the control (>= 16, the verifier's own threshold) must hold for a matched cell;
+ * - Stage 3: the sidecar's `observedBars` row (a measured bar, or a measured absence);
+ * - Stage 4: the sidecar's `observedIcons` row, or a `pixel-classified` bucket on the cell.
+ */
+export function reusedCaptureEvidenced(manifest: CfManifest, r: (typeof CF_STAGE5_REUSED_CAPTURES)[number], rootDir: string): boolean {
+  const c = manifest.cases.find(x => x.id === r.caseId)
+  if (!c || c.status !== 'measured' || verifyCfCase(c, { rootDir }).kind !== 'verified') return false
+  const cap = c.captures.find(x => x.appearance === 'screen') ?? c.captures[0]
+  let sidecar: Record<string, unknown> = {}
+  try {
+    sidecar = cap ? (JSON.parse(readFileSync(resolve(rootDir, cap.sidecarPath), 'utf8')) as Record<string, unknown>) : {}
+  } catch {
+    return false
+  }
+  const rows = (key: string): Array<Record<string, unknown>> => (Array.isArray(sidecar[key]) ? (sidecar[key] as Array<Record<string, unknown>>) : [])
+  const rowOf = (key: string, ref: string): Record<string, unknown> | undefined => rows(key).find(o => typeof o?.ref === 'string' && o.ref.toUpperCase() === ref.toUpperCase())
+  return r.refs.every(ref => {
+    const e = c.expected.cells.find(x => x.ref === ref)
+    if (!e) return false
+    if (c.stage === 1 || c.stage === 2) {
+      const o = rowOf('observedCells', ref)
+      if (!o) return false
+      if (o.fillSource === 'excel-display-format') return e.fillRgb === undefined || String(o.fillRgb).toUpperCase() === e.fillRgb.toUpperCase()
+      return e.matched === true && typeof o.bgContrastDelta === 'number' && o.bgContrastDelta >= 16
+    }
+    if (c.stage === 3) return rowOf('observedBars', ref) !== undefined
+    if (c.stage === 4) return rowOf('observedIcons', ref) !== undefined || e.iconEvidence?.bucket === 'pixel-classified'
+    return false
+  })
+}
+
+/**
+ * Stage 5 (Task 31), following `auditStage4Manifest`. A capability's disposition comes from `verifyCfCase`'s
+ * per-capability semantic evaluation and the Stage 5 gates in `isCapabilityVerified`, never from the case-level status.
+ * Unsupported shapes are `refused-unsupported`; twin registries are `unverified-nondiscriminating`; a capability that
+ * re-reads a Stage 1-4 capture (S5-STUB) also needs that capture to evidence its cells.
+ */
+export function auditStage5Manifest(manifest: CfManifest, options: { rootDir?: string } = {}): Stage5AuditReport {
+  const rootDir = options.rootDir ?? process.cwd()
+  const cases = manifest.cases.filter(c => c.stage === 5 || c.id.startsWith('stage5'))
+  const catalogIds = CF_STAGE5_CASES.map(c => c.id)
+  const manifestIds = new Set(cases.map(c => c.id))
+  const missingCases = manifest.cases.length === 0 ? [] : catalogIds.filter(id => !manifestIds.has(id))
+  const catalogSet = new Set(catalogIds)
+  const extraCases = cases.map(c => c.id).filter(id => !catalogSet.has(id))
+  const evidence = new Map(cases.map(c => [c.id, verifyCfCase(c, { rootDir })] as const))
+  primeVerifiedCases(manifest, { rootDir }, evidence)
+  const perCase = cases.map(c => auditCase(c, rootDir, evidence.get(c.id)))
+  const reused: Record<string, 'evidenced' | 'pending'> = {}
+  for (const r of CF_STAGE5_REUSED_CAPTURES) reused[`${r.caseId}:${r.capabilityId}`] = reusedCaptureEvidenced(manifest, r, rootDir) ? 'evidenced' : 'pending'
+  const reuseHolds = (cap: string): boolean => CF_STAGE5_REUSED_CAPTURES.filter(r => r.capabilityId === cap).every(r => reused[`${r.caseId}:${r.capabilityId}`] === 'evidenced')
+  const ownedByCase = (cap: string): boolean => CF_STAGE5_CASES.some(c => c.markers.some(m => m.capabilityId === cap) || (c.formulaConfigurations ?? []).some(x => x.capabilityId === cap))
+  const perCapability: Stage5CapabilityAudit[] = (manifest.cases.length === 0 ? [] : CF_STAGE5_CAPABILITIES).map(entry => {
+    const owning = perCase.find(p => p.id === entry.caseId)
+    let disposition: Stage5CapabilityAudit['disposition'] = 'unaccounted'
+    if (owning?.structuralValid) {
+      if (owning.status === 'unsupported' || CF_STAGE5_UNSUPPORTED[entry.capabilityId] !== undefined) disposition = 'refused-unsupported'
+      else if (CF_STAGE5_NONDISCRIMINATING[entry.capabilityId] !== undefined) disposition = 'unverified-nondiscriminating'
+      // A reuse-only capability (S5-STUB) rests on the Stage 1-4 capture and the Stage 5 gates (formula:truth-boolean).
+      else if (!ownedByCase(entry.capabilityId)) disposition = reuseHolds(entry.capabilityId) && stage5GatesHold(entry.capabilityId, manifest, { rootDir }) ? 'verified' : 'supported-structural'
+      else {
+        disposition = 'supported-structural'
+        const res = evidence.get(entry.caseId)
+        if (res?.kind === 'verified') {
+          if (res.nonDiscriminatingCapabilities?.includes(entry.capabilityId)) disposition = 'unverified-nondiscriminating'
+          else if (res.verifiedCapabilities.includes(entry.capabilityId) && isCapabilityVerified(entry.capabilityId, manifest, { rootDir }) && reuseHolds(entry.capabilityId)) disposition = 'verified'
+        }
+      }
+    }
+    return { capabilityId: entry.capabilityId, caseId: entry.caseId, disposition }
+  })
+  const matchedReadings: Record<string, string> = {}
+  for (const p of perCapability) {
+    if (p.disposition !== 'verified') continue
+    const res = evidence.get(p.caseId)
+    // A reuse-only capability (S5-STUB) has no configuration in its owning case, so its reading is always the recorded
+    // Stage 1-4 outcome, whether or not that case's own capture verifies (Task 39: the composition rebuild verified it).
+    const matched = !ownedByCase(p.capabilityId) ? 'recorded' : res?.kind === 'verified' ? res.matchedHypotheses?.[p.capabilityId] : undefined
+    if (typeof matched === 'string') matchedReadings[p.capabilityId] = matched
+  }
+  const ids = new Set(CF_STAGE5_CAPABILITIES.map(e => e.capabilityId))
+  const unknownRegistrations = [...Object.keys(CF_STAGE5_NONDISCRIMINATING), ...Object.keys(CF_STAGE5_UNSUPPORTED)].filter(id => !ids.has(id))
+  const caseOk = (p: Stage5CaseAudit): boolean => (p.status === 'measured' ? p.structuralValid && p.code === undefined : p.structuralValid)
+  const ok = missingCases.length === 0 && perCase.every(caseOk) && perCapability.every(p => p.disposition !== 'unaccounted') && unknownRegistrations.length === 0
+  const gate = stageGateStatus(perCapability)
+  return {
+    ok,
+    perCase,
+    perCapability,
+    missingCases,
+    extraCases,
+    stageComplete: ok && perCase.length > 0 && gate.complete,
+    blockedCapabilities: gate.blocked,
+    blocked: gate.blocked,
+    matchedReadings,
+    reused,
+    summary: {
+      cases: perCase.length,
+      structuralValid: perCase.filter(p => p.structuralValid).length,
+      verified: perCase.filter(p => p.status === 'measured' && p.code === undefined).length,
+      unsupported: perCase.filter(p => p.status === 'unsupported').length,
+      pending: perCase.filter(p => p.status === 'recipe-pending' || p.status === 'geometry-unverified').length,
+      capabilities: perCapability.length,
+      covered: perCapability.filter(p => p.disposition !== 'unaccounted').length,
+      verifiedCapabilities: perCapability.filter(p => p.disposition === 'verified').length,
+      unverifiedCapabilities: perCapability.filter(p => p.disposition === 'unverified-nondiscriminating').length,
+    },
+  }
+}
+
+/**
+ * The reading production implements for each Stage 5 capability (the Stage 4 `CF_STAGE4_PRODUCTION_READINGS` pattern):
+ * `CF_FORMULA_PRODUCTION_READINGS` (`src/xlsx/cf/formulaReadings.ts`), the one table production gates on, added by Task 35
+ * together with the code and tests that implement each reading (tests/xlsx-cf-formula-rules.test.ts pins every entry to a
+ * catalog hypothesis). A list is a selection, read from `VERIFIED_STAGE5_FORMULA_SELECTIONS`, which `--publish-stage5` renders
+ * beside the published set (`renderFormulaSelectionsBlock`, Task 39).
+ * A capability with a matched reading but no entry (`formula:truth-range`, `formula:fn-today`, ...) is withheld.
+ */
+export const CF_STAGE5_PRODUCTION_READINGS: Readonly<Record<string, string | readonly string[]>> = { ...CF_FORMULA_PRODUCTION_READINGS }
+
+/**
+ * Task 35 fix round 2 (ruling a): capabilities whose Stage 5 fixture production cannot confirm, with the only witnesses
+ * that may fail there. The publication gate refuses them whatever the audit verified (tests/xlsx-cf-formula-readings.test.ts).
+ */
+export interface Stage5UnconfirmableScope {
+  reason: string
+  witnesses: readonly string[]
+  /** Task 37 fix round 1: production withholds the configuration's designated cells (fail closed) rather than painting them,
+   * so the narrow check accepts withheld cells; it still refuses any painted cell that contradicts the reading. */
+  designatedWithheld?: true
+}
+
+export const CF_STAGE5_UNCONFIRMABLE: Readonly<Record<string, Stage5UnconfirmableScope & {
+  /** Per-case scopes: when present, only the listed cases are unconfirmable, each under its own scope. */
+  cases?: Readonly<Record<string, Stage5UnconfirmableScope>> }>> = {
+  // The bar:bounds-formula follow-up: stage5-bar-bounds-formula (the owner) is confirmed by production, so only the
+  // old fixture stays recorded as unconfirmable, for its own configuration (orchestrator ruling 4, 2026-11-19).
+  'bar:bounds-formula': {
+    reason: 'only stage5-cfvo-formulas, a superseded case version, cannot be confirmed: see its scope',
+    witnesses: [],
+    cases: {
+      'stage5-cfvo-formulas': {
+        reason: 'stage5-cfvo-formulas cfvo-bar-formula: the bar column holds 5..100 against formula bounds 20..80, a whole-scope cf-value-beyond-bounds (Ruling S3-E), and its num twin W needs bar:bounds-num (CF_STAGE3_NONDISCRIMINATING), so production cannot reproduce the fixture (Task 37 fix round 1)',
+        witnesses: ['W2', 'W3', 'W4', 'W5', 'W6', 'W7', 'W8', 'W9'], designatedWithheld: true,
+      },
+    },
+  },
+  'formula:active-present-bar': {
+    reason: 'stage5-active-present-bar: a standalone x14 bar, and bar:pairing-standalone is CF_STAGE3_UNSUPPORTED, so the activated bar and its twin withhold in production (Task 37 fix round 1)',
+    witnesses: ['C2', 'C3', 'C4', 'C5', 'C6', 'C7'], designatedWithheld: true,
+  },
+  'formula:composition-stop-icon': {
+    reason: "stage5-composition stop-icon: its continues witnesses L3/L5/L7 (a red fill plus an icon; column K before Task 39's re-lettering) are withheld in production while icon:composition-dxf-fill is unpublished, so production cannot confirm the fixture's reading (S5-WITNESS)",
+    witnesses: ['L3', 'L5', 'L7'],
+  },
+}
+
+/** The unconfirmable scope of a capability's configurations in one case, or undefined when production must confirm them. */
+export function stage5UnconfirmableScope(capabilityId: string, caseId: string): Stage5UnconfirmableScope | undefined {
+  const entry = CF_STAGE5_UNCONFIRMABLE[capabilityId]
+  if (!entry) return undefined
+  return entry.cases ? entry.cases[caseId] : entry
+}
+
+export interface Stage5Publication {
+  /** The ids `--publish-stage5` writes to `VERIFIED_STAGE5_CAPABILITIES` (sorted). */
+  published: string[]
+  /** Every other Stage 5 id, with the reason it stays withheld. */
+  withheld: Record<string, string>
+  /** The matched reading of each published selection capability (a list entry in the production readings). */
+  selections: Record<string, string>
+}
+
+/**
+ * The Stage 5 publication gate: a capability publishes only when it is verified and the reading Excel matched is the one
+ * production implements (`readings`, by default `CF_STAGE5_PRODUCTION_READINGS`). Pure in the report.
+ */
+export function stage5Publication(report: Stage5AuditReport, readings: Readonly<Record<string, string | readonly string[]>> = CF_STAGE5_PRODUCTION_READINGS): Stage5Publication {
+  const published: string[] = []
+  const withheld: Record<string, string> = {}
+  const selections: Record<string, string> = {}
+  for (const p of report.perCapability) {
+    const id = p.capabilityId
+    if (p.disposition !== 'verified') { withheld[id] = p.disposition; continue }
+    // A per-case entry refuses publication only through the owning case's own scope; a superseded case version's scope
+    // stays recorded for that case alone (orchestrator ruling 4 on the bar:bounds-formula follow-up).
+    const unconfirmable = stage5UnconfirmableScope(id, p.caseId)
+    if (unconfirmable) { withheld[id] = `fixture-unconfirmable: ${unconfirmable.reason}`; continue }
+    const matched = report.matchedReadings[id]
+    const prod = Object.prototype.hasOwnProperty.call(readings, id) ? readings[id] : undefined
+    if (matched === undefined) { withheld[id] = 'reading-unrecorded: a verified Stage 5 capability names the reading it matched'; continue }
+    if (prod === undefined) { withheld[id] = `reading-unimplemented: Excel matched ${matched}, production names no reading`; continue }
+    if (typeof prod === 'string') {
+      if (prod !== matched) { withheld[id] = `reading-mismatch: Excel matched ${matched}, production implements ${prod}`; continue }
+    } else {
+      if (!prod.includes(matched)) { withheld[id] = `reading-unimplemented: Excel matched ${matched}, production implements ${prod.join(' | ')}`; continue }
+      selections[id] = matched
+    }
+    published.push(id)
+  }
+  published.sort()
+  return { published, withheld, selections }
+}
+
 /** `VERIFIED_STAGE4_ICON_SELECTIONS` as `--publish-stage4` renders it (keys sorted, so the write is idempotent). */
 export function renderIconSelectionsBlock(selections: Readonly<Record<string, string>>): string {
   const keys = Object.keys(selections).sort()
   return `export const VERIFIED_STAGE4_ICON_SELECTIONS: Readonly<Record<string, string>> = {\n${keys.map(k => `  '${k}': '${selections[k]}',`).join('\n')}\n}\n`
+}
+
+/** `VERIFIED_STAGE5_FORMULA_SELECTIONS` as `--publish-stage5` renders it beside the Stage 5 set (keys sorted, idempotent). */
+export function renderFormulaSelectionsBlock(selections: Readonly<Record<string, string>>): string {
+  const keys = Object.keys(selections).sort()
+  return `export const VERIFIED_STAGE5_FORMULA_SELECTIONS: Readonly<Record<string, string>> = {\n${keys.map(k => `  '${k}': '${selections[k]}',`).join('\n')}\n}\n`
+}
+
+const exportedFormulaSelections = (text: string | undefined): string | undefined => {
+  const m = text === undefined ? null : /export const VERIFIED_STAGE5_FORMULA_SELECTIONS: [^\n]* = \{\n[\s\S]*?\n?\}\n/.exec(text)
+  return m ? m[0] : undefined
 }
 
 const exportedSelections = (text: string | undefined): string | undefined => {
@@ -876,6 +1119,11 @@ export interface RenderVerifiedOptions {
   committedSource?: string
   /** Mirrors Ruling S3-WRITE for Stage 4: publish the audited Stage 4 set (Task 30 only); otherwise the committed Stage 4 export, or its absence, is kept verbatim. */
   publishStage4?: boolean
+  /**
+   * Mirrors S3-WRITE and `publishStage4` for Stage 5: publish the gated Stage 5 set (`stage5Publication`), and only when the
+   * Stage 5 audit reports `stageComplete`; otherwise the committed Stage 5 export, or its absence, is kept verbatim.
+   */
+  publishStage5?: boolean
 }
 
 /** Per-channel ARGB agreement within the bar colour tolerance (8, the calibration cell's). */
@@ -942,8 +1190,14 @@ export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: 
   const stage4Gate = options.publishStage4 ? stage4Publication(auditStage4Manifest(manifest, { rootDir })) : undefined
   const stage4Verified = stage4Gate ? stage4Gate.published : exportedSet(options.committedSource, 'VERIFIED_STAGE4_CAPABILITIES')
   const selectionsBlock = stage4Gate ? renderIconSelectionsBlock(stage4Gate.selections) : exportedSelections(options.committedSource)
+  // Task 31: Stage 5 publishes only a complete audit's gated set; an incomplete one leaves the committed export as is.
+  const stage5Report = options.publishStage5 ? auditStage5Manifest(manifest, { rootDir }) : undefined
+  const stage5Gate = stage5Report?.stageComplete ? stage5Publication(stage5Report) : undefined
+  const stage5Verified = stage5Gate ? stage5Gate.published : exportedSet(options.committedSource, 'VERIFIED_STAGE5_CAPABILITIES')
+  // Task 39: the matched reading of each published selection capability travels beside the set (evidence.ts reads it).
+  const formulaSelectionsBlock = stage5Gate ? renderFormulaSelectionsBlock(stage5Gate.selections) : exportedFormulaSelections(options.committedSource)
   const list = (ids: readonly string[]): string => ids.map(id => `  '${id}',`).join('\n')
-  const allVerified = [...new Set([...stage1Verified, ...stage2Verified, ...(stage3Verified ?? []), ...(stage4Verified ?? [])])].sort()
+  const allVerified = [...new Set([...stage1Verified, ...stage2Verified, ...(stage3Verified ?? []), ...(stage4Verified ?? []), ...(stage5Verified ?? [])])].sort()
   const block = (name: string, ids: readonly string[]): string => `export const ${name}: ReadonlySet<string> = new Set([\n${list(ids)}\n])\n`
   return `/**
  * Verified conditional formatting capabilities, every stage from its own audit (Stage 3 only once published, Ruling S3-WRITE).
@@ -952,7 +1206,7 @@ export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: 
  */
 ${block('VERIFIED_STAGE1_CAPABILITIES', stage1Verified)}
 ${block('VERIFIED_STAGE2_CAPABILITIES', stage2Verified)}
-${stage3Verified !== undefined ? `${block('VERIFIED_STAGE3_CAPABILITIES', stage3Verified)}\n` : ''}${stage3Verified !== undefined && autoColoursBlock !== undefined ? `${autoColoursBlock}\n` : ''}${stage3Verified !== undefined && layoutBlock !== undefined ? `${layoutBlock}\n` : ''}${stage3Verified !== undefined && gradientBlock !== undefined ? `${gradientBlock}\n` : ''}${stage3Verified !== undefined && lengthsBlock !== undefined ? `${lengthsBlock}\n` : ''}${stage3Verified !== undefined && borderBlock !== undefined ? `${borderBlock}\n` : ''}${stage3Verified !== undefined && autoBoundsBlock !== undefined ? `${autoBoundsBlock}\n` : ''}${stage4Verified !== undefined ? `${block('VERIFIED_STAGE4_CAPABILITIES', stage4Verified)}\n` : ''}${stage4Verified !== undefined && selectionsBlock !== undefined ? `${selectionsBlock}\n` : ''}${block('VERIFIED_CAPABILITIES', allVerified)}`
+${stage3Verified !== undefined ? `${block('VERIFIED_STAGE3_CAPABILITIES', stage3Verified)}\n` : ''}${stage3Verified !== undefined && autoColoursBlock !== undefined ? `${autoColoursBlock}\n` : ''}${stage3Verified !== undefined && layoutBlock !== undefined ? `${layoutBlock}\n` : ''}${stage3Verified !== undefined && gradientBlock !== undefined ? `${gradientBlock}\n` : ''}${stage3Verified !== undefined && lengthsBlock !== undefined ? `${lengthsBlock}\n` : ''}${stage3Verified !== undefined && borderBlock !== undefined ? `${borderBlock}\n` : ''}${stage3Verified !== undefined && autoBoundsBlock !== undefined ? `${autoBoundsBlock}\n` : ''}${stage4Verified !== undefined ? `${block('VERIFIED_STAGE4_CAPABILITIES', stage4Verified)}\n` : ''}${stage4Verified !== undefined && selectionsBlock !== undefined ? `${selectionsBlock}\n` : ''}${stage5Verified !== undefined ? `${block('VERIFIED_STAGE5_CAPABILITIES', stage5Verified)}\n` : ''}${stage5Verified !== undefined && formulaSelectionsBlock !== undefined ? `${formulaSelectionsBlock}\n` : ''}${block('VERIFIED_CAPABILITIES', allVerified)}`
 }
 
 /* ---------------- pressure + lifecycle scenarios ---------------- */
@@ -2020,6 +2274,126 @@ export async function stage4CaseRecords(manifest: CfManifest, rootDir: string = 
   }
   return out
 }
+// Fix round 2 (R2): the agreement and the slot-specific justifications live in ./stage5-withhold (shared with
+// cf-compare and the conformance test).
+// Fix round 4: the verdict follows a counterfactual run of the real compositor (stage5CounterfactualOf).
+export { stage5CellAgreement, type Stage5Excel, type Stage5Production } from './stage5-withhold'
+import { stage5CellAgreement, stage5CounterfactualOf, stage5TokenOf, type Stage5Excel, type Stage5Production, type Stage5Refusal, type Stage5Truth } from './stage5-withhold'
+
+export interface Stage5CaseRecord {
+  caseId: string
+  /** The variant: the designated cell (or its control). */
+  ref: string
+  status: string
+  /** Whether the row was compared with Excel; when not, `notCompared` says why (an unmeasured case). */
+  compared: boolean
+  notCompared?: string
+  /** `display-format` under a formula rule, `literal` under literal twins/controls only, `control` with no rule. */
+  evidenceKind: 'display-format' | 'literal' | 'control'
+  /** The formula capabilities of the rules covering the cell. */
+  capabilities: string[]
+  excel: Stage5Excel | undefined
+  production: Stage5Production
+  /** The justified-refusal set at the cell, from independent evidence only (stage5JustifiedRefusals). */
+  justification: Stage5Refusal[]
+  /** The real compositor's output with exactly those refusals forced (stage5CounterfactualOf); absent when not compared. */
+  counterfactual?: Pick<Stage5Truth, 'counterfactual' | 'unjustified' | 'overResolved' | 'cellRefusal'>
+  /** Production equals the counterfactual (no unjustified refusal), and every resolved component is Excel's. */
+  agrees: boolean
+  disagreement?: string
+  mode: 'resident'
+  stamp: { cfGen: number; workbookValueGen: number }
+  /** The case's CF memory peak (bytes) and the work units its preparations spent. */
+  bytePeak: number
+  workUnits: number
+}
+
+/** The per-case/variant records of every Stage 5 case under production evidence (nothing injected). */
+export async function stage5CaseRecords(manifest: CfManifest, rootDir: string = REPO_ROOT): Promise<Stage5CaseRecord[]> {
+  const { OfficePackage } = await import('../../src/core/zip')
+  const { parseXlsx } = await import('../../src/xlsx/parse')
+  const { createCfService } = await import('../../src/xlsx/cf/service')
+  const { CF_LIMITS } = await import('../../src/xlsx/cf/limits')
+  const { cfRuntimeEvidence } = await import('../../src/xlsx/cf/predicates')
+  const { cfWorkbookOfDocument } = await import('../../src/xlsx/cf/render')
+  const { caseEvaluationOf, caseNowOf, caseParseOptionsOf } = await import('./case-clock')
+  const { cfRulesVersion } = await import('../../src/xlsx/view/pagedSource')
+  const { formulaObservationOf, decodePngSync, computeWorksheetRangeGeometry, readZipPartsSync, stage5IconKeys, stage5IconKeyOf, describeS5Visual } = await import('./verify')
+  const refRC = (ref: string) => { const m = /^([A-Z]+)(\d+)$/.exec(ref)!; return { row: Number(m[2]) - 1, col: [...m[1]!].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1 } }
+  const iconKeys = stage5IconKeys(rootDir)
+  const out: Stage5CaseRecord[] = []
+  for (const c of manifest.cases.filter(x => x.stage === 5)) {
+    const kindOf = (ref: string): { covering: typeof c.markers; formulaCaps: string[]; kind: Stage5CaseRecord['evidenceKind'] } => {
+      const covering = c.markers.filter(m => isCellInSqref(ref, m.sqref))
+      const formulaCaps = [...new Set(covering.filter(m => m.formula !== undefined).map(m => m.capabilityId))].sort()
+      return { covering, formulaCaps, kind: formulaCaps.length > 0 ? 'display-format' : covering.length > 0 ? 'literal' : 'control' }
+    }
+    const blank: Stage5Production = stage5TokenOf(undefined)
+    if (c.status !== 'measured') {
+      // Not compared: the case holds no verified Excel evidence (a recorded outcome, a refused shape, or pending).
+      const refs = c.expected.cells.length > 0 ? c.expected.cells.map(e => e.ref) : [...new Set(c.markers.map(m => m.sqref.split(/[: ]/)[0]!))]
+      for (const ref of refs) {
+        const k = kindOf(ref)
+        out.push({ caseId: c.id, ref, status: c.status, compared: false, notCompared: `${c.status}: ${c.reason ?? 'no verified Excel capture'}`.slice(0, 400),
+          evidenceKind: k.kind, capabilities: k.formulaCaps, excel: undefined, production: blank, justification: [], agrees: true, mode: 'resident', stamp: { cfGen: 0, workbookValueGen: 0 }, bytePeak: 0, workUnits: 0 })
+      }
+      continue
+    }
+    const savedBytes = new Uint8Array(readFileSync(resolve(rootDir, c.saved)))
+    // Final review F2: a clock case is parsed, prepared and counterfactually checked at its anchor instant in its required
+    // zone (case-clock.ts), whatever the host's zone and day.
+    const doc = await parseXlsx(await OfficePackage.load(savedBytes), caseParseOptionsOf(c))
+    const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+    const cap = c.captures.find(x => x.appearance === 'screen') ?? c.captures[0]
+    const sidecar = cap && existsSync(resolve(rootDir, cap.sidecarPath)) ? JSON.parse(readFileSync(resolve(rootDir, cap.sidecarPath), 'utf8')) as Record<string, unknown> : undefined
+    const png = cap && cap.pngPath && existsSync(resolve(rootDir, cap.pngPath)) ? decodePngSync(new Uint8Array(readFileSync(resolve(rootDir, cap.pngPath)))) ?? undefined : undefined
+    const parts = readZipPartsSync(savedBytes) ?? undefined
+    const geom = parts && sidecar && Array.isArray(sidecar.colWidthsPt) ? computeWorksheetRangeGeometry(parts, c.range, { colWidthsPt: sidecar.colWidthsPt as number[], rowHeightsPt: sidecar.rowHeightsPt as number[] }) ?? undefined : undefined
+    const observation = sidecar ? formulaObservationOf(c, sidecar, png, geom, stage5IconKeyOf(iconKeys, parts)) : undefined
+    const memory = createCfMemory()
+    const budgets: CfWorkBudgetLike[] = []
+    const budget = (scan: boolean) => () => { const b = createCfWorkBudget(scan ? { scan: true } : {}); budgets.push(b); return b }
+    const cf = sheet.conditionalFormatting
+    // The clock cases were measured on their anchor day; production reads the same day through the evaluation clock.
+    const now = caseNowOf(c)
+    const service = cf ? createCfService(cf, memory, { evidence: cfRuntimeEvidence, budget: budget(false), statisticsBudget: budget(true),
+      evaluation: caseEvaluationOf(c, doc, now), sheetName: sheet.name, workbook: cfWorkbookOfDocument(doc.sheets, memory, 'engine') }) : undefined
+    const stamp = { owner: 'audit-records', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cf ? cfRulesVersion(cf) : 0, viewGen: 0, structureGen: 0, clockGen: 0 }
+    const source = residentSource(sheet, stamp, memory, 'engine')
+    const truths = await stage5CounterfactualOf({ c, doc, sheet, refs: c.expected.cells.map(e => e.ref), now })
+    try {
+      for (const exp of c.expected.cells) {
+        const k = kindOf(exp.ref)
+        const fill = observation?.fill(exp.ref)
+        const visualKind = k.covering.some(m => m.ruleType === 'iconSet') ? 'icon' : k.covering.some(m => m.ruleType === 'dataBar') ? 'bar' : undefined
+        const measured = visualKind && observation?.visual ? observation.visual(exp.ref, visualKind) : undefined
+        const visualToken = (v: NonNullable<typeof measured>): string => (v.kind === 'none' ? 'none' : v.kind === 'bar' ? 'bar' : `icon:${(v as { cls: string }).cls}`)
+        const excel: Stage5Excel | undefined = fill ? { fill: fill.fill, strike: fill.strike, ...(measured ? { visual: visualToken(measured) } : {}) } : undefined
+        let production: Stage5Production = { ...blank }
+        if (service) {
+          const { row, col } = refRC(exp.ref)
+          const lease = await service.prepareCf({ stamp, sourceRects: [{ firstRow: row, lastRow: row, firstCol: col, lastCol: col }], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, source)
+          production = stage5TokenOf(lease.value.at(row, col))
+          lease.release()
+        }
+        const truth = truths.get(exp.ref)
+        const justification = truth?.refusals ?? []
+        const verdict = stage5CellAgreement(production, excel, truth)
+        out.push({
+          caseId: c.id, ref: exp.ref, status: c.status, compared: true,
+          evidenceKind: k.kind, capabilities: k.formulaCaps, excel, production, justification,
+          ...(truth ? { counterfactual: { counterfactual: truth.counterfactual, unjustified: truth.unjustified, overResolved: truth.overResolved, ...(truth.cellRefusal !== undefined ? { cellRefusal: truth.cellRefusal } : {}) } } : {}),
+          agrees: verdict.agrees, ...(verdict.disagreement ? { disagreement: verdict.disagreement } : {}),
+          mode: 'resident', stamp: { cfGen: stamp.cfGen, workbookValueGen: stamp.workbookValueGen }, bytePeak: 0, workUnits: 0,
+        })
+      }
+    } finally { service?.dispose() }
+    void describeS5Visual
+    const units = budgets.reduce((n, b) => n + b.units, 0)
+    for (const r of out) if (r.caseId === c.id) { r.bytePeak = memory.peakBytes; r.workUnits = units }
+  }
+  return out
+}
 type CfWorkBudgetLike = { readonly units: number }
 type CfObservedIconRow = { ref: string; cellLeftPx: number; cellTopPx: number; icon: null | { leftPx: number; topPx: number; rightPx: number; bottomPx: number; glyphClass: string } }
 
@@ -2193,6 +2567,17 @@ export function auditEagerBoundary(rootDir: string = REPO_ROOT): EagerBoundary {
   return { checked: true, passed: out.status === 0, reason: out.status === 0 ? 'eager graph clean' : String(out.stderr ?? out.stdout).slice(0, 500) }
 }
 
+/** Task 39 fix round 1 (F4): writes `content` to a temporary sibling, then renames it over `target` (one atomic step). */
+export function writeFileAtomic(target: string, content: string): void {
+  const tmp = `${target}.tmp-${process.pid}-${Date.now()}`
+  try {
+    writeFileSync(tmp, content, 'utf8')
+    renameSync(tmp, target)
+  } finally {
+    if (existsSync(tmp)) rmSync(tmp, { force: true })
+  }
+}
+
 /* ---------------- CLI ---------------- */
 
 function printCase(entry: { id: string; status: string; structuralValid: boolean; code?: string; reason?: string }): void {
@@ -2204,9 +2589,9 @@ function printCase(entry: { id: string; status: string; structuralValid: boolean
 async function main(): Promise<void> {
   const args = process.argv.slice(2)
   const stage = Number(args.includes('--stage') ? args[args.indexOf('--stage') + 1] : 1)
-  if (stage !== 1 && stage !== 2 && stage !== 3 && stage !== 4) {
+  if (stage !== 1 && stage !== 2 && stage !== 3 && stage !== 4 && stage !== 5) {
     // eslint-disable-next-line no-console
-    console.error('Only --stage 1, --stage 2, --stage 3 and --stage 4 are implemented')
+    console.error('Only --stage 1, --stage 2, --stage 3, --stage 4 and --stage 5 are implemented')
     process.exit(2)
   }
   const only = args.includes('--case') ? args[args.indexOf('--case') + 1] : undefined
@@ -2218,21 +2603,29 @@ async function main(): Promise<void> {
       ? auditStage2Manifest(manifest, { rootDir: REPO_ROOT })
       : stage === 3
         ? auditStage3Manifest(manifest, { rootDir: REPO_ROOT })
-        : auditStage4Manifest(manifest, { rootDir: REPO_ROOT })
+        : stage === 4
+          ? auditStage4Manifest(manifest, { rootDir: REPO_ROOT })
+          : auditStage5Manifest(manifest, { rootDir: REPO_ROOT })
+  // Task 39 fix round 1 (F4): `--write` renders now and writes only after every check below has passed, atomically
+  // (a temporary sibling and one rename). Any failure (a thrown scenario, ok=false, an incomplete stage) leaves the
+  // target byte-unchanged. `--target` redirects the write (tests); CF_AUDIT_INJECT_FAILURE=after-render is a test seam.
+  let pendingWrite: { target: string; content: string; summary: string } | undefined
   if (args.includes('--write')) {
-    const target = resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts')
+    const target = args.includes('--target') ? resolve(args[args.indexOf('--target') + 1]!) : resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts')
+    const committed = resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts')
     const content = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, {
-      committedSource: existsSync(target) ? readFileSync(target, 'utf8') : undefined,
+      committedSource: existsSync(committed) ? readFileSync(committed, 'utf8') : undefined,
       publishStage3: args.includes('--publish-stage3'),
       publishStage4: args.includes('--publish-stage4'),
+      publishStage5: args.includes('--publish-stage5'),
     })
-    writeFileSync(target, content, 'utf8')
+    if (process.env.CF_AUDIT_INJECT_FAILURE === 'after-render') throw new Error('injected failure after render (test seam)')
     const count = (name: string): number => (new RegExp(`export const ${name}: ReadonlySet<string> = new Set\\(\\[([\\s\\S]*?)\\]\\)`).exec(content)?.[1]?.match(/'[^']+'/g) ?? []).length
     const s3 = content.includes('VERIFIED_STAGE3_CAPABILITIES') ? `, ${count('VERIFIED_STAGE3_CAPABILITIES')} S3${args.includes('--publish-stage3') ? ' published' : ' as committed'}` : ', S3 unpublished'
     const s4 = content.includes('VERIFIED_STAGE4_CAPABILITIES') ? `, ${count('VERIFIED_STAGE4_CAPABILITIES')} S4${args.includes('--publish-stage4') ? ' published' : ' as committed'}` : ', S4 unpublished'
-    const detail = ` (${count('VERIFIED_STAGE1_CAPABILITIES')} S1, ${count('VERIFIED_STAGE2_CAPABILITIES')} S2${s3}${s4})`
-    // eslint-disable-next-line no-console
-    console.log(`wrote ${count('VERIFIED_CAPABILITIES')} verified capabilities${detail} to src/xlsx/cf/verifiedCapabilities.ts`)
+    const s5 = content.includes('VERIFIED_STAGE5_CAPABILITIES') ? `, ${count('VERIFIED_STAGE5_CAPABILITIES')} S5${args.includes('--publish-stage5') ? ' published' : ' as committed'}` : ', S5 unpublished'
+    const detail = ` (${count('VERIFIED_STAGE1_CAPABILITIES')} S1, ${count('VERIFIED_STAGE2_CAPABILITIES')} S2${s3}${s4}${s5})`
+    pendingWrite = { target, content, summary: `${count('VERIFIED_CAPABILITIES')} verified capabilities${detail}` }
   }
   const cases = only ? report.perCase.filter(c => c.id === only) : report.perCase
   for (const entry of cases) printCase(entry)
@@ -2263,6 +2656,7 @@ async function main(): Promise<void> {
   let stage1Pressure: { whole: PressureSample; shared: PressureSample; bounds: ReturnType<typeof pressureRangeBoundaries>; refusedSheet: PressureSample; stats: PressureSample } | undefined
   let stage2Pressure: { scaleShared: PressureSample; percentile: PressureSample; extents: PressureSample } | undefined
   let stage4Pressure: Record<string, unknown> | undefined
+  let stage5Pressure: Record<string, unknown> | undefined
   let stage3Pressure: { barShared: Awaited<ReturnType<typeof pressureBar1MRowSharedScan>>; barPercentile: PressureSample; barExtents: PressureSample; barDistinct: PressureSample; barUnitCap: Awaited<ReturnType<typeof pressureBarUnitCap>> } | undefined
 
   if (stage === 1) {
@@ -2347,6 +2741,57 @@ async function main(): Promise<void> {
     // eslint-disable-next-line no-console
     console.log(`stage 4 case records: ${caseRecords.length} rows over ${new Set(caseRecords.map(r => r.caseId)).size} measured cases (resident mode); painted ${caseRecords.filter(r => r.produced.paints).length}`)
     stage4Pressure = { iconShared, iconPercentile, iconExtents, glyphs, iconDistinct, unitCap, caseRecords }
+  } else if (stage === 5) {
+    const r5 = report as Stage5AuditReport
+    // eslint-disable-next-line no-console
+    console.log(`stage 5 reused captures (S5-STUB): ${Object.entries(r5.reused).map(([k, v]) => `${k}=${v}`).join(', ')}`)
+    // Task 39: the formula resource scenarios (scripts/cf-refs/pressure-stage5.ts), each with zero unowned live bytes.
+    const p5 = await import('./pressure-stage5')
+    const fail = (msg: string): never => { throw new Error(`stage 5 pressure: ${msg}`) }
+    const shared = await p5.pressureFormulaSharedSnapshot()
+    // eslint-disable-next-line no-console
+    console.log(`${shared.name}: rules=${shared.rules} attempts=${shared.attempts} snapshotEntries=${shared.snapshotEntries}/${shared.targetCells} ready=${shared.ready} peak=${shared.peakBytes} net=${shared.netBytes} (${shared.wallMs}ms context only)`)
+    if (shared.attempts !== 1 || shared.snapshotEntries !== shared.targetCells || shared.ready !== shared.rules * shared.targetCells) fail('100 rules must share one snapshot of the target cells')
+    const hoists = await p5.pressureFormulaHoists()
+    // eslint-disable-next-line no-console
+    console.log(`${hoists.name}: visible=${hoists.visibleCells} columnScans=${hoists.columnScans} clamped=${hoists.clampedScans} calls=${hoists.calls} maxCallUnits=${hoists.maxCallUnits} refused=${hoists.refused}; ~1M populated: ${hoists.millionOutcomes.join(',')} calls=${hoists.millionCalls}; relative SUM(A1:A200): ${hoists.relativeOutcomes.join(',')} calls=${hoists.relativeCalls}; peak=${hoists.peakBytes} net=${hoists.netBytes} (${hoists.wallMs}ms context only)`)
+    if (hoists.columnScans !== 2 || hoists.clampedScans !== 2 || hoists.refused !== 0 || hoists.maxCallUnits > p5.CHECKPOINT_UNITS) fail('hoists must scan the populated column once per rule and keep every call within the checkpoint')
+    if (hoists.millionOutcomes.some(o => o !== 'unresolved:cf-resource-limit') || hoists.millionCalls !== 0) fail('a ~1M populated column must refuse at the scan budget')
+    if (hoists.relativeOutcomes.join() !== 'unresolved:cf-resource-limit' || hoists.relativeCalls !== 0) fail('a relative-range SUM(A1:A200) must refuse before any call')
+    const cap = await p5.pressureFormulaSnapshotCap()
+    // eslint-disable-next-line no-console
+    console.log(`${cap.name}: cap=${cap.cap} atCap=${cap.atCap} (entries=${cap.atCapEntries}) cap+1=${cap.overCap} peak=${cap.peakBytes} net=${cap.netBytes} (${cap.wallMs}ms context only)`)
+    if (cap.atCap !== 'ready' || cap.atCapEntries !== cap.cap || cap.overCap !== 'unresolved:cf-resource-limit') fail('the snapshot cap must admit exactly cap cells')
+    const sheets = await p5.pressureFormulaReferencedSheets()
+    // eslint-disable-next-line no-console
+    console.log(`${sheets.name}: 16=${sheets.at16} 17(compile)=${sheets.compile17} union18=${sheets.union18.join(',')} net=${sheets.netBytes}`)
+    if (sheets.at16 !== 'ready' || !sheets.compile17.startsWith('refused:') || sheets.union18.join() !== 'ready,unresolved:cf-resource-limit') fail('16 sheets admit, 17 refuse')
+    const beside = await p5.pressureFormulaRefusedBesideReady()
+    // eslint-disable-next-line no-console
+    console.log(`${beside.name}: ready=${beside.readyCells}/10 refused=${beside.refusedCells}/10 (${beside.refusedReasons.join(',')}) net=${beside.netBytes}`)
+    if (beside.readyCells !== 10 || beside.refusedCells !== 10) fail('a refused footprint must not take the ready rule down')
+    const cyc = await p5.pressureFormulaCrossSheetCycles(20)
+    // eslint-disable-next-line no-console
+    console.log(`${cyc.name}: cycles=${cyc.cycles} ready=${cyc.ready} pending=${cyc.pending} closedMidRead=${cyc.cancelled} maxNetBetween=${cyc.maxNetBetween} net=${cyc.netBytes}`)
+    if (cyc.ready !== 20 || cyc.pending !== 20 || cyc.cancelled !== 20 || cyc.maxNetBetween !== 0) fail('cross-sheet cycles must hold nothing between close and open')
+    for (const p of [shared, hoists, cap, sheets, beside, cyc]) if (p.netBytes !== 0) fail(`${p.name} leaked ${p.netBytes} B`)
+    const caseRecords5 = await stage5CaseRecords(manifest, REPO_ROOT)
+    const compared5 = caseRecords5.filter(r => r.compared)
+    const disagree = compared5.filter(r => !r.agrees)
+    // eslint-disable-next-line no-console
+    console.log(`stage 5 case records: ${caseRecords5.length} rows over ${new Set(caseRecords5.map(r => r.caseId)).size} cases (${new Set(compared5.map(r => r.caseId)).size} measured and compared, resident); formula cells ${compared5.filter(r => r.evidenceKind === 'display-format').length}, painted as Excel with nothing unresolved ${compared5.filter(r => r.evidenceKind === 'display-format' && r.production.unresolved.length === 0 && r.production.fill === r.excel?.fill).length}, with justified unresolved slots ${compared5.filter(r => r.production.unresolved.length > 0).length}, visual evidence compared ${compared5.filter(r => r.excel?.visual !== undefined).length}, disagreeing ${disagree.length}${disagree.length ? ` (${disagree.slice(0, 5).map(r => `${r.caseId}:${r.ref} ${r.disagreement}`).join('; ')})` : ''}`)
+    if (disagree.length > 0) fail(`${disagree.length} Stage 5 cells disagree with Excel or are withheld without a recorded justification`)
+    const noFormula = await p5.pressureNoFormulaBaseline()
+    // eslint-disable-next-line no-console
+    console.log(`no-formula baseline (literal CF kept): compiles=${noFormula.literal.compiles} snapshots=${noFormula.literal.snapshots} clockReads=${noFormula.literal.clockReads} painted=${noFormula.literal.painted}; control (one expression): compiles=${noFormula.control.compiles} snapshots=${noFormula.control.snapshots} clockReads=${noFormula.control.clockReads}`)
+    if (noFormula.literal.compiles + noFormula.literal.snapshots + noFormula.literal.clockReads !== 0 || noFormula.literal.painted === 0) fail('the no-formula baseline did formula work (or painted nothing)')
+    if (noFormula.control.compiles === 0 || noFormula.control.snapshots === 0 || noFormula.control.clockReads === 0) fail('the no-formula positive control moved no counter')
+    // Final review F3: the same baseline on the worker (paged) route.
+    const wl = noFormula.workerLiteral, wc = noFormula.workerControl
+    console.log(`no-formula baseline, worker route (literal CF kept): compiles=${wl.compiles} snapshots=${wl.snapshots} clockReads=${wl.clockReads} painted=${wl.painted}; control (one expression): compiles=${wc.compiles} snapshots=${wc.snapshots} clockReads=${wc.clockReads}`)
+    if (wl.compiles + wl.snapshots + wl.clockReads !== 0 || wl.painted === 0) fail('the worker no-formula baseline did formula work (or painted nothing)')
+    if (wc.compiles === 0 || wc.snapshots === 0 || wc.clockReads === 0) fail('the worker no-formula positive control moved no counter')
+    stage5Pressure = { shared, hoists, cap, sheets, beside, cyc, caseRecords: caseRecords5, noFormula }
   } else {
     const scaleShared = await pressureScale1MRowSharedStatistics()
     // eslint-disable-next-line no-console
@@ -2405,10 +2850,22 @@ async function main(): Promise<void> {
         ? { report, ...stage3Pressure, distinct, cycles, baseline, eager }
         : stage === 4
           ? { report, publication: stage4Publication(report as Stage4AuditReport), ...stage4Pressure, distinct, cycles, baseline, eager }
-          : { report, ...stage2Pressure, distinct, cycles, baseline, eager }
+          : stage === 5
+            ? { report, publication: stage5Publication(report as Stage5AuditReport), ...stage5Pressure, distinct, cycles, baseline, eager }
+            : { report, ...stage2Pressure, distinct, cycles, baseline, eager }
     writeFileSync(join(outDir, `stage${stage}-audit.json`), JSON.stringify(outData, null, 2))
   }
 
+  if (pendingWrite) {
+    if (ok && report.stageComplete) {
+      writeFileAtomic(pendingWrite.target, pendingWrite.content)
+      // eslint-disable-next-line no-console
+      console.log(`wrote ${pendingWrite.summary} to ${relative(REPO_ROOT, pendingWrite.target)}`)
+    } else {
+      // eslint-disable-next-line no-console
+      console.log(`not written: the audit failed, ${relative(REPO_ROOT, pendingWrite.target)} is unchanged`)
+    }
+  }
   if (!ok) process.exit(1)
   if (!report.stageComplete) {
     // eslint-disable-next-line no-console

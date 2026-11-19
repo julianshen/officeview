@@ -1,0 +1,1446 @@
+{
+  "excelVersion": "16.115",
+  "route": "copy-picture",
+  "appearance": "screen",
+  "scale": 1,
+  "pxPerPt": 1,
+  "width": 1261,
+  "height": 841,
+  "colWidthsPt": [
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    60,
+    180,
+    360,
+    72
+  ],
+  "rowHeightsPt": [
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20
+  ],
+  "geometrySource": "excel-measured",
+  "resavedByExcel": true,
+  "resaveSavedSha256": "ba8656fd9063446c71909a655013ce08cbb8f0ec5be9d959291dd01a2b2a546c",
+  "sheet": "Sheet1",
+  "range": "A1:K42",
+  "hostTimeZone": "Asia/Taipei",
+  "savedSha256": "ba8656fd9063446c71909a655013ce08cbb8f0ec5be9d959291dd01a2b2a546c",
+  "pngSha256": "b23266dd73aef4add88684ce7547c9faad32390db758f7216c942c5735b1e87e",
+  "capturedAt": "2026-11-18T23:55:29.690Z",
+  "zoom": 100,
+  "dpr": 1,
+  "lockBefore": "unlocked",
+  "lockAfter": "unlocked",
+  "glyphClasses": {
+    "3Arrows:0": "3Arrows:0",
+    "3Arrows:1": "3Arrows:1",
+    "3Arrows:2": "3Arrows:2",
+    "3ArrowsGray:0": "3ArrowsGray:0",
+    "3ArrowsGray:1": "3ArrowsGray:1",
+    "3ArrowsGray:2": "3ArrowsGray:2",
+    "3Flags:0": "3Flags:0",
+    "3Flags:1": "3Flags:1",
+    "3Flags:2": "3Flags:2",
+    "3TrafficLights1:0": "3TrafficLights1:0",
+    "3TrafficLights1:1": "3TrafficLights1:1",
+    "3TrafficLights1:2": "3TrafficLights1:2",
+    "3TrafficLights2:0": "3TrafficLights2:0",
+    "3TrafficLights2:1": "3TrafficLights2:1",
+    "3TrafficLights2:2": "3TrafficLights2:2",
+    "3Signs:0": "3Signs:0",
+    "3Signs:1": "3Signs:1",
+    "3Signs:2": "3Signs:2",
+    "3Symbols:0": "3Symbols:0",
+    "3Symbols:1": "3Symbols:1",
+    "3Symbols:2": "3Symbols:2",
+    "3Symbols2:0": "3Symbols2:0",
+    "3Symbols2:1": "3Symbols2:1",
+    "3Symbols2:2": "3Symbols2:2",
+    "4Arrows:0": "3Arrows:0",
+    "4Arrows:1": "4Arrows:1",
+    "4Arrows:2": "4Arrows:2",
+    "4Arrows:3": "3Arrows:2",
+    "4ArrowsGray:0": "3ArrowsGray:0",
+    "4ArrowsGray:1": "4ArrowsGray:1",
+    "4ArrowsGray:2": "4ArrowsGray:2",
+    "4ArrowsGray:3": "3ArrowsGray:2",
+    "4RedToBlack:0": "4RedToBlack:0",
+    "4RedToBlack:1": "4RedToBlack:1",
+    "4RedToBlack:2": "4RedToBlack:2",
+    "4RedToBlack:3": "4RedToBlack:3",
+    "4Rating:0": "4Rating:0",
+    "4Rating:1": "4Rating:1",
+    "4Rating:2": "4Rating:2",
+    "4Rating:3": "4Rating:3",
+    "4TrafficLights:0": "4TrafficLights:0",
+    "4TrafficLights:1": "3TrafficLights1:0",
+    "4TrafficLights:2": "3TrafficLights1:1",
+    "4TrafficLights:3": "3TrafficLights1:2",
+    "5Arrows:0": "3Arrows:0",
+    "5Arrows:1": "4Arrows:1",
+    "5Arrows:2": "3Arrows:1",
+    "5Arrows:3": "4Arrows:2",
+    "5Arrows:4": "3Arrows:2",
+    "5ArrowsGray:0": "3ArrowsGray:0",
+    "5ArrowsGray:1": "4ArrowsGray:1",
+    "5ArrowsGray:2": "3ArrowsGray:1",
+    "5ArrowsGray:3": "4ArrowsGray:2",
+    "5ArrowsGray:4": "3ArrowsGray:2",
+    "5Rating:0": "5Rating:0",
+    "5Rating:1": "4Rating:0",
+    "5Rating:2": "4Rating:1",
+    "5Rating:3": "4Rating:2",
+    "5Rating:4": "4Rating:3",
+    "5Quarters:0": "5Quarters:0",
+    "5Quarters:1": "5Quarters:1",
+    "5Quarters:2": "5Quarters:2",
+    "5Quarters:3": "5Quarters:3",
+    "5Quarters:4": "5Quarters:4",
+    "3Stars:0": "3Stars:0",
+    "3Stars:1": "3Stars:1",
+    "3Stars:2": "3Stars:2",
+    "3Triangles:0": "3Triangles:0",
+    "3Triangles:1": "3Triangles:1",
+    "3Triangles:2": "3Triangles:2",
+    "5Boxes:0": "5Boxes:0",
+    "5Boxes:1": "5Boxes:1",
+    "5Boxes:2": "5Boxes:2",
+    "5Boxes:3": "5Boxes:3",
+    "5Boxes:4": "5Boxes:4"
+  },
+  "glyphTwins": {
+    "4RedToBlack:0": [
+      "5Quarters:4"
+    ],
+    "4RedToBlack:1": [
+      "5Boxes:0"
+    ],
+    "5Quarters:4": [
+      "4RedToBlack:0"
+    ],
+    "5Boxes:0": [
+      "4RedToBlack:1"
+    ]
+  },
+  "glyphFaint": [
+    "5Boxes:0"
+  ],
+  "observedIcons": [
+    {
+      "ref": "B2",
+      "cellLeftPx": 84,
+      "cellTopPx": 20,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 86,
+        "topPx": 24,
+        "rightPx": 96,
+        "bottomPx": 35,
+        "glyphClass": "3Arrows:0"
+      },
+      "textInkLeftPx": 155,
+      "textInkRightPx": 164,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "C2",
+      "cellLeftPx": 168,
+      "cellTopPx": 20,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 170,
+        "topPx": 24,
+        "rightPx": 181,
+        "bottomPx": 34,
+        "glyphClass": "3Arrows:1"
+      },
+      "textInkLeftPx": 239,
+      "textInkRightPx": 248,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "D2",
+      "cellLeftPx": 252,
+      "cellTopPx": 20,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 254,
+        "topPx": 24,
+        "rightPx": 264,
+        "bottomPx": 35,
+        "glyphClass": "3Arrows:2"
+      },
+      "textInkLeftPx": 323,
+      "textInkRightPx": 332,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "B3",
+      "cellLeftPx": 84,
+      "cellTopPx": 40,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 86,
+        "topPx": 44,
+        "rightPx": 96,
+        "bottomPx": 55,
+        "glyphClass": "3ArrowsGray:0"
+      },
+      "textInkLeftPx": 155,
+      "textInkRightPx": 164,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "C3",
+      "cellLeftPx": 168,
+      "cellTopPx": 40,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 170,
+        "topPx": 44,
+        "rightPx": 181,
+        "bottomPx": 54,
+        "glyphClass": "3ArrowsGray:1"
+      },
+      "textInkLeftPx": 239,
+      "textInkRightPx": 248,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "D3",
+      "cellLeftPx": 252,
+      "cellTopPx": 40,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 254,
+        "topPx": 44,
+        "rightPx": 264,
+        "bottomPx": 55,
+        "glyphClass": "3ArrowsGray:2"
+      },
+      "textInkLeftPx": 323,
+      "textInkRightPx": 332,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "B4",
+      "cellLeftPx": 84,
+      "cellTopPx": 60,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 87,
+        "topPx": 64,
+        "rightPx": 95,
+        "bottomPx": 75,
+        "glyphClass": "3Flags:0"
+      },
+      "textInkLeftPx": 155,
+      "textInkRightPx": 164,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "C4",
+      "cellLeftPx": 168,
+      "cellTopPx": 60,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 171,
+        "topPx": 64,
+        "rightPx": 179,
+        "bottomPx": 75,
+        "glyphClass": "3Flags:1"
+      },
+      "textInkLeftPx": 239,
+      "textInkRightPx": 248,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "D4",
+      "cellLeftPx": 252,
+      "cellTopPx": 60,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 255,
+        "topPx": 64,
+        "rightPx": 263,
+        "bottomPx": 75,
+        "glyphClass": "3Flags:2"
+      },
+      "textInkLeftPx": 323,
+      "textInkRightPx": 332,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "B5",
+      "cellLeftPx": 84,
+      "cellTopPx": 80,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 86,
+        "topPx": 84,
+        "rightPx": 96,
+        "bottomPx": 94,
+        "glyphClass": "3TrafficLights1:0"
+      },
+      "textInkLeftPx": 155,
+      "textInkRightPx": 164,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "C5",
+      "cellLeftPx": 168,
+      "cellTopPx": 80,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 170,
+        "topPx": 84,
+        "rightPx": 180,
+        "bottomPx": 94,
+        "glyphClass": "3TrafficLights1:1"
+      },
+      "textInkLeftPx": 239,
+      "textInkRightPx": 248,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "D5",
+      "cellLeftPx": 252,
+      "cellTopPx": 80,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 254,
+        "topPx": 84,
+        "rightPx": 264,
+        "bottomPx": 94,
+        "glyphClass": "3TrafficLights1:2"
+      },
+      "textInkLeftPx": 323,
+      "textInkRightPx": 332,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "B6",
+      "cellLeftPx": 84,
+      "cellTopPx": 100,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 87,
+        "topPx": 105,
+        "rightPx": 97,
+        "bottomPx": 115,
+        "glyphClass": "3TrafficLights2:0"
+      },
+      "textInkLeftPx": 155,
+      "textInkRightPx": 164,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "C6",
+      "cellLeftPx": 168,
+      "cellTopPx": 100,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 171,
+        "topPx": 105,
+        "rightPx": 181,
+        "bottomPx": 115,
+        "glyphClass": "3TrafficLights2:1"
+      },
+      "textInkLeftPx": 239,
+      "textInkRightPx": 248,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "D6",
+      "cellLeftPx": 252,
+      "cellTopPx": 100,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 255,
+        "topPx": 105,
+        "rightPx": 265,
+        "bottomPx": 115,
+        "glyphClass": "3TrafficLights2:2"
+      },
+      "textInkLeftPx": 323,
+      "textInkRightPx": 332,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "B7",
+      "cellLeftPx": 84,
+      "cellTopPx": 120,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 87,
+        "topPx": 124,
+        "rightPx": 97,
+        "bottomPx": 135,
+        "glyphClass": "3Signs:0"
+      },
+      "textInkLeftPx": 155,
+      "textInkRightPx": 164,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "C7",
+      "cellLeftPx": 168,
+      "cellTopPx": 120,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 171,
+        "topPx": 124,
+        "rightPx": 181,
+        "bottomPx": 134,
+        "glyphClass": "3Signs:1"
+      },
+      "textInkLeftPx": 239,
+      "textInkRightPx": 248,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "D7",
+      "cellLeftPx": 252,
+      "cellTopPx": 120,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 255,
+        "topPx": 125,
+        "rightPx": 265,
+        "bottomPx": 135,
+        "glyphClass": "3Signs:2"
+      },
+      "textInkLeftPx": 323,
+      "textInkRightPx": 332,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "B8",
+      "cellLeftPx": 84,
+      "cellTopPx": 140,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 86,
+        "topPx": 144,
+        "rightPx": 96,
+        "bottomPx": 154,
+        "glyphClass": "3Symbols:0"
+      },
+      "textInkLeftPx": 155,
+      "textInkRightPx": 164,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "C8",
+      "cellLeftPx": 168,
+      "cellTopPx": 140,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 170,
+        "topPx": 144,
+        "rightPx": 180,
+        "bottomPx": 154,
+        "glyphClass": "3Symbols:1"
+      },
+      "textInkLeftPx": 239,
+      "textInkRightPx": 248,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "D8",
+      "cellLeftPx": 252,
+      "cellTopPx": 140,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 254,
+        "topPx": 144,
+        "rightPx": 264,
+        "bottomPx": 154,
+        "glyphClass": "3Symbols:2"
+      },
+      "textInkLeftPx": 323,
+      "textInkRightPx": 332,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "B9",
+      "cellLeftPx": 84,
+      "cellTopPx": 160,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 87,
+        "topPx": 165,
+        "rightPx": 96,
+        "bottomPx": 174,
+        "glyphClass": "3Symbols2:0"
+      },
+      "textInkLeftPx": 155,
+      "textInkRightPx": 164,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "C9",
+      "cellLeftPx": 168,
+      "cellTopPx": 160,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 175,
+        "topPx": 165,
+        "rightPx": 177,
+        "bottomPx": 174,
+        "glyphClass": "3Symbols2:1"
+      },
+      "textInkLeftPx": 239,
+      "textInkRightPx": 248,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "D9",
+      "cellLeftPx": 252,
+      "cellTopPx": 160,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 254,
+        "topPx": 164,
+        "rightPx": 265,
+        "bottomPx": 174,
+        "glyphClass": "3Symbols2:2"
+      },
+      "textInkLeftPx": 323,
+      "textInkRightPx": 332,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "B10",
+      "cellLeftPx": 84,
+      "cellTopPx": 180,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 86,
+        "topPx": 184,
+        "rightPx": 96,
+        "bottomPx": 195,
+        "glyphClass": "3Arrows:0"
+      },
+      "textInkLeftPx": 155,
+      "textInkRightPx": 164,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "C10",
+      "cellLeftPx": 168,
+      "cellTopPx": 180,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 170,
+        "topPx": 184,
+        "rightPx": 181,
+        "bottomPx": 195,
+        "glyphClass": "4Arrows:1"
+      },
+      "textInkLeftPx": 239,
+      "textInkRightPx": 248,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "D10",
+      "cellLeftPx": 252,
+      "cellTopPx": 180,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 254,
+        "topPx": 184,
+        "rightPx": 265,
+        "bottomPx": 195,
+        "glyphClass": "4Arrows:2"
+      },
+      "textInkLeftPx": 323,
+      "textInkRightPx": 332,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "E10",
+      "cellLeftPx": 336,
+      "cellTopPx": 180,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 338,
+        "topPx": 184,
+        "rightPx": 348,
+        "bottomPx": 195,
+        "glyphClass": "3Arrows:2"
+      },
+      "textInkLeftPx": 407,
+      "textInkRightPx": 416,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "B11",
+      "cellLeftPx": 84,
+      "cellTopPx": 200,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 86,
+        "topPx": 204,
+        "rightPx": 96,
+        "bottomPx": 215,
+        "glyphClass": "3ArrowsGray:0"
+      },
+      "textInkLeftPx": 155,
+      "textInkRightPx": 164,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "C11",
+      "cellLeftPx": 168,
+      "cellTopPx": 200,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 170,
+        "topPx": 204,
+        "rightPx": 181,
+        "bottomPx": 215,
+        "glyphClass": "4ArrowsGray:1"
+      },
+      "textInkLeftPx": 239,
+      "textInkRightPx": 248,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "D11",
+      "cellLeftPx": 252,
+      "cellTopPx": 200,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 254,
+        "topPx": 204,
+        "rightPx": 265,
+        "bottomPx": 215,
+        "glyphClass": "4ArrowsGray:2"
+      },
+      "textInkLeftPx": 323,
+      "textInkRightPx": 332,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "E11",
+      "cellLeftPx": 336,
+      "cellTopPx": 200,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 338,
+        "topPx": 204,
+        "rightPx": 348,
+        "bottomPx": 215,
+        "glyphClass": "3ArrowsGray:2"
+      },
+      "textInkLeftPx": 407,
+      "textInkRightPx": 416,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "B12",
+      "cellLeftPx": 84,
+      "cellTopPx": 220,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 86,
+        "topPx": 224,
+        "rightPx": 96,
+        "bottomPx": 234,
+        "glyphClass": "twin-set:4RedToBlack:0|5Quarters:4"
+      },
+      "textInkLeftPx": 155,
+      "textInkRightPx": 164,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "C12",
+      "cellLeftPx": 168,
+      "cellTopPx": 220,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 171,
+        "topPx": 225,
+        "rightPx": 179,
+        "bottomPx": 233,
+        "glyphClass": "twin-set:4RedToBlack:1|5Boxes:0"
+      },
+      "textInkLeftPx": 239,
+      "textInkRightPx": 248,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "D12",
+      "cellLeftPx": 252,
+      "cellTopPx": 220,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 254,
+        "topPx": 224,
+        "rightPx": 264,
+        "bottomPx": 234,
+        "glyphClass": "4RedToBlack:2"
+      },
+      "textInkLeftPx": 323,
+      "textInkRightPx": 332,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "E12",
+      "cellLeftPx": 336,
+      "cellTopPx": 220,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 338,
+        "topPx": 224,
+        "rightPx": 348,
+        "bottomPx": 234,
+        "glyphClass": "4RedToBlack:3"
+      },
+      "textInkLeftPx": 407,
+      "textInkRightPx": 416,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "B13",
+      "cellLeftPx": 84,
+      "cellTopPx": 240,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 86,
+        "topPx": 244,
+        "rightPx": 98,
+        "bottomPx": 255,
+        "glyphClass": "4Rating:0"
+      },
+      "textInkLeftPx": 155,
+      "textInkRightPx": 164,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "C13",
+      "cellLeftPx": 168,
+      "cellTopPx": 240,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 170,
+        "topPx": 244,
+        "rightPx": 182,
+        "bottomPx": 255,
+        "glyphClass": "4Rating:1"
+      },
+      "textInkLeftPx": 239,
+      "textInkRightPx": 248,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "D13",
+      "cellLeftPx": 252,
+      "cellTopPx": 240,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 254,
+        "topPx": 244,
+        "rightPx": 266,
+        "bottomPx": 255,
+        "glyphClass": "4Rating:2"
+      },
+      "textInkLeftPx": 323,
+      "textInkRightPx": 332,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "E13",
+      "cellLeftPx": 336,
+      "cellTopPx": 240,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 338,
+        "topPx": 244,
+        "rightPx": 350,
+        "bottomPx": 255,
+        "glyphClass": "4Rating:3"
+      },
+      "textInkLeftPx": 407,
+      "textInkRightPx": 416,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "B14",
+      "cellLeftPx": 84,
+      "cellTopPx": 260,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 86,
+        "topPx": 264,
+        "rightPx": 96,
+        "bottomPx": 274,
+        "glyphClass": "4TrafficLights:0"
+      },
+      "textInkLeftPx": 155,
+      "textInkRightPx": 164,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "C14",
+      "cellLeftPx": 168,
+      "cellTopPx": 260,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 170,
+        "topPx": 264,
+        "rightPx": 180,
+        "bottomPx": 274,
+        "glyphClass": "3TrafficLights1:0"
+      },
+      "textInkLeftPx": 239,
+      "textInkRightPx": 248,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "D14",
+      "cellLeftPx": 252,
+      "cellTopPx": 260,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 254,
+        "topPx": 264,
+        "rightPx": 264,
+        "bottomPx": 274,
+        "glyphClass": "3TrafficLights1:1"
+      },
+      "textInkLeftPx": 323,
+      "textInkRightPx": 332,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "E14",
+      "cellLeftPx": 336,
+      "cellTopPx": 260,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 338,
+        "topPx": 264,
+        "rightPx": 348,
+        "bottomPx": 274,
+        "glyphClass": "3TrafficLights1:2"
+      },
+      "textInkLeftPx": 407,
+      "textInkRightPx": 416,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "B15",
+      "cellLeftPx": 84,
+      "cellTopPx": 280,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 86,
+        "topPx": 284,
+        "rightPx": 96,
+        "bottomPx": 295,
+        "glyphClass": "3Arrows:0"
+      },
+      "textInkLeftPx": 155,
+      "textInkRightPx": 164,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "C15",
+      "cellLeftPx": 168,
+      "cellTopPx": 280,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 170,
+        "topPx": 284,
+        "rightPx": 181,
+        "bottomPx": 295,
+        "glyphClass": "4Arrows:1"
+      },
+      "textInkLeftPx": 239,
+      "textInkRightPx": 248,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "D15",
+      "cellLeftPx": 252,
+      "cellTopPx": 280,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 254,
+        "topPx": 284,
+        "rightPx": 265,
+        "bottomPx": 294,
+        "glyphClass": "3Arrows:1"
+      },
+      "textInkLeftPx": 323,
+      "textInkRightPx": 332,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "E15",
+      "cellLeftPx": 336,
+      "cellTopPx": 280,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 338,
+        "topPx": 284,
+        "rightPx": 349,
+        "bottomPx": 295,
+        "glyphClass": "4Arrows:2"
+      },
+      "textInkLeftPx": 407,
+      "textInkRightPx": 416,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "F15",
+      "cellLeftPx": 420,
+      "cellTopPx": 280,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 422,
+        "topPx": 284,
+        "rightPx": 432,
+        "bottomPx": 295,
+        "glyphClass": "3Arrows:2"
+      },
+      "textInkLeftPx": 491,
+      "textInkRightPx": 500,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "B16",
+      "cellLeftPx": 84,
+      "cellTopPx": 300,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 86,
+        "topPx": 304,
+        "rightPx": 96,
+        "bottomPx": 315,
+        "glyphClass": "3ArrowsGray:0"
+      },
+      "textInkLeftPx": 155,
+      "textInkRightPx": 164,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "C16",
+      "cellLeftPx": 168,
+      "cellTopPx": 300,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 170,
+        "topPx": 304,
+        "rightPx": 181,
+        "bottomPx": 315,
+        "glyphClass": "4ArrowsGray:1"
+      },
+      "textInkLeftPx": 239,
+      "textInkRightPx": 248,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "D16",
+      "cellLeftPx": 252,
+      "cellTopPx": 300,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 254,
+        "topPx": 304,
+        "rightPx": 265,
+        "bottomPx": 314,
+        "glyphClass": "3ArrowsGray:1"
+      },
+      "textInkLeftPx": 323,
+      "textInkRightPx": 332,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "E16",
+      "cellLeftPx": 336,
+      "cellTopPx": 300,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 338,
+        "topPx": 304,
+        "rightPx": 349,
+        "bottomPx": 315,
+        "glyphClass": "4ArrowsGray:2"
+      },
+      "textInkLeftPx": 407,
+      "textInkRightPx": 416,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "F16",
+      "cellLeftPx": 420,
+      "cellTopPx": 300,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 422,
+        "topPx": 304,
+        "rightPx": 432,
+        "bottomPx": 315,
+        "glyphClass": "3ArrowsGray:2"
+      },
+      "textInkLeftPx": 491,
+      "textInkRightPx": 500,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "B17",
+      "cellLeftPx": 84,
+      "cellTopPx": 320,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 86,
+        "topPx": 324,
+        "rightPx": 98,
+        "bottomPx": 335,
+        "glyphClass": "5Rating:0"
+      },
+      "textInkLeftPx": 155,
+      "textInkRightPx": 164,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "C17",
+      "cellLeftPx": 168,
+      "cellTopPx": 320,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 170,
+        "topPx": 324,
+        "rightPx": 182,
+        "bottomPx": 335,
+        "glyphClass": "4Rating:0"
+      },
+      "textInkLeftPx": 239,
+      "textInkRightPx": 248,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "D17",
+      "cellLeftPx": 252,
+      "cellTopPx": 320,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 254,
+        "topPx": 324,
+        "rightPx": 266,
+        "bottomPx": 335,
+        "glyphClass": "4Rating:1"
+      },
+      "textInkLeftPx": 323,
+      "textInkRightPx": 332,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "E17",
+      "cellLeftPx": 336,
+      "cellTopPx": 320,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 338,
+        "topPx": 324,
+        "rightPx": 350,
+        "bottomPx": 335,
+        "glyphClass": "4Rating:2"
+      },
+      "textInkLeftPx": 407,
+      "textInkRightPx": 416,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "F17",
+      "cellLeftPx": 420,
+      "cellTopPx": 320,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 422,
+        "topPx": 324,
+        "rightPx": 434,
+        "bottomPx": 335,
+        "glyphClass": "4Rating:3"
+      },
+      "textInkLeftPx": 491,
+      "textInkRightPx": 500,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "B18",
+      "cellLeftPx": 84,
+      "cellTopPx": 340,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 86,
+        "topPx": 344,
+        "rightPx": 96,
+        "bottomPx": 354,
+        "glyphClass": "5Quarters:0"
+      },
+      "textInkLeftPx": 155,
+      "textInkRightPx": 164,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "C18",
+      "cellLeftPx": 168,
+      "cellTopPx": 340,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 170,
+        "topPx": 344,
+        "rightPx": 180,
+        "bottomPx": 354,
+        "glyphClass": "5Quarters:1"
+      },
+      "textInkLeftPx": 239,
+      "textInkRightPx": 248,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "D18",
+      "cellLeftPx": 252,
+      "cellTopPx": 340,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 254,
+        "topPx": 344,
+        "rightPx": 264,
+        "bottomPx": 354,
+        "glyphClass": "5Quarters:2"
+      },
+      "textInkLeftPx": 323,
+      "textInkRightPx": 332,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "E18",
+      "cellLeftPx": 336,
+      "cellTopPx": 340,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 338,
+        "topPx": 344,
+        "rightPx": 348,
+        "bottomPx": 354,
+        "glyphClass": "5Quarters:3"
+      },
+      "textInkLeftPx": 407,
+      "textInkRightPx": 416,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "F18",
+      "cellLeftPx": 420,
+      "cellTopPx": 340,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 422,
+        "topPx": 344,
+        "rightPx": 432,
+        "bottomPx": 354,
+        "glyphClass": "twin-set:4RedToBlack:0|5Quarters:4"
+      },
+      "textInkLeftPx": 491,
+      "textInkRightPx": 500,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "B19",
+      "cellLeftPx": 84,
+      "cellTopPx": 360,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 87,
+        "topPx": 366,
+        "rightPx": 96,
+        "bottomPx": 374,
+        "glyphClass": "3Stars:0"
+      },
+      "textInkLeftPx": 155,
+      "textInkRightPx": 164,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "C19",
+      "cellLeftPx": 168,
+      "cellTopPx": 360,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 171,
+        "topPx": 366,
+        "rightPx": 180,
+        "bottomPx": 375,
+        "glyphClass": "3Stars:1"
+      },
+      "textInkLeftPx": 239,
+      "textInkRightPx": 248,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "D19",
+      "cellLeftPx": 252,
+      "cellTopPx": 360,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 255,
+        "topPx": 366,
+        "rightPx": 265,
+        "bottomPx": 375,
+        "glyphClass": "3Stars:2"
+      },
+      "textInkLeftPx": 323,
+      "textInkRightPx": 332,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "B20",
+      "cellLeftPx": 84,
+      "cellTopPx": 380,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 87,
+        "topPx": 389,
+        "rightPx": 96,
+        "bottomPx": 394,
+        "glyphClass": "3Triangles:0"
+      },
+      "textInkLeftPx": 155,
+      "textInkRightPx": 164,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "C20",
+      "cellLeftPx": 168,
+      "cellTopPx": 380,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 170,
+        "topPx": 389,
+        "rightPx": 180,
+        "bottomPx": 391,
+        "glyphClass": "3Triangles:1"
+      },
+      "textInkLeftPx": 239,
+      "textInkRightPx": 248,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "D20",
+      "cellLeftPx": 252,
+      "cellTopPx": 380,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 255,
+        "topPx": 387,
+        "rightPx": 264,
+        "bottomPx": 391,
+        "glyphClass": "3Triangles:2"
+      },
+      "textInkLeftPx": 323,
+      "textInkRightPx": 332,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "B21",
+      "cellLeftPx": 84,
+      "cellTopPx": 400,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": null,
+      "textInkLeftPx": 155,
+      "textInkRightPx": 164,
+      "textShiftPx": 0,
+      "faintGlyphClass": "twin-set:4RedToBlack:1|5Boxes:0|no-icon"
+    },
+    {
+      "ref": "C21",
+      "cellLeftPx": 168,
+      "cellTopPx": 400,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 171,
+        "topPx": 410,
+        "rightPx": 175,
+        "bottomPx": 414,
+        "glyphClass": "5Boxes:1"
+      },
+      "textInkLeftPx": 239,
+      "textInkRightPx": 248,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "D21",
+      "cellLeftPx": 252,
+      "cellTopPx": 400,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 255,
+        "topPx": 410,
+        "rightPx": 264,
+        "bottomPx": 414,
+        "glyphClass": "5Boxes:2"
+      },
+      "textInkLeftPx": 323,
+      "textInkRightPx": 332,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "E21",
+      "cellLeftPx": 336,
+      "cellTopPx": 400,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 339,
+        "topPx": 405,
+        "rightPx": 348,
+        "bottomPx": 414,
+        "glyphClass": "5Boxes:3"
+      },
+      "textInkLeftPx": 407,
+      "textInkRightPx": 416,
+      "textShiftPx": 0
+    },
+    {
+      "ref": "F21",
+      "cellLeftPx": 420,
+      "cellTopPx": 400,
+      "cellWidthPx": 84,
+      "cellHeightPx": 20,
+      "icon": {
+        "leftPx": 423,
+        "topPx": 405,
+        "rightPx": 432,
+        "bottomPx": 414,
+        "glyphClass": "5Boxes:4"
+      },
+      "textInkLeftPx": 491,
+      "textInkRightPx": 500,
+      "textShiftPx": 0
+    }
+  ],
+  "iconHypotheses": {}
+}

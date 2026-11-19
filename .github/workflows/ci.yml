@@ -32,8 +32,9 @@ jobs:
   check:
     name: typecheck, test, build, corpus
     runs-on: ubuntu-latest
-    # 45: piece 5 adds the ffmpeg install and the sandboxed server media tests (~3 min) ahead
-    # of the ~20-25 min vitest suite; 30 cancelled a passing run mid-suite (PR #83).
+    # The suite outgrew 30 min (PR #85: the test step alone ran 29 min); the CF oracle and Stage 5 audit
+    # suites verify full Excel captures, which takes minutes on this runner. Piece 5 adds the ffmpeg
+    # install and the sandboxed server media tests (~3 min) ahead of it (PR #83).
     timeout-minutes: 45
     steps:
       - name: Check out the repository

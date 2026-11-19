@@ -382,3 +382,32 @@ describe('CF Stage 4 icon-set model and parsing (Task 25)', () => {
     expect(CF_ICON_DEFINITION_BYTES).toBeGreaterThan(0)
   })
 })
+
+describe('Stage 5 formula thresholds and activation (Task 37)', () => {
+  const FX = ['formula:dialect-base', 'formula:dialect-x14', 'formula:anchor-single', 'formula:anchor-mixed-abs', 'formula:cfvo-reference', 'icon:thresholds-formula',
+    'formula:active-present-icon']
+  const set = (cfvos: string) => `<conditionalFormatting sqref="B2:B5"><cfRule type="iconSet" priority="1"><iconSet iconSet="3Arrows">${cfvos}</iconSet></cfRule></conditionalFormatting>`
+  const cfvos = '<cfvo type="percent" val="0"/><cfvo type="formula" val="$F$1"/><cfvo type="num" val="$F$2"/>'
+  it('a formula and a reference num threshold compile under their capabilities, gte kept', async () => {
+    const def = withExactCfEvidence([...ICON_PARSE_CAPS, ...FX], () => only(parse(set(cfvos)).value.rules).definition)
+    expect(def.kind).toBe('iconSet')
+    const t = (def as Extract<CfDefinition, { kind: 'iconSet' }>).thresholds
+    expect(t.map(x => x.bound.type === 'formula' ? `formula:${x.bound.cfvo}` : x.bound.type)).toEqual(['percent', 'formula:formula', 'formula:num'])
+    expect(t.every(x => x.gte)).toBe(true)
+    const streamed = await withExactCfEvidence([...ICON_PARSE_CAPS, ...FX], () => stream(set(cfvos)))
+    expect(streamed.value.rules.map(r => r.definition)).toEqual([def])
+  })
+  it('without the family or the dialect capability, main\'s cf-unsupported-rule', () => {
+    for (const missing of ['icon:thresholds-formula', 'formula:dialect-base', 'formula:cfvo-reference']) {
+      const def = withExactCfEvidence([...ICON_PARSE_CAPS, ...FX].filter(c => c !== missing), () => only(parse(set(cfvos)).value.rules).definition)
+      expect(def, missing).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+    }
+  })
+  it('a standalone activePresent set carries its activation; a base one stays refused', () => {
+    const x14 = `<extLst><ext uri="${CF_EXT}"><x14:conditionalFormattings><x14:conditionalFormatting><x14:cfRule type="iconSet" priority="1" activePresent="1" id="{00000000-0000-4000-8000-0000000000C1}"><xm:f>$A2&gt;0</xm:f><x14:iconSet iconSet="3Arrows"><x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>33</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>67</xm:f></x14:cfvo></x14:iconSet></x14:cfRule><xm:sqref>B2:B5</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>`
+    const def = withExactCfEvidence([...ICON_PARSE_CAPS, ...FX], () => only(parse(x14).value.rules).definition)
+    expect(def).toMatchObject({ kind: 'iconSet', activePresent: true, activation: { pinned: true } })
+    const base = `<conditionalFormatting sqref="B2:B5"><cfRule type="iconSet" priority="1" activePresent="1"><formula>$A2&gt;0</formula><iconSet iconSet="3Arrows"><cfvo type="percent" val="0"/><cfvo type="percent" val="33"/><cfvo type="percent" val="67"/></iconSet></cfRule></conditionalFormatting>`
+    expect(withExactCfEvidence([...ICON_PARSE_CAPS, ...FX], () => only(parse(base).value.rules).definition)).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+  })
+})

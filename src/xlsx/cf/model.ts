@@ -1,8 +1,12 @@
 /** Data-only CF contracts. All consumers outside cf/ use type-only imports. */
 import type { XlsxCellStyle } from '../types'
+import type { AstNode } from '../formula/types'
 import type { CfMemory, CfWorkBudget } from './limits'
 export type SourceRect = Readonly<{ firstRow: number; lastRow: number; firstCol: number; lastCol: number }>
-export type CfStamp = Readonly<{ owner: string; sheetId: string; workbookValueGen: number; cfGen: number; viewGen: number; structureGen: number; clockGen: number }>
+/** `dependencyGen` (Stage 5, Ruling S5-K): the sum of the referenced sheets' value generations, absent = 0. Task 34 adds
+ * the field and its comparison so hoists and tiles invalidate on a referenced-sheet commit; Task 36 fills it at every
+ * stamp construction site. */
+export type CfStamp = Readonly<{ owner: string; sheetId: string; workbookValueGen: number; cfGen: number; viewGen: number; structureGen: number; clockGen: number; dependencyGen?: number }>
 export type CfOutcome<T> = { kind: 'ready'; value: T } | { kind: 'no-match' } | { kind: 'unresolved'; reason: string; pendingSheetIds?: readonly string[] }
 export type CfWriteMask = ReadonlySet<string> // Property paths; singleton ALL for unknown writes.
 /** `dateSerial` marks a number whose cell is displayed with a date or time format (S3-G); absent means a plain number,
@@ -11,11 +15,47 @@ export type CfLiteral = { kind: 'number'; value: number; dateSerial?: true } | {
 export type CfRuleType = 'cellIs' | 'containsText' | 'notContainsText' | 'beginsWith' | 'endsWith' | 'containsBlanks' | 'notContainsBlanks' | 'containsErrors' | 'notContainsErrors' | 'timePeriod' | 'top10' | 'aboveAverage' | 'duplicateValues' | 'uniqueValues' | 'colorScale' | 'dataBar' | 'iconSet' | 'expression'
 export type CfOperator = 'equal' | 'notEqual' | 'greaterThan' | 'lessThan' | 'greaterThanOrEqual' | 'lessThanOrEqual' | 'between' | 'notBetween'
 export type CfTimePeriod = 'today' | 'yesterday' | 'tomorrow' | 'last7Days' | 'thisWeek' | 'lastWeek' | 'nextWeek' | 'thisMonth' | 'lastMonth' | 'nextMonth'
-export interface CfRuleOrigin { dialect: 'base' | 'x14'; guid?: string; activePresent?: boolean; formulas: readonly string[]; dxfId?: number }
+/** `dependencySheets` (Stage 5): the other sheets the rule's compiled formulas name, in first-appearance order. Data only:
+ * the resident live key reads it, nothing evaluates from it. Absent when no formula names another sheet. */
+export interface CfRuleOrigin { dialect: 'base' | 'x14'; guid?: string; activePresent?: boolean; formulas: readonly string[]; dxfId?: number; dependencySheets?: readonly string[] }
+/** One reference atom of a compiled formula (Ruling S5-B). `absRow`/`absCol` mean every endpoint is `$`-pinned on that axis;
+ * a range whose endpoints disagree is refused at compile, so the pair is always exact. A whole column or row carries its
+ * `axis` and pins the other axis by construction. */
+export type CfFormulaRef = Readonly<{ sheet?: string; firstRow: number; lastRow: number; firstCol: number; lastCol: number; absRow: boolean; absCol: boolean; axis?: 'col' | 'row' }>
+/** What a root value can be, from the formula's static shape; value-dependent outcomes (an error from any function) are gated per result. */
+export type CfTruthKind = 'number' | 'boolean' | 'text' | 'blank' | 'error' | 'range'
+/** A compiled, admitted CF formula (Ruling S5-B): plain data, no handlers, deep-equal across the resident and streamed parsers. */
+export type CfFormula = Readonly<{
+  ast: AstNode; nodes: number; atoms: readonly CfFormulaRef[]; invariant: boolean; usesClock: boolean; families: readonly string[]
+  /** Other sheets named by the atoms (case-insensitive distinct, first-appearance spelling). */
+  dependencySheets: readonly string[]
+  /** The rule anchor the relative references are written against; absent for a multi-range rule (Ruling S5-C). */
+  anchor?: Readonly<{ row: number; col: number }>
+  /** Any `$` pin on any axis of any atom (`formula:anchor-mixed-abs`). */
+  pinned: boolean
+  /** The root is a multi-cell reference: a range result (Ruling S5-D), the only place one is admitted. */
+  rootArea: boolean
+  /** Result kinds the root can take, from its static shape. */
+  truth: readonly CfTruthKind[]
+  /** Indexes, in the AST's left-to-right preorder of string literals, of those holding a non-ASCII code unit: measured
+   * once at compile (Task 34 round 4, finding 1) so the per-call text model never rescans literal text. */
+  nonAsciiLiterals: readonly number[]
+}>
+/** A `cellIs` operand that is a formula rather than a literal (it carries no `kind`, so no literal arm can mistake it for one). */
+export type CfFormulaOperand = Readonly<{ formula: CfFormula }>
+export const isCfFormulaOperand = (operand: CfLiteral | CfFormulaOperand): operand is CfFormulaOperand => 'formula' in operand
+/** Stage 5 (Ruling S5-H): a cfvo whose value is a formula: `type="formula"`, or a `num`/`percent`/`percentile` whose value
+ * is a reference or expression (`cfvo` keeps the authored type). It is never a threshold itself: the service evaluates it
+ * once per measured scope and substitutes the number (`formula`/`num` as a num bound, `percent`/`percentile` as p), so
+ * every resolver meets only the Stage 2-4 literal bounds; an unsubstituted one is unresolved there. */
+export type CfFormulaBound = Readonly<{ type: 'formula'; cfvo: 'formula' | 'num' | 'percent' | 'percentile'; formula: CfFormula }>
 export type CfScaleBound =
   | { type: 'min' }
   | { type: 'max' }
-  | { type: 'num' | 'percent' | 'percentile'; value: number }
+  /** `resolved` (Task 37 fix round 1): the number came from a formula bound, so a resolver that gates its literal twin
+   * differently (a bar: `bar:bounds-formula`, not `bar:bounds-num`) keeps the provenance. */
+  | { type: 'num' | 'percent' | 'percentile'; value: number; resolved?: 'formula' }
+  | CfFormulaBound
 export type CfScalePoint = Readonly<{ bound: CfScaleBound; argb: number }>
 export const COLOR_SCALE_WRITES: ReadonlySet<string> = Object.freeze(new Set(['colorScale', 'fill']))
 export const COLOR_SCALE_WRITE_MASK = COLOR_SCALE_WRITES
@@ -38,7 +78,7 @@ export const CF_ICON_SET_NAMES: readonly (CfIconSetName | 'NoIcons')[] = Object.
 /** The one canonical icon-set write mask, for resolved and unresolved icon sets alike (an icon never writes the fill slot). */
 export const ICON_SET_WRITES: ReadonlySet<string> = Object.freeze(new Set(['iconSet']))
 /** One icon-set threshold: `bound` is the cfvo, `gte` says whether a value equal to it reaches the bucket (spec §3, default true). */
-export type CfIconThreshold = Readonly<{ bound: { type: 'num' | 'percent' | 'percentile'; value: number } | { type: 'min' } | { type: 'max' }; gte: boolean }>
+export type CfIconThreshold = Readonly<{ bound: { type: 'num' | 'percent' | 'percentile'; value: number } | { type: 'min' } | { type: 'max' } | CfFormulaBound; gte: boolean }>
 /** A custom bucket mapping: the family and icon id one bucket shows, or `NoIcons` (id 0) for an empty bucket. */
 export type CfIconRef = Readonly<{ set: CfIconSetName | 'NoIcons'; iconId: number }>
 /** The evaluated icon of one cell (Task 26 evaluates it): the winning `(set, iconId)` with its bucket position. */
@@ -53,19 +93,24 @@ export type CfBarDescriptor = Readonly<{
   direction: 'leftToRight' | 'rightToLeft'
 }>
 export type CfDefinition = (CfRuleOrigin & (
-  | { kind: 'cellIs'; operator: CfOperator; operands: readonly CfLiteral[] }
+  | { kind: 'cellIs'; operator: CfOperator; operands: readonly (CfLiteral | CfFormulaOperand)[] }
+  /** Stage 5: a formula rule. `sourceType` keeps the authored `@type` for the write mask; a divergent text, blank or error
+   * predicate compiles here with its own type (Ruling S5-G). Never evaluated without its evidence and an evaluation context. */
+  | { kind: 'expression'; formula: CfFormula; sourceType: CfRuleType }
   | { kind: 'text'; type: 'containsText' | 'notContainsText' | 'beginsWith' | 'endsWith'; needle: string }
   | { kind: 'predicate'; type: 'containsBlanks' | 'notContainsBlanks' | 'containsErrors' | 'notContainsErrors' | 'duplicateValues' | 'uniqueValues' }
   | { kind: 'timePeriod'; period: CfTimePeriod }
   | { kind: 'top10'; rank?: number; bottom: boolean; percent: boolean }
   | { kind: 'aboveAverage'; above: boolean; equal: boolean; stdDev?: number }
-  | { kind: 'colorScale'; points: readonly [CfScalePoint, CfScalePoint] | readonly [CfScalePoint, CfScalePoint, CfScalePoint] }
+  /** `activation` (Ruling S5-J): the rule-level `<xm:f>` of an `activePresent="1"` x14 visual, a per-cell truth gate ahead of
+   * the visual's own evaluation. Present only when its capability is evidenced at parse. */
+  | { kind: 'colorScale'; points: readonly [CfScalePoint, CfScalePoint] | readonly [CfScalePoint, CfScalePoint, CfScalePoint]; activation?: CfFormula }
   // Colours are resolved ARGB, normalised once. An optional colour is absent when its element is missing or the
   // rule's settings never draw it; an evaluator that needs an absent colour must withhold (Ruling S3-F).
   // `thresholds` holds one entry per bucket (k cfvo for a k-icon family); every omitted attribute is its schema default.
   // `set` is the family (for a custom set, the bucket count's family); `custom` maps each bucket to its own icon.
   | { kind: 'iconSet'; set: CfIconSetName; thresholds: readonly CfIconThreshold[]; reverse: boolean; showValue: boolean
-      percentAttr: boolean; custom?: readonly CfIconRef[]; sheetRightToLeft?: boolean }
+      percentAttr: boolean; custom?: readonly CfIconRef[]; sheetRightToLeft?: boolean; activation?: CfFormula }
   | { kind: 'dataBar'; bounds: readonly [CfBarBound, CfBarBound]; fillArgb: number; negativeFillArgb?: number
       borderArgb?: number; negativeBorderArgb?: number; axisArgb?: number; minLength: number; maxLength: number; gradient: boolean
       border: boolean; negativeBarColorSameAsPositive: boolean; negativeBarBorderColorSameAsPositive: boolean
@@ -75,7 +120,7 @@ export type CfDefinition = (CfRuleOrigin & (
        * bare base `<dataBar>`. Excel's default 10/90 lengths differ between them; absent means unknown (fail closed). */
       pairing?: 'x14' | 'base-only'
       /** Colours Excel draws as automatic (`auto="1"`), resolved to the measured ARGB of their capability (S3-F amended). */
-      autoColors?: readonly ('negativeFill' | 'axis')[] }
+      autoColors?: readonly ('negativeFill' | 'axis')[]; activation?: CfFormula }
 )) | { kind: 'unresolved'; type: CfRuleType | 'unknown'; reason: string; origin?: CfRuleOrigin }
 /** Presence means a winning override; null explicitly clears a property. */
 export interface CfCellState {
@@ -89,10 +134,14 @@ export interface CfCellState {
   }>
 }
 export interface CfRule { readonly id: number; readonly priority: number; readonly documentOrder: number; readonly ranges: readonly SourceRect[]; readonly stopIfTrue: boolean; readonly writes: CfWriteMask; readonly definition: CfDefinition; readonly dxf?: CfCellState['properties'] }
-export interface CfSheetRules { readonly rules: readonly CfRule[]; readonly unresolvedSheet?: Readonly<{ reason: string; writes: 'ALL' }>; readonly diagnostics: readonly CfDiagnostic[] }
+/** `clockFree`: the parse's fact that no rule reads the clock (Ruling S5-M); absent means "may read it", the safe default, so a
+ * hand-built or foreign value is simply ticked at midnight. */
+export interface CfSheetRules { readonly rules: readonly CfRule[]; readonly unresolvedSheet?: Readonly<{ reason: string; writes: 'ALL' }>; readonly diagnostics: readonly CfDiagnostic[]; readonly clockFree?: true }
 export interface CfDiagnostic { kind: 'unsupported' | 'parse'; feature: `cf-${string}`; message: string }
 export interface CfLease<T> { readonly value: T; readonly bytes: number; release(): void; transfer(memory: CfMemory): CfOutcome<CfLease<T>> }
-export interface CfPrepared { readonly stamp: CfStamp; at(sourceRow: number, col: number): CfOutcome<CfCellState>; dispose(): void }
+/** `pendingSheetIds` (Task 36): referenced sheets still importing when this preparation ran; its cells reading them are
+ * `cf-pending-data`, and a consumer re-prepares once they complete. */
+export interface CfPrepared { readonly stamp: CfStamp; readonly pendingSheetIds?: readonly string[]; at(sourceRow: number, col: number): CfOutcome<CfCellState>; dispose(): void }
 export interface CfPrepareRequest { readonly stamp: CfStamp; readonly sourceRects: readonly SourceRect[]; readonly signal: AbortSignal; readonly grantBytes: number }
 export interface CfValuePage { readonly rows: Uint32Array; readonly cols: Uint16Array; readonly values: readonly CfLiteral[] }
 export interface CfValueSource {
@@ -113,4 +162,35 @@ export interface CfValueSource {
 export interface CfEngine {
   prepareCf(request: CfPrepareRequest, source: CfValueSource, memory: CfMemory): Promise<CfLease<CfPrepared>>
   resolveCfCellStyle(base: XlsxCellStyle | undefined, state: CfCellState): XlsxCellStyle
+}
+
+/** Every compiled formula one rule definition carries (an expression's, or a `cellIs` formula operand's). */
+export function cfDefinitionFormulas(definition: CfDefinition): readonly CfFormula[] {
+  if (definition.kind === 'expression') return [definition.formula]
+  if (definition.kind === 'cellIs') return definition.operands.flatMap(operand => isCfFormulaOperand(operand) ? [operand.formula] : [])
+  // Stage 5 (Task 37): a visual's formula bounds, in cfvo order, then its activation.
+  const bounds = cfVisualFormulaBounds(definition)
+  const activation = definition.kind === 'colorScale' || definition.kind === 'dataBar' || definition.kind === 'iconSet' ? definition.activation : undefined
+  if (bounds.length === 0 && !activation) return []
+  return [...bounds.map(b => b.formula), ...(activation ? [activation] : [])]
+}
+
+/**
+ * Whether any rule reads the clock (Ruling S5-M, M2): a `timePeriod` rule or a formula that calls `TODAY()` (an expression, a
+ * `cellIs` operand, a cfvo bound or an activation). `formulasOnly` leaves the `timePeriod` rules out. Computed once at parse and
+ * published as `CfSheetRules.clockFree`; the viewer never walks the rules itself.
+ */
+export function cfRulesUseClock(rules: Readonly<{ rules: readonly Pick<CfRule, 'definition'>[] }>, formulasOnly = false): boolean {
+  for (const { definition } of rules.rules) {
+    if (definition.kind === 'timePeriod' ? !formulasOnly : cfDefinitionFormulas(definition).some(f => f.usesClock)) return true
+  }
+  return false
+}
+
+/** The formula bounds of a visual definition in cfvo order (empty for every other kind). */
+export function cfVisualFormulaBounds(definition: CfDefinition): readonly CfFormulaBound[] {
+  const bounds: readonly (CfBarBound | CfIconThreshold['bound'])[] = definition.kind === 'colorScale' ? definition.points.map(p => p.bound)
+    : definition.kind === 'dataBar' ? definition.bounds
+    : definition.kind === 'iconSet' ? definition.thresholds.map(t => t.bound) : []
+  return bounds.filter((b): b is CfFormulaBound => b.type === 'formula')
 }

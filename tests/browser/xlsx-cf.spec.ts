@@ -37,12 +37,14 @@ const LEGS: readonly Leg[] = [
 
 type Img = { width: number; height: number; data: Uint8ClampedArray }
 
-async function openCf(page: Page, name: string, bytes: Buffer, leg: Leg): Promise<void> {
+async function openCf(page: Page, name: string, bytes: Buffer, leg: Leg, extra: { cfev?: boolean } = {}): Promise<void> {
   const route = `/__fixtures/cf-${encodeURIComponent(name)}.xlsx`
   await page.route(url => url.pathname === route, r => r.fulfill({ body: bytes, contentType: 'application/octet-stream' }))
   const query = new URLSearchParams({ src: route })
   if (leg.worker) query.set('worker', '1')
   if (leg.paged) query.set('paged', '1')
+  // Stage 5 evidence seam (src/debug/cfEvidence.ts, debug-only): the page and its viewer worker hold the readings production implements.
+  if (extra.cfev) query.set('cfev', '1')
   await page.goto(`/src/debug/viewer-e2e.html?${query}`)
   await expect(page.getByRole('grid')).toBeVisible({ timeout: 60_000 })
 }
@@ -1119,4 +1121,486 @@ test('Stage 4 print capture paints the admitted icons', async ({ context }) => {
       }
     })
   }
+})
+
+// ==================== Stage 5 formula rules (Task 38) ====================
+//
+// Task 39 published Stage 5 (42 capabilities, among them the formula dialects stage5-formula-authored needs). Two kinds of run,
+// each stating what it is: `cfev` runs open the page with the debug-only evidence seam (`?cfev=1`, src/debug/cfEvidence.ts,
+// excluded from the build) so the page AND its viewer worker hold every reading production implements; production runs (no
+// `cfev`) use the published set. On these fixtures both paint the formula rules, identically across the legs, forced-paged
+// included. Neither run compares with Excel here (tests/xlsx-cf-oracle-conformance.test.ts does).
+
+const S5_AUTHORED = 'stage5-formula-authored'
+const S5_CROSS = 'stage5-cross-sheet'
+const S5_CELLS = ['B2', 'B3', 'B4', 'B5', 'E2', 'E3', 'E4', 'E5', 'G2', 'G3', 'G4', 'G5'] as const
+const S5_CROSS_CELLS = ['B2', 'B3', 'B4', 'B5', 'C2', 'C3', 'C4', 'C5', 'D2', 'D3', 'D4', 'D5', 'E2', 'E3', 'E4', 'E5'] as const
+const FORMULA_TEXT = /[=$!]|[A-Z]{2,}\(|TODAY|COUNTIF|ISBLANK|Sheet2/
+const namesOf = async (page: Page, refs: readonly string[]): Promise<string[]> => Promise.all(refs.map(async ref => (await cell(page, ref).getAttribute('aria-label')) ?? (await cell(page, ref).textContent()) ?? ''))
+/** The names, each stripped of the cell's own value text: what is left is the CF announcement. */
+const announcements = (names: readonly string[]): string[] => names.map(n => n.replace(/^[A-Z]+\d+, value [^;]*;?\s*/, ''))
+const appliedCount = (names: readonly string[]): number => names.filter(n => /Conditional formatting applied/.test(n)).length
+const announced = (refs: readonly string[], min: number) => async (page: Page): Promise<boolean> => (await namesOf(page, refs)).filter(n => /Conditional formatting/.test(n)).length >= min
+
+async function editSheetCell(raw: Buffer, sheetPath: string, ref: string, value: string): Promise<Buffer> {
+  const zip = await JSZip.loadAsync(raw)
+  const xml = await zip.file(sheetPath)!.async('string')
+  const patched = xml.replace(new RegExp(`(<c r="${ref}"[^>]*>.*?<v>)([^<]*)(</v>)`, 's'), `$1${value}$3`)
+  if (patched === xml) throw new Error(`Could not edit ${ref} in ${sheetPath}`)
+  zip.file(sheetPath, patched)
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }) as unknown as Promise<Buffer>
+}
+
+test('Stage 5 formula rules paint and announce on every leg, and legs agree', async ({ context }) => {
+  const bytes = readFileSync(`${CF_FIXTURES}${S5_AUTHORED}.xlsx`)
+  const shotsByRun: Record<string, number> = {}
+  for (const cfev of [true, false]) {
+    const shots: Img[] = [], names: string[][] = []
+    for (const leg of LEGS) {
+      await test.step(`${leg.name}${cfev ? ' (evidence seam)' : ' (production evidence)'}`, async () => {
+        const page = await context.newPage()
+        try {
+          await openCf(page, S5_AUTHORED, bytes, leg, { cfev })
+          await expect.poll(async () => announced(S5_CELLS, 2)(page), { timeout: 30_000, message: `${leg.name}: the formula cells announce their CF state` }).toBe(true)
+          const grid = await settledCfGrid(page, 200)
+          shots.push(grid)
+          names.push(announcements(await namesOf(page, S5_CELLS)))
+          for (const n of names.at(-1)!) expect(n).not.toMatch(FORMULA_TEXT)
+          // Published (Task 39): production applies the formula rules as the evidence seam does.
+          expect(appliedCount(await namesOf(page, S5_CELLS)), `${leg.name}: formula rules apply`).toBeGreaterThan(2)
+          expect(countPink(grid, 0, 0, grid.width, grid.height), `${leg.name}: the formula fill paints`).toBeGreaterThan(200)
+          await expect(page.getByRole('alert'), `${leg.name}: no error alert`).toHaveCount(0)
+        } finally { await page.close() }
+      })
+    }
+    expect(names[1], 'worker announces what resident announces').toEqual(names[0])
+    expect(names[2], 'forced paged announces what resident announces').toEqual(names[0])
+    const [resident, worker, paged] = shots as [Img, Img, Img]
+    expect(worker.width).toBe(resident.width); expect(paged.width).toBe(resident.width)
+    let differing = 0
+    for (let i = 0; i < resident.data.length; i += 4) if (Math.abs(resident.data[i]! - worker.data[i]!) > 4 || Math.abs(resident.data[i + 1]! - worker.data[i + 1]!) > 4 || Math.abs(resident.data[i + 2]! - worker.data[i + 2]!) > 4) differing++
+    expect(differing / (resident.width * resident.height), 'worker paints what resident paints').toBeLessThan(0.002)
+    // The forced-paged tile pipeline lays pixels out differently (its fill coverage is not pixel-equal), but it paints the same cells:
+    // the same number of filled row bands and column bands as resident, and the fill is present on it.
+    const bands = (img: Img): { rows: number; cols: number; pink: number } => {
+      const isPink = (x: number, y: number): boolean => { const i = (y * img.width + x) * 4; return Math.abs(img.data[i]! - 0xff) <= 48 && Math.abs(img.data[i + 1]! - 0xc7) <= 48 && Math.abs(img.data[i + 2]! - 0xce) <= 48 }
+      const rowHit = Array.from({ length: img.height }, (_, y) => { let n = 0; for (let x = 0; x < img.width; x++) if (isPink(x, y)) n++; return n >= 10 })
+      const colHit = Array.from({ length: img.width }, (_, x) => { let n = 0; for (let y = 0; y < img.height; y++) if (isPink(x, y)) n++; return n >= 10 })
+      const runs = (hit: boolean[]): number => hit.filter((v, i) => v && !hit[i - 1]).length
+      return { rows: runs(rowHit), cols: runs(colHit), pink: countPink(img, 0, 0, img.width, img.height) }
+    }
+    const [br, bw, bp] = [bands(resident), bands(worker), bands(paged)]
+    expect(bw, 'worker bands').toEqual(br)
+    expect(bp.pink, 'forced paged paints the fill').toBeGreaterThan(200)
+    expect({ rows: bp.rows, cols: bp.cols }, 'forced paged paints the same cells as resident').toEqual({ rows: br.rows, cols: br.cols })
+    shotsByRun[cfev ? 'evidence' : 'production'] = br.pink
+  }
+  // Published: production paints the formula fill the evidence seam paints (within anti-aliasing).
+  expect(Math.abs(shotsByRun.evidence! - shotsByRun.production!), 'production paints what the evidence seam paints').toBeLessThanOrEqual(200)
+  expect(shotsByRun.production!).toBeGreaterThan(200)
+})
+
+test('Stage 5 cross-sheet edit repaints the dependent sheet', async ({ context }) => {
+  // The viewer is view-only (no cell-commit API on this page, and a worker-backed workbook has no value commit), so the edit is
+  // made in the file and the page is opened on it: a new document, not a same-session commit. The same-session invalidation
+  // (a referenced-sheet commit staling the dependent sheet's tiles and subscriptions) is covered by tests/xlsx-cf-live.test.tsx,
+  // tests/xlsx-cf-formula-cross-sheet.test.ts and the remote-cache dependency epoch tests.
+  const raw = readFileSync(`${CF_FIXTURES}${S5_CROSS}.xlsx`)
+  const edited = await editSheetCell(raw, 'xl/worksheets/sheet2.xml', 'A3', '9')
+  const seen: Record<string, { names: string[]; pink: number }[]> = {}
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      for (const [phase, bytes] of [['before', raw], ['after', edited]] as const) {
+        const page = await context.newPage()
+        try {
+          await openCf(page, `${S5_CROSS}-${phase}`, bytes, leg, { cfev: true })
+          await expect.poll(async () => announced(S5_CROSS_CELLS, 4)(page), { timeout: 30_000, message: `${leg.name} ${phase}: announces` }).toBe(true)
+          const grid = await settledCfGrid(page, 0)
+          const names = announcements(await namesOf(page, S5_CROSS_CELLS))
+          for (const n of names) expect(n).not.toMatch(FORMULA_TEXT)
+          ;(seen[phase] ??= []).push({ names, pink: countPink(grid, 0, 0, grid.width, grid.height) })
+        } finally { await page.close() }
+      }
+    })
+  }
+  for (const phase of ['before', 'after']) { expect(seen[phase]![1]!.names, `${phase}: worker`).toEqual(seen[phase]![0]!.names); expect(seen[phase]![2]!.names, `${phase}: forced paged`).toEqual(seen[phase]![0]!.names) }
+  expect(appliedCount(seen.before![0]!.names), 'the cross-sheet rules apply from Sheet2').toBeGreaterThan(1)
+  for (const leg of [0, 1, 2]) {
+    expect(seen.after![leg]!.names, `leg ${leg}: Sheet2 moved what Sheet1 announces`).not.toEqual(seen.before![leg]!.names)
+    expect(seen.after![leg]!.pink, `leg ${leg}: and what it paints`).not.toBe(seen.before![leg]!.pink)
+  }
+})
+
+test('Stage 5 formula rules under frozen panes', async ({ context }) => {
+  const bytes = await frozenBytes(S5_AUTHORED, { xSplit: 1, ySplit: 1, topLeftCell: 'B2' })
+  const names: string[][] = []
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      const page = await context.newPage()
+      try {
+        await openCf(page, `${S5_AUTHORED}-frozen`, bytes, leg, { cfev: true })
+        await expect.poll(async () => announced(S5_CELLS, 2)(page), { timeout: 30_000, message: `${leg.name}: announces` }).toBe(true)
+        const scroller = page.getByTestId('officeview-sheet-scroller')
+        await scroller.evaluate(node => { node.scrollTop = 600; node.scrollLeft = 400 })
+        await page.waitForTimeout(500)
+        await expect(page.getByRole('columnheader', { name: /^Column A/ }).first(), 'frozen column header').toBeVisible()
+        await expect(page.getByRole('rowheader', { name: 'Row 1' }).first(), 'frozen row header').toBeVisible()
+        await scroller.evaluate(node => { node.scrollTop = 0; node.scrollLeft = 0 })
+        await page.waitForTimeout(500)
+        await expect.poll(async () => announced(S5_CELLS, 2)(page), { timeout: 30_000 }).toBe(true)
+        names.push(announcements(await namesOf(page, S5_CELLS)))
+        expect(appliedCount(await namesOf(page, S5_CELLS)), `${leg.name}: formula rules apply under frozen panes`).toBeGreaterThan(2)
+        const grid = await settledCfGrid(page, 200)
+        expect(countPink(grid, 0, 0, grid.width, grid.height), `${leg.name}: the formula fill paints`).toBeGreaterThan(200)
+        await expect(page.getByRole('alert')).toHaveCount(0)
+      } finally { await page.close() }
+    })
+  }
+  expect(names[1]).toEqual(names[0]); expect(names[2]).toEqual(names[0])
+})
+
+test('Stage 5 print capture paints formula rules', async ({ context }) => {
+  const bytes = readFileSync(`${CF_FIXTURES}${S5_AUTHORED}.xlsx`)
+  const pinkOf = async (page: Page): Promise<number> => page.locator('[data-testid="officeview-sheet-print-pages"] canvas').first().evaluate(canvas => {
+    const c = canvas as HTMLCanvasElement, ctx = c.getContext('2d')
+    if (!ctx) return -1
+    const data = ctx.getImageData(0, 0, c.width, c.height).data
+    let count = 0
+    for (let i = 0; i < data.length; i += 4) if (Math.abs(data[i]! - 0xff) <= 48 && Math.abs(data[i + 1]! - 0xc7) <= 48 && Math.abs(data[i + 2]! - 0xce) <= 48) count++
+    return count
+  })
+  const totals: Record<string, number> = {}
+  for (const cfev of [true, false]) {
+    const pink: number[] = []
+    for (const leg of LEGS.filter(l => !l.paged)) {
+      await test.step(`${leg.name}${cfev ? ' (evidence seam)' : ' (production evidence)'}`, async () => {
+        const page = await context.newPage()
+        await page.addInitScript(() => { (window as unknown as { print: () => void }).print = () => { (window as unknown as { __printed: number }).__printed = 1 } })
+        try {
+          await openCf(page, S5_AUTHORED, bytes, leg, { cfev })
+          await page.getByRole('button', { name: 'Print', exact: true }).click()
+          await page.waitForFunction(() => (window as unknown as { __printed?: number }).__printed === 1, { timeout: 30_000 })
+          await expect.poll(async () => page.locator('[data-testid="officeview-sheet-print-pages"] canvas').count(), { message: 'the workbook\'s pages are prepared' }).toBeGreaterThan(0)
+          pink.push(await pinkOf(page))
+        } finally { await page.close() }
+      })
+    }
+    // Print prepares the same CF the screen does: resident and worker pages carry the same formula fill.
+    expect(pink[1], `resident and worker print pages agree (${cfev ? 'evidence seam' : 'production'})`).toBe(pink[0])
+    totals[cfev ? 'evidence' : 'production'] = pink[0]!
+  }
+  // Published (Task 39): production prints the formula fill the evidence seam prints.
+  expect(Math.abs(totals.evidence! - totals.production!), 'production prints what the evidence seam prints').toBeLessThanOrEqual(200)
+})
+
+// ---- Stage 5: a referenced-sheet commit in the SAME live session (fix round 2, finding 6) ----
+//
+// The viewer is view-only, but a pivot click is a real in-session commit on all three legs: it replaces the pivot's displayed cells
+// (an overlay on the pivot's sheet) without reopening anything. The Excel-saved pivot workbook
+// tests/fixtures/xlsx-pivots/engine/baseline.xlsx has the pivot on "Pivot" and its source data on "Data"; this spec adds one
+// cross-sheet rule to "Data"!A2, `Pivot!$B$7>5000`. East's first child row is B7 = 1234.5 (false); collapsing East moves the next
+// region's 6497.84 into B7 (true). The test visits Data, goes back to Pivot, clicks Collapse East (the commit), returns to Data and
+// expects A2 painted and announced: the dependent rule must read the COMMITTED overlay value of the other sheet, on the resident,
+// worker and forced-paged legs alike (no reopen, no forced rerender; the evidence seam is the debug one above).
+//
+// This test goes through a sheet switch, which re-prepares the sheet it lands on, so it does not exercise the dependency subscriptions
+// (reverting `cfResidentDependencyKey` or `cfDependencyEpoch` leaves it green, checked). The test after it does: it keeps the
+// dependent sheet on screen while a slicer on that sheet commits another sheet's pivot. The revert-checks that fail THIS one are
+// dropping the resident CF workbook (sheetAssets) and the worker's cross-sheet seam (pagedSource cfWorkbook).
+const PIVOTS = fileURLToPath(new URL('../fixtures/xlsx-pivots/', import.meta.url))
+async function crossSheetPivotBytes(): Promise<Buffer> {
+  const zip = await JSZip.loadAsync(readFileSync(`${PIVOTS}engine/baseline.xlsx`))
+  const sheet = await zip.file('xl/worksheets/sheet2.xml')!.async('string')
+  const rule = '<conditionalFormatting sqref="A2"><cfRule type="expression" dxfId="0" priority="1"><formula>Pivot!$B$7&gt;5000</formula></cfRule></conditionalFormatting>'
+  if (!sheet.includes('<pageMargins')) throw new Error('Data sheet has no pageMargins anchor')
+  zip.file('xl/worksheets/sheet2.xml', sheet.replace('<pageMargins', `${rule}<pageMargins`))
+  const styles = await zip.file('xl/styles.xml')!.async('string')
+  if (!styles.includes('<dxfs count="0"/>')) throw new Error('unexpected dxfs')
+  zip.file('xl/styles.xml', styles.replace('<dxfs count="0"/>', '<dxfs count="1"><dxf><fill><patternFill patternType="solid"><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf></dxfs>'))
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }) as unknown as Promise<Buffer>
+}
+
+test('Stage 5 cross-sheet commit in the same live session repaints the dependent sheet', async ({ context }) => {
+  const bytes = await crossSheetPivotBytes()
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      const page = await context.newPage()
+      try {
+        await openCf(page, 'stage5-pivot-cross', bytes, leg, { cfev: true })
+        const sheets = page.getByRole('combobox', { name: 'Worksheet' })
+        const collapse = page.getByRole('button', { name: /^Collapse East/ })
+        await expect(collapse).toBeAttached({ timeout: 30_000 })
+        // Visit the dependent sheet first: its tiles and CF scope are prepared and cached under the pre-commit pivot.
+        await sheets.selectOption({ label: 'Data' })
+        await expect(cell(page, 'A2')).toContainText('East', { timeout: 30_000 })
+        await expect.poll(async () => (await namesOf(page, ['A2']))[0], { timeout: 15_000, message: 'A2 settles before the commit' }).not.toMatch(/Conditional formatting applied/)
+        const before = await settledCfGrid(page, 0)
+        // The Data sheet's own styling is pinkish at the default tolerance, so the rule's fill (FFC7CE) is counted exactly.
+        const exact = (img: Img): number => countColor(img, 0, 0, img.width, img.height, 0xff, 0xc7, 0xce, 2)
+        const fillBefore = exact(before)
+        expect(fillBefore, `${leg.name}: the rule's fill is absent before the commit`).toBeLessThan(100)
+        // The commit: collapse East on the pivot's own sheet, in this session.
+        await sheets.selectOption({ label: 'Pivot' })
+        await expect(collapse).toBeAttached({ timeout: 30_000 })
+        await collapse.click()
+        await expect(page.getByRole('button', { name: 'Expand East (Region)' })).toBeAttached({ timeout: 30_000 })
+        // Back on the dependent sheet: it must show the committed state, announced and painted.
+        await sheets.selectOption({ label: 'Data' })
+        await expect.poll(async () => (await namesOf(page, ['A2']))[0], { timeout: 30_000, message: `${leg.name}: A2 announces the rule after the pivot commit` }).toMatch(/Conditional formatting applied/)
+        const after = await settledCfGrid(page, 0)
+        await expect.poll(async () => exact(await settledCfGrid(page, 0)), { timeout: 30_000, message: `${leg.name}: A2's fill paints after the commit` }).toBeGreaterThan(fillBefore + 300)
+        void after
+        await expect(page.getByRole('alert')).toHaveCount(0)
+      } finally { await page.close() }
+    })
+  }
+})
+
+
+// ---- the dependent sheet stays on screen while the referenced sheet commits (fix round 3) ----
+//
+// controls/controls-seed.xlsx (Excel): the pivot on "工作表1" is filtered by a "Product" slicer that starts at All. The slicer's
+// drawing is moved from that sheet to "Data", so the slicer lives on the dependent sheet and its click commits the pivot on another
+// sheet (InteractiveSheetDoc applyLinked) while Data stays displayed. Data!A2 carries `'工作表1'!$C$8>50`: C8 is Bananas' column
+// (20) at All and the Total column (90) once Apples alone is selected. The measured single-item click from All and Clear Filter are
+// the actions the slicer controller allows (src/xlsx/pivots/slicers/controller.ts:177-184 and :166 for clear); nothing is injected.
+// No sheet switch, no reopen, no forced rerender: the sheet's own subscriptions must repaint and re-announce A2 after each commit.
+//
+// Legs (fix round 4). Every leg must COMMIT (the slicer republishes its selection only for a committed result). Forced paged holds
+// the pivot in the worker, so its commit is a remote controlApply then controlCommit (src/worker/viewerRemotePivots.ts applyLinked),
+// counted at the worker port; `?worker=1` alone admits this small workbook resident, so its commit is the main-thread one (zero
+// control commands, pinned). The worker's transaction chunk is served by the harness warmup (vite.harness.config.ts).
+// Revert-checks, each fails this test: the resident dependency key in the CF live key (resident leg); the remote dependency epoch
+// in that key, or RemoteCfCache.invalidateDependents (forced-paged leg); the harness warmup of slicers/transaction.ts (forced paged:
+// the commit is refused). What it does NOT prove: that the CF-key tile invalidation (the `paintedCf` check in the canvas effect) is
+// needed here. The slicer publication also advances Data's drawing generation, whose tile invalidation repaints Data on its own:
+// removing the CF-key invalidation alone leaves this test green, removing both fails it (checked). The announcements follow the CF
+// evaluation, not the tiles.
+async function slicerOnDataBytes(dxf = '<dxf><fill><patternFill patternType="solid"><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf>'): Promise<Buffer> {
+  const zip = await JSZip.loadAsync(readFileSync(`${PIVOTS}controls/controls-seed.xlsx`))
+  const s1 = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+  const moved = /<drawing r:id="rId2"\/><extLst>.*<\/extLst>/s.exec(s1)
+  if (!moved) throw new Error('controls-seed drawing/extLst anchor not found')
+  zip.file('xl/worksheets/sheet1.xml', s1.replace(moved[0], ''))
+  const rels1 = await zip.file('xl/worksheets/_rels/sheet1.xml.rels')!.async('string')
+  const keep = (id: string) => new RegExp(`<Relationship Id="${id}"[^>]*/>`).exec(rels1)![0]
+  zip.file('xl/worksheets/_rels/sheet1.xml.rels', rels1.replace(keep('rId2'), '').replace(keep('rId3'), '').replace(keep('rId4'), ''))
+  zip.file('xl/worksheets/_rels/sheet2.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${keep('rId2')}${keep('rId3')}${keep('rId4')}</Relationships>`)
+  const s2 = await zip.file('xl/worksheets/sheet2.xml')!.async('string')
+  const rule = `<conditionalFormatting sqref="A2"><cfRule type="expression" dxfId="0" priority="1"><formula>'工作表1'!$C$8&gt;50</formula></cfRule></conditionalFormatting>`
+  zip.file('xl/worksheets/sheet2.xml', s2.replace('<pageMargins', `${rule}<pageMargins`).replace('</worksheet>', `${moved[0]}</worksheet>`))
+  const styles = await zip.file('xl/styles.xml')!.async('string')
+  zip.file('xl/styles.xml', styles.replace('<dxfs count="0"/>', `<dxfs count="1">${dxf}</dxfs>`))
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }) as unknown as Promise<Buffer>
+}
+
+test('Stage 5 slicer commit on another sheet repaints the visible dependent sheet without a switch', async ({ context }) => {
+  const bytes = await slicerOnDataBytes()
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      const page = await context.newPage()
+      try {
+        await openCf(page, 'stage5-slicer-controls', bytes, leg, { cfev: true })
+        const sheets = page.getByRole('combobox', { name: 'Worksheet' })
+        // The slicer's target is resolved against the pivot definitions of the sheets the viewer holds loaded (paged shells carry
+        // none, InteractiveSheetDoc.tsx slicer apply). Wait for 工作表1's pivot display before leaving it: a pivot field button
+        // (named after the field on the resident legs, after the saved caption when paged).
+        await expect(sheets.locator('option:checked')).toHaveText('工作表1')
+        await expect(page.getByRole('button', { name: /^Filter and sort / }).first()).toBeAttached({ timeout: 30_000 })
+        await sheets.selectOption({ label: 'Data' })
+        await expect(cell(page, 'A2')).toContainText('2023', { timeout: 30_000 })
+        const exact = (img: Img): number => countColor(img, 0, 0, img.width, img.height, 0xff, 0xc7, 0xce, 2)
+        const a2 = async (): Promise<string> => (await namesOf(page, ['A2']))[0]!
+        await expect.poll(a2, { timeout: 15_000, message: `${leg.name}: A2 settles at All` }).not.toMatch(/Conditional formatting applied/)
+        const fillAll = exact(await settledCfGrid(page, 0))
+        expect(fillAll, `${leg.name}: the rule's fill is absent at All`).toBeLessThan(100)
+        const linked = async (): Promise<[number, number]> => { const c = await counts(page); return [c.controlApply ?? 0, c.controlCommit ?? 0] }
+        const [applied0, committed0] = await linked()
+        // Commit 1, Data on screen throughout: All -> Apples alone.
+        await page.getByRole('button', { name: 'Apples, selected' }).click()
+        // The commit succeeded: the controller publishes the new selection only for a committed result (controller.ts enqueue).
+        await expect(page.getByRole('button', { name: 'Bananas, not selected' })).toBeAttached({ timeout: 30_000 })
+        await expect(page.getByRole('button', { name: 'Apples, selected' })).toBeAttached()
+        // Forced paged holds the pivot in the worker: the click is one remote controlApply then controlCommit
+        // (src/worker/viewerRemotePivots.ts applyLinked). `?worker=1` alone admits this small workbook resident, so its commit is the
+        // main-thread one and no control command reaches the worker (pinned, so the leg cannot silently change kind).
+        const remote = leg.paged ? 1 : 0
+        await expect.poll(linked, { timeout: 30_000, message: `${leg.name}: ${remote} remote apply and commit` }).toEqual([applied0 + remote, committed0 + remote])
+        // Data is still the selected worksheet: nothing below switches sheets.
+        await expect(sheets.locator('option:checked')).toHaveText('Data')
+        await expect.poll(a2, { timeout: 30_000, message: `${leg.name}: A2 announces the rule after the slicer commit` }).toMatch(/Conditional formatting applied/)
+        await expect.poll(async () => exact(await settledCfGrid(page, 0)), { timeout: 30_000, message: `${leg.name}: A2's fill paints after the commit` }).toBeGreaterThan(fillAll + 300)
+        // Commit 2, still on Data: Clear Filter restores All, and the rule goes away again.
+        await page.getByRole('button', { name: 'Clear Filter' }).click()
+        await expect(page.getByRole('button', { name: 'Bananas, selected' })).toBeAttached({ timeout: 30_000 })
+        await expect.poll(linked, { timeout: 30_000, message: `${leg.name}: the clear's remote apply and commit` }).toEqual([applied0 + 2 * remote, committed0 + 2 * remote])
+        await expect.poll(a2, { timeout: 30_000, message: `${leg.name}: A2 withdraws the rule after Clear Filter` }).not.toMatch(/Conditional formatting applied/)
+        await expect.poll(async () => exact(await settledCfGrid(page, 0)), { timeout: 30_000, message: `${leg.name}: A2's fill is gone after Clear Filter` }).toBeLessThan(100)
+        await expect(page.getByRole('alert')).toHaveCount(0)
+      } finally { await page.close() }
+    })
+  }
+})
+
+// PR #81 bot P2: the dependent sheet's CF TEXT scope (conditional number formats, hidden values, descriptions) must also be
+// prepared again when only a referenced sheet commits. The rule's dxf carries a number format, so A2's displayed text comes from
+// the text scope alone; the dependency generation was in the paint key but not in the text-scope key.
+test('Stage 5 slicer commit on another sheet re-prepares the dependent sheet\'s conditional number format without a switch', async ({ context }) => {
+  const bytes = await slicerOnDataBytes('<dxf><numFmt numFmtId="200" formatCode="&quot;HIT&quot;"/></dxf>')
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      const page = await context.newPage()
+      try {
+        await openCf(page, 'stage5-slicer-numfmt', bytes, leg, { cfev: true })
+        const sheets = page.getByRole('combobox', { name: 'Worksheet' })
+        await expect(sheets.locator('option:checked')).toHaveText('工作表1')
+        await expect(page.getByRole('button', { name: /^Filter and sort / }).first()).toBeAttached({ timeout: 30_000 })
+        await sheets.selectOption({ label: 'Data' })
+        await expect(cell(page, 'A2')).toContainText('2023', { timeout: 30_000 })
+        await page.getByRole('button', { name: 'Apples, selected' }).click()
+        await expect(page.getByRole('button', { name: 'Bananas, not selected' })).toBeAttached({ timeout: 30_000 })
+        await expect(sheets.locator('option:checked')).toHaveText('Data')
+        await expect(cell(page, 'A2'), `${leg.name}: A2 shows the rule's number format after the commit`).toContainText('HIT', { timeout: 30_000 })
+        await page.getByRole('button', { name: 'Clear Filter' }).click()
+        await expect(page.getByRole('button', { name: 'Bananas, selected' })).toBeAttached({ timeout: 30_000 })
+        await expect(cell(page, 'A2'), `${leg.name}: A2 drops the number format after Clear Filter`).toContainText('2023', { timeout: 30_000 })
+      } finally { await page.close() }
+    })
+  }
+})
+
+// ---- Stage 5 at the six zoom/DPR pairs and across a midnight (Task 39 fix rounds 1-2, F6/R3) ----
+
+/** The CF fill pixels (red FFC7CE or green C6EFCE, +-24) inside one cell's on-screen box, its 2 px border excluded. */
+async function cellFillPixels(page: Page, ref: string): Promise<number> {
+  const box = await cell(page, ref).boundingBox()
+  if (!box || box.width < 6 || box.height < 6) throw new Error(`${ref}: no on-screen cell box`)
+  const img = await decode(await page.screenshot({ clip: { x: box.x + 2, y: box.y + 2, width: box.width - 4, height: box.height - 4 }, animations: 'disabled', caret: 'hide' }))
+  let n = 0
+  for (let i = 0; i < img.data.length; i += 4) {
+    const [r, g, b] = [img.data[i]!, img.data[i + 1]!, img.data[i + 2]!]
+    if ((Math.abs(r - 0xff) <= 24 && Math.abs(g - 0xc7) <= 24 && Math.abs(b - 0xce) <= 24) || (Math.abs(r - 0xc6) <= 24 && Math.abs(g - 0xef) <= 24 && Math.abs(b - 0xce) <= 24)) n++
+  }
+  return n
+}
+/** Whether a cell is mostly CF-filled (at least a third of its inner box). */
+async function cellFilled(page: Page, ref: string): Promise<boolean> {
+  const box = (await cell(page, ref).boundingBox())!
+  return (await cellFillPixels(page, ref)) * 3 >= Math.max(1, (box.width - 4) * (box.height - 4)) * (await page.evaluate(() => window.devicePixelRatio)) ** 2
+}
+
+test('Stage 5 formula rules paint and announce at the six zoom/DPR pairs on every leg (production evidence)', async ({ browser }) => {
+  const bytes = readFileSync(`${CF_FIXTURES}${S5_AUTHORED}.xlsx`)
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      // R3: one reference per leg, so announcements are compared across both DPRs as well as across the zooms.
+      const reference: string[] = []
+      for (const dpr of [1, 2]) {
+        const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: dpr })
+        try {
+          const page = await context.newPage()
+          try {
+            await openCf(page, S5_AUTHORED, bytes, leg)
+            for (const zoom of ['50%', '100%', '200%']) {
+              const label = page.getByRole('button', { name: 'Reset zoom' })
+              for (let i = 0; i < 12; i++) {
+                if ((await label.textContent()) === zoom) break
+                const current = Number((await label.textContent())!.replace('%', ''))
+                await page.getByRole('button', { name: current < Number(zoom.replace('%', '')) ? 'Zoom in' : 'Zoom out' }).click()
+              }
+              await expect(label).toHaveText(zoom, { timeout: 10_000 })
+              await page.getByTestId('officeview-sheet-scroller').evaluate(node => { node.scrollTop = 0; node.scrollLeft = 0 })
+              const where = `${leg.name} dpr=${dpr} zoom=${zoom}`
+              await expect.poll(async () => appliedCount(await namesOf(page, S5_CELLS)), { timeout: 30_000, message: `${where}: formula rules apply` }).toBeGreaterThan(2)
+              // The announcement is decided by the rule, not the scale: identical at every zoom and DPR.
+              const names = announcements(await namesOf(page, S5_CELLS))
+              if (reference.length === 0) reference.push(...names)
+              else expect(names, where).toEqual(reference)
+              for (const n of names) expect(n, where).not.toMatch(FORMULA_TEXT)
+              await settledCfGrid(page, 50)
+              // R3: the pixels of each designated formula cell agree with its announcement: an applied cell is filled, a
+              // cell without applied formatting is not.
+              const all = await namesOf(page, S5_CELLS)
+              let filled = 0
+              for (const [i, ref] of S5_CELLS.entries()) {
+                const appliedHere = /Conditional formatting applied/.test(all[i] ?? '')
+                expect(await cellFilled(page, ref), `${where} ${ref}: pixels follow the announcement`).toBe(appliedHere)
+                if (appliedHere) filled++
+              }
+              expect(filled, `${where}: formula cells painted`).toBeGreaterThan(2)
+              await expect(page.getByRole('alert'), `${where}: no error alert`).toHaveCount(0)
+            }
+          } finally { await page.close() }
+        } finally { await context.close() }
+      }
+    })
+  }
+})
+
+/**
+ * The midnight tick in a browser (resident leg). Playwright's clock (`page.clock`) fakes Date and timers on the page; it
+ * never reaches a dedicated worker (init scripts and clock installation do not run in a worker realm), so the worker and
+ * forced-paged legs cannot be put on a faked midnight here: their tick is covered by the mounted tests of Task 38
+ * (tests/xlsx-cf-live.test.tsx, the remote-cache clock-fact tests). stage5-clock-today holds `=A2=TODAY()` over B2:B10,
+ * with A4 and A9 on the anchor day: before the anchor day's midnight they do not match, after it they do.
+ */
+test('Stage 5 midnight tick repaints TODAY() rules on the resident leg (injected browser clock)', async ({ browser }) => {
+  const id = 'stage5-clock-today'
+  const bytes = readFileSync(`${CF_FIXTURES}${id}.xlsx`)
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, timezoneId: 'Asia/Taipei' })
+  try {
+    const page = await context.newPage()
+    try {
+      // Before the anchor day (2026-11-18, the capture's local day) begins in Asia/Taipei; the clock is paused at
+      // 23:59:30 so only runFor crosses midnight (a run without it stays on the 17th; revert-checked).
+      // The page loads on a flowing clock (its scheduling needs timers), then the clock is paused before midnight.
+      await page.clock.install({ time: new Date('2026-11-17T23:58:00+08:00') })
+      await openCf(page, `${id}-midnight`, bytes, LEGS[0]!)
+      await page.clock.pauseAt(new Date('2026-11-17T23:59:30+08:00'))
+      const applied = async (ref: string): Promise<boolean> => /Conditional formatting applied/.test((await namesOf(page, [ref]))[0] ?? '')
+      await expect.poll(async () => (await namesOf(page, ['B2']))[0] ?? '', { timeout: 30_000, message: 'the grid announces' }).toMatch(/B2, value/)
+      expect(await applied('B4'), 'before midnight: the anchor-day cell is not today').toBe(false)
+      expect(await applied('B9'), 'before midnight: the anchor-day cell is not today').toBe(false)
+      // R3: the canvas, not only the announcement: B4/B9 unfilled before midnight, filled after it.
+      expect(await cellFilled(page, 'B4'), 'before midnight: B4 unfilled on the canvas').toBe(false)
+      expect(await cellFilled(page, 'B9'), 'before midnight: B9 unfilled on the canvas').toBe(false)
+      await midnightTick(page)
+      await expect.poll(async () => (await applied('B4')) && (await applied('B9')), { timeout: 30_000, message: 'after midnight: the anchor-day cells match TODAY()' }).toBe(true)
+      await expect.poll(async () => (await cellFilled(page, 'B4')) && (await cellFilled(page, 'B9')), { timeout: 30_000, message: 'after midnight: the canvas repaints B4/B9' }).toBe(true)
+      await expect(page.getByRole('alert')).toHaveCount(0)
+    } finally { await page.close() }
+  } finally { await context.close() }
+})
+
+/** Crosses the anchor day's midnight on the injected clock (the page is paused at 23:59:30). */
+async function midnightTick(page: Page): Promise<void> { await page.clock.runFor(60_000) }
+
+/**
+ * R3 revert-check, kept as a test: a canvas that is not repainted after midnight (every 2D draw call disabled just
+ * before the tick, while the accessibility layer still updates) is caught by the pixel check that the midnight test uses.
+ */
+test('Stage 5 midnight pixel check catches a stale canvas (revert-check)', async ({ browser }) => {
+  const id = 'stage5-clock-today'
+  const bytes = readFileSync(`${CF_FIXTURES}${id}.xlsx`)
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, timezoneId: 'Asia/Taipei' })
+  try {
+    const page = await context.newPage()
+    try {
+      await page.clock.install({ time: new Date('2026-11-17T23:58:00+08:00') })
+      await openCf(page, `${id}-stale`, bytes, LEGS[0]!)
+      await page.clock.pauseAt(new Date('2026-11-17T23:59:30+08:00'))
+      await expect.poll(async () => (await namesOf(page, ['B2']))[0] ?? '', { timeout: 30_000 }).toMatch(/B2, value/)
+      expect(await cellFilled(page, 'B4')).toBe(false)
+      // Freeze the canvas: every 2D drawing and clearing call becomes a no-op from here on.
+      await page.evaluate(() => {
+        const proto = CanvasRenderingContext2D.prototype as unknown as Record<string, unknown>
+        for (const name of ['fillRect', 'clearRect', 'strokeRect', 'fillText', 'drawImage', 'fill', 'stroke', 'putImageData']) proto[name] = () => {}
+      })
+      await midnightTick(page)
+      // The announcement moves on, the frozen canvas does not: the pixel check reports the stale frame.
+      await expect.poll(async () => /Conditional formatting applied/.test((await namesOf(page, ['B4']))[0] ?? ''), { timeout: 30_000 }).toBe(true)
+      await page.waitForTimeout(1000)
+      expect(await cellFilled(page, 'B4'), 'a stale canvas is detected (B4 still unfilled)').toBe(false)
+    } finally { await page.close() }
+  } finally { await context.close() }
 })

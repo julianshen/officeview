@@ -86,6 +86,9 @@ function sameOverlayMerges(a: readonly SourceRect[] | undefined, b: readonly Sou
 interface OverlayState { overlay?: ValueOverlay; structureGen: number }
 const overlayStates = new WeakMap<object, OverlayState>()
 const workbookAdapters = new WeakMap<object, Map<string, PagedXlsxSheetAdapter>>()
+/** Each workbook's `storeFor` (Task 36, Ruling S5-K): a sheet a cross-sheet CF formula reads is created through the same
+ * path a later activation uses, so there is one canonical, overlay-aware adapter per sheet. */
+const workbookStoreFactories = new WeakMap<object, (sheetId: string) => PagedXlsxSheetAdapter | undefined>()
 
 /** Conservative structured-clone size for the sparkline model, recursive; depth is bounded by the sparkline model.
  * Repeated references are counted again. */
@@ -964,6 +967,12 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       } else {
         liveCfGen = versionCfRules('[]')
       }
+    // One clock per preparation (Ruling S5-M): sampled once, shared by the predicates, the formulas and the stamp. Final
+    // review F3: sampled at its first read (memoised), as the resident evaluation context is, so a preparation whose rules
+    // never read the clock (a literal-only sheet) takes no clock sample.
+    let sampledInstant: number | undefined
+    const instant = (): number => (sampledInstant ??= (options?.now ?? Date.now)())
+    let liveClockGen: number | undefined
     const source: CfValueSource = {
       bounds: async (_id: string) => {
         // A complete sheet with no used extent is still readable: the service
@@ -986,26 +995,94 @@ export class PagedXlsxSheetAdapter implements SourceStore {
         cfGen: liveCfGen,
         viewGen: request.stamp.viewGen,
         structureGen: request.stamp.structureGen,
-        clockGen: request.stamp.clockGen,
+        // Ruling S5-M: a main-thread stamp is echoed; an unknown one (0) on a sheet with a clock-dependent formula adopts this
+        // preparation's one clock, so a worker-side route (find, copy) names the same day the viewer's tick does.
+        clockGen: request.stamp.clockGen !== 0 || liveClockGen === undefined ? request.stamp.clockGen : liveClockGen,
       }),
       pages: this.cfPages(request, account, options?.signal),
       ...(this.workbook.formatting?.styles ? { numberFormats: 'resolved' as const } : {}),
       }
-      const dateContext = options?.dateContext ?? {
+      const ownDateContext: import('../cf/predicates').CfDateContext = options?.dateContext ?? Object.defineProperty({
         dateSystem: this.workbook.formatting?.dateSystem ?? '1900',
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC',
-        epochNowMs: Date.now(),
-      }
+      } as import('../cf/predicates').CfDateContext, 'epochNowMs', { get: instant, enumerable: true })
+      // The worker owns the workbook's calculation facts: the policy comes from the same `PagedWorkbook` the values do, so
+      // every worker route (paint, text, find) takes one authority. Only a sheet with a formula rule loads the module.
+      const carriesFormula = liveRules?.rules.some(rule => rule.definition.kind === 'expression'
+        || (rule.definition.kind === 'cellIs' && rule.definition.operands.some(operand => 'formula' in operand))
+        || visualFormulaShape(rule.definition) !== undefined) === true
+      const formulaModule = carriesFormula ? await import('../cf/formula') : undefined
+      const evaluation = formulaModule?.cfDocumentEvaluationOfPaged(this.workbook)
+      if (formulaModule && evaluation && liveRules?.clockFree !== true) liveClockGen = formulaModule.cfEvaluationContextFor(evaluation, instant).clock.clockGen
+      // Ruling S5-K: only a sheet whose rules name another sheet gets the workbook seam (no cross-sheet work otherwise).
+      const crossSheet = carriesFormula && liveRules?.rules.some(rule => rule.definition.kind !== 'unresolved' && (rule.definition.dependencySheets?.length ?? 0) > 0) === true
+      const workbook = crossSheet ? this.cfWorkbook(account) : undefined
       const remoteOptions: CfRemotePrepareOptions = {
         ...options,
-        dateContext,
+        now: instant,
+        ...(evaluation ? { evaluation } : {}),
+        ...(workbook ? { workbook, sheetName: this.sheet.name } : {}),
+        ...(evaluation ? (options?.dateContext ? { dateContext: options.dateContext } : {}) : { dateContext: ownDateContext }),
         hiddenRows: (this.sheet.metadata?.hiddenRows ?? []).map(run => ({ firstRow: run.r0, lastRow: run.r1, firstCol: 0, lastCol: 16383 })),
         merges: (this.sheet.mergeRects ?? []).map(m => ({ firstRow: m.r0, lastRow: m.r1, firstCol: m.c0, lastCol: m.c1 })),
         ...(admitted ? { admittedRules: { rules: liveRules, normalized: admitted.normalized, version: admitted.version } } : {}),
       }
-      return await prepareCfRemote(request, this.sheet.sheetId, source, liveRules, account, remoteOptions)
+      // The adopted clock (Ruling S5-M) is part of the request's own stamp too, so the service, the source and the reply agree.
+      const effective = request.stamp.clockGen === 0 && liveClockGen !== undefined ? { ...request, stamp: { ...request.stamp, clockGen: liveClockGen } } : request
+      // Ruling S5-M: a day the request names that is not the day sampled for this preparation is refused (fail closed); the
+      // viewer re-requests under its advanced stamp at the tick.
+      if (liveClockGen !== undefined && request.stamp.clockGen !== 0 && request.stamp.clockGen !== liveClockGen) {
+        return { ...cfReadError(this.sheet.sheetId, { ...request.stamp, clockGen: liveClockGen }, 'cf-stale-generation', 'cf-stale-source', 'Conditional formatting request names a different day; re-request under the live clock.'), requiredBytes: undefined }
+      }
+      const result = await prepareCfRemote(effective, this.sheet.sheetId, source, liveRules, account, remoteOptions)
+      return result.kind === 'ready' && liveRules?.clockFree === true ? { ...result, clockFree: true } : result
     } finally {
       try { hashHold.release() } catch { /* release-only path */ }
+    }
+  }
+
+  /**
+   * Task 36 (Ruling S5-K): the workbook seam over the canonical adapters. Each referenced sheet's values and generation
+   * come from its own `PagedXlsxSheetAdapter` (overlay-aware), created through the workbook's `storeFor` when it was never
+   * activated; raw `workbook.store.pages` is never read for CF.
+   */
+  private cfWorkbook(memory: CfMemory): import('../cf/dependencies').CfWorkbookSource {
+    const workbook = this.workbook
+    const adapterOf = (sheetId: string): PagedXlsxSheetAdapter | undefined => workbookStoreFactories.get(workbook)?.(sheetId) ?? workbookAdapters.get(workbook)?.get(sheetId)
+    const made = new Map<string, import('../cf/dependencies').CfWorkbookSheet>()
+    return {
+      sheetIdOf: name => workbook.sheets.find(s => s.name.toLowerCase() === name.toLowerCase())?.sheetId,
+      sheet(sheetId) {
+        const known = made.get(sheetId)
+        if (known) return known
+        const paged = workbook.sheets.find(s => s.sheetId === sheetId)
+        const adapter = paged ? adapterOf(sheetId) : undefined
+        if (!paged || !adapter) return undefined
+        const sheet = adapter.cfDependencySheet(memory)
+        made.set(sheetId, sheet)
+        return sheet
+      },
+    }
+  }
+  /** This sheet as another sheet's CF dependency: its values (overlay-aware pages), its live value generation, and its
+   * import state, all read from this one adapter. */
+  cfDependencySheet(memory: CfMemory): import('../cf/dependencies').CfWorkbookSheet {
+    const self = this
+    const values: CfValueSource = {
+      bounds: async () => {
+        if (self.sheet.state !== 'complete') return undefined
+        const used = self.extent.used
+        if (!used) return { firstRow: 0, lastRow: 1048575, firstCol: 0, lastCol: 16383 }
+        return { firstRow: used.r0, lastRow: used.r1, firstCol: used.c0, lastCol: used.c1 }
+      },
+      stamp: () => ({ owner: self.stamp.docId, sheetId: self.sheet.sheetId, workbookValueGen: self.stamp.valueGen, cfGen: 0, viewGen: 0, structureGen: self.structureGen, clockGen: 0 }),
+      pages: (id, rects, budget, signal) => self.cfPages({ rects: [], stamp: { owner: '', sheetId: id, workbookValueGen: 0, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 }, grantBytes: 0 }, memory, signal)(id, rects, budget, signal),
+      ...(this.workbook.formatting?.styles ? { numberFormats: 'resolved' as const } : {}),
+    }
+    return {
+      sheetId: this.sheet.sheetId, name: this.sheet.name, values,
+      state: () => (self.sheet.state === 'complete' ? 'ready' : self.sheet.state === 'incomplete' ? 'failed' : 'pending'),
+      valueGen: () => self.stamp.valueGen,
     }
   }
 
@@ -1489,6 +1566,31 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     }
   }
 }
+/** Task 37: a scale, bar or icon set carrying formula bounds or an activation, with every compiled formula reduced to its
+ * node count (as `hashableDefinition` does for expressions); undefined for any other definition. */
+function visualFormulaShape(definition: CfSheetRules['rules'][number]['definition']): unknown {
+  type Bound = { type: string; formula?: { nodes: number } }
+  const strip = <T extends Bound>(b: T): T => (b.type === 'formula' && b.formula ? { ...b, formula: { nodes: b.formula.nodes } } : b)
+  const has = (bounds: readonly Bound[], activation: unknown): boolean => activation !== undefined || bounds.some(b => b.type === 'formula')
+  const activation = (d: { activation?: { nodes: number } }) => (d.activation ? { activation: { nodes: d.activation.nodes } } : {})
+  if (definition.kind === 'colorScale') return has(definition.points.map(p => p.bound), definition.activation) ? { ...definition, points: definition.points.map(p => ({ ...p, bound: strip(p.bound) })), ...activation(definition) } : undefined
+  if (definition.kind === 'dataBar') return has(definition.bounds, definition.activation) ? { ...definition, bounds: definition.bounds.map(strip), ...activation(definition) } : undefined
+  if (definition.kind === 'iconSet') return has(definition.thresholds.map(t => t.bound), definition.activation) ? { ...definition, thresholds: definition.thresholds.map(t => ({ ...t, bound: strip(t.bound) })), ...activation(definition) } : undefined
+  return undefined
+}
+/** Stage 5: a compiled formula is a pure function of the rule's own formula text (kept in `formulas`), its ranges and the
+ * code, so the content hash and its byte sizing carry the rule without the AST. This also keeps a deeply nested formula
+ * (a long `A1+A2+...` chain is as deep as it is long) inside the serializer's depth bound, so the paged view cannot refuse
+ * a sheet's rules that the resident view paints. Everything but the AST is unchanged. */
+function hashableDefinition(definition: CfSheetRules['rules'][number]['definition']): unknown {
+  if (definition.kind === 'expression') return { ...definition, formula: { nodes: definition.formula.nodes } }
+  const visual = visualFormulaShape(definition)
+  if (visual !== undefined) return visual
+  if (definition.kind === 'cellIs' && definition.operands.some(operand => 'formula' in operand)) {
+    return { ...definition, operands: definition.operands.map(operand => 'formula' in operand ? { formula: { nodes: operand.formula.nodes } } : operand) }
+  }
+  return definition
+}
 /** Deterministic serialization of a rule set for shared-definition versioning:
  * identical rules share one charged copy; any change yields a new version. */
 function normalizeCfRules(rules: readonly CfSheetRules['rules'][number][]): string {
@@ -1500,7 +1602,7 @@ function normalizeCfRules(rules: readonly CfSheetRules['rules'][number][]): stri
     ranges: [...rule.ranges].map(r => [r.firstRow, r.lastRow, r.firstCol, r.lastCol]),
     writes: [...rule.writes].sort(),
     dxf: Object.fromEntries(Object.keys(rule.dxf ?? {}).sort().map(k => [k, (rule.dxf as Record<string, unknown>)[k]])),
-    definition: rule.definition,
+    definition: hashableDefinition(rule.definition),
   }))
   normalized.sort((a, b) => a.id - b.id || a.documentOrder - b.documentOrder)
   return JSON.stringify(normalized)
@@ -1622,7 +1724,7 @@ function cfNormalizedBytes(rules: readonly CfSheetRules['rules'][number][]): num
       units += jsonQuotedUnits(key) + 1 + item
       if (!Number.isSafeInteger(units)) return undefined
     }
-    const definition = jsonValueUnits(rule.definition, 0, seen)
+    const definition = jsonValueUnits(hashableDefinition(rule.definition), 0, seen)
     if (definition === undefined) return undefined
     units += definition
     units += 1 // closing }
@@ -1739,9 +1841,17 @@ export interface CfRemotePrepareOptions {
    * — and skips its own sizing and serialization when they verify. */
   readonly admittedRules?: { rules: CfSheetRules | undefined; normalized: string; version: number }
   readonly dateContext?: import('../cf/predicates').CfDateContext
+  /** Stage 5 (Ruling S5-L): the workbook's evaluation policy. Each preparation takes one clock snapshot from `now`
+   * (default: the wall clock). Absent: formula rules are unresolved (`cf-evaluation-context-missing`). */
+  readonly evaluation?: import('../cf/formula').CfDocumentEvaluation
+  readonly now?: () => number
   /** Sheet layout facts the scale scope gates need (hidden rows, merged regions), in CF rect naming. */
   readonly hiddenRows?: readonly { firstRow: number; lastRow: number; firstCol: number; lastCol: number }[]
   readonly merges?: readonly { firstRow: number; lastRow: number; firstCol: number; lastCol: number }[]
+  /** Task 36 (Ruling S5-K): the workbook's other sheets, over the worker's canonical adapters, and the host's name.
+   * Absent: cross-sheet rules withhold, and the reply carries no `dependencies`. */
+  readonly workbook?: import('../cf/dependencies').CfWorkbookSource
+  readonly sheetName?: string
 }
 export async function prepareCfRemote(
   request: CfReadRequest,
@@ -1809,6 +1919,15 @@ async function prepareCfRemoteOnce(
   const limitsModule = await import('../cf/limits')
   const serviceModule = await import('../cf/service')
   const modelModule = await import('../cf/model')
+  // Only a preparation handed a workbook loads the cross-sheet helpers (a sheet without cross-sheet rules gets none).
+  const depsModule = options?.workbook && rules ? await import('../cf/dependencies') : undefined
+  // One clock snapshot per preparation, from the injected `now` (Ruling S5-L). Taken before anything is reserved, and only a
+  // policy-carrying route loads the module.
+  const formulaRuntime = options?.evaluation ? await import('../cf/formula') : undefined
+  // One clock per preparation (Ruling S5-M): the predicates' date context is this snapshot's; a conflicting override withholds the formulas.
+  const aligned = formulaRuntime && options?.evaluation ? formulaRuntime.cfAlignClock(formulaRuntime.cfEvaluationContextFor(options.evaluation, options.now ?? Date.now), options.dateContext, () => options.dateContext) : undefined
+  const evaluation = aligned?.evaluation
+  const dateContext = aligned ? aligned.dateContext : options?.dateContext
   if (rules && rules.rules.length > limitsModule.CF_LIMITS.rules) {
     return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-scope-too-large', 'Conditional formatting exceeds the bounded rule count.'), requiredBytes: undefined }
   }
@@ -1910,6 +2029,13 @@ async function prepareCfRemoteOnce(
     }
   }
   const liveStamp: CfReadStamp = { ...request.stamp, workbookValueGen: live.workbookValueGen, cfGen: version }
+  // Ruling S5-K: the referenced sheets' generations this preparation reads, captured once. The service stamp carries
+  // their sum (`dependencyGen`), so the batch goes stale synchronously at a referenced commit; the reply lists them so
+  // the main cache entry is current only while each keeps its `valueGen`. Absent when no rule names another sheet.
+  const dependencies = depsModule ? depsModule.cfDependencyIdentities(rules, options?.sheetName, options?.workbook) : []
+  const dependencyGen = dependencies.reduce((n, d) => n + d.valueGen, 0)
+  const depField: { dependencies?: readonly { sheetId: string; valueGen: number }[] } = dependencies.length > 0 ? { dependencies } : {}
+  const dependenciesMoved = (): boolean => depsModule !== undefined && depsModule.cfDependencyGenOf(rules, options?.sheetName, options?.workbook) !== dependencyGen
   // CF service ranges use firstRow/lastRow naming; the wire uses r0/r1/c0/c1.
   // Built inside the admitted hold: the rect list is request-bounded above.
   const cfRects = request.rects.map(r => ({ firstRow: r.r0, lastRow: r.r1, firstCol: r.c0, lastCol: r.c1 }))
@@ -1987,8 +2113,14 @@ async function prepareCfRemoteOnce(
   // traversal workspace on the shared account instead of running unbounded.
   const templateBytes = limitsModule.measureCfWalkedBytes({
     sheetId, stamp: liveStamp, kind: 'ready', states: [], definitions,
-    definitionsVersion: version, diagnostics: [],
+    definitionsVersion: version, diagnostics: [], ...depField,
   }, memory)
+  // Task 36 (fix round 1): the `dependencies` list can be omitted with the cross-sheet states (the grant ladder below), so
+  // the base gate is priced without it, the full target with it, as the visual families are.
+  const templateBase = depField.dependencies ? limitsModule.measureCfWalkedBytes({
+    sheetId, stamp: liveStamp, kind: 'ready', states: [], definitions,
+    definitionsVersion: version, diagnostics: [],
+  }, memory) : templateBytes
   const diagBytes = limitsModule.measureCfWalkedBytes(diagnostics, memory)
   // Per-cell bound matching the walked wire size exactly for full wins:
   // 24 object + 3x16 property slots + 2x8 numbers + 16 props slot + properties,
@@ -2009,7 +2141,7 @@ async function prepareCfRemoteOnce(
   const perCellBar = perCellScale + (hasBar ? limitsModule.CF_BAR_CELL_BYTES : 0)
   const perCellIcon = perCellBar + (hasIcon ? limitsModule.CF_ICON_CELL_BYTES : 0)
   const hasVisual = hasScale || hasBar || hasIcon
-  if (templateBytes === undefined || diagBytes === undefined || !Number.isSafeInteger(perCell)) {
+  if (templateBytes === undefined || templateBase === undefined || diagBytes === undefined || !Number.isSafeInteger(perCell)) {
     working.release()
     return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting exceeds the receiver grant; retry with at least the estimated size.'), requiredBytes: undefined }
   }
@@ -2019,28 +2151,30 @@ async function prepareCfRemoteOnce(
     working.release()
     return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting exceeds the receiver grant; retry with at least the estimated size.'), requiredBytes: undefined }
   }
-  const boundedEstimate = templateBytes + estimate + envelopeBytes
+  const boundedEstimate = templateBase + estimate + envelopeBytes
   const boundedEstimateWithVisuals = templateBytes + estimateWithVisuals + envelopeBytes
+  const fullTarget = hasVisual || depField.dependencies
   if (!Number.isSafeInteger(boundedEstimate) || boundedEstimate > grantBytes) {
     working.release()
     return {
       ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting exceeds the receiver grant; retry with at least the estimated size.'),
-      requiredBytes: hasVisual ? boundedEstimateWithVisuals : boundedEstimate,
+      requiredBytes: fullTarget ? boundedEstimateWithVisuals : boundedEstimate,
     }
   }
-  const visualGrantTarget = hasVisual ? Math.min(grantBytes, boundedEstimateWithVisuals) : 0
+  const visualGrantTarget = fullTarget ? Math.min(grantBytes, boundedEstimateWithVisuals) : 0
   const workingTarget = Math.max(boundedEstimate, visualGrantTarget) + diagBytes
   if (!Number.isSafeInteger(workingTarget) || !working.grow(workingTarget)) {
     working.release()
     return {
       ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-budget-exceeded', 'Conditional formatting exceeds the admitted worker memory; retry when pressure drops.'),
-      requiredBytes: hasVisual ? boundedEstimateWithVisuals : boundedEstimate,
+      requiredBytes: fullTarget ? boundedEstimateWithVisuals : boundedEstimate,
     }
   }
   // Service and its lease live inside the working hold: everything built
   // below is covered by the pre-admitted bound, and a single finally unwinds
   // in reverse order (lease, service, working hold) exactly once.
-  const service = serviceModule.createCfService(rules, memory, { budget: options?.budget, dateContext: options?.dateContext, merges: options?.merges, ...(options?.hiddenRows?.length ? { statisticsOptions: { hiddenRows: options.hiddenRows } } : {}) })
+  const service = serviceModule.createCfService(rules, memory, { budget: options?.budget, dateContext, merges: options?.merges, ...(evaluation ? { evaluation } : {}), ...(options?.hiddenRows?.length ? { statisticsOptions: { hiddenRows: options.hiddenRows } } : {}),
+    ...(options?.workbook ? { workbook: options.workbook } : {}), ...(options?.sheetName !== undefined ? { sheetName: options.sheetName } : {}) })
   let prepared: CfLease<CfPrepared> | undefined
   try {
     if (signal?.aborted) throw cancelled()
@@ -2048,11 +2182,16 @@ async function prepareCfRemoteOnce(
       prepared = await service.prepareCf(
           // The service grant bounds the transient workspace (its own session
           // cap); the receiver grant above bounds the wire reply.
-          { stamp: { ...liveStamp }, sourceRects: cfRects, signal: signal ?? new AbortController().signal, grantBytes: limitsModule.CF_LIMITS.scratchBytes },
+          { stamp: { ...liveStamp, ...(dependencyGen !== 0 ? { dependencyGen } : {}) }, sourceRects: cfRects, signal: signal ?? new AbortController().signal, grantBytes: limitsModule.CF_LIMITS.scratchBytes },
           source,
           memory,
         )
     } catch (error) {
+      // A referenced sheet that committed mid-build cancels the service's adoption (S5-K): that is a stale generation,
+      // never a value published under the newer one.
+      if (error instanceof PackageError && error.code === 'cancelled' && !signal?.aborted && dependenciesMoved()) {
+        return { ...cfReadError(sheetId, liveStamp, 'cf-stale-generation', 'cf-stale-source', 'A sheet these rules read changed generation during preparation.'), requiredBytes: undefined }
+      }
       if (error instanceof PackageError && error.code === 'cancelled') throw error
       if (signal?.aborted) throw cancelled()
         if (error instanceof CfPageFault) {
@@ -2082,13 +2221,19 @@ async function prepareCfRemoteOnce(
     // Revalidate liveness before publishing: a generation change during the
     // scan must withhold instead of publishing stale states.
     const liveAfter = source.stamp(sheetId)
-    if (liveAfter.workbookValueGen !== request.stamp.workbookValueGen) {
+    if (liveAfter.workbookValueGen !== request.stamp.workbookValueGen || dependenciesMoved()) {
       try { prepared.release() } catch { /* release-only path */ }
       prepared = undefined
       return {
         ...cfReadError(sheetId, { ...request.stamp, workbookValueGen: liveAfter.workbookValueGen }, 'cf-stale-generation', 'cf-stale-source', 'Conditional formatting source changed generation during preparation.'),
         requiredBytes: undefined,
       }
+    }
+    // A referenced sheet still importing (S5-K): the reply is pending on it, with no permanent diagnostic; the main cache
+    // waits for that sheet and re-requests once it completes.
+    if (prepared.value.pendingSheetIds?.length) {
+      const pendingSheetIds = [...prepared.value.pendingSheetIds]
+      return { ...cfReadError(sheetId, liveStamp, 'cf-pending-data', 'cf-source-pending', 'A sheet these conditional formats read is still importing.'), pendingSheetIds }
     }
     const states: CfReadResult['states'][number][] = []
     let unresolvedCells = 0
@@ -2145,10 +2290,12 @@ async function prepareCfRemoteOnce(
     // Post-build measurement uses the same payload walker the kernel publishes
     // with, so preflight, publication and adoption share one framing model.
     // Every walk admits its traversal workspace on the shared account.
+    // The dependency list the reply carries: dropped together with the cross-sheet states when they are omitted below.
+    let depOut = depField
     const measureBuilt = (candidateStates: typeof states, withDiagnostics: boolean): number | undefined => {
       const candidate: CfReadResult = {
         sheetId, stamp: liveStamp, kind: 'ready', states: candidateStates, definitions,
-        definitionsVersion: version, diagnostics: withDiagnostics ? diagnostics : [],
+        definitionsVersion: version, diagnostics: withDiagnostics ? diagnostics : [], ...depOut,
       }
       return limitsModule.measureCfWalkedBytes(candidate, memory)
     }
@@ -2173,16 +2320,25 @@ async function prepareCfRemoteOnce(
       if (fullNoDiagBytes !== undefined && fullNoDiagBytes + envelopeBytes <= grantBytes) {
         finalStates = states
         finalDiagnostics = []
-      } else if (hasVisual) {
+      } else if (hasVisual || depField.dependencies) {
         // A visual payload that exceeds the grant is omitted, never replaced (Rulings S3-S, S4-Q): icon fields go first,
         // then bar fields, then scale fields, while every cell's base properties still return. Each step offers the bounded
         // cf-grant-required diagnostics of the families omitted so far, and drops them when only the base fits.
-        const omit = (from: typeof states, field: 'icon' | 'bar' | 'scale'): typeof states => from.map(s => {
-          if (s[field] === undefined) return s
-          const { [field]: _, ...rest } = s
-          return rest
-        })
-        const families: { field: 'icon' | 'bar' | 'scale'; message: string }[] = [
+        // Task 36 (fix round 1): before any visual, the cross-sheet part goes: the states of every cell a cross-sheet rule
+        // covers and the `dependencies` list together, so what returns reads no other sheet and needs no dependency.
+        const host = options?.sheetName?.toLowerCase()
+        const crossRules = depField.dependencies ? rules.rules.filter(r => r.definition.kind !== 'unresolved' && (r.definition.dependencySheets ?? []).some(n => n.toLowerCase() !== host)) : []
+        const crossCovered = (row: number, col: number): boolean => crossRules.some(r => r.ranges.some(g => row >= g.firstRow && row <= g.lastRow && col >= g.firstCol && col <= g.lastCol))
+        const omit = (from: typeof states, field: 'icon' | 'bar' | 'scale' | 'formula'): typeof states => {
+          if (field === 'formula') { depOut = {}; return from.filter(s => !crossCovered(s.row, s.col)) }
+          return from.map(s => {
+            if (s[field] === undefined) return s
+            const { [field]: _, ...rest } = s
+            return rest
+          })
+        }
+        const families: { field: 'icon' | 'bar' | 'scale' | 'formula'; message: string }[] = [
+          ...(depField.dependencies ? [{ field: 'formula' as const, message: 'Conditional formatting that reads other sheets omitted due to receiver grant limit.' }] : []),
           ...(hasIcon ? [{ field: 'icon' as const, message: 'Conditional formatting icon sets omitted due to receiver grant limit.' }] : []),
           ...(hasBar ? [{ field: 'bar' as const, message: 'Conditional formatting data bars omitted due to receiver grant limit.' }] : []),
           ...(hasScale ? [{ field: 'scale' as const, message: 'Conditional formatting scale fill omitted due to receiver grant limit.' }] : []),
@@ -2196,7 +2352,7 @@ async function prepareCfRemoteOnce(
           const diagWithGrant = [...diagnostics, ...grantDiags]
           const withGrantDiagBytes = limitsModule.measureCfWalkedBytes({
             sheetId, stamp: liveStamp, kind: 'ready', states: omitted, definitions,
-            definitionsVersion: version, diagnostics: diagWithGrant,
+            definitionsVersion: version, diagnostics: diagWithGrant, ...depOut,
           }, memory)
           if (withGrantDiagBytes !== undefined && withGrantDiagBytes + envelopeBytes <= grantBytes) {
             finalStates = omitted
@@ -2224,7 +2380,7 @@ async function prepareCfRemoteOnce(
     const published = live ?? definitions
     const result: CfReadResult = {
       sheetId, stamp: liveStamp, kind: 'ready', states: finalStates, definitions: published,
-      definitionsVersion: version, diagnostics: finalDiagnostics,
+      definitionsVersion: version, diagnostics: finalDiagnostics, ...depOut,
     }
     // Transfer live outgoing ownership: adopt the wire result on the shared
     // account instead of refunding before return, so no window exists where
@@ -2518,6 +2674,7 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
     }
     return store
   }
+  workbookStoreFactories.set(workbook, sheetId => (workbook.sheets.some(s => s.sheetId === sheetId) ? storeFor(sheetId) : undefined))
   /** Builds a sheet's pivot assets for its current generation (`pivotAssets` runs one build per key). */
   const buildPivotAssets = async (sheetId: string, signal: AbortSignal, profile: ProfileId, memory: Parameters<NonNullable<WorkbookSource['pivotAssets']>>[3]): Promise<WorkerPivotAssets | undefined> => {
       const sheet = find(sheetId)

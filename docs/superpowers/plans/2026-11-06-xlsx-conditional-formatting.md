@@ -2042,9 +2042,839 @@ Expected non-discriminating candidates, which the rule confirms or clears after 
   - `resolveScaleThresholds` cannot take 4–5 points.
 - **Proportion.** Seven tasks against Stage 3's six. Three things are new compared with Stage 3: the glyph key and classification (Task 24), the text inset through layout (Task 29), and the OD-9(b) glyph table (Task 28).
 
-## Stage 5 stub: general formulas and cross-kind completion (PR 5)
+## Stage 5: general formulas and cross-kind completion (PR 5, one PR per OD-11, decided)
 
-Oracle first: expression truth/error/array coercion, mixed absolute/relative and multi-range anchors, nonliteral cellIs, noncanonical text/blank/error/date predicates, cfvo formulas and visual activation, cross-sheet values, cached/manual policy, clock/midnight and full cross-kind conflicts. Build a dedicated bounded translator/adapter over existing evaluator callbacks, with mandatory shared materialization/work budgets and admitted asynchronous dependency snapshots. Invalidation foundation already exists; extend dependency tracking across sheets and pending pages without introducing old-generation paint. Named/external references remain out of scope. Refine all static/print/copy/find asynchronous boundaries, repeated SUM(A:A) budgets and cancel/close lifecycle before implementation. Full five-family corpus/eager/performance/a11y gates and reviewed evidence close the project.
+Refined from spec draft 4 (§3 x14 bullet at lines 76–79; §4 row 5 at line 113 and the fail-closed staging rule at line 116; §5.1 lines 125–126; §5.2 line 136; §5.3 lines 143–147; §5.7 lines 171–181; §5.8 line 186; §5.9 line 193; §5.11 lines 207–213; §6.3 lines 235–248; §6.5 lines 268–272; §6.6 lines 274–277; §6.7; §6.8; §7; §8; §9 items 5/8 at lines 329/332; §10 item 5 at line 342), the Stage 1–4 rulings, and the merged code on `main` at `fc61c6c6` (Stage 4, PR #79). The branch is `feature/xlsx-cf-s5`. Every `file:line` below was printed on `fc61c6c6`.
+
+**Goal.** A formula-driven rule formats a cell exactly where Excel formats it, from the same values Excel's own calculation reads, or it formats nothing. The scope covers:
+- `expression` rules (base `<formula>` and standalone x14 `<xm:f>`);
+- non-literal `cellIs` operands (references, expressions, function calls);
+- non-canonical `<formula>`/`<xm:f>` on text, blank and error rules, which Excel already evaluates as formulas (Stage 1 measured this: `cases.ts:794`, `:981–995`), and a canonical/divergent classification of `timePeriod` formulas, which main does not yet have (S5-G, Task 33);
+- formula `cfvo` bounds and thresholds on colour scales, data bars and icon sets: `type="formula"`, and `num`/`percent`/`percentile` whose `@val` or `<xm:f>` is a reference or expression;
+- standalone x14 colour scales (OD-3, deferred from Stage 2);
+- x14 `activePresent="1"` activation predicates, conditionally (S5-J);
+- references to other sheets of the same workbook;
+- full cross-kind composition: every Stage 1–4 family under and over formula rules, including the unresolved-stub cases that Stages 1–4 could only withhold.
+
+Formula outcomes paint in every view (page, interactive, paged/worker, print, PNG/PDF export) on the resident and paged paths, through the existing DXF, scale, bar and icon seams. Stage 5 adds no painter. None of the Stage 1–4 correctness is lost.
+
+Out of scope, as before (spec §2): defined names, external workbooks, structured (table) references, and pivot `conditionalFormats`. Each is parsed, diagnosed and refused (S5-B).
+
+**Architecture delta.** Stage 5 adds one evaluator input, a CF formula adapter, and one data dependency, the formula footprint. It adds no new rule family, no new visual slot, no new wire field per cell, no new lazy chunk and no painter. Formula outcomes reach paint as the booleans, literals and numbers the Stage 1–4 evaluators already consume.
+- **Parser stubs to replace (`src/xlsx/cf/parse.ts`).**
+  - `expression` ends in `finishUnresolved('cf-unsupported-rule', withDxf())` (`:1526–1527`).
+  - Non-literal `cellIs` operands fail `parseLiteral` (`:274`) and finish unresolved (`:1449–1451`). The text operators on `cellIs` finish unresolved too (`:1439–1440`).
+  - Non-canonical text and blank/error formulas finish unresolved (`:1470`, `:1482`). They are detected by `canonicalTextFormula`/`canonicalBlankFormula` (`:410`, `:431`), whose anchor test is `refsMatchAnchor` (`:341`). **Main-branch fact (round-1 correction):** `parse.ts:1489` refuses a `timePeriod` whose `<formula>` sits in a foreign XML **namespace**; it does not classify the formula text. A same-namespace divergent formula (`<formula>A2=TODAY()-3</formula>` with `timePeriod="today"`) resolves today as `{ kind: 'timePeriod', period: 'today' }` through the attribute (Ruling R1c, comment at `:1490`; pinned by `tests/xlsx-cf-parse.test.ts:257–262` and `tests/xlsx-cf-paint-fixes.test.ts:165`). R1c has no oracle row, so this is a fail-open against spec §5.3 line 143, not a stub; Task 33 fixes it. `duplicateValues`/`uniqueValues` with any formula are unresolved at `:1511–1512`.
+  - Colour scales: every x14 scale is refused (OD-3, `:767–769`), and so are `activePresent` (`:772–774`), `type="formula"` (`:807–809`) and a reference or expression `@val` (`:834–842`).
+  - Bars: `barBound` refuses `type="formula"` (`:982–983`), and the activation predicate is refused at `:1030–1032`.
+  - Icons: `iconThreshold` refuses `type="formula"` (`:1225–1226`), and the activation predicate is refused at `:1250–1251`.
+  - Shared: `cfvoLiteral` (`:960–969`) classifies a reference or expression as `cf-unsupported-rule`. `activePresent` on a non-visual rule is `cf-invalid-rule` at `:1413–1414`, and its non-boolean spelling at `:1374–1377`. The single-range anchor is `anchorOf(ranges[0])` (`:1419`), and multi-range anchoring is undefined.
+  - Formula text is already bounded: `readFormulas` (`:1556`) caps children at `CF_LIMITS.formulaChildren` (3), text at `textUnits` (8,192) and tokens through `countFormulaTokens` (`:451`). The streamed capture keeps one overflow witness (`cfChildLimit`, `:2268`). The raw formula strings already ride on `CfRuleOrigin.formulas` (`model.ts:14`).
+- **Formula engine (`src/xlsx/formula/`).**
+  - `parseFormula` (`parser.ts:859`) over `tokenize` (`lexer.ts:149`) yields the `AstNode` union (`types.ts:206`), which includes `name`, `table`, `ref3d`, `union`, `intersect`, `spill`, `implicitIntersect` and `arrayConst`.
+  - `evaluateNode` (`evaluator.ts:717`) and `evaluateFormulaInternal` (`:1100`) evaluate against `EvaluationContext` (`types.ts:92`). The context supplies `getCellValue`/`getRangeValues` (`:116`, `:125`), `semantics: ResolvedSemantics` (`:134`, whose fields at `:279` are `dateSystem`, `timeZone` and `epochNowMs`, not the spec's `zone`/`clock`), `currentCell`, `unsupportedFeatures` (`:105`) and `materializationBudget` (`:152`; type at `:90`; charged by `chargeMaterialization`, `evaluator.ts:179`).
+  - **Main-branch fact (changes the adapter).** Conditional aggregates need `ctx.references`. Without it `COUNTIF`/`SUMIF` return `conditional-reference-unavailable` (`functions/cond.ts:159`, `:350`), and a whole-column area takes `sparse-population-unavailable` (`functions.ts:117`). Both are typical CF formulas (`COUNTIF($A:$A,A2)>1`). The adapter therefore builds `ReferenceServices` through `createReferenceServices` (`refs.ts:810`), with deps `ReferenceServiceDeps` (`refs.ts:50`) over a snapshot-backed `SparseCellStore` (`refs.ts:43`), as the workbook evaluator does at `workbook.ts:1693`. `definedNames: []` and `tables: undefined` make names and structured references unavailable, never known-empty.
+  - **Main-branch fact (corrects the Stage 1 inspected-facts table, row `formula/types.ts…`).** `translateSharedFormula` is defined at `shared.ts:386` over `translateAst` (`shared.ts:270`). `workbook.ts:938` is only its call site. `translateAst` turns an out-of-sheet coordinate into `#REF!`, which is one of two competing hypotheses for CF (S5-C). It also allocates a fresh tree per call.
+  - `FUNCTIONS` (`functions.ts:508`) is mutable through `registerFormulaFunction` (`:969`). An unknown function is recorded through `markUnsupported` (`evaluator.ts:1004`, helper at `:499`), but only when the branch actually runs, so lazy `IF` branches record nothing. **Not registered on main:** `SEARCH`, `FIND`, `EXACT`, `ISEVEN`, `ISODD`, `INDIRECT`, `OFFSET`, `SUMPRODUCT`, `RAND` and `CELL`. Excel's own synthesised text formulas (`NOT(ISERROR(SEARCH(…)))`) are therefore evaluable only through the Stage 1 canonical-pattern path.
+  - **Main-branch fact (round-1):** the public boundary `evaluateFormulaInternal` turns a top-level referenced blank into `0` (`evaluator.ts:1132`), and a bare range at the root is projected to a scalar inside `evaluateNode` (`scalarOfReference`, `refs.ts:672`). Neither may sit in front of the CF truth gate (S5-D).
+  - **Main-branch fact (round-1):** sparse aggregate traversal does not charge `MaterializationBudget`. `ResolvedRefImpl.populated` (`refs.ts:200`) scans the whole `store.stored()` once per area occurrence and then sorts natively. `SUM(A:A)+SUM(A:A)` over 50 cells performs 100 reads with `used=0` (reviewer counterexample). An admitted function can also record an unsupported argument profile and still return a value through `IFERROR`: `COUNTIF(A:A,TRUE)` records `conditional-boolean-criterion-unverified` (`functions/cond.ts:175`). Unsupported features, issues and cycles surface through `unsupportedFeatures`, `reportFormulaIssue` and `hasCycle` (`types.ts:105,162,166`).
+  - `TODAY`/`NOW` read `semantics.epochNowMs`/`timeZone` (`functions/datetime.ts:321–328`, registry at `:616–617`). `recomputeDependents` (`workbook.ts:627`) throws under the cached policy (`:632`). `decideCellCalculation` is at `calc-policy.ts:72`, and `workbookValuePolicy` at `value-policy.ts:11`.
+- **Evaluation (`src/xlsx/cf/service.ts`).**
+  - `createCfService` (`:71`) evaluates each cell in `evaluate` (`:214–325`). Non-visual rules go to `evaluatePredicate` (`:296–297`, `predicates.ts:461`), whose `cellIs`/text/blank/error/`timePeriod` arms (`evaluateCellIs` `:80`, `evaluateText` `:145`, `evaluateBlanksGated` `:222`, `evaluateErrors` `:238`, `evaluateTimePeriod` `:342`) take a `CfLiteral` (`model.ts:10`).
+  - Visual thresholds resolve per rule: `resolveScaleThresholds`, `resolveBarThresholds`, `resolveIconThresholds` (`:245`, `:273`, `:291`). The unit budget is `work()` (`:101`), and the per-cell page loop is at `:326–336`.
+  - Stage 5 adds a per-batch **dependency snapshot**, built before the page loop, plus one formula arm per consumer.
+  - The `statistical()` predicate (`:18`) and `estimateCfPrepareBytes` (`:37`) key on definition kinds. A new formula arm must be added to both deliberately, or it is silently priced at zero.
+- **Value sources.**
+  - Every `CfValueSource` (`model.ts:98`) is single-sheet: `residentSource` (`render.ts:68`), `storeCfSource` (`render.ts:129`), `createResidentCfSource` (`statistics.ts:1143`) and the paged source built in `readConditionalFormatting` (`pagedSource.ts:897`, stamp at `:982–990`).
+  - Cross-sheet reads need a new workbook-scoped seam. The paged worker already reads other sheets' pages for charts: `fillCharts` (`pagedSource.ts:1198`) groups cells by `workbook.store.pages(sheetId)` and adds an unimported sheet to `pending` (`:1231`).
+- **Generations and invalidation.**
+  - `CfStamp` (`model.ts:5`) carries `workbookValueGen`. Every construction site fills it with the **host sheet's** `valueGen`: `InteractiveSheetDoc.tsx:1168`, `storeCfSource` (`render.ts:131`), `pagedSource.ts:985`, and `viewerSession.ts:3329,3590,3604,3627`.
+  - `sameCfStamp` (`cache.ts:5`) and the remote cache's comparisons (`viewerRemoteCf.ts:105,140,614,650`) therefore cannot see a referenced sheet change. The resident live key `cfLiveKey` (`InteractiveSheetDoc.tsx:1083`) keys on the host `valueGen` only.
+  - A remote pivot commit invalidates CF only for the committed sheet (`invalidateRegionStyles(sheetId)` → `invalidateCf`, `viewerRemoteSource.ts:706,414,417`). `RemoteCfCache.load` checks only the host sheet's `loadState` (`viewerRemoteCf.ts:514`). Waiting entries retry on every `notify` (`wakeWaiting`, `viewerRemoteSource.ts:784`).
+  - **Main-branch fact.** The plan's Stage 1 Task 10 promised an "external source change invalidates CF" coordinator for Stage 5. No such symbol or test exists on main: grep finds neither, and `tests/xlsx-cf-live.test.tsx` has no test of that name. Stage 5 builds the cross-sheet path itself (S5-K) and cites only what exists.
+- **Clock.**
+  - The interactive view advances `clockGen` at local midnight (Ruling M2, `InteractiveSheetDoc.tsx:566–576`).
+  - The static, text and worker preparations each read `Date.now()` themselves: `render.ts:342`, `text.ts:424` and `pagedSource.ts:997`. `text.ts:435` and `viewerSession.ts:3329` hardcode `clockGen: 0`.
+  - Stage 1 published the `timePeriod:*` clock as measured in the Asia/Taipei UTC/local window (`docs/validation/xlsx-cf.md:72`). Formula `TODAY()` must use that same clock (§5.11), threaded identically on every leg (S5-M).
+- **Calculation settings.** `calcMode` lives on `XlsxDocument.calc` (`src/xlsx/types.ts:247`, built at `parse.ts` of the workbook, `src/xlsx/parse.ts:330–340`). The paged import reads only `fullCalcOnLoad` (`src/xlsx/storage/pagedImport.ts:196–198`), and `PagedWorkbook` (`pagedImport.ts:71`) carries no calculation mode. A sheet-only preparation therefore cannot know the calc mode or the document value policy (S5-L).
+- **Overlay-aware stores.** Each paged sheet's canonical store is a `PagedXlsxSheetAdapter` (`pagedSource.ts:110`, live `stamp` at `:132`), registered per workbook in `workbookAdapters` (`:88`, `:125`) and created on demand by `storeFor` in `createPagedWorkbookSource` (`:2498`, `:2513`); the resident twin is `storeFor` at `src/xlsx/view/source.ts:999`. These stores carry pivot overlays and the matching generation; raw `workbook.store.pages` (the `fillCharts` pattern) does not.
+- **Value policy.**
+  - `prepareCfPaint` defaults `valuePolicy` to `'cached'` (`render.ts:322`), but `prepareCfTextScope` defaults it to `'engine'` (`text.ts:438`).
+  - UI callers pass `doc.valuePolicy` (`src/render/paint.ts:425`, `sheetAssets.ts:259`). A direct API caller that omits it gets paint and text from different value authorities, which breaks Lesson 13.
+  - Formula footprints read many more cells than a host, so S5-L binds one authority.
+- **Blank synthesis.**
+  - `canRuleMatchBlanks` (`src/xlsx/cfLoader.ts:100–105`, **eager**) returns true for `unresolved` + `expression` only. A resolved `expression` kind, a formula-operand `cellIs` or a resolved non-canonical predicate would silently stop blank-cell synthesis for `ISBLANK`-style rules.
+  - Stage 5 changes this eager helper (Lesson 7 justification in the Global Constraints delta).
+- **Oracle facts.**
+  - `CfOracleCase.stage` already admits `5` (`scripts/cf-refs/cases.ts:253`). `audit.ts` refuses `--stage 5` (`:2206–2207`).
+  - `CfPartMarker.formulas` (`cases.ts:95`) pins rule-level formulas. `CfPartMarker.scale` (`:97–100`) has no `f` and no dialect, and `bar.cfvo.f`/`icon.cfvo.f` exist.
+  - The semantic route is the Stage 1 DisplayFormat readback: `buildColorProbeScript`/`buildDecorationProbeScript`/`buildTextProbeScript` (`capture.ts:213,192,175`) and `probeLiveExcelCellObservations` (`:587`). It yields `fillSource: 'excel-display-format'` (`cases.ts:144`). This is Excel's own evaluation of the rule against Excel's own calculation, so it is the primary oracle for every formula rule (S5-A).
+  - Live expression stubs already exist in captured workbooks: `MOD(G2,2)=1` (`cases.ts:1949`, `priority:unresolved-expression-stub`, **published**), the scale stub (`:3478`, `scale:composition-unresolved-expression-stub`, **published**), `MOD(I2,2)=1` (`:4342`, `bar:composition-unresolved-stub`, refused) and `MOD(L2,2)=1` (`:5297`, `icon:composition-unresolved-stub`, refused; Excel matched `halted`, `docs/validation/xlsx-cf.md:1870`). `MOD` is registered.
+  - The three `*-unresolved-shapes.rejected.xlsx` twins (Stages 2–4) carry **no `<cfRule>` at all**, inspected with `unzip -p`. Excel discarded the whole sheet's CF, so nothing is known about `activePresent` or formula cfvo in isolation. Stage 5 authors each such shape in its own workbook (Lesson 12).
+- **Closures.** `src/xlsx/formula/*` is already in the index closure (`scripts/eager-baseline.json`, `indexModules`), and the engine is outside `EAGER_FORBIDDEN`/`PAGED_WORKER_FORBIDDEN` (`tests/helpers/eager-graph.ts:38,67`). The lazy `cf` chunk importing the evaluator adds no module to either closure. Task 32 proves this from the module map rather than assuming it.
+
+**Global Constraints delta.** The Stage 1–4 Global Constraints, binding requirements and common gates apply unchanged. Stage 5 adds or re-binds:
+- **Eager budget (Lesson 7).**
+  - The eager bundle stays strictly below 38,720 B gzip (`scripts/eager-budget.ts:14`).
+  - The CF formula adapter (`src/xlsx/cf/formula.ts`, `dependencies.ts`) stays in `EAGER_FORBIDDEN`/`PAGED_WORKER_FORBIDDEN`, and both join the file list of `tests/xlsx-cf-lazy.test.ts:14–17`.
+  - The only eager or index-closure changes allowed (round-2 #3):
+    - the widened `canRuleMatchBlanks` arms (`cfLoader.ts:100`);
+    - `CfRuleOrigin.dependencySheets` read for the live key (`InteractiveSheetDoc.tsx:1083`);
+    - `dependencyGen` at each stamp construction site;
+    - the evaluation-context call sites in `src/render/paint.ts:425`, `src/components/xlsx/sheetAssets.ts:259`, `InteractiveSheetDoc.tsx` (text and paint scopes) and the worker metadata reply. Each site only passes `evaluation: cf.cfDocumentEvaluationOf(doc)` (or the worker's `PagedWorkbook` twin), where `cf` is the module the site already holds from the lazy loader (`ensureConditionalFormatting`, `cfLoader.ts:79`); the builder itself is lazy. No eager module imports a CF value.
+  - **Byte estimate:** about 12–25 B gzip per call site, 80–130 B gzip in total, over the +16 B allowance. It is recorded as one `recordedChanges` entry in `scripts/eager-baseline.json` with this justification (the `recordedChanges` pattern already exists in that file), and the eager entry stays strictly below 38,720 B gzip. `bun run gates:core` must pass with the entry.
+  - Stage 4 already spent about 1 KB of index-closure growth on parser metadata. Any Stage 5 growth beyond the allowance needs a written justification in the Task 39 report, or it moves behind the lazy loader.
+  - The formula engine is already in the index closure. Task 32 asserts that `indexModuleSetHash` is unchanged by the adapter.
+- **Exact or withheld (Lesson 2).**
+  - A formula rule paints only when every capability its shape needs is verified: grammar, anchor, truthiness, function family, reference kind and calculation policy.
+  - A formula that reads a value the snapshot does not hold (pending, out of footprint, unavailable under the cached policy, or past the budget) is **unresolved**. It is never evaluated against a substituted blank, `0` or `""` (spec §5.1 line 126, §6.3 line 248).
+- **Evidence (Lesson 4).**
+  - `verifiedCapabilities.ts` changes only through `bun scripts/cf-refs/audit.ts --stage 5 --write`, which must be idempotent.
+  - The Stage 5 export is carried over verbatim unless `--publish-stage5` is passed. Only Task 39 passes it.
+  - The gate is dual: the audit's `stageComplete=true` AND conformance is green under production evidence with no injection. A capability publishes only when the reading Excel matched equals production's reading, as in the Stage 4 publication gate (`CF_STAGE4_PRODUCTION_READINGS`, `docs/validation/xlsx-cf.md:1867`).
+  - The Stage 1–4 exports stay byte-unchanged (S5-STUB).
+- **Invalidation (Lesson 5).** Any CF generation change that keeps the lease invalidates the whole sheet, and that includes a change in a **referenced** sheet's value generation (S5-K). No old-generation formula outcome paints after the commit.
+- **Bytes and numerics (Lesson 6).**
+  - Dependency snapshot entries, compiled-formula nodes and per-cell translated trees are priced from the payload measurer (`measurePayloadBytes`, `src/xlsx/view/payloadBytes.ts:62`), never hand-counted.
+  - Formula results feeding thresholds stay finite near ±1e308 through the existing `lerp`/`safeFraction` (`colorScale.ts:36,431`). A non-finite formula result is unresolved.
+- **Bounded work (Lesson 9).**
+  - `evaluateNode` cannot yield, and the engine's sparse traversal charges nothing. CF work is therefore charged at the CF-owned seams the engine must pass through, **before** the work happens (S5-N):
+    - **per-call store (round-4 #1):** each call sees a restricted `SparseCellStore` view built from the snapshot index for that call's translated atoms only (`CfDependencySnapshot.viewFor`), never the shared snapshot, so a full-store enumeration visits only the call's own footprint. Building the view spends one unit per view cell;
+    - every `read` spends one unit first; every element yielded by `stored()` spends one unit first, and `populated()` (`refs.ts:200`) enumerates the **whole view** once per traversal occurrence, so each occurrence costs `v` enumeration units, where v is the view's cardinality, separately from the matched-cell reads; entering `stored()` also spends `v·⌈log₂ v⌉` units for the native sort that follows;
+    - every `getCellValue`/`getRangeValues` call spends one unit per cell before it reads;
+    - the per-cell evaluation reserves its evaluator scratch bound (S5-N) before the call.
+  - **Bounded synchronous calls, yields between them (round-2 #2):** each per-cell `evaluateNode` call is synchronous and runs under a **static per-call bound** computed before invocation: `nodes + v (view build) + Σ over traversal occurrences of (v enumeration visits + matched-cell reads + v·⌈log₂ v⌉ sort) + single-cell reads + text units + conditional-matcher transitions` (S5-B), with v taken from `CfPayloadMetrics.viewCells`, computed from the measured payload of the cells this call will read. A formula whose per-call bound exceeds `CF_LIMITS.checkpointUnits` (128, `limits.ts:49`) is refused at compile or at footprint time (`cf-resource-limit`), never evaluated. Because one call cannot exceed one checkpoint's worth of units, no call needs to yield inside the evaluator; the preparation loop's existing `work()` checkpoint (`service.ts:101–108`) runs between cells, awaits `hostTask()` on `'yield'`, and checks `signal.aborted` there. This satisfies spec §7's cooperative checkpoints ("yield every 128 steps under `AbortSignal`") at cell granularity. Store spends made inside a call that return `'yield'` still count (the budget contract at `limits.ts:274–275`); the yield is honoured at the next between-cell checkpoint, at most 128 units later.
+  - **Why not a resumable evaluator:** suspending `evaluateNode` mid-traversal would need retained engine frames across an await and their ownership on cancellation; the engine's suspension machinery is a worksheet-recalculation contract, not a CF one. Ruling S5-HOIST moves absolute-range aggregates (`SUM($A:$A)`, `A2>AVERAGE($A:$A)`, `COUNTIF($A:$A,A2)>1`) out of the call into the chunked statistics scan, so the cap applies only to the per-cell remainder. What still stays plain: relative-range aggregates and non-hoistable criteria whose single-cell work exceeds 128 units. Task 39 reports how many oracle and corpus formulas the cap still refuses.
+  - A refused spend throws the CF refusal token, which taints the evaluation (S5-E); the rule is unresolved (`cf-resource-limit`) on the rest of the batch, deterministically in row-major order. `MaterializationBudget` still bounds array materialization, but is never the only charge.
+  - Wall time is never a refusal reason.
+  - A fallback attempt, such as rebuilding a refused shared snapshot per rule, gets its own fresh per-attempt budget, and all attempts of one preparation draw from one preparation ceiling of 2 × `CF_LIMITS.activeUnits`, so fallbacks cannot multiply total work.
+  - `scripts/cf-refs/active-units.ts` is re-run, so `activeUnits` stays at least 5× the largest production call with formula rules present.
+- **Charge before allocating (Lesson 15).** Each compiled AST is reserved on the parse account before `parseFormula` runs (S5-B). The snapshot, its growth peaks (old plus new while it grows), each translated tree, evaluator scratch (populated-slot arrays, flattened argument arrays, memo maps; S5-N), the `ReferenceServices` store index and every decoded cross-sheet page are reserved on the batch's `CfMemory` before construction. Each has an admission-owned lifetime that ends at batch dispose.
+- **Every view agrees (Lesson 13).**
+  - Every preparation route receives one `CfEvaluationContext` (calculation mode, resolved value policy, clock), and its other-sheet values from one overlay-aware `CfWorkbookSource` (S5-K, S5-L, S5-P).
+  - A view that lacks an input withholds identically. No path fails open (S5-P).
+- **CI (Lesson 8).** osacompile and Excel tests use `it.skipIf(!hasOsacompile)` (`tests/xlsx-cf-oracle.test.ts:12`). Clock-dependent harnesses pin `process.env.TZ`, as the clock conformance test does (`tests/xlsx-cf-oracle-conformance.test.ts:1411`).
+
+**New policy caps [call], not claims about Excel.** Task 34 implements and tests them at limit and limit+1. Task 34 calibrates them against the Task 31 fixtures and `active-units.ts`. A change after calibration needs a recorded review.
+
+| Cap | Initial value / handling |
+|---|---|
+| Compiled formula | ≤ `CF_LIMITS.formulaTokens` (4,096) AST nodes. More refuses the rule (`cf-resource-limit`) at compile, before any translation. |
+| Footprint per formula | ≤ 64 reference atoms after admission. Whole-column and whole-row atoms clamp to the referenced sheet's populated bounds, as statistics do (§6.3 line 243). |
+| Dependency snapshot | ≤ 262,144 cells and ≤ 8 MiB (`CF_LIMITS.scratchBytes`) per preparation, holding **only the per-cell footprint** (the atoms the per-cell remainder reads after hoisting). Hoisted ranges are never copied into it; they are scanned by the hoist (S5-HOIST). Over the cap, the rules whose per-cell footprint does not fit are unresolved and the others still evaluate. |
+| Traversal work | Every per-cell store read, `stored()` element and sort charge spends from the per-cell work budget before it happens. Which budget pays for what is fixed in S5-HOIST ("Budgets"). |
+| Evaluator scratch | Reserved per call before invocation from `cfEvaluatorScratchBytes(f, payload)`, where `payload` (`CfPayloadMetrics`) is measured while the snapshot is built: per atom occurrence, the cell count, total string units and longest string. It prices nodes, populated-slot arrays, text intermediates and character arrays, and the conditional matcher's DP table (S5-B). Measurer-derived where the payload measurer can see the structure; the matcher's typed arrays at a conservative 8 B per DP cell [call]. A refused reservation means the call never runs. |
+| Hoisted aggregates | One scalar or frequency map per `(rule, range, valueGen, dependencyGen)`, built by the chunked statistics scan under `scan: true` budgets and charged within `CF_LIMITS.statisticsBytes` (8 MiB) with its growth peak; over the cap the rule is `cf-resource-limit` (S5-HOIST). |
+| Per-call work | ≤ `CF_LIMITS.checkpointUnits` (128) per synchronous evaluation; more refuses the formula (round-2 #2). |
+| Materialization | One `MaterializationBudget` per preparation, `limit` = 1,000,000 cells, for array materialization only. |
+| Referenced sheets | ≤ 16 distinct sheets per sheet's rules. More refuses those rules (`cf-resource-limit`). |
+| Invariant results | A cell-invariant subtree (no relative reference and no `ROW()`/`COLUMN()`) evaluates once per preparation and is memoised under the batch's lease. A cfvo formula is memoised only under its measured scope (S5-H). |
+
+### Stage 5 scope rulings
+
+Each ruling names the spec clause it interprets, its fail-closed default and its cost if wrong. "Unresolved" means the spec §5.7 atomic fail-closed outcome:
+- the rule's own contribution is withheld;
+- an unresolved `stopIfTrue` rule withholds everything after it;
+- any other unresolved rule taints its write mask for the rules after it (`compose.ts:239–245`).
+
+A default never ships as a measured fact. Only the named capability lifts a ruling, through `hasEvidence` (`evidence.ts:88`). The capability prefix is `formula:*`. Formula bounds on visuals also use the family prefixes (`scale:*`, `bar:*`, `icon:*`).
+
+- **Ruling S5-A: evidence authority (semantic first).**
+  - **Spec tie:** §8 and §5.11, where every coercion and anchor is `[measure]`.
+  - **Trusted source:** Excel's own DisplayFormat readback per cell (`buildColorProbeScript`/`buildDecorationProbeScript`, `capture.ts:213,192`), on the Excel-resaved workbook, after Excel has calculated it. The question for a formula rule is whether the format applied to this cell. DisplayFormat answers that from Excel's calculation, not from our evaluator. A pixel capture backs it up, using the Stage 1 `pixel-matched` fill comparison, and is required for print.
+  - **Visual bounds:** a formula bound on a scale, bar or icon reuses the Stage 2–4 pixel evidence kinds unchanged. The formula only moves the threshold.
+  - **Competing hypotheses (Lesson 3):** every case is designed so that each pair of hypotheses for a `[measure]` item predicts different outcomes at ≥ 2 designated cells per configuration (`replicationShortfall`, `verify.ts:5061`, Ruling S4-REPLICATE). A configuration with fewer agreeing decisive cells is `unverified-nondiscriminating`.
+  - **No object-model reading of the formula itself:** Excel's resaved XML is diffed instead (Lesson 12). The formula text Excel writes back (canonicalised references, sheet quoting, sqref order) is what the marker pins.
+  - **Cost if wrong:** a mis-designed case lifts a coercion. The defence is the two-cell rule plus a negative control per configuration.
+- **Ruling S5-B: grammar admission and the function allow-list (OD-13, decided).**
+  - **Spec tie:** §2 (names and external refs are refused), §5.11 line 210 (unresolved functions, external refs, defined names, cycles and budget refuse) and §6.2 line 233 (AST caps).
+  - **Static, not lazy:** admission walks the parsed AST once at parse time (`compileCfFormula`), so it cannot depend on `unsupportedFeatures`, which records nothing for an untaken branch. It refuses the rule (`cf-unsupported-rule`) on any of:
+    - a `name`, `table`, `spill`, `arrayConst`, `union` or `intersect` node;
+    - a `ref3d` node (sheet runs);
+    - a sheet qualifier containing `[` (external workbook);
+    - a call whose upper-cased name is not in the frozen `CF_FORMULA_FUNCTIONS` table.
+  - **Reservation before construction (round-1 #3):** `compileCfFormula` takes the parse-time `CfMemory`. Before calling `parseFormula` it reserves `countFormulaTokens(text) × CF_FORMULA_NODE_BYTES` (the token count already bounds the node count, `parse.ts:451`). A refused reservation returns `cf-resource-limit` and constructs nothing. The reservation is adopted into the rule's parse lease and released with it (parse failure, cancelled import, sheet disposal).
+  - **Bound at compile:** the table also binds each admitted name to the handler captured at compile time. A later `registerFormulaFunction` cannot widen it.
+  - **Allow-list (OD-13, decided 2026-11-16):** only names registered on main today (`functions.ts:508` and the `functions/*` tables):
+    - `AND`, `OR`, `NOT`, `IF`, `IFERROR`, `IFNA`;
+    - `ISBLANK`, `ISERROR`, `ISNA`, `ISNUMBER`, `ISTEXT`, `ISLOGICAL`;
+    - `LEN`, `TRIM`, `LEFT`, `RIGHT`, `MID`, `UPPER`, `LOWER`, and `CONCAT` with scalar (single-cell or literal) arguments only;
+    - `ABS`, `INT`, `MOD`, `ROUND`;
+    - `ROW`, `COLUMN`;
+    - `SUM`, `COUNT`, `COUNTA`, `AVERAGE`, `MIN`, `MAX`;
+    - `COUNTIF`, `COUNTIFS`, `SUMIF`, `SUMIFS`, `AVERAGEIF`, `AVERAGEIFS`;
+    - `DATE`, `YEAR`, `MONTH`, `DAY`, `WEEKDAY`;
+    - `TODAY`, which is clock-gated (S5-M).
+  - **Withheld by default:**
+    - `NOW` (S5-M);
+    - the lookup family (`INDEX`, `MATCH`, `VLOOKUP`, `HLOOKUP`, `XLOOKUP`, `XMATCH`);
+    - dynamic arrays (`SEQUENCE`, `FILTER`, `SORT`, `SORTBY`, `UNIQUE`, `TRANSPOSE`);
+    - `TEXT`, `DATEVALUE` and `TIMEVALUE`, whose results depend on the locale;
+    - every unregistered name (`SEARCH`, `FIND`, `EXACT`, `ISEVEN`, `ISODD`, `INDIRECT`, `OFFSET`, `SUMPRODUCT`, `RAND`, `CELL`).
+  - **Payload-sensitive profiles (round-2 #1):** every admitted profile has a conservative bound computed before invocation, or it is refused. Text work is the risk: `textChars` (`evaluator.ts:508–511`) builds one array element per character, and `CONCAT`/`&` build intermediate strings. The snapshot records, while it is built and charged, the string units of every cell it holds; the per-call text bound is the atoms' total string units plus literal units, multiplied by the text-op node count plus one, priced for the simultaneous string and character-array lifetimes. A text bound over the per-call scratch cap (64 KiB) refuses the formula. `CONCAT` (or `&`) with any multi-cell argument is refused at compile, whatever its size, because its output size depends on the payload of a range (`TEXTJOIN` is not registered on main). `LEN(CONCAT(A1:A64))` is therefore refused at compile, before any read or allocation.
+  - **Conditional-matcher profile (round-3 #2):** a non-hoisted `COUNTIF`/`COUNTIFS`/`SUMIF`/`SUMIFS`/`AVERAGEIF(S)` whose criterion is text runs the engine's wildcard matcher per range cell, a DP over `(pattern tokens + 1) × (text length + 1)` cells (`functions/wildcard.ts:137`), with typed-array allocations. Its profile bound is `Σ over the range's cells of (tokens(criterion) + 1) × (length(cell) + 1)` transitions, priced in both work units and scratch bytes, with the criterion's token count taken from the engine's own tokenizer (`tokenizeWildcardPattern`, `functions/wildcard.ts:41`) and lengths from the snapshot's `CfPayloadMetrics`. If the criterion is not yet known before the call (it is not a literal or a snapshot cell), the bound cannot be computed and the formula is refused. If the bound exceeds the 128-unit per-call cap, the formula is refused. A number criterion against numbers costs one unit per range cell.
+  - **Reference-returning argument profiles (round-2 #4):** each `CF_FORMULA_FUNCTIONS` entry declares, per argument, `scalar` or `range`. A multi-cell reference (`range`, `wholeCol`, `wholeRow`) is admitted only in a `range` slot (the aggregate and `COUNTIF`-family range arguments). In any other position (a `scalar` slot, an operator operand such as `A2:A4>0`, or a value-returning branch of `IF`/`IFERROR`/`IFNA`) it is refused at compile until `formula:truth-range-nested` is measured, because the engine projects it to a scalar (`IF(TRUE,A2:A4,0)` and `IFERROR(A2:A4,0)` return a scalar on main with nothing recorded) before CF could inspect it.
+  - **No engine changes:** Stage 5 adds no function to the shared engine. A function family paints only with its `formula:fn-<family>` capability (S5-E).
+  - **Cost if wrong:** CF formulas using `SEARCH` or lookups stay plain. These include Excel's own divergent text formulas.
+- **Ruling S5-SUMIF-SHAPE: effective read geometry (orchestrator ruling, round 5).**
+  - **Spec tie:** §6.3 line 248 (callbacks read from a pre-admitted snapshot; a read outside it must never be served as data) and §5.7.
+  - **The fail-open.** `SUMIF`/`AVERAGEIF` resize their sum range to the criteria range's rows × cols (`resizeTarget`, `functions/cond.ts:237–243`, applied at `:258–259`), so the cells they read are not the literal reference atom. A view built from literal atoms omits cells. With A1:A2 blank, B1 = 0 and B2 = 7, `SUMIF(A1:A2,"",B1)=0` is false on the full store but true on an atoms-only view. Codex's example.
+  - **Admission:** a function whose reads extend beyond its literal reference atoms is admitted only when its effective geometry equals its literal geometry. For `SUMIF`/`AVERAGEIF`, a sum range (third argument) must have exactly the criteria range's rows × cols; any other shape is refused at compile (`cf-unsupported-rule`). With the sum range omitted, the engine reuses the criteria range (`cond.ts:253`), which is literal and admitted.
+  - **Coverage rule:** every `CfFormulaFunction` declares, per argument, its **effective read geometry** (`literal`, or `resized-to: <argument index>`). `planCfHoist`, `cfFormulaFootprint`, the snapshot, `CfDependencySnapshot.viewFor`, `CfPayloadMetrics` and the hoist scans are all built from the effective geometry, never from the literal atoms alone. Whole-column and whole-row geometry is preserved as geometry (so the engine's absent-cell count, `view.ref.countAbsent()` at `cond.ts:270`, sees the true area) and bounded by population. `viewFor` validates, **before any sparse traversal**, that every effective area is fully covered by the snapshot's covered rects; an uncovered area refuses the call (`cf-formula-dependency`). Read-time taint stays as a second line of defence, but never the only one.
+  - **Allow-list sweep (round 5), against `fc61c6c6`:**
+
+  | Function | Implicit expansion? | Result |
+  |---|---|---|
+  | `SUMIF`, `AVERAGEIF` | Yes: sum range resized to the criteria range (`cond.ts:258–259`) | Admitted only with a same-shape sum range (or none); otherwise refused at compile |
+  | `SUMIFS`, `AVERAGEIFS`, `COUNTIFS` | No: every range is read as written; mismatched shapes return `#VALUE!` (`cond.ts:265`) | Admitted with literal geometry |
+  | `COUNTIF` | No: one range, no target | Admitted with literal geometry |
+  | `SUM`, `COUNT`, `COUNTA`, `AVERAGE`, `MIN`, `MAX` | No | Admitted with literal geometry |
+  | `ROW`, `COLUMN` | No value read (geometry only); a multi-cell argument is already refused in a scalar slot (S5-B) | Admitted |
+  | `ISBLANK`, `ISERROR`, `ISNA`, `ISNUMBER`, `ISTEXT`, `ISLOGICAL`, text, math, date and logical functions | Single-cell or scalar arguments only | Admitted with literal geometry |
+  | `INDEX` | Reference-returning; lookup family | Not admitted (S5-B) |
+  | `SUMPRODUCT`, `OFFSET`, `INDIRECT` | — | Not registered on main; refused |
+  | Dynamic arrays (`SEQUENCE`, `FILTER`, `SORT`, `SORTBY`, `UNIQUE`, `TRANSPOSE`) | Output geometry depends on data | Not admitted (S5-B) |
+
+  - **Cost if wrong:** `SUMIF` with a single-cell or differently shaped sum range stays plain.
+- **Ruling S5-C: anchor and relative translation.**
+  - **Spec tie:** §5.11 line 209.
+  - **Single range:** the anchor is the top-left of the sole range, as main already assumes (`parse.ts:1419`). It needs `formula:anchor-single`.
+  - **Multi-range `sqref`:** three hypotheses: (h1) the top-left of the first listed range; (h2) the top-left of the bounding box; (h3) each range's own top-left. The fixture orders `sqref` so the first range is not top-left (`D5:D8 B2:B4`). Until `formula:anchor-multi-range` selects one reading, a multi-range formula rule is unresolved. Excel's resaved `sqref` order is recorded first, because Excel may re-sort it on resave (Lesson 12). If it does, the reading is defined on the resaved order.
+  - **Pinned axes:** a `$`-pinned axis never moves (`$A$1`, `$A1`, `A$1`), under `formula:anchor-mixed-abs`.
+  - **Off-sheet shift:** a shift past the sheet edge has two hypotheses: (w1) wrap modulo 1,048,576 rows / 16,384 columns; (w2) `#REF!`, as `translateAst` does. Until `formula:relative-wrap` selects one, a translated reference that leaves the sheet makes the cell unresolved.
+  - **New translator:** translation uses the new `translateCfFormula`, never `translateAst`. It takes the measured edge mode and charges its output tree before allocating (Lesson 15).
+  - **Cost if wrong:** multi-range and edge-wrapping formula rules stay plain.
+- **Ruling S5-D: result shape, projection and truthiness.**
+  - **Spec tie:** §5.11 line 210.
+  - **Shape before projection (round-1 #7):** the CF adapter never calls `evaluateFormulaInternal`, whose top-level blank→`0` (`evaluator.ts:1132`) would turn a blank result into a number. It classifies the root first:
+    - a root `cell` reference reads the snapshot directly and keeps `blank` as `blank`;
+    - a root `range`, `wholeCol` or `wholeRow` is a **range result**. CF projects it explicitly under the selected `range-*` reading (implicit intersection with the target row/column, top-left, or no-match), never through the engine's `scalarOfReference`;
+    - any other root runs through `evaluateNode` in scalar mode with a CF-owned `nodeValues` memo; a `MatrixValue` result is a range result.
+  - **Readings by observable outcome (round-1 #11):** hypotheses are defined by what the cell shows and whether lower rules continue, and indistinguishable readings are merged:
+    - number: `number-nonzero-true` (0 ⇒ no-match);
+    - boolean: `boolean`;
+    - text: `text-no-match` (no format, lower rules continue; "false" and "error ⇒ no-match" are the same observable and are one reading) vs `text-true` (formats and, with `stopIfTrue`, halts);
+    - blank: `blank-no-match` only. Treating a blank result as zero predicts the same observable under `number-nonzero-true`, so the two readings are merged (round-2 #7); `formula:truth-blank` still gates it;
+    - error: `error-no-match` vs `error-halts` (an erroring `stopIfTrue` rule still halting lower rules);
+    - range: `range-implicit`, `range-top-left`, `range-no-match`, discriminated by values that differ between the intersected cell and the top-left.
+  - **Gating:** each kind needs its `formula:truth-<kind>` reading. Evidence for one kind never authorises another: number evidence alone leaves a blank or range result unresolved. `coerceToBoolean` (`evaluator.ts:382`) is never used as the fact.
+  - **Cost if wrong:** rules returning text, blanks, errors or ranges stay plain.
+- **Ruling S5-E: evaluation context and the values a formula reads.**
+  - **Spec tie:** §5.11 lines 209–212, and §6.3 line 248.
+  - **One value per cell:** the formula reads exactly the `CfLiteral` the host evaluation reads for that cell, the grid-displayed value (S5-L), converted once by `cfLiteralToElement`:
+    - blank → `null`;
+    - an error → its tagged `EvaluationError`;
+    - a date serial → its number;
+    - the rest as literals.
+  - **Context:** `currentCell` = the target cell, `currentSheet` = the host name and `typedValues: true`. `semantics` comes from the sheet (`dateSystem`, `timeZone`) plus the S5-M clock. `references` is `createReferenceServices` over the snapshot store, with `definedNames: []` and `tables: undefined`.
+  - **Taint, never coerce:** a read outside the snapshot, of a pending page, or of an unavailable value sets the evaluation's taint flag and returns `#N/A`. A tainted result is discarded as unresolved (`cf-pending-data` or `cf-formula-dependency`), whatever value it computed.
+  - **Recorded issues discard the result (round-1 #1):** each evaluation gets a fresh `unsupportedFeatures` set, a `reportFormulaIssue` collector and `hasCycle = false`. If after the call any feature or issue was recorded, `hasCycle` is set, a materialization or work refusal happened, or the taint flag is set, the result is discarded as unresolved (`cf-formula-unsupported`, `cf-resource-limit` or `cf-formula-dependency`). This holds even when `IFERROR`/`IFNA` masked the error: `IFERROR(COUNTIF(A:A,TRUE),TRUE)` returns `true` on main while recording `conditional-boolean-criterion-unverified`, and CF treats it as unresolved, tainting its writes for lower rules.
+  - **Self-reference:** a formula reading its own host cell is ordinary, since a CF rule writes no value. A referenced cell whose own worksheet formula is circular reads its grid value.
+  - **Function families:** each needs `formula:fn-<family>` (logical, information, text, math, aggregate, conditional-aggregate, date, row-column). The evidence is the family's CF cells discriminating under DisplayFormat. Engine correctness itself stays covered by the engine's own tests.
+  - **Cost if wrong:** a family whose CF behaviour is unmeasured stays plain.
+- **Ruling S5-F: non-literal `cellIs` operands.**
+  - **Spec tie:** §5.1 lines 125–126.
+  - **Per-cell operand:** each operand formula is evaluated per cell under S5-C/S5-E, to a scalar converted back to a `CfLiteral` (`cfElementToLiteral`), then handed to the existing `evaluateCellIs` (`predicates.ts:80`). The Stage 1 operator semantics and their `cellIs:*` capabilities are therefore reused unchanged.
+  - **Operand kinds:** `formula:cellis-operand-reference`, `-relative`, `-expression` and `-cross-sheet` gate them.
+  - **Errors:** an operand that evaluates to an error refuses the rule on that cell. It never falls back to `0` or `""` (spec line 126).
+  - **Text and blank operands:** these need `formula:cellis-operand-text` / `-blank`.
+  - **Text operators:** the text operators on `cellIs` (`containsText`, `notContains`, `beginsWith`, `endsWith`; `parse.ts:1439–1440`) are **re-deferred**. Excel's dialog writes the standalone text types instead. `stage5-unresolved-shapes` records Excel's handling of a hand-authored `cellIs containsText`, and the shape stays `cf-unsupported-rule`.
+  - **Cost if wrong:** `cellIs` with error operands stays plain.
+- **Ruling S5-G: non-canonical text, blank, error and date formulas.**
+  - **Spec tie:** §3 line 77 and §5.2 line 136.
+  - **Measured fact:** Stage 1 measured that Excel evaluates the divergent `<formula>`, not `@type`/`@text`: `cases.ts:794` (`SEARCH("zz",J2)` overrides `@text="ab"`), and `:981–995` (`ISBLANK(D2)`, `NOT(ISBLANK(G2))`, `ISNA(J2)`).
+  - **Default:** a non-canonical formula on these types compiles as an expression rule with the original `@type` kept for the write mask. It is evaluated by S5-B–E and needs `formula:predicate-divergent`.
+  - **Canonical formulas:** these keep their Stage 1 predicate path (`canonicalTextFormula`/`canonicalBlankFormula`), so no measured Stage 1 outcome changes.
+  - **Unregistered functions:** a divergent formula using an unregistered function (the `SEARCH` cells) stays unresolved under S5-B.
+  - **`timePeriod` (round-1 #9):** main has no classifier (see the architecture fact). Task 33 adds `canonicalTimePeriodFormula(period, formulas, anchor)` (new), whose ten canonical patterns are read from the Excel-resaved Stage 1 clock workbooks (`stage1-timeperiod-today-clock`, `-2`), never written by hand. On both parser paths:
+    - absent or canonical formula → the Stage 1 attribute predicate, unchanged;
+    - divergent formula → unresolved (`cf-unsupported-rule`) until `formula:predicate-timeperiod-divergent` records which one Excel follows; if Excel follows the formula, it compiles as an expression (S5-B–E) with `sourceType: 'timePeriod'`. An unevidenced divergent formula never reaches the attribute predicate.
+  - **R1c reconciliation:** the R1c tests at `tests/xlsx-cf-parse.test.ts:257–262` and `tests/xlsx-cf-paint-fixes.test.ts:165` are rewritten in Task 33 to expect unresolved for the divergent and off-by-one formulas. This is a deliberate Stage 1 behaviour change towards spec §5.3, recorded in the changelog; every Stage 1 clock conformance cell (Excel-written canonical formulas) must stay byte-unchanged.
+  - **Duplicates:** a formula on `duplicateValues`/`uniqueValues` (`:1511`) is re-deferred. Excel writes none, and the shape stays unresolved.
+  - **Cost if wrong:** divergent date rules stay plain.
+- **Ruling S5-H: formula cfvo bounds and thresholds.**
+  - **Spec tie:** §5.8 line 186 ("evaluated once per range"), §5.9 line 193 and §5.10.
+  - **Default:** a cfvo of `type="formula"`, or `num`/`percent`/`percentile` with a reference or expression `@val`/`<xm:f>`, compiles once and evaluates to a number at the anchor (S5-C).
+  - **Evaluation scope (round-1 #10):** on a single-range rule there is one scope, and the result is memoised per rule per preparation. On a multi-range `sqref` the two hypotheses are rule-wide (one value at the first range's anchor) and per-range (one value per range, at each range's own anchor). The `stage5-cfvo-scope` oracle discriminates them with ≥ 2 decisive cells per configuration. Until `formula:cfvo-scope-multi-range` selects one, **every multi-range rule with a formula bound is unresolved**. Once selected, memoisation is keyed by that scope (rule, or rule + range index).
+  - **Feeding thresholds:** `num`/`formula` feed the threshold directly. `percent`/`percentile` feed the value p into the existing `lerp`/`percentileOrderStatistic` paths.
+  - **Gates:**
+    - `scale:thresholds-formula`, `bar:bounds-formula` and `icon:thresholds-formula` per family;
+    - `formula:cfvo-reference` / `-expression`;
+    - `formula:cfvo-relative`, because a relative cfvo formula's anchor is `[measure]`.
+    - `scale:thresholds-num-val-reference` is already verified by Stage 2 (`docs/validation/xlsx-cf.md:252`), but production refuses it today (`parse.ts:834–842`). It now lifts, together with `formula:cfvo-reference`.
+  - **Non-numeric results:** a cfvo result that is text, blank, boolean or an error is unresolved until `formula:cfvo-nonnumeric` selects a reading. The fixture's hypotheses are rule withheld, bound treated as 0, and bound skipped.
+  - **Cost if wrong:** visuals bounded by cells stay plain.
+- **Ruling S5-I: standalone x14 colour scales (OD-3 pickup).**
+  - **Spec tie:** §3 line 75 and Ruling S2-K.
+  - **Default:** a standalone `<x14:cfRule type="colorScale" priority>` with `<x14:colorScale>`/`<x14:cfvo><xm:f>` resolves through the Stage 2 point model with `scale:dialect-standalone`. The XML shape comes from `excel-authored-formulas.xlsx` (Lesson 12), which is authored with a bound on another sheet, the case S2-K expected.
+  - **If Excel writes base:** if Excel writes such a scale in the base dialect instead, `scale:dialect-standalone` is recorded `refused-unsupported` with that reason, never retried, and x14 scales stay `cf-unsupported-rule`.
+  - **Cost if wrong:** x14 scales stay plain.
+- **Ruling S5-J: `activePresent="1"` activation (conditional pickup).**
+  - **Spec tie:** §3 line 79 and §5.11 line 210.
+  - **Authoring order:** Excel's dialog is tried first. If no dialog writes it, a hand-authored x14 visual with `activePresent="1"` and one rule-level `<xm:f>` is opened and resaved in its own workbook, one per visual kind.
+  - **If Excel strips or repairs it,** or drops the rule: the outcome is recorded (Lesson 12, no retry), `formula:active-present-*` is `refused-unsupported` with that reason, and the shape stays `cf-unsupported-rule` permanently. That is the expected outcome, because the Stage 2–4 twins lost everything.
+  - **If Excel retains it** and the capture discriminates (an activation false on ≥ 2 cells where the visual would otherwise paint): the activation is a per-cell S5-D truth gate ahead of the visual's own evaluation, under `formula:active-present-<kind>`.
+  - **Unchanged refusals:** a missing or extra rule-level `<xm:f>` stays `cf-invalid-rule`, and so does `activePresent` on a non-visual (`parse.ts:1413`).
+  - **Cost if wrong:** activated visuals stay plain, as today.
+- **Ruling S5-K: cross-sheet values, pending pages and generations.**
+  - **Spec tie:** §5.11 line 213, §6.3 lines 246–248, §6.5 line 272 and §6.6.
+  - **Default:** a reference qualified by another sheet of the same workbook resolves through the new workbook-scoped seam `CfWorkbookSource`.
+  - **One authoritative store (round-1 #6):** each dependency's values **and** its generation come from the same canonical, overlay-aware `SourceStore`:
+    - paged worker: the sheet's `PagedXlsxSheetAdapter`, through `workbookAdapters` (`pagedSource.ts:88`) or, for a sheet never activated, created by the same `storeFor` path (`:2513`), so a first cross-sheet read builds the same store a later activation reuses; values through `storeCfSource` (`render.ts:129`) over that store, the generation from its `stamp` (`:132`);
+    - resident interactive: `source.store(sheetId)` (`src/xlsx/view/source.ts:999`);
+    - static, print and export: the document's sheets, which carry no overlay; a static leg mixing a host store with document sheets withholds cross-sheet rules.
+    Raw `workbook.store.pages` is never used for CF values, because it does not carry committed pivot overlays.
+  - **Recheck before publication:** after the snapshot is built and again before the preparation is adopted, each dependency store's stamp is re-read; any change cancels the preparation (`cf-stale-generation`), so a value read before a commit can never be published under the newer generation.
+  - **Unknown or unimported sheets:** an unknown sheet name is `#REF!` under `formula:cross-sheet-missing`, else unresolved. An unimported page (`row > importedThroughRow` or status `'unknown'`) makes the cells reading it pending, with `pendingSheetIds` naming that sheet and no permanent diagnostic.
+  - **Generations:** `CfStamp` gains `dependencyGen?: number` (absent ≡ 0): the sum of the referenced sheets' value generations, excluding the host. It strictly increases on any commit to any of them.
+    - Every `source.stamp()` computes it live, so `CfPrepared.at` (`service.ts:134`) goes stale **synchronously** at a referenced sheet's commit, exactly as it does today for the host. `sameCfStamp` and the four `viewerRemoteCf.ts` comparisons include it.
+    - The worker reply lists the referenced sheets in a new `CfReadResult.dependencies` field (each a `{ sheetId, valueGen }` pair). The main `RemoteCfCache` entry is current only while each listed identity keeps that `valueGen`.
+    - `viewerRemoteSource` invalidates the CF of every sheet whose cached reply lists a committed sheet (beside `:706` and `:752`).
+  - **Unknown generation:** a referenced sheet whose value generation the worker cannot name refuses those rules (`cf-dependency-generation-unknown`).
+  - **Gate:** `formula:cross-sheet-reference`.
+  - **Cost if wrong:** cross-sheet rules stay plain or pending. No stale paint, because the stamp check is synchronous.
+- **Ruling S5-L: calculation and value policy (OD-12, decided).**
+  - **Spec tie:** §5.11 line 212.
+  - **Default (OD-12 decided 2026-11-16: option (a)):**
+    - Formulas read the grid-displayed value of every cell: the cached value or the engine's value, whichever the grid shows under `doc.valuePolicy`.
+    - Never `recomputeDependents`.
+    - Under `'cached'`, a footprint cell that `isValueUnavailable` (`view/values.ts:50`) taints the evaluation (S5-E).
+    - A CF formula still evaluates under `'cached'`, because `<cfRule>` stores no result to show.
+  - **Manual calculation:** under `<calcPr calcMode="manual"/>`, formula rules are unresolved until `formula:calc-manual-saved-values` confirms that Excel evaluates CF against the saved `<v>` on open. A volatile `TODAY()` under manual mode needs `formula:calc-manual-today`.
+  - **One evaluation context (round-1 #5, split in round 2):** the document policy `CfDocumentEvaluation` (new) `{ calcMode, valuePolicy, dateSystem, timeZone }` is built **once per document** by `cfDocumentEvaluationOf(doc)` (resident, from `XlsxDocument.calc` and `doc.valuePolicy`) or `cfDocumentEvaluationOfPaged(workbook)`. Each preparation then takes **one clock snapshot** with `cfEvaluationContextFor(policy, now)`, giving `CfEvaluationContext = CfDocumentEvaluation & { clock: { epochNowMs, clockGen } }`. The policy is never re-sampled; the clock is never shared between preparations. **Omitted policy:** a document whose `valuePolicy` is undefined resolves through `workbookValuePolicy` (`value-policy.ts:11`, i.e. `'engine'`), and an absent `calc` resolves to `calcMode: 'auto'`, exactly as the workbook evaluator treats them; only a missing **context** (the route got none) withholds. The paged import records `calcMode` on `PagedWorkbook` beside `fullCalcOnLoad` (`pagedImport.ts:196–198`), and the worker forwards the context with its sheet metadata. Routes: `prepareCfPaint`, `prepareCfTextScope`, `readConditionalFormatting`/`prepareCfRemoteOnce`, `getPaintables` (`paint.ts:425`), `prepareSheetAssets` (`sheetAssets.ts:259`), and the a11y/copy/find scopes.
+  - **Missing context withholds:** a route called without the context (a sheet-only direct API call) evaluates no formula rule: each is unresolved (`cf-evaluation-context-missing`). There is no default value policy for formula rules. The non-formula Stage 1–4 defaults (`render.ts:322` `'cached'`, `text.ts:438` `'engine'`) are left as they are, so no Stage 1–4 outcome changes.
+  - **Cost if wrong:** manual-mode workbooks' formula rules stay plain.
+- **Ruling S5-M: clock and volatile functions.**
+  - **Spec tie:** §5.3 lines 144–147 and §5.11 line 211.
+  - **`TODAY()`:** it reads the same clock `timePeriod` uses: the Stage 1 measured local-date policy (`timePeriod:*` published, `docs/validation/xlsx-cf.md:72`). It needs `formula:fn-today`.
+  - **One clock per preparation:** the clock travels inside `CfEvaluationContext` (S5-L) into both `evaluatePredicate` and the formula context. The epoch is sampled once per preparation, and `clockGen` is the local day serial of that sample. That replaces the hardcoded `clockGen: 0` at `text.ts:435` and `viewerSession.ts:3329` for sheets with clock-dependent formula rules only. The interactive midnight tick (Ruling M2) then invalidates formula rules exactly as it does `timePeriod`.
+  - **`NOW()`:** withheld (OD-14, decided 2026-11-16). Its sub-day value would need a periodic repaint the viewer does not have.
+  - **Unaffected rules:** a formula without `TODAY` never reads the clock, so its stamp is clock-free.
+  - **Cost if wrong:** `NOW`-based rules stay plain.
+- **Ruling S5-N: work and memory for repeated aggregates.**
+  - **Spec tie:** §6.3 line 245 and §7.
+  - **Default (round-1 #2, #3):**
+    - The snapshot is built once per preparation from the union of the **per-cell** footprints (hoisted ranges excluded, S5-HOIST), and is the only `SparseCellStore` the engine sees.
+    - Work is charged where the engine reads: per `read`, per `stored()` element, plus the sort charge on entering `stored()` (Global Constraints). Repeated aggregates in one formula (`SUM(A:A)+SUM(A:A)`) and per-cell varying criteria (`COUNTIF($A:$A,A2)`) are therefore charged per traversal occurrence, not per footprint.
+    - Evaluator scratch is reserved before each call from the payload-sensitive bound in the caps table; a refusal means the call never runs.
+    - Each call's static work bound is ≤ 128 units, so calls never need to yield; the preparation loop yields and checks cancellation between cells (round-2 #2).
+    - Absolute-range aggregates are hoisted to once-per-rule scalars or frequency maps by the statistics machinery (S5-HOIST); remaining cell-invariant subtrees under the per-call cap are memoised per preparation in a CF-owned map charged per entry.
+    - A refusal of one rule's work or footprint never refuses another rule.
+  - **Cost if wrong:** large formula sheets refuse with `cf-resource-limit`, a diagnostic, never a wrong format.
+- **Ruling S5-HOIST: absolute-range aggregates are hoisted out of per-cell evaluation (orchestrator ruling).**
+  - **Spec tie:** §6.3 line 245 ("an expression like `SUM(A:A)` cannot repeat a million-cell scan across visible cells") and §7 (cooperative checkpoints).
+  - **What is hoisted.** At compile, `planCfHoist` (new) marks each `call` node whose reference arguments are all **absolute** (every axis `$`-pinned, or a whole column/row with pinned endpoints) and hoists it:
+    - **Invariant aggregates:** `SUM`, `COUNT`, `COUNTA`, `AVERAGE`, `MIN`, `MAX` over an absolute range, and `COUNTIF`/`SUMIF` whose criterion is invariant (a literal or an absolute single-cell reference). Each becomes **one scalar per rule**.
+    - **Per-cell criterion:** `COUNTIF(<absolute range>, <relative single-cell reference>)`, the duplicate-highlight idiom `COUNTIF($A:$A,A2)>1`, becomes **one value→count frequency map per rule**. The per-cell lookup then costs one unit.
+  - **How it is computed (round-3 #3).** Through the existing chunked scanning infrastructure of the statistics loop (`service.ts:188–202`, `prepareStatistics` at `statistics.ts:793`, checkpoints every 128 units, fresh fallback), but with **engine-ordered reducers**, never the existing statistics totals: the statistics sum is Neumaier-compensated (`statistics.ts:527`) and gives 1 for `[1e16, 1, -1e16]` where the engine's sequential `SUM` gives 0. Each hoist reducer accumulates sequentially in reference order (areas in argument order, row-major within an area, as the engine's sparse cursor sorts them, `refs.ts:200`), and applies the engine's own rules for the first error in that order, overflow (`finiteOrNum`, `evaluator.ts:332`) and the empty range. The reducer asserts row-major arrival and refuses the hoist if a source yields out of order. A cross-sheet absolute range is scanned through the dependency's canonical store (S5-K).
+  - **Exact semantics or refused.** The hoisted values must equal what the engine's own function returns on the same values:
+    - scalar aggregates: equal to the engine's call on the same values, by the ordered reducer above; any value class whose engine treatment the reducer does not reproduce refuses the hoist;
+    - the frequency map reproduces `COUNTIF`'s plain-equality arm only (`matches`, `functions/cond.ts:198`; criterion parsing in `criterionOf`, `:167–194`): a number criterion counts equal numbers; a text criterion counts strings that the engine's matcher (`matchWildcard`, `functions/wildcard.ts:85`) matches with no wildcard token. Its key is `cfCountifKey` (new), **not** `cfValueKey` (`statistics.ts:38`), which merges numeric text with numbers. Keys are computed, validated and folded **during the chunked hoist scan** and charged there (one unit per cell plus the key's string units); the per-cell lookup is then one unit.
+    - **Refused per cell** (unresolved, never approximated), mirroring the engine's own refusals by calling or citing them rather than restating thresholds: a criterion that is text containing `*`, `?` or `~`; text with a comparison prefix (`criterionOf`'s prefix rule, `cond.ts:180–183`); an **error-literal criterion**, i.e. any text beginning with `#` (the engine turns `"#N/A"` into an error criterion that counts genuine errors, `cond.ts:189`); a criterion longer than the engine's criterion limit (`cond.ts:179`, `conditional-long-criterion-unverified`); a criterion whose matcher DP against the **longest string in the range** (recorded by the scan) would exceed the engine's DP policy (`DEFAULT_MAX_DP_CELLS` at `functions/wildcard.ts:28`, checked at `:137`, `conditional-wildcard-resource-limit`); non-ASCII text; **numeric-looking** text, defined by the engine's own rules: the numeric-criterion pattern of `criterionOf` (`cond.ts:185`) or `coerceToNumber` succeeding (`evaluator.ts:346`), so `" 1 "` counts; the empty string, a blank, a boolean or an error. To mirror without restating, Task 34 exports the two engine limits (`cond.ts:179`'s literal as `CONDITIONAL_MAX_CRITERION_LENGTH`, and `DEFAULT_MAX_DP_CELLS`) from the engine as named constants with no behaviour change, re-running the engine's conditional and wildcard tests.
+    - **Refused for the whole rule:** a range that holds text that is numeric-looking by `coerceToNumber` (the engine reports `conditional-numeric-text-unverified` for number criteria, `cond.ts:227`), a boolean (`conditional-boolean-range-unverified`, `cond.ts:221`), or non-ASCII text (case-fold nuance).
+    - Every other `COUNTIF`/`SUMIF` criterion shape (operators, wildcards, relative ranges) is not hoisted.
+  - **The per-cell remainder.** The per-cell formula then evaluates against the hoisted scalars and map lookups under the 128-unit per-call cap; a hoisted node counts one unit.
+  - **Cache key and invalidation.** Hoisted results are memoised per `(rule, normalised range, valueGen of the range's sheet, dependencyGen)` in the statistics session cache, and invalidated exactly like it: whole sheet, on any generation change that keeps the lease (Lesson 5).
+  - **Charging.** Chunked, charged before allocation, with the frequency map's growth peak (old plus new table) reserved before it grows, and refused atomically: a refused or cancelled hoist publishes nothing and leaves nothing charged; the rule is `cf-resource-limit` (or cancelled).
+  - **Budgets (round-3 #4).** Each hoist scan pays from its own statistics scan budget (`createCfWorkBudget({ signal, scan: true })`, as range statistics do at `service.ts:189`; on the paint path the factory at `render.ts:469`), and a retry pays from a fresh scan budget (`service.ts:199`). Neither counts against the per-cell preparation ceiling. The per-cell remainder pays from the per-call budget (`CF_LIMITS.activeUnits`) under the 128-unit per-call cap; the snapshot build and its fallback pay from the per-cell ceiling (2 × `activeUnits`). Generation rechecks stay: each hoist's source stamp is rechecked after its scan and before adoption (S5-K), and a change cancels it. **Whole columns** clamp to populated bounds exactly as Stage 1–4 statistics do (§6.3 line 243): a declared 1M-row `A:A` with sparse population scans its populated cells only, while a column with about a million **populated** rows refuses at the scan budget, as Stage 1–4 bars and scales already do (`docs/validation/xlsx-cf.md:1235`).
+  - **Fallback.** A relative-range aggregate, or one that cannot be hoisted, keeps the per-cell path under the cap, or is refused.
+  - **Gates:** `formula:hoist-aggregate` (scalar aggregates) and `formula:hoist-countif-frequency` (the map), each lifted by the `stage5-formula-hoist` oracle row, plus the function family capability.
+  - **What it re-admits.** In the Task 31 matrix: `=COUNTIF($A:$A,A2)>1` and `=A2>AVERAGE($A$2:$A$9)` (`stage5-formula-functions`), `=MIN($A$2:$A$9)+1` (`stage5-cfvo-formulas`), and the four configurations of the new `stage5-formula-hoist` row. In the corpus, 0: `corpus/` holds no CF file (`docs/validation/xlsx-cf.md` §4). Task 39 reports the measured counts.
+  - **Cost if wrong:** duplicate-highlight rules over text with wildcard characters, numeric text or non-ASCII letters stay plain.
+- **Ruling S5-O: cross-kind composition.**
+  - **Spec tie:** §5.7 and §10 item 5.
+  - **Default:** a resolved formula rule is an ordinary DXF rule in `composeCell` (`compose.ts:300`). Its `stopIfTrue` halts like any DXF `stopIfTrue` (`halts`, `:79`). A formula bound changes only the visual's threshold, never its slot.
+  - **Per-pair gates:** every cross-kind outcome with a formula rule on either side needs `formula:composition-<pair>`:
+    - `expression-dxf`, `expression-scale`, `expression-bar`, `expression-icon`;
+    - `stop-ahead-scale`, `stop-ahead-bar`, `stop-ahead-icon`;
+    - `overlapping-expressions`;
+    - `unresolved-expression-ahead-<kind>`.
+  - **Existing guards stay:** the Stage 1 multi-positive guards (`service.ts:305–322`) and the Stage 2–4 slot gates also stay in force.
+  - **Cost if wrong:** mixed sheets withhold their lower rules.
+- **Ruling S5-STUB: every assertion that pins "withheld until Stage 5".**
+  - **Spec tie:** §5.7 and §6.5.
+  - **Exports unchanged:** the Stage 1–4 registries and exports stay byte-unchanged (`CF_STAGE1–4_*`, `CF_STAGE3_UNSUPPORTED`, `CF_STAGE4_UNSUPPORTED`, every `VERIFIED_STAGE1–4_*`).
+  - **Inventory (round-1 #8; redone in round 2 by grepping every `<formula>`/`<xm:f>` text in `tests/xlsx-cf-*` and classifying its shape, not by comments) and successors.** Each row's successor is "Excel's recorded outcome under the named capabilities, or withheld"; nothing else is re-pointed:
+
+  | Assertion | Cells | Successor capabilities |
+  |---|---|---|
+  | `STAGE5_OR_DEFERRED_WITHHELD` (`tests/xlsx-cf-oracle-conformance.test.ts:109–116`, asserted at `:225–226`) | `stage1-blanks-errors` D2 (`ISBLANK(D2)`), G6 (`NOT(ISBLANK(G2))`), J8 (`ISNA(J2)`), M6 (`NOT(ISNA(M2))`) | `formula:predicate-divergent`, `formula:fn-information`, `formula:fn-logical`, `formula:truth-boolean`, `formula:anchor-single` |
+  | same set | `stage1-priority-composition` G2, G3 (`MOD(G2,2)=1`) | `formula:fn-math`, `formula:truth-boolean`, `formula:composition-stub-successor-dxf` |
+  | `FINDINGS` (`:164–167`) | `stage2-scale-composition` L2–L5 | `formula:composition-stub-successor-scale` |
+  | `STAGE3_NONBAR_WITHHELD` (`:171–172`) | `stage3-bar-composition` I2–I4 | `formula:composition-stub-successor-bar` |
+  | `stage4StubWithheld` (`:283–286`, count 4 at `:366`) | `stage4-icon-composition` L cells | `formula:composition-stub-successor-icon` |
+  | Parser and predicate unit tests pinning formula shapes as unresolved: `tests/xlsx-cf-parse.test.ts:153–160` (non-literal, `expression`), `:226` (x14 divergent), `tests/xlsx-cf-predicates.test.ts:183` (non-literal B1), `:264–266` (divergent `SEARCH`, stays unresolved), `tests/xlsx-cf-scale-parse.test.ts:216–242`, `tests/xlsx-cf-bar-parse.test.ts:331–332`, `tests/xlsx-cf-icon-parse.test.ts:234–237` | synthetic | each is pinned under `withExactCfEvidence([])` (or keeps an unregistered function), so it asserts the same refusal without evidence and cannot flip silently when Stage 5 publishes; a twin under the injected capabilities asserts the resolved shape |
+  | Cap and lifecycle tests that use `type="expression"` as a generic stub: `tests/xlsx-cf-parse.test.ts:674,771,821,828,968,995,1109,1135,1180,1201`, `tests/xlsx-cf-paged-parse.test.ts:101` | synthetic | unchanged where the stub has no formula (still `cf-invalid-rule`/unresolved); where it carries `<formula>A1</formula>` the test pins `withExactCfEvidence([])` |
+  | R1c timePeriod tests (`tests/xlsx-cf-parse.test.ts:257–262`, `tests/xlsx-cf-paint-fixes.test.ts:165`) | synthetic | rewritten per S5-G (Task 33), together with the ten-period table's `lastWeek` row (`tests/xlsx-cf-parse.test.ts:240`) |
+  | `F6` (`tests/xlsx-cf-parse.test.ts:848–852`): `cellIs` operand `"a"&"b"` (round-2 #5) | synthetic | pinned under `withExactCfEvidence([])` (still unresolved); twin under `formula:cellis-operand-expression` + dialect/anchor resolves to a formula operand |
+  | `F7` (`tests/xlsx-cf-parse.test.ts:867–871`): off-anchor `containsBlanks LEN(TRIM(Z99))=0` (round-2 #5) | synthetic | pinned under `withExactCfEvidence([])`; twin under `formula:predicate-divergent` compiles as an expression reading Z99 |
+  | `F4` (`tests/xlsx-cf-parse.test.ts:1024–1035`): pinned `LEN(TRIM($A$1))=0`, `LEN(TRIM(A$1))=0` | synthetic | pinned under `withExactCfEvidence([])`; twin compiles as divergent expressions |
+  | Divergent blank/error parse rows (`tests/xlsx-cf-parse.test.ts:180–181`, `ISBLANK(G2)`, `ISNA(H2)`) and `cellIs` operand `B2>100` (`:119`) | synthetic | pinned under `withExactCfEvidence([])`; twins under complete evidence |
+  | `tests/xlsx-cf-paged-semantics.test.tsx:74`: `LEN(A1)>100000` used to make a rule unresolved | synthetic | switched to an unregistered function (`ISEVEN(A1)`) so it stays unresolved under any published evidence |
+  | Parity tests with expression shapes (`tests/xlsx-cf-paged-parse.test.ts:61,203`) | synthetic | unchanged: they compare the two paths, which stay deep-equal |
+  | `SEARCH`-based rows (`tests/xlsx-cf-parse.test.ts:175–177,198–199,217–218,873,883,1039,1050`; `tests/xlsx-cf-predicates.test.ts:264`; `tests/xlsx-cf-oracle.test.ts:1870,4026`) | synthetic | unchanged: canonical rows keep the Stage 1 path, divergent ones stay unresolved (`SEARCH` unregistered) |
+
+  - **Reused captures:** the four composition cases' committed captures are re-read through `CF_STAGE5_REUSED_CAPTURES`; `stage1-blanks-errors` is reused the same way.
+  - **One commit:** the conformance re-pointing lands in one named commit; a grep test asserts it touches only the rows above.
+  - **Cost if wrong:** none beyond today. Without the capabilities those cells keep withholding.
+- **Ruling S5-P: every view agrees.**
+  - **Spec tie:** §6.4 and §6.7.
+  - **Inputs per leg:** each leg takes its inputs from one place:
+    - values: its `CfValueSource` plus `CfWorkbookSource`, both over canonical overlay-aware stores (S5-K);
+    - calculation mode, value policy and clock: one `CfEvaluationContext` (S5-L);
+    - a route lacking either withholds formula rules identically on paint, a11y and copy/find.
+  - **Table:** Task 38 pins this as a source table (static `render.ts:287`; print and export through `paint.ts:425`; resident `sheetAssets.ts:259`; text `text.ts:364`; worker `prepareCfRemoteOnce` `pagedSource.ts:1773`; forced-paged the same).
+  - **Missing inputs:** a leg without `CfWorkbookSource` (a direct `renderSheet` caller with one sheet) withholds cross-sheet rules identically on paint, a11y and copy/find.
+  - **Blank synthesis:** `canRuleMatchBlanks` returns true for every resolved formula-bearing kind (`expression`, formula-operand `cellIs`, divergent predicates), so blank synthesis stays on wherever a formula can match a blank.
+  - **Cost if wrong:** a leg that cannot see another sheet stays plain where others paint. That is a parity failure the gate must catch, so the tests compare legs pairwise.
+- **Ruling S5-Q: accessibility, copy and find.**
+  - **Spec tie:** §6.7.
+  - **Default:** a formula rule's descriptor is the Stage 1 DXF descriptor (`describeCfWin`, `describe.ts:65`), derived from the winning properties, never from formula text (Lesson 10). Copy and find follow the effective number format exactly as Stage 1 does.
+  - **Cost if wrong:** none new.
+- **Ruling S5-R: wire and bytes.**
+  - **Spec tie:** §6.8.
+  - **Default:** no per-cell wire field is added. Formula outcomes compose into the existing `properties`/`scale`/`bar`/`icon` fields of `CfCellStateWire` (`contracts.ts:396`).
+  - **New reply data:** a reply grows only by `CfReadResult.dependencies`, at most 16 entries, priced by `measurePayloadBytes`.
+  - **No shared definitions:** compiled formulas never cross the wire. The worker compiles from its own rules, and the main thread consumes no per-rule formula data (the S4-Q pattern).
+  - **Cost if wrong:** reply headroom only.
+
+### Deferral sweep
+
+Built from the code (`finishUnresolved` sites in `parse.ts`, `unmeasured()` sites in `predicates.ts`, `CF_STAGE3_UNSUPPORTED`/`CF_STAGE4_UNSUPPORTED`), not only from the plan's "until Stage 5" text.
+
+| Deferred shape | Where on main | Disposition |
+|---|---|---|
+| `expression` rule (base and x14) | `parse.ts:1526–1527` | Picked up: S5-B–E, Task 35 |
+| Non-literal `cellIs` operand | `parse.ts:1449–1451` | Picked up: S5-F, Task 35 |
+| `cellIs` text operators | `parse.ts:1439–1440` | **Re-deferred** (S5-F): Excel's dialog writes the standalone types; recorded only |
+| Divergent text/blank/error formula | `parse.ts:1470,1482` | Picked up: S5-G, Task 35 (the `SEARCH` forms stay refused under S5-B) |
+| Divergent `timePeriod` formula | none: main resolves it from the attribute (R1c, `parse.ts:1490`); `:1489` is a namespace check | Fail-open fixed: classified on both paths, divergent unresolved until measured (S5-G, Task 33) |
+| Formula on `duplicateValues`/`uniqueValues` | `parse.ts:1511–1512` | **Re-deferred** (S5-G): Excel writes none |
+| Scale `type="formula"` / reference `@val` | `parse.ts:807–809,834–842` | Picked up: S5-H, Task 37 |
+| Bar `type="formula"` / reference `xm:f` | `parse.ts:982–983`, `cfvoLiteral` `:960–969` | Picked up: S5-H, Task 37 |
+| Icon `type="formula"` / reference `xm:f` | `parse.ts:1225–1226` | Picked up: S5-H, Task 37 |
+| Standalone x14 colour scale (OD-3) | `parse.ts:767–769` | Picked up conditionally: S5-I, Task 37 |
+| `activePresent="1"` on scale/bar/icon | `parse.ts:772–774,1030–1032,1250–1251` | Conditional: S5-J, Task 37; expected to re-defer permanently |
+| Multi-range formula anchor | `parse.ts:1419` | Picked up behind `formula:anchor-multi-range`, Task 34 |
+| Stub compositions (`bar:`/`icon:composition-unresolved-stub`) | `cases.ts:4706`, `CF_STAGE4_UNSUPPORTED` | Picked up as `formula:composition-stub-successor-*` (S5-STUB), Task 35 |
+| Cross-sheet values | none (single-sheet sources) | Picked up: S5-K, Task 36 |
+| Clock / midnight for formulas | `text.ts:435`, `viewerSession.ts:3329` | Picked up: S5-M, Task 38 |
+| Cached/manual policy | `render.ts:322` vs `text.ts:438` | Picked up: S5-L, Task 38 |
+| `NOW()` | `functions/datetime.ts:617` | **Re-deferred** (OD-14): needs periodic repaint |
+| Defined names, external refs, tables | spec §2 | **Out of scope**: refused (S5-B) |
+| Lookup and dynamic-array functions | `functions/lookup.ts:316` | **Re-deferred** (OD-13, decided) |
+| `bar:pairing-standalone` | `CF_STAGE3_UNSUPPORTED` | Not Stage 5 (Excel resaves it paired); unchanged |
+
+### Planned files and interfaces
+
+| File | Stage 5 responsibility |
+|---|---|
+| `scripts/cf-refs/cases.ts`, `generate.ts`, `capture.ts`, `verify.ts`, `build.ts`, `audit.ts`, `scripts/cf-compare.ts` | `CF_STAGE5_*`; formula markers; semantic DisplayFormat route; Stage 5 audit and `--publish-stage5`; reused Stage 1–4 captures |
+| `tests/fixtures/xlsx-cf/excel-authored-formulas.xlsx` (new, orchestrator) | Excel-dialog-authored formula, cfvo-formula and x14 XML (Lesson 12) |
+| `src/xlsx/cf/formula.ts` (new) | Compile and admit, allow-list, translator, footprint, truth readings, per-cell evaluation |
+| `src/xlsx/cf/dependencies.ts` (new) | Dependency snapshot, `SparseCellStore` over it, `CfWorkbookSource` adapters, pending and taint |
+| `src/xlsx/cf/model.ts`, `parse.ts`, `evidence.ts` | Formula definition arms; parse wiring on both paths; `formulaRequiredCapabilities` |
+| `src/xlsx/cf/service.ts`, `predicates.ts`, `colorScale.ts`, `dataBar.ts`, `iconSet.ts`, `compose.ts`, `limits.ts` | Formula arms, cfvo formula thresholds, caps |
+| `src/xlsx/cf/cache.ts`, `render.ts`, `text.ts`; `src/xlsx/view/pagedSource.ts`, `contracts.ts`; `src/worker/viewerRemoteCf.ts`, `viewerRemoteSource.ts`, `viewerSession.ts`; `src/components/xlsx/InteractiveSheetDoc.tsx`; `src/xlsx/cfLoader.ts` | `dependencyGen`, dependencies on the wire, cross-sheet invalidation, clock and policy threading, blank-synthesis arms |
+
+**Consumes** (all printed on `fc61c6c6`):
+- **Engine:** `parseFormula` (`parser.ts:859`), `tokenize` (`lexer.ts:149`), `AstNode` (`types.ts:206`), `evaluateNode` (`evaluator.ts:717`; `evaluateFormulaInternal` `:1100` is deliberately not consumed), `chargeMaterialization` (`:179`), `markUnsupported` (`:499`), `isEvaluationError`/`formulaError` (`:109,105`), `EvaluationContext`/`MaterializationBudget`/`ResolvedSemantics`/`CellAddress`/`ReferenceServices` (`types.ts:92,90,279,234,381`), `createReferenceServices`/`ReferenceServiceDeps`/`SparseCellStore` (`refs.ts:810,50,43`), `FUNCTIONS` (`functions.ts:508`), `epochToSerial` (`serial.ts:328`).
+- **CF model and evaluation:** `CfDefinition`/`CfRuleOrigin`/`CfLiteral`/`CfStamp`/`CfOutcome`/`CfValueSource` (`model.ts:55,14,10,5,6,98`), `cfvoLiteral` (`parse.ts:960`), `readFormulas` (`:1556`), `createCfService` (`service.ts:71`), `estimateCfPrepareBytes` (`:37`), `evaluatePredicate` (`predicates.ts:461`), `CfDateContext` (`:29`), `composeCellAsync` (`compose.ts:365`), `createCfWorkBudget`/`createCfMemory`/`CF_LIMITS` (`limits.ts:276,70,43`), `sameCfStamp` (`cache.ts:5`), `hasEvidence`/`withExactCfEvidence` (`evidence.ts:88,28`).
+- **Sources and views:** `residentSource`/`storeCfSource`/`prepareCfPaint` (`render.ts:68,129,287`), `prepareCfTextScope` (`text.ts:364`), `readConditionalFormatting`/`prepareCfRemoteOnce`/`cfRulesVersion` (`pagedSource.ts:897,1773,1511`), `CfReadResult`/`CfCellStateWire`/`measureCfCellBytes` (`contracts.ts:422,396,483`), `RemoteCfCache` (`viewerRemoteCf.ts:147`), `isValueUnavailable` (`view/values.ts:50`), `measurePayloadBytes` (`view/payloadBytes.ts:62`), `canRuleMatchBlanks` (`cfLoader.ts:100`).
+- **Oracle:** `buildColorProbeScript`/`buildDecorationProbeScript`/`probeLiveExcelCellObservations` (`capture.ts:213,192,587`), `captureUnderLockGuard` (`:493`), `replicationShortfall` (`verify.ts:5061`), `verifyCfCase`, `auditStage4Manifest`/`stage4Publication`/`renderVerifiedCapabilitiesSource` (`audit.ts:665,825,924`), `CF_CASES` (`cases.ts:5604`).
+
+**Produces** (every name below was grepped absent on `fc61c6c6`; the creating task is given):
+```ts
+// Task 31 — scripts/cf-refs
+CfPartMarker.formula?: { kind: 'expression' | 'operand' | 'cfvo' | 'activation'; anchor?: string; dialect: 'base' | 'x14' }
+CfPartMarker.scale.cfvo[].f?: string ; CfPartMarker.scale.dialect?: 'base' | 'x14'          // widened in place
+CfPartMarker.activePresent?: boolean
+CF_STAGE5_CASES / CF_STAGE5_CAPABILITIES / CF_STAGE5_NONDISCRIMINATING / CF_STAGE5_UNSUPPORTED   // cases.ts
+CF_STAGE5_REUSED_CAPTURES: readonly { caseId: string; refs: readonly string[]; capabilityId: string }[]
+auditStage5Manifest(manifest: CfManifest, options?: { rootDir?: string }): Stage5AuditReport     // audit.ts
+Stage5AuditReport (new): { ok: boolean; stageComplete: boolean; blocked: readonly string[]; perCapability: readonly Stage5CapabilityAudit[] }
+RenderVerifiedOptions.publishStage5?: boolean                                                    // --publish-stage5
+// Task 32 — src/xlsx/cf/formula.ts, model.ts, parse.ts
+type CfFormula = Readonly<{ ast: AstNode; nodes: number; atoms: readonly CfFormulaRef[]; invariant: boolean; usesClock: boolean; families: readonly string[] }>
+type CfFormulaRef = Readonly<{ sheet?: string; firstRow: number; lastRow: number; firstCol: number; lastCol: number; absRow: boolean; absCol: boolean; axis?: 'col' | 'row' }>
+CF_FORMULA_FUNCTIONS: ReadonlyMap<string, CfFormulaFunction>   // frozen: NAME → family and argument profile
+compileCfFormula(text: string, anchor: { row: number; col: number } | undefined, memory: CfMemory):
+  CfLease<CfFormula> | { refused: 'cf-unsupported-rule' | 'cf-resource-limit'; reason: string }   // reserves before parseFormula
+type CfFormulaUse = 'expression' | 'operand' | 'cfvo' | 'activation'
+formulaRequiredCapabilities(f: CfFormula, use: CfFormulaUse, rule: Readonly<{ dialect: 'base' | 'x14'; rangeCount: number; sourceType: CfRuleType }>):
+  Readonly<{ parse: ReadonlySet<string>; evaluation: ReadonlySet<string> }>
+canonicalTimePeriodFormula(period: CfTimePeriod, formulas: readonly string[], anchor: string | undefined): boolean   // Task 33
+// CfDefinition gains: { kind: 'expression'; formula: CfFormula; sourceType: CfRuleType }
+//   and cellIs gains operands: readonly (CfLiteral | { formula: CfFormula })[]
+// CfScaleBound / CfBarBound / CfIconThreshold.bound gain { type: 'num' | 'percent' | 'percentile' | 'formula'; formula: CfFormula }
+CfRuleOrigin.dependencySheets?: readonly string[]          // referenced sheet names, data only
+// Task 34 — src/xlsx/cf/formula.ts, dependencies.ts, limits.ts
+type CfEdgeMode = 'wrap' | 'ref-error'
+translateCfFormula(f: CfFormula, dRow: number, dCol: number, edge: CfEdgeMode, memory: CfMemory): CfOutcome<CfLease<AstNode>>
+cfFormulaFootprint(f: CfFormula, targets: readonly SourceRect[], anchor: { row: number; col: number }, edge: CfEdgeMode): readonly { sheet?: string; rect: SourceRect }[] | 'over-cap'
+type CfTruthReading = 'number-nonzero-true' | 'boolean' | 'text-no-match' | 'text-true' | 'blank-no-match'
+  | 'error-no-match' | 'error-halts' | 'range-implicit' | 'range-top-left' | 'range-no-match'
+type CfResult = Readonly<{ kind: 'number' | 'boolean' | 'text' | 'blank' | 'error'; value: ElementValue } | { kind: 'range'; matrix: MatrixValue; area: SourceRect }>
+cfTruth(result: CfResult, at: { row: number; col: number }, readings: ReadonlySet<CfTruthReading>): CfOutcome<boolean | 'halt'>
+cfLiteralToElement(v: CfLiteral): ElementValue ; cfElementToLiteral(v: EvaluationValue): CfLiteral | undefined
+interface CfDependencySnapshot { read(sheet: string | undefined, row: number, col: number): ElementValue; readonly tainted: boolean; reset(): void; dispose(): void
+  viewFor(effective: readonly { sheet?: string; rect: SourceRect }[], budget: CfWorkBudget):   // effective geometry; refuses if not fully covered, before traversal CfOutcome<{ store: SparseCellStore; metrics: CfPayloadMetrics }> }   // the per-call store
+prepareCfDependencies(atoms: readonly { sheet?: string; rect: SourceRect }[], host: CfValueSource, workbook: CfWorkbookSource | undefined,
+  budget: CfWorkBudget, memory: CfMemory, signal: AbortSignal): Promise<CfOutcome<CfLease<CfDependencySnapshot>>>
+evaluateCfFormula(f: CfFormula, at: { row: number; col: number }, snapshot: CfDependencySnapshot, context: CfFormulaContext): CfOutcome<CfResult>
+  // never via evaluateFormulaInternal; discards on any recorded feature, issue, cycle, refusal or taint (S5-E)
+type CfFormulaContext = Readonly<{ sheetName: string; evaluation: CfEvaluationContext; semantics: ResolvedSemantics; edge: CfEdgeMode | undefined;
+  materialization: MaterializationBudget; budget: CfWorkBudget; memory: CfMemory; invariants: CfInvariantMemo }>
+type CfInvariantMemo (new): a charged per-preparation map keyed by compiled subtree and measured scope
+type CfPayloadMetrics (new): Readonly<{ viewCells: number   // cardinality of the call's restricted store (stored cells in its translated atoms), an upper bound on every stored() enumeration
+  atoms: readonly Readonly<{ cells: number; stringUnits: number; longestString: number }>[] }>   // measured while the snapshot is built
+cfEvaluatorScratchBytes(f: CfFormula, payload: CfPayloadMetrics): number   // the bound reserved before each call
+cfCallWorkUnits(f: CfFormula, payload: CfPayloadMetrics, criterionLengths: readonly number[]): number | 'unbounded'   // ≤ 128 or refused
+CF_DEPENDENCY_CELL_BYTES: number ; CF_FORMULA_NODE_BYTES: number ; CF_SLOT_BYTES: number   // measurer-derived
+CF_LIMITS.dependencyCells / formulaAtoms / referencedSheets / materializationCells   // new keys
+// Task 36 — dependencies.ts, model.ts, contracts.ts, worker
+interface CfWorkbookSource { sheetIdOf(name: string): string | undefined; store(sheetId: string): SourceStore | undefined }   // values and stamp from the same store
+CfStamp.dependencyGen?: number                             // absent ≡ 0; sameCfStamp compares it
+CfReadResult.dependencies?: readonly { sheetId: string; valueGen: number }[]
+// Task 32 (contract and route wiring, before any formula evaluates) — formula.ts, render.ts, text.ts, pagedSource.ts, pagedImport.ts
+type CfDocumentEvaluation = Readonly<{ calcMode: 'auto' | 'manual' | 'autoNoTable'; valuePolicy: ValuePolicy; dateSystem: '1900' | '1904'; timeZone: string }>
+type CfEvaluationContext = CfDocumentEvaluation & Readonly<{ clock: Readonly<{ epochNowMs: number; clockGen: number }> }>
+cfDocumentEvaluationOf(doc: Pick<XlsxDocument, 'calc' | 'valuePolicy' | 'semantics'>): CfDocumentEvaluation   // once per document
+cfDocumentEvaluationOfPaged(workbook: PagedWorkbook): CfDocumentEvaluation
+cfEvaluationContextFor(policy: CfDocumentEvaluation, now: () => number): CfEvaluationContext                 // once per preparation
+PagedWorkbook.calcMode?: 'auto' | 'manual' | 'autoNoTable'           // recorded beside fullCalcOnLoad
+// prepareCfPaint / prepareCfTextScope / CfRemotePrepareOptions gain `evaluation?: CfDocumentEvaluation`; absent ⇒ formula rules unresolved
+CfFormulaFunction (new): Readonly<{ family: string; args: readonly ('scalar' | 'range')[]; text?: true
+  geometry: readonly ('literal' | { resizedTo: number })[] }>   // effective read geometry per argument (S5-SUMIF-SHAPE)   // CF_FORMULA_FUNCTIONS values
+CF_CHAR_SLOT_BYTES: number                                                                                 // measurer-derived
+// Task 34 — S5-HOIST (formula.ts, service.ts, statistics.ts)
+type CfHoist = Readonly<{ node: AstNode; kind: 'scalar' | 'countif-frequency'; fn: string; range: Readonly<{ sheet?: string; rect: SourceRect }>; criterion?: AstNode }>
+planCfHoist(f: CfFormula): readonly CfHoist[]
+cfCountifKey(value: CfLiteral): string | 'refuse'                       // plain-equality COUNTIF key; never cfValueKey
+type CfHoisted = Readonly<{ scalars: ReadonlyMap<AstNode, ElementValue>; frequencies: ReadonlyMap<AstNode, ReadonlyMap<string, number>> }>
+CfStatisticsSession.prepareHoists(rule: CfRule, hoists: readonly CfHoist[], stamp: CfStamp, source: CfValueSource, budget: CfWorkBudget,
+  options?: CfStatisticsOptions): Promise<CfOutcome<CfLease<CfHoisted>>>
+// Task 31 — capture.ts
+buildManualObservationScript(workbookName: string, sheetName: string, refs: readonly string[]): string[]   // no `calculate` before the observation
+CfOracleCase.calcObservation?: 'pre-calculate'                                                       // build/capture skip the unconditional calculate
+```
+
+### Execution, assignments and review
+
+Implementers are Claude subagents: Sonnet for mechanical tasks, Opus for judgement-heavy ones. A different model family reviews every task: opencode, or codex when opencode is unavailable. Before dispatch, record the actual model of each seat, and never relabel a same-family review as independent. Implementers do not run Excel. The orchestrator executes every host-Excel step (AppleScript and System Events) while the owner keeps the display unlocked. Reports and reviews go in `.superpowers/sdd/<plan>/task-N-report.md` / `task-N-review.md`. After every agent, check `git status` and `git diff --stat` for test files. Task 39 ends with a high-effort whole-branch review by the other family.
+
+| Task | Implementer | Reviewer |
+|---|---|---|
+| 31 Stage 5 Excel oracle, semantic route, Stage 5 audit, withheld-only conformance | Claude Opus (orchestrator executes host Excel) | opencode / codex |
+| 32 Formula compile, admission, allow-list, model and both-path parsing | Claude Sonnet | opencode / codex |
+| 33 Canonical/divergent `timePeriod` formula classification on both parser paths, R1c reconciliation | Claude Sonnet | opencode / codex |
+| 34 Translator, truth readings, same-sheet dependency snapshot, budgets | Claude Opus | opencode / codex |
+| 35 Formula DXF rules: expression, operands, divergent predicates, composition, stub successors | Claude Opus | opencode / codex |
+| 36 Cross-sheet values, pending pages, `dependencyGen`, remote invalidation | Claude Opus | opencode / codex |
+| 37 Formula cfvo bounds, x14 colour scales, `activePresent` | Claude Opus | opencode / codex |
+| 38 Calculation policy, clock, every-view agreement, blank synthesis, a11y/copy/find | Claude Sonnet | opencode / codex |
+| 39 Stage 5 validation, five-family closure gates, resource audit, PR evidence | Claude Sonnet | opencode / codex, plus whole-branch high-effort review |
+
+**One PR (OD-11, decided 2026-11-16).** Stage 5 ships as one PR. Tasks run in order 31–39; Task 37 follows Task 36 because S2-K expects x14 scales to be cross-sheet. Task 39 publishes once, when the whole Stage 5 audit reports `stageComplete=true`.
+
+### Review Focus (Stage 5)
+
+1. A read outside the snapshot, on a pending page or of an unavailable cached value that yields a guessed `0`/blank instead of unresolved. Every taint must discard the result (S5-E, Tasks 34, 36).
+2. An allow-list checked at run time, so `IF(FALSE, INDIRECT(…), 1)` passes, or a later `registerFormulaFunction` widens it. Admission must be static on the AST (S5-B, Task 32).
+3. A translated reference past the sheet edge, or a multi-range anchor, that paints before its reading is measured (S5-C, Tasks 31, 34).
+4. A cross-sheet commit after which the old batch still paints. `at()` must go stale synchronously through `dependencyGen`, on resident and worker legs alike (S5-K, Task 36).
+5. A hoisted `COUNTIF($A:$A,A2)` frequency map that counts differently from the engine's `COUNTIF` (wildcards, numeric text, case, booleans), or a hoist that publishes after cancellation or is not invalidated with its range's generation (S5-HOIST, Task 34). Also `SUM(A:A)+SUM(A:A)` on a relative-range path, `LEN(CONCAT(A1:A64))` over 32,767-character strings and `IFERROR(COUNTIF(A:A,TRUE),TRUE)`: a per-call bound over 128 units or over the text cap refused before invocation, cancellation honoured between cells, every traversal occurrence charged before it happens, scratch reserved before the call, refusal before excess work, and any recorded unsupported feature discarding the result (S5-E, S5-N, Lessons 9, 15, Task 34).
+6. A blank or range result reaching a number gate (blank→0 or engine projection before the CF shape gate), or two readings that predict the same observable published as distinct (S5-D, Task 34).
+7. A view without the workbook source or with a different clock or policy that paints where another withholds (static vs text defaults `render.ts:322`/`text.ts:438`) (S5-L/M/P, Task 38).
+8. A resolved `expression` that disables blank synthesis through `canRuleMatchBlanks`, or is priced at zero by `estimateCfPrepareBytes` (S5-P, Tasks 32, 38).
+9. A "withheld until Stage 5" assertion re-pointed outside the S5-STUB inventory, a unit test that flips silently at publication, an unevidenced divergent `timePeriod` formula reaching the attribute predicate, or any Stage 1–4 export byte changed (S5-STUB, S5-G, Tasks 33, 35, 39).
+10. A capability lifted from an evaluation rule changed after seeing the capture with no independent justification (post-hoc fitting), or a `[measure]` row with one decisive cell (Lessons 3, 14, Task 31).
+
+### Task 31: Stage 5 Excel oracle, semantic route, audit, conformance (Claude Opus; review per table)
+
+**Dependencies:** Stage 4 merged (PR #79, `fc61c6c6`). Host Excel runs only through the orchestrator. Preparing scripts is not evidence: every case without captures stays `recipe-pending`, and refused.
+
+**Files:**
+- Modify `scripts/cf-refs/cases.ts`: add the `CF_STAGE5_*` exports and `CF_STAGE5_GROUPS`/`CF_STAGE5_REUSED_CAPTURES` beside the Stage 4 exports; widen `CfPartMarker` as listed; extend `CF_CASES`/`CF_CAPABILITIES` (`:5604`).
+- Modify `generate.ts` (templates diffed against the Excel-authored fixture; one malformed shape per workbook), `capture.ts` (DisplayFormat probes for the Stage 5 cases, the `dynamicRefresh` edit of a referenced sheet), `verify.ts` (formula marker semantics, `CfPartMarker.formula`), `audit.ts` (the guard at `:2207` accepts 5, `auditStage5Manifest` follows `:665`, `--publish-stage5` mirrors S3-WRITE and `--publish-stage4`), `scripts/cf-compare.ts` (Stage 5 cases).
+- Modify `tests/xlsx-cf-oracle.test.ts`, `tests/xlsx-cf-oracle-conformance.test.ts`, `tests/fixtures/xlsx-cf/manifest.json`, plus case files and `refs/*`. Create `tests/fixtures/xlsx-cf/excel-authored-formulas.xlsx` (orchestrator) and `docs/validation/xlsx-cf-recipes-stage5.md`. Update `docs/validation/xlsx-cf.md`.
+
+**Interfaces:**
+- **Consumes:** `CfOracleCase`, `CfPartMarker`, `CfCellExpectation` (`fillSource`, `dynamicRefresh`), `verifyCfCase`, `buildColorProbeScript`, `buildDecorationProbeScript`, `probeLiveExcelCellObservations`, `captureUnderLockGuard`, `replicationShortfall`, `auditStage4Manifest`/`stage4Publication` (patterns), `renderVerifiedCapabilitiesSource`, `DEFAULT_CLOCK_ANCHOR_DATE` (`cases.ts:399`) and `--refresh-clock-date` (`build.ts:247`).
+- **Produces:** the Task 31 block of **Produces**.
+
+**Required Stage 5 oracle matrix.** Every row is `[measure]`. No expected outcome is written by the plan or by the code's authors. Each row has a same-content unformatted control block, positive and negative controls, a repair-free open, and retained markers diffed against Excel's resaved XML. Every configuration has ≥ 2 decisive cells (S4-REPLICATE), with the hypotheses fixed in the case before capture (Lesson 14).
+
+| Case ID | Input / question (competing hypotheses) | Capabilities |
+|---|---|---|
+| `stage5-formula-authored` | Orchestrator authors through Excel's dialog: expression `=$B2>$C2` over B2:D9; `=MOD(ROW(),2)=0`; `cellIs > =$F$1`; `between =$F$1,=$F$2`; a scale with `num` `=$F$1` and `formula` bounds; a bar and an icon set with formula bounds; `=Sheet2!$A$1>0`; a scale bounded by `Sheet2!$A$1`. Output `excel-authored-formulas.xlsx`: the template source. | `formula:dialect-base`, `formula:dialect-x14` |
+| `stage5-formula-truthiness` | Expression results 1, 0, −0.5, TRUE, FALSE, `"abc"`, `""`, `="TRUE"`, a blank reference, `#N/A`, `#DIV/0!`, `=A2:A4` (target row 3, so implicit intersection ≠ top-left), each over ≥ 2 cells, each once with a lower matching fill and once with `stopIfTrue="1"` ahead of a lower matching fill. Nested shapes `=IF(TRUE,A2:A4,0)` and `=IFERROR(A2:A4,0)` at target row 3 with A2 ≠ A3 record `formula:truth-range-nested` (round-2 #4). Hypotheses per S5-D, stated as observables: format/no format × lower rule shown/halted. | `formula:truth-number`, `-boolean`, `-text`, `-blank`, `-error`, `-range`, `-range-nested` |
+| `stage5-formula-anchor` | `=A2>0` over B2:B9; `=$A2`, `=A$2`, `=$A$2`; multi-range `D5:D8 B2:B4` with values making h1/h2/h3 differ at ≥ 2 cells each; Excel's resaved `sqref` order recorded. | `formula:anchor-single`, `-mixed-abs`, `-multi-range` |
+| `stage5-formula-edge` | Rows: `sqref="A1:A4"` with `=A1048575>0` (offset +1048574): A3 and A4 overflow, so two targets decide w1 (wrap to A1, A2) vs w2 (`#REF!`), with A1, A2, A1048575, A1048576 holding values that separate them. Columns: `sqref="A1:D1"` with `=XFC1>0`: C1 and D1 overflow. Each configuration has two overflowing targets. | `formula:relative-wrap` (rows and columns as separate configurations) |
+| `stage5-formula-functions` | One configuration per family in `CF_FORMULA_FUNCTIONS`, plus `=A2=""` and `=ISBLANK(A2)` over an unstored blank and `""` (the blank-versus-empty-text outcome comes from Excel, round-1 #12): `=AND($A2>0,$B2<5)`, `=ISNUMBER(A2)`, `=LEN(A2)>3`, `=MOD(A2,3)=0`, `=A2>AVERAGE($A$2:$A$9)`, `=COUNTIF($A:$A,A2)>1`, `=YEAR(A2)=2026`, `=ROW()=COLUMN()`; inputs include cached formula cells and errors. | `formula:fn-logical`, `-information`, `-text`, `-math`, `-aggregate`, `-conditional-aggregate`, `-date`, `-row-column` |
+| `stage5-formula-hoist` | **Admitted configurations** (each ≥ 2 decisive cells): `=COUNTIF($A:$A,A2)>1` over A2:A40 holding numbers, ASCII text in mixed case (`"abc"`/`"ABC"`), blanks and errors, with duplicates and singletons; `=A2>AVERAGE($A:$A)`; `=A2=MAX($A:$A)`; `=COUNTIF($A:$A,"x")>2`. **Refused configurations**, recorded only, each in its own column and never evidence for success: a range with numeric text (`"1"`, `" 1 "`), a range with a boolean, non-ASCII text, wildcard criteria (`"a*"`), an `"#N/A"` criterion over a range holding `#N/A`. | `formula:hoist-aggregate`, `formula:hoist-countif-frequency` |
+| `stage5-cellis-operands` | `cellIs >` with `$F$1`, `F2` (relative), `$F$1*2`; `between` with reversed referenced bounds; operands evaluating to `"100"`, blank, `#N/A`, TRUE. | `formula:cellis-operand-reference`, `-relative`, `-expression`, `-text`, `-blank`, `-error` |
+| `stage5-predicate-formulas` | Divergent `containsBlanks ISBLANK(D2)`, `notContainsErrors NOT(ISNA(E2))`, `timePeriod` today with `<formula>A2=TODAY()-3</formula>` (attribute vs formula); a hand-authored `cellIs containsText` (record only). | `formula:predicate-divergent`, `formula:predicate-timeperiod-divergent` (the divergent `timePeriod` cells: ≥ 2 where attribute and formula disagree in each direction) |
+| `stage5-clock-today` | `=A2=TODAY()` with D−2..D+2 and fractional serials under the Stage 1 anchor (`--refresh-clock-date`); `=A2<NOW()` recorded only. | `formula:fn-today` |
+| `stage5-calc-manual` | `<calcPr calcMode="manual"/>` with formula cells whose saved `<v>` differs from a recompute; expressions reading them; `TODAY()` in CF. **Capture route (round-1 #4):** `calcObservation: 'pre-calculate'`. Observed with `buildManualObservationScript` (application calculation mode, values and DisplayFormat) before any `calculate`, before resave, with no other workbook open; then one explicit `calculate` and a second observation, recorded separately. Hypotheses: CF follows saved values vs recomputed. | `formula:calc-manual-saved-values`, `formula:calc-manual-today` |
+| `stage5-composition` | Expression p1 `stopIfTrue` true/false ahead of a DXF, a scale, a bar and an icon; an expression fill vs a scale fill both orders; two overlapping expressions; an unresolved expression (`INDIRECT`) p1 ahead of each kind. Plus the reused Stage 1–4 stub captures (`CF_STAGE5_REUSED_CAPTURES`). | `formula:composition-*`, `formula:composition-stub-successor-dxf/-scale/-bar/-icon` |
+| `stage5-cross-sheet` | `=Sheet2!A2>0` (relative cross-sheet); `=$A2>Sheet2!$B$1`; operand `Sheet2!$A$1`; `'My Sheet'!A1`; a reference to a deleted sheet; `dynamicRefresh` after editing Sheet2 without saving. | `formula:cross-sheet-reference`, `-quoted-name`, `-missing`, `formula:cellis-operand-cross-sheet` |
+| `stage5-cfvo-formulas` | Scale `formula` `=$F$1` and `=MIN($A$2:$A$9)+1`; `num` `$F$1`; `percent`/`percentile` `$F$1`; bar `formula` min/max; icon `formula` and `num` `$F$1`; relative `=A2` cfvo; cfvo results text/blank/error (hypotheses: withheld / 0 / skipped). | `scale:thresholds-formula`, `bar:bounds-formula`, `icon:thresholds-formula`, `formula:cfvo-reference`, `-expression`, `-relative`, `-nonnumeric` |
+| `stage5-cfvo-scope` | `sqref="B2:B5 D2:D5 F2:F5"` scale and icon set with a relative `formula` bound `=MAX(B2:B5)`, plus an absolute-bound twin (`=$H$1`) as a negative control. The first range B2:B5 is the **control**: both hypotheses evaluate it at the same anchor. D2:D5 and F2:F5 hold maxima different from B's, so rule-wide (one value from B2's anchor) and per-range (each range's own anchor) differ there; each of D and F has ≥ 2 decisive cells (round-2 #7). | `formula:cfvo-scope-multi-range` |
+| `stage5-x14-scale` | The dialog-authored cross-sheet scale: does Excel write `<x14:colorScale>` or the base form? Capture if x14. | `scale:dialect-standalone` |
+| `stage5-active-present` | One workbook per visual kind: hand-authored x14 `activePresent="1"` plus a rule-level `<xm:f>` false on ≥ 2 cells; record retain/strip/repair. | `formula:active-present-scale`, `-bar`, `-icon` |
+| `stage5-unresolved-shapes` | One workbook each: `=MyName>0`, `=[1]Sheet1!A1>0`, `=Table1[@Col]>0`, `=INDIRECT("A1")>0`, `={1,2}`, `=(A1,B1)`, `=A1#`, a formula on `duplicateValues`. Records Excel's outcome; lifts nothing. | — |
+
+- [ ] **Conformance first (Lesson 1).** Add `stage 5 formula cells are withheld until their evidence lands` to `tests/xlsx-cf-oracle-conformance.test.ts`. Under production evidence, every Stage 5 cell's `CfPrepared.at(...)` is either not `ready` or carries no formula-sourced property. FINDINGS stay withheld-only (extending the guard at `:1395`). The Stage 1–4 assertions stay byte-unchanged except those re-pointed by S5-STUB in Task 35.
+- [ ] Write `stage 5 cases join the manifest and stage 1–4 cases are unchanged`. Manifest ids equal the combined `CF_CASES`, and the Stage 1–4 capability ids and sets are unchanged. RED, then GREEN.
+- [ ] Write `formula marker pins rule formula, operands, cfvo f, dialect and activePresent exactly`. The verifier refuses each mutation: `$B2` → `B2`; `>` → `>=`; operand order swapped; `cfvo.f` `$F$1` → `$F$2`; x14 scale moved to base; `activePresent` dropped; `sqref` order changed when the marker pins Excel's resaved order; a formula moved to another part. It compares semantics: Excel's canonical reference spelling and sheet quoting, not raw strings.
+- [ ] Write `semantic DisplayFormat evidence needs two decisive cells and a control (Lesson 3)`. On synthetic sidecars:
+  - a configuration whose hypotheses agree at every designated cell → `unverified-nondiscriminating`;
+  - one decisive cell → `replicationShortfall` refusal;
+  - two agreeing decisive cells with one hypothesis matching → verified;
+  - a positive whose control is also formatted → refused.
+- [ ] Write `audit --stage 5 --write is idempotent (Lesson 4)`.
+  - Two runs give a byte-identical `verifiedCapabilities.ts`.
+  - Without `--publish-stage5` the Stage 5 export is carried over verbatim (absent at first).
+  - `--publish-stage5` writes `VERIFIED_STAGE5_CAPABILITIES` only when `stageComplete=true`.
+  - Stage 1–4 exports are unchanged.
+- [ ] Write `a publication requires production's reading to equal Excel's matched reading`. A capability whose matched reading (for example `range-top-left`) is not the reading production implements stays withheld, as Stage 4's `CF_STAGE4_PRODUCTION_READINGS` does.
+- [ ] Write `the manual-calculation route emits no premature calculate (round-1 #4)`. For a `calcObservation: 'pre-calculate'` case, the generated AppleScript of build and capture contains no `calculate` before the first observation line, and records the application calculation mode; the explicit-calculation observation is a separate, later script. A mutant that keeps `build.ts:180` fails.
+- [ ] Extend the osacompile test with the Stage 5 probe scripts under `it.skipIf(!hasOsacompile)`. The clock cases reuse the TZ pin (Lesson 8).
+- [ ] **Orchestrator:**
+  1. Author `stage5-formula-authored` through the dialog, save, and diff its XML into the templates (Lesson 12).
+  2. Run `bun scripts/cf-refs/build.ts --stage 5 --case <id>` and `capture.ts --stage 5 --case <id>` per case, one malformed shape per workbook. A `calcObservation: 'pre-calculate'` case skips the unconditional `calculate` in the build resave (`scripts/cf-refs/build.ts:180`) and the clock probe's `calculate` (`capture.ts:66`), and runs `buildManualObservationScript` first.
+  3. Run the clock cases with `--refresh-clock-date`.
+  4. Record every strip or repair as the case outcome and never retry it.
+  5. Close owned workbooks between cases. Never manufacture evidence.
+- [ ] Inventory the corpus for formula-bearing CF (ZIP XML; skip `~$`) into `docs/validation/xlsx-cf.md` §4. If the count is 0, as §4 recorded for all CF in `corpus/`, record that, and make the Excel-authored fixture the corpus gate (Task 39).
+- [ ] Run `npx vitest run tests/xlsx-cf-oracle.test.ts tests/xlsx-cf-oracle-conformance.test.ts`, `npx tsc --noEmit -p tsconfig.scripts.json`, `npx tsc --noEmit -p .` and `git diff --check`. Commit (`test(xlsx-cf): add Stage 5 formula oracle cases`), report, review.
+
+### Task 32: Formula compile, admission, allow-list, model and both-path parsing (Claude Sonnet; review per table)
+
+**Files:** Create `src/xlsx/cf/formula.ts` (compile and admission half, and the evaluation-context contract), `tests/xlsx-cf-formula-parse.test.ts`, `tests/xlsx-cf-evaluation-context.test.ts`. Modify `src/xlsx/cf/model.ts`, `parse.ts`, `evidence.ts`, `service.ts` (`statistical`, `estimateCfPrepareBytes` arms only), `render.ts` and `text.ts` (the `evaluation` option), `src/xlsx/view/pagedSource.ts` (`CfRemotePrepareOptions.evaluation`), `src/xlsx/storage/pagedImport.ts` (`calcMode`), `src/worker/viewerSession.ts` (metadata), `src/render/paint.ts:425`, `src/components/xlsx/sheetAssets.ts:259`, `InteractiveSheetDoc.tsx` (pass-through only), `src/xlsx/cfLoader.ts` (`canRuleMatchBlanks`), `tests/xlsx-cf-oracle-conformance.test.ts` (callers at `:213`), `tests/xlsx-cf-paged-parse.test.ts`, `tests/xlsx-cf-lazy.test.ts`.
+
+**Interfaces:**
+- **Consumes:** `parseFormula`, `tokenize`, `AstNode`, `FUNCTIONS`, `readFormulas`, `cfvoLiteral`, `anchorOf`, `CfRuleOrigin.formulas`, `CF_LIMITS.formulaTokens`, `hasEvidence`.
+- **Produces:** the Task 32 block of **Produces**, including the evaluation-context contract and its wiring through every route **before** Task 35 evaluates any formula (round-2 #3). The `expression` stub at `parse.ts:1526` and the operand stub at `:1449–1451` are replaced; cfvo stubs stay until Task 37.
+
+- [ ] Write `the evaluation context is built once per document and the clock once per preparation (round-2 #3)`. `cfDocumentEvaluationOf` called twice on one document returns equal policies; two preparations take two clock snapshots from the injected `now`. An undefined `doc.valuePolicy` resolves `'engine'` and an absent `calc` resolves `'auto'`. Every route (`prepareCfPaint`, `prepareCfTextScope`, `prepareCfRemoteOnce`, `getPaintables`, `prepareSheetAssets`, the interactive text and paint scopes, the worker metadata) forwards the policy; a route given none leaves formula rules `cf-evaluation-context-missing` and Stage 1–4 rules unchanged. The conformance callers (`tests/xlsx-cf-oracle-conformance.test.ts:213`) pass `cfDocumentEvaluationOf(doc)`, and their Stage 1–4 assertions stay green. A source-text assertion confirms that the eager sites import no CF value and reach the builder only through the loaded lazy module.
+
+- [ ] Write `compile admits the allow-list and refuses every out-of-scope node statically (S5-B)`. Each of these → `{ refused: 'cf-unsupported-rule' }`: `MyName>0`, `[1]Sheet1!A1>0`, `Table1[@Col]>0`, `INDIRECT("A1")`, `IF(FALSE,INDIRECT("A1"),1)` (the untaken branch), `{1,2}`, `(A1,B1)`, `A1#`, `Sheet1:Sheet3!A1`, `NOW()`, `VLOOKUP(A1,B:C,2)`, `SEARCH("a",A1)`. `LEN(CONCAT(A1:A64))`, `CONCAT(A1:A3)`, `A2:A4>0`, `IF(TRUE,A2:A4,0)`, `IFERROR(A2:A4,0)` and `NOT(A2:A4)` are refused too (round-2 #1, #4); for `LEN(CONCAT(A1:A64))` a spy proves that no snapshot read and no `textChars` call happens. `MOD(A1,2)=1`, `COUNTIF($A$1:$A$50,A1)>1`, `CONCAT(A1,"x")` and `AND(A1>0,B1<5)` compile. After `registerFormulaFunction('ZZZ', …)`, `ZZZ(A1)` still refuses.
+- [ ] Write `functions with implicit expansion compile only at literal geometry (S5-SUMIF-SHAPE)`. `SUMIF(A1:A2,"",B1)`, `AVERAGEIF(A1:A2,"",B1)` and `SUMIF(A:A,"",B1)` are refused at compile; `SUMIF(A1:A2,"",B1:B2)`, `AVERAGEIF(A1:A2,"",B1:B2)`, `SUMIF(A:A,"",B:B)` and `SUMIF(A1:A2,"")` compile, and their footprint holds the effective geometry (B1:B2, B:B). `SUMIFS`, `AVERAGEIFS` and `COUNTIFS` compile with literal geometry. Every `CF_FORMULA_FUNCTIONS` entry declares `geometry` for every argument (table test against the sweep).
+- [ ] Write `compiled formula records atoms, families, invariance and clock use`. `=$A$1>AVERAGE($A$2:$A$9)` → `invariant: true`, atoms `[A1 abs, A2:A9 abs]`, families `['aggregate']`. `=A2>0` → `invariant: false`. `=ROW()=2` → `invariant: false`. `=A2=TODAY()` → `usesClock: true`. `=Sheet2!$B$1<A2` → `dependencySheets: ['Sheet2']`.
+- [ ] Write `compile caps refuse before construction`: 4,097 nodes → `cf-resource-limit`; 65 atoms → `cf-resource-limit`; 17 referenced sheets → `cf-resource-limit`. Each limit itself is admitted.
+- [ ] Write `compile reserves before parsing and releases with the rule (round-1 #3)`. At `tokens × CF_FORMULA_NODE_BYTES − 1` free bytes, `parseFormula` is never called (spy) and no AST exists; at exactly that, it compiles and the parse account holds the reservation. A parse failure, a cancelled streamed import and sheet disposal each return the parse ledger to baseline. A test with the accounting removed (mutant: no reserve) fails the first assertion.
+- [ ] Write `expression and operand rules parse to formula definitions behind evidence`. Under the **complete** injected parse set (`formula:dialect-base`, `formula:anchor-single`, `formula:anchor-mixed-abs`; round-2 #6), `<cfRule type="expression"><formula>$B2>$C2</formula>` over B2:D9 yields `{ kind: 'expression', sourceType: 'expression' }` with anchor B2. Without evidence → `cf-unsupported-rule`, writes = the DXF writes, one diagnostic. `cellIs greaterThan <formula>$F$1</formula>` yields an operand `{ formula }`, and literal `100` still yields a `CfLiteral` (Stage 1 unchanged). A divergent `containsBlanks ISBLANK(D2)` yields an `expression` definition with `sourceType: 'containsBlanks'`. The canonical `LEN(TRIM(D2))=0` keeps its predicate definition.
+- [ ] Write `formulaRequiredCapabilities splits parse and evaluation gates (round-1 #12)`. With rule context `{ dialect: 'base', rangeCount: 1, sourceType: 'expression' }`, `=$B2>$C2` gives `parse = {formula:dialect-base, formula:anchor-single, formula:anchor-mixed-abs}` and `evaluation` ⊇ the family ids plus the truth reading of its root shape. `rangeCount: 2` adds `formula:anchor-multi-range` to `parse`; `dialect: 'x14'` swaps in `formula:dialect-x14`; a cross-sheet atom adds `formula:cross-sheet-reference`; `TODAY` adds `formula:fn-today`; `use: 'cfvo'` with `rangeCount: 2` adds `formula:cfvo-scope-multi-range`. Neither set is ever empty.
+- [ ] Write `resident and streamed formula rules are deep equal at every chunk boundary`, extending `tests/xlsx-cf-paged-parse.test.ts:32` with an expression, a formula operand, a divergent predicate and a quoted cross-sheet name, with boundaries inside `<formula>` and `<xm:f>`.
+- [ ] Write `formula definitions are priced and statistical-aware`. `estimateCfPrepareBytes` adds `CF_FORMULA_NODE_BYTES × nodes` per formula rule (source-text assertion: no new integer literal on the formula arm). `statistical()` is unchanged for expressions (they use the snapshot, not statistics).
+- [ ] Write `blank synthesis stays on for formula rules (S5-P)`. `canRuleMatchBlanks` returns true for resolved `expression`, formula-operand `cellIs` and divergent predicates, and stays true for the unresolved `expression`. Record the eager gzip delta.
+- [ ] Add `'formula'` and `'dependencies'` to the file list of `excludes every CF implementation from both ordinary static closures` (`tests/xlsx-cf-lazy.test.ts:14–17`). Assert from the module map that `indexModuleSetHash` (`scripts/eager-baseline.json`) is unchanged by importing the engine from the `cf` chunk.
+- [ ] Run `npx vitest run tests/xlsx-cf-formula-parse.test.ts tests/xlsx-cf-parse.test.ts tests/xlsx-cf-paged-parse.test.ts tests/xlsx-cf-scale-parse.test.ts tests/xlsx-cf-bar-parse.test.ts tests/xlsx-cf-icon-parse.test.ts tests/xlsx-cf-lazy.test.ts` (RED, implement, GREEN), tsc and the eager gates. Commit (`feat(xlsx-cf): compile and admit CF formulas`), report, review.
+
+### Task 33: Canonical and divergent `timePeriod` formula classification (Claude Sonnet; review per table)
+
+**Dependencies:** Task 32 (compile path) and the Task 31 `stage5-predicate-formulas` case. Runs before Task 35 so the divergent arm exists when expressions resolve.
+
+**Files:** Modify `src/xlsx/cf/parse.ts` (the `timePeriod` arm at `:1484–1492`), `tests/xlsx-cf-parse.test.ts` (R1c block `:257–262`), `tests/xlsx-cf-paint-fixes.test.ts` (`:165`), `tests/xlsx-cf-paged-parse.test.ts`. Create `tests/xlsx-cf-timeperiod-formula.test.ts`.
+
+**Interfaces:**
+- **Consumes:** `refsMatchAnchor`, `stripOutsideStrings` (`parse.ts:341,380`), `PERIODS` (`:124`), the Stage 1 clock workbooks' resaved XML, `compileCfFormula` (Task 32).
+- **Produces:** `canonicalTimePeriodFormula` (new); the divergent `timePeriod` arm.
+
+- [ ] Write `canonical timePeriod patterns come from Excel's own XML`. For each of the ten periods, the formula Excel wrote in the resaved `stage1-timeperiod-today-clock` and `-2` workbooks is read by the test from the saved archive and must classify canonical; the pattern table is not typed by hand in the test.
+- [ ] Write `divergent timePeriod formulas never reach the attribute predicate (round-1 #9)`. `timePeriod="today"` with `<formula>A2=TODAY()-3</formula>` or `FLOOR(B2,1)=TODAY()-2` is unresolved (`cf-unsupported-rule`) on the resident and streamed paths, writes its DXF mask, and has one diagnostic. Under the complete injected set for the "formula" reading (`formula:predicate-timeperiod-divergent`, `formula:dialect-base`, `formula:anchor-single`, `formula:fn-today`, `formula:truth-boolean`), `A2=TODAY()-3` compiles as `{ kind: 'expression', sourceType: 'timePeriod' }`, and `FLOOR(B2,1)=TODAY()-2` stays `cf-unsupported-rule` because `FLOOR` is neither registered nor allow-listed (round-2 #6). Under the "attribute" reading the divergent formula keeps the attribute predicate. An absent formula and a foreign-namespace formula keep their main-branch outcomes.
+- [ ] Rewrite the R1c tests (`tests/xlsx-cf-parse.test.ts:257–262`, `tests/xlsx-cf-paint-fixes.test.ts:165`) to the new expectation, citing S5-G. Also update the ten-period table at `tests/xlsx-cf-parse.test.ts:231–241`: its `lastWeek` row (`:240`) holds the off-by-one `>(WEEKDAY(TODAY())-1)`/`<(WEEKDAY(TODAY())+6)` form, which now classifies divergent; it is replaced by the form Excel wrote in the saved clock fixture (`>=(WEEKDAY(TODAY()))`/`<(WEEKDAY(TODAY())+7)`, as in `tests/xlsx-cf-paint-fixes.test.ts:152`), read from the fixture rather than typed. Every Stage 1 clock conformance cell stays byte-unchanged (`tests/xlsx-cf-oracle-conformance.test.ts:1411` passes unmodified).
+- [ ] Extend `resident and streamed CF are deep equal at every chunk boundary` with canonical and divergent `timePeriod` formulas.
+- [ ] Run `npx vitest run tests/xlsx-cf-timeperiod-formula.test.ts tests/xlsx-cf-parse.test.ts tests/xlsx-cf-paint-fixes.test.ts tests/xlsx-cf-paged-parse.test.ts tests/xlsx-cf-oracle-conformance.test.ts` (RED, implement, GREEN), tsc and the eager gates. Commit (`fix(xlsx-cf): classify timePeriod formulas instead of trusting the attribute`), report, review.
+
+### Task 34: Translator, truth readings, same-sheet dependency snapshot and budgets (Claude Opus; review per table)
+
+**Files:** Complete `src/xlsx/cf/formula.ts` (including `planCfHoist`, `cfCountifKey`); modify `src/xlsx/cf/statistics.ts` (`prepareHoists`) and `service.ts` (the statistics loop runs hoists beside statistical rules); create `src/xlsx/cf/dependencies.ts`, `tests/xlsx-cf-formula-hoist.test.ts`, `tests/xlsx-cf-formula-eval.test.ts`, `tests/xlsx-cf-formula-budget.test.ts`. Modify `src/xlsx/cf/limits.ts`, `tests/xlsx-cf-active-units.test.ts`, `scripts/cf-refs/active-units.ts`.
+
+**Interfaces:**
+- **Consumes:** `evaluateNode` (never `evaluateFormulaInternal`, S5-D), `createReferenceServices`, `SparseCellStore`, `MaterializationBudget`, `ResolvedSemantics`, `CfValueSource.pages`/`bounds`, `createCfWorkBudget`, `createCfMemory`, `measurePayloadBytes`.
+- **Produces:** the Task 34 block of **Produces**. Evaluation stays pure: no DOM, no wall clock (the clock arrives through `semantics`).
+
+- [ ] Write `translation follows the measured edge mode and pinned axes`. `=A2>0` anchored at B2, evaluated at B5 → reads A5. `$A2` at C5 → `$A5`. `A$2` → row 2. At row 1048576, `A1048577` → A1 under `'wrap'`, `#REF!` under `'ref-error'`, and unresolved with no edge evidence (S5-C). The translated tree is reserved before allocation: at `nodes × CF_FORMULA_NODE_BYTES − 1` nothing is built.
+- [ ] Write `footprint over a target rect is the shifted union, clamped`. `=A2>B1` anchored at C2, over C2:C9 → `{A2:A9, B1:B8}`. `COUNTIF($A:$A,A2)` on a 50-row sheet → `A1:A50` plus `A2:A9`. 262,145 cells → `'over-cap'`.
+- [ ] Write `shape is gated before projection (S5-D, round-1 #7)`. `=A2` over an unstored A2 yields a `blank` result, never `0`, and with only `formula:truth-number` injected it is unresolved. `=A1:A3` at row 2 yields a `range` result; with only number evidence it is unresolved, and under `range-implicit` vs `range-top-left` it reads A2 vs A1. `evaluateFormulaInternal` is never imported by `formula.ts` (source-text assertion). Under each injected reading the observable outcome matches S5-D; `coerceToBoolean` is never called.
+- [ ] Write `values a formula reads equal the host literals (S5-E)`. For blank, `""`, `#DIV/0!`, a date serial, TRUE and `"1"`, `cfLiteralToElement` and `cfElementToLiteral` round-trip. `=ISBLANK(A2)` matches the unstored blank and not `""` (Excel-backed: `cases.ts:981–982`). `=A2=""` is asserted only against the `stage5-formula-functions` observation, never against the engine's own answer (round-1 #12).
+- [ ] Write `a recorded unsupported feature discards a masked result (round-1 #1)`. p1 `IFERROR(COUNTIF(A:A,TRUE),TRUE)` with a red fill and p2 `cellIs > 0` with a green fill and a bold font over the same cells: the p1 result is unresolved (`cf-formula-unsupported`) although the engine returns `true`; the cell shows neither red nor green, and bold only if the p1 DXF does not write font. The same holds for a cycle flag and for a materialization refusal swallowed by `IFERROR`.
+- [ ] Write `a read outside the snapshot taints and discards (Review Focus 1)`. A formula whose dynamic branch reads a cell outside the footprint returns unresolved `cf-formula-dependency`, even when its computed value would be `true`. A cached-unavailable cell under `'cached'` → unresolved. No path returns a blank for a missing cell.
+- [ ] Write `relative-range traversal work is charged per occurrence before it happens (S5-N, round-1 #2, round-3 #6, round-4 #2)`. Not hoisted (relative axes). Each expectation is derived from the component breakdown `cfCallWorkUnits` reports, and the test asserts each component:
+  - `SUM(A1:A4)+SUM(A1:A4)` on a 4-cell view: 5 nodes + 4 view build + 2 × (4 enumeration + 4 reads + 8 sort) = 41 ≤ 128. With the budget at 40 the call never runs (spy) and the rule is unresolved, while a second rule in the batch still evaluates.
+  - `COUNTIF(A$1:A$4,B2)` (column relative, so not hoisted) over the 1,000 numeric targets B2:B1001. The snapshot is explicitly bounded: A1:A4 plus B2:B1001, 1,004 cells, built once for 1,004 units. Each call's restricted view holds 5 cells (A1:A4 and its own criterion cell), so its bound is 3 nodes + 5 view build + 5 enumeration + 4 range reads + 1 criterion read + 15 sort (5 · ⌈log₂ 5⌉) + 4 numeric comparisons = 37, not the 1,004-cell enumeration of the shared snapshot. With an injected preparation ceiling of 5,000 units, the snapshot build leaves 3,996, so exactly ⌊3,996 / 37⌋ = 108 targets (B2:B109) evaluate and B110:B1001 are unresolved in row-major order.
+  - With charging removed (mutant), both tests fail.
+- [ ] Write `SUMIF/AVERAGEIF read the same cells on the view as on the full store (S5-SUMIF-SHAPE regressions)`. With A1:A2 blank, B1 = 0 and B2 = 7: `SUMIF(A1:A2,"",B1)=0`, `AVERAGEIF(A1:A2,"",B1)=0` and `SUMIF(A:A,"",B1)=0` are each refused (compile), never evaluated on a view. With matching-size sum ranges (`B1:B2`, and `B:B` for the whole column), each evaluates on the per-call view to exactly the engine's result on the full store (`SUMIF(A1:A2,"",B1:B2)` = 7, so `=0` is false). A `viewFor` request whose effective area is not fully covered by the snapshot is refused before any `stored()` visit (spy).
+- [ ] Write `full-store enumeration is counted per traversal occurrence (round-4 #1)`. On a 6-cell view, `SUM(A1:A6)+SUM(A1:A6)+SUM(A1:A6)+SUM(A1:A6)` costs 11 nodes + 24 matched reads + 24 enumeration visits + 72 sort units = 131, plus 6 to build the view = 137 > 128, so it is refused before invocation (spy: no `evaluateNode` call, no `stored()` visit). A mutant that omits the enumeration term computes 113 and admits it, and fails the test.
+- [ ] Write `each synchronous call stays within one checkpoint and the loop yields between cells (round-2 #2)`. A formula whose per-call bound is 128 evaluates; at 129 it is refused at footprint time and `evaluateNode` is never called (spy). Over 1,000 targets, `hostTask` is awaited between cells whenever the budget says `'yield'`, never inside a call (spy on call depth). An abort scheduled from a host task fired at the 10th checkpoint stops the preparation before the next cell's call: no further `evaluateNode` call, the preparation throws `cancelled`, and the ledger returns to baseline.
+- [ ] Write `absolute-range aggregates are hoisted and paint on a 10,000-row column (S5-HOIST)`. On a populated 10,000-row column A, under complete injected evidence, `COUNTIF($A:$A,A2)>1` and `A2>AVERAGE($A:$A)` paint exactly the cells the engine's own per-cell evaluation of the same formula marks (computed once offline on the snapshot as the expectation). Every per-cell call is ≤ 128 units (spy), the hoist scan awaits `hostTask` at its checkpoints and pays from a scan budget, not the per-cell ceiling (spy), the snapshot holds only the per-cell footprint (A2 and its neighbours, not the column), and the column is scanned once per rule (source-visit counter). A hoist-free mutant refuses both rules (`cf-resource-limit`).
+- [ ] Write `the COUNTIF frequency map equals the engine's COUNTIF on admitted inputs (S5-HOIST property test, round-3 #5)`. Random **admitted** snapshots (numbers, ASCII text in mixed case, blanks, errors) and random admitted criterion cells: `map.get(cfCountifKey(criterion)) ?? 0` equals the engine's `COUNTIF(range, criterion)` on the same snapshot, with at least 500 successful comparisons each for number criteria and for text criteria (the test asserts the counts), plus fixed deterministic cases: an empty range, a range of only errors, duplicates differing only in case. A mutant map that admits wildcard criteria (`"a*"`) fails.
+- [ ] Write `COUNTIF hoist policy refusals (S5-HOIST, round-3 #1, #5)`. Deterministic, and separate from the engine-equivalence test: a `"#N/A"` criterion over a range holding `#N/A` is refused per cell (the engine counts 1, a string lookup would count 0); a 256-character ASCII criterion is refused (`conditional-long-criterion-unverified`); a 123-character ASCII criterion against a range holding one 32,767-character string is refused (`conditional-wildcard-resource-limit`); `" 1 "` and `"1"` as criteria are refused; ranges with `" 1 "`, a boolean or non-ASCII text refuse the whole rule. Each asserts refusal without consulting the engine's result.
+- [ ] Write `hoisted scalar aggregates equal the engine's own evaluation on admitted inputs (S5-HOIST property test, round-3 #3, #5)`. Random snapshots over mixed cell kinds (numbers, numeric text, text, booleans, blanks, errors), including empty and all-error ranges: for each hoisted `SUM`, `COUNT`, `COUNTA`, `AVERAGE`, `MIN`, `MAX`, and invariant `COUNTIF`/`SUMIF` with literal and absolute-reference criteria, every input the hoist admits gives exactly the engine's value or error code, with at least 300 successful comparisons per profile (asserted). Fixed deterministic cases: `SUM` of `[1e16, 1, -1e16]` = 0 (the compensated statistics sum gives 1, so a mutant reusing it fails); an overflowing `SUM` gives the engine's overflow result; the first error in row-major order wins over a later one; an empty range gives the engine's empty result for each function. Inputs the hoist refuses are tested separately by policy. A mutant that ignores booleans, and one that ignores errors, each fail.
+- [ ] Write `a cancelled or refused hoist leaves nothing charged (S5-HOIST)`. An abort mid-scan, and a frequency-map growth one byte over its reservation (old plus new table at the peak), each publish nothing, return the ledger to baseline and leave the rule unresolved. A host-sheet commit, and a referenced-sheet commit (`dependencyGen`), each invalidate the cached hoist and every tile of the sheet.
+- [ ] Write `text work is bounded by measured payload before invocation (round-2 #1, round-3 #6)`. Two 32,767-character strings make `LEN(A1&A2)` refused at compile-from-payload time **whatever memory is available** (its text units exceed the 128-unit cap; spy: no `evaluateNode` or `textChars` call, even with an unlimited scratch grant). A genuinely sub-cap positive, `LEN(A1&A2)` over two 10-character strings, runs at its exact scratch bound and never runs one byte below it. The matcher bound: `COUNTIF(A1:A2,B1)` over 10-character strings has a bound of 2 × 11 × 11 = 242 transitions and is refused; `COUNTIF(A1:A2,B1)` over 3-character strings runs: 3 nodes + 3 view build + 3 enumeration + 3 reads + 6 sort + 32 matcher transitions (2 × 4 × 4) = 50 ≤ 128. The sub-cap `LEN(A1&A2)` over 10-character strings totals 4 nodes + 2 view build + 2 reads + 20 text units = 28 ≤ 128, with enumeration counted (it has no range traversal). A mutant that drops the text or matcher term fails.
+- [ ] Write `evaluator scratch and snapshot growth are reserved before use (Lessons 9, 15, round-1 #3)`. With free bytes one below `cfEvaluatorScratchBytes(f, metrics)`, where `metrics` is the `CfPayloadMetrics` returned by `viewFor` for that call, `evaluateNode` is never called (spy) and nothing is constructed. A snapshot growth from 1,024 to 2,048 entries charges old plus new at the peak. A refused shared snapshot retried per rule uses a fresh per-attempt budget (spy: two distinct budgets) and both draw from one preparation ceiling. Cancellation between calls, or during the asynchronous snapshot build or hoist scan, and dispose each return the ledger to baseline.
+- [ ] Write `formula results stay finite near ±1e308 (Lesson 6)`. `=A2*10>0` with A2 = 1e308 → `#NUM!` in the engine → unresolved, never `Infinity` as true.
+- [ ] Extend `tests/xlsx-cf-active-units.test.ts`. The largest production call with formula rules (1,000 text-path and 256 paint-path cells, four formula rules each, one `COUNTIF($A:$A,…)`) spends ≤ `CF_LIMITS.activeUnits / 5`. Re-run `npx tsx scripts/cf-refs/active-units.ts`, and record the numbers in `docs/validation/xlsx-cf.md` §11.
+- [ ] Run `npx vitest run tests/xlsx-cf-formula-eval.test.ts tests/xlsx-cf-formula-budget.test.ts tests/xlsx-cf-active-units.test.ts tests/xlsx-cf-budget.test.ts` (RED, implement, GREEN), tsc and the eager gates. Commit (`feat(xlsx-cf): evaluate CF formulas over a bounded snapshot`), report, review.
+
+### Task 35: Formula DXF rules: expression, operands, divergent predicates, composition, stub successors (Claude Opus; review per table)
+
+**Files:** Modify `src/xlsx/cf/service.ts` (formula arm in `evaluate`, snapshot before the page loop), `predicates.ts` (operand path into `evaluateCellIs`), `compose.ts` (only if a gate is missing), `tests/xlsx-cf-oracle-conformance.test.ts` (S5-STUB re-pointing, one commit). Create `tests/xlsx-cf-formula-rules.test.ts`, `tests/xlsx-cf-formula-compose.test.ts`.
+
+**Interfaces:**
+- **Consumes:** Tasks 32–34; `evaluatePredicate`, `evaluateCellIs`, `composeCellAsync`, `visualSlotOf`, `CF_STAGE5_REUSED_CAPTURES`.
+- **Produces:** resolved formula outcomes in `CfCellState.properties` on both adapters; the re-pointed stub assertions.
+
+- [ ] Write `expression rule paints exactly the DisplayFormat cells (Lesson 1)`. For every verified Stage 5 case, production's per-cell match equals the sidecar's `excel-display-format` observation. Every pending, refused or non-discriminating cell asserts no formula-sourced property. No expectation is computed by the function under test.
+- [ ] Write `formula operands reuse the Stage 1 comparators`. `cellIs > $F$1` with F1 = 100 separates 99/100/101 exactly as literal 100 does under the same `cellIs:*` capabilities. An operand `#N/A` → unresolved on that cell only; a reversed `between` follows `cellIs:between-reversed`.
+- [ ] Write `divergent predicates follow the formula (S5-G)`. `ISBLANK(D2)` matches the unstored blank but not `""` (Stage 1 cells `cases.ts:981–982`). `NOT(ISBLANK(G2))` matches 0 (`:988`). `ISNA(J2)` matches `#N/A` and not `#DIV/0!` (`:994–995`). The `SEARCH("zz",J2)` cells stay withheld (S5-B).
+- [ ] Write `formula composition across kinds (S5-O)`:
+  - an expression p1 `stopIfTrue` true halts a lower DXF, scale, bar and icon only with `formula:composition-stop-ahead-<kind>`, else the lower contribution is withheld;
+  - an expression fill vs a scale fill follows `formula:composition-expression-scale`;
+  - two overlapping expressions write first-writer-wins only with `formula:composition-overlapping-expressions` (and the Stage 1 multi-positive guard);
+  - an unresolved expression p1 taints exactly its DXF writes;
+  - all Stage 2–4 compose suites (`tests/xlsx-cf-scale-compose.test.ts`, `xlsx-cf-bar-compose.test.ts`, `xlsx-cf-icon-compose.test.ts`, `xlsx-cf-bot-fixes.test.ts`) stay green unchanged.
+- [ ] Write `stub successors repaint only where Excel did (S5-STUB)`. For every row of the S5-STUB inventory, each conformance cell is Excel's recorded outcome under its named successor capabilities, or withheld; `stage1-blanks-errors` D2/G6/J8/M6 match their recorded Excel fills under `formula:predicate-divergent`. The unit-test rows assert the same refusal under `withExactCfEvidence([])`. A grep test asserts the re-pointing commit touches only the inventoried lines. `git diff main -- src/xlsx/cf/verifiedCapabilities.ts` is empty at this task.
+- [ ] Write `formula rules evaluate identically on the resident and paged adapters`. On the Stage 5 fixtures, `createResidentCfSource` and the paged `readConditionalFormatting` produce deep-equal per-cell states.
+- [ ] Run `npx vitest run tests/xlsx-cf-formula-rules.test.ts tests/xlsx-cf-formula-compose.test.ts tests/xlsx-cf-oracle-conformance.test.ts tests/xlsx-cf-compose.test.ts tests/xlsx-cf-predicates.test.ts tests/xlsx-cf-worker.test.ts` (RED, implement, GREEN), tsc and the eager gates. Commit (`feat(xlsx-cf): evaluate expression rules and formula operands`), report, review.
+
+### Task 36: Cross-sheet values, pending pages, `dependencyGen` and remote invalidation (Claude Opus; review per table)
+
+**Files:** Modify `src/xlsx/cf/dependencies.ts` (`CfWorkbookSource` adapters), `model.ts`, `cache.ts`, `render.ts`, `text.ts`, `src/xlsx/view/contracts.ts`, `pagedSource.ts`, `src/worker/viewerRemoteCf.ts`, `viewerRemoteSource.ts`, `viewerSession.ts`, `src/components/xlsx/InteractiveSheetDoc.tsx`. Create `tests/xlsx-cf-formula-cross-sheet.test.ts`; extend `tests/xlsx-cf-live.test.tsx`, `tests/xlsx-cf-worker.test.ts`.
+
+**Interfaces:**
+- **Consumes:** `CfStamp`, `sameCfStamp`, `CfReadResult`, `RemoteCfCache`, `workbook.store.pages` and `importedThroughRow` (the `fillCharts` pattern, `pagedSource.ts:1198,1231`), `WorkbookOwner.sheetVector` (`contracts.ts:777`), `cfLiveKey` (`InteractiveSheetDoc.tsx:1083`).
+- **Produces:** the Task 36 block of **Produces**. The construction sites at `InteractiveSheetDoc.tsx:1168,1434`, `render.ts:313–320`, `text.ts:428–436`, `pagedSource.ts:982–990` and `viewerSession.ts:3329,3590,3604,3627` set `dependencyGen` (0 when a sheet has no cross-sheet rule).
+
+- [ ] Write `a referenced-sheet commit makes the old batch stale synchronously (Review Focus 4)`. Sheet1 `=Sheet2!A2>0`, painting green at g1. Commit Sheet2 A2 = −1: in the same tick, `at()` returns `cf-stale-generation` on resident, store and worker legs; no tile paints green after the commit; the g2 preparation paints base. A late g1 completion never publishes.
+- [ ] Write `cross-sheet values and generation come from one overlay-aware store (round-1 #6)`. Sheet2 A2 saved `5`, pivot overlay `-5`. Sheet1 `=Sheet2!A2>0`: before the commit the rule matches; after the overlay commit it does not; after the pivot release it matches again. At each transition the snapshot value and the stamp come from the same `PagedXlsxSheetAdapter` (worker) and `source.store` (resident). A commit landing between snapshot build and adoption cancels the preparation (`cf-stale-generation`); a never-activated Sheet2 is created through `storeFor` and reused on activation (one adapter).
+- [ ] Write `dependencyGen strictly increases on any referenced commit and ignores unrelated sheets`. With Sheet2 and Sheet3 referenced, a Sheet3 commit changes it and a Sheet4 commit does not. A host commit still invalidates through `workbookValueGen`. Wrapping a store without CF never touches its stamp.
+- [ ] Write `unimported referenced pages are pending, then repaint once`. A Sheet2 still importing → the Sheet1 cells reading it are `cf-pending-data` with `pendingSheetIds: ['Sheet2']`, no permanent diagnostic, and exactly one invalidation of Sheet1 when Sheet2 completes. A Sheet2 that ends `incomplete` → `cf-read-failed` once.
+- [ ] Write `remote cache entries follow their reply's dependencies`. A reply listing `{Sheet2, valueGen 3}` is current until Sheet2's identity moves to 4, at which point `get()` is stale and `viewerRemoteSource` invalidates every tile of Sheet1 (Lesson 5). A pivot commit on Sheet2 (`:706`) and a pivot release (`:752`) both reach it.
+- [ ] Write `cross-sheet edge cases refuse identically`. An unknown sheet → `#REF!` only under `formula:cross-sheet-missing`, else unresolved. A quoted `'My Sheet'!A1` resolves. More than 16 referenced sheets → `cf-resource-limit`. A worker that cannot name a referenced sheet's generation → `cf-dependency-generation-unknown`.
+- [ ] Write `dependency bytes are measurer-derived`. `CfReadResult.dependencies` at 16 entries is priced by `measurePayloadBytes`. At grant − 1 the formula states are omitted with `cf-grant-required`, base cells return, and `admitReply` never replaces the reply.
+- [ ] Write `a no-cross-sheet workbook does zero cross-sheet work`. No `CfWorkbookSource` read, `dependencyGen` stays 0, and the reply carries no `dependencies` key.
+- [ ] Run `npx vitest run tests/xlsx-cf-formula-cross-sheet.test.ts tests/xlsx-cf-live.test.tsx tests/xlsx-cf-worker.test.ts tests/xlsx-cf-lifecycle.test.ts tests/worker-package-bootstrap.test.ts` (RED, implement, GREEN), tsc and the eager gates (record the `InteractiveSheetDoc` delta). Commit (`feat(xlsx-cf): evaluate cross-sheet CF formulas`), report, review.
+
+### Task 37: Formula cfvo bounds, x14 colour scales and `activePresent` (Claude Opus; review per table)
+
+**Files:** Modify `src/xlsx/cf/parse.ts` (`parseColorScaleRule`, `barBound`, `iconThreshold`, the activation checks), `colorScale.ts`, `dataBar.ts`, `iconSet.ts`, `service.ts`. Create `tests/xlsx-cf-formula-cfvo.test.ts`; extend the scale/bar/icon parse tests.
+
+**Interfaces:**
+- **Consumes:** Tasks 32–36; `resolveScaleThresholds`, `resolveBarThresholds`, `resolveIconThresholds`, `lerp`, `percentileOrderStatistic`, `scaleRequiredCapabilities`/`barRequiredCapabilities`/`iconRequiredCapabilities`.
+- **Produces:** formula bounds on all three families; the x14 scale arm when `scale:dialect-standalone` is verified; the activation gate when S5-J's evidence exists, else the recorded permanent refusal.
+
+- [ ] Write `a formula bound resolves once per measured scope (S5-H, round-1 #10)`. A single-range scale with `formula` `=$F$1` (F1 = 50) over {0..100} resolves its min threshold to 50, evaluated once per preparation (spy). `percent` `$F$1` with F1 = 25 resolves to `lerp(min, max, 0.25)`. A bar `formula` max and an icon `formula` threshold resolve the same way. A multi-range rule with any formula bound is unresolved without `formula:cfvo-scope-multi-range`; under each injected reading, memoisation is keyed rule-wide or per range and the disjoint fixture's cells follow it.
+- [ ] Write `non-numeric or relative cfvo results withhold`. Text, blank or error → unresolved until `formula:cfvo-nonnumeric`. A relative `=A2` cfvo → unresolved until `formula:cfvo-relative`. A cross-sheet cfvo follows Task 36.
+- [ ] Write `num-val references lift only with both capabilities`. `type="num" val="$A$1"` resolves only with `scale:thresholds-num-val-reference` (already verified) plus `formula:cfvo-reference`; with either missing → `cf-unsupported-rule` as on main.
+- [ ] Write `x14 colour scales follow the recorded dialect (S5-I)`. With `scale:dialect-standalone` injected, the Excel-authored `<x14:colorScale>` resolves to the same points as its base twin. If Task 31 recorded the base form, the x14 shape stays `cf-unsupported-rule`, and the test pins that refusal with the recorded reason.
+- [ ] Write `activePresent follows its recorded outcome (S5-J)`. If Excel stripped it, every `activePresent="1"` visual stays `cf-unsupported-rule` and `formula:active-present-*` sits in `CF_STAGE5_UNSUPPORTED` with the reason. If retained, an activation false at a cell withholds that cell's visual only, and a missing rule-level `<xm:f>` stays `cf-invalid-rule`.
+- [ ] Write `formula bounds stay finite and visuals keep their slots`. Bounds at ±1e308 resolve finite or unresolved, never NaN. A formula-bounded bar and icon on one cell follow the Stage 3–4 slot gates unchanged.
+- [ ] Run `npx vitest run tests/xlsx-cf-formula-cfvo.test.ts tests/xlsx-cf-scale-parse.test.ts tests/xlsx-cf-bar-parse.test.ts tests/xlsx-cf-icon-parse.test.ts tests/xlsx-cf-scale-eval.test.ts tests/xlsx-cf-bar-eval.test.ts tests/xlsx-cf-icon-eval.test.ts` (RED, implement, GREEN), tsc and the eager gates. Commit (`feat(xlsx-cf): resolve formula cfvo bounds`), report, review.
+
+### Task 38: Calculation policy, clock, every-view agreement, blank synthesis, a11y/copy/find (Claude Sonnet; review per table)
+
+**Files:** Modify `src/xlsx/cf/render.ts`, `text.ts`, `src/xlsx/view/pagedSource.ts` and `src/worker/viewerSession.ts` only where the leg table exposes a gap in the Task 32 wiring. Create `tests/xlsx-cf-formula-views.test.ts`; extend `tests/xlsx-cf-print.test.ts`, `xlsx-cf-export.test.ts`, `xlsx-cf-copy-find.test.ts`, `xlsx-cf-paged-a11y.test.ts`, `xlsx-cf-presentation.test.tsx`, `tests/browser/xlsx-cf.spec.ts`.
+
+**Interfaces:**
+- **Consumes:** `prepareCfPaint`, `prepareCfTextScope`, `prepareCfRemoteOnce`, `describeCfWin`, `isValueUnavailable`, `workbookValuePolicy`, the M2 midnight tick (`InteractiveSheetDoc.tsx:566–576`).
+- **Produces:** the leg table of S5-P as an executable test, over the context contract and wiring Task 32 already produced (round-2 #3).
+
+- [ ] Write `every route takes one evaluation context or withholds (S5-L, round-1 #5)`. On a workbook with an uncached formula cell in a footprint: `prepareCfPaint`, `prepareCfTextScope`, `prepareCfRemoteOnce`, `getPaintables`, `prepareSheetAssets` and the copy/find and a11y scopes, given the same `CfDocumentEvaluation` and an injected clock, give pairwise-equal outcomes (unresolved under `'cached'`, evaluated under `'engine'`). Each route called without the context leaves every formula rule unresolved (`cf-evaluation-context-missing`) and leaves Stage 1–4 rules unchanged. A paged manual-mode workbook reports `calcMode: 'manual'` from `PagedWorkbook` and withholds exactly as the resident one does. `recomputeDependents` is never called (spy).
+- [ ] Write `manual calculation withholds until measured`. A `calcMode="manual"` workbook's formula rules are unresolved without `formula:calc-manual-saved-values` and follow the saved values with it.
+- [ ] Write `one clock per preparation on every leg (S5-M)`. With an injected `now` inside `CfEvaluationContext`, static, text, resident and worker preparations give the same `TODAY()` outcome and the same `clockGen`. A midnight tick invalidates every tile of a `TODAY()`-rule sheet once, and a sheet without clock-dependent rules sees no tick (zero preparations). `NOW()` stays refused.
+- [ ] Write `static, print, export, resident, worker and forced-paged agree for paint, a11y and copy/find (Lesson 13)`. On the Stage 5 fixtures, the cross-sheet fixture included, each leg's per-cell properties, the `describeCfWin` descriptor and the copy/find text are pairwise equal. A leg without `CfWorkbookSource` withholds the cross-sheet cells identically on all three surfaces.
+- [ ] Write `formula descriptors carry no formula text (S5-Q, Lesson 10)`. A matching expression's accessible descriptor equals the Stage 1 DXF descriptor for the same DXF, is ≤ 128 units, and contains no `=`, reference or function name. Focus order is unchanged.
+- [ ] Write `blank cells match formula rules in every view`. `=ISBLANK(B2)` over an unstored B2 on a CF-only sheet paints on static, print and interactive legs, and hit testing reaches it (the Stage 1 `B2`/`Z5` pattern).
+- [ ] Extend `tests/browser/xlsx-cf.spec.ts` with `Stage 5 formula rules paint and announce on every leg, and legs agree`, `Stage 5 cross-sheet edit repaints the dependent sheet`, `Stage 5 formula rules under frozen panes` and `Stage 5 print capture paints formula rules`.
+- [ ] Run `npx vitest run tests/xlsx-cf-formula-views.test.ts tests/xlsx-cf-print.test.ts tests/xlsx-cf-export.test.ts tests/xlsx-cf-copy-find.test.ts tests/xlsx-cf-paged-a11y.test.ts tests/xlsx-cf-presentation.test.tsx`, then `npx playwright test --config playwright.viewer.config.ts tests/browser/xlsx-cf.spec.ts --project chromium`, tsc and the eager gates. Commit (`feat(xlsx-cf): one policy and clock for CF formulas in every view`), report, review.
+
+### Task 39: Stage 5 validation, five-family closure gates, resource audit and PR evidence (Claude Sonnet; review per table)
+
+**Files:** Create `tests/xlsx-cf-stage5.test.ts`. Extend `tests/xlsx-cf-oracle-conformance.test.ts` (Stage 5 counts) and `tests/browser/xlsx-cf.spec.ts`. Update `docs/validation/xlsx-cf.md`, the manifest statuses, `scripts/eager-baseline.json` (recorded growth), `src/xlsx/cf/verifiedCapabilities.ts` (via `--write --publish-stage5` only) and `CHANGELOG.md`. Fix product regressions in separate focused commits, each with RED evidence and a different-family re-review.
+
+**Interfaces:**
+- **Consumes:** everything above, `auditStage5Manifest`, the Stage 1–4 audits.
+- **Produces:** a Stage 5 audit row per case and variant (status, evidence kind, Excel vs production reading, mode, stamp, byte peak, work units); the generated `VERIFIED_STAGE5_CAPABILITIES`; the PR 5 evidence.
+
+- [ ] Write `every enabled formula capability has verified evidence` and `every unresolved formula shape refuses atomically on both paths`, covering the `formula:*` rows and the formula rows of `scale:`/`bar:`/`icon:` only. RED, then GREEN.
+- [ ] **Corpus gate (not vacuous).** Write `formula CF files parse identically on both paths` over the inventoried corpus files and, unconditionally, over `excel-authored-formulas.xlsx` and every Stage 5 saved workbook. The file count must equal the inventory's; a count of 0 corpus files is recorded, never treated as a pass on its own.
+- [ ] **Dual gate (Lessons 1, 4).** Run `bun scripts/cf-refs/audit.ts --stage 5` until it reports `stageComplete=true`, with every disposition in {`verified`, `unverified-nondiscriminating`, `refused-unsupported`, `supported-structural`} and none `unaccounted`, AND `npx vitest run tests/xlsx-cf-oracle-conformance.test.ts` green with no injection. Then run `--write --publish-stage5` twice; `git diff --exit-code src/xlsx/cf/verifiedCapabilities.ts` after the second proves idempotency.
+- [ ] **Five-family closure.** Re-run the Stage 1–4 audits and conformance under the published Stage 5 set: `audit.ts --stage 1..4` stay ok, and `git diff main -- src/xlsx/cf/verifiedCapabilities.ts` touches only `VERIFIED_STAGE5_CAPABILITIES` and the combined set.
+- [ ] Run `npx tsc --noEmit -p .`, `npx tsc --noEmit -p tsconfig.scripts.json`, `npx vitest run`, `bun run gates:core` (including `OV_MODULE_MAP=1 bun run build`), `bun scripts/check-eager.ts`, `bun scripts/eager-budget.ts` and `git diff --check`. Record the summaries, the eager gzip (strictly below 38,720 B), the `eager-baseline.json` delta with its justification, `indexModuleSetHash`, and the `cf` chunk delta against PR 4.
+- [ ] Browser: `npx playwright test --config playwright.viewer.config.ts tests/browser/xlsx-cf.spec.ts --project chromium`, plus `--project webkit` if installed. Cover saved, interactive, resident and forced-paged views, the six zoom/DPR pairs, frozen panes, a live cross-sheet edit, a midnight tick (injected clock), print capture, and the formula descriptor. An unavailable engine is a named blocked gate.
+- [ ] Run `bun scripts/cf-compare.ts --stage 5 --mode static|interactive|paged|print|export`, bound to the workbook and oracle hashes. Unverified fidelity is labelled `*unverified*`.
+- [ ] Run `bun scripts/cf-refs/audit.ts --stage 5` resource scenarios:
+  - a 1M-row synthetic sheet with 100 formula rules over `A:A` sharing one snapshot;
+  - `SUM($A:$A)` and `COUNTIF($A:$A,A2)>1` on 5,000 visible cells over a declared 1M-row `A:A` with 10,000 populated cells: hoisted, clamped to populated bounds, one chunked scan per rule paid by the scan budget, per-cell calls ≤ 128 units; the same rules over a column with about a million **populated** rows refuse at the scan budget with one diagnostic, as Stage 1–4 statistics do; and a relative-range `SUM(A1:A200)` over the same cells is refused before any `evaluateNode` call;
+  - snapshot pressure at the cap and cap+1;
+  - 16 and 17 referenced sheets;
+  - a refused footprint beside a ready rule;
+  - 20 open/read/cancel/close cycles, including close during a cross-sheet pending read.
+
+  Pass when there are zero unowned live bytes at every transition, and zero formula compiles, snapshot reads or clock reads on a no-formula baseline.
+- [ ] Publish one row per Stage 5 `[measure]` item in `docs/validation/xlsx-cf.md`: ruling, capability, evidence kind, status and the exact refusal still in force, including every re-deferral of the deferral sweep.
+- [ ] Update the changelog. The reviewer verdict is recorded in `.superpowers/sdd/<plan>/task-39-review.md` (APPROVE), then the whole-branch high-effort review by the other family. Budget one extra PR-bot round for cross-path semantics. Prepare the PR 5 evidence and leave the merge to the owner.
+
+### Lesson-to-task mapping
+
+| Lesson (brief numbering) | Task | Test |
+|---|---|---|
+| 1 Oracle first + production conformance | 31, 35, 39 | `stage 5 formula cells are withheld until their evidence lands`; `expression rule paints exactly the DisplayFormat cells (Lesson 1)`; the dual gate |
+| 2 Exact or withheld | 32–38 | `compile admits the allow-list and refuses every out-of-scope node statically`; `truth readings are gated`; `a read outside the snapshot taints and discards` |
+| 3 Non-discriminating ⇒ withhold, ≥ 2 cells | 31 | `semantic DisplayFormat evidence needs two decisive cells and a control (Lesson 3)` |
+| 4 Publication only through the audit; dual gate; matched reading = production reading | 31, 39 | `audit --stage 5 --write is idempotent`; `a publication requires production's reading to equal Excel's matched reading`; Task 39 dual gate |
+| 5 Whole-sheet invalidation | 36, 38 | `remote cache entries follow their reply's dependencies` (every tile of Sheet1); the midnight-tick test |
+| 6 Measurer bytes; finite near ±1e308 | 32, 34, 36, 37 | `formula definitions are priced`; `formula results stay finite near ±1e308`; `dependency bytes are measurer-derived`; `formula bounds stay finite` |
+| 7 Eager size; CF out of eager/paged-worker | 32, 36, 39 | lazy file list + `indexModuleSetHash` assertion; recorded `canRuleMatchBlanks`/stamp deltas |
+| 8 Linux CI: skipIf + TZ pin | 31, 38 | osacompile under `it.skipIf(!hasOsacompile)`; TZ-pinned clock tests |
+| 9 Deterministic budgets; fresh fallback budget | 34, 39 | `each synchronous call stays within one checkpoint and the loop yields between cells`; `traversal work is charged per occurrence before it happens`; `text work is bounded by measured payload before invocation`; active-units extension |
+| 10 A11y from semantics; legs announce identically | 38 | `formula descriptors carry no formula text`; the every-leg agreement test |
+| 11 Coarse plans: decorations only on a painted host | 38 | inherited unchanged: formula rules add no decoration; the agreement test includes a coarse frame |
+| 12 Excel canonicalises; Excel-authored source; record strips | 31, 37 | `stage5-formula-authored`; one shape per workbook; `x14 colour scales follow the recorded dialect`; `activePresent follows its recorded outcome` |
+| 13 Every view agrees; missing inputs fail closed identically | 36, 38 | `static, print, export, resident, worker and forced-paged agree…`; `every leg reads one value policy`; `cross-sheet edge cases refuse identically` |
+| 14 No post-hoc fitting | 31, 39 | hypotheses fixed in each case before capture; reviewer checklist item (Review Focus 10) |
+| 15 Charge before allocating (growth peaks, decoded caches) | 34, 36 | translated-tree reservation; snapshot growth charges old + new; cross-sheet decoded pages admitted under the batch lease |
+
+### Stage 5 owner decisions
+
+1. **OD-11 — splitting.** Decided 2026-11-16: Stage 5 ships as one PR, Tasks 31–39 in order (owner decision).
+   - Alternative: three sub-PRs (same-sheet, cross-sheet, cfvo/x14/closure). Cost: a group-scoped audit and three closure runs.
+2. **OD-12 — calculation policy.** Decided 2026-11-16: option (a), CF formulas read the grid-displayed value of every cell (cached or engine, whichever the grid shows), never recompute, still evaluate under `'cached'` (a CF rule has no cache), treat an unavailable cached value as unresolved, and withhold manual-mode workbooks until `formula:calc-manual-saved-values` (owner accepted the recommendation).
+   - Alternative (b): always read the saved `<v>`. Cost: CF can disagree with the grid the user sees.
+3. **OD-13 — function coverage.** Decided 2026-11-16: the closed tier-1 allow-list of S5-B (only functions registered on main), with no engine additions in Stage 5 (owner accepted the recommendation).
+   - Alternative: admit the lookup family. Cost: lookup semantics in CF need their own discriminating cases.
+   - Alternative: implement `SEARCH`/`FIND`/`ISEVEN`/`ISODD` in the shared engine. Cost: changes worksheet formulas and needs its own engine oracle.
+4. **OD-14 — `NOW()` and sub-day volatility.** Decided 2026-11-16: `NOW()` is withheld, and `TODAY()` is admitted under the Stage 1 clock and the M2 midnight tick (owner accepted the recommendation).
+   - Alternative: a periodic CF clock tick for `NOW()` sheets. Cost: a new timer and an invalidation path in every view.
+5. **OD-15 — x14 colour scales (OD-3 pickup).** Decided 2026-11-16: in scope only if Excel's dialog writes the x14 form for a cross-sheet bound; otherwise the outcome is recorded and the shape re-deferred (owner accepted the recommendation).
+   - Alternative: ship from hand-authored x14 XML. Cost: a dialect Excel may never write, so there is no evidence.
+6. **OD-16 — `activePresent`.** Decided 2026-11-16: a permanent recorded refusal is accepted if Excel cannot author it or strips it on resave (owner accepted the recommendation).
+   - Alternative: ship from hand-authored XML that Excel never keeps. Cost: unverifiable semantics.
+
+### Self-review
+
+- **Coverage.**
+  - §4 row 5 and §10 item 5 → Goal, deferral sweep, Tasks 32–37.
+  - §5.1 non-literal operands → S5-F, Task 35. §5.2/§5.3 divergent formulas → S5-G, Task 35.
+  - §5.7 composition → S5-O, S5-STUB, Task 35. §5.8–§5.10 formula bounds → S5-H, Task 37.
+  - §5.11 anchor, truthiness, `activePresent`, clock, calc policy, cross-sheet → S5-C/D/J/M/L/K, Tasks 34, 36–38.
+  - §6.3 paged dependency preparation and budgets (including line 245's `SUM(A:A)` repeat) → S5-K/N/HOIST, Tasks 34, 36. §6.5/§6.6 → S5-K stale-at-commit, Task 36.
+  - §6.7 → S5-Q, Task 38. §6.8 → S5-R, Task 36. §7 → Global Constraints delta, caps, Task 39. §8 → S5-A, Task 31. §9 items 5/8 → Review Focus 1, 4, 5.
+- **Interfaces.** Every Consumes and architecture citation was printed on `fc61c6c6` after drafting (a mechanical pass over every `file:line`). Every Produces name was grepped absent with `rtk proxy grep`. Corrected facts: `translateSharedFormula` lives at `shared.ts:386`, not `workbook.ts:938`; the Stage 1 "external source change" coordinator does not exist on main; `ResolvedSemantics` fields are `timeZone`/`epochNowMs`.
+- **Main-branch facts that change the plan.**
+  - Conditional aggregates and whole-column references need `ReferenceServices`, so the adapter builds them over its snapshot.
+  - `SEARCH`/`FIND` are unregistered, so Excel's own divergent text formulas stay withheld.
+  - Every CF source and stamp is single-sheet, so cross-sheet needs `dependencyGen` and a workbook seam.
+  - The Stage 2–4 rejected twins lost all CF, so every malformed shape gets its own workbook.
+  - `canRuleMatchBlanks` is eager and keyed on the unresolved `expression`.
+  - Paint and text default to different value policies.
+- **Round-2b (S5-HOIST).** Absolute-range aggregates and the `COUNTIF($A:$A,A2)` idiom are hoisted into the chunked statistics machinery, so the 128-unit per-call cap no longer refuses them; the hoist is exact-or-refused against the engine's own `COUNTIF`.
+- **Proportion.** Nine tasks against Stage 4's seven (Task 33 was added in round 1 for the `timePeriod` fail-open). Three things are new compared with Stage 4: the formula adapter and snapshot (Task 34), the cross-sheet generation (Task 36), and the reused-capture stub successors (Tasks 31, 35).
 
 ## Self-review checklist for this plan
 

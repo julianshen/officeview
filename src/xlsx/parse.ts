@@ -207,8 +207,10 @@ async function parseStyles(pkg: OfficePackage, themePalette?: Readonly<Record<st
 }
 
 export interface ParseXlsxOptions {
-  /** Load-time evaluator resource caps (large-source admission, design note §4.3). Unset = today's behaviour. */
-  evaluation?: Pick<WorkbookEvaluationOptions, 'maxArrayCells' | 'maxArraySide' | 'maxMaterializedCells'>
+  /** Load-time evaluator resource caps (large-source admission, design note §4.3), and the load-time clock and zone a
+   * validation run pins (the evaluator already honoured both at runtime; no production caller passes them). Unset =
+   * today's behaviour. */
+  evaluation?: Pick<WorkbookEvaluationOptions, 'maxArrayCells' | 'maxArraySide' | 'maxMaterializedCells' | 'timeZone' | 'now'>
   /** 'cached' shows saved values only: no load-time evaluation, so a formula
    * without a cached value stays unavailable (hasCachedValue false). Default 'engine'. */
   valuePolicy?: 'engine' | 'cached'

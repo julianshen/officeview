@@ -13,7 +13,12 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx, type ParseXlsxOptions } from '../src/xlsx/parse'
-import { prepareCfPaint, residentSource } from '../src/xlsx/cf/render'
+import { cfDocumentEvaluationOf, prepareCfPaint, residentSource } from '../src/xlsx/cf/render'
+import { caseClockOf, caseDocumentEvaluationOf, caseParseOptionsOf, type CaseClockLike } from '../scripts/cf-refs/case-clock'
+import { prepareCfTextScope } from '../src/xlsx/cf/text'
+import { stage5SlotVerdict } from './helpers/cf-stage5-verdict'
+import type { CfDateContext } from '../src/xlsx/cf/predicates'
+import type { XlsxSheet } from '../src/xlsx/types'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
 import { VERIFIED_CAPABILITIES, injectCfAutoBarColours, injectCfBarGradient, injectCfBarLayout, injectCfBarAutoBounds, injectCfBarGradientBorder, injectCfBarLengths, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import * as verifiedExports from '../src/xlsx/cf/verifiedCapabilities'
@@ -46,10 +51,9 @@ function refToRowCol(ref: string): { row: number; col: number } {
 
 /** The viewer evaluates TODAY() in the workbook/viewer time zone (host default). The Excel observation was taken in
  * `requiredTimeZone`, so a conformance run evaluates in that zone instead of inheriting the CI host's (UTC). */
-function parseOptionsFor(c: { clockRequirement?: { requiredTimeZone: string } }): ParseXlsxOptions {
-  // `evaluation` is spread into evaluateWorkbookFormulas at runtime, which honours timeZone; the public type only
-  // advertises the array caps, hence the cast.
-  return (c.clockRequirement ? { evaluation: { timeZone: c.clockRequirement.requiredTimeZone } } : {}) as ParseXlsxOptions
+function parseOptionsFor(c: CaseClockLike): ParseXlsxOptions {
+  // Final review F2: the case's zone and anchor instant (case-clock.ts); the load-time evaluator honours both.
+  return caseParseOptionsOf(c)
 }
 
 
@@ -101,6 +105,40 @@ function underUnevidencedBarStop(c: { markers: ReadonlyArray<{ ruleType: string;
     c.markers.some(m => m.ruleType !== 'dataBar' && m.priority !== undefined && m.priority > bar.priority! && isCellInSqref(ref, m.sqref)))
 }
 
+/** Task 39: whether a formula-bearing marker (an expression, a formula operand, a formula bound or activation) covers `ref`. */
+function stage5FormulaCovered(c: { markers: ReadonlyArray<{ sqref: string; formula?: unknown }> }, ref: string): boolean {
+  return c.markers.some(m => m.formula !== undefined && isCellInSqref(ref, m.sqref))
+}
+
+/** Task 39: production's own announcement of one cell (the text scope over the paint path's inputs): withheld or not.
+ * Fix round 1 (F1): any exception is a failure (it propagates), never accepted as withholding. */
+async function stage5WithheldAt(c: CfManifest['cases'][number], sheet: XlsxSheet, doc: Awaited<ReturnType<typeof parseXlsx>>, ref: string, dateContext: CfDateContext | undefined): Promise<boolean> {
+  const { row, col } = refToRowCol(ref)
+  const budget = { reserve: () => {}, release: () => {}, retain: (_t: unknown, _b: number, commit: () => void) => commit(), settle: () => {} }
+  const scope = await prepareCfTextScope(sheet, {
+    rects: [{ r0: row, r1: row, c0: col, c1: col }], signal: new AbortController().signal, locale: 'en-US', budget: budget as never,
+    documentSheets: doc.sheets, evaluation: caseDocumentEvaluationOf(c, doc), ...(dateContext ? { dateContext } : {}),
+  })
+  if (!scope) throw new Error(`${ref}: no text scope for a sheet with conditional formatting`)
+  try { return scope.describe(row, col)?.text === 'Conditional formatting unavailable' } finally { scope.dispose() }
+}
+
+/**
+ * Task 39 fix rounds 1-2 (F1, R2): one Stage 5 cell under a formula rule. The production service's outcome at the cell is
+ * compared slot by slot (`stage5SlotVerdict`): every unresolved slot needs a justification for that slot of that rule,
+ * every resolved slot is Excel's. A cell the paint leaves unformatted where Excel shows a format must also be announced
+ * withheld by production's text scope (not a no-match). Returns the violation, if any.
+ */
+async function stage5CellVerdict5(c: CfManifest['cases'][number], exp: { ref: string; matched?: boolean }, gotMatched: boolean, sheet: XlsxSheet, doc: Awaited<ReturnType<typeof parseXlsx>>, dateContext: CfDateContext | undefined): Promise<{ violation?: string; withheld: boolean }> {
+  const key = `${c.id}:${exp.ref}`
+  const slot = await stage5SlotVerdict(c, doc, sheet, exp.ref, REPO_ROOT)
+  if (slot) return { withheld: false, violation: slot }
+  if (gotMatched) return { withheld: false }
+  const withheld = await stage5WithheldAt(c, sheet, doc, exp.ref, dateContext)
+  if (!withheld && exp.matched) return { withheld, violation: `${key}: Excel shows a format and production paints none (a no-match, not withheld)` }
+  return { withheld }
+}
+
 describe('production viewer conditional formatting oracle conformance (C1 & C3)', () => {
   const manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8')) as CfManifest
 
@@ -114,6 +152,21 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     'stage1-priority-composition:G2', // MOD(25,2)=1 expression rule (Stage 5)
     'stage1-priority-composition:G3', // MOD(14,2)=0 expression rule (Stage 5)
   ])
+  // Ruling S5-STUB (Task 35): each stub cell above, and the Stage 2-4 stub cells below, follows its successor
+  // capabilities. Once every one is verified the cell must be Excel's recorded outcome; until then it is withheld or Excel's
+  // recorded outcome, never anything else. The lists are the ruling's inventory plus what production itself gates the stub on
+  // (the dialect, the anchor and the formula:composition-stop-<kind> ahead of the lower rule).
+  const S5_STUB_DXF = ['formula:dialect-base', 'formula:anchor-single', 'formula:truth-boolean']
+  const S5_STUB_SUCCESSORS: Readonly<Record<string, readonly string[]>> = {
+    'stage1-blanks-errors': [...S5_STUB_DXF, 'formula:predicate-divergent', 'formula:fn-information', 'formula:fn-logical'],
+    'stage1-priority-composition': [...S5_STUB_DXF, 'formula:fn-math', 'formula:composition-stop-dxf', 'formula:composition-stub-successor-dxf'],
+    'stage2-scale-composition': [...S5_STUB_DXF, 'formula:fn-math', 'formula:composition-stop-scale', 'formula:composition-stub-successor-scale'],
+    'stage3-bar-composition': [...S5_STUB_DXF, 'formula:fn-math', 'formula:composition-stop-bar', 'formula:composition-stub-successor-bar'],
+    'stage4-icon-composition': [...S5_STUB_DXF, 'formula:fn-math', 'formula:composition-stop-icon', 'formula:composition-stub-successor-icon'],
+  }
+  /** `'withheld'`: the stub cell paints nothing and its successors are not all verified. `'compare'`: it must be Excel's. */
+  const stubOutcome = (cellKey: string, gotMatched: boolean): 'withheld' | 'compare' =>
+    !gotMatched && !S5_STUB_SUCCESSORS[cellKey.split(':')[0]!]!.every(id => VERIFIED_CAPABILITIES.has(id)) ? 'withheld' : 'compare'
 
   type Finding = { outcome: 'withheld'; reason: string }
 
@@ -192,23 +245,28 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     let stage4IconOnlyWithheld = 0
     let stage4Evidenced = 0
     let stage4StubWithheld = 0
+    let stage3StubCompared = 0
+    let stage4StubCompared = 0
+    let stage5Withheld = 0
+    let stage5Compared = 0
+    let stage5FormulaCompared = 0
 
     for (const c of manifest.cases) {
       if (c.status !== 'measured' || c.stage === 2) continue
       if (c.clockRequirement) {
         vi.useFakeTimers({ toFake: ['Date'] })
-        vi.setSystemTime(new Date(`${c.clockRequirement.anchorLocalDate}T04:00:00+08:00`))
+        vi.setSystemTime(caseClockOf(c)!.epochMs)
       }
       try {
         const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
         const doc = await parseXlsx(await OfficePackage.load(bytes), parseOptionsFor(c))
         const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
-        const dateContext = c.clockRequirement ? {
+        const dateContext = c.clockRequirement && c.stage !== 5 ? { // Task 39 fix 1: a Stage 5 case takes the evaluation clock (faked Date), as paint.ts does
           clockSerial: c.clockRequirement.anchorSerial,
           dateSystem: c.clockRequirement.dateSystem,
         } : undefined
 
-        const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext })
+        const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext, evaluation: caseDocumentEvaluationOf(c, doc), documentSheets: doc.sheets }) // Final review F2: the case zone pinned. Task 39: as src/render/paint.ts passes it (the cross-sheet seam, S5-K)
         expect(paint, `prepareCfPaint should succeed for ${c.id}`).toBeDefined()
         if (!paint) continue
 
@@ -218,13 +276,27 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
 
           const { row, col } = refToRowCol(exp.ref)
           const st = paint.layer.styleAt(row, col, undefined)
-          const gotMatched = Boolean(st && (st.fillColor || st.color || st.bold !== undefined || st.formatCode || st.numFmtId))
+          // Task 39: a strikethrough-only DXF (stage5-composition's dxf 2 positive control B10) is a CF match too; Excel's
+          // DisplayFormat records it as `matched` with no fill.
+          const gotMatched = Boolean(st && (st.fillColor || st.color || st.bold !== undefined || st.strike === true || st.formatCode || st.numFmtId))
 
           // Ruling M3: Withheld Stage 5 expressions or Stage 2/3 visuals must be asserted
           // as withheld rather than skipped silently:
-          if (STAGE5_OR_DEFERRED_WITHHELD.has(cellKey)) {
-            expect(gotMatched, `${cellKey} should be withheld in Stage 1`).toBe(false)
-            continue
+          // S5-STUB: withheld until its successors are verified, otherwise compared with Excel below.
+          if (STAGE5_OR_DEFERRED_WITHHELD.has(cellKey) && stubOutcome(cellKey, gotMatched) === 'withheld') continue
+          if (c.stage === 5) {
+            // Task 39 (dual gate, Lessons 1 and 13): a Stage 5 cell under a formula-bearing rule is WITHHELD or Excel's
+            // outcome, never anything else. A capability production does not hold (unpublished, or a reading it does not
+            // implement, e.g. a bare reference needs every truth reading) leaves the cell withheld; a rule production holds
+            // (or a higher-priority one, stage5-composition N's colour scale) paints, and is then compared with Excel below.
+            // Where production paints nothing but Excel shows a format, production must announce the cell withheld: a
+            // no-match there would be a wrong paint. Literal twins and positive controls carry no formula: always compared.
+            if (stage5FormulaCovered(c, exp.ref)) {
+              const verdict = await stage5CellVerdict5(c, exp, gotMatched, sheet, doc, dateContext)
+              expect(verdict.violation, cellKey).toBeUndefined()
+              if (verdict.withheld) { stage5Withheld++; continue }
+              stage5FormulaCompared++
+            } else stage5Compared++
           }
           if (c.stage === 3) {
             stage3Checked++
@@ -252,9 +324,9 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
               const excelFilled = argbDelta(excel, 'FFFFFFFF') > 8
               if (STAGE3_NONBAR_WITHHELD[cellKey]) {
                 expect(STAGE3_NONBAR_WITHHELD[cellKey]!.outcome).toBe('withheld')
-                expect(gotMatched, `${cellKey} is withheld (${STAGE3_NONBAR_WITHHELD[cellKey]!.reason})`).toBe(false)
-                stage3NonBarWithheld++
-                continue
+                // S5-STUB: withheld until its successors are verified, otherwise compared with Excel's background below.
+                if (stubOutcome(cellKey, gotMatched) === 'withheld') { stage3NonBarWithheld++; continue }
+                stage3StubCompared++
               }
               expect(gotMatched, `${cellKey}: non-bar rules match where Excel paints a fill (Excel ${excel})`).toBe(excelFilled)
               if (excelFilled) expect(argbDelta(st!.fillColor!, excel), `${cellKey} fill ${st?.fillColor} vs Excel ${excel}`).toBeLessThanOrEqual(8)
@@ -281,9 +353,20 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
                 continue
               }
               // The Stage 5 expression stub (L, its capability withheld) is unresolved, so it paints no fill.
-              if (writers.some(m => m.ruleType === 'expression')) {
-                expect(gotMatched, `${cellKey}: the Stage 5 expression stub is withheld`).toBe(false)
+              // S5-STUB: withheld until its successors are verified, otherwise compared with Excel below.
+              const stub = writers.some(m => m.ruleType === 'expression')
+              if (stub && stubOutcome(cellKey, gotMatched) === 'withheld') {
                 stage4StubWithheld++
+                continue
+              }
+              if (stub) {
+                // Excel's recorded outcome: the stub's own fill where its expression matched. An icon-only match
+                // (iconApplied, the expression false) paints no style, since an icon never reaches the cell style.
+                const stubFill = writers.find(m => m.ruleType === 'expression')!.dxf?.fillRgb
+                const filled = exp.matched === true && exp.iconApplied !== true
+                expect(gotMatched, `${cellKey}: the stub paints exactly where Excel shows its fill`).toBe(filled)
+                if (filled && stubFill) expect(st?.fillColor, `${cellKey} fill`).toBe(stubFill)
+                stage4StubCompared++
                 continue
               }
               if (!caps.every(id => VERIFIED_CAPABILITIES.has(id))) continue
@@ -349,7 +432,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(stage3BarWithheld + stage3BarEvidenced).toBeLessThanOrEqual(stage3Checked)
     // Non-vacuous (Task 18b review): the non-bar outcomes on bar cells were compared with Excel's background.
     expect(stage3NonBarChecked).toBeGreaterThan(10)
-    expect(stage3NonBarWithheld).toBe(Object.keys(STAGE3_NONBAR_WITHHELD).length)
+    expect(stage3NonBarWithheld + stage3StubCompared).toBe(Object.keys(STAGE3_NONBAR_WITHHELD).length)
     // Stage 4 (non-vacuous, derived from the manifest): every ruled cell of a measured Stage 4 case is unverified, and
     // most of them are covered by icon rules only.
     const expectedStage4Unverified = manifest.cases
@@ -363,8 +446,23 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(stage4Unverified).toBe(expectedStage4Unverified)
     expect(stage4Evidenced).toBeGreaterThan(200)
     expect(stage4IconOnlyWithheld).toBeGreaterThan(200)
-    expect(stage4StubWithheld).toBe(4)
-  })
+    expect(stage4StubWithheld + stage4StubCompared).toBe(4)
+    // Stage 5 (Task 39), pinned to the manifest: every expected cell of a measured Stage 5 case under a formula-bearing
+    // marker is withheld or compared with Excel; every other one was compared with Excel.
+    const measured5 = manifest.cases.filter(c => c.stage === 5 && c.status === 'measured')
+    const expectedFormulaCells = measured5.flatMap(c => c.expected.cells.filter(exp => stage5FormulaCovered(c, exp.ref))).length
+    const expectedOtherCells = measured5.flatMap(c => c.expected.cells.filter(exp => !stage5FormulaCovered(c, exp.ref))).length
+    expect(measured5.length).toBeGreaterThan(10)
+    expect(stage5Withheld + stage5FormulaCompared).toBe(expectedFormulaCells)
+    expect(stage5Compared).toBe(expectedOtherCells)
+    expect(stage5Compared).toBeGreaterThan(100)
+    // Non-vacuous both ways: production paints formula cells Excel's way, and still withholds the unmeasured ones.
+    expect(stage5FormulaCompared).toBeGreaterThan(100)
+    expect(stage5Withheld).toBeGreaterThan(0)
+    // eslint-disable-next-line no-console
+    process.stderr.write(`stage 5 conformance: withheld=${stage5Withheld} formulaCompared=${stage5FormulaCompared} compared=${stage5Compared}\n`)
+  // Runs production paint over every measured case (more bars paint since PR #85); timed out at 5 s on the CI runner.
+  }, 300_000)
 
   it('proves all 53 previously withheld cells now paint under production evidence (C1)', async () => {
     // Stage 1 cases with previously withheld cells in final-r1-oracle-vs-viewer.txt:
@@ -438,7 +536,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       const c = manifest.cases.find(x => x.id === caseId)!
       if (c.clockRequirement) {
         vi.useFakeTimers({ toFake: ['Date'] })
-        vi.setSystemTime(new Date(`${c.clockRequirement.anchorLocalDate}T04:00:00+08:00`))
+        vi.setSystemTime(caseClockOf(c)!.epochMs)
       }
       try {
         const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
@@ -448,7 +546,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
           clockSerial: c.clockRequirement.anchorSerial,
           dateSystem: c.clockRequirement.dateSystem,
         } : undefined
-        const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext })
+        const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext, evaluation: caseDocumentEvaluationOf(c, doc) })
         expect(paint).toBeDefined()
 
         for (const targetKey of expectedWithheldRecovered.filter(k => k.startsWith(`${caseId}:`))) {
@@ -547,6 +645,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     let grandTotalChecked = 0
     let exactCount = 0
     let withheldCount = 0
+    let stubComparedCount = 0
     const caseCounts: Record<string, number> = {}
 
     for (const caseId of STAGE2_MEASURED_CASES) {
@@ -558,7 +657,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       const bytes = new Uint8Array(readFileSync(savedPath))
       const doc = await parseXlsx(await OfficePackage.load(bytes))
       const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
-      const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence })
+      const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, evaluation: cfDocumentEvaluationOf(doc) })
       expect(paint, `prepareCfPaint should succeed for ${caseId}`).toBeDefined()
       if (!paint) continue
 
@@ -583,7 +682,10 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
         const actualFill = st?.fillColor ?? 'FFFFFFFF'
 
         const finding = FINDINGS[cellKey]
-        if (finding) {
+        // S5-STUB: the stub's finding (L2:L5) holds until its successors are verified, then the cell is Excel's ARGB.
+        const stubCompared = finding !== undefined && /^stage2-scale-composition:L[2-5]$/.test(cellKey) && stubOutcome(cellKey, actualFill !== 'FFFFFFFF') === 'compare'
+        if (stubCompared) stubComparedCount++
+        if (finding && !stubCompared) {
           expect(finding.outcome).toBe('withheld')
           expect(actualFill, `${cellKey} finding: ${finding.reason}`).toBe('FFFFFFFF')
           withheldCount++
@@ -603,8 +705,8 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     }
     expect(grandTotalChecked).toBe(398)
     // Ruling F-2: cells that lost paint moved into typed withheld-only FINDINGS; none is an allowlisted wrong colour.
-    expect(exactCount).toBe(364)
-    expect(withheldCount).toBe(34)
+    expect(exactCount).toBe(364 + stubComparedCount)
+    expect(withheldCount).toBe(34 - stubComparedCount)
     expect(exactCount + withheldCount).toBe(grandTotalChecked)
   })
 
@@ -690,7 +792,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(barWithheld({ kind: 'unresolved', reason: 'cf-unsupported-rule' })).toBe(true)
 
     const stage3 = manifest.cases.filter(c => c.stage === 3)
-    expect(stage3.map(c => c.id)).toHaveLength(15)
+    expect(stage3.map(c => c.id)).toHaveLength(16)
     let checked = 0
     let barCells = 0
     let painted = 0
@@ -703,6 +805,9 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       'stage3-bar-composition:H': 'bar:composition-bar-stopIfTrue: Excel dropped the flag on resave (S3-CLOSE)',
       'stage3-bar-degenerate:G': 'bar:bounds-positional is non-discriminating; the saved bar\'s bounds and lengths are verified',
       'stage3-bar-pairing:C': 'bar:pairing-standalone: Excel resaves the standalone bar in its paired form (S3-CLOSE)',
+      // Since the bar:bounds-num follow-up these num-bounded bars need only verified capabilities.
+      'stage3-bar-geometry:G': 'bar:geometry-min-visible-width is non-discriminating; the saved num 0/100 bar\'s bounds and lengths are verified',
+      'stage3-bar-showvalue:C': 'bar:showvalue-copy-text is a clipboard observation, not paint; the saved num 0/100 bar\'s bounds and lengths are verified',
     }
     const markerOnlyPainted = new Set<string>()
     for (const c of stage3) {
@@ -809,7 +914,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(s4, 'Task 30 publishes the Stage 4 set').toBeDefined()
     const stage4 = manifest.cases.filter(c => c.stage === 4)
     expect(stage4.map(c => c.id)).toEqual(CF_CASES.filter(c => c.stage === 4).map(c => c.id))
-    expect(stage4).toHaveLength(19)
+    expect(stage4).toHaveLength(20)
     let checked = 0, iconCells = 0, preparedSheets = 0, agreedIcon = 0, agreedNone = 0, withheld = 0, unclassified = 0, unobserved = 0, controls = 0
     const violations: string[] = []
     const shownBy = new Map<string, number>()
@@ -879,8 +984,10 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(violations).toEqual([])
     // The publication is not vacuous: production evaluates Excel's icon on most icon cells, across the bucket cases.
     // Pinned at publication (Task 30): any change in what production evaluates moves these.
-    expect({ checked, agreedIcon, agreedNone, withheld, unclassified, unobserved, controls }).toEqual({ checked: 1506, agreedIcon: 549, agreedNone: 25, withheld: 111, unclassified: 86, unobserved: 21, controls: 714 })
-    for (const id of ['stage4-icon-families', 'stage4-icon-thresholds', 'stage4-icon-degenerate', 'stage4-icon-reverse-custom', 'stage4-icon-participation', 'stage4-icon-scope', 'stage4-icon-composition', 'stage4-icon-glyph-key', 'stage4-icon-rows-bottom', 'stage4-icon-authored']) {
+    // Centred-key follow-up: stage4-icon-glyph-key-centred (captured 6d13e093) adds 152 cells: its 75 key cells, where
+    // production evaluates Excel's glyph class on every one, and 77 controls (the 75 key controls, K2 and its control).
+    expect({ checked, agreedIcon, agreedNone, withheld, unclassified, unobserved, controls }).toEqual({ checked: 1658, agreedIcon: 624, agreedNone: 25, withheld: 111, unclassified: 86, unobserved: 21, controls: 791 })
+    for (const id of ['stage4-icon-glyph-key-centred', 'stage4-icon-families', 'stage4-icon-thresholds', 'stage4-icon-degenerate', 'stage4-icon-reverse-custom', 'stage4-icon-participation', 'stage4-icon-scope', 'stage4-icon-composition', 'stage4-icon-glyph-key', 'stage4-icon-rows-bottom', 'stage4-icon-authored']) {
       expect(shownBy.get(id) ?? 0, id).toBeGreaterThan(0)
     }
 
@@ -1168,11 +1275,11 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       'stage3-bar-lengths:G': { outcome: 'withheld', reason: 'percentile 10/90 leaves values beyond the bounds: S3-E keeps the rule unresolved (Excel clamps; bar:degenerate-beyond-bounds lifts nothing in the evaluator yet)' },
       'stage3-bar-degenerate:B': { outcome: 'withheld', reason: 'all values equal: S3-E keeps the degenerate scope unresolved (Excel draws half length; not implemented)' },
       'stage3-bar-degenerate:C': { outcome: 'withheld', reason: 'single numeric cell: S3-E keeps the degenerate scope unresolved (Excel draws half length; not implemented)' },
-      ...Object.fromEntries(['stage3-bar-degenerate:D', 'stage3-bar-degenerate:E',
-        ...['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'].map(col => `stage3-bar-rendering:${col}`),
-        ...['B', 'C', 'D', 'E', 'F', 'H', 'I'].map(col => `stage3-bar-geometry:${col}`),
-        'stage3-bar-showvalue:B', 'stage3-bar-showvalue:D',
-      ].map(key => [key, { outcome: 'withheld', reason: 'num bounds: bar:bounds-num is non-discriminating (num 20/80 equals the data min/max), so unverified' } as Finding])),
+      // Since the bar:bounds-num follow-up (stage3-bar-bounds-num verified num) the num-bounded bars of rendering, geometry
+      // and showvalue paint and are checked against Excel's px below; these two stay withheld by S3-E itself.
+      'stage3-bar-degenerate:D': { outcome: 'withheld', reason: 'inverted num 80/20: S3-E keeps the degenerate scope unresolved (Excel swaps the bounds; not implemented)' },
+      'stage3-bar-degenerate:E': { outcome: 'withheld', reason: 'values beyond num 20/80: S3-E keeps the rule unresolved (Excel clamps; not implemented)' },
+      ...Object.fromEntries(['stage3-bar-geometry:H', 'stage3-bar-geometry:I'].map(key => [key, { outcome: 'withheld', reason: 'every value is 100 (v_min = v_max): S3-E keeps the degenerate scope unresolved even under num 0/100 bounds (Excel draws the full bar; not implemented)' } as Finding])),
       'stage3-bar-degenerate:F': { outcome: 'withheld', reason: 'percent bounds: bar:bounds-percent is non-discriminating, so unverified' },
     }
     // Bars production paints on cells the capture designated for no geometry capability (settings or another
@@ -1191,6 +1298,10 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       // Capture run 8 (Task 22c): the automatic bounds are verified, so the lengths case's autoMax column paints.
       'stage3-bar-pairing:B': 'the paired bar (x14 autoMin/autoMax, 0/100) designates settings capabilities only; since run 8 every capability it needs is verified',
       'stage3-bar-lengths:I': 'autoMax on all-positive data is non-discriminating in this case; stage3-bar-auto-bounds settles it (zero-anchored), which reproduces it',
+      // The bar:bounds-num follow-up: num bounds are verified, so the lengths case's num column paints.
+      'stage3-bar-lengths:E': 'num 20/80 over 20..80 is non-discriminating in this case; stage3-bar-bounds-num settles it (num), which reproduces it',
+      'stage3-bar-geometry:G': 'designated for bar:geometry-min-visible-width (non-discriminating); the saved num 0/100 bar needs only verified capabilities since bar:bounds-num',
+      'stage3-bar-showvalue:C': 'designated for bar:showvalue-copy-text (a clipboard observation); the saved num 0/100 bar needs only verified capabilities since bar:bounds-num',
     }
     for (const f of Object.values(BAR_FINDINGS)) expect(f.outcome).toBe('withheld')
 
@@ -1286,7 +1397,8 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     // No stale finding or exception, and pinned counts (a regression that withholds or paints one more moves them).
     expect([...usedFindings].sort()).toEqual(Object.keys(BAR_FINDINGS).sort())
     expect([...usedPainted].sort()).toEqual(Object.keys(PAINTED_UNDESIGNATED).sort())
-    expect({ painted, measuredPainted, withheldFound, axes, axisRows, gradientBars }).toEqual({ painted: 472, measuredPainted: 428, withheldFound: 84, axes: 48, axisRows: 48 * 30, gradientBars: 246 })
+    // 555/498/27/250 since the bar:bounds-num follow-up (was 472/428/84/246): the num-bounded bars now paint, each at Excel's px.
+    expect({ painted, measuredPainted, withheldFound, axes, axisRows, gradientBars }).toEqual({ painted: 555, measuredPainted: 498, withheldFound: 27, axes: 48, axisRows: 48 * 30, gradientBars: 250 })
     // Mutant: a solid axis (the axis colour on every row) disagrees with Excel on every black dotted axis compared.
     // Run 8 adds stage3-bar-auto-bounds J and K: ten more explicit black axes.
     expect(solidMutantFails, 'a solid axis fails on every explicit (black) axis').toBe(38)
@@ -1392,6 +1504,69 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(solidFails).toBe(255)
   }, 60_000)
 
+  it('stage 5 formula cells are withheld until their evidence lands', async () => {
+    // Withheld-only findings, as the guard below requires of every finding map (Lesson 1): empty until a capture lands.
+    const STAGE5_FINDINGS: Record<string, Finding> = {}
+    for (const [key, f] of Object.entries(STAGE5_FINDINGS)) expect(f.outcome, key).toBe('withheld')
+    const stage5 = manifest.cases.filter(c => c.stage === 5)
+    expect(stage5.map(c => c.id)).toEqual(CF_CASES.filter(c => c.stage === 5).map(c => c.id))
+    expect(stage5.length).toBeGreaterThan(20)
+    // The slot a formula-bearing rule writes: a DXF rule writes properties, a visual its own visual slot.
+    type Marker = (typeof stage5)[number]['markers'][number]
+    const slotOf = (m: Marker): 'properties' | 'colorScale' | 'dataBar' | 'iconSet' =>
+      m.ruleType === 'colorScale' ? 'colorScale' : m.ruleType === 'dataBar' ? 'dataBar' : m.ruleType === 'iconSet' ? 'iconSet' : 'properties'
+    const formulaSourced = (outcome: CfOutcome<CfCellState>, slots: ReadonlySet<string>): boolean =>
+      outcome.kind === 'ready' &&
+      ((slots.has('properties') && Object.keys(outcome.value.properties).length > 0) ||
+        [...slots].some(s => s !== 'properties' && (outcome.value.visual as Record<string, unknown> | undefined)?.[s] !== undefined))
+    // Teeth: a ready cell carrying the formula rule's fill, or its visual, is formula-sourced; refusals and empty cells are not.
+    expect(formulaSourced({ kind: 'ready', value: { properties: { fillColor: 'FFFFC7CE' } } }, new Set(['properties']))).toBe(true)
+    expect(formulaSourced({ kind: 'ready', value: { properties: {}, visual: { colorScale: { ruleId: 1, argb: 0 } } } } as unknown as CfOutcome<CfCellState>, new Set(['colorScale']))).toBe(true)
+    expect(formulaSourced({ kind: 'ready', value: { properties: {} } }, new Set(['properties']))).toBe(false)
+    expect(formulaSourced({ kind: 'no-match' }, new Set(['properties']))).toBe(false)
+    expect(formulaSourced({ kind: 'unresolved', reason: 'cf-unsupported-rule' }, new Set(['properties']))).toBe(false)
+    let covered = 0, withheld = 0, preparedSheets = 0, refusedSheets = 0
+    const violations: string[] = []
+    for (const c of stage5) {
+      const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))), parseOptionsFor(c))
+      const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+      const slotsAt = (ref: string): Set<string> => new Set(c.markers.filter(m => m.formula !== undefined && isCellInSqref(ref, m.sqref)).map(slotOf))
+      const designated = c.expected.cells.filter(e => slotsAt(e.ref).size > 0)
+      if (!sheet.conditionalFormatting) {
+        // Production refused every rule of the sheet at parse: nothing paints.
+        refusedSheets++
+        covered += designated.length
+        withheld += designated.length
+        continue
+      }
+      preparedSheets++
+      const memory = createCfMemory()
+      const service = createCfService(sheet.conditionalFormatting, memory, { evidence: cfRuntimeEvidence })
+      const stamp = { owner: 'conformance', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(sheet.conditionalFormatting), viewGen: 0, structureGen: 0, clockGen: 0 }
+      const source = residentSource(sheet, stamp, memory, 'engine')
+      for (const exp of designated) {
+        const { row, col } = refToRowCol(exp.ref)
+        const lease = await service.prepareCf({ stamp, sourceRects: [{ firstRow: row, lastRow: row, firstCol: col, lastCol: col }], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, source)
+        try {
+          covered++
+          const key = `${c.id}:${exp.ref}`
+          const outcome = lease.value.at(row, col)
+          if (formulaSourced(outcome, slotsAt(exp.ref)) && STAGE5_FINDINGS[key] === undefined) violations.push(`${key}: production paints a formula-sourced ${[...slotsAt(exp.ref)].join('/')} (${JSON.stringify(outcome.kind === 'ready' ? outcome.value : outcome)})`)
+          else withheld++
+        } finally {
+          lease.release()
+        }
+      }
+    }
+    expect(violations).toEqual([])
+    expect(covered).toBeGreaterThan(200)
+    expect(withheld).toBe(covered)
+    expect(preparedSheets + refusedSheets).toBe(stage5.length)
+    // Non-vacuous: the production service ran on (nearly) every Stage 5 sheet, not only the parse-refused branch.
+    expect(preparedSheets).toBeGreaterThanOrEqual(25)
+    expect(covered).toBeGreaterThan(600)
+  }, 120_000)
+
   it('guard: FINDINGS structure strictly disallows non-withheld outcomes', () => {
     // Type definition allows only { outcome: 'withheld', reason: string }
     type ConformanceFinding = { outcome: 'withheld'; reason: string }
@@ -1416,7 +1591,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       for (const id of ['stage1-timeperiod-today-clock', 'stage1-timeperiod-today-clock-2']) {
         const c = manifest.cases.find(x => x.id === id)!
         vi.useFakeTimers({ toFake: ['Date'] })
-        vi.setSystemTime(new Date(`${c.clockRequirement!.anchorLocalDate}T04:00:00+08:00`))
+        vi.setSystemTime(caseClockOf(c)!.epochMs)
         try {
           const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))), parseOptionsFor(c))
           const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
@@ -1430,4 +1605,33 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous
     }
   })
+})
+
+describe('a Stage 5 cell withheld without a recorded justification fails (Task 39 fix round 1, F1)', () => {
+  it('codex mutant: stage5-composition B2..B7 rule rewritten in memory to a resource refusal is caught', async () => {
+    const manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8')) as CfManifest
+    const c = manifest.cases.find(x => x.id === 'stage5-composition')!
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
+    const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+    const marker = c.markers.find(m => m.capabilityId === 'formula:composition-stop-dxf' && m.ruleType === 'expression')!
+    const verdicts = async (): Promise<string[]> => {
+      const out: string[] = []
+      const paint = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, evaluation: cfDocumentEvaluationOf(doc), documentSheets: doc.sheets }))!
+      for (const exp of c.expected.cells.filter(e => /^B[2-7]$/.test(e.ref))) {
+        const { row, col } = refToRowCol(exp.ref)
+        const st = paint.layer.styleAt(row, col, undefined)
+        const gotMatched = Boolean(st && (st.fillColor || st.color || st.bold !== undefined || st.strike === true || st.formatCode || st.numFmtId))
+        const v = await stage5CellVerdict5(c, exp, gotMatched, sheet, doc, undefined)
+        if (v.violation) out.push(v.violation)
+      }
+      paint.dispose()
+      return out
+    }
+    expect(await verdicts(), 'the unmutated sheet').toEqual([])
+    const rule = sheet.conditionalFormatting!.rules.find(r => r.priority === marker.priority)!
+    ;(rule as { definition: unknown }).definition = { kind: 'unresolved', type: 'expression', reason: 'cf-resource-limit' }
+    const caught = await verdicts()
+    expect(caught.length, 'the mutant is caught').toBeGreaterThan(0)
+    expect(caught.every(v => /without a recorded justification/.test(v))).toBe(true)
+  }, 120000)
 })

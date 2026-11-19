@@ -1,0 +1,112 @@
+{
+  "excelVersion": "16.115",
+  "route": "copy-picture",
+  "appearance": "screen",
+  "scale": 1,
+  "pxPerPt": 1,
+  "width": 505,
+  "height": 181,
+  "colWidthsPt": [
+    84,
+    84,
+    84,
+    84,
+    84,
+    84
+  ],
+  "rowHeightsPt": [
+    18,
+    18,
+    18,
+    18,
+    18,
+    18,
+    18,
+    18,
+    18,
+    18
+  ],
+  "geometrySource": "excel-measured",
+  "resavedByExcel": false,
+  "sheet": "Sheet1",
+  "range": "A1:F10",
+  "hostTimeZone": "Asia/Taipei",
+  "savedSha256": "1c3097d4428301e22fdf23c003bb2eb647ba861516679fcff02808881f541ddf",
+  "pngSha256": "4190e50f04a8a095ad0e793a830655c0759b0e4463f129869845d5e9063baed8",
+  "capturedAt": "2026-11-17T16:12:17.391Z",
+  "excelTodaySerial": 46344,
+  "staleTodayCacheRefreshed": true,
+  "observedTodayBranch": "local",
+  "lockBefore": "unlocked",
+  "lockAfter": "unlocked",
+  "formulaObservations": {
+    "A2": {
+      "displayFormatFill": "FFFFC7CE",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "A3": {
+      "displayFormatFill": "FFFFC7CE",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "A4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "A5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B10": {
+      "displayFormatFill": "FFFFC7CE",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "E2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "E3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "E4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "E5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F10": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    }
+  },
+  "formulaEvaluation": {
+    "formula:predicate-timeperiod-divergent": {
+      "status": "discriminating",
+      "reason": "attribute matches every designated cell; every required visual and empty cell is validated, and each rival is contradicted at >= 2 decisive cells of every replication group (Ruling S5-WITNESS)",
+      "matched": "attribute",
+      "survivors": [
+        "attribute"
+      ],
+      "observed": {
+        "timeperiod-divergent": {
+          "A2": "FFFFC7CE",
+          "A3": "FFFFC7CE",
+          "A4": "none",
+          "A5": "none"
+        }
+      }
+    }
+  }
+}

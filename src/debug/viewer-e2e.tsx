@@ -32,6 +32,7 @@
  * here reaches into viewer internals. Excluded from the library build
  * (tsconfig.build.json excludes src/debug).
  */
+import { installCfEvidence } from './cfEvidence'
 import { useEffect, useMemo, useState, type JSX } from 'react'
 import { createRoot } from 'react-dom/client'
 import { OfficeFile, type ViewerWorkerPort } from '../components/OfficeFile'
@@ -78,6 +79,8 @@ declare global {
 }
 
 const params = new URLSearchParams(window.location.search)
+// `?cfev=1`: the Stage 5 evidence seam (src/debug/cfEvidence.ts); the page and, through its Worker name, every viewer worker hold it.
+if (params.get('cfev') === '1') installCfEvidence()
 const state: ViewerE2E = {
   loaded: false,
   error: null,
@@ -127,7 +130,7 @@ function transferSize(transfer: Transferable[]): number {
 /** A real dedicated module worker behind a counting port. */
 function countingWorker(): ViewerWorkerPort {
   const caps = params.get('wcaps')
-  const name = [caps ? `caps:${caps}` : '', params.get('paged') === '1' ? 'paged' : ''].filter(Boolean).join(';')
+  const name = [caps ? `caps:${caps}` : '', params.get('paged') === '1' ? 'paged' : '', params.get('cfev') === '1' ? 'cfev' : ''].filter(Boolean).join(';')
   const worker = new Worker(new URL('./viewerWorker.ts', import.meta.url), { name, type: 'module' })
   state.workersCreated++
   worker.addEventListener('message', (event) => { state.replies++; if (params.get('log') === '1') console.log('reply', JSON.stringify(event.data).slice(0, 400)) })

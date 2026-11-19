@@ -19,11 +19,15 @@ import {
   CF_CASES,
   CF_STAGE3_FIXTURES,
   CF_STAGE4_FIXTURES,
+  CF_STAGE5_FIXTURES,
   DEFAULT_CLOCK_ANCHOR_DATE,
   isoDateToExcelSerial,
   s3ControlOffset,
   s3ControlRef,
   s3Range,
+  s5CellsAt,
+  s5ControlRef,
+  s5DesignatedRefs,
   type CfBarColors,
   type CfBarCfvo,
   type CfManifest,
@@ -35,6 +39,8 @@ import {
   type S4Fixture,
   type S4IconRule,
   type S4Style,
+  type S5Fixture,
+  type S5Value,
 } from './cases'
 import { parseXml } from '../../src/core/xml'
 import { readZipPartsSync, verifyCfCase } from './verify'
@@ -68,7 +74,7 @@ const colLetters = (col1: number): string => {
 }
 
 type CellSpec =
-  | { ref: string; v: number | string | boolean | null; s?: number; f?: string; err?: undefined }
+  | { ref: string; v: number | string | boolean | null; s?: number; f?: string; err?: undefined; t?: 'str' | 'b' | 'e' }
   | { ref: string; err: string; s?: number; v?: undefined; f?: undefined }
 
 interface SheetPayload {
@@ -104,6 +110,11 @@ interface SheetPayload {
   stylesXml?: string
   /** Stage 4: `<sheetView rightToLeft="1">` (Ruling S4-M); absent writes no attribute. */
   rightToLeft?: boolean
+  /** Stage 5: further worksheets after Sheet1 (`xl/worksheets/sheet2.xml`, ...), in order. */
+  extraSheets?: ReadonlyArray<{ name: string; xml: string }>
+  /** Stage 5: `<definedNames>` and `<calcPr>` in `xl/workbook.xml`; absent writes neither. */
+  definedNames?: ReadonlyArray<{ name: string; ref: string }>
+  calcMode?: 'manual'
 }
 
 /** The `cellXfs` index of the static cell fill: after the four base styles and the optional date style. */
@@ -1154,6 +1165,8 @@ function casePayload(id: string, anchorDateIso = DEFAULT_CLOCK_ANCHOR_DATE): She
       if (fx) return stage3Payload(fx)
       const fx4 = CF_STAGE4_FIXTURES.find(f => f.id === id)
       if (fx4) return stage4Payload(fx4)
+      const fx5 = CF_STAGE5_FIXTURES.find(f => f.id === id)
+      if (fx5) return stage5Payload(fx5, isoDateToExcelSerial(anchorDateIso, '1900'))
       throw new Error(`Unknown CF case id: ${id}`)
     }
   }
@@ -1427,6 +1440,152 @@ function stage4Payload(fx: S4Fixture): SheetPayload {
   }
 }
 
+// ---- Stage 5: formula fixtures (the shared `S5Fixture` spec in cases.ts drives both markers and XML) ----
+
+/** One Stage 5 value as a cell (date serials take the date style, `cellXfs` 4). */
+function s5CellSpec(ref: string, v: S5Value): CellSpec | undefined {
+  if (v === null) return undefined
+  if (typeof v !== 'object') return { ref, v }
+  if ('err' in v) return { ref, err: v.err }
+  if ('date' in v) return { ref, v: v.date, s: 4 }
+  if (v.t === 'e') return { ref, f: v.f, v: v.v as string, t: 'e' }
+  if (v.t !== undefined) return { ref, f: v.f, v: v.v, t: v.t }
+  return { ref, f: v.f, v: v.v }
+}
+
+/** A control copies the cell's displayed value as a literal (never the formula), so it reads the same and nothing recalculates it. */
+function s5ControlValue(v: S5Value): S5Value {
+  if (v === null || typeof v !== 'object' || 'err' in v || 'date' in v) return v
+  if (v.t === 'e') return { err: String(v.v) }
+  return v.v as S5Value
+}
+
+function s5SheetXml(cells: Readonly<Record<string, S5Value>>): string {
+  const specs = Object.entries(cells).map(([ref, v]) => s5CellSpec(ref, v)).filter((c): c is CellSpec => c !== undefined)
+  const maxRow = Math.max(1, ...specs.map(c => Number(/\d+/.exec(c.ref)![0])).filter(r => r < 1000))
+  const maxCol = Math.max(1, ...specs.map(c => colIdxOf(/^[A-Z]+/.exec(c.ref)![0])).filter(c => c < 200))
+  return buildWorksheetXml({ dimension: `A1:${colLetters(maxCol)}${maxRow}`, cells: specs, legacyCfXml: '', dxfsXml: '' })
+}
+
+function stage5Payload(fx: S5Fixture, anchorSerial: number): SheetPayload {
+  const base = s5CellsAt(fx, anchorSerial)
+  const sheet1: Record<string, S5Value> = { ...base }
+  for (const ref of s5DesignatedRefs(fx)) {
+    const v = base[ref]
+    if (v !== undefined) sheet1[s5ControlRef(fx, ref)] = s5ControlValue(v)
+  }
+  const legacyBlocks: Array<{ sqref: string; rules: string[] }> = []
+  const x14Blocks: Array<{ sqref: string; rules: string[] }> = []
+  const add = (blocks: Array<{ sqref: string; rules: string[] }>, sqref: string, xml: string): void => {
+    const last = blocks[blocks.length - 1]
+    if (last && last.sqref === sqref) last.rules.push(xml)
+    else blocks.push({ sqref, rules: [xml] })
+  }
+  for (const r of fx.rules) {
+    add(r.where === 'legacy' ? legacyBlocks : x14Blocks, r.sqref, r.xml)
+    if (r.x14Companion) add(x14Blocks, r.sqref, r.x14Companion)
+  }
+  // Task 39: Excel renders a cell on the default style (xf 0, the Normal style) vertically centred, 3 px above the
+  // bottom-aligned frame the Stage 4 glyph key was captured in, so no Stage 5 icon crop classified. A fixture that asks
+  // for it puts every Sheet1 cell (controls included) on an explicit bottom-aligned style; date cells keep theirs.
+  const bottom = fx.cellVertical === 'bottom'
+  const specs = Object.entries(sheet1).map(([ref, v]) => s5CellSpec(ref, v)).filter((c): c is CellSpec => c !== undefined)
+    .map(c => (bottom && c.s === undefined ? { ...c, s: bottomXfIndex(true) } : c))
+  const caseOf = CF_CASES.find(c => c.id === fx.id)!
+  return {
+    dimension: caseOf.range,
+    cells: specs,
+    legacyCfXml: legacyBlocks.map(b => `<conditionalFormatting sqref="${esc(b.sqref)}">${b.rules.join('')}</conditionalFormatting>`).join(''),
+    ...(x14Blocks.length > 0 ? { x14CfXml: `<x14:conditionalFormattings>${x14Blocks.map(b => `<x14:conditionalFormatting xmlns:xm="${NS_XM}">${b.rules.join('')}<xm:sqref>${esc(b.sqref)}</xm:sqref></x14:conditionalFormatting>`).join('')}</x14:conditionalFormattings>` } : {}),
+    dxfsXml: fx.dxfsXml ?? '<dxfs count="0"/>',
+    dateStyle: true,
+    ...(bottom ? { stylesXml: buildStylesXml(fx.dxfsXml ?? '<dxfs count="0"/>', true, undefined, true) } : {}),
+    // Fix round 2: an icon is classified against the Stage 4 glyph key, whose crops are taken from 20 pt rows; a
+    // workbook with an icon rule uses the same row height so its crops have the key's size.
+    ...(fx.rules.some(r => r.marker.ruleType === 'iconSet') || fx.defaultRowHeightPt === 20 ? { defaultRowHeightPt: 20 } : {}),
+    ...(fx.tableXml ? { tablePartXml: `${XML_DECL}${fx.tableXml}` } : {}),
+    ...(fx.sheets ? { extraSheets: fx.sheets.map(sh => ({ name: sh.name, xml: s5SheetXml(sh.cells) })) } : {}),
+    ...(fx.definedNames ? { definedNames: fx.definedNames } : {}),
+    ...(fx.calcMode ? { calcMode: fx.calcMode } : {}),
+  }
+}
+
+/** Every conditional formatting rule of `xl/worksheets/sheet1.xml` as written, for the formula template diff. */
+interface WrittenFormulaRule {
+  dialect: 'base' | 'x14'
+  sqref: string
+  type: string
+  ruleAttrs: Record<string, string>
+  formulas: string[]
+  cfvo: Array<Record<string, string>>
+}
+
+export function readWrittenFormulaRules(parts: Map<string, Uint8Array>): WrittenFormulaRule[] {
+  const raw = parts.get('xl/worksheets/sheet1.xml')
+  if (!raw) return []
+  const root = parseXml(new TextDecoder().decode(raw)) as XNode
+  const ws = xNode(root.worksheet) ?? root
+  const out: WrittenFormulaRule[] = []
+  const read = (rule: XNode, dialect: 'base' | 'x14', sqref: string): void => {
+    const attrs = xAttrs(rule)
+    const visual = xNode(rule.colorScale) ?? xNode(rule.dataBar) ?? xNode(rule.iconSet)
+    out.push({
+      dialect,
+      sqref: sqref.trim().replace(/\s+/g, ' ').toUpperCase(),
+      type: attrs.type ?? '',
+      ruleAttrs: attrs,
+      formulas: [...xArr(rule.formula), ...xArr(rule.f)].map(xText).filter((t): t is string => t !== undefined),
+      cfvo: xArr(visual?.cfvo).map(xNode).map(c => ({ ...xAttrs(c), ...(xText(c?.f) !== undefined ? { f: xText(c?.f)! } : {}) })),
+    })
+  }
+  for (const cf of xArr(ws.conditionalFormatting).map(xNode)) for (const rule of xArr(cf?.cfRule).map(xNode)) if (rule) read(rule, 'base', xAttrs(cf).sqref ?? '')
+  for (const ext of xArr(xNode(ws.extLst)?.ext).map(xNode)) {
+    for (const cf of xArr(xNode(ext?.conditionalFormattings)?.conditionalFormatting).map(xNode)) {
+      for (const rule of xArr(cf?.cfRule).map(xNode)) if (rule) read(rule, 'x14', xText(cf?.sqref) ?? '')
+    }
+  }
+  return out
+}
+
+/**
+ * Lesson 12 (Task 31): the generator's formula templates (the `stage5-formula-authored` input) against Excel's dialog
+ * output (`excel-authored-formulas.xlsx`), rule by rule on the same sqref and type. Compares the dialect, the rule
+ * attributes as written (`priority`, `id` and `dxfId` excepted), the formula text exactly as Excel spells it and every
+ * cfvo. Returns one line per difference; empty means the templates write what Excel writes. A paired data bar's x14
+ * companion is matched by its sqref and type like any other rule.
+ */
+export function diffAuthoredFormulaTemplates(generated: Map<string, Uint8Array>, authored: Map<string, Uint8Array>): string[] {
+  // Fix round 6: the literal positive controls (`formula:positive-control`) are Stage 1 cellIs rules the generator adds
+  // to prove the readback; Excel's dialog authors no such rule, so they are no template question.
+  const controls = new Set((CF_STAGE5_FIXTURES.find(f => f.id === 'stage5-formula-authored')?.rules ?? []).filter(r => r.marker.capabilityId === 'formula:positive-control').map(r => r.sqref.toUpperCase()))
+  const gen = readWrittenFormulaRules(generated).filter(g => !controls.has(g.sqref))
+  const exc = readWrittenFormulaRules(authored)
+  const diffs: string[] = []
+  const fix = 'update the Stage 5 rule builders (scripts/cf-refs/cases.ts) or S5_CROSS_SHEET_DIALECT'
+  const json = (v: unknown): string => JSON.stringify(v)
+  const sorted = (a: Record<string, string>): string => json(Object.fromEntries(Object.entries(a).filter(([k]) => k !== 'priority' && k !== 'id' && k !== 'dxfId').sort(([x], [y]) => x.localeCompare(y))))
+  const used = new Set<number>()
+  for (const g of gen) {
+    const idx = exc.findIndex((e, i) => !used.has(i) && e.sqref === g.sqref && e.type === g.type && e.dialect === g.dialect)
+    const anyDialect = exc.findIndex((e, i) => !used.has(i) && e.sqref === g.sqref && e.type === g.type)
+    if (idx < 0 && anyDialect < 0) {
+      diffs.push(`${g.sqref} ${g.type}: Excel's authored workbook has no such rule on this range`)
+      continue
+    }
+    const at = idx >= 0 ? idx : anyDialect
+    used.add(at)
+    const e = exc[at]!
+    if (e.dialect !== g.dialect) diffs.push(`${g.sqref} ${g.type}: Excel writes the ${e.dialect} dialect, the template writes ${g.dialect}; ${fix}`)
+    if (sorted(e.ruleAttrs) !== sorted(g.ruleAttrs)) diffs.push(`${g.sqref} ${g.type}: rule attributes Excel ${sorted(e.ruleAttrs)} vs template ${sorted(g.ruleAttrs)}; ${fix}`)
+    if (json(e.formulas) !== json(g.formulas)) diffs.push(`${g.sqref} ${g.type}: formulas Excel ${json(e.formulas)} vs template ${json(g.formulas)}; ${fix}`)
+    if (json(e.cfvo.map(sorted)) !== json(g.cfvo.map(sorted))) diffs.push(`${g.sqref} ${g.type}: cfvo Excel ${json(e.cfvo)} vs template ${json(g.cfvo)}; ${fix}`)
+  }
+  exc.forEach((e, i) => { if (!used.has(i)) diffs.push(`${e.sqref} ${e.type}: Excel's authored workbook has a rule the template does not write`) })
+  return diffs
+}
+
+export const EXCEL_AUTHORED_FORMULAS_PATH = join(CF_FIXTURE_DIR, 'excel-authored-formulas.xlsx')
+
 /** One icon set rule as written, for the template diff: where it lives, its attributes and children exactly. */
 interface WrittenIconRule {
   dialect: 'base' | 'x14'
@@ -1547,6 +1706,11 @@ function buildWorksheetXml(p: SheetPayload): string {
             return `<c r="${c.ref}"${sAttr} t="e"><v>${esc(c.err)}</v></c>`
           }
           if (c.v === null) return ''
+          if (c.f !== undefined && c.t !== undefined) {
+            // Stage 5: a cached text, boolean or error formula result.
+            const cached = c.t === 'b' ? (c.v ? '1' : '0') : esc(String(c.v ?? ''))
+            return `<c r="${c.ref}"${sAttr} t="${c.t}"><f>${esc(c.f)}</f><v>${cached}</v></c>`
+          }
           if (c.f !== undefined) {
             return `<c r="${c.ref}"${sAttr}><f>${esc(c.f)}</f><v>${c.v}</v></c>`
           }
@@ -1609,7 +1773,11 @@ function buildWorksheetXml(p: SheetPayload): string {
   ].join('')
 }
 
-function buildStylesXml(dxfsXml: string, dateStyle = false, cellFillRgb?: string): string {
+/** The bottom-aligned `cellXfs` entry `buildStylesXml` appends last when asked (Stage 5 icon cases, Task 39). */
+const S5_BOTTOM_XF = '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="bottom"/></xf>'
+const bottomXfIndex = (dateStyle: boolean, cellFillRgb?: string): number => cellFillXf(dateStyle) + (cellFillRgb ? 1 : 0)
+
+function buildStylesXml(dxfsXml: string, dateStyle = false, cellFillRgb?: string, bottomXf = false): string {
   return [
     XML_DECL,
     `<styleSheet xmlns="${NS_MAIN}">`,
@@ -1631,13 +1799,14 @@ function buildStylesXml(dxfsXml: string, dateStyle = false, cellFillRgb?: string
     '<border><left/><right/><top/><bottom/><diagonal/></border>',
     '</borders>',
     '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>',
-    `<cellXfs count="${cellFillXf(dateStyle) + (cellFillRgb ? 1 : 0)}">`,
+    `<cellXfs count="${bottomXfIndex(dateStyle, cellFillRgb) + (bottomXf ? 1 : 0)}">`,
     '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>',
     '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>',
     '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>',
     '<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>',
     ...(dateStyle ? ['<xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'] : []),
     ...(cellFillRgb ? ['<xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1"/>'] : []),
+    ...(bottomXf ? [S5_BOTTOM_XF] : []),
     '</cellXfs>',
     dxfsXml,
     '</styleSheet>',
@@ -1756,6 +1925,7 @@ export async function generateCaseArchive(id: string, anchorDateIso = DEFAULT_CL
       '<Default Extension="xml" ContentType="application/xml"/>',
       '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
       '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>',
+      ...(p.extraSheets ?? []).map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 2}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`),
       ...(p.pivotParts
         ? [
             '<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>',
@@ -1801,7 +1971,11 @@ export async function generateCaseArchive(id: string, anchorDateIso = DEFAULT_CL
       wbPrXml,
       p.pivotParts
         ? '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/><sheet name="PivotSrc" sheetId="2" state="hidden" r:id="rId3"/></sheets><pivotCaches><pivotCache cacheId="1" r:id="rId4"/></pivotCaches>'
-        : '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>',
+        : p.extraSheets
+          ? `<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/>${p.extraSheets.map((x, i) => `<sheet name="${esc(x.name)}" sheetId="${i + 2}" r:id="rIdS${i + 2}"/>`).join('')}</sheets>`
+          : '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>',
+      ...(p.definedNames ? [`<definedNames>${p.definedNames.map(d => `<definedName name="${esc(d.name)}">${esc(d.ref)}</definedName>`).join('')}</definedNames>`] : []),
+      ...(p.calcMode ? [`<calcPr calcId="191029" calcMode="${p.calcMode}"/>`] : []),
       '</workbook>',
     ].join(''),
     'xl/_rels/workbook.xml.rels': [
@@ -1809,6 +1983,7 @@ export async function generateCaseArchive(id: string, anchorDateIso = DEFAULT_CL
       '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
       `<Relationship Id="rId1" Type="${NS_R}/worksheet" Target="worksheets/sheet1.xml"/>`,
       `<Relationship Id="rId2" Type="${NS_R}/styles" Target="styles.xml"/>`,
+      ...(p.extraSheets ?? []).map((_, i) => `<Relationship Id="rIdS${i + 2}" Type="${NS_R}/worksheet" Target="worksheets/sheet${i + 2}.xml"/>`),
       ...(p.pivotParts
         ? [
             `<Relationship Id="rId3" Type="${NS_R}/worksheet" Target="worksheets/sheet2.xml"/>`,
@@ -1820,6 +1995,7 @@ export async function generateCaseArchive(id: string, anchorDateIso = DEFAULT_CL
     'xl/styles.xml': p.stylesXml ?? buildStylesXml(p.dxfsXml, p.dateStyle === true, p.cellFillRgb),
     'xl/worksheets/sheet1.xml': buildWorksheetXml(p),
   }
+  for (const [i, x] of (p.extraSheets ?? []).entries()) files[`xl/worksheets/sheet${i + 2}.xml`] = x.xml
   if (p.tablePartXml || p.pivotParts) {
     if (p.tablePartXml) {
       files['xl/tables/table1.xml'] = p.tablePartXml
@@ -2006,6 +2182,23 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const diffs = diffAuthoredIconTemplates(generated, authored)
     for (const d of diffs) console.log(`DIFF ${d}`)
     console.log(`[cf-refs/generate] icon template diff: ${diffs.length} difference(s) against ${EXCEL_AUTHORED_ICONSETS_PATH}`)
+    process.exit(diffs.length === 0 ? 0 : 1)
+  }
+  if (args.includes('--diff-authored-formulas')) {
+    // Lesson 12 (Task 31): the formula templates against Excel's dialog output. Exit 1 on any difference or a missing fixture.
+    if (!existsSync(EXCEL_AUTHORED_FORMULAS_PATH)) {
+      console.error(`[cf-refs/generate] ${EXCEL_AUTHORED_FORMULAS_PATH} does not exist: author it through Excel's dialog first (docs/validation/xlsx-cf-recipes-stage5.md)`)
+      process.exit(1)
+    }
+    const authored = readZipPartsSync(new Uint8Array(readFileSync(EXCEL_AUTHORED_FORMULAS_PATH)))
+    const generated = readZipPartsSync(await generateCaseArchive('stage5-formula-authored'))
+    if (!authored || !generated) {
+      console.error('[cf-refs/generate] could not read the authored or generated workbook')
+      process.exit(1)
+    }
+    const diffs = diffAuthoredFormulaTemplates(generated, authored)
+    for (const d of diffs) console.log(`DIFF ${d}`)
+    console.log(`[cf-refs/generate] formula template diff: ${diffs.length} difference(s) against ${EXCEL_AUTHORED_FORMULAS_PATH}`)
     process.exit(diffs.length === 0 ? 0 : 1)
   }
   const manifest = await generateAllStage1({ onlyCaseId, stage, anchorLocalDate, force })

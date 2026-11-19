@@ -215,3 +215,39 @@ it('print output at screen and PRINT_SCALE = 2 carries the prepared icons (injec
     } finally { batch.dispose() }
   })
 })
+
+it('Stage 5: a formula rule over an unstored cell paints on the print page and the interactive viewport, and is withheld without evidence (S5-P)', async () => {
+  const { load, withPaint, workbookBytes, cfBlock, exprRule } = await import('./helpers/cf-views')
+  const { buildSheetGeometry } = await import('../src/xlsx/view/viewport')
+  const { renderSheetViewport } = await import('../src/xlsx/view/renderViewport')
+  const { prepareCfPaint } = await import('../src/xlsx/cf/render')
+  const bytes = workbookBytes({}, cfBlock('B2', exprRule('ISBLANK(B2)', 1, 1)))
+  const pixel = async (evidence: boolean): Promise<{ print: number[]; viewport: number[] }> => {
+    const run = async () => {
+      const l = await load(bytes, 'cached')
+      const pages = await getPaintables(l.doc)
+      let print: number[] = []
+      try {
+        const canvas = createCanvas(pages[0].spec.widthPx, pages[0].spec.heightPx), ctx = canvas.getContext('2d')
+        pages[0].paint(ctx as unknown as CanvasRenderingContext2D)
+        print = [...ctx.getImageData(70, 25, 1, 1).data]
+      } finally { pages.dispose() }
+      const batch = await prepareCfPaint(l.sheet, { evaluation: (await import('../src/xlsx/cf/formula')).cfDocumentEvaluationOf(l.doc), valuePolicy: 'cached', documentSheets: l.doc.sheets })
+      const canvas = createCanvas(256, 80), ctx = canvas.getContext('2d')
+      try {
+        renderSheetViewport(l.sheet, ctx as unknown as CanvasRenderingContext2D, buildSheetGeometry(l.sheet), { box: { x: 0, y: 0, width: 256, height: 80 }, zoom: 1, deviceScale: 1 }, { conditionalFormatting: batch })
+        return { print, viewport: [...ctx.getImageData(70, 25, 1, 1).data] }
+      } finally { batch?.dispose() }
+    }
+    // Task 39: "without evidence" is production before --publish-stage5 (Stage 1-4 evidence only).
+    const { withoutStage5Evidence } = await import('./helpers/cf-stage5-off')
+    return evidence ? withPaint(run) : withoutStage5Evidence(run)
+  }
+  // 0xC6EFCE: the green DXF fill of the synthetic workbook.
+  const painted = await pixel(true)
+  expect(painted.print).toEqual([0xc6, 0xef, 0xce, 255])
+  expect(painted.viewport).toEqual([0xc6, 0xef, 0xce, 255])
+  const withheld = await pixel(false)
+  expect(withheld.print).not.toEqual(painted.print)
+  expect(withheld.viewport).not.toEqual(painted.viewport)
+})

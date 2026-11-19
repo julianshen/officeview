@@ -15,9 +15,10 @@ import { copyFileSync, existsSync, readFileSync, renameSync, rmSync, writeFileSy
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { openWorkbook, osa, q, runScript, waitFor, workbookNames } from '../xlsx-refs/excel'
-import type { CfManifest, CfOracleCase } from './cases'
+import type { CfManifest, CfOracleCase, S5ManualObservation } from './cases'
+import { buildExplicitCalculationObservationScript, buildManualObservationScript, parseS5Observation } from './capture'
 import { CF_FIXTURE_DIR, CF_MANIFEST_PATH, generateAllStage1 } from './generate'
-import { readZipPartsSync, verifyCfCase } from './verify'
+import { readZipPartsSync, s5RetainedSqrefs, verifyCfCase } from './verify'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const sha256Hex = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex')
@@ -106,8 +107,59 @@ export function currentTaipeiDateIso(nowMs = Date.now()): string {
   return new Date(nowMs + 8 * 3_600_000).toISOString().slice(0, 10)
 }
 
+/**
+ * The scripts a build runs on its work copy after the open probe, in order (round-1 #4). An ordinary case resaves with the
+ * unconditional `calculate`. A `calcObservation: 'pre-calculate'` case first observes with no calculation
+ * (`buildManualObservationScript`), then runs one explicit calculation observation as a separate script, and resaves
+ * without a `calculate`.
+ */
+export function buildCaseBuildScripts(
+  c: CfOracleCase,
+  workbookName: string,
+  candidateAbs: string,
+  observeRefs: readonly string[],
+): Array<{ kind: 'manual-observation' | 'explicit-calculation' | 'resave'; lines: string[] }> {
+  const preCalculate = c.calcObservation === 'pre-calculate'
+  const resave = {
+    kind: 'resave' as const,
+    lines: [
+      `set wb to workbook "${q(workbookName)}"`,
+      ...(preCalculate ? [] : [`calculate`]),
+      `save workbook as wb filename (POSIX file "${q(candidateAbs)}" as string) file format Excel XML file format`,
+    ],
+  }
+  if (!preCalculate) return [resave]
+  return [
+    { kind: 'manual-observation', lines: buildManualObservationScript(workbookName, c.sheet, observeRefs) },
+    { kind: 'explicit-calculation', lines: buildExplicitCalculationObservationScript(workbookName, c.sheet, observeRefs) },
+    resave,
+  ]
+}
+
+/**
+ * The cells a `pre-calculate` case observes: its stale sources, every `pre:`/`calc:` ref and literal positive control
+ * (fix round 6) of its configurations, and their controls.
+ */
+export function manualObservationRefs(c: CfOracleCase): string[] {
+  const out = new Set<string>(Object.keys(c.calcObservationSources ?? {}))
+  for (const cfg of c.formulaConfigurations ?? []) {
+    for (const ref of [...cfg.refs, ...Object.keys(cfg.positiveControls ?? {})]) {
+      if (!/^(pre|calc):/.test(ref)) continue
+      const bare = ref.replace(/^(pre|calc):/, '')
+      out.add(bare)
+      const ctrl = c.expected.cells.find(e => e.ref === bare)?.controlRef
+      if (ctrl) out.add(ctrl)
+    }
+  }
+  return [...out]
+}
+
 export interface LiveExcelProbeResult {
   id: string
+  /** Stage 5 (fix round 1 #2): the sqref order Excel retained per unpinned marker, read from the resaved XML. */
+  retainedSqrefs?: Record<string, string>
+  /** Stage 5 `pre-calculate` cases: the observations made before (pre) and after one explicit calculation (calc). */
+  manualObservation?: Omit<S5ManualObservation, 'inputSha256'>
   openedRepairFree: boolean
   excelSavedFlag: boolean
   firstRangeSqref: string
@@ -174,14 +226,17 @@ export function probeAndBuildCase(
 
     const candidateAbs = join(CF_FIXTURE_DIR, `${c.id}.candidate.xlsx`)
     rmSync(candidateAbs, { force: true })
-    runScript(
-      [
-        `set wb to workbook "${q(name)}"`,
-        `calculate`,
-        `save workbook as wb filename (POSIX file "${q(candidateAbs)}" as string) file format Excel XML file format`,
-      ],
-      20_000,
-    )
+    const observeRefs = manualObservationRefs(c)
+    let manualObservation: LiveExcelProbeResult['manualObservation']
+    let pre: ReturnType<typeof parseS5Observation> | undefined
+    for (const script of buildCaseBuildScripts(c, name, candidateAbs, observeRefs)) {
+      const out = runScript(script.lines, 30_000)
+      if (script.kind === 'manual-observation') pre = parseS5Observation(out, observeRefs)
+      if (script.kind === 'explicit-calculation' && pre) {
+        const calc = parseS5Observation(out, observeRefs)
+        manualObservation = { calculationMode: pre.calculationMode, workbookCount: pre.workbookCount, pre: pre.cells, calc: calc.cells }
+      }
+    }
     closeOwnedWorkbook(`${c.id}.candidate.xlsx`, preExistingOpenWorkbooks)
 
     if (!existsSync(candidateAbs)) {
@@ -225,8 +280,11 @@ export function probeAndBuildCase(
     }
 
     renameSync(candidateAbs, savedAbs)
+    const retainedSqrefs = c.markers.some(m => m.sqrefOrder === 'any') && zipParts ? s5RetainedSqrefs(c, zipParts) : undefined
     return {
       id: c.id,
+      ...(retainedSqrefs ? { retainedSqrefs } : {}),
+      ...(manualObservation ? { manualObservation } : {}),
       openedRepairFree: true,
       excelSavedFlag,
       firstRangeSqref: firstSqref,
@@ -290,6 +348,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
 
     manifest.cases[i] = {
       ...c,
+      // Stage 5 (round-1 #4): the pre-calculation observation is bound to the input it was made on.
+      ...(probe.manualObservation ? { manualObservation: { inputSha256: currentInputSha256, ...probe.manualObservation } } : {}),
+      ...(probe.retainedSqrefs ? { retainedSqrefs: probe.retainedSqrefs } : {}),
       resavedByExcel: isResaved,
       ...(resaveReceipt ? { resaveReceipt } : {}),
       expected: {

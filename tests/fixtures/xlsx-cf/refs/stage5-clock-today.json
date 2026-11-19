@@ -1,0 +1,273 @@
+{
+  "excelVersion": "16.115",
+  "route": "copy-picture",
+  "appearance": "screen",
+  "scale": 1,
+  "pxPerPt": 1,
+  "width": 757,
+  "height": 199,
+  "colWidthsPt": [
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84
+  ],
+  "rowHeightsPt": [
+    18,
+    18,
+    18,
+    18,
+    18,
+    18,
+    18,
+    18,
+    18,
+    18,
+    18
+  ],
+  "geometrySource": "excel-measured",
+  "resavedByExcel": true,
+  "resaveSavedSha256": "cd2b4960f62ad41a191ffee6cf535241fbf826698f5f962319636c931a8e3083",
+  "sheet": "Sheet1",
+  "range": "A1:I11",
+  "hostTimeZone": "Asia/Taipei",
+  "savedSha256": "cd2b4960f62ad41a191ffee6cf535241fbf826698f5f962319636c931a8e3083",
+  "pngSha256": "847f1ae37979c76c1c0c72c961522c783ae8bd87482456979ba19b7dad2a002a",
+  "capturedAt": "2026-11-17T16:11:47.066Z",
+  "excelTodaySerial": 46344,
+  "staleTodayCacheRefreshed": true,
+  "observedTodayBranch": "local",
+  "lockBefore": "unlocked",
+  "lockAfter": "unlocked",
+  "formulaObservations": {
+    "B2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B4": {
+      "displayFormatFill": "FFFFC7CE",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B6": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B7": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B8": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B9": {
+      "displayFormatFill": "FFFFC7CE",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B10": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B11": {
+      "displayFormatFill": "FFFFC7CE",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "C2": {
+      "displayFormatFill": "FFFFC7CE",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "C3": {
+      "displayFormatFill": "FFFFC7CE",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "C4": {
+      "displayFormatFill": "FFFFC7CE",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "C5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "C6": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "C7": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "C8": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "C9": {
+      "displayFormatFill": "FFFFC7CE",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "C10": {
+      "displayFormatFill": "FFFFC7CE",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "H2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "H3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "H4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "H5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "H6": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "H7": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "H8": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "H9": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "H10": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "H11": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "I2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "I3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "I4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "I5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "I6": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "I7": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "I8": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "I9": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "I10": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    }
+  },
+  "formulaEvaluation": {
+    "formula:fn-today": {
+      "status": "discriminating",
+      "reason": "local-today matches every designated cell; every required visual and empty cell is validated, and each rival is contradicted at >= 2 decisive cells of every replication group (Ruling S5-WITNESS)",
+      "matched": "local-today",
+      "survivors": [
+        "local-today"
+      ],
+      "observed": {
+        "today-exact": {
+          "B2": "none",
+          "B3": "none",
+          "B4": "FFFFC7CE",
+          "B5": "none",
+          "B6": "none",
+          "B7": "none",
+          "B8": "none",
+          "B9": "FFFFC7CE",
+          "B10": "none"
+        },
+        "now-recorded": {
+          "C2": "FFFFC7CE",
+          "C3": "FFFFC7CE",
+          "C4": "FFFFC7CE",
+          "C5": "none",
+          "C6": "none",
+          "C7": "none",
+          "C8": "none",
+          "C9": "FFFFC7CE",
+          "C10": "FFFFC7CE"
+        }
+      }
+    }
+  }
+}

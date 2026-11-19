@@ -95,9 +95,24 @@ export interface CfPartMarker {
   formulas: readonly string[]
   /** Expected `<colorScale>` definition pinned in cfvo and color sequence. */
   scale?: {
-    cfvo: readonly { type: string; val?: string }[]
+    /** `f` (Stage 5) pins a formula bound semantically: base `@val` or x14 `<xm:f>`, compared with `normalizeCfFormula`. */
+    cfvo: readonly { type: string; val?: string; f?: string }[]
     colors: readonly string[]
+    /** Stage 5 (Ruling S5-I): where the scale lives; `x14` requires `<x14:colorScale>` in the x14 extension. */
+    dialect?: 'base' | 'x14'
   }
+  /**
+   * Stage 5: the rule carries a formula (an expression, a `cellIs` operand, a cfvo bound or an `activePresent`
+   * activation). When present, `formulas` and `scale.cfvo[].f` are compared by formula semantics (Excel's canonical
+   * spelling: case, whitespace and unneeded sheet quotes folded; `$`, operators and operand order kept), and `dialect`
+   * must agree with `extension` (`base` = legacy, `x14` = x14). `anchor` records the sqref top-left the formula is
+   * written relative to (data only).
+   */
+  formula?: { kind: 'expression' | 'operand' | 'cfvo' | 'activation'; anchor?: string; dialect: 'base' | 'x14' }
+  /** Stage 5 (Ruling S5-J): `true` requires `activePresent="1"` on the x14 rule, `false` requires it absent. */
+  activePresent?: boolean
+  /** Stage 5: `any` matches a multi-range sqref in any order (until Excel's resaved order is recorded); default exact order. */
+  sqrefOrder?: 'any'
   /** Expected `<dxf>` resolved from `xl/styles.xml` via `@dxfId` (legacy) or inline `<x14:dxf>` (x14). */
   dxf?: CfDxfExpectation
   /**
@@ -285,6 +300,24 @@ export interface CfOracleCase {
    */
   iconShiftedKey?: true
   captures: readonly CfCaptureSpec[]
+  /** Stage 5: the semantic configurations and their hypotheses, fixed before capture (Lessons 3, 14). */
+  formulaConfigurations?: readonly S5Configuration[]
+  /**
+   * Stage 5 (round-1 #4): observe before any calculation. Build runs `buildManualObservationScript` on the input first,
+   * then one explicit calculation observation, and the resave carries no `calculate`; the capture's clock probe skips it.
+   */
+  calcObservation?: 'pre-calculate'
+  /** Stage 5: the build-time observations of a `pre-calculate` case (written by build.ts, bound to the input hash). */
+  manualObservation?: S5ManualObservation
+  /** Stage 5 (fix round 1 #2): the sqref order Excel retained per unpinned marker, read from the saved XML by build.ts. */
+  retainedSqrefs?: Readonly<Record<string, string>>
+  /**
+   * Stage 5 (fix round 1 #6): the stale formula sources of a `pre-calculate` case, with their saved and recomputed values;
+   * `anchor`/`anchor-5` resolve against the clock anchor serial.
+   */
+  calcObservationSources?: Readonly<Record<string, { saved: string; recomputed: string }>>
+  /** Stage 5: a live edit of a referenced sheet without saving, observed through DisplayFormat (`post:` refs). */
+  formulaDynamicRefresh?: { sheet: string; edits: readonly { ref: string; value: number }[]; refs: readonly string[] }
   status: CfOracleStatus
   reason?: string
   /** Pixel comparison tolerances (`meanAbs`, `rowMax`, `strong`) for `scripts/cf-compare.ts`. */
@@ -329,6 +362,15 @@ export type CfRefusalCode =
   | 'icon-key-mismatch'
   | 'icon-edge-unstable'
   | 'icon-hypothesis-none'
+  | 'formula-control-formatted'
+  | 'formula-hypothesis-none'
+  | 'formula-replication-shortfall'
+  | 'formula-manual-observation-invalid'
+  | 'formula-twin-blank'
+  | 'formula-twin-missing'
+  | 'formula-unexpected-visual'
+  | 'formula-positive-control-missing'
+  | 'formula-positive-control-failed'
 
 export interface VerifiedEvidence {
   kind: 'verified'
@@ -3895,6 +3937,12 @@ const AUTO_POS: readonly S3Value[] = [20, 40, 60, 80, 100]
 const AUTO_NEG: readonly S3Value[] = [-100, -80, -60, -40, -20]
 const AUTO_MIXED: readonly S3Value[] = [-50, -25, 0, 50, 100]
 const AUTO_CFVO: readonly CfBarCfvo[] = [{ type: 'autoMin' }, { type: 'autoMax' }]
+/**
+ * The bar:bounds-num follow-up (orchestrator ruling 2026-11-19): data strictly inside num 20/80 (no cell beyond a bound,
+ * Ruling S3-E) whose own min/max (25/75) differ from the num bounds, with no predicted edge on a half pixel under either
+ * reading (tests/xlsx-cf-bar-bounds-num.test.ts pins the separation).
+ */
+const NUM_INSIDE: readonly S3Value[] = [25, 36, 45, 56, 75]
 const VALUES_11: readonly S3Value[] = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 /** Ruling S3-GRAD-BORDER: 0..100 by 10, plus two short bars that separate an outer-length ramp from an inner one. */
 const VALUES_BORDERED: readonly S3Value[] = [...VALUES_11, 3, 5]
@@ -4426,6 +4474,18 @@ export const CF_STAGE3_FIXTURES: readonly S3Fixture[] = [
       ],
     },
   ),
+  // 17. stage3-bar-bounds-num (the bar:bounds-num follow-up, orchestrator ruling 2026-11-19): the owning case of
+  // bar:bounds-num through CF_STAGE3_OWNERS (stage3-bar-lengths E, 20..80 under num 20/80, stays a cross-check). It is
+  // appended last: a Stage 3 bar GUID carries its fixture's index, so an insertion would change every later input.
+  rect(
+    'stage3-bar-bounds-num',
+    'Num bounds against min/max. stage3-bar-lengths E holds 20..80 under num 20/80, so the num bounds equal its data\'s min and max and the two readings predict the same px. Here every value lies strictly inside num 20/80 ({25,36,45,56,75}: no cell beyond a bound, Ruling S3-E), so a num reading (20/80) and a min/max reading (25/75) put the bar edges apart: a 15 px bar against none at 25, 15 px at 75. One paired solid bar, x14 minLength 0 / maxLength 100, left to right, no border, on the 180 pt column and 30 pt rows of stage3-bar-lengths.',
+    {
+      n: 5,
+      cols: [col('B', 'Num2080Inside', NUM_INSIDE)],
+      rules: [bar('bar:bounds-num', 'B2:B6', 1, { baseCfvo: [{ type: 'num', val: '20' }, { type: 'num', val: '80' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE } })],
+    },
+  ),
 ]
 
 // ---- fixture -> oracle case ----
@@ -4677,8 +4737,6 @@ const S3_RULINGS: Record<string, string> = {
  * `bar:geometry-snapping` if no edge lands at a fractional point) are decided per capture by `discriminateBar`.
  */
 export const CF_STAGE3_NONDISCRIMINATING: Readonly<Record<string, string>> = {
-  'bar:bounds-num':
-    'The fixture\'s num 20/80 bounds equal its data\'s min/max (20..80), so num and min/max predict identical px (largest separation 0 px; Task 18b recomputation). Re-measure with data spanning beyond the num bounds, for example 0..100 under num 20/80.',
   'bar:bounds-percent':
     'On 0..100 data percent 25/75 and num 25/75 give the same bounds, so a pixel measurement cannot tell percent from a literal reading (largest separation 0 px; Task 18b recomputation). Re-measure with data whose range is not 0..100.',
   'bar:geometry-min-visible-width':
@@ -4709,6 +4767,15 @@ export const CF_STAGE3_UNSUPPORTED: Readonly<Record<string, string>> = {
     'Unsupported in Stage 3 per S3-CLOSE: Excel 16.114 always resaves a standalone x14 bar in its canonical paired form (stage3-bar-pairing.rejected.xlsx), so no capture of a saved workbook can show the standalone shape; it stays withheld (cf-unsupported-rule).',
 }
 
+/**
+ * Capabilities owned by a later case version rather than by the first case carrying their marker (the bar:bounds-num
+ * follow-up, 2026-11-19). The new case is appended to keep every earlier input byte-identical; the old case keeps its
+ * marker and capture as a cross-check.
+ */
+export const CF_STAGE3_OWNERS: Readonly<Record<string, string>> = {
+  'bar:bounds-num': 'stage3-bar-bounds-num',
+}
+
 /** Complete capability-to-evidence registry for all Stage 3 markers (one entry per distinct capability id). */
 export const CF_STAGE3_CAPABILITIES: readonly CfCapabilityEntry[] = (() => {
   const seen = new Set<string>()
@@ -4716,6 +4783,7 @@ export const CF_STAGE3_CAPABILITIES: readonly CfCapabilityEntry[] = (() => {
   for (const c of CF_STAGE3_CASES) {
     for (const m of c.markers) {
       if (seen.has(m.capabilityId)) continue
+      if (CF_STAGE3_OWNERS[m.capabilityId] !== undefined && CF_STAGE3_OWNERS[m.capabilityId] !== c.id) continue
       seen.add(m.capabilityId)
       const cfvo = m.bar?.cfvo ?? m.scale?.cfvo
       out.push({
@@ -4837,6 +4905,14 @@ export interface S4Fixture extends Omit<S3Fixture, 'rules' | 'calibration' | 'da
 
 const S4_WIDTH = 12
 const KEY_STYLE: S4Style = { numFmt: 'hidden' }
+/** The column width (characters) every Stage 5 workbook is written with (`buildWorksheetXml`'s default). */
+const S5_COL_WIDTH = 14
+
+/**
+ * The two glyph-key cases (owner decision 2026-11-19): `bottom` is the Stage 4 key (cells bottom-placed on 20 pt rows),
+ * `centre` the key captured at the Stage 5 icon placement (Normal, vertical=center, 20 pt rows).
+ */
+export const CF_ICON_KEY_CASES = { bottom: 'stage4-icon-glyph-key', centre: 'stage4-icon-glyph-key-centred' } as const
 
 const icon = (cap: string, sqref: string, priority: number, set: string | undefined, cfvo: readonly CfIconCfvo[], o: Partial<Omit<S4IconRule, 'kind' | 'cap' | 'sqref' | 'priority' | 'set' | 'cfvo'>> = {}): S4IconRule => ({
   kind: 'icon',
@@ -5392,6 +5468,26 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
       ],
     },
   ),
+  // 19. stage4-icon-glyph-key-centred (owner decision 2026-11-19): the glyph key at the Stage 5 icon cells' placement.
+  // Appended last: the Stage 4 key stays first in manifest order, so it keeps owning every icon:glyph-* id, and no
+  // earlier fixture's GUIDs (derived from its index) change.
+  s4rect(
+    CF_ICON_KEY_CASES.centre,
+    'The glyph key at the Stage 5 icon placement. Excel resaves the Stage 5 icon cells as Normal, vertical=center (§14.y, §14.z) and draws their icons at cell top + 4 px, while the Stage 4 key cells (number format ;;;, an xf without <alignment>) are bottom-placed at + 7 px, so no Stage 5 crop can classify against it. The same 75 single-cell x14 custom rules as stage4-icon-glyph-key, one per (set, iconId) pair (rows 2..21, iconId 0..4 in B..F), on cells exactly like the Stage 5 icon cells: the default style (no s, xf 0, which Excel resaves as Normal), visible right-aligned General numbers (10), 20 pt rows, 14-character columns and the Normal font; the same-content controls below show the same number. The calibration columns and solid DXF cell repeat the Stage 4 key\'s. Every Stage 5 crop whose saved cell is centred on a 20 pt row is classified against this key; it owns no capability.',
+    {
+      n: 20,
+      dxfsXml: DXF_FILLS_XML,
+      calibration: { columns: ['H', 'I', 'J'], scanRow: 3, solidRef: 'K2', solidArgb: 'FFC6EFCE' },
+      cols: [
+        ...GLYPH_KEY_COLS.map((c, id) => s4col(c, `IconId${id}`, S4_ICON_FAMILIES.map(f => (id < f.size ? 10 : null)), S5_COL_WIDTH)),
+        s4col('H', 'Calib10', [], 10),
+        s4col('I', 'Calib30', [], 30),
+        s4col('J', 'Calib60', [], 60),
+        s4col('K', 'SolidDxf', [100]),
+      ],
+      rules: [...glyphKeyRules(), cellIsRaw('icon:pixel-calibration', 'K2', 76, '0', { dxfId: 1 })],
+    },
+  ),
 ]
 
 // ---- fixture -> oracle case ----
@@ -5601,11 +5697,1748 @@ export const CF_STAGE4_CAPABILITIES: readonly CfCapabilityEntry[] = (() => {
   return out
 })()
 
-export const CF_CASES: readonly CfOracleCase[] = [...CF_STAGE1_CASES, ...CF_STAGE2_CASES, ...CF_STAGE3_CASES, ...CF_STAGE4_CASES]
+// ---------------------------------------------------------------------------------------------------------------------
+// Stage 5: general formulas and cross-kind completion (Task 31). Every case below is a `[measure]` question for the
+// Excel oracle. Nothing here is an Excel fact: each configuration names competing hypotheses, each stated as the
+// observable outcome it predicts per designated cell, fixed before any capture (Lessons 3, 14). The capture decides;
+// every case stays `recipe-pending` (or `unsupported`) until the orchestrator captures it under host Excel, and
+// production withholds every formula rule until the named `formula:*` capability is published (Ruling S5-A).
+//
+// Prediction tokens (observable `fill`, Excel's DisplayFormat readback): an ARGB fill, `none` (the DisplayFormat fill
+// equals the base fill), or `twin:<ref>` (the same DisplayFormat fill as that cell, a literal-bound twin of the formula
+// rule), each optionally suffixed `+strike` (DisplayFormat strikethrough). Observable `crop` (bars and icons, which
+// DisplayFormat cannot read): `twin:<ref>` means the cell's capture crop equals that twin cell's crop. A ref prefixed
+// `pre:`/`calc:` reads the build-time manual-calculation observations, `post:` the live-edit (dynamic refresh) ones.
+// ---------------------------------------------------------------------------------------------------------------------
+
+export type S5Value =
+  | number
+  | string
+  | boolean
+  | null
+  | { err: string }
+  | { date: number }
+  | { f: string; v: number | string | boolean | null; t?: 'str' | 'b' | 'e' }
+
+export interface S5Sheet {
+  name: string
+  cells: Readonly<Record<string, S5Value>>
+}
+
+export type S5Observable = 'fill' | 'crop'
+
+export interface S5Configuration {
+  /** Configuration key: one rule shape (S4-REPLICATE groups decisive cells by it). */
+  id: string
+  capabilityId: string
+  observable: S5Observable
+  /** Designated cells (optionally `pre:`/`calc:`/`post:` prefixed). */
+  refs: readonly string[]
+  /** Hypothesis name -> designated ref -> predicted token. Every non-record configuration of a capability names the same hypotheses. */
+  hypotheses: Readonly<Record<string, Readonly<Record<string, string>>>>
+  /** Recorded only (a refused shape): evaluated and kept in the sidecar, never evidence for or against a capability. */
+  record?: string
+  /** A negative control: its hypotheses agree by design; Excel must match them, but it is never evidence (fix round 1 #3). */
+  role?: 'negative-control'
+  /** Replication is checked per column inside the configuration too (each range of a multi-range rule, fix round 1 #3). */
+  replicateBy?: 'column'
+  /**
+   * Ruling S5-WITNESS (fix round 4): what each twin a reading names is expected to render, fixed before capture from the
+   * twin's own rule and values. `visual`: a positive control that must render (a bar, an icon class, a scale or DXF fill)
+   * before its observation is used as a prediction. `empty`: it must render nothing (no visual rule, a bar at or below its
+   * lower bound). `either`: unknown (a degenerate bar), validated only by equality with the formula cell.
+   */
+  twinExpect?: Readonly<Record<string, 'visual' | 'empty' | 'either'>>
+  /**
+   * Fix round 1 #2: hypotheses that depend on the sqref order Excel retains on resave. `tables` maps each possible order of
+   * the named rule's sqref to its hypotheses; the verifier reads the retained order from the saved XML and evaluates that
+   * table (`hypotheses` is the table of the authored order).
+   */
+  orderedHypotheses?: { capabilityId: string; tables: Readonly<Record<string, Readonly<Record<string, Readonly<Record<string, string>>>>>> }
+  /**
+   * Fix round 6 (blank DXF evidence): literal positive controls, ref (with the configuration's own `pre:`/`calc:`/`post:`
+   * prefix) -> the exact DisplayFormat token (fill, `+strike`) fixed before capture. Each is a cell under a literal `cellIs`
+   * rule (`formula:positive-control`) on the dxf the configuration's readings predict; its DisplayFormat must show that
+   * token, and its same-content control nothing, before any reading is judged. Every literal fill colour and any
+   * strikethrough (literal or twin token) a reading predicts needs a control showing it, and a configuration whose twins
+   * hold no `visual` expectation needs at least one; otherwise it refuses (`formula-positive-control-missing`).
+   */
+  positiveControls?: Readonly<Record<string, string>>
+  note?: string
+}
+
+export interface S5Rule {
+  where: 'legacy' | 'x14'
+  sqref: string
+  xml: string
+  /** A paired data bar's x14 companion (written in the x14 extension on the same sqref). */
+  x14Companion?: string
+  /** Further markers the rule settles (a paired bar's x14 companion, pinned on its own). */
+  extraMarkers?: ReadonlyArray<Omit<CfPartMarker, 'part' | 'sqref'>>
+  marker: Omit<CfPartMarker, 'part' | 'extension' | 'sqref'>
+  separateBlock?: boolean
+}
+
+export interface S5ManualObservation {
+  inputSha256: string
+  calculationMode: string
+  workbookCount: number
+  /** Before any calculation: cell -> { value, displayFormatFill, baseFill, strikethrough }. */
+  pre: Readonly<Record<string, { value: string; displayFormatFill?: string; baseFill?: string; strikethrough?: boolean }>>
+  /** After one explicit `calculate`. */
+  calc: Readonly<Record<string, { value: string; displayFormatFill?: string; baseFill?: string; strikethrough?: boolean }>>
+}
+
+export interface S5Fixture {
+  id: string
+  question: string
+  status: 'recipe-pending' | 'unsupported'
+  reason: string
+  /** Sheet1 cells; a function of the clock anchor serial for clock fixtures. */
+  cells: Readonly<Record<string, S5Value>> | ((anchorSerial: number) => Readonly<Record<string, S5Value>>)
+  sheets?: readonly S5Sheet[]
+  rules: readonly S5Rule[]
+  configurations: readonly S5Configuration[]
+  /** Designated cells of an unsupported shape (no configuration: nothing is evidence). */
+  recordRefs?: readonly string[]
+  dxfsXml?: string
+  calcMode?: 'manual'
+  calcObservation?: 'pre-calculate'
+  definedNames?: readonly { name: string; ref: string }[]
+  /** A table part (`xl/tables/table1.xml`) on Sheet1. */
+  tableXml?: string
+  clock?: Pick<CfClockRequirement, 'staleCacheCellRef' | 'localTodayCellRef' | 'utcTodayCellRef'>
+  dynamicRefresh?: CfOracleCase['formulaDynamicRefresh']
+  calcObservationSources?: CfOracleCase['calcObservationSources']
+  /**
+   * Task 39: put every Sheet1 cell on an explicit bottom-aligned style. Excel renders the default style vertically centred,
+   * which moves an icon 3 px off the bottom-aligned frame the Stage 4 glyph key was captured in (every icon crop of the
+   * first Stage 5 run was unclassifiable). Set only on a case built afresh, since it changes the workbook bytes.
+   */
+  cellVertical?: 'bottom'
+  /**
+   * 20 pt rows on a fixture without an icon rule (which gets them anyway): the row height every measured Stage 5 bar crop
+   * was taken at (stage5-bar-bounds-formula). Set only on a case built afresh, since it changes the workbook bytes.
+   */
+  defaultRowHeightPt?: 20
+}
+
+const S5_RED = 'FFFFC7CE'
+const S5_GREEN = 'FFC6EFCE'
+const NONE = 'none'
+const S5_STRIKE_DXF = '<dxf><font><strike/></font></dxf>'
+/** dxfId 0 red fill, 1 green fill, 2 strikethrough only. */
+const S5_DXFS = `<dxfs count="3">${DXF_RED_FILL}${DXF_GREEN_FILL}${S5_STRIKE_DXF}</dxfs>`
+const S5_DXF_EXPECT: readonly CfDxfExpectation[] = [S3_DXF_RED, S3_DXF_GREEN, { strikethrough: true }]
+const S5_DXF_INLINE = [
+  '<fill><patternFill patternType="solid"><bgColor rgb="FFFFC7CE"/></patternFill></fill>',
+  '<fill><patternFill patternType="solid"><bgColor rgb="FFC6EFCE"/></patternFill></fill>',
+  '<font><strike/></font>',
+]
+const S5_SCALE_COLORS = ['FFF8696B', 'FF63BE7B'] as const
+const S5_PENDING_REASON =
+  'Preparation only: no Excel capture has been run for this Stage 5 case; every formula:* capability it settles stays unverified and production withholds the formula rule (Ruling S5-A)'
+const S5_UNSUPPORTED_REASON =
+  'Records Excel\'s open/repair/strip outcome for an unresolved formula shape only; it lifts nothing and production keeps the shape cf-unsupported-rule (Rulings S5-B, S5-F, S5-G)'
+
+/**
+ * Provisional dialects (Lesson 12), like ICON_KEY_PERCENT_FORM: the dialect Excel's dialog is expected to write for a
+ * cross-sheet expression and a cross-sheet-bounded colour scale. `bun scripts/cf-refs/generate.ts --diff-authored-formulas`
+ * compares the templates with `excel-authored-formulas.xlsx` and names this constant when Excel disagrees.
+ */
+export const S5_CROSS_SHEET_DIALECT: 'base' | 'x14' = 'x14'
+const S5_CROSS_SHEET_WHERE: 'legacy' | 'x14' = S5_CROSS_SHEET_DIALECT === 'x14' ? 'x14' : 'legacy'
+
+const xe = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+const topLeftOf = (sqref: string): string => sqref.trim().split(/\s+/)[0]!.split(':')[0]!
+const s5Guid = (priority: number): string => `{5F5F5F5F-0000-4000-8000-${priority.toString(16).toUpperCase().padStart(12, '0')}}`
+const dialectOf = (where: 'legacy' | 'x14'): 'base' | 'x14' => (where === 'x14' ? 'x14' : 'base')
+
+/** An expression-shaped rule (`expression`, or a divergent predicate type carrying its own `<formula>`). */
+function s5Expr(
+  cap: string,
+  sqref: string,
+  priority: number,
+  formula: string,
+  o: { dxf?: 0 | 1 | 2; stop?: boolean; where?: 'legacy' | 'x14'; type?: CfPartMarker['ruleType']; attrs?: string; timePeriod?: string } = {},
+): S5Rule {
+  const where = o.where ?? 'legacy'
+  const dxf = o.dxf ?? 0
+  const type = o.type ?? 'expression'
+  const stop = o.stop ? ' stopIfTrue="1"' : ''
+  const attrs = o.attrs ?? ''
+  const xml =
+    where === 'legacy'
+      ? `<cfRule type="${type}" dxfId="${dxf}" priority="${priority}"${stop}${attrs}><formula>${xe(formula)}</formula></cfRule>`
+      : `<x14:cfRule type="${type}" priority="${priority}"${stop}${attrs} id="${s5Guid(priority)}"><xm:f>${xe(formula)}</xm:f><x14:dxf>${S5_DXF_INLINE[dxf]}</x14:dxf></x14:cfRule>`
+  return {
+    where,
+    sqref,
+    xml,
+    separateBlock: true,
+    marker: {
+      capabilityId: cap,
+      ruleType: type,
+      priority,
+      ...(o.stop ? { stopIfTrue: true } : {}),
+      ...(o.timePeriod ? { timePeriod: o.timePeriod } : {}),
+      formulas: [formula],
+      dxf: S5_DXF_EXPECT[dxf]!,
+      formula: { kind: 'expression', anchor: topLeftOf(sqref), dialect: dialectOf(where) },
+    },
+  }
+}
+
+/**
+ * A `cellIs` rule; `literal` operands carry no formula marker (a Stage 1 rule), others are formula operands (S5-F).
+ * `where: 'x14'` writes the form Excel 16.115 resaved a cross-sheet operand in (stage5-cross-sheet.rejected.xlsx, Task 39):
+ * `<x14:cfRule type="cellIs" priority operator id>`, one `<xm:f>` per operand, and an inline `<x14:dxf>`.
+ */
+function s5CellIs(cap: string, sqref: string, priority: number, operator: string, operands: readonly string[], o: { dxf?: 0 | 1 | 2; stop?: boolean; literal?: boolean; where?: 'legacy' | 'x14' } = {}): S5Rule {
+  const dxf = o.dxf ?? 0
+  const where = o.where ?? 'legacy'
+  const stop = o.stop ? ' stopIfTrue="1"' : ''
+  return {
+    where,
+    sqref,
+    xml: where === 'legacy'
+      ? `<cfRule type="cellIs" dxfId="${dxf}" priority="${priority}"${stop} operator="${operator}">${operands.map(f => `<formula>${xe(f)}</formula>`).join('')}</cfRule>`
+      : `<x14:cfRule type="cellIs" priority="${priority}"${stop} operator="${operator}" id="${s5Guid(priority)}">${operands.map(f => `<xm:f>${xe(f)}</xm:f>`).join('')}<x14:dxf>${S5_DXF_INLINE[dxf]}</x14:dxf></x14:cfRule>`,
+    separateBlock: true,
+    marker: {
+      capabilityId: cap,
+      ruleType: 'cellIs',
+      operator,
+      priority,
+      ...(o.stop ? { stopIfTrue: true } : {}),
+      formulas: [...operands],
+      dxf: S5_DXF_EXPECT[dxf]!,
+      ...(o.literal ? {} : { formula: { kind: 'operand' as const, anchor: topLeftOf(sqref), dialect: dialectOf(where) } }),
+    },
+  }
+}
+
+type S5Cfvo = { type: string; val?: string }
+const isFormulaVal = (v: string | undefined): boolean => v !== undefined && !/^-?\d+(\.\d+)?$/.test(v)
+
+/** A two-colour scale, base or standalone x14; a non-numeric `val` is a formula bound (S5-H). */
+function s5Scale(cap: string, sqref: string, priority: number, cfvo: readonly S5Cfvo[], o: { where?: 'legacy' | 'x14'; activation?: string; activePresent?: boolean } = {}): S5Rule {
+  const where = o.where ?? 'legacy'
+  const formulaBound = cfvo.some(c => isFormulaVal(c.val))
+  const colors = S5_SCALE_COLORS
+  const xml =
+    where === 'legacy'
+      ? `<cfRule type="colorScale" priority="${priority}"><colorScale>${cfvo.map(c => `<cfvo type="${c.type}"${c.val !== undefined ? ` val="${xe(c.val)}"` : ''}/>`).join('')}${colors.map(c => `<color rgb="${c}"/>`).join('')}</colorScale></cfRule>`
+      : `<x14:cfRule type="colorScale" priority="${priority}"${o.activePresent ? ' activePresent="1"' : ''} id="${s5Guid(priority)}">${o.activation !== undefined ? `<xm:f>${xe(o.activation)}</xm:f>` : ''}<x14:colorScale>${cfvo.map(c => (c.val !== undefined ? `<x14:cfvo type="${c.type}"><xm:f>${xe(c.val)}</xm:f></x14:cfvo>` : `<x14:cfvo type="${c.type}"/>`)).join('')}${colors.map(c => `<x14:color rgb="${c}"/>`).join('')}</x14:colorScale></x14:cfRule>`
+  const formulaCfvo = cfvo.filter(c => c.type === 'formula' && c.val !== undefined).map(c => c.val!)
+  return {
+    where,
+    sqref,
+    xml,
+    separateBlock: true,
+    marker: {
+      capabilityId: cap,
+      ruleType: 'colorScale',
+      priority,
+      formulas: o.activation !== undefined ? [o.activation] : formulaCfvo,
+      scale: {
+        cfvo: cfvo.map(c => (c.val === undefined ? { type: c.type } : formulaBound || isFormulaVal(c.val) ? { type: c.type, f: c.val } : { type: c.type, val: c.val })),
+        colors,
+        dialect: dialectOf(where),
+      },
+      ...(formulaBound || o.activation !== undefined ? { formula: { kind: o.activation !== undefined ? ('activation' as const) : ('cfvo' as const), anchor: topLeftOf(sqref), dialect: dialectOf(where) } } : {}),
+      ...(o.activePresent !== undefined ? { activePresent: o.activePresent } : {}),
+    },
+  }
+}
+
+const S5_DB_EXT = (guid: string): string => `<extLst><ext uri="${DB_EXT_URI}" ${NS_X14_DECL}><x14:id>${guid}</x14:id></ext></extLst>`
+const S5_BAR_X14_ATTRS = 'minLength="0" maxLength="100" gradient="0"'
+const S5_BAR_X14_PINS: Readonly<Record<string, string>> = { minLength: '0', maxLength: '100', gradient: '0' }
+
+/** A paired data bar (the shape Excel resaves, Stage 3), solid; a non-numeric `val` is a formula bound. */
+function s5Bar(cap: string, sqref: string, priority: number, cfvo: readonly S5Cfvo[]): S5Rule {
+  const guid = s5Guid(0x100 + priority)
+  const baseCfvo = cfvo.map(c => `<cfvo type="${c.type}"${c.val !== undefined ? ` val="${xe(c.val)}"` : ''}/>`).join('')
+  const x14Cfvo = cfvo.map(c => (c.val !== undefined ? `<x14:cfvo type="${c.type}"><xm:f>${xe(c.val)}</xm:f></x14:cfvo>` : `<x14:cfvo type="${c.type}"/>`)).join('')
+  const formulaBound = cfvo.some(c => isFormulaVal(c.val))
+  return {
+    where: 'legacy',
+    sqref,
+    xml: `<cfRule type="dataBar" priority="${priority}"><dataBar>${baseCfvo}<color rgb="${BLUE}"/></dataBar>${S5_DB_EXT(guid)}</cfRule>`,
+    x14Companion: `<x14:cfRule type="dataBar" id="${guid}"><x14:dataBar ${S5_BAR_X14_ATTRS}>${x14Cfvo}<x14:negativeFillColor rgb="${RED}"/><x14:axisColor rgb="${BLACK}"/></x14:dataBar></x14:cfRule>`,
+    separateBlock: true,
+    marker: {
+      capabilityId: cap,
+      ruleType: 'dataBar',
+      priority,
+      formulas: [],
+      // Fix round 1 #1: the base bounds and the link to the companion are pinned (Stage 3 pairing semantics).
+      bar: { pairing: 'paired', cfvo: cfvo.map(c => (c.val !== undefined ? { type: c.type, val: c.val } : { type: c.type })), attrs: {}, colors: { fill: BLUE } },
+      ...(formulaBound ? { formula: { kind: 'cfvo' as const, anchor: topLeftOf(sqref), dialect: 'base' as const } } : {}),
+    },
+    extraMarkers: [{
+      extension: 'x14',
+      capabilityId: cap,
+      ruleType: 'dataBar',
+      formulas: [],
+      bar: { pairing: 'paired', cfvo: cfvo.map(c => (c.val !== undefined ? { type: c.type, f: c.val } : { type: c.type })), attrs: S5_BAR_X14_PINS, colors: { negativeFill: RED, axis: BLACK } },
+      ...(formulaBound ? { formula: { kind: 'cfvo' as const, anchor: topLeftOf(sqref), dialect: 'x14' as const } } : {}),
+    }],
+  }
+}
+
+/** A standalone x14 data bar (only the activePresent shape: Excel's canonical paired form cannot carry it). */
+function s5BarX14(cap: string, sqref: string, priority: number, cfvo: readonly S5Cfvo[], o: { activation?: string; activePresent?: boolean } = {}): S5Rule {
+  const x14Cfvo = cfvo.map(c => (c.val !== undefined ? `<x14:cfvo type="${c.type}"><xm:f>${xe(c.val)}</xm:f></x14:cfvo>` : `<x14:cfvo type="${c.type}"/>`)).join('')
+  return {
+    where: 'x14',
+    sqref,
+    xml: `<x14:cfRule type="dataBar" priority="${priority}"${o.activePresent ? ' activePresent="1"' : ''} id="${s5Guid(priority)}">${o.activation !== undefined ? `<xm:f>${xe(o.activation)}</xm:f>` : ''}<x14:dataBar ${S5_BAR_X14_ATTRS}>${x14Cfvo}<x14:fillColor rgb="${BLUE}"/><x14:negativeFillColor rgb="${RED}"/><x14:axisColor rgb="${BLACK}"/></x14:dataBar></x14:cfRule>`,
+    separateBlock: true,
+    marker: {
+      capabilityId: cap,
+      ruleType: 'dataBar',
+      priority,
+      formulas: o.activation !== undefined ? [o.activation] : [],
+      bar: { pairing: 'standalone', cfvo: cfvo.map(c => (c.val !== undefined ? { type: c.type, f: c.val } : { type: c.type })), attrs: S5_BAR_X14_PINS, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } },
+      ...(o.activation !== undefined ? { formula: { kind: 'activation' as const, anchor: topLeftOf(sqref), dialect: 'x14' as const } } : {}),
+      ...(o.activePresent !== undefined ? { activePresent: o.activePresent } : {}),
+    },
+  }
+}
+
+/** A base icon set (3Arrows unless named); a non-numeric `val` is a formula threshold. */
+function s5Icon(cap: string, sqref: string, priority: number, cfvo: readonly S5Cfvo[], o: { set?: string; where?: 'legacy' | 'x14'; activation?: string; activePresent?: boolean } = {}): S5Rule {
+  const set = o.set ?? '3Arrows'
+  const where = o.where ?? 'legacy'
+  const formulaBound = cfvo.some(c => isFormulaVal(c.val))
+  const xml =
+    where === 'legacy'
+      ? `<cfRule type="iconSet" priority="${priority}"><iconSet iconSet="${set}">${cfvo.map(c => `<cfvo type="${c.type}"${c.val !== undefined ? ` val="${xe(c.val)}"` : ''}/>`).join('')}</iconSet></cfRule>`
+      : `<x14:cfRule type="iconSet" priority="${priority}"${o.activePresent ? ' activePresent="1"' : ''} id="${s5Guid(priority)}">${o.activation !== undefined ? `<xm:f>${xe(o.activation)}</xm:f>` : ''}<x14:iconSet iconSet="${set}">${cfvo.map(c => (c.val !== undefined ? `<x14:cfvo type="${c.type}"><xm:f>${xe(c.val)}</xm:f></x14:cfvo>` : `<x14:cfvo type="${c.type}"/>`)).join('')}</x14:iconSet></x14:cfRule>`
+  return {
+    where,
+    sqref,
+    xml,
+    separateBlock: true,
+    marker: {
+      capabilityId: cap,
+      ruleType: 'iconSet',
+      priority,
+      formulas: o.activation !== undefined ? [o.activation] : [],
+      // Fix round 1 #1: the set and every threshold are pinned (Stage 4 icon semantics; `val` base, `f` x14).
+      icon: { dialect: dialectOf(where), set, cfvo: cfvo.map(c => (c.val === undefined ? { type: c.type } : where === 'x14' ? { type: c.type, f: c.val } : { type: c.type, val: c.val })), attrs: {} },
+      ...(formulaBound || o.activation !== undefined ? { formula: { kind: o.activation !== undefined ? ('activation' as const) : ('cfvo' as const), anchor: topLeftOf(sqref), dialect: dialectOf(where) } } : {}),
+      ...(o.activePresent !== undefined ? { activePresent: o.activePresent } : {}),
+    },
+  }
+}
+
+/** A raw shape (unsupported cases): the marker pins type, priority and sqref only (Excel's outcome is recorded). */
+function s5Raw(cap: string, sqref: string, priority: number, type: CfPartMarker['ruleType'], xml: string, formulas: readonly string[], dxf?: 0 | 1 | 2): S5Rule {
+  return {
+    where: 'legacy',
+    sqref,
+    xml,
+    separateBlock: true,
+    marker: { capabilityId: cap, ruleType: type, priority, formulas: [...formulas], ...(dxf !== undefined ? { dxf: S5_DXF_EXPECT[dxf]! } : {}), formula: { kind: 'expression', anchor: topLeftOf(sqref), dialect: 'base' } },
+  }
+}
+
+/** Builds a configuration from per-hypothesis prediction functions (each evaluated at every ref). */
+function s5Cfg(
+  id: string,
+  cap: string,
+  refs: readonly string[],
+  hyps: Readonly<Record<string, (ref: string, i: number) => string>>,
+  o: { observable?: S5Observable; record?: string; note?: string } = {},
+): S5Configuration {
+  return {
+    id,
+    capabilityId: cap,
+    observable: o.observable ?? 'fill',
+    refs,
+    hypotheses: Object.fromEntries(Object.entries(hyps).map(([h, fn]) => [h, Object.fromEntries(refs.map((r, i) => [r, fn(r, i)]))])),
+    ...(o.record ? { record: o.record } : {}),
+    ...(o.note ? { note: o.note } : {}),
+  }
+}
+
+const rowsOf = (colL: string, from: number, to: number): string[] => Array.from({ length: to - from + 1 }, (_, i) => `${colL}${from + i}`)
+const rowOfRef = (ref: string): number => Number(/\d+/.exec(ref)![0])
+const colOfRef = (ref: string): string => /^[A-Z]+/.exec(ref.replace(/^(pre|calc|post):/, ''))![0]
+const shiftCol = (ref: string, by: number): string => `${colLetter(colIndex(colOfRef(ref)) + by)}${rowOfRef(ref)}`
+const always = (t: string) => (): string => t
+const twinCol = (twin: string) => (ref: string): string => `twin:${twin}${rowOfRef(ref)}`
+
+const s5rect = (fx: Omit<S5Fixture, 'status' | 'reason'> & Partial<Pick<S5Fixture, 'status' | 'reason'>>): S5Fixture => ({
+  status: 'recipe-pending',
+  reason: S5_PENDING_REASON,
+  dxfsXml: S5_DXFS,
+  ...fx,
+})
+
+/** Fills a column with values from row `from`. */
+const colValues = (c: string, values: readonly S5Value[], from = 2): Record<string, S5Value> =>
+  Object.fromEntries(values.map((v, i) => [`${c}${from + i}`, v]).filter(([, v]) => v !== null))
+
+// ---- a tiny independent model of the Excel semantics the `documented` hypotheses state (never the viewer's evaluator) ----
+
+type XV = { k: 'n'; v: number } | { k: 's'; v: string } | { k: 'b'; v: boolean } | { k: 'blank' } | { k: 'e' }
+const xv = (v: S5Value | undefined): XV => {
+  if (v === undefined || v === null) return { k: 'blank' }
+  if (typeof v === 'number') return { k: 'n', v }
+  if (typeof v === 'string') return { k: 's', v }
+  if (typeof v === 'boolean') return { k: 'b', v }
+  if ('err' in v) return { k: 'e' }
+  if ('date' in v) return { k: 'n', v: v.date }
+  return xv(v.t === 'e' ? { err: String(v.v) } : (v.v as S5Value))
+}
+/** Excel comparison order: numbers < text < booleans; a blank compares as 0, "" or FALSE against its partner. */
+function xCmp(a: XV, b: XV): number | 'err' {
+  if (a.k === 'e' || b.k === 'e') return 'err'
+  const fill = (x: XV, other: XV): XV => (x.k !== 'blank' ? x : other.k === 's' ? { k: 's', v: '' } : other.k === 'b' ? { k: 'b', v: false } : { k: 'n', v: 0 })
+  const x = fill(a, b)
+  const y = fill(b, a)
+  const rank = (z: XV): number => (z.k === 'n' || z.k === 'blank' ? 0 : z.k === 's' ? 1 : 2)
+  if (rank(x) !== rank(y)) return rank(x) - rank(y)
+  if (x.k === 'n' && y.k === 'n') return Math.sign(x.v - y.v)
+  if (x.k === 's' && y.k === 's') return x.v.toLowerCase() < y.v.toLowerCase() ? -1 : x.v.toLowerCase() > y.v.toLowerCase() ? 1 : 0
+  if (x.k === 'b' && y.k === 'b') return Number(x.v) - Number(y.v)
+  return 0
+}
+const xGt = (a: XV, b: XV): boolean | 'err' => { const c = xCmp(a, b); return c === 'err' ? 'err' : c > 0 }
+const xLt = (a: XV, b: XV): boolean | 'err' => { const c = xCmp(a, b); return c === 'err' ? 'err' : c < 0 }
+const xEq = (a: XV, b: XV): boolean | 'err' => { const c = xCmp(a, b); return c === 'err' ? 'err' : c === 0 }
+const N = (v: number): XV => ({ k: 'n', v })
+
+// ---- fixtures ----
+
+const AUTH_B = [5, 1, 7, 2, 9, 3, 4, 8]
+const AUTH_C = [3, 4, 2, 6, 1, 5, 6, 2]
+
+const TRUTH_ROWS: ReadonlyArray<{ row: number; formula: string; cap: string }> = [
+  { row: 3, formula: '1', cap: 'formula:truth-number' },
+  { row: 4, formula: '0', cap: 'formula:truth-number' },
+  { row: 5, formula: '-0.5', cap: 'formula:truth-number' },
+  { row: 6, formula: 'TRUE', cap: 'formula:truth-boolean' },
+  { row: 7, formula: 'FALSE', cap: 'formula:truth-boolean' },
+  { row: 8, formula: '"abc"', cap: 'formula:truth-text' },
+  { row: 9, formula: '""', cap: 'formula:truth-text' },
+  { row: 10, formula: '"TRUE"', cap: 'formula:truth-text' },
+  { row: 11, formula: '$H$1', cap: 'formula:truth-blank' },
+  { row: 12, formula: 'NA()', cap: 'formula:truth-error' },
+  { row: 13, formula: '1/0', cap: 'formula:truth-error' },
+]
+/** Range-shaped expressions at target row 3 (A2=0, A3=1; B2=1, B3=0): implicit intersection differs from the top-left. */
+const TRUTH_RANGE: ReadonlyArray<{ cols: readonly [string, string, string, string]; formula: string; data: 'A' | 'B'; cap: string }> = [
+  { cols: ['I', 'J', 'K', 'L'], formula: '$A2:$A4', data: 'A', cap: 'formula:truth-range' },
+  { cols: ['M', 'N', 'O', 'P'], formula: '$B2:$B4', data: 'B', cap: 'formula:truth-range' },
+  { cols: ['Q', 'R', 'S', 'T'], formula: 'IF(TRUE,$A2:$A4,0)', data: 'A', cap: 'formula:truth-range-nested' },
+  { cols: ['U', 'V', 'W', 'X'], formula: 'IF(TRUE,$B2:$B4,0)', data: 'B', cap: 'formula:truth-range-nested' },
+  { cols: ['Y', 'Z', 'AA', 'AB'], formula: 'IFERROR($A2:$A4,0)', data: 'A', cap: 'formula:truth-range-nested' },
+  { cols: ['AC', 'AD', 'AE', 'AF'], formula: 'IFERROR($B2:$B4,0)', data: 'B', cap: 'formula:truth-range-nested' },
+]
+
+/** Per-kind readings (Ruling S5-D, stated as observables): red = formats, green = no format and the lower rule shows, none = halted. */
+function truthHypotheses(cap: string, formula: string, stop: boolean): Record<string, (ref: string, i: number) => string> {
+  const R = S5_RED
+  const G = S5_GREEN
+  const halt = stop ? NONE : G
+  switch (cap) {
+    case 'formula:truth-number': {
+      const v = Number(formula)
+      return {
+        'number-nonzero-true': always(v !== 0 ? R : G),
+        'number-positive-true': always(v > 0 ? R : G),
+        'number-never': always(G),
+      }
+    }
+    case 'formula:truth-boolean':
+      return { boolean: always(formula === 'TRUE' ? R : G), 'boolean-never': always(G), 'boolean-always': always(R) }
+    case 'formula:truth-text':
+      return {
+        'text-no-match': always(G),
+        'text-true': always(R),
+        'text-nonempty-true': always(formula === '""' ? G : R),
+        'text-boolean-parse': always(formula === '"TRUE"' ? R : G),
+        'text-halts': always(halt),
+      }
+    case 'formula:truth-blank':
+      return { 'blank-no-match': always(G), 'blank-true': always(R), 'blank-halts': always(halt) }
+    case 'formula:truth-error':
+      return { 'error-no-match': always(G), 'error-halts': always(halt), 'error-true': always(R) }
+    default:
+      throw new Error(cap)
+  }
+}
+
+function truthinessFixture(): S5Fixture {
+  const cells: Record<string, S5Value> = { A2: 0, A3: 1, A4: 0, B2: 1, B3: 0, B4: 0 }
+  const rules: S5Rule[] = []
+  let p = 1
+  const lower = (cap: string, sqref: string): S5Rule => s5CellIs(cap, sqref, p++, 'greaterThan', ['0'], { dxf: 1, literal: true })
+  const configs = new Map<string, string[]>()
+  const push = (key: string, refs: string[]): void => { configs.set(key, [...(configs.get(key) ?? []), ...refs]) }
+  for (const t of TRUTH_ROWS) {
+    for (const [c1, c2, stop] of [['C', 'D', false], ['F', 'G', true]] as const) {
+      const sq = `${c1}${t.row}:${c2}${t.row}`
+      cells[`${c1}${t.row}`] = 1
+      cells[`${c2}${t.row}`] = 1
+      rules.push(s5Expr(t.cap, sq, p++, t.formula, { dxf: 0, stop }), lower(t.cap, sq))
+      push(`${t.cap}|${stop ? 'stop' : 'lower'}`, [`${c1}${t.row}`, `${c2}${t.row}`])
+    }
+  }
+  for (const t of TRUTH_RANGE) {
+    for (const [c1, c2, stop] of [[t.cols[0], t.cols[1], false], [t.cols[2], t.cols[3], true]] as const) {
+      const sq = `${c1}3:${c2}3`
+      cells[`${c1}3`] = 1
+      cells[`${c2}3`] = 1
+      rules.push(s5Expr(t.cap, sq, p++, t.formula, { dxf: 0, stop }), lower(t.cap, sq))
+      push(`${t.cap}|${stop ? 'stop' : 'lower'}`, [`${c1}3`, `${c2}3`])
+    }
+  }
+  const formulaAt = (ref: string): string => {
+    const r = rowOfRef(ref)
+    if (r !== 3 || ['C', 'D', 'F', 'G'].includes(colOfRef(ref))) return TRUTH_ROWS.find(t => t.row === r)!.formula
+    return TRUTH_RANGE.find(t => t.cols.includes(colOfRef(ref) as never))!.formula
+  }
+  const dataOf = (ref: string): 'A' | 'B' => TRUTH_RANGE.find(t => t.cols.includes(colOfRef(ref) as never))!.data
+  const configurations: S5Configuration[] = []
+  for (const [key, refs] of configs) {
+    const [cap, variant] = key.split('|') as [string, 'stop' | 'lower']
+    const stop = variant === 'stop'
+    if (cap === 'formula:truth-range' || cap === 'formula:truth-range-nested') {
+      // A-data: implicit row 3 reads 1 (true), the top-left reads 0. B-data: the reverse.
+      const halt = stop ? NONE : S5_GREEN
+      configurations.push(s5Cfg(`${cap}-${variant}`, cap, refs, {
+        'range-implicit': r => (dataOf(r) === 'A' ? S5_RED : S5_GREEN),
+        'range-top-left': r => (dataOf(r) === 'B' ? S5_RED : S5_GREEN),
+        'range-no-match': always(S5_GREEN),
+        'range-any-true': always(S5_RED),
+        'range-halts': always(halt),
+      }))
+      continue
+    }
+    const perRef = (fn: (formula: string) => Record<string, (ref: string, i: number) => string>): Record<string, (ref: string, i: number) => string> => {
+      const names = Object.keys(fn(TRUTH_ROWS.find(t => t.cap === cap)!.formula))
+      return Object.fromEntries(names.map(n => [n, (r: string, i: number) => fn(formulaAt(r))[n]!(r, i)]))
+    }
+    configurations.push(s5Cfg(`${cap}-${variant}`, cap, refs, perRef(f => truthHypotheses(cap, f, stop))))
+  }
+  return s5rect({
+    id: 'stage5-formula-truthiness',
+    question:
+      'S5-D: how does Excel read each expression result shape? Each kind (number 1/0/-0.5, TRUE/FALSE, "abc"/""/="TRUE", a blank reference, #N/A/#DIV/0!, a bare range at target row 3 and the nested IF/IFERROR range) sits once ahead of a lower matching literal fill (green) and once with stopIfTrue="1" ahead of it, over two cells each. Observables: red (formats), green (no format, the lower rule shows), none (halted).',
+    cells,
+    rules,
+    configurations,
+  })
+}
+
+/** Data of stage5-formula-functions column A (rows 2..19) and B (AND's partner). */
+const FN_A: readonly S5Value[] = [
+  5, 12, 'abcd', 'ab', true, null, { f: '""', v: '', t: 'str' }, { date: 46332 }, { date: 46000 }, { err: '#N/A' },
+  9, 5, { f: '2+3', v: 5 }, { date: 46100 }, null, null, { f: '""', v: '', t: 'str' }, 'wxyz',
+]
+const FN_B: readonly S5Value[] = [3, 7, 1, 9, 2, 4, 1, 8, 3, 2, 6, 1, 4, 3, 2, 2, 2, 2]
+const fnA = (ref: string): XV => xv(FN_A[rowOfRef(ref) - 2])
+const fnB = (ref: string): XV => xv(FN_B[rowOfRef(ref) - 2])
+const isTextCell = (v: XV): boolean => v.k === 's'
+const red = (b: boolean | 'err'): string => (b === true ? S5_RED : NONE)
+const FN_ROWS = (c: string, keep: (v: XV, ref: string) => boolean = () => true): string[] => rowsOf(c, 2, 19).filter(r => keep(fnA(r), r))
+
+function functionsFixture(): S5Fixture {
+  let p = 1
+  const rule = (cap: string, col: string, f: string, last = col): S5Rule => s5Expr(cap, `${col}2:${last}19`, p++, f)
+  const avgA2A9 = (() => { const ns = FN_A.slice(0, 8).map(xv).filter(v => v.k === 'n') as Array<{ k: 'n'; v: number }>; return ns.reduce((a, b) => a + b.v, 0) / ns.length })()
+  const countA = (v: XV): number => FN_A.map(xv).filter(x => xEq(x, v) === true && x.k !== 'blank').length
+  const len = (v: XV): number | 'err' => (v.k === 'e' ? 'err' : v.k === 'blank' ? 0 : v.k === 's' ? v.v.length : v.k === 'b' ? (v.v ? 4 : 5) : String(v.v).length)
+  const yearOf = (serial: number): number => new Date(Date.UTC(1899, 11, 30) + serial * 86_400_000).getUTCFullYear()
+  const and = (a: boolean | 'err', b: boolean | 'err'): boolean | 'err' => (a === 'err' || b === 'err' ? 'err' : a && b)
+  const asNumber = (v: XV): XV => (v.k === 'n' ? v : v.k === 'b' ? N(Number(v.v)) : v.k === 'blank' ? N(0) : { k: 'e' })
+  const configurations: S5Configuration[] = [
+    s5Cfg('fn-logical', 'formula:fn-logical', FN_ROWS('C'), {
+      documented: r => red(and(xGt(fnA(r), N(0)), xLt(fnB(r), N(5)))),
+      'numeric-coercion': r => red(and(xGt(asNumber(fnA(r)), N(0)), xLt(fnB(r), N(5)))),
+      never: always(NONE),
+    }),
+    s5Cfg('fn-information-isnumber', 'formula:fn-information', FN_ROWS('D'), {
+      documented: r => red(fnA(r).k === 'n'),
+      'empty-text-is-blank': r => red(fnA(r).k === 'n'),
+      'blank-not-empty-text': r => red(fnA(r).k === 'n'),
+      never: always(NONE),
+    }),
+    s5Cfg('fn-information-equals-empty', 'formula:fn-information', FN_ROWS('L'), {
+      documented: r => red(fnA(r).k === 'blank' || (fnA(r).k === 's' && (fnA(r) as { v: string }).v === '')),
+      'empty-text-is-blank': r => red(fnA(r).k === 'blank' || (fnA(r).k === 's' && (fnA(r) as { v: string }).v === '')),
+      'blank-not-empty-text': r => red(fnA(r).k === 's' && (fnA(r) as { v: string }).v === ''),
+      never: always(NONE),
+    }),
+    s5Cfg('fn-information-isblank', 'formula:fn-information', FN_ROWS('M'), {
+      documented: r => red(fnA(r).k === 'blank'),
+      'empty-text-is-blank': r => red(fnA(r).k === 'blank' || (fnA(r).k === 's' && (fnA(r) as { v: string }).v === '')),
+      'blank-not-empty-text': r => red(fnA(r).k === 'blank'),
+      never: always(NONE),
+    }),
+    s5Cfg('fn-text', 'formula:fn-text', FN_ROWS('E'), {
+      documented: r => { const n = len(fnA(r)); return red(n !== 'err' && n > 3) },
+      'text-only': r => red(isTextCell(fnA(r)) && (fnA(r) as { v: string }).v.length > 3),
+      never: always(NONE),
+    }),
+    s5Cfg('fn-math', 'formula:fn-math', FN_ROWS('F', v => v.k !== 's' && v.k !== 'e'), {
+      documented: r => { const v = asNumber(fnA(r)); return red(v.k === 'n' && v.v % 3 === 0) },
+      'blank-skips': r => { const v = fnA(r); return red(v.k === 'n' && v.v % 3 === 0) },
+      never: always(NONE),
+    }),
+    s5Cfg('fn-aggregate', 'formula:fn-aggregate', FN_ROWS('G', v => v.k !== 'e'), {
+      documented: r => red(xGt(fnA(r), N(avgA2A9))),
+      'numeric-only': r => red(fnA(r).k === 'n' && xGt(fnA(r), N(avgA2A9)) === true),
+      never: always(NONE),
+    }),
+    s5Cfg('fn-conditional-aggregate', 'formula:fn-conditional-aggregate', FN_ROWS('H', v => v.k === 'n' || (v.k === 's' && v.v !== '')), {
+      documented: r => red(countA(fnA(r)) > 1),
+      never: always(NONE),
+    }),
+    s5Cfg('fn-date', 'formula:fn-date', FN_ROWS('I', v => v.k === 'n'), {
+      documented: r => { const v = fnA(r) as { v: number }; return red(yearOf(v.v) === 2026) },
+      never: always(NONE),
+    }),
+    s5Cfg('fn-row-column', 'formula:fn-row-column', [...rowsOf('J', 8, 12), ...rowsOf('K', 9, 13)], {
+      documented: r => red(rowOfRef(r) === colIndex(colOfRef(r))),
+      never: always(NONE),
+    }),
+  ]
+  return s5rect({
+    id: 'stage5-formula-functions',
+    question:
+      'S5-E: does Excel\'s conditional formatting apply each admitted function family as documented? One rule per family over rows 2..19 of column A (numbers, text, a boolean, unstored blanks, cached ="" and =2+3 formula cells, date serials, #N/A), plus =A2="" and =ISBLANK(A2) over unstored blanks and "" (blank-versus-empty-text, round-1 #12). Hypotheses per family: documented semantics, a plausible coercion variant, or never applied.',
+    cells: { ...colValues('A', FN_A), ...colValues('B', FN_B), ...colValues('C', Array(18).fill(1)), ...colValues('D', Array(18).fill(1)), ...colValues('E', Array(18).fill(1)), ...colValues('F', Array(18).fill(1)), ...colValues('G', Array(18).fill(1)), ...colValues('H', Array(18).fill(1)), ...colValues('I', Array(18).fill(1)), ...colValues('J', Array(18).fill(1)), ...colValues('K', Array(18).fill(1)), ...colValues('L', Array(18).fill(1)), ...colValues('M', Array(18).fill(1)) },
+    rules: [
+      rule('formula:fn-logical', 'C', 'AND($A2>0,$B2<5)'),
+      rule('formula:fn-information', 'D', 'ISNUMBER(A2)'),
+      rule('formula:fn-text', 'E', 'LEN(A2)>3'),
+      rule('formula:fn-math', 'F', 'MOD(A2,3)=0'),
+      rule('formula:fn-aggregate', 'G', 'A2>AVERAGE($A$2:$A$9)'),
+      rule('formula:fn-conditional-aggregate', 'H', 'COUNTIF($A:$A,A2)>1'),
+      rule('formula:fn-date', 'I', 'YEAR(A2)=2026'),
+      rule('formula:fn-row-column', 'J', 'ROW()=COLUMN()', 'K'),
+      rule('formula:fn-information', 'L', 'A2=""'),
+      rule('formula:fn-information', 'M', 'ISBLANK(A2)'),
+    ],
+    configurations,
+  })
+}
+
+// Hoist data, column A rows 2..40 (S5-HOIST): numbers with duplicates and singletons, ASCII text in mixed case, blanks, errors.
+const HOIST_A: readonly S5Value[] = [
+  1, 2, 2, 3, 3, 3, 4, 5, 7, 7, 'abc', 'ABC', 'xyz', 'x', 'x', 'x', 'Q', null, null, { err: '#DIV/0!' }, { err: '#DIV/0!' },
+  10, 11, 12, 12, 13, 14, 15, 15, 16, 17, 18, 19, 20, 'Mixed', 'mixed', 'MIXED', 21, 21,
+]
+
+/** Fix round 1 #5: the same column with its errors left unstored, so AVERAGE/MAX over $A:$A can succeed. */
+const HOIST_A_NO_ERRORS: readonly S5Value[] = HOIST_A.map(v => (v !== null && typeof v === 'object' && 'err' in v ? null : v))
+
+/** Ruling S5-HOIST, the aggregates that must paint: AVERAGE($A:$A) and MAX($A:$A) over a column that holds no error. */
+function hoistAggregateFixture(): S5Fixture {
+  const a = (ref: string): XV => xv(HOIST_A_NO_ERRORS[rowOfRef(ref) - 2])
+  const nums = HOIST_A_NO_ERRORS.map(xv).filter(v => v.k === 'n') as Array<{ k: 'n'; v: number }>
+  const avg = nums.reduce((t, v) => t + v.v, 0) / nums.length
+  const max = Math.max(...nums.map(v => v.v))
+  const valued = (c: string, keepBlank = false): string[] => rowsOf(c, 2, 40).filter(r => a(r).k === 'n' || a(r).k === 's' || (keepBlank && a(r).k === 'blank'))
+  return s5rect({
+    id: 'stage5-formula-hoist-aggregate',
+    question:
+      'S5-HOIST (fix round 1 #5): A2>AVERAGE($A:$A) and A2=MAX($A:$A) over column A with numbers, mixed-case text and blanks but no error (an error in the range propagates: see stage5-formula-hoist for that configuration).',
+    cells: { ...colValues('A', HOIST_A_NO_ERRORS), ...colValues('B', Array(39).fill(1)), ...colValues('C', Array(39).fill(1)) },
+    rules: [s5Expr('formula:hoist-aggregate', 'B2:B40', 1, 'A2>AVERAGE($A:$A)'), s5Expr('formula:hoist-aggregate', 'C2:C40', 2, 'A2=MAX($A:$A)')],
+    configurations: [
+      s5Cfg('hoist-average', 'formula:hoist-aggregate', valued('B', true), {
+        documented: r => red(xGt(a(r), N(avg))),
+        'numeric-only': r => red(a(r).k === 'n' && xGt(a(r), N(avg)) === true),
+        never: always(NONE),
+      }),
+      s5Cfg('hoist-max', 'formula:hoist-aggregate', valued('C'), {
+        documented: r => red(xEq(a(r), N(max))),
+        'numeric-only': r => red(xEq(a(r), N(max))),
+        never: always(NONE),
+      }),
+    ],
+  })
+}
+
+function hoistFixture(): S5Fixture {
+  const a = (ref: string): XV => xv(HOIST_A[rowOfRef(ref) - 2])
+  const nums = HOIST_A.map(xv).filter(v => v.k === 'n') as Array<{ k: 'n'; v: number }>
+  const avg = nums.reduce((s, v) => s + v.v, 0) / nums.length
+  const max = Math.max(...nums.map(v => v.v))
+  const count = (v: XV, caseSensitive: boolean): number => HOIST_A.map(xv).filter(x => (caseSensitive ? JSON.stringify(x) === JSON.stringify(v) : xEq(x, v) === true && x.k !== 'blank')).length
+  const valued = (c: string, keepBlank = false): string[] => rowsOf(c, 2, 40).filter(r => a(r).k === 'n' || a(r).k === 's' || (keepBlank && a(r).k === 'blank'))
+  let p = 1
+  const refused = (id: string, c: string, values: readonly S5Value[], f: string, why: string): { rule: S5Rule; cfg: S5Configuration; cells: Record<string, S5Value> } => {
+    const refs = rowsOf(c, 2, 1 + values.length)
+    return {
+      rule: s5Expr('formula:hoist-countif-frequency', `${c}2:${c}${1 + values.length}`, p++, f),
+      cfg: s5Cfg(id, 'formula:hoist-countif-frequency', refs, { documented: always(S5_RED), never: always(NONE) }, { record: why }),
+      cells: colValues(c, values),
+    }
+  }
+  const rules: S5Rule[] = [
+    s5Expr('formula:hoist-countif-frequency', 'A2:A40', p++, 'COUNTIF($A:$A,A2)>1'),
+    s5Expr('formula:hoist-aggregate-errors', 'B2:B40', p++, 'A2>AVERAGE($A:$A)'),
+    s5Expr('formula:hoist-aggregate-errors', 'C2:C40', p++, 'A2=MAX($A:$A)'),
+    s5Expr('formula:hoist-countif-frequency', 'D2:D40', p++, 'COUNTIF($A:$A,"x")>2'),
+  ]
+  const r1 = refused('hoist-refused-numeric-text', 'F', ['1', ' 1 ', 1, 1, 2], 'COUNTIF($F:$F,F2)>1', 'S5-HOIST refused: a range holding numeric text ("1", " 1 ") is refused by the hoist; recorded, never evidence')
+  const r2 = refused('hoist-refused-boolean', 'G', [true, true, 1, 0], 'COUNTIF($G:$G,G2)>1', 'S5-HOIST refused: a range holding a boolean refuses the whole rule; recorded, never evidence')
+  const r3 = refused('hoist-refused-non-ascii', 'H', ['é', 'É', 'e'], 'COUNTIF($H:$H,H2)>1', 'S5-HOIST refused: non-ASCII text refuses the whole rule; recorded, never evidence')
+  const r4 = refused('hoist-refused-wildcard', 'I', ['abc', 'abd', 'b'], 'COUNTIF($I:$I,"a*")>1', 'S5-HOIST refused: wildcard criteria are refused; recorded, never evidence')
+  const r5 = refused('hoist-refused-na-criterion', 'J', [{ err: '#N/A' }, { err: '#N/A' }, 1], 'COUNTIF($J:$J,"#N/A")>1', 'S5-HOIST refused: a "#N/A" criterion over a range holding #N/A (the engine counts 1, a string lookup 0); recorded, never evidence')
+  const refusedAll = [r1, r2, r3, r4, r5]
+  return s5rect({
+    id: 'stage5-formula-hoist',
+    question:
+      'S5-HOIST: do absolute-range aggregates paint in Excel as the per-cell formula reads? COUNTIF($A:$A,A2)>1 over A2:A40 (numbers, mixed-case ASCII text, blanks, errors; duplicates and singletons), A2>AVERAGE($A:$A), A2=MAX($A:$A) and COUNTIF($A:$A,"x")>2. Refused shapes (numeric text, a boolean, non-ASCII text, a wildcard and a "#N/A" criterion) each sit in their own column and are recorded only.',
+    cells: { ...colValues('A', HOIST_A), ...colValues('B', Array(39).fill(1)), ...colValues('C', Array(39).fill(1)), ...colValues('D', Array(39).fill(1)), ...Object.assign({}, ...refusedAll.map(r => r.cells)) },
+    rules: [...rules, ...refusedAll.map(r => r.rule)],
+    configurations: [
+      s5Cfg('hoist-countif', 'formula:hoist-countif-frequency', valued('A'), {
+        documented: r => red(count(a(r), false) > 1),
+        'case-sensitive': r => red(count(a(r), true) > 1),
+        never: always(NONE),
+      }),
+      s5Cfg('hoist-countif-literal', 'formula:hoist-countif-frequency', rowsOf('D', 2, 6), { documented: always(S5_RED), 'case-sensitive': always(S5_RED), never: always(NONE) }),
+      // Fix round 1 #5: A21:A22 hold #DIV/0!, so AVERAGE($A:$A) and MAX($A:$A) are errors (Excel propagates a range
+      // error) and no cell formats; "errors-skipped" is the hoist mistake of aggregating numbers only.
+      s5Cfg('hoist-average-errors', 'formula:hoist-aggregate-errors', valued('B', true), {
+        'error-propagates': always(NONE),
+        'errors-skipped': r => red(xGt(a(r), N(avg))),
+      }),
+      s5Cfg('hoist-max-errors', 'formula:hoist-aggregate-errors', valued('C'), {
+        'error-propagates': always(NONE),
+        'errors-skipped': r => red(xEq(a(r), N(max))),
+      }),
+      ...refusedAll.map(r => r.cfg),
+    ],
+  })
+}
+
+function anchorFixture(): S5Fixture {
+  const A = [1, 0, 1, 0, 1, 0, 1, 0]
+  const B = [0, 1, 0, 1, 0, 1, 0, 1]
+  const aAt = (r: number): number => A[r - 2] ?? 0
+  const bAt = (r: number): number => B[r - 2] ?? 0
+  const mixed = 'formula:anchor-mixed-abs'
+  return s5rect({
+    id: 'stage5-formula-anchor',
+    question:
+      'S5-C: is a single-range formula anchored at the sqref top-left, and do $-pinned axes stay pinned? =A2>0 over B2:B9; =$A2 over C2:D9; =A$2 over E3:F6; =$A$2 over G2:G9 (A alternates 1/0, B the reverse, so every hypothesis pair differs at >= 2 cells per rule).',
+    cells: { ...colValues('A', A), ...colValues('B', B), ...colValues('C', Array(8).fill(1)), ...colValues('D', Array(8).fill(1)), ...colValues('E', Array(4).fill(1), 3), ...colValues('F', Array(4).fill(1), 3), ...colValues('G', Array(8).fill(1)) },
+    rules: [
+      s5Expr('formula:anchor-single', 'B2:B9', 1, 'A2>0'),
+      s5Expr(mixed, 'C2:D9', 2, '$A2'),
+      s5Expr(mixed, 'E3:F6', 3, 'A$2'),
+      s5Expr(mixed, 'G2:G9', 4, '$A$2'),
+    ],
+    configurations: [
+      s5Cfg('anchor-single', 'formula:anchor-single', rowsOf('B', 2, 9), {
+        'relative-top-left': r => red(aAt(rowOfRef(r)) > 0),
+        unanchored: always(S5_RED),
+      }),
+      s5Cfg('mixed-col-pinned', mixed, [...rowsOf('C', 2, 9), ...rowsOf('D', 2, 9)], {
+        pinned: r => red(aAt(rowOfRef(r)) !== 0),
+        'all-relative': r => red((colOfRef(r) === 'C' ? aAt(rowOfRef(r)) : bAt(rowOfRef(r))) !== 0),
+      }),
+      s5Cfg('mixed-row-pinned', mixed, [...rowsOf('E', 3, 6), ...rowsOf('F', 3, 6)], {
+        pinned: r => red((colOfRef(r) === 'E' ? aAt(2) : bAt(2)) !== 0),
+        'all-relative': r => red((colOfRef(r) === 'E' ? aAt(rowOfRef(r) - 1) : bAt(rowOfRef(r) - 1)) !== 0),
+      }),
+      s5Cfg('mixed-both-pinned', mixed, rowsOf('G', 2, 9), {
+        pinned: always(S5_RED),
+        'all-relative': r => red(aAt(rowOfRef(r)) !== 0),
+      }),
+    ],
+  })
+}
+
+function anchorMultiFixture(): S5Fixture {
+  const A: Record<number, number> = { 2: 0, 3: 0, 4: 0, 5: 1, 6: 1, 7: 1, 8: 1, 9: 0, 10: 0, 11: 0 }
+  const refs = [...rowsOf('D', 5, 8), ...rowsOf('B', 2, 4)]
+  const SQREF = 'D5:D8 B2:B4'
+  // The formula =$A5>0 is written for the anchor row 5. A reading anchors each target at some row; the target at row r
+  // then reads A(r - anchorRow + 5). The first listed range comes from the order Excel retains (fix round 1 #2).
+  const tableFor = (order: string): Record<string, Record<string, string>> => {
+    const ranges = order.split(' ')
+    const topRow = (rg: string): number => rowOfRef(rg.split(':')[0]!)
+    const first = topRow(ranges[0]!)
+    const box = Math.min(...ranges.map(topRow))
+    const own = (ref: string): number => topRow(ranges.find(rg => isCellInSqrefLocal(ref, rg))!)
+    const at = (ref: string, anchorRow: number): string => red((A[rowOfRef(ref) - anchorRow + 5] ?? 0) > 0)
+    return {
+      'first-listed': Object.fromEntries(refs.map(r => [r, at(r, first)])),
+      'bounding-box': Object.fromEntries(refs.map(r => [r, at(r, box)])),
+      'per-range': Object.fromEntries(refs.map(r => [r, at(r, own(r))])),
+    }
+  }
+  const rule = s5Expr('formula:anchor-multi-range', SQREF, 1, '$A5>0')
+  return s5rect({
+    id: 'stage5-formula-anchor-multi',
+    question:
+      'S5-C: which anchor does Excel use for a multi-range sqref authored with its first range not top-left (D5:D8 B2:B4, =$A5>0)? h1 the first listed range\'s top-left, h2 the bounding box top-left (B2), h3 each range\'s own top-left. The predictions are derived from the sqref order Excel retains on resave (read from the saved XML before capture and then pinned); if Excel re-sorts to B2:B4 D5:D8, h1 and h2 coincide and the case cannot discriminate them.',
+    cells: { ...Object.fromEntries(Object.entries(A).map(([r, v]) => [`A${r}`, v])), ...colValues('D', [1, 1, 1, 1], 5), ...colValues('B', [1, 1, 1], 2) },
+    rules: [{ ...rule, marker: { ...rule.marker, sqrefOrder: 'any' } }],
+    configurations: [
+      {
+        id: 'anchor-multi',
+        capabilityId: 'formula:anchor-multi-range',
+        observable: 'fill',
+        replicateBy: 'column',
+        refs,
+        hypotheses: tableFor(SQREF),
+        orderedHypotheses: { capabilityId: 'formula:anchor-multi-range', tables: { [SQREF]: tableFor(SQREF), 'B2:B4 D5:D8': tableFor('B2:B4 D5:D8') } },
+      },
+    ],
+  })
+}
+
+function edgeFixture(): S5Fixture {
+  return s5rect({
+    id: 'stage5-formula-edge',
+    question:
+      'S5-C: does a relative reference shifted past the sheet edge wrap (w1) or become #REF! (w2)? Rows: =A1048575>0 over A1:A4 (A3, A4 overflow to A1, A2 under w1). Columns: =XFC1>0 over A1:D1 (C1, D1 overflow to A1, B1). A1, A2, B1 hold positives and A1048575, A1048576, XFC1, XFD1 hold 1, so w1 formats the overflowing targets and w2 does not (an error result, read per formula:truth-error).',
+    cells: { A1: 5, A2: 7, A3: 0, A4: 0, B1: 6, C1: 0, D1: 0, A1048575: 1, A1048576: 1, XFC1: 1, XFD1: 1 },
+    rules: [s5Expr('formula:relative-wrap', 'A1:A4', 1, 'A1048575>0', { dxf: 0 }), s5Expr('formula:relative-wrap', 'A1:D1', 2, 'XFC1>0', { dxf: 1 })],
+    configurations: [
+      s5Cfg('wrap-rows', 'formula:relative-wrap', ['A3', 'A4'], { wrap: always(S5_RED), 'ref-error': always(NONE), 'rows-wrap-cols-ref-error': always(S5_RED), 'rows-ref-error-cols-wrap': always(NONE) }),
+      s5Cfg('wrap-cols', 'formula:relative-wrap', ['C1', 'D1'], { wrap: always(S5_GREEN), 'ref-error': always(NONE), 'rows-wrap-cols-ref-error': always(NONE), 'rows-ref-error-cols-wrap': always(S5_GREEN) }),
+    ],
+  })
+}
+
+function cellIsOperandsFixture(): S5Fixture {
+  const F = [1, 9, 2, 8, 3, 7]
+  const vals = (c: string, values: readonly S5Value[]): Record<string, S5Value> => colValues(c, values)
+  const B = [1, 2, 3, 4, 5, 6]
+  const C = [5, 5, 5, 5, 5, 5]
+  const Dv = [5, 6, 7, 8, 9, 10]
+  const E = [2, 3, 5, 8, 9, 4]
+  const I: S5Value[] = [50, 150, 'abc', '200']
+  const J = [0, 5, 7, -1]
+  const K = [1, 2, 3]
+  const L = [0, 1, 2, 3]
+  const at = (values: readonly S5Value[]) => (ref: string): XV => xv(values[rowOfRef(ref) - 2])
+  return s5rect({
+    id: 'stage5-cellis-operands',
+    question:
+      'S5-F: how does Excel evaluate non-literal cellIs operands? > $F$1, > F2 (relative), > $F$1*2, between with reversed referenced bounds ($G$1=8, $G$2=3), and operands evaluating to the text "100", a blank, #N/A and TRUE (recorded).',
+    cells: { F1: 4, ...vals('F', F), G1: 8, G2: 3, H1: '100', H3: { err: '#N/A' }, H4: true, ...vals('B', B), ...vals('C', C), ...vals('D', Dv), ...vals('E', E), ...vals('I', I), ...vals('J', J), ...vals('K', K), ...vals('L', L) },
+    rules: [
+      s5CellIs('formula:cellis-operand-reference', 'B2:B7', 1, 'greaterThan', ['$F$1']),
+      s5CellIs('formula:cellis-operand-relative', 'C2:C7', 2, 'greaterThan', ['F2']),
+      s5CellIs('formula:cellis-operand-expression', 'D2:D7', 3, 'greaterThan', ['$F$1*2']),
+      s5CellIs('formula:cellis-operand-reference', 'E2:E7', 4, 'between', ['$G$1', '$G$2']),
+      s5CellIs('formula:cellis-operand-text', 'I2:I5', 5, 'greaterThan', ['$H$1']),
+      s5CellIs('formula:cellis-operand-blank', 'J2:J5', 6, 'greaterThan', ['$H$2']),
+      s5CellIs('formula:cellis-operand-error', 'K2:K4', 7, 'greaterThan', ['$H$3']),
+      s5CellIs('formula:cellis-operand-text', 'L2:L5', 8, 'greaterThan', ['$H$4']),
+    ],
+    configurations: [
+      s5Cfg('operand-absolute', 'formula:cellis-operand-reference', rowsOf('B', 2, 7), { documented: r => red(xGt(at(B)(r), N(4))), 'between-ordered': r => red(xGt(at(B)(r), N(4))), never: always(NONE) }),
+      s5Cfg('operand-between-reversed', 'formula:cellis-operand-reference', rowsOf('E', 2, 7), {
+        documented: r => { const v = (at(E)(r) as { v: number }).v; return red(v >= 3 && v <= 8) },
+        'between-ordered': always(NONE),
+        never: always(NONE),
+      }),
+      s5Cfg('operand-relative', 'formula:cellis-operand-relative', rowsOf('C', 2, 7), { documented: r => red(5 > F[rowOfRef(r) - 2]!), unanchored: always(S5_RED), never: always(NONE) }),
+      s5Cfg('operand-expression', 'formula:cellis-operand-expression', rowsOf('D', 2, 7), { documented: r => red(xGt(at(Dv)(r), N(8))), 'reference-only': r => red(xGt(at(Dv)(r), N(4))), never: always(NONE) }),
+      s5Cfg('operand-text', 'formula:cellis-operand-text', rowsOf('I', 2, 5), {
+        'text-compare': r => red(xGt(at(I)(r), { k: 's', v: '100' })),
+        'numeric-coerce': r => { const v = at(I)(r); const n = v.k === 'n' ? v.v : v.k === 's' && /^\d+$/.test(v.v) ? Number(v.v) : undefined; return red(n !== undefined && n > 100) },
+        never: always(NONE),
+      }),
+      s5Cfg('operand-boolean', 'formula:cellis-operand-text', rowsOf('L', 2, 5), { 'text-compare': always(NONE), 'numeric-coerce': r => red(L[rowOfRef(r) - 2]! > 1), never: always(NONE) }, { record: 'A boolean operand (TRUE) is recorded only: no Stage 5 capability names it' }),
+      s5Cfg('operand-blank', 'formula:cellis-operand-blank', rowsOf('J', 2, 5), { 'blank-zero': r => red(J[rowOfRef(r) - 2]! > 0), 'blank-empty-text': always(NONE) }),
+      s5Cfg('operand-error', 'formula:cellis-operand-error', rowsOf('K', 2, 4), { 'no-format': always(NONE), 'error-as-zero': always(S5_RED) }),
+    ],
+  })
+}
+
+function predicateFixture(): S5Fixture {
+  return s5rect({
+    id: 'stage5-predicate-formulas',
+    question:
+      'S5-G: when a containsBlanks/notContainsErrors rule carries a divergent <formula>, does Excel follow the formula or @type? containsBlanks with ISBLANK(D2) over B2:B5 and notContainsErrors with NOT(ISNA(E2)) over C2:C5; at every designated cell the attribute and the formula disagree.',
+    cells: { B3: 'x', B5: 'y', D2: 'a', D4: 'b', C2: { err: '#DIV/0!' }, C3: 1, C4: { err: '#DIV/0!' }, C5: 2, E2: 1, E3: { err: '#N/A' }, E4: 1, E5: { err: '#N/A' } },
+    rules: [
+      s5Expr('formula:predicate-divergent', 'B2:B5', 1, 'ISBLANK(D2)', { type: 'containsBlanks' }),
+      s5Expr('formula:predicate-divergent', 'C2:C5', 2, 'NOT(ISNA(E2))', { type: 'notContainsErrors' }),
+    ],
+    configurations: [
+      s5Cfg('divergent-blanks', 'formula:predicate-divergent', rowsOf('B', 2, 5), { formula: r => red(['B3', 'B5'].includes(r)), attribute: r => red(['B2', 'B4'].includes(r)) }),
+      s5Cfg('divergent-errors', 'formula:predicate-divergent', rowsOf('C', 2, 5), { formula: r => red(['C2', 'C4'].includes(r)), attribute: r => red(['C3', 'C5'].includes(r)) }),
+    ],
+  })
+}
+
+const S5_CLOCK = (stale: string, local: string, utc: string): NonNullable<S5Fixture['clock']> => ({
+  staleCacheCellRef: stale,
+  localTodayCellRef: local,
+  utcTodayCellRef: utc,
+})
+
+function timePeriodFixture(): S5Fixture {
+  // Targets A2:A9 hold dates relative to the anchor day D: the attribute (today) formats D, the formula A2=TODAY()-3 formats D-3.
+  const offsets = [0, 0, -3, -3, -1, 1, -2, 2]
+  return s5rect({
+    id: 'stage5-predicate-timeperiod',
+    question:
+      'S5-G (round-1 #9): a timePeriod="today" rule whose <formula> is the divergent A2=TODAY()-3: does Excel follow @timePeriod or the formula? Two cells hold D (attribute formats, formula not) and two D-3 (formula formats, attribute not), captured on the anchor day (--refresh-clock-date).',
+    cells: d => ({ ...Object.fromEntries(offsets.map((o, i) => [`A${i + 2}`, { date: d + o }])), C1: { f: 'TODAY()', v: d - 5 }, C2: { date: d }, C3: { date: d - 1 } }),
+    clock: S5_CLOCK('C1', 'C2', 'C3'),
+    rules: [s5Expr('formula:predicate-timeperiod-divergent', 'A2:A9', 1, 'A2=TODAY()-3', { type: 'timePeriod', attrs: ' timePeriod="today"', timePeriod: 'today' })],
+    configurations: [
+      s5Cfg('timeperiod-divergent', 'formula:predicate-timeperiod-divergent', ['A2', 'A3', 'A4', 'A5'], { attribute: r => red(['A2', 'A3'].includes(r)), formula: r => red(['A4', 'A5'].includes(r)) }),
+    ],
+  })
+}
+
+function clockTodayFixture(): S5Fixture {
+  // A2..A10: D-2, D-1, D, D+1, D+2, D+0.5, D+0.25, D, D-1.
+  const offsets = [-2, -1, 0, 1, 2, 0.5, 0.25, 0, -1]
+  const off = (ref: string): number => offsets[rowOfRef(ref) - 2]!
+  return s5rect({
+    id: 'stage5-clock-today',
+    question:
+      'S5-M: =A2=TODAY() over B2:B10 with A holding D-2..D+2, D+0.5, D+0.25, D and D-1 under the Stage 1 anchor (--refresh-clock-date), captured 00:05-07:55 Asia/Taipei: exact local today, UTC today (D-1), or day-floor equality? =A2<NOW() over C2:C10 is recorded only.',
+    cells: d => ({ ...Object.fromEntries(offsets.map((o, i) => [`A${i + 2}`, { date: d + o }])), ...colValues('B', Array(9).fill(1)), ...colValues('C', Array(9).fill(1)), E1: { f: 'TODAY()', v: d - 5 }, E2: { date: d }, E3: { date: d - 1 } }),
+    clock: S5_CLOCK('E1', 'E2', 'E3'),
+    rules: [s5Expr('formula:fn-today', 'B2:B10', 1, 'A2=TODAY()'), s5Expr('formula:fn-today', 'C2:C10', 2, 'A2<NOW()')],
+    configurations: [
+      s5Cfg('today-exact', 'formula:fn-today', rowsOf('B', 2, 10), {
+        'local-today': r => red(off(r) === 0),
+        'utc-today': r => red(off(r) === -1),
+        'day-floor': r => red(Math.floor(off(r)) === 0),
+      }),
+      s5Cfg('now-recorded', 'formula:fn-today', rowsOf('C', 2, 10), { 'local-today': r => red(off(r) < 0), 'utc-today': r => red(off(r) < -1), 'day-floor': r => red(off(r) < 0) }, { record: '=A2<NOW() is recorded only (the time of day is not pinned)' }),
+    ],
+  })
+}
+
+function calcManualFixture(): S5Fixture {
+  // A2..A5: saved <v> differs from a recompute of B*2 / B+1. G2..G5: D, D, D-5, D-5 against CF TODAY().
+  const saved = [999, 0, 50, 1]
+  const recomputed = [10, 8, 2, 61]
+  return s5rect({
+    id: 'stage5-calc-manual',
+    question:
+      'S5-L (round-1 #4): under <calcPr calcMode="manual"/>, does CF read the saved <v> or a recompute? =A2>20 over C2:C5 where A holds formulas whose saved values (999, 0, 50, 1) differ from a recompute (10, 8, 2, 61); and =G2=TODAY() over H2:H5 with G = D, D, D-5, D-5 while the workbook\'s TODAY() cell E1 holds the stale D-5. Observed before any calculate (pre:), then after one explicit calculate (calc:), recorded separately.',
+    cells: d => ({
+      A2: { f: 'B2*2', v: 999 }, A3: { f: 'B3*2', v: 0 }, A4: { f: 'B4+1', v: 50 }, A5: { f: 'B5+1', v: 1 },
+      B2: 5, B3: 4, B4: 1, B5: 60,
+      ...colValues('C', [1, 1, 1, 1]), ...colValues('H', [1, 1, 1, 1]),
+      E1: { f: 'TODAY()', v: d - 5 }, E2: { date: d }, E3: { date: d - 1 },
+      G2: { date: d }, G3: { date: d }, G4: { date: d - 5 }, G5: { date: d - 5 },
+    }),
+    calcMode: 'manual',
+    calcObservation: 'pre-calculate',
+    // Fix round 1 #6: the stale sources, observed before and after the explicit calculation (E1 is the workbook TODAY()).
+    calcObservationSources: {
+      A2: { saved: '999', recomputed: '10' }, A3: { saved: '0', recomputed: '8' }, A4: { saved: '50', recomputed: '2' }, A5: { saved: '1', recomputed: '61' },
+      E1: { saved: 'anchor-5', recomputed: 'anchor' },
+    },
+    clock: S5_CLOCK('E1', 'E2', 'E3'),
+    rules: [s5Expr('formula:calc-manual-saved-values', 'C2:C5', 1, 'A2>20'), s5Expr('formula:calc-manual-today', 'H2:H5', 2, 'G2=TODAY()')],
+    configurations: [
+      s5Cfg('manual-saved', 'formula:calc-manual-saved-values', ['pre:C2', 'pre:C3', 'pre:C4', 'pre:C5'], {
+        'saved-values': (_r, i) => red(saved[i]! > 20),
+        recomputed: (_r, i) => red(recomputed[i]! > 20),
+      }),
+      s5Cfg('manual-today', 'formula:calc-manual-today', ['pre:H2', 'pre:H3', 'pre:H4', 'pre:H5'], {
+        'cf-today-live': (_r, i) => red(i < 2),
+        'cf-today-stale': (_r, i) => red(i >= 2),
+      }),
+      s5Cfg('manual-after-calculate', 'formula:calc-manual-saved-values', ['calc:C2', 'calc:C3', 'calc:C4', 'calc:C5'], {
+        'saved-values': (_r, i) => red(recomputed[i]! > 20),
+        recomputed: (_r, i) => red(recomputed[i]! > 20),
+      }, { record: 'After the explicit calculate both readings agree (sanity record)' }),
+    ],
+  })
+}
+
+function compositionFixture(): S5Fixture {
+  // A2..A7 = 0, 1, 0, 1, 0, 1: the p1 expression ($A2>0) is true on rows 3, 5 and 7, never on the column minimum (row 2,
+  // a zero-length bar). So every p1-true row is decisive and the unstopped rows 4 and 6 are two non-empty witnesses
+  // (fix rounds 3 and 4). Every target and twin holds 10, 20, 30, 40, 50, 60.
+  const V = [10, 20, 30, 40, 50, 60]
+  const cols = ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T']
+  const cells: Record<string, S5Value> = { ...colValues('A', [0, 1, 0, 1, 0, 1]), ...Object.assign({}, ...cols.map(c => colValues(c, V))) }
+  const on = (r: string): boolean => [3, 5, 7].includes(rowOfRef(r))
+  let p = 1
+  const pct3: S5Cfvo[] = [{ type: 'percent', val: '0' }, { type: 'percent', val: '33' }, { type: 'percent', val: '67' }]
+  const mm: S5Cfvo[] = [{ type: 'min' }, { type: 'max' }]
+  const P1 = '$A2>0'
+  const IND = 'INDIRECT("A"&ROW())>0'
+  const lit = (cap: string, sq: string, dxf: 0 | 1 | 2): S5Rule => s5CellIs(cap, sq, p++, 'greaterThan', ['0'], { dxf, literal: true })
+  const rules: S5Rule[] = []
+  // p1 ahead of a literal green fill or a scale writes strikethrough (dxf 2), so the lower fill stays observable; ahead of a
+  // bar or an icon it writes the red fill (dxf 0), compared by crop with the red-only, red + visual and visual-only twins.
+  const stopAhead = (cap: string, col: string, f: string, lower: 'dxf' | 'scale' | 'bar' | 'icon'): void => {
+    const sq = `${col}2:${col}7`
+    rules.push(s5Expr(cap, sq, p++, f, { dxf: lower === 'dxf' || lower === 'scale' ? 2 : 0, stop: true }))
+    if (lower === 'dxf') rules.push(lit(cap, sq, 1))
+    else if (lower === 'scale') rules.push(s5Scale(cap, sq, p++, mm))
+    else if (lower === 'bar') rules.push(s5Bar(cap, sq, p++, mm))
+    else rules.push(s5Icon(cap, sq, p++, pct3))
+  }
+  // Task 39 (S5-REPAIR): Excel 16.115 merges an identical rule on adjacent columns into one sqref on resave (B2:C7, F2:G7,
+  // J2:K7, Q2:R7, S2:T7 in stage5-composition.rejected.xlsx), which the markers cannot find. The columns are therefore laid
+  // out so no two adjacent columns start with the same rule (same type, formula and format); every prediction is unchanged.
+  // Twins (literal rules only, no formula): C scale; F red only, G bar only, H red + bar; J red only, K icon only, L red + icon; O scale.
+  const twinCap = 'formula:composition-twin'
+  stopAhead('formula:composition-stop-dxf', 'B', P1, 'dxf')
+  rules.push(s5Scale(twinCap, 'C2:C7', p++, mm))
+  stopAhead('formula:composition-stop-scale', 'D', P1, 'scale')
+  stopAhead('formula:composition-stop-bar', 'E', P1, 'bar')
+  rules.push(lit(twinCap, 'F2:F7', 0), s5Bar(twinCap, 'G2:G7', p++, mm), lit(twinCap, 'H2:H7', 0), s5Bar(twinCap, 'H2:H7', p++, mm))
+  stopAhead('formula:composition-stop-icon', 'I', P1, 'icon')
+  rules.push(lit(twinCap, 'J2:J7', 0), s5Icon(twinCap, 'K2:K7', p++, pct3), lit(twinCap, 'L2:L7', 0), s5Icon(twinCap, 'L2:L7', p++, pct3))
+  // An expression fill against a scale fill, both orders (M: expression first; N: scale first), twin scale O.
+  rules.push(s5Expr('formula:composition-expression-vs-scale', 'M2:M7', p++, '$A2>-1'), s5Scale('formula:composition-expression-vs-scale', 'M2:M7', p++, mm))
+  rules.push(s5Scale('formula:composition-expression-vs-scale', 'N2:N7', p++, mm), s5Expr('formula:composition-expression-vs-scale', 'N2:N7', p++, '$A2>-1'))
+  rules.push(s5Scale(twinCap, 'O2:O7', p++, mm))
+  // Two overlapping expressions (red ahead of green).
+  rules.push(s5Expr('formula:composition-overlapping', 'P2:P7', p++, '$A2>0', { dxf: 0 }), s5Expr('formula:composition-overlapping', 'P2:P7', p++, '$A2>-1', { dxf: 1 }))
+  // INDIRECT (unresolved in production, evaluated by Excel) p1 stopIfTrue ahead of each kind; twins reused (C, F/G/H, J/K/L).
+  // The strikethrough (dxf 2) and red (dxf 0) heads alternate, so adjacent heads differ (Task 39).
+  stopAhead('formula:composition-indirect-ahead-dxf', 'Q', IND, 'dxf')
+  stopAhead('formula:composition-indirect-ahead-bar', 'R', IND, 'bar')
+  stopAhead('formula:composition-indirect-ahead-scale', 'S', IND, 'scale')
+  stopAhead('formula:composition-indirect-ahead-icon', 'T', IND, 'icon')
+  const refs = (c: string): string[] => rowsOf(c, 2, 7)
+  const stopDxf = (id: string, cap: string, c: string, ignoredPrediction: boolean): S5Configuration =>
+    s5Cfg(id, cap, refs(c), {
+      halts: r => (on(r) ? `${NONE}+strike` : S5_GREEN),
+      continues: r => (on(r) ? `${S5_GREEN}+strike` : S5_GREEN),
+      ...(ignoredPrediction ? { ignored: always(S5_GREEN) } : {}),
+    })
+  const stopScale = (id: string, cap: string, c: string, ignoredPrediction: boolean): S5Configuration =>
+    s5Cfg(id, cap, refs(c), {
+      halts: r => (on(r) ? `${NONE}+strike` : `twin:C${rowOfRef(r)}`),
+      continues: r => (on(r) ? `twin:C${rowOfRef(r)}+strike` : `twin:C${rowOfRef(r)}`),
+      ...(ignoredPrediction ? { ignored: twinCol('C') } : {}),
+    })
+  const stopCrop = (id: string, cap: string, c: string, twins: readonly [string, string, string], ignoredPrediction: boolean): S5Configuration =>
+    s5Cfg(id, cap, refs(c), {
+      halts: r => `twin:${on(r) ? twins[0] : twins[2]}${rowOfRef(r)}`,
+      continues: r => `twin:${on(r) ? twins[1] : twins[2]}${rowOfRef(r)}`,
+      ...(ignoredPrediction ? { ignored: r => `twin:${twins[2]}${rowOfRef(r)}` } : {}),
+    }, { observable: 'crop' })
+  return s5rect({
+    id: 'stage5-composition',
+    question:
+      'S5-O: how does an expression rule compose with the other kinds? A p1 stopIfTrue expression ahead of a literal DXF, a scale, a bar and an icon; an expression fill against a scale fill in both orders; two overlapping expressions; and an INDIRECT expression (which production cannot evaluate) p1 ahead of each kind. Scale, bar and icon outcomes are compared with literal twins in the same workbook.',
+    cells,
+    rules,
+    cellVertical: 'bottom',
+    configurations: [
+      stopDxf('stop-dxf', 'formula:composition-stop-dxf', 'B', false),
+      stopScale('stop-scale', 'formula:composition-stop-scale', 'D', false),
+      // Twins: [red only, red + visual, visual only].
+      stopCrop('stop-bar', 'formula:composition-stop-bar', 'E', ['F', 'H', 'G'], false),
+      stopCrop('stop-icon', 'formula:composition-stop-icon', 'I', ['J', 'L', 'K'], false),
+      s5Cfg('expression-vs-scale', 'formula:composition-expression-vs-scale', [...refs('M'), ...refs('N')], {
+        'dxf-wins': always(S5_RED),
+        'scale-wins': twinCol('O'),
+        'priority-wins': r => (colOfRef(r) === 'M' ? S5_RED : `twin:O${rowOfRef(r)}`),
+      }),
+      s5Cfg('overlapping', 'formula:composition-overlapping', refs('P'), {
+        'first-wins': r => (on(r) ? S5_RED : S5_GREEN),
+        'last-wins': always(S5_GREEN),
+      }),
+      stopDxf('indirect-dxf', 'formula:composition-indirect-ahead-dxf', 'Q', true),
+      stopScale('indirect-scale', 'formula:composition-indirect-ahead-scale', 'S', true),
+      stopCrop('indirect-bar', 'formula:composition-indirect-ahead-bar', 'R', ['F', 'H', 'G'], true),
+      stopCrop('indirect-icon', 'formula:composition-indirect-ahead-icon', 'T', ['J', 'L', 'K'], true),
+    ],
+  })
+}
+
+function crossSheetFixture(): S5Fixture {
+  const s2A = [1, 0, 1, 0]
+  return s5rect({
+    id: 'stage5-cross-sheet',
+    question:
+      'S5-K: does Excel read another sheet\'s cells from a CF formula, relatively and absolutely, through a quoted name and as a cellIs operand, and does an edit of that sheet refresh the format without saving (dynamicRefresh)?',
+    cells: { ...colValues('A', [5, 1, 6, 2]), ...colValues('B', [1, 1, 1, 1]), ...colValues('C', [1, 1, 1, 1]), ...colValues('D', [1, 5, 2, 6]), ...colValues('E', [1, 1, 1, 1]) },
+    sheets: [
+      { name: 'Sheet2', cells: { A1: 3, ...colValues('A', s2A), B1: 3 } },
+      { name: 'My Sheet', cells: { A1: 1, A2: 0, A3: 1, A4: 0 } },
+    ],
+    rules: [
+      s5Expr('formula:cross-sheet-reference', 'B2:B5', 1, 'Sheet2!A2>0', { where: S5_CROSS_SHEET_WHERE }),
+      s5Expr('formula:cross-sheet-reference', 'C2:C5', 2, '$A2>Sheet2!$B$1', { where: S5_CROSS_SHEET_WHERE }),
+      // Task 39 (S5-REPAIR): the base form was an incidental generator defect; Excel moved it to x14 on resave.
+      s5CellIs('formula:cellis-operand-cross-sheet', 'D2:D5', 3, 'greaterThan', ['Sheet2!$A$1'], { where: S5_CROSS_SHEET_WHERE }),
+      s5Expr('formula:cross-sheet-quoted-name', 'E2:E5', 4, "'My Sheet'!A1>0", { where: S5_CROSS_SHEET_WHERE }),
+    ],
+    dynamicRefresh: { sheet: 'Sheet2', edits: [{ ref: 'A3', value: 1 }, { ref: 'A5', value: 1 }], refs: ['B3', 'B5'] },
+    configurations: [
+      s5Cfg('cross-relative', 'formula:cross-sheet-reference', rowsOf('B', 2, 5), { documented: r => red(s2A[rowOfRef(r) - 2]! > 0), 'absolute-anchor': always(S5_RED), stale: r => red(s2A[rowOfRef(r) - 2]! > 0), never: always(NONE) }),
+      s5Cfg('cross-absolute', 'formula:cross-sheet-reference', rowsOf('C', 2, 5), { documented: r => red([5, 1, 6, 2][rowOfRef(r) - 2]! > 3), 'absolute-anchor': r => red([5, 1, 6, 2][rowOfRef(r) - 2]! > 3), stale: r => red([5, 1, 6, 2][rowOfRef(r) - 2]! > 3), never: always(NONE) }),
+      s5Cfg('cross-dynamic-refresh', 'formula:cross-sheet-reference', ['post:B3', 'post:B5'], { documented: always(S5_RED), 'absolute-anchor': always(S5_RED), stale: always(NONE), never: always(NONE) }),
+      s5Cfg('cross-operand', 'formula:cellis-operand-cross-sheet', rowsOf('D', 2, 5), { documented: r => red([1, 5, 2, 6][rowOfRef(r) - 2]! > 3), never: always(NONE) }),
+      s5Cfg('cross-quoted', 'formula:cross-sheet-quoted-name', rowsOf('E', 2, 5), { documented: r => red([1, 0, 1, 0][rowOfRef(r) - 2]! > 0), 'absolute-anchor': always(S5_RED), never: always(NONE) }),
+    ],
+  })
+}
+
+function crossSheetMissingFixture(): S5Fixture {
+  return s5rect({
+    id: 'stage5-cross-sheet-missing',
+    question:
+      'S5-K: a CF formula naming a sheet the workbook does not hold (=Gone!A1>0, one malformed shape in its own workbook): does Excel keep, repair or drop the rule, and does it format? A repaired or rejected resave is the recorded outcome (never retried).',
+    cells: colValues('B', [1, 1, 1]),
+    rules: [s5Expr('formula:cross-sheet-missing', 'B2:B4', 1, 'Gone!A1>0')],
+    configurations: [s5Cfg('cross-missing', 'formula:cross-sheet-missing', rowsOf('B', 2, 4), { 'no-format': always(NONE), formats: always(S5_RED) })],
+  })
+}
+
+/**
+ * The bar:bounds-formula follow-up (orchestrator ruling 2026-11-19), a new version of stage5-cfvo-formulas' bar
+ * configuration, which holds 5..100 against formula bounds 20/80 (a whole-scope cf-value-beyond-bounds, Ruling S3-E) and
+ * whose twin W7 is unmeasurable. Here every value lies strictly inside 20..80, and every bar edge under either reading
+ * (20/80, or the data's own 28/62) is at most 58 px or full width, clear of the right-aligned value text, which hid the
+ * 73 and 75 px edges of the old capture, and none sits on a half pixel (tests/xlsx-cf-bar-bounds-formula.test.ts
+ * calibrates both on it). The same
+ * default columns and 20 pt rows as stage5-cfvo-formulas, and the same literal twins (their own registry id): num 20/80 (evaluated), num 0/0 (zero), min/max
+ * (ignored).
+ */
+const S5_BAR_BOUNDS_VALUES: readonly number[] = [28, 31, 35, 41, 46, 49, 52, 62]
+
+function barBoundsFormulaFixture(): S5Fixture {
+  const sq = (c: string): string => `${c}2:${c}9`
+  const num = (v: number): S5Cfvo => ({ type: 'num', val: String(v) })
+  let p = 1
+  return s5rect({
+    id: 'stage5-bar-bounds-formula',
+    question:
+      'S5-H: how does a data bar resolve formula bounds? A paired bar with formula min/max ($F$1 = 20, $F$2 = 80) over values strictly inside them (28..62), compared by crop with literal twins of its competing readings on the same values: num 20/80 (the formula evaluated), num 0/0 (read as zero) and min/max (ignored).',
+    cells: { F1: 20, F2: 80, ...Object.assign({}, ...['B', 'C', 'D', 'E'].map(c => colValues(c, S5_BAR_BOUNDS_VALUES))) },
+    rules: [
+      s5Bar('bar:bounds-formula', sq('B'), p++, [{ type: 'formula', val: '$F$1' }, { type: 'formula', val: '$F$2' }]),
+      s5Bar('formula:cfvo-bar-twin', sq('C'), p++, [num(20), num(80)]),
+      s5Bar('formula:cfvo-bar-twin', sq('D'), p++, [num(0), num(0)]),
+      s5Bar('formula:cfvo-bar-twin', sq('E'), p++, [{ type: 'min' }, { type: 'max' }]),
+    ],
+    defaultRowHeightPt: 20,
+    configurations: [
+      s5Cfg('bar-bounds-formula', 'bar:bounds-formula', rowsOf('B', 2, 9), { evaluated: twinCol('C'), zero: twinCol('D'), ignored: twinCol('E') }, { observable: 'crop' }),
+    ],
+  })
+}
+
+function cfvoFormulasFixture(): S5Fixture {
+  const Dv = [5, 15, 30, 45, 60, 75, 90, 100]
+  const Av = [10, 15, 30, 45, 60, 75, 90, 100]
+  const scaleCols = ['B', 'C', 'D', 'E', 'G', 'K', 'L', 'M', 'N']
+  const twinScales = ['O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V']
+  const dataCols = [...scaleCols, ...twinScales, 'I', 'W', 'X', 'Y', 'J', 'Z', 'AA']
+  const mx: S5Cfvo = { type: 'max' }
+  let p = 1
+  const sq = (c: string): string => `${c}2:${c}9`
+  const refs = (c: string): string[] => rowsOf(c, 2, 9)
+  const icon3 = (a: string, b: string): S5Cfvo[] => [{ type: 'percent', val: '0' }, { type: 'formula', val: a }, { type: 'num', val: b }]
+  const rules: S5Rule[] = [
+    s5Scale('scale:thresholds-formula', sq('B'), p++, [{ type: 'formula', val: '$F$1' }, mx]),
+    s5Scale('formula:cfvo-expression', sq('C'), p++, [{ type: 'formula', val: 'MIN($A$2:$A$9)+1' }, mx]),
+    s5Scale('formula:cfvo-reference', sq('D'), p++, [{ type: 'num', val: '$F$1' }, mx]),
+    s5Scale('formula:cfvo-reference', sq('E'), p++, [{ type: 'percent', val: '$F$1' }, mx]),
+    s5Scale('formula:cfvo-reference', sq('G'), p++, [{ type: 'percentile', val: '$F$1' }, mx]),
+    s5Bar('bar:bounds-formula', sq('I'), p++, [{ type: 'formula', val: '$F$1' }, { type: 'formula', val: '$F$2' }]),
+    s5Icon('icon:thresholds-formula', sq('J'), p++, icon3('$F$1', '$F$2')),
+    s5Scale('formula:cfvo-relative', sq('K'), p++, [{ type: 'formula', val: 'A2' }, mx]),
+    s5Scale('formula:cfvo-nonnumeric', sq('L'), p++, [{ type: 'formula', val: '$F$3' }, mx]),
+    s5Scale('formula:cfvo-nonnumeric', sq('M'), p++, [{ type: 'formula', val: '$F$4' }, mx]),
+    s5Scale('formula:cfvo-nonnumeric', sq('N'), p++, [{ type: 'formula', val: '$F$5' }, mx]),
+    // Literal twins (no formula): O num 20, P num 11, Q num 0, R min/max, S percent 20, T percentile 20, U num 10, V no rule.
+    s5Scale('formula:cfvo-twin', sq('O'), p++, [{ type: 'num', val: '20' }, mx]),
+    s5Scale('formula:cfvo-twin', sq('P'), p++, [{ type: 'num', val: '11' }, mx]),
+    s5Scale('formula:cfvo-twin', sq('Q'), p++, [{ type: 'num', val: '0' }, mx]),
+    s5Scale('formula:cfvo-twin', sq('R'), p++, [{ type: 'min' }, mx]),
+    s5Scale('formula:cfvo-twin', sq('S'), p++, [{ type: 'percent', val: '20' }, mx]),
+    s5Scale('formula:cfvo-twin', sq('T'), p++, [{ type: 'percentile', val: '20' }, mx]),
+    s5Scale('formula:cfvo-twin', sq('U'), p++, [{ type: 'num', val: '10' }, mx]),
+    s5Bar('formula:cfvo-twin', sq('W'), p++, [{ type: 'num', val: '20' }, { type: 'num', val: '80' }]),
+    s5Bar('formula:cfvo-twin', sq('X'), p++, [{ type: 'num', val: '0' }, { type: 'num', val: '0' }]),
+    s5Bar('formula:cfvo-twin', sq('Y'), p++, [{ type: 'min' }, { type: 'max' }]),
+    s5Icon('formula:cfvo-twin', sq('Z'), p++, [{ type: 'percent', val: '0' }, { type: 'num', val: '20' }, { type: 'num', val: '80' }]),
+    s5Icon('formula:cfvo-twin', sq('AA'), p++, [{ type: 'percent', val: '0' }, { type: 'num', val: '0' }, { type: 'num', val: '0' }]),
+  ]
+  const three = (o: string, z: string, i: string) => ({ evaluated: twinCol(o), zero: twinCol(z), ignored: twinCol(i) })
+  return s5rect({
+    id: 'stage5-cfvo-formulas',
+    question:
+      'S5-H: how do formula and reference cfvo bounds resolve? Scale formula $F$1 and MIN($A$2:$A$9)+1, num/percent/percentile $F$1, a bar with formula min/max ($F$1, $F$2), an icon set with formula and num $F$1/$F$2 thresholds, a relative =A2 cfvo, and cfvo results that are text, blank or #N/A. Each is compared with literal twins of its competing readings in the same workbook (scales by DisplayFormat, bars and icons by crop).',
+    cells: { F1: 20, F2: 80, F3: 'abc', F5: { err: '#N/A' }, ...colValues('A', Av), ...Object.assign({}, ...dataCols.map(c => colValues(c, Dv))) },
+    rules,
+    configurations: [
+      s5Cfg('cfvo-scale-formula', 'scale:thresholds-formula', refs('B'), three('O', 'Q', 'R')),
+      s5Cfg('cfvo-scale-expression', 'formula:cfvo-expression', refs('C'), three('P', 'Q', 'R')),
+      s5Cfg('cfvo-scale-num-ref', 'formula:cfvo-reference', refs('D'), three('O', 'Q', 'R')),
+      s5Cfg('cfvo-scale-percent-ref', 'formula:cfvo-reference', refs('E'), three('S', 'R', 'R')),
+      s5Cfg('cfvo-scale-percentile-ref', 'formula:cfvo-reference', refs('G'), three('T', 'R', 'R')),
+      s5Cfg('cfvo-bar-formula', 'bar:bounds-formula', refs('I'), three('W', 'X', 'Y'), { observable: 'crop' }),
+      s5Cfg('cfvo-icon-formula', 'icon:thresholds-formula', refs('J'), three('Z', 'AA', 'V'), { observable: 'crop' }),
+      s5Cfg('cfvo-relative', 'formula:cfvo-relative', refs('K'), { 'anchor-top-left': twinCol('U'), zero: twinCol('Q'), ignored: twinCol('R') }),
+      ...(['L', 'M', 'N'] as const).map(c => s5Cfg(`cfvo-nonnumeric-${c}`, 'formula:cfvo-nonnumeric', refs(c), { withheld: twinCol('V'), zero: twinCol('Q'), skipped: twinCol('R') })),
+    ],
+  })
+}
+
+function cfvoScopeFixture(): S5Fixture {
+  const Bv = [10, 20, 30, 40]
+  const Dv = [10, 20, 30, 60]
+  const Fv = [10, 20, 30, 80]
+  const Hv = [10, 20, 30, 40]
+  const iB = [10, 20, 30, 40]
+  const iD = [10, 45, 50, 60]
+  const iF = [10, 45, 50, 80]
+  let p = 1
+  const mn: S5Cfvo = { type: 'min' }
+  const num = (v: number): S5Cfvo => ({ type: 'num', val: String(v) })
+  const icon = (top: S5Cfvo): S5Cfvo[] => [{ type: 'percent', val: '0' }, num(25), top]
+  const rules: S5Rule[] = [
+    s5Scale('formula:cfvo-scope-multi-range', 'B2:B5 D2:D5 F2:F5', p++, [mn, { type: 'formula', val: 'MAX(B2:B5)' }]),
+    s5Scale('formula:cfvo-scope-multi-range', 'J2:J5 L2:L5 N2:N5', p++, [mn, { type: 'formula', val: '$H$1' }]),
+    s5Icon('formula:cfvo-scope-multi-range', 'B12:B15 D12:D15 F12:F15', p++, icon({ type: 'formula', val: 'MAX(B12:B15)' })),
+    // Literal twins (single-range, num bounds; the union minimum is 10): P/Q/R scale B/D/F rule-wide (40), S/T scale D/F per-range (60/80),
+    // U/V/W the absolute twin (50); P12..W12 icon twins.
+    s5Scale('formula:cfvo-scope-twin', 'P2:P5', p++, [num(10), num(40)]),
+    s5Scale('formula:cfvo-scope-twin', 'Q2:Q5', p++, [num(10), num(40)]),
+    s5Scale('formula:cfvo-scope-twin', 'R2:R5', p++, [num(10), num(40)]),
+    s5Scale('formula:cfvo-scope-twin', 'S2:S5', p++, [num(10), num(60)]),
+    s5Scale('formula:cfvo-scope-twin', 'T2:T5', p++, [num(10), num(80)]),
+    s5Scale('formula:cfvo-scope-twin', 'U2:U5', p++, [num(10), num(50)]),
+    s5Scale('formula:cfvo-scope-twin', 'V2:V5', p++, [num(10), num(50)]),
+    s5Scale('formula:cfvo-scope-twin', 'W2:W5', p++, [num(10), num(50)]),
+    s5Icon('formula:cfvo-scope-twin', 'P12:P15', p++, icon(num(40))),
+    s5Icon('formula:cfvo-scope-twin', 'Q12:Q15', p++, icon(num(40))),
+    s5Icon('formula:cfvo-scope-twin', 'R12:R15', p++, icon(num(40))),
+    s5Icon('formula:cfvo-scope-twin', 'S12:S15', p++, icon(num(60))),
+    s5Icon('formula:cfvo-scope-twin', 'T12:T15', p++, icon(num(80))),
+  ]
+  const twinFor = (perRange: boolean) => (r: string): string => {
+    const c = colOfRef(r)
+    const row = rowOfRef(r)
+    const map: Record<string, string> = perRange ? { B: 'P', D: 'S', F: 'T', J: 'U', L: 'V', N: 'W' } : { B: 'P', D: 'Q', F: 'R', J: 'U', L: 'V', N: 'W' }
+    return `twin:${map[c]!}${row}`
+  }
+  const refs = (cols: readonly string[], from: number): string[] => cols.flatMap(c => rowsOf(c, from, from + 3))
+  return s5rect({
+    id: 'stage5-cfvo-scope',
+    question:
+      'S5-H (round-2 #7): on sqref="B2:B5 D2:D5 F2:F5" a scale (and on rows 12-15 an icon set) with the relative bound =MAX(B2:B5): rule-wide (one value from B2\'s anchor) or per-range (each range\'s own anchor)? B is the control range (both agree); D and F hold other maxima. The absolute-bound twin (=$H$1) is the negative control: both readings agree there.',
+    cells: {
+      ...colValues('B', Bv), ...colValues('D', Dv), ...colValues('F', Fv), H1: 50, ...colValues('J', Hv), ...colValues('L', Dv), ...colValues('N', Fv),
+      ...colValues('P', Bv), ...colValues('Q', Dv), ...colValues('R', Fv), ...colValues('S', Dv), ...colValues('T', Fv), ...colValues('U', Hv), ...colValues('V', Dv), ...colValues('W', Fv),
+      ...colValues('B', iB, 12), ...colValues('D', iD, 12), ...colValues('F', iF, 12),
+      ...colValues('P', iB, 12), ...colValues('Q', iD, 12), ...colValues('R', iF, 12), ...colValues('S', iD, 12), ...colValues('T', iF, 12),
+    },
+    rules,
+    configurations: [
+      { ...s5Cfg('scope-scale', 'formula:cfvo-scope-multi-range', refs(['B', 'D', 'F'], 2), { 'rule-wide': twinFor(false), 'per-range': twinFor(true) }), replicateBy: 'column' as const },
+      { ...s5Cfg('scope-scale-absolute', 'formula:cfvo-scope-multi-range', refs(['J', 'L', 'N'], 2), { 'rule-wide': twinFor(false), 'per-range': twinFor(true) }, { note: 'Negative control: an absolute bound reads the same value under both readings' }), role: 'negative-control' as const },
+      { ...s5Cfg('scope-icon', 'formula:cfvo-scope-multi-range', refs(['B', 'D', 'F'], 12), { 'rule-wide': twinFor(false), 'per-range': twinFor(true) }, { observable: 'crop' }), replicateBy: 'column' as const },
+    ],
+  })
+}
+
+function x14ScaleFixture(): S5Fixture {
+  const Dv = [5, 15, 30, 45, 60, 75, 90, 100]
+  return s5rect({
+    id: 'stage5-x14-scale',
+    question:
+      'S5-I: Excel\'s dialog writes a scale bounded by another sheet (Sheet2!$A$1) as a standalone <x14:colorScale> (S5_CROSS_SHEET_DIALECT, provisional until excel-authored-formulas.xlsx decides): does the standalone x14 scale resolve as its base literal twin (C, num 20) or is it ignored (D, no rule)? Captured only if Excel keeps the x14 form.',
+    cells: { ...colValues('B', Dv), ...colValues('C', Dv), ...colValues('D', Dv) },
+    sheets: [{ name: 'Sheet2', cells: { A1: 20 } }],
+    rules: [s5Scale('scale:dialect-standalone', 'B2:B9', 1, [{ type: 'num', val: 'Sheet2!$A$1' }, { type: 'max' }], { where: S5_CROSS_SHEET_WHERE }), s5Scale('formula:x14-scale-twin', 'C2:C9', 2, [{ type: 'num', val: '20' }, { type: 'max' }])],
+    configurations: [s5Cfg('x14-scale', 'scale:dialect-standalone', rowsOf('B', 2, 9), { 'standalone-evaluated': twinCol('C'), ignored: twinCol('D') })],
+  })
+}
+
+function activePresentFixture(kind: 'scale' | 'bar' | 'icon'): S5Fixture {
+  // Fix round 3 #4: the bar needs six rows. The column minimum (row 2) draws no bar, so the activation is false on it and on
+  // rows 4 and 6: active rows 3/5/7 are three non-empty witnesses, and inactive rows 4/6 two decisive ones.
+  if (kind === 'bar') return activePresentBarFixture()
+  const V = [10, 20, 30, 40]
+  const cap = `formula:active-present-${kind}`
+  const mm: S5Cfvo[] = [{ type: 'min' }, { type: 'max' }]
+  const pct3: S5Cfvo[] = [{ type: 'percent', val: '0' }, { type: 'percent', val: '33' }, { type: 'percent', val: '67' }]
+  const act = { activation: '$A2>0', activePresent: true }
+  const rule = kind === 'scale' ? s5Scale(cap, 'B2:B5', 1, mm, { where: 'x14', ...act }) : s5Icon(cap, 'B2:B5', 1, pct3, { where: 'x14', ...act })
+  const twin = kind === 'scale' ? s5Scale(`${cap}-twin`, 'C2:C5', 2, mm) : s5Icon(`${cap}-twin`, 'C2:C5', 2, pct3, { where: 'x14' })
+  const on = (r: string): boolean => [2, 4].includes(rowOfRef(r))
+  return s5rect({
+    id: `stage5-active-present-${kind}`,
+    question:
+      `S5-J: a hand-authored x14 ${kind} carrying activePresent="1" and the rule-level <xm:f>$A2>0</xm:f> (false on rows 3 and 5): does Excel keep, strip or repair it on resave (recorded, never retried), and if kept, does the activation gate the ${kind} per cell? Compared with the same ${kind} without activation (C) and no rule (D).`,
+    cells: { ...colValues('A', [1, 0, 1, 0]), ...colValues('B', V), ...colValues('C', V), ...colValues('D', V) },
+    rules: [rule, twin],
+    configurations: [s5Cfg(`active-present-${kind}`, cap, rowsOf('B', 2, 5), { 'activation-gates': r => (on(r) ? `twin:C${rowOfRef(r)}` : `twin:D${rowOfRef(r)}`), ignored: twinCol('C') }, kind === 'scale' ? {} : { observable: 'crop' })],
+  })
+}
+
+function activePresentBarFixture(): S5Fixture {
+  const V = [10, 20, 30, 40, 50, 60]
+  const cap = 'formula:active-present-bar'
+  const mm: S5Cfvo[] = [{ type: 'min' }, { type: 'max' }]
+  const act = { activation: '$A2>0', activePresent: true }
+  const on = (r: string): boolean => [3, 5, 7].includes(rowOfRef(r))
+  return s5rect({
+    id: 'stage5-active-present-bar',
+    question:
+      'S5-J: a hand-authored standalone x14 bar carrying activePresent="1" and the rule-level <xm:f>$A2>0</xm:f> (true on rows 3, 5 and 7 only): does Excel keep, strip or repair it on resave (recorded, never retried), and if kept, does the activation gate the bar per cell? Compared with the same bar without activation (C) and no rule (D).',
+    cells: { ...colValues('A', [0, 1, 0, 1, 0, 1]), ...colValues('B', V), ...colValues('C', V), ...colValues('D', V) },
+    rules: [s5BarX14(cap, 'B2:B7', 1, mm, act), s5BarX14(`${cap}-twin`, 'C2:C7', 2, mm)],
+    configurations: [s5Cfg('active-present-bar', cap, rowsOf('B', 2, 7), { 'activation-gates': r => (on(r) ? `twin:C${rowOfRef(r)}` : `twin:D${rowOfRef(r)}`), ignored: twinCol('C') }, { observable: 'crop' })],
+  })
+}
+
+/**
+ * Ruling S5-WITNESS: the expected rendering of every twin a configuration names, from the twin's own rule and values.
+ * Crop configurations look at the bar or icon slot: a twin under no bar or icon rule renders nothing, an icon always
+ * draws a bucket, a bar draws nothing at or below its lower bound (minLength 0), and a degenerate or unresolvable bar is
+ * unknown. Fill configurations look at the DisplayFormat fill: a twin under a colour scale or a DXF rule renders a fill,
+ * any other renders none.
+ */
+function s5TwinExpect(fx: S5Fixture, cfg: S5Configuration): Record<string, 'visual' | 'empty' | 'either'> {
+  const cells = s5CellsAt(fx)
+  const twins = new Set<string>()
+  for (const preds of Object.values(cfg.hypotheses)) for (const tok of Object.values(preds)) { const m = /^twin:([A-Z]+\d+)/.exec(tok); if (m) twins.add(m[1]!) }
+  const out: Record<string, 'visual' | 'empty' | 'either'> = {}
+  for (const t of [...twins].sort()) {
+    const covering = fx.rules.filter(r => isCellInSqrefLocal(t, r.sqref))
+    if (cfg.observable !== 'crop') {
+      out[t] = covering.some(r => r.marker.ruleType === 'colorScale' || r.marker.dxf?.fillRgb !== undefined) ? 'visual' : 'empty'
+      continue
+    }
+    const rules = covering.filter(r => r.marker.ruleType === 'dataBar' || r.marker.ruleType === 'iconSet')
+    if (rules.length === 0) { out[t] = 'empty'; continue }
+    if (rules.some(r => r.marker.ruleType === 'iconSet')) { out[t] = 'visual'; continue }
+    const r = rules[0]!
+    const bound = r.marker.bar?.cfvo
+    const values = r.sqref.split(/\s+/).flatMap(rg => Object.entries(cells).filter(([ref]) => isCellInSqrefLocal(ref, rg)).map(([, v]) => v)).filter((v): v is number => typeof v === 'number')
+    const at = (c: { type: string; val?: string; f?: string } | undefined): number => {
+      if (!c) return NaN
+      if (c.type === 'min') return Math.min(...values)
+      if (c.type === 'max') return Math.max(...values)
+      const n = Number(c.val ?? c.f)
+      return c.type === 'num' && Number.isFinite(n) ? n : NaN
+    }
+    const lo = at(bound?.[0])
+    const hi = at(bound?.[1])
+    const v = cells[t]
+    out[t] = !Number.isFinite(lo) || !Number.isFinite(hi) || lo >= hi || typeof v !== 'number' ? 'either' : v <= lo ? 'empty' : 'visual'
+  }
+  return out
+}
+
+const S5_UNRESOLVED: ReadonlyArray<{ id: string; formula: string; type?: CfPartMarker['ruleType']; operator?: string; extra?: Partial<S5Fixture> }> = [
+  { id: 'name', formula: 'MyName>0', extra: { definedNames: [{ name: 'MyName', ref: 'Sheet1!$A$1' }] } },
+  { id: 'external', formula: '[1]Sheet1!A1>0' },
+  { id: 'table', formula: 'Table1[@Col]>0' },
+  { id: 'indirect', formula: 'INDIRECT("A1")>0' },
+  { id: 'array-constant', formula: '{1,2}' },
+  { id: 'union', formula: '(A1,B1)' },
+  { id: 'spill', formula: 'A1#' },
+  { id: 'duplicate-formula', formula: 'A1>0', type: 'duplicateValues' },
+  { id: 'cellis-text', formula: '"a"', type: 'cellIs', operator: 'containsText' },
+]
+
+function unresolvedFixture(u: (typeof S5_UNRESOLVED)[number]): S5Fixture {
+  const cap = `formula:unresolved-${u.id}`
+  const type = u.type ?? 'expression'
+  const xml = `<cfRule type="${type}" dxfId="0" priority="1"${u.operator ? ` operator="${u.operator}"` : ''}><formula>${xe(u.formula)}</formula></cfRule>`
+  const rule = s5Raw(cap, 'B2:B3', 1, type, xml, [u.formula], 0)
+  return {
+    id: `stage5-unresolved-shapes-${u.id}`,
+    question: `Record only (one malformed or unresolved shape per workbook): Excel's open, repair or strip outcome for ${type === 'expression' ? `=${u.formula}` : `a ${type}${u.operator ? ` ${u.operator}` : ''} rule carrying <formula>${u.formula}</formula>`}; lifts nothing.`,
+    status: 'unsupported',
+    reason: S5_UNSUPPORTED_REASON,
+    dxfsXml: S5_DXFS,
+    cells: { A1: 1, B1: 2, B2: 1, B3: 'a', ...(u.id === 'table' ? { D1: 'Col', D2: 1, D3: 2 } : {}) },
+    rules: [{ ...rule, marker: { ...rule.marker, ...(u.operator ? { operator: u.operator } : {}) } }],
+    configurations: [],
+    recordRefs: ['B2', 'B3'],
+    ...(u.id === 'table'
+      ? { tableXml: '<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="Table1" displayName="Table1" ref="D1:D3" totalsRowShown="0"><autoFilter ref="D1:D3"/><tableColumns count="1"><tableColumn id="1" name="Col"/></tableColumns><tableStyleInfo name="TableStyleLight1" showFirstColumn="0" showLastColumn="0" showRowStripes="0" showColumnStripes="0"/></table>' }
+      : {}),
+    ...(u.extra ?? {}),
+  }
+}
+
+function authoredFixture(): S5Fixture {
+  const bRows = rowsOf('B', 2, 9)
+  const where = S5_CROSS_SHEET_WHERE
+  return s5rect({
+    id: 'stage5-formula-authored',
+    question:
+      'Lesson 12 / S5-A: the template source. The orchestrator authors these rules through Excel\'s dialog into excel-authored-formulas.xlsx (=$B2>$C2 over B2:D9, =MOD(ROW(),2)=0, cellIs > =$F$1, between =$F$1,=$F$2, a scale with num =$F$1 and a formula bound, a bar and an icon set with formula bounds, =Sheet2!$A$1>0 and a scale bounded by Sheet2!$A$1); this case is the generated twin, captured to settle whether each dialect\'s formula applies.',
+    cells: { ...colValues('B', AUTH_B), ...colValues('C', AUTH_C), ...colValues('D', Array(8).fill(0)), ...colValues('E', Array(8).fill(1)), F1: 4, F2: 7, ...colValues('G', [1, 2, 3, 4, 5, 6, 7, 8]), ...colValues('H', [1, 2, 3, 4, 5, 6, 7, 8]), ...colValues('I', [1, 2, 3, 4, 5, 6, 7, 8]), ...colValues('J', [1, 2, 3, 4, 5, 6, 7, 8]), ...colValues('K', [1, 2, 3, 4, 5, 6, 7, 8]), ...colValues('L', [1, 1, 1, 1]), ...colValues('M', [1, 2, 3, 4, 5, 6, 7, 8]) },
+    sheets: [{ name: 'Sheet2', cells: { A1: 1 } }],
+    rules: [
+      s5Expr('formula:dialect-base', 'B2:D9', 1, '$B2>$C2'),
+      s5Expr('formula:dialect-base', 'E2:E9', 2, 'MOD(ROW(),2)=0', { dxf: 1 }),
+      s5CellIs('formula:dialect-base', 'G2:G9', 3, 'greaterThan', ['$F$1']),
+      s5CellIs('formula:dialect-base', 'H2:H9', 4, 'between', ['$F$1', '$F$2'], { dxf: 1 }),
+      s5Scale('formula:dialect-base', 'I2:I9', 5, [{ type: 'num', val: '$F$1' }, { type: 'formula', val: '$F$2' }]),
+      s5Bar('formula:dialect-base', 'J2:J9', 6, [{ type: 'formula', val: '$F$1' }, { type: 'formula', val: '$F$2' }]),
+      s5Icon('formula:dialect-base', 'K2:K9', 7, [{ type: 'percent', val: '0' }, { type: 'formula', val: '$F$1' }, { type: 'formula', val: '$F$2' }]),
+      s5Expr('formula:dialect-x14', 'L2:L5', 8, 'Sheet2!$A$1>0', { where }),
+      s5Scale('formula:dialect-x14', 'M2:M9', 9, [{ type: 'num', val: 'Sheet2!$A$1' }, { type: 'max' }], { where }),
+    ],
+    configurations: [
+      s5Cfg('authored-expression', 'formula:dialect-base', bRows, { applies: r => red(AUTH_B[rowOfRef(r) - 2]! > AUTH_C[rowOfRef(r) - 2]!), ignored: always(NONE) }),
+      s5Cfg('authored-mod-row', 'formula:dialect-base', rowsOf('E', 2, 9), { applies: r => (rowOfRef(r) % 2 === 0 ? S5_GREEN : NONE), ignored: always(NONE) }),
+      s5Cfg('authored-cellis', 'formula:dialect-base', rowsOf('G', 2, 9), { applies: r => red(rowOfRef(r) - 1 > 4), ignored: always(NONE) }),
+      s5Cfg('authored-cross-sheet', 'formula:dialect-x14', rowsOf('L', 2, 5), { applies: always(S5_RED), ignored: always(NONE) }),
+    ],
+  })
+}
+
+/**
+ * The literal positive-control rules (fix round 6): one per dxf, the token its DisplayFormat shows, and the DXF component
+ * of a reading's token it vouches for (a literal fill colour, or a strikethrough on any token, twin tokens included).
+ */
+const S5_POSITIVE_CONTROLS: ReadonlyArray<{ dxf: 0 | 1 | 2; token: string; vouches: (tok: string) => boolean }> = [
+  { dxf: 0, token: S5_RED, vouches: t => t.startsWith(S5_RED) },
+  { dxf: 1, token: S5_GREEN, vouches: t => t.startsWith(S5_GREEN) },
+  { dxf: 2, token: `${NONE}+strike`, vouches: t => t.endsWith('+strike') },
+]
+
+/**
+ * Fix round 6 (codex P1 #1, blank DXF evidence): every live configuration needs functioning positive controls. Each DXF
+ * component its readings predict (a literal fill colour, a strikethrough on a literal or twin token) gains a literal
+ * control on that dxf, and a configuration with neither such a component nor a twin expected to render gains the red
+ * one. A control is a cell holding 1 under `cellIs greaterThan 0`, in column B below every row the fixture uses (inside
+ * the existing columns, so no same-content control moves; outside every sqref and every whole-column reference, which
+ * name columns A and F..J only). The cells are designated, so each has its own same-content control, and are read in the
+ * configuration's own observation table (its ref prefix).
+ */
+function withPositiveControls(fx: S5Fixture): S5Fixture {
+  if (fx.status === 'unsupported') return fx
+  const tokens = (cfg: S5Configuration): string[] => Object.values(cfg.hypotheses).flatMap(h => Object.values(h))
+  const vouched = (cfg: S5Configuration): typeof S5_POSITIVE_CONTROLS => S5_POSITIVE_CONTROLS.filter(d => tokens(cfg).some(t => (d.dxf === 2 || !t.startsWith('twin:')) && d.vouches(t)))
+  const blind = (cfg: S5Configuration): boolean => !Object.values(cfg.twinExpect ?? {}).includes('visual')
+  const lacking = fx.configurations.filter(cfg => cfg.record === undefined && (vouched(cfg).length > 0 || blind(cfg)))
+  if (lacking.length === 0) return fx
+  const needed = S5_POSITIVE_CONTROLS.filter(d => lacking.some(cfg => vouched(cfg).includes(d) || (d.dxf === 0 && vouched(cfg).length === 0)))
+  const base = s5CellsAt(fx)
+  const rows = [...Object.keys(base), ...fx.configurations.flatMap(cfg => cfg.refs.map(r => r.replace(/^(pre|calc|post):/, ''))), ...fx.rules.flatMap(r => r.sqref.split(/[\s:]+/))].map(rowOfRef).filter(r => r <= 1000)
+  const top = Math.max(...rows, 1)
+  const at = needed.map((d, i) => ({ ...d, ref: `B${top + 1 + i}` }))
+  for (const p of at) {
+    if (fx.rules.some(r => isCellInSqrefLocal(p.ref, r.sqref)) || base[p.ref] !== undefined) throw new Error(`${fx.id}: positive control ${p.ref} is not a free cell`)
+    if (fx.rules.some(r => r.marker.formulas.some(f => /\$?B:\$?B/.test(f)))) throw new Error(`${fx.id}: a rule reads all of column B`)
+  }
+  const priority = Math.max(0, ...fx.rules.map(r => r.marker.priority ?? 0)) + 1
+  const added = Object.fromEntries(at.map(p => [p.ref, 1 as S5Value]))
+  const cells = fx.cells
+  return {
+    ...fx,
+    cells: typeof cells === 'function' ? (anchor: number) => ({ ...cells(anchor), ...added }) : { ...cells, ...added },
+    rules: [...fx.rules, ...at.map((p, i) => s5CellIs('formula:positive-control', p.ref, priority + i, 'greaterThan', ['0'], { dxf: p.dxf, literal: true }))],
+    configurations: fx.configurations.map(cfg => {
+      if (!lacking.includes(cfg)) return cfg
+      const prefixes = new Set(cfg.refs.map(r => /^(pre|calc|post):/.exec(r)?.[0] ?? ''))
+      if (prefixes.size !== 1) throw new Error(`${fx.id} ${cfg.id}: mixed observation tables`)
+      const prefix = [...prefixes][0]!
+      const mine = vouched(cfg).length > 0 ? at.filter(p => vouched(cfg).some(d => d.dxf === p.dxf)) : at.filter(p => p.dxf === 0)
+      return { ...cfg, positiveControls: Object.fromEntries(mine.map(p => [`${prefix}${p.ref}`, p.token])) }
+    }),
+  }
+}
+
+/** Attaches the expected twin renderings to every configuration that names a twin (Ruling S5-WITNESS). */
+const withEmptyTwins = (fx: S5Fixture): S5Fixture => ({
+  ...fx,
+  configurations: fx.configurations.map(cfg => {
+    const expect = s5TwinExpect(fx, cfg)
+    return Object.keys(expect).length > 0 ? { ...cfg, twinExpect: expect } : cfg
+  }),
+})
+
+export const CF_STAGE5_FIXTURES: readonly S5Fixture[] = ([
+  authoredFixture(),
+  truthinessFixture(),
+  anchorFixture(),
+  anchorMultiFixture(),
+  edgeFixture(),
+  functionsFixture(),
+  hoistFixture(),
+  hoistAggregateFixture(),
+  cellIsOperandsFixture(),
+  predicateFixture(),
+  timePeriodFixture(),
+  clockTodayFixture(),
+  calcManualFixture(),
+  compositionFixture(),
+  crossSheetFixture(),
+  crossSheetMissingFixture(),
+  cfvoFormulasFixture(),
+  cfvoScopeFixture(),
+  x14ScaleFixture(),
+  activePresentFixture('scale'),
+  activePresentFixture('bar'),
+  activePresentFixture('icon'),
+  ...S5_UNRESOLVED.map(unresolvedFixture),
+  // Appended last, like every later case version; it owns bar:bounds-formula through CF_STAGE5_OWNERS.
+  barBoundsFormulaFixture(),
+] as const satisfies readonly S5Fixture[]).map(withEmptyTwins).map(withPositiveControls)
+
+/** The brief's matrix rows -> the workbooks that answer them ("one workbook each" rows and clock splits have several). */
+export const CF_STAGE5_GROUPS: Readonly<Record<string, readonly string[]>> = {
+  'stage5-formula-authored': ['stage5-formula-authored'],
+  'stage5-formula-truthiness': ['stage5-formula-truthiness'],
+  'stage5-formula-anchor': ['stage5-formula-anchor', 'stage5-formula-anchor-multi'],
+  'stage5-formula-edge': ['stage5-formula-edge'],
+  'stage5-formula-functions': ['stage5-formula-functions'],
+  'stage5-formula-hoist': ['stage5-formula-hoist', 'stage5-formula-hoist-aggregate'],
+  'stage5-cellis-operands': ['stage5-cellis-operands'],
+  'stage5-predicate-formulas': ['stage5-predicate-formulas', 'stage5-predicate-timeperiod'],
+  'stage5-clock-today': ['stage5-clock-today'],
+  'stage5-calc-manual': ['stage5-calc-manual'],
+  'stage5-composition': ['stage5-composition'],
+  'stage5-cross-sheet': ['stage5-cross-sheet', 'stage5-cross-sheet-missing'],
+  'stage5-cfvo-formulas': ['stage5-bar-bounds-formula', 'stage5-cfvo-formulas'],
+  'stage5-cfvo-scope': ['stage5-cfvo-scope'],
+  'stage5-x14-scale': ['stage5-x14-scale'],
+  'stage5-active-present': ['stage5-active-present-scale', 'stage5-active-present-bar', 'stage5-active-present-icon'],
+  'stage5-unresolved-shapes': S5_UNRESOLVED.map(u => `stage5-unresolved-shapes-${u.id}`),
+}
+
+/**
+ * Ruling S5-STUB: the Stage 1-4 captures re-read as Stage 5 evidence. Each entry names the measured case, the cells under
+ * the Stage 5 expression stub and the capability those cells settle; the capture is Excel's recorded outcome there.
+ */
+export const CF_STAGE5_REUSED_CAPTURES: readonly { caseId: string; refs: readonly string[]; capabilityId: string }[] = [
+  { caseId: 'stage1-priority-composition', refs: ['G2', 'G3'], capabilityId: 'formula:composition-stub-successor-dxf' },
+  { caseId: 'stage2-scale-composition', refs: ['L2', 'L3', 'L4', 'L5'], capabilityId: 'formula:composition-stub-successor-scale' },
+  { caseId: 'stage3-bar-composition', refs: ['I2', 'I3', 'I4'], capabilityId: 'formula:composition-stub-successor-bar' },
+  { caseId: 'stage4-icon-composition', refs: ['L2', 'L3', 'L4', 'L5'], capabilityId: 'formula:composition-stub-successor-icon' },
+  { caseId: 'stage1-blanks-errors', refs: ['D2', 'G6', 'J8', 'M6'], capabilityId: 'formula:predicate-divergent' },
+]
+
+// ---- fixture -> oracle case ----
+
+const S5_PREFIX = /^(pre|calc|post):/
+const stripPrefix = (ref: string): string => ref.replace(S5_PREFIX, '')
+
+/** Sheet1 cells of a fixture at a clock anchor serial. */
+export function s5CellsAt(fx: S5Fixture, anchorSerial = D1900): Readonly<Record<string, S5Value>> {
+  return typeof fx.cells === 'function' ? fx.cells(anchorSerial) : fx.cells
+}
+
+/** Every cell a fixture designates: configuration refs, their twin cells and the record refs, in first-seen order. */
+export function s5DesignatedRefs(fx: S5Fixture): string[] {
+  const out = new Set<string>()
+  for (const cfg of fx.configurations) {
+    for (const ref of cfg.refs) out.add(stripPrefix(ref))
+    for (const ref of Object.keys(cfg.positiveControls ?? {})) out.add(stripPrefix(ref))
+    for (const preds of Object.values(cfg.hypotheses)) for (const tok of Object.values(preds)) {
+      const m = /^twin:([A-Z]+\d+)/.exec(tok)
+      if (m) out.add(m[1]!)
+    }
+  }
+  for (const ref of fx.recordRefs ?? []) out.add(ref)
+  // Every rule sqref has at least one designated cell (its top-left), so each marker is covered.
+  for (const r of fx.rules) {
+    const covered = [...out].some(ref => isCellInSqrefLocal(ref, r.sqref))
+    if (!covered) out.add(topLeftOf(r.sqref))
+  }
+  return [...out]
+}
+
+function isCellInSqrefLocal(ref: string, sqref: string): boolean {
+  const m = /^([A-Z]+)(\d+)$/.exec(ref)
+  if (!m) return false
+  const c = colIndex(m[1]!)
+  const r = Number(m[2])
+  return sqref.trim().split(/\s+/).some(tok => {
+    const [a, b] = tok.split(':')
+    const ma = /^([A-Z]+)(\d+)$/.exec(a ?? '')
+    const mb = /^([A-Z]+)(\d+)$/.exec(b ?? a ?? '')
+    if (!ma || !mb) return false
+    return c >= Math.min(colIndex(ma[1]!), colIndex(mb[1]!)) && c <= Math.max(colIndex(ma[1]!), colIndex(mb[1]!)) && r >= Math.min(Number(ma[2]), Number(mb[2])) && r <= Math.max(Number(ma[2]), Number(mb[2]))
+  })
+}
+
+/** Columns used by a fixture's rules and cells (refs beyond column CZ, the edge cells, are ignored). */
+function s5MaxCol(fx: S5Fixture): number {
+  const cols = [
+    ...Object.keys(s5CellsAt(fx)).map(r => colIndex(colOfRef(r))),
+    ...fx.rules.flatMap(r => r.sqref.split(/[\s:]+/).map(t => colIndex(colOfRef(t)))),
+  ].filter(c => c <= 104)
+  return Math.max(...cols, 2)
+}
+
+/** The same-content control of a designated cell: the same row, one block to the right of every used column. */
+export function s5ControlRef(fx: S5Fixture, ref: string): string {
+  return shiftCol(ref, s5MaxCol(fx) + 1)
+}
+
+function s5Case(fx: S5Fixture): CfOracleCase {
+  const designated = s5DesignatedRefs(fx)
+  const controlOf = (ref: string): string => s5ControlRef(fx, ref)
+  const cells: CfCellExpectation[] = [
+    ...designated.map(ref => ({ ref, controlRef: controlOf(ref), matched: false, fillSource: 'unverified' as const })),
+    ...designated.map(ref => ({ ref: controlOf(ref), controlRef: ref, matched: false, fillSource: 'unverified' as const, note: 'same-content unformatted control' })),
+  ]
+  const all = cells.map(c => c.ref)
+  const maxCol = Math.max(...all.map(r => colIndex(colOfRef(r))))
+  const maxRow = Math.max(...all.map(rowOfRef))
+  const unsupported = fx.status === 'unsupported'
+  const part = 'xl/worksheets/sheet1.xml'
+  return {
+    id: fx.id,
+    stage: 5,
+    question: fx.question,
+    input: `tests/fixtures/xlsx-cf/inputs/${fx.id}.xlsx`,
+    saved: `tests/fixtures/xlsx-cf/${fx.id}.xlsx`,
+    sheet: 'Sheet1',
+    range: `A1:${colLetter(maxCol)}${maxRow}`,
+    requiredAppearances: ['screen'],
+    ...(fx.clock
+      ? {
+          clockRequirement: {
+            dateSystem: '1900' as const,
+            requiredTimeZone: 'Asia/Taipei' as const,
+            anchorLocalDate: DEFAULT_CLOCK_ANCHOR_DATE,
+            anchorSerial: D1900,
+            staleSavedTodaySerial: D1900 - 5,
+            ...fx.clock,
+          },
+        }
+      : {}),
+    markers: fx.rules.flatMap(r => [{ part, extension: r.where, sqref: r.sqref, ...r.marker }, ...(r.extraMarkers ?? []).map(x => ({ part, sqref: r.sqref, ...x }))]),
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: [],
+      negativeRefs: unsupported ? [] : designated.map(controlOf),
+      cells,
+    },
+    formulaConfigurations: fx.configurations,
+    ...(fx.calcObservation ? { calcObservation: fx.calcObservation } : {}),
+    ...(fx.dynamicRefresh ? { formulaDynamicRefresh: fx.dynamicRefresh } : {}),
+    ...(fx.calcObservationSources ? { calcObservationSources: fx.calcObservationSources } : {}),
+    captures: unsupported ? [] : [{ appearance: 'screen', pngPath: `tests/fixtures/xlsx-cf/refs/${fx.id}.png`, sidecarPath: `tests/fixtures/xlsx-cf/refs/${fx.id}.json` }],
+    status: fx.status,
+    reason: fx.reason,
+    tolerance: DEFAULT_TOLERANCE,
+  }
+}
+
+export const CF_STAGE5_CASES: readonly CfOracleCase[] = CF_STAGE5_FIXTURES.map(s5Case)
+
+/** The S5 ruling each Stage 5 capability lifts (every `failClosedDisposition` cites it). */
+function s5Ruling(cap: string): string {
+  const rules: Array<[RegExp, string]> = [
+    [/^formula:unresolved-/, 'Always unsupported per S5-B, S5-F and S5-G (the viewer refuses the shape either way; Excel\'s open/repair/strip outcome is recorded only)'],
+    [/^formula:dialect-/, 'S5-A and Lesson 12 (the formula XML shape comes from excel-authored-formulas.xlsx; every formula rule is unresolved until its dialect is evidenced)'],
+    [/^formula:truth-/, 'S5-D (each result shape needs its own truth reading; evidence for one kind never authorises another; coerceToBoolean is never the fact)'],
+    [/^formula:anchor-/, 'S5-C (single-range anchor, pinned axes and the multi-range anchor are each measured; until then such a rule is unresolved)'],
+    [/^formula:relative-wrap$/, 'S5-C (a translated reference that leaves the sheet makes the cell unresolved until wrap or #REF! is measured)'],
+    [/^formula:fn-today$/, 'S5-M (the CF clock reading of TODAY() is measured under the Stage 1 anchor; until then clock formulas are unresolved)'],
+    [/^formula:fn-/, 'S5-E (each function family needs formula:fn-<family>; a family whose CF behaviour is unmeasured stays plain)'],
+    [/^formula:hoist-aggregate-errors$/, 'S5-HOIST (an error in a hoisted range propagates to every cell; a hoist that skips errors would paint where Excel does not)'],
+    [/^formula:hoist-/, 'S5-HOIST (absolute-range aggregates are hoisted only under this evidence; refused inputs are recorded, never evidence)'],
+    [/^formula:cellis-operand-/, 'S5-F (each operand kind needs its own capability; an operand error refuses the rule on that cell)'],
+    [/^formula:predicate-timeperiod-divergent$/, 'S5-G round-1 #9 (an unevidenced divergent timePeriod formula never reaches the attribute predicate)'],
+    [/^formula:predicate-divergent$/, 'S5-G (a non-canonical formula on a text, blank or error type is an expression only under this evidence)'],
+    [/^formula:calc-manual-/, 'S5-L (manual calculation: CF follows the saved or the recomputed values only as measured before any calculate)'],
+    [/^formula:composition-stub-successor-/, 'S5-STUB (the Stage 1-4 captures under the expression stub are re-read; withheld until the successor capabilities are published)'],
+    [/^formula:composition-/, 'S5-O (an expression composes with DXF, scale, bar and icon rules only as measured; an unresolved expression ahead taints its writes)'],
+    [/^formula:cross-sheet-/, 'S5-K (cross-sheet values need this evidence and a CfWorkbookSource; a missing sheet stays unresolved)'],
+    [/^formula:cfvo-/, 'S5-H (formula and reference cfvo bounds resolve only under these capabilities; a multi-range formula bound is unresolved until the scope is selected)'],
+    [/^formula:active-present-/, 'S5-J (activePresent is a per-cell truth gate only if Excel retains it and the capture discriminates; otherwise cf-unsupported-rule permanently)'],
+    [/^scale:dialect-standalone$/, 'S5-I (a standalone x14 colour scale resolves through the Stage 2 point model only with this capability; if Excel writes base, refused-unsupported)'],
+    [/^(scale:thresholds|bar:bounds|icon:thresholds)-formula$/, 'S5-H (a formula bound per visual family)'],
+  ]
+  return rules.find(([re]) => re.test(cap))?.[1] ?? 'S5-A (withheld until measured)'
+}
+
+/**
+ * Stage 5 capabilities recorded as unsupported although their case may be captured (the S3-CLOSE mechanism): an Excel
+ * outcome on the construct a case tests (Ruling S5-REPAIR, S5-J, OD-16), a finding no hypothesis predicted (S4-MINMAX
+ * precedent), or a re-deferral whose capture cannot measure it (Task 39). Production keeps every one unresolved.
+ */
+export const CF_STAGE5_UNSUPPORTED: Readonly<Record<string, string>> = {
+  'formula:active-present-scale':
+    'Ruling S5-J / OD-16: Excel 16.115 rewrote the standalone x14 colour scale on resave (stage5-active-present-scale.rejected.xlsx): activePresent dropped and the rule moved to the base dialect with its activation as a <formula> child. Permanent recorded refusal; production keeps cf-unsupported-rule.',
+  'formula:active-present-bar':
+    'Ruling S5-J / OD-16: Excel 16.115 rewrote the standalone x14 data bar on resave (stage5-active-present-bar.rejected.xlsx): activePresent dropped and the rule moved to a paired base bar with its activation as a <formula> child. Permanent recorded refusal; production keeps cf-unsupported-rule.',
+  'formula:active-present-icon':
+    'Ruling S5-J / OD-16: Excel 16.115 rewrote the standalone x14 icon set on resave (stage5-active-present-icon.rejected.xlsx): activePresent dropped and the rule moved to the base dialect with its activation as a <formula> child. Permanent recorded refusal; production keeps cf-unsupported-rule.',
+  'formula:predicate-timeperiod-divergent':
+    'Ruling S5-REPAIR: Excel 16.115 replaced the divergent formula A2=TODAY()-3 of a timePeriod="today" rule with the canonical FLOOR(A2,1)=TODAY() on resave (stage5-predicate-timeperiod.rejected.xlsx): Excel regenerates the formula from the attribute, so a divergent timePeriod formula is not a shape Excel keeps. Production keeps it unresolved (Task 33).',
+  'formula:cross-sheet-missing':
+    'Ruling S5-REPAIR / S5-K: Excel reads =Gone!A1>0 (no such sheet) as an external-workbook reference; opening the workbook prompted to update links (answered Don\'t update), so no capture exists. Production keeps a formula naming an unknown sheet unresolved; its #REF! reading is never registered.',
+  'formula:cfvo-nonnumeric':
+    'Finding (S4-MINMAX precedent): no hypothesis (withheld, zero, skipped) matched what Excel showed for a text, blank or error formula bound in stage5-cfvo-formulas L..N; recorded, never fitted. Production keeps a non-numeric formula bound unresolved.',
+  'formula:cfvo-scope-multi-range':
+    'Finding (centred glyph key, 2026-11-19; S4-MINMAX precedent): with the icon twins measurable at last (P12..T15 classify against stage4-icon-glyph-key-centred at the centred frame, cell top + 4 px), no hypothesis (rule-wide, per-range) matches what Excel showed for the relative bound =MAX(B2:B5) on sqref "B2:B5 D2:D5 F2:F5": Excel drew the top colour (FF63BE7B) on every cell of the scale and the top icon (3Arrows:2) on every cell of the icon set, in the control range B as in D and F. Recorded, never fitted. Production keeps a multi-range formula bound unresolved.',
+}
+
+/**
+ * Stage 5 capabilities no capture can turn into evidence (Lesson 3): the twin registries (literal comparison rules,
+ * never a formula question).
+ */
+export const CF_STAGE5_NONDISCRIMINATING: Readonly<Record<string, string>> = {
+  'formula:composition-twin': 'Literal twin rules of stage5-composition: comparison references for the formula configurations, never a question themselves.',
+  'formula:cfvo-twin': 'Literal twin rules of stage5-cfvo-formulas: comparison references for the formula bounds, never a question themselves.',
+  'formula:cfvo-bar-twin': 'Literal twin rules of stage5-bar-bounds-formula: comparison references for the formula bar bounds, never a question themselves.',
+  'formula:cfvo-scope-twin': 'Literal twin rules of stage5-cfvo-scope: comparison references for the scope readings, never a question themselves.',
+  'formula:x14-scale-twin': 'The base literal twin of stage5-x14-scale: a comparison reference, never a question itself.',
+  'formula:active-present-scale-twin': 'The non-activated twin of stage5-active-present-scale: a comparison reference.',
+  'formula:active-present-bar-twin': 'The non-activated twin of stage5-active-present-bar: a comparison reference.',
+  'formula:active-present-icon-twin': 'The non-activated twin of stage5-active-present-icon: a comparison reference.',
+  'formula:positive-control': 'Literal positive controls (fix round 6): a cellIs rule on each predicted dxf, proving the DisplayFormat readback shows a format before any reading is judged; never a question itself.',
+}
+
+/** Capabilities owned by a later case version (the bar:bounds-formula follow-up, 2026-11-19; see CF_STAGE3_OWNERS). */
+export const CF_STAGE5_OWNERS: Readonly<Record<string, string>> = {
+  'bar:bounds-formula': 'stage5-bar-bounds-formula',
+}
+
+/** Complete capability registry for every Stage 5 marker, configuration and reused capture (one entry per id). */
+export const CF_STAGE5_CAPABILITIES: readonly CfCapabilityEntry[] = (() => {
+  const seen = new Set<string>()
+  const out: CfCapabilityEntry[] = []
+  const push = (capabilityId: string, caseId: string, category: string, description: string, policy: string): void => {
+    if (seen.has(capabilityId)) return
+    if (CF_STAGE5_OWNERS[capabilityId] !== undefined && CF_STAGE5_OWNERS[capabilityId] !== caseId) return
+    seen.add(capabilityId)
+    out.push({ capabilityId, caseId, category, description, absentOrDivergentFormulaPolicy: policy, failClosedDisposition: s5Ruling(capabilityId) })
+  }
+  for (const c of CF_STAGE5_CASES) {
+    for (const m of c.markers) {
+      push(m.capabilityId, c.id, m.ruleType, `${c.id} :: ${m.extension} ${m.ruleType} on ${m.sqref}`, m.formula ? `Requires the exact ${m.formula.dialect} ${m.formula.kind} formula [${m.formulas.join(', ')}] in Excel's canonical spelling; a divergent, unsupported or unevidenced formula is unresolved` : 'Requires the exact pinned rule shape')
+    }
+    for (const cfg of c.formulaConfigurations ?? []) push(cfg.capabilityId, c.id, 'expression', `${c.id} :: configuration ${cfg.id}`, 'Requires a discriminating DisplayFormat or crop observation of its configurations')
+  }
+  for (const r of CF_STAGE5_REUSED_CAPTURES) push(r.capabilityId, 'stage5-composition', 'expression', `${r.caseId} :: reused capture ${r.refs.join(', ')}`, 'Requires the reused measured capture at the stub cells (S5-STUB)')
+  return out
+})()
+
+export const CF_CASES: readonly CfOracleCase[] = [...CF_STAGE1_CASES, ...CF_STAGE2_CASES, ...CF_STAGE3_CASES, ...CF_STAGE4_CASES, ...CF_STAGE5_CASES]
 
 export const CF_CAPABILITIES: readonly CfCapabilityEntry[] = [
   ...CF_STAGE1_CAPABILITIES,
   ...CF_STAGE2_CAPABILITIES,
   ...CF_STAGE3_CAPABILITIES,
   ...CF_STAGE4_CAPABILITIES,
+  ...CF_STAGE5_CAPABILITIES,
 ]

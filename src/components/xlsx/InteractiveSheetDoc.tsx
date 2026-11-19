@@ -1074,13 +1074,30 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const cfRules = entry?.sheet.conditionalFormatting
   const cfTextGen = useMemo(() => (!remote && cfRules ? cfRulesVersion(cfRules) : 0), [remote, cfRules])
   const hasRemoteCf = !!remote && !!activeSheetId && remote.layout(activeSheetId).hasConditionalFormatting === true
+  // Ruling S5-M (M2): the midnight tick reaches only a sheet whose rules may read the clock. The parse publishes the fact on the
+  // rules (`clockFree`, resident) and each ready worker reply carries it (remote); absent means "may read it". Every sheet holds the
+  // day its keys and stamps name; a sheet not (yet) known to be clock-free follows the clock, a clock-free one keeps its day, so
+  // learning the fact moves nothing and the tick reaches only the others.
+  const appliedDays = useRef(new Map<string, number>()).current
+  const clockFree = cfRules ? cfRules.clockFree === true : hasRemoteCf && remote!.cfClockFree(activeSheetId)
+  const dayKey = activeSheetId ?? ''
+  if (!clockFree || !appliedDays.has(dayKey)) appliedDays.set(dayKey, clockGen)
+  const tickGen = appliedDays.get(dayKey)!
   const scopedCf = cfRules ? cfNeedsViewport(entry!.sheet) : false
   const cfViewport = (scopedCf || hasRemoteCf) && entry && scroll ? { metrics: entry.metrics, boxes: paneLogicalBoxes(scroll.frozen, scroll.logicalOrigin, scroll.zoom, viewport).map(box => {
     const range = tileRangeFor({origin:box,viewport:{width:box.width*scroll.zoom,height:box.height*scroll.zoom},zoom:scroll.zoom,dpr,extent:{width:entry.metrics.cols.totalCss(),height:entry.metrics.rows.totalCss()}},TILE_PREFETCH_RING)
     const first=tileLogicalBox(range.c0,range.r0,scroll.zoom,dpr),last=tileLogicalBox(range.c1,range.r1,scroll.zoom,dpr)
     return {x:first.x,y:first.y,width:last.x+last.width-first.x,height:last.y+last.height-first.y}
   }) } : undefined
-  const cfLiveKey = cfRules ? JSON.stringify([source.store(activeSheetId).stamp.docId, activeSheetId, source.store(activeSheetId).stamp.valueGen, entry?.structureGen, cfTextGen, scopedCf ? entry?.revision : 0, clockGen]) : hasRemoteCf ? JSON.stringify([identity.docId, activeSheetId, identity.valueGen, identity.viewGen, entry?.structureGen, remote!.merges(activeSheetId).gen, remote!.isClosed, clockGen]) : undefined
+  // S5-K: the referenced sheets' value generations (resident), or the cache's dependency epoch (remote), join the key.
+  // S5-K: the lazy CF runtime (kept once loaded) builds the resident dependency key on every render; resident CF is withheld
+  // until it is loaded.
+  // Only a sheet whose rules name another sheet needs it; any other sheet's key part is empty, as before.
+  const cfCross = cfRules?.rules.some(r => r.definition.kind !== 'unresolved' && r.definition.dependencySheets?.length)
+  const [cfRuntime, setCfRuntime] = useState<typeof import('../../xlsx/cf/render')>()
+  useEffect(() => { if (cfCross && !cfRuntime) void ensureConditionalFormatting([entry!.sheet]).then(cf => cf && setCfRuntime(cf)) }, [cfCross, cfRuntime])
+  const cfDepGen = cfRules ? cfCross ? cfRuntime?.cfResidentDependencyKey(cfRules, entry!.sheet.name, source.sheets, id => source.store(id)) : '' : hasRemoteCf ? remote!.cfDependencyEpoch(activeSheetId) : 0
+  const cfLiveKey = cfRules ? cfDepGen === undefined ? undefined : JSON.stringify([source.store(activeSheetId).stamp.docId, activeSheetId, source.store(activeSheetId).stamp.valueGen, entry?.structureGen, cfTextGen, scopedCf ? entry?.revision : 0, tickGen, cfDepGen]) : hasRemoteCf ? JSON.stringify([identity.docId, activeSheetId, identity.valueGen, identity.viewGen, entry?.structureGen, remote!.merges(activeSheetId).gen, remote!.isClosed, tickGen, cfDepGen]) : undefined
   const cfViewportKey = cfViewport ? JSON.stringify([cfLiveKey, cfViewport.boxes]) : cfLiveKey
   const [viewportCf,setViewportCf]=useState<{key:string;generation:string|undefined;boxes?:readonly LogicalCellBox[];batch:import('../../xlsx/cf/render').CfPaintBatch|undefined}|null>(null)
   const heldViewportCf=useRef<import('../../xlsx/cf/render').CfPaintBatch|undefined>(undefined)
@@ -1097,7 +1114,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     let cancelled=false
     const sheet=entry.sheet
     void ensureConditionalFormatting([sheet]).then(async cf=>{
-      const batch=await cf?.prepareCfPaint(sheet,{store:source.store(activeSheetId!),memory:cf.paintMemoryFor(doc,chartParent),valuePolicy:doc.valuePolicy??'engine',viewport:cfViewport})
+      const batch=await cf?.prepareCfPaint(sheet,{store:source.store(activeSheetId!),workbook:source,memory:cf.paintMemoryFor(doc,chartParent),valuePolicy:doc.valuePolicy??'engine',evaluation:cf.cfDocumentEvaluationOf(doc),viewport:cfViewport})
       if(cancelled){batch?.dispose();return}
       setViewportCf({key:cfViewportKey,generation:cfLiveKey,boxes:batch ? cfViewport?.boxes : undefined,batch})
     })
@@ -1120,9 +1137,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return text.prepareCfTextScope(sheet, {
       rects,
       store: source.store(sheet.sheetId ?? sheetIds[doc.sheets.findIndex(candidate => candidate.name === sheet.name)]!),
+      workbook: source,
       signal: batchSignal,
       locale: sheet.semantics?.locale ?? 'en-US',
       budget,
+      evaluation: text.cfDocumentEvaluationOf(doc),
       ...(hosts ? { hosts } : {}),
     })
   }
@@ -1157,7 +1176,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // when a bail-out re-run (same key, scope already claimed) cleans up.
     // Otherwise the claimed scope goes stale with no recovery (same key, no
     // new prepare). Explicit disposal (key change, unmount) ends scopes.
-    const live = () => !remote.isClosed && remote.identity(sheetId).docId === identity.docId && remote.identity(sheetId).valueGen === identity.valueGen && remote.identity(sheetId).viewGen === identity.viewGen && remote.merges(sheetId).gen === structureGen
+    const depEpoch = remote.cfDependencyEpoch(sheetId)
+    const live = () => !remote.isClosed && remote.identity(sheetId).docId === identity.docId && remote.identity(sheetId).valueGen === identity.valueGen && remote.identity(sheetId).viewGen === identity.viewGen && remote.merges(sheetId).gen === structureGen && remote.cfDependencyEpoch(sheetId) === depEpoch
     const current = () => live() && !batchSignal.aborted
     const text = await import('../../xlsx/cf/text')
     if (!current()) return undefined
@@ -1165,7 +1185,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       async chunk => {
         if (!current()) return { result: undefined, release: () => {} }
         const stamp = {
-          owner: identity.docId, sheetId, workbookValueGen: identity.valueGen, cfGen: 0, viewGen: identity.viewGen, structureGen, clockGen,
+          owner: identity.docId, sheetId, workbookValueGen: identity.valueGen, cfGen: 0, viewGen: identity.viewGen, structureGen, clockGen: tickGen,
         }
         let held = remote.acquireCfPreparation(sheetId, chunk, stamp, batchSignal)
         // A failed entry never reloads on its own, so a churn-time refusal
@@ -1208,7 +1228,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       },
       rects,
       // Ruling S4-ROW-EXACT: the authored row heights the paged layout holds (pt), for the icon frame.
-      { locale, budget, current: live, base, onEmpty, ...(hosts ? { hosts } : {}), rowPtOf: text.cfRowPtOfOverrides(remote.layout(sheetId).rowOverrides, remote.layout(sheetId).defaultRowPt), rowUniformOf: text.cfRowUniformOfLayout(remote.layout(sheetId).nonUniformFontRows), colors: remote.formatting().colors ?? { theme: doc.sheets[sheetIds.indexOf(sheetId)]?.drawingTheme?.palette }},
+      { locale, budget, current: live, identityOf: id => remote.identity(id).valueGen, retainDependencies: deps => remote.retainCfDependencies(sheetId, deps), base, onEmpty, ...(hosts ? { hosts } : {}), rowPtOf: text.cfRowPtOfOverrides(remote.layout(sheetId).rowOverrides, remote.layout(sheetId).defaultRowPt), rowUniformOf: text.cfRowUniformOfLayout(remote.layout(sheetId).nonUniformFontRows), colors: remote.formatting().colors ?? { theme: doc.sheets[sheetIds.indexOf(sheetId)]?.drawingTheme?.palette }},
     )
   }
   const residentBatch = currentViewportCf?.batch ?? (assets?.cfLiveKey === cfLiveKey ? assets?.lease.assets.conditionalFormatting : undefined)
@@ -1229,7 +1249,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const sheetIndex = sheetIds.indexOf(activeSheetId)
     let assetDoc = activeDrawings ? documentWithDrawings(doc, sheetIndex, activeDrawings) : doc
     if (activeSparklines) assetDoc = documentWithSparklines(assetDoc, sheetIndex, activeSparklines)
-    void loadAssets(assetDoc, { ...(fontKey ? { fallbackFonts } : {}), sheetIndex, profile, imageCache: imageCacheFor(), chartOwner: doc, chartParent, ...(cfRules ? {cfStore:source.store(activeSheetId)} : {}), ...(cfViewport ? { cfViewport } : {}) }).then(next => {
+    void loadAssets(assetDoc, { ...(fontKey ? { fallbackFonts } : {}), sheetIndex, profile, imageCache: imageCacheFor(), chartOwner: doc, chartParent, ...(cfRules ? {cfStore:source.store(activeSheetId),cfWorkbook:source} : {}), ...(cfViewport ? { cfViewport } : {}) }).then(next => {
       if (cancelled) { next.dispose(); return }
       if (fontGenRef.current.key !== fontKey || fontGenRef.current.gen === 0) fontGenRef.current = { key: fontKey, gen: fontGenRef.current.gen + 1 }
       setAssets({ lease: next, fontGen: fontGenRef.current.gen, fontKey, sheetId: activeSheetId, sparklineGen: activeSparklines?.gen ?? 0, cfLiveKey, cfViewportKey, cfBoxes:cfViewport?.boxes })
@@ -1281,11 +1301,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   })()
   // Live CF generation for the display key: a changed rule set must invalidate
   // the held scope even when value generations and rects are unchanged.
+  // The dependency generation (cross-sheet reads) is part of it too, as in the paint key (PR #81 bot P2): a
+  // referenced sheet's commit must not leave a scope the dependency-liveness check rejects held under a matching key.
   // Memoized on the parsed rules object so the JSON normalization runs only
   // when rules actually change (per render it would dominate scrolling).
 
   const cfTextKey = cfTextRects && entry && activeSheetId
-    ? JSON.stringify([ownerKey, identityKey, nextWindowKey, cfTextKeyFor({ sheetId: activeSheetId, valueGen: identityOf(activeSheetId).valueGen, cfGen: cfTextGen, locale: entry.sheet.semantics?.locale ?? 'en-US', rects: cfTextRects }), remote?.merges(activeSheetId).gen ?? -1, clockGen])
+    ? JSON.stringify([ownerKey, identityKey, nextWindowKey, cfTextKeyFor({ sheetId: activeSheetId, valueGen: identityOf(activeSheetId).valueGen, cfGen: cfTextGen, locale: entry.sheet.semantics?.locale ?? 'en-US', rects: cfTextRects }), remote?.merges(activeSheetId).gen ?? -1, tickGen, cfDepGen ?? null])
     : undefined
   const [cfText, setCfText] = useState<{ key: string; scope: EffectiveFormatScope | undefined; empty?: boolean } | null>(null)
   const heldCfText = useRef<EffectiveFormatScope | undefined>(undefined)
@@ -1431,7 +1453,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const scope=currentRemotePaint?.scope
     if(!remote || !scope || !activeSheetId || !cfLiveKey || remote.isClosed)return undefined
     const id=remote.identity(activeSheetId)
-    return {key:cfLiveKey,stamp:{owner:id.docId,sheetId:activeSheetId,workbookValueGen:id.valueGen,cfGen:scope.gen,viewGen:id.viewGen,structureGen:remote.merges(activeSheetId).gen,clockGen},
+    return {key:cfLiveKey,stamp:{owner:id.docId,sheetId:activeSheetId,workbookValueGen:id.valueGen,cfGen:scope.gen,viewGen:id.viewGen,structureGen:remote.merges(activeSheetId).gen,clockGen:tickGen},
       layer:scope.paintLayer ?? {rects:scope.regions??[],retainedBytes:0,styleAt:scope.effectiveStyle},
       // The lazy scope's bar painter (Task 22): the paged view paints exactly the bars the wire carried.
       barAt:(row:number,col:number)=>scope.barAt?.(row,col),

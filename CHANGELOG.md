@@ -12,6 +12,35 @@ in git history.
 
 ### Added
 
+- **Excel formula conditional formatting rules (view-only).** "Use a formula" rules, `cellIs` rules whose value is a
+  reference or a formula, and text, blank and error rules whose formula differs from the one Excel writes are now
+  evaluated per cell by a bounded formula evaluator, compose with the other rule kinds, and paint wherever Excel 16.115's
+  own rendering verifies them (45 Stage 5 capabilities): the formula dialects, relative and pinned anchors and the edge
+  wrap, number/boolean/blank/error truth, the logical, information, text, math, aggregate, conditional-aggregate, date,
+  row/column and `TODAY()` functions, hoisted whole-column aggregates (an error in the column propagates, as Excel shows) and `COUNTIF` frequency, reference, relative,
+  expression and blank `cellIs` operands, divergent predicates, saved values under manual calculation, stopIfTrue and
+  priority composition with fills, scales and bars, references to other sheets (also as a `cellIs` operand), formula
+  colour-scale bounds, formula data-bar bounds, formula icon-set thresholds (measured against a glyph key captured at the centred placement
+  Excel gives Normal-style cells) and the x14 standalone colour scale. On Excel's own oracle workbooks every formula cell is
+  Excel's reading or withheld. Everything else keeps its base formatting and is announced as unavailable: shapes Excel
+  rewrites or refuses (`activePresent` on scales, bars and icon sets; a time-period formula that differs from its
+  period; a reference to a missing sheet; a non-numeric formula bound), readings production does not implement (text and
+  range truth, error operands, a relative cfvo bound, a relative formula bound across several ranges), and stopIfTrue ahead of an icon set.
+
+- **Excel formula conditional formatting: an error in a whole-column aggregate propagates.** A rule such as
+  `A2>AVERAGE($A:$A)` or `A2=MAX($A:$A)` over a column that holds an error (`#DIV/0!`) formats no cell, which is what
+  Excel 16.115 shows. Viewer behaviour does not change: it already evaluated these rules that way, and the reading
+  (`error-propagates`) is now registered and published as the 44th Stage 5 capability
+  (`formula:hoist-aggregate-errors`), which takes the verified total to 336. Evidence: `docs/validation/xlsx-cf.md` §14.z.9.
+
+- **Excel time-period rules (view-only): a rule's formula is classified, not ignored.** A conditional formatting
+  "dates occurring" rule whose `<formula>` is the one Excel itself writes for its period (today, yesterday, tomorrow,
+  last 7 days, this/last/next week, this/last/next month) is evaluated as before. A rule whose formula disagrees with its
+  `timePeriod` attribute used to paint from the attribute; it is now withheld, because Excel evaluates the formula and which
+  of the two it follows is measured only in Stage 5 (`formula:predicate-timeperiod-divergent`). Every Stage 1 clock
+  measurement is unchanged. A time-period rule on several ranges also stays withheld while multi-range anchoring is
+  unmeasured.
+
 - **Excel icon sets (view-only).** Conditional formatting icon sets now evaluate and paint in resident, worker-backed
   and paged views, in print and export, wherever Excel 16.115's own rendering verifies them. Buckets follow Excel's
   readings for every built-in family (base and x14), num, percent, percentile and mixed thresholds, `gte`, `reverse`,
@@ -26,13 +55,13 @@ in git history.
 
 - **Excel data bars (view-only).** Conditional formatting data bars now paint in resident, worker-backed and paged
   views, in print and export, wherever Excel's own rendering verifies them: solid and gradient fills (gradient toward
-  white over the bar's length, with or without a border), borders, min/max and automatic bounds (percentile bounds
+  white over the bar's length, with or without a border), borders, min/max, number (`num`) and automatic bounds (percentile bounds
   when every value lies within them), Excel's default 10/90 lengths, the dotted axis with negative bars, left-to-right and right-to-left, theme/indexed colours,
   automatic axis and negative colours, `showValue="0"`, and composition with fills and colour scales. Every geometry
-  was measured from Excel 16.114 captures and the painter reproduces them (472 painted bars compared with Excel's
-  pixels, edges within 1 px; 255 gradient bars compared in colour within 8 per channel, 246 of them also in geometry). Shapes whose captures could not discriminate
-  the question (num and percent bounds, positional bounds, merged hosts, minimum visible width, copy text and the
-  default negative border), equal or single-value scopes, values beyond num/percentile bounds, stop-if-true bars,
+  was measured from Excel 16.114 captures and the painter reproduces them (555 painted bars compared with Excel's
+  pixels, edges within 1 px; 255 gradient bars compared in colour within 8 per channel, 250 of them also in geometry). Shapes whose captures could not discriminate
+  the question (percent bounds, positional bounds, merged hosts, minimum visible width, copy text and the
+  default negative border), equal or single-value scopes, values beyond num/percentile/formula bounds, stop-if-true bars,
   standalone x14 bars and every unresolved shape stay withheld
   with their base formatting and announce "Conditional formatting unavailable". A painted bar announces
   "Data bar, N% of range" (「資料橫條 N%」 in zh-TW). Conditional formatting preparation is bounded by a deterministic work-unit cap instead of a
@@ -187,6 +216,15 @@ in git history.
     `docs/validation/xlsx-pivots.md`.
 
 ### Fixed
+
+- **Formula conditional formatting reads text the way the worksheet does.** A formula rule used to count characters
+  under a different Unicode compatibility version from the workbook's own formulas, so `LEN` of an emoji was 1 in a
+  rule but 2 on the sheet, and `=LEN($A$1)=1` painted where Excel's worksheet semantics say it is false. Rules now
+  evaluate under the workbook's own compatibility version (a parsed workbook: UTF-16 code units, as its formulas).
+
+- **The worker-backed view no longer reads the clock for sheets whose rules never use it.** Conditional formatting
+  in the worker sampled the clock on every preparation; it now samples it once, only when a rule reads it (`TODAY()`,
+  a time-period rule), as the resident view already did.
 
 - **The forced-paged view announces its painted data bars** ("Data bar, N% of range") instead of "Conditional formatting unavailable", deciding each bar from the host the frame paints it in.
 

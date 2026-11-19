@@ -132,6 +132,10 @@ Scanned all `.xlsx` archives in `corpus/` and `tests/fixtures/` by inspecting ZI
   - **Seen in the wild (Excel-resaved)**: `stage1-priority-composition.xlsx` (and its `.rejected` twin) carries one base rule, `<iconSet>` with the `iconSet` attribute omitted (3TrafficLights1), `percent` cfvo 0/33/67, no `gte`, `reverse`, `showValue` or `percent` attribute: Excel 16.114 omits default-valued attributes on resave, the form the glyph key provisionally pins (`ICON_KEY_PERCENT_FORM = '(omitted)'`).
   - **Authored by the oracle (30 Stage 4 workbooks, 15 inputs + 15 seeded saves, not yet resaved by Excel)**: dialects base (81 rules per workbook set) and standalone x14 (95 rules, including the 75 glyph-key rules); all 20 families (17 base, and `3Stars`/`3Triangles`/`5Boxes` only as x14), plus `iconSet` omitted; custom `cfIcon` mappings (87 rules) with `NoIcons iconId="0"` in the first, middle and last bucket and in all-`NoIcons` sets; cfvo types `num`, `percent`, `percentile`, `min`, `max` (and, unresolved shapes only, `formula`, `<xm:f>$A$1</xm:f>` and a cfvo without `type`); `gte="1"` written explicitly and `gte="0"`; `reverse="1"` on 3-, 4- and 5-icon and custom sets; `showValue="0"`; `<iconSet percent="0">` once (`stage4-icon-degenerate` H).
 
+- **Formula-bearing conditional formatting inventory (Task 31, Stage 5)**: I scanned every `.xlsx` by reading its ZIP entries (`xl/worksheets/*.xml`), skipping `~$` lockfiles. In each `<cfRule>`/`<x14:cfRule>` the scan looked for a `<formula>` or `<xm:f>` child, a `cfvo type="formula"`, or a `num`/`percent`/`percentile` cfvo whose `@val` is not a literal. It covered `corpus/` (this worktree holds only `corpus.lock.json`; the main checkout's materialized `corpus/` holds 9 `.xlsx`) and `tests/fixtures/` (626 `.xlsx` outside `xlsx-cf/`).
+  - **The count is 0.** No corpus workbook and no fixture outside `tests/fixtures/xlsx-cf/` contains conditional formatting at all, so none contains a formula-bearing rule. The formula-bearing workbooks in the repository are the oracle's own: Stages 1–4 carry their divergent predicate formulas, `cellIs` operands and expression stubs, and Stage 5 adds its 30 workbooks.
+  - **Corpus gate (Task 39):** Stage 5 has no third-party writer shapes to be compatible with. `tests/fixtures/xlsx-cf/excel-authored-formulas.xlsx` (Excel's dialog, orchestrator, Lesson 12; it does not exist yet) is therefore the corpus gate, as `excel-authored-iconsets.xlsx` was for Stage 4.
+
 ---
 
 ## 5. Stage 1 Verification, Resource Audit & Browser Evidence (Task 11)
@@ -372,7 +376,7 @@ Every row is `unverified` (or refused) until the orchestrator's captures land; "
 | `bar:lengths-default-10-90` | `stage3-bar-lengths-default` (since Task 22b; `stage3-bar-lengths` B is a one-width cross-check) | pixel-measured | S3-B | recipe-pending: blocked until the case is captured (Task 22b) |
 | `bar:lengths-explicit-0-100` | `stage3-bar-lengths` | pixel-measured | S3-B | recipe-pending (unverified) |
 | `bar:bounds-min-max` | `stage3-bar-lengths` | pixel-measured | S3-C and S3-B | recipe-pending (unverified) |
-| `bar:bounds-num` | `stage3-bar-lengths` | pixel-measured | S3-C and S3-B | recipe-pending (unverified) |
+| `bar:bounds-num` | `stage3-bar-bounds-num` (since §14.z.10; `stage3-bar-lengths` E is a cross-check) | pixel-measured | S3-C and S3-B | verified (num; §14.z.10) |
 | `bar:bounds-percent` | `stage3-bar-lengths` | pixel-measured | S3-C and S3-B | recipe-pending (unverified) |
 | `bar:bounds-percentile` | `stage3-bar-lengths` | pixel-measured | S3-C and S3-B | recipe-pending (unverified) |
 | `bar:bounds-automin` | `stage3-bar-lengths` | pixel-measured | S3-C | recipe-pending (unverified) |
@@ -1029,7 +1033,7 @@ the capability lifts):
 | `bar:bounds-automax` | `stage3-bar-auto-bounds` | S3-C | pixel-measured | verified | — |
 | `bar:lengths-explicit-0-100` | `stage3-bar-lengths` | S3-B | pixel-measured | verified | — |
 | `bar:bounds-min-max` | `stage3-bar-lengths` | S3-C and S3-B | pixel-measured | verified | — |
-| `bar:bounds-num` | `stage3-bar-lengths` | S3-C and S3-B | pixel-measured, non-discriminating | unverified-nondiscriminating | withheld (`cf-unmeasured-capability` or unresolved): The fixture's num 20/80 bounds equal its data's min/max (20..80), so num and min/max predict identical px (largest separation 0 px; Task 18b recomputation). Re-measure with data spanning beyond the num bounds, for example 0..100 under num 20/80. |
+| `bar:bounds-num` | `stage3-bar-bounds-num` (§14.z.10) | S3-C and S3-B | pixel-measured | verified | — (num 20/80 over 25..75: Excel drew the num reading on every cell; until §14.z.10 non-discriminating, num 20/80 equalling the data's min/max in `stage3-bar-lengths` E) |
 | `bar:bounds-percent` | `stage3-bar-lengths` | S3-C and S3-B | pixel-measured, non-discriminating | unverified-nondiscriminating | withheld (`cf-unmeasured-capability` or unresolved): On 0..100 data percent 25/75 and num 25/75 give the same bounds, so a pixel measurement cannot tell percent from a literal reading (largest separation 0 px; Task 18b recomputation). Re-measure with data whose range is not 0..100. |
 | `bar:bounds-percentile` | `stage3-bar-lengths` | S3-C and S3-B | pixel-measured | verified | — |
 | `bar:lengths-all-negative` | `stage3-bar-lengths` | S3-B and S3-L | pixel-measured | verified | — |
@@ -1154,6 +1158,67 @@ is verified, so these calls take the unresolved path; with every gate open and t
 full bucket path on every cell), `tests/xlsx-cf-active-units.test.ts` counts 23,007 units for 1,000 cells and 5,895
 for 256, and asserts both stay at or below `CF_LIMITS.activeUnits / 5` (50,000). The worst production call is still
 the 200-rule sparse scope at 48,579 units (5.1x).
+
+**Task 34 (Stage 5, 2026-11-16): recalibrated to `activeUnits = 300,000` for formula rules.** A production call with
+formula rules spends the service's own preparation plus every bounded per-cell formula call on the same per-call budget
+(Ruling S5-N; the dependency snapshot pays from its own attempt budget under the preparation ceiling, and the hoist
+scans from scan budgets, Ruling S5-HOIST "Budgets"). Four formula rules over a populated 5,000-row column
+(`COUNTIF($A:$A,A1)>1` and `A1>AVERAGE($A:$A)`, both hoisted, `MOD(A1,3)=0`, `AND(A1>10,A1<50)`) cost 28 units per
+cell in their static bounds (6 + 5 + 7 + 10) on top of the service's 27, so the 1,000-cell text-path call spends 55,011
+units, over the old `250,000 / 5` = 50,000. `activeUnits` is raised to 300,000 (5.5x that call), and the preparation
+ceiling `formulaCeilingUnits` = 2 x activeUnits follows (600,000). The Stage 1-4 shapes are unchanged in units; their
+margins grow by 1.2x. `tests/xlsx-cf-active-units.test.ts` asserts both formula calls at or below `activeUnits / 5`
+(60,000). Re-run (`npx tsx scripts/cf-refs/active-units.ts 3`, this machine, 2026-11-16):
+
+| Scope (one `prepareCf` call) | Cells | Units | Margin to 300,000 | Cold / warm median active ms | Units per ms (warm) |
+|---|---|---|---|---|---|
+| `stage3-bar-lengths-default` A1:V28 (largest fixture) | 616 | 28,490 | 10.5x | 8.6 / 5.2 | 5,506 |
+| `stage3-bar-auto-bounds` | 132 | 3,205 | 94x | 1.5 / 1.3 | 2,534 |
+| sparse 1M-row declared A:A, 100 bars + 100 scales, 40-cell request | 40 | 48,579 | 6.2x | 10.7 / 10.3 | 4,741 |
+| populated 100,000-row column, 1 bar (text-path maximum) | 1,000 | 8,001 | 37x | 37.8 / 4.4 | 1,812 |
+| populated 100,000-row column, 1 bar (paint-path maximum) | 256 | 2,049 | 146x | 32.6 / 1.3 | 1,532 |
+| populated 100,000-row column, 1 bar (not a production call size) | 5,000 | 40,001 | 7.5x | 50.5 / 17.2 | 2,324 |
+| populated 100,000-row column, 4 icon rules (text-path maximum) | 1,000 | 26,007 | 11.5x | 43.5 / 8.0 | 3,254 |
+| populated 100,000-row column, 4 icon rules (paint-path maximum) | 256 | 6,663 | 45x | 36.2 / 2.0 | 3,352 |
+| populated 5,000-row column, 4 formula rules incl. `COUNTIF($A:$A,...)` (text-path maximum; Task 34) | 1,000 | 55,011 | 5.5x | 56.1 / 47.6 | 1,155 |
+| populated 5,000-row column, 4 formula rules incl. `COUNTIF($A:$A,...)` (paint-path maximum; Task 34) | 256 | 14,091 | 21x | 18.3 / 16.0 | 881 |
+
+The icon rows read 26,007 / 6,663 units here against 27,007 / 6,919 recorded by Task 26; these shapes carry no formula
+rule, so the difference predates Task 34 (not investigated here). The formula rows' active time includes the snapshot
+build and the hoist scans, which run between two per-call spends on their own budgets, so their units-per-ms understates
+the per-call rate; at 881 units per ms a call at the new cap is about 340 ms on this machine, under the 10x (500 ms)
+ceiling of Ruling S3-I1-UNITS. The worst production call is now the formula text-path call at 55,011 units (5.5x).
+
+Task 34 review fix round 2 (2026-11-16) re-ran the script after its eight fixes: the view's charged `index` term
+(empty index steps only), the per-operation text bound with rendered operands and criterion text, the budget
+preflight, refcounted hoist leases and the invariant-subtree memo. The formula rows are unchanged at 55,011 and 14,091
+units. Their reads are dense single-column cells, so they take no empty index step, and their values are numbers,
+which no text operation renders. Their formulas have no memoisable subtree, because `AVERAGE($A:$A)` is hoisted.
+`activeUnits` stays at 300,000.
+
+Fix round 3 (2026-11-16) re-ran the script after its five fixes: discovery charged on refusal, criterion parses
+preflighted, hoists under the session byte cap, array-mode subtree memoisation, and the per-node text model with the
+snapshot's charged ASCII scan. The formula rows are again 55,011 and 14,091 units, because these fixtures hold only
+numbers. The text rate is `CF_TEXT_UNIT_CHARS` = 4 characters per unit. At that rate, text calls near the cap ran at
+3,821 to 7,204 units per ms on this machine (1,000 calls each of `UPPER(A1)="ABC"` over 60 characters,
+`LOWER(A1)=UPPER(A1)` over 30, and `LEN(TRIM(A1))>3` over 54). Numeric calls ran at 843 to 5,446 units per ms. So a
+text unit is not slower than a numeric one.
+
+**Task 35 (Stage 5, 2026-11-16): the formula rows re-measured through a real `prepareCf`.** Task 34's 55,011 / 14,091
+were composed: the service's own units plus a separate `prepareCfFormulaBatch` run. With the formula arm in the service,
+one `prepareCf` call now runs every per-cell formula call on its per-call budget, and both `scripts/cf-refs/active-units.ts`
+(the formula capabilities injected for the measurement, `formula:composition-overlapping` included so every cell takes
+the full composition path) and `tests/xlsx-cf-active-units.test.ts` (every gate open) measure that call directly:
+
+| Scope (one `prepareCf` call) | Cells | Per-call units | Of which formula arm (vs. no context) | Margin to 300,000 | Scan-budget units (test harness count) |
+|---|---|---|---|---|---|
+| populated 5,000-row column, 4 formula rules incl. `COUNTIF($A:$A,...)`, hoisted (text-path maximum) | 1,000 | 55,509 | 28,498 | 5.4x | 21,000 |
+| same (paint-path maximum) | 256 | 14,221 | 7,298 | 21.1x | 20,256 |
+
+Both stay under `activeUnits / 5` = 60,000, which the test asserts. The 498 units over the composed 55,011 are not decomposed
+here (the composed run counted the batch's calls apart from the service's own per-cell composition). `COUNTIF($A:$A,A1)` and
+`AVERAGE($A:$A)` are hoisted (each scan on its own scan budget); the dependency snapshot pays from its attempt budget
+under the preparation ceiling, not from the per-call units above. `activeUnits` is unchanged at 300,000.
 
 Every production call shape admits with at least 5.1x margin (the worst is the 200-rule sparse scope; the 4x floor
 would be 194,316 units). The warm rate, 2,242 to 6,894 units per ms, is the one to read: the cold populated rows spend
@@ -2004,3 +2069,763 @@ Evidence kind is read from the owning case's per-cell `iconEvidence` labels (ver
 | `icon:composition-icon-stopIfTrue` | S4-J | — | — | withheld | refused-unsupported |
 | `icon:geometry-row-offset` | S4-K | pixel-measured | anchor-constant | published | — |
 | `icon:glyph-<set>-<id>` (75 pairs) | S4-A, OD-9(b) | pixel-approximated (*unverified* artwork) | — | 54 published, 21 withheld | the 15 classes in `CF_ICON_GLYPH_WITHHELD` failed the approximation check; their pairs: 3ArrowsGray-2, 3Flags-0, 3Flags-1, 3Flags-2, 3Signs-1, 3Symbols2-1, 4ArrowsGray-3, 4Rating-0, 4Rating-1, 4Rating-2, 4Rating-3, 5ArrowsGray-4, 5Rating-0, 5Rating-1, 5Rating-2, 5Rating-3, 5Rating-4, 3Stars-0, 3Stars-1, 3Stars-2, 3Triangles-0 |
+
+## 14. Stage 5 Formula Oracle Cases (Task 31: semantic route, audit, conformance)
+
+**Preparation only.** No Excel capture has been run for Stage 5. Every case is `recipe-pending` (21 workbooks) or `unsupported` (9 unresolved shapes), and production withholds every formula rule. The orchestrator's run sequence is [`xlsx-cf-recipes-stage5.md`](xlsx-cf-recipes-stage5.md).
+
+### Harness additions
+
+- **Cases (`scripts/cf-refs/cases.ts`).** `CF_STAGE5_FIXTURES` and `CF_STAGE5_CASES` hold 30 workbooks for the 17 matrix rows; `CF_STAGE5_GROUPS` maps each row to its workbooks.
+  - Rows split where one workbook cannot answer them: `stage5-formula-anchor` plus `-anchor-multi` (the multi-range rule overlaps `B2:B4`); `stage5-predicate-formulas` plus `-predicate-timeperiod` (the clock window); `stage5-cross-sheet` plus `-cross-sheet-missing` (one malformed shape per workbook); and one workbook per `activePresent` kind and per unresolved shape.
+  - The registries are `CF_STAGE5_CAPABILITIES` (80 ids), `CF_STAGE5_NONDISCRIMINATING` (the literal twin rules), `CF_STAGE5_UNSUPPORTED` (empty until an Excel outcome is recorded) and `CF_STAGE5_REUSED_CAPTURES`. The reused captures are the Stage 1–4 stub cells of S5-STUB plus `stage1-blanks-errors`.
+- **Hypotheses before capture (Lessons 3, 14).** Each configuration names competing hypotheses as the observable each predicts per designated cell:
+  - a DisplayFormat fill, `none`, or `twin:<ref>` (the same DisplayFormat as a literal-bound twin of the formula rule), optionally with `+strike`;
+  - for bars and icons, which DisplayFormat cannot read: a crop equal to a twin's.
+
+  A static test checks that every pair of hypotheses is separated at ≥ 2 cells of one configuration, and that every control is uncovered. The verifier refuses a manifest whose configurations differ from the catalogue's.
+- **Semantic route (`verify.ts`).** `evaluateFormulaCapabilities` verifies a capability only when all of these hold:
+  - exactly one hypothesis matches every designated cell of every live configuration;
+  - each rival is eliminated at ≥ 2 decisive cells of one configuration (`replicationShortfall`, keyed by configuration);
+  - every cell and control was observed;
+  - every control is unformatted.
+
+  Agreeing hypotheses are `non-discriminating`, and no match is `formula-hypothesis-none` (a finding). Gates: every `formula:*` capability waits on `formula:truth-boolean` reading `boolean`; `formula:anchor-mixed-abs` also waits on `formula:truth-number`, and `formula:relative-wrap` on `formula:truth-error`.
+- **Markers.** `CfPartMarker.formula` (`kind`, `anchor`, `dialect`), `scale.cfvo[].f`, `scale.dialect`, `activePresent` and `sqrefOrder: 'any'` are compared by formula semantics (`normalizeCfFormula`: case, spaces and unneeded sheet quotes folded; `$`, operators and operand order kept). Stage 1–4 markers keep their exact text comparison.
+- **Manual calculation (round-1 #4).** `CfOracleCase.calcObservation: 'pre-calculate'` changes both scripts:
+  - **Build** observes first with `buildManualObservationScript` (no `calculate`; it records the calculation mode and workbook count), then runs one explicit calculation observation, and resaves without `calculate`.
+  - **Capture:** the clock probe skips its `calculate`.
+
+  Both observations are stored as `manualObservation`, bound to the input hash.
+- **Audit.** `audit.ts --stage 5` (`auditStage5Manifest`) reports per-capability dispositions and the reused captures. `--publish-stage5` writes `VERIFIED_STAGE5_CAPABILITIES` only for a `stageComplete` audit, and only the `stage5Publication` subset whose matched reading equals `CF_STAGE5_PRODUCTION_READINGS`, which is empty until Tasks 32–38 implement readings. Without the flag the committed Stage 5 export, absent today, is kept verbatim, so `verifiedCapabilities.ts` is unchanged.
+- **Generator.** The generator gains extra sheets (including the quoted `My Sheet`), `<calcPr calcMode="manual">`, defined names, a table part, and cached text, boolean and error formula results. All of it is additive: the Stage 1–4 archives are byte-identical, pinned by a digest test. `--diff-authored-formulas` diffs the templates against `excel-authored-formulas.xlsx`.
+
+### Known limits of the prepared machinery (not evidence)
+
+- **Bar and icon formula bounds** (`bar:bounds-formula`, `icon:thresholds-formula`, the composition and cfvo-scope icon configurations, the `activePresent` bar and icon) are decided by crop equality with literal twins in the same workbook (±8 per channel). That is weaker than the Stage 3/4 pixel models, and it depends on the twin rendering identically, which needs the same values and widths.
+- **The marker does not pin bar and icon cfvo formulas**; `--diff-authored-formulas` and the saved XML do.
+- **The multi-range anchor hypotheses** are written for the authored order `D5:D8 B2:B4`. If Excel re-sorts the sqref on resave, "first listed" must be read against the recorded order (Ruling S5-C).
+- **`stage5-formula-functions`** states the `documented` hypothesis from Excel's comparison order (numbers < text < booleans) through a small independent model in `cases.ts`, never through the viewer's evaluator. A disagreement is `formula-hypothesis-none`, never a refit.
+
+### Fix round 1 (codex review, before any Excel run)
+
+- **Bar and icon markers** pin their cfvo bounds by formula semantics, the paired x14 companion (`bar.pairing: 'paired'`) and every literal twin. A bound changed from `$F$1` to `$F$2` refuses.
+- **Multi-range anchor:** build reads the sqref order Excel retained from the resaved XML (`retainedSqrefs`), and that order is then pinned. The anchor hypotheses come from the table fixed for that order. Readings that coincide are reported `non-discriminating`, never as one of them.
+- **Replication:**
+  - it is checked per evidence-bearing configuration, and per range where the configuration declares `replicateBy: 'column'` (the D and F ranges of `stage5-cfvo-scope`);
+  - one configuration no longer covers for another;
+  - negative controls are explicit (`role: 'negative-control'`): Excel must match them, and they are never evidence.
+- **Twins:** a winning twin under a bar or icon rule must show a visual against its unformatted control (`formula-twin-blank`). Crops are compared over the common box, because 73.5 pt columns round to 73 or 74 px.
+- **AVERAGE/MAX:** the aggregates that must paint now read an error-free column (`stage5-formula-hoist-aggregate`). In `stage5-formula-hoist`, Excel's propagation of `#DIV/0!` from `$A:$A` is its own capability, `formula:hoist-aggregate-errors` (Excel documents this for AVERAGE and MAX).
+- **Manual calculation:** the observation reads the stale sources `A2:A5` and `E1` before and after the explicit calculation. An input that already looks recalculated on open is refused.
+- **S5-STUB reuse** reads each Stage 1–4 capture in its own representation: Stage 1/2 `observedCells`, Stage 3 `observedBars`, Stage 4 `observedIcons`. All five reused captures are now evidenced.
+- **The post-capture suite is runnable:** the preparation invariants are checked on the freshly generated catalogue, and committed cases go through the verifier.
+
+### Fix round 2 (codex re-review)
+
+- **Bars:** a bar witness is the Stage 3 column scan (`measureBarGeometry`: three scanlines that agree, with the control's text masked), and at least half of the measured bar box must be ink.
+- **Icons:** an icon witness is a Stage 4 glyph-key class (`classifyIconCrop` on the left 28 px, twin sets included) at the frame position that `measureIconGeometry` locates. That position is relative to the cell, with the control's text excluded.
+- **Comparison:** formula and twin cells are compared by these measurements, never by crop equality.
+- **Noise:** isolated pixels and unclassified ink are unmeasurable, which is fail-closed.
+- **Expected-empty cells:** a cell whose reading predicts no visual, such as a zero-length bar below the minimum, is checked as empty by the same measurement.
+- **Witness count:** a configuration needs at least 2 validated non-empty witnesses (`formula-twin-blank` otherwise).
+- **Row height:** Stage 5 workbooks with an icon rule use the glyph key's 20 pt rows, so their crops have the key's size. This needs the Stage 4 key capture (`stage4-icon-glyph-key`), which is measured.
+
+### Fix round 3 (codex re-review)
+
+- **Permitted blanks:** each crop configuration lists the twins that may show no visual (`emptyTwins`), fixed before capture from each twin's own rule and values: a twin under no bar or icon rule, a bar at or below its lower bound, or a degenerate bar. Wherever the winning reading names any other twin, a missing bar or icon is `formula-twin-missing`. The requirement of at least 2 non-empty witnesses still holds.
+- **Composition fills:** crop matching and rival discrimination compare the DisplayFormat fill and strikethrough alongside the measured bar or icon.
+- **Icons on fills:** a glyph on a measured fill is classified with an ink mask referenced to the key. Background pixels must equal the fill, opaque key ink must equal the key, and anti-aliased edges are ignored. The fill itself is validated through DisplayFormat.
+- **Fixtures:**
+  - `stage5-active-present-bar` now has six rows, giving three non-empty active witnesses and two decisive inactive cells.
+  - `stage5-composition` moves its p1-true rows to 3 and 5, so none falls on the column minimum, where a bar has zero length.
+
+### Fix round 4: Ruling S5-WITNESS (orchestrator ruling)
+
+Every Stage 5 configuration, whether fill, scale, bar or icon, goes through one witness rule, `s5Witness`, instead of per-configuration bookkeeping:
+- **Twins:** each twin a reading names carries `twinExpect` (`visual`, `empty` or `either`), fixed before capture from the twin's own rule and values.
+  - **Positive controls** must render (a Stage 3 bar, a Stage 4 icon class, or a fill against the unformatted control) before their observation is used as a prediction; otherwise `formula-twin-missing`.
+  - **Empty twins** must render nothing; otherwise `formula-unexpected-visual`.
+- **The winner's cells:** each required-visual and required-empty cell is validated by the same measurement, formula cell and twin alike.
+- **Decisive cells:** a cell is decisive only when its observation matches the winner and contradicts the rival beyond tolerance. A cell within tolerance of both decides nothing. Every replication group needs at least 2 such cells, and a bar or icon configuration also needs at least 2 required-visual witnesses.
+- **Adversarial test:** a generic test applies four corruptions to every configuration and every reading that can win: blank twins, visuals in required-empty cells, blank positive controls, and shifts into the shared tolerance band. Each must refuse.
+- **Fixture:** `stage5-composition` now has six rows (p1 true on rows 3, 5 and 7), so `stop-bar` and `indirect-bar` each have two non-empty unstopped witnesses and two decisive stopped cells.
+
+### Fix round 6: positive controls everywhere, all-rival decisive cells
+
+- **Positive controls:** every live configuration needs at least one functioning positive control. It is validated before any reading is judged, even when the winning reading predicts only empty cells.
+  - **Twins:** a twin expected to render (`twinExpect: 'visual'`) counts as a control.
+  - **Literal controls:** a configuration without such a twin carries `positiveControls`. Each is a cell holding 1 under a literal `cellIs greaterThan 0` rule (`formula:positive-control`, unverified-nondiscriminating) on each dxf its readings predict. Its DisplayFormat must show exactly that token in the configuration's own `pre:`/`calc:`/`post:` table, and its same-content control must show nothing.
+  - **Refusals:** a missing control is `formula-positive-control-missing`; a failed one is `formula-positive-control-failed`.
+  - **Which cases changed:** the controls sit in column B below every used row, so no existing control moves. Sixteen DisplayFormat cases gained them. An all-white `stage5-formula-functions` capture now verifies nothing.
+- **Decisive cells:** a cell is decisive only when it matches the winner and contradicts, beyond tolerance, every rival whose prediction differs there. Each rival the configuration separates needs at least 2 decisive cells per replication group. Cells that each reject a different rival no longer add up.
+- **Adversarial test:** every evidence-bearing capability group × reading × retained order is enumerated, with icons measured as icons. The coverage set and the count of each corruption are pinned. Two corruptions were added: blank DXF controls and disjoint-rival witnesses. Four baselines refuse by design, and the test lists each one:
+  - anchor-multi under `B2:B4 D5:D8`: first-listed and bounding-box coincide;
+  - `bar:bounds-formula` / zero: only degenerate twins, so no witness;
+  - `icon:thresholds-formula` / ignored: only empty twins.
+
+### 14.x Known metadata defect: `stage2-scale-composition` L2:L4 `scaleApplied` (Task 35, recorded, not corrected)
+
+- **What.** In the committed manifest, `stage2-scale-composition` L2:L5 all carry `scaleApplied: true`. The capture says otherwise:
+  - At L2:L4 the higher-priority `stopIfTrue` expression (`MOD(L2,2)=1`) matches. Excel's DisplayFormat fill there is the expression's `FFFFC7CE`, so the scale did not paint.
+  - Only L5, where the expression is false, shows the scale's colour (`FFF8696B`).
+- **What it affects.** The DisplayFormat fills, which are the evidence, are correct; only the derived flag is wrong. Nothing reads the flag as evidence:
+  - The Stage 2 Lesson 1 comparison uses the fills.
+  - The Task 35 S5-STUB test (`tests/xlsx-cf-formula-rules.test.ts`) judges Stage 2 stub cells by their fill alone.
+  - `scripts/cf-refs/capture.ts` reads the flag only to choose which cells to probe.
+- **Where it comes from.** The manifest is generated, so it is not edited by hand. The flag is set by the `stage2-scale-composition` expected-cells generator in `scripts/cf-refs/cases.ts`, which writes `scaleApplied: true` for every row 2-5 of columns B to L. The correction belongs there, at L2:L4 only, followed by regenerating the manifest. That would change a Stage 2 fixture's expected record, so it needs its own ruling and is not done here.
+
+### 14.y Task 39: Stage 5 validation, the dual gate and the recorded Excel outcomes
+
+**Excel run (b5e08ec5, authored fixture b619726a, Excel 16.115).** 15 cases verified: formula-authored, truthiness, anchor, anchor-multi, edge, functions, hoist, hoist-aggregate, cellis-operands, predicate-formulas, cfvo-formulas, cfvo-scope, x14-scale (S5-I: Excel kept the x14 standalone scale), clock-today and calc-manual. Recorded outcomes, never retried: composition, cross-sheet, predicate-timeperiod and the three activePresent cases were rejected at build; cross-sheet-missing raised an external-link update prompt (answered Don't update); of the unresolved shapes, name and indirect opened repair-free, table, array-constant, spill, cellis-text and external prompted a repair (answered No), union was repaired (rule dropped) and duplicate-formula was stripped.
+
+**"Rejected" means the build's structural check, not an Excel repair dialog.** `build.ts` keeps a resave as `<id>.rejected.xlsx` when its zip holds a repair part or `verifyCfCase` refuses it structurally. For all six cases it was the latter (`stripped-rule`: a marker no longer found).
+
+**Ruling S5-REPAIR, per case (each `*.rejected.xlsx` diffed against its generated input):**
+
+| Case | What Excel's resave shows | Cause | Disposition |
+|---|---|---|---|
+| `stage5-composition` | Every rule kept, but identical rules on adjacent columns merged into one sqref: B2:C7, F2:G7, J2:K7, Q2:R7, S2:T7 (semantics preserved) | Incidental generator layout defect | Generator fixed (`ce59e04f`): columns re-lettered so no two adjacent columns start with the same rule; predictions unchanged. **Needs Excel rebuild** as a new case version |
+| `stage5-cross-sheet` | The `cellIs` with operand `Sheet2!$A$1` (D2:D5) moved from the base `<cfRule>` to the x14 dialect; nothing else changed | Incidental generator defect: `s5CellIs` wrote only the base form. `--diff-authored-formulas` reported 0 because `excel-authored-formulas.xlsx` holds no cross-sheet `cellIs`, so it never compared that shape | Generator fixed (`ce59e04f`): the rule is written in Excel's x14 form. Excel's own rejected output now passes the structural markers. **Needs Excel rebuild** |
+| `stage5-predicate-timeperiod` | `A2=TODAY()-3` under `timePeriod="today"` rewritten to the canonical `FLOOR(A2,1)=TODAY()` | Excel regenerates the formula from the attribute: the very construct the case tests | `formula:predicate-timeperiod-divergent` refused-unsupported; production keeps divergent time-period formulas unresolved (Task 33) |
+| `stage5-active-present-{scale,bar,icon}` | `activePresent` dropped; each rule moved to the base dialect (the bar to a paired base bar) with its activation as a `<formula>` child | S5-J: Excel does not keep the construct | `formula:active-present-*` refused-unsupported permanently (OD-16) |
+
+**Finding: no Stage 5 icon crop classified.** Every icon crop in the Stage 5 captures is `icon-class-none`, while the Stage 4 crops classify exactly (a positive control: `stage4-icon-families` B2..B4 match their key class with 0 differing pixels). Cause: the Stage 5 generator left cells on the default style, which Excel draws vertically centred. The icon sits at cell top + 4 px, while the Stage 4 glyph key was captured bottom-aligned (cell top + 7 px), and the key comparison is position-exact. Confirmed on Excel's pixels: with the shift-tolerant classifier (`classifyIconCropShifted`), the committed composition capture's L2..L7 and I2/I4/I6 classify as 3Arrows:0,0,1,1,2,2 at dy = -3 exactly, so the cause is a shift only and the visible number does not alter the glyph. The Stage 5 visual path returns icons on a real capture (`stage4-icon-families` B2..B4: 3Arrows:0/1/2 at left 2, top 7). Residual risk: no Stage 4 capture holds a 20 pt bottom-aligned cell with a right-aligned visible number. The composition case now puts its Sheet1 cells on an explicit bottom-aligned style (`S5Fixture.cellVertical`). The measured cases are not regenerated, because that would discard their verified evidence. Their icon-dependent capabilities are re-deferred instead (below).
+
+**Recorded refusals (`CF_STAGE5_UNSUPPORTED`, Task 39):** `formula:active-present-scale|bar|icon`, `formula:predicate-timeperiod-divergent`, `formula:cross-sheet-missing` (the external-link prompt; no capture), `formula:cfvo-nonnumeric` (no hypothesis matched: a finding, never fitted, as S4-MINMAX), and three re-deferrals: `bar:bounds-formula` (fixture holds 5..100 against bounds 20..80; twin W7 unmeasurable), `icon:thresholds-formula` and `formula:cfvo-scope-multi-range` (icon twins Z2 and P12 unmeasurable on the default style). Each stays unresolved in production.
+
+**Readings Excel matched that production does not implement (withheld by the gate, re-deferred; no production change after the capture):**
+- `formula:truth-text`: `text-boolean-parse`, against production's `text-no-match | text-true`.
+- `formula:truth-range` and `formula:truth-range-nested`: `range-top-left`, no production reading.
+- `formula:hoist-aggregate-errors`: `error-propagates`, no production reading. (Registered and published afterwards: §14.z.9.)
+- `formula:cellis-operand-text`: `text-compare`; `formula:cellis-operand-error`: `no-format`.
+- `formula:calc-manual-today`: `cf-today-live`, deliberately unregistered (a volatile TODAY() under manual calculation).
+- `formula:cfvo-relative`: `zero`, against production's `anchor-top-left` (reading-mismatch).
+- Expected after the composition rebuild: the provisional (rejected) capture read `continues` for stop-dxf and stop-scale and `halts` for stop-bar, against production's `halts` throughout. If the rebuild repeats it, stop-dxf and stop-scale are withheld as reading-mismatch. Note also that DisplayFormat may not reflect stopIfTrue, while the bar reading came from pixels.
+
+**Parked items closed or re-deferred:**
+- `CF_STAGE5_UNCONFIRMABLE`: `bar:bounds-formula` and `formula:active-present-bar` are now also refused-unsupported. `formula:composition-stop-icon` stays unconfirmable; its witnesses moved to L3/L5/L7 with the re-lettering.
+- `VERIFIED_STAGE5_FORMULA_SELECTIONS`: `--publish-stage5` now renders it beside the set, and a plain `--write` carries a committed block verbatim (`7b0102fe`). Closed.
+- `stage2-scale-composition` L2:L4 `scaleApplied`: re-deferred unchanged (§14.x). No evidence reads the flag; correcting it changes a Stage 2 expected record and needs its own ruling.
+- `stage5-calc-manual`: Excel's resave recomputed the stale values. Readings and tests therefore read `tests/fixtures/xlsx-cf/inputs/stage5-calc-manual.xlsx`, and the pre-calculate observation was made on that input (`manualObservation.inputSha256`).
+- Cross-sheet `COUNTIF`/`SUMIF` with a cell criterion: not hoisted (Task 36), so it evaluates per cell and may refuse over large ranges with `cf-resource-limit`. Known limit, re-deferred.
+- `formula:cross-sheet-missing`: refused-unsupported (above). `formula:calc-manual-today`: verified but unregistered, so withheld (above).
+
+**Dual gate: not met; nothing published.** `audit --stage 5` reports `ok=true structural=31/31 unsupported=9 pending=7 unverifiedNonDiscriminating=9 stageComplete=false blockedCapabilities=13`. The 13 blocked capabilities are exactly the 10 of `stage5-composition` and the 3 of `stage5-cross-sheet`, pending their rebuild. `--write --publish-stage5` was not run, and `src/xlsx/cf/verifiedCapabilities.ts` is unchanged from the Stage 5 base (`fc61c6c6`). The gate would publish 34 ids today, with selections `formula:relative-wrap=wrap` and `formula:cellis-operand-blank=blank-zero`. Conformance: a measured Stage 5 cell under a formula-bearing marker whose capability production does not hold is asserted withheld. Counts are pinned to the manifest (709 withheld, 1,083 compared with Excel); no injection, and Stage 1–4 assertions unchanged. The audits for stages 1–4 stay ok and complete.
+
+**Resource audit (`audit --stage 5`, `scripts/cf-refs/pressure-stage5.ts`):**
+
+| Scenario | Result |
+|---|---|
+| 100 formula rules over a declared 1M-row `A:A` (100 populated) | 1 snapshot attempt, 40 entries for 40 target cells, 4,000 ready, net 0 |
+| `SUM($A:$A)>0`, `COUNTIF($A:$A,A2)>1` on 5,000 visible cells, 10,000 populated | 2 column scans (one per rule), both clamped to row 10,000; 5,020 calls, max 6 units (≤ 128); 0 refused; net 0 |
+| the same over ~1M populated rows | both `cf-resource-limit` at the scan budget, 0 calls |
+| relative `SUM(A1:A200)>0` | `cf-resource-limit` before any call (0 calls) |
+| snapshot cap | 262,144 cells admitted (262,144 entries), 262,145 refused; net 0 |
+| 16 / 17 referenced sheets | 16 ready; 17 refused at compile; a union of 18 refuses only the rule crossing 16 |
+| refused footprint beside a ready rule | ready 10/10, refused 10/10 (`cf-resource-limit`) |
+| 20 cycles: ready, pending, closed mid cross-sheet read | 20/20/20, 0 B held between cycles, net 0 |
+| shared Stage 1–4 checks | distinct-range-300 refused (0 reads); 20 open/read/cancel/close cycles final net 0; no-CF baseline 0 reserves, 0 reads, no scope |
+
+**Gates and sizes (Task 39, before the composition and cross-sheet rebuild; full suite at `d5775b46`, builds, eager and `tsc` re-run at `22897ce8`):**
+- `npx vitest run`: 718 files, 14,291 passed, 13 failed, 131 skipped. Every failure is environmental and pre-existing: missing `corpus/` files (slideshow-morph, stream/local-unchanged, stream/recorder, pivots-parse, pivots-records) and `core-entry`, which needs the full build's `.d.ts`. The two known reds (conformance "zero unexpected mismatches" and formula-eval "sidecar observes L2") now pass.
+- At `22897ce8`, the CF, worker and view suites (`tests/xlsx-cf*`, `tests/worker*`, `tests/xlsx-view*`, `tests/viewer-remote*`) gave 249 files and 5,233 passed. One heap-probe test, `xlsx-viewer-construction-memory`, failed while builds ran concurrently and passes alone (22/22), so it is a load flake.
+- `npx tsc --noEmit -p .`: only the 3 known `@napi-rs/canvas` errors. `bun run gates:core` stops there, so its two vite builds (`OV_MODULE_MAP=1`) and `bun scripts/core-gates.ts` ran by hand.
+- `core-gates`: core closure ok; the index closure is 422,494 B with module-set FAIL, environmental as on main (absolute `node_modules` paths). Task 39 adds no product code: `evidence.ts` changes by one comment, and `viewerRemoteCf.ts` and two other source files lose stray whitespace only.
+- Eager gzip 36,524 B (limit 38,720); `check-eager` ok (158 modules; paged worker chunks clean).
+- `scripts/eager-baseline.json`: Stage 5 grew the index closure 422,389 → 422,494 B (+105). Tasks 32 and 38 recorded +30 and +5; Task 39 records the remaining +70 B of Tasks 34, 36 and 37 (`22897ce8`), so the 16 B allowance holds on CI. `indexModuleSetHash` stays `5b23020808b682f78f91eda9dc68dad2e2d27d6f29ba1ff1dcb2832350ca7340` (baseline).
+- CF lazy chunks: 110,311 B, gzip -9 of the chunks whose modules all live in `src/xlsx/cf/` per `dist/.module-map.json`. §13.5 records 72,213 B for PR 4 without its method, so the delta (+38,098 B, mostly `formula.ts`, `dependencies.ts` and `statistics.ts`) is approximate.
+- `git diff --check`: clean (Task 39 cleared four pre-existing whitespace findings on the branch).
+- Browser `tests/browser/xlsx-cf.spec.ts` on Chromium (scratch config: the vite webServer only, cached headless shell 1243): 34/34. **WebKit: blocked gate**, not installed on this host. The repo Playwright config cannot launch here: its second webServer needs `@napi-rs/canvas`, and it wants Chromium 1248 while 1243 is cached.
+- `bun scripts/cf-compare.ts --stage 5`:
+  - static, print and export: 0 pass, 8 pending, 14 unsupported, 64 fail. These are whole-frame cross-renderer pixel diffs, failing for every stage as in §13.5; off-capture fidelity is *unverified*.
+  - paged: 59 pass, 7 pending, 14 unsupported, 6 fail.
+  - interactive: 57 pass, 6 pending, 14 unsupported, 9 fail, after `cf-compare` records a refused batch per case instead of crashing (stage5-formula-truthiness: one 8-row batch over 70 rules exceeds the grant, so it is withheld).
+  - The Stage 5 failures are not product mismatches:
+    - composition, cross-sheet and cross-sheet-missing compare against seed expectations (recipe-pending; the literal positive controls are seeded `matched: false`, and production paints them);
+    - cfvo-formulas Y2 is a literal min/max bar cell, and the viewport check counts a bar as "formatting applied" against Excel's DisplayFormat, which shows no fill for a bar.
+  - The two Stage 3 paged failures predate this task.
+- Not yet covered (gaps):
+  - `tests/browser/xlsx-cf.spec.ts` has no Stage 5 test at the six zoom/DPR pairs and no browser midnight tick; the tick is covered by the Task 38 mounted tests.
+  - The Stage 5 tests cover resident, worker and forced-paged legs, production and evidence-seam runs, frozen panes, a live and a same-session cross-sheet edit, a slicer commit, print and the descriptor.
+  - The per-case and per-variant Stage 5 audit rows (the Stage 4 `caseRecords` analogue) are not yet written; the capability rows below stand in until the rebuild.
+- Corpus gate: this worktree has no `corpus/`, so 0 corpus files were read. The scan inflates worksheet parts and must flag `excel-authored-formulas.xlsx` (positive control). Parity also holds under every Stage 5 id plus the selections, where more than 50 formula rules resolve and the x14 cross-sheet `cellIs` resolves on both paths. That count is recorded, never a pass. The unconditional part ran: `excel-authored-formulas.xlsx` and all Stage 5 workbooks (inputs and saved) parse identically on the resident and paged paths.
+
+### 14.z Task 39 resumed: the rebuild, the dual gate and publication
+
+This section supersedes the "pending rebuild" statements of 14.y.
+
+**Rebuild (orchestrator, 26a648e1, Excel 16.115).** `stage5-composition` and `stage5-cross-sheet` opened repair-free (fcCount 2 and 1), were resaved, and `capture.ts` verified both. The generator fixes held: Excel kept every marker, merged no rules, and kept the cross-sheet `cellIs` in x14.
+- **Stop readings:** stop-dxf, stop-scale, stop-bar and indirect-ahead-dxf/scale/bar all matched `halts`. The first run's `continues` belonged to the merged-rule workbook.
+- **Cross-sheet:** documented readings for the relative, absolute, quoted-name, operand and dynamic-refresh configurations.
+
+**The icon fix did not take.** Excel 16.115 folded the explicit bottom-aligned `cellXfs` entry into its Normal style on resave (the saved `cellXfs count="1"`, `vertical="center"`; no cell keeps an `s`). It drew every icon at cell top + 4 px, as in the first run, so all icon crops are again `icon-class-none`. The Stage 4 key cells sit at + 7 px; they carry a number format, which may be what keeps them bottom-placed (not established).
+
+**Two capabilities re-deferred, refused-unsupported:** `formula:composition-stop-icon` (its icon-only twin K2 is unmeasurable; it was also `CF_STAGE5_UNCONFIRMABLE`) and `formula:composition-indirect-ahead-icon` (the same twin; production has no INDIRECT reading). The fix belongs in measurement (a key at this placement), not in a verifier change after the capture.
+
+**Gate defect fixed (`b4b1326f`).** Once `stage5-composition` verified, the four S5-STUB successor ids lost their `recorded` reading: the audit read a reuse-only id's reading from its owning case's evidence. A reuse-only id has no configuration there, so its reading is always the recorded Stage 1–4 outcome.
+
+**Dual gate: met; published.**
+- `audit --stage 5`: `ok=true structural=31/31 unsupported=9 pending=5 unverifiedNonDiscriminating=9 stageComplete=true blockedCapabilities=0`.
+- Conformance passes with no injection. Every Stage 5 cell under a formula rule is either Excel's reading or announced withheld by production's own text scope; a no-match where Excel shows a format is a failure. Counts: 636 formula cells compared, 155 withheld, 1,245 others compared. A mutant that never reports withheld fails.
+- `--write --publish-stage5` ran twice; the second run is byte-identical, and so is a third run at HEAD (`git diff --exit-code`). `77a2fda5` publishes **42** ids plus `VERIFIED_STAGE5_FORMULA_SELECTIONS` (`relative-wrap=wrap`, `cellis-operand-blank=blank-zero`). Against the base the file only gains lines: the Stage 5 export, its selections and the combined-set entries.
+- Stages 1–4 audits stay ok and complete.
+
+**Withheld after publication (by the gate):**
+- **Readings production does not implement:**
+  - `truth-text`, `truth-range` and `truth-range-nested`;
+  - `hoist-aggregate-errors`;
+  - `cellis-operand-text` and `cellis-operand-error`;
+  - `calc-manual-today`;
+  - `cfvo-relative` (Excel matched `zero`; production implements `anchor-top-left`);
+  - `composition-indirect-ahead-dxf/scale/bar` (production cannot evaluate INDIRECT).
+- **Non-discriminating:** `anchor-multi-range` and the twins.
+- **Refused-unsupported:** see `CF_STAGE5_UNSUPPORTED`.
+- A bare reference result needs every truth reading, so cells such as `stage5-formula-truthiness` C11 stay withheld even though their marker's capability is published.
+
+**Tests after publication.** Tests that meant "no Stage 5 evidence" by "production evidence" now run that leg under exactly the Stage 1–4 evidence (`tests/helpers/cf-stage5-off.ts`). `withPaint` uses exact evidence. The conformance and Lesson 1 legs pass the document's sheets (the cross-sheet seam production's paint passes). CF suite: 84 files, 1,769 passed.
+
+**Per-case and per-variant audit rows (`stage5CaseRecords`, `audit --stage 5 --out`).** One row per expected cell of every measured case, carrying:
+- status, evidence kind and the covering formula capabilities;
+- Excel's DisplayFormat vs production's resident reading or `withheld`;
+- mode, stamp, byte peak and work units.
+
+There are 2,036 rows over 17 cases: 791 formula cells, 542 painted as Excel, 0 disagreeing. The audit fails on any disagreement.
+
+**Gates after publication (HEAD):**
+- `npx vitest run`: 718 files, 14,356 passed, 13 failed, 132 skipped. All 13 failures are environmental: missing `corpus/` and `core-entry`.
+- `tsc -p .`: only the 3 known `@napi-rs/canvas` errors.
+- `core-gates`: core closure ok. Index closure 422,485 B, FAIL environmentally as on main; the Stage 5 growth is recorded in `eager-baseline.json`.
+- Eager gzip 36,517 B (limit 38,720); `check-eager` ok.
+- CF lazy chunks 110,648 B gzip -9; the published set lives in the lazy CF chunk.
+- `git diff --check`: clean.
+- Audits for stages 1–4: ok and complete.
+- Browser `xlsx-cf.spec.ts`, Chromium (scratch config): 34/34. The two Stage 5 tests whose production run asserted withholding now assert that production paints what the evidence seam paints. WebKit is a blocked gate (not installed).
+- `cf-compare --stage 5`:
+
+  | Mode | Pass | Pending | Unsupported | Fail |
+  |---|---|---|---|---|
+  | static | 0 | 6 | 14 | 66 |
+  | paged | 60 | 7 | 14 | 5 |
+  | interactive | 58 | 6 | 14 | 8 |
+
+  - Static fails on cross-renderer frames, as in every stage; off-capture fidelity is *unverified*.
+  - The Stage 5 viewport failures are harness limits:
+    - a bar cell counts as "formatting applied" against Excel's DisplayFormat, which shows no fill (composition E2/G2, cfvo-formulas Y2);
+    - recipe-pending seed expectations (cross-sheet-missing positive control B5).
+- Known limits (after fix round 1):
+  - the browser midnight tick runs on the resident leg only, because Playwright's clock does not reach a dedicated worker;
+  - `pressure-stage5.ts` imports `tests/helpers/cf-formula.ts`.
+
+### 14.z.1 Task 39 fix round 1 (codex review)
+
+- **F1, withholding needs a recorded justification.** A Stage 5 cell under a formula rule that production withholds must carry a justification keyed per cell from evidence (`scripts/cf-refs/stage5-withhold.ts`). The accepted justifications are:
+  - a capability the covering rules need that is not published. This covers the marker's own capability and every parse/evaluation capability its formula text requires, compiled from the manifest. It also covers a visual's formula-bound family, and the literal Stage 3–4 gates a twin meets: `bar:bounds-num`, `icon:composition-dxf-fill`.
+  - a compile refusal;
+  - a record configuration fixed before capture (the S5-HOIST refused columns);
+  - an enumerated refusal. Only one is enumerated: `stage5-formula-functions` H2:H19, where `COUNTIF($A:$A,A2)>1` reads a range holding a boolean (A6), which the S5-HOIST policy refuses. A test checks this against the workbook.
+
+  Production's own unavailable state never counts, and any exception in the text-scope helper is a failure. Codex's mutant (composition B2..B7 rewritten in memory to a resource refusal) passed the conformance test and the Lesson 1 verdict before this fix; it now fails both. A Stage 5 clock case now takes the evaluation clock, as `paint.ts` does, rather than an injected Stage 1 `dateContext`, which had dropped the evaluation context.
+- **F2, cf-compare on production's inputs.** The interactive service and text scope now receive the document's evaluation context (at the anchor day for a clock case) and its sheets, and the paged read takes the worker's clock.
+  - An unresolved Stage 5 formula cell with a verified expectation fails unless it is justified. Each result reports formula cells matched, painted and justified-withheld.
+  - On a Stage 5 case a data bar no longer counts as "formatting applied" against Excel's DisplayFormat.
+  - Interactive: 60 pass, 6 pending, 14 unsupported, 6 fail. Paged: 62 pass, 7 pending, 14 unsupported, 3 fail. None of the remaining failures is a Stage 5 formula cell. They are the Stage 1 time-period clock cases (S5-TP-MULTI narrowing), the Stage 3 participation and composition bars, the glyph-key batch limit, and the `stage5-cross-sheet-missing` positive-control seed (a recipe-pending case). All of them failed before this round.
+- **F3, audit rows.** Resolved paint and unresolved slots are kept apart (`stage5CellAgreement`).
+  - Every resolved component is compared with Excel: fill within ±8, and strikethrough.
+  - Every unresolved slot needs a justification.
+  - Bars and icons are compared with Excel's PNG measurement where one exists; a zero-length bar draws nothing.
+  - Rows now cover all 31 cases, and the 14 unmeasured ones say why they are not compared. Totals: 2,160 rows; 791 formula cells; 542 painted as Excel with nothing unresolved; 268 with justified unresolved slots; 57 visual comparisons; 0 disagreeing.
+- **F4, atomic publication.** `--write` renders, validates the whole audit, then writes a temporary sibling and renames it over the target. A failure leaves the target byte-unchanged; the test uses `--target` and the `CF_AUDIT_INJECT_FAILURE` seam.
+- **F5, the no-formula baseline keeps literal CF.** It counts formula compiles, dependency-snapshot preparations and clock reads through `cfFormulaActivity()`, and all three must be 0.
+  - It found a product defect: literal-only CF took a clock sample on every preparation (4 in the scenario). The evaluation context now samples the clock on first read, once, and the derived date context reads it lazily.
+  - A positive control (one expression rule) moves all three counters.
+- **F6, browser.** Added Chromium tests:
+  - Stage 5 at the six zoom/DPR pairs on all three legs, under production evidence.
+  - A midnight tick on the resident leg with Playwright's injected clock, paused before midnight. It is revert-checked: without the clock advance it fails.
+
+  The worker legs cannot take a faked midnight in a browser: Playwright's clock never reaches a dedicated worker realm. Their tick stays covered by the Task 38 mounted tests.
+
+### 14.z.2 Task 39 fix round 2 (codex re-review)
+
+- **R1: a compile refusal is not self-justifying.**
+  - A covering rule the compiler refuses is excused only by an entry in `STAGE5_EXPECTED_COMPILE_REFUSALS`, which records the case, the exact formula text, the refusal code and the ruling. There is one entry: `stage5-formula-truthiness` `NA()` (OD-13 closed allow-list). A test checks that it still refuses exactly so.
+  - Codex's mutant (the compiler refusing `$A2>0`, mocked in `tests/xlsx-cf-stage5-mutants.test.ts`) now makes the composition B2 audit row and the conformance verdict disagree.
+- **R2: justifications are rule- and slot-specific.**
+  - `stage5Justifications` names the rule (marker capability and priority) and the slots it may leave unresolved:
+    - its own slots;
+    - for a stopIfTrue rule, also the lower rules' slots;
+    - for a literal Stage 3–4 gate, only the visual's slot.
+  - `stage5CellAgreement` excuses each unresolved slot separately. A cell-wide `ALL` needs every covering slot excused, and every resolved slot is compared with Excel.
+  - The audit rows, the conformance verdict and the Lesson 1 verdict share this logic. The conformance verdict reads the production service's outcome (`tests/helpers/cf-stage5-verdict.ts`). cf-compare's `verifyCaseCells` checks every Stage 5 observed cell slot by slot, and its icon branch no longer skips a Stage 5 cell.
+  - Both L3 mutants now disagree: the literal fill rule refused beside the justified icon slot, and a green fill beside an unresolved icon against Excel's red.
+  - Under the round-1 logic, 2 of the 4 mutant tests fail. The cf-compare mutant would pass only through the skip that was removed.
+- **R3: browser pixels.**
+  - The midnight test checks the canvas pixels of B4/B9 (each cell's own on-screen box): unfilled before midnight, filled after it.
+  - A kept revert-check test freezes every 2D draw call before the tick and shows the pixel check reports the stale frame.
+  - The zoom/DPR test ties pixels to each designated formula cell (applied means filled, otherwise unfilled) and compares announcements across both DPRs and all three zooms per leg.
+
+### 14.z.3 Task 39 fix round 3 (codex re-review 2)
+
+- **S1: grants are scoped by the compositor's real effect** (`stage5Justifications`, compose.ts).
+  - A rule that is itself unresolved gets `ALL` if it is a halting stopIfTrue rule (compose.ts :279). The reasons are: an unheld capability its evaluation needs, a record configuration, or an enumerated or expected compile refusal. A non-halting rule gets its own writes, plus the lower icon or bar slot that an unknown fill or bar leaves unknown.
+  - A missing stop gate (`formula:composition-stop-<kind>`, `-indirect-ahead-<kind>`) is applied after the stopping rule paints (compose.ts :363). It excuses only the writes of the lower rules of that kind.
+  - A missing expression-vs-scale gate excuses `fill` and `colorScale`.
+  - A literal Stage 3–4 gate excuses only that visual's own slot.
+  - `ALL` is excused only by an `ALL` grant.
+  - The composition INDIRECT expression is now an expected compile refusal (S5-O/S5-B), like `NA()`.
+  - Codex's I3 mutant (the stopping expression refused: no fill, `ALL` unresolved) now disagrees in the audit rows, the conformance helper and cf-compare.
+- **S2: property-level paths.**
+  - Marker writes, grants and comparisons use compose.ts's exact paths: `fill`, `font.strike`, `font.bold`, …, `colorScale`, `dataBar`, `iconSet`. Nothing is collapsed to `font`, and no grant covers the whole font.
+  - A resolved component is compared unless an unresolved write conflicts with it (compose.ts `conflicts`).
+  - Codex's Q3 mutant (`font.bold` unresolved, strikethrough resolved false, Excel struck) now disagrees in all three places.
+- **Other scopes checked:**
+  - record configurations, enumerated refusals and literal gates now use the same compositor scopes;
+  - cf-compare's per-cell check, the Lesson 1 verdict and the conformance helper drop the "every covering slot" expansion of `ALL`;
+  - the visual comparison is skipped only when its own slot is unresolved.
+
+### 14.z.4 Task 39 fix round 4 (codex re-review 3; orchestrator rulings)
+
+- **Ruling: a counterfactual run of the real compositor replaces the hand-mirrored grant scopes.** Codex r3 found two places where the round-3 mirror was wider than compose.ts:
+  - I2: the stop-gate and DXF-coexistence grants applied while the gate was inactive;
+  - `halts`: a stopIfTrue rule always got `ALL`, but compose.ts ignores the stop flag of a visual whose capability is held.
+
+  The verdict now has three steps (`scripts/cf-refs/stage5-withhold.ts`):
+  1. **`stage5JustifiedRefusals`** builds, from independent evidence only, the rules whose refusal is predicted:
+     - an unheld capability the rule's own evaluation needs, which covers its marker capability, the parse and evaluation capabilities its formula requires, a formula bound's family and a literal bar's `bar:bounds-num`;
+     - a record configuration;
+     - an expected compile refusal (`NA()` and the composition `INDIRECT`);
+     - the enumerated S5-HOIST refusal.
+
+     Composition gates (stop, indirect-ahead, expression-vs-scale, coexistence, stub successors, a visual's halting) are not in the set, because the compositor applies them itself.
+  2. **`stage5CounterfactualOf`** runs a fresh production service (src/xlsx/cf, not a copy) with production's inputs.
+     - Every rule in the set is forced unresolved. Every other rule keeps its real evaluated state, and any real refusal among them is an unjustified refusal.
+     - A whole-cell refusal is accepted only from the evidence-gated multi-positive guards.
+     - The rules are forced through a validation-only `cellOutcomes` option of `createCfService`. It is called just before the multi-positive guards and `composeCellAsync`, because the guards read the outcomes too. The viewer never passes it.
+  3. **`stage5CellAgreement`** requires production to equal the counterfactual exactly: the set of unresolved write paths, fill, strikethrough, and the visual where the leg observes one. The resolved components are then compared with Excel as before: fill within ±8, strikethrough, and measured bars and icons.
+
+  One implementation serves the audit rows, the conformance helper, the Lesson 1 helper and cf-compare (interactive and paged legs, each on its own clock).
+- **Mutants:** codex's two r3 mutants were written first and were accepted by the round-3 code on every surface. All 8 mutants now disagree in the audit rows, the conformance helper and cf-compare:
+  - B2 compile refusal;
+  - L3 refused fill;
+  - L3 green-vs-red;
+  - I3 stop refusal;
+  - Q3 bold/strike;
+  - I2 with the p13 icon refused while the stop expression is false;
+  - the K2:K9 relative scale made stopIfTrue over a lower strike rule. Unmutated it gives `[colorScale, fill]` with strike kept; the mutant also loses strike.
+- **Ruling (option d): `STAGE5_EXPECTED_RESOLUTIONS`.** On the unmodified fixtures the counterfactual exposed 72 rows in `stage5-formula-hoist`: B2:B20, B23:B40 (`A2>AVERAGE($A:$A)`) and C2:C18, C23:C40 (`A2=MAX($A:$A)`).
+  - **Why they were exposed.** Their marker, `formula:hoist-aggregate-errors`, is unpublished, but no production code gates on it. Production evaluates the propagated `#DIV/0!` through held readings to no-match, and that equals Excel's capture on every cell.
+  - **The entry.** It is the mirror of `STAGE5_EXPECTED_COMPILE_REFUSALS`. It names the case, the exact formula texts and ranges, the marker (an evidence label), and the held capabilities: `formulaRequiredCapabilities` plus `formula:truth-error`. For those rules only, the marker-based refusal no longer counts; every other justification and the Excel comparison still apply.
+  - **The test** (`tests/xlsx-cf-stage5.test.ts`) checks that:
+    - every listed capability is published, and covers what the formula requires;
+    - nothing in `src` names the marker;
+    - the text and range are exact;
+    - production resolves and equals Excel's capture on every listed cell;
+    - the entry stops counting once a listed capability is unpublished.
+  - Production behaviour is unchanged.
+- **Follow-up: done (§14.z.9).** Register Excel's `error-propagates` reading of `formula:hoist-aggregate-errors` (an error in a hoisted aggregate's range propagates to every cell) and publish it. It was registered and published after this round, and `STAGE5_EXPECTED_RESOLUTIONS` was retired with it.
+- **Bytes (accepted):**
+  - The seam lives in the lazy `service` chunk: 28,287 → 28,299 B gzip -9 (+12 B).
+  - `check-eager` is ok.
+  - The eager gzip moved by +2 B (36,517 → 36,519). That is chunk-hash churn: `dist/index.js` is 125,364 B in both builds and byte-identical once the eight-character chunk hashes in the lazy-chunk filenames are normalised. Only those names, which change with the service chunk's content, differ.
+- **Known limit (accepted):** step 1 derives a formula's own needs from production's static `formulaRequiredCapabilities`. If that function regresses, the justification set regresses with it.
+- **Known limit:** the counterfactual reuses production's evaluator and compositor, so a defect inside them is caught only by the Excel comparison of the resolved components.
+
+### 14.z.5 Task 39 fix round 5 (codex re-review 4)
+
+- **Every surface fails directly on a counterfactual mismatch.**
+  - **Lesson 1 (r4 #1).** `tests/xlsx-cf-formula-rules.test.ts` now records any disagreement with the counterfactual as a violation in its own right. It is reported before, and regardless of, the fill/strike and unverified acceptance paths. Previously a disagreement only cleared the `justified` flag. Codex's two mutants now each give one violation, where the old helper returned none:
+    - I2 with the p13 icon refused;
+    - I3 with the p12 stopping expression refused.
+  - **cf-compare (r4 #2).** `stage5TokenOfActual` keeps the leg's icon and bar descriptors, resolved properties and colour-scale colour.
+    - Both legs (the interactive service outcome and the paged wire state) report them on every Stage 5 cell.
+    - On a measured case, every expected cell is checked against the counterfactual first, resolved or not.
+    - Codex's I2 mutant (icon nulled, `unresolved=false`, no unresolved slots) now fails with "visual none differs from the counterfactual's icon:…".
+  - **Audit rows and conformance.** They already failed on any `stage5CellAgreement` disagreement. They now compare the richer token below.
+- **Every component is compared.** The Stage 5 token now carries, alongside the unresolved write paths:
+  - fill and strikethrough, in Excel's vocabulary;
+  - every resolved DXF property (fill, each font path, numFmt, borders);
+  - the colour-scale colour;
+  - the bar/icon visual.
+
+  `stage5CellAgreement` requires each component to equal the counterfactual's. A token that does not report a component never agrees, so nothing is skipped. Excel's capture is then compared on fill, strikethrough and measured visuals, as before.
+- **Population.** The every-cell check covers the measured Stage 5 cases, the same population as the audit rows and conformance.
+  - An unmeasured case keeps the round-4 check on its matched-but-unresolved cells. Such a case has no Excel evidence: in `stage5-active-present-bar` (recipe-pending), production refuses a hand-authored unpaired x14 twin structurally.
+- **Harness defect fixed.** cf-compare (bar/icon cell detection) and the mutants helper named column AA as `[`. Both now use multi-letter A1 names. The defect surfaced once visuals were compared.
+
+**Gates after fix round 5:**
+- `npx vitest run`: 719 files, 14,377 passed, 13 failed, all environmental (missing `corpus/`, `core-entry`, stream, pivots, slideshow-morph).
+- `tsc -p .`: the 3 known errors.
+- Stages 1–4 audits: ok. Stage 5: `ok=true structural=31/31 unsupported=9 pending=5 unverifiedNonDiscriminating=9 stageComplete=true blockedCapabilities=0`.
+- Case records: 2,160 rows. 542 of 791 formula cells paint as Excel, 268 have justified unresolved slots, 57 visual comparisons were made, and 0 disagree.
+- Publish: `--write --publish-stage5` run twice, byte-identical. The published set is unchanged at 42.
+- Chromium (scratch config): 37/37.
+- `cf-compare --stage 5`: interactive 60 pass, 6 pending, 14 unsupported, 6 fail; paged 62 pass, 7 pending, 14 unsupported, 3 fail. The only Stage 5 failure is the `stage5-cross-sheet-missing` seed, as before; the paged wire states equal the resident counterfactual in every component on every measured case.
+- `check-eager`: ok. No production change this round (eager gzip 36,519 B as in 14.z.4).
+- `git diff --check`: clean.
+
+**Gates after fix round 4:**
+- `npx vitest run`: 719 files, 14,375 passed, 13 failed, all environmental (missing `corpus/`, `core-entry`, stream, pivots, slideshow-morph). The fix round 4 known red is cleared.
+- `tsc -p .`: the 3 known errors. `tsc -p tsconfig.scripts.json`: clean.
+- Stages 1–4 audits: ok and complete.
+- Stage 5: `ok=true structural=31/31 unsupported=9 pending=5 unverifiedNonDiscriminating=9 stageComplete=true blockedCapabilities=0`.
+- Case records: 2,160 rows. 542 of 791 formula cells paint as Excel, 268 have justified unresolved slots, 57 visual comparisons were made, and 0 disagree.
+- Publish: `--write --publish-stage5` run twice, byte-identical (`git diff --exit-code`). The published set is unchanged at 42.
+- Chromium (scratch config): 37/37. WebKit is a blocked gate.
+- `cf-compare --stage 5`: interactive 60 pass, 6 pending, 14 unsupported, 6 fail; paged 62 pass, 7 pending, 14 unsupported, 3 fail. The only Stage 5 failure is the `stage5-cross-sheet-missing` seed, as before.
+- Eager gzip 36,519 B (hash churn, see above); `check-eager` ok.
+- `git diff --check`: clean.
+
+**Gates after fix round 3:**
+- `npx vitest run`: 14,372 passed, 13 failed, all environmental (missing `corpus/` and `core-entry`).
+- `tsc -p .`: the 3 known errors.
+- Stages 1–5 audits: ok and complete. Stage 5 case records: 2,160 rows, 0 disagreeing.
+- No-formula baseline: 0 compiles, 0 snapshot preparations, 0 clock reads.
+- Publish: `--write --publish-stage5` run twice, byte-identical. The published set is unchanged at 42.
+- Chromium: 37/37.
+- `cf-compare --stage 5`: interactive 60 pass, 6 fail; paged 62 pass, 3 fail. The only Stage 5 failure is the `stage5-cross-sheet-missing` seed.
+- Eager gzip 36,517 B; `check-eager` ok.
+- Index closure 422,487 B (environmental FAIL; the growth is recorded).
+- `git diff --check`: clean.
+
+**Gates after fix round 2:**
+- `npx vitest run`: 14,369 passed, 14 failed.
+  - 13 failures are environmental (missing `corpus/` and `core-entry`).
+  - The 14th, the `xlsx-viewer-construction-memory` heap probe, failed under load and passes alone (22/22).
+- `tsc -p .`: the 3 known errors.
+- Stages 1–5 audits: ok and complete. Stage 5 case records: 2,160 rows, 0 disagreeing.
+- Publish: `--write --publish-stage5` run twice, byte-identical. The published set is unchanged at 42.
+- Chromium: 37/37, including the stale-canvas revert-check.
+- `cf-compare --stage 5`: interactive 60 pass, 6 fail; paged 62 pass, 3 fail. The only Stage 5 failure is the `stage5-cross-sheet-missing` seed.
+- Eager gzip 36,517 B; `check-eager` ok.
+- Index closure 422,487 B (environmental FAIL; the growth is recorded).
+- `git diff --check`: clean.
+
+**Gates after fix round 1:**
+- `npx vitest run`: 718 files, 14,366 passed, 13 failed (environmental: missing `corpus/` and `core-entry`).
+- `tsc -p .`: the 3 known errors.
+- Stages 1–5 audits: ok and complete.
+- `--write --publish-stage5`: run twice, byte-identical to the committed file. The published set is unchanged (42 ids).
+- Conformance: 21/21.
+- Eager gzip 36,517 B; `check-eager` ok.
+- Index closure 422,487 B: environmental FAIL, growth recorded.
+- CF chunks 110,842 B gzip -9.
+- `git diff --check`: clean.
+- Browser Chromium (scratch config): 36/36, including the new Stage 5 zoom/DPR and midnight-tick tests. WebKit is a blocked gate (not installed).
+- `cf-compare --stage 5`: static 0 pass, 6 pending, 14 unsupported, 66 fail (cross-renderer frames, as in every stage); paged 62 pass, 7 pending, 14 unsupported, 3 fail; interactive 60 pass, 6 pending, 14 unsupported, 6 fail. None of the remaining failures is a Stage 5 formula cell (see 14.z.1).
+
+**Capability rows (one per Stage 5 capability, after publication):**
+
+| Capability | Case | Ruling | Evidence | Matched (Excel) | Status | Refusal in force |
+|---|---|---|---|---|---|---|
+| `formula:dialect-base` | formula-authored | S5-A | DisplayFormat / PNG measurement | applies | published | none |
+| `formula:dialect-x14` | formula-authored | S5-A | DisplayFormat / PNG measurement | applies | published | none |
+| `formula:positive-control` | formula-authored | S5-A | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
+| `formula:truth-number` | formula-truthiness | S5-D | DisplayFormat / PNG measurement | number-nonzero-true | published | none |
+| `formula:truth-boolean` | formula-truthiness | S5-D | DisplayFormat / PNG measurement | boolean | published | none |
+| `formula:truth-text` | formula-truthiness | S5-D | DisplayFormat / PNG measurement | text-boolean-parse | withheld: reading-unimplemented: Excel matched text-boolean-parse, production implements text-no-match | text-true | withheld (gate) |
+| `formula:truth-blank` | formula-truthiness | S5-D | DisplayFormat / PNG measurement | blank-no-match | published | none |
+| `formula:truth-error` | formula-truthiness | S5-D | DisplayFormat / PNG measurement | error-no-match | published | none |
+| `formula:truth-range` | formula-truthiness | S5-D | DisplayFormat / PNG measurement | range-top-left | withheld: reading-unimplemented: Excel matched range-top-left, production names no reading | withheld (gate) |
+| `formula:truth-range-nested` | formula-truthiness | S5-D | DisplayFormat / PNG measurement | range-top-left | withheld: reading-unimplemented: Excel matched range-top-left, production names no reading | withheld (gate) |
+| `formula:anchor-single` | formula-anchor | S5-C | DisplayFormat / PNG measurement | relative-top-left | published | none |
+| `formula:anchor-mixed-abs` | formula-anchor | S5-C | DisplayFormat / PNG measurement | pinned | published | none |
+| `formula:anchor-multi-range` | formula-anchor-multi | S5-C | twin / non-discriminating | — | withheld: unverified-nondiscriminating | withheld (gate) |
+| `formula:relative-wrap` | formula-edge | S5-C | DisplayFormat / PNG measurement | wrap | published | none |
+| `formula:fn-logical` | formula-functions | S5-E | DisplayFormat / PNG measurement | documented | published | none |
+| `formula:fn-information` | formula-functions | S5-E | DisplayFormat / PNG measurement | documented | published | none |
+| `formula:fn-text` | formula-functions | S5-E | DisplayFormat / PNG measurement | documented | published | none |
+| `formula:fn-math` | formula-functions | S5-E | DisplayFormat / PNG measurement | documented | published | none |
+| `formula:fn-aggregate` | formula-functions | S5-E | DisplayFormat / PNG measurement | documented | published | none |
+| `formula:fn-conditional-aggregate` | formula-functions | S5-E | DisplayFormat / PNG measurement | documented | published | none |
+| `formula:fn-date` | formula-functions | S5-E | DisplayFormat / PNG measurement | documented | published | none |
+| `formula:fn-row-column` | formula-functions | S5-E | DisplayFormat / PNG measurement | documented | published | none |
+| `formula:hoist-countif-frequency` | formula-hoist | S5-HOIST | DisplayFormat / PNG measurement | documented | published | none |
+| `formula:hoist-aggregate-errors` | formula-hoist | S5-HOIST | DisplayFormat / PNG measurement | error-propagates | withheld: reading-unimplemented: Excel matched error-propagates, production names no reading | withheld (gate) at this round; published since (§14.z.9) |
+| `formula:hoist-aggregate` | formula-hoist-aggregate | S5-HOIST | DisplayFormat / PNG measurement | documented | published | none |
+| `formula:cellis-operand-reference` | cellis-operands | S5-F | DisplayFormat / PNG measurement | documented | published | none |
+| `formula:cellis-operand-relative` | cellis-operands | S5-F | DisplayFormat / PNG measurement | documented | published | none |
+| `formula:cellis-operand-expression` | cellis-operands | S5-F | DisplayFormat / PNG measurement | documented | published | none |
+| `formula:cellis-operand-text` | cellis-operands | S5-F | DisplayFormat / PNG measurement | text-compare | withheld: reading-unimplemented: Excel matched text-compare, production names no reading | withheld (gate) |
+| `formula:cellis-operand-blank` | cellis-operands | S5-F | DisplayFormat / PNG measurement | blank-zero | published | none |
+| `formula:cellis-operand-error` | cellis-operands | S5-F | DisplayFormat / PNG measurement | no-format | withheld: reading-unimplemented: Excel matched no-format, production names no reading | withheld (gate) |
+| `formula:predicate-divergent` | predicate-formulas | S5-G | DisplayFormat / PNG measurement | formula | published | none |
+| `formula:predicate-timeperiod-divergent` | predicate-timeperiod | S5-G | recorded Excel outcome | — | withheld: refused-unsupported | Ruling S5-REPAIR: Excel 16.115 replaced the divergent formula A2=TODAY()-3 of a timePeriod="today" rule with the canonical FLOOR(A2,1)=TODAY() on r... |
+| `formula:fn-today` | clock-today | S5-M | DisplayFormat / PNG measurement | local-today | published | none |
+| `formula:calc-manual-saved-values` | calc-manual | S5-L | DisplayFormat / PNG measurement | saved-values | published | none |
+| `formula:calc-manual-today` | calc-manual | S5-L | DisplayFormat / PNG measurement | cf-today-live | withheld: reading-unimplemented: Excel matched cf-today-live, production names no reading | withheld (gate) |
+| `formula:composition-stop-dxf` | composition | S5-O | DisplayFormat / PNG measurement | halts | published | none |
+| `formula:composition-twin` | composition | S5-O | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
+| `formula:composition-stop-scale` | composition | S5-O | DisplayFormat / PNG measurement | halts | published | none |
+| `formula:composition-stop-bar` | composition | S5-O | DisplayFormat / PNG measurement | halts | published | none |
+| `formula:composition-stop-icon` | composition | S5-O | recorded Excel outcome | — | withheld: refused-unsupported | Re-deferred (Task 39, after the rebuild 26a648e1): every icon crop of stage5-composition is unclassifiable (icon-class-none), so the icon-only twin... |
+| `formula:composition-expression-vs-scale` | composition | S5-O | DisplayFormat / PNG measurement | priority-wins | published | none |
+| `formula:composition-overlapping` | composition | S5-O | DisplayFormat / PNG measurement | first-wins | published | none |
+| `formula:composition-indirect-ahead-dxf` | composition | S5-O | DisplayFormat / PNG measurement | halts | withheld: reading-unimplemented: Excel matched halts, production names no reading | withheld (gate) |
+| `formula:composition-indirect-ahead-bar` | composition | S5-O | DisplayFormat / PNG measurement | halts | withheld: reading-unimplemented: Excel matched halts, production names no reading | withheld (gate) |
+| `formula:composition-indirect-ahead-scale` | composition | S5-O | DisplayFormat / PNG measurement | halts | withheld: reading-unimplemented: Excel matched halts, production names no reading | withheld (gate) |
+| `formula:composition-indirect-ahead-icon` | composition | S5-O | recorded Excel outcome | — | withheld: refused-unsupported | Re-deferred (Task 39, after the rebuild 26a648e1): the indirect-icon configuration needs the same icon-only twin K2, which is unmeasurable (icon-cl... |
+| `formula:cross-sheet-reference` | cross-sheet | S5-K | DisplayFormat / PNG measurement | documented | published | none |
+| `formula:cellis-operand-cross-sheet` | cross-sheet | S5-F | DisplayFormat / PNG measurement | documented | published | none |
+| `formula:cross-sheet-quoted-name` | cross-sheet | S5-K | DisplayFormat / PNG measurement | documented | published | none |
+| `formula:cross-sheet-missing` | cross-sheet-missing | S5-K | recorded Excel outcome | — | withheld: refused-unsupported | Ruling S5-REPAIR / S5-K: Excel reads =Gone!A1>0 (no such sheet) as an external-workbook reference; opening the workbook prompted to update links (a... |
+| `scale:thresholds-formula` | cfvo-formulas | S5-H | DisplayFormat / PNG measurement | evaluated | published | none |
+| `formula:cfvo-expression` | cfvo-formulas | S5-H | DisplayFormat / PNG measurement | evaluated | published | none |
+| `formula:cfvo-reference` | cfvo-formulas | S5-H | DisplayFormat / PNG measurement | evaluated | published | none |
+| `bar:bounds-formula` | bar-bounds-formula (§14.z.10) | S5-H | PNG measurement (crop against literal twins) | evaluated | published | none (Task 39 re-deferred it on the stage5-cfvo-formulas fixture, which stays recorded as unconfirmable for that case only) |
+| `icon:thresholds-formula` | cfvo-formulas | S5-H | recorded Excel outcome | — | withheld: refused-unsupported | Re-deferred (Task 39): every icon crop of stage5-cfvo-formulas is unclassifiable (icon-class-none). Its cells sit on the default style, which Excel... |
+| `formula:cfvo-relative` | cfvo-formulas | S5-H | DisplayFormat / PNG measurement | zero | withheld: reading-mismatch: Excel matched zero, production implements anchor-top-left | withheld (gate) |
+| `formula:cfvo-nonnumeric` | cfvo-formulas | S5-H | recorded Excel outcome | — | withheld: refused-unsupported | Finding (S4-MINMAX precedent): no hypothesis (withheld, zero, skipped) matched what Excel showed for a text, blank or error formula bound in stage5... |
+| `formula:cfvo-twin` | cfvo-formulas | S5-H | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
+| `formula:cfvo-scope-multi-range` | cfvo-scope | S5-H | recorded Excel outcome | — | withheld: refused-unsupported | Re-deferred (Task 39): the scope-icon configuration of stage5-cfvo-scope cannot be measured (twin P12 is an unclassifiable icon crop: default style... |
+| `formula:cfvo-scope-twin` | cfvo-scope | S5-H | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
+| `scale:dialect-standalone` | x14-scale | S5-I | DisplayFormat / PNG measurement | standalone-evaluated | published | none |
+| `formula:x14-scale-twin` | x14-scale | S5-A | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
+| `formula:active-present-scale` | active-present-scale | S5-J | recorded Excel outcome | — | withheld: refused-unsupported | Ruling S5-J / OD-16: Excel 16.115 rewrote the standalone x14 colour scale on resave (stage5-active-present-scale.rejected.xlsx): activePresent drop... |
+| `formula:active-present-scale-twin` | active-present-scale | S5-J | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
+| `formula:active-present-bar` | active-present-bar | S5-J | recorded Excel outcome | — | withheld: refused-unsupported | Ruling S5-J / OD-16: Excel 16.115 rewrote the standalone x14 data bar on resave (stage5-active-present-bar.rejected.xlsx): activePresent dropped an... |
+| `formula:active-present-bar-twin` | active-present-bar | S5-J | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
+| `formula:active-present-icon` | active-present-icon | S5-J | recorded Excel outcome | — | withheld: refused-unsupported | Ruling S5-J / OD-16: Excel 16.115 rewrote the standalone x14 icon set on resave (stage5-active-present-icon.rejected.xlsx): activePresent dropped a... |
+| `formula:active-present-icon-twin` | active-present-icon | S5-J | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
+| `formula:unresolved-name` | unresolved-shapes-name | A | recorded Excel outcome | — | withheld: refused-unsupported | withheld (gate) |
+| `formula:unresolved-external` | unresolved-shapes-external | A | recorded Excel outcome | — | withheld: refused-unsupported | withheld (gate) |
+| `formula:unresolved-table` | unresolved-shapes-table | A | recorded Excel outcome | — | withheld: refused-unsupported | withheld (gate) |
+| `formula:unresolved-indirect` | unresolved-shapes-indirect | A | recorded Excel outcome | — | withheld: refused-unsupported | withheld (gate) |
+| `formula:unresolved-array-constant` | unresolved-shapes-array-constant | A | recorded Excel outcome | — | withheld: refused-unsupported | withheld (gate) |
+| `formula:unresolved-union` | unresolved-shapes-union | A | recorded Excel outcome | — | withheld: refused-unsupported | withheld (gate) |
+| `formula:unresolved-spill` | unresolved-shapes-spill | A | recorded Excel outcome | — | withheld: refused-unsupported | withheld (gate) |
+| `formula:unresolved-duplicate-formula` | unresolved-shapes-duplicate-formula | A | recorded Excel outcome | — | withheld: refused-unsupported | withheld (gate) |
+| `formula:unresolved-cellis-text` | unresolved-shapes-cellis-text | A | recorded Excel outcome | — | withheld: refused-unsupported | withheld (gate) |
+| `formula:composition-stub-successor-dxf` | composition | S5-STUB | reused Stage 1-4 capture (S5-STUB) | recorded | published | none |
+| `formula:composition-stub-successor-scale` | composition | S5-STUB | reused Stage 1-4 capture (S5-STUB) | recorded | published | none |
+| `formula:composition-stub-successor-bar` | composition | S5-STUB | reused Stage 1-4 capture (S5-STUB) | recorded | published | none |
+| `formula:composition-stub-successor-icon` | composition | S5-STUB | reused Stage 1-4 capture (S5-STUB) | recorded | published | none |
+
+### 14.z.6 Task 39 orchestrator fix (codex re-review 5; the cap is reached)
+
+The re-review of fix round 5 found one gap (P2). `stage5VisualToken` reduces every drawn bar to `bar` and every icon to its glyph class, so a descriptor field could differ from the counterfactual without any surface noticing. Codex's two mutants show this: composition E4 with `endFraction` changed from 0.40 to 0.91, and I2 with `showValue` flipped. Both agreed on the audit rows, conformance, Lesson 1 and both cf-compare legs. The five fix rounds were used up, so the orchestrator ruled and fixed it directly:
+- `stage5VisualDetail` (`scripts/cf-refs/stage5-withhold.ts`) serialises every drawn bar and icon field to one stable string:
+  - bar: axis, start, end and value fractions, the fill, border and axis colours, gradient, negative, `showValue` and direction;
+  - icon: set, id, bucket, buckets and `showValue`.
+
+  It accepts both the resident descriptor and the wire form. The rule id is left out because it is internal numbering, not what is drawn.
+- `Stage5Production.visualDetail` is compared exactly with the counterfactual, and a token without it never agrees. The coarse `visual` token remains only for Excel's captured observations.
+- `stage5TokenOf` (used by the audit rows, conformance and Lesson 1) and both cf-compare legs (`visualDetail` on `ActualCellOutcome`) supply it.
+- Mutants: `tests/xlsx-cf-stage5-mutants.test.ts` adds the E4 and I2 mutants. Under the round-5 code both were accepted (RED); with the fix, both the agreement check and cf-compare report "visual detail … differs from the counterfactual's".
+- Test-harness note: the mutants file must import `stage5-withhold` inside a test, never at file or `beforeAll` scope. An early import binds the formula compiler before the compile mutants (R1, S1) are installed.
+
+**Gates:**
+- CF vitest suites: 85 files, 1,793 passed.
+- `tsc -p .`: the 3 known errors. `tsc -p tsconfig.scripts.json`: clean.
+- Stage 5 audit: `stageComplete=true blockedCapabilities=0`. Case records: 2,160 rows, 0 disagreeing.
+- Publish run twice: byte-identical, 42.
+- cf-compare `--stage 5`: interactive 60/6/14/6, paged 62/7/14/3. The only Stage 5 failure is the `stage5-cross-sheet-missing` seed.
+- No production (`src/`) change.
+
+### 14.z.7 Stage 5 final-review fixes (codex whole-branch review)
+
+The final whole-branch codex review requested changes on four findings. The orchestrator's rulings are in `.superpowers/sdd/2026-11-06-xlsx-conditional-formatting/final-fix-brief.md`. Each fix below starts from a test that failed first.
+
+**F1 (Important): CF evaluated under a forced Unicode compatibility version.**
+- `cfFormulaSemantics` hard-coded version 2 (`standalone-default`) at its introduction (`4fc5dcf0`, Task 34 slice 1). Neither the ledger, the Task 34 brief and report, nor this section records a reason, and no Stage 5 fixture holds a non-BMP character, so no Excel evidence supported it.
+- Worse, the CF evaluation context never set `excelTextLengthVersion`, the flag `textChars` actually reads (formula/evaluator.ts). So CF counted code points whatever the semantics said, while the worksheet evaluator (formula/workbook.ts) counts UTF-16 code units for a parsed workbook (version 1).
+- Codex's repro: `A1="😀"`. Worksheet `LEN(A1)` is 2, but CF `LEN($A$1)=1` painted red and was announced as applied.
+- Fix (src/xlsx/cf/formula.ts):
+  - `CfDocumentEvaluation` carries `unicode`. `cfDocumentEvaluationOf` resolves it exactly as `resolveSemantics` does with no explicit option: verified metadata, else the entry default (a parsed workbook is version 1; a document with no semantics is version 2).
+  - `cfDocumentEvaluationOfPaged` is a parsed workbook, so version 1.
+  - `cfFormulaSemantics` passes the version on, and the CF evaluation context sets `excelTextLengthVersion` from it, as the workbook evaluator does. Every `textChars` reader therefore agrees with the sheet, and nothing needs withholding.
+- Test: `tests/xlsx-cf-unicode-compat.test.ts`. Worksheet `LEN` is 2. The policy carries version 1 on both the resident and the paged route. `LEN($A$1)=1` paints nothing and `LEN($A$1)=2` paints, on the static, resident, text, resident-text, worker and forced-paged legs, under both the engine and the cached value policy. It was RED before the fix.
+- The published set is unchanged: 42, byte-identical.
+
+**F2 (Important): the Stage 5 audit depended on the host time zone.**
+- The audit pinned the clock cases' instant (`04:00 +08:00` on the anchor day), but the CF policy took its zone from `doc.semantics.timeZone`, which `parseXlsx` reads from the host. Under `TZ=UTC` the anchor instant falls on the previous calendar day, so `stage5-clock-today` B3, B4, B9 and B10 disagreed and the audit exited 1. The Lesson 1 helper, the verdict helper and the mutants also passed `Date.now`. They passed only because today is the anchor day.
+- Fix: `scripts/cf-refs/case-clock.ts`, used by every surface that evaluates a clock case:
+  - **Parse:** `caseParseOptionsOf` pins the load-time evaluator's zone and instant. `ParseXlsxOptions.evaluation`'s type now admits `timeZone` and `now`. The evaluator already honoured both at runtime, and no production caller passes them.
+  - **Resident production and the counterfactual:** `caseDocumentEvaluationOf` and `caseEvaluationOf` take the document's policy with the case's `requiredTimeZone`, at the anchor instant (`caseNowOf`), whatever zone the document was parsed under.
+  - **Worker (paged) route:** this route has no policy seam (production reads the viewer's ambient zone). `withCaseZone` sets `TZ` to the case zone before the session opens, checks that `Intl` adopted it, and restores it afterwards.
+- Users: the audit rows, `stage5CounterfactualOf`, cf-compare (interactive and paged), the conformance test (which now uses the case clock instead of the former cast), the Lesson 1 helper, `tests/helpers/cf-stage5-verdict.ts` (`stage5OutcomeAt` and `stage5ProductionAt` take the case), the mutants and the cf-compare helper test.
+- Production semantics are unchanged: CF still evaluates in the viewer's local time.
+- Test: `tests/xlsx-cf-stage5-host-zone.test.ts`. It runs under `TZ=UTC` and `TZ=America/Los_Angeles` with the host clock faked to 2027-03-01. The audit rows and the verdict helper agree with Excel on every measured clock-case cell. It was RED before the fix.
+
+**F3 (Minor): the worker sampled the clock unconditionally.**
+- `PagedXlsxSheetAdapter`'s CF preparation took `(options?.now ?? Date.now)()` on every preparation, literal-only sheets included.
+- Fix (src/xlsx/view/pagedSource.ts): the instant is memoised at its first read. The predicates' own date context reads it through a getter, and the formulas' evaluation context and the adopted stamp share the same sample (S5-M). A literal-only sheet takes no sample; a clock-reading sheet takes exactly one per preparation.
+- Tests:
+  - `tests/xlsx-cf-worker-clock.test.ts`. Literal `cellIs`: 0 samples, painted. Expression rule: 1. `timePeriod`: 1. It was RED before the fix.
+  - The no-formula baseline (`pressureNoFormulaBaseline`, `audit --stage 5`, `tests/xlsx-cf-stage5.test.ts`) gains the worker route: three paged preparations count injected `now` calls plus the context's counter. The literal case shows 0 compiles, 0 snapshots and 0 clock reads, and paints 6. The control shows compiles 1, snapshots 3 and clock reads 6. It was RED before the fix.
+  - The source-text check in `tests/xlsx-cf-paged-parse.test.ts` follows the new shape.
+
+**F4 (Minor): PR body overclaims.**
+- The independent Excel comparison now claims only fill, strikethrough and the measured bar and icon visuals. Every other component is compared only with the counterfactual (§14.z.5).
+- The zero-clock-read claim now covers both routes, since F3.
+- The orchestrator's codex-r5 fix (`ea0c0efd`, §14.z.6) is listed.
+
+**Gates:**
+- **CF vitest suites:** 88 files, 1,805 passed, 3 skipped. The same result under the host zone (Asia/Taipei) and under `TZ=UTC`.
+- **Audits:**
+  - Stages 1–4: ok and complete.
+  - Stage 5: `ok=true structural=31/31 unsupported=9 pending=5 unverifiedNonDiscriminating=9 stageComplete=true blockedCapabilities=0`.
+  - Case records: 2,160 rows, 542 painted as Excel, 268 with justified unresolved slots, 0 disagreeing. The result is identical under the host zone, `TZ=UTC` and `TZ=America/Los_Angeles`.
+- **Publish:** run under `TZ=UTC`, `TZ=America/Los_Angeles` and Asia/Taipei. Each run wrote 42 Stage 5 capabilities and left the tree byte-identical.
+- **cf-compare `--stage 5`:** interactive 60/6/14/6 and paged 62/7/14/3, under both the host zone and `TZ=UTC`. The only Stage 5 failure is the `stage5-cross-sheet-missing` seed.
+- **Eager:** `check-eager` ok (158 modules); eager gzip 36,519 B (limit 38,720).
+- **Full vitest:** 14,390 passed, 12 failed. All 12 failures are environmental: the missing `corpus/` (pivots, stream recorder and local-load, and the slideshow morph `tdf149588` file).
+- **tsc:** `-p .` shows the 3 known `@napi-rs/canvas` errors; `tsconfig.scripts.json` is clean.
+- **Chromium `xlsx-cf.spec.ts`:** 37/37, using the scratch Playwright config. WebKit is not installed (blocked gate).
+- **`git diff --check`:** clean.
+- **Production changes:** the type of `ParseXlsxOptions.evaluation` (type only), F1 in `src/xlsx/cf/formula.ts`, and F3 in `src/xlsx/view/pagedSource.ts`.
+
+### 14.z.8 The centred glyph key (owner decision 2026-11-19)
+
+§14.y and §14.z recorded that no Stage 5 icon crop classified. The crops are position-exact. Excel resaves the Stage 5 icon cells as Normal, `vertical="center"`, and draws their icons at cell top + 4 px, while the Stage 4 glyph key's cells (number format `;;;`, an xf with no `<alignment>`) are bottom-placed at + 7 px. Four icon capabilities were re-deferred for this reason. The ruling was that the fix belongs in measurement. The owner decided to capture a centred key in Excel, with no shifted or predicted-offset classifier for Stage 5.
+
+**The key case: `stage4-icon-glyph-key-centred` (`8126756d`; Excel capture `6d13e093`, Excel 16.115).**
+- The case lives in Stage 4, because only the Stage 4 pipeline records and verifies a glyph key. It is appended last to `CF_STAGE4_FIXTURES`, so no earlier GUID or input changes.
+- It repeats the Stage 4 key's 75 single-pair x14 custom rules and its calibration columns.
+- Its key and control cells are shaped like the Stage 5 icon cells: the default style (no `s`, xf 0), visible General `10` right-aligned, 20 pt rows, 14-character columns and the Normal Calibri 11 font. `tests/xlsx-cf-icon-centred-key.test.ts` pins this against the generated and the Excel-saved Stage 5 icon cells (cfvo-scope P12, cfvo-formulas Z2, composition K2), and checks that the visible numbers stay clear of the 28 px crop.
+- It owns no capability. Every `icon:glyph-*` and `icon:pixel-calibration` id stays with `stage4-icon-glyph-key`, which is first in manifest order.
+- Excel opened it repair-free (fcCount 1) and resaved it. The resaved key cells are xf 0 with `vertical="center"` on 20 pt rows.
+
+**Self-check.**
+- `verifyCfCase` verifies the case: `icon:pixel-calibration`, `icon:glyph-key` and all 75 `icon:glyph-<set>-<id>`.
+- The 75 pairs partition into the same 54 classes as the Stage 4 key: identical `glyphClasses`, the same 4 twin links (`4RedToBlack:0` with `5Quarters:4`, `4RedToBlack:1` with `5Boxes:0`) and the same faint class `5Boxes:0`. So class names agree between the two keys.
+- Every measurable key glyph sits exactly 3 px higher than in the Stage 4 key, with the same left edge. This is tested on all 74 framed cells. B21, the faint `5Boxes:0`, has no measurable frame in either key.
+- Two predictions from earlier work hold. The ink-frame top at 20 pt, centred, is + 4 px, which is `CF_ICON_RENDER_MODEL.keyFrame.rows[20].center`. The visible number does not change the glyph.
+
+**Key choice (fixed before the capture, `8126756d`).** A Stage 5 crop takes its key from its cell in the Excel-saved workbook, in two steps (`iconKeyPlacement`):
+1. Read the vertical alignment of the cell's own `cellXfs` entry. A missing `<alignment>` or `vertical` counts as bottom, which is how Excel drew the Stage 4 key's `;;;` xf.
+2. Read the row height: the row's `ht`, else `defaultRowHeight`. It must be exactly 20.
+
+The result then selects the key:
+
+| Cell placement | Key |
+|---|---|
+| centre at 20 pt | the centred key |
+| bottom at 20 pt | the Stage 4 key |
+| anything else (top, justify, another height, a cell the sheet does not hold, no styles part) | none: the crop is unmeasurable or `icon-class-none`, as before |
+
+- There is no fallback and no shifted search; `classifyIconCrop` still runs at zero offset.
+- `stage5IconKeys` admits a key only when its own case passes full `verifyCfCase` (review fix round 1, below) and every one of its own saved key cells reads the placement the key stands for.
+- One selector (`stage5IconKeyOf`) serves capture, verify and audit. Its result is cached on a content digest of the manifest and of both keys' sidecars, PNGs and saved workbooks.
+- `capture --stage 4 --verify-only` re-derives both key sidecars first.
+
+**Stage 5 re-evaluation (`capture --stage 5 --verify-only`; no Excel).** Every icon witness now classifies at cell-relative (2, 4).
+
+| Capability | Excel's reading | Production's reading | Disposition |
+|---|---|---|---|
+| `icon:thresholds-formula` (cfvo-formulas J2..J9 against twins Z/AA) | `evaluated`: 3Arrows 0,0,1,1,1,1,2,2 | `evaluated` | **Re-deferral lifted; published** |
+| `formula:composition-stop-icon` (I2..I7 against K/L) | `halts`: an icon on rows 2/4/6, none under the red fill on rows 3/5/7 | `halts` | **Re-deferral lifted.** It stays withheld by the publication gate as fixture-unconfirmable (`CF_STAGE5_UNCONFIRMABLE`). Witnesses L3/L5/L7 are withheld in production while `icon:composition-dxf-fill` is non-discriminating. |
+| `formula:composition-indirect-ahead-icon` (T2..T7) | `halts`, like the dxf, scale and bar siblings | none (no INDIRECT reading) | **Re-deferral lifted;** withheld as reading-unimplemented |
+| `formula:cfvo-scope-multi-range` | `formula-hypothesis-none` | — | **Kept deferred, now as a finding** (below) |
+
+On `formula:cfvo-scope-multi-range`, Excel drew the top icon (3Arrows:2) on all twelve designated icon cells and the top colour (`FF63BE7B`) on every scale cell, in the control range B as in D and F. Neither rule-wide nor per-range predicts that. The new reason in `CF_STAGE5_UNSUPPORTED` records this as a finding, never fitted (the S4-MINMAX precedent). Production keeps a multi-range formula bound unresolved.
+
+`bar:bounds-formula` is out of scope (fixture defect) and unchanged.
+
+**Publication.**
+- `audit --stage 5 --write --publish-stage5` ran twice; the second run is byte-identical. It publishes **43** Stage 5 ids, up from 42: `icon:thresholds-formula` joins `VERIFIED_STAGE5_CAPABILITIES` and the combined set. The selections are unchanged.
+- Audits:
+  - Stages 1–3: ok and complete.
+  - Stage 4: `ok=true structural=20/20 unsupported=2 pending=1 unverifiedNonDiscriminating=7 stageComplete=true blockedCapabilities=0`.
+  - Stage 5: `ok=true structural=31/31 unsupported=9 pending=5 unverifiedNonDiscriminating=9 stageComplete=true blockedCapabilities=0`.
+- Stage 5 case records: 2,160 rows, 791 formula cells. 551 are painted as Excel (542 before) and 259 have justified unresolved slots (268 before). 129 have visual evidence compared, and 0 disagree.
+
+**Production (Ruling S4-ROW-EXACT).**
+- No `src/` code changed. Only the evidence set `src/xlsx/cf/verifiedCapabilities.ts` gains `icon:thresholds-formula`, written by the audit.
+- Production now resolves icon sets whose thresholds are formula cfvo instead of announcing them unavailable. They paint only where the icon frame is admitted. A 20 pt row is never admitted (20 pt is 26.67 px, not a whole px), so on the Stage 5 oracle workbooks the icons stay withheld from the canvas. On admitted rows (15, 18 and 30 pt, the Normal font, a measured alignment) a formula-threshold icon set now paints its evaluated bucket.
+- The other three capabilities do not change what production paints: two stay withheld by the gate, and the scope bound stays unresolved.
+
+**Pins moved (comments in the tests):**
+- Stage 4 has 20 cases.
+- The `CF_CASES` slice is 56.
+- The multi-chunk list and the Stage 4 matrix: the centred key owns `[]`.
+- Stage 4 conformance: `checked` 1,658, `agreedIcon` 624. Production evaluates Excel's class on all 75 centred key cells. `unobserved` 21, `controls` 791.
+- `RECORDED_EXCEL_REFUSALS` drops stop-icon and indirect-ahead-icon and adds `cfvo-scope-multi-range`.
+- The Stage 1–4 input digest is unchanged: the centred input is excluded from it and pinned on its own.
+
+**Review fix round 1 (codex: changes requested, two Important findings; orchestrator rulings).** Each fix starts from a test that failed first: `tests/xlsx-cf-icon-key-admission.test.ts`, whose mutants live in memory through a wrapped `node:fs`.
+1. **A key is admitted only when its own case fully verifies.**
+   - Before the fix, admission checked only that the glyph table rebuilt and the saved placement matched. Codex's mutant (the centred sidecar's `lockBefore` set to `locked`) made `verifyCfCase` refuse the case with `display-locked`, yet `stage5IconKeys` still admitted the key, and `icon:thresholds-formula` published among 43 ids.
+   - `stage5IconKeys` now requires `verifyCfCase(keyCase)` to be `verified` with `icon:glyph-key`, for the Stage 4 key and the centred key alike. That covers lock states, the resave receipt, calibration, the capture checks and the key build.
+   - Under the mutant:
+     - the centred key is not admitted;
+     - the `stage5-cfvo-formulas` icon cells are unmeasurable again (no `icon:3Arrows` witness);
+     - the audit refuses the icon-bearing Stage 5 cases, because their committed evaluations no longer recompute (`sidecar-mismatch`). Only 30 ids publish, all within the committed 43, and `icon:thresholds-formula` is not among them.
+   - A locked Stage 4 key is likewise not admitted.
+2. **One invalidation for both cache layers.**
+   - Before the fix, the outer cache watched disk stats while `loadIconGlyphKey` cached on the manifest's declared hashes, so a vanished PNG still returned the stale key and a restored PNG still returned the cached miss.
+   - Both layers now key on the same content digest: the SHA-256 of the manifest text and of the case's sidecar, PNG and saved workbook, with a missing file digesting as `-` (`iconKeyCaseInputs`).
+   - Regression tests cover a PNG that vanishes after a warm cache (no key from either layer), one replaced with other bytes (re-evaluated: no key) and one restored after a cached miss (the 54-class key again).
+   - The check stays cheap: a cache hit costs one manifest parse and six file hashes, and the full `audit --stage 5` takes 18 s.
+
+Gates after the fix:
+- Audits for stages 1–5 are unchanged (Stage 5 `ok=true structural=31/31 … stageComplete=true blockedCapabilities=0`; 2,160 records, 551 painted as Excel, 0 disagreeing).
+- `--write --publish-stage5` ran twice: 43 ids, byte-identical, `verifiedCapabilities.ts` untouched.
+- `capture --stage 5 --verify-only` on the four icon cases leaves every sidecar byte-identical.
+- CF, worker, view and viewer-remote suites: 255 files, 5,298 passed. The one failure, `xlsx-viewer-construction-memory`, is the known load flake; it passes alone (22/22).
+- `tsc`: only the 3 known `@napi-rs/canvas` errors; `tsconfig.scripts.json` is clean.
+- `check-eager`: ok.
+- `git diff --check`: clean.
+
+### 14.z.9 Registering and publishing `formula:hoist-aggregate-errors` (owner-directed follow-up, 2026-11-19)
+
+The §14.z.4 follow-up. `stage5-formula-hoist` holds B2:B40 `A2>AVERAGE($A:$A)` and C2:C40 `A2=MAX($A:$A)` over a column whose A21:A22 are `#DIV/0!`. Excel (capture `b5e08ec5`, 2026-11-18) read the capability's `error-propagates` hypothesis, so no cell of either range formats. The id had stayed unpublished only because `CF_FORMULA_PRODUCTION_READINGS` had no entry for it, so the publication gate withheld it as `reading-unimplemented`.
+
+**The ruling.** Register `'formula:hoist-aggregate-errors': 'error-propagates'`. This is not a production behaviour change, and the reading was not fitted to the capture.
+
+**The evidence that production already implemented it**, all from before the capture. The capability's hypotheses were registered in `d29cebe4` (2026-11-16) and Excel captured on 2026-11-18. `tests/xlsx-cf-formula-hoist.test.ts` (`c7fd936f`, 2026-11-16) pins the behaviour:
+- a hoisted `SUM` over a range holding an error yields the first error;
+- the mutant that ignores errors fails that test;
+- the property test that hoisted scalar aggregates equal the engine includes all-error ranges, for `AVERAGE` and `MAX` among others.
+
+The comment on the registration cites these commits.
+
+**Nothing in `src` gates on the id.** After this change the id appears in `src` only in `formulaReadings.ts` (the registration) and in the generated `verifiedCapabilities.ts` (the published set). `tests/xlsx-cf-stage5.test.ts` asserts exactly that file list, so a new gate on the id would fail it.
+
+**Publication.** `bun scripts/cf-refs/audit.ts --stage 5 --write --publish-stage5` ran twice and the second run is byte-identical (sha-256 `e8c93ca1…`). Stage 5 goes from 43 to 44 ids and the combined set from 335 to 336 (110 S1, 34 S2, 51 S3, 97 S4, 44 S5). The only diff in `verifiedCapabilities.ts` is the id in the combined set and in `VERIFIED_STAGE5_CAPABILITIES`; it was written by the audit, never edited.
+
+**The stopgap is retired.** Task 39's `STAGE5_EXPECTED_RESOLUTIONS` (§14.z.4) existed only to stop an unpublished marker from counting as a refusal of those two rules. With the marker held, the counterfactual no longer refuses them, so the table, `stage5ExpectedResolution` and the exemption in `formulaMarkerReasons` are deleted. Nothing else used them, so no empty table with a dormant mechanism is left behind. The audit's Stage 5 case records are unchanged: 0 disagreeing.
+
+**Tests** (each written to fail first):
+- The Stage 5 publication includes the id with matched reading `error-propagates`, production registers that reading, and the committed set and `cfRuntimeEvidence` hold it.
+- The `src` file list above.
+- B2:B40 and C2:C40 are plain resolved cells: every cell resolves, `stage5JustifiedRefusals` is empty for it (no exception needed), and production's fill and strike equal Excel's capture on every cell Excel recorded.
+- The marker is a real gate again: with the id unpublished, B2 and C2 are refused by the marker capability (mutation).
+- Pinned count moved: `tests/xlsx-cf-icon-key-admission.test.ts` expects 44 committed Stage 5 ids (was 43).
+
+**Gates.**
+- Audits for stages 1–5 are ok and complete. Stage 5: `ok=true structural=31/31 unsupported=9 pending=5 unverifiedNonDiscriminating=9 stageComplete=true blockedCapabilities=0`; 2,160 records, 791 formula cells, 551 painted as Excel, 259 with justified unresolved slots, 129 with visual evidence compared, 0 disagreeing (identical with and without the stopgap).
+- `npx vitest run tests/xlsx-cf tests/xlsx-viewer tests/worker tests/view`: 252 files, 5,271 passed. The one failure was a 5 s timeout of `xlsx-cf-oracle-conformance` while other jobs shared the machine; it passes alone, together with `xlsx-viewer-construction-memory`.
+- `tsc`: only the 3 known `@napi-rs/canvas` errors; `tsconfig.scripts.json` is clean.
+- `OV_MODULE_MAP=1 vite build` then `check-eager`: eager graph ok.
+- `git diff --check`: clean.
+
+### 14.z.10 Discriminating evidence for `bar:bounds-num` and `bar:bounds-formula` (follow-up, 2026-11-19)
+
+**Why.** `bar:bounds-num` was unverified-nondiscriminating: `stage3-bar-lengths` E holds 20..80 under num 20/80, so the num bounds equal the data's min/max and the two readings predict the same px. `bar:bounds-formula` was re-deferred in Task 39: `stage5-cfvo-formulas` I holds 5..100 against formula bounds 20/80 (a whole-scope cf-value-beyond-bounds, Ruling S3-E), its num twin W needed `bar:bounds-num`, and W7 was unmeasurable. Both old cases stay as they were, captures included.
+
+**Two new case versions** (orchestrator ruling; hypotheses fixed before capture, tests written first):
+- `stage3-bar-bounds-num`: one paired solid 0/100 bar on B2:B6, num 20/80, over {25,36,45,56,75}: every value inside the bounds, own min/max 25/75, no predicted edge on a half pixel. The `numAs` family predicts num 15/47/74/106/162 px against min/max none/39/71/110/177 px of the 177 px span: a bar against no bar at 25 and 8/3/4/15 px elsewhere (at least the 3 px the ±1 px tolerance needs). Same 180 pt column and 30 pt rows as `stage3-bar-lengths`.
+- `stage5-bar-bounds-formula`: B2:B9 a paired bar with formula bounds `$F$1`/`$F$2` = 20/80 over {28,31,35,41,46,49,52,62}, with literal twins on the same values: C num 20/80 (`evaluated`), D num 0/0 (`zero`), E min/max (`ignored`); twin id `formula:cfvo-bar-twin` (non-discriminating registry). Default 84 px columns, 20 pt rows (new `S5Fixture.defaultRowHeightPt`, the height every measured Stage 5 bar crop was taken at). Every edge under either reading is at most 58 px or full width and off half pixels; the margin was calibrated on the committed `stage5-cfvo-formulas` capture (61 px measurable, 73 and 75 px hidden by the value text, a 13.5 px tie drawn as 13 px). `evaluated` and `ignored` differ by at least 3 px or bar against no bar at all 8 cells. `zero` can never verify (its twin is degenerate, `formula-twin-blank`), as in the old case.
+
+**Ownership.** Both cases are appended last: a Stage 3 bar GUID carries its fixture's index, so an insertion would have changed every later input (the pinned Stage 1–4 digest caught it). They own their capability through `CF_STAGE3_OWNERS` / `CF_STAGE5_OWNERS`, and `capabilityOwnerCase` (verify.ts) now drives `isCapabilityVerified`, so a capability is judged on its owner, not on the first case carrying its marker. Until its capture, a registered non-discriminating capability whose owner is `recipe-pending` reported `unverified-nondiscriminating` (ruling 5).
+
+**The capture** (orchestrator, Excel 16.114, 6a83cbe2; both opened repair-free, resaved, contrast 0/0):
+- `stage3-bar-bounds-num`: right edges B2..B6 = 100/132/159/191/247 px, the num reading at every cell (min/max: none/124/156/195/262). `bar:bounds-num` verifies, discriminating, matched `num`.
+- `stage5-bar-bounds-formula`: B2..B9 `bar:2-12/16/21/29/36/40/44/58`, equal to C; E differs; D drew `bar:43-82` everywhere, as X did. `bar:bounds-formula` verifies, discriminating, matched `evaluated` (the reading production registers).
+
+**Retired.** `CF_STAGE3_NONDISCRIMINATING['bar:bounds-num']`, `CF_STAGE5_UNSUPPORTED['bar:bounds-formula']`, and the new case's scope in `CF_STAGE5_UNCONFIRMABLE`. That registry is now per case (`cases`, `stage5UnconfirmableScope`): `stage5-cfvo-formulas` keeps its W2..W9 / designated-withheld scope as unconfirmable evidence for that case only, still refusing its own misreadings (tested), and `stage5Publication` refuses a capability only through its owner's scope (ruling 4).
+
+**Composition (code, not the brief's guess).** A formula bound resolved to a number keeps `resolved: 'formula'` (service.ts) and is gated by `bar:bounds-formula` alone (dataBar.ts `boundCapability`); the formula bar never needs `bar:bounds-num`. Only its literal num twin did (stage5-withhold.ts, and the S5-WITNESS check in the readings test), so `bar:bounds-num` publishes first: in the same audit run (ruling 6).
+
+**S3-E refusals are now recorded, not borrowed.** With both capabilities held, five Stage 5 bars are still refused by production's own Ruling S3-E, which until now hid behind "bar:bounds-num/-formula not held": `stage5-formula-authored` J2:J9 (formula 4/7 over 1..8) and `stage5-cfvo-formulas` I2:I9 and W2:W9 (20/80 over 5..100) beyond their bounds, `stage5-cfvo-formulas` X2:X9 and the new zero twin D2:D9 (num 0/0) degenerate. They are `STAGE5_BAR_SCOPE_REFUSALS` (stage5-withhold.ts), justified with their real refusal code; tests/xlsx-cf-stage5.test.ts derives the list from every measured saved workbook (bounds and scope values) and requires exactly these five. The zero twin D therefore stays a crop-only rival: Excel draws 43–82, production withholds it, and the audit row is a justified refusal, not a disagreement.
+
+**Publication.** `npx tsx scripts/cf-refs/audit.ts --stage 5 --write --publish-stage3 --publish-stage5` ran twice, byte-identical (sha-256 `1be0d313…`): 338 ids (110 S1, 34 S2, 52 S3 published, 97 S4 as committed, 45 S5 published), up from 336. The only diff in `verifiedCapabilities.ts` is `bar:bounds-num` (S3 set and combined set) and `bar:bounds-formula` (S5 set and combined set), written by the audit.
+
+**Production effect.** No `src/` behaviour changed; only the published set. Data bars with literal `num` bounds now paint where every other capability they need is held, and so do bars with formula bounds (their formula evaluated, then painted as a num bound). On the Stage 3 oracle the Lesson 1 conformance now compares 555 painted bars with Excel's px (was 472; 498 of them on pixel-measured cells, 250 gradient bars also in geometry), every one within 1 px: the num-bounded bars of `stage3-bar-rendering`, `-geometry`, `-showvalue` and `stage3-bar-lengths` E. Still withheld, by S3-E: values beyond num bounds (`stage3-bar-degenerate` E), inverted num bounds (D), and all-equal scopes even under num 0/100 (`stage3-bar-geometry` H and I, whose values are all 100; Excel draws full bars there, a recorded finding).
+
+**Audits** (all ok, complete, 0 blocked):
+- Stage 3: `structural=16/16 unsupported=1 pending=0 unverifiedNonDiscriminating=6`.
+- Stage 5: `structural=32/32 unsupported=9 pending=5 unverifiedNonDiscriminating=10`; 2,224 records over 32 cases (18 measured), 799 formula cells, 559 painted as Excel, 267 with justified unresolved slots, 161 with visual evidence compared, 0 disagreeing.
+- Stages 1, 2 and 4 unchanged.
+
+**Pinned counts moved:** Stage 3 cases 15→16 and published 51→52; Stage 5 cases 31→32 and published 44→45; the S5-WITNESS adversarial coverage (one more crop:bar configuration, every corruption still refuses); the Lesson 1 painted counts above. The Stage 1–4 input digest is unchanged; the new Stage 3 input is pinned on its own.

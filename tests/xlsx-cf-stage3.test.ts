@@ -92,7 +92,7 @@ describe('every enabled bar capability has verified evidence', () => {
     for (const p of audit.perCapability) {
       expect(['verified', 'unverified-nondiscriminating', 'refused-unsupported', 'supported-structural'], p.capabilityId).toContain(p.disposition)
     }
-    expect(by('verified')).toHaveLength(51)
+    expect(by('verified')).toHaveLength(52) // 52 since bar:bounds-num (stage3-bar-bounds-num)
     expect(by('unverified-nondiscriminating')).toEqual(Object.keys(CF_STAGE3_NONDISCRIMINATING).sort())
     expect(by('refused-unsupported')).toEqual([...CF_STAGE3_CAPABILITIES.filter(c => c.capabilityId.startsWith('bar:unresolved-')).map(c => c.capabilityId), ...Object.keys(CF_STAGE3_UNSUPPORTED)].sort())
     expect(by('supported-structural')).toEqual([])
@@ -127,7 +127,8 @@ describe('every enabled bar capability has verified evidence', () => {
     // Task 30 publishes Stage 4 (tests/xlsx-cf-stage4.test.ts pins it to the publication gate); it adds only icon:* ids.
     const s4 = (Reflect.get(verifiedExports, 'VERIFIED_STAGE4_CAPABILITIES') as ReadonlySet<string> | undefined) ?? new Set<string>()
     expect([...s4].every(id => id.startsWith('icon:'))).toBe(true)
-    expect([...VERIFIED_CAPABILITIES].sort()).toEqual([...new Set([...VERIFIED_STAGE1_CAPABILITIES, ...VERIFIED_STAGE2_CAPABILITIES, ...s3, ...s4])].sort())
+    // Task 39: plus the published Stage 5 set.
+    expect([...VERIFIED_CAPABILITIES].sort()).toEqual([...new Set([...VERIFIED_STAGE1_CAPABILITIES, ...VERIFIED_STAGE2_CAPABILITIES, ...s3, ...s4, ...((Reflect.get(verifiedExports, 'VERIFIED_STAGE5_CAPABILITIES') as ReadonlySet<string> | undefined) ?? [])])].sort())
   })
 })
 
@@ -257,11 +258,16 @@ describe('published bars agree on the resident and the paged worker paths', () =
     const { createPagedWorkbookSource } = await import('../src/xlsx/view/pagedSource')
     let compared = 0, bars = 0
     for (const c of manifest().cases.filter(x => x.stage === 3 && x.status === 'measured')) {
-      const sheet = await savedSheet(c.saved)
+      // Task 39: the resident leg takes the document's evaluation context, as production's paint does (render.ts); without
+      // it a published formula rule (the S5-STUB expression of stage3-bar-composition) withholds here but not on the worker.
+      const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
+      const sheet = (doc.sheets.find(s => s.name === 'Sheet1') ?? doc.sheets[0]!) as unknown as XlsxSheet
       const cf = sheet.conditionalFormatting!
       const memory = createCfMemory()
       const merges = (sheet.mergeRanges ?? []).map(m => ({ firstRow: m.minRow, lastRow: m.maxRow, firstCol: m.minCol, lastCol: m.maxCol }))
-      const service = createCfService(cf, memory, { evidence: cfRuntimeEvidence, merges })
+      const { cfDocumentEvaluationOf } = await import('../src/xlsx/cf/render')
+      const { cfEvaluationContextFor } = await import('../src/xlsx/cf/formula')
+      const service = createCfService(cf, memory, { evidence: cfRuntimeEvidence, merges, evaluation: cfEvaluationContextFor(cfDocumentEvaluationOf(doc), Date.now), sheetName: sheet.name })
       const stamp = { owner: 'resident', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(cf), viewGen: 0, structureGen: 0, clockGen: 0 }
       const rect = sqrefRect(c.range)
       // The resident outcome over the case range, in paint batches of at most 256 cells (the cap per call).
@@ -300,7 +306,7 @@ describe('published bars agree on the resident and the paged worker paths', () =
       compared++
       bars += resident.size
     }
-    expect(compared).toBe(14)
+    expect(compared).toBe(15) // 15 since stage3-bar-bounds-num
     expect(bars).toBeGreaterThan(400)
   }, 300000)
 })

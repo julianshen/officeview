@@ -241,3 +241,55 @@ describe('Task 26 (Lesson 9): icon rules keep the largest production call under 
     } finally { injectCfIconSelections(null) }
   }, 60_000)
 })
+
+describe('Task 34 (Lesson 9): formula rules keep the largest production call under CF_LIMITS.activeUnits / 5', () => {
+  // Four formula rules over a populated 5,000-row column, one of them COUNTIF($A:$A,...). The per-call budget pays the
+  // service's own preparation and every per-cell formula call (the bounded calls Task 35 runs inside prepareCf); the
+  // snapshot build pays from its attempt budget and the hoist scans from scan budgets, as Ruling S5-HOIST "Budgets" fixes.
+  const ROWS_POPULATED = 5_000
+  it('1,000 text-path and 256 paint-path cells, four formula rules each, one COUNTIF($A:$A,...)', async () => {
+    const { compileCfFormula, isCfFormulaRefusal, cfEvaluationContextFor, cfDocumentEvaluationOf } = await import('../src/xlsx/cf/formula')
+    const evaluation = cfEvaluationContextFor(cfDocumentEvaluationOf({ calc: undefined, valuePolicy: 'cached', semantics: { dateSystem: '1900', timeZone: 'UTC' } } as never), () => Date.UTC(2026, 10, 16))
+    const all = rect(0, ROWS_POPULATED - 1)
+    const texts = ['COUNTIF($A:$A,A1)>1', 'A1>AVERAGE($A:$A)', 'MOD(A1,3)=0', 'AND(A1>10,A1<50)']
+    const rules = texts.map((text, i) => {
+      const out = compileCfFormula(text, { row: 0, col: 0 }, createCfMemory())
+      if (isCfFormulaRefusal(out)) throw new Error(text)
+      return { id: i + 1, priority: i + 1, documentOrder: i, stopIfTrue: false, ranges: [all], writes: new Set(['fill']), dxf: { 'fill.pattern': 'solid', 'fill.bg': 'FFFF0000' },
+        definition: { kind: 'expression', formula: out.value, sourceType: 'expression', dialect: 'base', formulas: [text] } } as unknown as CfRule
+    })
+    const rows = Array.from({ length: ROWS_POPULATED }, (_, r) => ({ index: r, cells: [{ ref: `A${r + 1}`, row: r, col: 0, value: (r * 37) % 97, styleIndex: 0, hasCachedValue: true } as XlsxCell] }))
+    const s = { name: 'F', sheetId: 'f', rows, cols: [], merges: [], mergeRanges: [], conditionalFormatting: { diagnostics: [], rules } } as unknown as XlsxSheet
+    // Task 35: measured through one real prepareCf, whose formula arm now runs every per-cell call (no composed estimate).
+    const measure = async (cellsPerCall: number, withFormulas: boolean) => {
+      const stamp = stampOf(s), memory = createCfMemory()
+      const counter = createCfWorkBudget({ now: frozen(), scan: true, maxUnits: 10_000_000 })
+      let scanUnits = 0
+      const scan = (): CfWorkBudget => {
+        const b = createCfWorkBudget({ now: frozen(), scan: true })
+        return { get units() { return b.units }, get remaining() { return b.remaining }, spend(n: number) { scanUnits += n; return b.spend(n) }, resume: () => b.resume() }
+      }
+      const service = createCfService(s.conditionalFormatting!, memory, { evidence: { allows: () => true }, ...(withFormulas ? { evaluation } : {}), budget: () => counter, statisticsBudget: scan })
+      const request = rect(1000, 1000 + cellsPerCall - 1)
+      const source = residentSource(s, stamp, memory, 'engine')
+      const lease = await service.prepareCf({ stamp, sourceRects: [request], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, source)
+      let painted = 0, unresolved = 0
+      for (let i = 0; i < cellsPerCall; i++) {
+        const o = lease.value.at(1000 + i, 0)
+        if (o.kind === 'ready' && Object.keys(o.value.properties).length > 0) painted++
+        if (o.kind === 'unresolved' || (o.kind === 'ready' && o.value.unresolvedWrites)) unresolved++
+      }
+      lease.release(); service.dispose()
+      return { units: counter.units, scanUnits, painted, unresolved }
+    }
+    for (const cellsPerCall of [1000, 256]) {
+      const real = await measure(cellsPerCall, true), plain = await measure(cellsPerCall, false)
+      // Every cell evaluated: nothing is withheld, and the rules paint some cells.
+      expect(real.unresolved, `${cellsPerCall} cells`).toBe(0)
+      expect(real.painted, `${cellsPerCall} cells`).toBeGreaterThan(0)
+      expect(real.units, `${cellsPerCall} cells`).toBeLessThanOrEqual(CF_LIMITS.activeUnits / 5)
+      expect(real.units - plain.units, `${cellsPerCall} cells: the formula calls`).toBeGreaterThan(0)
+      console.info(`[calibration] ${cellsPerCall} cells x 4 formula rules: prepareCf pacing ${real.units} units (formula arm ${real.units - plain.units}), scan budgets ${real.scanUnits}`)
+    }
+  }, 60_000)
+})
