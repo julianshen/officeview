@@ -15,9 +15,9 @@ in git history.
 - **Excel formula conditional formatting rules (view-only).** "Use a formula" rules, `cellIs` rules whose value is a
   reference or a formula, and text, blank and error rules whose formula differs from the one Excel writes are now
   evaluated per cell by a bounded formula evaluator, compose with the other rule kinds, and paint wherever Excel 16.115's
-  own rendering verifies them (43 Stage 5 capabilities): the formula dialects, relative and pinned anchors and the edge
+  own rendering verifies them (44 Stage 5 capabilities): the formula dialects, relative and pinned anchors and the edge
   wrap, number/boolean/blank/error truth, the logical, information, text, math, aggregate, conditional-aggregate, date,
-  row/column and `TODAY()` functions, hoisted whole-column aggregates and `COUNTIF` frequency, reference, relative,
+  row/column and `TODAY()` functions, hoisted whole-column aggregates (an error in the column propagates, as Excel shows) and `COUNTIF` frequency, reference, relative,
   expression and blank `cellIs` operands, divergent predicates, saved values under manual calculation, stopIfTrue and
   priority composition with fills, scales and bars, references to other sheets (also as a `cellIs` operand), formula
   colour-scale bounds, formula icon-set thresholds (measured against a glyph key captured at the centred placement
@@ -27,6 +27,12 @@ in git history.
   period; a reference to a missing sheet; a non-numeric formula bound), readings production does not implement (text and
   range truth, error operands, a relative cfvo bound, a relative formula bound across several ranges), formula bar
   bounds, and stopIfTrue ahead of an icon set.
+
+- **Excel formula conditional formatting: an error in a whole-column aggregate propagates.** A rule such as
+  `A2>AVERAGE($A:$A)` or `A2=MAX($A:$A)` over a column that holds an error (`#DIV/0!`) formats no cell, which is what
+  Excel 16.115 shows. Viewer behaviour does not change: it already evaluated these rules that way, and the reading
+  (`error-propagates`) is now registered and published as the 44th Stage 5 capability
+  (`formula:hoist-aggregate-errors`), which takes the verified total to 336. Evidence: `docs/validation/xlsx-cf.md` §14.z.9.
 
 - **Excel time-period rules (view-only): a rule's formula is classified, not ignored.** A conditional formatting
   "dates occurring" rule whose `<formula>` is the one Excel itself writes for its period (today, yesterday, tomorrow,

@@ -47,6 +47,15 @@ export const CF_FORMULA_PRODUCTION_READINGS: Readonly<Record<string, string | re
   // statistics.ts `prepareHoists`: engine-ordered reducers and COUNTIF's plain-equality arm.
   'formula:hoist-aggregate': 'documented',
   'formula:hoist-countif-frequency': 'documented',
+  // statistics.ts `prepareHoists` (an error in a hoisted range propagates: SUM yields the first error, AVERAGE/MAX over an
+  // error-holding column are that error, and a comparison against an error is no match). Excel's capture (b5e08ec5,
+  // 2026-11-18) read `error-propagates` on stage5-formula-hoist (A21:A22 = #DIV/0!: no cell of B2:B40 or C2:C40 formats).
+  // This registers behaviour production already had; it is not fitted to that capture. The evidence that predates it is the
+  // pre-capture tests of tests/xlsx-cf-formula-hoist.test.ts (commit c7fd936f, 2026-11-16, before the capture): a hoisted
+  // SUM with an error yields the first error, the mutant that ignores errors fails, and the property test that hoisted
+  // scalar aggregates equal the engine includes all-error ranges for AVERAGE and MAX. The id was left unregistered only
+  // because it was registered (d29cebe4, 2026-11-16) before the capture; nothing in src gates on it.
+  'formula:hoist-aggregate-errors': 'error-propagates',
   // service.ts operand arm: the operand's value is handed to the Stage 1 `evaluateCellIs` (Ruling S5-F).
   'formula:cellis-operand-reference': 'documented',
   'formula:cellis-operand-relative': 'documented',
