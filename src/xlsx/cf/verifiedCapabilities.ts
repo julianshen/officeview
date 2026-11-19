@@ -384,6 +384,7 @@ export const VERIFIED_STAGE5_CAPABILITIES: ReadonlySet<string> = new Set([
   'formula:truth-boolean',
   'formula:truth-error',
   'formula:truth-number',
+  'icon:thresholds-formula',
   'scale:dialect-standalone',
   'scale:thresholds-formula',
 ])
@@ -624,6 +625,7 @@ export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set([
   'icon:settings-schema-defaults',
   'icon:showvalue-canvas-suppression',
   'icon:thresholds-floor',
+  'icon:thresholds-formula',
   'icon:thresholds-gte-false',
   'icon:thresholds-gte-true',
   'icon:thresholds-mixed',
