@@ -67,7 +67,17 @@ export interface Scheduler {
    * diagnosed).
    */
   endTimeOf(nodeId: number, events: readonly ShowEvent[]): number | 'indefinite' | undefined
+  /**
+   * Additive (piece 5, spec §5): every activation, begun by `t`, of each audio, video and `cmd` leaf in its current
+   * frame (its parent's current activation and iteration), in absolute time and document order: `begin` is the
+   * first absolute time it is active, `end` the last (`lastAbs`, `Infinity` when open). The media clock reads exact
+   * begins here, never the frame that first samples a node.
+   */
+  activations(events: readonly ShowEvent[], t: number): MediaActivation[]
 }
+
+/** One activation of a media or `cmd` leaf (`Scheduler.activations`). */
+export interface MediaActivation { readonly node: BehaviourNode; readonly begin: number; readonly end: number }
 
 /** Optional diagnostics, each once per node per scheduler: `timing-cycle`, `timing-forward-reference`, `timing-too-deep`, `timing-history-truncated`, `timing-reference-outside-window`, `timing-query-budget`, `timing-too-many-activations`. */
 export interface SchedulerOptions {
@@ -1027,6 +1037,18 @@ class Run {
     }
   }
 
+  /** `activations`, inside `drive`: the activations of `node` begun by now in its current frame, in absolute time. */
+  activationsOf(node: TimeNode): Array<{ begin: number; end: number }> {
+    const f = this.currentFrame(node)
+    if (!f) return []
+    const out: Array<{ begin: number; end: number }> = []
+    for (const iv of this.intervalsIn(node, f)) {
+      if (!(iv.begin <= f.tau)) continue
+      out.push({ begin: toAbsFirst(f, iv.begin), end: lastAbs(f, iv.begin, iv.end) })
+    }
+    return out
+  }
+
   /** `endTimeOf`, inside `drive`: the end of the last activation, in whichever ancestor iteration it happened. */
   endOf(node: TimeNode): number | 'indefinite' | undefined {
     let frames: Frame[]
@@ -1094,6 +1116,16 @@ export function createScheduler(tree: TimingTree, options: SchedulerOptions = {}
         ;(s.status === 'active' ? active : frozen).push(entry)
       }
       return { active, frozen, ended }
+    },
+    activations(events, t) {
+      const out: MediaActivation[] = []
+      if (Number.isNaN(t)) return out
+      const run = new Run(ix, prepare(events, t), t, report)
+      for (const node of ix.list) {
+        if (isContainer(node) || (node.kind !== 'audio' && node.kind !== 'video' && node.kind !== 'cmd')) continue
+        for (const a of run.drive(() => run.activationsOf(node))) out.push({ node, begin: a.begin, end: a.end })
+      }
+      return out
     },
     endTimeOf(nodeId, events) {
       const node = ix.byId.get(nodeId)
