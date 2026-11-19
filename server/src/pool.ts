@@ -15,7 +15,9 @@ import type { LayerCrop, MarkLayerResult, MarkRasterResult } from './mark/mark-r
 import { SHOW_BUILD_BYTES, showRequestBytes } from './show/grant'
 import { SHOW_PLAN_DEADLINE_MS, type BuiltShowPlan, type ShowPlanJob, type ShowRefusal } from './show/build'
 import type { BuiltMorph, MorphJob } from './show/morph'
-import type { MarkSpec, NotesJob, NotesPlan, NotesRaster, OpenResult, Projection, RenderedUnit } from './render'
+import type { MarkSpec, MediaUnitRefs, NotesJob, NotesPlan, NotesRaster, OpenResult, Projection, RenderedUnit } from './render'
+import type { FfmpegInfo } from './media/ffmpeg'
+import { PROBE_DECK_MS, PROBE_PART_MS } from './media/probe'
 import type { WorkerReply, WorkerRequest } from './worker/render-worker'
 import { prepareWorkspace, TEXT_PREPARE_ALLOWANCE, type TextJob, type TextReply } from './text/served'
 
@@ -32,8 +34,12 @@ export interface RenderJob { docRef: string; contentPolicy: 'visible-only' | 'fu
 export type PoolNotesJob = { docRef: string; contentPolicy: 'visible-only' | 'full' } & NotesJob
 /** A per-session Layer-1 encode (§9.4); no document affinity. */
 export interface EncodeJob { png: Uint8Array; w: number; h: number; kBasis: Uint8Array; code: Int8Array; hangMs?: number; crash?: boolean }
-/** Piece 4: a show-plan bundle or track job on the docRef's worker. */
-export type PoolShowJob = { docRef: string; contentPolicy: 'visible-only' | 'full'; hangMs?: number; crash?: boolean } & ShowPlanJob
+/** Piece 4: a show-plan bundle or track job on the docRef's worker. `media` (piece 5, D21: `can.media`) joins the
+ * refusal and remembered keys; absent is false. */
+export type PoolShowJob = { docRef: string; contentPolicy: 'visible-only' | 'full'; media?: boolean; hangMs?: number; crash?: boolean } & ShowPlanJob
+/** Piece 5 (D21): a media read job's deadline. `mediaRefs` may probe a deck's whole budget (10 s) plus one part's
+ * staging; `mediaPart` streams up to 512 MiB. Neither is an encode. */
+export const MEDIA_JOB_DEADLINE_MS = PROBE_DECK_MS + 2 * PROBE_PART_MS + 1000
 /** Piece 4 Task 7: a Morph pair job on the docRef's worker. */
 export type PoolMorphJob = { docRef: string; contentPolicy: 'visible-only' | 'full'; hangMs?: number; crash?: boolean } & MorphJob
 /** Piece 4 D7: a show-plan layer's per-session Layer-1 encode. */
@@ -44,7 +50,7 @@ export type PoolTextJob = { docRef: string; contentPolicy: 'visible-only' | 'ful
  * every prepare it needs is charged separately (`prepareWorkspace`). */
 export const TEXT_JOB_BYTES = TEXT_PREPARE_ALLOWANCE
 /** `servedCacheBytes`: the worker's served-index bound per document (R6 default 32 MiB). */
-export interface PoolOptions { /** Piece 4 (tests shorten it): the show-plan job deadline, default `SHOW_PLAN_DEADLINE_MS`. */ showDeadlineMs?: number; workers?: number; caps?: Caps; recyclePages?: number; now?: () => number; testHooks?: boolean; openDeadlineMs?: number; servedCacheBytes?: number }
+export interface PoolOptions { /** Piece 4 (tests shorten it): the show-plan job deadline, default `SHOW_PLAN_DEADLINE_MS`. */ showDeadlineMs?: number; workers?: number; caps?: Caps; recyclePages?: number; now?: () => number; testHooks?: boolean; openDeadlineMs?: number; servedCacheBytes?: number; /** Piece 5 (D21): ffmpeg and the media temp dir, forwarded in each worker's init. */ media?: { info: FfmpegInfo; dir: string } }
 
 const WORKER_URL = resolve(import.meta.dir, 'worker/render-worker.ts')
 const PRELOAD = resolve(import.meta.dir, '../../scripts/stream-s0/napi-preload.ts')
@@ -63,6 +69,8 @@ interface Slot {
   docs: Map<string, string>       // docRef|policy → docKey on this worker
   pages: number
   parses: number
+  /** Piece 5: media probes run by the current worker. */
+  probes: number
   generation: number
   /** The preparation grant of the show job holding this slot (0: none). */
   prep: number
@@ -86,6 +94,7 @@ export class Pool {
   private readonly testHooks: boolean
   private readonly servedCacheBytes?: number
   private readonly showDeadlineMs: number
+  private readonly media?: { info: FfmpegInfo; dir: string }
   /**
    * Piece 4 (controller ruling): show-plan refusals by slide (`docRef|policy|unit|scale|motion|strictMarks`: the
    * L1 tuple; the fingerprint is per process). A slide that timed out retired its worker, and with it the worker's
@@ -132,14 +141,15 @@ export class Pool {
     this.testHooks = opts.testHooks ?? false
     this.servedCacheBytes = opts.servedCacheBytes
     this.showDeadlineMs = opts.showDeadlineMs ?? SHOW_PLAN_DEADLINE_MS
+    this.media = opts.media
     for (let i = 0; i < (opts.workers ?? defaultWorkers()); i++) {
-      const slot = { index: i, busy: false, queue: [], pending: new Map(), docs: new Map(), pages: 0, parses: 0, generation: 0, closed: false, prep: 0 } as unknown as Slot
+      const slot = { index: i, busy: false, queue: [], pending: new Map(), docs: new Map(), pages: 0, parses: 0, probes: 0, generation: 0, closed: false, prep: 0 } as unknown as Slot
       this.attach(slot)
       this.slots.push(slot)
     }
   }
 
-  private static failure(error: string): WorkerReply { return { id: -1, ok: false, error, stats: { parses: 0, pages: 0, docs: 0 } } }
+  private static failure(error: string): WorkerReply { return { id: -1, ok: false, error, stats: { parses: 0, pages: 0, docs: 0, probes: 0 } } }
 
   /** Settles every in-flight post on `slot` with a failure reply. */
   private settle(slot: Slot, error: string) {
@@ -161,9 +171,12 @@ export class Pool {
       const p = slot.pending.get(e.data.id)
       if (!p) return
       slot.pending.delete(e.data.id)
-      slot.pages = e.data.stats.pages; slot.parses = e.data.stats.parses
+      slot.pages = e.data.stats.pages; slot.parses = e.data.stats.parses; slot.probes = e.data.stats.probes
       p.ok(e.data)
     }
+    // The init goes first (messages are ordered), so every later job sees the media config. Its reply is unawaited;
+    // a worker whose init fails has media off (every entry `media-unavailable`).
+    worker.postMessage({ type: 'init', id: this.nextId++, ...(this.media ? { media: this.media } : {}) } satisfies WorkerRequest)
     worker.addEventListener('close', () => {
       markClosed()
       if (slot.worker !== worker) return
@@ -291,7 +304,7 @@ export class Pool {
    */
   async showPlan(sessionId: string, job: PoolShowJob, bytesEstimate: number, signal?: AbortSignal): Promise<BuiltShowPlan | ShowRefusal> {
     const { docRef, contentPolicy, hangMs, crash, ...show } = job
-    const key = [docRef, contentPolicy, show.unitIndex, show.scale, show.motion, show.strictMarks].join('|')
+    const key = [docRef, contentPolicy, show.unitIndex, show.scale, show.motion, show.strictMarks, show.media === true].join('|')
     const known = this.showRefusals.get(key)
     if (known) return known
     let r: BuiltShowPlan | ShowRefusal
@@ -308,7 +321,7 @@ export class Pool {
   /** Piece 4: the keyframe track of one composited step (affinity, admission, `SHOW_PLAN_DEADLINE_MS`; a timeout throws `RenderTimeout`). */
   async showTrack(sessionId: string, job: PoolShowJob & { step: number }, bytesEstimate: number, signal?: AbortSignal): Promise<Array<{ assetId: number; w: number; h: number; png: Uint8Array }>> {
     const { docRef, contentPolicy, hangMs, crash, ...show } = job
-    const plan = [docRef, contentPolicy, show.unitIndex, show.scale, show.motion, show.strictMarks].join('|')
+    const plan = [docRef, contentPolicy, show.unitIndex, show.scale, show.motion, show.strictMarks, show.media === true].join('|')
     // A slide whose bundle is refused has no track.
     if (this.showRefusals.has(plan)) return []
     return await this.remembered(docRef, `${plan}|track|${show.step}`, async () => await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-track', id: this.nextId++, docKey, job: show, grant: bytesEstimate, ...this.hooks(hangMs, crash) }), signal) as Array<{ assetId: number; w: number; h: number; png: Uint8Array }>)
@@ -333,6 +346,42 @@ export class Pool {
         if (signal?.aborted) throw new ShowCancelled()
         const msg: WorkerRequest = { type: 'mark-layer', id: this.nextId++, png: job.png, w: job.w, h: job.h, kBasis: job.kBasis, code: job.code, crop: job.crop, ...this.hooks(job.hangMs, job.crash) }
         return this.runJob(slot, admitted, msg, this.showDeadlineMs) as Promise<MarkLayerResult>
+      })
+    } finally {
+      if (admitted.state === 'running') this.finish(admitted)
+    }
+  }
+
+  /**
+   * Piece 5 (D21, D22): unit `unit`'s audio uses and their probed entries, from the document's table on its affinity
+   * worker (one table per document). A short read job admitted like `text`; not an encode.
+   */
+  async mediaRefs(sessionId: string, docRef: string, contentPolicy: 'visible-only' | 'full', unit: number, signal?: AbortSignal): Promise<MediaUnitRefs> {
+    return await this.mediaJob(sessionId, docRef, contentPolicy, (docKey) => ({ type: 'media-refs', id: this.nextId++, docKey, unit }), signal) as MediaUnitRefs
+  }
+
+  /**
+   * Piece 5 (D21): the worker writes the projected part to a 0600 file in `dir` (the media temp dir), so part bytes
+   * never cross the worker boundary; the caller adopts it into its `MediaTemp` ledger. A short read job like `text`.
+   */
+  async mediaPart(sessionId: string, docRef: string, contentPolicy: 'visible-only' | 'full', partPath: string, dir: string, signal?: AbortSignal): Promise<{ path: string; bytes: number; sourceHash: string }> {
+    return await this.mediaJob(sessionId, docRef, contentPolicy, (docKey) => ({ type: 'media-part', id: this.nextId++, docKey, partPath, dir }), signal) as { path: string; bytes: number; sourceHash: string }
+  }
+
+  private async mediaJob(sessionId: string, docRef: string, contentPolicy: 'visible-only' | 'full', msg: (docKey: string) => WorkerRequest, signal?: AbortSignal): Promise<unknown> {
+    const admitted = await this.admit(sessionId, TEXT_JOB_BYTES, signal)
+    const slot = this.pick(docRef)
+    try {
+      return await this.exclusive(slot, async () => {
+        if (signal?.aborted) throw new ShowCancelled()
+        const generation = slot.generation
+        try {
+          const { docKey } = await this.ensureOpen(slot, docRef, contentPolicy)
+          if (signal?.aborted) throw new ShowCancelled()
+          return await this.runJob(slot, admitted, msg(docKey), MEDIA_JOB_DEADLINE_MS)
+        } finally {
+          if (slot.generation === generation && !slot.closed && slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
+        }
       })
     } finally {
       if (admitted.state === 'running') this.finish(admitted)
@@ -574,7 +623,7 @@ export class Pool {
       old.terminate()
       await closed
     }
-    slot.docs.clear(); slot.pages = 0; slot.parses = 0; slot.generation++
+    slot.docs.clear(); slot.pages = 0; slot.parses = 0; slot.probes = 0; slot.generation++
     if (!this.disposed) this.attach(slot)
   }
 
@@ -607,7 +656,7 @@ export class Pool {
 
   stats() {
     return {
-      workers: this.slots.map((s) => ({ index: s.index, generation: s.generation, pages: s.pages, parses: s.parses, docs: s.docs.size, busy: s.busy, closed: s.closed })),
+      workers: this.slots.map((s) => ({ index: s.index, generation: s.generation, pages: s.pages, parses: s.parses, probes: s.probes, docs: s.docs.size, busy: s.busy, closed: s.closed })),
       reserved: this.admission.reserved, running: this.admission.runningCount, queued: this.admission.queued,
       prep: { ...this.prep, bound: this.slots.length * SHOW_BUILD_BYTES },
       retired: this.retired, recycled: this.recycled, encodes: this.encodes, affinity: Object.fromEntries(this.affinity), unitSizes: this.unitSizes.size,

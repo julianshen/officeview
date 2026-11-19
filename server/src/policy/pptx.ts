@@ -18,6 +18,30 @@ const slideIdPath = (slideId: Node, targets: Map<string | undefined, string>) =>
 const hiddenByRoot = (root: Node) => { const slide = all(root, 'sld')[0]; return !!slide && isFalse(attr(slide,'show')) }
 const hiddenByEntry = (slideId: Node) => isFalse(attr(slideId,'show'))
 
+/** The shape's own `cNvPr` (not a nested shape's) when it is flagged hidden: the projection's shape rule. */
+function hiddenFlag(shape: Node): Node | undefined {
+  const properties = (n: Node): Node[] => n.children.flatMap(c => shapes.has(local(c.name)) ? [] : local(c.name) === 'cNvPr' ? [c] : properties(c))
+  return properties(shape).find(p => isTrue(attr(p, 'hidden')))
+}
+
+/**
+ * Piece 5 (hidden shapes under `'full'`, where they are not stripped): the `cNvPr` ids of every shape the
+ * visible-only projection would drop, by the same rule, including every shape inside a hidden group.
+ */
+export function hiddenShapeIds(root: Node): Set<string> {
+  const out = new Set<string>()
+  const visit = (node: Node, hidden: boolean) => {
+    for (const c of node.children) {
+      if (!shapes.has(local(c.name))) { visit(c, hidden); continue }
+      const own = hidden || !!hiddenFlag(c)
+      if (own) for (const p of all(c, 'cNvPr')) { const id = attr(p, 'id'); if (id) out.add(id) }
+      visit(c, own)
+    }
+  }
+  visit(root, false)
+  return out
+}
+
 export function projectPptx(ctx: Context): void {
   const presentation = ctx.parts.get('ppt/presentation.xml')
   const targets = slideTargets(ctx.parts.get('ppt/_rels/presentation.xml.rels'))
@@ -33,8 +57,7 @@ export function projectPptx(ctx: Context): void {
     function visit(node: Node) {
       node.children = node.children.filter(current => {
         if (shapes.has(local(current.name))) {
-          const properties = (n: Node): Node[] => n.children.flatMap(c => shapes.has(local(c.name)) ? [] : local(c.name) === 'cNvPr' ? [c] : properties(c))
-          const flag = properties(current).find(p => isTrue(attr(p, 'hidden')))
+          const flag = hiddenFlag(current)
           if (flag) { ctx.diagnostics.push({code:'hidden-stripped',part,element:flag.name,attr:'hidden',value:attr(flag,'hidden')}); return false }
         }
         visit(current); return true

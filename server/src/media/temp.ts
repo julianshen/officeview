@@ -55,8 +55,34 @@ export async function createMediaTemp(root: string = tmpdir()): Promise<MediaTem
   if (claimed.has(dir)) throw new Error(`media temp: ${dir} is already claimed by this process`)
   claimed.add(dir)
   try { await claimDir(dir) } catch (e) { claimed.delete(dir); throw e }
+  return tempOver(dir, async (ledger) => {
+    ledger.clear()
+    try { await rm(dir, { recursive: true, force: true }) } finally { claimed.delete(dir) }
+  })
+}
+
+/**
+ * A view over a media directory another instance claimed (a render worker's view of the pool's `dir`, plan D21).
+ * Workers share `process.pid` but not module state, so a worker must never call `createMediaTemp`: its empty
+ * `claimed` set would reclaim, and empty, the live directory. The view claims nothing; `remove()` disposes only the
+ * files it holds and leaves the directory to its owner.
+ */
+export function attachMediaTemp(dir: string): MediaTemp {
+  const abs = resolve(dir)
+  const st = lstatSync(abs)
+  if (!st.isDirectory() || st.isSymbolicLink() || (st.mode & 0o777) !== 0o700 || (uid() !== undefined && st.uid !== uid())) throw new Error(`media temp: ${abs} is not our 0700 directory`)
+  return tempOver(abs, async (ledger) => {
+    const paths = [...ledger.values()].map((e) => e.path)
+    ledger.clear()
+    await Promise.all(paths.map((p) => unlink(p).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'ENOENT') throw e })))
+  })
+}
+
+type Ledger = Map<symbol, { path: string; bytes?: number }>
+
+function tempOver(dir: string, removeAll: (ledger: Ledger) => Promise<void>): MediaTemp {
   /** Ledger: one entry per live handle; `bytes` undefined means "reserved, size read when asked". */
-  const ledger = new Map<symbol, { path: string; bytes?: number }>()
+  const ledger: Ledger = new Map()
 
   const handle = (path: string, bytes?: number): MediaFile => {
     const key = Symbol(path)
@@ -114,9 +140,6 @@ export async function createMediaTemp(root: string = tmpdir()): Promise<MediaTem
       }
       return n
     },
-    async remove() {
-      ledger.clear()
-      try { await rm(dir, { recursive: true, force: true }) } finally { claimed.delete(dir) }
-    },
+    remove: () => removeAll(ledger),
   }
 }

@@ -37,6 +37,15 @@ import { gateBackend } from './show/canvas'
 import { buildShowPlan, createShowDoc, type BuiltShowPlan, type ShowBuildOptions, type ShowDoc, type ShowPlanJob, type ShowRefusal } from './show/build'
 import { renderTrack } from './show/tracks'
 import { buildMorphPlan, MorphInvalid, morphReference, type BuiltMorph, type MorphJob } from './show/morph'
+import { asAudioUse, createDocMediaTable, MediaPartRefused, writePart, type DocMediaEntry, type DocMediaTable, type MediaTableSeams } from './media/probe'
+import { attachMediaTemp, type MediaTemp } from './media/temp'
+import type { FfmpegInfo } from './media/ffmpeg'
+import { hiddenShapeIds } from './policy/pptx'
+import { readTree } from './policy/tree'
+import { readRelationships } from '../../src/slideshow/read/deck'
+import { mediaShapes } from '../../src/slideshow/read/media'
+import { parseXml } from '../../src/core/xml'
+import type { ShowSlide, TimeNode } from '../../src/slideshow/types'
 import { answerText, buildServedUnit, OBSERVER_BUDGET, prepareWorkspace, recordSpans, ServedCache, TEXT_RECORD_BUDGET, TextBudgetExceeded, TextRefusal, type ServedUnit, type TextJob, type TextReply } from './text/served'
 
 export const MAX_UNIT_PX = 8192
@@ -57,7 +66,7 @@ export type RenderedUnit = (
 ) & { evidence?: OcclusionEvidence }
 /** `wrap` may interpose on the context the painter receives (the visible mark is painted outside it). */
 export interface PaintObserver { beforeUnit(ctx: CanvasRenderingContext2D, unitIndex: number): void; afterUnit(ctx: CanvasRenderingContext2D, unitIndex: number): void; wrap?(ctx: CanvasRenderingContext2D): CanvasRenderingContext2D }
-export class RenderRefusal extends Error { constructor(readonly code: 'unsupported-format' | 'unit-range' | 'scale' | 'oversize' | 'unknown-doc' | 'bad-job' | 'grant', m?: string) { super(m ?? code); this.name = 'RenderRefusal' } }
+export class RenderRefusal extends Error { constructor(readonly code: 'unsupported-format' | 'unit-range' | 'scale' | 'oversize' | 'unknown-doc' | 'bad-job' | 'grant' | 'media-part', m?: string) { super(m ?? code); this.name = 'RenderRefusal' } }
 
 /** §7.7: every paint pass that serves a unit records occlusion evidence. */
 function observe(ctx: CanvasRenderingContext2D, w: number, h: number, scale: number, observers: readonly PaintObserver[], maxObserverBytes?: number) {
@@ -89,7 +98,10 @@ export function layoutFingerprint(contentPolicyId: string): string {
  * original, which holds withheld content), its metadata store and the show-plan caches. `anim` (D5): the shown
  * units with timing, a transition or both.
  */
-export interface OpenDoc { key: string; docRef: string; show?: ShowDoc; anim: number[]; morph: number[]; paintables: PaintableArray; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
+export interface OpenDoc { key: string; docRef: string; show?: ShowDoc; /** Piece 5 (D21): the probe table, over the projected package. */ media: DocMediaTable; anim: number[]; morph: number[]; paintables: PaintableArray; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
+/** Piece 5 (D22): a unit's AUDIO uses (an audio node, a `p:sndTgt` sound, a transition sound) and their probed entries.
+ * Video nodes are never listed. `spid`: the shape an audio node plays on (none for a sound). */
+export interface MediaUnitRefs { unit: number; hidden: boolean; refs: Array<{ k: number; partPath: string; spid?: string; hiddenShape: boolean; entry: DocMediaEntry }> }
 /** A notes job (Stage 3c): `draw: false` plans only (size, truncation, characters drawn); `true` draws with the visible mark. */
 export interface NotesJob { unitIndex: number; scale: number; mark: MarkSpec; draw: boolean }
 export interface NotesPlan { kind: 'notes-plan'; w: number; h: number; truncated: boolean; chars: number }
@@ -205,14 +217,16 @@ export class DocumentHost {
           morph.length = 0
         }
       }
-      doc = { key, docRef, paintables, raw, hidden, anim, morph, ...(notes ? { notes } : {}), ...(show ? { show } : {}), units, fingerprint, contentPolicyId: projected.contentPolicyId, diagnostics: projected.diagnostics, format: admitted.format }
+      const opened = { key, docRef, paintables, raw, hidden, anim, morph, ...(notes ? { notes } : {}), ...(show ? { show } : {}), units, fingerprint, contentPolicyId: projected.contentPolicyId, diagnostics: projected.diagnostics, format: admitted.format } as Omit<OpenDoc, 'media'> as OpenDoc
+      opened.media = this.mediaTableFor(opened)
+      doc = opened
       this.docs.set(key, doc)
     }
     return { docKey: key, units: doc.units, hidden: doc.hidden, anim: [...doc.anim], morph: [...doc.morph], layoutFingerprint: doc.fingerprint, contentPolicyId: doc.contentPolicyId, format: doc.format, diagnostics: doc.diagnostics, fontDiagnostics: doc.paintables.fontDiagnostics?.length ?? 0 }
   }
 
   has(docKey: string) { return this.docs.has(docKey) }
-  drop(docKey: string) { const d = this.docs.get(docKey); if (d) { d.paintables.dispose(); d.show?.store.close(); this.docs.delete(docKey) } this.served.drop(docKey) }
+  drop(docKey: string) { const d = this.docs.get(docKey); if (d) { this.droppedProbes += d.media.probes; d.paintables.dispose(); d.show?.store.close(); this.docs.delete(docKey) } this.served.drop(docKey) }
   get docCount() { return this.docs.size }
 
   render(docKey: string, job: { unitIndex: number; scale: number; projection: Projection; mark: MarkSpec; missingFaces?: readonly string[] }, observers: readonly PaintObserver[] = []): RenderedUnit {
@@ -238,6 +252,96 @@ export class DocumentHost {
     return this.raster(paintable, job.unitIndex, w, h, job.scale, page, mark, observers)
   }
 
+  /** Piece 5 (D21): ffmpeg and the media temp directory, from the worker init; undefined = media off. */
+  private mediaConfig?: { info: FfmpegInfo; dir: string; temp: MediaTemp }
+  /** TEST-ONLY seams for the probe table (a clock, a held probe, a run observer); empty in production. */
+  mediaSeams: MediaTableSeams = {}
+  /** Sets ffmpeg and the media dir (a view over the pool's directory: a worker never claims one). Documents opened
+   * afterwards get a table over them; with no config every entry is `media-unavailable`. */
+  configureMedia(media: { info: FfmpegInfo; dir: string } | undefined): void {
+    this.mediaConfig = media ? { ...media, temp: attachMediaTemp(media.dir) } : undefined
+  }
+  /** With no media config: a temp that is never used (no ffmpeg means no probe stages a file). */
+  private static readonly NO_TEMP: MediaTemp = {
+    dir: '', create: () => Promise.reject(new Error('media off')), adopt: () => { throw new Error('media off') }, reserve: () => { throw new Error('media off') },
+    live: () => 0, bytes: () => 0, remove: () => Promise.resolve(),
+  }
+  private mediaTableFor(doc: OpenDoc): DocMediaTable {
+    const m = this.mediaConfig
+    return createDocMediaTable(doc, m?.info, m?.temp ?? DocumentHost.NO_TEMP, this.mediaSeams)
+  }
+  /** The document's probe table (tests, stats). */
+  mediaTable(docKey: string): DocMediaTable {
+    const doc = this.docs.get(docKey)
+    if (!doc) throw new RenderRefusal('unknown-doc')
+    return doc.media
+  }
+  /** Probes run, summed over open documents (worker stats). */
+  get mediaProbes(): number { let n = 0; for (const d of this.docs.values()) n += d.media.probes; return n + this.droppedProbes }
+  private droppedProbes = 0
+
+  /**
+   * Piece 5 (D21, D22): unit `unit`'s audio uses and their probed entries. Loads the slide (and probes in k order up
+   * to its highest k) first. A hidden slide lists nothing and probes nothing.
+   */
+  async mediaRefs(docKey: string, unit: number): Promise<MediaUnitRefs> {
+    const doc = this.docs.get(docKey)
+    if (!doc) throw new RenderRefusal('unknown-doc')
+    if (!Number.isInteger(unit) || unit < 0 || unit >= doc.units.length) throw new RenderRefusal('unit-range')
+    const hidden = doc.hidden.includes(unit)
+    if (!doc.show || hidden) return { unit, hidden, refs: [] }
+    await this.loadShow(doc, unit)
+    const show = doc.show
+    const slide = show.metas.get(unit)!.slide
+    const part = show.handle.slideParts[unit]!
+    const uses = audioUses(slide)
+    if (uses.length === 0) return { unit, hidden, refs: [] }
+    // Lazily: the slide's relationships (an external link is dropped from `slide.media`) and its shape tree.
+    let rels: Awaited<ReturnType<typeof readRelationships>> | undefined
+    let xml: string | undefined
+    const slideXml = async () => (xml ??= (await show.handle.pkg.entry(part)?.async('string')) ?? '')
+    const relsOf = async () => (rels ??= await readRelationships(show.handle, part).catch(() => []))
+    const hiddenIds = doc.contentPolicyId.startsWith('full') ? hiddenShapeIds(readTree(await slideXml())) : new Set<string>()
+    const refs: MediaUnitRefs['refs'] = []
+    const seen = new Set<string>()
+    for (const u of uses) {
+      const rec = 'spid' in u ? slide.media.find((m) => m.spid === u.spid) : slide.media.find((m) => m.rId === u.rId)
+      let entry: DocMediaEntry
+      if (rec) entry = asAudioUse(await doc.media.entry(rec.partPath, { external: false }))
+      else {
+        // No record: an external link (`media-linked`), else nothing to play (not listed).
+        let ids: string[] = []
+        if ('spid' in u) { for (const [id, spids] of mediaShapes(parseXml(await slideXml()))) if (spids.includes(u.spid)) ids.push(id) }
+        else ids = [u.rId]
+        const ext = (await relsOf()).find((r) => ids.includes(r.id) && r.external && MEDIA_REL_TYPE.test(r.type))
+        if (!ext) continue
+        entry = await doc.media.entry(ext.target, { external: true })
+      }
+      const spid = 'spid' in u ? u.spid : undefined
+      const key = `${entry.partPath}|${spid ?? ''}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      refs.push({ k: entry.k, partPath: entry.partPath, ...(spid !== undefined ? { spid } : {}), hiddenShape: spid !== undefined && hiddenIds.has(spid), entry })
+    }
+    return { unit, hidden, refs }
+  }
+
+  /**
+   * Piece 5 (D21): writes the projected part to a fresh 0600 file directly in the media dir (`dir` must be the one
+   * configured), so part bytes never cross the worker boundary. Only a media part of the projection is written.
+   */
+  async mediaPart(docKey: string, partPath: string, dir: string): Promise<{ path: string; bytes: number; sourceHash: string }> {
+    const doc = this.docs.get(docKey)
+    if (!doc) throw new RenderRefusal('unknown-doc')
+    const m = this.mediaConfig
+    if (!m || typeof dir !== 'string' || dir !== m.dir) throw new RenderRefusal('media-part', 'not the media directory')
+    if (typeof partPath !== 'string' || !(await doc.media.parts()).includes(partPath)) throw new RenderRefusal('media-part', 'not a media part of the projection')
+    try { return await writePart(doc, partPath, dir) } catch (e) {
+      if (e instanceof MediaPartRefused) throw new RenderRefusal('media-part', e.reason)
+      throw e
+    }
+  }
+
   /** TEST-ONLY seams for the show-plan build (a forced budget or composite mismatch, a ledger); empty in production. */
   showOptions: ShowBuildOptions = {}
   /** The seams plus the job's admitted grant (PR #78 round 13), when the pool sent one. */
@@ -250,7 +354,7 @@ export class DocumentHost {
    */
   async showPlan(docKey: string, job: ShowPlanJob, grant?: number): Promise<BuiltShowPlan | ShowRefusal> {
     const doc = this.showDoc(docKey, job)
-    await this.loadShow(doc.show!, job.unitIndex)
+    await this.loadShow(doc, job.unitIndex)
     this.pages++
     return buildShowPlan(doc, job, this.showJobOptions(grant))
   }
@@ -259,7 +363,7 @@ export class DocumentHost {
   async showTrack(docKey: string, job: ShowPlanJob & { step: number }, grant?: number): Promise<Array<{ assetId: number; w: number; h: number; png: Uint8Array }>> {
     const doc = this.showDoc(docKey, job)
     if (!Number.isInteger(job.step) || job.step < 0) throw new RenderRefusal('bad-job')
-    await this.loadShow(doc.show!, job.unitIndex)
+    await this.loadShow(doc, job.unitIndex)
     this.pages++
     return renderTrack(doc, job, this.showJobOptions(grant))
   }
@@ -276,8 +380,8 @@ export class DocumentHost {
     if (job.scale !== 1 && job.scale !== 2) throw new RenderRefusal('scale')
     const shown = (u: unknown) => Number.isInteger(u) && (u as number) >= 0 && (u as number) < doc.units.length && !doc.hidden.includes(u as number)
     if (!shown(job.from) || !shown(job.to) || job.from === job.to || !doc.morph.includes(job.to) || !Number.isInteger(job.fromStep) || job.fromStep < 0) throw new RenderRefusal('unit-range')
-    await this.loadShow(doc.show, job.from)
-    await this.loadShow(doc.show, job.to)
+    await this.loadShow(doc, job.from)
+    await this.loadShow(doc, job.to)
     this.pages++
     try { return buildMorphPlan(doc, job, this.showJobOptions(grant)) } catch (e) { if (e instanceof MorphInvalid) throw new RenderRefusal('unit-range', e.message); throw e }
   }
@@ -286,8 +390,8 @@ export class DocumentHost {
   async showMorphReference(docKey: string, job: MorphJob, progresses: readonly number[]) {
     const doc = this.docs.get(docKey)
     if (!doc?.show) throw new RenderRefusal('unknown-doc')
-    await this.loadShow(doc.show, job.from)
-    await this.loadShow(doc.show, job.to)
+    await this.loadShow(doc, job.from)
+    await this.loadShow(doc, job.to)
     return morphReference(doc, job, progresses)
   }
 
@@ -313,7 +417,10 @@ export class DocumentHost {
     return doc
   }
 
-  private async loadShow(show: ShowDoc, unit: number): Promise<void> {
+  /** The slide's metadata and the deck's images (async reads), then the media probes up to the slide's highest k
+   * (D21), so the synchronous build reads `doc.media.peek`. */
+  private async loadShow(doc: OpenDoc, unit: number): Promise<void> {
+    const show = doc.show!
     if (!show.metas.has(unit)) {
       const h = await show.acquire(unit)
       // The handle is held for the document's life: the slide's text-build working copy is charged to it.
@@ -323,6 +430,7 @@ export class DocumentHost {
       const backend = this.backend
       show.images = await Promise.all(show.doc.images.map((a) => decodeImageAsset(a as never, (b, mime) => backend.decodeImage(b, mime) as Promise<CanvasImageSource>).catch(() => undefined)))
     }
+    await doc.media.load(unit)
   }
 
   /** Stage 3c notes: unit i's notes slide read from the original package
@@ -442,4 +550,28 @@ export class DocumentHost {
     if (out.discriminator === 3) return { ok: false as const, reason: out.reason }
     return { ok: true as const, ops: out.ops, opCount: out.opCount, assets: out.assets, evidence: evidence() }
   }
+}
+
+const MEDIA_REL_TYPE = /\/(audio|video|media)$/
+const MAX_TIMING_DEPTH = 64
+
+/** D22: a slide's audio uses, in timing order then the transition sound: audio nodes (on a shape, or a `p:sndTgt`
+ * sound by relationship id) and the transition's start sound. Video nodes are not uses. */
+function audioUses(slide: ShowSlide): Array<{ spid: string } | { rId: string }> {
+  const out: Array<{ spid: string } | { rId: string }> = []
+  const timing = slide.timing
+  if (timing && !('refused' in timing)) {
+    const walk = (n: TimeNode, depth: number) => {
+      if (depth > MAX_TIMING_DEPTH) return
+      if ('children' in n) { for (const c of n.children) walk(c, depth + 1); return }
+      if (n.kind !== 'audio') return
+      const t = n.target
+      if ('spid' in t) out.push({ spid: t.spid })
+      else if ('snd' in t && t.snd) out.push({ rId: t.snd })
+    }
+    walk(timing.root, 0)
+  }
+  const start = slide.transition?.sound?.start
+  if (start) out.push({ rId: start.rId })
+  return out
 }
