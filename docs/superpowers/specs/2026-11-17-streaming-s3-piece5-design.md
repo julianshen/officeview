@@ -173,7 +173,7 @@ Piece 4 refuses a slide when a media end could change what is drawn, because the
 1. In a streamed show, a media node ends at its begin plus its media's `durationMs`, measured on the show clock. Its `ended` event never decides the end. A `playFrom(x)` command is an absolute seek to x within the current iteration, so `durationMs − x` remains of it from the command (§10, `playFrom`). A deck-command pause stops that node's clock until resume.
    - **Repeats and loops** (*my call*, the same rule on the server and the client):
      - `repeatCount = N` plays for N × `durationMs`.
-     - An indefinite repeat, a looping transition sound and "loop until next sound" never end on the clock. They end only on `stop`, on `onstopaudio`, on the next sound or on slide exit.
+     - An indefinite repeat, a looping transition sound and "loop until next sound" never end on the clock. They end only on `stop`, on `onstopaudio`, on the next sound or on slide exit. A looping transition sound is the exception to slide exit: as in PowerPoint and the local player, it plays on across the slide change until the next slide's sound or `p:endSnd` (§10).
      - A finite `dur` on the node bounds all of these, as in SMIL: the node ends at the earlier of `dur` and the media-derived end.
 2. The element follows the clock. If the bytes arrive after the node began, playback starts at the node's current offset. If they arrive after the node ended, it never plays. Buffering stalls don't move the end.
 3. Refused or unplayable media ends exactly as the local fallback does: at the node's finite `dur`, else at once. The server knows which media are refused, because it made the decision.
