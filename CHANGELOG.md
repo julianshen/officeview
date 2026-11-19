@@ -15,16 +15,18 @@ in git history.
 - **Excel formula conditional formatting rules (view-only).** "Use a formula" rules, `cellIs` rules whose value is a
   reference or a formula, and text, blank and error rules whose formula differs from the one Excel writes are now
   evaluated per cell by a bounded formula evaluator, compose with the other rule kinds, and paint wherever Excel 16.115's
-  own rendering verifies them (42 Stage 5 capabilities): the formula dialects, relative and pinned anchors and the edge
+  own rendering verifies them (43 Stage 5 capabilities): the formula dialects, relative and pinned anchors and the edge
   wrap, number/boolean/blank/error truth, the logical, information, text, math, aggregate, conditional-aggregate, date,
   row/column and `TODAY()` functions, hoisted whole-column aggregates and `COUNTIF` frequency, reference, relative,
   expression and blank `cellIs` operands, divergent predicates, saved values under manual calculation, stopIfTrue and
   priority composition with fills, scales and bars, references to other sheets (also as a `cellIs` operand), formula
-  colour-scale bounds and the x14 standalone colour scale. On Excel's own oracle workbooks every formula cell is
+  colour-scale bounds, formula icon-set thresholds (measured against a glyph key captured at the centred placement
+  Excel gives Normal-style cells) and the x14 standalone colour scale. On Excel's own oracle workbooks every formula cell is
   Excel's reading or withheld. Everything else keeps its base formatting and is announced as unavailable: shapes Excel
   rewrites or refuses (`activePresent` on scales, bars and icon sets; a time-period formula that differs from its
   period; a reference to a missing sheet; a non-numeric formula bound), readings production does not implement (text and
-  range truth, error operands, a relative cfvo bound), formula bar and icon bounds, and stopIfTrue ahead of an icon set.
+  range truth, error operands, a relative cfvo bound, a relative formula bound across several ranges), formula bar
+  bounds, and stopIfTrue ahead of an icon set.
 
 - **Excel time-period rules (view-only): a rule's formula is classified, not ignored.** A conditional formatting
   "dates occurring" rule whose `<formula>` is the one Excel itself writes for its period (today, yesterday, tomorrow,
