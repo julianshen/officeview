@@ -22,6 +22,7 @@
 import type { SlideSource } from '../../slideshow/player/driver'
 import type { ShowSlide } from '../../slideshow/types'
 import type { Manifest } from '../manifest'
+import { localTransition } from '../show-plan'
 import type { ShowBundle } from './show-bundle'
 
 export function createPlanSource(o: { manifest: Manifest; unitOf: readonly number[]; bundles: (streamed: number) => ShowBundle | undefined; loop: boolean; kiosk: boolean }): SlideSource {
@@ -40,7 +41,7 @@ export function createPlanSource(o: { manifest: Manifest; unitOf: readonly numbe
     const { plan } = bundle
     options = plan.options
     const { timing, transition, builds } = plan.show
-    return { index: i, hidden: false, timing, ...(transition ? { transition } : {}), builds: builds ?? [], notes: [], links: [], media: [] }
+    return { index: i, hidden: false, timing, ...(transition ? { transition: localTransition(transition) } : {}), builds: builds ?? [], notes: [], links: [], media: [] }
   }
   return {
     count: o.unitOf.length,

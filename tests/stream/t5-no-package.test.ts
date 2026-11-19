@@ -52,7 +52,7 @@ import { createSlideShowWorkspace } from '../../src/slideshow/workspace'
 import { decodeRasterBody } from '../../src/stream/raster'
 import { createPlanStage, createTrackWindow, type PlanAssets, type PlanSlideData, type PlanStageDeps, type PlanTrack } from '../../src/stream/remote/plan-stage'
 import type { ImageBitmapLike } from '../../src/stream/remote/show-fetch'
-import { decodeShowMessage, isRasterLayer, SHOW_PLAN_LIMITS, type MorphPlanRecord, type ShowMessage, type ShowPlanRecord } from '../../src/stream/show-plan'
+import { decodeShowMessage, isRasterLayer, localTransition, SHOW_PLAN_LIMITS, type MorphPlanRecord, type ShowMessage, type ShowPlanRecord } from '../../src/stream/show-plan'
 import { decodeUnit } from '../../src/stream/unit'
 
 const MOCKED = [
@@ -167,7 +167,7 @@ async function play(s: Session) {
   // The slide source a streamed show reads: the plan's show metadata, or a static still slide.
   const slideOf = (i: number): ShowSlide => {
     const plan = s.plans.get(i)?.plan
-    return { index: i, hidden: false, timing: plan?.show.timing, ...(plan?.show.transition ? { transition: plan.show.transition } : {}), builds: plan?.show.builds ?? [], notes: [], links: [], media: [] }
+    return { index: i, hidden: false, timing: plan?.show.timing, ...(plan?.show.transition ? { transition: localTransition(plan.show.transition) } : {}), builds: plan?.show.builds ?? [], notes: [], links: [], media: [] }
   }
   const source: SlideSource = {
     count: s.count,
