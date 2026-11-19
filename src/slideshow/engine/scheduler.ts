@@ -1049,7 +1049,9 @@ class Run {
       if (this.exhausted) break
       for (const iv of this.intervalsIn(node, f)) {
         if (!(iv.begin <= f.tau)) continue
-        list.push({ begin: toAbsFirst(f, iv.begin), end: lastAbs(f, iv.begin, iv.end) })
+        const begin = toAbsFirst(f, iv.begin), end = lastAbs(f, iv.begin, iv.end)
+        // A zero-length activation (begun at its ended parent's last instant) was never active.
+        if (begin < end) list.push({ begin, end })
       }
     }
     return { list, truncated: truncated || this.exhausted }

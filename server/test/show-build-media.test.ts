@@ -177,10 +177,9 @@ describe.skipIf(!info)('show plans carry audio media (Task 4)', () => {
         expect(json).not.toContain('@a')
       }
     }
-    // Stills with media on (Task 5): a video end that reveals a box (D22), a click-timed audio pause. A repeating
-    // audio plays from its plan now (rule 4: its end is N × durationMs on the clock).
-    expect(streamedOnly.sort()).toEqual(['togglePauseDeck#0', 'videoDeck#0'])
-    expect(shipped.sort()).toEqual(['builtIn#0', 'crossSlideSoundDeck#0', 'crossSlideSoundDeck#1', 'crossSlideSoundDeck#2', 'effectSoundDeck#0', 'narrationDeck#0', 'playFromDeck#0', 'repeatDeck#0', 'transitionSoundDeck#0', 'twoShapeAudioDeck#0'])
+    // Piece 4 stills (Task 5 owns them): a video end that reveals a box (D22), a trigger cut, a repeating audio.
+    expect(streamedOnly.sort()).toEqual(['repeatDeck#0', 'togglePauseDeck#0', 'videoDeck#0'])
+    expect(shipped.sort()).toEqual(['builtIn#0', 'crossSlideSoundDeck#0', 'crossSlideSoundDeck#1', 'crossSlideSoundDeck#2', 'effectSoundDeck#0', 'narrationDeck#0', 'playFromDeck#0', 'transitionSoundDeck#0', 'twoShapeAudioDeck#0'])
   }, 120_000)
 
   it("hidden shape's media is not shipped", async () => {
@@ -388,16 +387,14 @@ describe.skipIf(!info)('show plans carry audio media (Task 4)', () => {
         expect(p.media).toEqual([{ mediaId: expect.stringMatching(MEDIA_ID), kind: 'audio', spid: '3', durationMs: 0, refused: 'media-unavailable' }])
       } finally { c.close(); h.stop() }
     }
-    // Piece 4's stills stay stills with media off: a video end reveals a box, an audio repeats. With media on the
-    // video ones stay stills (D22); the repeating audio plays from its plan (Task 5, rule 4).
-    for (const [doc, still] of [[await mediaEndRevealDeck('onEnd'), [true, true]], [await videoDeck(), [true, true]], [await repeatDeck(2), [true, false]]] as const) {
-      for (const [i, media] of [undefined, { enabled: true, info }].entries()) {
+    // Piece 4's stills stay stills: a video end reveals a box (D22), an audio repeats; with media on and off.
+    for (const doc of [await mediaEndRevealDeck('onEnd'), await videoDeck(), await repeatDeck(2)]) {
+      for (const media of [undefined, { enabled: true, info }]) {
         const h = await start({ doc, pool: poolOn(), ...(media ? { media } : {}) }), c = new Client(h.url)
         try {
           await c.hello(); await c.ready()
           const r = await c.showPlan(0, 1, 'full')
-          if (still[i]) expect(r.end).toEqual({ reqId: r.reqId, type: 'error', code: 'still' })
-          else expect(r.end).toBeUndefined()
+          expect(r.end).toEqual({ reqId: r.reqId, type: 'error', code: 'still' })
         } finally { c.close(); h.stop() }
       }
     }

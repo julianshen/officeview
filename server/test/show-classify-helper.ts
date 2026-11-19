@@ -7,7 +7,6 @@
 import { canvasBackend } from '../../src/core/canvas-backend'
 import { decodeImageAsset } from '../../src/core/images'
 import { createDiagnosticSink } from '../../src/slideshow/diagnostics'
-import type { MediaClockRecord } from '../../src/slideshow/engine/media-ends'
 import { createSlideTimeline, type SlideCursor, type SlideTimeline } from '../../src/slideshow/engine/steps'
 import { prepareSlide, rasterPreparedLayer, type PreparedSlide } from '../../src/slideshow/prepare'
 import type { PlanLayer } from '../../src/slideshow/render/plan'
@@ -31,7 +30,7 @@ export const factory = (): CanvasFactory => (w, h) => canvasBackend().createCanv
 export interface Run { ps: PreparedSlide; c: Classification; rasters: Map<PlanLayer, LayerBitmap>; timeline: SlideTimeline; scale: number; ms: number }
 
 /** Prepares, rasterises (decoding the deck's images when `images`) and classifies slide 0 of `bytes`. */
-export async function classify(bytes: Uint8Array, opts: { scale?: number; strictMarks?: boolean; images?: boolean; media?: { records: readonly MediaClockRecord[] } } = {}): Promise<Run> {
+export async function classify(bytes: Uint8Array, opts: { scale?: number; strictMarks?: boolean; images?: boolean } = {}): Promise<Run> {
   const scale = opts.scale ?? 0.25
   const d = await loadShowDeck(bytes)
   const meta = await d.meta(0)
@@ -48,7 +47,7 @@ export async function classify(bytes: Uint8Array, opts: { scale?: number; strict
   }
   const timeline = createSlideTimeline(meta.timing, { showAnimation: true, reducedMotion: false })
   const t0 = performance.now()
-  const c = classifySlide({ ps, timeline, scale, rasters, strictMarks: opts.strictMarks ?? false, triggers: timeline.triggers(), ...(opts.media ? { media: opts.media } : {}) })
+  const c = classifySlide({ ps, timeline, scale, rasters, strictMarks: opts.strictMarks ?? false, triggers: timeline.triggers() })
   return { ps, c, rasters, timeline, scale, ms: performance.now() - t0 }
 }
 

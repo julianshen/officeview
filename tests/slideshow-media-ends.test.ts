@@ -158,6 +158,13 @@ describe('slideMediaEnds: the shared loop over a history', () => {
     expect(slideMediaEnds([all], mediaClockOf([all], [shapeRec(3000), shapeRec(5000, '4')])).settle(tla, tla.initial(), 9000).ends).toEqual([{ nodeId: 3, at: 800 }, { nodeId: 4, at: 800 }])
   })
 
+  it('a zero-length activation (a command at its ended parent\'s last instant) fires nothing', () => {
+    const box: ContainerNode = { kind: 'par', ctn: ctnOf(20, { durMs: 200 }), children: [cmdAt(10, 200, 'stop')] }
+    const r = root(audio(3), box)
+    const tl = timelineOf(r)
+    expect(slideMediaEnds([r], mediaClockOf([r], [shapeRec(3000)])).settle(tl, tl.initial(), 9000).ends).toEqual([{ nodeId: 3, at: 3000 }])
+  })
+
   it('a node with no record ends as it begins; a video node is never ended here (D22)', () => {
     const r = root(audio(3, { start: [{ delayMs: 400 }] }), { ...audio(9), kind: 'video' } as unknown as BehaviourNode)
     const tl = timelineOf(r)
