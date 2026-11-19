@@ -2197,7 +2197,7 @@ Every Stage 5 configuration, whether fill, scale, bar or icon, goes through one 
 **Readings Excel matched that production does not implement (withheld by the gate, re-deferred; no production change after the capture):**
 - `formula:truth-text`: `text-boolean-parse`, against production's `text-no-match | text-true`.
 - `formula:truth-range` and `formula:truth-range-nested`: `range-top-left`, no production reading.
-- `formula:hoist-aggregate-errors`: `error-propagates`, no production reading.
+- `formula:hoist-aggregate-errors`: `error-propagates`, no production reading. (Registered and published afterwards: §14.z.9.)
 - `formula:cellis-operand-text`: `text-compare`; `formula:cellis-operand-error`: `no-format`.
 - `formula:calc-manual-today`: `cf-today-live`, deliberately unregistered (a volatile TODAY() under manual calculation).
 - `formula:cfvo-relative`: `zero`, against production's `anchor-top-left` (reading-mismatch).
@@ -2422,7 +2422,7 @@ There are 2,036 rows over 17 cases: 791 formula cells, 542 painted as Excel, 0 d
     - production resolves and equals Excel's capture on every listed cell;
     - the entry stops counting once a listed capability is unpublished.
   - Production behaviour is unchanged.
-- **Follow-up (a future stage):** register Excel's `error-propagates` reading of `formula:hoist-aggregate-errors` (an error in a hoisted aggregate's range propagates to every cell) and publish it from its own discriminating case. It stays unregistered and unpublished in Stage 5.
+- **Follow-up: done (§14.z.9).** Register Excel's `error-propagates` reading of `formula:hoist-aggregate-errors` (an error in a hoisted aggregate's range propagates to every cell) and publish it. It was registered and published after this round, and `STAGE5_EXPECTED_RESOLUTIONS` was retired with it.
 - **Bytes (accepted):**
   - The seam lives in the lazy `service` chunk: 28,287 → 28,299 B gzip -9 (+12 B).
   - `check-eager` is ok.
@@ -2540,7 +2540,7 @@ There are 2,036 rows over 17 cases: 791 formula cells, 542 painted as Excel, 0 d
 | `formula:fn-date` | formula-functions | S5-E | DisplayFormat / PNG measurement | documented | published | none |
 | `formula:fn-row-column` | formula-functions | S5-E | DisplayFormat / PNG measurement | documented | published | none |
 | `formula:hoist-countif-frequency` | formula-hoist | S5-HOIST | DisplayFormat / PNG measurement | documented | published | none |
-| `formula:hoist-aggregate-errors` | formula-hoist | S5-HOIST | DisplayFormat / PNG measurement | error-propagates | withheld: reading-unimplemented: Excel matched error-propagates, production names no reading | withheld (gate) |
+| `formula:hoist-aggregate-errors` | formula-hoist | S5-HOIST | DisplayFormat / PNG measurement | error-propagates | withheld: reading-unimplemented: Excel matched error-propagates, production names no reading | withheld (gate) at this round; published since (§14.z.9) |
 | `formula:hoist-aggregate` | formula-hoist-aggregate | S5-HOIST | DisplayFormat / PNG measurement | documented | published | none |
 | `formula:cellis-operand-reference` | cellis-operands | S5-F | DisplayFormat / PNG measurement | documented | published | none |
 | `formula:cellis-operand-relative` | cellis-operands | S5-F | DisplayFormat / PNG measurement | documented | published | none |
@@ -2764,4 +2764,37 @@ Gates after the fix:
 - CF, worker, view and viewer-remote suites: 255 files, 5,298 passed. The one failure, `xlsx-viewer-construction-memory`, is the known load flake; it passes alone (22/22).
 - `tsc`: only the 3 known `@napi-rs/canvas` errors; `tsconfig.scripts.json` is clean.
 - `check-eager`: ok.
+- `git diff --check`: clean.
+
+### 14.z.9 Registering and publishing `formula:hoist-aggregate-errors` (owner-directed follow-up, 2026-11-19)
+
+The §14.z.4 follow-up. `stage5-formula-hoist` holds B2:B40 `A2>AVERAGE($A:$A)` and C2:C40 `A2=MAX($A:$A)` over a column whose A21:A22 are `#DIV/0!`. Excel (capture `b5e08ec5`, 2026-11-18) read the capability's `error-propagates` hypothesis, so no cell of either range formats. The id had stayed unpublished only because `CF_FORMULA_PRODUCTION_READINGS` had no entry for it, so the publication gate withheld it as `reading-unimplemented`.
+
+**The ruling.** Register `'formula:hoist-aggregate-errors': 'error-propagates'`. This is not a production behaviour change, and the reading was not fitted to the capture.
+
+**The evidence that production already implemented it**, all from before the capture. The capability's hypotheses were registered in `d29cebe4` (2026-11-16) and Excel captured on 2026-11-18. `tests/xlsx-cf-formula-hoist.test.ts` (`c7fd936f`, 2026-11-16) pins the behaviour:
+- a hoisted `SUM` over a range holding an error yields the first error;
+- the mutant that ignores errors fails that test;
+- the property test that hoisted scalar aggregates equal the engine includes all-error ranges, for `AVERAGE` and `MAX` among others.
+
+The comment on the registration cites these commits.
+
+**Nothing in `src` gates on the id.** After this change the id appears in `src` only in `formulaReadings.ts` (the registration) and in the generated `verifiedCapabilities.ts` (the published set). `tests/xlsx-cf-stage5.test.ts` asserts exactly that file list, so a new gate on the id would fail it.
+
+**Publication.** `bun scripts/cf-refs/audit.ts --stage 5 --write --publish-stage5` ran twice and the second run is byte-identical (sha-256 `e8c93ca1…`). Stage 5 goes from 43 to 44 ids and the combined set from 335 to 336 (110 S1, 34 S2, 51 S3, 97 S4, 44 S5). The only diff in `verifiedCapabilities.ts` is the id in the combined set and in `VERIFIED_STAGE5_CAPABILITIES`; it was written by the audit, never edited.
+
+**The stopgap is retired.** Task 39's `STAGE5_EXPECTED_RESOLUTIONS` (§14.z.4) existed only to stop an unpublished marker from counting as a refusal of those two rules. With the marker held, the counterfactual no longer refuses them, so the table, `stage5ExpectedResolution` and the exemption in `formulaMarkerReasons` are deleted. Nothing else used them, so no empty table with a dormant mechanism is left behind. The audit's Stage 5 case records are unchanged: 0 disagreeing.
+
+**Tests** (each written to fail first):
+- The Stage 5 publication includes the id with matched reading `error-propagates`, production registers that reading, and the committed set and `cfRuntimeEvidence` hold it.
+- The `src` file list above.
+- B2:B40 and C2:C40 are plain resolved cells: every cell resolves, `stage5JustifiedRefusals` is empty for it (no exception needed), and production's fill and strike equal Excel's capture on every cell Excel recorded.
+- The marker is a real gate again: with the id unpublished, B2 and C2 are refused by the marker capability (mutation).
+- Pinned count moved: `tests/xlsx-cf-icon-key-admission.test.ts` expects 44 committed Stage 5 ids (was 43).
+
+**Gates.**
+- Audits for stages 1–5 are ok and complete. Stage 5: `ok=true structural=31/31 unsupported=9 pending=5 unverifiedNonDiscriminating=9 stageComplete=true blockedCapabilities=0`; 2,160 records, 791 formula cells, 551 painted as Excel, 259 with justified unresolved slots, 129 with visual evidence compared, 0 disagreeing (identical with and without the stopgap).
+- `npx vitest run tests/xlsx-cf tests/xlsx-viewer tests/worker tests/view`: 252 files, 5,271 passed. The one failure was a 5 s timeout of `xlsx-cf-oracle-conformance` while other jobs shared the machine; it passes alone, together with `xlsx-viewer-construction-memory`.
+- `tsc`: only the 3 known `@napi-rs/canvas` errors; `tsconfig.scripts.json` is clean.
+- `OV_MODULE_MAP=1 vite build` then `check-eager`: eager graph ok.
 - `git diff --check`: clean.
