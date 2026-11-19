@@ -2673,3 +2673,95 @@ The final whole-branch codex review requested changes on four findings. The orch
 - **Chromium `xlsx-cf.spec.ts`:** 37/37, using the scratch Playwright config. WebKit is not installed (blocked gate).
 - **`git diff --check`:** clean.
 - **Production changes:** the type of `ParseXlsxOptions.evaluation` (type only), F1 in `src/xlsx/cf/formula.ts`, and F3 in `src/xlsx/view/pagedSource.ts`.
+
+### 14.z.8 The centred glyph key (owner decision 2026-11-19)
+
+§14.y and §14.z recorded that no Stage 5 icon crop classified. The crops are position-exact. Excel resaves the Stage 5 icon cells as Normal, `vertical="center"`, and draws their icons at cell top + 4 px, while the Stage 4 glyph key's cells (number format `;;;`, an xf with no `<alignment>`) are bottom-placed at + 7 px. Four icon capabilities were re-deferred for this reason. The ruling was that the fix belongs in measurement. The owner decided to capture a centred key in Excel, with no shifted or predicted-offset classifier for Stage 5.
+
+**The key case: `stage4-icon-glyph-key-centred` (`8126756d`; Excel capture `6d13e093`, Excel 16.115).**
+- The case lives in Stage 4, because only the Stage 4 pipeline records and verifies a glyph key. It is appended last to `CF_STAGE4_FIXTURES`, so no earlier GUID or input changes.
+- It repeats the Stage 4 key's 75 single-pair x14 custom rules and its calibration columns.
+- Its key and control cells are shaped like the Stage 5 icon cells: the default style (no `s`, xf 0), visible General `10` right-aligned, 20 pt rows, 14-character columns and the Normal Calibri 11 font. `tests/xlsx-cf-icon-centred-key.test.ts` pins this against the generated and the Excel-saved Stage 5 icon cells (cfvo-scope P12, cfvo-formulas Z2, composition K2), and checks that the visible numbers stay clear of the 28 px crop.
+- It owns no capability. Every `icon:glyph-*` and `icon:pixel-calibration` id stays with `stage4-icon-glyph-key`, which is first in manifest order.
+- Excel opened it repair-free (fcCount 1) and resaved it. The resaved key cells are xf 0 with `vertical="center"` on 20 pt rows.
+
+**Self-check.**
+- `verifyCfCase` verifies the case: `icon:pixel-calibration`, `icon:glyph-key` and all 75 `icon:glyph-<set>-<id>`.
+- The 75 pairs partition into the same 54 classes as the Stage 4 key: identical `glyphClasses`, the same 4 twin links (`4RedToBlack:0` with `5Quarters:4`, `4RedToBlack:1` with `5Boxes:0`) and the same faint class `5Boxes:0`. So class names agree between the two keys.
+- Every measurable key glyph sits exactly 3 px higher than in the Stage 4 key, with the same left edge. This is tested on all 74 framed cells. B21, the faint `5Boxes:0`, has no measurable frame in either key.
+- Two predictions from earlier work hold. The ink-frame top at 20 pt, centred, is + 4 px, which is `CF_ICON_RENDER_MODEL.keyFrame.rows[20].center`. The visible number does not change the glyph.
+
+**Key choice (fixed before the capture, `8126756d`).** A Stage 5 crop takes its key from its cell in the Excel-saved workbook, in two steps (`iconKeyPlacement`):
+1. Read the vertical alignment of the cell's own `cellXfs` entry. A missing `<alignment>` or `vertical` counts as bottom, which is how Excel drew the Stage 4 key's `;;;` xf.
+2. Read the row height: the row's `ht`, else `defaultRowHeight`. It must be exactly 20.
+
+The result then selects the key:
+
+| Cell placement | Key |
+|---|---|
+| centre at 20 pt | the centred key |
+| bottom at 20 pt | the Stage 4 key |
+| anything else (top, justify, another height, a cell the sheet does not hold, no styles part) | none: the crop is unmeasurable or `icon-class-none`, as before |
+
+- There is no fallback and no shifted search; `classifyIconCrop` still runs at zero offset.
+- `stage5IconKeys` admits a key only when its own case passes full `verifyCfCase` (review fix round 1, below) and every one of its own saved key cells reads the placement the key stands for.
+- One selector (`stage5IconKeyOf`) serves capture, verify and audit. Its result is cached on a content digest of the manifest and of both keys' sidecars, PNGs and saved workbooks.
+- `capture --stage 4 --verify-only` re-derives both key sidecars first.
+
+**Stage 5 re-evaluation (`capture --stage 5 --verify-only`; no Excel).** Every icon witness now classifies at cell-relative (2, 4).
+
+| Capability | Excel's reading | Production's reading | Disposition |
+|---|---|---|---|
+| `icon:thresholds-formula` (cfvo-formulas J2..J9 against twins Z/AA) | `evaluated`: 3Arrows 0,0,1,1,1,1,2,2 | `evaluated` | **Re-deferral lifted; published** |
+| `formula:composition-stop-icon` (I2..I7 against K/L) | `halts`: an icon on rows 2/4/6, none under the red fill on rows 3/5/7 | `halts` | **Re-deferral lifted.** It stays withheld by the publication gate as fixture-unconfirmable (`CF_STAGE5_UNCONFIRMABLE`). Witnesses L3/L5/L7 are withheld in production while `icon:composition-dxf-fill` is non-discriminating. |
+| `formula:composition-indirect-ahead-icon` (T2..T7) | `halts`, like the dxf, scale and bar siblings | none (no INDIRECT reading) | **Re-deferral lifted;** withheld as reading-unimplemented |
+| `formula:cfvo-scope-multi-range` | `formula-hypothesis-none` | — | **Kept deferred, now as a finding** (below) |
+
+On `formula:cfvo-scope-multi-range`, Excel drew the top icon (3Arrows:2) on all twelve designated icon cells and the top colour (`FF63BE7B`) on every scale cell, in the control range B as in D and F. Neither rule-wide nor per-range predicts that. The new reason in `CF_STAGE5_UNSUPPORTED` records this as a finding, never fitted (the S4-MINMAX precedent). Production keeps a multi-range formula bound unresolved.
+
+`bar:bounds-formula` is out of scope (fixture defect) and unchanged.
+
+**Publication.**
+- `audit --stage 5 --write --publish-stage5` ran twice; the second run is byte-identical. It publishes **43** Stage 5 ids, up from 42: `icon:thresholds-formula` joins `VERIFIED_STAGE5_CAPABILITIES` and the combined set. The selections are unchanged.
+- Audits:
+  - Stages 1–3: ok and complete.
+  - Stage 4: `ok=true structural=20/20 unsupported=2 pending=1 unverifiedNonDiscriminating=7 stageComplete=true blockedCapabilities=0`.
+  - Stage 5: `ok=true structural=31/31 unsupported=9 pending=5 unverifiedNonDiscriminating=9 stageComplete=true blockedCapabilities=0`.
+- Stage 5 case records: 2,160 rows, 791 formula cells. 551 are painted as Excel (542 before) and 259 have justified unresolved slots (268 before). 129 have visual evidence compared, and 0 disagree.
+
+**Production (Ruling S4-ROW-EXACT).**
+- No `src/` code changed. Only the evidence set `src/xlsx/cf/verifiedCapabilities.ts` gains `icon:thresholds-formula`, written by the audit.
+- Production now resolves icon sets whose thresholds are formula cfvo instead of announcing them unavailable. They paint only where the icon frame is admitted. A 20 pt row is never admitted (20 pt is 26.67 px, not a whole px), so on the Stage 5 oracle workbooks the icons stay withheld from the canvas. On admitted rows (15, 18 and 30 pt, the Normal font, a measured alignment) a formula-threshold icon set now paints its evaluated bucket.
+- The other three capabilities do not change what production paints: two stay withheld by the gate, and the scope bound stays unresolved.
+
+**Pins moved (comments in the tests):**
+- Stage 4 has 20 cases.
+- The `CF_CASES` slice is 56.
+- The multi-chunk list and the Stage 4 matrix: the centred key owns `[]`.
+- Stage 4 conformance: `checked` 1,658, `agreedIcon` 624. Production evaluates Excel's class on all 75 centred key cells. `unobserved` 21, `controls` 791.
+- `RECORDED_EXCEL_REFUSALS` drops stop-icon and indirect-ahead-icon and adds `cfvo-scope-multi-range`.
+- The Stage 1–4 input digest is unchanged: the centred input is excluded from it and pinned on its own.
+
+**Review fix round 1 (codex: changes requested, two Important findings; orchestrator rulings).** Each fix starts from a test that failed first: `tests/xlsx-cf-icon-key-admission.test.ts`, whose mutants live in memory through a wrapped `node:fs`.
+1. **A key is admitted only when its own case fully verifies.**
+   - Before the fix, admission checked only that the glyph table rebuilt and the saved placement matched. Codex's mutant (the centred sidecar's `lockBefore` set to `locked`) made `verifyCfCase` refuse the case with `display-locked`, yet `stage5IconKeys` still admitted the key, and `icon:thresholds-formula` published among 43 ids.
+   - `stage5IconKeys` now requires `verifyCfCase(keyCase)` to be `verified` with `icon:glyph-key`, for the Stage 4 key and the centred key alike. That covers lock states, the resave receipt, calibration, the capture checks and the key build.
+   - Under the mutant:
+     - the centred key is not admitted;
+     - the `stage5-cfvo-formulas` icon cells are unmeasurable again (no `icon:3Arrows` witness);
+     - the audit refuses the icon-bearing Stage 5 cases, because their committed evaluations no longer recompute (`sidecar-mismatch`). Only 30 ids publish, all within the committed 43, and `icon:thresholds-formula` is not among them.
+   - A locked Stage 4 key is likewise not admitted.
+2. **One invalidation for both cache layers.**
+   - Before the fix, the outer cache watched disk stats while `loadIconGlyphKey` cached on the manifest's declared hashes, so a vanished PNG still returned the stale key and a restored PNG still returned the cached miss.
+   - Both layers now key on the same content digest: the SHA-256 of the manifest text and of the case's sidecar, PNG and saved workbook, with a missing file digesting as `-` (`iconKeyCaseInputs`).
+   - Regression tests cover a PNG that vanishes after a warm cache (no key from either layer), one replaced with other bytes (re-evaluated: no key) and one restored after a cached miss (the 54-class key again).
+   - The check stays cheap: a cache hit costs one manifest parse and six file hashes, and the full `audit --stage 5` takes 18 s.
+
+Gates after the fix:
+- Audits for stages 1–5 are unchanged (Stage 5 `ok=true structural=31/31 … stageComplete=true blockedCapabilities=0`; 2,160 records, 551 painted as Excel, 0 disagreeing).
+- `--write --publish-stage5` ran twice: 43 ids, byte-identical, `verifiedCapabilities.ts` untouched.
+- `capture --stage 5 --verify-only` on the four icon cases leaves every sidecar byte-identical.
+- CF, worker, view and viewer-remote suites: 255 files, 5,298 passed. The one failure, `xlsx-viewer-construction-memory`, is the known load flake; it passes alone (22/22).
+- `tsc`: only the 3 known `@napi-rs/canvas` errors; `tsconfig.scripts.json` is clean.
+- `check-eager`: ok.
+- `git diff --check`: clean.

@@ -968,8 +968,8 @@
   "formulaEvaluation": {
     "formula:cfvo-scope-multi-range": {
       "status": "refused",
-      "code": "missing-capture",
-      "reason": "scope-icon: twin P12 cannot be measured",
+      "code": "formula-hypothesis-none",
+      "reason": "no hypothesis matches what Excel showed (rule-wide, per-range): a finding, never fitted",
       "observed": {
         "scope-scale": {
           "B2": "FF63BE7B",
@@ -1000,20 +1000,21 @@
           "N5": "FF63BE7B"
         },
         "scope-icon": {
-          "B12": "unmeasurable|none",
-          "B13": "unmeasurable|none",
-          "B14": "unmeasurable|none",
-          "B15": "unmeasurable|none",
-          "D12": "unmeasurable|none",
-          "D13": "unmeasurable|none",
-          "D14": "unmeasurable|none",
-          "D15": "unmeasurable|none",
-          "F12": "unmeasurable|none",
-          "F13": "unmeasurable|none",
-          "F14": "unmeasurable|none",
-          "F15": "unmeasurable|none"
+          "B12": "icon:3Arrows:2@2,4|none",
+          "B13": "icon:3Arrows:2@2,4|none",
+          "B14": "icon:3Arrows:2@2,4|none",
+          "B15": "icon:3Arrows:2@2,4|none",
+          "D12": "icon:3Arrows:2@2,4|none",
+          "D13": "icon:3Arrows:2@2,4|none",
+          "D14": "icon:3Arrows:2@2,4|none",
+          "D15": "icon:3Arrows:2@2,4|none",
+          "F12": "icon:3Arrows:2@2,4|none",
+          "F13": "icon:3Arrows:2@2,4|none",
+          "F14": "icon:3Arrows:2@2,4|none",
+          "F15": "icon:3Arrows:2@2,4|none"
         }
-      }
+      },
+      "survivors": []
     }
   }
 }

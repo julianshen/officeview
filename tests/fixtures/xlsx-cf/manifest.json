@@ -52754,6 +52754,5530 @@
       }
     },
     {
+      "id": "stage4-icon-glyph-key-centred",
+      "stage": 4,
+      "question": "The glyph key at the Stage 5 icon placement. Excel resaves the Stage 5 icon cells as Normal, vertical=center (§14.y, §14.z) and draws their icons at cell top + 4 px, while the Stage 4 key cells (number format ;;;, an xf without <alignment>) are bottom-placed at + 7 px, so no Stage 5 crop can classify against it. The same 75 single-cell x14 custom rules as stage4-icon-glyph-key, one per (set, iconId) pair (rows 2..21, iconId 0..4 in B..F), on cells exactly like the Stage 5 icon cells: the default style (no s, xf 0, which Excel resaves as Normal), visible right-aligned General numbers (10), 20 pt rows, 14-character columns and the Normal font; the same-content controls below show the same number. The calibration columns and solid DXF cell repeat the Stage 4 key's. Every Stage 5 crop whose saved cell is centred on a 20 pt row is classified against this key; it owns no capability.",
+      "input": "tests/fixtures/xlsx-cf/inputs/stage4-icon-glyph-key-centred.xlsx",
+      "saved": "tests/fixtures/xlsx-cf/stage4-icon-glyph-key-centred.xlsx",
+      "sheet": "Sheet1",
+      "range": "A1:K42",
+      "requiredAppearances": [
+        "screen"
+      ],
+      "markers": [
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3Arrows-0",
+          "sqref": "B2",
+          "ruleType": "iconSet",
+          "priority": 1,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Arrows",
+            "custom": [
+              {
+                "set": "3Arrows",
+                "iconId": 0
+              },
+              {
+                "set": "3Arrows",
+                "iconId": 0
+              },
+              {
+                "set": "3Arrows",
+                "iconId": 0
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3Arrows-1",
+          "sqref": "C2",
+          "ruleType": "iconSet",
+          "priority": 2,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Arrows",
+            "custom": [
+              {
+                "set": "3Arrows",
+                "iconId": 1
+              },
+              {
+                "set": "3Arrows",
+                "iconId": 1
+              },
+              {
+                "set": "3Arrows",
+                "iconId": 1
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3Arrows-2",
+          "sqref": "D2",
+          "ruleType": "iconSet",
+          "priority": 3,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Arrows",
+            "custom": [
+              {
+                "set": "3Arrows",
+                "iconId": 2
+              },
+              {
+                "set": "3Arrows",
+                "iconId": 2
+              },
+              {
+                "set": "3Arrows",
+                "iconId": 2
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3ArrowsGray-0",
+          "sqref": "B3",
+          "ruleType": "iconSet",
+          "priority": 4,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3ArrowsGray",
+            "custom": [
+              {
+                "set": "3ArrowsGray",
+                "iconId": 0
+              },
+              {
+                "set": "3ArrowsGray",
+                "iconId": 0
+              },
+              {
+                "set": "3ArrowsGray",
+                "iconId": 0
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3ArrowsGray-1",
+          "sqref": "C3",
+          "ruleType": "iconSet",
+          "priority": 5,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3ArrowsGray",
+            "custom": [
+              {
+                "set": "3ArrowsGray",
+                "iconId": 1
+              },
+              {
+                "set": "3ArrowsGray",
+                "iconId": 1
+              },
+              {
+                "set": "3ArrowsGray",
+                "iconId": 1
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3ArrowsGray-2",
+          "sqref": "D3",
+          "ruleType": "iconSet",
+          "priority": 6,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3ArrowsGray",
+            "custom": [
+              {
+                "set": "3ArrowsGray",
+                "iconId": 2
+              },
+              {
+                "set": "3ArrowsGray",
+                "iconId": 2
+              },
+              {
+                "set": "3ArrowsGray",
+                "iconId": 2
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3Flags-0",
+          "sqref": "B4",
+          "ruleType": "iconSet",
+          "priority": 7,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Flags",
+            "custom": [
+              {
+                "set": "3Flags",
+                "iconId": 0
+              },
+              {
+                "set": "3Flags",
+                "iconId": 0
+              },
+              {
+                "set": "3Flags",
+                "iconId": 0
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3Flags-1",
+          "sqref": "C4",
+          "ruleType": "iconSet",
+          "priority": 8,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Flags",
+            "custom": [
+              {
+                "set": "3Flags",
+                "iconId": 1
+              },
+              {
+                "set": "3Flags",
+                "iconId": 1
+              },
+              {
+                "set": "3Flags",
+                "iconId": 1
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3Flags-2",
+          "sqref": "D4",
+          "ruleType": "iconSet",
+          "priority": 9,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Flags",
+            "custom": [
+              {
+                "set": "3Flags",
+                "iconId": 2
+              },
+              {
+                "set": "3Flags",
+                "iconId": 2
+              },
+              {
+                "set": "3Flags",
+                "iconId": 2
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3TrafficLights1-0",
+          "sqref": "B5",
+          "ruleType": "iconSet",
+          "priority": 10,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3TrafficLights1",
+            "custom": [
+              {
+                "set": "3TrafficLights1",
+                "iconId": 0
+              },
+              {
+                "set": "3TrafficLights1",
+                "iconId": 0
+              },
+              {
+                "set": "3TrafficLights1",
+                "iconId": 0
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3TrafficLights1-1",
+          "sqref": "C5",
+          "ruleType": "iconSet",
+          "priority": 11,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3TrafficLights1",
+            "custom": [
+              {
+                "set": "3TrafficLights1",
+                "iconId": 1
+              },
+              {
+                "set": "3TrafficLights1",
+                "iconId": 1
+              },
+              {
+                "set": "3TrafficLights1",
+                "iconId": 1
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3TrafficLights1-2",
+          "sqref": "D5",
+          "ruleType": "iconSet",
+          "priority": 12,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3TrafficLights1",
+            "custom": [
+              {
+                "set": "3TrafficLights1",
+                "iconId": 2
+              },
+              {
+                "set": "3TrafficLights1",
+                "iconId": 2
+              },
+              {
+                "set": "3TrafficLights1",
+                "iconId": 2
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3TrafficLights2-0",
+          "sqref": "B6",
+          "ruleType": "iconSet",
+          "priority": 13,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3TrafficLights2",
+            "custom": [
+              {
+                "set": "3TrafficLights2",
+                "iconId": 0
+              },
+              {
+                "set": "3TrafficLights2",
+                "iconId": 0
+              },
+              {
+                "set": "3TrafficLights2",
+                "iconId": 0
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3TrafficLights2-1",
+          "sqref": "C6",
+          "ruleType": "iconSet",
+          "priority": 14,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3TrafficLights2",
+            "custom": [
+              {
+                "set": "3TrafficLights2",
+                "iconId": 1
+              },
+              {
+                "set": "3TrafficLights2",
+                "iconId": 1
+              },
+              {
+                "set": "3TrafficLights2",
+                "iconId": 1
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3TrafficLights2-2",
+          "sqref": "D6",
+          "ruleType": "iconSet",
+          "priority": 15,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3TrafficLights2",
+            "custom": [
+              {
+                "set": "3TrafficLights2",
+                "iconId": 2
+              },
+              {
+                "set": "3TrafficLights2",
+                "iconId": 2
+              },
+              {
+                "set": "3TrafficLights2",
+                "iconId": 2
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3Signs-0",
+          "sqref": "B7",
+          "ruleType": "iconSet",
+          "priority": 16,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Signs",
+            "custom": [
+              {
+                "set": "3Signs",
+                "iconId": 0
+              },
+              {
+                "set": "3Signs",
+                "iconId": 0
+              },
+              {
+                "set": "3Signs",
+                "iconId": 0
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3Signs-1",
+          "sqref": "C7",
+          "ruleType": "iconSet",
+          "priority": 17,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Signs",
+            "custom": [
+              {
+                "set": "3Signs",
+                "iconId": 1
+              },
+              {
+                "set": "3Signs",
+                "iconId": 1
+              },
+              {
+                "set": "3Signs",
+                "iconId": 1
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3Signs-2",
+          "sqref": "D7",
+          "ruleType": "iconSet",
+          "priority": 18,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Signs",
+            "custom": [
+              {
+                "set": "3Signs",
+                "iconId": 2
+              },
+              {
+                "set": "3Signs",
+                "iconId": 2
+              },
+              {
+                "set": "3Signs",
+                "iconId": 2
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3Symbols-0",
+          "sqref": "B8",
+          "ruleType": "iconSet",
+          "priority": 19,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Symbols",
+            "custom": [
+              {
+                "set": "3Symbols",
+                "iconId": 0
+              },
+              {
+                "set": "3Symbols",
+                "iconId": 0
+              },
+              {
+                "set": "3Symbols",
+                "iconId": 0
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3Symbols-1",
+          "sqref": "C8",
+          "ruleType": "iconSet",
+          "priority": 20,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Symbols",
+            "custom": [
+              {
+                "set": "3Symbols",
+                "iconId": 1
+              },
+              {
+                "set": "3Symbols",
+                "iconId": 1
+              },
+              {
+                "set": "3Symbols",
+                "iconId": 1
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3Symbols-2",
+          "sqref": "D8",
+          "ruleType": "iconSet",
+          "priority": 21,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Symbols",
+            "custom": [
+              {
+                "set": "3Symbols",
+                "iconId": 2
+              },
+              {
+                "set": "3Symbols",
+                "iconId": 2
+              },
+              {
+                "set": "3Symbols",
+                "iconId": 2
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3Symbols2-0",
+          "sqref": "B9",
+          "ruleType": "iconSet",
+          "priority": 22,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Symbols2",
+            "custom": [
+              {
+                "set": "3Symbols2",
+                "iconId": 0
+              },
+              {
+                "set": "3Symbols2",
+                "iconId": 0
+              },
+              {
+                "set": "3Symbols2",
+                "iconId": 0
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3Symbols2-1",
+          "sqref": "C9",
+          "ruleType": "iconSet",
+          "priority": 23,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Symbols2",
+            "custom": [
+              {
+                "set": "3Symbols2",
+                "iconId": 1
+              },
+              {
+                "set": "3Symbols2",
+                "iconId": 1
+              },
+              {
+                "set": "3Symbols2",
+                "iconId": 1
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3Symbols2-2",
+          "sqref": "D9",
+          "ruleType": "iconSet",
+          "priority": 24,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Symbols2",
+            "custom": [
+              {
+                "set": "3Symbols2",
+                "iconId": 2
+              },
+              {
+                "set": "3Symbols2",
+                "iconId": 2
+              },
+              {
+                "set": "3Symbols2",
+                "iconId": 2
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-4Arrows-0",
+          "sqref": "B10",
+          "ruleType": "iconSet",
+          "priority": 25,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "4Arrows",
+            "custom": [
+              {
+                "set": "4Arrows",
+                "iconId": 0
+              },
+              {
+                "set": "4Arrows",
+                "iconId": 0
+              },
+              {
+                "set": "4Arrows",
+                "iconId": 0
+              },
+              {
+                "set": "4Arrows",
+                "iconId": 0
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-4Arrows-1",
+          "sqref": "C10",
+          "ruleType": "iconSet",
+          "priority": 26,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "4Arrows",
+            "custom": [
+              {
+                "set": "4Arrows",
+                "iconId": 1
+              },
+              {
+                "set": "4Arrows",
+                "iconId": 1
+              },
+              {
+                "set": "4Arrows",
+                "iconId": 1
+              },
+              {
+                "set": "4Arrows",
+                "iconId": 1
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-4Arrows-2",
+          "sqref": "D10",
+          "ruleType": "iconSet",
+          "priority": 27,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "4Arrows",
+            "custom": [
+              {
+                "set": "4Arrows",
+                "iconId": 2
+              },
+              {
+                "set": "4Arrows",
+                "iconId": 2
+              },
+              {
+                "set": "4Arrows",
+                "iconId": 2
+              },
+              {
+                "set": "4Arrows",
+                "iconId": 2
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-4Arrows-3",
+          "sqref": "E10",
+          "ruleType": "iconSet",
+          "priority": 28,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "4Arrows",
+            "custom": [
+              {
+                "set": "4Arrows",
+                "iconId": 3
+              },
+              {
+                "set": "4Arrows",
+                "iconId": 3
+              },
+              {
+                "set": "4Arrows",
+                "iconId": 3
+              },
+              {
+                "set": "4Arrows",
+                "iconId": 3
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-4ArrowsGray-0",
+          "sqref": "B11",
+          "ruleType": "iconSet",
+          "priority": 29,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "4ArrowsGray",
+            "custom": [
+              {
+                "set": "4ArrowsGray",
+                "iconId": 0
+              },
+              {
+                "set": "4ArrowsGray",
+                "iconId": 0
+              },
+              {
+                "set": "4ArrowsGray",
+                "iconId": 0
+              },
+              {
+                "set": "4ArrowsGray",
+                "iconId": 0
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-4ArrowsGray-1",
+          "sqref": "C11",
+          "ruleType": "iconSet",
+          "priority": 30,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "4ArrowsGray",
+            "custom": [
+              {
+                "set": "4ArrowsGray",
+                "iconId": 1
+              },
+              {
+                "set": "4ArrowsGray",
+                "iconId": 1
+              },
+              {
+                "set": "4ArrowsGray",
+                "iconId": 1
+              },
+              {
+                "set": "4ArrowsGray",
+                "iconId": 1
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-4ArrowsGray-2",
+          "sqref": "D11",
+          "ruleType": "iconSet",
+          "priority": 31,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "4ArrowsGray",
+            "custom": [
+              {
+                "set": "4ArrowsGray",
+                "iconId": 2
+              },
+              {
+                "set": "4ArrowsGray",
+                "iconId": 2
+              },
+              {
+                "set": "4ArrowsGray",
+                "iconId": 2
+              },
+              {
+                "set": "4ArrowsGray",
+                "iconId": 2
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-4ArrowsGray-3",
+          "sqref": "E11",
+          "ruleType": "iconSet",
+          "priority": 32,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "4ArrowsGray",
+            "custom": [
+              {
+                "set": "4ArrowsGray",
+                "iconId": 3
+              },
+              {
+                "set": "4ArrowsGray",
+                "iconId": 3
+              },
+              {
+                "set": "4ArrowsGray",
+                "iconId": 3
+              },
+              {
+                "set": "4ArrowsGray",
+                "iconId": 3
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-4RedToBlack-0",
+          "sqref": "B12",
+          "ruleType": "iconSet",
+          "priority": 33,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "4RedToBlack",
+            "custom": [
+              {
+                "set": "4RedToBlack",
+                "iconId": 0
+              },
+              {
+                "set": "4RedToBlack",
+                "iconId": 0
+              },
+              {
+                "set": "4RedToBlack",
+                "iconId": 0
+              },
+              {
+                "set": "4RedToBlack",
+                "iconId": 0
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-4RedToBlack-1",
+          "sqref": "C12",
+          "ruleType": "iconSet",
+          "priority": 34,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "4RedToBlack",
+            "custom": [
+              {
+                "set": "4RedToBlack",
+                "iconId": 1
+              },
+              {
+                "set": "4RedToBlack",
+                "iconId": 1
+              },
+              {
+                "set": "4RedToBlack",
+                "iconId": 1
+              },
+              {
+                "set": "4RedToBlack",
+                "iconId": 1
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-4RedToBlack-2",
+          "sqref": "D12",
+          "ruleType": "iconSet",
+          "priority": 35,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "4RedToBlack",
+            "custom": [
+              {
+                "set": "4RedToBlack",
+                "iconId": 2
+              },
+              {
+                "set": "4RedToBlack",
+                "iconId": 2
+              },
+              {
+                "set": "4RedToBlack",
+                "iconId": 2
+              },
+              {
+                "set": "4RedToBlack",
+                "iconId": 2
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-4RedToBlack-3",
+          "sqref": "E12",
+          "ruleType": "iconSet",
+          "priority": 36,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "4RedToBlack",
+            "custom": [
+              {
+                "set": "4RedToBlack",
+                "iconId": 3
+              },
+              {
+                "set": "4RedToBlack",
+                "iconId": 3
+              },
+              {
+                "set": "4RedToBlack",
+                "iconId": 3
+              },
+              {
+                "set": "4RedToBlack",
+                "iconId": 3
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-4Rating-0",
+          "sqref": "B13",
+          "ruleType": "iconSet",
+          "priority": 37,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "4Rating",
+            "custom": [
+              {
+                "set": "4Rating",
+                "iconId": 0
+              },
+              {
+                "set": "4Rating",
+                "iconId": 0
+              },
+              {
+                "set": "4Rating",
+                "iconId": 0
+              },
+              {
+                "set": "4Rating",
+                "iconId": 0
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-4Rating-1",
+          "sqref": "C13",
+          "ruleType": "iconSet",
+          "priority": 38,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "4Rating",
+            "custom": [
+              {
+                "set": "4Rating",
+                "iconId": 1
+              },
+              {
+                "set": "4Rating",
+                "iconId": 1
+              },
+              {
+                "set": "4Rating",
+                "iconId": 1
+              },
+              {
+                "set": "4Rating",
+                "iconId": 1
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-4Rating-2",
+          "sqref": "D13",
+          "ruleType": "iconSet",
+          "priority": 39,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "4Rating",
+            "custom": [
+              {
+                "set": "4Rating",
+                "iconId": 2
+              },
+              {
+                "set": "4Rating",
+                "iconId": 2
+              },
+              {
+                "set": "4Rating",
+                "iconId": 2
+              },
+              {
+                "set": "4Rating",
+                "iconId": 2
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-4Rating-3",
+          "sqref": "E13",
+          "ruleType": "iconSet",
+          "priority": 40,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "4Rating",
+            "custom": [
+              {
+                "set": "4Rating",
+                "iconId": 3
+              },
+              {
+                "set": "4Rating",
+                "iconId": 3
+              },
+              {
+                "set": "4Rating",
+                "iconId": 3
+              },
+              {
+                "set": "4Rating",
+                "iconId": 3
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-4TrafficLights-0",
+          "sqref": "B14",
+          "ruleType": "iconSet",
+          "priority": 41,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "4TrafficLights",
+            "custom": [
+              {
+                "set": "4TrafficLights",
+                "iconId": 0
+              },
+              {
+                "set": "4TrafficLights",
+                "iconId": 0
+              },
+              {
+                "set": "4TrafficLights",
+                "iconId": 0
+              },
+              {
+                "set": "4TrafficLights",
+                "iconId": 0
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-4TrafficLights-1",
+          "sqref": "C14",
+          "ruleType": "iconSet",
+          "priority": 42,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "4TrafficLights",
+            "custom": [
+              {
+                "set": "4TrafficLights",
+                "iconId": 1
+              },
+              {
+                "set": "4TrafficLights",
+                "iconId": 1
+              },
+              {
+                "set": "4TrafficLights",
+                "iconId": 1
+              },
+              {
+                "set": "4TrafficLights",
+                "iconId": 1
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-4TrafficLights-2",
+          "sqref": "D14",
+          "ruleType": "iconSet",
+          "priority": 43,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "4TrafficLights",
+            "custom": [
+              {
+                "set": "4TrafficLights",
+                "iconId": 2
+              },
+              {
+                "set": "4TrafficLights",
+                "iconId": 2
+              },
+              {
+                "set": "4TrafficLights",
+                "iconId": 2
+              },
+              {
+                "set": "4TrafficLights",
+                "iconId": 2
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-4TrafficLights-3",
+          "sqref": "E14",
+          "ruleType": "iconSet",
+          "priority": 44,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "4TrafficLights",
+            "custom": [
+              {
+                "set": "4TrafficLights",
+                "iconId": 3
+              },
+              {
+                "set": "4TrafficLights",
+                "iconId": 3
+              },
+              {
+                "set": "4TrafficLights",
+                "iconId": 3
+              },
+              {
+                "set": "4TrafficLights",
+                "iconId": 3
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5Arrows-0",
+          "sqref": "B15",
+          "ruleType": "iconSet",
+          "priority": 45,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5Arrows",
+            "custom": [
+              {
+                "set": "5Arrows",
+                "iconId": 0
+              },
+              {
+                "set": "5Arrows",
+                "iconId": 0
+              },
+              {
+                "set": "5Arrows",
+                "iconId": 0
+              },
+              {
+                "set": "5Arrows",
+                "iconId": 0
+              },
+              {
+                "set": "5Arrows",
+                "iconId": 0
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5Arrows-1",
+          "sqref": "C15",
+          "ruleType": "iconSet",
+          "priority": 46,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5Arrows",
+            "custom": [
+              {
+                "set": "5Arrows",
+                "iconId": 1
+              },
+              {
+                "set": "5Arrows",
+                "iconId": 1
+              },
+              {
+                "set": "5Arrows",
+                "iconId": 1
+              },
+              {
+                "set": "5Arrows",
+                "iconId": 1
+              },
+              {
+                "set": "5Arrows",
+                "iconId": 1
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5Arrows-2",
+          "sqref": "D15",
+          "ruleType": "iconSet",
+          "priority": 47,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5Arrows",
+            "custom": [
+              {
+                "set": "5Arrows",
+                "iconId": 2
+              },
+              {
+                "set": "5Arrows",
+                "iconId": 2
+              },
+              {
+                "set": "5Arrows",
+                "iconId": 2
+              },
+              {
+                "set": "5Arrows",
+                "iconId": 2
+              },
+              {
+                "set": "5Arrows",
+                "iconId": 2
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5Arrows-3",
+          "sqref": "E15",
+          "ruleType": "iconSet",
+          "priority": 48,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5Arrows",
+            "custom": [
+              {
+                "set": "5Arrows",
+                "iconId": 3
+              },
+              {
+                "set": "5Arrows",
+                "iconId": 3
+              },
+              {
+                "set": "5Arrows",
+                "iconId": 3
+              },
+              {
+                "set": "5Arrows",
+                "iconId": 3
+              },
+              {
+                "set": "5Arrows",
+                "iconId": 3
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5Arrows-4",
+          "sqref": "F15",
+          "ruleType": "iconSet",
+          "priority": 49,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5Arrows",
+            "custom": [
+              {
+                "set": "5Arrows",
+                "iconId": 4
+              },
+              {
+                "set": "5Arrows",
+                "iconId": 4
+              },
+              {
+                "set": "5Arrows",
+                "iconId": 4
+              },
+              {
+                "set": "5Arrows",
+                "iconId": 4
+              },
+              {
+                "set": "5Arrows",
+                "iconId": 4
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5ArrowsGray-0",
+          "sqref": "B16",
+          "ruleType": "iconSet",
+          "priority": 50,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5ArrowsGray",
+            "custom": [
+              {
+                "set": "5ArrowsGray",
+                "iconId": 0
+              },
+              {
+                "set": "5ArrowsGray",
+                "iconId": 0
+              },
+              {
+                "set": "5ArrowsGray",
+                "iconId": 0
+              },
+              {
+                "set": "5ArrowsGray",
+                "iconId": 0
+              },
+              {
+                "set": "5ArrowsGray",
+                "iconId": 0
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5ArrowsGray-1",
+          "sqref": "C16",
+          "ruleType": "iconSet",
+          "priority": 51,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5ArrowsGray",
+            "custom": [
+              {
+                "set": "5ArrowsGray",
+                "iconId": 1
+              },
+              {
+                "set": "5ArrowsGray",
+                "iconId": 1
+              },
+              {
+                "set": "5ArrowsGray",
+                "iconId": 1
+              },
+              {
+                "set": "5ArrowsGray",
+                "iconId": 1
+              },
+              {
+                "set": "5ArrowsGray",
+                "iconId": 1
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5ArrowsGray-2",
+          "sqref": "D16",
+          "ruleType": "iconSet",
+          "priority": 52,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5ArrowsGray",
+            "custom": [
+              {
+                "set": "5ArrowsGray",
+                "iconId": 2
+              },
+              {
+                "set": "5ArrowsGray",
+                "iconId": 2
+              },
+              {
+                "set": "5ArrowsGray",
+                "iconId": 2
+              },
+              {
+                "set": "5ArrowsGray",
+                "iconId": 2
+              },
+              {
+                "set": "5ArrowsGray",
+                "iconId": 2
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5ArrowsGray-3",
+          "sqref": "E16",
+          "ruleType": "iconSet",
+          "priority": 53,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5ArrowsGray",
+            "custom": [
+              {
+                "set": "5ArrowsGray",
+                "iconId": 3
+              },
+              {
+                "set": "5ArrowsGray",
+                "iconId": 3
+              },
+              {
+                "set": "5ArrowsGray",
+                "iconId": 3
+              },
+              {
+                "set": "5ArrowsGray",
+                "iconId": 3
+              },
+              {
+                "set": "5ArrowsGray",
+                "iconId": 3
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5ArrowsGray-4",
+          "sqref": "F16",
+          "ruleType": "iconSet",
+          "priority": 54,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5ArrowsGray",
+            "custom": [
+              {
+                "set": "5ArrowsGray",
+                "iconId": 4
+              },
+              {
+                "set": "5ArrowsGray",
+                "iconId": 4
+              },
+              {
+                "set": "5ArrowsGray",
+                "iconId": 4
+              },
+              {
+                "set": "5ArrowsGray",
+                "iconId": 4
+              },
+              {
+                "set": "5ArrowsGray",
+                "iconId": 4
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5Rating-0",
+          "sqref": "B17",
+          "ruleType": "iconSet",
+          "priority": 55,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5Rating",
+            "custom": [
+              {
+                "set": "5Rating",
+                "iconId": 0
+              },
+              {
+                "set": "5Rating",
+                "iconId": 0
+              },
+              {
+                "set": "5Rating",
+                "iconId": 0
+              },
+              {
+                "set": "5Rating",
+                "iconId": 0
+              },
+              {
+                "set": "5Rating",
+                "iconId": 0
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5Rating-1",
+          "sqref": "C17",
+          "ruleType": "iconSet",
+          "priority": 56,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5Rating",
+            "custom": [
+              {
+                "set": "5Rating",
+                "iconId": 1
+              },
+              {
+                "set": "5Rating",
+                "iconId": 1
+              },
+              {
+                "set": "5Rating",
+                "iconId": 1
+              },
+              {
+                "set": "5Rating",
+                "iconId": 1
+              },
+              {
+                "set": "5Rating",
+                "iconId": 1
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5Rating-2",
+          "sqref": "D17",
+          "ruleType": "iconSet",
+          "priority": 57,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5Rating",
+            "custom": [
+              {
+                "set": "5Rating",
+                "iconId": 2
+              },
+              {
+                "set": "5Rating",
+                "iconId": 2
+              },
+              {
+                "set": "5Rating",
+                "iconId": 2
+              },
+              {
+                "set": "5Rating",
+                "iconId": 2
+              },
+              {
+                "set": "5Rating",
+                "iconId": 2
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5Rating-3",
+          "sqref": "E17",
+          "ruleType": "iconSet",
+          "priority": 58,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5Rating",
+            "custom": [
+              {
+                "set": "5Rating",
+                "iconId": 3
+              },
+              {
+                "set": "5Rating",
+                "iconId": 3
+              },
+              {
+                "set": "5Rating",
+                "iconId": 3
+              },
+              {
+                "set": "5Rating",
+                "iconId": 3
+              },
+              {
+                "set": "5Rating",
+                "iconId": 3
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5Rating-4",
+          "sqref": "F17",
+          "ruleType": "iconSet",
+          "priority": 59,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5Rating",
+            "custom": [
+              {
+                "set": "5Rating",
+                "iconId": 4
+              },
+              {
+                "set": "5Rating",
+                "iconId": 4
+              },
+              {
+                "set": "5Rating",
+                "iconId": 4
+              },
+              {
+                "set": "5Rating",
+                "iconId": 4
+              },
+              {
+                "set": "5Rating",
+                "iconId": 4
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5Quarters-0",
+          "sqref": "B18",
+          "ruleType": "iconSet",
+          "priority": 60,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5Quarters",
+            "custom": [
+              {
+                "set": "5Quarters",
+                "iconId": 0
+              },
+              {
+                "set": "5Quarters",
+                "iconId": 0
+              },
+              {
+                "set": "5Quarters",
+                "iconId": 0
+              },
+              {
+                "set": "5Quarters",
+                "iconId": 0
+              },
+              {
+                "set": "5Quarters",
+                "iconId": 0
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5Quarters-1",
+          "sqref": "C18",
+          "ruleType": "iconSet",
+          "priority": 61,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5Quarters",
+            "custom": [
+              {
+                "set": "5Quarters",
+                "iconId": 1
+              },
+              {
+                "set": "5Quarters",
+                "iconId": 1
+              },
+              {
+                "set": "5Quarters",
+                "iconId": 1
+              },
+              {
+                "set": "5Quarters",
+                "iconId": 1
+              },
+              {
+                "set": "5Quarters",
+                "iconId": 1
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5Quarters-2",
+          "sqref": "D18",
+          "ruleType": "iconSet",
+          "priority": 62,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5Quarters",
+            "custom": [
+              {
+                "set": "5Quarters",
+                "iconId": 2
+              },
+              {
+                "set": "5Quarters",
+                "iconId": 2
+              },
+              {
+                "set": "5Quarters",
+                "iconId": 2
+              },
+              {
+                "set": "5Quarters",
+                "iconId": 2
+              },
+              {
+                "set": "5Quarters",
+                "iconId": 2
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5Quarters-3",
+          "sqref": "E18",
+          "ruleType": "iconSet",
+          "priority": 63,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5Quarters",
+            "custom": [
+              {
+                "set": "5Quarters",
+                "iconId": 3
+              },
+              {
+                "set": "5Quarters",
+                "iconId": 3
+              },
+              {
+                "set": "5Quarters",
+                "iconId": 3
+              },
+              {
+                "set": "5Quarters",
+                "iconId": 3
+              },
+              {
+                "set": "5Quarters",
+                "iconId": 3
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5Quarters-4",
+          "sqref": "F18",
+          "ruleType": "iconSet",
+          "priority": 64,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5Quarters",
+            "custom": [
+              {
+                "set": "5Quarters",
+                "iconId": 4
+              },
+              {
+                "set": "5Quarters",
+                "iconId": 4
+              },
+              {
+                "set": "5Quarters",
+                "iconId": 4
+              },
+              {
+                "set": "5Quarters",
+                "iconId": 4
+              },
+              {
+                "set": "5Quarters",
+                "iconId": 4
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3Stars-0",
+          "sqref": "B19",
+          "ruleType": "iconSet",
+          "priority": 65,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Stars",
+            "custom": [
+              {
+                "set": "3Stars",
+                "iconId": 0
+              },
+              {
+                "set": "3Stars",
+                "iconId": 0
+              },
+              {
+                "set": "3Stars",
+                "iconId": 0
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3Stars-1",
+          "sqref": "C19",
+          "ruleType": "iconSet",
+          "priority": 66,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Stars",
+            "custom": [
+              {
+                "set": "3Stars",
+                "iconId": 1
+              },
+              {
+                "set": "3Stars",
+                "iconId": 1
+              },
+              {
+                "set": "3Stars",
+                "iconId": 1
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3Stars-2",
+          "sqref": "D19",
+          "ruleType": "iconSet",
+          "priority": 67,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Stars",
+            "custom": [
+              {
+                "set": "3Stars",
+                "iconId": 2
+              },
+              {
+                "set": "3Stars",
+                "iconId": 2
+              },
+              {
+                "set": "3Stars",
+                "iconId": 2
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3Triangles-0",
+          "sqref": "B20",
+          "ruleType": "iconSet",
+          "priority": 68,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Triangles",
+            "custom": [
+              {
+                "set": "3Triangles",
+                "iconId": 0
+              },
+              {
+                "set": "3Triangles",
+                "iconId": 0
+              },
+              {
+                "set": "3Triangles",
+                "iconId": 0
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3Triangles-1",
+          "sqref": "C20",
+          "ruleType": "iconSet",
+          "priority": 69,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Triangles",
+            "custom": [
+              {
+                "set": "3Triangles",
+                "iconId": 1
+              },
+              {
+                "set": "3Triangles",
+                "iconId": 1
+              },
+              {
+                "set": "3Triangles",
+                "iconId": 1
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-3Triangles-2",
+          "sqref": "D20",
+          "ruleType": "iconSet",
+          "priority": 70,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "3Triangles",
+            "custom": [
+              {
+                "set": "3Triangles",
+                "iconId": 2
+              },
+              {
+                "set": "3Triangles",
+                "iconId": 2
+              },
+              {
+                "set": "3Triangles",
+                "iconId": 2
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5Boxes-0",
+          "sqref": "B21",
+          "ruleType": "iconSet",
+          "priority": 71,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5Boxes",
+            "custom": [
+              {
+                "set": "5Boxes",
+                "iconId": 0
+              },
+              {
+                "set": "5Boxes",
+                "iconId": 0
+              },
+              {
+                "set": "5Boxes",
+                "iconId": 0
+              },
+              {
+                "set": "5Boxes",
+                "iconId": 0
+              },
+              {
+                "set": "5Boxes",
+                "iconId": 0
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5Boxes-1",
+          "sqref": "C21",
+          "ruleType": "iconSet",
+          "priority": 72,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5Boxes",
+            "custom": [
+              {
+                "set": "5Boxes",
+                "iconId": 1
+              },
+              {
+                "set": "5Boxes",
+                "iconId": 1
+              },
+              {
+                "set": "5Boxes",
+                "iconId": 1
+              },
+              {
+                "set": "5Boxes",
+                "iconId": 1
+              },
+              {
+                "set": "5Boxes",
+                "iconId": 1
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5Boxes-2",
+          "sqref": "D21",
+          "ruleType": "iconSet",
+          "priority": 73,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5Boxes",
+            "custom": [
+              {
+                "set": "5Boxes",
+                "iconId": 2
+              },
+              {
+                "set": "5Boxes",
+                "iconId": 2
+              },
+              {
+                "set": "5Boxes",
+                "iconId": 2
+              },
+              {
+                "set": "5Boxes",
+                "iconId": 2
+              },
+              {
+                "set": "5Boxes",
+                "iconId": 2
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5Boxes-3",
+          "sqref": "E21",
+          "ruleType": "iconSet",
+          "priority": 74,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5Boxes",
+            "custom": [
+              {
+                "set": "5Boxes",
+                "iconId": 3
+              },
+              {
+                "set": "5Boxes",
+                "iconId": 3
+              },
+              {
+                "set": "5Boxes",
+                "iconId": 3
+              },
+              {
+                "set": "5Boxes",
+                "iconId": 3
+              },
+              {
+                "set": "5Boxes",
+                "iconId": 3
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "icon:glyph-5Boxes-4",
+          "sqref": "F21",
+          "ruleType": "iconSet",
+          "priority": 75,
+          "formulas": [],
+          "icon": {
+            "dialect": "x14",
+            "set": "5Boxes",
+            "custom": [
+              {
+                "set": "5Boxes",
+                "iconId": 4
+              },
+              {
+                "set": "5Boxes",
+                "iconId": 4
+              },
+              {
+                "set": "5Boxes",
+                "iconId": 4
+              },
+              {
+                "set": "5Boxes",
+                "iconId": 4
+              },
+              {
+                "set": "5Boxes",
+                "iconId": 4
+              }
+            ],
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "0"
+              },
+              {
+                "type": "num",
+                "f": "1"
+              },
+              {
+                "type": "num",
+                "f": "2"
+              },
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "4"
+              }
+            ],
+            "attrs": {
+              "percent": "(omitted)"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "K2",
+          "capabilityId": "icon:pixel-calibration",
+          "ruleType": "cellIs",
+          "operator": "greaterThan",
+          "priority": 76,
+          "formulas": [
+            "0"
+          ],
+          "dxf": {
+            "fillRgb": "FFC6EFCE"
+          }
+        }
+      ],
+      "iconCalibration": {
+        "columns": [
+          "H",
+          "I",
+          "J"
+        ],
+        "scanRow": 3,
+        "solidRef": "K2",
+        "solidArgb": "FFC6EFCE"
+      },
+      "expected": {
+        "inputSha256": "79b1c712d75f3c4476182346624c8c33805a27e84e4a57b52b93e199338d0126",
+        "savedSha256": "ba8656fd9063446c71909a655013ce08cbb8f0ec5be9d959291dd01a2b2a546c",
+        "provenance": "excel-observed",
+        "positiveRefs": [
+          "B2",
+          "C2",
+          "D2",
+          "B3",
+          "C3",
+          "D3",
+          "B4",
+          "C4",
+          "D4",
+          "B5",
+          "C5",
+          "D5",
+          "B6",
+          "C6",
+          "D6",
+          "B7",
+          "C7",
+          "D7",
+          "B8",
+          "C8",
+          "D8",
+          "B9",
+          "C9",
+          "D9",
+          "B10",
+          "C10",
+          "D10",
+          "E10",
+          "B11",
+          "C11",
+          "D11",
+          "E11",
+          "B12",
+          "C12",
+          "D12",
+          "E12",
+          "B13",
+          "C13",
+          "D13",
+          "E13",
+          "B14",
+          "C14",
+          "D14",
+          "E14",
+          "B15",
+          "C15",
+          "D15",
+          "E15",
+          "F15",
+          "B16",
+          "C16",
+          "D16",
+          "E16",
+          "F16",
+          "B17",
+          "C17",
+          "D17",
+          "E17",
+          "F17",
+          "B18",
+          "C18",
+          "D18",
+          "E18",
+          "F18",
+          "B19",
+          "C19",
+          "D19",
+          "B20",
+          "C20",
+          "D20",
+          "B21",
+          "C21",
+          "D21",
+          "E21",
+          "F21",
+          "K2"
+        ],
+        "negativeRefs": [
+          "B23",
+          "C23",
+          "D23",
+          "B24",
+          "C24",
+          "D24",
+          "B25",
+          "C25",
+          "D25",
+          "B26",
+          "C26",
+          "D26",
+          "B27",
+          "C27",
+          "D27",
+          "B28",
+          "C28",
+          "D28",
+          "B29",
+          "C29",
+          "D29",
+          "B30",
+          "C30",
+          "D30",
+          "B31",
+          "C31",
+          "D31",
+          "E31",
+          "B32",
+          "C32",
+          "D32",
+          "E32",
+          "B33",
+          "C33",
+          "D33",
+          "E33",
+          "B34",
+          "C34",
+          "D34",
+          "E34",
+          "B35",
+          "C35",
+          "D35",
+          "E35",
+          "B36",
+          "C36",
+          "D36",
+          "E36",
+          "F36",
+          "B37",
+          "C37",
+          "D37",
+          "E37",
+          "F37",
+          "B38",
+          "C38",
+          "D38",
+          "E38",
+          "F38",
+          "B39",
+          "C39",
+          "D39",
+          "E39",
+          "F39",
+          "B40",
+          "C40",
+          "D40",
+          "B41",
+          "C41",
+          "D41",
+          "B42",
+          "C42",
+          "D42",
+          "E42",
+          "F42",
+          "K23"
+        ],
+        "cells": [
+          {
+            "ref": "B2",
+            "controlRef": "B23",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C2",
+            "controlRef": "C23",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D2",
+            "controlRef": "D23",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B3",
+            "controlRef": "B24",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C3",
+            "controlRef": "C24",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D3",
+            "controlRef": "D24",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B4",
+            "controlRef": "B25",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C4",
+            "controlRef": "C25",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D4",
+            "controlRef": "D25",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B5",
+            "controlRef": "B26",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C5",
+            "controlRef": "C26",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D5",
+            "controlRef": "D26",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B6",
+            "controlRef": "B27",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C6",
+            "controlRef": "C27",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D6",
+            "controlRef": "D27",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B7",
+            "controlRef": "B28",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C7",
+            "controlRef": "C28",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D7",
+            "controlRef": "D28",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B8",
+            "controlRef": "B29",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C8",
+            "controlRef": "C29",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D8",
+            "controlRef": "D29",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B9",
+            "controlRef": "B30",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C9",
+            "controlRef": "C30",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D9",
+            "controlRef": "D30",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B10",
+            "controlRef": "B31",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C10",
+            "controlRef": "C31",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D10",
+            "controlRef": "D31",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E10",
+            "controlRef": "E31",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B11",
+            "controlRef": "B32",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C11",
+            "controlRef": "C32",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D11",
+            "controlRef": "D32",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E11",
+            "controlRef": "E32",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B12",
+            "controlRef": "B33",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C12",
+            "controlRef": "C33",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D12",
+            "controlRef": "D33",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E12",
+            "controlRef": "E33",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B13",
+            "controlRef": "B34",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C13",
+            "controlRef": "C34",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D13",
+            "controlRef": "D34",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E13",
+            "controlRef": "E34",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B14",
+            "controlRef": "B35",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C14",
+            "controlRef": "C35",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D14",
+            "controlRef": "D35",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E14",
+            "controlRef": "E35",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B15",
+            "controlRef": "B36",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C15",
+            "controlRef": "C36",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D15",
+            "controlRef": "D36",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E15",
+            "controlRef": "E36",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "F15",
+            "controlRef": "F36",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B16",
+            "controlRef": "B37",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C16",
+            "controlRef": "C37",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D16",
+            "controlRef": "D37",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E16",
+            "controlRef": "E37",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "F16",
+            "controlRef": "F37",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B17",
+            "controlRef": "B38",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C17",
+            "controlRef": "C38",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D17",
+            "controlRef": "D38",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E17",
+            "controlRef": "E38",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "F17",
+            "controlRef": "F38",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B18",
+            "controlRef": "B39",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C18",
+            "controlRef": "C39",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D18",
+            "controlRef": "D39",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E18",
+            "controlRef": "E39",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "F18",
+            "controlRef": "F39",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B19",
+            "controlRef": "B40",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C19",
+            "controlRef": "C40",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D19",
+            "controlRef": "D40",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B20",
+            "controlRef": "B41",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C20",
+            "controlRef": "C41",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D20",
+            "controlRef": "D41",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B21",
+            "controlRef": "B42",
+            "matched": true,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C21",
+            "controlRef": "C42",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D21",
+            "controlRef": "D42",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E21",
+            "controlRef": "E42",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "F21",
+            "controlRef": "F42",
+            "matched": true,
+            "iconApplied": true,
+            "fillSource": "unverified",
+            "iconEvidence": {
+              "bucket": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "K2",
+            "controlRef": "K23",
+            "matched": true,
+            "iconApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B23",
+            "controlRef": "B2",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C23",
+            "controlRef": "C2",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D23",
+            "controlRef": "D2",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B24",
+            "controlRef": "B3",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C24",
+            "controlRef": "C3",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D24",
+            "controlRef": "D3",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B25",
+            "controlRef": "B4",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C25",
+            "controlRef": "C4",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D25",
+            "controlRef": "D4",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B26",
+            "controlRef": "B5",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C26",
+            "controlRef": "C5",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D26",
+            "controlRef": "D5",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B27",
+            "controlRef": "B6",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C27",
+            "controlRef": "C6",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D27",
+            "controlRef": "D6",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B28",
+            "controlRef": "B7",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C28",
+            "controlRef": "C7",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D28",
+            "controlRef": "D7",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B29",
+            "controlRef": "B8",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C29",
+            "controlRef": "C8",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D29",
+            "controlRef": "D8",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B30",
+            "controlRef": "B9",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C30",
+            "controlRef": "C9",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D30",
+            "controlRef": "D9",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B31",
+            "controlRef": "B10",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C31",
+            "controlRef": "C10",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D31",
+            "controlRef": "D10",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E31",
+            "controlRef": "E10",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B32",
+            "controlRef": "B11",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C32",
+            "controlRef": "C11",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D32",
+            "controlRef": "D11",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E32",
+            "controlRef": "E11",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B33",
+            "controlRef": "B12",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C33",
+            "controlRef": "C12",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D33",
+            "controlRef": "D12",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E33",
+            "controlRef": "E12",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B34",
+            "controlRef": "B13",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C34",
+            "controlRef": "C13",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D34",
+            "controlRef": "D13",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E34",
+            "controlRef": "E13",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B35",
+            "controlRef": "B14",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C35",
+            "controlRef": "C14",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D35",
+            "controlRef": "D14",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E35",
+            "controlRef": "E14",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B36",
+            "controlRef": "B15",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C36",
+            "controlRef": "C15",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D36",
+            "controlRef": "D15",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E36",
+            "controlRef": "E15",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F36",
+            "controlRef": "F15",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B37",
+            "controlRef": "B16",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C37",
+            "controlRef": "C16",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D37",
+            "controlRef": "D16",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E37",
+            "controlRef": "E16",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F37",
+            "controlRef": "F16",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B38",
+            "controlRef": "B17",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C38",
+            "controlRef": "C17",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D38",
+            "controlRef": "D17",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E38",
+            "controlRef": "E17",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F38",
+            "controlRef": "F17",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B39",
+            "controlRef": "B18",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C39",
+            "controlRef": "C18",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D39",
+            "controlRef": "D18",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E39",
+            "controlRef": "E18",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F39",
+            "controlRef": "F18",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B40",
+            "controlRef": "B19",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C40",
+            "controlRef": "C19",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D40",
+            "controlRef": "D19",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B41",
+            "controlRef": "B20",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C41",
+            "controlRef": "C20",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D41",
+            "controlRef": "D20",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B42",
+            "controlRef": "B21",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C42",
+            "controlRef": "C21",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D42",
+            "controlRef": "D21",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E42",
+            "controlRef": "E21",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F42",
+            "controlRef": "F21",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "K23",
+            "controlRef": "K2",
+            "matched": false,
+            "iconApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          }
+        ]
+      },
+      "captures": [
+        {
+          "appearance": "screen",
+          "pngPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-glyph-key-centred.png",
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage4-icon-glyph-key-centred.json",
+          "pngSha256": "b23266dd73aef4add88684ce7547c9faad32390db758f7216c942c5735b1e87e"
+        }
+      ],
+      "status": "measured",
+      "tolerance": {
+        "meanAbs": 0.015,
+        "rowMax": 0.08,
+        "strong": 12
+      },
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-18T23:55:28.107Z",
+        "excelVersion": "16.115",
+        "inputSha256": "79b1c712d75f3c4476182346624c8c33805a27e84e4a57b52b93e199338d0126",
+        "savedSha256": "ba8656fd9063446c71909a655013ce08cbb8f0ec5be9d959291dd01a2b2a546c",
+        "openedRepairFree": true
+      }
+    },
+    {
       "id": "stage5-formula-authored",
       "stage": 5,
       "question": "Lesson 12 / S5-A: the template source. The orchestrator authors these rules through Excel's dialog into excel-authored-formulas.xlsx (=$B2>$C2 over B2:D9, =MOD(ROW(),2)=0, cellIs > =$F$1, between =$F$1,=$F$2, a scale with num =$F$1 and a formula bound, a bar and an icon set with formula bounds, =Sheet2!$A$1>0 and a scale bounded by Sheet2!$A$1); this case is the generated twin, captured to settle whether each dialect's formula applies.",

@@ -81,6 +81,16 @@ Run 1 (c63de53a): the faint `5Boxes:0` glyph (B21) peaks at a delta of 34 from i
 
 Record the failure in `docs/validation/xlsx-cf.md` §12 and stop. Never retouch or synthesize a PNG.
 
+### 3b. The centred glyph key (owner decision 2026-11-19)
+
+`stage4-icon-glyph-key-centred` repeats the 75 single-pair rules of the glyph key on cells shaped like the Stage 5 icon cells: the default style (Excel resaves it as Normal, vertical=center), visible right-aligned numbers (10, General), 20 pt rows and 14-character columns. Stage 5 icon crops whose saved cell is centred on a 20 pt row are classified against it; bottom-aligned ones keep the Stage 4 key. Run it after the Stage 4 key:
+```
+bun scripts/cf-refs/build.ts --stage 4 --case stage4-icon-glyph-key-centred
+bun scripts/cf-refs/capture.ts --stage 4 --case stage4-icon-glyph-key-centred
+npx tsx scripts/cf-refs/audit.ts --stage 4 --case stage4-icon-glyph-key-centred
+```
+The case must come back `measured`, with all 75 key cells classified. It owns no capability, because every `icon:glyph-*` id stays with `stage4-icon-glyph-key`. It fails as the Stage 4 key does: `bar-calibration-failed`, `icon-key-mismatch` (a key cell shows no icon against its control, which here shows the same visible `10`) or `icon-class-ambiguous`. Record any failure and stop. If the resaved key cells are no longer centred on 20 pt rows (`<alignment vertical="center"/>` on their xf), the key is not admitted for Stage 5 either. Record that too.
+
 ## 4. The remaining cases
 
 Run each case's build and capture, closing owned workbooks in between (the harness does it):

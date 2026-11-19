@@ -2291,9 +2291,9 @@ export async function stage5CaseRecords(manifest: CfManifest, rootDir: string = 
   const { cfWorkbookOfDocument } = await import('../../src/xlsx/cf/render')
   const { caseEvaluationOf, caseNowOf, caseParseOptionsOf } = await import('./case-clock')
   const { cfRulesVersion } = await import('../../src/xlsx/view/pagedSource')
-  const { formulaObservationOf, decodePngSync, computeWorksheetRangeGeometry, readZipPartsSync, stage5IconKey, describeS5Visual } = await import('./verify')
+  const { formulaObservationOf, decodePngSync, computeWorksheetRangeGeometry, readZipPartsSync, stage5IconKeys, stage5IconKeyOf, describeS5Visual } = await import('./verify')
   const refRC = (ref: string) => { const m = /^([A-Z]+)(\d+)$/.exec(ref)!; return { row: Number(m[2]) - 1, col: [...m[1]!].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1 } }
-  const iconKey = stage5IconKey(rootDir)
+  const iconKeys = stage5IconKeys(rootDir)
   const out: Stage5CaseRecord[] = []
   for (const c of manifest.cases.filter(x => x.stage === 5)) {
     const kindOf = (ref: string): { covering: typeof c.markers; formulaCaps: string[]; kind: Stage5CaseRecord['evidenceKind'] } => {
@@ -2322,7 +2322,7 @@ export async function stage5CaseRecords(manifest: CfManifest, rootDir: string = 
     const png = cap && cap.pngPath && existsSync(resolve(rootDir, cap.pngPath)) ? decodePngSync(new Uint8Array(readFileSync(resolve(rootDir, cap.pngPath)))) ?? undefined : undefined
     const parts = readZipPartsSync(savedBytes) ?? undefined
     const geom = parts && sidecar && Array.isArray(sidecar.colWidthsPt) ? computeWorksheetRangeGeometry(parts, c.range, { colWidthsPt: sidecar.colWidthsPt as number[], rowHeightsPt: sidecar.rowHeightsPt as number[] }) ?? undefined : undefined
-    const observation = sidecar ? formulaObservationOf(c, sidecar, png, geom, iconKey) : undefined
+    const observation = sidecar ? formulaObservationOf(c, sidecar, png, geom, stage5IconKeyOf(iconKeys, parts)) : undefined
     const memory = createCfMemory()
     const budgets: CfWorkBudgetLike[] = []
     const budget = (scan: boolean) => () => { const b = createCfWorkBudget(scan ? { scan: true } : {}); budgets.push(b); return b }

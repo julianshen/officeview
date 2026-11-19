@@ -1076,7 +1076,8 @@ describe('CF oracle verifier', () => {
     // Stage 4 postdates the chunking: exactly these cases span several chunks, and each still probes every cell in order.
     // (fix round 3: stage4-icon-degenerate lost its H column and now fits one chunk.)
     // (Task 28 round 2: stage4-icon-rows holds 64 designated cells and their 64 controls.)
-    const STAGE4_MULTI_CHUNK = ['stage4-icon-glyph-key', 'stage4-icon-families', 'stage4-icon-thresholds', 'stage4-icon-reverse-custom', 'stage4-icon-rows']
+    // (Centred-key follow-up: stage4-icon-glyph-key-centred holds the key's 75 cells and their controls.)
+    const STAGE4_MULTI_CHUNK = ['stage4-icon-glyph-key', 'stage4-icon-families', 'stage4-icon-thresholds', 'stage4-icon-reverse-custom', 'stage4-icon-rows', 'stage4-icon-glyph-key-centred']
     expect(CF_CASES.filter(x => x.stage === 4 && x.expected.cells.length > PROBE_CHUNK_CELLS).map(x => x.id)).toEqual(STAGE4_MULTI_CHUNK)
     for (const c of CF_CASES.filter(x => x.stage === 4)) {
       const refs = c.expected.cells.map(x => x.ref)
@@ -4165,6 +4166,8 @@ describe('Stage 4 icon oracle (Task 24)', () => {
       // stage4-icon-rows (round 2, S4-ROWS-CAPTURE) stays captured and recorded.
       'stage4-icon-rows-bottom': ['icon:geometry-row-offset'],
       'stage4-icon-rows': [],
+      // Owner decision 2026-11-19: the centred glyph key, appended last, owns nothing (the Stage 4 key keeps every id).
+      'stage4-icon-glyph-key-centred': [],
     }
     expect(CF_STAGE4_CASES.map(c => c.id)).toEqual(Object.keys(expected))
     for (const [id, caps] of Object.entries(expected)) {
@@ -4494,7 +4497,7 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     // whatever the committed captures verify; publishing itself is Task 30 and is only rendered in memory here).
     const report = auditStage4Manifest(manifest, { rootDir: REPO_ROOT })
     expect(report.ok).toBe(true)
-    expect(report.summary.cases).toBe(19)
+    expect(report.summary.cases).toBe(20)
     expect(report.summary.capabilities).toBe(CF_STAGE4_CAPABILITIES.length)
     expect(report.perCapability.filter(p => p.disposition === 'unaccounted')).toEqual([])
     expect(report.stageComplete).toBe(report.blockedCapabilities.length === 0)
@@ -5439,15 +5442,17 @@ describe('Stage 5 formula oracle (Task 31)', () => {
     expect(manifest.cases.map(c => c.id)).toEqual(CF_CASES.map(c => c.id))
     // Stage 1-4 catalogues and capability ids are exactly what Stage 4 shipped.
     expect([CF_STAGE1_CAPABILITIES.length, CF_STAGE2_CAPABILITIES.length, CF_STAGE3_CAPABILITIES.length, CF_STAGE4_CAPABILITIES.length]).toEqual([115, 46, 73, 145])
-    expect([CF_STAGE1_CASES.length, CF_STAGE2_CASES.length, CF_STAGE3_CASES.length, CF_STAGE4_CASES.length]).toEqual([13, 8, 15, 19])
-    expect(CF_CASES.slice(0, 55).map(c => c.id)).toEqual([...CF_STAGE1_CASES, ...CF_STAGE2_CASES, ...CF_STAGE3_CASES, ...CF_STAGE4_CASES].map(c => c.id))
-    expect(CF_CASES.slice(55).map(c => c.id)).toEqual(CF_STAGE5_CASES.map(c => c.id))
+    expect([CF_STAGE1_CASES.length, CF_STAGE2_CASES.length, CF_STAGE3_CASES.length, CF_STAGE4_CASES.length]).toEqual([13, 8, 15, 20])
+    expect(CF_CASES.slice(0, 56).map(c => c.id)).toEqual([...CF_STAGE1_CASES, ...CF_STAGE2_CASES, ...CF_STAGE3_CASES, ...CF_STAGE4_CASES].map(c => c.id))
+    expect(CF_CASES.slice(56).map(c => c.id)).toEqual(CF_STAGE5_CASES.map(c => c.id))
     expect(CF_CAPABILITIES.length).toBe(CF_STAGE1_CAPABILITIES.length + CF_STAGE2_CAPABILITIES.length + CF_STAGE3_CAPABILITIES.length + CF_STAGE4_CAPABILITIES.length + CF_STAGE5_CAPABILITIES.length)
     expect(new Set(CF_CAPABILITIES.map(c => c.capabilityId)).size).toBe(CF_CAPABILITIES.length)
     // Stage 1-4 generated inputs are byte-identical to fc61c6c6's generator (digest of every case's archive hash).
     const all = createHash('sha256')
-    for (const c of CF_CASES.filter(x => x.stage < 5)) all.update(`${c.id}:${sha256(await generateCaseArchive(c.id))}\n`)
+    // The centred glyph key (appended after them) is pinned on its own, so the earlier digest still holds.
+    for (const c of CF_CASES.filter(x => x.stage < 5 && x.id !== 'stage4-icon-glyph-key-centred')) all.update(`${c.id}:${sha256(await generateCaseArchive(c.id))}\n`)
     expect(all.digest('hex')).toBe('c1daae80753c0dea2a10f782ac118a221f2df7fe1de83156e1a4bc08bcd89b36')
+    expect(sha256(await generateCaseArchive('stage4-icon-glyph-key-centred'))).toBe(sha256(new Uint8Array(readFileSync(resolve(REPO_ROOT, 'tests/fixtures/xlsx-cf/inputs/stage4-icon-glyph-key-centred.xlsx')))))
 
     // The brief's matrix, row by row (CF_STAGE5_GROUPS maps a row to its workbooks).
     const required: Record<string, string[]> = {

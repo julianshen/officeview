@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { capture } from '../xlsx-refs/capture'
 import { openWorkbook, osa, q, runScript, workbookNames } from '../xlsx-refs/excel'
 import { closeOwnedWorkbook, isDisplayLocked } from './build'
-import { CF_CASES, type CfManifest, type CfOracleCase, type Refusal } from './cases'
+import { CF_CASES, CF_ICON_KEY_CASES, type CfManifest, type CfOracleCase, type Refusal } from './cases'
 import { CF_MANIFEST_PATH, CF_REFS_DIR } from './generate'
 import {
   type BarSettingsRow,
@@ -36,7 +36,7 @@ import {
   decodePngSync,
   evaluateFormulaCase,
   formulaObservationOf,
-  stage5IconKey,
+  stage5IconKeys,
   type BarCapabilityEvaluation,
   evaluateBarCapabilities,
   isCellInSqref,
@@ -583,8 +583,10 @@ export function captureAndCloseOwned(
 export function verifyOnlyCaseOrder(cases: readonly CfOracleCase[], stage: number): number[] {
   const idx = cases.map((_, i) => i)
   if (stage !== 4) return idx
-  const isKey = (i: number): boolean => cases[i]!.id === 'stage4-icon-glyph-key'
-  return [...idx.filter(isKey), ...idx.filter(i => !isKey(i))]
+  // Both glyph keys (the Stage 4 key, then the centred key the Stage 5 icon crops use) come first, in that order.
+  const keys: readonly string[] = [CF_ICON_KEY_CASES.bottom, CF_ICON_KEY_CASES.centre]
+  const isKey = (i: number): boolean => keys.includes(cases[i]!.id)
+  return [...keys.flatMap(id => idx.filter(i => cases[i]!.id === id)), ...idx.filter(i => !isKey(i))]
 }
 
 /** `--verify-only`: whether the case's kept sidecar records a different saved workbook than the one on disk. */
@@ -1179,7 +1181,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
               ...(isFormulaCase
                 ? (() => {
                     const recorded = { formulaObservations: formulaObservations ?? {}, ...(formulaDynamic ? { formulaDynamicRefresh: formulaDynamic } : {}) }
-                    return { lockBefore: sidecarLockBefore, lockAfter: sidecarLockAfter, ...recorded, formulaEvaluation: evaluateFormulaCase(cWithUpdatedExpected, recorded, decoded ?? undefined, capGeom ?? undefined, parts ?? undefined, stage5IconKey(REPO_ROOT)) }
+                    return { lockBefore: sidecarLockBefore, lockAfter: sidecarLockAfter, ...recorded, formulaEvaluation: evaluateFormulaCase(cWithUpdatedExpected, recorded, decoded ?? undefined, capGeom ?? undefined, parts ?? undefined, stage5IconKeys(REPO_ROOT)) }
                   })()
                 : {}),
             },

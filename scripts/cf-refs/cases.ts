@@ -4879,6 +4879,14 @@ export interface S4Fixture extends Omit<S3Fixture, 'rules' | 'calibration' | 'da
 
 const S4_WIDTH = 12
 const KEY_STYLE: S4Style = { numFmt: 'hidden' }
+/** The column width (characters) every Stage 5 workbook is written with (`buildWorksheetXml`'s default). */
+const S5_COL_WIDTH = 14
+
+/**
+ * The two glyph-key cases (owner decision 2026-11-19): `bottom` is the Stage 4 key (cells bottom-placed on 20 pt rows),
+ * `centre` the key captured at the Stage 5 icon placement (Normal, vertical=center, 20 pt rows).
+ */
+export const CF_ICON_KEY_CASES = { bottom: 'stage4-icon-glyph-key', centre: 'stage4-icon-glyph-key-centred' } as const
 
 const icon = (cap: string, sqref: string, priority: number, set: string | undefined, cfvo: readonly CfIconCfvo[], o: Partial<Omit<S4IconRule, 'kind' | 'cap' | 'sqref' | 'priority' | 'set' | 'cfvo'>> = {}): S4IconRule => ({
   kind: 'icon',
@@ -5432,6 +5440,26 @@ export const CF_STAGE4_FIXTURES: readonly S4Fixture[] = [
         icon('icon:geometry-row-offset', 'H2:H9', 7, '3Symbols', nums(0, 5, 8)),
         icon('icon:geometry-row-offset', 'I2:I9', 8, '3Arrows', nums(0, 5, 8)),
       ],
+    },
+  ),
+  // 19. stage4-icon-glyph-key-centred (owner decision 2026-11-19): the glyph key at the Stage 5 icon cells' placement.
+  // Appended last: the Stage 4 key stays first in manifest order, so it keeps owning every icon:glyph-* id, and no
+  // earlier fixture's GUIDs (derived from its index) change.
+  s4rect(
+    CF_ICON_KEY_CASES.centre,
+    'The glyph key at the Stage 5 icon placement. Excel resaves the Stage 5 icon cells as Normal, vertical=center (§14.y, §14.z) and draws their icons at cell top + 4 px, while the Stage 4 key cells (number format ;;;, an xf without <alignment>) are bottom-placed at + 7 px, so no Stage 5 crop can classify against it. The same 75 single-cell x14 custom rules as stage4-icon-glyph-key, one per (set, iconId) pair (rows 2..21, iconId 0..4 in B..F), on cells exactly like the Stage 5 icon cells: the default style (no s, xf 0, which Excel resaves as Normal), visible right-aligned General numbers (10), 20 pt rows, 14-character columns and the Normal font; the same-content controls below show the same number. The calibration columns and solid DXF cell repeat the Stage 4 key\'s. Every Stage 5 crop whose saved cell is centred on a 20 pt row is classified against this key; it owns no capability.',
+    {
+      n: 20,
+      dxfsXml: DXF_FILLS_XML,
+      calibration: { columns: ['H', 'I', 'J'], scanRow: 3, solidRef: 'K2', solidArgb: 'FFC6EFCE' },
+      cols: [
+        ...GLYPH_KEY_COLS.map((c, id) => s4col(c, `IconId${id}`, S4_ICON_FAMILIES.map(f => (id < f.size ? 10 : null)), S5_COL_WIDTH)),
+        s4col('H', 'Calib10', [], 10),
+        s4col('I', 'Calib30', [], 30),
+        s4col('J', 'Calib60', [], 60),
+        s4col('K', 'SolidDxf', [100]),
+      ],
+      rules: [...glyphKeyRules(), cellIsRaw('icon:pixel-calibration', 'K2', 76, '0', { dxfId: 1 })],
     },
   ),
 ]
@@ -7295,14 +7323,8 @@ export const CF_STAGE5_UNSUPPORTED: Readonly<Record<string, string>> = {
     'Finding (S4-MINMAX precedent): no hypothesis (withheld, zero, skipped) matched what Excel showed for a text, blank or error formula bound in stage5-cfvo-formulas L..N; recorded, never fitted. Production keeps a non-numeric formula bound unresolved.',
   'bar:bounds-formula':
     'Re-deferred (Task 39): the stage5-cfvo-formulas bar fixture holds 5..100 against formula bounds 20..80 (a whole-scope cf-value-beyond-bounds, Ruling S3-E) and its twin W7 cannot be measured, so the capture cannot evidence it (CF_STAGE5_UNCONFIRMABLE). Fixing the fixture is a new case version; production keeps formula bar bounds unresolved.',
-  'icon:thresholds-formula':
-    'Re-deferred (Task 39): every icon crop of stage5-cfvo-formulas is unclassifiable (icon-class-none). Its cells sit on the default style, which Excel draws vertically centred, 3 px above the bottom-aligned frame of the Stage 4 glyph key, so twin Z2 cannot be measured. A rebuild with bottom-aligned cells is a new case version; production keeps formula icon thresholds unresolved.',
-  'formula:composition-stop-icon':
-    'Re-deferred (Task 39, after the rebuild 26a648e1): every icon crop of stage5-composition is unclassifiable (icon-class-none), so the icon-only twin K2 cannot be measured. Excel 16.115 folded the explicit bottom-aligned style into the Normal style on resave and drew each icon at cell top + 4 px, against + 7 px in the Stage 4 glyph key (whose cells carry a number format), so the position-exact key matches nothing. Measuring it needs a key captured at this placement, not a verifier change after the capture. Also CF_STAGE5_UNCONFIRMABLE. Production keeps a formula stopIfTrue ahead of an icon set unresolved.',
-  'formula:composition-indirect-ahead-icon':
-    'Re-deferred (Task 39, after the rebuild 26a648e1): the indirect-icon configuration needs the same icon-only twin K2, which is unmeasurable (icon-class-none: Excel 16.115 draws the icon at cell top + 4 px, the Stage 4 glyph key at + 7 px). Production cannot evaluate INDIRECT and names no reading for it, so the capability is withheld either way.',
   'formula:cfvo-scope-multi-range':
-    'Re-deferred (Task 39): the scope-icon configuration of stage5-cfvo-scope cannot be measured (twin P12 is an unclassifiable icon crop: default style, vertically centred, 3 px off the glyph key frame), so the capability cannot verify. Production keeps a multi-range formula bound unresolved.',
+    'Finding (centred glyph key, 2026-11-19; S4-MINMAX precedent): with the icon twins measurable at last (P12..T15 classify against stage4-icon-glyph-key-centred at the centred frame, cell top + 4 px), no hypothesis (rule-wide, per-range) matches what Excel showed for the relative bound =MAX(B2:B5) on sqref "B2:B5 D2:D5 F2:F5": Excel drew the top colour (FF63BE7B) on every cell of the scale and the top icon (3Arrows:2) on every cell of the icon set, in the control range B as in D and F. Recorded, never fitted. Production keeps a multi-range formula bound unresolved.',
 }
 
 /**
