@@ -21,6 +21,12 @@ async function refused(r: Reassembler, b: Uint8Array, reason: RejectReason) {
   expect(r.bufferedBytes).toBe(0)
 }
 
+/** Byte equality of large arrays (a deep `toEqual` on MiB arrays takes seconds: the CI timeout). */
+function sameBytes(got: Uint8Array, want: Uint8Array) {
+  expect(got.length).toBe(want.length)
+  expect(Buffer.compare(Buffer.from(got.buffer, got.byteOffset, got.byteLength), Buffer.from(want.buffer, want.byteOffset, want.byteLength))).toBe(0)
+}
+
 describe('MEDIA_CHUNK (kind 9) is stored only (D14)', () => {
   it('kind 9 stored round-trips through Reassembler', async () => {
     const payload = noise(1048512) // D13: one chunk is 1 MiB − 64 B, one fragment
@@ -31,14 +37,14 @@ describe('MEDIA_CHUNK (kind 9) is stored only (D14)', () => {
     const r = make()
     const res = await r.push(frames[0]!)
     expect(res).toMatchObject({ ok: true, kind: 9, reqId: 41 })
-    expect((res as { payload: Uint8Array }).payload).toEqual(payload)
+    sameBytes((res as { payload: Uint8Array }).payload, payload)
     // A multi-fragment stored message reassembles too (the cap, not the fragment, bounds it).
     const big = noise(3 << 20)
     const many = stored(big)
     expect(many.length).toBeGreaterThan(1)
     let out: Awaited<ReturnType<Reassembler['push']>> = null
     for (const f of many) out = await r.push(f)
-    expect((out as { payload: Uint8Array }).payload).toEqual(big)
+    sameBytes((out as { payload: Uint8Array }).payload, big)
     expect(r.bufferedBytes).toBe(0)
   })
 
