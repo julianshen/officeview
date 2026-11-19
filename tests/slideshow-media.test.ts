@@ -1003,3 +1003,40 @@ describe('PR #19 review 11', () => {
     expect(el.currentTime).toBe(0)
   })
 })
+
+describe('clocked (streaming piece 5, spec §5.2)', () => {
+  const late = (clocked: boolean | undefined) => {
+    const r = rig()
+    let resolve!: (v: MediaLeaseResult) => void
+    const lease = fakeLease(rec('7', 'audio/mp4'))
+    const el = Object.assign(document.createElement('audio'), { canPlayType: () => 'maybe', play: vi.fn(() => Promise.resolve()), pause: vi.fn(), load: vi.fn() })
+    const now = { t: 0 }
+    const player = createMediaPlayer({ root: r.root, sink: r.sink, open: () => new Promise((res) => { resolve = res }), create: () => el, ...(clocked !== undefined ? { clocked } : {}) })
+    const t = tree(mainSeq([]), media('audio', 10, '7'))
+    const tl = createSlideTimeline(t, { showAnimation: true, reducedMotion: false })
+    const ctl = player.enter(slideOf(t, [rec('7', 'audio/mp4')]), () => now.t)
+    const cursor: SlideCursor = tl.initial()
+    const sync = (ms: number) => { now.t = ms; ctl.sync(tl.stateAt(cursor, ms), ms) }
+    return { el, lease, sync, deliver: () => resolve(lease) }
+  }
+
+  it('bytes that arrive after the node began start at its clock offset', async () => {
+    const d = late(true)
+    d.sync(0)
+    d.sync(800)
+    d.deliver(); await flush()
+    expect(d.el.currentTime).toBeCloseTo(0.8, 5)
+    expect(d.el.play).toHaveBeenCalledTimes(1)
+  })
+
+  it('without it (local shows) late bytes still start at 0', async () => {
+    for (const c of [undefined, false]) {
+      const d = late(c)
+      d.sync(0)
+      d.sync(800)
+      d.deliver(); await flush()
+      expect(d.el.currentTime).toBe(0)
+      expect(d.el.play).toHaveBeenCalledTimes(1)
+    }
+  })
+})

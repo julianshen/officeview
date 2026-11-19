@@ -88,6 +88,13 @@ export interface MediaPlayerDeps {
   stopTransitionSound?(onlyLooping: boolean): boolean
   /** @internal Element factory (tests); default: `root.ownerDocument.createElement`. */
   create?(kind: 'audio' | 'video'): HTMLMediaElement
+  /**
+   * Additive (streaming piece 5, spec §5.2): the show clock decides media ends and the element follows it. Bytes that
+   * arrive after the node began start at its current offset (`now() − begin`, after a `playFrom` offset); an
+   * activation the timeline already ended never plays (as without it). Absent (local shows): unchanged, the element
+   * starts at the node's `playFrom` offset or 0.
+   */
+  clocked?: boolean
 }
 
 export interface MediaController {
@@ -500,7 +507,9 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
         }
         if (left) { res.release(); return }
         attach(st, el, res)
-        if (st.from !== undefined) el.currentTime = st.from
+        // Streamed (§5.2): late bytes join the node where its clock is, not at its start.
+        const late = deps.clocked ? Math.max(0, now() - st.begin) / 1000 : 0
+        if (st.from !== undefined || late > 0) el.currentTime = (st.from ?? 0) + late
         st.from = undefined
         if (st.want) doPlay(st)
       }, () => {

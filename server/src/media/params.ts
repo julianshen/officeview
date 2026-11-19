@@ -46,6 +46,16 @@ export const MUXER_TAG_ALLOWLIST: Readonly<{ format: Record<string, readonly str
   stream: Object.freeze({ language: Object.freeze(['und']), handler_name: Object.freeze(['SoundHandler']) }),
 })
 
+/**
+ * Tags some ffprobe versions *report* without the file carrying them as metadata. ffprobe 6.1.1 (CI,
+ * Ubuntu 24.04 apt) surfaces the sample entry's zero vendor field as `vendor_id`; 8.1.1 does not. They
+ * may be absent, and when present must hold exactly these values. The raw-bytes check still proves
+ * nothing was written beyond the muxer's constants.
+ */
+export const PROBE_REPORTED_OPTIONAL: Readonly<{ stream: Record<string, readonly string[]> }> = Object.freeze({
+  stream: Object.freeze({ vendor_id: Object.freeze(['[0][0][0][0]']) }),
+})
+
 /** `ms` as seconds with exactly three decimals, without a float multiply. */
 function seconds(ms: number): string {
   return `${Math.floor(ms / 1000)}.${String(ms % 1000).padStart(3, '0')}`

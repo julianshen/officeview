@@ -8,7 +8,7 @@ import { join, resolve } from 'node:path'
 import { MEMORY_BYTES, runSandboxed, type SandboxRun } from '../../src/media/sandbox'
 import { createMediaTemp, type MediaFile } from '../../src/media/temp'
 import { CODEC_WHITELIST, inputArgs, parseProbe, probeArgv, sniffDemuxer, type ProbedMedia } from '../../src/media/probe'
-import { AUDIO_ARGV_TEMPLATE, MUXER_TAG_ALLOWLIST, audioArgv, encodeKeyId, encodeKeyOf, encodeParamsSha } from '../../src/media/params'
+import { AUDIO_ARGV_TEMPLATE, MUXER_TAG_ALLOWLIST, PROBE_REPORTED_OPTIONAL, audioArgv, encodeKeyId, encodeKeyOf, encodeParamsSha } from '../../src/media/params'
 import { AUDIO_MAX_BYTES, transcode, wallCapMs, type EncodeResult } from '../../src/media/transcode'
 import { ffmpegForTests } from './ffmpeg-gate'
 
@@ -263,13 +263,15 @@ describe.skipIf(!info)('transcode (sandboxed ffmpeg)', () => {
       expect(j.streams).toHaveLength(1)
       expect(j.streams.map((s: any) => s.codec_type)).toEqual(['audio'])
       expect(j.format.nb_streams).toBe(1)
-      const check = (tags: Record<string, string> | undefined, allow: Record<string, readonly string[]>) => {
-        // Every allowlisted key is present at its pinned value, and nothing else.
-        expect(Object.keys(tags ?? {}).sort()).toEqual(Object.keys(allow).sort())
-        for (const [k, v] of Object.entries(tags ?? {})) expect(allow[k]).toContain(v)
+      const check = (tags: Record<string, string> | undefined, allow: Record<string, readonly string[]>, optional: Record<string, readonly string[]> = {}) => {
+        // Every allowlisted key is present at its pinned value; a probe-reported optional key may appear
+        // only at its pinned value; nothing else.
+        const seen = Object.keys(tags ?? {}).filter((k) => !(k in optional)).sort()
+        expect(seen).toEqual(Object.keys(allow).sort())
+        for (const [k, v] of Object.entries(tags ?? {})) expect(allow[k] ?? optional[k]).toContain(v)
       }
       check(j.format.tags, MUXER_TAG_ALLOWLIST.format)
-      check(j.streams[0].tags, MUXER_TAG_ALLOWLIST.stream)
+      check(j.streams[0].tags, MUXER_TAG_ALLOWLIST.stream, PROBE_REPORTED_OPTIONAL.stream)
       const raw = Buffer.from(ok(n).bytes)
       for (const s of ['Lavf', 'Lavc', 'encoder', 'creation_time', 'libavformat', 'FFmpeg', ...SECRETS]) expect(raw.includes(s)).toBe(false)
       // The box tree holds only the boxes an audio-only mp4 needs (no chpl, tref, covr, uuid, a second trak…), and

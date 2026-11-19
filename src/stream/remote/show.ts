@@ -52,14 +52,15 @@ import { mountPresenterView, type PresenterSource } from '../../slideshow/presen
 import { createPresenterPlacement, type PresenterPlacement } from '../../slideshow/presenter/placement'
 import { createElapsedTimer, type ElapsedTimer } from '../../slideshow/presenter/timer'
 import { adoptPresenterWindow, type PresenterWindow } from '../../slideshow/presenter/window'
-import type { DiagnosticSink, Lease, SlideShowWorkspace, TerminalReserve } from '../../slideshow/types'
+import type { DiagnosticSink, Lease, ShowSlide, SlideShowWorkspace, TerminalReserve } from '../../slideshow/types'
 import { admitShow, backingFor, createSlideShowWorkspace, surfaceBytes, type Backing, type SlideShowProfile } from '../../slideshow/workspace'
 import { SHOW_PLAN_LIMITS } from '../show-plan'
 import { StreamSessionError } from './errors'
-import { createPlanSource } from './plan-source'
+import { createPlanSource, planUnit } from './plan-source'
 import { createPlanStage, type PlanSlideData, type PlanStage, type PlanTrack } from './plan-stage'
 import { bucketFor, type RemoteOfficeDoc } from './remote-doc'
 import { decodeBundle, decodeMorph, decodeTrack, type ShowBundle, type ShowMorph, type ShowTrack } from './show-bundle'
+import { createShowMedia, type ShowMedia } from './show-media'
 import { BACKOFF_MS, createShowFetcher, type ImageBitmapLike, type RemoteErrorCode, type ShowFetchClock, type ShowFetcher } from './show-fetch'
 
 /** What the remote `present()` start hands the lazy show: the local start contract over a streamed deck. */
@@ -175,9 +176,15 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
   const motion: 'full' | 'reduced' = (start.motion === 'auto' ? !!win?.matchMedia?.('(prefers-reduced-motion: reduce)').matches : start.motion === 'reduced') ? 'reduced' : 'full'
   /** Piece 4: the session's show requests (absent: piece 3's still show). */
   const show = doc.session
-  /** The deck plays on PlanStage when a shown slide is animated and the session serves show plans (D5). */
-  const planned = !!show?.showPlan && unitOf.some((u) => !!list[u]!.anim)
-  const animated = (unit: number) => planned && !!list[unit]?.anim
+  /**
+   * The deck plays on PlanStage when a shown slide has a plan and the session serves show plans (D5): an animated
+   * slide, or (piece 5, D19) one that ships audio or a transition sound. `animated(unit)`: the unit is fetched as a
+   * plan bundle (show-fetch gates on it).
+   */
+  const planned = !!show?.showPlan && unitOf.some((u) => planUnit(list[u]))
+  const animated = (unit: number) => planned && planUnit(list[unit])
+  /** Piece 5 (D18): audio plays when the server offers it (`can.media`) and the session carries the transport. */
+  const mediaOn = planned && doc.manifest.can.media === true && !!show?.mediaShow && !!show.mediaCursor && !!show.mediaRequest && !!show.mediaEnd
 
   const seen = createDiagnosticSink()
   const sink: DiagnosticSink = {
@@ -250,8 +257,13 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     pause() { if (pausedAt === undefined) pausedAt = clock.now() },
     resume() { if (pausedAt === undefined) return; pausedFor += clock.now() - pausedAt; pausedAt = undefined },
   }
-  /** An explicit pause and a hidden document compose: the show clock runs only when neither holds it. */
-  const syncClock = () => { if (paused || hiddenDoc) showClock.pause(); else showClock.resume() }
+  /** Piece 5: the show's audio (the media player, the transition sound and the media transport), when `mediaOn`. */
+  let media: ShowMedia | undefined
+  /** An explicit pause and a hidden document compose: the show clock runs only when neither holds it (media too). */
+  const syncClock = () => {
+    media?.setPaused(paused || hiddenDoc)
+    if (paused || hiddenDoc) showClock.pause(); else showClock.resume()
+  }
   const showBytes = remoteShowDeps.showBytes
 
   // ---------------------------------------------------------------------
@@ -771,6 +783,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     content++
     wake(unit)
     if (slide !== 'end' && unitOf[slide] === unit) render()
+    // Piece 5: a bundle in may name media for the current or the next slide (§4.4 request timing).
+    media?.want()
     prefetchMorph()
     syncPresenter()
   })
@@ -948,11 +962,14 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     const unit = p === 'end' ? undefined : unitOf[p]
     if (unit !== undefined && animated(unit) && failed.has(unit) && clock.now() - (failedAt.get(unit) ?? 0) >= BACKOFF_MS) { failed.delete(unit); failedAt.delete(unit) }
     want()
+    media?.moved(p, p === 'end' ? undefined : nextShown(p))
     render(false)
     announce()
     followNotes()
     syncPresenter()
   }
+  /** The slide Next leaves to (the loop included), for the media request window (§4.4). */
+  const nextShown = (p: number): number | undefined => (p + 1 < count ? p + 1 : loop && count > 1 ? 0 : undefined)
 
   function next(): void {
     if (exited) return
@@ -982,8 +999,10 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     stopFrames = undefined
     askingAgain?.(); askingAgain = undefined
     dropNotes()
-    // The driver lets go of the slide on screen (its pinned bundle), the stage of everything it uploaded.
+    // The driver lets go of the slide on screen (its pinned bundle), the stage of everything it uploaded; then the
+    // media (sounds, player, every lease) and the server's media queue (`media-end`).
     driver?.dispose()
+    media?.end()
     planStage?.dispose()
     dropExtras(undefined)
     fetcher.dispose()
@@ -1234,11 +1253,22 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     frameText.style.cssText = HIDDEN
     surface.root.append(live, frameText)
     // The driver over the plan-backed source, on PlanStage (an animated deck) or piece 3's still stage.
-    const planSource = createPlanSource({ manifest: doc.manifest, unitOf, bundles: bundleFor, loop, kiosk })
+    const planSource = createPlanSource({ manifest: doc.manifest, unitOf, bundles: bundleFor, loop, kiosk, media: mediaOn })
+    if (mediaOn) {
+      const s = show!
+      media = createShowMedia({
+        transport: { mediaShow: (u) => s.mediaShow!(u), mediaCursor: (u) => s.mediaCursor!(u), mediaRequest: (id, sig, room, u) => s.mediaRequest!(id, sig, room, u), mediaEnd: () => s.mediaEnd!() },
+        root: surface.root, win: win ?? (globalThis as unknown as Window), workspace, sink, unitOf,
+        records: (i) => bundleFor(i)?.plan.media,
+        slide: (i) => (driver?.visit?.index === i ? driver.visit.slide : undefined),
+        onResume: (cb) => doc.onManifestChange(cb),
+      })
+    }
     const slides: SlideSource = {
       count,
       settings: planSource.settings,
       hidden: planSource.hidden,
+      ...(planSource.mediaClock ? { mediaClock: (i: number) => planSource.mediaClock!(i) } : {}),
       async acquire(i, sig) {
         const unit = unitOf[i]!
         await settle(unit, sig)
@@ -1326,7 +1356,15 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
       },
       onVisit(v) {
         if (exited) return
-        if (!v) { entered(driver?.slide ?? 'end'); return }
+        if (!v) {
+          // Everything but cross-slide media (numSld) and a looping transition sound stops on a slide change.
+          media?.sounds.stopAt(lastShown)
+          entered(driver?.slide ?? 'end')
+          return
+        }
+        // The transition sound starts with the transition (the incoming frame can now be drawn), as locally.
+        media?.sounds.start(v.index)
+        media?.want()
         if (v.cursor) tracksOnEntry(v.index, v.cursor.step)
         prefetchMorph()
         render(false)
@@ -1340,6 +1378,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
       onEnd() { exit() },
       // A blanked screen holds the after-timer auto-advance.
       held: () => screen !== 'slide',
+      // Piece 5: the player follows each slide's timeline; its ends never reach the history (the media clock's do).
+      ...(media ? { media: (slide: ShowSlide, now: () => number) => media!.enter(slide, now) } : {}),
     }
     driver = createShowDriver({ source: slides, stage: planStage ?? stillStage, clock: showClock, sink, reducedMotion: motion === 'reduced', kiosk, hooks })
     cursorHider = createCursorHider(surface.root, remoteShowDeps.timer(win))
@@ -1424,6 +1464,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     } else if (start.from === 'beginning') from = count ? 0 : 'end'
     else from = Number.isInteger(start.from) && start.from >= 0 && start.from < count ? start.from : count ? 0 : 'end'
     applyBucket()
+    // D1: the server queues the show's media from the starting slide before anything is requested.
+    if (from !== 'end') media?.start(from)
     void driver.start(from)
     if (!start.isCurrent()) throw new SlideShowError('cancelled')
     // An animated deck draws every frame (transitions, builds, tracks, Morph).
