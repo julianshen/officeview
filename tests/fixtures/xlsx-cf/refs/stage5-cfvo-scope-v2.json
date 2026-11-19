@@ -1,0 +1,2831 @@
+{
+  "excelVersion": "16.115",
+  "route": "copy-picture",
+  "appearance": "screen",
+  "scale": 1,
+  "pxPerPt": 1,
+  "width": 4789,
+  "height": 841,
+  "colWidthsPt": [
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84
+  ],
+  "rowHeightsPt": [
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20
+  ],
+  "geometrySource": "excel-measured",
+  "resavedByExcel": true,
+  "resaveSavedSha256": "34aa439ca9e1f9eaa543272e34b1e1e8d77e8630d1bf45a357fb4d6fd846be82",
+  "sheet": "Sheet1",
+  "range": "A1:BE42",
+  "hostTimeZone": "Asia/Taipei",
+  "savedSha256": "34aa439ca9e1f9eaa543272e34b1e1e8d77e8630d1bf45a357fb4d6fd846be82",
+  "pngSha256": "a7c7ee24b1d8ef08717ce6c703977c77b3f3ff12025405948980771df2d13bc8",
+  "capturedAt": "2026-11-19T23:36:17.738Z",
+  "lockBefore": "unlocked",
+  "lockAfter": "unlocked",
+  "formulaObservations": {
+    "B2": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B3": {
+      "displayFormatFill": "FFD0806F",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B4": {
+      "displayFormatFill": "FF9A9F75",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B5": {
+      "displayFormatFill": "FF7FAE78",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B6": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B7": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D2": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D3": {
+      "displayFormatFill": "FFB58F72",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D4": {
+      "displayFormatFill": "FF87A977",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D5": {
+      "displayFormatFill": "FF71B679",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D6": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D7": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F2": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F3": {
+      "displayFormatFill": "FFDD786D",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F4": {
+      "displayFormatFill": "FFA29A74",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F5": {
+      "displayFormatFill": "FF76B378",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F6": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F7": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "S2": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "S10": {
+      "displayFormatFill": "FFDB7A6E",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "S11": {
+      "displayFormatFill": "FFB39072",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "S12": {
+      "displayFormatFill": "FF9F9C74",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "S13": {
+      "displayFormatFill": "FF81AD77",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "S21": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "S23": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "S31": {
+      "displayFormatFill": "FFC78570",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "S32": {
+      "displayFormatFill": "FFA59873",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "S33": {
+      "displayFormatFill": "FF95A175",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "S34": {
+      "displayFormatFill": "FF6DB879",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "S42": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T2": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T10": {
+      "displayFormatFill": "FFE5746D",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T11": {
+      "displayFormatFill": "FFB98D71",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T12": {
+      "displayFormatFill": "FF999F75",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T13": {
+      "displayFormatFill": "FF77B278",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T21": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T24": {
+      "displayFormatFill": "FFD87B6E",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T25": {
+      "displayFormatFill": "FFC28870",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T26": {
+      "displayFormatFill": "FFB88D71",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T27": {
+      "displayFormatFill": "FF9E9C74",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T31": {
+      "displayFormatFill": "FFE9716C",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T32": {
+      "displayFormatFill": "FFC68570",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T33": {
+      "displayFormatFill": "FFAD9373",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T34": {
+      "displayFormatFill": "FF93A375",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T38": {
+      "displayFormatFill": "FFE8726C",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T39": {
+      "displayFormatFill": "FFD27F6F",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T40": {
+      "displayFormatFill": "FFC78570",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T41": {
+      "displayFormatFill": "FFB68E72",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T42": {
+      "displayFormatFill": "FFA69873",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U5": {
+      "displayFormatFill": "FFBF8971",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U6": {
+      "displayFormatFill": "FFA89673",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U7": {
+      "displayFormatFill": "FF75B479",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U13": {
+      "displayFormatFill": "FFB39072",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U14": {
+      "displayFormatFill": "FF93A375",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U17": {
+      "displayFormatFill": "FFE1766D",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U18": {
+      "displayFormatFill": "FFC28870",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U19": {
+      "displayFormatFill": "FFB29172",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U20": {
+      "displayFormatFill": "FF9A9E75",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U21": {
+      "displayFormatFill": "FF83AC77",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U24": {
+      "displayFormatFill": "FFD17F6F",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U25": {
+      "displayFormatFill": "FFB78E72",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U26": {
+      "displayFormatFill": "FFAA9573",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U27": {
+      "displayFormatFill": "FF8BA776",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U31": {
+      "displayFormatFill": "FFD0806F",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U32": {
+      "displayFormatFill": "FF9A9F75",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U33": {
+      "displayFormatFill": "FF7FAE78",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "S20": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U38": {
+      "displayFormatFill": "FFB58F72",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U39": {
+      "displayFormatFill": "FF87A977",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U40": {
+      "displayFormatFill": "FF71B679",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "S41": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V3": {
+      "displayFormatFill": "FFDD786D",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V4": {
+      "displayFormatFill": "FFA29A74",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V5": {
+      "displayFormatFill": "FF76B378",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T20": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V10": {
+      "displayFormatFill": "FFE0776D",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V11": {
+      "displayFormatFill": "FFBF8A71",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V12": {
+      "displayFormatFill": "FFAE9373",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V13": {
+      "displayFormatFill": "FF95A175",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V14": {
+      "displayFormatFill": "FF7CAF78",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V17": {
+      "displayFormatFill": "FFCF806F",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V18": {
+      "displayFormatFill": "FFB39072",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V19": {
+      "displayFormatFill": "FFA69873",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V20": {
+      "displayFormatFill": "FF85AB77",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V24": {
+      "displayFormatFill": "FFE8726C",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V25": {
+      "displayFormatFill": "FFC48770",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V26": {
+      "displayFormatFill": "FFA99673",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V27": {
+      "displayFormatFill": "FF8DA676",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V31": {
+      "displayFormatFill": "FFDB7A6E",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V32": {
+      "displayFormatFill": "FFC68570",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V33": {
+      "displayFormatFill": "FFBD8B71",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V34": {
+      "displayFormatFill": "FFA59873",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V35": {
+      "displayFormatFill": "FF6FB779",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V38": {
+      "displayFormatFill": "FFE7736C",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V39": {
+      "displayFormatFill": "FFC08971",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V40": {
+      "displayFormatFill": "FFA49974",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "V41": {
+      "displayFormatFill": "FF87AA77",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W3": {
+      "displayFormatFill": "FFE2756D",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W4": {
+      "displayFormatFill": "FFC48670",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W5": {
+      "displayFormatFill": "FFB58F72",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W6": {
+      "displayFormatFill": "FF9F9C74",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W7": {
+      "displayFormatFill": "FF89A877",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W10": {
+      "displayFormatFill": "FFEA716C",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W11": {
+      "displayFormatFill": "FFCB826F",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W12": {
+      "displayFormatFill": "FFB48F72",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W13": {
+      "displayFormatFill": "FF9C9D74",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W14": {
+      "displayFormatFill": "FF72B579",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W17": {
+      "displayFormatFill": "FFDE786D",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W18": {
+      "displayFormatFill": "FFBB8C71",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W19": {
+      "displayFormatFill": "FFAA9673",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W20": {
+      "displayFormatFill": "FF8FA576",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W21": {
+      "displayFormatFill": "FF75B479",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W24": {
+      "displayFormatFill": "FFCD826F",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W25": {
+      "displayFormatFill": "FFAF9372",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W26": {
+      "displayFormatFill": "FFA19B74",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W27": {
+      "displayFormatFill": "FF7EAF78",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W31": {
+      "displayFormatFill": "FFC18871",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W32": {
+      "displayFormatFill": "FF76B379",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "S19": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W38": {
+      "displayFormatFill": "FF9B9E75",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "S39": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "S40": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X3": {
+      "displayFormatFill": "FFD37E6F",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X4": {
+      "displayFormatFill": "FF81AD77",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T19": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "S16": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "S17": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "S18": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "S37": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "S38": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T16": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T17": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "T18": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X10": {
+      "displayFormatFill": "FFE5746D",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X11": {
+      "displayFormatFill": "FFCB826F",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X12": {
+      "displayFormatFill": "FFBE8A71",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X13": {
+      "displayFormatFill": "FFAB9573",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X14": {
+      "displayFormatFill": "FF97A075",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X17": {
+      "displayFormatFill": "FFEC706C",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X18": {
+      "displayFormatFill": "FFCF806F",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X19": {
+      "displayFormatFill": "FFBA8C71",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X20": {
+      "displayFormatFill": "FFA49974",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X21": {
+      "displayFormatFill": "FF7DAF78",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B16": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B17": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B18": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B19": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B21": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D16": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D17": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D18": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D19": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D21": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F16": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F17": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F18": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F19": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F21": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X23": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X31": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X32": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X33": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X41": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X42": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y10": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y11": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y21": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y23": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y31": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y32": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y33": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y41": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y42": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X34": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X35": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y34": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y35": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X39": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X40": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y18": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y19": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y39": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y40": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X37": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "X38": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y16": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y17": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y37": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y38": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "K2": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "K3": {
+      "displayFormatFill": "FFD37E6F",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "K4": {
+      "displayFormatFill": "FFA29A74",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "K5": {
+      "displayFormatFill": "FF89A877",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "K6": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "K7": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "M2": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "M3": {
+      "displayFormatFill": "FFBA8C71",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "M4": {
+      "displayFormatFill": "FF90A476",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "M5": {
+      "displayFormatFill": "FF7CAF78",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "M6": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "M7": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O2": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O3": {
+      "displayFormatFill": "FFE0776D",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O4": {
+      "displayFormatFill": "FFA99673",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O5": {
+      "displayFormatFill": "FF81AD77",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O6": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O7": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Z2": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Z10": {
+      "displayFormatFill": "FFD37E6F",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Z11": {
+      "displayFormatFill": "FFA29A74",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Z12": {
+      "displayFormatFill": "FF89A877",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Z20": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Z21": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Z23": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Z31": {
+      "displayFormatFill": "FFBA8C71",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Z32": {
+      "displayFormatFill": "FF90A476",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Z33": {
+      "displayFormatFill": "FF7CAF78",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Z41": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Z42": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AA2": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AA10": {
+      "displayFormatFill": "FFE0776D",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AA11": {
+      "displayFormatFill": "FFA99673",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AA12": {
+      "displayFormatFill": "FF81AD77",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AA20": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AA21": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "I2": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "I3": {
+      "displayFormatFill": "FFC28770",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "I4": {
+      "displayFormatFill": "FF9A9F75",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "I5": {
+      "displayFormatFill": "FF76B378",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "I6": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "I7": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AA23": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AA31": {
+      "displayFormatFill": "FFD57D6E",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AA32": {
+      "displayFormatFill": "FFBB8C71",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AA33": {
+      "displayFormatFill": "FFA49974",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AA34": {
+      "displayFormatFill": "FF8CA776",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AA42": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AB4": {
+      "displayFormatFill": "FFD07F6F",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AB5": {
+      "displayFormatFill": "FFC18870",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AB6": {
+      "displayFormatFill": "FFB19172",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AB7": {
+      "displayFormatFill": "FF97A075",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AB10": {
+      "displayFormatFill": "FFC28770",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AB11": {
+      "displayFormatFill": "FF9A9F75",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AB12": {
+      "displayFormatFill": "FF76B378",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AA41": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AB17": {
+      "displayFormatFill": "FFD97A6E",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AB18": {
+      "displayFormatFill": "FFC28870",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AB19": {
+      "displayFormatFill": "FFAD9373",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AB20": {
+      "displayFormatFill": "FF97A075",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AB21": {
+      "displayFormatFill": "FF73B579",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AA40": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AB24": {
+      "displayFormatFill": "FFAE9373",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AB25": {
+      "displayFormatFill": "FF76B379",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AA37": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AA38": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AA39": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE6": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE7": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG6": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG7": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AI2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AI3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AI4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AI5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AI6": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AI7": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AV2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AV10": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AV11": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AV12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AV13": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AV21": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AV23": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AV31": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AV32": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AV33": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AV34": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AV42": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW10": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW11": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW13": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW21": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW24": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW25": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW26": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW27": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW31": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW32": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW33": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW34": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW38": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW39": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW40": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW41": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW42": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AX5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AX6": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AX7": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AX13": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AX14": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AX17": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AX18": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AX19": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AX20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AX21": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AX24": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AX25": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AX26": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AX27": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AX31": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AX32": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AX33": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AV20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AX38": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AX39": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AX40": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AV41": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY10": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY11": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY13": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY14": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY17": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY18": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY19": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY24": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY25": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY26": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY27": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY31": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY32": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY33": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY34": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY35": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY38": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY39": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY40": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AY41": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AZ3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AZ4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AZ5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AZ6": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AZ7": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AZ10": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AZ11": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AZ12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AZ13": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AZ14": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AZ17": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AZ18": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AZ19": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AZ20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AZ21": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AZ24": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AZ25": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AZ26": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AZ27": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AZ31": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AZ32": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AV19": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AZ38": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AV39": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AV40": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW19": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AV16": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AV17": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AV18": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AV37": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AV38": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW16": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW17": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AW18": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA10": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA11": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA13": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA14": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA17": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA18": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA19": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA21": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE16": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE17": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE18": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE19": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE21": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG16": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG17": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG18": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG19": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG21": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AI16": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AI17": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AI18": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AI19": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AI20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AI21": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA23": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA31": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA32": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA33": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA41": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA42": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BB2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BB10": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BB11": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BB12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BB20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BB21": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BB23": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BB31": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BB32": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BB33": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BB41": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BB42": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA34": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA35": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BB34": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BB35": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA39": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA40": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BB18": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BB19": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BB39": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BB40": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA37": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BA38": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BB16": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BB17": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BB37": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BB38": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AN2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AN3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AN4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AN5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AN6": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AN7": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AP2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AP3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AP4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AP5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AP6": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AP7": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AR2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AR3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AR4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AR5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AR6": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AR7": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BC2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BC10": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BC11": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BC12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BC20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BC21": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BC23": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BC31": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BC32": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BC33": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BC41": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BC42": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BD2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BD10": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BD11": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BD12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BD20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BD21": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AL2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AL3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AL4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AL5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AL6": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AL7": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BD23": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BD31": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BD32": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BD33": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BD34": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BD42": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BE4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BE5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BE6": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BE7": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BE10": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BE11": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BE12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BD41": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BE17": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BE18": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BE19": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BE20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BE21": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BD40": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BE24": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BE25": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BD37": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BD38": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "BD39": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    }
+  },
+  "formulaEvaluation": {
+    "formula:cfvo-scope-multi-range": {
+      "status": "discriminating",
+      "reason": "anchor-a1 matches every designated cell; every required visual and empty cell is validated, and each rival is contradicted at >= 2 decisive cells of every replication group (Ruling S5-WITNESS)",
+      "matched": "anchor-a1",
+      "survivors": [
+        "anchor-a1"
+      ],
+      "observed": {
+        "scope2-scale": {
+          "B2": "FFF8696B",
+          "B3": "FFD0806F",
+          "B4": "FF9A9F75",
+          "B5": "FF7FAE78",
+          "B6": "FF63BE7B",
+          "B7": "FF63BE7B",
+          "D2": "FFF8696B",
+          "D3": "FFB58F72",
+          "D4": "FF87A977",
+          "D5": "FF71B679",
+          "D6": "FF63BE7B",
+          "D7": "FF63BE7B",
+          "F2": "FFF8696B",
+          "F3": "FFDD786D",
+          "F4": "FFA29A74",
+          "F5": "FF76B378",
+          "F6": "FF63BE7B",
+          "F7": "FF63BE7B"
+        },
+        "scope2-icon": {
+          "B16": "icon:3Arrows:0@2,4|none",
+          "B17": "icon:3Arrows:1@2,4|none",
+          "B18": "icon:3Arrows:1@2,4|none",
+          "B19": "icon:3Arrows:1@2,4|none",
+          "B20": "icon:3Arrows:2@2,4|none",
+          "B21": "icon:3Arrows:2@2,4|none",
+          "D16": "icon:3Arrows:0@2,4|none",
+          "D17": "icon:3Arrows:1@2,4|none",
+          "D18": "icon:3Arrows:1@2,4|none",
+          "D19": "icon:3Arrows:1@2,4|none",
+          "D20": "icon:3Arrows:2@2,4|none",
+          "D21": "icon:3Arrows:2@2,4|none",
+          "F16": "icon:3Arrows:0@2,4|none",
+          "F17": "icon:3Arrows:1@2,4|none",
+          "F18": "icon:3Arrows:1@2,4|none",
+          "F19": "icon:3Arrows:1@2,4|none",
+          "F20": "icon:3Arrows:2@2,4|none",
+          "F21": "icon:3Arrows:2@2,4|none"
+        },
+        "scope2-scale-absolute": {
+          "K2": "FFF8696B",
+          "K3": "FFD37E6F",
+          "K4": "FFA29A74",
+          "K5": "FF89A877",
+          "K6": "FF63BE7B",
+          "K7": "FF63BE7B",
+          "M2": "FFF8696B",
+          "M3": "FFBA8C71",
+          "M4": "FF90A476",
+          "M5": "FF7CAF78",
+          "M6": "FF63BE7B",
+          "M7": "FF63BE7B",
+          "O2": "FFF8696B",
+          "O3": "FFE0776D",
+          "O4": "FFA99673",
+          "O5": "FF81AD77",
+          "O6": "FF63BE7B",
+          "O7": "FF63BE7B"
+        }
+      }
+    },
+    "formula:cfvo-relative": {
+      "status": "no-hypotheses",
+      "reason": "record only: Recorded only: the single-range control (=MAX(I2:I7) on I2:I7) shows whether the multi-range scope causes the behaviour or a relative cfvo always does it; it never bears evidence for the multi-range capability",
+      "observed": {
+        "scope2-single-range": {
+          "I2": "FFF8696B",
+          "I3": "FFC28770",
+          "I4": "FF9A9F75",
+          "I5": "FF76B378",
+          "I6": "FF63BE7B",
+          "I7": "FF63BE7B"
+        }
+      }
+    }
+  }
+}
