@@ -461,7 +461,8 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(stage5Withheld).toBeGreaterThan(0)
     // eslint-disable-next-line no-console
     process.stderr.write(`stage 5 conformance: withheld=${stage5Withheld} formulaCompared=${stage5FormulaCompared} compared=${stage5Compared}\n`)
-  })
+  // Runs production paint over every measured case (more bars paint since PR #85); timed out at 5 s on the CI runner.
+  }, 300_000)
 
   it('proves all 53 previously withheld cells now paint under production evidence (C1)', async () => {
     // Stage 1 cases with previously withheld cells in final-r1-oracle-vs-viewer.txt:
