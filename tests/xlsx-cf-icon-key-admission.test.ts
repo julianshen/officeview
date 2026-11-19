@@ -143,3 +143,24 @@ describe('ruling 2: both cache layers are invalidated by the same inputs', () =>
     expect(inner && !('kind' in inner) ? inner.classes.size : 0).toBe(54)
   })
 })
+
+describe('codex re-review: admission invalidation covers every file the key case verifies, its input workbook included', () => {
+  const inputPath = (id: string): string => abs(manifest().cases.find(c => c.id === id)!.input)
+  it('an input replaced after a warm cache is re-verified: hash-mismatch, so no key', () => {
+    expect(stage5IconKeys(ROOT).centre).toBeDefined()
+    fsOverrides.set(inputPath(CENTRED), readFileSync(inputPath(BOTTOM)))
+    expect(verifyCfCase(manifest().cases.find(c => c.id === CENTRED)!, { rootDir: ROOT })).toMatchObject({ kind: 'refusal', code: 'hash-mismatch' })
+    expect(stage5IconKeys(ROOT).centre).toBeUndefined()
+  })
+  it('an input that disappears after a warm cache yields no key', () => {
+    expect(stage5IconKeys(ROOT).centre).toBeDefined()
+    fsOverrides.set(inputPath(CENTRED), null)
+    expect(stage5IconKeys(ROOT).centre).toBeUndefined()
+  })
+  it('an input restored after a cached miss yields the key again', () => {
+    fsOverrides.set(inputPath(CENTRED), null)
+    expect(stage5IconKeys(ROOT).centre).toBeUndefined()
+    fsOverrides.delete(inputPath(CENTRED))
+    expect(stage5IconKeys(ROOT).centre?.classes.size).toBe(54)
+  })
+})

@@ -4952,8 +4952,8 @@ export function loadIconGlyphKey(rootDir: string, caseId: string = CF_ICON_KEY_C
 const sha256OfFile = (abs: string): string => (existsSync(abs) ? createHash('sha256').update(readFileSync(abs)).digest('hex') : '-')
 
 /**
- * A key case's manifest entry and the content digest of everything its key is derived from: the manifest text and the
- * case's sidecar, PNG and saved workbook (a missing file digests as `-`). Undefined without a manifest or the case.
+ * A key case's manifest entry and the content digest of everything its key and its admission are derived from: the manifest
+ * text, the case's input and saved workbooks, and every capture's sidecar and PNG (a missing file digests as `-`). Undefined without a manifest or the case.
  */
 function iconKeyCaseInputs(rootDir: string, caseId: string, manifestText?: string): { keyCase: CfOracleCase; digest: string } | undefined {
   const manifestAbs = resolve(rootDir, 'tests/fixtures/xlsx-cf/manifest.json')
@@ -4961,8 +4961,9 @@ function iconKeyCaseInputs(rootDir: string, caseId: string, manifestText?: strin
   if (text === undefined) return undefined
   const keyCase = (JSON.parse(text) as CfManifest).cases.find(c => c.id === caseId)
   if (!keyCase) return undefined
-  const cap = keyCase.captures.find(x => x.appearance === 'screen')
-  const files = [cap?.sidecarPath, cap?.pngPath, keyCase.saved].map(f => (f ? sha256OfFile(resolve(rootDir, f)) : '-'))
+  // Every file the key case's full verification reads (codex re-review): its input and saved workbooks and every capture's
+  // sidecar and PNG, so replacing, removing or restoring any of them re-runs admission.
+  const files = [keyCase.input, keyCase.saved, ...keyCase.captures.flatMap(x => [x.sidecarPath, x.pngPath])].map(f => (f ? sha256OfFile(resolve(rootDir, f)) : '-'))
   return { keyCase, digest: [createHash('sha256').update(text).digest('hex'), ...files].join(':') }
 }
 
