@@ -6,7 +6,7 @@ Spec: `docs/superpowers/specs/2026-11-17-streaming-s3-piece5-design.md`, with it
 
 Piece 5 ships audio only: shape audio, narration, effect sounds and transition sounds. Video keeps piece 4's behaviour until piece 6.
 
-Every gate is green except the eager size gate. That gate was already red at the merge base, and this branch adds 271 B to it (§Size gate). The browser stream suite was red on a stale assertion; the assertion was replaced by controller ruling (§Verification).
+Every gate is green except the eager size gate. That gate was already red at the merge base, and this branch adds 271 B to it (§Size gate). The browser stream suite was red on a stale assertion; the assertion was replaced by controller ruling (§Verification). The final-review fix pass changed the gate by nothing (§Final review fix pass).
 
 ## The feasibility gate and the rescope
 
@@ -216,18 +216,18 @@ Against the brief's expectation (red, with Δ ≤ 4 B against 421,385 B): the me
 
 ### Final review fix pass (2026-11-20)
 
-Four findings were fixed: `56adaa39` (F2), `12538ce4` (F1), `395c9d61` (F3) and `8cdff349` (F4, docs only). Each counterexample became a failing test first, and the tests are in the table above.
-- F2 went red on `expected { at: 2500 } to deeply equal { at: 3500 }`.
+Four findings were fixed: `56adaa39` (F2, with the follow-up `1d0130f7`), `12538ce4` (F1), `395c9d61` (F3) and `8cdff349` (F4, docs only). Each counterexample became a failing test first, and the tests are in the table above.
+- F2 went red on `expected { at: 2500 } to deeply equal { at: 3500 }`. Its follow-up went red on a fractional `repeatCount` (2.5 on 4 s, `playFrom(3)` at 9000): the seek passed the playback's end, so the node ended at 8000, before its own command. The seek is now clamped at the total.
 - F1 went red on `currentTime` 3 (expected 1), 6 (expected 1) and 1 (expected 2), and on `play()` called for a position past the duration.
-- F3 went red on `currentTime` 0 (expected 1 and 0.5), and on `play()` called after the duration. The end-to-end test went red on a start position of 0 (expected ≥ 0.9).
+- F3 went red on `currentTime` 0 (expected 1 and 0.5), and on `play()` called after the duration. The end-to-end test went red on a start position of 0 (expected ≥ 0.9). Its "never plays" half also goes red when `show-media.ts`'s `durationOf` is stubbed to `undefined` (2 plays, expected 1), so it proves the duration wiring.
 
 The gates on the final tree:
 - `npx vitest run tests/stream tests/slideshow*`: 95 files, 1863 pass, 2 skipped.
-- `cd server && OV_MEDIA_REQUIRED=1 bun test`: 1327 pass, 0 fail, 80 files (834 s).
+- `cd server && OV_MEDIA_REQUIRED=1 bun test`: 1327 pass, 0 fail, 80 files (831 s).
 - `IV_HARNESS_PORT=4391 npm run test:browser:stream`: 41 pass, 1 skipped.
-- `bun scripts/stream-show-compare.ts --deck all`: exit 0. 402 pass, 24 skipped-mark, 52 unit stills, and the same four known unit-still failures. These are the counts recorded above, both after F2 alone and at the final tree.
+- `bun scripts/stream-show-compare.ts --deck all`: exit 0. 402 pass, 24 skipped-mark, 52 unit stills, and the same four known unit-still failures. These are the counts recorded above, after F2 alone and at the final tree alike.
 - `tsc`, `typecheck:server` and `lint`: green.
-- `bun run gates:core`: red, at 422,665 B (+1 B over 422,664 B at `8500545c`, measured in a temporary detached worktree). The module set is unchanged (+ `src/xlsx/rowFont.ts`, as before), and every eager chunk's raw size is unchanged. Only the lazy `show` and `sounds` chunks grew, so the 1 B is gzip noise from their renamed hashes inside eager chunks.
+- `bun run gates:core`: red, as at `8500545c`. The final tree measures 422,664 B, the same as `8500545c` (measured in a temporary detached worktree), so Δ is 0 B. The module set is unchanged (+ `src/xlsx/rowFont.ts`). An intermediate build at `8cdff349` measured 422,665 B (+1 B). Every eager chunk's raw size was unchanged there; only the lazy `show` and `sounds` chunks had grown, and their renamed hashes appear inside eager chunks, so that byte was gzip noise.
 
 ## Not machine-checked
 
