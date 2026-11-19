@@ -182,7 +182,8 @@ export function createSessionMediaQueue(o: SessionMediaQueueOptions): SessionMed
     const s = o.admission.slot(sid, mode, ctl.signal)
     if ('refused' in s) return false
     ticket = s
-    ticketDone = s.then((l) => { if (ended || revoked()) l.release(); else lease = l }, () => {}).finally(() => { ticket = undefined; ticketDone = undefined })
+    // Granted: the loop is woken, so a lease that arrives while it is idle (nothing left to run) is handed back.
+    ticketDone = s.then((l) => { if (ended || revoked()) l.release(); else { lease = l; poke() } }, () => {}).finally(() => { ticket = undefined; ticketDone = undefined })
     return true
   }
 

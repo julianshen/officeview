@@ -23,6 +23,8 @@ export interface MediaAdmission {
   upgrade(ticket: Promise<{ release(): void }>): 'held' | 'busy'
   readonly running: number
   readonly queued: number
+  /** Who holds the queue places and who is parked, in order (tests, diagnostics). */
+  snapshot(): { running: number; queue: string[]; parked: string[] }
 }
 
 interface Waiter { sid: string; mode: 'ahead' | 'request'; grant(): void; signal: AbortSignal; onAbort(): void }
@@ -99,6 +101,7 @@ export function createMediaAdmission(o: { slots: number; queue: number }): Media
       pump()
       return 'held'
     },
+    snapshot: () => ({ running, queue: queue.map((w) => w.sid), parked: parked.map((w) => w.sid) }),
     get running() { return running },
     get queued() { return queue.length },
   }

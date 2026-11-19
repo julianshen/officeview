@@ -90,8 +90,16 @@ export interface EncodeCache {
   sweep(): Promise<void>
   stats(): { entries: number; bytes: number; referenced: number; inflight: number }
   referencesOf(sid: string): number
+  /** A snapshot for invariant checks (tests, diagnostics): every entry and every session's references. */
+  inspect(): CacheSnapshot
   /** Deletes every entry file, aborts every flight and resolves once they have settled. */
   close(): Promise<void>
+}
+
+export interface CacheSnapshot {
+  entries: Array<{ id: string; docId: string; state: 'inflight' | 'done'; bytes: number; refs: number; waiters: number; path?: string; refused?: string }>
+  sessions: Record<string, { bytes: number; refs: Array<{ id: string; unit: number; pins: number }> }>
+  bytes: number
 }
 
 const CACHED_REFUSALS: ReadonlySet<MediaRefusal> = new Set(['media-too-large', 'media-unreadable'])
@@ -348,6 +356,16 @@ export function createEncodeCache(o: { temp: MediaTemp; sessionBytes: number; se
       return { entries: done, bytes: serverTotal(), referenced, inflight }
     },
     referencesOf(sid) { return sessions.get(sid)?.size ?? 0 },
+    inspect() {
+      return {
+        entries: [...entries.values()].map((e) => ({
+          id: e.id, docId: e.key.docId, state: e.state, bytes: e.bytes, refs: e.refs.size, waiters: e.waiters.size,
+          ...(e.media && 'path' in e.media ? { path: e.media.path } : {}), ...(e.media && 'refused' in e.media ? { refused: e.media.refused } : {}),
+        })),
+        sessions: Object.fromEntries([...sessions].map(([sid, m]) => [sid, { bytes: sessionTotal(sid), refs: [...m].map(([id, r]) => ({ id, unit: r.unit, pins: r.pins })) }])),
+        bytes: serverTotal(),
+      }
+    },
     async close() {
       closed = true
       clearInterval(timer)
