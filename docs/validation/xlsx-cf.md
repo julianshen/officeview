@@ -2704,8 +2704,8 @@ The result then selects the key:
 | anything else (top, justify, another height, a cell the sheet does not hold, no styles part) | none: the crop is unmeasurable or `icon-class-none`, as before |
 
 - There is no fallback and no shifted search; `classifyIconCrop` still runs at zero offset.
-- `stage5IconKeys` admits a key only when every one of its own saved key cells reads the placement the key stands for.
-- One selector (`stage5IconKeyOf`) serves capture, verify and audit. Its result is cached on the stat of the manifest and of both keys' sidecars, PNGs and saved workbooks.
+- `stage5IconKeys` admits a key only when its own case passes full `verifyCfCase` (review fix round 1, below) and every one of its own saved key cells reads the placement the key stands for.
+- One selector (`stage5IconKeyOf`) serves capture, verify and audit. Its result is cached on a content digest of the manifest and of both keys' sidecars, PNGs and saved workbooks.
 - `capture --stage 4 --verify-only` re-derives both key sidecars first.
 
 **Stage 5 re-evaluation (`capture --stage 5 --verify-only`; no Excel).** Every icon witness now classifies at cell-relative (2, 4).
@@ -2741,3 +2741,27 @@ On `formula:cfvo-scope-multi-range`, Excel drew the top icon (3Arrows:2) on all 
 - Stage 4 conformance: `checked` 1,658, `agreedIcon` 624. Production evaluates Excel's class on all 75 centred key cells. `unobserved` 21, `controls` 791.
 - `RECORDED_EXCEL_REFUSALS` drops stop-icon and indirect-ahead-icon and adds `cfvo-scope-multi-range`.
 - The Stage 1–4 input digest is unchanged: the centred input is excluded from it and pinned on its own.
+
+**Review fix round 1 (codex: changes requested, two Important findings; orchestrator rulings).** Each fix starts from a test that failed first: `tests/xlsx-cf-icon-key-admission.test.ts`, whose mutants live in memory through a wrapped `node:fs`.
+1. **A key is admitted only when its own case fully verifies.**
+   - Before the fix, admission checked only that the glyph table rebuilt and the saved placement matched. Codex's mutant (the centred sidecar's `lockBefore` set to `locked`) made `verifyCfCase` refuse the case with `display-locked`, yet `stage5IconKeys` still admitted the key, and `icon:thresholds-formula` published among 43 ids.
+   - `stage5IconKeys` now requires `verifyCfCase(keyCase)` to be `verified` with `icon:glyph-key`, for the Stage 4 key and the centred key alike. That covers lock states, the resave receipt, calibration, the capture checks and the key build.
+   - Under the mutant:
+     - the centred key is not admitted;
+     - the `stage5-cfvo-formulas` icon cells are unmeasurable again (no `icon:3Arrows` witness);
+     - the audit refuses the icon-bearing Stage 5 cases, because their committed evaluations no longer recompute (`sidecar-mismatch`). Only 30 ids publish, all within the committed 43, and `icon:thresholds-formula` is not among them.
+   - A locked Stage 4 key is likewise not admitted.
+2. **One invalidation for both cache layers.**
+   - Before the fix, the outer cache watched disk stats while `loadIconGlyphKey` cached on the manifest's declared hashes, so a vanished PNG still returned the stale key and a restored PNG still returned the cached miss.
+   - Both layers now key on the same content digest: the SHA-256 of the manifest text and of the case's sidecar, PNG and saved workbook, with a missing file digesting as `-` (`iconKeyCaseInputs`).
+   - Regression tests cover a PNG that vanishes after a warm cache (no key from either layer), one replaced with other bytes (re-evaluated: no key) and one restored after a cached miss (the 54-class key again).
+   - The check stays cheap: a cache hit costs one manifest parse and six file hashes, and the full `audit --stage 5` takes 18 s.
+
+Gates after the fix:
+- Audits for stages 1–5 are unchanged (Stage 5 `ok=true structural=31/31 … stageComplete=true blockedCapabilities=0`; 2,160 records, 551 painted as Excel, 0 disagreeing).
+- `--write --publish-stage5` ran twice: 43 ids, byte-identical, `verifiedCapabilities.ts` untouched.
+- `capture --stage 5 --verify-only` on the four icon cases leaves every sidecar byte-identical.
+- CF, worker, view and viewer-remote suites: 255 files, 5,298 passed. The one failure, `xlsx-viewer-construction-memory`, is the known load flake; it passes alone (22/22).
+- `tsc`: only the 3 known `@napi-rs/canvas` errors; `tsconfig.scripts.json` is clean.
+- `check-eager`: ok.
+- `git diff --check`: clean.
