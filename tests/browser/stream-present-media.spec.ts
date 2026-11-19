@@ -60,7 +60,8 @@ test('a still with audio plays its narration (or takes the media-codec path with
 
   // A click on the still advances (no step, no trigger): the click-started effect sound is never asked for.
   const before = sent.filter((t) => t === 'media-request').length
-  await page.keyboard.press('ArrowRight')
+  // Fix round 1 (minor 6): a pointer click on the surface (the driver's hit test and advClick path), not a key.
+  await surface(page).click({ position: { x: 20, y: 20 } })
   await expect(surface(page)).toHaveAttribute('data-slide', 'end')
   expect(sent.filter((t) => t === 'media-request').length).toBe(before)
   await expect(surface(page).locator('audio[data-officeview-show-effect-sound]')).toHaveCount(0)

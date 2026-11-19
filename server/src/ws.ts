@@ -821,6 +821,8 @@ export function createStreamServer(o: StreamServerOptions) {
   /** Task 11b fix round: the session's record of what the plan bound for `unit` ships, and how (`MediaSlot.plans`). */
   const planned = (sd: { media: MediaSlot }, unit: number, plan: ShowPlanRecord) => {
     sd.media.plans.set(unit, new Map((plan.media ?? []).map((r) => [r.mediaId, r.refused])))
+    // Encode-ahead of this unit waited for its plan (Important 4): the queue looks again.
+    sd.media.queue?.wake()
   }
 
   async function onShow(ws: WS, msg: Record<string, unknown>, kind: ShowDeliveryRecord['kind']) {
@@ -871,14 +873,12 @@ export function createStreamServer(o: StreamServerOptions) {
           // still and sounds. Any other refusal, or a still without audio (or media off), is piece 4's error.
           if (!built.sounds) return deny(reqId, built.refused)
           head = { tag: 1, plan: bindMedia(built.sounds.plan, (ref) => sessionMediaId(sd.mediaKey, mediaIdentity(ref)), built.sounds.mediaRefs) }
-          planned(sd, unit, head.plan)
           assets = []
           page = { w: 0, h: 0 }
           decoded = built.sounds.decodedBytes
         } else {
           // D2: the cached plan's placeholders become this session's media ids.
           head = { tag: 1, plan: bindMedia(built.plan, (ref) => sessionMediaId(sd.mediaKey, mediaIdentity(ref)), built.mediaRefs) }
-          planned(sd, unit, head.plan)
           assets = built.assets
           const entry = built.assets.find((x) => x.tag === 3)
           if (!entry) return deny(reqId, 'policy-refused')
@@ -924,6 +924,8 @@ export function createStreamServer(o: StreamServerOptions) {
     for (const pl of payloads) { const f = frame(KIND.SHOW_PLAN, reqId, pl); if (!f) return deny(reqId, 'policy-refused'); messages.push(f) }
     const unmarked = marked.unmarked.length
     try { audit.recordShow({ sid: s.sid, unitIndex: unit, kind, assetCount: assets.length, unmarked, ...(unmarked ? { reason: marked.reason } : {}) }) } catch { return deny(reqId, 'policy-refused') }
+    // Fix round 1 (Important 3): the plan's media answers count from here on, once nothing can refuse the reply.
+    if (head?.tag === 1) planned(sd, unit, head.plan)
 
     // 9. Diagnostics, the start, the messages.
     if (marked.reason === 'layer-capacity' && unmarked) diags.push({ reqId, type: 'diag', code: 'forensic-unmarked', unit, reason: 'layer-capacity', assetIds: marked.unmarked })
@@ -1014,7 +1016,8 @@ export function createStreamServer(o: StreamServerOptions) {
             return items
           },
           // Task 11b fix round: encode-ahead skips a use the plan sent for its unit refuses (a request is refused too).
-          ahead: (it) => !sd.media.plans.get(it.unit)?.get(it.mediaId),
+          // Fix round 1 (Important 4): only a use the plan sent for its unit ships playable; before that plan, nothing.
+          ahead: (it) => { const sent = sd.media.plans.get(it.unit); return !!sent && sent.has(it.mediaId) && sent.get(it.mediaId) === undefined },
           part: async (partPath) => {
             if (!ledger.touch(docRef, policy, sd.doc.bytes.length)) throw new Error('document cache full')
             const r = await o.pool.mediaPart(s.sid, docRef, policy, partPath, svc.temp.dir)

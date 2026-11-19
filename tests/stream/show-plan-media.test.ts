@@ -108,7 +108,41 @@ describe('show plan media records', () => {
  * plays as) carries the records, the transition (its sound) and the no-input audio schedule; nothing drawn.
  */
 describe('a still sound-only plan (Task 11b)', () => {
-  const still = (over: Partial<ShowPlanRecord> = {}): ShowPlanRecord => ({ ...plan(), fallback: 'still', ...over })
+  /** The shipped form: a sound-only transition (fix round 1, minor 7), the schedule's wrappers around plain leaves. */
+  const wrap = (i: number, at: number, leaf: TimeNode): ContainerNode => par(i, [leaf], { durMs: 'indefinite', fill: 'remove', start: [{ delayMs: at }] })
+  const schedule = (kids: TimeNode[] = [wrap(10, 250, audio(2, { spid: '3' })), wrap(11, 0, audio(3, { snd: id(1) }))]) =>
+    ({ root: par(1, kids, { durMs: 'indefinite', nodeType: 'tmRoot' }), build: [] })
+  const still = (over: Partial<ShowPlanRecord> = {}): ShowPlanRecord => {
+    const p = plan()
+    return { ...p, show: { transition: { sound: p.show.transition!.sound! } as ShowPlanRecord['show']['transition'], timing: schedule(), builds: [] }, fallback: 'still', ...over }
+  }
+  const withTiming = (kids: TimeNode[]) => { const p = still(); return { ...p, show: { ...p.show, timing: schedule(kids) } } }
+  const cmd = (i: number, cmdType: string, text: string, target: BehaviourNode['target'] = { spid: '3' }): TimeNode => ({ kind: 'cmd', cmdType, cmd: text, ctn: ctn(i, { durMs: 1 }), target, attrNames: [], additive: 'base', accumulate: 'none' } as unknown as TimeNode)
+  // Fix round 1 (Important 1): a still plan is inert. Its timing is only the sound schedule: no click step, trigger,
+  // non-media behaviour, video, sequence, condition on an event, carried sound (numSld), and no visual transition.
+  it.each<[string, () => unknown, string?]>([
+    ['mainSeq', () => withTiming([par(12, [audio(2, { spid: '3' })], { nodeType: 'mainSeq', durMs: 'indefinite' })])],
+    ['interactiveSeq', () => withTiming([par(12, [audio(2, { spid: '3' })], { nodeType: 'interactiveSeq', durMs: 'indefinite' })])],
+    ['a click-started group', () => withTiming([par(12, [audio(2, { spid: '3' })], { durMs: 'indefinite', start: [{ delayMs: 'indefinite' }, { delayMs: 0, evt: 'onClick', target: { spid: '3' } }] })])],
+    ['a seq container', () => withTiming([{ kind: 'seq', ctn: ctn(12, { durMs: 'indefinite' }), children: [audio(2, { spid: '3' })], seq: { concurrent: false, nextAc: 'none', prevAc: 'none' } } as TimeNode])],
+    ['a set behaviour', () => withTiming([{ kind: 'set', ctn: ctn(12, { durMs: 1 }), target: { spid: '3' }, attrNames: ['style.visibility'], additive: 'base', accumulate: 'none', to: 'visible' } as unknown as TimeNode])],
+    ['a video leaf', () => withTiming([{ ...audio(12, { spid: '3' }), kind: 'video' } as TimeNode])],
+    ['numSld', () => withTiming([{ ...audio(2, { spid: '3' }), numSld: 999 } as TimeNode])],
+    ['a non-media cmd', () => withTiming([cmd(12, 'verb', '0')])],
+    ['an end on an event', () => withTiming([par(12, [audio(2, { spid: '3' })], { durMs: 'indefinite', end: [{ delayMs: 0, evt: 'onNext' }] })])],
+    ['a repeating wrapper', () => withTiming([par(12, [audio(2, { spid: '3' })], { durMs: 100, repeatCount: 'indefinite' })])],
+    ['a timing build', () => { const p = still(); return { ...p, show: { ...p.show, timing: { ...schedule(), build: [{ spid: '3', grpId: 0 }] } } } }],
+    ['a visual transition', () => ({ ...still(), show: { ...still().show, transition: plan().show.transition } }), 'show.transition'],
+    ['diagnostics', () => ({ ...still(), diagnostics: [{ code: 'cmd-dropped' }] }), 'diagnostics'],
+    ['an entry asset', () => ({ ...still(), entry: 7 }), 'entry'],
+  ])('rejects a still plan with %s', (_what, make, path = 'show.timing') => {
+    expect(rej(still())).toBe('accepted')
+    // Rejected at (or under) the field that makes it non-inert.
+    expect(rej(make()).startsWith(path)).toBe(true)
+  })
+  it('accepts the schedule a server ships: wrappers, media commands, a never-begun cmd-driven leaf', () => {
+    expect(rej(withTiming([wrap(10, 250, audio(2, { spid: '3' })), wrap(12, 300, cmd(13, 'call', 'playFrom(1.5)')), wrap(14, 400, cmd(15, 'evt', 'onstopaudio', { sld: true } as unknown as BehaviourNode['target'])), { ...audio(16, { spid: '4' }), ctn: ctn(16, { durMs: 'indefinite', start: [{ delayMs: 'indefinite' }] }) } as TimeNode]))).toBe('accepted')
+  })
   it('round-trips with fallback "still" and no layers, steps, base, triggers, links or iterations', () => {
     const p = still()
     expect(decodeShowMessage(encodeShowMessage({ tag: 1, plan: p }), E)).toEqual({ tag: 1, plan: p })

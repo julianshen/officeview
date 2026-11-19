@@ -12,10 +12,11 @@ import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { decodeShowMessage, encodeShowMessage, MEDIA_ID, SHOW_PLAN_LIMITS, type ShowPlanRecord } from '../../src/stream/show-plan'
 import type { BehaviourNode, TimeNode } from '../../src/slideshow/types'
-import { flyInDeck, mixedMediaDeck, narrationDeck, repeatDeck, stillSoundDeck, videoDeck } from '../../src/testdata/show-decks'
+import { flyInDeck, mediaDeck, mixedMediaDeck, narrationDeck, repeatDeck, stillSoundDeck, videoDeck } from '../../src/testdata/show-decks'
 import { DocumentHost } from '../src/render'
 import { Pool } from '../src/pool'
 import { createMediaTemp } from '../src/media/temp'
+import { createMediaServices } from '../src/media/services'
 import { bindMedia, mediaIdentity, sessionMediaId } from '../src/media/bind'
 import type { BuiltShowPlan, ShowPlanJob, ShowRefusal } from '../src/show/build'
 import { Client, disposePool, start } from './harness'
@@ -28,6 +29,7 @@ let mediaPool: Pool | undefined
 const poolOn = () => (mediaPool ??= new Pool({ workers: 1, media: { info: info!, dir: temp.dir } }))
 afterAll(async () => { mediaPool?.dispose(); disposePool(); await temp.remove(); rmSync(root, { recursive: true, force: true }) })
 
+const inkBox = { id: 2, name: 'Ink', prst: 'rect', off: ['3619500', '2476500'] as [string, string], ext: ['1905000', '1905000'] as [string, string], fill: '13F00D' }
 const job = (over: Partial<ShowPlanJob> = {}): ShowPlanJob => ({ unitIndex: 0, scale: 1, motion: 'full', mark: { kind: 'fixed' }, strictMarks: false, media: true, ...over })
 async function opened(bytes: Uint8Array) {
   const h = new DocumentHost()
@@ -106,6 +108,30 @@ describe.skipIf(!info)('still slides play their sounds (Task 11b)', () => {
     expect(leaves(s.plan)).toEqual([])
     const b = viaClient(bind(s))
     expect(b.show.transition!.sound!.start!.mediaId).toBe(b.media![0]!.mediaId)
+  })
+
+  it('fix round 1 (Important 2): a shape command the schedule would retarget onto another audio leaf leaves the still silent', async () => {
+    // Shape 3 holds two audio leaves: cTn 3 (first: the one its commands drive) begins twice and so is not scheduled,
+    // cTn 4 begins once. A playFrom on shape 3 at 300 ms drives cTn 3 locally; in a schedule without cTn 3 it would
+    // seek cTn 4. The ink box is revealed on cTn 4's end (the still).
+    const tgt3 = '<p:tgtEl><p:spTgt spid="3"/></p:tgtEl>'
+    const twice = `<p:audio><p:cMediaNode vol="80000"><p:cTn id="3" dur="100" restart="always" fill="hold"><p:stCondLst><p:cond delay="0"/><p:cond delay="500"/></p:stCondLst></p:cTn>${tgt3}</p:cMediaNode></p:audio>`
+    const once = `<p:audio><p:cMediaNode vol="80000"><p:cTn id="4" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn>${tgt3}</p:cMediaNode></p:audio>`
+    const seek = `<p:cmd type="call" cmd="playFrom(0.0)"><p:cBhvr><p:cTn id="5" dur="1" fill="hold"><p:stCondLst><p:cond delay="300"/></p:stCondLst></p:cTn>${tgt3}</p:cBhvr></p:cmd>`
+    const reveal = '<p:par><p:cTn id="6" fill="hold"><p:stCondLst><p:cond evt="onEnd" delay="0"><p:tn val="4"/></p:cond></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:cTn id="7" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="2"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set></p:childTnLst></p:cTn></p:par>'
+    const deck = (cmds: string) => mediaDeck({ slides: [{ boxes: [{ ...inkBox }], media: [{ spid: 3, file: 'a.m4a' }], timing: twice + once + cmds + reveal }] })
+    const r = await plan(await deck(seek))
+    expect('refused' in r && r.refused).toBe('still')
+    expect(r).not.toHaveProperty('sounds')
+    // Control: without the command the same still sounds (cTn 4 scheduled, cTn 3 not): the command is what silences it.
+    expect(leaves(sounds(await plan(await deck(''))).plan).map(l => l.node.ctn.id)).toEqual([4])
+  })
+
+  it('fix round 1 (minor 7): a sound-only plan carries the transition sound only, nothing visual', async () => {
+    const s = sounds(await plan(await stillSoundDeck('transition')))
+    expect(s.plan.show.transition as unknown).toEqual({ sound: { start: { mediaId: '@a1', loop: false } } })
+    // No sound, no transition at all.
+    expect(sounds(await plan(await stillSoundDeck('audio-end'))).plan.show.transition).toBeUndefined()
   })
 
   it('media off, a still without audio, and a non-still carry no sound-only plan', async () => {
@@ -217,6 +243,50 @@ describe.skipIf(!info)('a plan-refused use is never delivered (Task 11b fix roun
       expect(reason(await c.mediaRequest(id, { unit: 1, ms: 60_000 }))).toBe('media-unavailable')
       await c.showPlan(1, 1, 'full')
       expect(reason(await c.mediaRequest(id, { unit: 1, ms: 60_000 }))).toBe('delivered')
+    } finally { c.close(); h.stop() }
+  }, 120_000)
+
+  it('fix round 1 (Important 3): a show-plan reply refused after the build records nothing', async () => {
+    const svc = await createMediaServices({ env: process.env, enabled: true, testOnly: { root: mkdtempSync(join(root, 'svc-')) } })
+    const real = new Pool({ workers: 1, media: { info: svc.info!, dir: svc.temp.dir } })
+    let failMark = false
+    const pool = new Proxy(real, { get(t, k) {
+      if (k === 'markLayer') return async (...a: Parameters<Pool['markLayer']>) => { if (failMark) throw new Error('mark refused (test)'); return await t.markLayer(...a) }
+      const v = Reflect.get(t, k, t); return typeof v === 'function' ? v.bind(t) : v
+    } }) as Pool
+    const h = await start({ doc: await stillSoundDeck('shared'), pool, policy: { forensicMark: true }, media: { enabled: true, info: svc.info!, services: svc } }), c = new Client(h.url)
+    try {
+      await c.hello(); await c.ready()
+      const id = planOf(await c.showPlan(0, 1, 'full'), 0).media!.find(x => x.refused)!.mediaId
+      failMark = true
+      // Step 7 (Layer-1) refuses unit 1's reply: no plan was sent for it.
+      expect((await c.showPlan(1, 1, 'full')).end?.code).toBe('policy-refused')
+      failMark = false
+      expect((await c.mediaShow(1)).type).toBe('media-show-ok')
+      expect(reason(await c.mediaRequest(id, { unit: 1, ms: 60_000 }))).toBe('media-unavailable')
+      expect((await c.showPlan(1, 1, 'full')).end).toBeUndefined()
+      expect(reason(await c.mediaRequest(id, { unit: 1, ms: 60_000 }))).toBe('delivered')
+    } finally { c.close(); h.stop(); real.dispose(); await svc.close() }
+  }, 120_000)
+
+  it('fix round 1 (Important 4): encode-ahead waits for each unit\'s plan and never encodes a use it refuses', async () => {
+    const h = await start({ doc: await stillSoundDeck('audio-end'), media: {} }), c = new Client(h.url)
+    const entries = () => h.media!.cache.stats().entries + h.media!.cache.stats().inflight
+    try {
+      await c.hello(); await c.ready()
+      // The normal startup order: media-show before show-plan. Nothing is encoded ahead yet.
+      const shown = await c.mediaShow(0)
+      expect(shown).toMatchObject({ type: 'media-show-ok', queued: 0 })
+      await Bun.sleep(500)
+      expect(entries()).toBe(0)
+      // The still's plan: its narration is encoded ahead, its refused click sound never.
+      const p = planOf(await c.showPlan(0, 1, 'full'), 0)
+      expect(p.media!.filter(x => x.refused)).toHaveLength(1)
+      const end = Date.now() + 20_000
+      while (h.media!.cache.stats().entries < 1 && Date.now() < end) await Bun.sleep(50)
+      expect(h.media!.cache.stats().entries).toBe(1)
+      await Bun.sleep(1500)
+      expect(entries()).toBe(1)
     } finally { c.close(); h.stop() }
   }, 120_000)
 })

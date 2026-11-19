@@ -488,7 +488,8 @@ describe('module boundary', () => {
   it('has no runtime import of prepare/, morph/, pptx/, core/package or render/', () => {
     const src = readFileSync('src/stream/show-plan.ts', 'utf8')
     const runtime = [...src.matchAll(/^import\s+(?!type\b)[^\n]*?from\s+'([^']+)'/gm)].map((m) => m[1])
-    expect(runtime.sort()).toEqual(['../slideshow/read/limits', './raster'])
+    // Task 11b fix round 1: the still schedule's media-command check (`slideshow/media/commands`, import-free).
+    expect(runtime.sort()).toEqual(['../slideshow/media/commands', '../slideshow/read/limits', './raster'])
     expect(src).not.toMatch(/import\([^)]*\)/)
   })
 })

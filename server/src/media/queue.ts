@@ -32,6 +32,8 @@ export interface SessionMediaQueue {
   cursor(unit: number): void
   request(mediaId: string): Promise<MediaRequestResult>
   end(): Promise<void>
+  /** Task 11b fix round 1: `ahead` may answer otherwise now (a plan was sent): encode-ahead looks again. */
+  wake(): void
   /** The mediaId of the item the loop awaits now. */
   readonly running: string | undefined
 }
@@ -286,6 +288,7 @@ export function createSessionMediaQueue(o: SessionMediaQueueOptions): SessionMed
       o.observe?.({ type: 'start', count: enqueued })
       return enqueued
     },
+    wake() { if (!ended && loop) poke() },
     cursor(unit) {
       if (ended || !Number.isInteger(unit) || unit < 0 || unit >= o.units || unit === cur) return
       const prev = cur

@@ -941,21 +941,31 @@ function stillSoundsOf(show: ShowDoc, e: L1Entry, job: ShowPlanJob): StillSounds
     return { audio, fired }
   }
   const h = history(timeline, roots, records)
-  // The audio leaves in tree order (the first on a shape is the one its commands drive, as locally).
+  // Fix round 1 (Important 2): a history cut short decides nothing, the transition sound included: silent.
+  if (!h) return undefined
+  // The audio leaves in tree order; `firstOn`: the first media node on each shape (audio or video), the one its
+  // commands drive (the local player's `bySpid`, `slideMediaEnds`' `bySpid`).
   const audio: AudioBehaviour[] = []
+  const firstOn = new Map<string, number>()
   let maxId = 0
   const walk = (n: TimeNode, depth: number) => {
     if (depth > 256) return
     maxId = Math.max(maxId, n.ctn.id)
     if ('children' in n) { for (const c of n.children) walk(c, depth + 1); return }
+    if ((n.kind === 'audio' || n.kind === 'video') && 'spid' in n.target && !firstOn.has(n.target.spid)) firstOn.set(n.target.spid, n.ctn.id)
     if (n.kind === 'audio' && !audio.some(a => a.ctn.id === n.ctn.id)) audio.push(n)
   }
   for (const r of roots) if (r) walk(r, 0)
-  const fired = h?.fired ?? []
+  const fired = h.fired
   const played = new Set<string>()
   for (const f of fired) { const c = parseMediaCommand(f.node.cmdType, f.node.cmd)!; if (PLAYS.has(c.verb) && 'spid' in f.node.target) played.add(f.node.target.spid) }
+  /**
+   * A shipped leaf: its own media fields and timing, started by `start` only, with nothing structural (node or preset
+   * type, group, iteration, end sync) and no `numSld`. A command fires once per shipped activation (no repeat).
+   */
   const own = (n: TimeNode, start: TimeNode['ctn']['start']): TimeNode => {
-    const { endSync: _sync, ...ctn } = n.ctn
+    const { endSync: _sync, nodeType: _t, presetClass: _pc, presetId: _pi, presetSubtype: _ps, grpId: _g, masterRel: _m, afterEffect: _a, iterate: _i, ...ctn } = n.ctn
+    if (n.kind === 'cmd') { delete ctn.repeatCount; delete ctn.repeatDurMs; ctn.autoRev = false }
     const leaf = { ...n, ctn: { ...ctn, start, end: [] } } as TimeNode & { numSld?: number }
     delete leaf.numSld
     return leaf
@@ -964,12 +974,22 @@ function stillSoundsOf(show: ShowDoc, e: L1Entry, job: ShowPlanJob): StillSounds
   const playing: Array<{ n: AudioBehaviour; act?: { begin: number; end: number } }> = []
   const spidsPlaying = new Set<string>()
   for (const n of audio) {
-    const begun = h?.audio.get(n.ctn.id) ?? []
+    const begun = h.audio.get(n.ctn.id) ?? []
     const spid = 'spid' in n.target ? n.target.spid : undefined
     if (begun.length === 1) playing.push({ n, act: begun[0]! })
-    else if (begun.length === 0 && spid !== undefined && played.has(spid)) playing.push({ n })
+    // Only the node a play command drives (the first on its shape) starts on it, as the local player.
+    else if (begun.length === 0 && spid !== undefined && played.has(spid) && firstOn.get(spid) === n.ctn.id) playing.push({ n })
     else continue
     if (spid !== undefined) spidsPlaying.add(spid)
+  }
+  // Fix round 1 (Important 2): a shape command drives the first media node on its shape. If that node is not
+  // scheduled while another audio leaf on the shape is, the schedule would retarget the command: silent.
+  const scheduled = new Set(playing.map(p => p.n.ctn.id))
+  for (const f of fired) {
+    const c = parseMediaCommand(f.node.cmdType, f.node.cmd)!
+    if (c.verb === 'onstopaudio' || !('spid' in f.node.target)) continue
+    const spid = f.node.target.spid
+    if (spidsPlaying.has(spid) && !scheduled.has(firstOn.get(spid) ?? -1)) return undefined
   }
   // The records the schedule (or the transition) plays; every other one never sounds on the still.
   const clock = mediaClockOf(roots, records)
@@ -1000,15 +1020,25 @@ function stillSoundsOf(show: ShowDoc, e: L1Entry, job: ShowPlanJob): StillSounds
       const leaf = own(f.node, [{ delayMs: 0 }])
       children.push(at(f.begin, f.end, { ...leaf, ctn: { ...leaf.ctn, id: next++ } }))
     }
-    return timing && children.length ? { root: { ...timing.root, children } as TimeNode, build: [] } : undefined
+    // The root: the slide's own id, nothing else of its (an inert, open `tmRoot`).
+    const root: TimeNode = { kind: 'par', children, ctn: { id: timing?.root.ctn.id ?? 1, nodeType: 'tmRoot', durMs: 'indefinite', accel: 0, decel: 0, autoRev: false, start: [], end: [] } }
+    return timing && children.length ? { root, build: [] } : undefined
   }
+  /** The media commands a history fires, each as `verb@target@begin` (sorted), for the replay proof. */
+  const commandsOf = (list: ReadonlyArray<{ node: Extract<TimeNode, { kind: 'cmd' }>; begin: number }>) =>
+    list.map(f => `${canonicalMediaCommand(parseMediaCommand(f.node.cmdType, f.node.cmd)!)}@${'spid' in f.node.target ? f.node.target.spid : '-'}@${f.begin}`).sort()
   // The client's view of a schedule: its timeline (as the driver builds it) and its settled history.
   const settings = show.index.settings
   const replay = (tree: TimingTree | undefined) => {
     if (!tree) return { audio: new Map<number, Array<{ begin: number; end: number }>>(), fired: [] }
     return history(createSlideTimeline(tree, { showAnimation: settings.showAnimation, reducedMotion: job.motion === 'reduced' }), [tree.root], media)
   }
-  const differs = (got: ReturnType<typeof replay>) => {
+  /** The leaves whose begin or end the client would compute otherwise; `undefined`: unprovable (cut short, or the
+   * commands it fires are not the shipped ones at their times). */
+  const differs = (got: ReturnType<typeof replay>, shipped: TimingTree | undefined): Set<number> | undefined => {
+    if (!got) return undefined
+    const want = shipped ? fired.filter(f => { const c = parseMediaCommand(f.node.cmdType, f.node.cmd)!; return c.verb === 'onstopaudio' || ('spid' in f.node.target && spidsPlaying.has(f.node.target.spid)) }) : []
+    if (commandsOf(got.fired).join('|') !== commandsOf(want).join('|')) return undefined
     const out = new Set<number>()
     for (const { n, act } of playing) {
       const g = got?.audio.get(n.ctn.id) ?? []
@@ -1018,12 +1048,18 @@ function stillSoundsOf(show: ShowDoc, e: L1Entry, job: ShowPlanJob): StillSounds
   }
   // Unbounded first; where the client's clock would end a leaf elsewhere (a stop, an ancestor's end, the next sound),
   // its bound; then proven: every begin and end the client computes is the server's, or the still stays silent.
-  const tree = schedule(h ? differs(replay(schedule(new Set()))) : new Set())
-  if (h && differs(replay(tree)).size) return undefined
-  const transition = record.show.transition
+  // Fix round 1: unprovable at either pass is silent (never widened to cover it).
+  const open = schedule(new Set())
+  const first = differs(replay(open), open)
+  if (!first) return undefined
+  const tree = schedule(first)
+  const proof = differs(replay(tree), tree)
+  if (!proof || proof.size) return undefined
+  // Minor 7: the transition's sound only; nothing visual ships (the still draws no transition).
+  const sound = record.show.transition?.sound
   const plan: ShowPlanRecord = {
     v: 1, slide: record.slide, options: record.options,
-    show: { ...(transition ? { transition } : {}), timing: tree, builds: [] },
+    show: { ...(sound ? { transition: { sound } as PlanTransition } : {}), timing: tree, builds: [] },
     media, layers: [], base: [], steps: [], triggers: [], linkRegions: [], iterate: { keys: [], groups: [] }, entry: ENTRY_ASSET_ID, diagnostics: [],
     fallback: 'still',
   }

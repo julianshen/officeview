@@ -29,6 +29,7 @@
  * UTF-8, JSON syntax, non-object), `body`, `png`, `unit`, `w`, `h`, `decodedBytes`.
  */
 import { READER_LIMITS } from '../slideshow/read/limits'
+import { canonicalMediaCommand, parseMediaCommand } from '../slideshow/media/commands'
 import { decodeRasterBody, encodeRasterBody, RasterBodyError } from './raster'
 import type { BaseGeometry } from '../slideshow/engine/behaviours'
 import type { MorphRule } from '../slideshow/morph/match'
@@ -75,7 +76,11 @@ export interface PlanStepRecord { trigger: 'click' | 'after' | 'with' | 'shape';
  * video record ships in this piece (D22). Structurally a Task 5 `MediaClockRecord`.
  */
 export interface PlanMediaRecord { mediaId: string; kind: 'audio'; spid?: string; durationMs: number; refused?: (typeof PLAN_MEDIA_REFUSALS)[number] }
-/** The transition as it ships: its start sound names a media record (`mediaId`), never a package rId (D3, X12). */
+/**
+ * The transition as it ships: its start sound names a media record (`mediaId`), never a package rId (D3, X12). On a
+ * still's sound-only plan (`fallback`, Task 11b fix round 1) it is `{ sound }` alone, nothing visual (the validator
+ * takes no other key there); only the transition-sound path reads it.
+ */
 export type PlanTransition = Omit<TransitionSpec, 'sound'> & { sound?: { start?: { mediaId: string; loop: boolean }; end?: true } }
 /**
  * X12: a shipped transition as the local driver reads it. `sound.start.mediaId` fills the local `rId` slot, which
@@ -405,6 +410,45 @@ function transition(v: unknown, p: string, snds: Array<[string, string]>) {
     opt(so, 'end', q, yes)
   })
 }
+/** Task 11b fix round 1: a still's transition is its sound only (nothing visual: no element, duration or advance). */
+function stillTransition(v: unknown, p: string, snds: Array<[string, string]>) {
+  const o = obj(v, p, [], ['sound'])
+  opt(o, 'sound', p, (s, q) => {
+    const so = obj(s, q, [], ['start', 'end'])
+    opt(so, 'start', q, (st, r) => { const to = obj(st, r, ['mediaId', 'loop']); snds.push([str(to.mediaId, at(r, 'mediaId')), at(r, 'mediaId')]); bool(to.loop, at(r, 'loop')) })
+    opt(so, 'end', q, yes)
+  })
+}
+
+/**
+ * Task 11b fix round 1 (Important 1): a still's timing is inert, the sound schedule only, so it can neither change what
+ * a click does nor carry a sound past the slide: a `tmRoot` par (indefinite, no repeat) of `par` wrappers (one child,
+ * no repeat, reversal, iteration or end sync) around audio leaves (no `numSld`) and media commands; every condition a
+ * plain delay; no node type below the root; no build. Called after the general timing check (its shape is valid).
+ */
+function stillSchedule(v: unknown) {
+  const bad = (): never => fail('show.timing')
+  const t = v as { root?: unknown; build?: unknown; refused?: unknown }
+  if ('refused' in t || !Array.isArray(t.build) || t.build.length) bad()
+  const plain = (cs: unknown) => Array.isArray(cs) && cs.every((c) => isObj(c) && Object.keys(c).every((k) => k === 'delayMs'))
+  const calm = (c: O) => c.repeatCount === undefined && c.repeatDurMs === undefined && c.autoRev !== true && c.iterate === undefined && c.endSync === undefined && plain(c.start) && plain(c.end)
+  const walk = (n: unknown, depth: number) => {
+    if (!isObj(n) || !isObj(n.ctn) || depth > 3) return bad()
+    const c = n.ctn
+    if (Array.isArray(n.children)) {
+      if (n.kind !== 'par' || !calm(c) || (depth === 0 ? c.nodeType !== 'tmRoot' || c.durMs !== 'indefinite' : c.nodeType !== undefined || n.children.length !== 1)) bad()
+      for (const k of n.children) walk(k, depth + 1)
+      return
+    }
+    if (depth === 0 || c.nodeType !== undefined || !plain(c.start) || !plain(c.end) || c.endSync !== undefined || c.iterate !== undefined) bad()
+    if (n.kind === 'audio') { if (n.numSld !== undefined) bad(); return }
+    if (n.kind !== 'cmd' || c.repeatCount !== undefined || c.repeatDurMs !== undefined) return bad()
+    const m = parseMediaCommand(n.cmdType as never, String(n.cmd))
+    if (!m || canonicalMediaCommand(m) !== n.cmd) bad()
+  }
+  walk(t.root, 0)
+}
+
 function builds(v: unknown, p: string) {
   arr(v, p, READER_LIMITS.timeNodes).forEach((b, i) => {
     const q = ix(p, i), o = obj(b, q, ['spid', 'mode', 'ranges', 'animBg', 'body'])
@@ -450,12 +494,15 @@ function validatePlan(v: unknown, expect: ShowExpect): ShowPlanRecord {
   const o = obj(v, '', PLAN_KEYS, ['media', 'fallback'])
   if (o.v !== 1) fail('v')
   // Task 11b: a still's sound-only plan draws nothing.
-  if (has(o, 'fallback')) {
+  const still = has(o, 'fallback')
+  if (still) {
     if (o.fallback !== 'still') fail('fallback')
     const empty = (x: unknown) => Array.isArray(x) && x.length === 0
     for (const k of ['layers', 'steps', 'base', 'triggers', 'linkRegions']) if (!empty(o[k])) fail(k)
     if (!isObj(o.iterate) || !empty(o.iterate.keys) || !empty(o.iterate.groups)) fail('iterate')
     if (!isObj(o.show) || !empty(o.show.builds)) fail('show.builds')
+    if (!empty(o.diagnostics)) fail('diagnostics')
+    if (o.entry !== 0) fail('entry')
   }
   const sl = obj(o.slide, 'slide', ['index', 'w', 'h'])
   const index = u32(sl.index, 'slide.index'), W = num(sl.w, 'slide.w', 1e-6, MAX_PX), H = num(sl.h, 'slide.h', 1e-6, MAX_PX)
@@ -464,7 +511,8 @@ function validatePlan(v: unknown, expect: ShowExpect): ShowPlanRecord {
   bool(op.showAnimation, 'options.showAnimation'); bool(op.useTimings, 'options.useTimings')
   const sh = obj(o.show, 'show', ['builds'], ['transition', 'timing'])
   const snds: Array<[string, string]> = []
-  opt(sh, 'transition', 'show', (t, q) => transition(t, q, snds)); opt(sh, 'timing', 'show', (t, q) => timing(t, q, snds)); builds(sh.builds, 'show.builds')
+  opt(sh, 'transition', 'show', (t, q) => (still ? stillTransition(t, q, snds) : transition(t, q, snds))); opt(sh, 'timing', 'show', (t, q) => timing(t, q, snds)); builds(sh.builds, 'show.builds')
+  if (still && has(sh, 'timing')) stillSchedule(sh.timing)
   mediaRecords(o.media, snds, expect.placeholders === true)
 
   const ids = new Set<number>()

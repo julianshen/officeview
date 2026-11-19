@@ -67,7 +67,7 @@ export async function createMediaServices(o: { env: Record<string, string | unde
       const queue = createSessionMediaQueue({ ...q, info, temp, admission, cache, transcode, ...(seams ? { seams } : {}) })
       const end = queue.end.bind(queue)
       const tracked: SessionMediaQueue = {
-        start: (u) => queue.start(u), cursor: (u) => queue.cursor(u), request: (id) => queue.request(id),
+        start: (u) => queue.start(u), cursor: (u) => queue.cursor(u), request: (id) => queue.request(id), wake: () => queue.wake(),
         async end() { try { await end() } finally { queues.delete(tracked) } },
         get running() { return queue.running },
       }

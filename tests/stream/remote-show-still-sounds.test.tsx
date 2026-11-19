@@ -29,6 +29,12 @@ const { boom, calls } = vi.hoisted(() => ({
   }),
 }))
 vi.mock('../../src/pptx/types', boom('pptx/types'))
+// Fix round 1 (minor 5): every transition PlanStage runs goes through `dispatchTransition` (spied, real behaviour).
+const { dispatched } = vi.hoisted(() => ({ dispatched: [] as string[] }))
+vi.mock('../../src/slideshow/render/three/framework', async (orig) => {
+  const real = await orig<typeof import('../../src/slideshow/render/three/framework')>()
+  return { ...real, dispatchTransition: (...a: Parameters<typeof real.dispatchTransition>) => { dispatched.push(a[0].element); return real.dispatchTransition(...a) } }
+})
 vi.mock('../../src/core/zip', boom('core/zip'))
 vi.mock('../../src/core/package-sniff', boom('core/package-sniff'))
 vi.mock('../../src/slideshow/read/store', boom('read/store'))
@@ -49,7 +55,8 @@ vi.mock('../../src/slideshow/render/scene', calls('render/scene'))
 vi.mock('../../src/pptx/parse', calls('pptx/parse'))
 vi.mock('../../src/core/package-error', calls('core/package-error'))
 
-import { elements, it, mediaDoc, mediaEnds, mediaFixture, run, setUp, show, tearDown } from './remote-show-media-rig'
+import { elements, it, mediaDoc, mediaEnds, mediaFixture, run, setUp, show, tearDown, type MediaFixture } from './remote-show-media-rig'
+import { decodeShowMessage, SHOW_PLAN_LIMITS, type ShowPlanRecord } from '../../src/stream/show-plan'
 
 const THROW_ON_IMPORT = [
   '../../src/pptx/types', '../../src/core/zip', '../../src/core/package-sniff',
@@ -64,7 +71,7 @@ const SOUND = mediaFixture('still-sound')
 const TRANSITION = mediaFixture('still-transition')
 const DRIVES = 15_000
 
-beforeEach(() => setUp())
+beforeEach(() => { dispatched.length = 0; setUp() })
 afterEach(() => tearDown())
 
 const audios = (root: ParentNode) => [...root.querySelectorAll('audio, video')] as HTMLMediaElement[]
@@ -133,8 +140,48 @@ describe('a still slide plays its sounds (Task 11b)', () => {
     const sound = root.querySelector<HTMLMediaElement>('audio[data-officeview-show-sound]')
     expect(sound).not.toBeNull()
     expect(elements().playing()).toEqual([sound])
-    // The still enters as piece 3's still does: no transition route ran.
+    // The still enters as piece 3's still does: PlanStage ran no transition (the fade is never dispatched).
     expect(diags.some((d) => d.code === 'transition-approximate')).toBe(false)
+    expect(dispatched).toEqual([])
+    s.exit()
+    // Control (the spy is live): the same fade with its sound on an animated slide is dispatched.
+    const b = await show(mediaDoc(mediaFixture('transition-sound')))
+    await run(300)
+    expect(dispatched).toEqual(['fade'])
+    b.s.exit()
+  }, DRIVES)
+
+  it('a pointer click on the still advances it (fix round 1, minor 6)', async () => {
+    const { s, root } = await show(mediaDoc(SOUND))
+    await run(500)
+    expect(elements().playing()).toHaveLength(1)
+    root.dispatchEvent(new MouseEvent('click', { clientX: 480, clientY: 270, bubbles: true }))
+    await run(50)
+    expect(s.state.slide).toBe('end')
+    expect(elements().playing()).toEqual([])
+    s.exit()
+  }, DRIVES)
+
+  it('a hostile still plan (click steps, carried sound) is rejected: a click still advances and nothing sounds after exit (fix round 1, Important 1)', async () => {
+    const good = SOUND.plan(0)
+    const t = good.show.timing as { root: { children: unknown[] } }
+    const hostile = { ...good, show: { ...good.show, timing: { ...t, root: { ...t.root, children: [
+      ...t.root.children.map((c) => { const w = c as { children: Array<Record<string, unknown>> }; return { ...w, children: w.children.map((l) => ({ ...l, numSld: 99 })) } }),
+      { kind: 'par', ctn: { id: 900, durMs: 'indefinite', accel: 0, decel: 0, autoRev: false, nodeType: 'mainSeq', start: [], end: [] }, children: [] },
+    ] } } } }
+    const json = new TextEncoder().encode(JSON.stringify(hostile))
+    const raw = new Uint8Array(1 + json.length); raw[0] = 1; raw.set(json, 1)
+    expect(() => decodeShowMessage(raw, { unit: 0, maxDecoded: SHOW_PLAN_LIMITS.showDecoded })).toThrow()
+    const fx: MediaFixture = { list: SOUND.list, plans: new Map([[0, [raw]]]), plan: () => hostile as unknown as ShowPlanRecord }
+    const fd = mediaDoc(fx)
+    const { s, root } = await show(fd)
+    await run(600)
+    expect(fd.requests()).toEqual([])
+    expect(root.querySelectorAll('audio')).toHaveLength(0)
+    root.dispatchEvent(new MouseEvent('click', { clientX: 480, clientY: 270, bubbles: true }))
+    await run(50)
+    expect(s.state.slide).toBe('end')
+    expect(elements().playing()).toEqual([])
     s.exit()
   }, DRIVES)
 
