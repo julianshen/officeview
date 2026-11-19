@@ -8,8 +8,8 @@
  *      parse and evaluation capability its formula text requires (compiled here from the manifest's marker), a formula
  *      bound's family, or a literal Stage 3 bar's `bar:bounds-num`;
  *    - a record configuration fixed before capture ("recorded, never evidence") covering the cell;
- *    - an expected compile refusal (`STAGE5_EXPECTED_COMPILE_REFUSALS`) or the enumerated S5-HOIST refusal
- *      (`STAGE5_ENUMERATED_REFUSALS`). A compile refusal is never self-justifying (R1).
+ *    - an expected compile refusal (`STAGE5_EXPECTED_COMPILE_REFUSALS`), the enumerated S5-HOIST refusal
+ *      (`STAGE5_ENUMERATED_REFUSALS`) or a bar whose scope breaks Ruling S3-E (`STAGE5_BAR_SCOPE_REFUSALS`). A compile refusal is never self-justifying (R1).
  *    A marker capability that production holds (published, with its registered reading) never refuses its rule; a marker that
  *    is an evidence label with no registered reading would (the hoist-errors stopgap table was retired once
  *    `formula:hoist-aggregate-errors` registered and published its `error-propagates` reading).
@@ -47,7 +47,7 @@ type Marker = Readonly<{ sqref: string; capabilityId: string; ruleType: string; 
 type CaseLike = Readonly<{ id: string; markers: readonly Marker[]; formulaConfigurations?: ReadonlyArray<Readonly<{ id: string; capabilityId?: string; refs: readonly string[]; record?: string }>> }>
 
 /** One justified refusal: the rule (its marker label), the evidence that predicts it, and the refusal production gives. */
-export interface Stage5Refusal { rule: string; ruleType: string; priority?: number; sqref: string; reason: string; refused: 'cf-unmeasured-capability' | 'cf-unsupported-rule' | 'cf-resource-limit' }
+export interface Stage5Refusal { rule: string; ruleType: string; priority?: number; sqref: string; reason: string; refused: 'cf-unmeasured-capability' | 'cf-unsupported-rule' | 'cf-resource-limit' | 'cf-value-beyond-bounds' | 'cf-degenerate-scope' }
 
 /** The family capability a `type="formula"` bound needs (service.ts VISUAL_FORMULA_CAPABILITY, Ruling S5-H). */
 const FORMULA_BOUND_FAMILY: Readonly<Record<string, string>> = { colorScale: 'scale:thresholds-formula', dataBar: 'bar:bounds-formula', iconSet: 'icon:thresholds-formula' }
@@ -61,6 +61,21 @@ export const STAGE5_ENUMERATED_REFUSALS: ReadonlyArray<Readonly<{ caseId: string
   caseId: 'stage5-formula-functions', refs: Array.from({ length: 18 }, (_, i) => `H${i + 2}`), formula: 'COUNTIF($A:$A,A2)>1',
   reason: 'S5-HOIST policy (Task 34; recorded in stage5-formula-hoist hoist-refused-boolean): COUNTIF($A:$A,A2)>1 counts over a range holding a boolean (A6 = TRUE), which the COUNTIF frequency hoist refuses for the whole rule',
 }]
+
+/**
+ * Ruling S3-E (the bar:bounds-num/-formula follow-up, 2026-11-19): the Stage 5 data bars whose resolved bounds are
+ * degenerate (lo >= hi) or exceeded by a value of their scope, which production keeps unresolved for the whole rule, never
+ * clamped. Until bar:bounds-num and bar:bounds-formula were published they were justified by those unheld capabilities;
+ * now by this record. tests/xlsx-cf-stage5.test.ts derives the list from each saved workbook (bounds and scope values) and
+ * requires it to be exactly this one.
+ */
+export const STAGE5_BAR_SCOPE_REFUSALS: ReadonlyArray<Readonly<{ caseId: string; sqref: string; refused: 'cf-value-beyond-bounds' | 'cf-degenerate-scope'; reason: string }>> = [
+  { caseId: 'stage5-formula-authored', sqref: 'J2:J9', refused: 'cf-value-beyond-bounds', reason: 'Ruling S3-E: formula bounds $F$1/$F$2 = 4/7 over 1..8, values beyond the bounds' },
+  { caseId: 'stage5-cfvo-formulas', sqref: 'I2:I9', refused: 'cf-value-beyond-bounds', reason: 'Ruling S3-E: formula bounds $F$1/$F$2 = 20/80 over 5..100, values beyond the bounds' },
+  { caseId: 'stage5-cfvo-formulas', sqref: 'W2:W9', refused: 'cf-value-beyond-bounds', reason: 'Ruling S3-E: num bounds 20/80 over 5..100, values beyond the bounds' },
+  { caseId: 'stage5-cfvo-formulas', sqref: 'X2:X9', refused: 'cf-degenerate-scope', reason: 'Ruling S3-E: num bounds 0/0, degenerate' },
+  { caseId: 'stage5-bar-bounds-formula', sqref: 'D2:D9', refused: 'cf-degenerate-scope', reason: 'Ruling S3-E: num bounds 0/0, degenerate (the zero twin)' },
+]
 
 /**
  * Ruling R1: compile refusals that are expected, each recorded independently of the compiler (case, exact formula text,
@@ -143,6 +158,10 @@ export function stage5JustifiedRefusals(c: CaseLike | CfOracleCase, ref: string,
   for (const cfg of cs.formulaConfigurations ?? []) {
     if (!cfg.record || !cfg.refs.includes(ref)) continue
     for (const m of covering.filter(x => x.formula !== undefined && (cfg.capabilityId === undefined || x.capabilityId === cfg.capabilityId))) add(m, { reason: `${cfg.id}: ${cfg.record}`, refused: 'cf-unmeasured-capability' })
+  }
+  for (const e of STAGE5_BAR_SCOPE_REFUSALS) {
+    if (e.caseId !== cs.id || !isCellInSqref(ref, e.sqref)) continue
+    for (const m of covering.filter(x => x.ruleType === 'dataBar' && x.sqref === e.sqref)) add(m, { reason: e.reason, refused: e.refused })
   }
   for (const e of STAGE5_ENUMERATED_REFUSALS) {
     if (e.caseId !== cs.id || !e.refs.includes(ref)) continue

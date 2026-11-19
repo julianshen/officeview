@@ -488,6 +488,48 @@ describe('enumerated withholding justifications are backed by the workbook (Task
   })
 })
 
+describe('Stage 5 bars that break Ruling S3-E are enumerated from the workbooks (the bar:bounds-num/-formula follow-up)', () => {
+  it('exactly the bars whose resolved bounds are degenerate or exceeded by their scope are recorded, each with its refusal', async () => {
+    const { STAGE5_BAR_SCOPE_REFUSALS, stage5WithholdJustification } = await import('../scripts/cf-refs/stage5-withhold')
+    const found: string[] = []
+    for (const c of manifest().cases.filter(x => x.stage === 5 && x.status === 'measured')) {
+      const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
+      const values = new Map<string, unknown>()
+      for (const row of doc.sheets[0]!.rows) for (const cell of row.cells) values.set(cell.ref.toUpperCase(), cell.valueIsError ? undefined : cell.value)
+      for (const m of c.markers.filter(x => x.ruleType === 'dataBar' && x.extension === 'legacy')) {
+        const [a, b] = m.sqref.split(':')
+        const col = /^[A-Z]+/.exec(a!)![0], r0 = Number(/\d+/.exec(a!)![0]), r1 = Number(/\d+/.exec(b ?? a!)![0])
+        const scope = Array.from({ length: r1 - r0 + 1 }, (_, i) => values.get(`${col}${r0 + i}`)).filter((v): v is number => typeof v === 'number')
+        const bound = (cv: { type: string; val?: string }): number | undefined => {
+          if (cv.type === 'min') return Math.min(...scope)
+          if (cv.type === 'max') return Math.max(...scope)
+          if (cv.type === 'num' && /^-?\d+(\.\d+)?$/.test(cv.val ?? '')) return Number(cv.val)
+          const ref = /^\$([A-Z]+)\$(\d+)$/.exec(cv.val ?? '')
+          if (cv.type === 'formula' && ref) { const v = values.get(`${ref[1]}${ref[2]}`); return typeof v === 'number' ? v : undefined }
+          return undefined
+        }
+        const [lo, hi] = (m.bar?.cfvo ?? []).map(bound)
+        if (lo === undefined || hi === undefined || scope.length === 0) continue
+        const refused = !(lo < hi) ? 'cf-degenerate-scope' : scope.some(v => v < lo || v > hi) ? 'cf-value-beyond-bounds' : undefined
+        if (!refused) continue
+        found.push(`${c.id}|${m.sqref}|${refused}`)
+        for (let r = r0; r <= r1; r++) expect(stage5WithholdJustification(c, `${col}${r}`).join(), `${c.id} ${col}${r}`).toMatch(/Ruling S3-E/)
+      }
+    }
+    expect(found.sort()).toEqual(STAGE5_BAR_SCOPE_REFUSALS.map(e => `${e.caseId}|${e.sqref}|${e.refused}`).sort())
+    expect(found.sort()).toEqual([
+      'stage5-bar-bounds-formula|D2:D9|cf-degenerate-scope',
+      'stage5-cfvo-formulas|I2:I9|cf-value-beyond-bounds',
+      'stage5-cfvo-formulas|W2:W9|cf-value-beyond-bounds',
+      'stage5-cfvo-formulas|X2:X9|cf-degenerate-scope',
+      'stage5-formula-authored|J2:J9|cf-value-beyond-bounds',
+    ])
+    // The owner's formula bar and its other twins are in bounds: no justification there.
+    const own = manifest().cases.find(x => x.id === 'stage5-bar-bounds-formula')!
+    for (const ref of ['B2', 'C2', 'E2']) expect(stage5WithholdJustification(own, ref), ref).toEqual([])
+  })
+})
+
 describe('the hoist-errors rules are plain resolved cells (the expected-resolution stopgap is retired)', () => {
   const ID = 'formula:hoist-aggregate-errors'
   const RULES = [{ formula: 'A2>AVERAGE($A:$A)', sqref: 'B2:B40' }, { formula: 'A2=MAX($A:$A)', sqref: 'C2:C40' }]

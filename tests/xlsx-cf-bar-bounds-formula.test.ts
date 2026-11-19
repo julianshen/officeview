@@ -25,8 +25,10 @@ import {
   evaluateFormulaCapabilities,
   formulaControlsOf,
   formulaObservationOf,
+  isCapabilityVerified,
   readZipPartsSync,
   resolveFormulaConfigurations,
+  verifyCfCase,
   visualKindOf,
   type FormulaObservation,
   type S5Visual,
@@ -60,7 +62,7 @@ const FULL_PX = 82
 
 describe('stage5-bar-bounds-formula: the case', () => {
   it('owns bar:bounds-formula (appended last), while stage5-cfvo-formulas keeps its configuration and capture', () => {
-    expect(c.status).toBe('recipe-pending')
+    expect(c.status).toBe('measured')
     expect(CF_STAGE5_OWNERS[CAP]).toBe(ID)
     expect(CF_STAGE5_CAPABILITIES.find(e => e.capabilityId === CAP)!.caseId).toBe(ID)
     expect(CF_STAGE5_CASES.at(-1)!.id).toBe(ID)
@@ -91,7 +93,10 @@ describe('stage5-bar-bounds-formula: the case', () => {
   it('every value lies strictly inside the formula bounds (no S3-E beyond-bounds cell), with 20 pt rows like the measured Stage 5 bars', () => {
     expect(VALUES).toEqual([28, 31, 35, 41, 46, 49, 52, 62])
     for (const v of VALUES) expect(v > 20 && v < 80, String(v)).toBe(true)
-    expect(/<sheetFormatPr defaultRowHeight="20"/.test(sheetXml)).toBe(true)
+    // Every row Excel resaved is 20 pt (the generator writes them so; Excel keeps them as custom heights).
+    const rowTags = [...sheetXml.matchAll(/<row r="(\d+)"[^>]*?ht="([\d.]+)"/g)]
+    expect(rowTags.length).toBeGreaterThanOrEqual(9)
+    for (const [, r, ht] of rowTags) expect(Number(ht), `row ${r}`).toBe(20)
   })
 
   it('every bar edge, under either reading, is clear of the value text or full width', () => {
@@ -179,4 +184,18 @@ describe('stage5-bar-bounds-formula: the configuration on a synthetic observatio
     })
     expect(apart).toEqual(VALUES)
   })
+})
+
+describe('stage5-bar-bounds-formula: the committed capture (Excel 16.114)', () => {
+  // A full case verification: CI is about 10x slower than local.
+  it('verifies bar:bounds-formula as evaluated, and Excel drew the bars the model predicts', () => {
+    const res = verifyCfCase(c, { rootDir: REPO_ROOT })
+    expect(res.kind, JSON.stringify(res).slice(0, 300)).toBe('verified')
+    if (res.kind !== 'verified') return
+    expect(res.verifiedCapabilities).toContain(CAP)
+    expect(res.matchedHypotheses?.[CAP]).toBe('evaluated')
+    expect(isCapabilityVerified(CAP, manifest, { rootDir: REPO_ROOT })).toBe(true)
+    const side = JSON.parse(readFileSync(resolve(REPO_ROOT, c.captures[0]!.sidecarPath), 'utf8')) as { formulaEvaluation: Record<string, { observed: Record<string, Record<string, string>> }> }
+    expect(Object.values(side.formulaEvaluation[CAP]!.observed['bar-bounds-formula']!)).toEqual(VALUES.map(v => `${describeS5Visual(barOf(v, 20, 80))}|none`))
+  }, 600_000)
 })

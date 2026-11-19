@@ -804,6 +804,9 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       'stage3-bar-composition:H': 'bar:composition-bar-stopIfTrue: Excel dropped the flag on resave (S3-CLOSE)',
       'stage3-bar-degenerate:G': 'bar:bounds-positional is non-discriminating; the saved bar\'s bounds and lengths are verified',
       'stage3-bar-pairing:C': 'bar:pairing-standalone: Excel resaves the standalone bar in its paired form (S3-CLOSE)',
+      // Since the bar:bounds-num follow-up these num-bounded bars need only verified capabilities.
+      'stage3-bar-geometry:G': 'bar:geometry-min-visible-width is non-discriminating; the saved num 0/100 bar\'s bounds and lengths are verified',
+      'stage3-bar-showvalue:C': 'bar:showvalue-copy-text is a clipboard observation, not paint; the saved num 0/100 bar\'s bounds and lengths are verified',
     }
     const markerOnlyPainted = new Set<string>()
     for (const c of stage3) {
@@ -1271,11 +1274,11 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       'stage3-bar-lengths:G': { outcome: 'withheld', reason: 'percentile 10/90 leaves values beyond the bounds: S3-E keeps the rule unresolved (Excel clamps; bar:degenerate-beyond-bounds lifts nothing in the evaluator yet)' },
       'stage3-bar-degenerate:B': { outcome: 'withheld', reason: 'all values equal: S3-E keeps the degenerate scope unresolved (Excel draws half length; not implemented)' },
       'stage3-bar-degenerate:C': { outcome: 'withheld', reason: 'single numeric cell: S3-E keeps the degenerate scope unresolved (Excel draws half length; not implemented)' },
-      ...Object.fromEntries(['stage3-bar-degenerate:D', 'stage3-bar-degenerate:E',
-        ...['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'].map(col => `stage3-bar-rendering:${col}`),
-        ...['B', 'C', 'D', 'E', 'F', 'H', 'I'].map(col => `stage3-bar-geometry:${col}`),
-        'stage3-bar-showvalue:B', 'stage3-bar-showvalue:D',
-      ].map(key => [key, { outcome: 'withheld', reason: 'num bounds: bar:bounds-num is non-discriminating (num 20/80 equals the data min/max), so unverified' } as Finding])),
+      // Since the bar:bounds-num follow-up (stage3-bar-bounds-num verified num) the num-bounded bars of rendering, geometry
+      // and showvalue paint and are checked against Excel's px below; these two stay withheld by S3-E itself.
+      'stage3-bar-degenerate:D': { outcome: 'withheld', reason: 'inverted num 80/20: S3-E keeps the degenerate scope unresolved (Excel swaps the bounds; not implemented)' },
+      'stage3-bar-degenerate:E': { outcome: 'withheld', reason: 'values beyond num 20/80: S3-E keeps the rule unresolved (Excel clamps; not implemented)' },
+      ...Object.fromEntries(['stage3-bar-geometry:H', 'stage3-bar-geometry:I'].map(key => [key, { outcome: 'withheld', reason: 'every value is 100 (v_min = v_max): S3-E keeps the degenerate scope unresolved even under num 0/100 bounds (Excel draws the full bar; not implemented)' } as Finding])),
       'stage3-bar-degenerate:F': { outcome: 'withheld', reason: 'percent bounds: bar:bounds-percent is non-discriminating, so unverified' },
     }
     // Bars production paints on cells the capture designated for no geometry capability (settings or another
@@ -1294,6 +1297,10 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       // Capture run 8 (Task 22c): the automatic bounds are verified, so the lengths case's autoMax column paints.
       'stage3-bar-pairing:B': 'the paired bar (x14 autoMin/autoMax, 0/100) designates settings capabilities only; since run 8 every capability it needs is verified',
       'stage3-bar-lengths:I': 'autoMax on all-positive data is non-discriminating in this case; stage3-bar-auto-bounds settles it (zero-anchored), which reproduces it',
+      // The bar:bounds-num follow-up: num bounds are verified, so the lengths case's num column paints.
+      'stage3-bar-lengths:E': 'num 20/80 over 20..80 is non-discriminating in this case; stage3-bar-bounds-num settles it (num), which reproduces it',
+      'stage3-bar-geometry:G': 'designated for bar:geometry-min-visible-width (non-discriminating); the saved num 0/100 bar needs only verified capabilities since bar:bounds-num',
+      'stage3-bar-showvalue:C': 'designated for bar:showvalue-copy-text (a clipboard observation); the saved num 0/100 bar needs only verified capabilities since bar:bounds-num',
     }
     for (const f of Object.values(BAR_FINDINGS)) expect(f.outcome).toBe('withheld')
 
@@ -1389,7 +1396,8 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     // No stale finding or exception, and pinned counts (a regression that withholds or paints one more moves them).
     expect([...usedFindings].sort()).toEqual(Object.keys(BAR_FINDINGS).sort())
     expect([...usedPainted].sort()).toEqual(Object.keys(PAINTED_UNDESIGNATED).sort())
-    expect({ painted, measuredPainted, withheldFound, axes, axisRows, gradientBars }).toEqual({ painted: 472, measuredPainted: 428, withheldFound: 84, axes: 48, axisRows: 48 * 30, gradientBars: 246 })
+    // 555/498/27/250 since the bar:bounds-num follow-up (was 472/428/84/246): the num-bounded bars now paint, each at Excel's px.
+    expect({ painted, measuredPainted, withheldFound, axes, axisRows, gradientBars }).toEqual({ painted: 555, measuredPainted: 498, withheldFound: 27, axes: 48, axisRows: 48 * 30, gradientBars: 250 })
     // Mutant: a solid axis (the axis colour on every row) disagrees with Excel on every black dotted axis compared.
     // Run 8 adds stage3-bar-auto-bounds J and K: ten more explicit black axes.
     expect(solidMutantFails, 'a solid axis fails on every explicit (black) axis').toBe(38)

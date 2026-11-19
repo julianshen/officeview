@@ -3319,7 +3319,7 @@ describe('CF oracle verifier', () => {
     // published Stage 3 set (the audit's verified result, asserted in tests/xlsx-cf-stage3.test.ts), and never a
     // non-discriminating, unsupported or unresolved one.
     const published = Reflect.get(verifiedExports, 'VERIFIED_STAGE3_CAPABILITIES') as ReadonlySet<string>
-    expect(published.size).toBe(51)
+    expect(published.size).toBe(52) // 52 since bar:bounds-num (stage3-bar-bounds-num)
     for (const entry of CF_STAGE3_CAPABILITIES) {
       expect(entry.capabilityId.startsWith('bar:')).toBe(true)
       expect(entry.failClosedDisposition).toMatch(/S3-[A-S]|Always unsupported/)
@@ -3627,10 +3627,13 @@ describe('CF oracle verifier', () => {
     // A single hypothesis cannot discriminate anything.
     expect(discriminateBar({ B2: [{ id: 'a', leftPx: 84, rightPx: 143 }] }, { B2: measured.B2 }, 1)).toMatchObject({ status: 'non-discriminating' })
     // A static registry candidate is withheld and production holds no evidence for it. (bar:bounds-automax left the
-    // registry in Task 22c: stage3-bar-auto-bounds now owns it with data that discriminates, S3-AUTO-BOUNDS.)
-    expect(CF_STAGE3_NONDISCRIMINATING['bar:bounds-num']).toMatch(/num 20\/80/)
-    expect(hasEvidence('bar:bounds-num')).toBe(false)
-    expect(VERIFIED_CAPABILITIES.has('bar:bounds-num')).toBe(false)
+    // registry in Task 22c and bar:bounds-num in the bar:bounds-num follow-up: stage3-bar-auto-bounds and
+    // stage3-bar-bounds-num now own them with data that discriminates.)
+    expect(CF_STAGE3_NONDISCRIMINATING['bar:bounds-percent']).toMatch(/percent 25\/75/)
+    expect(hasEvidence('bar:bounds-percent')).toBe(false)
+    expect(VERIFIED_CAPABILITIES.has('bar:bounds-percent')).toBe(false)
+    expect(CF_STAGE3_NONDISCRIMINATING['bar:bounds-num']).toBeUndefined()
+    expect(hasEvidence('bar:bounds-num')).toBe(true)
     expect(CF_STAGE3_NONDISCRIMINATING['bar:bounds-automax']).toBeUndefined()
     // Verified by stage3-bar-auto-bounds and published by Task 23.
     expect(hasEvidence('bar:bounds-automax')).toBe(true)
@@ -3868,7 +3871,7 @@ describe('CF oracle verifier', () => {
     expect(report.summary.cases).toBe(16) // 16 since stage3-bar-bounds-num (recipe-pending until captured)
     expect(report.summary.capabilities).toBe(CF_STAGE3_CAPABILITIES.length)
     expect(report.blockedCapabilities).toEqual([])
-    expect(report.perCapability.filter(p => p.disposition === 'verified')).toHaveLength(51)
+    expect(report.perCapability.filter(p => p.disposition === 'verified')).toHaveLength(52)
     expect(report.barAutoBounds).toEqual({ autoMin: { rule: 'zero-anchored', settledBy: ['bar:bounds-automin'] }, autoMax: { rule: 'zero-anchored', settledBy: ['bar:bounds-automax'] } })
     expect(report.perCapability.filter(p => p.disposition === 'refused-unsupported').every(p => p.capabilityId.startsWith('bar:unresolved-') || CF_STAGE3_UNSUPPORTED[p.capabilityId] !== undefined)).toBe(true)
   }, 90_000) // about ten whole-stage audits: 15–25 s alone since capture run 7 (a 510-cell case), up to 50 s beside the full parallel suite

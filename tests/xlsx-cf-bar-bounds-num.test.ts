@@ -21,7 +21,9 @@ import {
   measureCaseBars,
   readBarSheetFacts,
   capabilityOwnerCase,
+  isCapabilityVerified,
   readZipPartsSync,
+  verifyCfCase,
   type DecodedPng,
 } from '../scripts/cf-refs/verify'
 
@@ -66,7 +68,7 @@ const judge = (lo: number, hi: number) => {
 
 describe('stage3-bar-bounds-num (synthetic capture)', () => {
   it('owns bar:bounds-num (appended last, so no earlier input changes), with one paired solid 0/100 bar under num 20/80', () => {
-    expect(c.status).toBe('recipe-pending')
+    expect(c.status).toBe('measured')
     expect(CF_STAGE3_OWNERS[CAP]).toBe(ID)
     expect(CF_STAGE3_CAPABILITIES.find(e => e.capabilityId === CAP)!.caseId).toBe(ID)
     expect(CF_STAGE3_CASES.at(-1)!.id).toBe(ID)
@@ -79,8 +81,8 @@ describe('stage3-bar-bounds-num (synthetic capture)', () => {
     }
     expect(c.markers.find(m => m.extension === 'x14')!.bar!.attrs).toMatchObject({ minLength: '0', maxLength: '100', gradient: '0' })
     expect(c.expected.cells.filter(x => x.matched).map(x => x.ref)).toEqual(['B2', 'B3', 'B4', 'B5', 'B6'])
-    // The registry entry retires only once a capture verifies and discriminates (task 5), never before.
-    expect(CF_STAGE3_NONDISCRIMINATING[CAP]).toBeDefined()
+    // Captured (6a83cbe2): the capture verifies and discriminates, so the registry entry is retired.
+    expect(CF_STAGE3_NONDISCRIMINATING[CAP]).toBeUndefined()
   })
 
   it('isCapabilityVerified asks the owner, not the first case carrying the marker (stage3-bar-lengths, listed first)', () => {
@@ -128,4 +130,18 @@ describe('stage3-bar-bounds-num (synthetic capture)', () => {
     // At least the 3 px the +-1 px tolerance needs (discriminateBar's minSeparationPx), at every designated cell.
     for (const ref of ['B2', 'B3', 'B4', 'B5', 'B6']) expect(sep(ref)).toBeGreaterThanOrEqual(3)
   }, TIMEOUT_MS)
+
+  // A full case verification: CI is about 10x slower than local.
+  it('the committed capture (Excel 16.114) verifies bar:bounds-num as num, discriminating', () => {
+    const res = verifyCfCase(c, { rootDir: REPO_ROOT })
+    expect(res.kind, JSON.stringify(res).slice(0, 300)).toBe('verified')
+    if (res.kind !== 'verified') return
+    expect(res.verifiedCapabilities).toEqual([CAP])
+    expect(res.nonDiscriminatingCapabilities ?? []).toEqual([])
+    expect(res.matchedHypotheses?.[CAP]).toBe('num')
+    expect(isCapabilityVerified(CAP, manifest, { rootDir: REPO_ROOT })).toBe(true)
+    // Excel's right edges, B2..B6: the num reading (min/max would be none/124/156/195/262).
+    const side = JSON.parse(readFileSync(resolve(REPO_ROOT, c.captures[0]!.sidecarPath), 'utf8')) as { observedBars: Array<{ ref: string; bar?: { rightPx: number } }> }
+    expect(['B2', 'B3', 'B4', 'B5', 'B6'].map(r => side.observedBars.find(o => o.ref === r)?.bar?.rightPx)).toEqual([100, 132, 159, 191, 247])
+  }, 600_000)
 })

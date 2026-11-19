@@ -100,16 +100,10 @@ export function configurationVerdict(cfg: Config, reading: string, got: Readonly
  * reproduced, and the audit refuses to publish it. Its configuration is still checked: no violation, no designated cell
  * withheld, and the only failing witnesses are exactly the documented ones. Returns the violations of that narrow check.
  */
-export function unconfirmableViolations(cfg: Config, verdict: ReturnType<typeof configurationVerdict>, got: ReadonlyMap<string, Shown>, caseId: string, reading: string): string[] {
+export function unconfirmableViolations(cfg: Config, verdict: ReturnType<typeof configurationVerdict>, got: ReadonlyMap<string, Shown>, caseId: string): string[] {
   const scope = stage5UnconfirmableScope(cfg.capabilityId, caseId)
   const allowed = new Set(scope?.witnesses ?? [])
-  // The bar:bounds-formula follow-up: a painted designated cell whose predicted twin is a documented witness production
-  // withholds disagrees only through that twin, so that violation is the documented one.
-  const throughWithheldTwin = (r: string): boolean => {
-    const twin = /^twin:([A-Z]+\d+)$/.exec(cfg.hypotheses[reading]?.[r] ?? '')?.[1]
-    return scope?.twinWithheld === true && twin !== undefined && allowed.has(twin) && got.get(twin)?.withheld === true && got.get(cellOfRef(r))?.withheld === false
-  }
-  const out = verdict.violations.filter(v => { const r = new RegExp(`^${cfg.id} ${reading} (\\S+):`).exec(v)?.[1]; return !(r && throughWithheldTwin(r)) })
+  const out = [...verdict.violations]
   for (const reason of verdict.unusable) {
     const ref = /witness (\S+):/.exec(reason)?.[1]
     if (!ref || !allowed.has(ref)) out.push(`${reason} (not a documented unconfirmable witness)`)
@@ -154,40 +148,48 @@ describe('the configuration verdict validates declared witnesses (fix round 1 #4
     for (const r of [2, 3, 4, 5, 6, 7]) { const on = r % 2 === 1; world.set(`I${r}`, on ? red : icon); world.set(`J${r}`, red); world.set(`L${r}`, withheld); world.set(`K${r}`, icon) }
     const v = configurationVerdict(cfg, 'halts', world)
     expect(v.reproduced).toBe(false)
-    expect(unconfirmableViolations(cfg, v, world, 'stage5-composition', 'halts')).toEqual([])
+    expect(unconfirmableViolations(cfg, v, world, 'stage5-composition')).toEqual([])
     // Codex counterexample: I4 and its required positive twin K4 both suppressed.
     const suppressed = new Map(world)
     suppressed.set('I4', empty); suppressed.set('K4', empty)
     const sv = configurationVerdict(cfg, 'halts', suppressed)
     expect(sv.reproduced).toBe(false)
-    expect(unconfirmableViolations(cfg, sv, suppressed, 'stage5-composition', 'halts')).toEqual([expect.stringMatching(/witness K4: declared visual.*not a documented unconfirmable witness/)])
+    expect(unconfirmableViolations(cfg, sv, suppressed, 'stage5-composition')).toEqual([expect.stringMatching(/witness K4: declared visual.*not a documented unconfirmable witness/)])
   })
 })
 
-describe('unconfirmable scopes are per case (the bar:bounds-formula follow-up)', () => {
+describe('unconfirmable scopes are per case (the bar:bounds-formula follow-up, orchestrator ruling 4)', () => {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest
-  const cfg = manifest.cases.find(x => x.id === 'stage5-bar-bounds-formula')!.formulaConfigurations!.find(x => x.id === 'bar-bounds-formula')!
-  const bar: Shown = { fill: 'none', strike: false, visual: 'dataBar', withheld: false, drawn: true }
-  const withheld: Shown = { fill: 'none', strike: false, visual: '', withheld: true, drawn: false }
-  // Production today: the formula bar B paints, its num 20/80 twin C withholds (bar:bounds-num unpublished), D/E paint.
-  const world = (): Map<string, Shown> => { const w = new Map<string, Shown>(); for (let r = 2; r <= 9; r++) { w.set(`B${r}`, bar); w.set(`C${r}`, withheld); w.set(`D${r}`, bar); w.set(`E${r}`, r === 2 ? { ...bar, drawn: false } : bar) } return w }
-  const check = (w: Map<string, Shown>) => unconfirmableViolations(cfg, configurationVerdict(cfg, 'evaluated', w), w, 'stage5-bar-bounds-formula', 'evaluated')
-  it('each case has its own scope; a case not listed is not unconfirmable', () => {
-    expect(stage5UnconfirmableScope('bar:bounds-formula', 'stage5-cfvo-formulas')?.witnesses).toEqual(['W2', 'W3', 'W4', 'W5', 'W6', 'W7', 'W8', 'W9'])
-    expect(stage5UnconfirmableScope('bar:bounds-formula', 'stage5-bar-bounds-formula')).toMatchObject({ witnesses: ['C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9'], twinWithheld: true })
+  it('only the superseded stage5-cfvo-formulas keeps a scope; the owner stage5-bar-bounds-formula is confirmed in full', () => {
+    expect(stage5UnconfirmableScope('bar:bounds-formula', 'stage5-cfvo-formulas')).toMatchObject({ witnesses: ['W2', 'W3', 'W4', 'W5', 'W6', 'W7', 'W8', 'W9'], designatedWithheld: true })
+    expect(stage5UnconfirmableScope('bar:bounds-formula', 'stage5-bar-bounds-formula')).toBeUndefined()
     expect(stage5UnconfirmableScope('bar:bounds-formula', 'stage5-composition')).toBeUndefined()
     expect(stage5UnconfirmableScope('formula:composition-stop-icon', 'stage5-composition')?.witnesses).toEqual(['L3', 'L5', 'L7'])
   })
-  it('accepts only the documented disagreement: B painted, its twin C withheld', () => {
-    expect(check(world())).toEqual([])
-    const w1 = world(); w1.set('B4', withheld)
-    expect(check(w1)).toEqual(['bar-bounds-formula B4: withheld'])
-    // A painted twin that differs from B is a real contradiction, not the documented one.
-    const w2 = world(); w2.set('C4', { ...bar, visual: 'dataBar&iconSet' })
-    expect(check(w2)).toEqual([expect.stringMatching(/^bar-bounds-formula evaluated B4: production none\|dataBar, reading predicts none\|dataBar&iconSet$/)])
-    // A witness outside the scope never fails quietly.
-    const w3 = world(); w3.set('E5', withheld)
-    expect(check(w3).length).toBeGreaterThan(0)
+  it('the old scope still refuses its own misreadings', () => {
+    const cfg = manifest.cases.find(x => x.id === 'stage5-cfvo-formulas')!.formulaConfigurations!.find(x => x.id === 'cfvo-bar-formula')!
+    const bar: Shown = { fill: 'none', strike: false, visual: 'dataBar', withheld: false, drawn: true }
+    const withheld: Shown = { fill: 'none', strike: false, visual: '', withheld: true, drawn: false }
+    // Production today: I, W and X withhold (beyond bounds, degenerate); Y paints.
+    const world = new Map<string, Shown>()
+    for (let r = 2; r <= 9; r++) { world.set(`I${r}`, withheld); world.set(`W${r}`, withheld); world.set(`X${r}`, withheld); world.set(`Y${r}`, r === 2 ? { ...bar, drawn: false } : bar) }
+    const check = (w: Map<string, Shown>) => unconfirmableViolations(cfg, configurationVerdict(cfg, 'evaluated', w), w, 'stage5-cfvo-formulas')
+    expect(check(world)).toEqual([])
+    // A painted formula bar that contradicts the evaluated reading's twin is a misreading, not the documented withholding.
+    const painted = new Map(world); painted.set('I5', bar)
+    expect(check(painted)).toEqual([expect.stringMatching(/^cfvo-bar-formula evaluated I5: production none\|dataBar, reading predicts withheld$/)])
+    // A witness outside the documented W2..W9 never fails quietly.
+    const yGone = new Map(world); yGone.set('Y5', withheld)
+    expect(check(yGone).length).toBeGreaterThan(0)
+  })
+  it('the superseded scope does not block publication: bar:bounds-formula publishes from its owner', () => {
+    const base = auditStage5Manifest({ cases: [] } as never, { rootDir: REPO_ROOT })
+    const report: Stage5AuditReport = { ...base, ok: true, stageComplete: true, blocked: [], blockedCapabilities: [],
+      perCapability: [{ capabilityId: 'bar:bounds-formula', caseId: 'stage5-bar-bounds-formula', disposition: 'verified' }],
+      matchedReadings: { 'bar:bounds-formula': 'evaluated' } }
+    expect(stage5Publication(report).published).toEqual(['bar:bounds-formula'])
+    const old: Stage5AuditReport = { ...report, perCapability: [{ capabilityId: 'bar:bounds-formula', caseId: 'stage5-cfvo-formulas', disposition: 'verified' }] }
+    expect(stage5Publication(old).withheld['bar:bounds-formula']).toMatch(/fixture-unconfirmable: stage5-cfvo-formulas/)
   })
 })
 
@@ -254,7 +256,7 @@ describe('every registered formula reading is the reading production implements,
           const verdict = configurationVerdict(cfg, reading, got)
           if (stage5UnconfirmableScope(cfg.capabilityId, c.id)) {
             // Never reproduced; checked narrowly (only its documented witnesses may fail) and refused publication by the audit.
-            for (const v of unconfirmableViolations(cfg, verdict, got, c.id, reading)) violations.push(`${cfg.capabilityId} ${c.id}/${v}`)
+            for (const v of unconfirmableViolations(cfg, verdict, got, c.id)) violations.push(`${cfg.capabilityId} ${c.id}/${v}`)
             unconfirmableChecked.add(cfg.capabilityId)
             continue
           }

@@ -1011,25 +1011,20 @@ export interface Stage5UnconfirmableScope {
   /** Task 37 fix round 1: production withholds the configuration's designated cells (fail closed) rather than painting them,
    * so the narrow check accepts withheld cells; it still refuses any painted cell that contradicts the reading. */
   designatedWithheld?: true
-  /** The bar:bounds-formula follow-up: production paints the designated cells, and the only cells they disagree with are
-   * their predicted twins, documented witnesses production withholds (a literal bar awaiting bar:bounds-num). */
-  twinWithheld?: true
 }
 
 export const CF_STAGE5_UNCONFIRMABLE: Readonly<Record<string, Stage5UnconfirmableScope & {
   /** Per-case scopes: when present, only the listed cases are unconfirmable, each under its own scope. */
   cases?: Readonly<Record<string, Stage5UnconfirmableScope>> }>> = {
+  // The bar:bounds-formula follow-up: stage5-bar-bounds-formula (the owner) is confirmed by production, so only the
+  // old fixture stays recorded as unconfirmable, for its own configuration (orchestrator ruling 4, 2026-11-19).
   'bar:bounds-formula': {
-    reason: 'no Stage 5 bar fixture with formula bounds can be confirmed by production yet: see each case',
+    reason: 'only stage5-cfvo-formulas, a superseded case version, cannot be confirmed: see its scope',
     witnesses: [],
     cases: {
       'stage5-cfvo-formulas': {
         reason: 'stage5-cfvo-formulas cfvo-bar-formula: the bar column holds 5..100 against formula bounds 20..80, a whole-scope cf-value-beyond-bounds (Ruling S3-E), and its num twin W needs bar:bounds-num (CF_STAGE3_NONDISCRIMINATING), so production cannot reproduce the fixture (Task 37 fix round 1)',
         witnesses: ['W2', 'W3', 'W4', 'W5', 'W6', 'W7', 'W8', 'W9'], designatedWithheld: true,
-      },
-      'stage5-bar-bounds-formula': {
-        reason: 'stage5-bar-bounds-formula bar-bounds-formula: its num 20/80 twin C is a literal bar with num bounds, withheld while bar:bounds-num is unpublished (CF_STAGE3_NONDISCRIMINATING until stage3-bar-bounds-num is captured), so the evaluated reading predicts a withheld cell where production paints the formula bar (the bar:bounds-formula follow-up)',
-        witnesses: ['C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9'], twinWithheld: true,
       },
     },
   },
@@ -1070,8 +1065,10 @@ export function stage5Publication(report: Stage5AuditReport, readings: Readonly<
   for (const p of report.perCapability) {
     const id = p.capabilityId
     if (p.disposition !== 'verified') { withheld[id] = p.disposition; continue }
-    const unconfirmable = CF_STAGE5_UNCONFIRMABLE[id]
-    if (unconfirmable) { withheld[id] = `fixture-unconfirmable: ${unconfirmable.cases ? Object.values(unconfirmable.cases).map(x => x.reason).join('; ') : unconfirmable.reason}`; continue }
+    // A per-case entry refuses publication only through the owning case's own scope; a superseded case version's scope
+    // stays recorded for that case alone (orchestrator ruling 4 on the bar:bounds-formula follow-up).
+    const unconfirmable = stage5UnconfirmableScope(id, p.caseId)
+    if (unconfirmable) { withheld[id] = `fixture-unconfirmable: ${unconfirmable.reason}`; continue }
     const matched = report.matchedReadings[id]
     const prod = Object.prototype.hasOwnProperty.call(readings, id) ? readings[id] : undefined
     if (matched === undefined) { withheld[id] = 'reading-unrecorded: a verified Stage 5 capability names the reading it matched'; continue }
