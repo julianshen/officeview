@@ -186,6 +186,44 @@ describe('audio argv (D7 input rules, D8)', () => {
 
 // --- ffmpeg ----------------------------------------------------------------------------------------------------
 
+/**
+ * Task 14 (Task 7 minor, parked): the two branches before any spawn. They run everywhere (no ffmpeg needed): the
+ * binaries are a marker script, so a spawn would leave the marker behind.
+ */
+describe('transcode before any spawn (no ffmpeg needed)', () => {
+  const dir = mkdtempSync(join(root, 'prespawn-'))
+  const marker = join(dir, 'spawned')
+  const fake = join(dir, 'ffmpeg')
+  writeFileSync(fake, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 })
+  const fakeInfo = { ffmpeg: fake, ffprobe: fake, version: '0.0-fake', platform: process.platform === 'darwin' ? 'darwin' as const : 'linux' as const }
+  const entry = (hasAudio: boolean): ProbedMedia => ({ k: 0, partPath: '/ppt/media/a.m4a', kind: 'audio', hasAudio, durationMs: 2000, sourceHash: 'x', demuxer: 'mov' })
+  const staged = async () => {
+    const src = await temp.create(fx('a.m4a'))
+    const out = temp.reserve('m4a')
+    writeFileSync(out.path, 'partial') // a stale output: both branches delete it
+    return { src, out }
+  }
+
+  it('an already-aborted signal rejects with its reason, deletes the output and spawns nothing', async () => {
+    const { src, out } = await staged()
+    const ac = new AbortController()
+    const reason = new Error('aborted before the spawn')
+    ac.abort(reason)
+    await expect(transcode(fakeInfo, { entry: entry(true), src: src.path, out: out.path }, ac.signal)).rejects.toBe(reason)
+    expect(existsSync(out.path)).toBe(false)
+    expect(existsSync(marker)).toBe(false)
+    await src.dispose(); await out.dispose()
+  })
+
+  it('a part without an audio stream is media-unreadable, deletes the output and spawns nothing', async () => {
+    const { src, out } = await staged()
+    expect(await transcode(fakeInfo, { entry: entry(false), src: src.path, out: out.path }, never())).toEqual({ ok: false, reason: 'media-unreadable' })
+    expect(existsSync(out.path)).toBe(false)
+    expect(existsSync(marker)).toBe(false)
+    await src.dispose(); await out.dispose()
+  })
+})
+
 describe.skipIf(!info)('transcode (sandboxed ffmpeg)', () => {
   const sources = new Map<string, Source>()
   const outputs = new Map<string, { r: EncodeResult; bytes: Uint8Array; ms: number }>()
