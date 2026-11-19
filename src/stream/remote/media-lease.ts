@@ -4,16 +4,17 @@
  * session (`StreamSession.mediaRequest`), reassembled into a Blob and handed to the unchanged media player as a
  * `MediaLease` with `openMediaLease`'s span, retain, leave and release semantics.
  *
- * The workspace charge follows `openMediaLease` (slideshow/media/lease.ts): `start.bytes` from `media-start` (the
- * chunks as they arrive), then the peak `2 × bytes` while the chunks and the Blob coexist, then `bytes` for the Blob
- * alone. No room is the player's `resource-limit`, its signal to drop carried media first and try again.
+ * The workspace charge (ruling 4): the 32 MiB per-file cap is reserved before the request is sent (no room: it waits
+ * unsent, after `evict`), shrunk to `start.bytes` at `media-start` (the chunks as they arrive), then, as
+ * `openMediaLease` (slideshow/media/lease.ts), the peak `2 × bytes` while the chunks and the Blob coexist, then
+ * `bytes` for the Blob alone. No room at that peak is the player's `resource-limit` (a defensive path).
  *
  * Lazy remote path only: everything from the local lease is imported as a type (its module reads package parts).
  * It rejects only on abort; every other outcome is a `{refused}`.
  */
 import type { MediaLease, MediaLeaseResult } from '../../slideshow/media/lease'
 import type { Lease, MediaRecord, SlideShowWorkspace } from '../../slideshow/types'
-import type { StreamSession } from './session'
+import type { MediaRoom, StreamSession } from './session'
 
 /** The one type every streamed media record plays as (D16, D22: audio-only M4A, AAC-LC). */
 export const REMOTE_MEDIA_TYPE = 'audio/mp4'
@@ -24,14 +25,22 @@ interface WindowUrl { URL?: { createObjectURL?(blob: Blob): string; revokeObject
 
 const aborted = (signal: AbortSignal) => signal.reason ?? Object.assign(new Error('The media request was aborted.'), { name: 'AbortError' })
 
-/** `unit`: the slide the record is played on, sent with the request (look-ahead requests especially). */
+/** Options of `openRemoteMediaLease`. */
+export interface RemoteMediaLeaseOptions {
+  /** The slide the record is played on, sent with the request (look-ahead requests especially). */
+  unit?: number
+  /** Ruling 4: frees room by evicting delivered entries no one is using (the caller's); true when it freed some. Called
+   * once per reservation attempt that finds no room, before the request waits. */
+  evict?: () => boolean
+}
+
 export async function openRemoteMediaLease(
   session: Pick<StreamSession, 'mediaRequest'>,
   rec: MediaRecord,
   ws: SlideShowWorkspace,
   win: Window,
   signal: AbortSignal,
-  unit?: number,
+  o: RemoteMediaLeaseOptions = {},
 ): Promise<MediaLeaseResult> {
   if (signal.aborted) throw aborted(signal)
   // A realm without Blob-URL support (a torn-down popup) is refused before anything is requested.
@@ -43,21 +52,29 @@ export async function openRemoteMediaLease(
   try { playable = win.document.createElement('audio').canPlayType(REMOTE_MEDIA_CODEC) } catch { playable = '' }
   if (playable === '') return { refused: 'media-codec' }
 
+  // Ruling 4: the session reserves the per-file cap here before it sends, shrinks it to the file at media-start, and
+  // returns it on any settlement without a delivery; a delivery leaves it to this lease.
   let lease: Lease | undefined
+  const tag = `media:${rec.rId}`
+  const room: MediaRoom = {
+    reserve(bytes) {
+      lease = ws.lease(bytes, tag)
+      if (!lease && o.evict?.()) lease = ws.lease(bytes, tag)
+      return lease !== undefined
+    },
+    fit(start) { if (lease && lease.bytes > start.bytes) lease.shrink(lease.bytes - start.bytes) },
+    release() { lease?.release(); lease = undefined },
+  }
   let got: Awaited<ReturnType<StreamSession['mediaRequest']>>
   try {
-    got = await session.mediaRequest(rec.rId, signal, (start) => {
-      lease = ws.lease(start.bytes, `media:${rec.rId}`)
-      return lease !== undefined
-    }, unit)
-  } catch (e) {
-    lease?.release()
+    got = await session.mediaRequest(rec.rId, signal, room, o.unit)
+  } catch {
+    room.release()
     if (signal.aborted) throw aborted(signal)
     // A session that ended (or closed) under the request: the media is unavailable, never a rejection.
-    void e
     return { refused: 'media-unavailable' }
   }
-  if ('refused' in got) { lease?.release(); return { refused: got.refused } }
+  if ('refused' in got) { room.release(); return { refused: got.refused } }
   const held = lease!
   const { chunks, start } = got
   if (signal.aborted) { held.release(); chunks.length = 0; throw aborted(signal) }

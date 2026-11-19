@@ -25,7 +25,7 @@ afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
 const exampleManifest = (media = true): Manifest => ({
   v: 1, docRef: 'a'.repeat(24), kind: 'pptx', name: 'deck.pptx',
-  units: { count: 3, list: [{ w: 960, h: 540, ...(media ? { media: true as const } : {}) }, { w: 960, h: 540 }, { w: 960, h: 540, hidden: true }] },
+  units: { count: 5, list: [{ w: 960, h: 540, ...(media ? { media: true as const } : {}) }, { w: 960, h: 540 }, { w: 960, h: 540, hidden: true }, { w: 960, h: 540 }, { w: 960, h: 540 }] },
   layoutFingerprint: 'f'.repeat(64),
   session: { sid: '0123456789ab', token: tokenFor('j1'), expiresSec: 300, resume: 'session' },
   policy: { contentPolicy: 'visible-only', protection: 'final-raster', semantic: 'visible-only', contentPolicyId: 'visible-only@1', viewerMarkId: 'fixed' },
@@ -76,12 +76,23 @@ const startOf = (reqId: number, bytes: number, extra: Record<string, unknown> = 
   ({ reqId, type: 'media-start', mediaId: MID, contentType: 'audio/mp4', durationMs: 1000, bytes, chunks: Math.ceil(bytes / SEND), ...extra })
 const rec = (rId = MID): MediaRecord => ({ rId, partPath: 'remote:' + rId, contentType: 'audio/mp4', declaredBytes: 0 })
 
+/** A media room that always has space; records what the session asked of it. */
+const room = () => {
+  const r = { reserved: 0, fitted: [] as number[], released: 0 }
+  return Object.assign(r, {
+    reserve(n: number) { r.reserved = n; return true },
+    fit(st: { bytes: number }) { r.fitted.push(st.bytes) },
+    release() { r.released++ },
+  })
+}
+
 /** A workspace whose peak `used()` is recorded after every lease operation. */
 function watched(limit = 96 << 20) {
   const ws = createSlideShowWorkspace('desktop', { limit })
   let peak = 0
-  const look = () => { peak = Math.max(peak, ws.used()) }
-  const out: SlideShowWorkspace & { peak(): number } = {
+  const seen: number[] = []
+  const look = () => { peak = Math.max(peak, ws.used()); seen.push(ws.used()) }
+  const out: SlideShowWorkspace & { peak(): number; seen: number[] } = {
     ...ws,
     used: () => ws.used(),
     reserveTerminal: (n) => ws.reserveTerminal(n),
@@ -98,6 +109,7 @@ function watched(limit = 96 << 20) {
       }
     },
     peak: () => peak,
+    seen,
   }
   return out
 }
@@ -121,15 +133,17 @@ describe('remote media lease (spec §4.4)', () => {
   it('happy path: start, chunks, Blob of bytes; one lease; charge peak 2×bytes then bytes', async () => {
     const { s, sock } = await opened()
     const ws = watched(), r = realm(), ac = new AbortController()
-    const p = openRemoteMediaLease(s, rec(), ws, r.win, ac.signal, 0)
+    const p = openRemoteMediaLease(s, rec(), ws, r.win, ac.signal, { unit: 0 })
     await settle()
     const [req] = sock.of('media-request')
     expect(req).toEqual({ reqId: req!.reqId, type: 'media-request', token: s.token, mediaId: MID, unit: 0 })
     expect(r.asked).toEqual(['audio/mp4; codecs="mp4a.40.2"'])
+    // The per-file cap is reserved before the request is sent (coordinator ruling 4).
+    expect(ws.used()).toBe(MEDIA_WIRE_LIMITS.audioBytes)
     const bytes = SEND + 100, a = noise(SEND, 1), b = noise(100, 2)
     sock.text(startOf(req!.reqId, bytes))
     await settle()
-    expect(ws.used()).toBe(bytes) // charged at media-start
+    expect(ws.used()).toBe(bytes) // shrunk to the file at media-start
     sock.chunk(req!.reqId, a)
     sock.chunk(req!.reqId, b)
     const lease = await p
@@ -139,7 +153,9 @@ describe('remote media lease (spec §4.4)', () => {
     expect(new Uint8Array(await r.made[0]!.arrayBuffer())).toEqual(concat([a, b]))
     expect(lease.url).toBe('blob:x/1')
     expect(lease.bytes).toBe(bytes)
-    expect(ws.peak()).toBe(2 * bytes)
+    // The chunks and the Blob coexist at 2 × bytes; the reservation (the cap) was the highest point.
+    expect(ws.seen).toContain(2 * bytes)
+    expect(ws.peak()).toBe(Math.max(MEDIA_WIRE_LIMITS.audioBytes, 2 * bytes))
     expect(ws.used()).toBe(bytes)
     expect(s.stats().inFlightBytes).toBe(0)
     expect(s.stats().reassemblyBytes).toBe(0)
@@ -159,6 +175,7 @@ describe('remote media lease (spec §4.4)', () => {
     expect(await p).toEqual({ refused: 'policy-refused' })
     expect(r.made).toHaveLength(0)
     expect(ws.used()).toBe(0)
+    await settle()
     expect(s.stats().inFlightBytes).toBe(0)
     expect(s.stats().reassemblyBytes).toBe(0)
   })
@@ -190,14 +207,16 @@ describe('remote media lease (spec §4.4)', () => {
     const { s, sock } = await opened()
     const ws = watched()
     for (const extra of [{ bytes: MEDIA_WIRE_LIMITS.audioBytes + 1, chunks: Math.ceil((MEDIA_WIRE_LIMITS.audioBytes + 1) / SEND) }, { contentType: 'video/mp4' }]) {
-      const onStart = vi.fn(() => true)
-      const p = s.mediaRequest(MID, new AbortController().signal, onStart)
+      const rm = room()
+      const p = s.mediaRequest(MID, new AbortController().signal, rm)
       await settle()
       const id = sock.of('media-request').at(-1)!.reqId
       sock.text(startOf(id, 100, extra))
       sock.chunk(id, noise(100))
       expect(await p).toEqual({ refused: 'policy-refused' })
-      expect(onStart).not.toHaveBeenCalled()
+      expect(rm.reserved).toBe(MEDIA_WIRE_LIMITS.audioBytes)
+      expect(rm.fitted).toEqual([])
+      expect(rm.released).toBe(1)
       await settle()
       expect(s.stats().reassemblyBytes).toBe(0)
       expect(s.stats().inFlightBytes).toBe(0)
@@ -212,11 +231,12 @@ describe('remote media lease (spec §4.4)', () => {
     expect(s.stats().reassemblyBytes).toBe(0)
     expect(s.stats().inFlightBytes).toBe(0)
     // A chunk for a live request before its media-start fails that request closed, unallocated.
-    const p = s.mediaRequest(MID, new AbortController().signal, () => true)
+    const p = s.mediaRequest(MID, new AbortController().signal, room())
     await settle()
     const id = sock.of('media-request')[0]!.reqId
     sock.chunk(id, noise(100))
     expect(await p).toEqual({ refused: 'policy-refused' })
+    await settle()
     expect(s.stats().reassemblyBytes).toBe(0)
     expect(s.stats().inFlightBytes).toBe(0)
     // The session survives.
@@ -275,28 +295,76 @@ describe('remote media lease (spec §4.4)', () => {
     expect(ws.used()).toBe(0)
   })
 
-  it('workspace refusal at media-start → refused, request aborted', async () => {
+  it('workspace refusal → the request is not sent and holds no pacing slot (ruling 4)', async () => {
     const { s, sock } = await opened()
-    const ws = watched(1000), r = realm()
+    const ws = watched(MEDIA_WIRE_LIMITS.audioBytes + 1000), r = realm()
+    const filler = ws.lease(2000, 'filler')!
+    const p = openRemoteMediaLease(s, rec(), ws, r.win, new AbortController().signal)
+    await settle()
+    expect(sock.of('media-request')).toHaveLength(0)
+    expect(s.stats().mediaPending).toBe(1)
+    expect(s.stats().inFlight).toBe(0)
+    // It holds no pacing slot: all six of the class's slots are still free for others.
+    const others = Array.from({ length: 6 }, () => s.mediaRequest(MID2, new AbortController().signal, room()))
+    await settle()
+    expect(sock.of('media-request').map((m) => m.mediaId)).toEqual(Array(6).fill(MID2))
+    for (const m of sock.of('media-request')) sock.text({ reqId: m.reqId, type: 'media-refused', reason: 'media-busy' })
+    for (const o of others) expect(await o).toEqual({ refused: 'media-busy' })
+    filler.release()
+    // Room is free, but the six answered slots fill the window: still unsent.
+    await settle(400)
+    expect(sock.of('media-request')).toHaveLength(6)
+    expect(ws.used()).toBe(0)
+    void p
+  })
+
+  it('workspace room frees: the waiting request goes out without a slot spent while it waited', async () => {
+    const { s, sock } = await opened()
+    const ws = watched(MEDIA_WIRE_LIMITS.audioBytes + 1000), r = realm()
+    const filler = ws.lease(2000, 'filler')!
+    const p = openRemoteMediaLease(s, rec(), ws, r.win, new AbortController().signal)
+    await settle(400)
+    expect(sock.of('media-request')).toHaveLength(0)
+    filler.release()
+    await settle(400)
+    const [m] = sock.of('media-request')
+    expect(m).toMatchObject({ mediaId: MID })
+    sock.text(startOf(m!.reqId, 100))
+    sock.chunk(m!.reqId, noise(100))
+    const lease = await p
+    if ('refused' in lease) throw new Error(lease.refused)
+    expect(ws.used()).toBe(100)
+    lease.release()
+  })
+
+  it('delivered entries are evicted before anything waits', async () => {
+    const { s, sock } = await opened()
+    const ws = watched(MEDIA_WIRE_LIMITS.audioBytes + 1000), r = realm()
+    const delivered = ws.lease(2000, 'media:delivered')!
+    let evicted = 0
+    const evict = () => { evicted++; delivered.release(); return true }
+    const p = openRemoteMediaLease(s, rec(), ws, r.win, new AbortController().signal, { evict })
+    await settle()
+    expect(evicted).toBe(1)
+    expect(sock.of('media-request')).toHaveLength(1)
+    void p
+  })
+
+  it('room for the chunks but not the Blob beside them (2 × bytes): resource-limit, a defensive path', async () => {
+    const { s, sock } = await opened()
+    const ws = watched(MEDIA_WIRE_LIMITS.audioBytes + 1000), r = realm()
     const p = openRemoteMediaLease(s, rec(), ws, r.win, new AbortController().signal)
     await settle()
     const id = sock.of('media-request')[0]!.reqId
     sock.text(startOf(id, 5000))
-    // The workspace's refusal is the player's drop-carried-and-retry signal (player.ts `open`).
-    expect(await p).toEqual({ refused: 'resource-limit' })
+    await settle()
+    // Something else takes the room the reservation gave back at media-start.
+    const other = ws.lease(MEDIA_WIRE_LIMITS.audioBytes - 4500, 'other')!
     sock.chunk(id, noise(5000))
-    await settle()
-    expect(s.stats().reassemblyBytes).toBe(0)
-    expect(s.stats().inFlightBytes).toBe(0)
-    expect(ws.used()).toBe(0)
-    // Room for the chunks but not the Blob beside them (the 2 × bytes peak): refused the same way.
-    const q = openRemoteMediaLease(s, rec(), watched(7000), r.win, new AbortController().signal)
-    await settle()
-    const id2 = sock.of('media-request')[1]!.reqId
-    sock.text(startOf(id2, 5000))
-    sock.chunk(id2, noise(5000))
-    expect(await q).toEqual({ refused: 'resource-limit' })
+    expect(await p).toEqual({ refused: 'resource-limit' })
     expect(r.made).toHaveLength(0)
+    other.release()
+    expect(ws.used()).toBe(0)
   })
 
   it('release() revokes the Blob URL exactly once', async () => {
@@ -328,7 +396,7 @@ describe('media transport (D1, D12)', () => {
     const { s, sock } = await opened({}, exampleManifest(false))
     const before = sock.sent.length
     expect(await s.mediaShow(0)).toEqual({ refused: 'media-unavailable' })
-    expect(await s.mediaRequest(MID, new AbortController().signal, () => true)).toEqual({ refused: 'media-unavailable' })
+    expect(await s.mediaRequest(MID, new AbortController().signal, room())).toEqual({ refused: 'media-unavailable' })
     s.mediaCursor(1)
     s.mediaEnd()
     await settle(250)
@@ -358,7 +426,7 @@ describe('media transport (D1, D12)', () => {
 
   it('mediaRequest: a stale-token refusal is a retry after rotation, not a refusal', async () => {
     const { s, sock } = await opened()
-    const p = s.mediaRequest(MID, new AbortController().signal, () => true, 1)
+    const p = s.mediaRequest(MID, new AbortController().signal, room(), 1)
     await settle()
     const [m] = sock.of('media-request')
     sock.text({ type: 'renew', token: tokenFor('j2'), jti: 'j2' })
@@ -373,7 +441,7 @@ describe('media transport (D1, D12)', () => {
     expect(got.start.bytes).toBe(10)
     expect(concat(got.chunks)).toEqual(noise(10))
     // A second stale-token refusal is a refusal.
-    const q = s.mediaRequest(MID, new AbortController().signal, () => true)
+    const q = s.mediaRequest(MID, new AbortController().signal, room())
     await settle()
     const n1 = sock.of('media-request')[2]!
     sock.text({ reqId: n1.reqId, type: 'refused', code: 'session-rotated' })
@@ -393,6 +461,7 @@ describe('media transport (D1, D12)', () => {
     sock.text({ reqId: id, type: 'media-refused', mediaId: MID, reason: 'media-unavailable' })
     expect(await p).toEqual({ refused: 'media-unavailable' })
     expect(ws.used()).toBe(0)
+    await settle()
     expect(s.stats().inFlightBytes).toBe(0)
   })
 
@@ -400,11 +469,11 @@ describe('media transport (D1, D12)', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance', 'Date'] })
     const { s, sock } = await opened({ now: () => Date.now() })
     const ps: Array<Promise<unknown>> = []
-    for (let i = 0; i < 6; i++) ps.push(s.mediaRequest(i % 2 ? MID2 : MID, new AbortController().signal, () => true))
+    for (let i = 0; i < 6; i++) ps.push(s.mediaRequest(i % 2 ? MID2 : MID, new AbortController().signal, room()))
     const gone = new AbortController()
-    const aborted = s.mediaRequest(MID, gone.signal, () => true)
+    const aborted = s.mediaRequest(MID, gone.signal, room())
     void aborted.catch(() => {})
-    const seventh = s.mediaRequest(MID2, new AbortController().signal, () => true, 1)
+    const seventh = s.mediaRequest(MID2, new AbortController().signal, room(), 1)
     await settle()
     expect(sock.of('media-request')).toHaveLength(6)
     gone.abort()
@@ -483,7 +552,7 @@ describe('media transport (D1, D12)', () => {
     const { s, sock } = await opened({ now: () => Date.now() })
     const ws = watched(), r = realm()
     let waitingDone = false
-    const waiting = s.mediaRequest(MID2, new AbortController().signal, () => true)
+    const waiting = s.mediaRequest(MID2, new AbortController().signal, room())
     void waiting.then(() => { waitingDone = true })
     const p = openRemoteMediaLease(s, rec(), ws, r.win, new AbortController().signal)
     await settle()
@@ -504,32 +573,32 @@ describe('media transport (D1, D12)', () => {
   it('the stale-token re-send takes over its pacing slot: one slot for both sends, aged from the re-send reply', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance', 'Date'] })
     const { s, sock } = await opened({ now: () => Date.now() })
-    void s.mediaRequest(MID, new AbortController().signal, () => true)
+    void s.mediaRequest(MID, new AbortController().signal, room())
     await settle()
     sock.text({ type: 'renew', token: tokenFor('j2'), jti: 'j2' })
     sock.text({ reqId: sock.of('media-request')[0]!.reqId, type: 'refused', code: 'session-rotated' })
     await settle()
     expect(sock.of('media-request')).toHaveLength(2)
-    for (let i = 0; i < 6; i++) void s.mediaRequest(MID2, new AbortController().signal, () => true)
+    for (let i = 0; i < 6; i++) void s.mediaRequest(MID2, new AbortController().signal, room())
     await settle()
     // 1 (original + re-send) + 5 = the class's 6; the last waits.
     expect(sock.of('media-request')).toHaveLength(7)
     for (const m of sock.of('media-request').slice(1)) sock.text({ reqId: m.reqId, type: 'media-refused', reason: 'media-busy' })
     await settle(63_000)
     // Every slot aged out (the original's moved to its re-send): the waiting one and five more go at once.
-    for (let i = 0; i < 5; i++) void s.mediaRequest(MID2, new AbortController().signal, () => true)
+    for (let i = 0; i < 5; i++) void s.mediaRequest(MID2, new AbortController().signal, room())
     await settle()
     expect(sock.of('media-request')).toHaveLength(13)
   })
 
   it('resume: a request while resuming is session-rotated unsent; a media-show goes out on the new socket; slots survive', async () => {
     const { s, sock, socks, manifest } = await opened()
-    const before = Array.from({ length: 6 }, () => s.mediaRequest(MID, new AbortController().signal, () => true))
+    const before = Array.from({ length: 6 }, () => s.mediaRequest(MID, new AbortController().signal, room()))
     await settle()
     expect(sock.of('media-request')).toHaveLength(6)
     sock.drop(1006)
     for (const p of before) expect(await p).toEqual({ refused: 'session-rotated' })
-    expect(await s.mediaRequest(MID, new AbortController().signal, () => true)).toEqual({ refused: 'session-rotated' })
+    expect(await s.mediaRequest(MID, new AbortController().signal, room())).toEqual({ refused: 'session-rotated' })
     const shown = s.mediaShow(1)
     await settle(300)
     const next = socks[1]!
@@ -541,7 +610,7 @@ describe('media transport (D1, D12)', () => {
     next.text({ reqId: m!.reqId, type: 'media-show-ok', queued: 2 })
     expect(await shown).toEqual({ queued: 2 })
     // The six sends before the drop still hold the media class's window (the server's sid window survives resume).
-    void s.mediaRequest(MID, new AbortController().signal, () => true)
+    void s.mediaRequest(MID, new AbortController().signal, room())
     await settle()
     expect(next.of('media-request')).toHaveLength(0)
     expect(sock.of('media-request')).toHaveLength(6)
@@ -550,32 +619,45 @@ describe('media transport (D1, D12)', () => {
   it('a media-refused rate-limited holds the next request for a span', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance', 'Date'] })
     const { s, sock } = await opened({ now: () => Date.now() })
-    const p = s.mediaRequest(MID, new AbortController().signal, () => true)
+    const p = s.mediaRequest(MID, new AbortController().signal, room())
     await settle()
     sock.text({ reqId: sock.of('media-request')[0]!.reqId, type: 'media-refused', mediaId: MID, reason: 'rate-limited' })
     expect(await p).toEqual({ refused: 'rate-limited' })
-    void s.mediaRequest(MID, new AbortController().signal, () => true)
+    void s.mediaRequest(MID, new AbortController().signal, room())
     await settle(60_000)
     expect(sock.of('media-request')).toHaveLength(1)
     await settle(3_000)
     expect(sock.of('media-request')).toHaveLength(2)
   })
 
-  it('no admission room for a chunk (8 outstanding) → resource-limit, nothing held', async () => {
+  it('8 outstanding: a request waits unsent until one settles; once sent, no chunk can come up short (ruling 4)', async () => {
     const { s, sock } = await opened()
     const ws = watched(), r = realm()
-    const units = Array.from({ length: 8 }, () => s.unit(0, 1))
+    const acs = Array.from({ length: 8 }, () => new AbortController())
+    const units = acs.map((ac) => s.unit(0, 1, ac.signal))
     for (const u of units) void u.catch(() => {})
     await settle()
     expect(s.stats().inFlight).toBe(8)
     const p = openRemoteMediaLease(s, rec(), ws, r.win, new AbortController().signal)
+    await settle(400)
+    expect(sock.of('media-request')).toHaveLength(0)
+    acs[0]!.abort()
+    await settle(400)
+    const [m] = sock.of('media-request')
+    expect(m).toBeDefined()
+    expect(s.stats().inFlight).toBe(8)
+    // Every slot of the admission is taken again (a unit queues), yet the started delivery's chunks are admitted.
+    const more = s.unit(0, 1, acs[0]!.signal)
+    void more.catch(() => {})
+    sock.text(startOf(m!.reqId, SEND + 100))
+    sock.chunk(m!.reqId, noise(SEND))
+    sock.chunk(m!.reqId, noise(100))
+    const lease = await p
+    if ('refused' in lease) throw new Error(lease.refused)
+    expect(lease.bytes).toBe(SEND + 100)
     await settle()
-    const id = sock.of('media-request')[0]!.reqId
-    sock.text(startOf(id, 100))
-    sock.chunk(id, noise(100))
-    expect(await p).toEqual({ refused: 'resource-limit' })
-    expect(ws.used()).toBe(0)
-    expect(s.stats().reassemblyBytes).toBe(0)
+    expect(s.stats().inFlight).toBe(7)
+    lease.release()
   })
 
   it('the first fragment of a multi-fragment kind 9 is not buffered when unsolicited or refused', async () => {
@@ -584,12 +666,13 @@ describe('media transport (D1, D12)', () => {
     sock.deliver(first(77).slice().buffer)
     await settle()
     expect(s.stats().reassemblyBytes).toBe(0)
-    // Refused at media-start (no workspace room): its chunks are dropped before allocation.
-    const p = openRemoteMediaLease(s, rec(), watched(1000), realm().win, new AbortController().signal)
+    // Refused after its media-start: its chunks are dropped before allocation.
+    const p = openRemoteMediaLease(s, rec(), watched(), realm().win, new AbortController().signal)
     await settle()
     const id = sock.of('media-request')[0]!.reqId
     sock.text(startOf(id, 3 << 20))
-    expect(await p).toEqual({ refused: 'resource-limit' })
+    sock.text({ reqId: id, type: 'media-refused', mediaId: MID, reason: 'media-unavailable' })
+    expect(await p).toEqual({ refused: 'media-unavailable' })
     sock.deliver(first(id).slice().buffer)
     await settle()
     expect(s.stats().reassemblyBytes).toBe(0)
@@ -606,5 +689,52 @@ describe('media transport (D1, D12)', () => {
     s.mediaEnd()
     await settle()
     expect(s.stats().reassemblyBytes).toBe(0)
+  })
+
+  it('the current slide comes first: look-ahead holds at most 4 of the 6 slots; a jump goes out in the reserved 2 (ruling 3)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance', 'Date'] })
+    const { s, sock } = await opened({ now: () => Date.now() })
+    const shown = s.mediaShow(0)
+    await settle()
+    sock.text({ reqId: sock.of('media-show')[0]!.reqId, type: 'media-show-ok', queued: 6 })
+    await shown
+    for (let i = 0; i < 6; i++) void s.mediaRequest(MID2, new AbortController().signal, room(), 1)
+    await settle()
+    expect(sock.of('media-request')).toHaveLength(4)
+    // The jump: slide 3 is now current; its requests take the two reserved slots at once.
+    s.mediaCursor(3)
+    void s.mediaRequest(MID, new AbortController().signal, room(), 3)
+    void s.mediaRequest(MID, new AbortController().signal, room(), 3)
+    await settle()
+    const sent = sock.of('media-request')
+    expect(sent).toHaveLength(6)
+    expect(sent.slice(4).map((m) => m.unit)).toEqual([3, 3])
+    // Queued: two look-ahead (slide 1) first, then slide 4 look-ahead, then one for the current slide 3.
+    void s.mediaRequest(MID2, new AbortController().signal, room(), 4)
+    void s.mediaRequest(MID, new AbortController().signal, room(), 3)
+    for (const m of sent) sock.text({ reqId: m.reqId, type: 'media-refused', reason: 'media-busy' })
+    await settle(63_000)
+    // Re-prioritised behind the current slide: slide 3 first, then the look-ahead in queue order.
+    expect(sock.of('media-request').slice(6).map((m) => m.unit)).toEqual([3, 1, 1, 4])
+  })
+
+  it('a rate-limited reply blocks only until the oldest slot ages out (ruling 3)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance', 'Date'] })
+    const { s, sock } = await opened({ now: () => Date.now() })
+    const a = s.mediaRequest(MID, new AbortController().signal, room())
+    await settle()
+    sock.text({ reqId: sock.of('media-request')[0]!.reqId, type: 'media-refused', reason: 'media-busy' })
+    await a
+    await settle(30_000)
+    const b = s.mediaRequest(MID, new AbortController().signal, room())
+    await settle()
+    sock.text({ reqId: sock.of('media-request')[1]!.reqId, type: 'media-refused', reason: 'rate-limited' })
+    expect(await b).toEqual({ refused: 'rate-limited' })
+    void s.mediaRequest(MID, new AbortController().signal, room())
+    await settle(30_000)
+    expect(sock.of('media-request')).toHaveLength(2)
+    // The oldest slot (a's, answered at 0) ages out at 62 s: the block lifts then, not a full span after b.
+    await settle(3_000)
+    expect(sock.of('media-request')).toHaveLength(3)
   })
 })
