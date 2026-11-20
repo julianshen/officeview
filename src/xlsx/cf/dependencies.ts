@@ -797,7 +797,8 @@ export async function prepareCfFormulaBatch(tasks: readonly CfFormulaTask[], opt
     ...(missing.size > 0 ? { missingSheets: missing } : {}),
     memory, invariants, ceiling, pacing, ...(hoists[i] ? { hoists: hoists[i] } : {}), ...(options.probe ? { probe: options.probe } : {}), ...(options.onCall ? { onCall: options.onCall } : {}), ...(options.onSettled ? { onSettled: options.onSettled } : {}),
   } : undefined)
-  const covers = (task: number, row: number, col: number): boolean => tasks[task]!.rule.ranges.some(r => inRect(r, row, col))
+  // A task with its own targets (a cfvo bound, Task 37) is evaluated at those cells, which may lie outside the rule (A1).
+  const covers = (task: number, row: number, col: number): boolean => (tasks[task]!.targets ?? tasks[task]!.rule.ranges).some(r => inRect(r, row, col))
   const batch: CfFormulaBatch = {
     get attempts() { return attempts },
     ceiling,

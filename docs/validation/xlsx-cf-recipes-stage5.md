@@ -86,6 +86,31 @@ npx tsx scripts/cf-refs/audit.ts --stage 5
 - Expected `formulaEvaluation['bar:bounds-formula']`: discriminating, matched `evaluated`, B2..B9 `bar:2-12/16/21/29/36/40/44/58`. Run of 2026-11-19 (6a83cbe2): exactly that.
 - `missing-capture`, `formula-hypothesis-none`, or an `ignored`/`zero` match is a finding: record it, never refit. A `zero` reading cannot verify (its twin is degenerate: `formula-twin-blank`).
 
+### 2b. The multi-range relative bound, version 2 (the cfvo-scope follow-up, 2026-11-20)
+
+`stage5-cfvo-scope-v2` owns `formula:cfvo-scope-multi-range` (through `CF_STAGE5_OWNERS`, appended last); `stage5-cfvo-scope` keeps its capture and finding. Its rules:
+
+- a scale `[min, =MAX(B2:B7)]` on `B2:B7 D2:D7 F2:F7` over -40..75;
+- an icon set `3Arrows [percent 0, num -20, =MAX(B16:B21)]` on `B16:B21 D16:D21 F16:F21`;
+- an absolute negative control `[min, =$H$1]` (H1 = 20) on `K2:K7 M2:M7 O2:O7`;
+- a recorded single-range control `[min, =MAX(I2:I7)]` on `I2:I7`.
+
+Every window a reading can read is seeded: A1:A6, below each range (rows 8-12 and 22-26), and one column right of each range (rows 3-13 and 31-41); for the single-range control, I8:I12 and Q3:Q13. There are 58 literal num/num twin blocks of six cells in columns S..AB, one per predicted rendering. The sheet is A1:BE42, with 20 pt rows and the default (centred) style, so the icons are classified against `stage4-icon-glyph-key-centred`.
+
+```
+bun scripts/cf-refs/build.ts   --stage 5 --case stage5-cfvo-scope-v2
+bun scripts/cf-refs/capture.ts --stage 5 --case stage5-cfvo-scope-v2
+bun scripts/cf-refs/capture.ts --stage 5 --verify-only
+npx tsx scripts/cf-refs/audit.ts --stage 5
+```
+
+- **Expected:** a repair-free open, with Excel keeping the three relative formulas as authored (`MAX(B2:B7)`, `MAX(B16:B21)`, `MAX(I2:I7)`), as it did on `stage5-cfvo-scope`. `formulaEvaluation['formula:cfvo-scope-multi-range']` is `discriminating`, matching one of the twelve readings. The capability stays in `CF_STAGE5_UNSUPPORTED` whatever the result, and production keeps it unresolved.
+- **Stop and record** (never retried, never refitted): a repair, strip or rewritten formula (keep `<id>.rejected.xlsx`); `missing-capture` or an unclassifiable icon crop; `formula-hypothesis-none`; `non-discriminating`; `formula-replication-shortfall`; a failed negative control.
+- **Run of 2026-11-20 (5dc2fe9e, Excel 16.115):** a repair-free open, all three formulas kept as authored, and a 4789 × 841 px capture.
+  - `formula:cfvo-scope-multi-range` is `discriminating`, matched `anchor-a1`, sole survivor. Excel reads `=MAX(B2:B7)` and `=MAX(B16:B21)` from A1, so both read the window A1:A6 (max 15). For example, B2..B7 = F8696B D0806F 9A9F75 7FAE78 63BE7B 63BE7B.
+  - The negative control matched its b20 twins.
+  - The single-range control I2..I7 = F8696B C28770 9A9F75 76B378 63BE7B 63BE7B. Read by its pre-registered method (the configuration alone, record removed), this is `anchor-a1` too: the window is A1:A6, not I2:I7 (45) and not H1:H6 (20). The A1 anchor is a property of every relative cfvo, not of the multi-range scope. See `docs/validation/xlsx-cf.md` §14.z.11.
+
 ## 3. Unresolved shapes (record only)
 
 ```

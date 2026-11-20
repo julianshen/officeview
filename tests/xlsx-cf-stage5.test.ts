@@ -44,8 +44,8 @@ const RECORDED_EXCEL_REFUSALS = [
   'formula:predicate-timeperiod-divergent',
   'formula:cross-sheet-missing',
   'formula:cfvo-nonnumeric',
-  // Centred glyph key (2026-11-19): with the icon twins measurable, no scope reading matched Excel (a finding). The
-  // composition stop-icon and indirect-ahead-icon re-deferrals are lifted: their icon twins now classify (both halt).
+  // Explained by stage5-cfvo-scope-v2 (5dc2fe9e matched anchor-a1), but production's anchor-a1 post-dates that capture:
+  // still a recorded refusal, awaiting a confirmation case.
   'formula:cfvo-scope-multi-range',
 ]
 
@@ -401,7 +401,7 @@ describe('per-case and per-variant Stage 5 audit rows (Task 39; fix round 1, F3)
     const m = manifest()
     const rows = await stage5CaseRecords(m, REPO_ROOT)
     const all = m.cases.filter(c => c.stage === 5)
-    expect(all).toHaveLength(32) // 32 since stage5-bar-bounds-formula (the bar:bounds-formula follow-up)
+    expect(all).toHaveLength(33) // 33 since stage5-cfvo-scope-v2 (the cfvo-scope follow-up)
     expect(new Set(rows.map(r => r.caseId))).toEqual(new Set(all.map(c => c.id)))
     const measured = all.filter(c => c.status === 'measured')
     expect(rows.filter(r => r.compared).length).toBe(measured.reduce((n, c) => n + c.expected.cells.length, 0))

@@ -92,6 +92,8 @@ export const CF_FORMULA_PRODUCTION_READINGS: Readonly<Record<string, string | re
   'formula:cfvo-expression': 'evaluated',
   'formula:cfvo-relative': 'anchor-top-left',
   'formula:cfvo-nonnumeric': Object.freeze(['withheld', 'zero', 'skipped']),
+  // Not `anchor-a1`, though stage5-cfvo-scope-v2 (5dc2fe9e) matched it: service.ts `cfvoBoundAnchors` implements it, but that
+  // behaviour post-dates the capture (709b6a7e), so it is not registered until a case captured after it confirms it.
   'formula:cfvo-scope-multi-range': Object.freeze(['rule-wide', 'per-range']),
   // parse.ts (Ruling S5-I): a standalone <x14:colorScale> resolves through the Stage 2 point model. Its parse gate is the
   // bare evidence; this entry is what lets the audit publish it only for the reading production implements.

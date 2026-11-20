@@ -27,6 +27,12 @@ in git history.
   period; a reference to a missing sheet; a non-numeric formula bound), readings production does not implement (text and
   range truth, error operands, a relative cfvo bound, a relative formula bound across several ranges), and stopIfTrue ahead of an icon set.
 
+- **Excel formula conditional formatting: how Excel reads a relative cfvo formula (measured, still withheld).** Excel
+  16.115 reads a colour-scale, data-bar or icon-set bound such as `=MAX(B2:B7)`, written on B2, as if it sat in A1, so
+  it reads `MAX(A1:A6)`, on one range or several. The viewer now implements that reading for multi-range rules (single-range rules still read from the range top-left), and it stays withheld until a
+  workbook captured after the implementation confirms it. Viewer output does not change. Evidence:
+  `docs/validation/xlsx-cf.md` §14.z.11.
+
 - **Excel formula conditional formatting: an error in a whole-column aggregate propagates.** A rule such as
   `A2>AVERAGE($A:$A)` or `A2=MAX($A:$A)` over a column that holds an error (`#DIV/0!`) formats no cell, which is what
   Excel 16.115 shows. Viewer behaviour does not change: it already evaluated these rules that way, and the reading
