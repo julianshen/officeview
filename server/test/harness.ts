@@ -1,6 +1,7 @@
 /** In-repo WS harness: a real Bun.serve on port 0 + a frame-decoding client. */
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { Reassembler } from '../../src/stream/frame'
 import { decodeUnit } from '../../src/stream/unit'
 import { validateManifest, type Manifest } from '../../src/stream/manifest'
@@ -8,6 +9,7 @@ import { deriveKeys } from '../src/keys'
 import type { AuthDecision, Authorize, ResolveDocument } from '../src/hooks'
 import { Pool } from '../src/pool'
 import { createStreamServer, type StreamServerOptions } from '../src/ws'
+import { createMediaServices, type MediaServices, type MediaTestOnly } from '../src/media/services'
 
 export const ORIGIN = 'http://localhost:5173'
 export const corpus = (name: string) => new Uint8Array(readFileSync(resolve(import.meta.dir, '../../corpus', name)))
@@ -17,22 +19,50 @@ export const pool = () => (sharedPool ??= new Pool({ workers: 2 }))
 /** Per-file teardown: the next file gets a fresh pool. */
 export const disposePool = () => { sharedPool?.dispose(); sharedPool = undefined }
 
-export interface Harness { url: string; stream: ReturnType<typeof createStreamServer>; stop(): void }
-export async function start(o: { policy?: AuthDecision['policy']; viewerId?: string; doc?: Uint8Array | null; authorize?: Authorize; resolveDocument?: ResolveDocument } & Partial<StreamServerOptions> = {}): Promise<Harness> {
+/** `media`: the `MediaServices` this harness built (piece 5 Task 9), for the tests to read the ledgers. `stop()`
+ * resolves once they are closed (callers that ignore it are unchanged). */
+export interface Harness { url: string; stream: ReturnType<typeof createStreamServer>; media?: MediaServices; stop(): Promise<void> }
+/**
+ * Piece 5 (Task 9): `media` without `info` builds real media services (`createMediaServices`, its own temp root
+ * unless `testOnly.root`) and, unless `pool` is given, a one-worker pool configured with them; both are closed by
+ * `stop()`. `media` with `info` (Task 4 tests: no services) is passed through as before.
+ */
+export type HarnessMedia = { enabled?: boolean; testOnly?: MediaTestOnly }
+export async function start(o: { policy?: AuthDecision['policy']; viewerId?: string; doc?: Uint8Array | null; authorize?: Authorize; resolveDocument?: ResolveDocument } & Omit<Partial<StreamServerOptions>, 'media'> & { media?: StreamServerOptions['media'] | HarnessMedia } = {}): Promise<Harness> {
   const keys = await deriveKeys(new Uint8Array(32).fill(9))
   const doc = o.doc === undefined ? corpus('pypptx-test.pptx') : o.doc
+  let media: MediaServices | undefined, ownPool: Pool | undefined, root: string | undefined
+  let streamMedia = o.media as StreamServerOptions['media']
+  if (o.media && !('info' in o.media) && !('services' in o.media)) {
+    const m = o.media as HarnessMedia
+    const enabled = m.enabled ?? true
+    if (!m.testOnly?.root) root = mkdtempSync(join(tmpdir(), 'ov-t9-'))
+    media = await createMediaServices({ env: process.env, enabled, testOnly: { ...m.testOnly, ...(root ? { root } : {}) } })
+    if (!o.pool) ownPool = new Pool({ workers: 1, ...(media.info ? { media: { info: media.info, dir: media.temp.dir } } : {}) })
+    streamMedia = { enabled, ...(media.info ? { info: media.info } : {}), services: media }
+  }
   const stream = createStreamServer({
-    keys, originAllowlist: [ORIGIN], pool: pool(),
+    keys, originAllowlist: [ORIGIN], pool: o.pool ?? ownPool ?? pool(),
     authorize: o.authorize ?? (async () => ({ viewerId: o.viewerId ?? 'alice', policy: o.policy ?? {} })),
     resolveDocument: o.resolveDocument ?? (async () => (doc ? { bytes: doc, name: 'doc' } : null)),
     ...o,
+    ...(ownPool ? { pool: ownPool } : {}),
+    media: streamMedia,
   })
   const srv = Bun.serve({ port: 0, fetch: stream.fetch as never, websocket: stream.websocket as never })
-  return { url: `ws://localhost:${srv.port}/stream`, stream, stop: () => srv.stop(true) }
+  return {
+    url: `ws://localhost:${srv.port}/stream`, stream, ...(media ? { media } : {}),
+    async stop() {
+      srv.stop(true)
+      ownPool?.dispose()
+      await media?.close()
+      if (root) rmSync(root, { recursive: true, force: true })
+    },
+  }
 }
 
 export type Msg = { text: Record<string, any>; /** UTF-8 bytes as received. */ bytes?: number } | { binary: { kind: number; reqId: number; payload: Uint8Array } }
-const CAPS: Record<number, [number, number]> = { 1: [256 << 10, 256 << 10], 2: [1 << 20, 8 << 20], 3: [8 << 20, 64 << 20], 4: [8 << 20, 8 << 20], 6: [8 << 20, 32 << 20], 7: [8 << 20, 64 << 20], 8: [8 << 20, 64 << 20] }
+const CAPS: Record<number, [number, number]> = { 1: [256 << 10, 256 << 10], 2: [1 << 20, 8 << 20], 3: [8 << 20, 64 << 20], 4: [8 << 20, 8 << 20], 6: [8 << 20, 32 << 20], 7: [8 << 20, 64 << 20], 8: [8 << 20, 64 << 20], 9: [4 << 20, 4 << 20] }
 
 export class Client {
   ws: WebSocket
@@ -164,5 +194,31 @@ export class Client {
   showTrack(unit: unknown, step: unknown, scale: unknown, motion: unknown, o: { reqId?: number; token?: string; ms?: number } = {}) { return this.show({ type: 'show-track', unit, step, scale, motion }, o) }
   showMorph(from: unknown, to: unknown, fromStep: unknown, scale: unknown, motion: unknown, o: { reqId?: number; token?: string; ms?: number } = {}) { return this.show({ type: 'show-morph', from, to, fromStep, scale, motion }, o) }
   private showSeq = 0
+  /** Piece 5: `media-show` and its reply (`media-show-ok`, `media-refused`, or a shared `refused`). */
+  async mediaShow(unit: unknown, o: { reqId?: number; token?: string; ms?: number } = {}) {
+    const reqId = o.reqId ?? 1500 + (this.mediaSeq++)
+    this.send({ reqId, type: 'media-show', token: o.token ?? this.manifest!.session.token, unit })
+    return (await this.next((m) => 'text' in m && m.text.reqId === reqId, o.ms) as { text: Record<string, any> }).text
+  }
+  mediaCursor(unit: unknown) { this.send({ type: 'media-cursor', unit }) }
+  mediaEnd() { this.send({ type: 'media-end' }) }
+  /**
+   * Piece 5: sends `media-request` and collects its reqId: the `media-start`, then every kind-9 payload up to
+   * `start.chunks`, or a refusal (`media-refused` after the start, too, as a delivery the server stopped) as `end`.
+   */
+  async mediaRequest(mediaId: unknown, o: { reqId?: number; token?: string; ms?: number; send?: boolean; unit?: number } = {}) {
+    const reqId = o.reqId ?? 1600 + (this.mediaSeq++)
+    if (o.send !== false) this.send({ reqId, type: 'media-request', token: o.token ?? this.manifest!.session.token, mediaId, ...(o.unit !== undefined ? { unit: o.unit } : {}) })
+    let start: Record<string, any> | undefined
+    const chunks: Uint8Array[] = []
+    for (;;) {
+      if (start && chunks.length >= start.chunks) return { reqId, start, chunks }
+      const m = await this.next((m) => ('text' in m && m.text.reqId === reqId) || ('binary' in m && m.binary.reqId === reqId), o.ms)
+      if ('binary' in m) { if (m.binary.kind !== 9) throw new Error(`unexpected kind ${m.binary.kind} on media-request`); chunks.push(m.binary.payload); continue }
+      if (m.text.type === 'media-start' && !start) { start = m.text; continue }
+      return { reqId, start, chunks, end: m.text }
+    }
+  }
+  private mediaSeq = 0
   close() { this.ws.close() }
 }

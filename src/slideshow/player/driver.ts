@@ -21,8 +21,9 @@
  * order, before the next slide's `enter`.
  */
 import { createAutoAdvance, createKioskTimer, type AutoAdvance, type KioskTimer } from '../engine/advance'
+import { slideMediaEnds, type MediaClock, type SlideMediaEnds } from '../engine/media-ends'
 import { createSlideTimeline, type SlideCursor, type SlideTimeline } from '../engine/steps'
-import type { SchedulerSnapshot } from '../engine/scheduler'
+import type { MediaActivation, SchedulerSnapshot } from '../engine/scheduler'
 import type { DiagnosticSink, LinkSpec, RenderState, ShowSettings, ShowSlide, TimeNode } from '../types'
 import { nextVisible, previousVisible } from './order'
 import type { SessionClock } from './session'
@@ -39,6 +40,13 @@ export interface SlideSource {
   /** Not in the visible order (hidden, or outside the show's range): never acquired by navigation. */
   hidden(i: number): boolean
   acquire(i: number, signal: AbortSignal): Promise<{ slide: ShowSlide; charge?(bytes: number, tag: string): boolean; release(): void }>
+  /**
+   * Additive (piece 5, spec §5): slide `i`'s media clock (a streamed show's plan records). With one, each audio node
+   * ends on the show clock at its computed end (`slideMediaEnds`, the classifier's own computation), never on a
+   * player's `ended` event; a video node still ends at its first live frame, as `syntheticEnds` ends it (D22).
+   * Absent (local shows, media off: D18): as before.
+   */
+  mediaClock?(i: number): MediaClock | undefined
 }
 
 export type HitResult = { kind: 'trigger'; spid: string } | { kind: 'link'; link: LinkSpec } | { kind: 'withheld' }
@@ -66,7 +74,8 @@ export interface DriverStage {
 /** What the driver needs of a media player for one slide (`MediaController`'s following part). */
 export interface DriverMedia {
   readonly wants: boolean
-  sync(snap: SchedulerSnapshot, t: number, quiet?: boolean): void
+  /** `history`: the slide's exact activations by `t` (piece 5, the computed path only; see `MediaController.sync`). */
+  sync(snap: SchedulerSnapshot, t: number, quiet?: boolean, history?: () => readonly MediaActivation[]): void
   onEnd(cb: (nodeId: number, synthetic: boolean, t: number) => void): void
   leave(): void
 }
@@ -123,8 +132,13 @@ interface Visit {
   cursor: SlideCursor | undefined
   advance?: AutoAdvance
   media?: DriverMedia
-  /** Without a media player: the slide's audio and video node ids, and those ended synthetically in their current activation. */
+  /**
+   * Without a media player: the slide's audio and video node ids, and those ended synthetically in their current
+   * activation. With a media clock: its video node ids only (D22).
+   */
   synthetic?: { ids: ReadonlySet<number>; fired: Set<number> }
+  /** Piece 5: the slide's audio on the show clock (the source's `mediaClock`). */
+  computed?: SlideMediaEnds
   /** Step inputs typed while the slide's model loads. */
   queue: Array<'next' | 'previous'>
   abort: AbortController
@@ -135,15 +149,15 @@ const staticSlide = (index: number): ShowSlide => ({ index, hidden: false, timin
 
 const MAX_DEPTH = 64
 
-/** The ids of the audio and video nodes of a slide's timing (bounded walk). */
-function mediaNodes(slide: ShowSlide): Set<number> {
+/** The ids of the audio and video nodes (or only `kinds`) of a slide's timing (bounded walk). */
+function mediaNodes(slide: ShowSlide, kinds: ReadonlyArray<'audio' | 'video'> = ['audio', 'video']): Set<number> {
   const ids = new Set<number>()
   const timing = slide.timing
   if (!timing || 'refused' in timing) return ids
   const walk = (n: TimeNode, depth: number) => {
     if (depth > MAX_DEPTH) return
     if ('children' in n) { for (const c of n.children) walk(c, depth + 1); return }
-    if (n.kind === 'audio' || n.kind === 'video') ids.add(n.ctn.id)
+    if ((n.kind === 'audio' || n.kind === 'video') && kinds.includes(n.kind)) ids.add(n.ctn.id)
   }
   walk(timing.root, 0)
   return ids
@@ -212,12 +226,14 @@ export function createShowDriver(o: { source: SlideSource; stage: DriverStage; c
     ).then((timing) => {
       if (!live()) return
       const options = { showAnimation: settings.showAnimation, reducedMotion: o.reducedMotion, sink, slideIndex: i }
+      let textRoot: TimeNode | undefined
       try {
         // Text by word or letter (S2-8): the stage's fanned-out working copy, charged to the slide's lease.
         const lease = v.lease
         const charge = lease?.charge
         const text = timing && !('refused' in timing) && lease && charge && v.slide && stage.textTiming
           ? stage.textTiming(i, v.slide, (bytes, tag) => charge.call(lease, bytes, tag)) : undefined
+        textRoot = text?.tree.root
         v.timeline = createSlideTimeline(text?.tree ?? timing, text ? { ...options, orderOf: text.orderOf } : options)
       } catch (e) {
         // A bound the navigation layer refuses (spec: refuse and diagnose, never a wrong answer): the slide is static.
@@ -226,7 +242,14 @@ export function createShowDriver(o: { source: SlideSource; stage: DriverStage; c
       }
       v.slide ??= staticSlide(i)
       v.advance = createAutoAdvance(v.slide, settings as ShowSettings, v.timeline)
-      if (hooks.media) {
+      const mediaClock = source.mediaClock?.(i)
+      if (mediaClock) {
+        // Piece 5: audio ends on the clock; a player (if any) follows the timeline but never decides an end.
+        v.computed = slideMediaEnds([timing && !('refused' in timing) ? timing.root : undefined, textRoot], mediaClock)
+        if (hooks.media) v.media = hooks.media(v.slide, () => Math.max(0, slideTime()))
+        const ids = mediaNodes(v.slide, ['video'])
+        if (ids.size) v.synthetic = { ids, fired: new Set() }
+      } else if (hooks.media) {
         const media = v.media = hooks.media(v.slide, () => Math.max(0, slideTime()))
         media.onEnd((id, synthetic, t) => mediaEnded(v, id, synthetic, t))
       } else {
@@ -272,6 +295,9 @@ export function createShowDriver(o: { source: SlideSource; stage: DriverStage; c
     if (slide === 'end') { hooks.onEnd(); return }
     const v = visit!
     if (!v.cursor || !v.timeline) { v.queue.push('next'); return }
+    // Ends due by now join the history before the click does, at their own times (never moved by input).
+    computedEnds(v)
+    if (visit !== v || !v.cursor) return
     const after = v.timeline.next(v.cursor, Math.max(0, slideTime()))
     // Identity: the timeline returns the same cursor when the slide has nothing left (S1-10).
     if (after !== v.cursor) { v.cursor = after; hooks.onSlideChange(v.index, after.step); return }
@@ -315,6 +341,8 @@ export function createShowDriver(o: { source: SlideSource; stage: DriverStage; c
     if (disposed || kiosk) return
     const v = visit
     if (!v || !v.cursor || !v.timeline || slide !== v.index) return
+    computedEnds(v)
+    if (visit !== v || !v.cursor) return
     const after = v.timeline.trigger(v.cursor, spid, Math.max(0, slideTime()))
     if (after) { v.cursor = after; hooks.onCursor(v) }
   }
@@ -356,7 +384,17 @@ export function createShowDriver(o: { source: SlideSource; stage: DriverStage; c
     // Media follows the slide's timeline (S2-7); a checkpoint entry records what has begun without playing it.
     const m = visit
     if (m && m.cursor && m.timeline && slide === m.index) {
-      if (m.media?.wants) {
+      if (m.computed) {
+        // Piece 5: audio on the clock first, then video as piece 4 ends it (D22), then the player follows.
+        computedEnds(m)
+        if (m.synthetic && m.cursor && m.cursor.mode !== 'checkpoint') syntheticEnds(m)
+        const st = slideTime()
+        if (m.media?.wants && m.cursor && st >= 0) {
+          const tl = m.timeline, cur = m.cursor
+          // R1: the player's late-join clock reads the same exact history as the computed ends.
+          m.media.sync(tl.stateAt(cur, st), st, cur.mode === 'checkpoint', () => tl.activations(cur, st).activations)
+        }
+      } else if (m.media?.wants) {
         const st = slideTime()
         if (st >= 0) m.media.sync(m.timeline.stateAt(m.cursor, st), st, m.cursor.mode === 'checkpoint')
       } else if (m.synthetic && m.cursor.mode !== 'checkpoint') syntheticEnds(m)
@@ -364,6 +402,19 @@ export function createShowDriver(o: { source: SlideSource; stage: DriverStage; c
     const w = visit
     const cursor = w && slide === w.index ? w.cursor : undefined
     return stage.frame(cursor, clock.now())
+  }
+
+  /**
+   * Piece 5 (spec §5): every audio end due by the slide's time now joins the history at its computed time
+   * (`slideMediaEnds`, shared with the server classifier). A checkpoint is left as it is (it carries no media end).
+   */
+  function computedEnds(v: Visit): void {
+    const st = slideTime()
+    if (!v.computed?.audio || !(st >= 0) || !v.cursor || !v.timeline || visit !== v || disposed) return
+    const r = v.computed.settle(v.timeline, v.cursor, st)
+    if (r.ends.length === 0) return
+    v.cursor = r.cursor
+    hooks.onCursor(v)
   }
 
   /** No media player (D16): an audio or video node that has begun ends at once, as local mode's refused media does. */

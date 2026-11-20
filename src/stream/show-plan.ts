@@ -29,11 +29,12 @@
  * UTF-8, JSON syntax, non-object), `body`, `png`, `unit`, `w`, `h`, `decodedBytes`.
  */
 import { READER_LIMITS } from '../slideshow/read/limits'
+import { canonicalMediaCommand, parseMediaCommand } from '../slideshow/media/commands'
 import { decodeRasterBody, encodeRasterBody, RasterBodyError } from './raster'
 import type { BaseGeometry } from '../slideshow/engine/behaviours'
 import type { MorphRule } from '../slideshow/morph/match'
 import type { MorphItemRef } from '../slideshow/prepare/morph'
-import type { MaskKind, ShowSlide, TargetState } from '../slideshow/types'
+import type { MaskKind, ShowSlide, TargetState, TransitionSpec } from '../slideshow/types'
 
 export const SHOW_PLAN_LIMITS = Object.freeze({
   layers: 128, steps: 64, trackFrames: 90, slideKeyframes: 512, rectsPerStep: 32, triggers: 64, links: 64, morphItems: 512,
@@ -45,6 +46,14 @@ export const SHOW_PLAN_ITERATE_ITEMS = 128
  * many frames' `w·h·4` (plus a Morph record), not Σ its frames. Not in `SHOW_PLAN_LIMITS`, whose shape is fixed. */
 export const SHOW_TRACK_WINDOW = 8
 /** D21. A diagnostic outside this list rejects the record (fail closed). */
+/** Piece 5 (spec §4.1, §6): at most 64 media records per slide, each at most 30 min. */
+export const SHOW_PLAN_MEDIA_LIMITS: Readonly<{ records: 64; durationMs: 1_800_000 }> = Object.freeze({ records: 64, durationMs: 1_800_000 } as const)
+/** A record's refusal as the plan ships it (`media-too-large`: a part over 512 MiB, refused unread). */
+export const PLAN_MEDIA_REFUSALS = ['media-too-long', 'media-too-large', 'media-unreadable', 'media-linked', 'media-unavailable'] as const
+/** The client's `mediaId` (22 base64url characters of the session HMAC, D2). */
+export const MEDIA_ID = /^[A-Za-z0-9_-]{22}$/
+/** A server-side placeholder (D2): `@a<k>` (spid-less audio) or `@a<k>.<spid>` (a shape's audio). Never framed. */
+export const MEDIA_PLACEHOLDER = /^@a\d{1,4}(\.\d{1,10})?$/
 export const SHOW_DIAGNOSTIC_CODES = [
   'step-composited', 'step-truncated', 'step-deferred', 'trigger-cut', 'morph-late', 'morph-composited', 'morph-fallback',
   'show-budget', 'show-limits', 'show-plan-timeout', 'link-withheld', 'preview-reduced', 'plan-stage-pressure', 'mark-rest', 'cmd-dropped',
@@ -61,11 +70,37 @@ export interface PlanLayerRecord { id: number; key?: string; part?: 'fill' | 'li
 export interface PlanContainerRecord { id: number; key: string; z: number; container: true; parent?: number }
 export const isRasterLayer = (l: PlanLayerRecord | PlanContainerRecord): l is PlanLayerRecord => !('container' in l && l.container)
 export interface PlanStepRecord { trigger: 'click' | 'after' | 'with' | 'shape'; eligibility: 'layers' | 'composited'; reason?: string; track?: { fps: 15; count: number } }
+/**
+ * Piece 5 (spec §4.1): one audio the slide plays. `spid`: a shape's own audio (the player keys shape media by spid);
+ * absent for an effect or transition sound. `durationMs`: whole ms from the server's probe (0 when refused). No
+ * video record ships in this piece (D22). Structurally a Task 5 `MediaClockRecord`.
+ */
+export interface PlanMediaRecord { mediaId: string; kind: 'audio'; spid?: string; durationMs: number; refused?: (typeof PLAN_MEDIA_REFUSALS)[number] }
+/**
+ * The transition as it ships: its start sound names a media record (`mediaId`), never a package rId (D3, X12). On a
+ * still's sound-only plan (`fallback`, Task 11b fix round 1) it is `{ sound }` alone, nothing visual (the validator
+ * takes no other key there); only the transition-sound path reads it.
+ */
+export type PlanTransition = Omit<TransitionSpec, 'sound'> & { sound?: { start?: { mediaId: string; loop: boolean }; end?: true } }
+/**
+ * X12: a shipped transition as the local driver reads it. `sound.start.mediaId` fills the local `rId` slot, which
+ * D16's remote media records key by (`rId: mediaId`), so the unchanged transition-sound path finds it.
+ */
+export function localTransition(t: PlanTransition): TransitionSpec {
+  const start = t.sound?.start
+  if (!start) return t as TransitionSpec
+  return { ...t, sound: { ...t.sound, start: { rId: start.mediaId, loop: start.loop } } }
+}
 export interface ShowPlanRecord {
   v: 1
   slide: { index: number; w: number; h: number }
   options: { showAnimation: boolean; useTimings: boolean }
-  show: Pick<ShowSlide, 'transition' | 'timing' | 'builds'>
+  show: Pick<ShowSlide, 'timing' | 'builds'> & { transition?: PlanTransition }
+  /**
+   * Piece 5: the slide's audio records (≤ 64, unique `mediaId`). Every `target.snd` and the transition's
+   * `sound.start.mediaId` names one. Absent on the wire = none (a piece-4 plan); the server always sends it.
+   */
+  media?: PlanMediaRecord[]
   layers: Array<PlanLayerRecord | PlanContainerRecord>
   base: Array<[string, BaseGeometry]>
   steps: PlanStepRecord[]
@@ -78,6 +113,14 @@ export interface ShowPlanRecord {
   iterate: { keys: Array<[string, string[]]>; groups: Array<[string, { wd?: string[][]; lt?: string[][] }]> }
   entry: number
   diagnostics: Array<{ code: string; step?: number }>
+  /**
+   * Task 11b (owner decision 2026-11-19): a still's sound-only plan. The slide plays as its piece-3 still (the
+   * refusal named here), and the plan carries only what it sounds: `media`, `show.transition` (its sound; the client
+   * draws no transition for a still) and `show.timing`, the server's no-input audio schedule (audio leaves at their
+   * computed begins, and the media commands that fire without input). No layer, step, base, trigger, link region,
+   * iteration or build, and no asset follows it (`entry` names none). Absent on every other plan.
+   */
+  fallback?: 'still'
 }
 /**
  * One side of a Morph item. `geometry`: the object's base box (slide px), which the Morph interpolates. `bounds`
@@ -207,14 +250,15 @@ function targetState(v: unknown, p: string) {
 // The timing tree (the reader's own limits; READER_LIMITS)
 // ---------------------------------------------------------------------------
 
-interface TimingCtx { nodes: number; keyframes: number; conditions: number }
+/** `snds`: every `target.snd` met (its value and path), checked against the media records afterwards. */
+interface TimingCtx { nodes: number; keyframes: number; conditions: number; snds: Array<[string, string]> }
 const TARGET_SUBS = ['bg', 'subSp', 'chart', 'graphic', 'ink']
 
-function targetRef(v: unknown, p: string) {
+function targetRef(v: unknown, p: string, ctx: TimingCtx) {
   if (!isObj(v)) return fail(p)
   if (has(v, 'bg')) yes(obj(v, p, ['bg']).bg, at(p, 'bg'))
   else if (has(v, 'sld')) yes(obj(v, p, ['sld']).sld, at(p, 'sld'))
-  else if (has(v, 'snd')) str(obj(v, p, ['snd']).snd, at(p, 'snd'))
+  else if (has(v, 'snd')) ctx.snds.push([str(obj(v, p, ['snd']).snd, at(p, 'snd')), at(p, 'snd')])
   else {
     const o = obj(v, p, ['spid'], ['text', 'sub'])
     str(o.spid, at(p, 'spid'))
@@ -226,7 +270,7 @@ function condition(v: unknown, p: string, ctx: TimingCtx) {
   if (++ctx.conditions > READER_LIMITS.conditions) fail(p)
   const o = obj(v, p, ['delayMs'], ['evt', 'tn', 'target', 'rtn'])
   if (o.delayMs !== 'indefinite') num(o.delayMs, at(p, 'delayMs'))
-  opt(o, 'evt', p, (e, q) => str(e, q)); opt(o, 'tn', p, (n, q) => int(n, q, 0, 0xffffffff)); opt(o, 'target', p, targetRef); opt(o, 'rtn', p, (r, q) => str(r, q))
+  opt(o, 'evt', p, (e, q) => str(e, q)); opt(o, 'tn', p, (n, q) => int(n, q, 0, 0xffffffff)); opt(o, 'target', p, (t, q) => targetRef(t, q, ctx)); opt(o, 'rtn', p, (r, q) => str(r, q))
 }
 function ctnRecord(v: unknown, p: string, ctx: TimingCtx) {
   const o = obj(v, p, ['id', 'accel', 'decel', 'autoRev', 'start', 'end'],
@@ -331,7 +375,7 @@ function timeNode(v: unknown, p: string, depth: number, ctx: TimingCtx) {
   const spec = typeof kind === 'string' && Object.prototype.hasOwnProperty.call(BEHAVIOURS, kind) ? BEHAVIOURS[kind]! : fail(at(p, 'kind'))
   const o = obj(v, p, [...BASE_REQ, ...spec.req], [...BASE_OPT, ...spec.opt])
   ctnRecord(o.ctn, at(p, 'ctn'), ctx)
-  targetRef(o.target, at(p, 'target'))
+  targetRef(o.target, at(p, 'target'), ctx)
   arr(o.attrNames, at(p, 'attrNames'), 64).forEach((a, i) => str(a, ix(at(p, 'attrNames'), i)))
   oneOf(o.additive, at(p, 'additive'), ['base', 'sum', 'repl', 'mult', 'none']); oneOf(o.accumulate, at(p, 'accumulate'), ['always', 'none'])
   opt(o, 'override', p, (s, q) => oneOf(s, q, ['normal', 'childStyle'])); opt(o, 'xfrmType', p, (s, q) => oneOf(s, q, ['pt', 'img'])); opt(o, 'rctx', p, (s, q) => str(s, q))
@@ -348,13 +392,13 @@ function buildTemplate(v: unknown, p: string) {
     str(o.spid, at(p, 'spid')); u32(o.grpId, at(p, 'grpId')); opt(o, 'bld', p, (s, q) => str(s, q))
   } else fail(at(p, 'kind'))
 }
-function timing(v: unknown, p: string) {
+function timing(v: unknown, p: string, snds: Array<[string, string]>) {
   if (isObj(v) && has(v, 'refused')) { str(obj(v, p, ['refused']).refused, at(p, 'refused')); return }
   const o = obj(v, p, ['root', 'build'])
-  timeNode(o.root, at(p, 'root'), 1, { nodes: 0, keyframes: 0, conditions: 0 })
+  timeNode(o.root, at(p, 'root'), 1, { nodes: 0, keyframes: 0, conditions: 0, snds })
   arr(o.build, at(p, 'build'), READER_LIMITS.timeNodes).forEach((b, i) => buildTemplate(b, ix(at(p, 'build'), i)))
 }
-function transition(v: unknown, p: string) {
+function transition(v: unknown, p: string, snds: Array<[string, string]>) {
   const o = obj(v, p, ['element', 'ns', 'attrs', 'durationMs', 'advClick'], ['preset', 'advTmMs', 'sound'])
   str(o.element, at(p, 'element')); oneOf(o.ns, at(p, 'ns'), ['p', 'p14', 'p15', 'p159'])
   strMap(o.attrs, at(p, 'attrs'), 64, (x, q) => { str(x, q) })
@@ -362,10 +406,49 @@ function transition(v: unknown, p: string) {
   opt(o, 'preset', p, (s, q) => str(s, q)); opt(o, 'advTmMs', p, (n, q) => num(n, q, 0, 1e9))
   opt(o, 'sound', p, (s, q) => {
     const so = obj(s, q, [], ['start', 'end'])
-    opt(so, 'start', q, (st, r) => { const to = obj(st, r, ['rId', 'loop']); str(to.rId, at(r, 'rId')); bool(to.loop, at(r, 'loop')) })
+    opt(so, 'start', q, (st, r) => { const to = obj(st, r, ['mediaId', 'loop']); snds.push([str(to.mediaId, at(r, 'mediaId')), at(r, 'mediaId')]); bool(to.loop, at(r, 'loop')) })
     opt(so, 'end', q, yes)
   })
 }
+/** Task 11b fix round 1: a still's transition is its sound only (nothing visual: no element, duration or advance). */
+function stillTransition(v: unknown, p: string, snds: Array<[string, string]>) {
+  const o = obj(v, p, [], ['sound'])
+  opt(o, 'sound', p, (s, q) => {
+    const so = obj(s, q, [], ['start', 'end'])
+    opt(so, 'start', q, (st, r) => { const to = obj(st, r, ['mediaId', 'loop']); snds.push([str(to.mediaId, at(r, 'mediaId')), at(r, 'mediaId')]); bool(to.loop, at(r, 'loop')) })
+    opt(so, 'end', q, yes)
+  })
+}
+
+/**
+ * Task 11b fix round 1 (Important 1): a still's timing is inert, the sound schedule only, so it can neither change what
+ * a click does nor carry a sound past the slide: a `tmRoot` par (indefinite, no repeat) of `par` wrappers (one child,
+ * no repeat, reversal, iteration or end sync) around audio leaves (no `numSld`) and media commands; every condition a
+ * plain delay; no node type below the root; no build. Called after the general timing check (its shape is valid).
+ */
+function stillSchedule(v: unknown) {
+  const bad = (): never => fail('show.timing')
+  const t = v as { root?: unknown; build?: unknown; refused?: unknown }
+  if ('refused' in t || !Array.isArray(t.build) || t.build.length) bad()
+  const plain = (cs: unknown) => Array.isArray(cs) && cs.every((c) => isObj(c) && Object.keys(c).every((k) => k === 'delayMs'))
+  const calm = (c: O) => c.repeatCount === undefined && c.repeatDurMs === undefined && c.autoRev !== true && c.iterate === undefined && c.endSync === undefined && plain(c.start) && plain(c.end)
+  const walk = (n: unknown, depth: number) => {
+    if (!isObj(n) || !isObj(n.ctn) || depth > 3) return bad()
+    const c = n.ctn
+    if (Array.isArray(n.children)) {
+      if (n.kind !== 'par' || !calm(c) || (depth === 0 ? c.nodeType !== 'tmRoot' || c.durMs !== 'indefinite' : c.nodeType !== undefined || n.children.length !== 1)) bad()
+      for (const k of n.children) walk(k, depth + 1)
+      return
+    }
+    if (depth === 0 || c.nodeType !== undefined || !plain(c.start) || !plain(c.end) || c.endSync !== undefined || c.iterate !== undefined) bad()
+    if (n.kind === 'audio') { if (n.numSld !== undefined) bad(); return }
+    if (n.kind !== 'cmd' || c.repeatCount !== undefined || c.repeatDurMs !== undefined) return bad()
+    const m = parseMediaCommand(n.cmdType as never, String(n.cmd))
+    if (!m || canonicalMediaCommand(m) !== n.cmd) bad()
+  }
+  walk(t.root, 0)
+}
+
 function builds(v: unknown, p: string) {
   arr(v, p, READER_LIMITS.timeNodes).forEach((b, i) => {
     const q = ix(p, i), o = obj(b, q, ['spid', 'mode', 'ranges', 'animBg', 'body'])
@@ -383,17 +466,54 @@ function builds(v: unknown, p: string) {
 
 const PLAN_KEYS = ['v', 'slide', 'options', 'show', 'layers', 'base', 'steps', 'triggers', 'linkRegions', 'iterate', 'entry', 'diagnostics']
 
-function validatePlan(v: unknown, expect: { unit: number; maxDecoded: number }): ShowPlanRecord {
+/**
+ * What the decoder expects of a message. `placeholders` (SERVER ONLY): media ids may be D2 placeholders
+ * (`@a<k>`, `@a<k>.<spid>`), as the shared plan cache holds them before `bindMedia`. A client never sets it, so a
+ * placeholder that reached the wire rejects the record.
+ */
+export interface ShowExpect { unit: number; maxDecoded: number; placeholders?: boolean }
+
+/** Piece 5: the media records, then every `snd` target and transition start naming one. */
+function mediaRecords(v: unknown, snds: ReadonlyArray<[string, string]>, placeholders: boolean) {
+  const ids = new Set<string>()
+  arr(v ?? [], 'media', SHOW_PLAN_MEDIA_LIMITS.records).forEach((r, i) => {
+    const p = ix('media', i), ro = obj(r, p, ['mediaId', 'kind', 'durationMs'], ['spid', 'refused'])
+    const id = str(ro.mediaId, at(p, 'mediaId'))
+    if (!(MEDIA_ID.test(id) || (placeholders && MEDIA_PLACEHOLDER.test(id))) || ids.has(id)) fail(at(p, 'mediaId'))
+    ids.add(id)
+    if (ro.kind !== 'audio') fail(at(p, 'kind'))
+    opt(ro, 'spid', p, (s, q) => str(s, q))
+    int(ro.durationMs, at(p, 'durationMs'), 0, SHOW_PLAN_MEDIA_LIMITS.durationMs)
+    opt(ro, 'refused', p, (s, q) => oneOf(s, q, PLAN_MEDIA_REFUSALS))
+  })
+  for (const [id, p] of snds) if (!ids.has(id)) fail(p)
+}
+
+function validatePlan(v: unknown, expect: ShowExpect): ShowPlanRecord {
   if (!isObj(v)) return fail('plan')
-  const o = obj(v, '', PLAN_KEYS)
+  const o = obj(v, '', PLAN_KEYS, ['media', 'fallback'])
   if (o.v !== 1) fail('v')
+  // Task 11b: a still's sound-only plan draws nothing.
+  const still = has(o, 'fallback')
+  if (still) {
+    if (o.fallback !== 'still') fail('fallback')
+    const empty = (x: unknown) => Array.isArray(x) && x.length === 0
+    for (const k of ['layers', 'steps', 'base', 'triggers', 'linkRegions']) if (!empty(o[k])) fail(k)
+    if (!isObj(o.iterate) || !empty(o.iterate.keys) || !empty(o.iterate.groups)) fail('iterate')
+    if (!isObj(o.show) || !empty(o.show.builds)) fail('show.builds')
+    if (!empty(o.diagnostics)) fail('diagnostics')
+    if (o.entry !== 0) fail('entry')
+  }
   const sl = obj(o.slide, 'slide', ['index', 'w', 'h'])
   const index = u32(sl.index, 'slide.index'), W = num(sl.w, 'slide.w', 1e-6, MAX_PX), H = num(sl.h, 'slide.h', 1e-6, MAX_PX)
   if (index !== expect.unit) fail('slide.index')
   const op = obj(o.options, 'options', ['showAnimation', 'useTimings'])
   bool(op.showAnimation, 'options.showAnimation'); bool(op.useTimings, 'options.useTimings')
   const sh = obj(o.show, 'show', ['builds'], ['transition', 'timing'])
-  opt(sh, 'transition', 'show', transition); opt(sh, 'timing', 'show', timing); builds(sh.builds, 'show.builds')
+  const snds: Array<[string, string]> = []
+  opt(sh, 'transition', 'show', (t, q) => (still ? stillTransition(t, q, snds) : transition(t, q, snds))); opt(sh, 'timing', 'show', (t, q) => timing(t, q, snds)); builds(sh.builds, 'show.builds')
+  if (still && has(sh, 'timing')) stillSchedule(sh.timing)
+  mediaRecords(o.media, snds, expect.placeholders === true)
 
   const ids = new Set<number>()
   const layers = arr(o.layers, 'layers', SHOW_PLAN_LIMITS.layers)
@@ -539,7 +659,7 @@ function parseRecord(payload: Uint8Array, label: 'plan' | 'morph'): unknown {
   try { return JSON.parse(fatal.decode(payload.subarray(1))) } catch { return fail(label) }
 }
 
-export function decodeShowMessage(payload: Uint8Array, expect: { unit: number; maxDecoded: number }): ShowMessage {
+export function decodeShowMessage(payload: Uint8Array, expect: ShowExpect): ShowMessage {
   if (payload.length === 0) fail('payload')
   const tag = payload[0]!
   if (tag === 1) return { tag, plan: validatePlan(parseRecord(payload, 'plan'), expect) }
@@ -562,8 +682,10 @@ export function decodeShowMessage(payload: Uint8Array, expect: { unit: number; m
   }
 }
 
-export function encodeShowMessage(m: ShowMessage): Uint8Array {
-  let out: Uint8Array, expect: { unit: number; maxDecoded: number }
+/** `o.placeholders` (SERVER ONLY): validate as the shared plan cache holds the record (`ShowExpect.placeholders`),
+ * to measure it; what is framed for a client is always encoded without it. */
+export function encodeShowMessage(m: ShowMessage, o: { placeholders?: boolean } = {}): Uint8Array {
+  let out: Uint8Array, expect: ShowExpect
   if (m.tag === 1 || m.tag === 5) {
     const json = utf8.encode(JSON.stringify(m.tag === 1 ? m.plan : m.morph))
     out = new Uint8Array(1 + json.length); out[0] = m.tag; out.set(json, 1)
@@ -577,6 +699,6 @@ export function encodeShowMessage(m: ShowMessage): Uint8Array {
     expect = { unit: m.unit, maxDecoded: SHOW_PLAN_LIMITS.assetDecoded }
   }
   // What this module frames is exactly what its decoder accepts.
-  decodeShowMessage(out, expect)
+  decodeShowMessage(out, { ...expect, ...(o.placeholders ? { placeholders: true } : {}) })
   return out
 }

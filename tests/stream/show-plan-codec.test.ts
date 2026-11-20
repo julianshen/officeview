@@ -150,8 +150,20 @@ describe('real reader output', () => {
     let slides = 0
     for (let i = 0; i < d.doc.slides.length; i++) {
       const m = await d.meta(i)
-      const show = { ...(m.transition ? { transition: m.transition } : {}), timing: m.timing, builds: m.builds } as ShowPlanRecord['show']
-      const plan = { ...flyIn(), show }
+      // Piece 5 (D3): a package rId never ships. Each sound (an effect's `snd` target, the transition's start) names a
+      // media record by an opaque id, as the server's build and `bindMedia` produce.
+      const ids = new Map<string, string>()
+      const idOf = (rId: string) => { let id = ids.get(rId); if (!id) ids.set(rId, id = `m${String(ids.size).padStart(21, '0')}`); return id }
+      const bind = (n: TimeNode): TimeNode => {
+        const ctn = { ...n.ctn, start: n.ctn.start.map((c) => (c.target && 'snd' in c.target ? { ...c, target: { snd: idOf(c.target.snd) } } : c)) }
+        if ('children' in n) return { ...n, ctn, children: n.children.map(bind) } as TimeNode
+        return { ...n, ctn, ...('snd' in n.target ? { target: { snd: idOf(n.target.snd) } } : {}) } as TimeNode
+      }
+      const timing = m.timing && !('refused' in m.timing) ? { ...m.timing, root: bind(m.timing.root) } : m.timing
+      const start = m.transition?.sound?.start
+      const transition = m.transition && { ...m.transition, ...(m.transition.sound ? { sound: { ...m.transition.sound, ...(start ? { start: { mediaId: idOf(start.rId), loop: start.loop } } : {}) } } : {}) }
+      const show = { ...(transition ? { transition } : {}), timing, builds: m.builds } as ShowPlanRecord['show']
+      const plan = { ...flyIn(), show, media: [...ids.values()].map((mediaId) => ({ mediaId, kind: 'audio' as const, durationMs: 0, refused: 'media-unavailable' as const })) }
       const back = decodeShowMessage(encodeShowMessage({ tag: 1, plan }), E)
       expect(back).toEqual({ tag: 1, plan: JSON.parse(JSON.stringify(plan)) })
       if (m.timing && !('refused' in m.timing)) walk(m.timing.root)
@@ -476,7 +488,8 @@ describe('module boundary', () => {
   it('has no runtime import of prepare/, morph/, pptx/, core/package or render/', () => {
     const src = readFileSync('src/stream/show-plan.ts', 'utf8')
     const runtime = [...src.matchAll(/^import\s+(?!type\b)[^\n]*?from\s+'([^']+)'/gm)].map((m) => m[1])
-    expect(runtime.sort()).toEqual(['../slideshow/read/limits', './raster'])
+    // Task 11b fix round 1: the still schedule's media-command check (`slideshow/media/commands`, import-free).
+    expect(runtime.sort()).toEqual(['../slideshow/media/commands', '../slideshow/read/limits', './raster'])
     expect(src).not.toMatch(/import\([^)]*\)/)
   })
 })

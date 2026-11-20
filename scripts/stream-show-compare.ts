@@ -51,6 +51,7 @@ import { fileURLToPath } from 'node:url'
 import type { MorphRule } from '../src/slideshow/morph/match'
 import type { Tolerance } from '../src/slideshow/types'
 import type { MarkSpec } from '../server/src/mark/visible'
+import type { MediaClock } from '../src/slideshow/engine/media-ends'
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..')
 const req = createRequire(import.meta.url)
@@ -133,7 +134,26 @@ export const SYNTHETIC: Record<string, () => Promise<Uint8Array>> = {
   autoplayTransitionDeck: async () => (await import('../src/testdata/show-decks')).autoplayTransitionDeck(),
   /** A video with the slide, and an entrance on its `onEnd`: the streamed slide plays its still (round 12). */
   mediaEndDeck: async () => (await import('../src/testdata/show-decks')).mediaEndRevealDeck('onEnd'),
+  // Piece 5 (Task 14): the audio decks over the Task 3 fixtures (D17). Both sides end audio on the show clock.
+  /** A narration (`a.m4a`) begins with the slide; nothing else animates. */
+  narrationDeck: async () => (await import('../src/testdata/show-decks')).narrationDeck(),
+  /** Click 1 fades a box in with an effect sound (`a.wav`). */
+  effectSoundDeck: async () => (await import('../src/testdata/show-decks')).effectSoundDeck(),
+  /** A fade transition with a start sound (`a.m4a`). */
+  transitionSoundDeck: async () => (await import('../src/testdata/show-decks')).transitionSoundDeck(),
+  /** An audio (`a.mp3`) across three slides (`numSld="3"`). */
+  crossSlideSoundDeck: async () => (await import('../src/testdata/show-decks')).crossSlideSoundDeck(),
+  /** An audio (`a.wav`) repeated twice. */
+  repeatDeck: async () => (await import('../src/testdata/show-decks')).repeatDeck(2),
+  /** A video and a narration; the box enters on the narration's end (an audio end reaching drawing: the still). */
+  mixedNarrationDeck: async () => (await import('../src/testdata/show-decks')).mixedMediaDeck('none'),
+  /** D22: a video whose end reveals a box — the piece-4 still, media on. */
+  videoDeck: async () => (await import('../src/testdata/show-decks')).videoDeck(),
+  /** Task 11b: a classifier still that sounds (its narration's end reveals a box): the sound-only plan. */
+  stillSoundDeck: async () => (await import('../src/testdata/show-decks')).stillSoundDeck('audio-end'),
 }
+/** The piece-5 media decks of `SYNTHETIC` (Task 14's parity test plays each). */
+export const MEDIA_PARITY_DECKS = ['narrationDeck', 'effectSoundDeck', 'transitionSoundDeck', 'crossSlideSoundDeck', 'repeatDeck', 'mixedNarrationDeck', 'videoDeck', 'stillSoundDeck'] as const
 
 export function deckFile(deck: string): string {
   if (deck.endsWith('.pptx')) return existsSync(deck) ? resolvePath(deck) : join(REPO, 'corpus', deck)
@@ -196,6 +216,11 @@ export interface StreamDeckResult {
   structure: { local: ShowStructure; streamed: ShowStructure; equal: boolean; equalExceptStills: boolean; stills: StillSlide[] }
   fallback: { steps: number; composited: number; rate: number }
   diagnostics: string[]
+  /**
+   * Piece 5 (Task 14, spec §5.5): the audio nodes each side's media clock resolved to a plan record, as
+   * `slide:nodeId` (0-based shown slide), sorted. Absent when the server offered no media (D18's off path).
+   */
+  media?: { local: string[]; streamed: string[] }
 }
 
 // ---------------------------------------------------------------------------
@@ -326,6 +351,8 @@ interface Wire {
   tracks: Map<string, Uint8Array[]>
   morphs: Map<number, { from: number; fromStep: number; reply: Uint8Array[] } | { code: string }>
   stills: Map<number, Uint8Array>
+  /** Task 11b: a classifier still's sound-only plan (`fallback: 'still'`), kept for its audio records (Task 14). */
+  stillPlans: Map<number, import('../src/stream/show-plan').ShowPlanRecord>
   diagnostics: string[]
 }
 
@@ -342,7 +369,11 @@ async function fetchWire(bytes: Uint8Array, marks: MarkSpec, testOnly: HarnessTe
   const { Client, start } = await import('../server/test/harness')
   const { decodeShowMessage, SHOW_PLAN_LIMITS } = await import('../src/stream/show-plan')
   const visibleMark = marks.kind
-  const h = await start({ doc: bytes, policy: { contentPolicy: 'full', visibleMark, forensicMark: false }, testOnly: { forensicOff: true }, ...(marks.kind === 'viewer' ? { viewerId: marks.text } : {}) })
+  // Piece 5 (Task 11): the streamed side runs with media on (the server's default), its own media services and
+  // ffmpeg probe; `OV_MEDIA=off` runs D18's off path. A failed probe runs the off path with a warning, and is an
+  // error under `OV_MEDIA_REQUIRED=1` (the server tests' ffmpeg-gate convention).
+  const mediaWanted = process.env.OV_MEDIA !== 'off'
+  const h = await start({ doc: bytes, policy: { contentPolicy: 'full', visibleMark, forensicMark: false }, testOnly: { forensicOff: true }, media: { enabled: mediaWanted }, ...(marks.kind === 'viewer' ? { viewerId: marks.text } : {}) })
   let c = new Client(h.url)
   let sends = 0
   /** The server's unit window is 60 charged sends a minute per session: a fresh session every 40. */
@@ -354,23 +385,31 @@ async function fetchWire(bytes: Uint8Array, marks: MarkSpec, testOnly: HarnessTe
   }
   try {
     const m = await c.hello(); await c.ready()
+    if (mediaWanted && m.can.media !== true) {
+      if (process.env.OV_MEDIA_REQUIRED === '1') throw new Error('OV_MEDIA_REQUIRED=1 but the server offers no media (the ffmpeg probe failed)')
+      console.warn('[compare] media is on but the server offers none (the ffmpeg probe failed): the streamed side runs media off')
+    }
     const list = m.units.list
     const unitOf = list.map((u, i) => (u.hidden ? -1 : i)).filter((i) => i >= 0)
-    const w: Wire = { manifest: m, unitOf, plans: new Map(), refused: new Map(), tracks: new Map(), morphs: new Map(), stills: new Map(), diagnostics: [] }
+    const w: Wire = { manifest: m, unitOf, plans: new Map(), refused: new Map(), tracks: new Map(), morphs: new Map(), stills: new Map(), stillPlans: new Map(), diagnostics: [] }
     const steps = new Map<number, number>()
     let reqId = 100
     for (const [si, u] of unitOf.entries()) {
       let plan: import('../src/stream/show-plan').ShowPlanRecord | undefined
-      if (list[u]!.anim) {
+      // D19: a unit with `anim` or `media` is fetched as a plan.
+      if (list[u]!.anim || list[u]!.media) {
         await fresh()
         const r = await c.showPlan(u, 1, 'full', { ms: 60_000 })
         const forced = testOnly.showPlanEnd?.(u)
         if (forced) r.end = forced
         for (const x of r.extra) if (x.type === 'diag') w.diagnostics.push(`${u}:${x.code}${x.reason ? `/${x.reason}` : ''}`)
         if (r.end && !SHOW_STILL_CODES.has(String(r.end.code))) throw new Error(`unit ${u}: show-plan refused ${String(r.end.code)}, which production does not play as a still`)
+        // Task 11b: a still's sound-only plan (`fallback`) plays its still, as the refusal it names.
+        const head = r.end ? undefined : (decodeShowMessage(r.messages[0]!, { unit: u, maxDecoded: SHOW_PLAN_LIMITS.showDecoded }) as { plan: NonNullable<typeof plan> }).plan
         if (r.end) w.refused.set(u, String(r.end.code))
+        else if (head!.fallback) { w.refused.set(u, head!.fallback); w.stillPlans.set(u, head!) }
         else {
-          plan = (decodeShowMessage(r.messages[0]!, { unit: u, maxDecoded: SHOW_PLAN_LIMITS.showDecoded }) as { plan: typeof plan }).plan!
+          plan = head!
           w.plans.set(u, { reply: r.messages })
           for (const [k, s] of plan.steps.entries()) {
             if (s.eligibility !== 'composited') continue
@@ -399,7 +438,7 @@ async function fetchWire(bytes: Uint8Array, marks: MarkSpec, testOnly: HarnessTe
       }
     }
     return w
-  } finally { c.close(); h.stop() }
+  } finally { c.close(); await h.stop() }
 }
 
 // ---------------------------------------------------------------------------
@@ -480,6 +519,7 @@ export async function compareStreamDeck(deck: string, o: { marks: MarkSpec; rows
   const { morphOptionOf } = await import('../src/slideshow/prepare/morph')
   const { loadShowDeck } = await import('../src/testdata/show-decks')
   const { decodeShowMessage, SHOW_PLAN_LIMITS } = await import('../src/stream/show-plan')
+  const { mediaClockOf } = await import('../src/slideshow/engine/media-ends')
 
   // --- The wire first: which steps are composited, which slides are stills. ---
   const wire = await fetchWire(bytes, o.marks, o.testOnly)
@@ -525,10 +565,29 @@ export async function compareStreamDeck(deck: string, o: { marks: MarkSpec; rows
     const sampleSlides = plan.slides.filter((s) => !s.hidden)
     const spanOf = (si: number, step: number) => { const v = sampleSlides[si]?.steps.find((x) => x.step === step)?.spanMs; return typeof v === 'number' ? v : 0 }
     const wm = markOptions(o.marks)
+    // --- Piece 5 (spec §5.5, Task 5's switch): both sides end audio through `mediaEndOf` on the show clock. The
+    // local reference's slide source gets a clock over the same server plan's records (the slide's plan, or a
+    // still's sound-only plan); node ids are the plan tree's, which keeps the package's `cTn` ids. ---
+    const mediaOn = wire.manifest.can.media === true
+    const resolved = { local: new Set<string>(), streamed: new Set<string>() }
+    const counted = (side: 'local' | 'streamed', si: number, c: MediaClock | undefined): MediaClock | undefined =>
+      c && { record(id: number) { const rec = c.record(id); if (rec) resolved[side].add(`${si}:${id}`); return rec } }
+    /** A still's audio, end to end: the sum of its sound-only plan's record durations (refused: 0), plus 1 s. */
+    const stillAudioMs = (u: number): number => {
+      const p = wire.stillPlans.get(u)
+      return p ? (p.media ?? []).reduce((n, r) => n + (r.refused ? 0 : r.durationMs), 0) + 1000 : 0
+    }
+    const localClock = (i: number): MediaClock | undefined => {
+      const si = unitOf.indexOf(i)
+      const p = planOf.get(i) ?? wire.stillPlans.get(i)
+      if (si < 0 || !p) return undefined
+      const timing = p.show.timing
+      return counted('local', si, mediaClockOf([timing && !('refused' in timing) ? timing.root : undefined], p.media ?? []))
+    }
     const doc = await loadDeck(bytes)
     async function makeLocal() {
       const seams = installShowSeams({ width: W, height: H })
-      const r = await startShow(doc, { seams, size: { width: W, height: H }, motion: 'full', ...(wm ? { watermark: wm } : {}) })
+      const r = await startShow(doc, { seams, size: { width: W, height: H }, motion: 'full', ...(wm ? { watermark: wm } : {}), ...(mediaOn ? { mediaClock: localClock } : {}) })
       return {
         seams, r,
         slide: () => { const x = r.s.state.slide; return x === 'end' ? 'end' as const : unitOf.indexOf(x as number) },
@@ -589,9 +648,11 @@ export async function compareStreamDeck(deck: string, o: { marks: MarkSpec; rows
           return { record: m.record, assets: m.assets, ...(m.track ? { track: m.track } : {}) }
         },
       })
-      const planSource = createPlanSource({ manifest: wire.manifest, unitOf, bundles: (i) => bundles.get(unitOf[i]!), loop: false, kiosk: false })
+      // Piece 5: with media on, audio ends on the show clock (the plan's records), as the remote show plays it.
+      const planSource = createPlanSource({ manifest: wire.manifest, unitOf, bundles: (i) => bundles.get(unitOf[i]!), loop: false, kiosk: false, media: mediaOn })
       const source = {
         ...planSource, settings: planSource.settings, count: planSource.count, hidden: planSource.hidden,
+        ...(planSource.mediaClock ? { mediaClock: (i: number) => counted('streamed', i, planSource.mediaClock!(i)) } : {}),
         async acquire(i: number, sig: AbortSignal) {
           const h = await planSource.acquire(i, sig)
           // The text fan is charged for the visit's life, as show.ts does (Task 11 carry).
@@ -696,7 +757,10 @@ export async function compareStreamDeck(deck: string, o: { marks: MarkSpec; rows
           }
           // The local steps the streamed slide does not have are pressed through (a still: then compared settled).
           for (let k = shared(si) + 1; k <= local.steps[si]!; k++) { await l.next(); await r.tick(spanOf(si, k)) }
-          if (still) { await r.tick(0); localFrames.set(`${si + 1}-0-100`, { img: l.grab(), moving: false }) }
+          // Piece 5: a still that sounds is settled past its audio on the local clock (a reveal on an audio end lands
+          // at its begin + durationMs, not at the first frame as a video's synthetic end does): every record's
+          // duration in turn, and a second more.
+          if (still) { await r.tick(mediaOn ? stillAudioMs(unitOf[si]!) : 0); localFrames.set(`${si + 1}-0-100`, { img: l.grab(), moving: false }) }
         }
       } finally { await l.dispose() }
     }
@@ -787,6 +851,7 @@ export async function compareStreamDeck(deck: string, o: { marks: MarkSpec; rows
       structure: { local, streamed, equal: same(local, streamed), equalExceptStills: same(adjusted, streamed), stills },
       fallback: { steps: fSteps, composited: fComp, rate: fSteps ? Math.round((fComp / fSteps) * 1e4) / 1e4 : 0 },
       diagnostics: [...wire.diagnostics, ...sink.list().map((d) => `${d.slideIndex ?? ''}:${d.code}`)],
+      ...(mediaOn ? { media: { local: [...resolved.local].sort(), streamed: [...resolved.streamed].sort() } } : {}),
     }
   } finally {
     installCanvasBackend(priorBackend)

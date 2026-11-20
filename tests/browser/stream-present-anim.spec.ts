@@ -174,6 +174,13 @@ for (const backend of BACKENDS) {
       await ready(page, 'morph')
       await present(page)
       await expectBackend(page, backend)
+      // Every slide change the show makes while held (the surface's `data-slide`, observed in the page).
+      await page.evaluate(() => {
+        const el = document.querySelector('[data-officeview-show-surface=""]')!
+        const w = window as unknown as { __ovSlideChanges: string[] }
+        w.__ovSlideChanges = []
+        new MutationObserver(() => w.__ovSlideChanges.push(el.getAttribute('data-slide') ?? '')).observe(el, { attributes: true, attributeFilter: ['data-slide'] })
+      })
       const HOLD_EVENTS = 300
       const t0 = Date.now()
       let at = 0, presses = 0
@@ -186,8 +193,17 @@ for (const backend of BACKENDS) {
         await page.waitForTimeout(33)
       }
       await page.waitForTimeout(500)
-      // The input was not ignored: the show navigated, re-asking the slide-2 Morph pair on its revisits.
-      expect(w.count('show-morph')).toBeGreaterThanOrEqual(10)
+      // The input was not ignored: the presses navigated back and forth between slides 1 and 2 (a press that lands
+      // during the Morph seeks it instead, so not every press is a change).
+      const changes = await page.evaluate(() => (window as unknown as { __ovSlideChanges: string[] }).__ovSlideChanges)
+      expect(changes.length).toBeGreaterThanOrEqual(HOLD_EVENTS / 2)
+      expect(new Set(changes)).toEqual(new Set(['0', '1']))
+      // Task 13 (8435707c): once settled, ← / → asks for no Morph pair again. The deck has one Morph pair (slide 1 →
+      // slide 2), so show-morph is bounded by the pairs, not the presses: one fetch per pair, plus one re-ask in case
+      // the first press aborts it in flight. Before 8435707c every revisit re-asked it (40 in 300 presses).
+      const MORPH_PAIRS = 1
+      expect(w.count('show-morph')).toBeLessThanOrEqual(2 * MORPH_PAIRS)
+      expect(w.count('show-morph')).toBeGreaterThanOrEqual(MORPH_PAIRS)
       expect(await surface(page).getAttribute('data-slide')).toMatch(/^[01]$/)
       expect(await presentState(page)).toBe('started')
       expect(await streamError(page)).toBeUndefined()
@@ -196,7 +212,7 @@ for (const backend of BACKENDS) {
       const peaks = Object.fromEntries(['unit', 'show-plan', 'show-track', 'show-morph'].map((t) => [t, w.peak(t, 60_000)]))
       // The server's charged window is 60/min per session; the show budgets 48/min of it (Task 12).
       expect(peaks.unit! + peaks['show-plan']! + peaks['show-track']! + peaks['show-morph']!).toBeLessThanOrEqual(60)
-      console.log(`hold [${backend}]: ${presses} presses in ${((Date.now() - t0) / 1000).toFixed(1)} s; peaks per 60 s ${JSON.stringify(peaks)}; totals ${JSON.stringify(Object.fromEntries(['unit', 'show-plan', 'show-track', 'show-morph'].map((t) => [t, w.count(t)])))}; close codes none`)
+      console.log(`hold [${backend}]: ${presses} presses, ${changes.length} slide changes, in ${((Date.now() - t0) / 1000).toFixed(1)} s; peaks per 60 s ${JSON.stringify(peaks)}; totals ${JSON.stringify(Object.fromEntries(['unit', 'show-plan', 'show-track', 'show-morph'].map((t) => [t, w.count(t)])))}; close codes none`)
       await page.keyboard.press('Escape')
       await expect.poll(() => presentState(page)).toBe('ended')
     })

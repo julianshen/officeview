@@ -32,8 +32,13 @@ import type { PlanLayer } from '../../../src/slideshow/render/plan'
 import { slideSize, textRangeBox } from '../../../src/slideshow/render/scene'
 import { createRng } from '../../../src/slideshow/rng'
 import { targetKey } from '../../../src/slideshow/target'
-import type { DiagnosticSink, MetadataHandle, CanvasFactory, LayerBitmap, Lease, ShowIndex, ShowSlide, SlideMetadataStore, SlideShowWorkspace, TimeNode, TimingTree, TransitionSpec } from '../../../src/slideshow/types'
-import { encodeShowMessage, PlanRejected, SHOW_DIAGNOSTIC_CODES, SHOW_PLAN_ITERATE_ITEMS, SHOW_PLAN_LIMITS, type PlanContainerRecord, type PlanLayerRecord, type PlanStepRecord, type Rect, type ShowPlanRecord } from '../../../src/stream/show-plan'
+import type { AudioBehaviour, Condition, DiagnosticSink, MetadataHandle, CanvasFactory, LayerBitmap, Lease, ShowIndex, ShowSlide, SlideMetadataStore, SlideShowWorkspace, TargetRef, TimeNode, TimingTree, TransitionSpec } from '../../../src/slideshow/types'
+import { encodeShowMessage, PLAN_MEDIA_REFUSALS, PlanRejected, SHOW_DIAGNOSTIC_CODES, SHOW_PLAN_ITERATE_ITEMS, SHOW_PLAN_LIMITS, SHOW_PLAN_MEDIA_LIMITS, type PlanContainerRecord, type PlanLayerRecord, type PlanMediaRecord, type PlanStepRecord, type PlanTransition, type Rect, type ShowPlanRecord } from '../../../src/stream/show-plan'
+import { canonicalMediaCommand, parseMediaCommand } from '../../../src/slideshow/media/commands'
+import { mediaClockOf, slideMediaEnds } from '../../../src/slideshow/engine/media-ends'
+import { bindMedia, mediaIdentity, type MediaRef } from '../media/bind'
+import { slideAudioUses, type SlideMediaContext } from '../media/uses'
+import { asAudioUse, type DocMediaTable } from '../media/probe'
 import { LruBytes, showPlanL1Key, showPlanL2Key } from '../cache'
 import { basis } from '../mark/basis'
 import { extendedCodeword } from '../mark/bch'
@@ -62,6 +67,9 @@ export interface ShowPlanJob {
    * Layer-1 is applied per session at send time (Task 7, `markLayerRaster` with `asset.rest`), never here.
    */
   kBasis?: Uint8Array
+  /** Piece 5 (D18, D21): `can.media`. Absent = false: every record ships `media-unavailable`, commands stay blanked
+   * and the transition sound is stripped, as in piece 4. Joins the L1 key. */
+  media?: boolean
 }
 /**
  * `rest` is the asset's top-left at its rest on the unit page, in page device px at the bucket, and `rest.scale`
@@ -74,14 +82,22 @@ export interface ShowAsset { tag: 2 | 3; assetId: number; w: number; h: number; 
  * `assets`: the entry frame first, then the layers in z order (D1). `decodedBytes`: Σ `w·h·4` of the assets plus
  * the plan record's bytes.
  */
-export interface BuiltShowPlan { plan: ShowPlanRecord; assets: ShowAsset[]; decodedBytes: number }
+/** `mediaRefs` (piece 5, server-only): each media placeholder's ref, which `bindMedia` hashes per session. */
+export interface BuiltShowPlan { plan: ShowPlanRecord; assets: ShowAsset[]; decodedBytes: number; mediaRefs: Array<{ placeholder: string; ref: MediaRef }> }
 /**
  * Task 6 decision. `show-limits` (over 64 steps, an iterate over 128 keys, a record the codec would refuse),
  * `show-budget` (over 128 MiB, or one asset over 64 MiB), `show-plan-timeout` (over `SHOW_PLAN_DEADLINE_MS`).
  * `still`: the classifier could not prove the slide (`Classification.fallback`, e.g. unproven autoplay); it plays
  * its piece-3 still with the classifier's `diagnostics`. Every refusal plays the still; none ships a layer.
  */
-export type ShowRefusal = { refused: 'show-budget' | 'show-limits' | 'show-plan-timeout' | 'still'; diagnostics: Array<{ code: string; step?: number }> }
+export type ShowRefusal = { refused: 'show-budget' | 'show-limits' | 'show-plan-timeout' | 'still'; diagnostics: Array<{ code: string; step?: number }>; sounds?: StillSounds }
+/**
+ * Task 11b (owner decision 2026-11-19): what a `still` refusal sounds, with media on, when the slide has audio
+ * records (`stillSounds`). `plan` is the sound-only plan (`fallback: 'still'`, placeholders until `bindMedia`, as any
+ * cached plan); `mediaRefs` its refs; `decodedBytes` its message's bytes as a session receives it (the tag byte included). The refusal itself,
+ * its diagnostics and everything drawn are unchanged: the slide plays its piece-3 still.
+ */
+export interface StillSounds { plan: ShowPlanRecord; mediaRefs: Array<{ placeholder: string; ref: MediaRef }>; decodedBytes: number }
 
 export const SHOW_BUNDLE_BUDGET = SHOW_PLAN_LIMITS.showDecoded
 export { SHOW_BUILD_BYTES, showBuildGrant, showMorphGrant }
@@ -132,6 +148,7 @@ interface L1Entry {
   timeline?: SlideTimeline
   record?: Omit<ShowPlanRecord, 'layers' | 'steps' | 'entry' | 'diagnostics'>
   extraDiagnostics?: Array<{ code: string }>
+  mediaRefs?: Array<{ placeholder: string; ref: MediaRef }>
   rasters?: Map<PlanLayer, LayerBitmap>
   classes: Map<boolean, Classification>
   /**
@@ -140,6 +157,8 @@ interface L1Entry {
    * slide, bucket and motion plays its still at once, whatever its mark.
    */
   refusals: Map<boolean, ShowRefusal>
+  /** Task 11b: the still's sound-only plan, once computed (`null`: none). Mark-independent, so one per L1 entry. */
+  stillSounds?: StillSounds | null
 }
 interface Stats { l1: { hits: number; misses: number }; l2: { hits: number; misses: number } }
 
@@ -165,13 +184,17 @@ export interface ShowDoc {
   l1: LruBytes<L1Entry>
   l2: LruBytes<BuiltShowPlan | ShowRefusal>
   stats: Stats
+  /** Piece 5 (D21): the document's probe table (the host sets it at open); the build reads `peek` and `digest`. */
+  media?: DocMediaTable
+  /** Piece 5: each loaded slide's media context (hidden shapes, external links), filled by the host's `loadShow`. */
+  mediaCtx: Map<number, SlideMediaContext>
 }
 
 /** The `OpenDoc` view the build needs: its show inputs. */
 export interface ShowHost { show?: ShowDoc }
 
-export function createShowDoc(init: Omit<ShowDoc, 'metas' | 'l1' | 'l2' | 'stats'>): ShowDoc {
-  return { ...init, metas: new Map(), l1: new LruBytes(L1_BYTES), l2: new LruBytes(L2_BYTES), stats: { l1: { hits: 0, misses: 0 }, l2: { hits: 0, misses: 0 } } }
+export function createShowDoc(init: Omit<ShowDoc, 'metas' | 'l1' | 'l2' | 'stats' | 'mediaCtx'>): ShowDoc {
+  return { ...init, metas: new Map(), mediaCtx: new Map(), l1: new LruBytes(L1_BYTES), l2: new LruBytes(L2_BYTES), stats: { l1: { hits: 0, misses: 0 }, l2: { hits: 0, misses: 0 } } }
 }
 
 class Timeout extends Error { constructor() { super('show-plan-timeout') } }
@@ -198,11 +221,26 @@ const MAX_DIAGNOSTICS = 1024
  * place, `cmdType` and timing (begin, duration, fill, restart), so the step and click structure is local mode's —
  * a long media call still holds its group, and a → during it seeks as locally — while its command payload (an OLE
  * verb, a media call, an event name) never leaves the server (`cmd: ''`).
+ *
+ * Piece 5 (D15, D22): with `keepMedia`, a command is kept, in canonical form, when it parses
+ * (`parseMediaCommand(cmdType, text)`), `keepMedia` accepts it (its target is a shipped audio node or shape, never a
+ * video shape) and a `playFrom` is within [0, 1800] s; every other command is blanked. `stripped` counts the blanked.
  */
-export function inertCommands(tree: TimingTree): { tree: TimingTree; stripped: number } {
+export function inertCommands(tree: TimingTree, o: { keepMedia?: (node: Extract<TimeNode, { kind: 'cmd' }>) => boolean } = {}): { tree: TimingTree; stripped: number } {
   let stripped = 0
+  const kept = (n: Extract<TimeNode, { kind: 'cmd' }>): string | undefined => {
+    if (!o.keepMedia) return undefined
+    const c = parseMediaCommand(n.cmdType, n.cmd)
+    if (!c || (c.verb === 'playFrom' && !(c.seconds >= 0 && c.seconds <= SHOW_PLAN_MEDIA_LIMITS.durationMs / 1000)) || !o.keepMedia(n)) return undefined
+    return canonicalMediaCommand(c)
+  }
   const walk = (n: TimeNode, depth: number): TimeNode => {
-    if (!('children' in n)) { if (n.kind === 'cmd') { stripped++; return { ...n, cmd: '' } } return n }
+    if (!('children' in n)) {
+      if (n.kind !== 'cmd') return n
+      const text = kept(n)
+      if (text === undefined) { stripped++; return { ...n, cmd: '' } }
+      return text === n.cmd ? n : { ...n, cmd: text }
+    }
     if (depth > 256) return n
     const children = n.children.map(c => walk(c, depth + 1))
     return children.every((c, i) => c === n.children[i]) ? n : { ...n, children }
@@ -211,16 +249,82 @@ export function inertCommands(tree: TimingTree): { tree: TimingTree; stripped: n
   return { tree: root === tree.root ? tree : { ...tree, root }, stripped }
 }
 
-function streamedMeta(meta: ShowSlide): { meta: ShowSlide; cmdDropped: boolean } {
+/** `tree` with every `snd` target (behaviour and condition targets) renamed by `snd`. */
+function renameSounds(tree: TimingTree, snd: ReadonlyMap<string, string>): TimingTree {
+  if (snd.size === 0) return tree
+  const target = <T extends TargetRef | undefined>(t: T): T => (t && 'snd' in t ? { ...t, snd: snd.get(t.snd)! } : t)
+  const cond = (c: Condition): Condition => (c.target && 'snd' in c.target ? { ...c, target: target(c.target) } : c)
+  const walk = (n: TimeNode, depth: number): TimeNode => {
+    if (depth > 256) return n
+    const ctn = { ...n.ctn, start: n.ctn.start.map(cond), end: n.ctn.end.map(cond), ...(n.ctn.endSync ? { endSync: cond(n.ctn.endSync) } : {}) }
+    if ('children' in n) return { ...n, ctn, children: n.children.map(c => walk(c, depth + 1)) }
+    return { ...n, ctn, target: target(n.target) } as TimeNode
+  }
+  return { ...tree, root: walk(tree.root, 0) }
+}
+
+/** The build's media inputs for one slide (piece 5): the job's `media` flag and the probe table's answers. */
+interface MediaInputs { on: boolean; ctx: SlideMediaContext; kOf: (partPath: string) => number; partCount: number; entry: (partPath: string) => ReturnType<DocMediaTable['peek']> }
+
+/**
+ * The slide as it streams. Piece 4 (`media` absent: a Morph pair's preparation): every command blanked, the
+ * transition sound stripped. Piece 5 (`media` given): sounds renamed to their placeholders and the records listed;
+ * with `media.on` media commands are kept (`inertCommands` with `keepMedia`) and the transition sound stays, naming
+ * its record; with it off both are as in piece 4 (D18), and every record is refused `media-unavailable`.
+ */
+function streamedMeta(meta: ShowSlide, unit: number, media?: MediaInputs): { meta: ShowSlide; cmdDropped: boolean; records?: PlanMediaRecord[]; refs?: Array<{ placeholder: string; ref: MediaRef }> } {
   let timing = meta.timing, cmdDropped = false
+  const uses = media ? slideAudioUses(meta, unit, media.ctx, media.kOf, media.partCount) : undefined
+  // A hidden shape's use ships nothing.
+  const mp = uses && { ...uses, records: uses.records.filter(r => !r.hiddenShape) }
   if (timing && !('refused' in timing)) {
-    const d = inertCommands(timing)
+    const keep = mp && media!.on ? (n: Extract<TimeNode, { kind: 'cmd' }>) => {
+      if (n.cmdType === 'evt') return true
+      const spid = 'spid' in n.target ? n.target.spid : undefined
+      return spid !== undefined && mp.shapeAudio.has(spid) && !mp.videoSpids.has(spid)
+    } : undefined
+    const d = inertCommands(mp ? renameSounds(timing, mp.snd) : timing, keep ? { keepMedia: keep } : {})
     timing = d.tree
     cmdDropped = d.stripped > 0
   }
   let transition: TransitionSpec | undefined = meta.transition
-  if (transition?.sound) { const { sound: _s, ...rest } = transition; transition = rest }
-  return { meta: { ...meta, timing, ...(transition ? { transition } : {}), notes: [], links: meta.links, media: [] }, cmdDropped }
+  if (transition?.sound) {
+    const { sound, ...rest } = transition
+    const start = mp?.transitionStart
+    // Media on: the sound names its record (the local rId slot holds the placeholder until the record ships).
+    const kept = media?.on ? { ...(start ? { start: { rId: start, loop: sound.start!.loop } } : {}), ...(sound.end ? { end: true as const } : {}) } : undefined
+    transition = kept && (kept.start || kept.end) ? { ...rest, sound: kept } : rest
+  }
+  // D22: an audio use whose begin may depend on a video end, or under a reversing or repeating ancestor, comes
+  // refused `media-unavailable` from `slideAudioUses` (the single definition `mediaRefs` reads too, Task 9 fix round 1).
+  const records = mp && media ? mp.records.map((r): PlanMediaRecord => {
+    const base = { mediaId: r.placeholder, kind: 'audio' as const, ...(r.spid !== undefined ? { spid: r.spid } : {}) }
+    if (!media.on) return { ...base, durationMs: 0, refused: 'media-unavailable' }
+    if (r.refused || r.partPath === undefined) return { ...base, durationMs: 0, refused: r.refused ?? 'media-unreadable' }
+    const e = media.entry(r.partPath)
+    if (!e) throw new Error('show: media part not probed')
+    const used = asAudioUse(e)
+    if ('refused' in used) return { ...base, durationMs: 0, refused: (PLAN_MEDIA_REFUSALS as readonly string[]).includes(used.refused) ? used.refused as PlanMediaRecord['refused'] : 'media-unreadable' }
+    return { ...base, durationMs: used.durationMs }
+  }) : undefined
+  return { meta: { ...meta, timing, ...(transition ? { transition } : {}), notes: [], links: meta.links, media: [] }, cmdDropped, ...(records ? { records, refs: mp!.records.map(r => ({ placeholder: r.placeholder, ref: r.ref })) } : {}) }
+}
+
+/** The shipped transition: its start sound's `rId` slot (a placeholder) becomes `mediaId` (D3, X12). */
+const wireTransition = (t: TransitionSpec | undefined): PlanTransition | undefined => {
+  if (!t?.sound?.start) return t as PlanTransition | undefined
+  const { start, ...sound } = t.sound
+  return { ...t, sound: { ...sound, start: { mediaId: start.rId, loop: start.loop } } }
+}
+
+/** The media inputs of `unit` for a plan job: the probe table must hold every part the slide uses (loud otherwise). */
+function mediaInputs(show: ShowDoc, unit: number, on: boolean): MediaInputs {
+  const table = show.media
+  if (!table) throw new Error('show: no media table')
+  const ctx = show.mediaCtx.get(unit)
+  if (!ctx) throw new Error(`show: slide ${unit} media context not loaded`)
+  const kOf = (partPath: string) => { const e = table.peek(partPath); if (!e) throw new Error('show: media part not probed'); return e.k }
+  return { on, ctx, kOf, partCount: table.partCount, entry: (partPath) => table.peek(partPath) }
 }
 
 // ---------------------------------------------------------------------------
@@ -305,10 +409,10 @@ function stepTriggers(tree: TimingTree | undefined, steps: number): PlanStepReco
  * and its timeline under `motion`, with no raster. The bundle build (`prepareL1`) and the Morph pair build
  * (`morph.ts`) share it, so both classify the same show.
  */
-export function prepareShowSlide(show: ShowDoc, unit: number, motion: 'full' | 'reduced'): { ps: PreparedSlide; timeline: SlideTimeline; cmdDropped: boolean; sink: DiagnosticSink } {
+export function prepareShowSlide(show: ShowDoc, unit: number, motion: 'full' | 'reduced', media?: { on: boolean }): { ps: PreparedSlide; timeline: SlideTimeline; cmdDropped: boolean; sink: DiagnosticSink; records?: PlanMediaRecord[]; refs?: Array<{ placeholder: string; ref: MediaRef }> } {
   const loaded = show.metas.get(unit)
   if (!loaded) throw new Error(`show: slide ${unit} metadata not loaded`)
-  const { meta, cmdDropped } = streamedMeta(loaded.slide)
+  const { meta, cmdDropped, records, refs } = streamedMeta(loaded.slide, unit, media ? mediaInputs(show, unit, media.on) : undefined)
   const slide = show.doc.slides[unit]!
   const sink = createDiagnosticSink()
   const ps = prepareSlide({ index: unit, slide, meta, watermark: false, charge: loaded.charge, sink })
@@ -316,18 +420,18 @@ export function prepareShowSlide(show: ShowDoc, unit: number, motion: 'full' | '
   const tt = ps.textTiming
   const settings = show.index.settings
   const timeline = createSlideTimeline(tt?.tree ?? meta.timing, { showAnimation: settings.showAnimation, reducedMotion: motion === 'reduced', ...(tt ? { orderOf: tt.orderOf } : {}) })
-  return { ps, timeline, cmdDropped, sink }
+  return { ps, timeline, cmdDropped, sink, ...(records ? { records, refs: refs ?? [] } : {}) }
 }
 
 function prepareL1(show: ShowDoc, job: ShowPlanJob): L1Entry {
   const unit = job.unitIndex
-  const { ps, timeline, cmdDropped, sink } = prepareShowSlide(show, unit, job.motion)
+  const { ps, timeline, cmdDropped, sink, records: media = [], refs: mediaRefs = [] } = prepareShowSlide(show, unit, job.motion, { on: job.media === true })
   const meta = ps.meta, slide = ps.slide
   const measure = measureCtx()
   const tt = ps.textTiming
   const settings = show.index.settings
   const classes = new Map<boolean, Classification>()
-  if (timeline.steps > SHOW_PLAN_LIMITS.steps) return { refusal: { refused: 'show-limits', diagnostics: [{ code: 'show-limits' }] }, classes, refusals: new Map() }
+  if (timeline.steps > SHOW_PLAN_LIMITS.steps || media.length > SHOW_PLAN_MEDIA_LIMITS.records) return { refusal: { refused: 'show-limits', diagnostics: [{ code: 'show-limits' }] }, classes, refusals: new Map() }
   // D22: the text items the client fans out itself; over 128 key strings the slide plays its still (Task 4 ruling).
   const keys: Array<[string, string[]]> = tt ? [...tt.items].map(([k, items]) => [k, [...items]]) : []
   const groups: Array<[string, { wd?: string[][]; lt?: string[][] }]> = tt?.groups ? [...tt.groups].map(([k, g]) => [k, { ...(g.wd ? { wd: g.wd.map(x => [...x]) } : {}), ...(g.lt ? { lt: g.lt.map(x => [...x]) } : {}) }]) : []
@@ -407,14 +511,15 @@ function prepareL1(show: ShowDoc, job: ShowPlanJob): L1Entry {
     v: 1,
     slide: { index: unit, w: W, h: H },
     options: { showAnimation: settings.showAnimation, useTimings: settings.useTimings },
-    show: { transition: meta.transition, timing: meta.timing, builds: meta.builds },
+    show: { ...(meta.transition ? { transition: wireTransition(meta.transition) } : {}), timing: meta.timing, builds: meta.builds },
+    media,
     base,
     triggers,
     linkRegions,
     iterate: { keys, groups },
   }
   const extraDiagnostics = [...(cmdDropped ? [{ code: 'cmd-dropped' }] : []), ...(withheld ? [{ code: 'link-withheld' }] : [])]
-  return { ps, timeline, record, extraDiagnostics, rasters, classes, refusals: new Map() }
+  return { ps, timeline, record, extraDiagnostics, mediaRefs, rasters, classes, refusals: new Map() }
 }
 
 const L1_OVERHEAD = 64 * 1024
@@ -511,7 +616,10 @@ function arrivalDraws(ps: PreparedSlide, timeline: SlideTimeline): DrawnLayer[] 
 // ---------------------------------------------------------------------------
 
 /** The cached L1 entry for `job` (computed on a miss). */
-const l1KeyOf = (show: ShowDoc, job: ShowPlanJob) => showPlanL1Key({ docRef: show.docRef, contentPolicyId: show.contentPolicyId, layoutFingerprint: show.fingerprint, scaleBucket: job.scale, motion: job.motion, unitId: job.unitIndex })
+const l1KeyOf = (show: ShowDoc, job: ShowPlanJob) => {
+  if (!show.media) throw new Error('show: no media table')
+  return showPlanL1Key({ docRef: show.docRef, contentPolicyId: show.contentPolicyId, layoutFingerprint: show.fingerprint, scaleBucket: job.scale, motion: job.motion, unitId: job.unitIndex, mediaOn: job.media === true, mediaDigest: show.media.digest(job.unitIndex) })
+}
 
 /**
  * The cached L1 entry for `job` (computed on a miss), its rasters charged to the open job: as they are drawn on a
@@ -543,6 +651,7 @@ export function trackInputs(show: ShowDoc, job: ShowPlanJob): { ps: PreparedSlid
 function classificationOf(e: L1Entry, job: ShowPlanJob): Classification {
   const have = e.classes.get(job.strictMarks)
   if (have) return have
+  // Task 5 controller ruling: media on classifies exactly as media off (every media end seeded, `mediaRefused`).
   const c = classifySlide({ ps: e.ps!, timeline: e.timeline!, scale: job.scale, rasters: e.rasters!, strictMarks: job.strictMarks, triggers: e.timeline!.triggers(), resolveFont })
   e.classes.set(job.strictMarks, c)
   return c
@@ -570,13 +679,13 @@ export function buildShowPlan(doc: ShowHost, job: ShowPlanJob, opts: ShowBuildOp
     e = l1For(show, job)
     if (e.refusal) return e.refusal
     const refused = seamed ? undefined : e.refusals.get(job.strictMarks)
-    if (refused) return refused
+    if (refused) return withStillSounds(show, e, job, refused)
     show.stats.l2.misses++
     check()
     const out = assemble(show, e, job, opts, check)
-    if (seamed) return out
-    if ('refused' in out) e.refusals.set(job.strictMarks, out)
-    else show.l2.put(l2key, out, out.assets.reduce((n, a) => n + a.png.length, 64 * 1024))
+    if (seamed) return 'refused' in out ? withStillSounds(show, e, job, out) : out
+    if ('refused' in out) { e.refusals.set(job.strictMarks, out); return withStillSounds(show, e, job, out) }
+    show.l2.put(l2key, out, out.assets.reduce((n, a) => n + a.png.length, 64 * 1024))
     return out
   } catch (err) {
     // A canvas the grant had no room for (PR #78 round 13b): allocation stopped there; the slide plays its still.
@@ -729,9 +838,9 @@ function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOp
       const triggers = record.triggers.map(t => (c.triggers.get(t.spid) === 'cut' ? { ...t, cut: true as const } : t))
       return { ...record, triggers, layers: layerRecords(list), steps: stepRecords, entry: ENTRY_ASSET_ID, diagnostics: diags }
     }
-    const planBytes = (plan: ShowPlanRecord): number | undefined => {
-      try { return encodeShowMessage({ tag: 1, plan }).length - 1 } catch (err) { if (err instanceof PlanRejected) return undefined; throw err }
-    }
+    // The plan's bytes as a session receives it: every placeholder bound to a distinct id of the session's length
+    // (22), so `decodedBytes` is exact for every session.
+    const planBytes = (plan: ShowPlanRecord): number | undefined => boundPlanBytes(plan, e.mediaRefs ?? [])
     const limits = (): ShowRefusal => ({ refused: 'show-limits', diagnostics: [{ code: 'show-limits' }] })
     const overBudget = (): ShowRefusal => ({ refused: 'show-budget', diagnostics: [{ code: 'show-budget' }] })
     const sizeOf = (list: readonly Shipped[], plan: ShowPlanRecord) => {
@@ -773,10 +882,199 @@ function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOp
       }
     }
     const entry: ShowAsset = { tag: 3, assetId: ENTRY_ASSET_ID, w: PW, h: PH, png: encodePng(PW, PH, entryRgba), rest: { x: 0, y: 0, scale: 1 } }
-    return { plan, assets: [entry, ...layerAssets], decodedBytes: size.bytes }
+    return { plan, assets: [entry, ...layerAssets], decodedBytes: size.bytes, mediaRefs: e.mediaRefs ?? [] }
   } finally {
     composer.dispose()
   }
+}
+
+/**
+ * The plan's bytes as a session receives it: every placeholder bound to a distinct id of the session's length (22),
+ * so the size is exact for every session. `undefined`: the codec refuses the record.
+ */
+function boundPlanBytes(plan: ShowPlanRecord, refs: ReadonlyArray<{ placeholder: string; ref: MediaRef }>): number | undefined {
+  const seen = new Map<string, string>()
+  const sized = bindMedia(plan, (ref) => { const key = mediaIdentity(ref); let id = seen.get(key); if (!id) seen.set(key, id = `m${String(seen.size).padStart(21, '0')}`); return id }, refs)
+  try { return encodeShowMessage({ tag: 1, plan: sized }).length - 1 } catch (err) { if (err instanceof PlanRejected) return undefined; throw err }
+}
+
+// ---------------------------------------------------------------------------
+// Task 11b: a still's sounds
+// ---------------------------------------------------------------------------
+
+const PLAYS: ReadonlySet<string> = new Set(['playFrom', 'play', 'resume', 'togglePause'])
+
+/**
+ * Task 11b (owner decision 2026-11-19): the sound-only plan of a still slide, or `undefined` (no audio record, or
+ * nothing it could say). The slide's no-input history: the shared scheduler on `timeline.initial()`, every audio end
+ * settled by `slideMediaEnds` (the driver's own loop), read back with `activations`; so the begins and ends are the
+ * ones the client computes from the shipped schedule.
+ *
+ * - **The schedule** (`show.timing`): the slide's own root, holding for each audio activation a `par` at its begin
+ *   (`delayMs`), bounded at its end (`durMs`, open: `indefinite`), around the audio leaf with its own fields and no
+ *   start or end condition but "with its parent"; each fired media command (a leaf the build kept, `inertCommands`) the
+ *   same way. An audio leaf with no activation that a fired play command names (`playFrom`, `play`, `resume`,
+ *   `togglePause`, as the local player starts it) stays, never begun by timing. Nothing else: no click step, trigger,
+ *   video node or build, so a click on the still advances (the client draws the still only).
+ * - **Records**: the transition's start sound and every record such an audio leaf plays keep their answer; every
+ *   other record (a click-, trigger- or event-started sound, a sound on more than one activation) ships refused
+ *   `media-unavailable`. A history the scheduler cuts short refuses them all (fail closed).
+ * - `numSld` is dropped: the still's sounds stop at slide exit.
+ */
+function stillSoundsOf(show: ShowDoc, e: L1Entry, job: ShowPlanJob): StillSounds | undefined {
+  const record = e.record, ps = e.ps, timeline = e.timeline
+  const records = record?.media ?? []
+  if (!record || !ps || !timeline || records.length === 0) return undefined
+  const timing = ps.meta.timing && !('refused' in ps.meta.timing) ? ps.meta.timing : undefined
+  const roots = [timing?.root, ps.textTiming?.tree.root]
+  /** A history's audio activations by node id, and its fired media commands; `undefined`: cut short (fail closed). */
+  const history = (tl: SlideTimeline, rs: ReadonlyArray<TimeNode | undefined>, recs: readonly PlanMediaRecord[]) => {
+    const settled = slideMediaEnds(rs, mediaClockOf(rs, recs)).settle(tl, tl.initial(), Number.POSITIVE_INFINITY)
+    const got = settled.truncated ? undefined : tl.activations(settled.cursor, Number.POSITIVE_INFINITY)
+    if (!got || got.truncated) return undefined
+    const audio = new Map<number, Array<{ begin: number; end: number }>>()
+    const fired: Array<{ node: Extract<TimeNode, { kind: 'cmd' }>; begin: number; end: number }> = []
+    for (const a of got.activations) {
+      if (a.node.kind === 'audio') { const l = audio.get(a.node.ctn.id) ?? []; l.push({ begin: a.begin, end: a.end }); audio.set(a.node.ctn.id, l) }
+      else if (a.node.kind === 'cmd' && parseMediaCommand(a.node.cmdType, a.node.cmd)) fired.push({ node: a.node, begin: a.begin, end: a.end })
+    }
+    return { audio, fired }
+  }
+  const h = history(timeline, roots, records)
+  // Fix round 1 (Important 2): a history cut short decides nothing, the transition sound included: silent.
+  if (!h) return undefined
+  // The audio leaves in tree order; `firstOn`: the first media node on each shape (audio or video), the one its
+  // commands drive (the local player's `bySpid`, `slideMediaEnds`' `bySpid`).
+  const audio: AudioBehaviour[] = []
+  const firstOn = new Map<string, number>()
+  let maxId = 0
+  const walk = (n: TimeNode, depth: number) => {
+    if (depth > 256) return
+    maxId = Math.max(maxId, n.ctn.id)
+    if ('children' in n) { for (const c of n.children) walk(c, depth + 1); return }
+    if ((n.kind === 'audio' || n.kind === 'video') && 'spid' in n.target && !firstOn.has(n.target.spid)) firstOn.set(n.target.spid, n.ctn.id)
+    if (n.kind === 'audio' && !audio.some(a => a.ctn.id === n.ctn.id)) audio.push(n)
+  }
+  for (const r of roots) if (r) walk(r, 0)
+  const fired = h.fired
+  const played = new Set<string>()
+  for (const f of fired) { const c = parseMediaCommand(f.node.cmdType, f.node.cmd)!; if (PLAYS.has(c.verb) && 'spid' in f.node.target) played.add(f.node.target.spid) }
+  /**
+   * A shipped leaf: its own media fields and timing, started by `start` only, with nothing structural (node or preset
+   * type, group, iteration, end sync) and no `numSld`. A command fires once per shipped activation (no repeat).
+   */
+  const own = (n: TimeNode, start: TimeNode['ctn']['start']): TimeNode => {
+    const { endSync: _sync, nodeType: _t, presetClass: _pc, presetId: _pi, presetSubtype: _ps, grpId: _g, masterRel: _m, afterEffect: _a, iterate: _i, ...ctn } = n.ctn
+    if (n.kind === 'cmd') { delete ctn.repeatCount; delete ctn.repeatDurMs; ctn.autoRev = false }
+    const leaf = { ...n, ctn: { ...ctn, start, end: [] } } as TimeNode & { numSld?: number }
+    delete leaf.numSld
+    return leaf
+  }
+  // What plays: each audio leaf begun once, or never begun but named by a fired play command.
+  const playing: Array<{ n: AudioBehaviour; act?: { begin: number; end: number } }> = []
+  const spidsPlaying = new Set<string>()
+  for (const n of audio) {
+    const begun = h.audio.get(n.ctn.id) ?? []
+    const spid = 'spid' in n.target ? n.target.spid : undefined
+    if (begun.length === 1) playing.push({ n, act: begun[0]! })
+    // Only the node a play command drives (the first on its shape) starts on it, as the local player.
+    else if (begun.length === 0 && spid !== undefined && played.has(spid) && firstOn.get(spid) === n.ctn.id) playing.push({ n })
+    else continue
+    if (spid !== undefined) spidsPlaying.add(spid)
+  }
+  // Fix round 1 (Important 2): a shape command drives the first media node on its shape. If that node is not
+  // scheduled while another audio leaf on the shape is, the schedule would retarget the command: silent.
+  const scheduled = new Set(playing.map(p => p.n.ctn.id))
+  for (const f of fired) {
+    const c = parseMediaCommand(f.node.cmdType, f.node.cmd)!
+    if (c.verb === 'onstopaudio' || !('spid' in f.node.target)) continue
+    const spid = f.node.target.spid
+    if (spidsPlaying.has(spid) && !scheduled.has(firstOn.get(spid) ?? -1)) return undefined
+  }
+  // The records the schedule (or the transition) plays; every other one never sounds on the still.
+  const clock = mediaClockOf(roots, records)
+  const keep = new Set<string>()
+  const startSound = record.show.transition?.sound?.start?.mediaId
+  if (startSound) keep.add(startSound)
+  for (const p of playing) { const r = clock.record(p.n.ctn.id); if (r) keep.add(r.mediaId) }
+  const media = records.map((r): PlanMediaRecord => (keep.has(r.mediaId) || r.refused ? r : { mediaId: r.mediaId, kind: 'audio', ...(r.spid !== undefined ? { spid: r.spid } : {}), durationMs: 0, refused: 'media-unavailable' }))
+  /**
+   * The schedule. An audio leaf's `par` is bounded at the leaf's end only where `bounded` says so: unbounded, the
+   * client's own clock (the same `slideMediaEnds`) ends it, and records that end in its history as the server does.
+   */
+  const schedule = (bounded: ReadonlySet<number>): TimingTree | undefined => {
+    let next = maxId + 1
+    const at = (begin: number, end: number, child: TimeNode): TimeNode => ({
+      kind: 'par', children: [child],
+      ctn: { id: next++, durMs: Number.isFinite(end) ? Math.max(0, end - begin) : 'indefinite', accel: 0, decel: 0, autoRev: false, fill: 'remove', start: [{ delayMs: begin }], end: [] },
+    })
+    const children: TimeNode[] = []
+    for (const { n, act } of playing) {
+      if (act) children.push(at(act.begin, bounded.has(n.ctn.id) ? act.end : Number.POSITIVE_INFINITY, own(n, [{ delayMs: 0 }])))
+      else children.push(own(n, [{ delayMs: 'indefinite' }]))
+    }
+    for (const f of fired) {
+      const c = parseMediaCommand(f.node.cmdType, f.node.cmd)!
+      if (c.verb !== 'onstopaudio' && !('spid' in f.node.target && spidsPlaying.has(f.node.target.spid))) continue
+      // One leaf per activation, each with its own id (a repeated command fires once per activation, as locally).
+      const leaf = own(f.node, [{ delayMs: 0 }])
+      children.push(at(f.begin, f.end, { ...leaf, ctn: { ...leaf.ctn, id: next++ } }))
+    }
+    // The root: the slide's own id, nothing else of its (an inert, open `tmRoot`).
+    const root: TimeNode = { kind: 'par', children, ctn: { id: timing?.root.ctn.id ?? 1, nodeType: 'tmRoot', durMs: 'indefinite', accel: 0, decel: 0, autoRev: false, start: [], end: [] } }
+    return timing && children.length ? { root, build: [] } : undefined
+  }
+  /** The media commands a history fires, each as `verb@target@begin` (sorted), for the replay proof. */
+  const commandsOf = (list: ReadonlyArray<{ node: Extract<TimeNode, { kind: 'cmd' }>; begin: number }>) =>
+    list.map(f => `${canonicalMediaCommand(parseMediaCommand(f.node.cmdType, f.node.cmd)!)}@${'spid' in f.node.target ? f.node.target.spid : '-'}@${f.begin}`).sort()
+  // The client's view of a schedule: its timeline (as the driver builds it) and its settled history.
+  const settings = show.index.settings
+  const replay = (tree: TimingTree | undefined) => {
+    if (!tree) return { audio: new Map<number, Array<{ begin: number; end: number }>>(), fired: [] }
+    return history(createSlideTimeline(tree, { showAnimation: settings.showAnimation, reducedMotion: job.motion === 'reduced' }), [tree.root], media)
+  }
+  /** The leaves whose begin or end the client would compute otherwise; `undefined`: unprovable (cut short, or the
+   * commands it fires are not the shipped ones at their times). */
+  const differs = (got: ReturnType<typeof replay>, shipped: TimingTree | undefined): Set<number> | undefined => {
+    if (!got) return undefined
+    const want = shipped ? fired.filter(f => { const c = parseMediaCommand(f.node.cmdType, f.node.cmd)!; return c.verb === 'onstopaudio' || ('spid' in f.node.target && spidsPlaying.has(f.node.target.spid)) }) : []
+    if (commandsOf(got.fired).join('|') !== commandsOf(want).join('|')) return undefined
+    const out = new Set<number>()
+    for (const { n, act } of playing) {
+      const g = got?.audio.get(n.ctn.id) ?? []
+      if (act ? !(g.length === 1 && g[0]!.begin === act.begin && g[0]!.end === act.end) : g.length !== 0) out.add(n.ctn.id)
+    }
+    return out
+  }
+  // Unbounded first; where the client's clock would end a leaf elsewhere (a stop, an ancestor's end, the next sound),
+  // its bound; then proven: every begin and end the client computes is the server's, or the still stays silent.
+  // Fix round 1: unprovable at either pass is silent (never widened to cover it).
+  const open = schedule(new Set())
+  const first = differs(replay(open), open)
+  if (!first) return undefined
+  const tree = schedule(first)
+  const proof = differs(replay(tree), tree)
+  if (!proof || proof.size) return undefined
+  // Minor 7: the transition's sound only; nothing visual ships (the still draws no transition).
+  const sound = record.show.transition?.sound
+  const plan: ShowPlanRecord = {
+    v: 1, slide: record.slide, options: record.options,
+    show: { ...(sound ? { transition: { sound } as PlanTransition } : {}), timing: tree, builds: [] },
+    media, layers: [], base: [], steps: [], triggers: [], linkRegions: [], iterate: { keys: [], groups: [] }, entry: ENTRY_ASSET_ID, diagnostics: [],
+    fallback: 'still',
+  }
+  const refs = e.mediaRefs ?? []
+  const bytes = boundPlanBytes(plan, refs)
+  // The reply's one message whole (its tag byte too): a client holds each message's decoded payload to the declared
+  // total, and here no asset makes room for the tag.
+  return bytes === undefined ? undefined : { plan, mediaRefs: refs, decodedBytes: bytes + 1 }
+}
+
+/** `r` with the still's sounds (Task 11b): only a `still` refusal of a media-on job whose slide has audio records. */
+function withStillSounds(show: ShowDoc, e: L1Entry, job: ShowPlanJob, r: ShowRefusal): ShowRefusal {
+  if (r.refused !== 'still' || job.media !== true) return r
+  if (e.stillSounds === undefined) e.stillSounds = stillSoundsOf(show, e, job) ?? null
+  return e.stillSounds ? { ...r, sounds: e.stillSounds } : r
 }
 
 /**

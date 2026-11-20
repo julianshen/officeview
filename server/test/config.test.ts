@@ -30,6 +30,12 @@ describe('config', () => {
     expect(loadConfig({ OV_STRICT_MARKS: '1' }, ['--demo']).animation).toEqual({ strictMarks: true })
     try { loadConfig({ OV_STRICT_MARKS: 'yes' }, ['--demo']); throw new Error('no throw') } catch (e) { expect((e as ConfigError).code).toBe('bad-arg') }
   })
+  it('media: OV_MEDIA on by default, off accepted, another value refuses; OV_FFMPEG/OV_FFPROBE pass through', () => {
+    expect(loadConfig({}, ['--demo']).media).toEqual({ OV_MEDIA: 'on' })
+    expect(loadConfig({ OV_MEDIA: 'off', OV_FFMPEG: '/opt/ff/ffmpeg', OV_FFPROBE: '/opt/ff/ffprobe' }, ['--demo']).media)
+      .toEqual({ OV_MEDIA: 'off', OV_FFMPEG: '/opt/ff/ffmpeg', OV_FFPROBE: '/opt/ff/ffprobe' })
+    try { loadConfig({ OV_MEDIA: 'yes' }, ['--demo']); throw new Error('no throw') } catch (e) { expect((e as ConfigError).code).toBe('bad-arg') }
+  })
   it('a supplied key is used and not ephemeral', () => {
     const c = loadConfig({ OV_STREAM_KEY: key(32), OV_AUDIT_DB: ':memory:' }, [])
     expect(c.ephemeral).toBe(false)

@@ -53,9 +53,11 @@
  *   built-in sound (`builtIn:<name>`, not in the package), or media on no
  *   shape and no sound, has no part: diagnosed `media-missing`.
  */
-import type { SchedulerEntry, SchedulerSnapshot } from '../engine/scheduler'
+import type { MediaActivation, SchedulerEntry, SchedulerSnapshot } from '../engine/scheduler'
 import type { AudioBehaviour, CmdBehaviour, DiagnosticSink, MediaRecord, ShowSlide, TimeNode, VideoBehaviour } from '../types'
 import type { MediaLease, MediaLeaseResult } from './lease'
+import { parseMediaCommand } from './commands'
+import { mediaPlayheadAt, type MediaEvent } from '../engine/media-ends'
 
 /** A shape's box in CSS px relative to the audience surface root. */
 export interface MediaBox { left: number; top: number; width: number; height: number }
@@ -87,6 +89,17 @@ export interface MediaPlayerDeps {
   stopTransitionSound?(onlyLooping: boolean): boolean
   /** @internal Element factory (tests); default: `root.ownerDocument.createElement`. */
   create?(kind: 'audio' | 'video'): HTMLMediaElement
+  /**
+   * Additive (streaming piece 5, spec §5.2): the show clock decides media ends and the element follows it. Bytes that
+   * arrive after the node began start where the node's own clock is (`mediaPlayheadAt`, the clock of the computed
+   * end: time since its begin less time paused by deck commands, from its last `playFrom` seek; final review F1). A
+   * position at or past its playback's end never plays and its lease is released; an activation the timeline already
+   * ended never plays (as without it). A play, resume or toggle that comes while the bytes are on their way continues
+   * the activation. Absent (local shows): unchanged, the element starts at the node's `playFrom` offset or 0.
+   */
+  clocked?: boolean
+  /** With `clocked`: a record's `durationMs` (the plan's), so the position folds onto the clip and an elapsed one never plays. */
+  durationOf?(rec: MediaRecord): number | undefined
 }
 
 export interface MediaController {
@@ -97,8 +110,13 @@ export interface MediaController {
   retry(nodeId: number): void
   /** Additive: the slide has media nodes or media commands (otherwise `sync` is never needed). */
   readonly wants: boolean
-  /** Additive: follows the timeline at slide time `t`; `quiet` records what has begun without acting (a checkpoint entry). */
-  sync(snap: SchedulerSnapshot, t: number, quiet?: boolean): void
+  /**
+   * Additive: follows the timeline at slide time `t`; `quiet` records what has begun without acting (a checkpoint entry).
+   * `history` (streamed, with `clocked`): the slide's exact activations by `t` (`SlideTimeline.activations`, the
+   * history `slideMediaEnds` reads), so a media node or command a frame stepped over begins at its own time, not at
+   * the frame that observed it (final review R1). Absent, or without `clocked`: begins are sampled from the snapshot.
+   */
+  sync(snap: SchedulerSnapshot, t: number, quiet?: boolean, history?: () => readonly MediaActivation[]): void
   /** Additive: the slide is left. */
   leave(): void
 }
@@ -163,6 +181,8 @@ interface NodeState {
   from?: number
   button?: HTMLButtonElement
   iterations: number
+  /** With `clocked`: the activation's own commands, from its begin (its playhead's input). */
+  log: MediaEvent[]
   /** Begun (active or frozen) at the last sync. */
   seen: boolean
   /** Observed active, so leaving `active` means its own timing ended it. */
@@ -301,7 +321,7 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
           const rec = onShape ? slide.media.find((m) => m.spid === spid) : sound ? slide.media.find((m) => m.rId === sound) : undefined
           const st: NodeState = {
             node: n, id: n.ctn.id, spid, ...(sound !== undefined ? { sound } : {}), rec,
-            activation: 0, ended: false, begin: 0, opening: false, openGen: 0, unplayable: false, want: false, iterations: 0, seen: false, wasActive: false,
+            activation: 0, ended: false, begin: 0, opening: false, openGen: 0, unplayable: false, want: false, iterations: 0, log: [], seen: false, wasActive: false,
           }
           nodes.set(st.id, st)
           if (onShape && !bySpid.has(spid)) bySpid.set(spid, st)
@@ -442,6 +462,7 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       st.begin = begin
       st.due = undefined
       st.want = true
+      st.log = from !== undefined ? [{ at: begin, type: 'cmd', nodeId: st.id, cmd: { verb: 'playFrom', seconds: from } }] : []
       removeButton(st)
       const rc = st.node.ctn.repeatCount
       st.iterations = typeof rc === 'number' && Number.isFinite(rc) && rc > 1 ? Math.ceil(rc) - 1 : 0
@@ -498,9 +519,19 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
           return
         }
         if (left) { res.release(); return }
-        attach(st, el, res)
-        if (st.from !== undefined) el.currentTime = st.from
-        st.from = undefined
+        if (deps.clocked) {
+          // Streamed (§5.2): late bytes join the node where its own clock is, the computed end's clock (F1).
+          const head = mediaPlayheadAt(st.node, deps.durationOf?.(rec), st.begin, st.log, now())
+          st.from = undefined
+          if (head.done) { res.release(); return }
+          attach(st, el, res)
+          if (head.iteration > 0) st.iterations = Math.max(0, st.iterations - head.iteration)
+          if (head.offset > 0) el.currentTime = head.offset / 1000
+        } else {
+          attach(st, el, res)
+          if (st.from !== undefined) el.currentTime = st.from
+          st.from = undefined
+        }
         if (st.want) doPlay(st)
       }, () => {
         // Only an abort rejects (the slide was left): nothing was charged.
@@ -571,6 +602,8 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
 
     /** A running or paused activation resumes; anything else starts a new one. */
     function resumeOrStart(st: NodeState, t: number, from?: number): void {
+      // Streamed: still opening, the activation goes on (its log holds any seek); its bytes join at its position (F1).
+      if (deps.clocked && !st.live && st.opening && st.activation > 0 && !st.ended) { st.want = true; return }
       if (st.live && st.activation > 0 && !st.ended) {
         if (from !== undefined) st.live.el.currentTime = from
         st.want = true
@@ -580,7 +613,8 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
 
     function command(c: CmdBehaviour, t: number): void {
       const text = c.cmd.trim()
-      if (c.cmdType === 'evt' && text.toLowerCase() === 'onstopaudio') {
+      const parsed = parseMediaCommand(c.cmdType, c.cmd)
+      if (parsed?.verb === 'onstopaudio') {
         // "Stop previous sound": every audio of the slide, and the transition sound.
         for (const st of nodes.values()) if (st.node.kind === 'audio') stop(st.id)
         for (const live of [...carried]) if (live.sound) teardown(live, true)
@@ -591,14 +625,17 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       const st = spid === undefined ? undefined : bySpid.get(spid)
       if (c.cmdType !== 'call') { diagnose('media-command', { spid: spid ?? String(c.ctn.id) }, `cmd type="${c.cmdType}" cmd="${text}" is not supported`); return }
       if (!st) { diagnose('media-command', { spid: spid ?? String(c.ctn.id) }, `cmd "${text}" targets no media node`); return }
-      const from = /^playFrom\(\s*([0-9]+(?:\.[0-9]+)?)\s*\)$/.exec(text)
-      if (from) { resumeOrStart(st, t, Number(from[1])); return }
-      switch (text) {
+      if (!parsed) { diagnose('media-command', st, `cmd "${text}" is not supported`); return }
+      // Streamed: the running activation's own clock (stops and slide exits end it elsewhere).
+      const playing = deps.clocked && !st.live && st.opening ? st.want : !!st.live?.playing
+      if (deps.clocked && st.activation > 0 && !st.ended && parsed.verb !== 'stop') st.log.push({ at: t, type: 'cmd', nodeId: st.id, cmd: parsed })
+      switch (parsed.verb) {
+        case 'playFrom': resumeOrStart(st, t, parsed.seconds); return
         case 'play': case 'resume': resumeOrStart(st, t); return
         case 'pause': pause(st.id); return
         case 'stop': stop(st.id); return
         case 'togglePause':
-          if (st.live?.playing) pause(st.id)
+          if (playing) pause(st.id)
           else resumeOrStart(st, t)
           return
         default:
@@ -610,8 +647,17 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       for (const st of nodes.values()) if (st.due !== undefined && t >= st.due && !st.ended) endNow(st, true, st.due)
     }
 
-    function sync(snap: SchedulerSnapshot, t: number, quiet = false): void {
+    function sync(snap: SchedulerSnapshot, t: number, quiet = false, history?: () => readonly MediaActivation[]): void {
       if (left) return
+      // Streamed: exact begins from the timeline history (R1); read once per sync, only when something begins.
+      let acts: readonly MediaActivation[] | undefined
+      const exact = (id: number, sampled: number): number => {
+        if (!deps.clocked || !history) return sampled
+        acts ??= history()
+        let best: number | undefined
+        for (const a of acts) if (a.node.ctn.id === id && a.begin <= t && (best === undefined || a.begin > best)) best = a.begin
+        return best ?? sampled
+      }
       fireDue(t)
       if (nodes.size === 0 && cmds.length === 0) return
       const active = new Map<number, SchedulerEntry>()
@@ -622,7 +668,7 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
         const e = active.get(st.id)
         const seen = !!e || frozen.has(st.id)
         // Begun: active, or already settled when first sampled (reduced motion enters each step settled) - it plays to its clip end.
-        if (seen && !st.seen && !quiet) start(st, beginOf(e, t))
+        if (seen && !st.seen && !quiet) start(st, exact(st.id, beginOf(e, t)))
         else if (!e && st.wasActive && !st.ended) {
           // The node's own timing ended it (dur, an end condition, a Next that settles its step): the clip stops with it.
           stopElement(st)
@@ -636,14 +682,18 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       if (cmds.length) {
         const seen = new Set<number>(active.keys())
         for (const e of snap.frozen) seen.add(e.node.ctn.id)
+        const fired: Array<{ c: CmdBehaviour; at: number }> = []
         for (const c of cmds) {
           const id = c.ctn.id
           const now = seen.has(id) || snap.ended.has(id)
           if (now && !begun.has(id)) {
             begun.add(id)
-            if (!quiet) command(c, beginOf(active.get(id), t))
+            if (!quiet) fired.push({ c, at: exact(id, beginOf(active.get(id), t)) })
           } else if (!now) begun.delete(id)
         }
+        // Streamed: commands a frame stepped over run in the order they began (stable: tree order on ties).
+        if (deps.clocked && history) fired.sort((a, b) => a.at - b.at)
+        for (const f of fired) command(f.c, f.at)
       }
       fireDue(t)
     }

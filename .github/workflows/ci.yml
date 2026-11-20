@@ -33,7 +33,8 @@ jobs:
     name: typecheck, test, build, corpus
     runs-on: ubuntu-latest
     # The suite outgrew 30 min (PR #85: the test step alone ran 29 min); the CF oracle and Stage 5 audit
-    # suites verify full Excel captures, which takes minutes on this runner.
+    # suites verify full Excel captures, which takes minutes on this runner. Piece 5 adds the ffmpeg
+    # install and the sandboxed server media tests (~3 min) ahead of it (PR #83).
     timeout-minutes: 45
     steps:
       - name: Check out the repository
@@ -67,9 +68,24 @@ jobs:
       - name: Typecheck the stream server
         run: bun run typecheck:server
 
-      # Before the suite, so corpus-regressions.test.ts runs instead of skipping.
+      # Piece 5 (plan D5/D6): the stream server's sandboxed ffmpeg. The media tests run with
+      # OV_MEDIA_REQUIRED=1, so a missing or failing probe (version < 6, codec, demuxer, sandbox) fails
+      # the job instead of skipping. The sysctl lets `unshare --user --net` work on ubuntu-24.04.
+      - name: Install ffmpeg for the stream server media tests
+        run: |
+          sudo apt-get install -y ffmpeg
+          ffmpeg -hide_banner -version | head -1
+
+      - name: Allow unprivileged user namespaces (unshare --user --net)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      # Before the media tests and the suite: the media wire audit opens corpus decks, and
+      # corpus-regressions.test.ts runs instead of skipping.
       - name: Fetch the real-file corpus
         run: bun scripts/fetch-corpus.ts
+
+      - name: Stream server media tests (sandboxed ffmpeg, required)
+        run: cd server && OV_MEDIA_REQUIRED=1 bun test test/media
 
       - name: Run the test suite (pixel-golden suites excluded — see note above)
         run: bunx vitest run --exclude 'tests/golden*.test.ts'

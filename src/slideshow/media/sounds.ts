@@ -32,6 +32,14 @@ export interface TransitionSoundDeps {
   open(rec: MediaRecord, signal: AbortSignal): Promise<MediaLeaseResult>
   /** @internal Element factory (tests). */
   create?(kind: 'audio'): HTMLMediaElement
+  /**
+   * Additive (streaming piece 5, spec §5.2; final review F3): the show clock and each record's duration. The sound's
+   * start is taken on `now()` when its slide is entered; bytes that arrive later seek to the time elapsed since
+   * (modulo the duration for a looping sound), and a non-looping sound whose duration has elapsed never plays (its
+   * lease is released). Loop, stop and slide-change behaviour are unchanged. Absent (local shows): unchanged, a sound
+   * plays from 0 whenever its bytes arrive.
+   */
+  clock?: { now(): number; durationOf(rec: MediaRecord): number | undefined }
 }
 
 export interface TransitionSoundController extends TransitionSound {
@@ -50,6 +58,8 @@ interface Playing {
   el?: HTMLMediaElement
   lease?: MediaLease
   abort: AbortController
+  /** With `clock`: the intended start, on the show clock. */
+  begin?: number
 }
 
 export function createTransitionSound(deps: TransitionSoundDeps): TransitionSoundController {
@@ -118,7 +128,7 @@ export function createTransitionSound(deps: TransitionSoundDeps): TransitionSoun
         diagnose(index, 'media-codec', 'transition-sound', `The browser cannot decode the transition sound (${rec.contentType}); the transition runs silent`)
         return
       }
-      const p: Playing = { slide: index, loop: want.loop, abort: new AbortController() }
+      const p: Playing = { slide: index, loop: want.loop, abort: new AbortController(), ...(deps.clock ? { begin: deps.clock.now() } : {}) }
       playing = p
       deps.open(rec, p.abort.signal).then((res) => {
         if ('refused' in res) {
@@ -127,6 +137,15 @@ export function createTransitionSound(deps: TransitionSoundDeps): TransitionSoun
           return
         }
         if (playing !== p) { res.release(); return }
+        // Streamed: late bytes join the sound where its clock is; a finished one never plays.
+        let offset = 0
+        if (deps.clock && p.begin !== undefined) {
+          const elapsed = Math.max(0, deps.clock.now() - p.begin)
+          const d = deps.clock.durationOf(rec)
+          const known = d !== undefined && Number.isFinite(d) && d > 0
+          if (!p.loop && d !== undefined && Number.isFinite(d) && elapsed >= d) { playing = undefined; res.release(); return }
+          offset = known && p.loop ? elapsed % d : elapsed
+        }
         if (p.loop) res.retain(Infinity)
         p.lease = res
         p.el = el
@@ -136,6 +155,7 @@ export function createTransitionSound(deps: TransitionSoundDeps): TransitionSoun
         el.hidden = true
         deps.root.append(el)
         el.addEventListener('ended', () => { if (playing === p && !p.loop) stop() })
+        if (offset > 0) el.currentTime = offset / 1000
         play(p)
       }, () => { if (playing === p) playing = undefined })
     },

@@ -5,7 +5,7 @@
 import { extendedCodeword } from './mark/bch'
 import { insertMessage } from './mark/message'
 import { CODEC_ID } from './mark/params'
-import { AUDIT_RETENTION_SEC, AuditStore, type CopyRecord, type DeliveryRecord, type NotesMarkRecord, type NotesRecord, type PrintRecord, type ShowDeliveryRecord, type StoredRow } from './audit-store'
+import { AUDIT_RETENTION_SEC, AuditStore, type CopyRecord, type DeliveryRecord, type MediaDeliveryRecord, type NotesMarkRecord, type NotesRecord, type PrintRecord, type ShowDeliveryRecord, type StoredRow } from './audit-store'
 import type { A11yMode, CopyPolicy, PrintPolicy } from './hooks'
 
 export { AUDIT_RETENTION_SEC }
@@ -42,8 +42,9 @@ export interface AuditRow {
   /** Show sends recorded for this sid (piece 4): charged sends, assets sent, and assets shipped without Layer-1. */
   showSent: { sends: number; assets: number; unmarked: number }
 }
-/** `notes` is whether this sid may get speaker notes (`canNotes`: presenter role and policy), Stage 3c. */
-export interface TextServices { copy: CopyPolicy; textA11y: A11yMode; print: PrintPolicy; notes: boolean }
+/** `notes` is whether this sid may get speaker notes (`canNotes`: presenter role and policy), Stage 3c. `media`
+ * (piece 5): whether the sid is served media in shows (`can.media`). */
+export interface TextServices { copy: CopyPolicy; textA11y: A11yMode; print: PrintPolicy; notes: boolean; media: boolean }
 export type AuditRowInput = Omit<AuditRow, 'untraceable' | 'forensicLayers' | 'delivered' | 'markSettings' | 'servicesChanged' | 'copied' | 'printed' | 'notesShown' | 'showSent'> & { markSettings: Omit<AuditRow['markSettings'], 'forensic'> & { forensic?: boolean } }
 
 export interface Issued { token24: number; salt8: number; msg40: Uint8Array; code: Int8Array }
@@ -118,10 +119,20 @@ export class AuditTable {
     if (!this.store.getRow(r.sid)) throw new Error(`no audit row for ${r.sid}`)
     this.store.putShow({ ...r, at: Math.floor(Date.now() / 1000) })
   }
+  /** One media answer (piece 5: a delivery, or a refusal of a bound mediaId) to `sid`: durable before `media-start`
+   * or `media-refused`. Throws for an unknown or expired sid. */
+  recordMedia(r: Omit<MediaDeliveryRecord, 'at'>): void {
+    if (!this.store.getRow(r.sid)) throw new Error(`no audit row for ${r.sid}`)
+    this.store.putMedia({ ...r, at: Math.floor(Date.now() / 1000) })
+  }
+  mediaDeliveries(sid: string): MediaDeliveryRecord[] { return this.store.mediaDeliveries(sid) }
+  mediaDeliveryById(mediaId: string): MediaDeliveryRecord | undefined { return this.store.mediaDeliveryById(mediaId) }
+  /** The `media_deliveries` columns, in order (schema checks). */
+  mediaColumns(): string[] { return this.store.columnsOf('media_deliveries') }
   /** A resume changed `sid`'s resolved text services: durable before they take effect. Throws for an unknown or expired sid. */
   recordServices(sid: string, s: TextServices): void {
     if (!this.store.getRow(sid)) throw new Error(`no audit row for ${sid}`)
-    this.store.putServices({ sid, copy: s.copy, textA11y: s.textA11y, print: s.print, notes: s.notes, at: Math.floor(Date.now() / 1000) })
+    this.store.putServices({ sid, copy: s.copy, textA11y: s.textA11y, print: s.print, notes: s.notes, media: s.media, at: Math.floor(Date.now() / 1000) })
   }
   /** Frozen view: issuance plus what has been delivered so far (distinct delivery records). */
   get(sid: string): AuditRow | undefined {
@@ -139,15 +150,15 @@ export class AuditTable {
     const prints = this.store.prints(sid)
     const notes = this.store.notesDeliveries(sid)
     // A row stored before Stage 3a reads as off; one stored before 3b has no print record and reads as print off;
-    // one stored before 3c has no notes record and reads as notes off.
+    // one stored before 3c has no notes record and reads as notes off; one stored before piece 5 reads as media off.
     const stored = (r as Partial<StoredRow>).services as Partial<TextServices> | undefined
-    const services: TextServices = stored ? { ...stored as TextServices, print: stored.print ?? false, notes: stored.notes ?? false } : { copy: false, textA11y: 'off', print: false, notes: false }
+    const services: TextServices = stored ? { ...stored as TextServices, print: stored.print ?? false, notes: stored.notes ?? false, media: stored.media ?? false } : { copy: false, textA11y: 'off', print: false, notes: false, media: false }
     return Object.freeze({
       ...r, visibleMark: Object.freeze({ ...r.visibleMark }), markSettings: Object.freeze({ ...r.markSettings, forensic: forensicLayers.length > 0 }), forensic: r.forensic && Object.freeze({ ...r.forensic }),
       forensicLayers: Object.freeze(forensicLayers) as Array<'l1'>, delivered: Object.freeze({ marked, unmarked: ds.length + notesMarked - marked }),
       untraceable: r.markSettings.visible === 'off' && forensicLayers.length === 0,
       services: Object.freeze({ ...services }),
-      servicesChanged: Object.freeze(this.store.services(sid).map((x) => Object.freeze({ copy: x.copy, textA11y: x.textA11y, print: x.print, notes: x.notes, at: x.at }))) as AuditRow['servicesChanged'],
+      servicesChanged: Object.freeze(this.store.services(sid).map((x) => Object.freeze({ copy: x.copy, textA11y: x.textA11y, print: x.print, notes: x.notes, media: x.media, at: x.at }))) as AuditRow['servicesChanged'],
       copied: Object.freeze({ events: copies.length, paragraphs: copies.reduce((n, c) => n + c.paragraphs, 0) }),
       printed: Object.freeze({ jobs: prints.length, pages: prints.reduce((n, p) => n + p.pages, 0) }),
       notesShown: Object.freeze({ images: notes.length, chars: notes.reduce((n, x) => n + x.charsDrawn, 0) }),

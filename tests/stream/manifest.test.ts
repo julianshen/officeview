@@ -95,4 +95,35 @@ describe('MANIFEST', () => {
     expect(await throughFrames(bytes)).toMatchObject({ ok: false, reason: 'decoded-cap' })
     expect(() => encodeManifest(big as Manifest)).toThrow(/256 KiB/)
   })
+
+  describe('piece 5 media (spec §4.1, D18)', () => {
+    const AUDIO = { maxSeconds: 1800, maxBytes: 33554432 }
+    const on = () => ({ ...exampleManifest(), can: { ...exampleManifest().can, media: true }, caps: { ...exampleManifest().caps, media: { audio: { ...AUDIO } } } })
+    it('can.media must be a boolean; absent means off (a piece-4 server)', () => {
+      expect(validateManifest(on())).toEqual({ ok: true, manifest: on() })
+      const off = { ...exampleManifest(), can: { ...exampleManifest().can, media: false }, caps: { ...exampleManifest().caps, media: null } }
+      expect(validateManifest(off)).toEqual({ ok: true, manifest: off })
+      for (const media of ['yes', 1, null, {}]) expect(validateManifest({ ...on(), can: { ...on().can, media } })).toEqual({ ok: false, field: 'can.media' })
+      const r = validateManifest(exampleManifest())
+      expect(r.ok && r.manifest.can.media).toBeFalsy()
+    })
+    it('caps.media is null or {audio: {…}} with the exact audio values; an extra member is ignored', () => {
+      const withVideo = { ...on(), caps: { ...on().caps, media: { audio: { ...AUDIO }, video: {} } } }
+      expect(validateManifest(withVideo)).toEqual({ ok: true, manifest: on() })
+      for (const audio of [{ ...AUDIO, maxSeconds: 1801 }, { ...AUDIO, maxBytes: 1 }, { maxSeconds: 1800 }, null, 'x'])
+        expect(validateManifest({ ...on(), caps: { ...on().caps, media: { audio } } }).ok).toBe(false)
+      expect(validateManifest({ ...on(), caps: { ...on().caps, media: {} } })).toEqual({ ok: false, field: 'caps.media.audio' })
+      expect(validateManifest({ ...on(), caps: { ...on().caps, media: 1 } })).toEqual({ ok: false, field: 'caps.media' })
+      // Media on needs its caps.
+      expect(validateManifest({ ...on(), caps: { ...on().caps, media: null } })).toEqual({ ok: false, field: 'caps.media' })
+    })
+    it('units.list[i].media: true is accepted; false or 1 reject the manifest', () => {
+      const units = { count: 2, list: [{ w: 960, h: 540 }, { w: 960, h: 540, anim: true, media: true }] }
+      expect(validateManifest({ ...on(), units })).toEqual({ ok: true, manifest: { ...on(), units } })
+      for (const media of [false, 1]) {
+        const bad = { count: 2, list: [{ w: 960, h: 540 }, { w: 960, h: 540, media }] }
+        expect(validateManifest({ ...on(), units: bad })).toEqual({ ok: false, field: 'units.list[1].media' })
+      }
+    })
+  })
 })

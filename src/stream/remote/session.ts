@@ -22,13 +22,15 @@ import { FRAGMENT_CAP, HEADER_BYTES, Kind, Reassembler, REASSEMBLY_MS, type Fram
 import { validateManifest, type Manifest } from '../manifest'
 import type { Asset } from '../ops'
 import { decodeRasterBody, UNIT_RASTER_DECODED_CAP } from '../raster'
-import { decodeShowMessage, SHOW_PLAN_LIMITS } from '../show-plan'
+import { MEDIA_WIRE_LIMITS, parseMediaRefused, parseMediaShowOk, parseMediaStart, type MediaStart } from '../media-wire'
+import { decodeShowMessage, MEDIA_ID, SHOW_PLAN_LIMITS } from '../show-plan'
 import type { AllocationOwner, Lease } from '../../slideshow/types'
 import type { StreamSource } from '../source'
 import { decodeUnit } from '../unit'
 import { closeName, StreamSessionError, type StreamErrorCode } from './errors'
 import { PRINT_JOB_MAX_BLOB_BYTES, PRINT_JOB_MAX_DECODED, PRINT_REFUSALS, printDecodedBound, printPage, printStart, type PrintedPage, type PrintRefusalCode } from './print-wire'
 import { Admission, ASSET_ALLOWANCE, SESSION_TRANSIENT_BYTES, unitCost } from './reservation'
+import { MediaSendLog } from './media-pacing'
 import { UNIT_FIRST_CAP, UNIT_RESEND_CAP, UNIT_SPAN_MS, UnitSendLog, type UnitBudgetView } from './unit-budget'
 import { admit, emptyTally, isTerminal, requestBody, TEXT_ANSWER_TYPES, TEXT_MESSAGE_BYTES, TEXT_REFUSALS, textMessage, utf8Bytes, type TextMessage, type TextRefusalCode, type TextRequest, type TextTally } from './text-wire'
 
@@ -87,6 +89,8 @@ export const CAPS: Partial<Record<Kind, [encoded: number, decoded: number]>> = {
   [Kind.NOTES_RASTER]: [NOTES_ENCODED_CAP, 64 << 20],
   // SHOW_PLAN (piece 4): one message ≤ 8 MiB encoded / 32 MiB decoded (parent §14); a bundle is several messages.
   [Kind.SHOW_PLAN]: [8 << 20, 32 << 20],
+  // MEDIA_CHUNK (piece 5, D14): stored, so its decoded cap equals its encoded cap. No request expects one yet.
+  [Kind.MEDIA_CHUNK]: [4 << 20, 4 << 20],
 }
 /** The notes image (twins of server/src/notes.ts): exactly 720 × scale device px
  * wide, 1..NOTES_MAX_PX device px tall. */
@@ -259,6 +263,76 @@ interface ShowReq {
 }
 const isShow = (r: UnitReq | ShowReq): r is ShowReq => 'show' in r
 
+/** A piece-5 media answer: the checked chunks of one delivered file and its start, or a typed refusal. */
+export type MediaDelivery = { chunks: Uint8Array[]; start: MediaStart } | { refused: string }
+export type MediaShowAnswer = { queued: number } | { refused: string }
+/** D12: the server's `media` class allows 6 `media-request`s in any 60 s per sid; the client holds its sends to it. */
+export const MEDIA_REQUEST_CAP = 6
+/** A media send keeps its slot from its first reply for the server's 60 s window plus a 2 s margin (as R29). */
+export const MEDIA_SPAN_MS = 62_000
+/** Ruling 3: look-ahead requests (a slide other than the viewer's) hold at most this many of the 6 slots; the rest
+ * are the current slide's. */
+export const MEDIA_AHEAD_CAP = 4
+/** D1: `media-cursor` is coalesced to at most one per this many ms (the latest unit wins). */
+export const MEDIA_CURSOR_MS = 200
+/** After `media-start`, a delivery fails when no chunk arrived for this long (a 1 MiB chunk on a slow link). Before
+ * `media-start` there is no deadline: the encode may take minutes (spec §6: up to 2 × duration + 30 s). */
+export const MEDIA_CHUNK_MS = 30_000
+/** The admission grant a media request holds from its send to its settlement (ruling 4): one kind-9 message of at
+ * most 4 MiB in flight, its stored fragments (the payload plus the 4-byte whole CRC) plus their contiguous copy
+ * (`Reassembler.unstore`). Held for the whole delivery, so no chunk can find the admission short. */
+export const MEDIA_REQUEST_GRANT = 2 * (4 << 20) + 4
+/**
+ * Ruling 4: where a media request's bytes are charged (the show workspace, via the remote lease). The session reserves
+ * the per-file cap before it sends, shrinks it to the file at `media-start`, and gives it back on any settlement
+ * without a delivery; a delivered file's reservation passes to the caller.
+ */
+export interface MediaRoom {
+  /** Reserve `bytes` now (it may first evict delivered, unused entries); false: no room yet, the request waits unsent. */
+  reserve(bytes: number): boolean
+  /** `media-start`: shrink the reservation to `start.bytes` (≤ the reserved cap). */
+  fit(start: MediaStart): void
+  /** Settled without a delivery: return the reservation (idempotent). */
+  release(): void
+  /** Calls `wake` after room may have come back (the workspace's `onFree`); returns the unsubscribe. Without it, a
+   * request short of room is retried only on the session's own events (a settlement, a reply, a cursor move). */
+  onFree?(wake: () => void): () => void
+}
+
+interface MediaReq {
+  readonly mediaId: string
+  /** The slide the request is for (sent as `unit`, plan fix round 1). */
+  readonly unit?: number
+  reqId: number
+  /** Sent on the current socket (false while it waits for a pacing slot). */
+  sent: boolean
+  rotatedRetry: boolean
+  /** The checked `media-start`. */
+  start?: MediaStart
+  /** The checked chunks so far, and their bytes. */
+  chunks: Uint8Array[]; bytes: number
+  /** Every declared chunk has arrived: it resolves once the inbox has drained what was queued with it. */
+  complete: boolean
+  /** The admission grant (MEDIA_REQUEST_GRANT), held from its send to its settlement. */
+  grant?: () => void
+  /** Its workspace room is reserved (`room.reserve`), until settled or delivered. */
+  reserved: boolean
+  /** Subscribed to `room.onFree` while it waits for room (review round 1: woken by events, never polled). */
+  unwake?: () => void
+  /** After `media-start`, while no chunk is in reassembly, it fails at this time (`now()`). */
+  deadline: number
+  readonly room: MediaRoom
+  resolve: (d: MediaDelivery) => void
+  fail: (e: unknown) => void
+}
+interface MediaShowReq {
+  readonly unit: number
+  reqId: number
+  sent: boolean
+  rotatedRetry: boolean
+  resolve: (a: MediaShowAnswer) => void
+}
+
 /** Re-issued after a resume; copy and a11y are not (the server may already
  * have counted them against the copy quota). */
 const REISSUED = new Set<TextRequest['type']>(['search', 'select'])
@@ -308,6 +382,22 @@ export class StreamSession {
   /** Unit and show requests waiting for log room, oldest first (each still in `units` / `shows`). */
   private readonly waiting = new Set<UnitReq | ShowReq>()
   private drainTimer?: ReturnType<typeof setTimeout>
+  /** Piece 5: `media-request`s by their current reqId, and those waiting for a pacing slot (oldest first). */
+  private readonly mediaReqs = new Map<number, MediaReq>()
+  private readonly mediaWaiting = new Set<MediaReq>()
+  /** D12: every `media-request` the server's `media` class counts, from any caller (survives resume). */
+  private readonly mediaLog = new MediaSendLog(() => this.now(), MEDIA_REQUEST_CAP, MEDIA_AHEAD_CAP, MEDIA_SPAN_MS)
+  /** Ruling 3: the viewer's slide (the last `mediaShow` or `mediaCursor` unit, before coalescing). */
+  private mediaCurrent?: number
+  /** Set while `drainMedia` runs: what it frees itself (a grant it could not use) wakes nothing. */
+  private mediaDraining = false
+  private mediaDrainTimer?: ReturnType<typeof setTimeout>
+  /** `media-show`s by their current reqId. */
+  private readonly mediaShows = new Map<number, MediaShowReq>()
+  /** D1: the last `media-cursor` sent (`now()`), the unit waiting for the trailing edge, and its timer. */
+  private cursorAt = -Infinity
+  private cursorUnit?: number
+  private cursorTimer?: ReturnType<typeof setTimeout>
   /**
    * R28: the session's unit send budget, for callers that pace themselves (the
    * show fetcher). Room is UNIT_FIRST_CAP less the window's charged sends and
@@ -320,6 +410,8 @@ export class StreamSession {
 
   private constructor(private readonly source: StreamSource, private readonly o: SessionOptions) {
     this.ended = new Promise((r) => { this.settleEnded = r })
+    // A released admission grant may let a media request waiting for one go out.
+    this.admission.onFree = () => this.mediaWake()
   }
 
   /** Calls `cb` after a resume has replaced `manifest`; returns the unsubscribe. */
@@ -346,7 +438,7 @@ export class StreamSession {
   stats() {
     return {
       inFlight: this.admission.inFlight, inFlightBytes: this.admission.inFlightBytes, pending: this.units.size,
-      printing: !!this.printJob, notesPending: this.notesReqs.size, showPending: this.shows.size, printHeld: this.printJob?.pages.length ?? 0, printMaxBlobBytes: this.printMaxBlobBytes(),
+      printing: !!this.printJob, notesPending: this.notesReqs.size, showPending: this.shows.size, mediaPending: this.mediaReqs.size, printHeld: this.printJob?.pages.length ?? 0, printMaxBlobBytes: this.printMaxBlobBytes(),
       /** Encoded bytes held in partial reassembly. */
       reassemblyBytes: this.reasm.bufferedBytes,
     }
@@ -581,6 +673,118 @@ export class StreamSession {
   showMorph(from: number, to: number, fromStep: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions): Promise<ShowReply> {
     const bad = !this.shownUnit(from) || from === to || !Number.isInteger(fromStep) || fromStep < 0 || fromStep > SHOW_PLAN_LIMITS.steps
     return this.showRequest('morph', to, { from, to, fromStep }, scale, motion, signal, o, bad ? `no Morph pair ${from} → ${to} at ${fromStep}` : undefined)
+  }
+
+  /**
+   * Piece 5 (D1): the show started at server unit `unit`. Sends `media-show {reqId, token, unit}` (message rate only)
+   * and answers the server's `media-show-ok {queued}` or `media-refused {reason}` as `{refused}`. A stale-token
+   * `refused session-rotated` is re-sent once with the fresh token. Never sends while `can.media` is off
+   * (`media-unavailable`) or for a unit that is not shown (`invalid-unit`); a drop with it sent is `session-rotated`
+   * (a socket close is the server's implicit `media-end`); `mediaEnd()` settles it `media-unavailable`. Never rejects.
+   */
+  mediaShow(unit: number): Promise<MediaShowAnswer> {
+    if (this.state === 'closed') return Promise.resolve({ refused: this.failure?.code ?? 'closed' })
+    if (this.manifest.can.media !== true) return Promise.resolve({ refused: 'media-unavailable' })
+    if (!this.shownUnit(unit)) return Promise.resolve({ refused: 'invalid-unit' })
+    this.mediaCurrent = unit
+    return new Promise<MediaShowAnswer>((resolve) => {
+      let settled = false
+      const req: MediaShowReq = {
+        unit, reqId: 0, sent: false, rotatedRetry: false,
+        resolve: (a) => {
+          if (settled) return
+          settled = true
+          if (this.mediaShows.get(req.reqId) === req) this.mediaShows.delete(req.reqId)
+          resolve(a)
+        },
+      }
+      this.issueMediaShow(req)
+    })
+  }
+  /**
+   * D1: the viewer is on server unit `unit` (every slide change and jump). Sends `media-cursor {unit}`, coalesced to at
+   * most one per MEDIA_CURSOR_MS: a call inside the window is sent on its trailing edge, the latest unit winning.
+   * No reply. A no-op while `can.media` is off, the session is not open, or for a unit out of range.
+   */
+  mediaCursor(unit: number): void {
+    if (this.state === 'closed' || this.manifest.can.media !== true) return
+    if (!Number.isInteger(unit) || unit < 0 || unit >= this.manifest.units.count) return
+    this.cursorUnit = unit
+    // Ruling 3: queued look-ahead goes behind the new current slide's requests.
+    if (this.mediaCurrent !== unit) { this.mediaCurrent = unit; if (this.mediaWaiting.size) this.drainMedia() }
+    if (this.cursorTimer) return
+    const wait = this.cursorAt + MEDIA_CURSOR_MS - this.now()
+    if (wait <= 0) return this.flushCursor()
+    this.cursorTimer = setTimeout(() => this.flushCursor(), wait)
+  }
+  /**
+   * D12: one media file of the show, delivered whole: `media-request {reqId, token, mediaId, unit?}` (`unit`: the slide
+   * it is for; send it, especially for look-ahead), then `media-start` and its `chunks` stored kind-9 messages, or
+   * `media-refused {reason}` (also after the start: a revoked document).
+   * Ruling 4, reserve before sending: a request goes out only once `room.reserve` holds the 32 MiB per-file cap and
+   * the session admission holds MEDIA_REQUEST_GRANT (one of its 8 outstanding); until then it waits unsent and spends
+   * no pacing slot. `media-start` shrinks the reservation to the file (`room.fit`); every settlement without a
+   * delivery returns it (`room.release`); a delivery hands it to the caller. Holding the grant for the whole delivery,
+   * no chunk can find the admission short (`resource-limit` stays only as a defensive path).
+   * Kind 9 is admitted only for this live, started request, short of its declared chunks and bytes; Σ chunk bytes
+   * must equal `bytes`. Anything that does not match — a start over 64 KiB, for another id, over the 32 MiB audio cap
+   * or not audio/mp4; a chunk before the start, past the count or the bytes — is `policy-refused`.
+   * Ruling 3, pacing: sends are held to the session's `media` log (6 per 60 s); look-ahead (`unit` other than the
+   * viewer's slide) holds at most 4 slots, and the current slide's requests go first. A stale-token
+   * `refused session-rotated` is re-sent once on the same slot. Answers, never rejects, with `{refused}`, except: abort
+   * rejects with its reason, and a session end rejects with the session failure. `can.media` off answers
+   * `media-unavailable` without sending; a drop (or a call while resuming) answers `session-rotated`; `mediaEnd()`
+   * answers `media-unavailable`.
+   */
+  async mediaRequest(mediaId: string, signal: AbortSignal, room: MediaRoom, unit?: number): Promise<MediaDelivery> {
+    if (this.state === 'closed') throw this.failure ?? new StreamSessionError('closed')
+    if (signal?.aborted) throw signal.reason ?? abortError()
+    if (this.manifest.can.media !== true) return { refused: 'media-unavailable' }
+    if (typeof mediaId !== 'string' || !MEDIA_ID.test(mediaId)) return { refused: 'invalid-media' }
+    if (unit !== undefined && !this.shownUnit(unit)) return { refused: 'invalid-unit' }
+    // A drop ended the server's media for this sid (its implicit media-end): nothing is held for the new socket.
+    if (this.state === 'resuming') return { refused: 'session-rotated' }
+    return new Promise<MediaDelivery>((resolve, reject) => {
+      let settled = false
+      const settle = (done: () => void) => {
+        if (settled) return
+        settled = true
+        if (this.mediaReqs.get(req.reqId) === req) this.mediaReqs.delete(req.reqId)
+        this.mediaWaiting.delete(req)
+        signal?.removeEventListener('abort', onAbort)
+        if (req.reqId) this.reasm.drop(req.reqId)
+        if (req.grant) { const r = req.grant; req.grant = undefined; void this.inbox.then(r) }
+        if (req.unwake) { const u = req.unwake; req.unwake = undefined; u() }
+        if (req.reserved && !delivered) { req.reserved = false; try { room.release() } catch { /* the caller's */ } }
+        done()
+        // A slot, a grant or room may have come free for a waiting request.
+        if (this.mediaWaiting.size) this.scheduleMediaDrain(0)
+      }
+      let delivered = false
+      const onAbort = () => req.fail(signal!.reason ?? abortError())
+      const req: MediaReq = {
+        mediaId, ...(unit !== undefined ? { unit } : {}), reqId: 0, sent: false, rotatedRetry: false,
+        chunks: [], bytes: 0, complete: false, reserved: false, deadline: Infinity, room,
+        resolve: (d) => { delivered = !('refused' in d); settle(() => { if ('refused' in d) req.chunks = []; resolve(d) }) },
+        fail: (e) => settle(() => { req.chunks = []; reject(e) }),
+      }
+      signal?.addEventListener('abort', onAbort, { once: true })
+      this.issueMedia(req)
+    })
+  }
+  /**
+   * D1: the show ended. Sends `media-end {}` (no reply), drops a pending cursor, and settles every live media request
+   * and show `media-unavailable`: after `media-end` the server stops their deliveries without a reply. Pacing slots
+   * still waiting for a reply are taken as answered now. A no-op while `can.media` is off.
+   */
+  mediaEnd(): void {
+    if (this.state === 'closed' || this.manifest.can.media !== true) return
+    this.cancelCursor()
+    this.mediaCurrent = undefined
+    if (this.state === 'open' && this.sock?.readyState === 1) { try { this.send({ type: 'media-end' }) } catch { /* the close ends it too */ } }
+    for (const req of [...this.mediaReqs.values()]) req.resolve({ refused: 'media-unavailable' })
+    for (const req of [...this.mediaShows.values()]) req.resolve({ refused: 'media-unavailable' })
+    this.mediaLog.settleAll()
   }
 
   private shownUnit(u: number) {
@@ -959,6 +1163,196 @@ export class StreamSession {
     void this.inbox.then(() => { if (this.shows.get(req.reqId) === req) req.resolve(req.received) })
   }
 
+  // ── piece 5 media ──────────────────────────────────────────────────────
+
+  private flushCursor() {
+    this.cursorTimer = undefined
+    const unit = this.cursorUnit
+    this.cursorUnit = undefined
+    if (unit === undefined || this.state !== 'open' || this.sock?.readyState !== 1) return
+    try { this.send({ type: 'media-cursor', unit }) } catch { return }
+    this.cursorAt = this.now()
+  }
+  private cancelCursor() {
+    if (this.cursorTimer) { clearTimeout(this.cursorTimer); this.cursorTimer = undefined }
+    this.cursorUnit = undefined
+  }
+  private issueMediaShow(req: MediaShowReq) {
+    if (req.reqId && this.mediaShows.get(req.reqId) === req) this.mediaShows.delete(req.reqId)
+    req.reqId = this.allocId(); req.sent = false
+    this.mediaShows.set(req.reqId, req)
+    if (this.state === 'resuming' || !this.sock || this.sock.readyState !== 1) return
+    if (this.manifest.can.media !== true) return req.resolve({ refused: 'media-unavailable' })
+    try { this.send({ reqId: req.reqId, type: 'media-show', token: this.token, unit: req.unit }) } catch { return req.resolve({ refused: 'policy-refused' }) }
+    req.sent = true
+  }
+  private liveMediaShow(reqId: unknown): MediaShowReq | undefined {
+    const req = typeof reqId === 'number' ? this.mediaShows.get(reqId) : undefined
+    return req?.sent ? req : undefined
+  }
+  private onMediaShowText(req: MediaShowReq, m: Record<string, unknown>, data: string) {
+    if (m.type === 'error' || m.type === 'refused') {
+      // The server's shared `refused session-rotated` (ws.ts mediaOp): re-sent once.
+      if (m.type === 'refused' && m.code === 'session-rotated' && !req.rotatedRetry) { req.rotatedRetry = true; return this.issueMediaShow(req) }
+      return req.resolve({ refused: m.code === 'rate-limited' || m.code === 'session-rotated' ? m.code : 'policy-refused' })
+    }
+    try {
+      if (utf8Bytes(data) > MEDIA_WIRE_LIMITS.textBytes) throw new Error('over 64 KiB')
+      if (m.type === 'media-show-ok') return req.resolve({ queued: parseMediaShowOk(m).queued })
+      if (m.type === 'media-refused') return req.resolve({ refused: parseMediaRefused(m).reason })
+    } catch { /* fail closed below */ }
+    req.resolve({ refused: 'policy-refused' })
+  }
+
+  /** Sends the media request under a fresh reqId (the retired one's partial reassembly is dropped). `charged` false
+   * only for the stale-jti re-send, whose pacing slot moves to the new reqId (as R30). */
+  private issueMedia(req: MediaReq, charged = true) {
+    const prev = req.reqId
+    if (prev) { if (this.mediaReqs.get(prev) === req) this.mediaReqs.delete(prev); this.reasm.drop(prev) }
+    req.reqId = this.allocId(); req.sent = false; req.start = undefined; req.chunks = []; req.bytes = 0; req.complete = false; req.deadline = Infinity
+    if (!charged) this.mediaLog.transfer(prev, req.reqId)
+    this.mediaReqs.set(req.reqId, req)
+    if (this.state !== 'open' || !this.sock || this.sock.readyState !== 1) return req.resolve({ refused: 'session-rotated' })
+    if (this.manifest.can.media !== true) return req.resolve({ refused: 'media-unavailable' })
+    // The stale-token re-send keeps its slot, its grant and its room.
+    if (!charged) return this.transmitMedia(req, false)
+    this.mediaWaiting.add(req)
+    this.drainMedia()
+  }
+  /** Ruling 3: a request for a slide other than the viewer's (a request without `unit` is the viewer's). */
+  private mediaAhead(req: MediaReq) { return req.unit !== undefined && this.mediaCurrent !== undefined && req.unit !== this.mediaCurrent }
+  /** Ruling 4: the request's admission grant and workspace room, now or not yet (it waits unsent, spending nothing). */
+  private mediaReserve(req: MediaReq): boolean {
+    if (!req.grant) {
+      const grant = this.admission.tryAcquire(MEDIA_REQUEST_GRANT)
+      if (!grant) return false
+      req.grant = grant
+    }
+    if (!req.reserved) {
+      let ok = false
+      try { ok = req.room.reserve(MEDIA_WIRE_LIMITS.audioBytes) === true } catch { ok = false }
+      if (!ok) {
+        const r = req.grant; req.grant = undefined; r()
+        // Woken when the workspace gives bytes back, never polled.
+        if (!req.unwake) { try { req.unwake = req.room.onFree?.(() => this.mediaWake()) } catch { req.unwake = undefined } }
+        return false
+      }
+      req.reserved = true
+      if (req.unwake) { const u = req.unwake; req.unwake = undefined; u() }
+    }
+    return true
+  }
+  /** An event that may have freed a slot, a grant or room: drain once, soon (coalesced). */
+  private mediaWake() {
+    if (this.mediaDraining || !this.mediaWaiting.size) return
+    this.scheduleMediaDrain(0)
+  }
+  private transmitMedia(req: MediaReq, charged: boolean) {
+    this.mediaWaiting.delete(req)
+    if (req.unwake) { const u = req.unwake; req.unwake = undefined; u() }
+    try {
+      this.send({ reqId: req.reqId, type: 'media-request', token: this.token, mediaId: req.mediaId, ...(req.unit !== undefined ? { unit: req.unit } : {}) })
+    } catch { return req.resolve({ refused: 'policy-refused' }) }
+    req.sent = true
+    // D12: one slot per counted send; it holds until the server's first reply for this reqId, then a span.
+    if (charged) this.mediaLog.record(req.reqId, this.mediaAhead(req))
+    this.ensureSweeper()
+  }
+  /** The first server reply for a media send starts its span; a waiting send may now get a timed slot. */
+  private mediaAnswered(reqId: number) {
+    if (this.mediaLog.answered(reqId) && this.mediaWaiting.size) this.scheduleMediaDrain(0)
+  }
+  /** Sends what has a slot and room: the current slide's requests first, then look-ahead, each oldest first. */
+  private drainMedia() {
+    if (this.mediaDrainTimer) { clearTimeout(this.mediaDrainTimer); this.mediaDrainTimer = undefined }
+    if (this.state !== 'open' || !this.sock || this.sock.readyState !== 1) return
+    this.mediaDraining = true
+    try {
+      const order = [...this.mediaWaiting].sort((a, b) => Number(this.mediaAhead(a)) - Number(this.mediaAhead(b)))
+      for (const req of order) {
+        if (this.mediaReqs.get(req.reqId) !== req) { this.mediaWaiting.delete(req); continue }
+        const ahead = this.mediaAhead(req)
+        if (!this.mediaLog.room(ahead)) { if (!ahead) break; continue }
+        // Short of a grant or room: it waits for the event that frees them (`mediaWake`).
+        if (!this.mediaReserve(req)) continue
+        this.transmitMedia(req, true)
+      }
+    } finally { this.mediaDraining = false }
+    // A timer only for a request waiting on a pacing slot that will age out; one short of room or a grant has a slot
+    // now and waits for its event, and a slot still awaiting its reply is freed by `mediaAnswered`.
+    let ms = Infinity
+    for (const req of this.mediaWaiting) {
+      const ahead = this.mediaAhead(req)
+      if (!this.mediaLog.room(ahead)) ms = Math.min(ms, this.mediaLog.waitMs(ahead))
+    }
+    if (Number.isFinite(ms)) this.scheduleMediaDrain(Math.max(ms, 0))
+  }
+  private scheduleMediaDrain(ms: number) {
+    if (!this.mediaWaiting.size) return
+    if (this.mediaDrainTimer) clearTimeout(this.mediaDrainTimer)
+    this.mediaDrainTimer = setTimeout(() => this.drainMedia(), ms)
+  }
+  private liveMedia(reqId: unknown): MediaReq | undefined {
+    const req = typeof reqId === 'number' ? this.mediaReqs.get(reqId) : undefined
+    return req?.sent ? req : undefined
+  }
+  /** A stale-token refusal of a live media request (or show) that onText re-sends: the server never counted it. */
+  private mediaRotatedResend(m: Record<string, unknown>) {
+    if (m.code !== 'session-rotated' || m.type !== 'refused') return false
+    const req = this.liveMedia(m.reqId)
+    return !!req && !req.start && !req.rotatedRetry
+  }
+  /** The bytes a started request may still receive. */
+  private mediaLeft(req: MediaReq | undefined) { return req?.start ? req.start.bytes - req.bytes : 0 }
+  /** Kind 9 is admitted only for a live, started request short of its declared chunks and bytes. It holds its
+   * admission grant from its send (ruling 4), so a chunk never finds the admission short. */
+  private mediaAdmits(reqId: number): boolean {
+    const req = this.liveMedia(reqId)
+    return !!req?.start && !!req.grant && !req.complete && req.chunks.length < req.start.chunks && this.mediaLeft(req) > 0
+  }
+  /** The text messages of a media request: `media-start`, `media-refused`, the shared stale-token refusal. */
+  private onMediaText(req: MediaReq, m: Record<string, unknown>, data: string) {
+    if (m.type === 'error' || m.type === 'refused') {
+      // A RENEW race (stale jti, refused before the media rate): the server's shared `refused session-rotated`
+      // (ws.ts mediaOp), re-sent once on the same pacing slot. The same test as `mediaRotatedResend`.
+      if (this.mediaRotatedResend(m)) { req.rotatedRetry = true; return this.issueMedia(req, false) }
+      return req.resolve({ refused: m.code === 'rate-limited' || m.code === 'session-rotated' ? m.code : 'policy-refused' })
+    }
+    const hostile = () => req.resolve({ refused: 'policy-refused' })
+    if (utf8Bytes(data) > MEDIA_WIRE_LIMITS.textBytes) return hostile()
+    if (m.type === 'media-refused') {
+      let r: ReturnType<typeof parseMediaRefused>
+      try { r = parseMediaRefused(m) } catch { return hostile() }
+      if (r.mediaId !== undefined && r.mediaId !== req.mediaId) return hostile()
+      return req.resolve({ refused: r.reason })
+    }
+    if (m.type !== 'media-start' || req.start) return hostile()
+    let start: MediaStart
+    try { start = parseMediaStart(m) } catch { return hostile() }
+    if (start.mediaId !== req.mediaId) return hostile()
+    // The reserved cap shrinks to the file (start.bytes ≤ the 32 MiB cap, parseMediaStart).
+    try { req.room.fit(start) } catch { return req.resolve({ refused: 'resource-limit' }) }
+    if (this.liveMedia(req.reqId) !== req) return
+    req.start = start
+    req.deadline = this.now() + MEDIA_CHUNK_MS
+  }
+  /** One kind-9 chunk of a started request; at the declared count Σ must be exactly the declared bytes. */
+  private onMediaFrame(req: MediaReq, payload: Uint8Array) {
+    const hostile = () => req.resolve({ refused: 'policy-refused' })
+    const start = req.start
+    if (!start || req.complete || req.chunks.length >= start.chunks) return hostile()
+    if (payload.length > this.mediaLeft(req)) return hostile()
+    req.chunks.push(payload)
+    req.bytes += payload.length
+    req.deadline = this.now() + MEDIA_CHUNK_MS
+    if (req.chunks.length < start.chunks) return
+    if (req.bytes !== start.bytes) return hostile()
+    // Complete. It settles once the inbox has processed what was queued with it, so a surplus chunk already
+    // received refuses the whole delivery.
+    req.complete = true
+    void this.inbox.then(() => { if (this.mediaReqs.get(req.reqId) === req) req.resolve({ chunks: req.chunks, start }) })
+  }
+
   /** A re-issued request's consumer first learns its earlier answer is void. */
   private reissueText(req: TextReq) {
     if (req.sent && !this.deliver(req, { type: 'restart' })) return
@@ -1007,15 +1401,20 @@ export class StreamSession {
         : kind === Kind.NOTES_RASTER ? this.liveNotes(reqId)?.start !== undefined
         // SHOW_PLAN only ever for a live, sent show request holding its declared grant, short of its declared count.
         : kind === Kind.SHOW_PLAN ? this.showAdmits(reqId)
+        // MEDIA_CHUNK only ever for a live, started media request short of its declared chunks and bytes.
+        : kind === Kind.MEDIA_CHUNK ? this.mediaAdmits(reqId)
         : this.units.has(reqId) && UNIT_KINDS.has(kind)),
       // A show message's declared total is held to its request's encoded allowance (the grant's encoded
       // part) as well as the kind cap, before any fragment of it is copied.
-      encodedCap: (k, reqId) => Math.min(CAPS[k]?.[0] ?? 0, k === Kind.SHOW_PLAN ? this.liveShow(reqId)?.start?.encodedCap ?? 0 : Infinity),
+      encodedCap: (k, reqId) => Math.min(CAPS[k]?.[0] ?? 0, k === Kind.SHOW_PLAN ? this.liveShow(reqId)?.start?.encodedCap ?? 0
+        // A stored chunk is its payload plus the 4-byte whole CRC: never past the bytes its start still declares.
+        : k === Kind.MEDIA_CHUNK ? this.mediaLeft(this.liveMedia(reqId)) + 4 : Infinity),
       // A unit response may never decode past the bytes its request was admitted for.
       decodedCap: (k, reqId) => Math.min(CAPS[k]?.[1] ?? 0, k === Kind.MANIFEST ? Infinity
         : k === Kind.PRINT_RASTER ? this.livePrint(reqId)?.pageCap ?? 0
         : k === Kind.NOTES_RASTER ? this.liveNotes(reqId)?.bodyCap ?? 0
         : k === Kind.SHOW_PLAN ? this.liveShow(reqId)?.start?.bodyCap ?? 0
+        : k === Kind.MEDIA_CHUNK ? this.mediaLeft(this.liveMedia(reqId))
         : this.units.get(reqId)?.grant ?? 0),
     })
     return new Promise<Manifest>((resolve, reject) => {
@@ -1069,7 +1468,7 @@ export class StreamSession {
     const size = typeof data === 'string' ? data.length : data instanceof ArrayBuffer ? data.byteLength : (data as Blob).size
     if (size > FRAGMENT_CAP) return this.end(new StreamSessionError('oversized-frame'), 4007, 'oversized-frame')
     // R29: any fragment for a unit send is evidence the server received it (also for an aborted request).
-    if (data instanceof ArrayBuffer && data.byteLength >= HEADER_BYTES) this.unitAnswered(new DataView(data).getUint32(6, true))
+    if (data instanceof ArrayBuffer && data.byteLength >= HEADER_BYTES) { const id = new DataView(data).getUint32(6, true); this.unitAnswered(id); this.mediaAnswered(id) }
     const gen = this.gen
     this.inbox = this.inbox.then(async () => {
       if (gen !== this.gen) return
@@ -1087,6 +1486,10 @@ export class StreamSession {
     // R29: any reply starts its send's span — except a stale-token refusal about to be
     // re-sent (R30): the server never counted it, and its slot passes to the re-send.
     if (typeof m.reqId === 'number' && !this.rotatedResend(m)) this.unitAnswered(m.reqId)
+    // D12: likewise for a media send's pacing slot; a `rate-limited` media refusal blocks the media log (also when the
+    // request was aborted meanwhile).
+    if (typeof m.reqId === 'number' && !this.mediaRotatedResend(m)) this.mediaAnswered(m.reqId)
+    if (m.type === 'media-refused' && m.reason === 'rate-limited' && typeof m.reqId === 'number' && this.mediaLog.has(m.reqId)) this.mediaLog.refused()
     // R28: a show refusal (`error`) of a charged send blocks the log before the caller hears of it —
     // also when the request was aborted meanwhile (a notes refusal's reqId is never in the log).
     if (m.type === 'error' && m.code === 'rate-limited' && typeof m.reqId === 'number' && this.sendLog.has(m.reqId)) this.sendLog.refused()
@@ -1101,6 +1504,10 @@ export class StreamSession {
     if (notes) return this.onNotesText(notes, m, data)
     const show = this.liveShow(m.reqId)
     if (show) return this.onShowText(show, m, data)
+    const media = this.liveMedia(m.reqId)
+    if (media) return this.onMediaText(media, m, data)
+    const mediaShow = this.liveMediaShow(m.reqId)
+    if (mediaShow) return this.onMediaShowText(mediaShow, m, data)
     const text = typeof m.reqId === 'number' ? this.texts.get(m.reqId) : undefined
     // Only text-service answers are held to 48 KiB (refused/diag are control messages).
     if (text) return this.onTextAnswer(text, m, TEXT_ANSWER_TYPES.has(m.type as string) ? utf8Bytes(data) : 0)
@@ -1126,6 +1533,10 @@ export class StreamSession {
       // Fail closed: a kind-6 message before the start or past the declared count, over a cap, or malformed.
       const show = this.liveShow(res.reqId)
       if (show) return show.fail(show.admissionShort ? new StreamSessionError('admission', 'no admission room for a show message') : new StreamSessionError('policy-refused', `show frame rejected: ${res.reason}`))
+      // Fail closed: a chunk before the start, past the declared count or bytes, over a cap, or malformed.
+      const media = this.liveMedia(res.reqId)
+      // Its grant is held from the send (ruling 4): a rejection is never an admission shortfall.
+      if (media) return media.resolve({ refused: 'policy-refused' })
       const req = res.reqId !== undefined ? this.units.get(res.reqId) : undefined
       if (req) this.retryOrFail(req)
       else if (res.reqId !== undefined && res.reqId === this.helloReqId && this.handshake) this.end(new StreamSessionError('manifest-invalid'), 1000)
@@ -1146,6 +1557,11 @@ export class StreamSession {
       // A message that completed after its request settled is dropped.
       const show = this.liveShow(res.reqId)
       return show && this.onShowFrame(show, res.payload)
+    }
+    if (res.kind === Kind.MEDIA_CHUNK) {
+      // A chunk that completed after its request settled is dropped.
+      const media = this.liveMedia(res.reqId)
+      return media && this.onMediaFrame(media, res.payload)
     }
     const req = this.units.get(res.reqId)
     if (!req) return
@@ -1214,6 +1630,11 @@ export class StreamSession {
     for (const req of [...this.notesReqs.values()]) if (req.sent) req.fail(new StreamSessionError('session-rotated', 'the session resumed with a notes request in flight'))
     // Likewise a sent show request (the server charged and audited it; a re-issue is a second charge).
     for (const req of [...this.shows.values()]) if (req.sent) req.fail(new StreamSessionError('session-rotated', 'the session resumed with a show request in flight'))
+    // D1: a socket close is the server's implicit media-end: every media request, sent or waiting, is void.
+    this.cancelCursor()
+    if (this.mediaDrainTimer) { clearTimeout(this.mediaDrainTimer); this.mediaDrainTimer = undefined }
+    for (const req of [...this.mediaReqs.values()]) req.resolve({ refused: 'session-rotated' })
+    for (const req of [...this.mediaShows.values()]) if (req.sent) req.resolve({ refused: 'session-rotated' })
     this.scheduleResume()
   }
 
@@ -1237,6 +1658,7 @@ export class StreamSession {
     this.resumeAttempt = 0
     // R29: a send still unanswered from the old socket is taken as received now (the resume reply).
     this.sendLog.settleAll()
+    this.mediaLog.settleAll()
     this.ready()
     this.setState('open')
     this.o.onNotice?.({ code: 'resumed' })
@@ -1251,6 +1673,8 @@ export class StreamSession {
     for (const req of [...this.notesReqs.values()]) if (!req.sent) this.issueNotes(req)
     // Show requests asked for while resuming (or waiting for log room) go out now, through the log.
     for (const req of [...this.shows.values()]) if (!req.sent) this.issueShow(req)
+    // A media-show asked for while resuming goes out now (it starts the new socket's media queue).
+    for (const req of [...this.mediaShows.values()]) if (!req.sent) this.issueMediaShow(req)
   }
 
   private ensureSweeper() {
@@ -1263,6 +1687,8 @@ export class StreamSession {
         if (notes) { notes.fail(new StreamSessionError('policy-refused', 'a notes image timed out in reassembly')); continue }
         const show = this.liveShow(r.reqId)
         if (show) { show.fail(new StreamSessionError('policy-refused', 'a show message timed out in reassembly')); continue }
+        const media = this.liveMedia(r.reqId)
+        if (media) { media.resolve({ refused: 'policy-refused' }); continue }
         const req = r.reqId !== undefined ? this.units.get(r.reqId) : undefined
         if (req) this.retryOrFail(req)
       }
@@ -1274,7 +1700,11 @@ export class StreamSession {
       for (const req of [...this.shows.values()]) {
         if (req.sent && !req.complete && now >= req.deadline && !this.reasm.has(req.reqId)) req.fail(new StreamSessionError('policy-refused', 'the show request timed out'))
       }
-      if (!this.units.size && !this.printJob && !this.notesReqs.size && !this.shows.size && this.sweeper) { clearInterval(this.sweeper); this.sweeper = undefined }
+      // A started delivery with nothing in reassembly fails on its chunk deadline (none before its start).
+      for (const req of [...this.mediaReqs.values()]) {
+        if (req.sent && req.start && !req.complete && now >= req.deadline && !this.reasm.has(req.reqId)) req.resolve({ refused: 'policy-refused' })
+      }
+      if (!this.units.size && !this.printJob && !this.notesReqs.size && !this.shows.size && !this.mediaReqs.size && this.sweeper) { clearInterval(this.sweeper); this.sweeper = undefined }
     }, 1000)
   }
 
@@ -1284,6 +1714,8 @@ export class StreamSession {
     this.failure = error
     if (this.sweeper) { clearInterval(this.sweeper); this.sweeper = undefined }
     if (this.drainTimer) { clearTimeout(this.drainTimer); this.drainTimer = undefined }
+    if (this.mediaDrainTimer) { clearTimeout(this.mediaDrainTimer); this.mediaDrainTimer = undefined }
+    this.cancelCursor()
     const sock = this.sock
     this.sock = undefined
     if (sock && closeCode !== undefined && sock.readyState < 2) sock.close(closeCode, reason)
@@ -1294,6 +1726,8 @@ export class StreamSession {
     this.printJob?.fail(err, false)
     for (const req of [...this.notesReqs.values()]) req.fail(err)
     for (const req of [...this.shows.values()]) req.fail(err)
+    for (const req of [...this.mediaReqs.values()]) req.fail(err)
+    for (const req of [...this.mediaShows.values()]) req.resolve({ refused: error?.code ?? 'closed' })
     this.admission.drain(err)
     this.setState('closed', error)
     this.settleEnded(error)

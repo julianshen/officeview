@@ -16,6 +16,8 @@ import { createDiagnosticSink } from '../src/slideshow/diagnostics'
 import { createScheduler } from '../src/slideshow/engine/scheduler'
 import { createSlideTimeline, type SlideCursor, type SlideTimeline } from '../src/slideshow/engine/steps'
 import type { MediaLease, MediaLeaseResult } from '../src/slideshow/media/lease'
+import { parseMediaCommand } from '../src/slideshow/media/commands'
+import { mediaEndOf, mediaPlayheadAt, type MediaEvent } from '../src/slideshow/engine/media-ends'
 import { createMediaPlayer, type FrameBox, type MediaBox, type MediaController, type MediaPlayer } from '../src/slideshow/media/player'
 import { createTransitionSound } from '../src/slideshow/media/sounds'
 import { readMedia } from '../src/slideshow/read/media'
@@ -1000,6 +1002,261 @@ describe('PR #19 review 11', () => {
     await flush()
     expect(r.elements).toHaveLength(1)
     expect(el.play).toHaveBeenCalledTimes(2)
+    expect(el.currentTime).toBe(0)
+  })
+})
+
+describe('clocked (streaming piece 5, spec §5.2)', () => {
+  const late = (clocked: boolean | undefined) => {
+    const r = rig()
+    let resolve!: (v: MediaLeaseResult) => void
+    const lease = fakeLease(rec('7', 'audio/mp4'))
+    const el = Object.assign(document.createElement('audio'), { canPlayType: () => 'maybe', play: vi.fn(() => Promise.resolve()), pause: vi.fn(), load: vi.fn() })
+    const now = { t: 0 }
+    const player = createMediaPlayer({ root: r.root, sink: r.sink, open: () => new Promise((res) => { resolve = res }), create: () => el, ...(clocked !== undefined ? { clocked } : {}) })
+    const t = tree(mainSeq([]), media('audio', 10, '7'))
+    const tl = createSlideTimeline(t, { showAnimation: true, reducedMotion: false })
+    const ctl = player.enter(slideOf(t, [rec('7', 'audio/mp4')]), () => now.t)
+    const cursor: SlideCursor = tl.initial()
+    const sync = (ms: number) => { now.t = ms; ctl.sync(tl.stateAt(cursor, ms), ms) }
+    return { el, lease, sync, deliver: () => resolve(lease) }
+  }
+
+  it('bytes that arrive after the node began start at its clock offset', async () => {
+    const d = late(true)
+    d.sync(0)
+    d.sync(800)
+    d.deliver(); await flush()
+    expect(d.el.currentTime).toBeCloseTo(0.8, 5)
+    expect(d.el.play).toHaveBeenCalledTimes(1)
+  })
+
+  /**
+   * Final review F1: a 4 s narration on shape 7 with deck commands at fixed times, its bytes delivered by hand. The
+   * element's position is checked against `mediaPlayheadAt`/`mediaEndOf` over the same tree and events.
+   */
+  const commanded = (cmds: Array<[number, string]>, opts: { clocked?: boolean; durationMs?: number } = { clocked: true, durationMs: 4000 }) => {
+    const r = rig()
+    let resolve!: (v: MediaLeaseResult) => void
+    const lease = fakeLease(rec('7', 'audio/mp4'))
+    const el = Object.assign(document.createElement('audio'), { canPlayType: () => 'maybe', play: vi.fn(() => Promise.resolve()), pause: vi.fn(), load: vi.fn() })
+    const now = { t: 0 }
+    const player = createMediaPlayer({
+      root: r.root, sink: r.sink, open: () => new Promise((res) => { resolve = res }), create: () => el,
+      ...(opts.clocked !== undefined ? { clocked: opts.clocked } : {}),
+      ...(opts.durationMs !== undefined ? { durationOf: () => opts.durationMs } : {}),
+    })
+    const cmdNodes = cmds.map(([ms, text], i) => {
+      const c = cmd(20 + i, '7', text)
+      return { ...c, ctn: { ...c.ctn, start: [at(ms)] } }
+    })
+    const t = tree(mainSeq([]), media('audio', 10, '7'), ...cmdNodes)
+    const tl = createSlideTimeline(t, { showAnimation: true, reducedMotion: false })
+    const ctl = player.enter(slideOf(t, [rec('7', 'audio/mp4')]), () => now.t)
+    const cursor: SlideCursor = tl.initial()
+    // As the driver's computed path does: the snapshot, and the exact activation history `slideMediaEnds` reads.
+    const sync = (ms: number) => { now.t = ms; ctl.sync(tl.stateAt(cursor, ms), ms, false, () => tl.activations(cursor, ms).activations) }
+    const events: MediaEvent[] = cmds.map(([ms, text]) => ({ at: ms, type: 'cmd', nodeId: 10, cmd: parseMediaCommand('call', text)! }))
+    const node = (t.root as ContainerNode).children[1] as AudioBehaviour
+    return { el, lease, sync, deliver: () => resolve(lease), events, node }
+  }
+
+  it('F1: bytes that arrive during a deck-command pause join at the paused position, and play from it on resume', async () => {
+    // A 4 s narration, pause at 1000, bytes at 3000, resume at 4000: the element resumes at 1 s, the end is 7000.
+    const d = commanded([[1000, 'pause'], [4000, 'resume']])
+    d.sync(0); d.sync(1000); d.sync(3000)
+    d.deliver(); await flush()
+    expect(d.el.currentTime).toBeCloseTo(1, 5)
+    expect(d.el.play).not.toHaveBeenCalled()
+    d.sync(4000); await flush()
+    expect(d.el.currentTime).toBeCloseTo(1, 5)
+    expect(d.el.play).toHaveBeenCalledTimes(1)
+    expect(d.lease.released).toBe(false)
+    // The element and the computed end agree: 1 s played before the pause, 3 s after the resume.
+    expect(mediaPlayheadAt(d.node, 4000, 0, d.events, 3000).pos).toBe(1000)
+    expect(mediaEndOf(d.node, { mediaId: 'm', kind: 'audio', durationMs: 4000 }, 0, d.events)).toEqual({ at: 7000 })
+  })
+
+  it('F1: a pause longer than the clip still joins at the paused position (raw slide time is past the duration)', async () => {
+    // Pause at 1000, bytes at 6000 (6 s of slide time > 4 s), resume at 7000: still 1 s, not 6 s; the end is 10000.
+    const d = commanded([[1000, 'pause'], [7000, 'resume']])
+    d.sync(0); d.sync(1000); d.sync(6000)
+    d.deliver(); await flush()
+    expect(d.el.currentTime).toBeCloseTo(1, 5)
+    expect(d.lease.released).toBe(false)
+    d.sync(7000); await flush()
+    expect(d.el.play).toHaveBeenCalledTimes(1)
+    expect(mediaEndOf(d.node, { mediaId: 'm', kind: 'audio', durationMs: 4000 }, 0, d.events)).toEqual({ at: 10000 })
+  })
+
+  it('F1: a resume that lands while the bytes are still on their way continues the activation (no restart)', async () => {
+    // Pause at 1000, resume at 2000, bytes at 3000: 1 s before the pause + 1 s after the resume = 2 s.
+    const d = commanded([[1000, 'pause'], [2000, 'resume']])
+    d.sync(0); d.sync(1000); d.sync(2000); d.sync(3000)
+    d.deliver(); await flush()
+    expect(d.el.currentTime).toBeCloseTo(2, 5)
+    expect(d.el.play).toHaveBeenCalledTimes(1)
+    expect(mediaPlayheadAt(d.node, 4000, 0, d.events, 3000).pos).toBe(2000)
+  })
+
+  it('F1: a mid-play playFrom before the bytes arrive is an absolute seek on the same clock', async () => {
+    // playFrom(1.5) at 1000, bytes at 2000: 1.5 s + 1 s = 2.5 s; the end is 3500 (F2).
+    const d = commanded([[1000, 'playFrom(1.5)']])
+    d.sync(0); d.sync(1000); d.sync(2000)
+    d.deliver(); await flush()
+    expect(d.el.currentTime).toBeCloseTo(2.5, 5)
+    expect(mediaEndOf(d.node, { mediaId: 'm', kind: 'audio', durationMs: 4000 }, 0, d.events)).toEqual({ at: 3500 })
+  })
+
+  it('F1: bytes whose position is at or past the duration never play, and the lease is released', async () => {
+    // playFrom(3.5) at 1000 → the clip runs out at 1500; the bytes arrive at 1600 (the timeline has not ended the node).
+    const d = commanded([[1000, 'playFrom(3.5)']])
+    d.sync(0); d.sync(1000)
+    d.sync(1600)
+    d.deliver(); await flush()
+    expect(d.el.play).not.toHaveBeenCalled()
+    expect(d.lease.released).toBe(true)
+    expect(d.el.getAttribute('src')).toBeNull()
+  })
+
+  it('F1 (re-review R1): a pause stepped over by a frame is logged at its exact begin, not at the frame', async () => {
+    // Ticks 0, 1500, 3000; the 1 ms pause at 1000 has ended by the 1500 frame. Bytes at 3000 → offset 1 s, paused.
+    const d = commanded([[1000, 'pause']])
+    d.sync(0); d.sync(1500); d.sync(3000)
+    d.deliver(); await flush()
+    expect(d.el.currentTime).toBeCloseTo(1, 5)
+    expect(d.el.play).not.toHaveBeenCalled()
+    expect(d.lease.released).toBe(false)
+    expect(mediaPlayheadAt(d.node, 4000, 0, d.events, 3000)).toMatchObject({ pos: 1000, running: false, done: false })
+  })
+
+  it('F1 (re-review R1): a pause and a resume both stepped over join at 1.5 s, running, and are not released', async () => {
+    // Ticks 0, 4500 (a long main-thread task); pause at 1000, resume at 4000; bytes at 4500 → 1.5 s, running; end 7000.
+    const d = commanded([[1000, 'pause'], [4000, 'resume']])
+    d.sync(0); d.sync(4500)
+    d.deliver(); await flush()
+    expect(d.lease.released).toBe(false)
+    expect(d.el.currentTime).toBeCloseTo(1.5, 5)
+    expect(d.el.play).toHaveBeenCalledTimes(1)
+    expect(mediaPlayheadAt(d.node, 4000, 0, d.events, 4500)).toMatchObject({ pos: 1500, running: true, done: false })
+    expect(mediaEndOf(d.node, { mediaId: 'm', kind: 'audio', durationMs: 4000 }, 0, d.events)).toEqual({ at: 7000 })
+  })
+
+  it('F1: without clocked (local shows) commands and late bytes behave as before', async () => {
+    const d = commanded([[1000, 'pause'], [4000, 'resume']], {})
+    d.sync(0); d.sync(1000); d.sync(3000)
+    d.deliver(); await flush()
+    expect(d.el.currentTime).toBe(0)
+  })
+
+  it('without it (local shows) late bytes still start at 0', async () => {
+    for (const c of [undefined, false]) {
+      const d = late(c)
+      d.sync(0)
+      d.sync(800)
+      d.deliver(); await flush()
+      expect(d.el.currentTime).toBe(0)
+      expect(d.el.play).toHaveBeenCalledTimes(1)
+    }
+  })
+})
+
+describe('clocked transition sound (streaming piece 5, final review F3)', () => {
+  /** A 2 s transition sound on slide 0 (loop or not), its lease delivered by hand on the show clock `now`. */
+  const delayed = (loop: boolean, clocked = true) => {
+    const r = rig()
+    const now = { t: 10_000 }
+    const pending: Array<(v: MediaLeaseResult) => void> = []
+    const leases: FakeLease[] = []
+    const sound = (rId: string, l: boolean) => ({ element: 'fade', ns: 'p' as const, attrs: {}, durationMs: 0, advClick: true, sound: { start: { rId, loop: l } } })
+    const slides = [
+      slideOf(undefined, [rec('a', 'audio/mp4', 'rIdS1')], 0, sound('rIdS1', loop)),
+      slideOf(undefined, [], 1),
+      slideOf(undefined, [rec('b', 'audio/mp4', 'rIdS2')], 2, sound('rIdS2', false)),
+    ]
+    const sounds = createTransitionSound({
+      root: r.root, sink: r.sink, slide: (i) => slides[i],
+      open: (m) => new Promise((res) => { pending.push(res); void m }),
+      create: (k) => {
+        const el = r.root.ownerDocument.createElement(k) as Fake
+        el.play = vi.fn(() => Promise.resolve()); el.pause = vi.fn(); el.load = vi.fn(); el.canPlayType = vi.fn(() => 'maybe' as CanPlayTypeResult)
+        r.elements.push(el)
+        return el
+      },
+      ...(clocked ? { clock: { now: () => now.t, durationOf: () => 2000 } } : {}),
+    })
+    const deliver = async (i: number, at: number) => {
+      now.t = at
+      const l = fakeLease(rec(String(i), 'audio/mp4'))
+      leases.push(l)
+      pending[i]!(l)
+      await flush()
+      return l
+    }
+    return { r, sounds, deliver, now, leases }
+  }
+
+  it('a sound delivered 1 s late joins at offset 1 s', async () => {
+    const d = delayed(false)
+    d.sounds.start(0)
+    const lease = await d.deliver(0, 11_000)
+    const el = d.r.elements[0]!
+    expect(el.play).toHaveBeenCalledTimes(1)
+    expect(el.currentTime).toBeCloseTo(1, 5)
+    expect(lease.released).toBe(false)
+  })
+
+  it('a non-looping sound delivered after its duration never plays, and its lease is released', async () => {
+    const d = delayed(false)
+    d.sounds.start(0)
+    const lease = await d.deliver(0, 12_500)
+    const el = d.r.elements[0]!
+    expect(el.play).not.toHaveBeenCalled()
+    expect(el.getAttribute('src')).toBeNull()
+    expect(el.isConnected).toBe(false)
+    expect(lease.released).toBe(true)
+    // Nothing is playing: a release or a slide change finds nothing to stop.
+    expect(d.sounds.release()).toBe(false)
+  })
+
+  it('a looping sound delivered late joins at its offset within the loop, plays on past the slide change, and stops at the next sound', async () => {
+    const d = delayed(true)
+    d.sounds.start(0)
+    // 5 s late on a 2 s loop: 1 s into its third pass.
+    const lease = await d.deliver(0, 15_000)
+    const el = d.r.elements[0]!
+    expect(el.loop).toBe(true)
+    expect(el.play).toHaveBeenCalledTimes(1)
+    expect(el.currentTime).toBeCloseTo(1, 5)
+    // The slide change keeps a looping sound, as locally; the next slide's own sound stops it.
+    d.sounds.stopAt(0)
+    d.sounds.start(1)
+    expect(el.pause).not.toHaveBeenCalled()
+    expect(lease.released).toBe(false)
+    d.sounds.stopAt(1)
+    d.sounds.start(2)
+    expect(el.pause).toHaveBeenCalled()
+    expect(el.getAttribute('src')).toBeNull()
+    expect(lease.released).toBe(true)
+  })
+
+  it('a non-looping sound delivered late still stops at slide exit', async () => {
+    const d = delayed(false)
+    d.sounds.start(0)
+    const lease = await d.deliver(0, 10_500)
+    const el = d.r.elements[0]!
+    expect(el.currentTime).toBeCloseTo(0.5, 5)
+    d.sounds.stopAt(0)
+    expect(el.pause).toHaveBeenCalled()
+    expect(lease.released).toBe(true)
+  })
+
+  it('without a clock (local shows) a late sound still plays from 0', async () => {
+    const d = delayed(false, false)
+    d.sounds.start(0)
+    await d.deliver(0, 12_500)
+    const el = d.r.elements[0]!
+    expect(el.play).toHaveBeenCalledTimes(1)
     expect(el.currentTime).toBe(0)
   })
 })

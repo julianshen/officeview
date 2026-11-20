@@ -122,10 +122,12 @@ export function createSlideShowWorkspace(profile: SlideShowProfile, limits: Slid
   const limit = limits.limit ?? SLIDESHOW_WORKSPACE_LIMIT[profile]
   const scratchBytes = limits.scratch ?? TERMINAL_SCRATCH[profile]
   if (!validBytes(limit) || !validBytes(scratchBytes)) throw new RangeError('slideshow workspace: invalid limits')
-  const pool: Pool = { used: 0, limit, closed: false }
+  const freed = new Set<() => void>()
+  const pool: Pool = { used: 0, limit, closed: false, onRelease: () => { for (const cb of [...freed]) { try { cb() } catch { /* a listener never breaks a release */ } } } }
   return {
     limit,
     lease: (bytes, tag) => poolLease(pool, bytes, tag),
+    onFree(cb) { freed.add(cb); return () => { freed.delete(cb) } },
     reserveTerminal(outputBytes): SlideShowTerminalReserve | undefined {
       if (!validBytes(outputBytes) || pool.used + outputBytes + scratchBytes > pool.limit) return undefined
       // Internal to the reserve: no caller can reach these bytes through `lease`.
