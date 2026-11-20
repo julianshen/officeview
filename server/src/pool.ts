@@ -24,7 +24,7 @@ import { createWorkerProbes, type ProbeKillRequest, type ProbeRunRequest, type W
 import { sweepPrefixed } from './media/temp'
 import type { WorkerReply, WorkerRequest } from './worker/render-worker'
 import { prepareWorkspace, TEXT_PREPARE_ALLOWANCE, type TextJob, type TextReply } from './text/served'
-import { startWorker, type StartedWorker } from './worker-start'
+import { startWorker, type StartOptions, type StartedWorker } from './worker-start'
 
 export class AdmissionRefused extends Error { constructor(readonly reason: 'session-queue' | 'process-queue' | 'too-large') { super(`admission refused: ${reason}`); this.name = 'AdmissionRefused' } }
 export class RenderTimeout extends Error { constructor() { super('render deadline exceeded'); this.name = 'RenderTimeout' } }
@@ -57,7 +57,7 @@ export type PoolTextJob = { docRef: string; contentPolicy: 'visible-only' | 'ful
  * every prepare it needs is charged separately (`prepareWorkspace`). */
 export const TEXT_JOB_BYTES = TEXT_PREPARE_ALLOWANCE
 /** `servedCacheBytes`: the worker's served-index bound per document (R6 default 32 MiB). */
-export interface PoolOptions { /** Piece 4 (tests shorten it): the show-plan job deadline, default `SHOW_PLAN_DEADLINE_MS`. */ showDeadlineMs?: number; workers?: number; caps?: Caps; recyclePages?: number; now?: () => number; testHooks?: boolean; openDeadlineMs?: number; servedCacheBytes?: number; /** Piece 5 (D21): ffmpeg and the media temp dir, forwarded in each worker's init. */ media?: { info: FfmpegInfo; dir: string }; /** TEST-ONLY (honoured with `testHooks`): every media probe is held this long (`MediaTableSeams.hangMs`). */ mediaHoldMs?: number; /** TEST-ONLY (honoured with `testHooks`): the media warm-up and media job deadline, default `MEDIA_JOB_DEADLINE_MS`. */ mediaDeadlineMs?: number; /** TEST-ONLY (honoured with `testHooks`): `after-part`, `mediaPart` never answers once it wrote its file. */ mediaWedge?: 'after-part' }
+export interface PoolOptions { /** Piece 4 (tests shorten it): the show-plan job deadline, default `SHOW_PLAN_DEADLINE_MS`. */ showDeadlineMs?: number; workers?: number; caps?: Caps; recyclePages?: number; now?: () => number; testHooks?: boolean; openDeadlineMs?: number; servedCacheBytes?: number; /** Piece 5 (D21): ffmpeg and the media temp dir, forwarded in each worker's init. */ media?: { info: FfmpegInfo; dir: string }; /** TEST-ONLY (honoured with `testHooks`): every media probe is held this long (`MediaTableSeams.hangMs`). */ mediaHoldMs?: number; /** TEST-ONLY (honoured with `testHooks`): the media warm-up and media job deadline, default `MEDIA_JOB_DEADLINE_MS`. */ mediaDeadlineMs?: number; /** TEST-ONLY (honoured with `testHooks`): `after-part`, `mediaPart` never answers once it wrote its file. */ mediaWedge?: 'after-part'; /** TEST-ONLY (honoured with `testHooks`): builds each worker in place of `new Worker` (`worker-start.ts` seam). */ workerFactoryForTests?: (url: string, options: WorkerOptions) => Worker; /** TEST-ONLY (honoured with `testHooks`): the start bound, default `WORKER_LOAD_BOUND_MS`. */ workerLoadBoundMsForTests?: number }
 
 const WORKER_URL = resolve(import.meta.dir, 'worker/render-worker.ts')
 const PRELOAD = resolve(import.meta.dir, '../../scripts/stream-s0/napi-preload.ts')
@@ -109,6 +109,7 @@ export class Pool {
   private readonly mediaHoldMs?: number
   private readonly mediaWedge?: 'after-part'
   private readonly mediaDeadlineMs: number
+  private readonly startOptions: StartOptions
   /**
    * Piece 4 (controller ruling): show-plan refusals by slide (`docRef|policy|unit|scale|motion|strictMarks`: the
    * L1 tuple; the fingerprint is per process). A slide that timed out retired its worker, and with it the worker's
@@ -159,6 +160,7 @@ export class Pool {
     this.mediaHoldMs = this.testHooks ? opts.mediaHoldMs : undefined
     this.mediaWedge = this.testHooks ? opts.mediaWedge : undefined
     this.mediaDeadlineMs = (this.testHooks ? opts.mediaDeadlineMs : undefined) ?? MEDIA_JOB_DEADLINE_MS
+    this.startOptions = this.testHooks ? { ...(opts.workerFactoryForTests ? { create: opts.workerFactoryForTests } : {}), ...(opts.workerLoadBoundMsForTests ? { boundMs: opts.workerLoadBoundMsForTests } : {}) } : {}
     for (let i = 0; i < (opts.workers ?? defaultWorkers()); i++) {
       const slot = { index: i, busy: false, queue: [], pending: new Map(), docs: new Map(), pages: 0, parses: 0, probes: 0, generation: 0, closed: false, prep: 0 } as unknown as Slot
       this.attach(slot)
@@ -180,7 +182,7 @@ export class Pool {
   private attach(slot: Slot): void {
     // The events are wired below; `worker` is assigned before any of them can fire (they fire on later turns).
     const on = { message: (_e: MessageEvent) => {}, close: () => {} }
-    const worker: StartedWorker = startWorker(WORKER_URL, { preload: [PRELOAD] } as WorkerOptions, { message: (e) => on.message(e), close: () => on.close() })
+    const worker: StartedWorker = startWorker(WORKER_URL, { preload: [PRELOAD] } as WorkerOptions, { message: (e) => on.message(e), close: () => on.close() }, this.startOptions)
     slot.worker = worker
     slot.closed = false
     let markClosed!: () => void
@@ -243,12 +245,7 @@ export class Pool {
       if (slot.closed) await this.replace(slot)
       // A worker still waiting its turn at the start gate, or loading, has not begun the job: its deadline starts after.
       // A loaded worker costs no extra turn (the job is posted in the same step as before).
-      if (!slot.worker.loaded) {
-        await slot.worker.ready
-        if (this.disposed) throw new RenderFailed('pool disposed')
-        // It died while loading: once more, on a fresh worker.
-        if (slot.closed) { await this.replace(slot); await slot.worker.ready }
-      }
+      if (!slot.worker.loaded) await this.startedFor(slot)
       return await fn()
     } finally {
       slot.busy = false
@@ -256,9 +253,35 @@ export class Pool {
     }
   }
 
+  /**
+   * Round 1 (R1, R3): waits for the slot's worker to load, inside the slot's exclusive turn, and re-checks the pool and
+   * the slot after every await. Startup-failure policy (see `worker-start.ts`):
+   * - closed while loading (or a construction that threw): one fresh worker; if that one does not load either, the
+   *   job fails with `RenderFailed('worker failed to start')` and nothing is posted (the slot is replaced again by the
+   *   next job, since it is closed);
+   * - stalled past the start bound: the job fails with `RenderFailed('worker start timed out')`, and so does every job
+   *   until the worker answers (then the slot works) or closes (then it is replaced). The stalled worker is never
+   *   terminated while it loads; a dispose's terminate waits for its answer or close;
+   * - disposed meanwhile: `RenderFailed('pool disposed')`.
+   */
+  private async startedFor(slot: Slot): Promise<void> {
+    for (let attempt = 0; ; attempt++) {
+      const r = await slot.worker.ready
+      if (this.disposed) throw new RenderFailed('pool disposed')
+      if (slot.worker.loaded && !slot.closed) return
+      if (r === 'stalled' && !slot.closed) throw new RenderFailed('worker start timed out')
+      // Closed while loading.
+      if (attempt >= 1) throw new RenderFailed('worker failed to start')
+      await this.replace(slot)
+      if (this.disposed) throw new RenderFailed('pool disposed')
+    }
+  }
+
   /** Posts and waits at most `ms`; on timeout the worker is retired (the
-   * caller learns via 'timeout'). */
+   * caller learns via 'timeout'). A closed worker is sent nothing: the reply is the death failure at once, with no
+   * pending entry (Round 1, R3). */
   private async post(slot: Slot, msg: WorkerRequest, ms?: number): Promise<WorkerReply | 'timeout'> {
+    if (slot.closed) return Pool.failure('worker died')
     const reply = new Promise<WorkerReply>((ok) => { slot.pending.set(msg.id, { ok }); slot.worker.post(msg) })
     if (ms === undefined) return reply
     let timer: ReturnType<typeof setTimeout> | undefined
