@@ -406,6 +406,21 @@ describe('show eligibility', () => {
       expect(mediaEndAffectsDrawing(root)).toBe(true)
     })
 
+    it('a later seq child that begins on a media end cuts an earlier one that shows the ink: the still (C4.1)', () => {
+      // seq 30: entrance 31 (fill remove, indefinite) shows the ink at 100 ms; audio 4 begins on audio 3's end. In a
+      // non-concurrent seq a later child's begin ends the earlier ones, so audio 3's end hides the ink.
+      const ctn = (id: number, o: Partial<TimeNode['ctn']> = {}) => ({ id, durMs: undefined, accel: 0, decel: 0, autoRev: false, fill: 'hold' as const, start: [{ delayMs: 0 }], end: [], ...o }) as TimeNode['ctn']
+      const leaf = (kind: string, id: number, spid: string, o: Partial<TimeNode['ctn']> = {}) => ({ kind, ctn: ctn(id, o), target: { spid }, attrNames: [], additive: 'base', accumulate: 'none' }) as unknown as TimeNode
+      const tree = (laterStart: TimeNode['ctn']['start']): TimeNode => {
+        const entrance: TimeNode = { kind: 'par', ctn: ctn(31, { presetClass: 'entr', durMs: 'indefinite', fill: 'remove' }), children: [leaf('set', 32, '2', { start: [{ delayMs: 100 }], durMs: 'indefinite' })] }
+        const seq: TimeNode = { kind: 'seq', ctn: ctn(30), children: [entrance, leaf('audio', 4, '4', { start: laterStart })], seq: { concurrent: false, nextAc: 'none', prevAc: 'none' } }
+        return { kind: 'par', ctn: ctn(1, { durMs: 'indefinite', fill: undefined, start: [] }), children: [leaf('audio', 3, '3'), seq] }
+      }
+      expect(mediaEndAffectsDrawing(tree([{ evt: 'onEnd', tn: 3, delayMs: 0 }]))).toBe(true)
+      // The same seq whose later child begins at a fixed offset: nothing drawn waits on a media end.
+      expect(mediaEndAffectsDrawing(tree([{ delayMs: 0 }]))).toBe(false)
+    })
+
     it('media no drawing depends on, beside a click animation: the slide stays eligible and plays its layers (round 12b)', async () => {
       const run = await classify(await mediaEndRevealDeck('unrelated'))
       const { ps, timeline: tl, c } = run

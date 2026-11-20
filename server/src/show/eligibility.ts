@@ -707,7 +707,8 @@ export function holdsMedia(ps: PreparedSlide): boolean {
  *   end depends (whatever the event: a node that begins again begins after its end); in a `seq`, it is chained to its previous sibling (a
  *   finite delay, or no condition) whose end depends; its parent repeats or reverses and the parent's end depends;
  *   in an `excl`, a sibling's begin or end depends.
- * - `C`, it may be cut short at such a time: it is media (the synthetic end); an end condition or its `endSync`
+ * - `C`, it may be cut short at such a time: it is media (the synthetic end); in a `seq`, a later sibling's begin
+ *   depends (C4.1: the later child's begin ends every earlier child still running); an end condition or its `endSync`
  *   names a dependent node; its parent is cut short; its parent's `endSync` ends it with a dependent child; an `excl` sibling depends.
  * - `E`, its end may depend: `B` or `C`; or it is a container whose end follows its children (no explicit `dur`,
  *   or an `endSync`) and a child's end depends; or its `endSync` names a dependent node.
@@ -770,7 +771,9 @@ export function mediaEndAffectsDrawing(root: TimeNode): boolean {
       const exclDep = p?.kind === 'excl' && sibs.some(o => o !== n && (B.has(o) || E.has(o)))
       const b = (!!p && B.has(p)) || n.ctn.start.some(refDep) || (!!prev && E.has(prev) && chained(n)) ||
         (!!p && repeats(p) && E.has(p)) || exclDep
-      const c = isMedia(n) || n.ctn.end.some(refDep) || (!!n.ctn.endSync && refDep(n.ctn.endSync)) || (!!p && C.has(p)) ||
+      // C4.1: a later `seq` sibling that begins at a dependent time cuts this one short (the sequence rule).
+      const cutByLater = p?.kind === 'seq' && sibs.slice(k + 1).some(o => B.has(o))
+      const c = isMedia(n) || cutByLater || n.ctn.end.some(refDep) || (!!n.ctn.endSync && refDep(n.ctn.endSync)) || (!!p && C.has(p)) ||
         (!!p && !!p.ctn.endSync && sibs.some(o => E.has(o))) || exclDep
       const follows = 'children' in n && (n.ctn.durMs === undefined || !!n.ctn.endSync) && n.children.some(o => E.has(o))
       const e = b || c || follows || (!!n.ctn.endSync && refDep(n.ctn.endSync))
