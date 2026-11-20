@@ -79,12 +79,13 @@ jobs:
       - name: Allow unprivileged user namespaces (unshare --user --net)
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
-      - name: Stream server media tests (sandboxed ffmpeg, required)
-        run: cd server && OV_MEDIA_REQUIRED=1 bun test test/media
-
-      # Before the suite, so corpus-regressions.test.ts runs instead of skipping.
+      # Before the media tests and the suite: the media wire audit opens corpus decks, and
+      # corpus-regressions.test.ts runs instead of skipping.
       - name: Fetch the real-file corpus
         run: bun scripts/fetch-corpus.ts
+
+      - name: Stream server media tests (sandboxed ffmpeg, required)
+        run: cd server && OV_MEDIA_REQUIRED=1 bun test test/media
 
       - name: Run the test suite (pixel-golden suites excluded — see note above)
         run: bunx vitest run --exclude 'tests/golden*.test.ts'
