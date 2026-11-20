@@ -112,17 +112,35 @@ describe.skipIf(!info)('the media wire audit (Task 13)', () => {
 
   /** The first 64-byte window of a source part (one with at least 32 distinct byte values) found in `out`. */
   function leak(out: Buffer, parts: Map<string, Uint8Array>): { path: string; at: number } | undefined {
+    const hit = leakAny([out], parts)
+    return hit && { path: hit.path, at: hit.at }
+  }
+
+  /** `leak` over several outputs at once: every output window is indexed once, and each source part is walked once
+   *  (not once per output), so a deck's audit costs one pass over its parts. `out` is the output that holds the hit. */
+  function leakAny(outs: readonly Buffer[], parts: Map<string, Uint8Array>): { path: string; at: number; out: number } | undefined {
     // Task 7 ruling: the empty moov/udta box (61 bytes) is a muxer constant, allowed in every output. The allowance
     // exempts only windows lying wholly inside it, and since a window (64 bytes) is longer than the box there are
     // none (fix round 1): every output window is indexed, so source bytes against either edge are still caught.
-    const windows = new Set<string>()
-    for (let i = 0; i + 64 <= out.length; i++) windows.add(out.toString('latin1', i, i + 64))
+    const windows = new Map<string, number>()
+    outs.forEach((out, k) => {
+      for (let i = 0; i + 64 <= out.length; i++) {
+        const w = out.toString('latin1', i, i + 64)
+        if (!windows.has(w)) windows.set(w, k)
+      }
+    })
+    const seen = new Uint8Array(256)
     for (const [path, bytes] of parts) {
       const src = Buffer.from(bytes)
       for (let i = 0; i + 64 <= src.length; i++) {
-        const w = src.subarray(i, i + 64)
-        if (new Set(w).size < 32) continue // X29 R8: zero padding and silence legitimately recur in a re-encode
-        if (windows.has(w.toString('latin1'))) return { path, at: i }
+        const k = windows.get(src.toString('latin1', i, i + 64))
+        if (k === undefined) continue
+        // X29 R8: zero padding and silence legitimately recur in a re-encode. Checked only on a match (it decides
+        // nothing otherwise): a window with fewer than 32 distinct byte values is not a leak.
+        seen.fill(0)
+        let distinct = 0
+        for (let j = i; j < i + 64; j++) if (!seen[src[j]!]++) distinct++
+        if (distinct >= 32) return { path, at: i, out: k }
       }
     }
     return undefined
@@ -146,22 +164,25 @@ describe.skipIf(!info)('the media wire audit (Task 13)', () => {
   it('no MEDIA_CHUNK contains any 64-byte window of any source part', () => {
     let outputs = 0
     for (const p of played) {
-      for (const d of p.deliveries) {
-        const out = Buffer.from(d.bytes)
+      const outs = p.deliveries.map((d) => Buffer.from(d.bytes))
+      for (const out of outs) {
         // Every output holds the muxer's empty udta exactly once.
         const at = out.indexOf(EMPTY_UDTA)
         expect(at, `${p.name}: the muxer's empty udta`).toBeGreaterThan(0)
         expect(out.indexOf(EMPTY_UDTA, at + 1)).toBe(-1)
-        const hit = leak(out, p.pkg.parts)
-        if (hit) throw new Error(`${p.name}: ${hit.path} window at ${hit.at} appears in ${d.mediaId}'s output`)
         outputs++
       }
+      const hit = leakAny(outs, p.pkg.parts)
+      if (hit) throw new Error(`${p.name}: ${hit.path} window at ${hit.at} appears in ${p.deliveries[hit.out]!.mediaId}'s output`)
     }
     expect(outputs).toBeGreaterThanOrEqual(20)
     // Positive control: a part delivered verbatim is caught.
     const fx = played.find((p) => p.name === 'fixturesDeck')!
     const [path, bytes] = [...fx.pkg.parts].find(([k]) => k.endsWith('.wav'))!
     expect(leak(Buffer.from(bytes), fx.pkg.parts)?.path).toBe(path)
+    // ...and, among a deck's outputs indexed together, it is attributed to the output that holds it.
+    const clean = Buffer.from(fx.deliveries[0]!.bytes)
+    expect(leakAny([clean, Buffer.from(bytes)], fx.pkg.parts)).toMatchObject({ path, out: 1 })
   })
 
   it('reassembled outputs show no metadata under ffprobe -show_format -show_streams', async () => {
