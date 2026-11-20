@@ -24,6 +24,7 @@ import { createWorkerProbes, type ProbeKillRequest, type ProbeRunRequest, type W
 import { sweepPrefixed } from './media/temp'
 import type { WorkerReply, WorkerRequest } from './worker/render-worker'
 import { prepareWorkspace, TEXT_PREPARE_ALLOWANCE, type TextJob, type TextReply } from './text/served'
+import { startWorker, type StartedWorker } from './worker-start'
 
 export class AdmissionRefused extends Error { constructor(readonly reason: 'session-queue' | 'process-queue' | 'too-large') { super(`admission refused: ${reason}`); this.name = 'AdmissionRefused' } }
 export class RenderTimeout extends Error { constructor() { super('render deadline exceeded'); this.name = 'RenderTimeout' } }
@@ -64,7 +65,9 @@ export const defaultWorkers = () => Math.max(1, Math.min(8, Math.floor(available
 
 interface Slot {
   index: number
-  worker: Worker
+  /** Started through the process's start gate (`worker-start.ts`, a Bun 1.3.10 workaround): one load at a time, and a
+   * terminate during a load waits for it to end. */
+  worker: StartedWorker
   busy: boolean
   queue: Array<() => void>
   pending: Map<number, { ok: (r: WorkerReply) => void }>
@@ -175,7 +178,9 @@ export class Pool {
   /** Starts a worker for `slot`; replies resolve the slot's pending map; an
    * unexpected death settles its posts (nothing waits forever). */
   private attach(slot: Slot): void {
-    const worker = new Worker(WORKER_URL, { preload: [PRELOAD] } as WorkerOptions)
+    // The events are wired below; `worker` is assigned before any of them can fire (they fire on later turns).
+    const on = { message: (_e: MessageEvent) => {}, close: () => {} }
+    const worker: StartedWorker = startWorker(WORKER_URL, { preload: [PRELOAD] } as WorkerOptions, { message: (e) => on.message(e), close: () => on.close() })
     slot.worker = worker
     slot.closed = false
     let markClosed!: () => void
@@ -184,10 +189,10 @@ export class Pool {
     // when it goes), and its probes, which run on this thread (`probe-host.ts`): killed when it goes, reaped here.
     const prefix = this.media ? `w${randomBytes(6).toString('hex')}-` : undefined
     // Released from the registry when retired with no run left (fix round 3), never by a stats() read.
-    const probes: WorkerProbes | undefined = this.media && prefix ? createWorkerProbes(this.media.info, this.media.dir, prefix, (r) => worker.postMessage(r), () => { if (probes) this.probeSets.delete(probes) }) : undefined
+    const probes: WorkerProbes | undefined = this.media && prefix ? createWorkerProbes(this.media.info, this.media.dir, prefix, (r) => worker.post(r), () => { if (probes) this.probeSets.delete(probes) }) : undefined
     if (probes) this.probeSets.add(probes)
     slot.retire = () => probes?.retire()
-    worker.onmessage = (e: MessageEvent<WorkerReply | ProbeRunRequest | ProbeKillRequest>) => {
+    on.message = (e: MessageEvent<WorkerReply | ProbeRunRequest | ProbeKillRequest>) => {
       const d = e.data
       if ('kind' in d) {
         // A request after its worker was retired is refused there (spawns nothing); media off has no probes at all.
@@ -201,10 +206,11 @@ export class Pool {
       slot.pages = d.stats.pages; slot.parses = d.stats.parses; slot.probes = d.stats.probes
       p.ok(d)
     }
-    // The init goes first (messages are ordered), so every later job sees the media config. Its reply is unawaited;
-    // a worker whose init fails has media off (every entry `media-unavailable`).
-    worker.postMessage({ type: 'init', id: this.nextId++, ...(this.media && prefix ? { media: { ...this.media, prefix } } : {}), ...(this.mediaHoldMs ? { mediaHoldMs: this.mediaHoldMs } : {}), ...(this.mediaWedge ? { testWedge: this.mediaWedge } : {}) } satisfies WorkerRequest)
-    worker.addEventListener('close', () => {
+    // The init goes first (messages are ordered), so every later job sees the media config. Its reply is unawaited here
+    // (the start gate takes it as the load signal); a worker whose init fails has media off (every entry
+    // `media-unavailable`).
+    worker.post({ type: 'init', id: this.nextId++, ...(this.media && prefix ? { media: { ...this.media, prefix } } : {}), ...(this.mediaHoldMs ? { mediaHoldMs: this.mediaHoldMs } : {}), ...(this.mediaWedge ? { testWedge: this.mediaWedge } : {}) } satisfies WorkerRequest)
+    on.close = () => {
       // First, before anything awaiting the close (`replace`, a dying job's refund) resumes: its probes are killed
       // (their exits are reaped on this thread) and its staged files deleted.
       probes?.retire()
@@ -214,7 +220,7 @@ export class Pool {
       slot.closed = true
       slot.docs.clear()
       this.settle(slot, 'worker died')
-    })
+    }
   }
 
   /** Every worker's probe handles, until a retired worker's last run has settled (its host removes itself). */
@@ -235,6 +241,11 @@ export class Pool {
     try {
       if (this.disposed) throw new RenderFailed('pool disposed')
       if (slot.closed) await this.replace(slot)
+      // A worker still waiting its turn at the start gate, or loading, has not begun the job: its deadline starts after.
+      await slot.worker.ready
+      if (this.disposed) throw new RenderFailed('pool disposed')
+      // It died while loading: once more, on a fresh worker.
+      if (slot.closed) { await this.replace(slot); await slot.worker.ready }
       return await fn()
     } finally {
       slot.busy = false
@@ -245,7 +256,7 @@ export class Pool {
   /** Posts and waits at most `ms`; on timeout the worker is retired (the
    * caller learns via 'timeout'). */
   private async post(slot: Slot, msg: WorkerRequest, ms?: number): Promise<WorkerReply | 'timeout'> {
-    const reply = new Promise<WorkerReply>((ok) => { slot.pending.set(msg.id, { ok }); slot.worker.postMessage(msg) })
+    const reply = new Promise<WorkerReply>((ok) => { slot.pending.set(msg.id, { ok }); slot.worker.post(msg) })
     if (ms === undefined) return reply
     let timer: ReturnType<typeof setTimeout> | undefined
     const timeout = new Promise<'timeout'>((r) => { timer = setTimeout(() => r('timeout'), ms) })
