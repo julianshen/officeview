@@ -2576,7 +2576,7 @@ There are 2,036 rows over 17 cases: 791 formula cells, 542 painted as Excel, 0 d
 | `formula:cfvo-relative` | cfvo-formulas | S5-H | DisplayFormat / PNG measurement | zero | withheld: reading-mismatch: Excel matched zero, production implements anchor-top-left | withheld (gate) |
 | `formula:cfvo-nonnumeric` | cfvo-formulas | S5-H | recorded Excel outcome | — | withheld: refused-unsupported | Finding (S4-MINMAX precedent): no hypothesis (withheld, zero, skipped) matched what Excel showed for a text, blank or error formula bound in stage5... |
 | `formula:cfvo-twin` | cfvo-formulas | S5-H | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
-| `formula:cfvo-scope-multi-range` | cfvo-scope-v2 (§14.z.11; cfvo-scope is a cross-check) | S5-H | DisplayFormat / PNG measurement (crop against literal twins) | anchor-a1 | published | relative bounds still withheld by `formula:cfvo-relative`; multi-range scales by `scale:scope-disjoint` |
+| `formula:cfvo-scope-multi-range` | cfvo-scope-v2 (§14.z.11; cfvo-scope is a cross-check) | S5-H | DisplayFormat / PNG measurement (crop against literal twins) | anchor-a1 | withheld: refused-unsupported | measured anchor-a1, but production's behaviour post-dates the capture: awaits a confirmation case (§14.z.11) |
 | `formula:cfvo-scope-twin` | cfvo-scope | S5-H | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
 | `scale:dialect-standalone` | x14-scale | S5-I | DisplayFormat / PNG measurement | standalone-evaluated | published | none |
 | `formula:x14-scale-twin` | x14-scale | S5-A | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
@@ -2860,27 +2860,31 @@ The comment on the registration cites these commits.
   - So the A1 anchor is a property of **every relative cfvo formula**, not of the multi-range scope.
   - This also explains the old finding: A1:A4 was blank there, so the bound read 0, below the minimum of 10. Excel swaps inverted bounds (`stage2-scale-degenerate` D), so every cell painted top.
 
-**Production (reading registered, not fitted).** The reading `anchor-a1` and its hypothesis predate the capture (fdae467d, d3c2e52d precede 5dc2fe9e). Production did not have the behaviour, and it is small and exact, so it was implemented test-first:
-- `formulaReadings.ts` lists `anchor-a1` in the selection of `formula:cfvo-scope-multi-range`;
-- `service.ts` evaluates the bound of a multi-range visual once, at A1 (row 0, column 0);
-- `dependencies.ts` treats a task with explicit targets as covering those cells, which may lie outside the rule.
+**Production: implemented, not registered (fix round 1).** A reading may be registered after a capture only if both its hypothesis **and** production's behaviour predate that capture. The hypothesis does (fdae467d, d3c2e52d precede 5dc2fe9e); the behaviour does not. It was implemented test-first after the capture (709b6a7e):
+- `service.ts` `cfvoBoundAnchors`: under `anchor-a1`, a multi-range visual's formula bound is evaluated once, at A1;
+- `dependencies.ts`: a task with explicit targets covers those cells, which may lie outside the rule.
 
-The new tests in `tests/xlsx-cf-formula-cfvo.test.ts` check three things:
-- the v2 fixture's scale, icon and absolute-control cells each equal their own anchor-a1 twin, with one evaluation per bound at A1;
-- a window shifted to A1 equals its literal twin;
-- a window that would leave the sheet is withheld when no edge reading is held.
+3b67bf35 registered and published it. That was ineligible, and fix round 1 withdrew it in new commits:
+- `anchor-a1` is no longer in `CF_FORMULA_PRODUCTION_READINGS['formula:cfvo-scope-multi-range']`;
+- the capability is back in `CF_STAGE5_UNSUPPORTED`, with the new reason "measured anchor-a1; production behaviour post-dates the capture; awaits a confirmation case";
+- the audit republished it twice, byte-identical (sha-256 `1be0d313…`, the same file as before 709b6a7e): 338 ids, 45 of them Stage 5.
 
-The audit's `--write --publish-stage3 --publish-stage5` ran twice, byte-identical (sha-256 `326b3a0a…`). It publishes 339 ids, 46 of them Stage 5. The only diff in `verifiedCapabilities.ts` is `formula:cfvo-scope-multi-range` (in the Stage 5 set and the combined set) and its selection `anchor-a1`. The finding left `CF_STAGE5_UNSUPPORTED`.
+Nothing paints through `anchor-a1`, because `cfFormulaReading` never selects an unregistered reading. Multi-range formula-bounded visuals, absolute bounds included, are withheld exactly as before 709b6a7e.
 
-**Production effect.**
-- **Now paint:** multi-range icon sets (tested with production's own evidence) and data bars (the same gates: `bar:scope-disjoint`, `bar:bounds-formula`) whose formula bound is absolute; the bound evaluated at A1 is the same value.
-- **Still withheld:**
-  - a relative cfvo bound, which still needs `formula:cfvo-relative`, unpublished (reading-mismatch);
-  - every multi-range colour scale, which needs `scale:scope-disjoint`, unverified under Ruling F-2.
-- **Audit justification:** `stage5JustifiedRefusals` (stage5-withhold.ts) now records the family `scope-disjoint` gate. It is the refusal production gives the multi-range absolute scales of both scope cases, and the multi-range capability no longer covers them.
+The tests in `tests/xlsx-cf-formula-cfvo.test.ts` cover the evaluation and the gate:
+- `cfvoBoundAnchors`;
+- a bound task targeted at A1 reads A1:A6 (15). Off the sheet, it is unresolved without an edge reading and `#REF!` under `ref-error`;
+- the publication gate withholds every v2 cell, under production's evidence and with every capability held and `anchor-a1` injected;
+- a multi-range absolute icon threshold is withheld again.
+
+The `scope-disjoint` justification added to `stage5JustifiedRefusals` in 3b67bf35 is no longer needed (the multi-range capability's own refusal covers those scales again) and was removed.
+
+**Production effect.** None: viewer output is as before 709b6a7e.
+
+**Follow-up (the confirmation case).** One new case version pre-registers `anchor-a1` for both `formula:cfvo-scope-multi-range` and `formula:cfvo-relative`, and is built and captured after this behaviour is committed. If Excel matches it there, the reading can be registered for both. For `formula:cfvo-relative` that also needs production to apply the A1 anchor to a single range, which it does not today: it implements `anchor-top-left`, now contradicted (below).
 
 **Flag: `formula:cfvo-relative`'s registered reading is contradicted.** Production registers `anchor-top-left` for a single-range relative cfvo, and Excel's single-range control here shows `anchor-a1`. The `zero` match on `stage5-cfvo-formulas` K is consistent with anchor-a1: `=A2` written on K2 and read from A1 lands ten columns left of A, off the sheet, which under the published `wrap` edge reading is a blank cell, so 0. The capability is unpublished (reading-mismatch), so nothing paints wrongly. It is **not** changed here. Re-registering it needs its own case version that pre-registers `anchor-a1`, since the v2 control was record-only by design.
 
 **Audits:** Stage 5 `structural=33/33 unsupported=9 pending=5 unverifiedNonDiscriminating=11 stageComplete=true blocked=0`; 2,748 records over 33 cases (19 measured), 0 disagreeing.
 
-**Pinned counts moved:** Stage 5 published 45→46 (icon-key admission); `RECORDED_EXCEL_REFUSALS` drops `formula:cfvo-scope-multi-range`.
+**Pinned counts (after fix round 1):** Stage 5 published stays 45; `RECORDED_EXCEL_REFUSALS` keeps `formula:cfvo-scope-multi-range`, whose reason is now the measured anchor-a1 awaiting confirmation.
