@@ -242,10 +242,13 @@ export class Pool {
       if (this.disposed) throw new RenderFailed('pool disposed')
       if (slot.closed) await this.replace(slot)
       // A worker still waiting its turn at the start gate, or loading, has not begun the job: its deadline starts after.
-      await slot.worker.ready
-      if (this.disposed) throw new RenderFailed('pool disposed')
-      // It died while loading: once more, on a fresh worker.
-      if (slot.closed) { await this.replace(slot); await slot.worker.ready }
+      // A loaded worker costs no extra turn (the job is posted in the same step as before).
+      if (!slot.worker.loaded) {
+        await slot.worker.ready
+        if (this.disposed) throw new RenderFailed('pool disposed')
+        // It died while loading: once more, on a fresh worker.
+        if (slot.closed) { await this.replace(slot); await slot.worker.ready }
+      }
       return await fn()
     } finally {
       slot.busy = false
