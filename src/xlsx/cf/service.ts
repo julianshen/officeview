@@ -62,6 +62,17 @@ const VISUAL_FORMULA_CAPABILITY = { colorScale: 'scale:thresholds-formula', data
  * needs its family id, a scale's reference `num` Stage 2's `scale:thresholds-num-val-reference`, and every formula the
  * parse and evaluation sets of its use. An activation on a stopIfTrue visual has no measured composition.
  */
+/**
+ * Ruling S5-H: where a visual's formula bound is evaluated, one anchor per measured scope: the first range's top-left (one
+ * scope; also a single range), each range's own (`per-range`), or A1 (`anchor-a1`: the stored references, written on the
+ * first range's top-left, shifted to A1, which stage5-cfvo-scope-v2 measured). `anchor-a1` is implemented but not a
+ * registered reading (its behaviour post-dates that capture), so `cfFormulaReading` never selects it in production.
+ */
+export function cfvoBoundAnchors(ranges: readonly SourceRect[], scope: string | undefined): ReadonlyArray<Readonly<{ row: number; col: number }>> {
+  if (scope === 'anchor-a1') return [Object.freeze({ row: 0, col: 0 })]
+  return (scope === 'per-range' ? ranges : ranges.slice(0, 1)).map(r => Object.freeze({ row: r.firstRow, col: r.firstCol }))
+}
+
 function visualFormulaRefusal(rule: CfRule, d: CfVisualDefinition, check: (capability: string) => boolean): string | undefined {
   const context = { dialect: d.dialect, rangeCount: rule.ranges.length, sourceType: d.kind }
   const held = (f: CfFormula, use: 'cfvo' | 'activation'): boolean => {
@@ -377,10 +388,7 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
             }
             // A bound is evaluated at its scope anchors only, wherever this preparation's rects lie; the activation at every
             // covered cell, like an expression.
-            const scope = rule.ranges.length > 1 ? cfFormulaReading('formula:cfvo-scope-multi-range', check) : undefined
-            // `anchor-a1`: one scope, its bound evaluated at A1 (the stored references shifted from the first range's top-left).
-            const anchors = scope === 'anchor-a1' ? [Object.freeze({ row: 0, col: 0 })]
-              : (scope === 'per-range' ? rule.ranges : rule.ranges.slice(0, 1)).map(r => Object.freeze({ row: r.firstRow, col: r.firstCol }))
+            const anchors = cfvoBoundAnchors(rule.ranges, rule.ranges.length > 1 ? cfFormulaReading('formula:cfvo-scope-multi-range', check) : undefined)
             visualAnchors.set(rule, anchors)
             const targets = anchors.map(a => Object.freeze({ firstRow: a.row, lastRow: a.row, firstCol: a.col, lastCol: a.col }))
             for (const b of cfVisualFormulaBounds(visual)) { taskOf.set(b.formula, formulaTasks.length); formulaTasks.push({ rule, formula: b.formula, targets }) }

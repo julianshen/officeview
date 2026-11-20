@@ -146,8 +146,9 @@ describe('stage5-cfvo-scope-v2: the case', () => {
     expect(old.formulaConfigurations!.map(x => x.id)).toEqual(['scope-scale', 'scope-scale-absolute', 'scope-icon'])
     expect(old.status).toBe('recipe-pending')
     expect(caseOf('stage5-cfvo-scope').status).toBe('measured')
-    // The capture (5dc2fe9e) matched anchor-a1, the reading pre-registered here: the old finding is explained, no longer a refusal.
-    expect(CF_STAGE5_UNSUPPORTED[CAP]).toBeUndefined()
+    // The capture (5dc2fe9e) matched anchor-a1, pre-registered here; production's anchor-a1 post-dates it, so the capability
+    // stays a recorded refusal until a confirmation case captured after the behaviour.
+    expect(CF_STAGE5_UNSUPPORTED[CAP]).toMatch(/Measured anchor-a1 .* awaits a confirmation case/)
     expect(CF_STAGE5_NONDISCRIMINATING[TWIN]).toBeDefined()
   })
 

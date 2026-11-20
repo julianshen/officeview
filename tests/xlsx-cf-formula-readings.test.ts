@@ -21,7 +21,7 @@ import { CF_LIMITS, createCfMemory } from '../src/xlsx/cf/limits'
 import { injectCfFormulaSelections, withInjectedCfEvidence } from '../src/xlsx/cf/evidence'
 import { CF_FORMULA_PRODUCTION_READINGS } from '../src/xlsx/cf/formulaReadings'
 import { cfRulesVersion } from '../src/xlsx/view/pagedSource'
-import { CF_STAGE5_OWNERS, type CfManifest } from '../scripts/cf-refs/cases'
+import type { CfManifest } from '../scripts/cf-refs/cases'
 import { CF_STAGE5_UNCONFIRMABLE, stage5Publication, stage5UnconfirmableScope, auditStage5Manifest, type Stage5AuditReport } from '../scripts/cf-refs/audit'
 import { rc, shown } from './helpers/cf-formula-rules'
 
@@ -219,10 +219,6 @@ describe('every registered formula reading is the reading production implements,
         if (entry === undefined) continue
         for (const reading of typeof entry === 'string' ? [entry] : entry) {
           const predicted = cfg.hypotheses[reading] as Readonly<Record<string, string>> | undefined
-          // A superseded case version (its capability owned by a later one, CF_STAGE5_OWNERS) need not name a reading that
-          // only its successor pre-registered (anchor-a1 of formula:cfvo-scope-multi-range, stage5-cfvo-scope-v2).
-          const owner = CF_STAGE5_OWNERS[cfg.capabilityId]
-          if (predicted === undefined && owner !== undefined && owner !== c.id) continue
           expect(predicted, `${cfg.capabilityId} ${cfg.id}: ${reading} is a hypothesis`).toBeDefined()
           const refs = cfg.refs.filter(isPaintRef)
           if (refs.length === 0) continue

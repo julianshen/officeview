@@ -112,9 +112,8 @@ describe('ruling 1: a key is admitted only when its own case fully verifies', ()
     const committed = new Set(stage5Publication(auditStage5Manifest(manifest() as never, { rootDir: ROOT })).published)
     expect(committed.has('icon:thresholds-formula')).toBe(true)
     // 44 since formula:hoist-aggregate-errors registered its error-propagates reading (it was 43 before), 45 since
-    // bar:bounds-formula (stage5-bar-bounds-formula), 46 since formula:cfvo-scope-multi-range (anchor-a1,
-    // stage5-cfvo-scope-v2; its icon set is classified against the centred key the case's own placement selects).
-    expect(committed.size).toBe(46)
+    // bar:bounds-formula (stage5-bar-bounds-formula); neither is a capability the icon key touches.
+    expect(committed.size).toBe(45)
     for (const id of gate.published) expect(committed.has(id), id).toBe(true)
   }, 600_000)
 })

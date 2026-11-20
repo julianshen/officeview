@@ -44,8 +44,9 @@ const RECORDED_EXCEL_REFUSALS = [
   'formula:predicate-timeperiod-divergent',
   'formula:cross-sheet-missing',
   'formula:cfvo-nonnumeric',
-  // formula:cfvo-scope-multi-range left this list with stage5-cfvo-scope-v2 (5dc2fe9e): Excel matched the pre-registered
-  // anchor-a1 reading, which explains the old all-top finding.
+  // Explained by stage5-cfvo-scope-v2 (5dc2fe9e matched anchor-a1), but production's anchor-a1 post-dates that capture:
+  // still a recorded refusal, awaiting a confirmation case.
+  'formula:cfvo-scope-multi-range',
 ]
 
 describe('every enabled formula capability has verified evidence', () => {

@@ -311,7 +311,7 @@ describe('Stage 5 re-evaluated with the centred key (the four Task 39 re-deferra
     // Excel drew the top icon (3Arrows:2) on all twelve designated cells and the top colour on every scale cell.
     expect(new Set(Object.values(e.observed!['scope-icon']!))).toEqual(new Set(['icon:3Arrows:2@2,4|none']))
     // The finding is explained by the later case version stage5-cfvo-scope-v2 (5dc2fe9e: Excel matched its pre-registered
-    // anchor-a1, whose blank window A1:A4 reads 0 here), so it is no longer a recorded refusal.
-    expect(CF_STAGE5_UNSUPPORTED['formula:cfvo-scope-multi-range']).toBeUndefined()
+    // anchor-a1, whose blank window A1:A4 reads 0 here); it stays a recorded refusal until a confirmation case is captured.
+    expect(CF_STAGE5_UNSUPPORTED['formula:cfvo-scope-multi-range']).toMatch(/Measured anchor-a1/)
   })
 })
