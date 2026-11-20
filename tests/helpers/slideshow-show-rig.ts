@@ -20,6 +20,7 @@ import type { PptxDocument } from '../../src/pptx/types'
 import type { RenderState, SlideShowDiagnostic } from '../../src/slideshow/types'
 import { slideSize } from '../../src/slideshow/render/scene'
 import type { WatermarkOptions } from '../../src/core/watermark'
+import type { MediaClock } from '../../src/slideshow/engine/media-ends'
 
 export interface ShowSeams {
   clock: ManualClock
@@ -34,7 +35,7 @@ export function installShowSeams(size: { width: number; height: number } = { wid
   const timers: Array<{ at: number; cb: () => void; id: number }> = []
   let wall = 0
   let next = 1
-  const saved = { clock: sessionDeps.clock, frames: sessionDeps.frames, timer: sessionDeps.timer, now: sessionDeps.now, backend: sessionDeps.backend }
+  const saved = { clock: sessionDeps.clock, frames: sessionDeps.frames, timer: sessionDeps.timer, now: sessionDeps.now, backend: sessionDeps.backend, source: sessionDeps.source }
   const rect = HTMLElement.prototype.getBoundingClientRect
   // The session sizes the surface from the host (clientWidth, 0 in jsdom) or the window.
   const inner = { w: window.innerWidth, h: window.innerHeight }
@@ -105,12 +106,20 @@ export interface ShowOptions {
   callbacks?: Partial<SlideShowCallbacks>
   /** Additive (piece 4 Task 14): the show's visible mark (`ShowStart.watermark`), as the stream parity harness draws it. */
   watermark?: WatermarkOptions
+  /**
+   * Additive (piece 5 Task 14, spec §5.5): slide `i`'s media clock. The driver's slide source is wrapped with it
+   * (`sessionDeps.source`, restored by the seams), so the local show ends audio on the show clock as a streamed show
+   * does (Task 5's switch); absent, the local show is unchanged.
+   */
+  mediaClock?: (i: number) => MediaClock | undefined
 }
 
 /** Starts a show of `doc` from the beginning, as the eager start sequence hands it to the lazy chunk. */
 export async function startShow(doc: PptxDocument, opts: ShowOptions): Promise<ShowRig> {
   const { seams } = opts
   const size = opts.size ?? { width: 1024, height: 768 }
+  const clockOf = opts.mediaClock
+  if (clockOf) sessionDeps.source = (slides) => ({ ...slides, settings: slides.settings, hidden: (i) => slides.hidden(i), acquire: (i, sig) => slides.acquire(i, sig), mediaClock: clockOf })
   const host = document.createElement('div')
   host.tabIndex = -1
   host.setAttribute('data-officeview-show', '')

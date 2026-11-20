@@ -4,7 +4,8 @@
  * token + capability checks, §14 rate gates, and the §6.2 rule-8 close-code
  * registry. No HTTP document route exists: every non-upgrade request is 404.
  */
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
+import { open as openFile } from 'node:fs/promises'
 import { gzipSync } from 'node:zlib'
 import type { Server, ServerWebSocket } from 'bun'
 import { encodeMessage } from '../../src/stream/frame'
@@ -12,7 +13,15 @@ import { encodeUnit } from '../../src/stream/unit'
 import { encodeRasterBody } from '../../src/stream/raster'
 import { AssetTooLarge, encodeAssets } from '../../src/stream/asset-wire'
 import { ASSET_ALLOWANCE } from '../../src/stream/remote/reservation'
-import { encodeManifest, type Manifest } from '../../src/stream/manifest'
+import { encodeManifest, MEDIA_AUDIO_CAPS, type Manifest } from '../../src/stream/manifest'
+import { bindMedia, mediaIdentity, sessionMediaId } from './media/bind'
+import type { FfmpegInfo } from './media/ffmpeg'
+import { mediaJobsFor, type MediaItem } from './media/jobs'
+import type { SessionMediaQueue } from './media/queue'
+import type { MediaServices } from './media/services'
+import { MEDIA_WIRE_LIMITS, parseMediaCursor, parseMediaEnd, parseMediaRequest, parseMediaShow, type MediaRefused } from '../../src/stream/media-wire'
+import { MEDIA_ID } from '../../src/stream/show-plan'
+import type { MediaRefusal } from '../../src/stream/media-types'
 import { AuditTable, ForensicExhausted, msgHex, type Issued } from './audit'
 import { CODEC_ID } from './mark/params'
 import { encodeEstimate } from './mark/mark-raster'
@@ -25,13 +34,13 @@ import { docRefOf, type Keys } from './keys'
 import { admit } from './policy'
 import { AdmissionRefused, RenderFailed, RenderTimeout, type Pool } from './pool'
 import { showBuildGrant, showMorphGrant } from './show/grant'
-import { encodeShowMessage, PlanRejected, SHOW_TRACK_WINDOW, type ShowMessage } from '../../src/stream/show-plan'
+import { encodeShowMessage, PlanRejected, SHOW_TRACK_WINDOW, type PlanMediaRecord, type ShowMessage, type ShowPlanRecord } from '../../src/stream/show-plan'
 import type { TestOnlyOptions } from './config'
 import type { ShowDeliveryRecord } from './audit-store'
 import { encodeNotesBody, NOTES_ENCODED_CAP, notesBasisLabel } from './notes'
 import { encodePrintBody, planPrint, PRINT_ENCODED_CAP, PRINT_SEND_HIGH_WATER, printArgs, printSizeOk, runPrint, type PrintJob, type PrintSlot } from './print'
 import { IpRates, SessionRates } from './rate'
-import { layoutFingerprint, SCALE_BUCKETS, type MarkSpec, type NotesPlan, type NotesRaster, type RenderedUnit, type UnitSize } from './render'
+import { layoutFingerprint, SCALE_BUCKETS, type MarkSpec, type MediaUnitRefs, type NotesPlan, type NotesRaster, type RenderedUnit, type UnitSize } from './render'
 import { SessionTable, type Session } from './sessionTable'
 import { a11yArgs, rangeArg, runA11y, runCopy, runSearch, runSelect, searchArgs, type SearchRun, type TextSlot } from './text/ops'
 import { issueToken, newSid, verifyToken } from './tokens'
@@ -66,7 +75,7 @@ export const trackWindowBytes = (frames: ReadonlyArray<{ w: number; h: number }>
 
 /** The most click steps a plan carries (D3): a track's step is below it, a Morph's `fromStep` at most it. */
 const SHOW_PLAN_LIMITS_STEPS = 64
-const KIND = { MANIFEST: 1, ASSET_DEFINE: 2, UNIT_RASTER: 3, UNIT_COMMANDS: 4, SHOW_PLAN: 6, NOTES_RASTER: 7, PRINT_RASTER: 8 } as const
+const KIND = { MANIFEST: 1, ASSET_DEFINE: 2, UNIT_RASTER: 3, UNIT_COMMANDS: 4, SHOW_PLAN: 6, NOTES_RASTER: 7, PRINT_RASTER: 8, MEDIA_CHUNK: 9 } as const
 /** Admission charge of a notes plan (a measuring context and the notes part's parse). */
 const NOTES_PLAN_BYTES = 4 * 1024 * 1024
 const HELLO_CAP = 4 * 1024, TEXT_CAP = 64 * 1024, FRAGMENT = 1 << 20
@@ -104,6 +113,38 @@ export interface StreamServerOptions {
   animation?: { strictMarks?: boolean }
   /** TEST-ONLY (`config.ts` `TestOnlyOptions`): never read from an `AuthDecision`. */
   testOnly?: TestOnlyOptions
+  /**
+   * Piece 5 (D18): audio media in shows. `enabled` defaults to `true` (Task 11: the client plays it); `can.media` is
+   * `enabled && info !== undefined` (ffmpeg probed: no `info` is media unavailable, fail closed). Off
+   * (`enabled: false`), shows behave exactly as in piece 4.
+   */
+  /** TEST-ONLY: awaited inside a media delivery, after the file is opened and checked, and after each chunk read. */
+  mediaTestHooks?: { afterOpen?(): void | Promise<void>; afterRead?(chunk: number): void | Promise<void> }
+  media?: { enabled?: boolean; info?: FfmpegInfo; /** Task 9: the process's media services (queues, the shared cache); without them `media-show` and `media-request` answer `media-unavailable`. */ services?: MediaServices }
+}
+
+/** Piece 5 (Task 9): one audio use of the session on one slide: its encode item (`mediaJobsFor`), or the refusal the
+ * slide's plan record ships (probe, link, or a chain on a video end: `slideAudioUses`). Server-only. */
+interface MediaUse { unit: number; refused?: MediaRefusal; item?: MediaItem }
+/**
+ * Piece 5 (Task 9): the session's media state on its `sessionDoc` entry.
+ * - `queue`: created at `media-show`, ended at `media-end`, on every socket close, expiry and revocation.
+ * - `uses`: mediaId → slide → use (fix round 1: a spid-less `audio|k` is one mediaId on every slide that uses its part,
+ *   and may be refused on one and play on another). Filled as the queue loads the slides' items (`started` settles
+ *   once it has); every id the session's plans can carry is here, and nothing else.
+ * - `refs`: each slide's `pool.mediaRefs`, read once per session (a re-show after `media-end` or a resume reuses it).
+ * - `cursor`: the slide of the last `media-show` or `media-cursor` (a `media-request` without `unit` is for it).
+ * - `wakes`: the high-water wait of every delivery in progress, woken by `endMedia` and the document's revocation.
+ */
+interface MediaSlot {
+  queue?: SessionMediaQueue; started?: Promise<void>; uses: Map<string, Map<number, MediaUse>>
+  refs: Map<number, MediaUnitRefs>; cursor?: number; wakes: Set<() => void>; revocationHooked?: boolean
+  /**
+   * Task 11b fix round (controller ruling): per unit, the media answers of the last plan bound for this session
+   * (mediaId → its plan refusal, `undefined` when it plays). A use is delivered only when a plan sent for its unit
+   * ships it playable; a unit no plan was sent for delivers nothing (`media-unavailable`).
+   */
+  plans: Map<number, Map<string, PlanMediaRecord['refused']>>
 }
 
 interface Conn {
@@ -125,7 +166,8 @@ type WS = ServerWebSocket<Conn>
 
 /** `hidden`: unit indices of hidden slides (pptx under 'full'); the show skips them and notes refuse them. */
 /** `anim` (D5): shown units with timing, a transition or both; `morph` (Task 7): those entered by Morph. */
-interface DocState { docRef: string; name: string; bytes: Uint8Array; units: UnitSize[]; hidden: ReadonlySet<number>; anim: ReadonlySet<number>; morph: ReadonlySet<number>; fingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; refs: number }
+/** `media` (piece 5, D19): shown units whose plan ships an audio record or a transition sound. */
+interface DocState { docRef: string; name: string; bytes: Uint8Array; units: UnitSize[]; hidden: ReadonlySet<number>; anim: ReadonlySet<number>; morph: ReadonlySet<number>; media: ReadonlySet<number>; fingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; refs: number }
 
 const isU32 = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 0 && (n as number) <= 0xffffffff
 
@@ -137,6 +179,12 @@ export function createStreamServer(o: StreamServerOptions) {
   /** sid → reaper of a detached session. */
   const reapers = new Map<string, ReturnType<typeof setTimeout>>()
   const fingerprintOf = o.fingerprint ?? layoutFingerprint
+  /** Piece 5 (D18): `can.media`, for every session of this server. */
+  const canMedia = (o.media?.enabled ?? true) && o.media?.info !== undefined
+  /** Media deliveries in progress (ok answers, until their pin is released): `stats().media`. */
+  let mediaDeliveries = 0
+  /** Task 9: `media-show` / `media-request` are served only with `can.media` and the media services. */
+  const services = canMedia ? o.media?.services : undefined
   const table = new SessionTable()
   const audit = o.audit ?? new AuditTable()
   const ipRates = new IpRates()
@@ -144,7 +192,7 @@ export function createStreamServer(o: StreamServerOptions) {
   /** Per-sid session entry. Its text state (in-flight search/select, the copy
    * queue and the quota counter `copiedParagraphs`) survives resume and is
    * gone on teardown. So does its print state (`printedPages`, the running job). */
-  const sessionDoc = new Map<string, TextSlot & PrintSlot & { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; tokenExp: number; /** Layer-1 issuance, fixed for the sid's life (a resume keeps it). */ forensic?: Issued; /** The sid's in-flight search (R6: one per sid); survives resume. */ search?: SearchRun }>()
+  const sessionDoc = new Map<string, TextSlot & PrintSlot & { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; tokenExp: number; /** Layer-1 issuance, fixed for the sid's life (a resume keeps it). */ forensic?: Issued; /** Piece 5 (D2): `sessionMediaKey`, 32 random bytes fixed for the sid's life (a resume keeps it). */ mediaKey: Uint8Array; /** Piece 5 (Task 9). */ media: MediaSlot; /** The sid's in-flight search (R6: one per sid); survives resume. */ search?: SearchRun }>()
   const sockets = new Set<WS>()
   /** Per-sid rate state survives resume (it belongs to the session, not the socket). */
   const sessionRates = new Map<string, SessionRates>()
@@ -162,6 +210,9 @@ export function createStreamServer(o: StreamServerOptions) {
   const close = (ws: WS, name: CloseName | 'superseded') => {
     if (ws.data.phase === 'closed') return
     const code = name === 'superseded' ? 4409 : CLOSE[name]
+    // D1 (fix round 1): a server-initiated close ends the session's media now, not at the peer's close handshake.
+    const sid = ws.data.sid
+    if (sid && table.get(sid)?.activeSocket === (ws as unknown)) endMedia(sessionDoc.get(sid))
     ws.data.phase = 'closed'
     ws.data.gone.abort()
     wakeDrain(ws)
@@ -175,11 +226,16 @@ export function createStreamServer(o: StreamServerOptions) {
   }
   /** §14 per-kind encoded (`totalLen`) caps. A message over its cap is never
    * framed, so a conforming client never sees an encoded-cap rejection. */
-  const ENCODED: Record<number, number> = { [KIND.MANIFEST]: 256 << 10, [KIND.ASSET_DEFINE]: 1 << 20, [KIND.UNIT_RASTER]: 8 << 20, [KIND.UNIT_COMMANDS]: 8 << 20, [KIND.SHOW_PLAN]: 8 << 20, [KIND.NOTES_RASTER]: NOTES_ENCODED_CAP, [KIND.PRINT_RASTER]: PRINT_ENCODED_CAP }
+  const ENCODED: Record<number, number> = { [KIND.MANIFEST]: 256 << 10, [KIND.ASSET_DEFINE]: 1 << 20, [KIND.UNIT_RASTER]: 8 << 20, [KIND.UNIT_COMMANDS]: 8 << 20, [KIND.SHOW_PLAN]: 8 << 20, [KIND.NOTES_RASTER]: NOTES_ENCODED_CAP, [KIND.PRINT_RASTER]: PRINT_ENCODED_CAP, [KIND.MEDIA_CHUNK]: 4 << 20 }
   const frame = (kind: number, reqId: number, payload: Uint8Array): Uint8Array[] | undefined => {
     const z = new Uint8Array(gzipSync(payload, { level: 6 }))
     if (z.length + 4 > ENCODED[kind]!) return undefined
     return encodeMessage({ ver: 1, kind: kind as never, reqId, payload, compress: () => z, fragmentBytes: FRAGMENT })
+  }
+  /** D13, D14: one MEDIA_CHUNK, framed stored (already-compressed audio), one fragment. */
+  const frameChunk = (reqId: number, payload: Uint8Array): Uint8Array[] | undefined => {
+    if (payload.length + 4 > ENCODED[KIND.MEDIA_CHUNK]!) return undefined
+    return encodeMessage({ ver: 1, kind: KIND.MEDIA_CHUNK as never, reqId, payload, compress: () => { throw new Error('a stored message is never compressed') }, stored: true, fragmentBytes: FRAGMENT })
   }
   const sendBinary = (ws: WS, f: Uint8Array) => o.transport ? o.transport.sendBinary(ws, f) : ws.sendBinary(f)
   const bufferedOf = (ws: WS) => o.transport ? o.transport.bufferedAmount(ws) : ws.getBufferedAmount()
@@ -208,11 +264,24 @@ export function createStreamServer(o: StreamServerOptions) {
   /** Document references across sessions; the last release forgets it in the pool. */
   function acquireDoc(docRef: string): void {
     const d = docs.get(docRef)
-    if (d) d.refs++; else docs.set(docRef, { docRef, refs: 1 } as DocState)
+    if (d) { d.refs++; return }
+    docs.set(docRef, { docRef, refs: 1 } as DocState)
+    // A document opened again after its close (the same docRef): its media is served afresh (Task 9).
+    o.media?.services?.cache.reopen(docRef)
   }
+  /** The last release closes the document: the pool forgets it, and its media entries are deleted at once (D12, D23). */
   function releaseDoc(docRef: string): void {
     const d = docs.get(docRef)
-    if (d && --d.refs <= 0) { docs.delete(docRef); o.pool.forget(docRef) }
+    if (d && --d.refs <= 0) { docs.delete(docRef); o.pool.forget(docRef); void o.media?.services?.cache.dropDocument(docRef).catch(() => {}) }
+  }
+  /** D1: `media-end`, a socket close, expiry and revocation all end the session's queue (`cache.dropSession`). */
+  function endMedia(sd: { media: MediaSlot } | undefined): void {
+    if (!sd) return
+    // Deliveries parked in the high-water wait exit at once (fix round 1); their alive check fails.
+    const q = sd.media.queue
+    sd.media.queue = undefined; sd.media.started = undefined
+    for (const w of [...sd.media.wakes]) w()
+    if (q) void q.end().catch(() => {})
   }
 
   function markOf(p: EffectivePolicy, d: AuthDecision): MarkSpec {
@@ -277,10 +346,10 @@ export function createStreamServer(o: StreamServerOptions) {
       // The issuance row is durable before anything is committed or sent; a failed write refuses the session.
       const startedAt = nowSec()
       try {
-        audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, services: { copy: policy.copy, textA11y: policy.textA11y, print: policy.print, notes: canNotes(policy) }, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, docRef, contentPolicy: policy.contentPolicy, visibleMark: markOf(policy, decision) })
+        audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, services: { copy: policy.copy, textA11y: policy.textA11y, print: policy.print, notes: canNotes(policy), media: canMedia }, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, docRef, contentPolicy: policy.contentPolicy, visibleMark: markOf(policy, decision) })
       } catch { return close(ws, 'policy-refused') }
       table.create({ sid, docRef, ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), role: policy.role, effectivePolicy: policy, activeSocket: ws as never, jti: token.jti, startedAt })
-      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, hidden: new Set(opened.hidden), anim: new Set(opened.anim.filter((i) => !opened.hidden.includes(i))), morph: new Set(opened.morph.filter((i) => !opened.hidden.includes(i))), fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, copiedParagraphs: 0, printedPages: 0, ...(forensic ? { forensic } : {}) })
+      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, hidden: new Set(opened.hidden), anim: new Set(opened.anim.filter((i) => !opened.hidden.includes(i))), morph: new Set(opened.morph.filter((i) => !opened.hidden.includes(i))), media: new Set((opened.media ?? []).filter((i) => !opened.hidden.includes(i))), fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, copiedParagraphs: 0, printedPages: 0, mediaKey: new Uint8Array(randomBytes(32)), media: { uses: new Map(), refs: new Map(), wakes: new Set(), plans: new Map() }, ...(forensic ? { forensic } : {}) })
       sessionRates.set(sid, ws.data.rates)
       ws.data.sid = sid
       committed = true
@@ -314,10 +383,12 @@ export function createStreamServer(o: StreamServerOptions) {
     // A change of the mutable text services is durable before it takes effect
     // (the open row stays write-once); a failed write refuses the resume.
     if (JSON.stringify([policy!.copy, policy!.textA11y, policy!.print, canNotes(policy!)]) !== JSON.stringify([sd.policy.copy, sd.policy.textA11y, sd.policy.print, canNotes(sd.policy)])) {
-      try { audit.recordServices(s.sid, { copy: policy!.copy, textA11y: policy!.textA11y, print: policy!.print, notes: canNotes(policy!) }) } catch { return close(ws, 'policy-refused') }
+      try { audit.recordServices(s.sid, { copy: policy!.copy, textA11y: policy!.textA11y, print: policy!.print, notes: canNotes(policy!), media: canMedia }) } catch { return close(ws, 'policy-refused') }
     }
     const old = s.activeSocket as unknown as WS | undefined
     if (old && old !== ws && old.data) { old.data.phase = 'closed'; for (const t of old.data.timers) clearTimeout(t); wakeDrain(old) }
+    // D1: the superseded socket's close is an implicit media-end (its deliveries stop on their own alive check).
+    if (old !== ws) endMedia(sd)
     // A job on the old socket cannot continue on the new one.
     if (sd.print) { sd.print.stopped = true; sd.print.wake?.() }
     const reaper = reapers.get(s.sid); if (reaper) { clearTimeout(reaper); reapers.delete(s.sid) }
@@ -342,6 +413,7 @@ export function createStreamServer(o: StreamServerOptions) {
     if (sd?.search) { sd.search.stopped = true; sd.search = undefined }
     if (sd?.select) { sd.select.stopped = true; sd.select = undefined }
     if (sd?.print) { sd.print.stopped = true; sd.print.wake?.() }
+    endMedia(sd)
     if (sd) releaseDoc(sd.doc.docRef)
   }
   /** Keep the session (and its document charge) for a resume until the grace
@@ -357,13 +429,15 @@ export function createStreamServer(o: StreamServerOptions) {
     const sd = sessionDoc.get(sid)!, p = sd.policy
     const m: Manifest = {
       v: 1, docRef: sd.doc.docRef, kind: sd.doc.format, name: sd.doc.name,
-      units: { count: sd.doc.units.length, list: sd.doc.units.map((u, i) => sd.doc.hidden.has(i) ? { ...u, hidden: true as const } : sd.doc.anim.has(i) ? { ...u, anim: true as const } : u) },
+      // D19: `media` only with `can.media` (D18: off, the manifest is piece 4's).
+      units: { count: sd.doc.units.length, list: sd.doc.units.map((u, i) => sd.doc.hidden.has(i) ? { ...u, hidden: true as const } : { ...u, ...(sd.doc.anim.has(i) ? { anim: true as const } : {}), ...(canMedia && sd.doc.media.has(i) ? { media: true as const } : {}) }) },
       layoutFingerprint: sd.doc.fingerprint,
       session: { sid, token, expiresSec: ttl, resume: 'session' },
       policy: { contentPolicy: p.contentPolicy, protection: p.projection, semantic: 'visible-only', contentPolicyId: sd.doc.contentPolicyId, viewerMarkId: p.visibleMark },
       // Links land later in Stage 3.
-      can: { search: true, copy: p.copy !== false, print: p.print !== false, textA11y: p.textA11y !== 'off', present: sd.doc.format === 'pptx', notes: canNotes(p), links: false },
-      caps: { copy: p.copy === false ? null : { ...p.copy }, a11y: p.textA11y, print: p.print === false ? null : { ...p.print } },
+      can: { search: true, copy: p.copy !== false, print: p.print !== false, textA11y: p.textA11y !== 'off', present: sd.doc.format === 'pptx', notes: canNotes(p), links: false, media: canMedia },
+      caps: { copy: p.copy === false ? null : { ...p.copy }, a11y: p.textA11y, print: p.print === false ? null : { ...p.print }, ...(canMedia ? { media: { audio: { ...MEDIA_AUDIO_CAPS } } } : {}) },
+      // D18: off, `caps` stays piece 4's (absent `caps.media` validates as null, media off).
       recorder: { commands: 'ovsd-1', textMode: 'text', scalesBuckets: [...SCALE_BUCKETS], requiredFaces: p.projection === 'commands' ? requiredFacesOf(pack.faces.map((f) => f.id), pack) : [], projection: p.projection },
       limits: { maxUnitPx: 8192, maxAssetBytes: 8 * 1024 * 1024, wsFrameBytes: FRAGMENT, tilePx: 512 },
       notices: [...forensicNotices(p), ...(p.relaxed ? ['relaxed-session'] : [])],
@@ -744,6 +818,13 @@ export function createStreamServer(o: StreamServerOptions) {
    * 9. `diag` text (forensic-unmarked, Morph diagnostics), `*-start`, then the kind-6 messages, each one sent only
    *    while the session lives.
    */
+  /** Task 11b fix round: the session's record of what the plan bound for `unit` ships, and how (`MediaSlot.plans`). */
+  const planned = (sd: { media: MediaSlot }, unit: number, plan: ShowPlanRecord) => {
+    sd.media.plans.set(unit, new Map((plan.media ?? []).map((r) => [r.mediaId, r.refused])))
+    // Encode-ahead of this unit waited for its plan (Important 4): the queue looks again.
+    sd.media.queue?.wake()
+  }
+
   async function onShow(ws: WS, msg: Record<string, unknown>, kind: ShowDeliveryRecord['kind']) {
     const deny = (reqId: unknown, code: ShowErrorCode) => send(ws, { reqId: isU32(reqId) ? reqId : 0, type: 'error', code })
     const a = await textOp(ws, msg, undefined, deny)
@@ -751,7 +832,8 @@ export function createStreamServer(o: StreamServerOptions) {
     const { reqId, s, sd } = a
     const d = sd.doc
     if (d.format !== 'pptx') return deny(reqId, 'policy-refused')
-    const animated = (u: unknown): u is number => shownUnit(d, u) && d.anim.has(u)
+    // D19: a unit with `anim`, or one the manifest marked `media` (only with `can.media`).
+    const animated = (u: unknown): u is number => shownUnit(d, u) && (d.anim.has(u) || (canMedia && d.media.has(u)))
     const step = (x: unknown, max: number): x is number => Number.isInteger(x) && (x as number) >= 0 && (x as number) <= max
     let unit: number
     if (kind === 'morph') {
@@ -773,7 +855,7 @@ export function createStreamServer(o: StreamServerOptions) {
     if (!ledger.touch(d.docRef, sd.policy.contentPolicy, d.bytes.length)) return deny(reqId, 'policy-refused')
     const alive = textAlive(ws, s.sid, sd)
     const p = sd.policy, mark = markOf(p, sd.decision), strictMarks = o.animation?.strictMarks === true
-    const base = { docRef: d.docRef, contentPolicy: p.contentPolicy, scale: scale as 1 | 2, motion: motion as 'full' | 'reduced', mark, strictMarks }
+    const base = { docRef: d.docRef, contentPolicy: p.contentPolicy, scale: scale as 1 | 2, motion: motion as 'full' | 'reduced', mark, strictMarks, media: canMedia }
     // A Morph pair prepares both slides (PR #78 round 13): it is admitted for both.
     const estimate = kind === 'morph' ? showMorphGrant(d.units[msg.from as number]!, d.units[unit]!, scale) : showEstimate(d.units[unit]!, scale)
 
@@ -786,13 +868,23 @@ export function createStreamServer(o: StreamServerOptions) {
       if (kind === 'plan') {
         const built = await o.pool.showPlan(s.sid, { ...base, unitIndex: unit }, estimate, ws.data.gone.signal)
         if (!alive()) return
-        if ('refused' in built) return deny(reqId, built.refused)
-        head = { tag: 1, plan: built.plan }
-        assets = built.assets
-        const entry = built.assets.find((x) => x.tag === 3)
-        if (!entry) return deny(reqId, 'policy-refused')
-        page = { w: entry.w, h: entry.h }
-        decoded = built.decodedBytes
+        if ('refused' in built) {
+          // Task 11b: a still with audio answers its sound-only plan (one message, no asset): it plays its piece-3
+          // still and sounds. Any other refusal, or a still without audio (or media off), is piece 4's error.
+          if (!built.sounds) return deny(reqId, built.refused)
+          head = { tag: 1, plan: bindMedia(built.sounds.plan, (ref) => sessionMediaId(sd.mediaKey, mediaIdentity(ref)), built.sounds.mediaRefs) }
+          assets = []
+          page = { w: 0, h: 0 }
+          decoded = built.sounds.decodedBytes
+        } else {
+          // D2: the cached plan's placeholders become this session's media ids.
+          head = { tag: 1, plan: bindMedia(built.plan, (ref) => sessionMediaId(sd.mediaKey, mediaIdentity(ref)), built.mediaRefs) }
+          assets = built.assets
+          const entry = built.assets.find((x) => x.tag === 3)
+          if (!entry) return deny(reqId, 'policy-refused')
+          page = { w: entry.w, h: entry.h }
+          decoded = built.decodedBytes
+        }
       } else if (kind === 'track') {
         const frames = await o.pool.showTrack(s.sid, { ...base, unitIndex: unit, step: msg.step as number }, estimate, ws.data.gone.signal)
         if (!alive()) return
@@ -832,6 +924,8 @@ export function createStreamServer(o: StreamServerOptions) {
     for (const pl of payloads) { const f = frame(KIND.SHOW_PLAN, reqId, pl); if (!f) return deny(reqId, 'policy-refused'); messages.push(f) }
     const unmarked = marked.unmarked.length
     try { audit.recordShow({ sid: s.sid, unitIndex: unit, kind, assetCount: assets.length, unmarked, ...(unmarked ? { reason: marked.reason } : {}) }) } catch { return deny(reqId, 'policy-refused') }
+    // Fix round 1 (Important 3): the plan's media answers count from here on, once nothing can refuse the reply.
+    if (head?.tag === 1) planned(sd, unit, head.plan)
 
     // 9. Diagnostics, the start, the messages.
     if (marked.reason === 'layer-capacity' && unmarked) diags.push({ reqId, type: 'diag', code: 'forensic-unmarked', unit, reason: 'layer-capacity', assetIds: marked.unmarked })
@@ -865,6 +959,199 @@ export function createStreamServer(o: StreamServerOptions) {
       if ('unmarked' in r) { forensicStats.unmarked++; unmarked.push(x.assetId); out.push(x) } else { forensicStats.marked++; out.push({ ...x, png: r.png }) }
     }
     return { assets: out, unmarked, reason: 'layer-capacity' }
+  }
+
+  // -------------------------------------------------------------------------
+  // Piece 5 Task 9: media-show, media-cursor, media-request, media-end (spec §4.3; plan D1, D12, D13, D23)
+  // -------------------------------------------------------------------------
+
+  type MediaReason = MediaRefused['reason']
+  /** `media-refused`; `mediaId` is echoed only when it is a well-formed id (a client validates every reply). */
+  const mediaDeny = (ws: WS, reqId: unknown, reason: MediaReason, mediaId?: string) =>
+    send(ws, { reqId: isU32(reqId) ? reqId : 0, type: 'media-refused', ...(mediaId !== undefined && MEDIA_ID.test(mediaId) ? { mediaId } : {}), reason })
+  /** The token preamble of a media op: a stale jti answers the shared `session-rotated` refusal (the client's retry
+   * signal, as every op); anything else is `media-refused policy-refused`. */
+  const mediaOp = (ws: WS, msg: Record<string, unknown>) =>
+    textOp(ws, msg, undefined, (reqId, code) => (code === 'session-rotated' ? refuse(ws, reqId, code) : mediaDeny(ws, reqId, code)))
+
+  /**
+   * `media-show {reqId, token, unit}` (D1): the token, `can.media` (and a deck), the unit (shown); then the session's
+   * queue (created on the first show, kept until `media-end`) starts from `unit`. While it loads the slides' items it
+   * records every audio use of the session's plans in `sd.media.uses` (refused ones included), the only ids
+   * `media-request` serves. Counted against the message rate only. Answers `media-show-ok {reqId, queued}`.
+   */
+  async function onMediaShow(ws: WS, msg: Record<string, unknown>) {
+    const a = await mediaOp(ws, msg)
+    if (!a) return
+    const { reqId, s, sd } = a
+    let unit: number
+    try { unit = parseMediaShow(msg).unit } catch { return mediaDeny(ws, reqId, 'policy-refused') }
+    const svc = services, info = o.media?.info
+    if (!svc || !info || sd.doc.format !== 'pptx') return mediaDeny(ws, reqId, 'media-unavailable')
+    if (!shownUnit(sd.doc, unit)) return mediaDeny(ws, reqId, 'policy-refused')
+    if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
+    let q = sd.media.queue
+    if (!q) {
+      const docRef = sd.doc.docRef, policy = sd.policy.contentPolicy, uses = sd.media.uses
+      try {
+        q = svc.createQueue({
+          sid: s.sid, units: sd.doc.units.length,
+          items: async (u) => {
+            let refs = sd.media.refs.get(u)
+            if (!refs) {
+              // A long show can outlive the parse: every read re-charges it.
+              if (!ledger.touch(docRef, policy, sd.doc.bytes.length)) throw new Error('document cache full')
+              refs = await o.pool.mediaRefs(s.sid, docRef, policy, u)
+              sd.media.refs.set(u, refs)
+            }
+            if (!refs.hidden) for (const r of refs.refs) {
+              if (r.hiddenShape) continue
+              const id = sessionMediaId(sd.mediaKey, r.identity)
+              let byUnit = uses.get(id)
+              if (!byUnit) uses.set(id, byUnit = new Map())
+              byUnit.set(u, { unit: u, ...('refused' in r.entry ? { refused: r.entry.refused } : {}) })
+            }
+            const items = mediaJobsFor(refs, u, { mediaKey: sd.mediaKey, docId: docRef }, info)
+            for (const it of items) { const use = uses.get(it.mediaId)?.get(u); if (use) use.item = it }
+            return items
+          },
+          // Task 11b fix round: encode-ahead skips a use the plan sent for its unit refuses (a request is refused too).
+          // Fix round 1 (Important 4): only a use the plan sent for its unit ships playable; before that plan, nothing.
+          ahead: (it) => { const sent = sd.media.plans.get(it.unit); return !!sent && sent.has(it.mediaId) && sent.get(it.mediaId) === undefined },
+          part: async (partPath) => {
+            if (!ledger.touch(docRef, policy, sd.doc.bytes.length)) throw new Error('document cache full')
+            const r = await o.pool.mediaPart(s.sid, docRef, policy, partPath, svc.temp.dir)
+            return svc.temp.adopt(r.path, r.bytes)
+          },
+        })
+      } catch { return mediaDeny(ws, reqId, 'media-unavailable') }
+      sd.media.queue = q
+      // A revocation of the document wakes every delivery parked in its high-water wait (fix round 1).
+      if (!sd.media.revocationHooked) {
+        sd.media.revocationHooked = true
+        void svc.cache.revocation(docRef).then(() => { for (const w of [...sd.media.wakes]) w() })
+      }
+    }
+    sd.media.cursor = unit
+    const started = q.start(unit)
+    sd.media.started = started.then(() => {}, () => {})
+    let queued: number
+    try { queued = await started } catch { return textAlive(ws, s.sid, sd)() ? mediaDeny(ws, reqId, 'policy-refused') : undefined }
+    if (!textAlive(ws, s.sid, sd)() || sd.media.queue !== q) return
+    send(ws, { reqId, type: 'media-show-ok', queued })
+  }
+
+  /** `media-cursor {unit}` (D1): no reply; ignored without a queue or with a malformed unit. */
+  function onMediaCursor(ws: WS, msg: Record<string, unknown>) {
+    const sid = ws.data.sid, sd = sid ? sessionDoc.get(sid) : undefined
+    if (ws.data.phase !== 'stream' || !sid || !sd || !owns(ws, sid) || !sd.media.queue) return
+    let unit: number
+    try { unit = parseMediaCursor(msg).unit } catch { return }
+    if (unit < sd.doc.units.length) { sd.media.cursor = unit; sd.media.queue.cursor(unit) }
+  }
+
+  /** `media-end {}` (D1): no reply. Ends the session's queue; its cache entries stay. */
+  function onMediaEnd(ws: WS, msg: Record<string, unknown>) {
+    const sid = ws.data.sid, sd = sid ? sessionDoc.get(sid) : undefined
+    if (ws.data.phase !== 'stream' || !sid || !sd || !owns(ws, sid)) return
+    try { parseMediaEnd(msg) } catch { return }
+    endMedia(sd)
+  }
+
+  /**
+   * `media-request {reqId, token, mediaId}` (Task 9 order):
+   * 1. the token; 2. `can.media`; 3. the show is started (`media-show`); 4. the mediaId is one of this session's
+   * uses (else `invalid-media`: another session's id, a cache key, anything else; nothing is charged, recorded or
+   * looked up); 5. the `'media'` rate (refuse-only); 6. the record's own plan refusal, else `queue.request`;
+   * 7. the durable `media_deliveries` row (a delivery or a refusal); 8. `media-start`; 9. the chunks, each under
+   * `PRINT_SEND_HIGH_WATER`, while the socket owns the session, the queue is the same and the cache still holds the
+   * file (a revoked document: `media-refused media-unavailable`). An ok answer's pin is released exactly once.
+   */
+  async function onMediaRequest(ws: WS, msg: Record<string, unknown>) {
+    const a = await mediaOp(ws, msg)
+    if (!a) return
+    const { reqId, s, sd } = a
+    let mediaId: string, asked: number | undefined
+    try { ({ mediaId, unit: asked } = parseMediaRequest(msg)) } catch { return mediaDeny(ws, reqId, 'policy-refused') }
+    const deny = (reason: MediaReason) => mediaDeny(ws, reqId, reason, mediaId)
+    const svc = services
+    if (!svc) return deny('media-unavailable')
+    const q = sd.media.queue
+    if (!q) return deny('invalid-media')
+    await sd.media.started
+    const revoked = () => svc.cache.revoked(sd.doc.docRef)
+    // Socket-and-queue liveness only (fix round 2): a dead socket or an ended queue sends nothing, while a revoked
+    // document is checked on its own and answers media-refused media-unavailable.
+    const alive = () => textAlive(ws, s.sid, sd)() && sd.media.queue === q
+    if (!alive()) return
+    // The use on the slide named by `unit`, else on the cursor's slide, else the next slide in show order using it
+    // (a look-ahead request). A refusal is per (mediaId, slide): fix round 1.
+    const byUnit = sd.media.uses.get(mediaId)
+    const n = sd.doc.units.length, from = sd.media.cursor ?? 0
+    let use: MediaUse | undefined
+    if (asked !== undefined) use = byUnit?.get(asked)
+    else for (let i = 0; i < n && byUnit && !use; i++) use = byUnit.get((from + i) % n)
+    if (!use) return deny('invalid-media')
+    // 5. Refuse-only: never a breach toward 4008, apart from the unit budget.
+    const rated = ws.data.rates.check('media', now()) === 'ok'
+    const key = use.item?.key
+    const row = (r: { reason?: string; outBytes?: number; durationMs?: number; cacheState?: 'hit' | 'joined' | 'miss'; ffmpegVersion?: string; encodeParamsSha?: string }): boolean => {
+      try {
+        audit.recordMedia({ sid: s.sid, unitIndex: use.unit, mediaId, kind: 'audio', ...(key ? { sourceHash: key.sourceHash, ffmpegVersion: key.ffmpegVersion, encodeParamsSha: key.paramsSha } : {}), ...r })
+        return true
+      } catch { return false }
+    }
+    const refused = (reason: MediaReason) => (row({ reason }) ? deny(reason) : deny('policy-refused'))
+    if (!rated) return refused('rate-limited')
+    // Task 11b fix round: only what a plan sent for the use's unit ships playable; its refusal is the plan's own.
+    const sent = sd.media.plans.get(use.unit)
+    if (!sent || !sent.has(mediaId)) return refused('media-unavailable')
+    const byPlan = sent.get(mediaId)
+    if (byPlan) return refused(byPlan)
+    if (use.refused || !use.item || !key) return refused(use.refused ?? 'media-unavailable')
+    const r = await q.request(mediaId)
+    if (!r.ok) return alive() ? refused(revoked() ? 'media-unavailable' : r.reason) : undefined
+    // The answer is pinned for this session: released exactly once below, unless the queue has ended (dropSession
+    // already released it, and a late release could hit a later show's references).
+    let fh: Awaited<ReturnType<typeof openFile>> | undefined
+    let wake: (() => void) | undefined
+    mediaDeliveries++
+    try {
+      if (!alive()) return
+      if (revoked()) return refused('media-unavailable')
+      try { fh = await openFile(r.path, 'r') } catch { return alive() ? refused('media-unavailable') : undefined }
+      const bytes = r.result.bytes
+      if ((await fh.stat()).size !== bytes || bytes < 1 || bytes > MEDIA_WIRE_LIMITS.audioBytes) return refused('media-unavailable')
+      await o.mediaTestHooks?.afterOpen?.()
+      if (!alive()) return
+      if (revoked()) return refused('media-unavailable')
+      if (!row({ outBytes: bytes, durationMs: r.result.durationMs, cacheState: r.origin, ffmpegVersion: r.result.ffmpegVersion, encodeParamsSha: r.result.paramsSha })) return deny('policy-refused')
+      const chunks = Math.ceil(bytes / MEDIA_WIRE_LIMITS.sendChunk)
+      send(ws, { reqId, type: 'media-start', mediaId, contentType: 'audio/mp4', durationMs: r.result.durationMs, bytes, chunks })
+      const job: PrintJob = { reqId, stopped: false }
+      wake = () => { job.wake?.() }
+      sd.media.wakes.add(wake)
+      for (let i = 0; i < chunks; i++) {
+        await belowHighWater(ws, job, () => alive() && !revoked())
+        if (!alive()) return
+        if (revoked()) return deny('media-unavailable')
+        const now = svc.cache.peek(key)
+        if (!now || !('path' in now) || now.path !== r.path) return deny('media-unavailable')
+        const n = Math.min(MEDIA_WIRE_LIMITS.sendChunk, bytes - i * MEDIA_WIRE_LIMITS.sendChunk)
+        const buf = new Uint8Array(n)
+        const got = await fh.read(buf, 0, n, i * MEDIA_WIRE_LIMITS.sendChunk)
+        await o.mediaTestHooks?.afterRead?.(i)
+        if (!alive()) return
+        if (revoked() || got.bytesRead !== n) return deny('media-unavailable')
+        const f = frameChunk(reqId, buf)
+        if (!f || !sendFrames(ws, [f])) return
+      }
+    } finally {
+      mediaDeliveries--
+      if (wake) sd.media.wakes.delete(wake)
+      await fh?.close().catch(() => {})
+      if (sd.media.queue === q && sessionDoc.get(s.sid) === sd) svc.cache.delivered(s.sid, key)
+    }
   }
 
   /** A page failure: `rate-limited` (admission or lease full), anything else `policy-refused`. */
@@ -968,6 +1255,10 @@ export function createStreamServer(o: StreamServerOptions) {
     if (m.type === 'show-plan') return onShow(ws, m, 'plan')
     if (m.type === 'show-track') return onShow(ws, m, 'track')
     if (m.type === 'show-morph') return onShow(ws, m, 'morph')
+    if (m.type === 'media-show') return onMediaShow(ws, m)
+    if (m.type === 'media-request') return onMediaRequest(ws, m)
+    if (m.type === 'media-cursor') return onMediaCursor(ws, m)
+    if (m.type === 'media-end') return onMediaEnd(ws, m)
     return refuse(ws, m.reqId, 'policy-refused')
   }
 
@@ -1017,6 +1308,8 @@ export function createStreamServer(o: StreamServerOptions) {
         if (!sid) return
         const s = table.get(sid)
         if (!s || s.activeSocket !== (ws as unknown)) return
+        // D1: a socket close is an implicit media-end, a detach included (a resume sends media-show again).
+        endMedia(sessionDoc.get(sid))
         if (!serverClosed && (code === 1001 || code === 1006) && (s.status === 'manifest' || s.status === 'stream')) return detach(sid)
         teardown(sid)
       },
@@ -1042,7 +1335,7 @@ export function createStreamServer(o: StreamServerOptions) {
       return hit?.kind === 'raster' ? hit.png : undefined
     },
     table,
-    stats: () => ({ sockets: sockets.size, sessions: table.size, docs: docs.size, cache: { entries: renderCache.count, bytes: renderCache.size }, pool: o.pool.stats(), forensic: { ...forensicStats, carriers: [...forensicStats.carriers] } }),
+    stats: () => ({ sockets: sockets.size, sessions: table.size, docs: docs.size, cache: { entries: renderCache.count, bytes: renderCache.size }, pool: o.pool.stats(), forensic: { ...forensicStats, carriers: [...forensicStats.carriers] }, media: { deliveries: mediaDeliveries } }),
   }
   return server
 }

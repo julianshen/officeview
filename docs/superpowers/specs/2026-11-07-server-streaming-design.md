@@ -1658,6 +1658,14 @@ outcomes.
   taken as received at the resume reply. A first send waits for fewer than
   48 sends in the log, a re-send for fewer than 56. A `rate-limited` unit
   refusal holds every unit send for 62 s.
+  *Amendment (2026-11-20, Stage 3 piece 5, as built):* `media-request` is
+  rate class `'media'`, `MEDIA_RATE_PER_MIN` = 6 requests per minute per
+  sid. An overflow is an op refusal (`rate-limited`) only and never
+  counts toward the 4008 breach window. The `'unit'` budget is untouched.
+  The show-lifecycle messages (`media-show`, `media-cursor`, `media-end`)
+  count against the message budget only. The client coalesces
+  `media-cursor` to at most one per 200 ms, and paces its requests to the
+  class with its own send log.
 - **Handshake windows [call]:** `ready window` 2 s from the MANIFEST
   (the one definition of the §6.2 rule-4 window; expiry CLOSEs with
   `ready-timeout`), **renew: a scheduling lead — the server sends RENEW
@@ -1684,6 +1692,7 @@ outcomes.
   | SHOW_PLAN | ≤ 8 MiB | ≤ 32 MiB |
   | NOTES_RASTER | ≤ 8 MiB | ≤ 64 MiB |
   | PRINT_RASTER | ≤ 8 MiB | ≤ 64 MiB (as built, 2026-11-13: client per-job page cap = min(64 MiB, 44 MiB, the range's largest scale-2 unit cost); see below) |
+  | MEDIA_CHUNK (kind 9; amended 2026-11-20, Stage 3 piece 5) | ≤ 4 MiB | ≤ 4 MiB (sent stored) |
   | text control message | ≤ 64 KiB | ≤ 64 KiB |
 
   *Amendment (2026-11-14, Stage 3 piece 4, D1):* one charged show request
@@ -1751,6 +1760,26 @@ outcomes.
     from `notes-start`.
 
   `notes-start` is a text message of a few dozen bytes.
+
+  *Amendment (2026-11-20, Stage 3 piece 5, as built; piece-5 spec §4.3,
+  plan D13, D14):* MEDIA_CHUNK (kind 9) carries one slice of an encoded
+  audio file, admitted only on the reqId of a live `media-request` after
+  its `media-start`. An unsolicited or overrunning chunk is dropped before
+  allocation.
+  - **Stored only.** Kind 9 is the one kind sent stored: its compressed
+    flag must be clear, and every other kind must still have it set. A
+    compressed kind-9 message is rejected (`flags`), and so is a stored
+    message of any other kind.
+  - **Caps.** ≤ 4 MiB encoded and ≤ 4 MiB decoded per message. A whole
+    file is ≤ 32 MiB, declared in `media-start` and enforced while
+    receiving.
+  - **Chunk size.** The server sends payloads of 1 MiB − 64 B, one
+    fragment each, so the 5 s reassembly window never spans a
+    multi-fragment chunk on a slow link. The 4 MiB cap stays as the
+    admission bound.
+  - **Sending.** Chunks go out under `PRINT_SEND_HIGH_WATER` (4 MiB).
+
+  `media-start` and every other media text message are ≤ 64 KiB.
 
   Admission is **streaming inflation** (round-10 F3): the compressed
   payload is inflated incrementally and the inflate/parse **aborts the

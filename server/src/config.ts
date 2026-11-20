@@ -23,6 +23,12 @@ export interface ServerConfig {
    * step `composited`, so the visible mark never leaves its page anchor. Off by default (the mark moves with a mover).
    */
   animation: { strictMarks: boolean }
+  /**
+   * Piece 5 (spec §4.2): `OV_MEDIA` (`on` | `off`, default `on`), `OV_FFMPEG` (default `ffmpeg` on PATH) and
+   * `OV_FFPROBE` (default the `ffprobe` next to the resolved ffmpeg). Passed to `probeFfmpeg` at startup; a failed
+   * probe or `off` means `can.media: false`.
+   */
+  media: { OV_MEDIA: 'on' | 'off'; OV_FFMPEG?: string; OV_FFPROBE?: string }
 }
 
 /**
@@ -53,5 +59,10 @@ export function loadConfig(env: Record<string, string | undefined>, argv: readon
   const strict = env.OV_STRICT_MARKS
   if (strict !== undefined && strict !== '0' && strict !== '1') throw new ConfigError('bad-arg', 'OV_STRICT_MARKS must be 0 or 1')
   const animation = { strictMarks: argv.includes('--strict-marks') || strict === '1' }
-  return { port, demo, docDir, originAllowlist: origins, keyring, auditDb, ephemeral, animation }
+  const mediaMode = env.OV_MEDIA ?? 'on'
+  if (mediaMode !== 'on' && mediaMode !== 'off') throw new ConfigError('bad-arg', 'OV_MEDIA must be on or off')
+  const media: ServerConfig['media'] = { OV_MEDIA: mediaMode }
+  if (env.OV_FFMPEG) media.OV_FFMPEG = env.OV_FFMPEG
+  if (env.OV_FFPROBE) media.OV_FFPROBE = env.OV_FFPROBE
+  return { port, demo, docDir, originAllowlist: origins, keyring, auditDb, ephemeral, animation, media }
 }

@@ -45,7 +45,7 @@
  */
 import type { CTn, ContainerNode, DiagnosticSink, ShowEvent, TimeNode, TimingTree } from '../types'
 import { easeProgress, invertEase } from './ease'
-import { createScheduler, type Scheduler, type SchedulerEntry, type SchedulerSnapshot } from './scheduler'
+import { createScheduler, type MediaActivation, type Scheduler, type SchedulerEntry, type SchedulerSnapshot } from './scheduler'
 
 export interface SlideCursor {
   readonly step: number
@@ -89,6 +89,12 @@ export interface SlideTimeline {
    * distinct. Motion-path vertices are not keyframes. Media, indefinite and unresolved nodes are left out.
    */
   keyTimes(cursor: SlideCursor, from: number, to: number): number[]
+  /**
+   * Additive (piece 5, spec §5): for this history at `t`, every activation begun by then of each audio, video and
+   * `cmd` leaf, in every frame of its history, in absolute time (`Scheduler.activations`). A checkpoint is read at its settle time; a static slide
+   * has none.
+   */
+  activations(cursor: SlideCursor, t: number): { activations: readonly MediaActivation[]; truncated: boolean }
 }
 
 export interface SlideTimelineOptions {
@@ -199,6 +205,7 @@ const staticTimeline: SlideTimeline = Object.freeze({
   busyUntil: () => -INF,
   mediaEnd: (cursor: SlideCursor) => cursor,
   keyTimes: () => [],
+  activations: () => ({ activations: [], truncated: false }),
 })
 
 export function createSlideTimeline(tree: TimingTree | { refused: string } | undefined, options: SlideTimelineOptions): SlideTimeline {
@@ -426,6 +433,10 @@ export function createSlideTimeline(tree: TimingTree | { refused: string } | und
         }
       })
       return [...out].sort((x, y) => x - y)
+    },
+    activations(cursor, t) {
+      if (cursor.mode === 'static') return { activations: [], truncated: false }
+      return scheduler.activations(cursor.events, cursor.mode === 'checkpoint' ? settledTime() : t)
     },
     mediaEnd(cursor, nodeId, t, synthetic) {
       if (cursor.mode === 'static') return cursor

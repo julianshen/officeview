@@ -3,6 +3,8 @@ import { crc32 } from './crc32'
 export const enum Kind {
   MANIFEST = 1, ASSET_DEFINE = 2, UNIT_RASTER = 3, UNIT_COMMANDS = 4,
   XLSX_TILE = 5, SHOW_PLAN = 6, NOTES_RASTER = 7, PRINT_RASTER = 8,
+  /** Piece 5 (D14): sent stored (compressed flag clear), the only kind that may be, and that must be. */
+  MEDIA_CHUNK = 9,
 }
 export const FRAGMENT_CAP = 1 << 20, MAX_FRAGMENTS = 256, REASSEMBLY_MS = 5000, HEADER_BYTES = 23, EXT01_BYTES = 10
 export type RejectReason = 'magic' | 'version' | 'kind' | 'unexpected-reqId' | 'flags' | 'invariant-mismatch' | 'sequence' | 'final-count' | 'missing-ext01' | 'fragment-cap' | 'length' | 'fragment-count' | 'fragment-crc' | 'total-len' | 'encoded-cap' | 'decoded-cap' | 'inflate' | 'whole-crc' | 'timeout' | 'cancelled'
@@ -15,10 +17,13 @@ const validInteger = (n: number, max: number) => Number.isInteger(n) && n >= 0 &
 export function encodeMessage(opts: {
   ver: number; kind: Kind; reqId: number; payload: Uint8Array;
   compress: (b: Uint8Array) => Uint8Array; fragmentBytes?: number; ext01?: boolean;
+  /** D14: the payload is framed as is (compressed flag clear). Legal, and required, for kind 9 only. */
+  stored?: true;
 }): Uint8Array[] {
   const cap = opts.fragmentBytes ?? FRAGMENT_CAP
-  if (!validInteger(opts.ver, 255) || !validInteger(opts.reqId, 0xffffffff) || !validInteger(opts.kind, 8) || opts.kind < 1 || !validInteger(cap, FRAGMENT_CAP) || cap < HEADER_BYTES + EXT01_BYTES + 1) throw new RangeError('Invalid OVSD encoder options')
-  const compressed = opts.compress(opts.payload)
+  const stored = opts.stored === true
+  if (!validInteger(opts.ver, 255) || !validInteger(opts.reqId, 0xffffffff) || !validInteger(opts.kind, 9) || opts.kind < 1 || stored !== (opts.kind === Kind.MEDIA_CHUNK) || !validInteger(cap, FRAGMENT_CAP) || cap < HEADER_BYTES + EXT01_BYTES + 1) throw new RangeError('Invalid OVSD encoder options')
+  const compressed = stored ? opts.payload : opts.compress(opts.payload)
   const total = compressed.byteLength + 4
   const ext = !!opts.ext01 || total + HEADER_BYTES > cap
   const lengths: number[] = []
@@ -38,7 +43,7 @@ export function encodeMessage(opts: {
     const b = new Uint8Array(start + length), v = data(b)
     v.setUint32(0, MAGIC, true); v.setUint8(4, opts.ver); v.setUint8(5, opts.kind)
     v.setUint32(6, opts.reqId, true); v.setUint32(10, seq, true)
-    v.setUint8(18, 4 | (firstExt ? 2 : 0) | (seq === lengths.length - 1 ? 1 : 0)); v.setUint32(19, length, true)
+    v.setUint8(18, (stored ? 0 : 4) | (firstExt ? 2 : 0) | (seq === lengths.length - 1 ? 1 : 0)); v.setUint32(19, length, true)
     if (firstExt) { v.setBigUint64(23, BigInt(total), true); v.setUint16(31, lengths.length, true) }
     b.set(compressed.subarray(offset, Math.min(offset + length, compressed.length)), start)
     if (seq === lengths.length - 1) v.setUint32(b.length - 4, wholeCrc, true)
@@ -91,7 +96,7 @@ export class Reassembler {
     if (v.getUint32(0, true) !== MAGIC) return this.reject(undefined, 'magic')
     const ver = fragment[4], kind = fragment[5] as Kind
     if (!this.opts.acceptedVersions.has(ver)) return this.reject(undefined, 'version')
-    if (kind < 1 || kind > 8) return this.reject(undefined, 'kind')
+    if (kind < 1 || kind > 9) return this.reject(undefined, 'kind')
     const seq = v.getUint32(10, true), flags = fragment[18], compressed = flags & 4
     const final = !!(flags & 1), ext = !!(flags & 2)
     if ((flags & ~7) || (ext && seq !== 0)) return this.reject(undefined, 'flags')
@@ -101,7 +106,8 @@ export class Reassembler {
     const id = v.getUint32(6, true)
     let p = this.pending.get(id)
     if (p && (p.ver !== ver || p.kind !== kind || p.compressed !== compressed)) return this.reject(id, 'invariant-mismatch')
-    if (!compressed) return this.reject(undefined, 'flags')
+    // D14: kind 9 is stored only; every other kind is compressed only.
+    if (kind === Kind.MEDIA_CHUNK ? compressed : !compressed) return this.reject(undefined, 'flags')
     if (!this.opts.expects(id, kind)) return this.reject(id, 'unexpected-reqId')
     if (p && !p.inflating && this.now() - p.began >= REASSEMBLY_MS) return this.reject(id, 'timeout')
     if (p ? p.inflating || seq !== p.next : seq !== 0) return this.reject(id, 'sequence')
@@ -130,10 +136,26 @@ export class Reassembler {
     p.inflating = true
     return this.inflate(id, p)
   }
+  /** D14: a stored message's payload is its fragments' bodies less the whole CRC; the decoded cap holds before the copy. */
+  private unstore(id: number, p: Pending, cap: number, expectedCrc: number): FrameResult {
+    try {
+      const size = p.total - 4
+      if (size > cap) return this.reject(id, 'decoded-cap')
+      const payload = new Uint8Array(size)
+      let at = 0
+      for (const chunk of p.chunks) { const n = Math.min(chunk.length, size - at); payload.set(chunk.subarray(0, n), at); at += n }
+      if (crc32(payload) !== expectedCrc) return this.reject(id, 'whole-crc')
+      return { ok: true, reqId: id, kind: p.kind, payload }
+    } finally {
+      p.chunks.length = 0
+      if (this.pending.get(id) === p) this.pending.delete(id)
+    }
+  }
   private async inflate(id: number, p: Pending): Promise<FrameResult> {
     const last = p.chunks[p.chunks.length - 1], expectedCrc = data(last).getUint32(last.length - 4, true)
     const cap = this.opts.decodedCap(p.kind, id)
     if (!Number.isSafeInteger(cap) || cap < 0) return this.reject(id, 'decoded-cap')
+    if (!p.compressed) return this.unstore(id, p, cap, expectedCrc)
     // Small compressed pulls bound the native inflater's output ahead of our admission.
     // In particular, never enqueue a complete compressed space bomb in one write.
     let part = 0, offset = 0

@@ -23,6 +23,8 @@ export class Admission {
   private used = 0
   private outstanding = 0
   private queue: Array<{ cost: number; go: () => void; fail: (e: unknown) => void; dropped: boolean }> = []
+  /** Called after any grant is released (and the queue has been pumped): a `tryAcquire` caller may retry now. */
+  onFree?: () => void
   constructor(private readonly limit = SESSION_TRANSIENT_BYTES, private readonly max = MAX_OUTSTANDING) {}
   get inFlightBytes() { return this.used }
   get inFlight() { return this.outstanding }
@@ -33,7 +35,7 @@ export class Admission {
       entry.go = () => {
         this.used += entry.cost; this.outstanding++
         let done = false
-        resolve(() => { if (done) return; done = true; this.used -= entry.cost; this.outstanding--; this.pump() })
+        resolve(() => { if (done) return; done = true; this.used -= entry.cost; this.outstanding--; this.pump(); this.onFree?.() })
       }
       signal?.addEventListener('abort', () => { entry.dropped = true; reject(signal.reason) }, { once: true })
       this.queue.push(entry)
@@ -49,7 +51,7 @@ export class Admission {
     if (this.outstanding >= this.max || this.used + c > this.limit) return undefined
     this.used += c; this.outstanding++
     let done = false
-    return () => { if (done) return; done = true; this.used -= c; this.outstanding--; this.pump() }
+    return () => { if (done) return; done = true; this.used -= c; this.outstanding--; this.pump(); this.onFree?.() }
   }
   private pump() {
     while (this.queue.length) {

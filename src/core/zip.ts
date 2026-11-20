@@ -58,6 +58,21 @@ export class OfficePackage {
     return buf
   }
 
+  /** Streams a part, uncached, into `onChunk`, refusing past `maxBytes` of actual inflated bytes (declared sizes
+   * are untrusted). `onChunk` throwing stops inflation and rejects with its error. Undefined: no such part. */
+  async stream(path: string, maxBytes: number, onChunk: (chunk: Uint8Array) => void): Promise<number | undefined> {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error('Invalid part byte limit')
+    const f = this.zip.file(path)
+    if (!f) return undefined
+    return boundedStream(f, maxBytes, onChunk)
+  }
+
+  /** The part's declared (central directory) uncompressed size: untrusted, for refusing before any read. */
+  declaredSize(path: string): number | undefined {
+    const size = (this.zip.file(path) as unknown as { _data?: { uncompressedSize?: number } } | null)?._data?.uncompressedSize
+    return Number.isSafeInteger(size) && size! >= 0 ? size : undefined
+  }
+
   /** Read a part as UTF-8 text, refusing with PackageError 'resource-limit' once it
    * inflates past maxBytes (counted chunk by chunk; declared sizes are untrusted). */
   async boundedText(path: string, maxBytes: number): Promise<string | undefined> {
@@ -116,11 +131,33 @@ export class OfficePackage {
 }
 
 /** Count actual inflate chunks before retaining them. Declared ZIP sizes are untrusted. */
-function boundedBytes(file: JSZip.JSZipObject, maxBytes: number): Promise<Uint8Array> {
+async function boundedBytes(file: JSZip.JSZipObject, maxBytes: number): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = []
+  let length: number
+  try {
+    length = await boundedStream(file, maxBytes, (chunk) => { chunks.push(chunk) })
+  } catch (error) {
+    chunks.length = 0
+    throw error
+  }
+  const bytes = new Uint8Array(length)
+  let offset = 0
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length }
+  chunks.length = 0
+  return bytes
+}
+
+/**
+ * Inflates `file` chunk by chunk into `onChunk`, counting actual bytes (declared sizes are untrusted). Past
+ * `maxBytes`, or when `onChunk` throws, inflation stops and the promise rejects with that error. Resolves with the
+ * byte count. Uses JSZip 3.10 internals (as `prefixBytes`); if they change, the patching throws and callers fail
+ * closed.
+ */
+function boundedStream(file: JSZip.JSZipObject, maxBytes: number, onChunk: (chunk: Uint8Array) => void): Promise<number> {
   return new Promise((resolve, reject) => {
     const stream = (file as unknown as { internalStream(type: 'uint8array'): JSZip.JSZipStreamHelper<Uint8Array> }).internalStream('uint8array')
-    const chunks: Uint8Array[] = []
     let length = 0
+    let settled = false
     // JSZip 3.10 StreamHelper has no cancel API. Catch at the source push/end
     // boundary so throwing from onData aborts the current pako inflate call,
     // then propagate error upstream to stop scheduled ticks and free workers.
@@ -129,19 +166,18 @@ function boundedBytes(file: JSZip.JSZipObject, maxBytes: number): Promise<Uint8A
     let source = last
     while (source.previous) source = source.previous
     const push = source.push.bind(source), end = source.end.bind(source)
-    const abort = (error: unknown) => { chunks.length = 0; reject(error); last.error(error instanceof Error ? error : new Error(String(error))) }
+    const abort = (error: unknown) => {
+      if (!settled) { settled = true; reject(error) }
+      last.error(error instanceof Error ? error : new Error(String(error)))
+    }
     source.push = (...args) => { try { return push(...args) } catch (error) { abort(error) } }
     source.end = () => { try { return end() } catch (error) { abort(error) } }
     stream.on('data', (chunk: Uint8Array) => {
       length += chunk.length
       if (length > maxBytes) throw new Error('Part byte limit exceeded during inflation')
-      chunks.push(chunk)
-    }).on('error', (error: Error) => { chunks.length = 0; reject(error) }).on('end', () => {
-      const bytes = new Uint8Array(length)
-      let offset = 0
-      for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length }
-      chunks.length = 0
-      resolve(bytes)
+      onChunk(chunk)
+    }).on('error', (error: Error) => { if (!settled) { settled = true; reject(error) } }).on('end', () => {
+      if (!settled) { settled = true; resolve(length) }
     }).resume()
   })
 }

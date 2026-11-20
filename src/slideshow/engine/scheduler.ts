@@ -67,7 +67,19 @@ export interface Scheduler {
    * diagnosed).
    */
   endTimeOf(nodeId: number, events: readonly ShowEvent[]): number | 'indefinite' | undefined
+  /**
+   * Additive (piece 5, spec §5): every activation, begun by `t`, of each audio, video and `cmd` leaf, in every
+   * ancestor activation and iteration of its history (the syncbase window `endTimeOf` reads), in absolute time:
+   * `begin` is the first absolute time it is active, `end` the last (`Infinity` when open). The media clock reads
+   * exact begins here, never the frame that first samples a node, and the answer at a later `t` still holds every
+   * earlier activation. `truncated`: a node's history was past the window or the query budget (activations are
+   * missing).
+   */
+  activations(events: readonly ShowEvent[], t: number): { activations: MediaActivation[]; truncated: boolean }
 }
+
+/** One activation of a media or `cmd` leaf (`Scheduler.activations`). */
+export interface MediaActivation { readonly node: BehaviourNode; readonly begin: number; readonly end: number }
 
 /** Optional diagnostics, each once per node per scheduler: `timing-cycle`, `timing-forward-reference`, `timing-too-deep`, `timing-history-truncated`, `timing-reference-outside-window`, `timing-query-budget`, `timing-too-many-activations`. */
 export interface SchedulerOptions {
@@ -1027,6 +1039,24 @@ class Run {
     }
   }
 
+  /** `activations`, inside `drive`: the activations of leaf `node` begun by now, in every frame of its history, in absolute time. */
+  activationsOf(node: TimeNode): { list: Array<{ begin: number; end: number }>; truncated: boolean } {
+    const list: Array<{ begin: number; end: number }> = []
+    const top = this.stateOf(this.ix.root)?.child
+    if (!top || node === this.ix.root) return { list, truncated: false }
+    const { frames, truncated } = this.historyFor(node, top)
+    for (const f of frames) {
+      if (this.exhausted) break
+      for (const iv of this.intervalsIn(node, f)) {
+        if (!(iv.begin <= f.tau)) continue
+        const begin = toAbsFirst(f, iv.begin), end = lastAbs(f, iv.begin, iv.end)
+        // A zero-length activation (begun at its ended parent's last instant) was never active.
+        if (begin < end) list.push({ begin, end })
+      }
+    }
+    return { list, truncated: truncated || this.exhausted }
+  }
+
   /** `endTimeOf`, inside `drive`: the end of the last activation, in whichever ancestor iteration it happened. */
   endOf(node: TimeNode): number | 'indefinite' | undefined {
     let frames: Frame[]
@@ -1094,6 +1124,19 @@ export function createScheduler(tree: TimingTree, options: SchedulerOptions = {}
         ;(s.status === 'active' ? active : frozen).push(entry)
       }
       return { active, frozen, ended }
+    },
+    activations(events, t) {
+      const out: MediaActivation[] = []
+      let truncated = false
+      if (Number.isNaN(t)) return { activations: out, truncated }
+      const run = new Run(ix, prepare(events, t), t, report)
+      for (const node of ix.list) {
+        if (isContainer(node) || (node.kind !== 'audio' && node.kind !== 'video' && node.kind !== 'cmd')) continue
+        const got = run.drive(() => run.activationsOf(node))
+        if (got.truncated) truncated = true
+        for (const a of got.list) out.push({ node, begin: a.begin, end: a.end })
+      }
+      return { activations: out, truncated }
     },
     endTimeOf(nodeId, events) {
       const node = ix.byId.get(nodeId)

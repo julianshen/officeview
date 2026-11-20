@@ -9,7 +9,7 @@
  * (`bun scripts/stream-show-compare.ts --deck all`); this file holds the synthetic decks only.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { compareStreamDeck, deckBytes, deckVerdict, installDom, measureWidening, runStreamCompareCli, SHOW_STILL_CODES, uninstallDom, wideningByFamily, type StreamDeckResult } from '../../scripts/stream-show-compare'
+import { compareStreamDeck, deckBytes, deckVerdict, installDom, MEDIA_PARITY_DECKS, measureWidening, runStreamCompareCli, SHOW_STILL_CODES, uninstallDom, wideningByFamily, type StreamDeckResult } from '../../scripts/stream-show-compare'
 import { disposePool } from './harness'
 import { TOLERANCE_APPROX } from '../../src/slideshow/catalogue'
 
@@ -164,6 +164,44 @@ describe('streamed show parity (synthetic decks)', () => {
     expect(r.structure.stills.map((x) => x.code)).toEqual(['still'])
     expect(r.outcomes.filter((o) => o.status === 'unit-still').map((o) => o.unitStill?.source)).toEqual(['refused:still'])
   }, 120_000)
+
+  /**
+   * Piece 5 Task 14 (spec §5.5, §8): both sides end audio through `mediaEndOf`. The streamed side's `mediaClock` is the
+   * plan source's; the local reference's `SlideSource` is wrapped (the rig's `mediaClock`) with a clock built from
+   * the same server plan's records. `media.local` / `media.streamed` list each `slide:node` whose record the clock
+   * resolved, so "computed ends" is checked, not assumed.
+   *
+   * Per deck: the still codes, and the `slide:node` audio nodes the local clock resolves (measured 2026-11-20).
+   * `transitionSoundDeck`: the start sound is no timing node (its end drives nothing drawn), so no node resolves.
+   * `repeatDeck`, `mixedNarrationDeck`, `stillSoundDeck`: classifier stills whose sound-only plan (Task 11b) gives the
+   * local side its records; the still image matches the local slide settled past that audio.
+   */
+  const MEDIA_EXPECT: Record<(typeof MEDIA_PARITY_DECKS)[number], { stills: string[]; local: string[] }> = {
+    narrationDeck: { stills: [], local: ['0:3'] },
+    effectSoundDeck: { stills: [], local: ['0:90'] },
+    transitionSoundDeck: { stills: [], local: [] },
+    crossSlideSoundDeck: { stills: [], local: ['0:3'] },
+    repeatDeck: { stills: ['still'], local: ['0:3'] },
+    mixedNarrationDeck: { stills: ['still'], local: ['0:4'] },
+    videoDeck: { stills: ['still'], local: [] },
+    stillSoundDeck: { stills: ['still'], local: ['0:3'] },
+  }
+  test('media decks: structure equal; sampled frames within Tolerance with computed ends', async () => {
+    for (const deck of MEDIA_PARITY_DECKS) {
+      const r = await compareStreamDeck(deck, { marks: { kind: 'off' }, widening: { meanAbs: 0.01, rowMax: 0.05 }, family: 'latin' })
+      const at = deck
+      expect(r.structure.equal || r.structure.equalExceptStills, `${at}: ${JSON.stringify(r.structure)}`).toBe(true)
+      expect(r.outcomes.filter((o) => o.status === 'fail' || o.status === 'unmatched').map((o) => `${o.slide}-${o.step}-${o.pct} ${o.kind}: ${o.detail}`), at).toEqual([])
+      for (const o of r.outcomes.filter((x) => x.status === 'unit-still')) expect(o.unitStill?.pass, `${at} ${o.detail}`).toBe(true)
+      expect(r.media, at).toBeDefined()
+      const want = MEDIA_EXPECT[deck]
+      expect(r.structure.stills.map((s) => s.code), at).toEqual(want.stills)
+      expect(r.media!.local, at).toEqual(want.local)
+      // A streamed still is drawn as its image (no clock); every other slide resolves the same nodes on both sides.
+      expect(r.media!.streamed, at).toEqual(want.stills.length ? [] : want.local)
+      if (!want.stills.length) expect(r.outcomes.filter((o) => o.status === 'pass').length, at).toBeGreaterThan(0)
+    }
+  }, 240_000)
 
   test('fallback rate reported', async () => {
     for (const deck of DECKS) {

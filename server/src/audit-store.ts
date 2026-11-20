@@ -36,8 +36,21 @@ export interface NotesMarkRecord { sid: string; unitIndex: number; scale: 1 | 2;
  * Layer-1). Written after the marks and before `*-start`. Never deduplicated (each is one charged send).
  */
 export interface ShowDeliveryRecord { sid: string; unitIndex: number; kind: 'plan' | 'track' | 'morph'; assetCount: number; unmarked: number; reason?: 'layer-capacity' | 'forensic-off'; at: number }
-/** A resume that changed the sid's resolved text services (the open row keeps the first value, write-once). */
-export interface ServicesRecord { sid: string; copy: CopyPolicy; textA11y: A11yMode; print: PrintPolicy; notes: boolean; at: number }
+/**
+ * One media answer to a sid (piece 5, spec §7): a delivery (`media-start` and its chunks) or a refusal of a bound
+ * mediaId. Rows are per session and viewer (through `sid`): two sessions that share one encode each get their own row.
+ * `kind` is always `audio`. `cacheState`: how this session came by the file (`hit`, `joined`, `miss`), absent on a
+ * refusal that never reached the cache. `sourceHash`, `ffmpegVersion` and `encodeParamsSha` are the encode key
+ * (with the docId of the sid's row); absent when unknown (a record the plan shipped refused). No mark or geometry
+ * columns: audio carries no mark (piece 6 adds them with video). Written before `media-start`. Never deduplicated.
+ */
+export interface MediaDeliveryRecord {
+  sid: string; unitIndex: number; mediaId: string; kind: 'audio'; sourceHash?: string; outBytes?: number; durationMs?: number
+  reason?: string; at: number; ffmpegVersion?: string; encodeParamsSha?: string; cacheState?: 'hit' | 'joined' | 'miss'
+}
+/** A resume that changed the sid's resolved text services (the open row keeps the first value, write-once). `media`
+ * (piece 5): whether the sid's server serves media (`can.media`); a row stored before piece 5 reads as off. */
+export interface ServicesRecord { sid: string; copy: CopyPolicy; textA11y: A11yMode; print: PrintPolicy; notes: boolean; media: boolean; at: number }
 export interface DetectionLog { at: number; osUser: string; investigator?: string; imageSha256: string; docRefs: string[]; unitIndex: number; answer: string; sid?: string }
 
 const SCHEMA = `
@@ -56,13 +69,23 @@ CREATE TABLE IF NOT EXISTS notes_marks (sid TEXT NOT NULL REFERENCES rows (sid),
 CREATE INDEX IF NOT EXISTS notes_marks_unit ON notes_marks (unit_index);
 CREATE TABLE IF NOT EXISTS show_deliveries (sid TEXT NOT NULL REFERENCES rows (sid), unit_index INTEGER NOT NULL, kind TEXT NOT NULL, asset_count INTEGER NOT NULL, unmarked INTEGER NOT NULL, reason TEXT, at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS show_deliveries_sid ON show_deliveries (sid);
-CREATE TABLE IF NOT EXISTS services (sid TEXT NOT NULL REFERENCES rows (sid), copy TEXT NOT NULL, text_a11y TEXT NOT NULL, print TEXT, notes INTEGER, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS media_deliveries (sid TEXT NOT NULL REFERENCES rows (sid), unit_index INTEGER NOT NULL, media_id TEXT NOT NULL, kind TEXT NOT NULL, source_hash TEXT, out_bytes INTEGER, duration_ms INTEGER, reason TEXT, at INTEGER NOT NULL, ffmpeg_version TEXT, encode_params_sha TEXT, cache_state TEXT);
+CREATE INDEX IF NOT EXISTS media_deliveries_sid ON media_deliveries (sid);
+CREATE INDEX IF NOT EXISTS media_deliveries_media ON media_deliveries (media_id);
+CREATE TABLE IF NOT EXISTS services (sid TEXT NOT NULL REFERENCES rows (sid), copy TEXT NOT NULL, text_a11y TEXT NOT NULL, print TEXT, notes INTEGER, media TEXT, at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS services_sid ON services (sid);
 CREATE TABLE IF NOT EXISTS counters (gen INTEGER PRIMARY KEY, next INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS detections (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, log TEXT NOT NULL);
 `
 
 type DeliveryCols = { sid: string; unit_index: number; scale: number; status: 'l1' | 'unmarked'; reason: string | null; ref_sha256: string; at: number }
+type MediaCols = { sid: string; unit_index: number; media_id: string; kind: 'audio'; source_hash: string | null; out_bytes: number | null; duration_ms: number | null; reason: string | null; at: number; ffmpeg_version: string | null; encode_params_sha: string | null; cache_state: MediaDeliveryRecord['cacheState'] | null }
+const mediaDelivery = (r: MediaCols): MediaDeliveryRecord => ({
+  sid: r.sid, unitIndex: r.unit_index, mediaId: r.media_id, kind: r.kind,
+  ...(r.source_hash !== null ? { sourceHash: r.source_hash } : {}), ...(r.out_bytes !== null ? { outBytes: r.out_bytes } : {}), ...(r.duration_ms !== null ? { durationMs: r.duration_ms } : {}),
+  ...(r.reason !== null ? { reason: r.reason } : {}), at: r.at,
+  ...(r.ffmpeg_version !== null ? { ffmpegVersion: r.ffmpeg_version } : {}), ...(r.encode_params_sha !== null ? { encodeParamsSha: r.encode_params_sha } : {}), ...(r.cache_state !== null ? { cacheState: r.cache_state } : {}),
+})
 const delivery = (d: DeliveryCols): DeliveryRecord => ({ sid: d.sid, unitIndex: d.unit_index, scale: d.scale, status: d.status, ...(d.reason !== null ? { reason: d.reason } : {}), refSha256: d.ref_sha256, at: d.at })
 
 /** Clears group/other permission bits (umask-independent); never adds a bit. */
@@ -96,6 +119,8 @@ export class AuditStore {
     if (!servicesColumns.includes('print')) db.exec('ALTER TABLE services ADD COLUMN print TEXT')
     // One created before Stage 3c has no `services.notes` column; add it, null = not recorded (reads as notes off).
     if (!servicesColumns.includes('notes')) db.exec('ALTER TABLE services ADD COLUMN notes INTEGER')
+    // One created before piece 5 has no `services.media` column; add it, null = not recorded (reads as media off).
+    if (!servicesColumns.includes('media')) db.exec('ALTER TABLE services ADD COLUMN media TEXT')
     // The sidecars now exist (WAL mode, schema written). Do not rely on the VFS
     // copying the db's mode, nor on the umask: pre-existing or recreated
     // sidecars hold session rows (IPs, viewer ids) until checkpoint.
@@ -180,14 +205,32 @@ export class AuditStore {
     return this.db.query<{ sid: string; unit_index: number; kind: ShowDeliveryRecord['kind']; asset_count: number; unmarked: number; reason: ShowDeliveryRecord['reason'] | null; at: number }, [string]>('SELECT * FROM show_deliveries WHERE sid = ? ORDER BY rowid').all(sid)
       .map((r) => ({ sid: r.sid, unitIndex: r.unit_index, kind: r.kind, assetCount: r.asset_count, unmarked: r.unmarked, ...(r.reason !== null ? { reason: r.reason } : {}), at: r.at }))
   }
+  /** Appends one media delivery or refusal (repeats are kept); throws for a sid with no row. */
+  putMedia(r: MediaDeliveryRecord): void {
+    this.writable()
+    this.db.query('INSERT INTO media_deliveries (sid, unit_index, media_id, kind, source_hash, out_bytes, duration_ms, reason, at, ffmpeg_version, encode_params_sha, cache_state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(r.sid, r.unitIndex, r.mediaId, r.kind, r.sourceHash ?? null, r.outBytes ?? null, r.durationMs ?? null, r.reason ?? null, r.at, r.ffmpegVersion ?? null, r.encodeParamsSha ?? null, r.cacheState ?? null)
+  }
+  mediaDeliveries(sid: string): MediaDeliveryRecord[] {
+    return this.db.query<MediaCols, [string]>('SELECT * FROM media_deliveries WHERE sid = ? ORDER BY rowid').all(sid).map(mediaDelivery)
+  }
+  /** The latest row for `mediaId` (a session's ids are unique to it), if any. */
+  mediaDeliveryById(mediaId: string): MediaDeliveryRecord | undefined {
+    const r = this.db.query<MediaCols, [string]>('SELECT * FROM media_deliveries WHERE media_id = ? ORDER BY rowid DESC LIMIT 1').get(mediaId)
+    return r ? mediaDelivery(r) : undefined
+  }
+  /** A table's column names, in order (schema checks). */
+  columnsOf(table: string): string[] {
+    return this.db.query<{ name: string }, []>(`PRAGMA table_info(${JSON.stringify(table)})`).all().map((c) => c.name)
+  }
   /** Appends one services change; throws for a sid with no row. */
   putServices(r: ServicesRecord): void {
     this.writable()
-    this.db.query('INSERT INTO services (sid, copy, text_a11y, print, notes, at) VALUES (?, ?, ?, ?, ?, ?)').run(r.sid, JSON.stringify(r.copy), r.textA11y, JSON.stringify(r.print), r.notes ? 1 : 0, r.at)
+    this.db.query('INSERT INTO services (sid, copy, text_a11y, print, notes, media, at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(r.sid, JSON.stringify(r.copy), r.textA11y, JSON.stringify(r.print), r.notes ? 1 : 0, r.media ? 'on' : 'off', r.at)
   }
   services(sid: string): ServicesRecord[] {
-    return this.db.query<{ sid: string; copy: string; text_a11y: A11yMode; print: string | null; notes: number | null; at: number }, [string]>('SELECT * FROM services WHERE sid = ? ORDER BY rowid').all(sid)
-      .map((r) => ({ sid: r.sid, copy: JSON.parse(r.copy) as CopyPolicy, textA11y: r.text_a11y, print: r.print === null ? false : JSON.parse(r.print) as PrintPolicy, notes: r.notes === 1, at: r.at }))
+    return this.db.query<{ sid: string; copy: string; text_a11y: A11yMode; print: string | null; notes: number | null; media: string | null; at: number }, [string]>('SELECT * FROM services WHERE sid = ? ORDER BY rowid').all(sid)
+      .map((r) => ({ sid: r.sid, copy: JSON.parse(r.copy) as CopyPolicy, textA11y: r.text_a11y, print: r.print === null ? false : JSON.parse(r.print) as PrintPolicy, notes: r.notes === 1, media: r.media === 'on', at: r.at }))
   }
   /** The token `takeToken(gen)` would return. */
   nextToken(gen: number): number {
@@ -214,12 +257,12 @@ export class AuditStore {
   detections(): DetectionLog[] {
     return this.db.query<{ log: string }, []>('SELECT log FROM detections ORDER BY id').all().map((r) => JSON.parse(r.log) as DetectionLog)
   }
-  /** Deletes rows older than the retention window with their deliveries, copies, prints, notes images (audited and marked), show sends and services changes (and so their messages); counters stay. */
+  /** Deletes rows older than the retention window with their deliveries, copies, prints, notes images (audited and marked), show sends, media deliveries and services changes (and so their messages); counters stay. */
   expire(nowSec: number): number {
     this.writable()
     const cutoff = nowSec - AUDIT_RETENTION_SEC
     return this.db.transaction(() => {
-      for (const t of ['deliveries', 'copies', 'prints', 'notes_deliveries', 'notes_marks', 'show_deliveries', 'services']) this.db.query(`DELETE FROM ${t} WHERE sid IN (SELECT sid FROM rows WHERE started_at <= ?)`).run(cutoff)
+      for (const t of ['deliveries', 'copies', 'prints', 'notes_deliveries', 'notes_marks', 'show_deliveries', 'media_deliveries', 'services']) this.db.query(`DELETE FROM ${t} WHERE sid IN (SELECT sid FROM rows WHERE started_at <= ?)`).run(cutoff)
       return this.db.query('DELETE FROM rows WHERE started_at <= ?').run(cutoff).changes
     })()
   }

@@ -10,16 +10,24 @@ export interface Manifest {
   layoutFingerprint: string
   session: { sid: string; token: string; expiresSec: number; resume: 'session' }
   policy: { contentPolicy: 'visible-only' | 'full'; protection: 'final-raster' | 'culled-commands' | 'commands'; semantic: 'visible-only' | 'off'; contentPolicyId: string; viewerMarkId: string }
-  can: { search: boolean; copy: boolean; print: boolean; textA11y: boolean; present: boolean; notes: boolean; links: boolean }
-  /** Service caps. `copy` null = copy off (Stage 3a); `print` null = print off (Stage 3b); a null cap = uncapped. */
-  caps: { copy: null | { maxParagraphs: number | null; maxSessionParagraphs: number | null }; a11y: 'off' | 'unit' | 'focused'; print: null | { maxPages: number | null; maxSessionPages: number | null } }
+  /** `media` (piece 5): audio media plays. Absent = off (a piece-4 server); a piece-5 server always sends it. */
+  can: { search: boolean; copy: boolean; print: boolean; textA11y: boolean; present: boolean; notes: boolean; links: boolean; media?: boolean }
+  /** Service caps. `copy` null = copy off (Stage 3a); `print` null = print off (Stage 3b); a null cap = uncapped.
+   * `media` (piece 5) is keyed by kind: this piece defines `audio` only, and any other member is ignored, so a later
+   * piece can add `video` beside it. Null or absent = media off; required when `can.media`. */
+  caps: { copy: null | { maxParagraphs: number | null; maxSessionParagraphs: number | null }; a11y: 'off' | 'unit' | 'focused'; print: null | { maxPages: number | null; maxSessionPages: number | null }; media?: null | MediaCaps }
   recorder: { commands: 'ovsd-1'; textMode: 'text'; scalesBuckets: number[]; requiredFaces: Array<{ id: string; hash: string; alias?: string }>; projection: 'final-raster' | 'culled-commands' | 'commands' }
   limits: { maxUnitPx: number; maxAssetBytes: number; wsFrameBytes: number; tilePx: number }
   notices: string[]
 }
 /** `hidden`: a hidden slide under contentPolicy 'full' (it is a unit, but a show skips it). Only `true` is valid.
  * `anim`: the slide has timing, a transition, or both, so a show asks for its SHOW_PLAN (piece 4 D5). Only `true` is valid; without it the slide is a still. */
-export interface ManifestUnit { w: number; h: number; hidden?: true; anim?: true }
+/** `media` (piece 5, D19): the slide ships an audio record or a transition sound, so a show asks for its SHOW_PLAN
+ * even without `anim`. Only `true` is valid. */
+export interface ManifestUnit { w: number; h: number; hidden?: true; anim?: true; media?: true }
+/** Piece 5 (spec §6): the audio limits, verbatim (30 min, 32 MiB). */
+export const MEDIA_AUDIO_CAPS = Object.freeze({ maxSeconds: 1800, maxBytes: 33554432 } as const)
+export interface MediaCaps { audio: { maxSeconds: 1800; maxBytes: 33554432 } }
 export type ManifestResult = { ok: true; manifest: Manifest } | { ok: false; field: string }
 
 export const MANIFEST_CAP = 256 * 1024
@@ -35,6 +43,15 @@ const cap = (v: unknown, f: string): number | null => v === null ? null : int(v,
 const printCaps = (o: Record<string, unknown>) => ({ maxPages: cap(o.maxPages, 'caps.print.maxPages'), maxSessionPages: cap(o.maxSessionPages, 'caps.print.maxSessionPages') })
 const arr = (v: unknown, f: string, max: number): unknown[] => { if (!Array.isArray(v) || v.length > max) throw new Bad(f); return v }
 
+/** `caps.media`: absent, null, or `{audio}` with exactly the spec values; other members are ignored (spec §4.1). */
+function mediaCaps(v: unknown): MediaCaps | null | undefined {
+  if (v === undefined || v === null) return v
+  const a = obj(obj(v, 'caps.media').audio, 'caps.media.audio')
+  if (a.maxSeconds !== MEDIA_AUDIO_CAPS.maxSeconds) throw new Bad('caps.media.audio.maxSeconds')
+  if (a.maxBytes !== MEDIA_AUDIO_CAPS.maxBytes) throw new Bad('caps.media.audio.maxBytes')
+  return { audio: { maxSeconds: MEDIA_AUDIO_CAPS.maxSeconds, maxBytes: MEDIA_AUDIO_CAPS.maxBytes } }
+}
+
 const HEX = /^[0-9a-f]+$/
 const PROJ = ['final-raster', 'culled-commands', 'commands'] as const
 
@@ -47,11 +64,15 @@ export function validateManifest(json: unknown): ManifestResult {
       const o = obj(u, `units.list[${i}]`), size = { w: int(o.w, `units.list[${i}].w`, 1, 8192), h: int(o.h, `units.list[${i}].h`, 1, 8192) }
       if (o.hidden !== undefined && o.hidden !== true) throw new Bad(`units.list[${i}].hidden`)
       if (o.anim !== undefined && o.anim !== true) throw new Bad(`units.list[${i}].anim`)
-      return { ...size, ...(o.hidden ? { hidden: true as const } : {}), ...(o.anim ? { anim: true as const } : {}) }
+      if (o.media !== undefined && o.media !== true) throw new Bad(`units.list[${i}].media`)
+      return { ...size, ...(o.hidden ? { hidden: true as const } : {}), ...(o.anim ? { anim: true as const } : {}), ...(o.media ? { media: true as const } : {}) }
     })
     if (int(units.count, 'units.count', 0, MAX_UNITS) !== list.length) throw new Bad('units.count')
     const s = obj(m.session, 'session'), p = obj(m.policy, 'policy'), c = obj(m.can, 'can'), r = obj(m.recorder, 'recorder'), l = obj(m.limits, 'limits'), k = obj(m.caps, 'caps')
     const kc = k.copy === null ? null : obj(k.copy, 'caps.copy')
+    const canMedia = c.media === undefined ? undefined : bool(c.media, 'can.media')
+    const media = mediaCaps(k.media)
+    if (canMedia && !media) throw new Bad('caps.media')
     const manifest: Manifest = {
       v: 1,
       docRef: str(m.docRef, 'docRef', 24, /^[0-9a-f]{24}$/),
@@ -67,11 +88,12 @@ export function validateManifest(json: unknown): ManifestResult {
         contentPolicyId: str(p.contentPolicyId, 'policy.contentPolicyId', 64),
         viewerMarkId: str(p.viewerMarkId, 'policy.viewerMarkId', 64),
       },
-      can: Object.fromEntries((['search', 'copy', 'print', 'textA11y', 'present', 'notes', 'links'] as const).map((k) => [k, bool(c[k], `can.${k}`)])) as Manifest['can'],
+      can: { ...Object.fromEntries((['search', 'copy', 'print', 'textA11y', 'present', 'notes', 'links'] as const).map((k) => [k, bool(c[k], `can.${k}`)])) as Manifest['can'], ...(canMedia !== undefined ? { media: canMedia } : {}) },
       caps: {
         copy: kc && { maxParagraphs: cap(kc.maxParagraphs, 'caps.copy.maxParagraphs'), maxSessionParagraphs: cap(kc.maxSessionParagraphs, 'caps.copy.maxSessionParagraphs') },
         a11y: oneOf(k.a11y, 'caps.a11y', ['off', 'unit', 'focused'] as const),
         print: k.print === null ? null : printCaps(obj(k.print, 'caps.print')),
+        ...(media !== undefined ? { media } : {}),
       },
       recorder: {
         commands: oneOf(r.commands, 'recorder.commands', ['ovsd-1'] as const),

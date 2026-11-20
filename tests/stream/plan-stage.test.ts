@@ -12,7 +12,7 @@ import { createSlideShowWorkspace } from '../../src/slideshow/workspace'
 import { createSlideTimeline, type SlideCursor, type SlideTimeline } from '../../src/slideshow/engine/steps'
 import type { StageModel } from '../../src/slideshow/player/stage'
 import type { BehaviourNode, CTn, ContainerNode, Lease, ShowSlide, SlideShowWorkspace, TimingTree, TransitionSpec, Compositor, LayerHandle } from '../../src/slideshow/types'
-import { decodeShowMessage, encodeShowMessage, SHOW_PLAN_LIMITS, type MorphPlanRecord, type PlanLayerRecord, type ShowPlanRecord } from '../../src/stream/show-plan'
+import { decodeShowMessage, encodeShowMessage, localTransition, SHOW_PLAN_LIMITS, type MorphPlanRecord, type PlanTransition, type PlanLayerRecord, type ShowPlanRecord } from '../../src/stream/show-plan'
 import type { ImageBitmapLike } from '../../src/stream/remote/show-fetch'
 import { flyInDeck, loadShowDeck, triggerFadeDeck } from '../../src/testdata/show-decks'
 
@@ -117,7 +117,7 @@ function flyIn(over: Partial<ShowPlanRecord> = {}, index = 0): { plan: ShowPlanR
 }
 
 /** A transition-only slide: no layers, its entry frame (asset 0) is solid `SLIDE_B`. */
-function plainSlide(index: number, transition?: TransitionSpec): { plan: ShowPlanRecord; assets: Map<number, ImageBitmapLike> } {
+function plainSlide(index: number, transition?: PlanTransition): { plan: ShowPlanRecord; assets: Map<number, ImageBitmapLike> } {
   const plan: ShowPlanRecord = {
     v: 1, slide: { index, w: W, h: H }, options: { showAnimation: true, useTimings: true },
     show: { timing: undefined, builds: [], ...(transition ? { transition } : {}) },
@@ -126,8 +126,8 @@ function plainSlide(index: number, transition?: TransitionSpec): { plan: ShowPla
   return { plan: viaWire(plan), assets: new Map([[0, solid(OW, OH, SLIDE_B)]]) }
 }
 
-const fade = (durationMs = 500): TransitionSpec => ({ element: 'fade', ns: 'p', attrs: {}, durationMs, advClick: true })
-const morphSpec = (durationMs = 1200): TransitionSpec => ({ element: 'morph', ns: 'p159', attrs: { option: 'byObject' }, durationMs, advClick: true })
+const fade = (durationMs = 500): Omit<TransitionSpec, 'sound'> => ({ element: 'fade', ns: 'p', attrs: {}, durationMs, advClick: true })
+const morphSpec = (durationMs = 1200): Omit<TransitionSpec, 'sound'> => ({ element: 'morph', ns: 'p159', attrs: { option: 'byObject' }, durationMs, advClick: true })
 
 /** A track of `count` full-slide frames; frame `i` is the colour `colours(i)`; `missing` frames are not decoded. */
 function fakeTrack(count: number, colours: (i: number) => RGB, missing: (i: number) => boolean = () => false): PlanTrack & { wanted: number[] } {
@@ -212,7 +212,7 @@ function rig(opts: { slides?: Array<{ plan: ShowPlanRecord; assets: Map<number, 
   const timelines = new Map<number, SlideTimeline>()
   const showSlide = (i: number): ShowSlide => {
     const plan = slides.get(i)?.plan
-    return { index: i, hidden: false, timing: plan?.show.timing, ...(plan?.show.transition ? { transition: plan.show.transition } : {}), builds: plan?.show.builds ?? [], notes: [], links: [], media: [] }
+    return { index: i, hidden: false, timing: plan?.show.timing, ...(plan?.show.transition ? { transition: localTransition(plan.show.transition) } : {}), builds: plan?.show.builds ?? [], notes: [], links: [], media: [] }
   }
   const metas = new Map<number, ShowSlide>()
   const r: Rig = {
@@ -565,7 +565,7 @@ describe('PlanStage', () => {
   })
 
   it('reduced motion applies reducedTransition', async () => {
-    const push: TransitionSpec = { element: 'push', ns: 'p', attrs: { dir: 'u' }, durationMs: 1000, advClick: true }
+    const push: Omit<TransitionSpec, 'sound'> = { element: 'push', ns: 'p', attrs: { dir: 'u' }, durationMs: 1000, advClick: true }
     const r = rig({ slides: [plainSlide(0), plainSlide(1, push)], reduced: true })
     await r.enter(0)
     r.stage.frame(r.timelines.get(0)!.initial(), 0)
@@ -911,7 +911,7 @@ describe('review fix round 1', () => {
 
 describe('review fix round 2', () => {
   it('leaving during a dissolve: the next from-frame is the dissolve exactly as shown (its noise seed kept)', async () => {
-    const dissolve: TransitionSpec = { element: 'dissolve', ns: 'p', attrs: {}, durationMs: 1000, advClick: true }
+    const dissolve: Omit<TransitionSpec, 'sound'> = { element: 'dissolve', ns: 'p', attrs: {}, durationMs: 1000, advClick: true }
     const r = rig({ slides: [flyIn(), plainSlide(1, dissolve), plainSlide(2, fade(1000))] })
     await r.enter(0)
     r.stage.frame(r.model(0).timeline.checkpoint(1), 0)

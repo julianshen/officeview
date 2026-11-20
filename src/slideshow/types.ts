@@ -383,6 +383,9 @@ export interface SlideShowWorkspace extends AllocationOwner {
   lease(bytes: number, tag: string): Lease | undefined
   reserveTerminal(outputBytes: number): TerminalReserve | undefined
   used(): number
+  /** Calls `cb` after bytes come back to the workspace (a lease shrunk or released); returns the unsubscribe.
+   * Optional: a waiter on room (the remote media requests, piece 5) is woken by it instead of polling. */
+  onFree?(cb: () => void): () => void
 }
 
 // ---------------------------------------------------------------------------

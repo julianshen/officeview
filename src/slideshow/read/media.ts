@@ -10,7 +10,7 @@ import { READER_LIMITS } from './limits'
  * `mc:AlternateContent` - the one the drawing parser selects (`alternateBranchSelector`, its compatibility
  * rules; PR #19 review) - bounded at 64 levels like the reader.
  */
-function mediaShapes(slide: XmlNode | undefined): Map<string, string[]> {
+export function mediaShapes(slide: XmlNode | undefined): Map<string, string[]> {
   // Every shape a relationship plays on: two shapes may share one media part (PR #19 review 10).
   const out = new Map<string, string[]>()
   const select = alternateBranchSelector()

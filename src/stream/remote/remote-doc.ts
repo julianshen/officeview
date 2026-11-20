@@ -10,7 +10,7 @@ import type { Manifest } from '../manifest'
 import { replayUnit } from '../replay'
 import { StreamSessionError } from './errors'
 import type { PrintedPage } from './print-wire'
-import type { NotesLease, PrintOptions, ShowMotion, ShowReply, ShowRequestOptions, StreamNotice, UnitLease, UnitPayload } from './session'
+import type { MediaDelivery, MediaRoom, MediaShowAnswer, NotesLease, PrintOptions, ShowMotion, ShowReply, ShowRequestOptions, StreamNotice, UnitLease, UnitPayload } from './session'
 import type { RemoteRange, TextMessage, TextRequest } from './text-wire'
 import type { UnitBudgetView } from './unit-budget'
 
@@ -33,6 +33,11 @@ export interface SessionLike {
   showPlan?(unit: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions): Promise<ShowReply>
   showTrack?(unit: number, step: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions): Promise<ShowReply>
   showMorph?(from: number, to: number, fromStep: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions): Promise<ShowReply>
+  /** Piece 5 (D1, D12; see StreamSession.mediaShow and friends); absent ⇒ no media in streamed shows. */
+  mediaShow?(unit: number): Promise<MediaShowAnswer>
+  mediaCursor?(unit: number): void
+  mediaRequest?(mediaId: string, signal: AbortSignal, room: MediaRoom, unit?: number): Promise<MediaDelivery>
+  mediaEnd?(): void
   close(): void
   readonly ended?: Promise<StreamSessionError | undefined>
   /** Calls `cb` after a resume has replaced `manifest`; returns the unsubscribe. */
@@ -83,7 +88,7 @@ export interface RemoteOfficeDoc {
   /** R28: the session's unit send budget (every paint's sends are stamped on it). */
   readonly unitBudget?: UnitBudgetView
   /** @internal Piece 4 (Task 11): the session's show requests, read by the lazy streamed show only. */
-  readonly session?: Pick<SessionLike, 'showPlan' | 'showTrack' | 'showMorph'>
+  readonly session?: Pick<SessionLike, 'showPlan' | 'showTrack' | 'showMorph' | 'mediaShow' | 'mediaCursor' | 'mediaRequest' | 'mediaEnd'>
 }
 
 /** Rects of one unit, in page px at scale 1 relative to the unit. */

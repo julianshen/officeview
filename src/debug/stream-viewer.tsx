@@ -4,7 +4,7 @@
  * deck= opens a synthetic show deck (piece 4); backend=canvas2d makes WebGL2 unavailable to the page, so the show
  * composites on Canvas 2D (webgl2, the default, leaves the browser as it is).
  * present=off sets allowPresent={false} (no Present button in the view; the harness buttons are then refused).
- * Assertions read window.__ovStream (notices, error) and the DOM. The Present and
+ * Assertions read window.__ovStream (notices, error, the show's diagnostics) and the DOM. The Present and
  * Presenter View buttons call the ref's present() (Stage 3c).
  */
 import { useMemo, useRef } from 'react'
@@ -23,8 +23,18 @@ if (q.get('backend') === 'canvas2d') {
 const P = Number(q.get('port') ?? 4181)
 const wsPort = q.get('srv') === 'short' ? P + 2 : P
 const params = new URLSearchParams({ doc: q.get('doc') ?? 'pypptx-test.pptx', ...(q.get('relaxed') ? { relaxed: '1' } : {}), ...(q.get('copy') ? { copy: q.get('copy')! } : {}), ...(q.get('a11y') ? { a11y: q.get('a11y')! } : {}), ...(q.get('print') ? { print: q.get('print')! } : {}), ...(q.get('role') ? { role: q.get('role')! } : {}), ...(q.get('notes') ? { notes: q.get('notes')! } : {}), ...(q.get('deck') ? { deck: q.get('deck')! } : {}) })
-const state = { notices: [] as StreamNotice[], error: undefined as string | undefined, present: undefined as string | undefined, endedAt: undefined as number | undefined }
+const state = { notices: [] as StreamNotice[], error: undefined as string | undefined, present: undefined as string | undefined, endedAt: undefined as number | undefined, showDiagnostics: [] as Array<{ code: string; message: string }>, mediaEnds: [] as Array<{ slide: number; nodeId: number; t: number; wall: number }>, mediaTrace: false }
 ;(window as unknown as { __ovStream: typeof state }).__ovStream = state
+// TEST-ONLY `?trace=media` (piece 5 Task 14): each computed media end the remote show's driver records (its node and
+// show-clock time), with the wall time it was first seen. Loads the remote show module only when asked.
+if (q.get('trace') === 'media') {
+  void import('../stream/remote/show').then((m) => {
+    m.remoteShowDeps.mediaEnds = (slide, ends) => {
+      for (const e of ends) if (!state.mediaEnds.some((x) => x.slide === slide && x.nodeId === e.nodeId && x.t === e.t)) state.mediaEnds.push({ slide, ...e, wall: performance.now() })
+    }
+    state.mediaTrace = true
+  })
+}
 
 function App() {
   const source = useMemo(() => ({ kind: 'stream' as const, url: `ws://127.0.0.1:${wsPort}/stream?${params}` }), [])
@@ -49,6 +59,7 @@ function App() {
         {...(q.get('present') === 'off' ? { allowPresent: false } : {})}
         {...(q.get('fonts') ? { streamFonts: { baseUrl: `http://127.0.0.1:${P + 1}/fontpack` } } : {})}
         onStreamNotice={(n) => state.notices.push(n)}
+        onSlideShowDiagnostic={(d) => state.showDiagnostics.push({ code: d.code, message: d.message })}
         error={(m) => { state.error = m; return <div role="alert" data-stream-error={m}>{m}</div> }}
       />
     </div>

@@ -637,6 +637,137 @@ unknown family falls back to Liberation Sans, never a host face. Units, print
 and notes get the new `Calibri Light` alias, but still pin aliases only, so
 an unknown family there can still reach a host face. That is a follow-up.
 
+## Media in shows (Stage 3, piece 5: audio)
+
+Spec: `docs/superpowers/specs/2026-11-17-streaming-s3-piece5-design.md`
+(binding, with its amendments) and parent §12a.6; test map and
+measurements: `docs/validation/streaming-s3-p5.md`.
+
+**What it does.** A streamed show plays the deck's audio: shape audio,
+narration, effect sounds and transition sounds, with local mode's timing,
+commands and slide spans. The deck's media bytes never leave the server.
+Each audio part is re-encoded by a sandboxed ffmpeg to AAC in M4A, without
+any source metadata, and the encode is shared by every session of the
+same document. Audio carries no mark.
+
+**Video plays its piece-4 still, or its poster, until piece 6.** No video
+byte is encoded or sent. A slide whose video end could change what is
+drawn plays its piece-3 still (reason `media`), as in piece 4. Any other
+video shows its poster and ends at its first live frame.
+
+**Configuration** (read once at startup):
+
+| variable | default | meaning |
+|---|---|---|
+| `OV_MEDIA` | `on` | `off` turns media off: no probe and no disk. Every record ships `refused: 'media-unavailable'`, and shows behave exactly as in piece 4. |
+| `OV_FFMPEG` | `ffmpeg` on `PATH` | the ffmpeg binary. The floor is major version 6. |
+| `OV_FFPROBE` | the `ffprobe` next to the resolved ffmpeg | the ffprobe binary, which measures durations. |
+
+The startup probe runs several sandboxed capability probes:
+- `-version` of ffmpeg and ffprobe, with a floor of major version 6;
+- ffmpeg's encoder, decoder and demuxer lists, which must include the AAC
+  encoder, the audio decoders and the demuxer allowlist (`mov`, `avi`,
+  `wav`, `asf`, `mp3`);
+- on macOS, a working `ps` RSS read for the watchdog;
+- a capped-write check that the file-size limit really applies.
+If any check fails, the manifest offers `can.media: false` and every
+record is `media-unavailable`. The server still starts.
+
+**Sandbox, per platform.** Every ffmpeg and ffprobe run has
+`-protocol_whitelist file`, an explicit demuxer sniffed from the part's
+first bytes, bounded `-probesize` and `-analyzeduration`, its own process
+group (abort or the wall cap kills the group), and stderr capped at
+64 KiB, which never reaches the client.
+
+| platform | wrapper | limits |
+|---|---|---|
+| Linux | `unshare --user --map-root-user --net`, then `sh -c 'ulimit …'` | CPU seconds, a 2 GiB address space (`ulimit -v`), file size. Ubuntu 24.04 and later need `kernel.apparmor_restrict_unprivileged_userns=0` for the user namespace. Proven in CI. |
+| macOS | `sandbox-exec -p '(version 1)(allow default)(deny network*)'`, then `sh -c 'ulimit …'` | CPU seconds and file size. macOS rejects `ulimit -v`, so an RSS watchdog reads the group's RSS every 100 ms and kills it above 1 GiB (owner ruling, D5). |
+| anything else | none | fails closed: `can.media: false`. |
+
+Neither wrapper confines file reads. Confinement comes from the inputs: the
+part is staged into the server's 0700 media temp dir as a 0600 file, and
+ffmpeg reads only that `file:` path through a fixed demuxer. Probes run on
+the main thread at the render worker's request. The staged file must be a
+regular file owned by the server's uid with one link. Its identity is
+checked again just before the spawn and after the run.
+
+**Wire** (client → server text, each ≤ 64 KiB):
+
+| message | answer |
+|---|---|
+| `{ reqId, type: 'media-show', token, unit }` at show start | `media-show-ok { reqId, queued }`, or `media-refused { reqId, reason }`. The server queues the show's audio in slide order, from `unit` onwards, then the slides before it. |
+| `{ type: 'media-cursor', unit }` on each slide change, at most one per 200 ms | none. A cursor outside `[current, next]` re-queues from `unit`. |
+| `{ type: 'media-end' }` at show end (a socket close, expiry and revocation count as one) | none |
+| `{ reqId, type: 'media-request', token, mediaId, unit? }` | `media-start { reqId, mediaId, contentType: 'audio/mp4', durationMs, bytes, chunks }`, then `chunks` MEDIA_CHUNK (kind 9) messages, or `media-refused { reqId, mediaId?, reason }` |
+
+- A `mediaId` is a per-session HMAC of the use. Two sessions never share
+  one, even when they share an encode. A request is checked against the
+  session's own bound plan before the cache is consulted, so a foreign id
+  or a cache key answers `invalid-media`.
+- `unit` names the slide the use is on: one part can be playable on one
+  slide and refused on another. Without it, the server looks on the
+  cursor's slide (the last `media-show` or `media-cursor`) first, then
+  searches the following slides cyclically, in show order, for the first
+  one that uses that `mediaId` (a look-ahead request).
+- Kind 9 is sent stored, never compressed, and every other kind stays
+  compressed (D14). Each chunk carries 1 MiB − 64 B (D13). Chunks go out
+  under the 4 MiB send high-water mark (`PRINT_SEND_HIGH_WATER`).
+
+**Caps and refusals.**
+
+| limit | value | refusal |
+|---|---|---|
+| audio duration | ≤ 30 min | `media-too-long` |
+| output size | ≤ 32 MiB | `media-too-large` |
+| encode wall time | ≤ 2 × duration + 30 s, then killed | `media-timeout` |
+| concurrent encodes | 1 awaited key per session; ⌈cores / 4⌉ distinct encodes per server, queue 16; joiners take no slot | `media-busy` |
+| encode cache | 2 GiB per server, shared; 256 MiB of referenced look-ahead per session | `media-busy` (`media-request` only) |
+| not decodable, or not in the allowlist | — | `media-unreadable` |
+| external link, online video | — | `media-linked` |
+| ffmpeg absent, or `OV_MEDIA=off` | — | `media-unavailable` |
+| kind 9 | ≤ 4 MiB encoded and decoded per message; a whole file ≤ 32 MiB, declared in `media-start` | the message is dropped before allocation |
+
+The probe takes at most 2 s per part and 10 s per deck. Media on a hidden
+shape or a hidden slide is never encoded or shipped.
+
+**Rate.** Rate class `media`: 6 `media-request`s per minute per session
+(`MEDIA_RATE_PER_MIN`). An overflow is refused `rate-limited` and never
+counts toward 4008. The show's `unit` budget is untouched. The client
+paces its own requests to the class.
+
+**The shared encode cache.** It is keyed by `(docId, sourceHash,
+encodeParamsSha, ffmpegVersion)`, with one encode per key; a second
+request joins it.
+- `docId` is an HMAC of the document's content, so two byte-identical
+  uploads share one encode. Two different documents never share one.
+- An entry with no references is deleted after 10 minutes idle
+  (`MEDIA_IDLE_TTL_MS`).
+- Revoking or closing a document, which happens when its last session
+  leaves, deletes all its entries at once.
+- `MediaServices.close()` at shutdown leaves the disk ledger empty.
+
+**Audit.** `media_deliveries (sid, unit_index, media_id, kind,
+source_hash, out_bytes, duration_ms, reason, at, ffmpeg_version,
+encode_params_sha, cache_state)` has one row per delivery and per refusal of
+an eligible use: a `mediaId` the session's own plan binds, on a slide that
+uses it. A foreign or unknown id answers `invalid-media` with no row.
+- `kind` is always `audio`.
+- `cache_state` is `hit`, `joined` or `miss`. It is empty on a refusal
+  that never reached the cache.
+- The `services` row gains `media`.
+
+**Client.** All media code loads lazily on the remote show path.
+- The browser must accept `audio/mp4; codecs="mp4a.40.2"`. If it does
+  not, the use is refused `media-codec` before any byte is asked for.
+- A media end is computed on the show clock (begin + `durationMs`); the
+  element's `ended` event never decides it.
+- A failure after the plan was sent keeps that clock end: the node shows
+  its poster and raises the notice (D4).
+- A classifier still (`still`) that has audio plays its sounds through
+  an inert, sound-only plan (`fallback: 'still'`). A still from
+  `show-budget`, `show-limits` or `show-plan-timeout` stays silent.
+
 ## The browser side (Stage 1d)
 
 ```tsx
