@@ -31,11 +31,12 @@ describe('worker start gate (Bun 1.3.10: no concurrent loads, no terminate mid-l
     expect(s.maxLoading).toBe(1)
     wa.terminate(); wb.terminate()
     await Promise.all([a.closed, b.closed])
-    expect(workerStartStats().terminatedLoading).toBe(0)
+    expect(workerStartStats().terminatedLoading - before.terminatedLoading).toBe(0)
   }, 20_000)
 
   it('a terminate during the load waits for the load to finish; close follows', async () => {
     const a = on()
+    const before = workerStartStats()
     const t0 = performance.now()
     const w = startWorker(SLOW, {}, a.events)
     w.post('hi')
@@ -43,7 +44,7 @@ describe('worker start gate (Bun 1.3.10: no concurrent loads, no terminate mid-l
     w.terminate()
     await a.closed
     expect(a.closedAt - t0).toBeGreaterThanOrEqual(240) // not before the 250 ms load
-    expect(workerStartStats().terminatedLoading).toBe(0)
+    expect(workerStartStats().terminatedLoading - before.terminatedLoading).toBe(0)
   }, 20_000)
 
   it('a worker terminated before its start never spawns, and still reports close', async () => {
@@ -65,12 +66,19 @@ describe('worker start gate (Bun 1.3.10: no concurrent loads, no terminate mid-l
 
   it('a load that never finishes is ended at the bound: the gate opens and the terminate goes through', async () => {
     const a = on(), b = on()
+    const before = workerStartStats()
     const wa = startWorker(NEVER, {}, a.events, 300)
     const wb = startWorker(SLOW, {}, b.events)
     wb.post('next')
-    wa.terminate()
+    await until(() => workerStartStats().started - before.started === 1) // wa spawned and loading; wb waits its turn
+    const t0 = performance.now()
+    wa.terminate() // deferred: wa is loading
+    await Bun.sleep(100)
+    expect(workerStartStats().started - before.started).toBe(1) // the gate is still held
     await a.closed
-    await until(() => b.got.length === 1)
+    expect(a.closedAt - t0).toBeGreaterThanOrEqual(150) // not before the 300 ms bound (spawned before t0)
+    expect(workerStartStats().terminatedLoading - before.terminatedLoading).toBe(1) // ended past the bound, still loading
+    await until(() => b.got.length === 1) // the gate opened for wb
     wb.terminate()
     await b.closed
   }, 20_000)
@@ -85,6 +93,6 @@ describe('worker start gate (Bun 1.3.10: no concurrent loads, no terminate mid-l
     expect(s.started - before.started).toBe(1)
     expect(s.cancelled - before.cancelled).toBe(2)
     expect(s.maxLoading).toBe(1)
-    expect(s.terminatedLoading).toBe(0)
+    expect(s.terminatedLoading - before.terminatedLoading).toBe(0)
   }, 20_000)
 })
