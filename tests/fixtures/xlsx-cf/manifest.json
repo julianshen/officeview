@@ -10669,6 +10669,2535 @@
       }
     },
     {
+      "id": "stage2-scale-num-segment",
+      "stage": 2,
+      "question": "The num-segment follow-up of capture e448d831 (T4 and V3 one unit higher per channel than truncation): which arithmetic does Excel use inside a 3-colour segment bounded by two literal num cfvo? Six readings pre-registered (truncate, percent-roundtrip, fixed-256, fixed-1000, fixed-308, fixed-700) on 3-colour num 7/217/637 scales in both colour orders, a midpoint-above-max copy and a replica of T4/V3; the same values under min / percentile 50 / max (truncate or percent-roundtrip) and, as a negative control, under 2-colour literal num bounds. Literal cellIs positive controls for every predicted fill.",
+      "input": "tests/fixtures/xlsx-cf/inputs/stage2-scale-num-segment.xlsx",
+      "saved": "tests/fixtures/xlsx-cf/stage2-scale-num-segment.xlsx",
+      "sheet": "Sheet1",
+      "range": "A1:I28",
+      "requiredAppearances": [
+        "screen"
+      ],
+      "markers": [
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:num-segment-fraction",
+          "sqref": "B5:B28",
+          "ruleType": "colorScale",
+          "priority": 1,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "7"
+              },
+              {
+                "type": "num",
+                "val": "217"
+              },
+              {
+                "type": "num",
+                "val": "637"
+              }
+            ],
+            "colors": [
+              "FF14F028",
+              "FFE61EFA",
+              "FF14F028"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:num-segment-fraction",
+          "sqref": "C5:C28",
+          "ruleType": "colorScale",
+          "priority": 2,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "7"
+              },
+              {
+                "type": "num",
+                "val": "217"
+              },
+              {
+                "type": "num",
+                "val": "637"
+              }
+            ],
+            "colors": [
+              "FFE61EFA",
+              "FF14F028",
+              "FFE61EFA"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:num-segment-fraction",
+          "sqref": "D5:D8",
+          "ruleType": "colorScale",
+          "priority": 3,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "7"
+              },
+              {
+                "type": "num",
+                "val": "637"
+              },
+              {
+                "type": "num",
+                "val": "217"
+              }
+            ],
+            "colors": [
+              "FF14F028",
+              "FFE61EFA",
+              "FF14F028"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:num-segment-fraction",
+          "sqref": "D10:D13",
+          "ruleType": "colorScale",
+          "priority": 4,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "30"
+              },
+              {
+                "type": "num",
+                "val": "60"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FFFFEB84",
+              "FF63BE7B"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:num-segment-fraction-statistical",
+          "sqref": "E2:E28",
+          "ruleType": "colorScale",
+          "priority": 5,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "percentile",
+                "val": "50"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "colors": [
+              "FF14F028",
+              "FFE61EFA",
+              "FF14F028"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:num-segment-fraction-2colour",
+          "sqref": "F5:F16",
+          "ruleType": "colorScale",
+          "priority": 6,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "7"
+              },
+              {
+                "type": "num",
+                "val": "217"
+              }
+            ],
+            "colors": [
+              "FF14F028",
+              "FFE61EFA"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:num-segment-fraction-2colour",
+          "sqref": "F17:F28",
+          "ruleType": "colorScale",
+          "priority": 7,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "217"
+              },
+              {
+                "type": "num",
+                "val": "637"
+              }
+            ],
+            "colors": [
+              "FFE61EFA",
+              "FF14F028"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "inputSha256": "794107e8141c3a0ced4707f089d248e58d6fac026bb4ac63c4114b47dbafc5c9",
+        "savedSha256": "794107e8141c3a0ced4707f089d248e58d6fac026bb4ac63c4114b47dbafc5c9",
+        "provenance": "seed-hypothesis",
+        "positiveRefs": [
+          "B5",
+          "B6",
+          "B7",
+          "B8",
+          "B9",
+          "B10",
+          "B11",
+          "B12",
+          "B13",
+          "B14",
+          "B15",
+          "B16",
+          "B17",
+          "B18",
+          "B19",
+          "B20",
+          "B21",
+          "B22",
+          "B23",
+          "B24",
+          "B25",
+          "B26",
+          "B27",
+          "B28",
+          "C5",
+          "C6",
+          "C7",
+          "C8",
+          "C9",
+          "C10",
+          "C11",
+          "C12",
+          "C13",
+          "C14",
+          "C15",
+          "C16",
+          "C17",
+          "C18",
+          "C19",
+          "C20",
+          "C21",
+          "C22",
+          "C23",
+          "C24",
+          "C25",
+          "C26",
+          "C27",
+          "C28",
+          "D5",
+          "D6",
+          "D7",
+          "D8",
+          "D10",
+          "D11",
+          "D12",
+          "D13",
+          "E5",
+          "E6",
+          "E7",
+          "E8",
+          "E9",
+          "E10",
+          "E11",
+          "E12",
+          "E13",
+          "E14",
+          "E15",
+          "E16",
+          "E17",
+          "E18",
+          "E19",
+          "E20",
+          "E21",
+          "E22",
+          "E23",
+          "E24",
+          "E25",
+          "E26",
+          "E27",
+          "E28",
+          "F5",
+          "F6",
+          "F7",
+          "F8",
+          "F9",
+          "F10",
+          "F11",
+          "F12",
+          "F13",
+          "F14",
+          "F15",
+          "F16",
+          "F17",
+          "F18",
+          "F19",
+          "F20",
+          "F21",
+          "F22",
+          "F23",
+          "F24",
+          "F25",
+          "F26",
+          "F27",
+          "F28",
+          "H2",
+          "H3",
+          "H4",
+          "H5",
+          "H6",
+          "H7",
+          "H8",
+          "H9",
+          "H10",
+          "H11",
+          "H12",
+          "H13",
+          "H14",
+          "H15",
+          "H16",
+          "H17",
+          "H18",
+          "H19",
+          "H20",
+          "H21",
+          "H22",
+          "H23",
+          "H24",
+          "H25",
+          "H26",
+          "H27",
+          "H28",
+          "I2",
+          "I3",
+          "I4",
+          "I5",
+          "I6",
+          "I7",
+          "I8",
+          "I9",
+          "I10",
+          "I11",
+          "I12",
+          "I13",
+          "I14",
+          "I15",
+          "I16",
+          "I17"
+        ],
+        "negativeRefs": [
+          "G5",
+          "G6",
+          "G7",
+          "G8",
+          "G9",
+          "G10",
+          "G11",
+          "G12",
+          "G13",
+          "G14",
+          "G15",
+          "G16",
+          "G17",
+          "G18",
+          "G19",
+          "G20",
+          "G21",
+          "G22",
+          "G23",
+          "G24",
+          "G25",
+          "G26",
+          "G27",
+          "G28",
+          "I22",
+          "I23",
+          "I24",
+          "I25",
+          "I20"
+        ],
+        "cells": [
+          {
+            "ref": "B5",
+            "controlRef": "G5",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B6",
+            "controlRef": "G6",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B7",
+            "controlRef": "G7",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B8",
+            "controlRef": "G8",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B9",
+            "controlRef": "G9",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B10",
+            "controlRef": "G10",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B11",
+            "controlRef": "G11",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B12",
+            "controlRef": "G12",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B13",
+            "controlRef": "G13",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B14",
+            "controlRef": "G14",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B15",
+            "controlRef": "G15",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B16",
+            "controlRef": "G16",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B17",
+            "controlRef": "G17",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B18",
+            "controlRef": "G18",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B19",
+            "controlRef": "G19",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B20",
+            "controlRef": "G20",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B21",
+            "controlRef": "G21",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B22",
+            "controlRef": "G22",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B23",
+            "controlRef": "G23",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B24",
+            "controlRef": "G24",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B25",
+            "controlRef": "G25",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B26",
+            "controlRef": "G26",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B27",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B28",
+            "controlRef": "G28",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C5",
+            "controlRef": "G5",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C6",
+            "controlRef": "G6",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C7",
+            "controlRef": "G7",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C8",
+            "controlRef": "G8",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C9",
+            "controlRef": "G9",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C10",
+            "controlRef": "G10",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C11",
+            "controlRef": "G11",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C12",
+            "controlRef": "G12",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C13",
+            "controlRef": "G13",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C14",
+            "controlRef": "G14",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C15",
+            "controlRef": "G15",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C16",
+            "controlRef": "G16",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C17",
+            "controlRef": "G17",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C18",
+            "controlRef": "G18",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C19",
+            "controlRef": "G19",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C20",
+            "controlRef": "G20",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C21",
+            "controlRef": "G21",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C22",
+            "controlRef": "G22",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C23",
+            "controlRef": "G23",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C24",
+            "controlRef": "G24",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C25",
+            "controlRef": "G25",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C26",
+            "controlRef": "G26",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C27",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C28",
+            "controlRef": "G28",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D5",
+            "controlRef": "G5",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D6",
+            "controlRef": "G6",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D7",
+            "controlRef": "G17",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D8",
+            "controlRef": "G18",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D10",
+            "controlRef": "I22",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D11",
+            "controlRef": "I23",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D12",
+            "controlRef": "I24",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D13",
+            "controlRef": "I25",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E5",
+            "controlRef": "G5",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E6",
+            "controlRef": "G6",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E7",
+            "controlRef": "G7",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E8",
+            "controlRef": "G8",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E9",
+            "controlRef": "G9",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E10",
+            "controlRef": "G10",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E11",
+            "controlRef": "G11",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E12",
+            "controlRef": "G12",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E13",
+            "controlRef": "G13",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E14",
+            "controlRef": "G14",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E15",
+            "controlRef": "G15",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E16",
+            "controlRef": "G16",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E17",
+            "controlRef": "G17",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E18",
+            "controlRef": "G18",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E19",
+            "controlRef": "G19",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E20",
+            "controlRef": "G20",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E21",
+            "controlRef": "G21",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E22",
+            "controlRef": "G22",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E23",
+            "controlRef": "G23",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E24",
+            "controlRef": "G24",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E25",
+            "controlRef": "G25",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E26",
+            "controlRef": "G26",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E27",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E28",
+            "controlRef": "G28",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F5",
+            "controlRef": "G5",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F6",
+            "controlRef": "G6",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F7",
+            "controlRef": "G7",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F8",
+            "controlRef": "G8",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F9",
+            "controlRef": "G9",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F10",
+            "controlRef": "G10",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F11",
+            "controlRef": "G11",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F12",
+            "controlRef": "G12",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F13",
+            "controlRef": "G13",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F14",
+            "controlRef": "G14",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F15",
+            "controlRef": "G15",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F16",
+            "controlRef": "G16",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F17",
+            "controlRef": "G17",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F18",
+            "controlRef": "G18",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F19",
+            "controlRef": "G19",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F20",
+            "controlRef": "G20",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F21",
+            "controlRef": "G21",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F22",
+            "controlRef": "G22",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F23",
+            "controlRef": "G23",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F24",
+            "controlRef": "G24",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F25",
+            "controlRef": "G25",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F26",
+            "controlRef": "G26",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F27",
+            "controlRef": "G27",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F28",
+            "controlRef": "G28",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H2",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF21E335",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H3",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF22E236",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H4",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF28DC3C",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H5",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF29DB3D",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H6",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF31D345",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H7",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF32D246",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H8",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF33D147",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H9",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF36CE4A",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H10",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF37CD4B",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H11",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF38CC4C",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H12",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF3DC751",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H13",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF3EC652",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H14",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF48BC5C",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H15",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF52B266",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H16",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF53B167",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H17",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF59AB6D",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H18",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF5AAA6E",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H19",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF5BA96F",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H20",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF7D8791",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H21",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF97CD7E",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H22",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF98CE7F",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H23",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FF9F65B3",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H24",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFA064B4",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H25",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFA163B5",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H26",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFA75DBB",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H27",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFA85CBC",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H28",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFB252C6",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I2",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFBC48D0",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I3",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFBD47D1",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I4",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFC242D6",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I5",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFC341D7",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I6",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFC440D8",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I7",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFC73DDB",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I8",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFC83CDC",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I9",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFC93BDD",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I10",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFCBDC81",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I11",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFCCDD82",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I12",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFD133E5",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I13",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFD232E6",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I14",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFD82CEC",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I15",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFD92BED",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I16",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFFA9473",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I17",
+            "controlRef": "I20",
+            "matched": true,
+            "scaleApplied": false,
+            "fillRgb": "FFFCBF7B",
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G5",
+            "controlRef": "B5",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G6",
+            "controlRef": "B6",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G7",
+            "controlRef": "B7",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G8",
+            "controlRef": "B8",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G9",
+            "controlRef": "B9",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G10",
+            "controlRef": "B10",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G11",
+            "controlRef": "B11",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G12",
+            "controlRef": "B12",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G13",
+            "controlRef": "B13",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G14",
+            "controlRef": "B14",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G15",
+            "controlRef": "B15",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G16",
+            "controlRef": "B16",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G17",
+            "controlRef": "B17",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G18",
+            "controlRef": "B18",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G19",
+            "controlRef": "B19",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G20",
+            "controlRef": "B20",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G21",
+            "controlRef": "B21",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G22",
+            "controlRef": "B22",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G23",
+            "controlRef": "B23",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G24",
+            "controlRef": "B24",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G25",
+            "controlRef": "B25",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G26",
+            "controlRef": "B26",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G27",
+            "controlRef": "B27",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G28",
+            "controlRef": "B28",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I22",
+            "controlRef": "D10",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I23",
+            "controlRef": "D11",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I24",
+            "controlRef": "D12",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I25",
+            "controlRef": "D13",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I20",
+            "controlRef": "H2",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          }
+        ]
+      },
+      "scaleReadings": [
+        {
+          "id": "num-pqp",
+          "capabilityId": "scale:num-segment-fraction",
+          "observable": "fill",
+          "refs": [
+            "B5",
+            "B6",
+            "B7",
+            "B8",
+            "B9",
+            "B10",
+            "B11",
+            "B12",
+            "B13",
+            "B14",
+            "B15",
+            "B16",
+            "B17",
+            "B18",
+            "B19",
+            "B20",
+            "B21",
+            "B22",
+            "B23",
+            "B24",
+            "B25",
+            "B26",
+            "B27",
+            "B28",
+            "D5",
+            "D6",
+            "D7",
+            "D8",
+            "D10",
+            "D11",
+            "D12",
+            "D13"
+          ],
+          "hypotheses": {
+            "truncate": {
+              "B5": "FF5AAA6E",
+              "B6": "FFA064B4",
+              "B7": "FF37CD4B",
+              "B8": "FFC341D7",
+              "B9": "FF3EC652",
+              "B10": "FF29DB3D",
+              "B11": "FF53B167",
+              "B12": "FF32D246",
+              "B13": "FFC83CDC",
+              "B14": "FF7D8791",
+              "B15": "FF48BC5C",
+              "B16": "FF22E236",
+              "B17": "FFA064B4",
+              "B18": "FF5AAA6E",
+              "B19": "FFC341D7",
+              "B20": "FF37CD4B",
+              "B21": "FFBC48D0",
+              "B22": "FFD133E5",
+              "B23": "FFA75DBB",
+              "B24": "FFC83CDC",
+              "B25": "FF32D246",
+              "B26": "FF7D8791",
+              "B27": "FFB252C6",
+              "B28": "FFD82CEC",
+              "D5": "FF5AAA6E",
+              "D6": "FFA064B4",
+              "D7": "FFA064B4",
+              "D8": "FF5AAA6E",
+              "D10": "FFFA9473",
+              "D11": "FFFCBF7B",
+              "D12": "FFCBDC81",
+              "D13": "FF97CD7E"
+            },
+            "percent-roundtrip": {
+              "B5": "FF59AB6D",
+              "B6": "FF9F65B3",
+              "B7": "FF36CE4A",
+              "B8": "FFC341D7",
+              "B9": "FF3EC652",
+              "B10": "FF29DB3D",
+              "B11": "FF53B167",
+              "B12": "FF32D246",
+              "B13": "FFC83CDC",
+              "B14": "FF7D8791",
+              "B15": "FF48BC5C",
+              "B16": "FF22E236",
+              "B17": "FFA163B5",
+              "B18": "FF5BA96F",
+              "B19": "FFC440D8",
+              "B20": "FF37CD4B",
+              "B21": "FFBC48D0",
+              "B22": "FFD133E5",
+              "B23": "FFA75DBB",
+              "B24": "FFC83CDC",
+              "B25": "FF32D246",
+              "B26": "FF7D8791",
+              "B27": "FFB252C6",
+              "B28": "FFD82CEC",
+              "D5": "FF59AB6D",
+              "D6": "FF9F65B3",
+              "D7": "FFA163B5",
+              "D8": "FF5BA96F",
+              "D10": "FFFA9473",
+              "D11": "FFFCBF7B",
+              "D12": "FFCCDD82",
+              "D13": "FF98CE7F"
+            },
+            "fixed-256": {
+              "B5": "FF59AB6D",
+              "B6": "FF9F65B3",
+              "B7": "FF36CE4A",
+              "B8": "FFC242D6",
+              "B9": "FF3DC751",
+              "B10": "FF28DC3C",
+              "B11": "FF52B266",
+              "B12": "FF31D345",
+              "B13": "FFC73DDB",
+              "B14": "FF7D8791",
+              "B15": "FF48BC5C",
+              "B16": "FF21E335",
+              "B17": "FFA163B5",
+              "B18": "FF5BA96F",
+              "B19": "FFC440D8",
+              "B20": "FF38CC4C",
+              "B21": "FFBD47D1",
+              "B22": "FFD232E6",
+              "B23": "FFA85CBC",
+              "B24": "FFC93BDD",
+              "B25": "FF33D147",
+              "B26": "FF7D8791",
+              "B27": "FFB252C6",
+              "B28": "FFD92BED",
+              "D5": "FF59AB6D",
+              "D6": "FF9F65B3",
+              "D7": "FFA163B5",
+              "D8": "FF5BA96F",
+              "D10": "FFFA9473",
+              "D11": "FFFCBF7B",
+              "D12": "FFCCDD82",
+              "D13": "FF98CE7F"
+            },
+            "fixed-1000": {
+              "B5": "FF59AB6D",
+              "B6": "FF9F65B3",
+              "B7": "FF36CE4A",
+              "B8": "FFC242D6",
+              "B9": "FF3EC652",
+              "B10": "FF29DB3D",
+              "B11": "FF53B167",
+              "B12": "FF31D345",
+              "B13": "FFC73DDB",
+              "B14": "FF7D8791",
+              "B15": "FF48BC5C",
+              "B16": "FF21E335",
+              "B17": "FFA163B5",
+              "B18": "FF5BA96F",
+              "B19": "FFC440D8",
+              "B20": "FF38CC4C",
+              "B21": "FFBC48D0",
+              "B22": "FFD133E5",
+              "B23": "FFA75DBB",
+              "B24": "FFC93BDD",
+              "B25": "FF33D147",
+              "B26": "FF7D8791",
+              "B27": "FFB252C6",
+              "B28": "FFD92BED",
+              "D5": "FF59AB6D",
+              "D6": "FF9F65B3",
+              "D7": "FFA163B5",
+              "D8": "FF5BA96F",
+              "D10": "FFFA9473",
+              "D11": "FFFCBF7B",
+              "D12": "FFCCDD82",
+              "D13": "FF98CE7F"
+            },
+            "fixed-308": {
+              "B5": "FF59AB6D",
+              "B6": "FF9F65B3",
+              "B7": "FF36CE4A",
+              "B8": "FFC242D6",
+              "B9": "FF3DC751",
+              "B10": "FF28DC3C",
+              "B11": "FF52B266",
+              "B12": "FF32D246",
+              "B13": "FFC83CDC",
+              "B14": "FF7D8791",
+              "B15": "FF48BC5C",
+              "B16": "FF21E335",
+              "B17": "FFA163B5",
+              "B18": "FF5BA96F",
+              "B19": "FFC440D8",
+              "B20": "FF38CC4C",
+              "B21": "FFBD47D1",
+              "B22": "FFD232E6",
+              "B23": "FFA85CBC",
+              "B24": "FFC83CDC",
+              "B25": "FF32D246",
+              "B26": "FF7D8791",
+              "B27": "FFB252C6",
+              "B28": "FFD92BED",
+              "D5": "FF59AB6D",
+              "D6": "FF9F65B3",
+              "D7": "FFA163B5",
+              "D8": "FF5BA96F",
+              "D10": "FFFA9473",
+              "D11": "FFFCBF7B",
+              "D12": "FFCCDD82",
+              "D13": "FF98CE7F"
+            },
+            "fixed-700": {
+              "B5": "FF59AB6D",
+              "B6": "FF9F65B3",
+              "B7": "FF36CE4A",
+              "B8": "FFC242D6",
+              "B9": "FF3EC652",
+              "B10": "FF29DB3D",
+              "B11": "FF53B167",
+              "B12": "FF32D246",
+              "B13": "FFC83CDC",
+              "B14": "FF7D8791",
+              "B15": "FF48BC5C",
+              "B16": "FF21E335",
+              "B17": "FFA163B5",
+              "B18": "FF5BA96F",
+              "B19": "FFC440D8",
+              "B20": "FF38CC4C",
+              "B21": "FFBC48D0",
+              "B22": "FFD133E5",
+              "B23": "FFA75DBB",
+              "B24": "FFC83CDC",
+              "B25": "FF32D246",
+              "B26": "FF7D8791",
+              "B27": "FFB252C6",
+              "B28": "FFD92BED",
+              "D5": "FF59AB6D",
+              "D6": "FF9F65B3",
+              "D7": "FFA163B5",
+              "D8": "FF5BA96F",
+              "D10": "FFFA9473",
+              "D11": "FFFCBF7B",
+              "D12": "FFCCDD82",
+              "D13": "FF98CE7F"
+            }
+          },
+          "positiveControls": {
+            "H2": "FF21E335",
+            "H3": "FF22E236",
+            "H4": "FF28DC3C",
+            "H5": "FF29DB3D",
+            "H6": "FF31D345",
+            "H7": "FF32D246",
+            "H8": "FF33D147",
+            "H9": "FF36CE4A",
+            "H10": "FF37CD4B",
+            "H11": "FF38CC4C",
+            "H12": "FF3DC751",
+            "H13": "FF3EC652",
+            "H14": "FF48BC5C",
+            "H15": "FF52B266",
+            "H16": "FF53B167",
+            "H17": "FF59AB6D",
+            "H18": "FF5AAA6E",
+            "H19": "FF5BA96F",
+            "H20": "FF7D8791",
+            "H21": "FF97CD7E",
+            "H22": "FF98CE7F",
+            "H23": "FF9F65B3",
+            "H24": "FFA064B4",
+            "H25": "FFA163B5",
+            "H26": "FFA75DBB",
+            "H27": "FFA85CBC",
+            "H28": "FFB252C6",
+            "I2": "FFBC48D0",
+            "I3": "FFBD47D1",
+            "I4": "FFC242D6",
+            "I5": "FFC341D7",
+            "I6": "FFC440D8",
+            "I7": "FFC73DDB",
+            "I8": "FFC83CDC",
+            "I9": "FFC93BDD",
+            "I10": "FFCBDC81",
+            "I11": "FFCCDD82",
+            "I12": "FFD133E5",
+            "I13": "FFD232E6",
+            "I14": "FFD82CEC",
+            "I15": "FFD92BED",
+            "I16": "FFFA9473",
+            "I17": "FFFCBF7B"
+          }
+        },
+        {
+          "id": "num-qpq",
+          "capabilityId": "scale:num-segment-fraction",
+          "observable": "fill",
+          "refs": [
+            "C5",
+            "C6",
+            "C7",
+            "C8",
+            "C9",
+            "C10",
+            "C11",
+            "C12",
+            "C13",
+            "C14",
+            "C15",
+            "C16",
+            "C17",
+            "C18",
+            "C19",
+            "C20",
+            "C21",
+            "C22",
+            "C23",
+            "C24",
+            "C25",
+            "C26",
+            "C27",
+            "C28"
+          ],
+          "hypotheses": {
+            "truncate": {
+              "C5": "FFA064B4",
+              "C6": "FF5AAA6E",
+              "C7": "FFC341D7",
+              "C8": "FF37CD4B",
+              "C9": "FFBC48D0",
+              "C10": "FFD133E5",
+              "C11": "FFA75DBB",
+              "C12": "FFC83CDC",
+              "C13": "FF32D246",
+              "C14": "FF7D8791",
+              "C15": "FFB252C6",
+              "C16": "FFD82CEC",
+              "C17": "FF5AAA6E",
+              "C18": "FFA064B4",
+              "C19": "FF37CD4B",
+              "C20": "FFC341D7",
+              "C21": "FF3EC652",
+              "C22": "FF29DB3D",
+              "C23": "FF53B167",
+              "C24": "FF32D246",
+              "C25": "FFC83CDC",
+              "C26": "FF7D8791",
+              "C27": "FF48BC5C",
+              "C28": "FF22E236"
+            },
+            "percent-roundtrip": {
+              "C5": "FFA163B5",
+              "C6": "FF5BA96F",
+              "C7": "FFC440D8",
+              "C8": "FF37CD4B",
+              "C9": "FFBC48D0",
+              "C10": "FFD133E5",
+              "C11": "FFA75DBB",
+              "C12": "FFC83CDC",
+              "C13": "FF32D246",
+              "C14": "FF7D8791",
+              "C15": "FFB252C6",
+              "C16": "FFD82CEC",
+              "C17": "FF59AB6D",
+              "C18": "FF9F65B3",
+              "C19": "FF36CE4A",
+              "C20": "FFC341D7",
+              "C21": "FF3EC652",
+              "C22": "FF29DB3D",
+              "C23": "FF53B167",
+              "C24": "FF32D246",
+              "C25": "FFC83CDC",
+              "C26": "FF7D8791",
+              "C27": "FF48BC5C",
+              "C28": "FF22E236"
+            },
+            "fixed-256": {
+              "C5": "FFA163B5",
+              "C6": "FF5BA96F",
+              "C7": "FFC440D8",
+              "C8": "FF38CC4C",
+              "C9": "FFBD47D1",
+              "C10": "FFD232E6",
+              "C11": "FFA85CBC",
+              "C12": "FFC93BDD",
+              "C13": "FF33D147",
+              "C14": "FF7D8791",
+              "C15": "FFB252C6",
+              "C16": "FFD92BED",
+              "C17": "FF59AB6D",
+              "C18": "FF9F65B3",
+              "C19": "FF36CE4A",
+              "C20": "FFC242D6",
+              "C21": "FF3DC751",
+              "C22": "FF28DC3C",
+              "C23": "FF52B266",
+              "C24": "FF31D345",
+              "C25": "FFC73DDB",
+              "C26": "FF7D8791",
+              "C27": "FF48BC5C",
+              "C28": "FF21E335"
+            },
+            "fixed-1000": {
+              "C5": "FFA163B5",
+              "C6": "FF5BA96F",
+              "C7": "FFC440D8",
+              "C8": "FF38CC4C",
+              "C9": "FFBC48D0",
+              "C10": "FFD133E5",
+              "C11": "FFA75DBB",
+              "C12": "FFC93BDD",
+              "C13": "FF33D147",
+              "C14": "FF7D8791",
+              "C15": "FFB252C6",
+              "C16": "FFD92BED",
+              "C17": "FF59AB6D",
+              "C18": "FF9F65B3",
+              "C19": "FF36CE4A",
+              "C20": "FFC242D6",
+              "C21": "FF3EC652",
+              "C22": "FF29DB3D",
+              "C23": "FF53B167",
+              "C24": "FF31D345",
+              "C25": "FFC73DDB",
+              "C26": "FF7D8791",
+              "C27": "FF48BC5C",
+              "C28": "FF21E335"
+            },
+            "fixed-308": {
+              "C5": "FFA163B5",
+              "C6": "FF5BA96F",
+              "C7": "FFC440D8",
+              "C8": "FF38CC4C",
+              "C9": "FFBD47D1",
+              "C10": "FFD232E6",
+              "C11": "FFA85CBC",
+              "C12": "FFC83CDC",
+              "C13": "FF32D246",
+              "C14": "FF7D8791",
+              "C15": "FFB252C6",
+              "C16": "FFD92BED",
+              "C17": "FF59AB6D",
+              "C18": "FF9F65B3",
+              "C19": "FF36CE4A",
+              "C20": "FFC242D6",
+              "C21": "FF3DC751",
+              "C22": "FF28DC3C",
+              "C23": "FF52B266",
+              "C24": "FF32D246",
+              "C25": "FFC83CDC",
+              "C26": "FF7D8791",
+              "C27": "FF48BC5C",
+              "C28": "FF21E335"
+            },
+            "fixed-700": {
+              "C5": "FFA163B5",
+              "C6": "FF5BA96F",
+              "C7": "FFC440D8",
+              "C8": "FF38CC4C",
+              "C9": "FFBC48D0",
+              "C10": "FFD133E5",
+              "C11": "FFA75DBB",
+              "C12": "FFC83CDC",
+              "C13": "FF32D246",
+              "C14": "FF7D8791",
+              "C15": "FFB252C6",
+              "C16": "FFD92BED",
+              "C17": "FF59AB6D",
+              "C18": "FF9F65B3",
+              "C19": "FF36CE4A",
+              "C20": "FFC242D6",
+              "C21": "FF3EC652",
+              "C22": "FF29DB3D",
+              "C23": "FF53B167",
+              "C24": "FF32D246",
+              "C25": "FFC83CDC",
+              "C26": "FF7D8791",
+              "C27": "FF48BC5C",
+              "C28": "FF21E335"
+            }
+          },
+          "positiveControls": {
+            "H2": "FF21E335",
+            "H3": "FF22E236",
+            "H4": "FF28DC3C",
+            "H5": "FF29DB3D",
+            "H6": "FF31D345",
+            "H7": "FF32D246",
+            "H8": "FF33D147",
+            "H9": "FF36CE4A",
+            "H10": "FF37CD4B",
+            "H11": "FF38CC4C",
+            "H12": "FF3DC751",
+            "H13": "FF3EC652",
+            "H14": "FF48BC5C",
+            "H15": "FF52B266",
+            "H16": "FF53B167",
+            "H17": "FF59AB6D",
+            "H18": "FF5AAA6E",
+            "H19": "FF5BA96F",
+            "H20": "FF7D8791",
+            "H23": "FF9F65B3",
+            "H24": "FFA064B4",
+            "H25": "FFA163B5",
+            "H26": "FFA75DBB",
+            "H27": "FFA85CBC",
+            "H28": "FFB252C6",
+            "I2": "FFBC48D0",
+            "I3": "FFBD47D1",
+            "I4": "FFC242D6",
+            "I5": "FFC341D7",
+            "I6": "FFC440D8",
+            "I7": "FFC73DDB",
+            "I8": "FFC83CDC",
+            "I9": "FFC93BDD",
+            "I12": "FFD133E5",
+            "I13": "FFD232E6",
+            "I14": "FFD82CEC",
+            "I15": "FFD92BED"
+          }
+        },
+        {
+          "id": "two-colour-control",
+          "capabilityId": "scale:num-segment-fraction",
+          "observable": "fill",
+          "refs": [
+            "F5",
+            "F6",
+            "F7",
+            "F8",
+            "F9",
+            "F10",
+            "F11",
+            "F12",
+            "F13",
+            "F14",
+            "F15",
+            "F16",
+            "F17",
+            "F18",
+            "F19",
+            "F20",
+            "F21",
+            "F22",
+            "F23",
+            "F24",
+            "F25",
+            "F26",
+            "F27",
+            "F28"
+          ],
+          "hypotheses": {
+            "truncate": {
+              "F5": "FF5AAA6E",
+              "F6": "FFA064B4",
+              "F7": "FF37CD4B",
+              "F8": "FFC341D7",
+              "F9": "FF3EC652",
+              "F10": "FF29DB3D",
+              "F11": "FF53B167",
+              "F12": "FF32D246",
+              "F13": "FFC83CDC",
+              "F14": "FF7D8791",
+              "F15": "FF48BC5C",
+              "F16": "FF22E236",
+              "F17": "FFA064B4",
+              "F18": "FF5AAA6E",
+              "F19": "FFC341D7",
+              "F20": "FF37CD4B",
+              "F21": "FFBC48D0",
+              "F22": "FFD133E5",
+              "F23": "FFA75DBB",
+              "F24": "FFC83CDC",
+              "F25": "FF32D246",
+              "F26": "FF7D8791",
+              "F27": "FFB252C6",
+              "F28": "FFD82CEC"
+            },
+            "percent-roundtrip": {
+              "F5": "FF5AAA6E",
+              "F6": "FFA064B4",
+              "F7": "FF37CD4B",
+              "F8": "FFC341D7",
+              "F9": "FF3EC652",
+              "F10": "FF29DB3D",
+              "F11": "FF53B167",
+              "F12": "FF32D246",
+              "F13": "FFC83CDC",
+              "F14": "FF7D8791",
+              "F15": "FF48BC5C",
+              "F16": "FF22E236",
+              "F17": "FFA064B4",
+              "F18": "FF5AAA6E",
+              "F19": "FFC341D7",
+              "F20": "FF37CD4B",
+              "F21": "FFBC48D0",
+              "F22": "FFD133E5",
+              "F23": "FFA75DBB",
+              "F24": "FFC83CDC",
+              "F25": "FF32D246",
+              "F26": "FF7D8791",
+              "F27": "FFB252C6",
+              "F28": "FFD82CEC"
+            },
+            "fixed-256": {
+              "F5": "FF5AAA6E",
+              "F6": "FFA064B4",
+              "F7": "FF37CD4B",
+              "F8": "FFC341D7",
+              "F9": "FF3EC652",
+              "F10": "FF29DB3D",
+              "F11": "FF53B167",
+              "F12": "FF32D246",
+              "F13": "FFC83CDC",
+              "F14": "FF7D8791",
+              "F15": "FF48BC5C",
+              "F16": "FF22E236",
+              "F17": "FFA064B4",
+              "F18": "FF5AAA6E",
+              "F19": "FFC341D7",
+              "F20": "FF37CD4B",
+              "F21": "FFBC48D0",
+              "F22": "FFD133E5",
+              "F23": "FFA75DBB",
+              "F24": "FFC83CDC",
+              "F25": "FF32D246",
+              "F26": "FF7D8791",
+              "F27": "FFB252C6",
+              "F28": "FFD82CEC"
+            },
+            "fixed-1000": {
+              "F5": "FF5AAA6E",
+              "F6": "FFA064B4",
+              "F7": "FF37CD4B",
+              "F8": "FFC341D7",
+              "F9": "FF3EC652",
+              "F10": "FF29DB3D",
+              "F11": "FF53B167",
+              "F12": "FF32D246",
+              "F13": "FFC83CDC",
+              "F14": "FF7D8791",
+              "F15": "FF48BC5C",
+              "F16": "FF22E236",
+              "F17": "FFA064B4",
+              "F18": "FF5AAA6E",
+              "F19": "FFC341D7",
+              "F20": "FF37CD4B",
+              "F21": "FFBC48D0",
+              "F22": "FFD133E5",
+              "F23": "FFA75DBB",
+              "F24": "FFC83CDC",
+              "F25": "FF32D246",
+              "F26": "FF7D8791",
+              "F27": "FFB252C6",
+              "F28": "FFD82CEC"
+            },
+            "fixed-308": {
+              "F5": "FF5AAA6E",
+              "F6": "FFA064B4",
+              "F7": "FF37CD4B",
+              "F8": "FFC341D7",
+              "F9": "FF3EC652",
+              "F10": "FF29DB3D",
+              "F11": "FF53B167",
+              "F12": "FF32D246",
+              "F13": "FFC83CDC",
+              "F14": "FF7D8791",
+              "F15": "FF48BC5C",
+              "F16": "FF22E236",
+              "F17": "FFA064B4",
+              "F18": "FF5AAA6E",
+              "F19": "FFC341D7",
+              "F20": "FF37CD4B",
+              "F21": "FFBC48D0",
+              "F22": "FFD133E5",
+              "F23": "FFA75DBB",
+              "F24": "FFC83CDC",
+              "F25": "FF32D246",
+              "F26": "FF7D8791",
+              "F27": "FFB252C6",
+              "F28": "FFD82CEC"
+            },
+            "fixed-700": {
+              "F5": "FF5AAA6E",
+              "F6": "FFA064B4",
+              "F7": "FF37CD4B",
+              "F8": "FFC341D7",
+              "F9": "FF3EC652",
+              "F10": "FF29DB3D",
+              "F11": "FF53B167",
+              "F12": "FF32D246",
+              "F13": "FFC83CDC",
+              "F14": "FF7D8791",
+              "F15": "FF48BC5C",
+              "F16": "FF22E236",
+              "F17": "FFA064B4",
+              "F18": "FF5AAA6E",
+              "F19": "FFC341D7",
+              "F20": "FF37CD4B",
+              "F21": "FFBC48D0",
+              "F22": "FFD133E5",
+              "F23": "FFA75DBB",
+              "F24": "FFC83CDC",
+              "F25": "FF32D246",
+              "F26": "FF7D8791",
+              "F27": "FFB252C6",
+              "F28": "FFD82CEC"
+            }
+          },
+          "role": "negative-control",
+          "positiveControls": {
+            "H3": "FF22E236",
+            "H5": "FF29DB3D",
+            "H7": "FF32D246",
+            "H10": "FF37CD4B",
+            "H13": "FF3EC652",
+            "H14": "FF48BC5C",
+            "H16": "FF53B167",
+            "H18": "FF5AAA6E",
+            "H20": "FF7D8791",
+            "H24": "FFA064B4",
+            "H26": "FFA75DBB",
+            "H28": "FFB252C6",
+            "I2": "FFBC48D0",
+            "I5": "FFC341D7",
+            "I8": "FFC83CDC",
+            "I12": "FFD133E5",
+            "I14": "FFD82CEC"
+          },
+          "note": "Negative control: the same values under 2-colour literal num bounds; every reading is 3-colour only, so all predict truncation. Excel must match it, never evidence."
+        },
+        {
+          "id": "statistical",
+          "capabilityId": "scale:num-segment-fraction-statistical",
+          "observable": "fill",
+          "refs": [
+            "E5",
+            "E6",
+            "E7",
+            "E8",
+            "E9",
+            "E10",
+            "E11",
+            "E12",
+            "E13",
+            "E14",
+            "E15",
+            "E16",
+            "E17",
+            "E18",
+            "E19",
+            "E20",
+            "E21",
+            "E22",
+            "E23",
+            "E24",
+            "E25",
+            "E26",
+            "E27",
+            "E28"
+          ],
+          "hypotheses": {
+            "truncate": {
+              "E5": "FF5AAA6E",
+              "E6": "FFA064B4",
+              "E7": "FF37CD4B",
+              "E8": "FFC341D7",
+              "E9": "FF3EC652",
+              "E10": "FF29DB3D",
+              "E11": "FF53B167",
+              "E12": "FF32D246",
+              "E13": "FFC83CDC",
+              "E14": "FF7D8791",
+              "E15": "FF48BC5C",
+              "E16": "FF22E236",
+              "E17": "FFA064B4",
+              "E18": "FF5AAA6E",
+              "E19": "FFC341D7",
+              "E20": "FF37CD4B",
+              "E21": "FFBC48D0",
+              "E22": "FFD133E5",
+              "E23": "FFA75DBB",
+              "E24": "FFC83CDC",
+              "E25": "FF32D246",
+              "E26": "FF7D8791",
+              "E27": "FFB252C6",
+              "E28": "FFD82CEC"
+            },
+            "percent-roundtrip": {
+              "E5": "FF59AB6D",
+              "E6": "FF9F65B3",
+              "E7": "FF36CE4A",
+              "E8": "FFC341D7",
+              "E9": "FF3EC652",
+              "E10": "FF29DB3D",
+              "E11": "FF53B167",
+              "E12": "FF32D246",
+              "E13": "FFC83CDC",
+              "E14": "FF7D8791",
+              "E15": "FF48BC5C",
+              "E16": "FF22E236",
+              "E17": "FFA163B5",
+              "E18": "FF5BA96F",
+              "E19": "FFC440D8",
+              "E20": "FF37CD4B",
+              "E21": "FFBC48D0",
+              "E22": "FFD133E5",
+              "E23": "FFA75DBB",
+              "E24": "FFC83CDC",
+              "E25": "FF32D246",
+              "E26": "FF7D8791",
+              "E27": "FFB252C6",
+              "E28": "FFD82CEC"
+            }
+          },
+          "positiveControls": {
+            "H3": "FF22E236",
+            "H5": "FF29DB3D",
+            "H7": "FF32D246",
+            "H9": "FF36CE4A",
+            "H10": "FF37CD4B",
+            "H13": "FF3EC652",
+            "H14": "FF48BC5C",
+            "H16": "FF53B167",
+            "H17": "FF59AB6D",
+            "H18": "FF5AAA6E",
+            "H19": "FF5BA96F",
+            "H20": "FF7D8791",
+            "H23": "FF9F65B3",
+            "H24": "FFA064B4",
+            "H25": "FFA163B5",
+            "H26": "FFA75DBB",
+            "H28": "FFB252C6",
+            "I2": "FFBC48D0",
+            "I5": "FFC341D7",
+            "I6": "FFC440D8",
+            "I8": "FFC83CDC",
+            "I12": "FFD133E5",
+            "I14": "FFD82CEC"
+          }
+        }
+      ],
+      "captures": [
+        {
+          "appearance": "screen",
+          "pngPath": "tests/fixtures/xlsx-cf/refs/stage2-scale-num-segment.png",
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage2-scale-num-segment.json"
+        }
+      ],
+      "status": "recipe-pending",
+      "reason": "Awaiting host Excel 16.115 execution and verified display-format interior color observations",
+      "tolerance": {
+        "meanAbs": 0.015,
+        "rowMax": 0.08,
+        "strong": 12
+      },
+      "resavedByExcel": false
+    },
+    {
       "id": "stage3-bar-settings-probe",
       "stage": 3,
       "question": "S3-A precondition probe. One bar is authored against every default (axis middle, solid, border 1, x14 minLength 0 / maxLength 100, direction rightToLeft, showValue 0, negative colour distinct from positive); a default-valued control rule sits beside it. Calibration columns of 10, 30 and 60 characters, and one solid DXF-filled cell, give pixel calibration. Gridlines stay on here so gridline-to-gridline widths can be measured.",
