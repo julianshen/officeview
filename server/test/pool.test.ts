@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { DEFAULT_CAPS } from '../src/admission'
 import { AdmissionRefused, Pool, RenderFailed, RenderTimeout, type RenderJob } from '../src/pool'
+import { rejection, rejectionMessage } from './fixtures/rejection'
 
 const root = resolve(import.meta.dir, '../..')
 const deck = new Uint8Array(readFileSync(resolve(root, 'corpus/pypptx-test.pptx')))
@@ -18,7 +19,7 @@ describe('render pool (§9.2/§14)', () => {
     await pool.open('deck', deck, 'visible-only')
     const runs = Array.from({ length: 40 }, () => pool.render('s1', job('deck'), 1024))
     expect(pool.stats()).toMatchObject({ running: 8, queued: 32 })
-    await expect(pool.render('s1', job('deck'), 1024)).rejects.toEqual(new AdmissionRefused('session-queue'))
+    expect(await rejection(pool.render('s1', job('deck'), 1024))).toEqual(new AdmissionRefused('session-queue'))
     const done = await Promise.all(runs)
     expect(done.every((u) => u.kind === 'raster')).toBe(true)
     expect(pool.stats()).toMatchObject({ running: 0, queued: 0, reserved: 0 })
@@ -26,7 +27,7 @@ describe('render pool (§9.2/§14)', () => {
 
   it('a request larger than the session transient budget is refused', async () => {
     const pool = mk({ workers: 1 })
-    await expect(pool.render('s1', job('deck'), DEFAULT_CAPS.sessionTransientBytes + 1)).rejects.toEqual(new AdmissionRefused('too-large'))
+    expect(await rejection(pool.render('s1', job('deck'), DEFAULT_CAPS.sessionTransientBytes + 1))).toEqual(new AdmissionRefused('too-large'))
   })
 
   it('a wedged paint is retired at the deadline; its charge is refunded only after the worker is gone', async () => {
@@ -35,7 +36,7 @@ describe('render pool (§9.2/§14)', () => {
     const run = pool.render('s1', job('deck', { hangMs: 1500 }), 4096)
     await Bun.sleep(300)
     expect(pool.stats().reserved).toBe(4096)
-    await expect(run).rejects.toBeInstanceOf(RenderTimeout)
+    expect(await rejection(run)).toBeInstanceOf(RenderTimeout)
     const s = pool.stats()
     expect(s).toMatchObject({ reserved: 0, running: 0, retired: 1 })
     expect(s.workers[0]!.generation).toBe(1)
@@ -48,7 +49,7 @@ describe('render pool (§9.2/§14)', () => {
     await pool.open('deck', deck, 'visible-only')
     const hung = pool.render('s1', job('deck', { hangMs: 600 }), 4096)
     const next = pool.render('s1', job('deck'), 4096)
-    await expect(hung).rejects.toBeInstanceOf(RenderTimeout)
+    expect(await rejection(hung)).toBeInstanceOf(RenderTimeout)
     expect((await next).kind).toBe('raster')
     expect(pool.stats()).toMatchObject({ reserved: 0, running: 0, queued: 0, retired: 1 })
   }, 30_000)
@@ -74,14 +75,14 @@ describe('render pool (§9.2/§14)', () => {
   it('a worker that dies mid-job fails that job, refunds it, and the slot recovers (review r1-4)', async () => {
     const pool = mk({ workers: 1, testHooks: true })
     await pool.open('deck', deck, 'visible-only')
-    await expect(pool.render('s1', job('deck', { crash: true }), 4096)).rejects.toBeInstanceOf(RenderFailed)
+    expect(await rejection(pool.render('s1', job('deck', { crash: true }), 4096))).toBeInstanceOf(RenderFailed)
     expect(pool.stats()).toMatchObject({ reserved: 0, running: 0 })
     expect((await pool.render('s1', job('deck'), 4096)).kind).toBe('raster')
   }, 30_000)
 
   it('invalid or unsatisfiable estimates are refused, never queued (review r1-8)', async () => {
     const pool = mk({ workers: 1, caps: { ...DEFAULT_CAPS, renderReservationBytes: 1024 } })
-    for (const b of [-1, Number.NaN, 1.5, 2048, Number.POSITIVE_INFINITY]) await expect(pool.render('s1', job('deck'), b)).rejects.toEqual(new AdmissionRefused('too-large'))
+    for (const b of [-1, Number.NaN, 1.5, 2048, Number.POSITIVE_INFINITY]) expect(await rejection(pool.render('s1', job('deck'), b))).toEqual(new AdmissionRefused('too-large'))
     expect(pool.stats()).toMatchObject({ reserved: 0, running: 0, queued: 0 })
   })
 
@@ -113,14 +114,14 @@ describe('render pool (§9.2/§14)', () => {
     await pool.render('s1', job('deck'), 1024)
     expect(pool.stats().workers[0]!.parses).toBe(2)
     pool.forget('deck')
-    await expect(pool.render('s1', job('deck'), 1024)).rejects.toThrow(/not registered/)
+    expect(await rejectionMessage(pool.render('s1', job('deck'), 1024))).toMatch(/not registered/)
     expect(pool.stats().reserved).toBe(0)
   }, 30_000)
 
   it('worker refusals surface with their code', async () => {
     const pool = mk({ workers: 1 })
     await pool.open('deck', deck, 'visible-only')
-    await expect(pool.render('s1', job('deck', { unitIndex: 99 }), 1024)).rejects.toMatchObject({ refusal: 'unit-range' })
+    expect(await rejection(pool.render('s1', job('deck', { unitIndex: 99 }), 1024))).toMatchObject({ refusal: 'unit-range' })
     expect(pool.stats().reserved).toBe(0)
   })
 })

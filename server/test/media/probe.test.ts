@@ -15,6 +15,7 @@ import { DocumentHost } from '../../src/render'
 import { Pool, RenderFailed } from '../../src/pool'
 import { showBuildGrant } from '../../src/show/grant'
 import { ffmpegForTests } from './ffmpeg-gate'
+import { rejection } from '../fixtures/rejection'
 
 const info = await ffmpegForTests()
 const FIX = resolve(import.meta.dir, '../fixtures/media')
@@ -374,9 +375,9 @@ describe.skipIf(!info)('the sandboxed probe (D7, D21)', () => {
       expect(temp.live()).toBe(1)
       await f.dispose()
       expect(temp.live()).toBe(0)
-      await expect(pool.mediaPart('s1', 'part', 'visible-only', 'ppt/media/absent.wav', temp.dir)).rejects.toMatchObject({ refusal: 'media-part' })
-      await expect(pool.mediaPart('s1', 'part', 'visible-only', 'ppt/slides/slide1.xml', temp.dir)).rejects.toBeInstanceOf(RenderFailed)
-      await expect(pool.mediaPart('s1', 'part', 'visible-only', partPath, root)).rejects.toMatchObject({ refusal: 'media-part' })
+      expect(await rejection(pool.mediaPart('s1', 'part', 'visible-only', 'ppt/media/absent.wav', temp.dir))).toMatchObject({ refusal: 'media-part' })
+      expect(await rejection(pool.mediaPart('s1', 'part', 'visible-only', 'ppt/slides/slide1.xml', temp.dir))).toBeInstanceOf(RenderFailed)
+      expect(await rejection(pool.mediaPart('s1', 'part', 'visible-only', partPath, root))).toMatchObject({ refusal: 'media-part' })
     } finally { pool.dispose() }
   })
 

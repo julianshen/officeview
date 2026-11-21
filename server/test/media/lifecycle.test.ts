@@ -22,6 +22,7 @@ import { SHOW_BUILD_BYTES } from '../../src/show/build'
 import { disposePool, start, type HarnessMedia } from '../harness'
 import { alive, childPids, groupOf, planOf, processes, running, zombieChildren, session, settled, sidOf, source, spawnLog, until, withPart, type AuditClient } from './battery'
 import { ffmpegForTests } from './ffmpeg-gate'
+import { rejectionMessage } from '../fixtures/rejection'
 
 const info = await ffmpegForTests()
 const scratch = mkdtempSync(join(tmpdir(), 'ov-t13-life-'))
@@ -526,7 +527,7 @@ describe.skipIf(!info)('a render worker terminated mid-job (Task 3 carry; fix ro
       const refs = await pool.mediaRefs('s1', 'part', 'visible-only', 0)
       const partPath = refs.refs[0]!.partPath
       expect(partPath).toMatch(/^\/?ppt\/media\//)
-      await expect(pool.mediaPart('s1', 'part', 'visible-only', partPath, temp.dir)).rejects.toThrow(/deadline/)
+      expect(await rejectionMessage(pool.mediaPart('s1', 'part', 'visible-only', partPath, temp.dir))).toMatch(/deadline/)
       expect(pool.stats().retired).toBe(1)
       expect(readdirSync(temp.dir)).toEqual([])
       expect(childPids()).toEqual([])

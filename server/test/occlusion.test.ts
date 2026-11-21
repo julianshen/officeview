@@ -11,6 +11,7 @@ import { PAINT_DECORATION } from '../../src/core/text-recording'
 import { paintCellLayout } from '../../src/xlsx/render'
 import { renderPages, type PageLayout, type Segment } from '../../src/docx/layout'
 import type { CellBodyLayout } from '../../src/xlsx/view/textLayout'
+import { MARKS_FAMILY, STACKING_MARK } from './fixtures/marks-font'
 
 /** The PAINT_DECORATION hook as the painters call it: 'text' opens a scope, 'line' starts its lines, false ends it. */
 const phase = (c: CanvasRenderingContext2D, v: unknown) => (c as unknown as Record<symbol, ((v: unknown) => void) | undefined>)[PAINT_DECORATION]?.(v)
@@ -519,19 +520,21 @@ describe('decoration thresholds are bounded by the run font size (Task 3c fix ro
     phase(c, false)
     return { ...o.runDetails()[0]!, ink: i }
   }
-  const tall = 'secret' + '̍'.repeat(40)
+  // Stacked marks in the pinned face (fixtures/marks-font): ink 201.64 px at 20 px on every platform.
+  const marks = `20px "${MARKS_FAMILY}"`
+  const tall = 'secret' + STACKING_MARK.repeat(40)
   it('a font size smaller than the ink extent bounds the thickness limit', () => {
     // 20 px font, ink > 150 px: the limit is 0.12 × 20 = 2.4 px, not 12 % of the ink.
-    const base = probe(tall, '20px sans-serif', () => [])
+    const base = probe(tall, marks, () => [])
     expect(base.ink.height).toBeGreaterThan(150)
-    expect(probe(tall, '20px sans-serif', (i) => [[i.height - 8, 2.3]])).toMatchObject({ servable: true })
-    expect(probe(tall, '20px sans-serif', (i) => [[i.height - 8, 2.5]])).toMatchObject({ servable: false, reason: 'covered' })
-    expect(probe(tall, '20px sans-serif', (i) => [[i.height - 12, 10]])).toMatchObject({ servable: false, reason: 'covered' })
+    expect(probe(tall, marks, (i) => [[i.height - 8, 2.3]])).toMatchObject({ servable: true })
+    expect(probe(tall, marks, (i) => [[i.height - 8, 2.5]])).toMatchObject({ servable: false, reason: 'covered' })
+    expect(probe(tall, marks, (i) => [[i.height - 12, 10]])).toMatchObject({ servable: false, reason: 'covered' })
   })
   it('a font size smaller than the ink extent bounds the union cap', () => {
     // Cap 0.25 × 20 = 5 px: two 2.3 px bars pass, three (6.9 px) do not — though far under 25 % of the ink.
-    expect(probe(tall, '20px sans-serif', (i) => [[10, 2.3], [i.height - 8, 2.3]])).toMatchObject({ servable: true })
-    expect(probe(tall, '20px sans-serif', (i) => [[10, 2.3], [100, 2.3], [i.height - 8, 2.3]])).toMatchObject({ servable: false, reason: 'covered' })
+    expect(probe(tall, marks, (i) => [[10, 2.3], [i.height - 8, 2.3]])).toMatchObject({ servable: true })
+    expect(probe(tall, marks, (i) => [[10, 2.3], [100, 2.3], [i.height - 8, 2.3]])).toMatchObject({ servable: false, reason: 'covered' })
   })
   it('an ink extent smaller than the font size still bounds the limit (unchanged)', () => {
     // 'a' in a 100 px font: ink ≈ 55 px, so 12 % of the ink (< 12 px), not of the font size.
@@ -549,32 +552,32 @@ describe('decoration thresholds are bounded by the run font size (Task 3c fix ro
   })
   it('a px-like token in the family name is not the font size', () => {
     // The size is the first px token of the serialised font; the family follows it.
-    const font = '20px "x 9999px y", sans-serif'
+    const font = `20px "x 9999px y", "${MARKS_FAMILY}"`
     expect(probe(tall, font, (i) => [[i.height - 8, 2.3]])).toMatchObject({ servable: true })
     expect(probe(tall, font, (i) => [[i.height - 8, 2.5]])).toMatchObject({ servable: false, reason: 'covered' })
   })
   it('a scaled transform (scale 2) scales the font-size bound', () => {
     // 20 px font under scale(2): 40 device px, limit 4.8 px, cap 10 px.
     const at = (c: CanvasRenderingContext2D) => c.scale(2, 2)
-    expect(probe(tall, '20px sans-serif', () => [], { pre: at }).ink.height).toBeGreaterThan(300)
-    expect(probe(tall, '20px sans-serif', (i) => [[i.height - 16, 4.7]], { pre: at })).toMatchObject({ servable: true })
-    expect(probe(tall, '20px sans-serif', (i) => [[i.height - 16, 4.9]], { pre: at })).toMatchObject({ servable: false, reason: 'covered' })
-    expect(probe(tall, '20px sans-serif', (i) => [[10, 4.7], [i.height - 16, 4.7]], { pre: at })).toMatchObject({ servable: true })
-    expect(probe(tall, '20px sans-serif', (i) => [[10, 4.7], [100, 4.7], [i.height - 16, 4.7]], { pre: at })).toMatchObject({ servable: false, reason: 'covered' })
+    expect(probe(tall, marks, () => [], { pre: at }).ink.height).toBeGreaterThan(300)
+    expect(probe(tall, marks, (i) => [[i.height - 16, 4.7]], { pre: at })).toMatchObject({ servable: true })
+    expect(probe(tall, marks, (i) => [[i.height - 16, 4.9]], { pre: at })).toMatchObject({ servable: false, reason: 'covered' })
+    expect(probe(tall, marks, (i) => [[10, 4.7], [i.height - 16, 4.7]], { pre: at })).toMatchObject({ servable: true })
+    expect(probe(tall, marks, (i) => [[10, 4.7], [100, 4.7], [i.height - 16, 4.7]], { pre: at })).toMatchObject({ servable: false, reason: 'covered' })
   })
   it('only the scale across the baseline counts: scale(3, 1) leaves the bound at the font size', () => {
     const pre = (c: CanvasRenderingContext2D) => c.scale(3, 1)
-    expect(probe('secret̍̍̍̍̍̍̍̍', '20px sans-serif', (i) => [[i.height - 8, 2.3]], { pre })).toMatchObject({ servable: true })
-    expect(probe('secret̍̍̍̍̍̍̍̍', '20px sans-serif', (i) => [[i.height - 8, 2.5]], { pre })).toMatchObject({ servable: false, reason: 'covered' })
+    expect(probe('secret' + STACKING_MARK.repeat(8), marks, (i) => [[i.height - 8, 2.3]], { pre })).toMatchObject({ servable: true })
+    expect(probe('secret' + STACKING_MARK.repeat(8), marks, (i) => [[i.height - 8, 2.5]], { pre })).toMatchObject({ servable: false, reason: 'covered' })
   })
 })
 
 describe('only a run\'s own lines and their continuations are decorations (Task 3c fix round 5)', () => {
   const W = 600, H = 600
-  const style = (pt: number) => ({ fontFamily: 'sans-serif', fontSizePt: pt, bold: false, italic: false })
-  const measure = (s: string, pt = 18) => { const c = createCanvas(10, 10).getContext('2d'); c.font = `${pt}pt sans-serif`; return c.measureText(s) }
-  const placed = (text: string, pt: number, color: string, deco: 'underline' | 'strike', e: number, f: number, widthPx: number): Segment =>
-    ({ text, run: { text, color, [deco]: true }, style: style(pt), widthPx, transform: { a: 1, b: 0, c: 0, d: 1, e, f } }) as Segment
+  const style = (pt: number, family = 'sans-serif') => ({ fontFamily: family, fontSizePt: pt, bold: false, italic: false })
+  const measure = (s: string, pt = 18, family = 'sans-serif') => { const c = createCanvas(10, 10).getContext('2d'); c.font = `${pt}pt ${family === 'sans-serif' ? family : JSON.stringify(family)}`; return c.measureText(s) }
+  const placed = (text: string, pt: number, color: string, deco: 'underline' | 'strike', e: number, f: number, widthPx: number, family?: string): Segment =>
+    ({ text, run: { text, color, [deco]: true }, style: style(pt, family), widthPx, transform: { a: 1, b: 0, c: 0, d: 1, e, f } }) as Segment
   const render = (segs: Segment[], line: Record<string, unknown> = {}) => {
     const ctx = createCanvas(W, H).getContext('2d') as unknown as CanvasRenderingContext2D
     const o = occlusionObserver(W, H)
@@ -584,9 +587,9 @@ describe('only a run\'s own lines and their continuations are decorations (Task 
     return { ctx, runs: o.runDetails() }
   }
   /** Black underlined 18 pt `word` at baseline 500, with two adjacent white strikes (from `pt`-sized struck spaces of the same stretch) centred on y = `mid`. */
-  const arrangement = (word: string, base: string, pt: number, mid: number, lines = true) => {
-    const lw = Math.max(1, pt * 0.06), b = measure(base)
-    const segs = [placed(word, 18, '000000', 'underline', 40, 500, measure(word).width), ...(lines ? [mid - lw / 2, mid + lw / 2].map((y) => placed(' ', pt, 'FFFFFF', 'strike', 20, y + 0.3 * pt, b.width + 40)) : [])]
+  const arrangement = (word: string, base: string, pt: number, mid: number, lines = true, family = 'sans-serif') => {
+    const lw = Math.max(1, pt * 0.06), b = measure(base, 18, family)
+    const segs = [placed(word, 18, '000000', 'underline', 40, 500, measure(word, 18, family).width, family), ...(lines ? [mid - lw / 2, mid + lw / 2].map((y) => placed(' ', pt, 'FFFFFF', 'strike', 20, y + 0.3 * pt, b.width + 40, family)) : [])]
     const { ctx, runs } = render(segs)
     const y0 = Math.floor(500 - b.actualBoundingBoxAscent), h = Math.ceil(b.actualBoundingBoxAscent + b.actualBoundingBoxDescent)
     const px = ctx.getImageData(40, y0, Math.ceil(b.width), h).data
@@ -594,16 +597,34 @@ describe('only a run\'s own lines and their continuations are decorations (Task 
     for (let i = 0; i < px.length; i += 4) if (px[i]! < 160) dark++
     return { run: runs.find((r) => r.text === word)!, dark }
   }
-  it('real DOCX renderPages: two neighbour strikes erasing superscript letters beside a capital withhold the run', () => {
-    // ˢᵉᶜʳᵉᵗ are ~8 px tall at 24 px; two 2.75 px lines (each ≤ 12 % of the 23 px ink, 5.5 px together ≤ 25 %) erase all but their edge rows.
-    const clean = arrangement('ˢᵉᶜʳᵉᵗÉ', 'ˢᵉᶜʳᵉᵗ', 45.8, 490, false), hit = arrangement('ˢᵉᶜʳᵉᵗÉ', 'ˢᵉᶜʳᵉᵗ', 45.8, 490)
+  /**
+   * The geometry for `arrangement`, derived from the pinned face's measured ink (fixtures/marks-font; the same on
+   * every platform): R = min(the word's ink extent, its 24 px font size); a strike line just inside 12 % of R, so two
+   * adjacent ones stay inside 25 % of R (each would pass as a decoration, and so would their union, were they the
+   * run's own); centred on `base`'s ink band, which they erase.
+   */
+  const raised = (word: string, base: string) => {
+    const w = measure(word, 18, MARKS_FAMILY), b = measure(base, 18, MARKS_FAMILY)
+    const R = Math.min(w.actualBoundingBoxAscent + w.actualBoundingBoxDescent, 24), pt = (0.99 * 0.12 * R) / 0.06
+    expect(pt * 0.06).toBeLessThanOrEqual(0.12 * R)
+    expect(2 * pt * 0.06).toBeLessThanOrEqual(0.25 * R)
+    const mid = 500 - (b.actualBoundingBoxAscent - b.actualBoundingBoxDescent) / 2
+    return { clean: arrangement(word, base, pt, mid, false, MARKS_FAMILY), hit: arrangement(word, base, pt, mid, true, MARKS_FAMILY) }
+  }
+  // Degree signs are small raised glyphs (7 px tall at 24 px in the pinned face, like a superscript); the macOS-tuned
+  // originals (ˢᵉᶜʳᵉᵗ, ¹²³ under U+030D in sans-serif) changed shape, or did not stack, with the Linux fonts.
+  it('real DOCX renderPages: two neighbour strikes erasing small raised glyphs beside a capital withhold the run', () => {
+    // °°°°°° beside É: R = the 23 px ink; two 2.73 px lines erase all but the degree signs' edge rows.
+    const { clean, hit } = raised('°°°°°°É', '°°°°°°')
     expect(clean.run).toMatchObject({ servable: true })
     expect(hit.dark).toBeLessThan(clean.dark * 0.4)
     expect(hit.run).toMatchObject({ servable: false, reason: 'covered' })
   })
-  it('real DOCX renderPages: two neighbour strikes erasing superscript digits under stacked combining marks withhold the run', () => {
-    const word = '¹²³' + '̍'.repeat(40)
-    const clean = arrangement(word, '¹²³', 47.8, 487.5, false), hit = arrangement(word, '¹²³', 47.8, 487.5)
+  it('real DOCX renderPages: two neighbour strikes erasing small raised glyphs under stacked combining marks withhold the run', () => {
+    // The marks inflate the ink past 200 px, so R is the 24 px font size; two 2.85 px lines.
+    const word = '°°°' + STACKING_MARK.repeat(40)
+    const { clean, hit } = raised(word, '°°°')
+    expect(clean.run.ink.height).toBeGreaterThan(200)
     expect(clean.run).toMatchObject({ servable: true })
     expect(hit.dark).toBeLessThan(clean.dark * 0.5)
     expect(hit.run).toMatchObject({ servable: false, reason: 'covered' })

@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { compareStreamDeck, deckBytes, deckVerdict, installDom, MEDIA_PARITY_DECKS, measureWidening, runStreamCompareCli, SHOW_STILL_CODES, uninstallDom, wideningByFamily, type StreamDeckResult } from '../../scripts/stream-show-compare'
 import { disposePool } from './harness'
 import { TOLERANCE_APPROX } from '../../src/slideshow/catalogue'
+import { rejectionMessage } from './fixtures/rejection'
 
 const DECKS = ['flyInDeck', 'morphDeck', 'cubeDeck'] as const
 const runs = new Map<string, StreamDeckResult>()
@@ -158,7 +159,7 @@ describe('streamed show parity (synthetic decks)', () => {
   test('a non-still show-plan error fails the comparison; only production still codes become unit stills (fix round 1)', async () => {
     expect([...SHOW_STILL_CODES].sort()).toEqual(['show-budget', 'show-limits', 'show-plan-timeout', 'still'])
     // The unit reply succeeds; the show-plan reply is rewritten to a policy-refused error.
-    await expect(compareStreamDeck('flyInDeck', { marks: { kind: 'off' }, testOnly: { showPlanEnd: () => ({ type: 'error', code: 'policy-refused' }) } })).rejects.toThrow(/policy-refused/)
+    expect(await rejectionMessage(compareStreamDeck('flyInDeck', { marks: { kind: 'off' }, testOnly: { showPlanEnd: () => ({ type: 'error', code: 'policy-refused' }) } }))).toMatch(/policy-refused/)
     // A production still code is still admitted as a unit still.
     const r = await compareStreamDeck('flyInDeck', { marks: { kind: 'off' }, testOnly: { showPlanEnd: () => ({ type: 'error', code: 'still' }) } })
     expect(r.structure.stills.map((x) => x.code)).toEqual(['still'])
