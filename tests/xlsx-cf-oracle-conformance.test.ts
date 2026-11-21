@@ -638,9 +638,9 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     }
 
     expect(checkedCount).toBeGreaterThan(0)
-    // 206 + the 51 scale cells (15 designated, 36 twins) of the recipe-pending stage2-scale-scope-disjoint, whose
+    // 206 + the 68 scale cells (20 designated, 48 twins) of the recipe-pending stage2-scale-scope-disjoint, whose
     // saved workbook is the generated input until Excel resaves it.
-    expect(checkedCount).toBe(257)
+    expect(checkedCount).toBe(274)
   })
 
   it('paints exact Excel ARGB for every non-hidden excel-display-format cell of all 7 measured Stage 2 cases under production evidence (Lesson 1 dual gate, T14-A)', async () => {

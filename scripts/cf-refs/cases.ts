@@ -2579,21 +2579,22 @@ export interface S2DisjointScale {
 }
 
 /**
- * The fixture: a 2-colour min/max scale on B2:B4 D2:D4 and a 3-colour min / percentile 50 / max scale on F2:F4 H2:H4, each
- * rectangle holding other values, so every pair of readings puts >= 2 cells of each rectangle on distinct colours (checked
- * in tests/xlsx-cf-scale-scope-disjoint.test.ts); the negative control J2:J4 is a single-range min/max scale, on which
- * every reading agrees. Twin blocks (from column L) copy a data rectangle's values under num bounds, one per distinct
- * (values, bounds) pair a reading predicts; the control block (rows 7..9) repeats the data columns with no rule.
+ * The fixture: a 2-colour min/max scale on B2:B5 D2:D5 and a 3-colour min / percentile 50 / max scale on F2:F5 H2:H5, each
+ * rectangle holding other values, so every pair of readings that reads different statistics on a rectangle puts >= 3 of
+ * its cells on distinct colours (pre-capture ruling: a capture cannot be retried; checked in
+ * tests/xlsx-cf-scale-scope-disjoint.test.ts); the negative control J2:J5 is a single-range min/max scale, on which every
+ * reading agrees. Twin blocks (from column L) copy a data rectangle's values under num bounds, one per distinct (values,
+ * bounds) pair a reading predicts; the control block (rows 7..10) repeats the data columns with no rule.
  */
 export const S2_SCOPE_DISJOINT = {
-  rows: [2, 3, 4] as const,
+  rows: [2, 3, 4, 5] as const,
   controlOffset: 5,
   twinFirstCol: 'L',
   scales: [
-    { id: 'disjoint-2colour', cols: ['B', 'D'], values: [[10, 20, 30], [40, 55, 70]], colours: 2 },
-    { id: 'disjoint-3colour', cols: ['F', 'H'], values: [[0, 30, 60], [20, 50, 100]], colours: 3 },
+    { id: 'disjoint-2colour', cols: ['B', 'D'], values: [[10, 20, 30, 40], [50, 60, 70, 80]], colours: 2 },
+    { id: 'disjoint-3colour', cols: ['F', 'H'], values: [[0, 20, 40, 60], [30, 50, 70, 100]], colours: 3 },
   ] as readonly S2DisjointScale[],
-  control: { id: 'single-range-control', col: 'J', values: [10, 20, 30] as readonly number[], colours: 2 as const },
+  control: { id: 'single-range-control', col: 'J', values: [10, 20, 30, 40] as readonly number[], colours: 2 as const },
 }
 
 /** PERCENTILE.INC (spec §5.8, Ruling S2-L) on the values. */
@@ -2710,7 +2711,7 @@ function stage2ScopeDisjointCase(): CfOracleCase {
     id: S2_SCOPE_DISJOINT_ID,
     stage: 2,
     question:
-      'Ruling S2-H (the scope-disjoint follow-up of Ruling F-2): a colour scale over two non-overlapping rectangles that hold different values. Which statistics does it use: the union of both rectangles, each rectangle its own, the leftmost rectangle\'s or the rightmost rectangle\'s? A 2-colour min/max scale on B2:B4 D2:D4 and a 3-colour min / percentile 50 / max scale on F2:F4 H2:H4, each compared by DisplayFormat with literal num twins on the same values, one per predicted rendering; a single-range min/max negative control on J2:J4.',
+      'Ruling S2-H (the scope-disjoint follow-up of Ruling F-2): a colour scale over two non-overlapping rectangles that hold different values. Which statistics does it use: the union of both rectangles, each rectangle its own, the leftmost rectangle\'s or the rightmost rectangle\'s? A 2-colour min/max scale on B2:B5 D2:D5 and a 3-colour min / percentile 50 / max scale on F2:F5 H2:H5, each compared by DisplayFormat with literal num twins on the same values, one per predicted rendering; a single-range min/max negative control on J2:J5.',
     input: `tests/fixtures/xlsx-cf/inputs/${S2_SCOPE_DISJOINT_ID}.xlsx`,
     saved: `tests/fixtures/xlsx-cf/${S2_SCOPE_DISJOINT_ID}.xlsx`,
     sheet: 'Sheet1',

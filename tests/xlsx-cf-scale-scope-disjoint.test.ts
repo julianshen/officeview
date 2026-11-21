@@ -205,9 +205,9 @@ describe('stage2-scale-scope-disjoint: the case', () => {
   it('the rules: two disjoint scales, a single-range control and num twins; nothing overlaps, nothing is hidden or merged', () => {
     const c = caseOf()
     expect(c.markers.filter(m => m.capabilityId !== S2_SCOPE_DISJOINT_TWIN).map(m => [m.capabilityId, m.sqref, m.scale!.cfvo.map(x => x.type + (x.val ?? '')).join(',')])).toEqual([
-      [CAP, 'B2:B4 D2:D4', 'min,max'],
-      [CAP, 'F2:F4 H2:H4', 'min,percentile50,max'],
-      [S2_SCOPE_DISJOINT_CONTROL, 'J2:J4', 'min,max'],
+      [CAP, 'B2:B5 D2:D5', 'min,max'],
+      [CAP, 'F2:F5 H2:H5', 'min,percentile50,max'],
+      [S2_SCOPE_DISJOINT_CONTROL, 'J2:J5', 'min,max'],
     ])
     for (const m of c.markers.filter(x => x.capabilityId === S2_SCOPE_DISJOINT_TWIN)) expect(m.scale!.cfvo.every(x => x.type === 'num'), m.sqref).toBe(true)
     const cells = c.expected.cells.map(e => e.ref)
@@ -219,12 +219,12 @@ describe('stage2-scale-scope-disjoint: the case', () => {
     for (const e of c.expected.cells) expect(typeof values.get(e.ref), e.ref).toBe('number')
   })
 
-  it('small: 66 cells (15 designated, 36 twins, 15 controls), well under 100', () => {
+  it('small: 88 cells (20 designated, 48 twins, 20 controls), under 100', () => {
     const c = caseOf()
-    expect(c.expected.cells.length).toBe(66)
-    expect(c.expected.cells.filter(e => twinOf(c, e.ref)).length).toBe(36)
-    expect(c.expected.negativeRefs.length).toBe(15)
-    expect(c.range).toBe('A1:W9')
+    expect(c.expected.cells.length).toBe(88)
+    expect(c.expected.cells.filter(e => twinOf(c, e.ref)).length).toBe(48)
+    expect(c.expected.negativeRefs.length).toBe(20)
+    expect(c.range).toBe('A1:W10')
   })
 
   it('readings: every configuration names the four readings; the 2- and 3-colour configurations replicate per rectangle; J is the negative control', () => {
@@ -237,7 +237,7 @@ describe('stage2-scale-scope-disjoint: the case', () => {
     expect(caseOf().scaleReadings).toEqual(CF_STAGE2_CASES.find(t => t.id === ID)!.scaleReadings)
   })
 
-  it('every pair of readings puts >= 2 cells of each rectangle on distinct colours, robust to 0.1 of a unit per channel', () => {
+  it('every pair of readings puts >= 3 cells of each rectangle on distinct colours, robust to 0.1 of a unit per channel (pre-capture ruling)', () => {
     const c = caseOf()
     const values = valuesOf(c)
     const channels = (v: number, bounds: readonly number[], colours: 2 | 3): Array<[number, number]> => {
@@ -260,9 +260,9 @@ describe('stage2-scale-scope-disjoint: the case', () => {
             return apart(channels(v, s2ScopeDisjointBounds(s2ScopeDisjointStatValues(sc, a, i), sc.colours), sc.colours), channels(v, s2ScopeDisjointBounds(s2ScopeDisjointStatValues(sc, b, i), sc.colours), sc.colours))
           })
           const same = (h: string): string => s2ScopeDisjointStatValues(sc, h, i).join(',')
-          // A pair that reads the same statistics on a rectangle cannot differ there; every other pair differs at >= 2 cells.
+          // A pair that reads the same statistics on a rectangle cannot differ there; every other pair differs at >= 3 cells.
           if (same(a) === same(b)) expect(differing, `${sc.id} ${sc.cols[i]} ${a}/${b}`).toEqual([])
-          else expect(differing.length, `${sc.id} ${sc.cols[i]} ${a}/${b}`).toBeGreaterThanOrEqual(2)
+          else expect(differing.length, `${sc.id} ${sc.cols[i]} ${a}/${b}`).toBeGreaterThanOrEqual(3)
         }
         // Every pair of readings differs somewhere in each configuration.
         expect(sc.cols.some((_, i) => s2ScopeDisjointStatValues(sc, a, i as 0 | 1).join() !== s2ScopeDisjointStatValues(sc, b, i as 0 | 1).join()), `${sc.id} ${a}/${b}`).toBe(true)

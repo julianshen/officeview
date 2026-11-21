@@ -199,7 +199,7 @@ For `stage2-scale-thresholds`, dynamic refresh behaviour (re-evaluating scale th
 | `stage2-scale-scope` | `Sheet1!A1:F20` | `screen` | Rows `2..9` (CF) vs. Rows `13..20` (Controls) | Disjoint `B2:B4 D2:D4` (`B2:D4`, S2-H); duplicate `<conditionalFormatting>` blocks (`B2:B6`, S2-H); hidden row 4 (`C2:C6`, S2-H); autofilter-hidden row 4 (`D2:D6`, S2-H); merged `B8:C9` inside scope (`B8:C9`, S2-H); canonical whole-column `F1:F1048576` with 5 populated rows (`F1:F1048576`, S2-H). |
 | `stage2-scale-composition` | `Sheet1!A1:L10` | `screen` | Rows `2..5` (CF) vs. Rows `7..10` (Controls) | DXF fill p1 + scale p2 (`B2:B5`, S2-I); scale p1 + DXF fill p2 (`C2:C5`, S2-I); equal-priority tie-break (`D2:D5`, S2-I); scale with font-only DXF merge (`E2:E5`, S2-I); matching DXF `stopIfTrue` ahead (`F2:F5`, S2-I); non-matching DXF `stopIfTrue` ahead (`G2:G5`, S2-I); scale `stopIfTrue="1"` ahead of DXF fill (`H2:H5`, S2-J, OD-1); two overlapping scales (`I2:I5`, S2-I); text cell in scale range with lower DXF (`J2:J5`, S2-I); own fill + table base under scale (`K2:K5`, S2-I); unresolved expression stub at p1 (`L2:L5`, S2-I). |
 | `stage2-scale-unresolved-shapes` | `Sheet1!A1:F12` | None (`status: unsupported`) | Rows `2..6` vs. Rows `8..12` | Malformed/unsupported scale shapes (S2-C, S2-K, OD-3): 2 cfvo with 3 colors (`B2:B6`); cfvo without `type` (`C2:C6`); formula cfvo (`D2:D6`); `activePresent="1"` (`E2:E6`); standalone `x14:colorScale` with literal/reference `xm:f` (`F2:F6`). Status is `unsupported`; viewer fails closed. |
-| `stage2-scale-scope-disjoint` | `Sheet1!A1:W9` | `screen` | Rows `2..4` (CF and twins) vs. Rows `7..9` (Controls of the data columns B, D, F, H, J; twins share the control of the column they copy) | The scope-disjoint follow-up (Ruling F-2, S2-H; §7): 2-colour min/max on `B2:B4 D2:D4`, 3-colour min / percentile 50 / max on `F2:F4 H2:H4`, single-range negative control on `J2:J4`, twelve literal num twins on `L2:W4`. Owns `scale:scope-disjoint` (`CF_STAGE2_OWNERS`); readings pre-registered in `scaleReadings`. |
+| `stage2-scale-scope-disjoint` | `Sheet1!A1:W10` | `screen` | Rows `2..5` (CF and twins) vs. Rows `7..10` (Controls of the data columns B, D, F, H, J; twins share the control of the column they copy) | The scope-disjoint follow-up (Ruling F-2, S2-H; §7): 2-colour min/max on `B2:B5 D2:D5`, 3-colour min / percentile 50 / max on `F2:F5 H2:H5`, single-range negative control on `J2:J5`, twelve literal num twins on `L2:W5`. Owns `scale:scope-disjoint` (`CF_STAGE2_OWNERS`); readings pre-registered in `scaleReadings`. |
 
 ---
 
@@ -211,44 +211,44 @@ For `stage2-scale-thresholds`, dynamic refresh behaviour (re-evaluating scale th
 
 **Rules** (priority order; colours `FFF8696B` / [`FFFFEB84`] / `FF63BE7B`):
 
-| Priority | sqref | Shape | Values (row 2..4) | Capability |
+| Priority | sqref | Shape | Values (row 2..5) | Capability |
 |---|---|---|---|---|
-| 1 | `B2:B4 D2:D4` | 2-colour min / max | B `10, 20, 30`; D `40, 55, 70` | `scale:scope-disjoint` |
-| 2 | `F2:F4 H2:H4` | 3-colour min / percentile 50 / max | F `0, 30, 60`; H `20, 50, 100` | `scale:scope-disjoint` |
-| 3 | `J2:J4` | 2-colour min / max (single range) | `10, 20, 30` | `scale:scope-disjoint-control` |
-| 4..15 | `L2:L4` .. `W2:W4` | num-bounded twins, one per predicted rendering | a copy of one data column | `scale:scope-disjoint-twin` |
+| 1 | `B2:B5 D2:D5` | 2-colour min / max | B `10, 20, 30, 40`; D `50, 60, 70, 80` | `scale:scope-disjoint` |
+| 2 | `F2:F5 H2:H5` | 3-colour min / percentile 50 / max | F `0, 20, 40, 60`; H `30, 50, 70, 100` | `scale:scope-disjoint` |
+| 3 | `J2:J5` | 2-colour min / max (single range) | `10, 20, 30, 40` | `scale:scope-disjoint-control` |
+| 4..15 | `L2:L5` .. `W2:W5` | num-bounded twins, one per predicted rendering | a copy of one data column | `scale:scope-disjoint-twin` |
 
 **Pre-registered readings** (`scaleReadings`, fixed before capture, Lesson 14). The single-range readings are named by position, not by sqref order, since Excel may reorder a multi-range sqref on resave.
 
 | Reading | Statistics for a cell of either rectangle | 2-colour bounds (B / D) | 3-colour bounds (F / H) |
 |---|---|---|---|
-| `union` | both rectangles together | 10/70 / 10/70 | 0/40/100 / 0/40/100 |
-| `per-range` | the cell's own rectangle | 10/30 / 40/70 | 0/30/60 / 20/50/100 |
-| `leftmost-range` | the left rectangle's, for every cell | 10/30 / 10/30 | 0/30/60 / 0/30/60 |
-| `rightmost-range` | the right rectangle's, for every cell | 40/70 / 40/70 | 20/50/100 / 20/50/100 |
+| `union` | both rectangles together | 10/80 / 10/80 | 0/45/100 / 0/45/100 |
+| `per-range` | the cell's own rectangle | 10/40 / 50/80 | 0/30/60 / 30/60/100 |
+| `leftmost-range` | the left rectangle's, for every cell | 10/40 / 10/40 | 0/30/60 / 0/30/60 |
+| `rightmost-range` | the right rectangle's, for every cell | 50/80 / 50/80 | 30/60/100 / 30/60/100 |
 
 A designated cell under a reading renders as its twin: the same values under num bounds equal to that reading's statistics (PERCENTILE.INC for the midpoint, S2-L; values beyond a bound clamp, `scale:degenerate-values-beyond-bounds`). The twin columns:
 
 | Twin | Copies | num bounds | Predicts |
 |---|---|---|---|
-| `L` | B | 10 / 70 | B under `union` |
-| `M` | D | 10 / 70 | D under `union` |
-| `N` | B (and J) | 10 / 30 | B under `per-range`, `leftmost-range`; J under every reading |
-| `O` | D | 40 / 70 | D under `per-range`, `rightmost-range` |
-| `P` | D | 10 / 30 | D under `leftmost-range` (every value above the bound) |
-| `Q` | B | 40 / 70 | B under `rightmost-range` (every value below the bound) |
-| `R` | F | 0 / 40 / 100 | F under `union` |
-| `S` | H | 0 / 40 / 100 | H under `union` |
+| `L` | B | 10 / 80 | B under `union` |
+| `M` | D | 10 / 80 | D under `union` |
+| `N` | B (and J) | 10 / 40 | B under `per-range`, `leftmost-range`; J under every reading |
+| `O` | D | 50 / 80 | D under `per-range`, `rightmost-range` |
+| `P` | D | 10 / 40 | D under `leftmost-range` (every value above the bound) |
+| `Q` | B | 50 / 80 | B under `rightmost-range` (every value below the bound) |
+| `R` | F | 0 / 45 / 100 | F under `union` |
+| `S` | H | 0 / 45 / 100 | H under `union` |
 | `T` | F | 0 / 30 / 60 | F under `per-range`, `leftmost-range` |
-| `U` | H | 20 / 50 / 100 | H under `per-range`, `rightmost-range` |
+| `U` | H | 30 / 60 / 100 | H under `per-range`, `rightmost-range` |
 | `V` | H | 0 / 30 / 60 | H under `leftmost-range` |
-| `W` | F | 20 / 50 / 100 | F under `rightmost-range` |
+| `W` | F | 30 / 60 / 100 | F under `rightmost-range` |
 
-**Decisive cells.** Both configurations replicate per rectangle (`replicateBy: 'column'`): every rival a rectangle separates must be contradicted at >= 2 decisive cells of that rectangle (S4-REPLICATE). Row 2 of B and F and row 4 of D and H render the same colour under every reading (each is an extreme of every reading's statistics); rows 3 and 4 of B and F, and rows 2 and 3 of D and H, decide. Every pair of readings that reads different statistics on a rectangle puts both of its deciding cells on distinct colours, robust to 0.1 of a unit per channel (`tests/xlsx-cf-scale-scope-disjoint.test.ts`). `J2:J4` is the negative control: every reading predicts twin `N`, so Excel must match it but it is never evidence.
+**Decisive cells.** Both configurations replicate per rectangle (`replicateBy: 'column'`): every rival a rectangle separates must be contradicted at >= 2 decisive cells of that rectangle (S4-REPLICATE); this case gives 3 (pre-capture ruling: a capture cannot be retried, so one unmeasurable cell must not cost the case). Row 2 of B and F and row 5 of D and H render the same colour under every reading (each is an extreme of every reading's statistics); rows 3..5 of B and F, and rows 2..4 of D and H, decide. Every pair of readings that reads different statistics on a rectangle puts all three of its deciding cells on distinct colours, robust to 0.1 of a unit per channel (`tests/xlsx-cf-scale-scope-disjoint.test.ts`). `J2:J5` is the negative control: every reading predicts twin `N`, so Excel must match it but it is never evidence.
 
 **Verification.** `verifyCfCase` judges the readings with `evaluateFormulaCapabilities` over the screen sidecar's `observedCells` DisplayFormat fills (`stage2ReadingsObservationOf`; `none` where the fill equals `baseFillRgb`, else white). `auditStage2Manifest` verifies `scale:scope-disjoint` only when the readings discriminate one reading and it is production's (`CF_STAGE2_PRODUCTION_READINGS`: `union`, the statistics `service.ts` prepares over all of a rule's ranges at once). While the case is `recipe-pending` the capability stays `unverified-nondiscriminating`; the registry entry is removed only at the Phase 2 publication. The twin and control ids are registered non-discriminating and never publish.
 
-**Size.** 66 expected cells: 15 designated, 36 twin cells, 15 controls. Capture range `A1:W9` (23 columns of 14 characters, 9 rows of 18 pt).
+**Size.** 88 expected cells: 20 designated, 48 twin cells, 20 controls. Capture range `A1:W10` (23 columns of 14 characters, 10 rows of 18 pt).
 
 **Run** (from the worktree root):
 
