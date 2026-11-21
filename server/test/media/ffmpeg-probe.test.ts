@@ -32,6 +32,20 @@ describe('probe parsers', () => {
     const s = parseDemuxerList(out)
     expect([...s].sort()).toEqual(['3g2', '3gp', 'asf', 'm4a', 'mj2', 'mov', 'mp4'])
   })
+  it('parseDemuxerList reads ffmpeg 6 output: two flag columns, no device column', () => {
+    // Verbatim rows of `ffmpeg -hide_banner -demuxers` from ffmpeg 6.1.1-3ubuntu5 (ubuntu:24.04 apt).
+    const out = 'File formats:\n D. = Demuxing supported\n .E = Muxing supported\n --\n D  3dostr          3DO STR\n'
+      + ' D  asf             ASF (Advanced / Active Streaming Format)\n  E asf_stream      ASF (Advanced / Active Streaming Format)\n'
+      + ' D  avi             AVI (Audio Video Interleaved)\n D  mov,mp4,m4a,3gp,3g2,mj2 QuickTime / MOV\n'
+      + ' D  mp3             MP2/3 (MPEG audio layer 2/3)\n DE wav             WAV / WAVE (Waveform Audio)\n'
+    const s = parseDemuxerList(out)
+    expect([...s].sort()).toEqual(['3dostr', '3g2', '3gp', 'asf', 'avi', 'm4a', 'mj2', 'mov', 'mp3', 'mp4', 'wav'])
+    for (const d of REQUIRED_DEMUXERS) expect(s.has(d)).toBe(true)
+  })
+  it('parseDemuxerList reads an ffmpeg 7+ device row (third column `d`) without eating the name', () => {
+    const out = 'Formats:\n D.. = Demuxing supported\n .E. = Muxing supported\n ..d = Is a device\n ---\n D d avfoundation    AVFoundation input device\n  Ed audiotoolbox    AudioToolbox output device\n D   data            raw data\n'
+    expect([...parseDemuxerList(out)].sort()).toEqual(['avfoundation', 'data'])
+  })
   it('parseCodecList keeps audio rows only', () => {
     const out = 'Encoders:\n A..... = Audio\n ------\n V....D h264_x  X\n A....D aac                  AAC\n A....D aac_at               aac (AudioToolbox)\n'
     expect([...parseCodecList(out, 'A')].sort()).toEqual(['aac', 'aac_at'])
