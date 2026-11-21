@@ -66,7 +66,7 @@ jobs:
       - name: Typecheck the stream server
         run: bun run typecheck:server
 
-      # Piece 5 (plan D5/D6): the stream server's sandboxed ffmpeg. The media tests run with
+      # Piece 5 (plan D5/D6): the stream server's sandboxed ffmpeg. The server suite runs with
       # OV_MEDIA_REQUIRED=1, so a missing or failing probe (version < 6, codec, demuxer, sandbox) fails
       # the job instead of skipping. The sysctl lets `unshare --user --net` work on ubuntu-24.04.
       - name: Install ffmpeg for the stream server media tests
@@ -77,13 +77,15 @@ jobs:
       - name: Allow unprivileged user namespaces (unshare --user --net)
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
-      # Before the media tests and the suite: the media wire audit opens corpus decks, and
+      # Before the server suite and the vitest suite: the server tests open corpus files, and
       # corpus-regressions.test.ts runs instead of skipping.
       - name: Fetch the real-file corpus
         run: bun scripts/fetch-corpus.ts
 
-      - name: Stream server media tests (sandboxed ffmpeg, required)
-        run: cd server && OV_MEDIA_REQUIRED=1 bun test test/media
+      # The whole stream server suite (bun test, one process), media tests included (sandboxed ffmpeg,
+      # required). This step used to run test/media only.
+      - name: Stream server test suite (sandboxed ffmpeg, required)
+        run: cd server && OV_MEDIA_REQUIRED=1 bun test
 
       - name: Build the library
         run: bun run build
