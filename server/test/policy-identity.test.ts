@@ -1,4 +1,5 @@
 import {expect,test} from 'bun:test'
+import { rejectionMessage } from './fixtures/rejection'
 import {readFileSync} from 'node:fs'
 import {createCanvas} from '@napi-rs/canvas'
 import {OfficePackage} from '../../src/core/zip'
@@ -17,7 +18,7 @@ for(const f of files)test(`projection identity ${f.name}`,async()=>{
  const original=await OfficePackage.load(readFileSync(f.path))
  // Pin the conservative refusal explicitly, never silently skip arbitrary errors.
  const refusals:Record<string,string>={}
- if(refusals[f.name]){await expect(projectPackage(original,f.kind,'visible-only')).rejects.toThrow(refusals[f.name]);console.log(`[identity] ${f.name}: REFUSED ${refusals[f.name]}`);return}
+ if(refusals[f.name]){expect(await rejectionMessage(projectPackage(original,f.kind,'visible-only'))).toContain(refusals[f.name]);console.log(`[identity] ${f.name}: REFUSED ${refusals[f.name]}`);return}
  const projected=await projectPackage(original,f.kind,'visible-only')
  if(projected.diagnostics.length){console.log(`[identity] ${f.name}: diagnostics ${JSON.stringify(projected.diagnostics.map(d=>`${d.code}:${d.element}`))}`);return}
  const before=await getPaintables(await detectAndParse(original)),after=await getPaintables(await detectAndParse(projected.pkg))

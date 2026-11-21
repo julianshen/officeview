@@ -3,6 +3,7 @@
  * D2, D3, D15, D18, D19, D21, D22, X13). The build (`DocumentHost.showPlan`), its binding (`bindMedia`) and the wire.
  */
 import { afterAll, describe, expect, it } from 'bun:test'
+import { rejectionMessage } from './fixtures/rejection'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -412,7 +413,7 @@ describe.skipIf(!info)('show plans carry audio media (Task 4)', () => {
     const table = createDocMediaTable({ show: doc.show }, info, temp)
     // Slide 0's metadata is not in `show.metas` yet (open releases it).
     expect(doc.show!.metas.has(0)).toBe(false)
-    await expect(table.load(0)).rejects.toThrow(/metadata not loaded/)
+    expect(await rejectionMessage(table.load(0))).toMatch(/metadata not loaded/)
     expect(() => table.digest(0)).toThrow()
     // The host's own path loads it first, so a plan builds.
     expect('refused' in await h.showPlan(docKey, job())).toBe(false)

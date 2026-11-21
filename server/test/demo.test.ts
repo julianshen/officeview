@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, it } from 'bun:test'
+import { rejectionMessage } from './fixtures/rejection'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -44,8 +45,8 @@ describe('demo hooks', () => {
 
 describe('demo server end to end', () => {
   it('refuses to start without a key outside --demo, and without an origin', async () => {
-    await expect(startServer(['--doc-dir', corpusDir], {})).rejects.toThrow(/OV_STREAM_KEY/)
-    await expect(startServer(['--doc-dir', corpusDir], { OV_STREAM_KEY: btoa('k'.repeat(32)), OV_AUDIT_DB: ':memory:' })).rejects.toThrow(/origin/)
+    expect(await rejectionMessage(startServer(['--doc-dir', corpusDir], {}))).toMatch(/OV_STREAM_KEY/)
+    expect(await rejectionMessage(startServer(['--doc-dir', corpusDir], { OV_STREAM_KEY: btoa('k'.repeat(32)), OV_AUDIT_DB: ':memory:' }))).toMatch(/origin/)
   })
   it('opens the OV_AUDIT_DB store outside --demo and expires old rows at startup', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ov-audit-')), path = join(dir, 'audit.db')

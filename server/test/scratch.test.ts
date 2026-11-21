@@ -1,5 +1,6 @@
 /** Final-review fixes: §14 scratch lease handoff is atomic, close wins, waiters are bounded. */
 import { expect, it } from 'bun:test'
+import { rejection } from './fixtures/rejection'
 import { LeaseClosed, LeaseFull, ScratchLease } from '../src/scratch'
 
 it('a release hands its slot to the head waiter: a racing acquire cannot exceed the limit', async () => {
@@ -32,7 +33,7 @@ it('waiters beyond maxWaiters are refused with LeaseFull', async () => {
   const l = new ScratchLease(1, 2)
   await l.acquire()
   const w1 = l.acquire(), w2 = l.acquire()
-  await expect(l.acquire()).rejects.toBeInstanceOf(LeaseFull)
+  expect(await rejection(l.acquire())).toBeInstanceOf(LeaseFull)
   const settled = Promise.allSettled([w1, w2])
   l.close()
   expect((await settled).map((r) => r.status === 'rejected' && r.reason instanceof LeaseClosed)).toEqual([true, true])
