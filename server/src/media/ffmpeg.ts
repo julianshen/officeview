@@ -34,13 +34,16 @@ export function parseVersion(out: string): { version: string; major: number } | 
   return { version: m[1]!, major: Number(m[2]) }
 }
 
-/** Rows after the ` ---` rule of `-demuxers`/`-formats`: three flag columns then comma-separated names. */
+/**
+ * Rows after the rule of `-demuxers`/`-formats`: flag columns then comma-separated names. ffmpeg 7+ prints three
+ * columns (` D..`, rule ` ---`); ffmpeg 6 has no device column (` D.`, rule ` --`), so that column is optional.
+ */
 export function parseDemuxerList(out: string): Set<string> {
   const names = new Set<string>()
   let body = false
   for (const line of out.split('\n')) {
     if (!body) { if (/^\s*-{2,}\s*$/.test(line)) body = true; continue }
-    const m = /^ ([D. ])([E. ])([d. ]) +(\S+)/.exec(line)
+    const m = /^ ([D. ])([E. ])([d. ])? +(\S+)/.exec(line)
     if (m && m[1] === 'D') for (const n of m[4]!.split(',')) names.add(n)
   }
   return names
