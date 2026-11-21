@@ -92888,6 +92888,4545 @@
         "savedSha256": "34aa439ca9e1f9eaa543272e34b1e1e8d77e8630d1bf45a357fb4d6fd846be82",
         "openedRepairFree": true
       }
+    },
+    {
+      "id": "stage5-cfvo-relative-a1",
+      "stage": 5,
+      "question": "S5-H (the cfvo-relative confirmation case): is a relative cfvo bound read from A1, on several ranges and on one? A scale [min, =MAX(B2:B5)], an icon set [percent 0, num -20, =MAX(B11:B14)] and a data bar [min, =MAX(B20:B23)] on \"B..:B.. D..:D..\", the same three on F alone (=MAX(F2:F5), =MAX(F11:F14), =MAX(F20:F23)), and an absolute negative control ($H$1). Readings: anchor-a1 (A1:A4, max 15), rule-wide / anchor-top-left, per-range, anchor-cell, zero and ignored (a bound below the minimum inverts a bar: a full bar). Literal num/num twins on the same values, one per predicted rendering.",
+      "input": "tests/fixtures/xlsx-cf/inputs/stage5-cfvo-relative-a1.xlsx",
+      "saved": "tests/fixtures/xlsx-cf/stage5-cfvo-relative-a1.xlsx",
+      "sheet": "Sheet1",
+      "range": "A1:AM30",
+      "requiredAppearances": [
+        "screen"
+      ],
+      "markers": [
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B2:B5 D2:D5",
+          "capabilityId": "formula:cfvo-scope-multi-range",
+          "ruleType": "colorScale",
+          "priority": 1,
+          "formulas": [
+            "MAX(B2:B5)"
+          ],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "formula",
+                "f": "MAX(B2:B5)"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "B2",
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B11:B14 D11:D14",
+          "capabilityId": "formula:cfvo-scope-multi-range",
+          "ruleType": "iconSet",
+          "priority": 2,
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "-20"
+              },
+              {
+                "type": "formula",
+                "val": "MAX(B11:B14)"
+              }
+            ],
+            "attrs": {}
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "B11",
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "B20:B23 D20:D23",
+          "capabilityId": "formula:cfvo-scope-multi-range",
+          "ruleType": "dataBar",
+          "priority": 3,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "formula",
+                "val": "MAX(B20:B23)"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "B20",
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "B20:B23 D20:D23",
+          "extension": "x14",
+          "capabilityId": "formula:cfvo-scope-multi-range",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "formula",
+                "f": "MAX(B20:B23)"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "B20",
+            "dialect": "x14"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "H2:H5 J2:J5",
+          "capabilityId": "formula:cfvo-scope-multi-range",
+          "ruleType": "colorScale",
+          "priority": 4,
+          "formulas": [
+            "$H$1"
+          ],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "formula",
+                "f": "$H$1"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "H2",
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "F2:F5",
+          "capabilityId": "formula:cfvo-relative",
+          "ruleType": "colorScale",
+          "priority": 5,
+          "formulas": [
+            "MAX(F2:F5)"
+          ],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "formula",
+                "f": "MAX(F2:F5)"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "F2",
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "F11:F14",
+          "capabilityId": "formula:cfvo-relative",
+          "ruleType": "iconSet",
+          "priority": 6,
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "-20"
+              },
+              {
+                "type": "formula",
+                "val": "MAX(F11:F14)"
+              }
+            ],
+            "attrs": {}
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "F11",
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "F20:F23",
+          "capabilityId": "formula:cfvo-relative",
+          "ruleType": "dataBar",
+          "priority": 7,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "formula",
+                "val": "MAX(F20:F23)"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "F20",
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "F20:F23",
+          "extension": "x14",
+          "capabilityId": "formula:cfvo-relative",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "formula",
+                "f": "MAX(F20:F23)"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "F20",
+            "dialect": "x14"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "L2:L5",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 8,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "40"
+              },
+              {
+                "type": "num",
+                "val": "50"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "L7:L10",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 9,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-40"
+              },
+              {
+                "type": "num",
+                "val": "15"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "L12:L15",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 10,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-60"
+              },
+              {
+                "type": "num",
+                "val": "-50"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "L17:L20",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 11,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "60"
+              },
+              {
+                "type": "num",
+                "val": "70"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "L22:L25",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 12,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-40"
+              },
+              {
+                "type": "num",
+                "val": "15"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "L27:L30",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 13,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-60"
+              },
+              {
+                "type": "num",
+                "val": "-50"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "M2:M5",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 14,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-40"
+              },
+              {
+                "type": "num",
+                "val": "30"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "M7:M10",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 15,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-40"
+              },
+              {
+                "type": "num",
+                "val": "30"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "M12:M15",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 16,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-40"
+              },
+              {
+                "type": "num",
+                "val": "50"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "M17:M20",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 17,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-40"
+              },
+              {
+                "type": "num",
+                "val": "90"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "M22:M25",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 18,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-40"
+              },
+              {
+                "type": "num",
+                "val": "95"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "M27:M30",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 19,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-40"
+              },
+              {
+                "type": "num",
+                "val": "0"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "N2:N5",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 20,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-40"
+              },
+              {
+                "type": "num",
+                "val": "0"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "N7:N10",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "iconSet",
+          "priority": 21,
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "-100"
+              },
+              {
+                "type": "num",
+                "val": "-90"
+              }
+            ],
+            "attrs": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "N12:N15",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "iconSet",
+          "priority": 22,
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "100"
+              },
+              {
+                "type": "num",
+                "val": "110"
+              }
+            ],
+            "attrs": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "N17:N20",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "iconSet",
+          "priority": 23,
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "-100"
+              },
+              {
+                "type": "num",
+                "val": "100"
+              }
+            ],
+            "attrs": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "N22:N25",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "iconSet",
+          "priority": 24,
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "-100"
+              },
+              {
+                "type": "num",
+                "val": "100"
+              }
+            ],
+            "attrs": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "N27:N30",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "iconSet",
+          "priority": 25,
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "-100"
+              },
+              {
+                "type": "num",
+                "val": "-90"
+              }
+            ],
+            "attrs": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "O2:O5",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "priority": 26,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "3"
+              },
+              {
+                "type": "num",
+                "val": "10"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "O2:O5",
+          "extension": "x14",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "10"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "O7:O10",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "priority": 27,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "3"
+              },
+              {
+                "type": "num",
+                "val": "15"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "O7:O10",
+          "extension": "x14",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "15"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "O12:O15",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "priority": 28,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "3"
+              },
+              {
+                "type": "num",
+                "val": "10"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "O12:O15",
+          "extension": "x14",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "10"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "O17:O20",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "priority": 29,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "3"
+              },
+              {
+                "type": "num",
+                "val": "15"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "O17:O20",
+          "extension": "x14",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "15"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "O22:O25",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "priority": 30,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "3"
+              },
+              {
+                "type": "num",
+                "val": "30"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "O22:O25",
+          "extension": "x14",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "30"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "O27:O30",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "priority": 31,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "3"
+              },
+              {
+                "type": "num",
+                "val": "25"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "O27:O30",
+          "extension": "x14",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "25"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "P2:P5",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "priority": 32,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-17"
+              },
+              {
+                "type": "num",
+                "val": "-7"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "P2:P5",
+          "extension": "x14",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "-17"
+              },
+              {
+                "type": "num",
+                "f": "-7"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "P7:P10",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "priority": 33,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-17"
+              },
+              {
+                "type": "num",
+                "val": "-7"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "P7:P10",
+          "extension": "x14",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "-17"
+              },
+              {
+                "type": "num",
+                "f": "-7"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "P12:P15",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 34,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "40"
+              },
+              {
+                "type": "num",
+                "val": "50"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "P17:P20",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 35,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-40"
+              },
+              {
+                "type": "num",
+                "val": "20"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "P22:P25",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 36,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-60"
+              },
+              {
+                "type": "num",
+                "val": "-50"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "P27:P30",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 37,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "60"
+              },
+              {
+                "type": "num",
+                "val": "70"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "Q2:Q5",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 38,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-40"
+              },
+              {
+                "type": "num",
+                "val": "20"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "Q7:Q10",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 39,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-60"
+              },
+              {
+                "type": "num",
+                "val": "-50"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "Q12:Q15",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 40,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "50"
+              },
+              {
+                "type": "num",
+                "val": "60"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "Q17:Q20",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 41,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-40"
+              },
+              {
+                "type": "num",
+                "val": "15"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "Q22:Q25",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 42,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-60"
+              },
+              {
+                "type": "num",
+                "val": "-50"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "Q27:Q30",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 43,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-40"
+              },
+              {
+                "type": "num",
+                "val": "40"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "R2:R5",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 44,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-40"
+              },
+              {
+                "type": "num",
+                "val": "85"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "R7:R10",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 45,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-40"
+              },
+              {
+                "type": "num",
+                "val": "0"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "R12:R15",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "iconSet",
+          "priority": 46,
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "100"
+              },
+              {
+                "type": "num",
+                "val": "110"
+              }
+            ],
+            "attrs": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "R17:R20",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "iconSet",
+          "priority": 47,
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "-100"
+              },
+              {
+                "type": "num",
+                "val": "100"
+              }
+            ],
+            "attrs": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "R22:R25",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "iconSet",
+          "priority": 48,
+          "formulas": [],
+          "icon": {
+            "dialect": "base",
+            "set": "3Arrows",
+            "cfvo": [
+              {
+                "type": "percent",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "-100"
+              },
+              {
+                "type": "num",
+                "val": "-90"
+              }
+            ],
+            "attrs": {}
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "R27:R30",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "priority": 49,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "3"
+              },
+              {
+                "type": "num",
+                "val": "10"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "R27:R30",
+          "extension": "x14",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "10"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "S2:S5",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "priority": 50,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "3"
+              },
+              {
+                "type": "num",
+                "val": "15"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "S2:S5",
+          "extension": "x14",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "15"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "S7:S10",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "priority": 51,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "3"
+              },
+              {
+                "type": "num",
+                "val": "40"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "S7:S10",
+          "extension": "x14",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "3"
+              },
+              {
+                "type": "num",
+                "f": "40"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "S12:S15",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "priority": 52,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-17"
+              },
+              {
+                "type": "num",
+                "val": "-7"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "sqref": "S12:S15",
+          "extension": "x14",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "num",
+                "f": "-17"
+              },
+              {
+                "type": "num",
+                "f": "-7"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "inputSha256": "abd5daafec86f950c707b693c71076a3dbd56496266c0c83f7044be753310be9",
+        "savedSha256": "abd5daafec86f950c707b693c71076a3dbd56496266c0c83f7044be753310be9",
+        "provenance": "seed-hypothesis",
+        "positiveRefs": [],
+        "negativeRefs": [
+          "V2",
+          "V3",
+          "V4",
+          "V5",
+          "X2",
+          "X3",
+          "X4",
+          "X5",
+          "AF2",
+          "AF8",
+          "AF9",
+          "AF15",
+          "AF17",
+          "AF23",
+          "AF24",
+          "AF30",
+          "AG3",
+          "AG4",
+          "AG8",
+          "AG9",
+          "AG13",
+          "AG14",
+          "AG18",
+          "AG19",
+          "AG20",
+          "AG24",
+          "AG25",
+          "AG28",
+          "AF14",
+          "AH3",
+          "AF29",
+          "AF12",
+          "AF13",
+          "AF27",
+          "AF28",
+          "V11",
+          "V12",
+          "V13",
+          "V14",
+          "X11",
+          "X12",
+          "X13",
+          "X14",
+          "AH7",
+          "AH8",
+          "AH9",
+          "AH10",
+          "AH12",
+          "AH18",
+          "AH19",
+          "AH20",
+          "AH22",
+          "AH23",
+          "AH29",
+          "AH30",
+          "AH24",
+          "AH25",
+          "AH27",
+          "AH28",
+          "V20",
+          "V21",
+          "V22",
+          "V23",
+          "X20",
+          "X21",
+          "X22",
+          "X23",
+          "AI2",
+          "AI3",
+          "AI9",
+          "AI10",
+          "AI12",
+          "AI18",
+          "AI19",
+          "AI20",
+          "AI4",
+          "AI5",
+          "AI13",
+          "AI14",
+          "AI15",
+          "AI24",
+          "AI25",
+          "AI28",
+          "AI29",
+          "AI30",
+          "AJ2",
+          "AJ3",
+          "AJ4",
+          "AJ7",
+          "AJ8",
+          "AB2",
+          "AB3",
+          "AB4",
+          "AB5",
+          "AD2",
+          "AD3",
+          "AD4",
+          "AD5",
+          "AJ12",
+          "AJ18",
+          "AJ19",
+          "AJ25",
+          "AJ27",
+          "AK3",
+          "AK4",
+          "AK10",
+          "Z2",
+          "Z3",
+          "Z4",
+          "Z5",
+          "AK12",
+          "AK18",
+          "AK19",
+          "AK25",
+          "AK28",
+          "AK29",
+          "AL3",
+          "AL4",
+          "AL5",
+          "AL8",
+          "AK24",
+          "AK22",
+          "AK23",
+          "Z11",
+          "Z12",
+          "Z13",
+          "Z14",
+          "AL12",
+          "AL18",
+          "AL19",
+          "AL20",
+          "AL24",
+          "AL25",
+          "AL22",
+          "AL23",
+          "Z20",
+          "Z21",
+          "Z22",
+          "Z23",
+          "AL27",
+          "AM3",
+          "AM4",
+          "AM5",
+          "AL28",
+          "AL29",
+          "AL30",
+          "AM9",
+          "AM10",
+          "AM12",
+          "AM13"
+        ],
+        "cells": [
+          {
+            "ref": "B2",
+            "controlRef": "V2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B3",
+            "controlRef": "V3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B4",
+            "controlRef": "V4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B5",
+            "controlRef": "V5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D2",
+            "controlRef": "X2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D3",
+            "controlRef": "X3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D4",
+            "controlRef": "X4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D5",
+            "controlRef": "X5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L2",
+            "controlRef": "AF2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L8",
+            "controlRef": "AF8",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L9",
+            "controlRef": "AF9",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L15",
+            "controlRef": "AF15",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L17",
+            "controlRef": "AF17",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L23",
+            "controlRef": "AF23",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L24",
+            "controlRef": "AF24",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L30",
+            "controlRef": "AF30",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M3",
+            "controlRef": "AG3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M4",
+            "controlRef": "AG4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M8",
+            "controlRef": "AG8",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M9",
+            "controlRef": "AG9",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M13",
+            "controlRef": "AG13",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M14",
+            "controlRef": "AG14",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M18",
+            "controlRef": "AG18",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M19",
+            "controlRef": "AG19",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M20",
+            "controlRef": "AG20",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M24",
+            "controlRef": "AG24",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M25",
+            "controlRef": "AG25",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M28",
+            "controlRef": "AG28",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L14",
+            "controlRef": "AF14",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N3",
+            "controlRef": "AH3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L29",
+            "controlRef": "AF29",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L12",
+            "controlRef": "AF12",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L13",
+            "controlRef": "AF13",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L27",
+            "controlRef": "AF27",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L28",
+            "controlRef": "AF28",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B11",
+            "controlRef": "V11",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B12",
+            "controlRef": "V12",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B13",
+            "controlRef": "V13",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B14",
+            "controlRef": "V14",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D11",
+            "controlRef": "X11",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D12",
+            "controlRef": "X12",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D13",
+            "controlRef": "X13",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D14",
+            "controlRef": "X14",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N7",
+            "controlRef": "AH7",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N8",
+            "controlRef": "AH8",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N9",
+            "controlRef": "AH9",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N10",
+            "controlRef": "AH10",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N12",
+            "controlRef": "AH12",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N18",
+            "controlRef": "AH18",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N19",
+            "controlRef": "AH19",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N20",
+            "controlRef": "AH20",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N22",
+            "controlRef": "AH22",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N23",
+            "controlRef": "AH23",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N29",
+            "controlRef": "AH29",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N30",
+            "controlRef": "AH30",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N24",
+            "controlRef": "AH24",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N25",
+            "controlRef": "AH25",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N27",
+            "controlRef": "AH27",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N28",
+            "controlRef": "AH28",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B20",
+            "controlRef": "V20",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B21",
+            "controlRef": "V21",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B22",
+            "controlRef": "V22",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B23",
+            "controlRef": "V23",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D20",
+            "controlRef": "X20",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D21",
+            "controlRef": "X21",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D22",
+            "controlRef": "X22",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D23",
+            "controlRef": "X23",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "O2",
+            "controlRef": "AI2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "O3",
+            "controlRef": "AI3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "O9",
+            "controlRef": "AI9",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "O10",
+            "controlRef": "AI10",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "O12",
+            "controlRef": "AI12",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "O18",
+            "controlRef": "AI18",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "O19",
+            "controlRef": "AI19",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "O20",
+            "controlRef": "AI20",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "O4",
+            "controlRef": "AI4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "O5",
+            "controlRef": "AI5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "O13",
+            "controlRef": "AI13",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "O14",
+            "controlRef": "AI14",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "O15",
+            "controlRef": "AI15",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "O24",
+            "controlRef": "AI24",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "O25",
+            "controlRef": "AI25",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "O28",
+            "controlRef": "AI28",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "O29",
+            "controlRef": "AI29",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "O30",
+            "controlRef": "AI30",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "P2",
+            "controlRef": "AJ2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "P3",
+            "controlRef": "AJ3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "P4",
+            "controlRef": "AJ4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "P7",
+            "controlRef": "AJ7",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "P8",
+            "controlRef": "AJ8",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H2",
+            "controlRef": "AB2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H3",
+            "controlRef": "AB3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H4",
+            "controlRef": "AB4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H5",
+            "controlRef": "AB5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "J2",
+            "controlRef": "AD2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "J3",
+            "controlRef": "AD3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "J4",
+            "controlRef": "AD4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "J5",
+            "controlRef": "AD5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "P12",
+            "controlRef": "AJ12",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "P18",
+            "controlRef": "AJ18",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "P19",
+            "controlRef": "AJ19",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "P25",
+            "controlRef": "AJ25",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "P27",
+            "controlRef": "AJ27",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q3",
+            "controlRef": "AK3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q4",
+            "controlRef": "AK4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q10",
+            "controlRef": "AK10",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F2",
+            "controlRef": "Z2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F3",
+            "controlRef": "Z3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F4",
+            "controlRef": "Z4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F5",
+            "controlRef": "Z5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q12",
+            "controlRef": "AK12",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q18",
+            "controlRef": "AK18",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q19",
+            "controlRef": "AK19",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q25",
+            "controlRef": "AK25",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q28",
+            "controlRef": "AK28",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q29",
+            "controlRef": "AK29",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R3",
+            "controlRef": "AL3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R4",
+            "controlRef": "AL4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R5",
+            "controlRef": "AL5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R8",
+            "controlRef": "AL8",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q24",
+            "controlRef": "AK24",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q22",
+            "controlRef": "AK22",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q23",
+            "controlRef": "AK23",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F11",
+            "controlRef": "Z11",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F12",
+            "controlRef": "Z12",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F13",
+            "controlRef": "Z13",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F14",
+            "controlRef": "Z14",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R12",
+            "controlRef": "AL12",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R18",
+            "controlRef": "AL18",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R19",
+            "controlRef": "AL19",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R20",
+            "controlRef": "AL20",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R24",
+            "controlRef": "AL24",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R25",
+            "controlRef": "AL25",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R22",
+            "controlRef": "AL22",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R23",
+            "controlRef": "AL23",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F20",
+            "controlRef": "Z20",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F21",
+            "controlRef": "Z21",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F22",
+            "controlRef": "Z22",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F23",
+            "controlRef": "Z23",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R27",
+            "controlRef": "AL27",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "S3",
+            "controlRef": "AM3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "S4",
+            "controlRef": "AM4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "S5",
+            "controlRef": "AM5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R28",
+            "controlRef": "AL28",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R29",
+            "controlRef": "AL29",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R30",
+            "controlRef": "AL30",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "S9",
+            "controlRef": "AM9",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "S10",
+            "controlRef": "AM10",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "S12",
+            "controlRef": "AM12",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "S13",
+            "controlRef": "AM13",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "V2",
+            "controlRef": "B2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "V3",
+            "controlRef": "B3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "V4",
+            "controlRef": "B4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "V5",
+            "controlRef": "B5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "X2",
+            "controlRef": "D2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "X3",
+            "controlRef": "D3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "X4",
+            "controlRef": "D4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "X5",
+            "controlRef": "D5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AF2",
+            "controlRef": "L2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AF8",
+            "controlRef": "L8",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AF9",
+            "controlRef": "L9",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AF15",
+            "controlRef": "L15",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AF17",
+            "controlRef": "L17",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AF23",
+            "controlRef": "L23",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AF24",
+            "controlRef": "L24",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AF30",
+            "controlRef": "L30",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AG3",
+            "controlRef": "M3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AG4",
+            "controlRef": "M4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AG8",
+            "controlRef": "M8",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AG9",
+            "controlRef": "M9",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AG13",
+            "controlRef": "M13",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AG14",
+            "controlRef": "M14",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AG18",
+            "controlRef": "M18",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AG19",
+            "controlRef": "M19",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AG20",
+            "controlRef": "M20",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AG24",
+            "controlRef": "M24",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AG25",
+            "controlRef": "M25",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AG28",
+            "controlRef": "M28",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AF14",
+            "controlRef": "L14",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AH3",
+            "controlRef": "N3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AF29",
+            "controlRef": "L29",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AF12",
+            "controlRef": "L12",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AF13",
+            "controlRef": "L13",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AF27",
+            "controlRef": "L27",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AF28",
+            "controlRef": "L28",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "V11",
+            "controlRef": "B11",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "V12",
+            "controlRef": "B12",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "V13",
+            "controlRef": "B13",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "V14",
+            "controlRef": "B14",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "X11",
+            "controlRef": "D11",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "X12",
+            "controlRef": "D12",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "X13",
+            "controlRef": "D13",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "X14",
+            "controlRef": "D14",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AH7",
+            "controlRef": "N7",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AH8",
+            "controlRef": "N8",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AH9",
+            "controlRef": "N9",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AH10",
+            "controlRef": "N10",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AH12",
+            "controlRef": "N12",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AH18",
+            "controlRef": "N18",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AH19",
+            "controlRef": "N19",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AH20",
+            "controlRef": "N20",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AH22",
+            "controlRef": "N22",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AH23",
+            "controlRef": "N23",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AH29",
+            "controlRef": "N29",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AH30",
+            "controlRef": "N30",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AH24",
+            "controlRef": "N24",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AH25",
+            "controlRef": "N25",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AH27",
+            "controlRef": "N27",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AH28",
+            "controlRef": "N28",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "V20",
+            "controlRef": "B20",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "V21",
+            "controlRef": "B21",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "V22",
+            "controlRef": "B22",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "V23",
+            "controlRef": "B23",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "X20",
+            "controlRef": "D20",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "X21",
+            "controlRef": "D21",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "X22",
+            "controlRef": "D22",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "X23",
+            "controlRef": "D23",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AI2",
+            "controlRef": "O2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AI3",
+            "controlRef": "O3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AI9",
+            "controlRef": "O9",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AI10",
+            "controlRef": "O10",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AI12",
+            "controlRef": "O12",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AI18",
+            "controlRef": "O18",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AI19",
+            "controlRef": "O19",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AI20",
+            "controlRef": "O20",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AI4",
+            "controlRef": "O4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AI5",
+            "controlRef": "O5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AI13",
+            "controlRef": "O13",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AI14",
+            "controlRef": "O14",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AI15",
+            "controlRef": "O15",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AI24",
+            "controlRef": "O24",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AI25",
+            "controlRef": "O25",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AI28",
+            "controlRef": "O28",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AI29",
+            "controlRef": "O29",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AI30",
+            "controlRef": "O30",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ2",
+            "controlRef": "P2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ3",
+            "controlRef": "P3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ4",
+            "controlRef": "P4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ7",
+            "controlRef": "P7",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ8",
+            "controlRef": "P8",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AB2",
+            "controlRef": "H2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AB3",
+            "controlRef": "H3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AB4",
+            "controlRef": "H4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AB5",
+            "controlRef": "H5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AD2",
+            "controlRef": "J2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AD3",
+            "controlRef": "J3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AD4",
+            "controlRef": "J4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AD5",
+            "controlRef": "J5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ12",
+            "controlRef": "P12",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ18",
+            "controlRef": "P18",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ19",
+            "controlRef": "P19",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ25",
+            "controlRef": "P25",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ27",
+            "controlRef": "P27",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK3",
+            "controlRef": "Q3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK4",
+            "controlRef": "Q4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK10",
+            "controlRef": "Q10",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Z2",
+            "controlRef": "F2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Z3",
+            "controlRef": "F3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Z4",
+            "controlRef": "F4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Z5",
+            "controlRef": "F5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK12",
+            "controlRef": "Q12",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK18",
+            "controlRef": "Q18",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK19",
+            "controlRef": "Q19",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK25",
+            "controlRef": "Q25",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK28",
+            "controlRef": "Q28",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK29",
+            "controlRef": "Q29",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AL3",
+            "controlRef": "R3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AL4",
+            "controlRef": "R4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AL5",
+            "controlRef": "R5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AL8",
+            "controlRef": "R8",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK24",
+            "controlRef": "Q24",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK22",
+            "controlRef": "Q22",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK23",
+            "controlRef": "Q23",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Z11",
+            "controlRef": "F11",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Z12",
+            "controlRef": "F12",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Z13",
+            "controlRef": "F13",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Z14",
+            "controlRef": "F14",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AL12",
+            "controlRef": "R12",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AL18",
+            "controlRef": "R18",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AL19",
+            "controlRef": "R19",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AL20",
+            "controlRef": "R20",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AL24",
+            "controlRef": "R24",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AL25",
+            "controlRef": "R25",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AL22",
+            "controlRef": "R22",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AL23",
+            "controlRef": "R23",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Z20",
+            "controlRef": "F20",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Z21",
+            "controlRef": "F21",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Z22",
+            "controlRef": "F22",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Z23",
+            "controlRef": "F23",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AL27",
+            "controlRef": "R27",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AM3",
+            "controlRef": "S3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AM4",
+            "controlRef": "S4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AM5",
+            "controlRef": "S5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AL28",
+            "controlRef": "R28",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AL29",
+            "controlRef": "R29",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AL30",
+            "controlRef": "R30",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AM9",
+            "controlRef": "S9",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AM10",
+            "controlRef": "S10",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AM12",
+            "controlRef": "S12",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AM13",
+            "controlRef": "S13",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          }
+        ]
+      },
+      "formulaConfigurations": [
+        {
+          "id": "rel-a1-scale",
+          "capabilityId": "formula:cfvo-scope-multi-range",
+          "observable": "fill",
+          "refs": [
+            "B2",
+            "B3",
+            "B4",
+            "B5",
+            "D2",
+            "D3",
+            "D4",
+            "D5"
+          ],
+          "hypotheses": {
+            "anchor-a1": {
+              "B2": "twin:L2",
+              "B3": "twin:L8",
+              "B4": "twin:L9",
+              "B5": "twin:L15",
+              "D2": "twin:L17",
+              "D3": "twin:L23",
+              "D4": "twin:L24",
+              "D5": "twin:L30"
+            },
+            "rule-wide": {
+              "B2": "twin:L2",
+              "B3": "twin:M3",
+              "B4": "twin:M4",
+              "B5": "twin:L15",
+              "D2": "twin:L17",
+              "D3": "twin:M8",
+              "D4": "twin:M9",
+              "D5": "twin:L30"
+            },
+            "per-range": {
+              "B2": "twin:L2",
+              "B3": "twin:M3",
+              "B4": "twin:M4",
+              "B5": "twin:L15",
+              "D2": "twin:L17",
+              "D3": "twin:M13",
+              "D4": "twin:M14",
+              "D5": "twin:L30"
+            },
+            "anchor-cell": {
+              "B2": "twin:L2",
+              "B3": "twin:M18",
+              "B4": "twin:M19",
+              "B5": "twin:M20",
+              "D2": "twin:L17",
+              "D3": "twin:M13",
+              "D4": "twin:M24",
+              "D5": "twin:M25"
+            },
+            "zero": {
+              "B2": "twin:L2",
+              "B3": "twin:M28",
+              "B4": "twin:L14",
+              "B5": "twin:L15",
+              "D2": "twin:L17",
+              "D3": "twin:N3",
+              "D4": "twin:L29",
+              "D5": "twin:L30"
+            },
+            "ignored": {
+              "B2": "twin:L12",
+              "B3": "twin:L13",
+              "B4": "twin:L14",
+              "B5": "twin:L15",
+              "D2": "twin:L27",
+              "D3": "twin:L28",
+              "D4": "twin:L29",
+              "D5": "twin:L30"
+            }
+          },
+          "replicateBy": "column",
+          "twinExpect": {
+            "L12": "visual",
+            "L13": "visual",
+            "L14": "visual",
+            "L15": "visual",
+            "L17": "visual",
+            "L2": "visual",
+            "L23": "visual",
+            "L24": "visual",
+            "L27": "visual",
+            "L28": "visual",
+            "L29": "visual",
+            "L30": "visual",
+            "L8": "visual",
+            "L9": "visual",
+            "M13": "visual",
+            "M14": "visual",
+            "M18": "visual",
+            "M19": "visual",
+            "M20": "visual",
+            "M24": "visual",
+            "M25": "visual",
+            "M28": "visual",
+            "M3": "visual",
+            "M4": "visual",
+            "M8": "visual",
+            "M9": "visual",
+            "N3": "visual"
+          }
+        },
+        {
+          "id": "rel-a1-icon",
+          "capabilityId": "formula:cfvo-scope-multi-range",
+          "observable": "crop",
+          "refs": [
+            "B11",
+            "B12",
+            "B13",
+            "B14",
+            "D11",
+            "D12",
+            "D13",
+            "D14"
+          ],
+          "hypotheses": {
+            "anchor-a1": {
+              "B11": "twin:N7",
+              "B12": "twin:N8",
+              "B13": "twin:N9",
+              "B14": "twin:N10",
+              "D11": "twin:N12",
+              "D12": "twin:N18",
+              "D13": "twin:N19",
+              "D14": "twin:N20"
+            },
+            "rule-wide": {
+              "B11": "twin:N22",
+              "B12": "twin:N23",
+              "B13": "twin:N9",
+              "B14": "twin:N10",
+              "D11": "twin:N12",
+              "D12": "twin:N18",
+              "D13": "twin:N19",
+              "D14": "twin:N20"
+            },
+            "per-range": {
+              "B11": "twin:N22",
+              "B12": "twin:N23",
+              "B13": "twin:N9",
+              "B14": "twin:N10",
+              "D11": "twin:N12",
+              "D12": "twin:N18",
+              "D13": "twin:N29",
+              "D14": "twin:N30"
+            },
+            "anchor-cell": {
+              "B11": "twin:N22",
+              "B12": "twin:N23",
+              "B13": "twin:N24",
+              "B14": "twin:N25",
+              "D11": "twin:N12",
+              "D12": "twin:N18",
+              "D13": "twin:N29",
+              "D14": "twin:N30"
+            },
+            "zero": {
+              "B11": "twin:N7",
+              "B12": "twin:N8",
+              "B13": "twin:N9",
+              "B14": "twin:N10",
+              "D11": "twin:N12",
+              "D12": "twin:N18",
+              "D13": "twin:N29",
+              "D14": "twin:N30"
+            },
+            "ignored": {
+              "B11": "twin:N7",
+              "B12": "twin:N8",
+              "B13": "twin:N9",
+              "B14": "twin:N10",
+              "D11": "twin:N27",
+              "D12": "twin:N28",
+              "D13": "twin:N29",
+              "D14": "twin:N30"
+            }
+          },
+          "replicateBy": "column",
+          "twinExpect": {
+            "N10": "visual",
+            "N12": "visual",
+            "N18": "visual",
+            "N19": "visual",
+            "N20": "visual",
+            "N22": "visual",
+            "N23": "visual",
+            "N24": "visual",
+            "N25": "visual",
+            "N27": "visual",
+            "N28": "visual",
+            "N29": "visual",
+            "N30": "visual",
+            "N7": "visual",
+            "N8": "visual",
+            "N9": "visual"
+          }
+        },
+        {
+          "id": "rel-a1-bar",
+          "capabilityId": "formula:cfvo-scope-multi-range",
+          "observable": "crop",
+          "refs": [
+            "B20",
+            "B21",
+            "B22",
+            "B23",
+            "D20",
+            "D21",
+            "D22",
+            "D23"
+          ],
+          "hypotheses": {
+            "anchor-a1": {
+              "B20": "twin:O2",
+              "B21": "twin:O3",
+              "B22": "twin:O9",
+              "B23": "twin:O10",
+              "D20": "twin:O12",
+              "D21": "twin:O18",
+              "D22": "twin:O19",
+              "D23": "twin:O20"
+            },
+            "rule-wide": {
+              "B20": "twin:O2",
+              "B21": "twin:O3",
+              "B22": "twin:O4",
+              "B23": "twin:O5",
+              "D20": "twin:O12",
+              "D21": "twin:O13",
+              "D22": "twin:O14",
+              "D23": "twin:O15"
+            },
+            "per-range": {
+              "B20": "twin:O2",
+              "B21": "twin:O3",
+              "B22": "twin:O4",
+              "B23": "twin:O5",
+              "D20": "twin:O12",
+              "D21": "twin:O13",
+              "D22": "twin:O14",
+              "D23": "twin:O15"
+            },
+            "anchor-cell": {
+              "B20": "twin:O2",
+              "B21": "twin:O3",
+              "B22": "twin:O24",
+              "B23": "twin:O25",
+              "D20": "twin:O12",
+              "D21": "twin:O28",
+              "D22": "twin:O29",
+              "D23": "twin:O30"
+            },
+            "zero": {
+              "B20": "twin:P2",
+              "B21": "twin:P3",
+              "B22": "twin:P4",
+              "B23": "twin:O5",
+              "D20": "twin:P7",
+              "D21": "twin:P8",
+              "D22": "twin:O14",
+              "D23": "twin:O15"
+            },
+            "ignored": {
+              "B20": "twin:P2",
+              "B21": "twin:P3",
+              "B22": "twin:P4",
+              "B23": "twin:O5",
+              "D20": "twin:P7",
+              "D21": "twin:P8",
+              "D22": "twin:O14",
+              "D23": "twin:O15"
+            }
+          },
+          "replicateBy": "column",
+          "twinExpect": {
+            "O10": "visual",
+            "O12": "empty",
+            "O13": "visual",
+            "O14": "visual",
+            "O15": "visual",
+            "O18": "visual",
+            "O19": "visual",
+            "O2": "empty",
+            "O20": "visual",
+            "O24": "visual",
+            "O25": "visual",
+            "O28": "visual",
+            "O29": "visual",
+            "O3": "empty",
+            "O30": "visual",
+            "O4": "visual",
+            "O5": "visual",
+            "O9": "visual",
+            "P2": "visual",
+            "P3": "visual",
+            "P4": "visual",
+            "P7": "visual",
+            "P8": "visual"
+          }
+        },
+        {
+          "id": "rel-a1-scale-absolute",
+          "capabilityId": "formula:cfvo-scope-multi-range",
+          "observable": "fill",
+          "refs": [
+            "H2",
+            "H3",
+            "H4",
+            "H5",
+            "J2",
+            "J3",
+            "J4",
+            "J5"
+          ],
+          "hypotheses": {
+            "anchor-a1": {
+              "H2": "twin:P12",
+              "H3": "twin:P18",
+              "H4": "twin:P19",
+              "H5": "twin:P25",
+              "J2": "twin:P27",
+              "J3": "twin:Q3",
+              "J4": "twin:Q4",
+              "J5": "twin:Q10"
+            },
+            "rule-wide": {
+              "H2": "twin:P12",
+              "H3": "twin:P18",
+              "H4": "twin:P19",
+              "H5": "twin:P25",
+              "J2": "twin:P27",
+              "J3": "twin:Q3",
+              "J4": "twin:Q4",
+              "J5": "twin:Q10"
+            },
+            "per-range": {
+              "H2": "twin:P12",
+              "H3": "twin:P18",
+              "H4": "twin:P19",
+              "H5": "twin:P25",
+              "J2": "twin:P27",
+              "J3": "twin:Q3",
+              "J4": "twin:Q4",
+              "J5": "twin:Q10"
+            },
+            "anchor-cell": {
+              "H2": "twin:P12",
+              "H3": "twin:P18",
+              "H4": "twin:P19",
+              "H5": "twin:P25",
+              "J2": "twin:P27",
+              "J3": "twin:Q3",
+              "J4": "twin:Q4",
+              "J5": "twin:Q10"
+            },
+            "zero": {
+              "H2": "twin:P12",
+              "H3": "twin:P18",
+              "H4": "twin:P19",
+              "H5": "twin:P25",
+              "J2": "twin:P27",
+              "J3": "twin:Q3",
+              "J4": "twin:Q4",
+              "J5": "twin:Q10"
+            },
+            "ignored": {
+              "H2": "twin:P12",
+              "H3": "twin:P18",
+              "H4": "twin:P19",
+              "H5": "twin:P25",
+              "J2": "twin:P27",
+              "J3": "twin:Q3",
+              "J4": "twin:Q4",
+              "J5": "twin:Q10"
+            }
+          },
+          "note": "Negative control: an absolute bound ($H$1) reads the same value under every reading",
+          "role": "negative-control",
+          "twinExpect": {
+            "P12": "visual",
+            "P18": "visual",
+            "P19": "visual",
+            "P25": "visual",
+            "P27": "visual",
+            "Q10": "visual",
+            "Q3": "visual",
+            "Q4": "visual"
+          }
+        },
+        {
+          "id": "rel-a1-single-scale",
+          "capabilityId": "formula:cfvo-relative",
+          "observable": "fill",
+          "refs": [
+            "F2",
+            "F3",
+            "F4",
+            "F5"
+          ],
+          "hypotheses": {
+            "anchor-a1": {
+              "F2": "twin:Q12",
+              "F3": "twin:Q18",
+              "F4": "twin:Q19",
+              "F5": "twin:Q25"
+            },
+            "anchor-top-left": {
+              "F2": "twin:Q12",
+              "F3": "twin:Q28",
+              "F4": "twin:Q29",
+              "F5": "twin:Q25"
+            },
+            "anchor-cell": {
+              "F2": "twin:Q12",
+              "F3": "twin:R3",
+              "F4": "twin:R4",
+              "F5": "twin:R5"
+            },
+            "zero": {
+              "F2": "twin:Q12",
+              "F3": "twin:R8",
+              "F4": "twin:Q24",
+              "F5": "twin:Q25"
+            },
+            "ignored": {
+              "F2": "twin:Q22",
+              "F3": "twin:Q23",
+              "F4": "twin:Q24",
+              "F5": "twin:Q25"
+            }
+          },
+          "twinExpect": {
+            "Q12": "visual",
+            "Q18": "visual",
+            "Q19": "visual",
+            "Q22": "visual",
+            "Q23": "visual",
+            "Q24": "visual",
+            "Q25": "visual",
+            "Q28": "visual",
+            "Q29": "visual",
+            "R3": "visual",
+            "R4": "visual",
+            "R5": "visual",
+            "R8": "visual"
+          }
+        },
+        {
+          "id": "rel-a1-single-icon",
+          "capabilityId": "formula:cfvo-relative",
+          "observable": "crop",
+          "refs": [
+            "F11",
+            "F12",
+            "F13",
+            "F14"
+          ],
+          "hypotheses": {
+            "anchor-a1": {
+              "F11": "twin:R12",
+              "F12": "twin:R18",
+              "F13": "twin:R19",
+              "F14": "twin:R20"
+            },
+            "anchor-top-left": {
+              "F11": "twin:R12",
+              "F12": "twin:R18",
+              "F13": "twin:R24",
+              "F14": "twin:R25"
+            },
+            "anchor-cell": {
+              "F11": "twin:R12",
+              "F12": "twin:R18",
+              "F13": "twin:R19",
+              "F14": "twin:R20"
+            },
+            "zero": {
+              "F11": "twin:R12",
+              "F12": "twin:R18",
+              "F13": "twin:R24",
+              "F14": "twin:R25"
+            },
+            "ignored": {
+              "F11": "twin:R22",
+              "F12": "twin:R23",
+              "F13": "twin:R24",
+              "F14": "twin:R25"
+            }
+          },
+          "twinExpect": {
+            "R12": "visual",
+            "R18": "visual",
+            "R19": "visual",
+            "R20": "visual",
+            "R22": "visual",
+            "R23": "visual",
+            "R24": "visual",
+            "R25": "visual"
+          }
+        },
+        {
+          "id": "rel-a1-single-bar",
+          "capabilityId": "formula:cfvo-relative",
+          "observable": "crop",
+          "refs": [
+            "F20",
+            "F21",
+            "F22",
+            "F23"
+          ],
+          "hypotheses": {
+            "anchor-a1": {
+              "F20": "twin:R27",
+              "F21": "twin:S3",
+              "F22": "twin:S4",
+              "F23": "twin:S5"
+            },
+            "anchor-top-left": {
+              "F20": "twin:R27",
+              "F21": "twin:R28",
+              "F22": "twin:R29",
+              "F23": "twin:R30"
+            },
+            "anchor-cell": {
+              "F20": "twin:R27",
+              "F21": "twin:R28",
+              "F22": "twin:S9",
+              "F23": "twin:S10"
+            },
+            "zero": {
+              "F20": "twin:S12",
+              "F21": "twin:S13",
+              "F22": "twin:R29",
+              "F23": "twin:R30"
+            },
+            "ignored": {
+              "F20": "twin:S12",
+              "F21": "twin:S13",
+              "F22": "twin:R29",
+              "F23": "twin:R30"
+            }
+          },
+          "twinExpect": {
+            "R27": "empty",
+            "R28": "visual",
+            "R29": "visual",
+            "R30": "visual",
+            "S10": "visual",
+            "S12": "visual",
+            "S13": "visual",
+            "S3": "visual",
+            "S4": "visual",
+            "S5": "visual",
+            "S9": "visual"
+          }
+        }
+      ],
+      "captures": [
+        {
+          "appearance": "screen",
+          "pngPath": "tests/fixtures/xlsx-cf/refs/stage5-cfvo-relative-a1.png",
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage5-cfvo-relative-a1.json"
+        }
+      ],
+      "status": "recipe-pending",
+      "reason": "Preparation only: no Excel capture has been run for this Stage 5 case; every formula:* capability it settles stays unverified and production withholds the formula rule (Ruling S5-A)",
+      "tolerance": {
+        "meanAbs": 0.015,
+        "rowMax": 0.08,
+        "strong": 12
+      },
+      "resavedByExcel": false
     }
   ]
 }
