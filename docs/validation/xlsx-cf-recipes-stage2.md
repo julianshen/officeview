@@ -244,7 +244,7 @@ A designated cell under a reading renders as its twin: the same values under num
 | `V` | H | 0 / 30 / 60 | H under `leftmost-range` |
 | `W` | F | 30 / 60 / 100 | F under `rightmost-range` |
 
-**Decisive cells.** Both configurations replicate per rectangle (`replicateBy: 'column'`): every rival a rectangle separates must be contradicted at >= 2 decisive cells of that rectangle (S4-REPLICATE); this case gives 3 (pre-capture ruling: a capture cannot be retried, so one unmeasurable cell must not cost the case). Row 2 of B and F and row 5 of D and H render the same colour under every reading (each is an extreme of every reading's statistics); rows 3..5 of B and F, and rows 2..4 of D and H, decide. Every pair of readings that reads different statistics on a rectangle puts all three of its deciding cells on distinct colours, robust to 0.1 of a unit per channel (`tests/xlsx-cf-scale-scope-disjoint.test.ts`). `J2:J5` is the negative control: every reading predicts twin `N`, so Excel must match it but it is never evidence.
+**Decisive cells.** Both configurations replicate per rectangle (`replicateBy: 'column'`): every rival a rectangle separates must be contradicted at >= 2 decisive cells of that rectangle (S4-REPLICATE); this case gives 3 (pre-capture ruling: a capture cannot be retried). Row 2 of B and F and row 5 of D and H render the same colour under every reading (each is an extreme of every reading's statistics); rows 3..5 of B and F, and rows 2..4 of D and H, decide. Every pair of readings that reads different statistics on a rectangle puts all three of its deciding cells on distinct colours (`tests/xlsx-cf-scale-scope-disjoint.test.ts` checks this robust to 0.1 of a unit of interpolation error per channel; the smallest separation is 21 channel units, B3 union vs rightmost-range). The readings classifier compares exact DisplayFormat fills with the twins'; the 12-unit DisplayFormat-to-pixel consistency check is separate. Every designated cell and every named twin must be observed: three deciding cells add separation, not permission to omit an observation. `J2:J5` is the negative control: every reading predicts twin `N`, so Excel must match it but it is never evidence.
 
 **Verification.** `verifyCfCase` judges the readings with `evaluateFormulaCapabilities` over the screen sidecar's `observedCells` DisplayFormat fills (`stage2ReadingsObservationOf`; `none` where the fill equals `baseFillRgb`, else white). `auditStage2Manifest` verifies `scale:scope-disjoint` only when the readings discriminate one reading and it is production's (`CF_STAGE2_PRODUCTION_READINGS`: `union`, the statistics `service.ts` prepares over all of a rule's ranges at once). While the case is `recipe-pending` the capability stays `unverified-nondiscriminating`; the registry entry is removed only at the Phase 2 publication. The twin and control ids are registered non-discriminating and never publish.
 
@@ -253,12 +253,16 @@ A designated cell under a reading renders as its twin: the same values under num
 **Run** (from the worktree root):
 
 ```sh
-# node, not bun: the committed inputs are node zlib's deflate (bun 1.4 deflates other bytes)
-npx tsx scripts/cf-refs/generate.ts --case stage2-scale-scope-disjoint
+# The input is committed (node zlib's deflate). Do not regenerate it: build.ts runs generateAllStage1 before opening
+# Excel, which keeps a committed input whose inflated parts are identical (keepCommittedArchive), so bun's different
+# deflate never rewrites it. Check before the build that the input hash is still the committed one:
+shasum -a 256 tests/fixtures/xlsx-cf/inputs/stage2-scale-scope-disjoint.xlsx   # af13180a6454b57bae583cef286eea1a672a24c6095cb59a3fbed1cec5d533c5
 bun scripts/cf-refs/build.ts --stage 2 --case stage2-scale-scope-disjoint
 bun scripts/cf-refs/capture.ts --stage 2 --case stage2-scale-scope-disjoint
 npx vitest run tests/xlsx-cf-scale-scope-disjoint.test.ts
 bun scripts/cf-refs/audit.ts --stage 2
 ```
+
+To regenerate the input (only before a build, never after a capture): `npx tsx scripts/cf-refs/generate.ts --case stage2-scale-scope-disjoint`.
 
 The capture cannot be retried and no tolerance is edited after it. A capture no reading explains is a finding (`formula-hypothesis-none`), recorded, never fitted; a reading other than `union` leaves production withholding every multi-range colour scale.
