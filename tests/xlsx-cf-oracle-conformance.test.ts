@@ -33,7 +33,7 @@ import { cfRulesVersion } from '../src/xlsx/view/pagedSource'
 import { decodePngSync, ICON_NO_ICON_MEMBER, iconTwinSetClass, iconTwinSetMembers, isCellInSqref, loadBarScreenCapture, observedIconClass, sampleBarGradients, verifyCfCase, type CfObservedIcon, type DecodedPng } from '../scripts/cf-refs/verify'
 import { CF_ICON_GLYPH_CLASSES } from '../src/xlsx/cf/iconGlyphs'
 import { CF_CASES, CF_STAGE4_CAPABILITIES, type CfManifest } from '../scripts/cf-refs/cases'
-import { STAGE2_WITHHELD_FINDINGS, stage2NumSegmentShape } from '../scripts/cf-refs/stage2-withhold'
+import { stage2Conformance } from './helpers/cf-stage2-conformance'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const MANIFEST_PATH = join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json')
@@ -171,9 +171,6 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
 
   type Finding = { outcome: 'withheld'; reason: string }
 
-  // Documented findings for cells where engine behavior diverges from Excel oracle:
-  // Only withheld outcomes are allowed; a finding can never encode a painted wrong colour.
-  const FINDINGS: Readonly<Record<string, Finding>> = STAGE2_WITHHELD_FINDINGS
 
   // Stage 3 bar cells whose NON-bar rule production withholds although Excel paints its fill (withheld-only).
   const STAGE3_NONBAR_WITHHELD: Record<string, Finding> = Object.fromEntries(['I2', 'I3', 'I4'].map(ref => [`stage3-bar-composition:${ref}`,
@@ -190,11 +187,6 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     'stage2-scale-scope-disjoint',
   ]
 
-  // The num-segment finding (scripts/cf-refs/stage2-withhold.ts): recomputed from the case's marker and the cell's value.
-  const numSegmentShape = (c: CfManifest['cases'][number], sheet: XlsxSheet, ref: string): boolean => {
-    const { row, col } = refToRowCol(ref)
-    return stage2NumSegmentShape(c.markers, ref, sheet.rows.find(r => r.index === row)?.cells.find(cl => cl.col === col)?.value)
-  }
 
   it('runs production pipeline on all measured cases with zero unexpected mismatches', async () => {
     let checkedCells = 0
@@ -601,86 +593,24 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
 
     expect(checkedCount).toBeGreaterThan(0)
     // 206 + the 68 scale cells (20 designated, 48 twins) of stage2-scale-scope-disjoint (measured, e448d831)
-    // + the 104 designated scale cells of stage2-scale-num-segment (recipe-pending; its saved file is the input).
-    expect(checkedCount).toBe(378)
+    // + the 217 scale cells (156 designated, 61 twin line) of stage2-scale-num-segment (recipe-pending; its saved file is the input).
+    expect(checkedCount).toBe(491)
   })
 
   it('paints exact Excel ARGB for every non-hidden excel-display-format cell of all 8 measured Stage 2 cases under production evidence (Lesson 1 dual gate, T14-A)', async () => {
-    let grandTotalChecked = 0
-    let exactCount = 0
-    let withheldCount = 0
-    let stubComparedCount = 0
-    let numSegmentWithheld = 0
-    const caseCounts: Record<string, number> = {}
-
-    for (const caseId of STAGE2_MEASURED_CASES) {
-      const c = manifest.cases.find(x => x.id === caseId)!
-      expect(c, `Manifest must contain ${caseId}`).toBeDefined()
-      const savedPath = join(REPO_ROOT, c.saved)
-      expect(existsSync(savedPath), `${savedPath} must exist`).toBe(true)
-
-      const bytes = new Uint8Array(readFileSync(savedPath))
-      const doc = await parseXlsx(await OfficePackage.load(bytes))
-      const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
-      const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, evaluation: cfDocumentEvaluationOf(doc) })
-      expect(paint, `prepareCfPaint should succeed for ${caseId}`).toBeDefined()
-      if (!paint) continue
-
-      // Read trusted observed cells from reference sidecar
-      const sidecarPath = join(REPO_ROOT, `tests/fixtures/xlsx-cf/refs/${caseId}.json`)
-      expect(existsSync(sidecarPath), `${sidecarPath} must exist`).toBe(true)
-      const sidecar = JSON.parse(readFileSync(sidecarPath, 'utf8')) as {
-        observedCells: Array<{ ref: string; fillSource: string; fillRgb: string; hidden?: boolean }>
-      }
-
-      const observed = sidecar.observedCells.filter(cell => cell.fillSource === 'excel-display-format' && !cell.hidden)
-      expect(observed.length, `${caseId} must have non-zero observed cells`).toBeGreaterThan(0)
-      caseCounts[caseId] = observed.length
-
-      for (const cell of observed) {
-        grandTotalChecked++
-        const cellKey = `${caseId}:${cell.ref}`
-        const { row, col } = refToRowCol(cell.ref)
-        const cellObj = sheet.rows.find(r => r.index === row)?.cells.find(cl => cl.col === col)
-        const baseStyle = { numFmtId: 0, ...(cellObj?.style ?? {}), fillColor: cellObj?.style?.fillColor ?? 'FFFFFFFF' }
-        const st = paint.layer.styleAt(row, col, baseStyle)
-        const actualFill = st?.fillColor ?? 'FFFFFFFF'
-
-        const finding = FINDINGS[cellKey]
-        // S5-STUB: the stub's finding (L2:L5) holds until its successors are verified, then the cell is Excel's ARGB.
-        const stubCompared = finding !== undefined && /^stage2-scale-composition:L[2-5]$/.test(cellKey) && stubOutcome(cellKey, actualFill !== 'FFFFFFFF') === 'compare'
-        if (stubCompared) stubComparedCount++
-        if (finding && !stubCompared) {
-          expect(finding.outcome).toBe('withheld')
-          expect(actualFill, `${cellKey} finding: ${finding.reason}`).toBe('FFFFFFFF')
-          withheldCount++
-        } else if (numSegmentShape(c, sheet, cell.ref)) {
-          // Withheld by the num-segment finding (never painted, whatever Excel shows).
-          expect(actualFill, `${cellKey}: the 3-colour literal-num segment with f*2^20 not an integer is withheld`).toBe('FFFFFFFF')
-          withheldCount++
-          numSegmentWithheld++
-        } else {
-          // Exact Excel ARGB match:
-          expect(actualFill, `${cellKey} must match exact Excel ARGB`).toBe(cell.fillRgb)
-          exactCount++
-        }
-      }
-
-      paint.dispose()
-    }
-
-    // Assert a non-zero checked-cell count per case:
-    for (const caseId of STAGE2_MEASURED_CASES) {
-      expect(caseCounts[caseId], `Case ${caseId} checked cell count`).toBeGreaterThan(0)
-    }
+    // The pass is shared with the num-segment rehearsal (tests/helpers/cf-stage2-conformance.ts).
+    const r = await stage2Conformance(manifest, REPO_ROOT, STAGE2_MEASURED_CASES, (key, gotMatched) => stubOutcome(key, gotMatched) === 'compare')
+    expect(r.violations).toEqual([])
+    for (const caseId of STAGE2_MEASURED_CASES) expect(r.caseCounts[caseId], `Case ${caseId} checked cell count`).toBeGreaterThan(0)
     // 398 + the 88 observed cells of stage2-scale-scope-disjoint (e448d831).
-    expect(grandTotalChecked).toBe(486)
+    expect(r.total).toBe(486)
     // Ruling F-2: cells that lost paint moved into typed withheld-only FINDINGS; none is an allowlisted wrong colour.
     // stage2-scale-scope-disjoint: 77 exact, 11 twins withheld by the num-segment finding (T4 and V3 among them).
-    expect(numSegmentWithheld).toBe(11)
-    expect(exactCount).toBe(364 + 77 + stubComparedCount)
-    expect(withheldCount).toBe(34 + 11 - stubComparedCount)
-    expect(exactCount + withheldCount).toBe(grandTotalChecked)
+    // No statistical reading is registered, so the statistical withhold holds nowhere.
+    expect([r.numSegmentWithheld, r.statisticalWithheld]).toEqual([11, 0])
+    expect(r.exact).toBe(364 + 77 + r.stubCompared)
+    expect(r.withheld).toBe(34 + 11 - r.stubCompared)
+    expect(r.exact + r.withheld).toBe(r.total)
   })
 
 

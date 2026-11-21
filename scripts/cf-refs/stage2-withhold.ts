@@ -4,11 +4,12 @@
  * (scripts/cf-compare.ts). A withheld cell is accepted only when it carries no painted fill and is justified here:
  * - `STAGE2_WITHHELD_FINDINGS`: the typed, separately justified findings (Ruling F-2, S2-I, S2-J, Stage 5 stubs);
  * - `stage2NumSegmentShape`: the num-segment finding (capture e448d831, a87121e8), recomputed from the case's own marker
- *   and the cell's value, never a cell list.
+ *   and the cell's value, never a cell list (under a registered reading: the cells its class members disagree on);
+ * - `stage2StatisticalSegmentShape`: the statistical withhold, only while a non-truncate statistical reading is registered.
  * A finding can never encode a painted (wrong) colour.
  */
 import { isCellInSqref } from './verify'
-import { CF_NUM_SEGMENT_CAP, cfNumSegmentReading } from '../../src/xlsx/cf/colorScale'
+import { CF_NUM_SEGMENT_CAP, CF_NUM_SEGMENT_STATISTICAL_CAP, cfNumSegmentReading, numSegmentConsensusColor, type CfScaleSegment } from '../../src/xlsx/cf/colorScale'
 import { hasEvidence } from '../../src/xlsx/cf/evidence'
 
 export type Stage2Finding = { outcome: 'withheld'; reason: string }
@@ -62,7 +63,7 @@ export const STAGE2_WITHHELD_FINDINGS: Readonly<Record<string, Stage2Finding>> =
     'stage2-scale-composition:L5': { outcome: 'withheld', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
 }
 
-type MarkerLike = { ruleType: string; sqref: string; scale?: { cfvo: readonly { type: string; val?: string; f?: string }[] } }
+type MarkerLike = { ruleType: string; sqref: string; scale?: { cfvo: readonly { type: string; val?: string; f?: string }[]; colors: readonly string[] } }
 
 /**
  * The num-segment finding (production's `numSegmentUnmeasured`, recomputed independently from the marker): a 3-colour
@@ -72,9 +73,10 @@ type MarkerLike = { ruleType: string; sqref: string; scale?: { cfvo: readonly { 
  */
 export function stage2NumSegmentShape(markers: readonly MarkerLike[], ref: string, value: unknown): boolean {
   if (typeof value !== 'number' || !Number.isFinite(value)) return false
-  // The num-segment follow-up: once a reading of scale:num-segment-fraction is registered (with its evidence) production
-  // paints the shape, so the justification is gone with the withhold it justified (the registration, rehearsed by tests).
-  if (cfNumSegmentReading(CF_NUM_SEGMENT_CAP) !== undefined && hasEvidence(CF_NUM_SEGMENT_CAP)) return false
+  // Fix round 1 (R1): once a reading of scale:num-segment-fraction is registered (with its evidence) production paints the
+  // shape by class consensus, so the justification narrows to the cells where the class members disagree.
+  const registered = cfNumSegmentReading(CF_NUM_SEGMENT_CAP)
+  const consensus = registered !== undefined && hasEvidence(CF_NUM_SEGMENT_CAP)
   return markers.some(m => {
     if (m.ruleType !== 'colorScale' || m.scale?.cfvo.length !== 3 || !isCellInSqref(ref, m.sqref)) return false
     const literal = (x: { type: string; val?: string; f?: string }): number | undefined =>
@@ -86,6 +88,49 @@ export function stage2NumSegmentShape(markers: readonly MarkerLike[], ref: strin
     if (b === undefined) return false
     const [lo, hi] = value <= b ? [a, b] : [b, c]
     if (lo === undefined || hi === undefined || !(value > lo && value < hi)) return false
-    return !Number.isInteger(((value - lo) / (hi - lo)) * 1048576)
+    if (!consensus) return !Number.isInteger(((value - lo) / (hi - lo)) * 1048576)
+    const colours = m.scale.colors.map(x => Number.parseInt(x, 16) >>> 0)
+    const seg = value <= b ? 0 : 1
+    const segment: CfScaleSegment = { value, lo, hi, fraction: Math.max(0, Math.min(1, (value - lo) / (hi - lo))), c0: colours[seg]!, c1: colours[seg + 1]!, colours: 3, segment: seg, loKind: 'num', hiKind: 'num', thresholds: [a!, b, c!] }
+    return numSegmentConsensusColor(registered, segment) === undefined
+  })
+}
+
+/** PERCENTILE.INC (Ruling S2-L) over ascending values. */
+function percentileInc(sorted: readonly number[], p: number): number {
+  const rank = (p / 100) * (sorted.length - 1)
+  const lo = Math.floor(rank)
+  return lo + 1 < sorted.length ? sorted[lo]! + (rank - lo) * (sorted[lo + 1]! - sorted[lo]!) : sorted[lo]!
+}
+
+/**
+ * Fix round 1 (R2): the statistical withhold, recomputed from the marker and the saved numbers. While a non-truncate
+ * reading of scale:num-segment-fraction-statistical is registered (with its evidence) production withholds a 3-colour
+ * cell strictly inside a segment not bounded by two literal num cfvo where f·2^20 is not an integer
+ * (`cf-num-segment-statistical-withheld`). Thresholds: min / max / percent / percentile over the rule's numeric cells
+ * (Stage 2 holds no formula bound). Otherwise (nothing registered) it justifies nothing.
+ */
+export function stage2StatisticalSegmentShape(markers: readonly MarkerLike[], ref: string, value: unknown, values: ReadonlyMap<string, number>): boolean {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return false
+  const r = cfNumSegmentReading(CF_NUM_SEGMENT_STATISTICAL_CAP)
+  if (r === undefined || r === 'truncate' || !hasEvidence(CF_NUM_SEGMENT_STATISTICAL_CAP)) return false
+  return markers.some(m => {
+    if (m.ruleType !== 'colorScale' || m.scale?.cfvo.length !== 3 || !isCellInSqref(ref, m.sqref)) return false
+    if (m.scale.cfvo.some(x => x.f !== undefined)) return false
+    const scope = [...values].filter(([k]) => isCellInSqref(k, m.sqref)).map(([, v]) => v).sort((x, y) => x - y)
+    if (scope.length === 0) return false
+    const min = scope[0]!, max = scope[scope.length - 1]!
+    const at = (x: { type: string; val?: string }): number | undefined =>
+      x.type === 'min' ? min : x.type === 'max' ? max : x.type === 'num' ? Number(x.val) : x.type === 'percent' ? min + (Number(x.val) / 100) * (max - min) : x.type === 'percentile' ? percentileInc(scope, Number(x.val)) : undefined
+    const t = m.scale.cfvo.map(at)
+    if (t.some(x => x === undefined || !Number.isFinite(x))) return false
+    const idx = t[1]! > t[2]! ? [0, 2, 1] : [0, 1, 2]
+    const kinds = idx.map(i => m.scale!.cfvo[i]!)
+    const [a, b, c] = idx.map(i => t[i]!) as [number, number, number]
+    const seg = value <= b ? 0 : 1
+    const [lo, hi] = seg === 0 ? [a, b] : [b, c]
+    const literalNum = (x: { type: string; f?: string }): boolean => x.type === 'num' && x.f === undefined
+    if (literalNum(kinds[seg]!) && literalNum(kinds[seg + 1]!)) return false
+    return value > lo && value < hi && !Number.isInteger(((value - lo) / (hi - lo)) * 1048576)
   })
 }

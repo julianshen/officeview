@@ -18,27 +18,26 @@
  *
  * Run: `npx tsx scripts/cf-refs/num-segment-candidates.ts` (prints the tables of docs/validation/xlsx-cf-recipes-stage2.md §8).
  */
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { OfficePackage } from '../../src/core/zip'
 import { parseXlsx } from '../../src/xlsx/parse'
 import { cfDocumentEvaluationOf, prepareCfPaint } from '../../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../../src/xlsx/cf/predicates'
-import { injectCfScaleSegmentProbe, interpolateScaleColor, numSegmentUnmeasured, type CfNumSegmentReading, type CfScaleSegment } from '../../src/xlsx/cf/colorScale'
+import { injectCfScaleSegmentProbe, interpolateScaleColor, numSegmentUnmeasured, type CfScaleSegment } from '../../src/xlsx/cf/colorScale'
 import type { CfScalePoint } from '../../src/xlsx/cf/model'
 import { caseDocumentEvaluationOf, caseParseOptionsOf } from './case-clock'
+import { FRACTIONS, numSegmentCandidates, SWEEP_N, type Candidate } from '../../src/xlsx/cf/numSegmentCandidates'
 import {
+  S2_NUM_SEGMENT,
   S2_NUM_SEGMENT_CAP,
-  S2_NUM_SEGMENT_READINGS,
-  S2_NUM_SEGMENT_STATISTICAL_CAP,
-  S2_NUM_SEGMENT_STATISTICAL_READINGS,
   s2NumSegmentLayout,
   s2NumSegmentRules,
   s2NumSegmentValueAt,
   type CfManifest,
   type CfOracleCase,
-  type S2NumSegmentReading,
+  type S2NumSegmentRule,
 } from './cases'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -57,7 +56,14 @@ export interface SegmentCell {
 export interface SegmentCollection {
   cells: SegmentCell[]
   /** Captured cells under a colour scale that are not in `cells`, with why (another gate withholds them, no fill observation). */
-  excluded: Array<{ caseId: string; ref: string; reason: string }>
+  /**
+   * Captured cells under a colour scale that are not in `cells` (fix round 1 R3), each in one group:
+   * - `a`, inapplicable: no DisplayFormat fill observation, Excel shows no fill, a non-numeric value, an endpoint or
+   *   equal-threshold colour (no interpolation), or a fill painted by another rule over the scale (obscured);
+   * - `b`, a numeric cell Excel fills that is dropped only because a production gate blocks it (overlap, hidden row,
+   *   stub, non-numeric bound, composition); `threeColour` says whether any 3-colour scale covers it.
+   */
+  excluded: Array<{ caseId: string; ref: string; reason: string; group: 'a' | 'b'; threeColour?: boolean }>
   /** Harness faults: an included cell whose production fill is neither Excel's nor the num-segment withhold (must be empty). */
   faults: string[]
 }
@@ -94,7 +100,7 @@ export async function collectSegmentCells(manifest: CfManifest, rootDir: string 
   for (const c of manifest.cases) {
     if (c.status !== 'measured' || !c.markers.some(m => m.ruleType === 'colorScale')) continue
     const fills = excelFills(c, rootDir)
-    if (!fills) { out.excluded.push({ caseId: c.id, ref: '*', reason: 'no DisplayFormat fill observation in the capture (bar/icon sidecar)' }); continue }
+    if (!fills) { out.excluded.push({ caseId: c.id, ref: '*', reason: 'no DisplayFormat fill observation in the capture (bar/icon sidecar)', group: 'a' }); continue }
     const bytes = new Uint8Array(readFileSync(resolve(rootDir, c.saved)))
     const doc = await parseXlsx(await OfficePackage.load(bytes), c.stage === 5 ? caseParseOptionsOf(c) : {})
     const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
@@ -119,12 +125,26 @@ export async function collectSegmentCells(manifest: CfManifest, rootDir: string 
     for (const [ref, excel] of fills) {
       const seg = probed.get(ref) !== undefined ? issued.get(probed.get(ref)!) : undefined
       const scaleCovered = c.markers.some(m => m.ruleType === 'colorScale' && sqrefCovers(m.sqref, ref))
-      if (!seg) { if (scaleCovered) out.excluded.push({ caseId: c.id, ref, reason: production.get(ref) === undefined ? 'withheld before interpolation (another gate)' : 'painted without a segment evaluation (equal thresholds return an endpoint colour, or another rule)' }); continue }
+      const { row, col } = rc(ref)
+      const value = sheet.rows.find(r => r.index === row)?.cells.find(x => x.col === col)?.value
+      const threeColour = c.markers.some(m => m.ruleType === 'colorScale' && m.scale?.cfvo.length === 3 && sqrefCovers(m.sqref, ref))
+      const exclude = (reason: string, gated: boolean): void => {
+        const inapplicable = !gated || excel === 'FFFFFFFF' || typeof value !== 'number'
+        const why = excel === 'FFFFFFFF' && gated ? `${reason}; Excel shows no fill` : typeof value !== 'number' && gated ? `${reason}; non-numeric value` : reason
+        out.excluded.push({ caseId: c.id, ref, reason: why, group: inapplicable ? 'a' : 'b', threeColour })
+      }
+      if (!seg) {
+        if (scaleCovered) {
+          if (production.get(ref) === undefined) exclude('withheld before interpolation (another gate)', true)
+          else exclude('painted without a segment evaluation (equal thresholds return an endpoint colour, or another rule)', false)
+        }
+        continue
+      }
       const prod = production.get(ref)
       const truncate = hex(interpolateScaleColor(seg.c0, seg.c1, seg.fraction))
       if (prod === undefined && withheldShape(seg)) { out.cells.push({ caseId: c.id, ref, segment: seg, excel, status: 'withheld' }); continue }
-      if (prod === undefined) { out.excluded.push({ caseId: c.id, ref, reason: 'interpolated, then withheld by a later gate (composition)' }); continue }
-      if (prod !== truncate) { out.excluded.push({ caseId: c.id, ref, reason: `painted ${prod} by another rule over the scale` }); continue }
+      if (prod === undefined) { exclude('interpolated, then withheld by a later gate (composition)', true); continue }
+      if (prod !== truncate) { exclude(`painted ${prod} by another rule over the scale`, false); continue }
       if (prod !== excel) { out.faults.push(`${c.id}:${ref} production ${prod} is not Excel's ${excel}`); continue }
       out.cells.push({ caseId: c.id, ref, segment: seg, excel, status: 'confirmed' })
     }
@@ -146,124 +166,12 @@ function sqrefCovers(sqref: string, ref: string): boolean {
 // deterministic formula of the segment; every one clamps the fraction to [0, 1] as production does.
 // ---------------------------------------------------------------------------------------------------------------------
 
+export { CHANNELS, FRACTIONS, SWEEP_K, SWEEP_N, type Candidate } from '../../src/xlsx/cf/numSegmentCandidates'
+/** Every candidate (src/xlsx/cf/numSegmentCandidates.ts, the one implementation production's consensus evaluates too). */
+export const CANDIDATES: readonly Candidate[] = numSegmentCandidates()
 const clamp01 = (f: number): number => Math.max(0, Math.min(1, f))
-const f32 = Math.fround
-/** The largest double below `x` (0 < x). */
-function nextDown(x: number): number {
-  const buf = new Float64Array([x]), bits = new BigInt64Array(buf.buffer)
-  bits[0] = bits[0]! - 1n
-  return buf[0]!
-}
-const gSpan = (s: CfScaleSegment) => { const tMin = s.thresholds[0]!, tMax = s.thresholds[s.thresholds.length - 1]!; return (x: number): number => (x - tMin) / (tMax - tMin) }
-
-/** Fraction formulations: the segment's position of the value. */
-export const FRACTIONS: Readonly<Record<string, (s: CfScaleSegment) => number>> = {
-  exact: s => (s.value - s.lo) / (s.hi - s.lo),
-  split: s => s.value / (s.hi - s.lo) - s.lo / (s.hi - s.lo),
-  reciprocal: s => (s.value - s.lo) * (1 / (s.hi - s.lo)),
-  complement: s => 1 - (s.hi - s.value) / (s.hi - s.lo),
-  'full-span': s => { const g = gSpan(s); return (g(s.value) - g(s.lo)) / (g(s.hi) - g(s.lo)) },
-  'full-span-reciprocal': s => { const g = gSpan(s); return (g(s.value) - g(s.lo)) * (1 / (g(s.hi) - g(s.lo))) },
-  'full-span-midpoint': s => { const g = gSpan(s); const gv = g(s.value); return s.segment === 0 ? gv / g(s.hi) : (gv - g(s.lo)) / (1 - g(s.lo)) },
-  float32: s => f32((s.value - s.lo) / (s.hi - s.lo)),
-  'float32-ops': s => f32(f32(f32(s.value) - f32(s.lo)) / f32(f32(s.hi) - f32(s.lo))),
-  'percent-roundtrip': s => (((s.value - s.lo) / (s.hi - s.lo)) * 100) / 100,
-  'percent-first': s => ((s.value - s.lo) * 100) / (s.hi - s.lo) / 100,
-  'percent-floor': s => Math.floor(((s.value - s.lo) / (s.hi - s.lo)) * 100) / 100,
-  'percent-round': s => Math.round(((s.value - s.lo) / (s.hi - s.lo)) * 100) / 100,
-  'next-down': s => { const f = (s.value - s.lo) / (s.hi - s.lo); return f > 0 && f < 1 ? nextDown(f) : f },
-  ...Object.fromEntries([100, 128, 255, 256, 512, 1000, 1024, 4096, 10000, 65536].flatMap(N => [
-    [`fixed-floor-${N}`, (s: CfScaleSegment) => Math.floor(((s.value - s.lo) / (s.hi - s.lo)) * N) / N],
-    [`fixed-round-${N}`, (s: CfScaleSegment) => Math.round(((s.value - s.lo) / (s.hi - s.lo)) * N) / N],
-  ])),
-}
-
-const GUARD = 1e-11
-const sgn = (d: number): number => (d >= 0 ? 1 : -1)
-/** Rounds `x` toward `toward`: floor when `toward` is below, ceil when above. */
-const towardOf = (x: number, toward: number): number => (toward <= x ? Math.floor(x) : Math.ceil(x))
-
-/** Channel formulations: one 0..255 channel from its endpoints and the fraction (and the segment, for the ratio form). */
-export const CHANNELS: Readonly<Record<string, (c0: number, c1: number, f: number, s: CfScaleSegment) => number>> = {
-  // production: the step magnitude truncated, toward the segment's start colour, with the 1e-11 guard
-  'step-truncate': (c0, c1, f) => c0 + sgn(c1 - c0) * Math.floor(f * Math.abs(c1 - c0) + GUARD),
-  'step-truncate-unguarded': (c0, c1, f) => c0 + sgn(c1 - c0) * Math.floor(f * Math.abs(c1 - c0)),
-  'value-floor': (c0, c1, f) => Math.floor(c0 + f * (c1 - c0)),
-  'value-floor-guarded': (c0, c1, f) => Math.floor(c0 + f * (c1 - c0) + GUARD),
-  'value-ceil': (c0, c1, f) => Math.ceil(c0 + f * (c1 - c0)),
-  'value-round': (c0, c1, f) => Math.round(c0 + f * (c1 - c0)),
-  'value-toward-start': (c0, c1, f) => towardOf(c0 + f * (c1 - c0), c0),
-  'value-toward-end': (c0, c1, f) => towardOf(c0 + f * (c1 - c0), c1),
-  'convex-floor': (c0, c1, f) => Math.floor(c0 * (1 - f) + c1 * f),
-  'convex-toward-start': (c0, c1, f) => towardOf(c0 * (1 - f) + c1 * f, c0),
-  'convex-round': (c0, c1, f) => Math.round(c0 * (1 - f) + c1 * f),
-  'other-end-toward-start': (c0, c1, f) => towardOf(c1 + (1 - f) * (c0 - c1), c0),
-  'other-end-toward-end': (c0, c1, f) => towardOf(c1 + (1 - f) * (c0 - c1), c1),
-  'other-end-floor': (c0, c1, f) => Math.floor(c1 + (1 - f) * (c0 - c1)),
-  'other-end-round': (c0, c1, f) => Math.round(c1 + (1 - f) * (c0 - c1)),
-  'other-end-step-truncate': (c0, c1, f) => c1 - sgn(c1 - c0) * Math.ceil((1 - f) * Math.abs(c1 - c0) - GUARD),
-  'step-toward-end': (c0, c1, f) => c1 - sgn(c1 - c0) * Math.floor((1 - f) * Math.abs(c1 - c0) + GUARD),
-  'ratio-step-truncate': (c0, c1, _f, s) => c0 + sgn(c1 - c0) * Math.floor((Math.abs(c1 - c0) * (s.value - s.lo)) / (s.hi - s.lo) + GUARD),
-  'ratio-step-truncate-unguarded': (c0, c1, _f, s) => c0 + sgn(c1 - c0) * Math.floor((Math.abs(c1 - c0) * (s.value - s.lo)) / (s.hi - s.lo)),
-  'float32-step-truncate': (c0, c1, f) => c0 + sgn(c1 - c0) * Math.floor(f32(f32(f) * Math.abs(c1 - c0))),
-  'float32-value-toward-start': (c0, c1, f) => towardOf(f32(c0 + f32(f32(f) * (c1 - c0))), c0),
-  'float32-value-floor': (c0, c1, f) => Math.floor(f32(c0 + f32(f32(f) * (c1 - c0)))),
-}
-
-/** The fixed-point family: k = floor(f·N) (exact fraction), then integer arithmetic. */
-const FIXED_N = [64, 100, 128, 255, 256, 512, 1000, 1024, 4096, 65536]
-const FIXED: Readonly<Record<string, (c0: number, c1: number, f: number) => number>> = Object.fromEntries(FIXED_N.flatMap(N => [
-  [`int${N}-step-truncate`, (c0: number, c1: number, f: number) => c0 + sgn(c1 - c0) * Math.floor((Math.abs(c1 - c0) * Math.floor(f * N)) / N)],
-  [`int${N}-convex-floor`, (c0: number, c1: number, f: number) => { const k = Math.floor(f * N); return Math.floor((c0 * (N - k) + c1 * k) / N) }],
-  [`int${N}-convex-round`, (c0: number, c1: number, f: number) => { const k = Math.floor(f * N); return Math.round((c0 * (N - k) + c1 * k) / N) }],
-  [`int${N}-round-k-step-truncate`, (c0: number, c1: number, f: number) => c0 + sgn(c1 - c0) * Math.floor((Math.abs(c1 - c0) * Math.round(f * N)) / N)],
-]))
-
-/**
- * The sweeps (advisor-requested breadth): the fixed-point grid at every N from 2 to 5000 and at 2^13..2^40, and the
- * scaled round trip `(f·K)/K` in three operation orders. Each member is a closed formula; the step is truncated, unguarded.
- */
-export const SWEEP_N: readonly number[] = [...Array.from({ length: 4999 }, (_, i) => i + 2), ...Array.from({ length: 28 }, (_, i) => 2 ** (i + 13))]
-export const SWEEP_K: readonly number[] = [2, 3, 7, 10, 12, 16, 24, 60, 100, 255, 256, 360, 1000, 1024, 10000, 65535, 65536, 1e6]
-const SWEEPS: Readonly<Record<string, (f: number, d: number) => number>> = {
-  ...Object.fromEntries(SWEEP_N.map(N => [`sweep-fixed-${N}`, (f: number, d: number) => Math.floor((Math.floor(f * N) / N) * d)])),
-  ...Object.fromEntries(SWEEP_K.flatMap(K => [
-    [`sweep-roundtrip-${K}`, (f: number, d: number) => Math.floor(((f * K) / K) * d)],
-    [`sweep-roundtrip-reciprocal-${K}`, (f: number, d: number) => Math.floor(f * K * (1 / K) * d)],
-    [`sweep-roundtrip-after-${K}`, (f: number, d: number) => Math.floor((f * K * d) / K)],
-  ])),
-}
-
-export interface Candidate { id: string; colour: (s: CfScaleSegment) => number }
-
 const channelsOf = (argb: number): number[] => [(argb >>> 24) & 0xff, (argb >> 16) & 0xff, (argb >> 8) & 0xff, argb & 0xff]
-function composeArgb(s: CfScaleSegment, channel: (c0: number, c1: number) => number): number {
-  const a = channelsOf(s.c0), b = channelsOf(s.c1)
-  // Alpha is never observed (DisplayFormat fills are opaque); every captured endpoint is FF.
-  const out = [a[0]!, ...[1, 2, 3].map(i => channel(a[i]!, b[i]!))]
-  return ((out[0]! << 24) | (out[1]! << 16) | (out[2]! << 8) | out[3]!) >>> 0
-}
-
-/** Every candidate: fraction × channel, plus the fixed-point family over the exact fraction. */
-export const CANDIDATES: readonly Candidate[] = [
-  ...Object.entries(FRACTIONS).flatMap(([fid, frac]) => Object.entries(CHANNELS)
-    // The ratio channels read the segment directly (no fraction): only with the exact fraction, once.
-    .filter(([cid]) => !cid.startsWith('ratio-') || fid === 'exact')
-    .map(([cid, ch]) => ({ id: cid.startsWith('ratio-') ? cid : `${fid}/${cid}`, colour: (s: CfScaleSegment) => { const f = clamp01(frac(s)); return composeArgb(s, (c0, c1) => ch(c0, c1, f, s)) } }))),
-  ...Object.entries(FIXED).map(([id, ch]) => ({ id, colour: (s: CfScaleSegment) => { const f = clamp01(FRACTIONS.exact!(s)); return composeArgb(s, (c0, c1) => ch(c0, c1, f)) } })),
-  ...Object.entries(SWEEPS).map(([id, step]) => ({ id, colour: (s: CfScaleSegment) => { const f = clamp01(FRACTIONS.exact!(s)); return composeArgb(s, (c0, c1) => c0 + sgn(c1 - c0) * step(f, Math.abs(c1 - c0))) } })),
-]
 export const BASELINE_ID = 'exact/step-truncate'
-/** The candidate each production reading (`CF_NUM_SEGMENT_READINGS`, colorScale.ts) implements: its class's representative. */
-export const NUM_SEGMENT_READING_CANDIDATE: Readonly<Record<CfNumSegmentReading, string>> = {
-  truncate: BASELINE_ID,
-  'percent-roundtrip': 'percent-roundtrip/step-truncate-unguarded',
-  'fixed-256': 'sweep-fixed-256',
-  'fixed-1000': 'sweep-fixed-1000',
-  'fixed-308': 'sweep-fixed-308',
-  'fixed-700': 'sweep-fixed-700',
-}
-
 /** Where a candidate replaces production's arithmetic; outside it, production's (already Excel-equal) colour stands. */
 export const SCOPES: Readonly<Record<string, (s: CfScaleSegment) => boolean>> = {
   all: () => true,
@@ -309,54 +217,172 @@ export function fractionWindow(c: SegmentCell): { lo: number; hi: number } {
 // The confirmation case (stage2-scale-num-segment): its cells as segments, and the survivors' classes on them.
 // ---------------------------------------------------------------------------------------------------------------------
 
-/** Each designated cell of the case's evidence configurations, as the segment production evaluates (thresholds ascending). */
+/** The segment production evaluates at one cell of a case rule (thresholds ascending, kinds by threshold position). */
+function ruleSegment(rule: S2NumSegmentRule, row: number): CfScaleSegment {
+  const v = s2NumSegmentValueAt(rule, row), t = rule.thresholds
+  const seg = t.length === 2 || v <= t[1]! ? 0 : 1
+  const kind = (x: { type: string }): CfScaleSegment['loKind'] => x.type as CfScaleSegment['loKind']
+  // The midpoint-above-max rule's cfvo 1 and 2 swap with their thresholds.
+  const byPos = rule.cfvo.length === 3 && rule.cfvo[1]!.val !== undefined && rule.cfvo[2]!.val !== undefined && Number(rule.cfvo[1]!.val) > Number(rule.cfvo[2]!.val) ? [rule.cfvo[0]!, rule.cfvo[2]!, rule.cfvo[1]!] : rule.cfvo
+  return { value: v, lo: t[seg]!, hi: t[seg + 1]!, fraction: clamp01((v - t[seg]!) / (t[seg + 1]! - t[seg]!)), c0: Number.parseInt(rule.colors[seg]!, 16) >>> 0, c1: Number.parseInt(rule.colors[seg + 1]!, 16) >>> 0, colours: rule.colors.length as 2 | 3, segment: seg as 0 | 1, loKind: kind(byPos[seg]!), hiKind: kind(byPos[seg + 1]!), thresholds: [...t] }
+}
+
+/** Each designated cell of the case's evidence rules for an id, as the segment production evaluates (from the rules, never the readings). */
 export function caseSegments(capabilityId: string): Array<{ ref: string; segment: CfScaleSegment }> {
-  const rules = new Map(s2NumSegmentRules().map(r => [r.col + ':' + r.rows.join(','), r]))
-  const out: Array<{ ref: string; segment: CfScaleSegment }> = []
-  for (const cfg of s2NumSegmentLayout().configurations.filter(c => c.capabilityId === capabilityId && c.role !== 'negative-control')) {
-    for (const ref of cfg.refs) {
-      const col = /^[A-Z]+/.exec(ref)![0], row = Number(/\d+$/.exec(ref)![0])
-      const rule = [...rules.values()].find(r => r.col === col && r.rows.includes(row))!
-      const v = s2NumSegmentValueAt(rule, row), t = rule.thresholds
-      const seg = v <= t[1]! ? 0 : 1
-      const kind = (x: { type: string }): CfScaleSegment['loKind'] => (x.type === 'num' ? 'num' : (x.type as CfScaleSegment['loKind']))
-      // Bound kinds by threshold position: the midpoint-above-max rule's cfvo 1 and 2 swap with their thresholds.
-      const byPos = rule.cfvo.length === 3 && Number(rule.cfvo[1]!.val) > Number(rule.cfvo[2]!.val) ? [rule.cfvo[0]!, rule.cfvo[2]!, rule.cfvo[1]!] : rule.cfvo
-      out.push({ ref, segment: { value: v, lo: t[seg]!, hi: t[seg + 1]!, fraction: clamp01((v - t[seg]!) / (t[seg + 1]! - t[seg]!)), c0: Number.parseInt(rule.colors[seg]!, 16) >>> 0, c1: Number.parseInt(rule.colors[seg + 1]!, 16) >>> 0, colours: 3, segment: seg as 0 | 1, loKind: kind(byPos[seg]!), hiKind: kind(byPos[seg + 1]!), thresholds: [...t] } })
-    }
-  }
-  return out
+  return s2NumSegmentRules().filter(r => r.capabilityId === capabilityId).flatMap(r => (r.designatedRows ?? r.rows).map(row => ({ ref: `${r.col}${row}`, segment: ruleSegment(r, row) })))
+}
+
+/** The survivors of the old captures at a scope (pinned by the candidates test). */
+export function survivorsAt(cells: readonly SegmentCell[], scope: string): string[] {
+  return evaluateCandidates(cells).filter(r => r.scope === scope && r.mismatches.length === 0).map(r => r.id)
 }
 
 /**
- * The survivors of a scope grouped by their colours on the case's cells of `capabilityId`: each group must coincide with
- * exactly one pre-registered reading (`unmatched` lists any survivor that does not, which would be a reading missing).
+ * Fix round 1 (R1): a class's reading name, from its representative member (the first, in the enumeration order, of the
+ * forms the case's independent model reads): the percent round trip; else the fixed-point grid at its smallest N; else a
+ * scaled round trip. A class holding none of these would need a model (an error, never a silent name).
  */
-export function survivorClassesOnCase(cells: readonly SegmentCell[], scope: string, capabilityId: string, readings: readonly S2NumSegmentReading[]): { classes: Record<string, string[]>; unmatched: string[] } {
-  const results = evaluateCandidates(cells)
-  const survivors = results.filter(r => r.scope === scope && r.mismatches.length === 0).map(r => r.id)
-  const cand = new Map(CANDIDATES.map(c => [c.id, c]))
-  const segs = caseSegments(capabilityId)
-  const sig = (id: string): string => segs.map(s => hex(cand.get(id)!.colour(s.segment))).join(',')
-  const readingSig = new Map(readings.map(r => [sig(NUM_SEGMENT_READING_CANDIDATE[r]), r]))
-  const classes: Record<string, string[]> = Object.fromEntries(readings.map(r => [r, [] as string[]]))
-  const unmatched: string[] = []
-  for (const id of survivors) { const r = readingSig.get(sig(id)); if (r) classes[r]!.push(id); else unmatched.push(id) }
-  return { classes, unmatched }
+function classNameOf(members: readonly string[]): string {
+  if (members.includes('percent-roundtrip/step-truncate-unguarded')) return 'percent-roundtrip'
+  const ns = members.filter(id => /^sweep-fixed-\d+$/.test(id)).map(id => Number(id.slice('sweep-fixed-'.length)))
+  if (ns.length > 0) return `fixed-${Math.min(...ns)}`
+  const rt = members.find(id => /^sweep-roundtrip(-reciprocal|-after)?-\d+$/.test(id))
+  if (rt) return rt.slice('sweep-'.length)
+  // A class of grid formulations only: named by its first member, `fixed-floor-N/<channel>` (the model reads that form).
+  if (/^fixed-floor-\d+\/(step-truncate|step-truncate-unguarded|convex-toward-start|value-toward-start)$/.test(members[0]!)) return members[0]!
+  throw new Error(`num-segment: class ${members.slice(0, 3).join(', ')}… has no modelled representative`)
+}
+
+/**
+ * Fix round 1 (R1): the classes of the survivors (3-colour literal-num scope) on the case's literal-num cells (every
+ * evidence rule of scale:num-segment-fraction, separators included), each named by its representative, plus `truncate`
+ * (production's arithmetic, a class of one). The committed membership is src/xlsx/cf/numSegmentClasses.ts.
+ */
+export function computeNumSegmentClasses(cells: readonly SegmentCell[]): Record<string, string[]> {
+  const survivors = survivorsAt(cells, '3-colour-literal-num')
+  const segs = caseSegments(S2_NUM_SEGMENT_CAP)
+  const groups = new Map<string, string[]>()
+  for (const id of survivors) { const c = CANDIDATES_BY_ID.get(id)!; const k = segs.map(s => hex(c.colour(s.segment))).join(','); groups.set(k, [...(groups.get(k) ?? []), id]) }
+  const out: Record<string, string[]> = { truncate: [BASELINE_ID] }
+  for (const members of groups.values()) {
+    const name = classNameOf(members)
+    if (out[name]) throw new Error(`num-segment: two classes named ${name}`)
+    out[name] = members
+  }
+  return out
+}
+const CANDIDATES_BY_ID = new Map(CANDIDATES.map(c => [c.id, c]))
+
+/** Writes the committed class membership (src) and the reading names (catalogue), both derived from `computeNumSegmentClasses`. */
+export function writeNumSegmentClasses(classes: Record<string, string[]>, rootDir: string = REPO_ROOT): void {
+  const names = Object.keys(classes)
+  writeFileSync(resolve(rootDir, 'src/xlsx/cf/numSegmentClasses.ts'), [
+    '// Generated by `npx tsx scripts/cf-refs/num-segment-candidates.ts --write-classes` (do not edit).',
+    '/**',
+    ' * Fix round 1 (R1, consensus): the class of each scale:num-segment-fraction reading, the finite list of candidates',
+    ' * (src/xlsx/cf/numSegmentCandidates.ts ids) that survive every earlier capture and predict the reading\'s fills on every',
+    ' * literal-num cell of stage2-scale-num-segment. A registered reading paints only where all its members agree.',
+    ' */',
+    `export const CF_NUM_SEGMENT_CLASSES: Readonly<Record<string, readonly string[]>> = Object.freeze({`,
+    ...names.map(n => `  ${JSON.stringify(n)}: Object.freeze(${JSON.stringify(classes[n])}),`),
+    '})',
+    '',
+  ].join('\n'))
+  writeFileSync(resolve(rootDir, 'scripts/cf-refs/num-segment-readings.ts'), [
+    '// Generated by `npx tsx scripts/cf-refs/num-segment-candidates.ts --write-classes` (do not edit).',
+    '/** The literal-num readings of stage2-scale-num-segment: `truncate`, then one per class of surviving candidates (src/xlsx/cf/numSegmentClasses.ts). */',
+    `export const S2_NUM_SEGMENT_READINGS: readonly string[] = ${JSON.stringify(names)}`,
+    '',
+  ].join('\n'))
+}
+
+/** A test domain of 3-colour literal-num cells (eight bound sets, P/Q in both orders and the stock palette, 59 values per segment). */
+export function consensusDomain(): CfScaleSegment[] {
+  const P = 0xff14f028, Q = 0xffe61efa
+  const out: CfScaleSegment[] = []
+  for (const t of [[0, 30, 60], [7, 217, 637], [0, 1000, 2000], [0, 8, 16], [10, 17, 24], [-40, 15, 100], [0, 100, 200], [1, 6, 11]])
+    for (const pal of [[P, Q, P], [Q, P, Q], [0xfff8696b, 0xffffeb84, 0xff63be7b]]) for (const seg of [0, 1] as const) {
+      const lo = t[seg]!, hi = t[seg + 1]!
+      for (let i = 1; i < 60; i++) { const v = Number((lo + ((hi - lo) * i) / 60).toFixed(4)); out.push({ value: v, lo, hi, fraction: (v - lo) / (hi - lo), c0: pal[seg]!, c1: pal[seg + 1]!, colours: 3, segment: seg, loKind: 'num', hiKind: 'num', thresholds: t }) }
+    }
+  return out
+}
+/** The share of a domain where a class's members disagree (consensus withholds there). */
+export function consensusWithheldShare(members: readonly string[], domain: readonly CfScaleSegment[]): number {
+  const cs = members.map(id => CANDIDATES_BY_ID.get(id)!)
+  let n = 0
+  for (const s of domain) { const a = cs[0]!.colour(s); if (cs.some(c => c.colour(s) !== a)) n++ }
+  return n / domain.length
+}
+
+/**
+ * Fix round 1 (R1): the greedy search that chose `S2_NUM_SEGMENT.separators` (slow: run with `--choose-separators`).
+ * Each separator is a lower value v of the 7 / 217 / 637 rules with its upper twin 217 + 2·(v − 7), placed in both colour
+ * orders (four cells in one configuration). Starting from the forced dyadic eighth (33.25), each round adds the pool value
+ * that most lowers the class-size-weighted share of `consensusDomain()` (sampled at 59 values per segment) that consensus
+ * would withhold, subject to every pair of classes differing at 0 or >= 3 cells of each configuration; it stops after
+ * `rounds` or when nothing lowers the share.
+ */
+export function chooseSeparators(cells: readonly SegmentCell[], rounds = 12, forced: readonly number[] = [33.25]): number[] {
+  const survivors = survivorsAt(cells, '3-colour-literal-num')
+  const cs = survivors.map(id => CANDIDATES_BY_ID.get(id)!)
+  const P = 0xff14f028, Q = 0xffe61efa, T = [7, 217, 637]
+  const mk = (val: number, lo: number, hi: number, c0: number, c1: number, segment: 0 | 1): CfScaleSegment => ({ value: val, lo, hi, fraction: (val - lo) / (hi - lo), c0, c1, colours: 3, segment, loKind: 'num', hiKind: 'num', thresholds: T })
+  const place = (v: number): CfScaleSegment[][] => { const u = 217 + 2 * (v - 7); return [[mk(v, 7, 217, P, Q, 0), mk(u, 217, 637, Q, P, 1)], [mk(v, 7, 217, Q, P, 0), mk(u, 217, 637, P, Q, 1)]] }
+  const base = S2_NUM_SEGMENT.fractions.map(([p, q]) => 7 + (210 * p) / q)
+  const pool: number[] = []
+  for (const k of [0, 1, 2, 3, 5, 8, 13, 21, 26, 34, 52, 70, 89, 105, 140, 175, 200]) for (const d of [0.001, 0.002, 0.004, 0.008, 0.016, 0.03, 0.06, 0.12, 0.25, 0.4, 0.6, 0.8]) { const v = Number((7 + k + d).toFixed(3)); if (v < 217) pool.push(v) }
+  for (let v = 8; v <= 216; v++) pool.push(v)
+  pool.push(33.25, 85.75, 8.26, 9.1, 20.125, 32.375)
+  const cl = new Map<number, number[][][]>()
+  for (const v of [...base, ...pool]) cl.set(v, place(v).map(c => c.map(x => cs.map(k => k.colour(x)))))
+  const lab = (v: number, i: number): string => cl.get(v)!.flat().map(pl => pl[i]).join(':')
+  const domain = consensusDomain()
+  const dom = cs.map(k => domain.map(s => k.colour(s)))
+  const partition = (vs: readonly number[]): number[][] => { const g = new Map<string, number[]>(); survivors.forEach((_, i) => { const key = vs.map(v => lab(v, i)).join('|'); g.set(key, [...(g.get(key) ?? []), i]) }); return [...g.values()] }
+  const withhold = (x: readonly number[]): number => { let n = 0; for (let k = 0; k < domain.length; k++) { const c = dom[x[0]!]![k]; for (const i of x) if (dom[i]![k] !== c) { n++; break } } return n / domain.length }
+  const score = (vs: readonly number[]): number => partition(vs).reduce((a, x) => a + withhold(x) * x.length, 0) / survivors.length
+  const ok = (sep: readonly number[]): boolean => {
+    const reps = partition([...base, ...sep]).map(x => x[0]!)
+    for (let a = 0; a < reps.length; a++) for (let b = a + 1; b < reps.length; b++) {
+      const A = reps[a]!, B = reps[b]!, n = [0, 0, 0]
+      for (const v of base) for (let c = 0; c < 2; c++) for (const pl of cl.get(v)![c]!) if (pl[A] !== pl[B]) n[c]!++
+      for (const v of sep) for (const cc of cl.get(v)!) for (const pl of cc) if (pl[A] !== pl[B]) n[2]!++
+      if (n.some(x => x > 0 && x < 3)) return false
+    }
+    return true
+  }
+  const sep = [...forced]
+  let cur = score([...base, ...sep])
+  for (let round = 0; round < rounds; round++) {
+    let best: { v: number; s: number } | undefined
+    for (const v of pool) {
+      if (sep.includes(v) || base.includes(v)) continue
+      const s = score([...base, ...sep, v])
+      if (s >= cur - 1e-9 || (best && s >= best.s) || !ok([...sep, v])) continue
+      best = { v, s }
+    }
+    if (!best) break
+    sep.push(best.v); cur = best.s
+  }
+  return sep
 }
 
 async function main(): Promise<void> {
   const manifest = JSON.parse(readFileSync(resolve(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest
   const { cells, excluded, faults } = await collectSegmentCells(manifest)
+  if (process.argv.includes('--choose-separators')) { console.log(`separators: ${JSON.stringify(chooseSeparators(cells))}`); return }
   const byCase = new Map<string, { confirmed: number; withheld: number }>()
   for (const c of cells) { const e = byCase.get(c.caseId) ?? { confirmed: 0, withheld: 0 }; e[c.status]++; byCase.set(c.caseId, e) }
   console.log(`## Cells\n\n${cells.length} captured colour-scale cells (${cells.filter(c => c.status === 'confirmed').length} confirmed, ${cells.filter(c => c.status === 'withheld').length} withheld as the num-segment shape); ${excluded.length} excluded; ${faults.length} harness faults.\n`)
   console.log('| Case | Confirmed | Withheld (num-segment) |\n|---|---|---|')
   for (const [id, e] of byCase) console.log(`| \`${id}\` | ${e.confirmed} | ${e.withheld} |`)
-  const exReasons = new Map<string, number>()
-  for (const e of excluded) exReasons.set(`${e.caseId}: ${e.reason}`, (exReasons.get(`${e.caseId}: ${e.reason}`) ?? 0) + 1)
-  console.log('\nExcluded:')
-  for (const [r, n] of exReasons) console.log(`- ${r} (${n})`)
+  for (const group of ['a', 'b'] as const) {
+    const exReasons = new Map<string, number>()
+    for (const e of excluded.filter(x => x.group === group)) { const k = `${e.caseId}: ${e.reason}${group === 'b' ? (e.threeColour ? ' [under a 3-colour scale]' : ' [2-colour scales only]') : ''}`; exReasons.set(k, (exReasons.get(k) ?? 0) + 1) }
+    console.log(`\nExcluded, group ${group} (${group === 'a' ? 'inapplicable' : 'numeric, Excel-filled, dropped only by a production gate'}): ${excluded.filter(x => x.group === group).length}`)
+    for (const [r, n] of exReasons) console.log(`- ${r} (${n})`)
+  }
   for (const f of faults) console.log(`FAULT ${f}`)
   const interior = (c: SegmentCell): boolean => c.segment.value > c.segment.lo && c.segment.value < c.segment.hi
   const classOf = (c: SegmentCell): string => `${c.segment.colours}-colour ${c.segment.loKind}/${c.segment.hiKind}`
@@ -406,31 +432,41 @@ async function main(): Promise<void> {
   console.log(`\nCandidate × scope pairs reproducing exactly one of T4/V3: ${one.length}; neither: ${results.filter(x => !x.t4 && !x.v3).length}; both: ${results.filter(x => x.t4 && x.v3).length}.`)
 
   console.log('\n## Classes on the case\n')
-  for (const [scope, cap, readings] of [['3-colour-literal-num', S2_NUM_SEGMENT_CAP, S2_NUM_SEGMENT_READINGS], ['3-colour', S2_NUM_SEGMENT_STATISTICAL_CAP, S2_NUM_SEGMENT_STATISTICAL_READINGS]] as const) {
-    const { classes, unmatched } = survivorClassesOnCase(cells, scope, cap, readings)
-    console.log(`${cap} (survivors at scope ${scope}, on ${caseSegments(cap).length} cells): ${unmatched.length} survivors match no reading`)
-    console.log('\n| Reading | Representative | Survivors in its class |\n|---|---|---|')
-    for (const r of readings) {
-      const ids = classes[r]!
-      const fixedN = ids.filter(id => /^sweep-fixed-\d+$/.test(id)).map(id => Number(id.slice('sweep-fixed-'.length)))
-      const other = ids.filter(id => !/^sweep-fixed-\d+$/.test(id))
-      console.log(`| \`${r}\` | ${NUM_SEGMENT_READING_CANDIDATE[r]} | ${ids.length}${fixedN.length ? ` (fixed-point N: ${fixedN.length}, smallest ${fixedN.slice(0, 5).join(', ')}${fixedN.length > 5 ? ', …' : ''})` : ''}${other.length ? `; ${other.slice(0, 6).join(', ')}${other.length > 6 ? `, … (${other.length})` : ''}` : ''} |`)
-    }
-    console.log('')
-  }
+  const numClasses = computeNumSegmentClasses(cells)
+  if (process.argv.includes('--write-classes')) writeNumSegmentClasses(numClasses)
+  const domain = consensusDomain()
+  const shares = Object.fromEntries(Object.entries(numClasses).map(([n, m]) => [n, consensusWithheldShare(m, domain)]))
+  const names = Object.keys(numClasses)
+  console.log(`${names.length} readings (truncate + ${names.length - 1} classes of the ${survivorsAt(cells, '3-colour-literal-num').length} survivors) on ${caseSegments(S2_NUM_SEGMENT_CAP).length} literal-num cells; consensus domain ${domain.length} cells.\n`)
+  const sizes = names.slice(1).map(n => numClasses[n]!.length)
+  const weighted = names.slice(1).reduce((a, n) => a + shares[n]! * numClasses[n]!.length, 0) / sizes.reduce((a, b) => a + b, 0)
+  const sorted = names.slice(1).map(n => shares[n]!).sort((a, b) => a - b)
+  console.log(`Class sizes: ${[...sizes].sort((a, b) => b - a).join(', ')}.`)
+  console.log(`Domain withheld under consensus: size-weighted mean ${(weighted * 100).toFixed(2)}%, median ${(sorted[Math.floor(sorted.length / 2)]! * 100).toFixed(2)}%, max ${(sorted.at(-1)! * 100).toFixed(2)}%; ${sorted.filter(x => x === 0).length} classes withhold nothing.\n`)
+  console.log('| Reading | Members | Domain withheld | Members (first six) |\n|---|---|---|---|')
+  for (const n of names) console.log(`| \`${n}\` | ${numClasses[n]!.length} | ${(shares[n]! * 100).toFixed(2)}% | ${numClasses[n]!.slice(0, 6).join(', ')}${numClasses[n]!.length > 6 ? ', …' : ''} |`)
+  const stat = survivorsAt(cells, '3-colour')
+  console.log(`\nscale:num-segment-fraction-statistical: the ${stat.length} survivors over every 3-colour segment (${stat.join(', ')}) are the percent round trip; readings truncate, percent-roundtrip.\n`)
 
   console.log('## Predictions at the decisive cells\n')
+  const lines: string[] = []
   for (const cfg of s2NumSegmentLayout().configurations) {
     const hs = Object.keys(cfg.hypotheses)
     const decisive = cfg.refs.filter(ref => new Set(hs.map(h => cfg.hypotheses[h]![ref])).size > 1)
-    console.log(`\`${cfg.id}\` (${cfg.capabilityId}${cfg.role ? `, ${cfg.role}` : ''}): ${cfg.refs.length} cells, ${decisive.length} decisive\n`)
-    if (decisive.length === 0) { console.log(`Every reading predicts the same fill at every cell.\n`); continue }
-    console.log(`| Cell | ${hs.map(h => `\`${h}\``).join(' | ')} |\n|---|${hs.map(() => '---').join('|')}|`)
-    for (const ref of decisive) console.log(`| ${ref} | ${hs.map(h => cfg.hypotheses[h]![ref]).join(' | ')} |`)
-    const pairs: string[] = []
-    for (let i = 0; i < hs.length; i++) for (let j = i + 1; j < hs.length; j++) pairs.push(`${hs[i]}/${hs[j]} ${cfg.refs.filter(r => cfg.hypotheses[hs[i]!]![r] !== cfg.hypotheses[hs[j]!]![r]).length}`)
-    console.log(`\nCells separating each pair: ${pairs.join('; ')}.\n`)
+    let min = Infinity
+    for (let i = 0; i < hs.length; i++) for (let j = i + 1; j < hs.length; j++) { const n = cfg.refs.filter(r => cfg.hypotheses[hs[i]!]![r] !== cfg.hypotheses[hs[j]!]![r]).length; if (n > 0) min = Math.min(min, n) }
+    console.log(`\`${cfg.id}\` (${cfg.capabilityId}${cfg.role ? `, ${cfg.role}` : ''}): ${cfg.refs.length} cells, ${decisive.length} decisive; smallest separation of two differing readings ${min === Infinity ? '—' : min}.`)
+    lines.push(`## \`${cfg.id}\` (${cfg.capabilityId}${cfg.role ? `, ${cfg.role}` : ''})`, '', '| Cell | Predicted token: readings |', '|---|---|')
+    for (const ref of cfg.refs) {
+      const by = new Map<string, string[]>()
+      for (const h of hs) by.set(cfg.hypotheses[h]![ref]!, [...(by.get(cfg.hypotheses[h]![ref]!) ?? []), h])
+      lines.push(`| ${ref} | ${[...by].map(([t, rs]) => `${t}: ${rs.length === hs.length ? 'every reading' : rs.join(', ')}`).join('; ')} |`)
+    }
+    lines.push('')
   }
+  const { twins } = s2NumSegmentLayout()
+  lines.push('## Twin line (2-colour num 0 / 210, P to Q)', '', '| Twin | k | Fill (P + k·(1, −1, 1)) |', '|---|---|---|', ...twins.map(t => `| ${t.ref} | ${t.k} | ${hex((0xff14f028 + t.k * 0x10000 - t.k * 0x100 + t.k) >>> 0)} |`), '')
+  if (process.argv.includes('--write-predictions')) writeFileSync(resolve(REPO_ROOT, 'docs/validation/xlsx-cf-num-segment-predictions.md'), ['# stage2-scale-num-segment: every reading\'s prediction at every designated cell', '', 'Generated by `npx tsx scripts/cf-refs/num-segment-candidates.ts --write-predictions` from the catalogue (`scaleReadings`); a `twin:` token is the twin line\'s cell listed at the end.', '', ...lines].join('\n'))
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

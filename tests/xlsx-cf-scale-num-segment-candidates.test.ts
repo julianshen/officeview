@@ -8,7 +8,9 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { BASELINE_ID, CANDIDATES, collectSegmentCells, evaluateCandidates, SWEEP_N, type SegmentCollection } from '../scripts/cf-refs/num-segment-candidates'
+import { BASELINE_ID, CANDIDATES, collectSegmentCells, computeNumSegmentClasses, consensusDomain, consensusWithheldShare, evaluateCandidates, SWEEP_N, type SegmentCollection } from '../scripts/cf-refs/num-segment-candidates'
+import { CF_NUM_SEGMENT_CLASSES } from '../src/xlsx/cf/numSegmentClasses'
+import { S2_NUM_SEGMENT_READINGS } from '../scripts/cf-refs/cases'
 import { injectCfScaleSegmentProbe, scaleColorAt, type CfScaleSegment } from '../src/xlsx/cf/colorScale'
 import type { CfScalePoint } from '../src/xlsx/cf/model'
 import type { CfManifest } from '../scripts/cf-refs/cases'
@@ -58,6 +60,14 @@ describe('the candidate search over every captured colour-scale cell', () => {
     expect(cells.filter(c => c.status === 'withheld').map(c => c.ref)).toEqual(['R3', 'R4', 'R5', 'S2', 'S3', 'S4', 'T3', 'T4', 'U3', 'V3', 'W4'])
     expect(cells.filter(c => c.status === 'withheld').every(c => c.caseId === 'stage2-scale-scope-disjoint')).toBe(true)
     expect(excluded.length).toBe(144)
+    // Fix round 1 (R3): 112 inapplicable (no fill observation, Excel shows no fill, a non-numeric value, an endpoint or a
+    // fill another rule paints) and 32 numeric, Excel-filled cells dropped only by a production gate, every one of them
+    // under 2-colour scales only: outside both changed scopes (every proposed change is 3-colour only).
+    expect(excluded.filter(e => e.group === 'a').length).toBe(112)
+    const gated = excluded.filter(e => e.group === 'b')
+    expect(gated.length).toBe(32)
+    expect(gated.every(e => e.threeColour === false)).toBe(true)
+    expect([...new Set(gated.map(e => e.caseId))].sort()).toEqual(['stage2-scale-composition', 'stage2-scale-scope', 'stage5-composition'])
     expect(scaleColorAt(40, [{ bound: { type: 'num', value: 0 }, argb: 0 }, { bound: { type: 'num', value: 30 }, argb: 0 }, { bound: { type: 'num', value: 60 }, argb: 0 }], [0, 30, 60], { hasEvidence: () => true }).kind).toBe('unresolved')
   }, HEAVY)
 
@@ -81,5 +91,21 @@ describe('the candidate search over every captured colour-scale cell', () => {
     // Every fixed-point survivor keeps the quarter exact (U4: f = 1/4) and does not hold a third exactly (T4, V3).
     expect(fixedN.every(N => N % 4 === 0 && N % 3 !== 0)).toBe(true)
     expect(narrow.filter(id => id.startsWith('sweep-roundtrip'))).toEqual(['sweep-roundtrip-reciprocal-7', 'sweep-roundtrip-after-7', 'sweep-roundtrip-100', 'sweep-roundtrip-after-100'])
+  }, HEAVY)
+
+  it('fix round 1 (R1): the committed classes are the survivors\' classes on the case\'s literal-num cells; consensus withholds 0.22% of the test domain (size-weighted)', async () => {
+    const { cells } = await collection()
+    const classes = computeNumSegmentClasses(cells)
+    expect(classes).toEqual(Object.fromEntries(Object.entries(CF_NUM_SEGMENT_CLASSES).map(([k, v]) => [k, [...v]])))
+    expect(Object.keys(classes)).toEqual([...S2_NUM_SEGMENT_READINGS])
+    expect(Object.keys(classes).length).toBe(126)
+    // Every survivor is in exactly one class.
+    expect(Object.values(classes).slice(1).flat().length).toBe(857)
+    const domain = consensusDomain()
+    const shares = Object.entries(classes).slice(1).map(([, m]) => [m.length, consensusWithheldShare(m, domain)] as const)
+    const weighted = shares.reduce((a, [n, w]) => a + n * w, 0) / 857
+    expect(weighted).toBeLessThan(0.0025)
+    expect(Math.max(...shares.map(([, w]) => w))).toBeLessThan(0.05)
+    expect(shares.filter(([, w]) => w === 0).length).toBe(113)
   }, HEAVY)
 })
