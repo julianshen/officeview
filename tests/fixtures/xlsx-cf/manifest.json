@@ -98511,7 +98511,7 @@
     {
       "id": "stage5-cfvo-nonnumeric-v2",
       "stage": 5,
-      "question": "S5-H (the cfvo-nonnumeric confirmation case): how does a colour-scale type=\"formula\" bound whose result is blank, text or an error resolve, each kind on its own? The bound is $A$1 (absent: blank), $A$2 (\"abc\"), $A$3 (=\"\": text) or $A$4 (#N/A), as the first point of [formula, max], the last of [min, formula] and the middle of a 3-colour [min, formula, max], over -32, -8, 8, 16, 32. Readings: one treatment per kind among withheld (the rule paints nothing), zero (a 0 bound: twins P [num 0, max], R [min, num 0], S [min, num 0, max]) and skipped (the positional extreme: twin Q [min, max]; a midpoint has none, so skipped predicts nothing there): the uniform withheld, zero, skipped and the 24 mixed blank-<t>+text-<t>+error-<t>.",
+      "question": "S5-H (the cfvo-nonnumeric confirmation case): how does a colour-scale type=\"formula\" bound whose result is blank, text, an empty string or an error resolve, each kind on its own (formula:cfvo-nonnumeric-blank, -text, -empty-string, -error)? The bound is $A$1 (absent: blank), $A$2 (\"abc\"), $A$3 (=\"\") or $A$4 (#N/A), as the first point of [formula, max], the last of [min, formula] and the middle of a 3-colour [min, formula, max], over -32, -8, 8, 16, 32. Readings per kind: withheld (the rule paints nothing), zero (a 0 bound: twins P [num 0, max], R [min, num 0], S [min, num 0, max]) and skipped (the positional extreme: twin Q [min, max]; a midpoint has none, so skipped predicts nothing there).",
       "input": "tests/fixtures/xlsx-cf/inputs/stage5-cfvo-nonnumeric-v2.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage5-cfvo-nonnumeric-v2.xlsx",
       "sheet": "Sheet1",
@@ -98524,7 +98524,7 @@
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
           "sqref": "C2:C6",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-blank",
           "ruleType": "colorScale",
           "priority": 1,
           "formulas": [
@@ -98556,7 +98556,7 @@
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
           "sqref": "D2:D6",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-blank",
           "ruleType": "colorScale",
           "priority": 2,
           "formulas": [
@@ -98588,7 +98588,7 @@
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
           "sqref": "E2:E6",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-blank",
           "ruleType": "colorScale",
           "priority": 3,
           "formulas": [
@@ -98624,7 +98624,7 @@
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
           "sqref": "F2:F6",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-text",
           "ruleType": "colorScale",
           "priority": 4,
           "formulas": [
@@ -98656,7 +98656,7 @@
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
           "sqref": "G2:G6",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-text",
           "ruleType": "colorScale",
           "priority": 5,
           "formulas": [
@@ -98688,7 +98688,7 @@
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
           "sqref": "H2:H6",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-text",
           "ruleType": "colorScale",
           "priority": 6,
           "formulas": [
@@ -98724,7 +98724,7 @@
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
           "sqref": "I2:I6",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-empty-string",
           "ruleType": "colorScale",
           "priority": 7,
           "formulas": [
@@ -98756,7 +98756,7 @@
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
           "sqref": "J2:J6",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-empty-string",
           "ruleType": "colorScale",
           "priority": 8,
           "formulas": [
@@ -98788,7 +98788,7 @@
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
           "sqref": "K2:K6",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-empty-string",
           "ruleType": "colorScale",
           "priority": 9,
           "formulas": [
@@ -98824,7 +98824,7 @@
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
           "sqref": "L2:L6",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-error",
           "ruleType": "colorScale",
           "priority": 10,
           "formulas": [
@@ -98856,7 +98856,7 @@
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
           "sqref": "M2:M6",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-error",
           "ruleType": "colorScale",
           "priority": 11,
           "formulas": [
@@ -98888,7 +98888,7 @@
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
           "sqref": "N2:N6",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-error",
           "ruleType": "colorScale",
           "priority": 12,
           "formulas": [
@@ -100157,7 +100157,7 @@
       "formulaConfigurations": [
         {
           "id": "nonnum-blank-first",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-blank",
           "observable": "fill",
           "refs": [
             "C2",
@@ -100187,174 +100187,6 @@
               "C4": "twin:Q4",
               "C5": "twin:Q5",
               "C6": "twin:Q6"
-            },
-            "blank-withheld+text-withheld+error-zero": {
-              "C2": "none",
-              "C3": "none",
-              "C4": "none",
-              "C5": "none",
-              "C6": "none"
-            },
-            "blank-withheld+text-withheld+error-skipped": {
-              "C2": "none",
-              "C3": "none",
-              "C4": "none",
-              "C5": "none",
-              "C6": "none"
-            },
-            "blank-withheld+text-zero+error-withheld": {
-              "C2": "none",
-              "C3": "none",
-              "C4": "none",
-              "C5": "none",
-              "C6": "none"
-            },
-            "blank-withheld+text-zero+error-zero": {
-              "C2": "none",
-              "C3": "none",
-              "C4": "none",
-              "C5": "none",
-              "C6": "none"
-            },
-            "blank-withheld+text-zero+error-skipped": {
-              "C2": "none",
-              "C3": "none",
-              "C4": "none",
-              "C5": "none",
-              "C6": "none"
-            },
-            "blank-withheld+text-skipped+error-withheld": {
-              "C2": "none",
-              "C3": "none",
-              "C4": "none",
-              "C5": "none",
-              "C6": "none"
-            },
-            "blank-withheld+text-skipped+error-zero": {
-              "C2": "none",
-              "C3": "none",
-              "C4": "none",
-              "C5": "none",
-              "C6": "none"
-            },
-            "blank-withheld+text-skipped+error-skipped": {
-              "C2": "none",
-              "C3": "none",
-              "C4": "none",
-              "C5": "none",
-              "C6": "none"
-            },
-            "blank-zero+text-withheld+error-withheld": {
-              "C2": "twin:P2",
-              "C3": "twin:P3",
-              "C4": "twin:P4",
-              "C5": "twin:P5",
-              "C6": "twin:P6"
-            },
-            "blank-zero+text-withheld+error-zero": {
-              "C2": "twin:P2",
-              "C3": "twin:P3",
-              "C4": "twin:P4",
-              "C5": "twin:P5",
-              "C6": "twin:P6"
-            },
-            "blank-zero+text-withheld+error-skipped": {
-              "C2": "twin:P2",
-              "C3": "twin:P3",
-              "C4": "twin:P4",
-              "C5": "twin:P5",
-              "C6": "twin:P6"
-            },
-            "blank-zero+text-zero+error-withheld": {
-              "C2": "twin:P2",
-              "C3": "twin:P3",
-              "C4": "twin:P4",
-              "C5": "twin:P5",
-              "C6": "twin:P6"
-            },
-            "blank-zero+text-zero+error-skipped": {
-              "C2": "twin:P2",
-              "C3": "twin:P3",
-              "C4": "twin:P4",
-              "C5": "twin:P5",
-              "C6": "twin:P6"
-            },
-            "blank-zero+text-skipped+error-withheld": {
-              "C2": "twin:P2",
-              "C3": "twin:P3",
-              "C4": "twin:P4",
-              "C5": "twin:P5",
-              "C6": "twin:P6"
-            },
-            "blank-zero+text-skipped+error-zero": {
-              "C2": "twin:P2",
-              "C3": "twin:P3",
-              "C4": "twin:P4",
-              "C5": "twin:P5",
-              "C6": "twin:P6"
-            },
-            "blank-zero+text-skipped+error-skipped": {
-              "C2": "twin:P2",
-              "C3": "twin:P3",
-              "C4": "twin:P4",
-              "C5": "twin:P5",
-              "C6": "twin:P6"
-            },
-            "blank-skipped+text-withheld+error-withheld": {
-              "C2": "twin:Q2",
-              "C3": "twin:Q3",
-              "C4": "twin:Q4",
-              "C5": "twin:Q5",
-              "C6": "twin:Q6"
-            },
-            "blank-skipped+text-withheld+error-zero": {
-              "C2": "twin:Q2",
-              "C3": "twin:Q3",
-              "C4": "twin:Q4",
-              "C5": "twin:Q5",
-              "C6": "twin:Q6"
-            },
-            "blank-skipped+text-withheld+error-skipped": {
-              "C2": "twin:Q2",
-              "C3": "twin:Q3",
-              "C4": "twin:Q4",
-              "C5": "twin:Q5",
-              "C6": "twin:Q6"
-            },
-            "blank-skipped+text-zero+error-withheld": {
-              "C2": "twin:Q2",
-              "C3": "twin:Q3",
-              "C4": "twin:Q4",
-              "C5": "twin:Q5",
-              "C6": "twin:Q6"
-            },
-            "blank-skipped+text-zero+error-zero": {
-              "C2": "twin:Q2",
-              "C3": "twin:Q3",
-              "C4": "twin:Q4",
-              "C5": "twin:Q5",
-              "C6": "twin:Q6"
-            },
-            "blank-skipped+text-zero+error-skipped": {
-              "C2": "twin:Q2",
-              "C3": "twin:Q3",
-              "C4": "twin:Q4",
-              "C5": "twin:Q5",
-              "C6": "twin:Q6"
-            },
-            "blank-skipped+text-skipped+error-withheld": {
-              "C2": "twin:Q2",
-              "C3": "twin:Q3",
-              "C4": "twin:Q4",
-              "C5": "twin:Q5",
-              "C6": "twin:Q6"
-            },
-            "blank-skipped+text-skipped+error-zero": {
-              "C2": "twin:Q2",
-              "C3": "twin:Q3",
-              "C4": "twin:Q4",
-              "C5": "twin:Q5",
-              "C6": "twin:Q6"
             }
           },
           "twinExpect": {
@@ -100372,7 +100204,7 @@
         },
         {
           "id": "nonnum-blank-last",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-blank",
           "observable": "fill",
           "refs": [
             "D2",
@@ -100402,174 +100234,6 @@
               "D4": "twin:Q4",
               "D5": "twin:Q5",
               "D6": "twin:Q6"
-            },
-            "blank-withheld+text-withheld+error-zero": {
-              "D2": "none",
-              "D3": "none",
-              "D4": "none",
-              "D5": "none",
-              "D6": "none"
-            },
-            "blank-withheld+text-withheld+error-skipped": {
-              "D2": "none",
-              "D3": "none",
-              "D4": "none",
-              "D5": "none",
-              "D6": "none"
-            },
-            "blank-withheld+text-zero+error-withheld": {
-              "D2": "none",
-              "D3": "none",
-              "D4": "none",
-              "D5": "none",
-              "D6": "none"
-            },
-            "blank-withheld+text-zero+error-zero": {
-              "D2": "none",
-              "D3": "none",
-              "D4": "none",
-              "D5": "none",
-              "D6": "none"
-            },
-            "blank-withheld+text-zero+error-skipped": {
-              "D2": "none",
-              "D3": "none",
-              "D4": "none",
-              "D5": "none",
-              "D6": "none"
-            },
-            "blank-withheld+text-skipped+error-withheld": {
-              "D2": "none",
-              "D3": "none",
-              "D4": "none",
-              "D5": "none",
-              "D6": "none"
-            },
-            "blank-withheld+text-skipped+error-zero": {
-              "D2": "none",
-              "D3": "none",
-              "D4": "none",
-              "D5": "none",
-              "D6": "none"
-            },
-            "blank-withheld+text-skipped+error-skipped": {
-              "D2": "none",
-              "D3": "none",
-              "D4": "none",
-              "D5": "none",
-              "D6": "none"
-            },
-            "blank-zero+text-withheld+error-withheld": {
-              "D2": "twin:R2",
-              "D3": "twin:R3",
-              "D4": "twin:R4",
-              "D5": "twin:R5",
-              "D6": "twin:R6"
-            },
-            "blank-zero+text-withheld+error-zero": {
-              "D2": "twin:R2",
-              "D3": "twin:R3",
-              "D4": "twin:R4",
-              "D5": "twin:R5",
-              "D6": "twin:R6"
-            },
-            "blank-zero+text-withheld+error-skipped": {
-              "D2": "twin:R2",
-              "D3": "twin:R3",
-              "D4": "twin:R4",
-              "D5": "twin:R5",
-              "D6": "twin:R6"
-            },
-            "blank-zero+text-zero+error-withheld": {
-              "D2": "twin:R2",
-              "D3": "twin:R3",
-              "D4": "twin:R4",
-              "D5": "twin:R5",
-              "D6": "twin:R6"
-            },
-            "blank-zero+text-zero+error-skipped": {
-              "D2": "twin:R2",
-              "D3": "twin:R3",
-              "D4": "twin:R4",
-              "D5": "twin:R5",
-              "D6": "twin:R6"
-            },
-            "blank-zero+text-skipped+error-withheld": {
-              "D2": "twin:R2",
-              "D3": "twin:R3",
-              "D4": "twin:R4",
-              "D5": "twin:R5",
-              "D6": "twin:R6"
-            },
-            "blank-zero+text-skipped+error-zero": {
-              "D2": "twin:R2",
-              "D3": "twin:R3",
-              "D4": "twin:R4",
-              "D5": "twin:R5",
-              "D6": "twin:R6"
-            },
-            "blank-zero+text-skipped+error-skipped": {
-              "D2": "twin:R2",
-              "D3": "twin:R3",
-              "D4": "twin:R4",
-              "D5": "twin:R5",
-              "D6": "twin:R6"
-            },
-            "blank-skipped+text-withheld+error-withheld": {
-              "D2": "twin:Q2",
-              "D3": "twin:Q3",
-              "D4": "twin:Q4",
-              "D5": "twin:Q5",
-              "D6": "twin:Q6"
-            },
-            "blank-skipped+text-withheld+error-zero": {
-              "D2": "twin:Q2",
-              "D3": "twin:Q3",
-              "D4": "twin:Q4",
-              "D5": "twin:Q5",
-              "D6": "twin:Q6"
-            },
-            "blank-skipped+text-withheld+error-skipped": {
-              "D2": "twin:Q2",
-              "D3": "twin:Q3",
-              "D4": "twin:Q4",
-              "D5": "twin:Q5",
-              "D6": "twin:Q6"
-            },
-            "blank-skipped+text-zero+error-withheld": {
-              "D2": "twin:Q2",
-              "D3": "twin:Q3",
-              "D4": "twin:Q4",
-              "D5": "twin:Q5",
-              "D6": "twin:Q6"
-            },
-            "blank-skipped+text-zero+error-zero": {
-              "D2": "twin:Q2",
-              "D3": "twin:Q3",
-              "D4": "twin:Q4",
-              "D5": "twin:Q5",
-              "D6": "twin:Q6"
-            },
-            "blank-skipped+text-zero+error-skipped": {
-              "D2": "twin:Q2",
-              "D3": "twin:Q3",
-              "D4": "twin:Q4",
-              "D5": "twin:Q5",
-              "D6": "twin:Q6"
-            },
-            "blank-skipped+text-skipped+error-withheld": {
-              "D2": "twin:Q2",
-              "D3": "twin:Q3",
-              "D4": "twin:Q4",
-              "D5": "twin:Q5",
-              "D6": "twin:Q6"
-            },
-            "blank-skipped+text-skipped+error-zero": {
-              "D2": "twin:Q2",
-              "D3": "twin:Q3",
-              "D4": "twin:Q4",
-              "D5": "twin:Q5",
-              "D6": "twin:Q6"
             }
           },
           "twinExpect": {
@@ -100587,7 +100251,7 @@
         },
         {
           "id": "nonnum-blank-middle",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-blank",
           "observable": "fill",
           "refs": [
             "E2",
@@ -100610,130 +100274,10 @@
               "E4": "twin:S4",
               "E5": "twin:S5",
               "E6": "twin:S6"
-            },
-            "blank-withheld+text-withheld+error-zero": {
-              "E2": "none",
-              "E3": "none",
-              "E4": "none",
-              "E5": "none",
-              "E6": "none"
-            },
-            "blank-withheld+text-withheld+error-skipped": {
-              "E2": "none",
-              "E3": "none",
-              "E4": "none",
-              "E5": "none",
-              "E6": "none"
-            },
-            "blank-withheld+text-zero+error-withheld": {
-              "E2": "none",
-              "E3": "none",
-              "E4": "none",
-              "E5": "none",
-              "E6": "none"
-            },
-            "blank-withheld+text-zero+error-zero": {
-              "E2": "none",
-              "E3": "none",
-              "E4": "none",
-              "E5": "none",
-              "E6": "none"
-            },
-            "blank-withheld+text-zero+error-skipped": {
-              "E2": "none",
-              "E3": "none",
-              "E4": "none",
-              "E5": "none",
-              "E6": "none"
-            },
-            "blank-withheld+text-skipped+error-withheld": {
-              "E2": "none",
-              "E3": "none",
-              "E4": "none",
-              "E5": "none",
-              "E6": "none"
-            },
-            "blank-withheld+text-skipped+error-zero": {
-              "E2": "none",
-              "E3": "none",
-              "E4": "none",
-              "E5": "none",
-              "E6": "none"
-            },
-            "blank-withheld+text-skipped+error-skipped": {
-              "E2": "none",
-              "E3": "none",
-              "E4": "none",
-              "E5": "none",
-              "E6": "none"
-            },
-            "blank-zero+text-withheld+error-withheld": {
-              "E2": "twin:S2",
-              "E3": "twin:S3",
-              "E4": "twin:S4",
-              "E5": "twin:S5",
-              "E6": "twin:S6"
-            },
-            "blank-zero+text-withheld+error-zero": {
-              "E2": "twin:S2",
-              "E3": "twin:S3",
-              "E4": "twin:S4",
-              "E5": "twin:S5",
-              "E6": "twin:S6"
-            },
-            "blank-zero+text-withheld+error-skipped": {
-              "E2": "twin:S2",
-              "E3": "twin:S3",
-              "E4": "twin:S4",
-              "E5": "twin:S5",
-              "E6": "twin:S6"
-            },
-            "blank-zero+text-zero+error-withheld": {
-              "E2": "twin:S2",
-              "E3": "twin:S3",
-              "E4": "twin:S4",
-              "E5": "twin:S5",
-              "E6": "twin:S6"
-            },
-            "blank-zero+text-zero+error-skipped": {
-              "E2": "twin:S2",
-              "E3": "twin:S3",
-              "E4": "twin:S4",
-              "E5": "twin:S5",
-              "E6": "twin:S6"
-            },
-            "blank-zero+text-skipped+error-withheld": {
-              "E2": "twin:S2",
-              "E3": "twin:S3",
-              "E4": "twin:S4",
-              "E5": "twin:S5",
-              "E6": "twin:S6"
-            },
-            "blank-zero+text-skipped+error-zero": {
-              "E2": "twin:S2",
-              "E3": "twin:S3",
-              "E4": "twin:S4",
-              "E5": "twin:S5",
-              "E6": "twin:S6"
-            },
-            "blank-zero+text-skipped+error-skipped": {
-              "E2": "twin:S2",
-              "E3": "twin:S3",
-              "E4": "twin:S4",
-              "E5": "twin:S5",
-              "E6": "twin:S6"
             }
           },
           "omitted": {
-            "skipped": "skipped blank at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-skipped+text-withheld+error-withheld": "skipped blank at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-skipped+text-withheld+error-zero": "skipped blank at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-skipped+text-withheld+error-skipped": "skipped blank at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-skipped+text-zero+error-withheld": "skipped blank at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-skipped+text-zero+error-zero": "skipped blank at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-skipped+text-zero+error-skipped": "skipped blank at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-skipped+text-skipped+error-withheld": "skipped blank at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-skipped+text-skipped+error-zero": "skipped blank at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations"
+            "skipped": "a midpoint has no positional extreme to skip to, so skipped predicts nothing here (production withholds the rule); decided by the first and last configurations"
           },
           "twinExpect": {
             "S2": "visual",
@@ -100745,7 +100289,7 @@
         },
         {
           "id": "nonnum-text-first",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-text",
           "observable": "fill",
           "refs": [
             "F2",
@@ -100775,174 +100319,6 @@
               "F4": "twin:Q4",
               "F5": "twin:Q5",
               "F6": "twin:Q6"
-            },
-            "blank-withheld+text-withheld+error-zero": {
-              "F2": "none",
-              "F3": "none",
-              "F4": "none",
-              "F5": "none",
-              "F6": "none"
-            },
-            "blank-withheld+text-withheld+error-skipped": {
-              "F2": "none",
-              "F3": "none",
-              "F4": "none",
-              "F5": "none",
-              "F6": "none"
-            },
-            "blank-withheld+text-zero+error-withheld": {
-              "F2": "twin:P2",
-              "F3": "twin:P3",
-              "F4": "twin:P4",
-              "F5": "twin:P5",
-              "F6": "twin:P6"
-            },
-            "blank-withheld+text-zero+error-zero": {
-              "F2": "twin:P2",
-              "F3": "twin:P3",
-              "F4": "twin:P4",
-              "F5": "twin:P5",
-              "F6": "twin:P6"
-            },
-            "blank-withheld+text-zero+error-skipped": {
-              "F2": "twin:P2",
-              "F3": "twin:P3",
-              "F4": "twin:P4",
-              "F5": "twin:P5",
-              "F6": "twin:P6"
-            },
-            "blank-withheld+text-skipped+error-withheld": {
-              "F2": "twin:Q2",
-              "F3": "twin:Q3",
-              "F4": "twin:Q4",
-              "F5": "twin:Q5",
-              "F6": "twin:Q6"
-            },
-            "blank-withheld+text-skipped+error-zero": {
-              "F2": "twin:Q2",
-              "F3": "twin:Q3",
-              "F4": "twin:Q4",
-              "F5": "twin:Q5",
-              "F6": "twin:Q6"
-            },
-            "blank-withheld+text-skipped+error-skipped": {
-              "F2": "twin:Q2",
-              "F3": "twin:Q3",
-              "F4": "twin:Q4",
-              "F5": "twin:Q5",
-              "F6": "twin:Q6"
-            },
-            "blank-zero+text-withheld+error-withheld": {
-              "F2": "none",
-              "F3": "none",
-              "F4": "none",
-              "F5": "none",
-              "F6": "none"
-            },
-            "blank-zero+text-withheld+error-zero": {
-              "F2": "none",
-              "F3": "none",
-              "F4": "none",
-              "F5": "none",
-              "F6": "none"
-            },
-            "blank-zero+text-withheld+error-skipped": {
-              "F2": "none",
-              "F3": "none",
-              "F4": "none",
-              "F5": "none",
-              "F6": "none"
-            },
-            "blank-zero+text-zero+error-withheld": {
-              "F2": "twin:P2",
-              "F3": "twin:P3",
-              "F4": "twin:P4",
-              "F5": "twin:P5",
-              "F6": "twin:P6"
-            },
-            "blank-zero+text-zero+error-skipped": {
-              "F2": "twin:P2",
-              "F3": "twin:P3",
-              "F4": "twin:P4",
-              "F5": "twin:P5",
-              "F6": "twin:P6"
-            },
-            "blank-zero+text-skipped+error-withheld": {
-              "F2": "twin:Q2",
-              "F3": "twin:Q3",
-              "F4": "twin:Q4",
-              "F5": "twin:Q5",
-              "F6": "twin:Q6"
-            },
-            "blank-zero+text-skipped+error-zero": {
-              "F2": "twin:Q2",
-              "F3": "twin:Q3",
-              "F4": "twin:Q4",
-              "F5": "twin:Q5",
-              "F6": "twin:Q6"
-            },
-            "blank-zero+text-skipped+error-skipped": {
-              "F2": "twin:Q2",
-              "F3": "twin:Q3",
-              "F4": "twin:Q4",
-              "F5": "twin:Q5",
-              "F6": "twin:Q6"
-            },
-            "blank-skipped+text-withheld+error-withheld": {
-              "F2": "none",
-              "F3": "none",
-              "F4": "none",
-              "F5": "none",
-              "F6": "none"
-            },
-            "blank-skipped+text-withheld+error-zero": {
-              "F2": "none",
-              "F3": "none",
-              "F4": "none",
-              "F5": "none",
-              "F6": "none"
-            },
-            "blank-skipped+text-withheld+error-skipped": {
-              "F2": "none",
-              "F3": "none",
-              "F4": "none",
-              "F5": "none",
-              "F6": "none"
-            },
-            "blank-skipped+text-zero+error-withheld": {
-              "F2": "twin:P2",
-              "F3": "twin:P3",
-              "F4": "twin:P4",
-              "F5": "twin:P5",
-              "F6": "twin:P6"
-            },
-            "blank-skipped+text-zero+error-zero": {
-              "F2": "twin:P2",
-              "F3": "twin:P3",
-              "F4": "twin:P4",
-              "F5": "twin:P5",
-              "F6": "twin:P6"
-            },
-            "blank-skipped+text-zero+error-skipped": {
-              "F2": "twin:P2",
-              "F3": "twin:P3",
-              "F4": "twin:P4",
-              "F5": "twin:P5",
-              "F6": "twin:P6"
-            },
-            "blank-skipped+text-skipped+error-withheld": {
-              "F2": "twin:Q2",
-              "F3": "twin:Q3",
-              "F4": "twin:Q4",
-              "F5": "twin:Q5",
-              "F6": "twin:Q6"
-            },
-            "blank-skipped+text-skipped+error-zero": {
-              "F2": "twin:Q2",
-              "F3": "twin:Q3",
-              "F4": "twin:Q4",
-              "F5": "twin:Q5",
-              "F6": "twin:Q6"
             }
           },
           "twinExpect": {
@@ -100960,7 +100336,7 @@
         },
         {
           "id": "nonnum-text-last",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-text",
           "observable": "fill",
           "refs": [
             "G2",
@@ -100990,174 +100366,6 @@
               "G4": "twin:Q4",
               "G5": "twin:Q5",
               "G6": "twin:Q6"
-            },
-            "blank-withheld+text-withheld+error-zero": {
-              "G2": "none",
-              "G3": "none",
-              "G4": "none",
-              "G5": "none",
-              "G6": "none"
-            },
-            "blank-withheld+text-withheld+error-skipped": {
-              "G2": "none",
-              "G3": "none",
-              "G4": "none",
-              "G5": "none",
-              "G6": "none"
-            },
-            "blank-withheld+text-zero+error-withheld": {
-              "G2": "twin:R2",
-              "G3": "twin:R3",
-              "G4": "twin:R4",
-              "G5": "twin:R5",
-              "G6": "twin:R6"
-            },
-            "blank-withheld+text-zero+error-zero": {
-              "G2": "twin:R2",
-              "G3": "twin:R3",
-              "G4": "twin:R4",
-              "G5": "twin:R5",
-              "G6": "twin:R6"
-            },
-            "blank-withheld+text-zero+error-skipped": {
-              "G2": "twin:R2",
-              "G3": "twin:R3",
-              "G4": "twin:R4",
-              "G5": "twin:R5",
-              "G6": "twin:R6"
-            },
-            "blank-withheld+text-skipped+error-withheld": {
-              "G2": "twin:Q2",
-              "G3": "twin:Q3",
-              "G4": "twin:Q4",
-              "G5": "twin:Q5",
-              "G6": "twin:Q6"
-            },
-            "blank-withheld+text-skipped+error-zero": {
-              "G2": "twin:Q2",
-              "G3": "twin:Q3",
-              "G4": "twin:Q4",
-              "G5": "twin:Q5",
-              "G6": "twin:Q6"
-            },
-            "blank-withheld+text-skipped+error-skipped": {
-              "G2": "twin:Q2",
-              "G3": "twin:Q3",
-              "G4": "twin:Q4",
-              "G5": "twin:Q5",
-              "G6": "twin:Q6"
-            },
-            "blank-zero+text-withheld+error-withheld": {
-              "G2": "none",
-              "G3": "none",
-              "G4": "none",
-              "G5": "none",
-              "G6": "none"
-            },
-            "blank-zero+text-withheld+error-zero": {
-              "G2": "none",
-              "G3": "none",
-              "G4": "none",
-              "G5": "none",
-              "G6": "none"
-            },
-            "blank-zero+text-withheld+error-skipped": {
-              "G2": "none",
-              "G3": "none",
-              "G4": "none",
-              "G5": "none",
-              "G6": "none"
-            },
-            "blank-zero+text-zero+error-withheld": {
-              "G2": "twin:R2",
-              "G3": "twin:R3",
-              "G4": "twin:R4",
-              "G5": "twin:R5",
-              "G6": "twin:R6"
-            },
-            "blank-zero+text-zero+error-skipped": {
-              "G2": "twin:R2",
-              "G3": "twin:R3",
-              "G4": "twin:R4",
-              "G5": "twin:R5",
-              "G6": "twin:R6"
-            },
-            "blank-zero+text-skipped+error-withheld": {
-              "G2": "twin:Q2",
-              "G3": "twin:Q3",
-              "G4": "twin:Q4",
-              "G5": "twin:Q5",
-              "G6": "twin:Q6"
-            },
-            "blank-zero+text-skipped+error-zero": {
-              "G2": "twin:Q2",
-              "G3": "twin:Q3",
-              "G4": "twin:Q4",
-              "G5": "twin:Q5",
-              "G6": "twin:Q6"
-            },
-            "blank-zero+text-skipped+error-skipped": {
-              "G2": "twin:Q2",
-              "G3": "twin:Q3",
-              "G4": "twin:Q4",
-              "G5": "twin:Q5",
-              "G6": "twin:Q6"
-            },
-            "blank-skipped+text-withheld+error-withheld": {
-              "G2": "none",
-              "G3": "none",
-              "G4": "none",
-              "G5": "none",
-              "G6": "none"
-            },
-            "blank-skipped+text-withheld+error-zero": {
-              "G2": "none",
-              "G3": "none",
-              "G4": "none",
-              "G5": "none",
-              "G6": "none"
-            },
-            "blank-skipped+text-withheld+error-skipped": {
-              "G2": "none",
-              "G3": "none",
-              "G4": "none",
-              "G5": "none",
-              "G6": "none"
-            },
-            "blank-skipped+text-zero+error-withheld": {
-              "G2": "twin:R2",
-              "G3": "twin:R3",
-              "G4": "twin:R4",
-              "G5": "twin:R5",
-              "G6": "twin:R6"
-            },
-            "blank-skipped+text-zero+error-zero": {
-              "G2": "twin:R2",
-              "G3": "twin:R3",
-              "G4": "twin:R4",
-              "G5": "twin:R5",
-              "G6": "twin:R6"
-            },
-            "blank-skipped+text-zero+error-skipped": {
-              "G2": "twin:R2",
-              "G3": "twin:R3",
-              "G4": "twin:R4",
-              "G5": "twin:R5",
-              "G6": "twin:R6"
-            },
-            "blank-skipped+text-skipped+error-withheld": {
-              "G2": "twin:Q2",
-              "G3": "twin:Q3",
-              "G4": "twin:Q4",
-              "G5": "twin:Q5",
-              "G6": "twin:Q6"
-            },
-            "blank-skipped+text-skipped+error-zero": {
-              "G2": "twin:Q2",
-              "G3": "twin:Q3",
-              "G4": "twin:Q4",
-              "G5": "twin:Q5",
-              "G6": "twin:Q6"
             }
           },
           "twinExpect": {
@@ -101175,7 +100383,7 @@
         },
         {
           "id": "nonnum-text-middle",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-text",
           "observable": "fill",
           "refs": [
             "H2",
@@ -101198,130 +100406,10 @@
               "H4": "twin:S4",
               "H5": "twin:S5",
               "H6": "twin:S6"
-            },
-            "blank-withheld+text-withheld+error-zero": {
-              "H2": "none",
-              "H3": "none",
-              "H4": "none",
-              "H5": "none",
-              "H6": "none"
-            },
-            "blank-withheld+text-withheld+error-skipped": {
-              "H2": "none",
-              "H3": "none",
-              "H4": "none",
-              "H5": "none",
-              "H6": "none"
-            },
-            "blank-withheld+text-zero+error-withheld": {
-              "H2": "twin:S2",
-              "H3": "twin:S3",
-              "H4": "twin:S4",
-              "H5": "twin:S5",
-              "H6": "twin:S6"
-            },
-            "blank-withheld+text-zero+error-zero": {
-              "H2": "twin:S2",
-              "H3": "twin:S3",
-              "H4": "twin:S4",
-              "H5": "twin:S5",
-              "H6": "twin:S6"
-            },
-            "blank-withheld+text-zero+error-skipped": {
-              "H2": "twin:S2",
-              "H3": "twin:S3",
-              "H4": "twin:S4",
-              "H5": "twin:S5",
-              "H6": "twin:S6"
-            },
-            "blank-zero+text-withheld+error-withheld": {
-              "H2": "none",
-              "H3": "none",
-              "H4": "none",
-              "H5": "none",
-              "H6": "none"
-            },
-            "blank-zero+text-withheld+error-zero": {
-              "H2": "none",
-              "H3": "none",
-              "H4": "none",
-              "H5": "none",
-              "H6": "none"
-            },
-            "blank-zero+text-withheld+error-skipped": {
-              "H2": "none",
-              "H3": "none",
-              "H4": "none",
-              "H5": "none",
-              "H6": "none"
-            },
-            "blank-zero+text-zero+error-withheld": {
-              "H2": "twin:S2",
-              "H3": "twin:S3",
-              "H4": "twin:S4",
-              "H5": "twin:S5",
-              "H6": "twin:S6"
-            },
-            "blank-zero+text-zero+error-skipped": {
-              "H2": "twin:S2",
-              "H3": "twin:S3",
-              "H4": "twin:S4",
-              "H5": "twin:S5",
-              "H6": "twin:S6"
-            },
-            "blank-skipped+text-withheld+error-withheld": {
-              "H2": "none",
-              "H3": "none",
-              "H4": "none",
-              "H5": "none",
-              "H6": "none"
-            },
-            "blank-skipped+text-withheld+error-zero": {
-              "H2": "none",
-              "H3": "none",
-              "H4": "none",
-              "H5": "none",
-              "H6": "none"
-            },
-            "blank-skipped+text-withheld+error-skipped": {
-              "H2": "none",
-              "H3": "none",
-              "H4": "none",
-              "H5": "none",
-              "H6": "none"
-            },
-            "blank-skipped+text-zero+error-withheld": {
-              "H2": "twin:S2",
-              "H3": "twin:S3",
-              "H4": "twin:S4",
-              "H5": "twin:S5",
-              "H6": "twin:S6"
-            },
-            "blank-skipped+text-zero+error-zero": {
-              "H2": "twin:S2",
-              "H3": "twin:S3",
-              "H4": "twin:S4",
-              "H5": "twin:S5",
-              "H6": "twin:S6"
-            },
-            "blank-skipped+text-zero+error-skipped": {
-              "H2": "twin:S2",
-              "H3": "twin:S3",
-              "H4": "twin:S4",
-              "H5": "twin:S5",
-              "H6": "twin:S6"
             }
           },
           "omitted": {
-            "skipped": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-withheld+text-skipped+error-withheld": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-withheld+text-skipped+error-zero": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-withheld+text-skipped+error-skipped": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-zero+text-skipped+error-withheld": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-zero+text-skipped+error-zero": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-zero+text-skipped+error-skipped": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-skipped+text-skipped+error-withheld": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-skipped+text-skipped+error-zero": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations"
+            "skipped": "a midpoint has no positional extreme to skip to, so skipped predicts nothing here (production withholds the rule); decided by the first and last configurations"
           },
           "twinExpect": {
             "S2": "visual",
@@ -101333,7 +100421,7 @@
         },
         {
           "id": "nonnum-empty-text-first",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-empty-string",
           "observable": "fill",
           "refs": [
             "I2",
@@ -101363,174 +100451,6 @@
               "I4": "twin:Q4",
               "I5": "twin:Q5",
               "I6": "twin:Q6"
-            },
-            "blank-withheld+text-withheld+error-zero": {
-              "I2": "none",
-              "I3": "none",
-              "I4": "none",
-              "I5": "none",
-              "I6": "none"
-            },
-            "blank-withheld+text-withheld+error-skipped": {
-              "I2": "none",
-              "I3": "none",
-              "I4": "none",
-              "I5": "none",
-              "I6": "none"
-            },
-            "blank-withheld+text-zero+error-withheld": {
-              "I2": "twin:P2",
-              "I3": "twin:P3",
-              "I4": "twin:P4",
-              "I5": "twin:P5",
-              "I6": "twin:P6"
-            },
-            "blank-withheld+text-zero+error-zero": {
-              "I2": "twin:P2",
-              "I3": "twin:P3",
-              "I4": "twin:P4",
-              "I5": "twin:P5",
-              "I6": "twin:P6"
-            },
-            "blank-withheld+text-zero+error-skipped": {
-              "I2": "twin:P2",
-              "I3": "twin:P3",
-              "I4": "twin:P4",
-              "I5": "twin:P5",
-              "I6": "twin:P6"
-            },
-            "blank-withheld+text-skipped+error-withheld": {
-              "I2": "twin:Q2",
-              "I3": "twin:Q3",
-              "I4": "twin:Q4",
-              "I5": "twin:Q5",
-              "I6": "twin:Q6"
-            },
-            "blank-withheld+text-skipped+error-zero": {
-              "I2": "twin:Q2",
-              "I3": "twin:Q3",
-              "I4": "twin:Q4",
-              "I5": "twin:Q5",
-              "I6": "twin:Q6"
-            },
-            "blank-withheld+text-skipped+error-skipped": {
-              "I2": "twin:Q2",
-              "I3": "twin:Q3",
-              "I4": "twin:Q4",
-              "I5": "twin:Q5",
-              "I6": "twin:Q6"
-            },
-            "blank-zero+text-withheld+error-withheld": {
-              "I2": "none",
-              "I3": "none",
-              "I4": "none",
-              "I5": "none",
-              "I6": "none"
-            },
-            "blank-zero+text-withheld+error-zero": {
-              "I2": "none",
-              "I3": "none",
-              "I4": "none",
-              "I5": "none",
-              "I6": "none"
-            },
-            "blank-zero+text-withheld+error-skipped": {
-              "I2": "none",
-              "I3": "none",
-              "I4": "none",
-              "I5": "none",
-              "I6": "none"
-            },
-            "blank-zero+text-zero+error-withheld": {
-              "I2": "twin:P2",
-              "I3": "twin:P3",
-              "I4": "twin:P4",
-              "I5": "twin:P5",
-              "I6": "twin:P6"
-            },
-            "blank-zero+text-zero+error-skipped": {
-              "I2": "twin:P2",
-              "I3": "twin:P3",
-              "I4": "twin:P4",
-              "I5": "twin:P5",
-              "I6": "twin:P6"
-            },
-            "blank-zero+text-skipped+error-withheld": {
-              "I2": "twin:Q2",
-              "I3": "twin:Q3",
-              "I4": "twin:Q4",
-              "I5": "twin:Q5",
-              "I6": "twin:Q6"
-            },
-            "blank-zero+text-skipped+error-zero": {
-              "I2": "twin:Q2",
-              "I3": "twin:Q3",
-              "I4": "twin:Q4",
-              "I5": "twin:Q5",
-              "I6": "twin:Q6"
-            },
-            "blank-zero+text-skipped+error-skipped": {
-              "I2": "twin:Q2",
-              "I3": "twin:Q3",
-              "I4": "twin:Q4",
-              "I5": "twin:Q5",
-              "I6": "twin:Q6"
-            },
-            "blank-skipped+text-withheld+error-withheld": {
-              "I2": "none",
-              "I3": "none",
-              "I4": "none",
-              "I5": "none",
-              "I6": "none"
-            },
-            "blank-skipped+text-withheld+error-zero": {
-              "I2": "none",
-              "I3": "none",
-              "I4": "none",
-              "I5": "none",
-              "I6": "none"
-            },
-            "blank-skipped+text-withheld+error-skipped": {
-              "I2": "none",
-              "I3": "none",
-              "I4": "none",
-              "I5": "none",
-              "I6": "none"
-            },
-            "blank-skipped+text-zero+error-withheld": {
-              "I2": "twin:P2",
-              "I3": "twin:P3",
-              "I4": "twin:P4",
-              "I5": "twin:P5",
-              "I6": "twin:P6"
-            },
-            "blank-skipped+text-zero+error-zero": {
-              "I2": "twin:P2",
-              "I3": "twin:P3",
-              "I4": "twin:P4",
-              "I5": "twin:P5",
-              "I6": "twin:P6"
-            },
-            "blank-skipped+text-zero+error-skipped": {
-              "I2": "twin:P2",
-              "I3": "twin:P3",
-              "I4": "twin:P4",
-              "I5": "twin:P5",
-              "I6": "twin:P6"
-            },
-            "blank-skipped+text-skipped+error-withheld": {
-              "I2": "twin:Q2",
-              "I3": "twin:Q3",
-              "I4": "twin:Q4",
-              "I5": "twin:Q5",
-              "I6": "twin:Q6"
-            },
-            "blank-skipped+text-skipped+error-zero": {
-              "I2": "twin:Q2",
-              "I3": "twin:Q3",
-              "I4": "twin:Q4",
-              "I5": "twin:Q5",
-              "I6": "twin:Q6"
             }
           },
           "twinExpect": {
@@ -101548,7 +100468,7 @@
         },
         {
           "id": "nonnum-empty-text-last",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-empty-string",
           "observable": "fill",
           "refs": [
             "J2",
@@ -101578,174 +100498,6 @@
               "J4": "twin:Q4",
               "J5": "twin:Q5",
               "J6": "twin:Q6"
-            },
-            "blank-withheld+text-withheld+error-zero": {
-              "J2": "none",
-              "J3": "none",
-              "J4": "none",
-              "J5": "none",
-              "J6": "none"
-            },
-            "blank-withheld+text-withheld+error-skipped": {
-              "J2": "none",
-              "J3": "none",
-              "J4": "none",
-              "J5": "none",
-              "J6": "none"
-            },
-            "blank-withheld+text-zero+error-withheld": {
-              "J2": "twin:R2",
-              "J3": "twin:R3",
-              "J4": "twin:R4",
-              "J5": "twin:R5",
-              "J6": "twin:R6"
-            },
-            "blank-withheld+text-zero+error-zero": {
-              "J2": "twin:R2",
-              "J3": "twin:R3",
-              "J4": "twin:R4",
-              "J5": "twin:R5",
-              "J6": "twin:R6"
-            },
-            "blank-withheld+text-zero+error-skipped": {
-              "J2": "twin:R2",
-              "J3": "twin:R3",
-              "J4": "twin:R4",
-              "J5": "twin:R5",
-              "J6": "twin:R6"
-            },
-            "blank-withheld+text-skipped+error-withheld": {
-              "J2": "twin:Q2",
-              "J3": "twin:Q3",
-              "J4": "twin:Q4",
-              "J5": "twin:Q5",
-              "J6": "twin:Q6"
-            },
-            "blank-withheld+text-skipped+error-zero": {
-              "J2": "twin:Q2",
-              "J3": "twin:Q3",
-              "J4": "twin:Q4",
-              "J5": "twin:Q5",
-              "J6": "twin:Q6"
-            },
-            "blank-withheld+text-skipped+error-skipped": {
-              "J2": "twin:Q2",
-              "J3": "twin:Q3",
-              "J4": "twin:Q4",
-              "J5": "twin:Q5",
-              "J6": "twin:Q6"
-            },
-            "blank-zero+text-withheld+error-withheld": {
-              "J2": "none",
-              "J3": "none",
-              "J4": "none",
-              "J5": "none",
-              "J6": "none"
-            },
-            "blank-zero+text-withheld+error-zero": {
-              "J2": "none",
-              "J3": "none",
-              "J4": "none",
-              "J5": "none",
-              "J6": "none"
-            },
-            "blank-zero+text-withheld+error-skipped": {
-              "J2": "none",
-              "J3": "none",
-              "J4": "none",
-              "J5": "none",
-              "J6": "none"
-            },
-            "blank-zero+text-zero+error-withheld": {
-              "J2": "twin:R2",
-              "J3": "twin:R3",
-              "J4": "twin:R4",
-              "J5": "twin:R5",
-              "J6": "twin:R6"
-            },
-            "blank-zero+text-zero+error-skipped": {
-              "J2": "twin:R2",
-              "J3": "twin:R3",
-              "J4": "twin:R4",
-              "J5": "twin:R5",
-              "J6": "twin:R6"
-            },
-            "blank-zero+text-skipped+error-withheld": {
-              "J2": "twin:Q2",
-              "J3": "twin:Q3",
-              "J4": "twin:Q4",
-              "J5": "twin:Q5",
-              "J6": "twin:Q6"
-            },
-            "blank-zero+text-skipped+error-zero": {
-              "J2": "twin:Q2",
-              "J3": "twin:Q3",
-              "J4": "twin:Q4",
-              "J5": "twin:Q5",
-              "J6": "twin:Q6"
-            },
-            "blank-zero+text-skipped+error-skipped": {
-              "J2": "twin:Q2",
-              "J3": "twin:Q3",
-              "J4": "twin:Q4",
-              "J5": "twin:Q5",
-              "J6": "twin:Q6"
-            },
-            "blank-skipped+text-withheld+error-withheld": {
-              "J2": "none",
-              "J3": "none",
-              "J4": "none",
-              "J5": "none",
-              "J6": "none"
-            },
-            "blank-skipped+text-withheld+error-zero": {
-              "J2": "none",
-              "J3": "none",
-              "J4": "none",
-              "J5": "none",
-              "J6": "none"
-            },
-            "blank-skipped+text-withheld+error-skipped": {
-              "J2": "none",
-              "J3": "none",
-              "J4": "none",
-              "J5": "none",
-              "J6": "none"
-            },
-            "blank-skipped+text-zero+error-withheld": {
-              "J2": "twin:R2",
-              "J3": "twin:R3",
-              "J4": "twin:R4",
-              "J5": "twin:R5",
-              "J6": "twin:R6"
-            },
-            "blank-skipped+text-zero+error-zero": {
-              "J2": "twin:R2",
-              "J3": "twin:R3",
-              "J4": "twin:R4",
-              "J5": "twin:R5",
-              "J6": "twin:R6"
-            },
-            "blank-skipped+text-zero+error-skipped": {
-              "J2": "twin:R2",
-              "J3": "twin:R3",
-              "J4": "twin:R4",
-              "J5": "twin:R5",
-              "J6": "twin:R6"
-            },
-            "blank-skipped+text-skipped+error-withheld": {
-              "J2": "twin:Q2",
-              "J3": "twin:Q3",
-              "J4": "twin:Q4",
-              "J5": "twin:Q5",
-              "J6": "twin:Q6"
-            },
-            "blank-skipped+text-skipped+error-zero": {
-              "J2": "twin:Q2",
-              "J3": "twin:Q3",
-              "J4": "twin:Q4",
-              "J5": "twin:Q5",
-              "J6": "twin:Q6"
             }
           },
           "twinExpect": {
@@ -101763,7 +100515,7 @@
         },
         {
           "id": "nonnum-empty-text-middle",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-empty-string",
           "observable": "fill",
           "refs": [
             "K2",
@@ -101786,130 +100538,10 @@
               "K4": "twin:S4",
               "K5": "twin:S5",
               "K6": "twin:S6"
-            },
-            "blank-withheld+text-withheld+error-zero": {
-              "K2": "none",
-              "K3": "none",
-              "K4": "none",
-              "K5": "none",
-              "K6": "none"
-            },
-            "blank-withheld+text-withheld+error-skipped": {
-              "K2": "none",
-              "K3": "none",
-              "K4": "none",
-              "K5": "none",
-              "K6": "none"
-            },
-            "blank-withheld+text-zero+error-withheld": {
-              "K2": "twin:S2",
-              "K3": "twin:S3",
-              "K4": "twin:S4",
-              "K5": "twin:S5",
-              "K6": "twin:S6"
-            },
-            "blank-withheld+text-zero+error-zero": {
-              "K2": "twin:S2",
-              "K3": "twin:S3",
-              "K4": "twin:S4",
-              "K5": "twin:S5",
-              "K6": "twin:S6"
-            },
-            "blank-withheld+text-zero+error-skipped": {
-              "K2": "twin:S2",
-              "K3": "twin:S3",
-              "K4": "twin:S4",
-              "K5": "twin:S5",
-              "K6": "twin:S6"
-            },
-            "blank-zero+text-withheld+error-withheld": {
-              "K2": "none",
-              "K3": "none",
-              "K4": "none",
-              "K5": "none",
-              "K6": "none"
-            },
-            "blank-zero+text-withheld+error-zero": {
-              "K2": "none",
-              "K3": "none",
-              "K4": "none",
-              "K5": "none",
-              "K6": "none"
-            },
-            "blank-zero+text-withheld+error-skipped": {
-              "K2": "none",
-              "K3": "none",
-              "K4": "none",
-              "K5": "none",
-              "K6": "none"
-            },
-            "blank-zero+text-zero+error-withheld": {
-              "K2": "twin:S2",
-              "K3": "twin:S3",
-              "K4": "twin:S4",
-              "K5": "twin:S5",
-              "K6": "twin:S6"
-            },
-            "blank-zero+text-zero+error-skipped": {
-              "K2": "twin:S2",
-              "K3": "twin:S3",
-              "K4": "twin:S4",
-              "K5": "twin:S5",
-              "K6": "twin:S6"
-            },
-            "blank-skipped+text-withheld+error-withheld": {
-              "K2": "none",
-              "K3": "none",
-              "K4": "none",
-              "K5": "none",
-              "K6": "none"
-            },
-            "blank-skipped+text-withheld+error-zero": {
-              "K2": "none",
-              "K3": "none",
-              "K4": "none",
-              "K5": "none",
-              "K6": "none"
-            },
-            "blank-skipped+text-withheld+error-skipped": {
-              "K2": "none",
-              "K3": "none",
-              "K4": "none",
-              "K5": "none",
-              "K6": "none"
-            },
-            "blank-skipped+text-zero+error-withheld": {
-              "K2": "twin:S2",
-              "K3": "twin:S3",
-              "K4": "twin:S4",
-              "K5": "twin:S5",
-              "K6": "twin:S6"
-            },
-            "blank-skipped+text-zero+error-zero": {
-              "K2": "twin:S2",
-              "K3": "twin:S3",
-              "K4": "twin:S4",
-              "K5": "twin:S5",
-              "K6": "twin:S6"
-            },
-            "blank-skipped+text-zero+error-skipped": {
-              "K2": "twin:S2",
-              "K3": "twin:S3",
-              "K4": "twin:S4",
-              "K5": "twin:S5",
-              "K6": "twin:S6"
             }
           },
           "omitted": {
-            "skipped": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-withheld+text-skipped+error-withheld": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-withheld+text-skipped+error-zero": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-withheld+text-skipped+error-skipped": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-zero+text-skipped+error-withheld": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-zero+text-skipped+error-zero": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-zero+text-skipped+error-skipped": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-skipped+text-skipped+error-withheld": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-skipped+text-skipped+error-zero": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations"
+            "skipped": "a midpoint has no positional extreme to skip to, so skipped predicts nothing here (production withholds the rule); decided by the first and last configurations"
           },
           "twinExpect": {
             "S2": "visual",
@@ -101921,7 +100553,7 @@
         },
         {
           "id": "nonnum-error-first",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-error",
           "observable": "fill",
           "refs": [
             "L2",
@@ -101951,174 +100583,6 @@
               "L4": "twin:Q4",
               "L5": "twin:Q5",
               "L6": "twin:Q6"
-            },
-            "blank-withheld+text-withheld+error-zero": {
-              "L2": "twin:P2",
-              "L3": "twin:P3",
-              "L4": "twin:P4",
-              "L5": "twin:P5",
-              "L6": "twin:P6"
-            },
-            "blank-withheld+text-withheld+error-skipped": {
-              "L2": "twin:Q2",
-              "L3": "twin:Q3",
-              "L4": "twin:Q4",
-              "L5": "twin:Q5",
-              "L6": "twin:Q6"
-            },
-            "blank-withheld+text-zero+error-withheld": {
-              "L2": "none",
-              "L3": "none",
-              "L4": "none",
-              "L5": "none",
-              "L6": "none"
-            },
-            "blank-withheld+text-zero+error-zero": {
-              "L2": "twin:P2",
-              "L3": "twin:P3",
-              "L4": "twin:P4",
-              "L5": "twin:P5",
-              "L6": "twin:P6"
-            },
-            "blank-withheld+text-zero+error-skipped": {
-              "L2": "twin:Q2",
-              "L3": "twin:Q3",
-              "L4": "twin:Q4",
-              "L5": "twin:Q5",
-              "L6": "twin:Q6"
-            },
-            "blank-withheld+text-skipped+error-withheld": {
-              "L2": "none",
-              "L3": "none",
-              "L4": "none",
-              "L5": "none",
-              "L6": "none"
-            },
-            "blank-withheld+text-skipped+error-zero": {
-              "L2": "twin:P2",
-              "L3": "twin:P3",
-              "L4": "twin:P4",
-              "L5": "twin:P5",
-              "L6": "twin:P6"
-            },
-            "blank-withheld+text-skipped+error-skipped": {
-              "L2": "twin:Q2",
-              "L3": "twin:Q3",
-              "L4": "twin:Q4",
-              "L5": "twin:Q5",
-              "L6": "twin:Q6"
-            },
-            "blank-zero+text-withheld+error-withheld": {
-              "L2": "none",
-              "L3": "none",
-              "L4": "none",
-              "L5": "none",
-              "L6": "none"
-            },
-            "blank-zero+text-withheld+error-zero": {
-              "L2": "twin:P2",
-              "L3": "twin:P3",
-              "L4": "twin:P4",
-              "L5": "twin:P5",
-              "L6": "twin:P6"
-            },
-            "blank-zero+text-withheld+error-skipped": {
-              "L2": "twin:Q2",
-              "L3": "twin:Q3",
-              "L4": "twin:Q4",
-              "L5": "twin:Q5",
-              "L6": "twin:Q6"
-            },
-            "blank-zero+text-zero+error-withheld": {
-              "L2": "none",
-              "L3": "none",
-              "L4": "none",
-              "L5": "none",
-              "L6": "none"
-            },
-            "blank-zero+text-zero+error-skipped": {
-              "L2": "twin:Q2",
-              "L3": "twin:Q3",
-              "L4": "twin:Q4",
-              "L5": "twin:Q5",
-              "L6": "twin:Q6"
-            },
-            "blank-zero+text-skipped+error-withheld": {
-              "L2": "none",
-              "L3": "none",
-              "L4": "none",
-              "L5": "none",
-              "L6": "none"
-            },
-            "blank-zero+text-skipped+error-zero": {
-              "L2": "twin:P2",
-              "L3": "twin:P3",
-              "L4": "twin:P4",
-              "L5": "twin:P5",
-              "L6": "twin:P6"
-            },
-            "blank-zero+text-skipped+error-skipped": {
-              "L2": "twin:Q2",
-              "L3": "twin:Q3",
-              "L4": "twin:Q4",
-              "L5": "twin:Q5",
-              "L6": "twin:Q6"
-            },
-            "blank-skipped+text-withheld+error-withheld": {
-              "L2": "none",
-              "L3": "none",
-              "L4": "none",
-              "L5": "none",
-              "L6": "none"
-            },
-            "blank-skipped+text-withheld+error-zero": {
-              "L2": "twin:P2",
-              "L3": "twin:P3",
-              "L4": "twin:P4",
-              "L5": "twin:P5",
-              "L6": "twin:P6"
-            },
-            "blank-skipped+text-withheld+error-skipped": {
-              "L2": "twin:Q2",
-              "L3": "twin:Q3",
-              "L4": "twin:Q4",
-              "L5": "twin:Q5",
-              "L6": "twin:Q6"
-            },
-            "blank-skipped+text-zero+error-withheld": {
-              "L2": "none",
-              "L3": "none",
-              "L4": "none",
-              "L5": "none",
-              "L6": "none"
-            },
-            "blank-skipped+text-zero+error-zero": {
-              "L2": "twin:P2",
-              "L3": "twin:P3",
-              "L4": "twin:P4",
-              "L5": "twin:P5",
-              "L6": "twin:P6"
-            },
-            "blank-skipped+text-zero+error-skipped": {
-              "L2": "twin:Q2",
-              "L3": "twin:Q3",
-              "L4": "twin:Q4",
-              "L5": "twin:Q5",
-              "L6": "twin:Q6"
-            },
-            "blank-skipped+text-skipped+error-withheld": {
-              "L2": "none",
-              "L3": "none",
-              "L4": "none",
-              "L5": "none",
-              "L6": "none"
-            },
-            "blank-skipped+text-skipped+error-zero": {
-              "L2": "twin:P2",
-              "L3": "twin:P3",
-              "L4": "twin:P4",
-              "L5": "twin:P5",
-              "L6": "twin:P6"
             }
           },
           "twinExpect": {
@@ -102136,7 +100600,7 @@
         },
         {
           "id": "nonnum-error-last",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-error",
           "observable": "fill",
           "refs": [
             "M2",
@@ -102166,174 +100630,6 @@
               "M4": "twin:Q4",
               "M5": "twin:Q5",
               "M6": "twin:Q6"
-            },
-            "blank-withheld+text-withheld+error-zero": {
-              "M2": "twin:R2",
-              "M3": "twin:R3",
-              "M4": "twin:R4",
-              "M5": "twin:R5",
-              "M6": "twin:R6"
-            },
-            "blank-withheld+text-withheld+error-skipped": {
-              "M2": "twin:Q2",
-              "M3": "twin:Q3",
-              "M4": "twin:Q4",
-              "M5": "twin:Q5",
-              "M6": "twin:Q6"
-            },
-            "blank-withheld+text-zero+error-withheld": {
-              "M2": "none",
-              "M3": "none",
-              "M4": "none",
-              "M5": "none",
-              "M6": "none"
-            },
-            "blank-withheld+text-zero+error-zero": {
-              "M2": "twin:R2",
-              "M3": "twin:R3",
-              "M4": "twin:R4",
-              "M5": "twin:R5",
-              "M6": "twin:R6"
-            },
-            "blank-withheld+text-zero+error-skipped": {
-              "M2": "twin:Q2",
-              "M3": "twin:Q3",
-              "M4": "twin:Q4",
-              "M5": "twin:Q5",
-              "M6": "twin:Q6"
-            },
-            "blank-withheld+text-skipped+error-withheld": {
-              "M2": "none",
-              "M3": "none",
-              "M4": "none",
-              "M5": "none",
-              "M6": "none"
-            },
-            "blank-withheld+text-skipped+error-zero": {
-              "M2": "twin:R2",
-              "M3": "twin:R3",
-              "M4": "twin:R4",
-              "M5": "twin:R5",
-              "M6": "twin:R6"
-            },
-            "blank-withheld+text-skipped+error-skipped": {
-              "M2": "twin:Q2",
-              "M3": "twin:Q3",
-              "M4": "twin:Q4",
-              "M5": "twin:Q5",
-              "M6": "twin:Q6"
-            },
-            "blank-zero+text-withheld+error-withheld": {
-              "M2": "none",
-              "M3": "none",
-              "M4": "none",
-              "M5": "none",
-              "M6": "none"
-            },
-            "blank-zero+text-withheld+error-zero": {
-              "M2": "twin:R2",
-              "M3": "twin:R3",
-              "M4": "twin:R4",
-              "M5": "twin:R5",
-              "M6": "twin:R6"
-            },
-            "blank-zero+text-withheld+error-skipped": {
-              "M2": "twin:Q2",
-              "M3": "twin:Q3",
-              "M4": "twin:Q4",
-              "M5": "twin:Q5",
-              "M6": "twin:Q6"
-            },
-            "blank-zero+text-zero+error-withheld": {
-              "M2": "none",
-              "M3": "none",
-              "M4": "none",
-              "M5": "none",
-              "M6": "none"
-            },
-            "blank-zero+text-zero+error-skipped": {
-              "M2": "twin:Q2",
-              "M3": "twin:Q3",
-              "M4": "twin:Q4",
-              "M5": "twin:Q5",
-              "M6": "twin:Q6"
-            },
-            "blank-zero+text-skipped+error-withheld": {
-              "M2": "none",
-              "M3": "none",
-              "M4": "none",
-              "M5": "none",
-              "M6": "none"
-            },
-            "blank-zero+text-skipped+error-zero": {
-              "M2": "twin:R2",
-              "M3": "twin:R3",
-              "M4": "twin:R4",
-              "M5": "twin:R5",
-              "M6": "twin:R6"
-            },
-            "blank-zero+text-skipped+error-skipped": {
-              "M2": "twin:Q2",
-              "M3": "twin:Q3",
-              "M4": "twin:Q4",
-              "M5": "twin:Q5",
-              "M6": "twin:Q6"
-            },
-            "blank-skipped+text-withheld+error-withheld": {
-              "M2": "none",
-              "M3": "none",
-              "M4": "none",
-              "M5": "none",
-              "M6": "none"
-            },
-            "blank-skipped+text-withheld+error-zero": {
-              "M2": "twin:R2",
-              "M3": "twin:R3",
-              "M4": "twin:R4",
-              "M5": "twin:R5",
-              "M6": "twin:R6"
-            },
-            "blank-skipped+text-withheld+error-skipped": {
-              "M2": "twin:Q2",
-              "M3": "twin:Q3",
-              "M4": "twin:Q4",
-              "M5": "twin:Q5",
-              "M6": "twin:Q6"
-            },
-            "blank-skipped+text-zero+error-withheld": {
-              "M2": "none",
-              "M3": "none",
-              "M4": "none",
-              "M5": "none",
-              "M6": "none"
-            },
-            "blank-skipped+text-zero+error-zero": {
-              "M2": "twin:R2",
-              "M3": "twin:R3",
-              "M4": "twin:R4",
-              "M5": "twin:R5",
-              "M6": "twin:R6"
-            },
-            "blank-skipped+text-zero+error-skipped": {
-              "M2": "twin:Q2",
-              "M3": "twin:Q3",
-              "M4": "twin:Q4",
-              "M5": "twin:Q5",
-              "M6": "twin:Q6"
-            },
-            "blank-skipped+text-skipped+error-withheld": {
-              "M2": "none",
-              "M3": "none",
-              "M4": "none",
-              "M5": "none",
-              "M6": "none"
-            },
-            "blank-skipped+text-skipped+error-zero": {
-              "M2": "twin:R2",
-              "M3": "twin:R3",
-              "M4": "twin:R4",
-              "M5": "twin:R5",
-              "M6": "twin:R6"
             }
           },
           "twinExpect": {
@@ -102351,7 +100647,7 @@
         },
         {
           "id": "nonnum-error-middle",
-          "capabilityId": "formula:cfvo-nonnumeric",
+          "capabilityId": "formula:cfvo-nonnumeric-error",
           "observable": "fill",
           "refs": [
             "N2",
@@ -102374,130 +100670,10 @@
               "N4": "twin:S4",
               "N5": "twin:S5",
               "N6": "twin:S6"
-            },
-            "blank-withheld+text-withheld+error-zero": {
-              "N2": "twin:S2",
-              "N3": "twin:S3",
-              "N4": "twin:S4",
-              "N5": "twin:S5",
-              "N6": "twin:S6"
-            },
-            "blank-withheld+text-zero+error-withheld": {
-              "N2": "none",
-              "N3": "none",
-              "N4": "none",
-              "N5": "none",
-              "N6": "none"
-            },
-            "blank-withheld+text-zero+error-zero": {
-              "N2": "twin:S2",
-              "N3": "twin:S3",
-              "N4": "twin:S4",
-              "N5": "twin:S5",
-              "N6": "twin:S6"
-            },
-            "blank-withheld+text-skipped+error-withheld": {
-              "N2": "none",
-              "N3": "none",
-              "N4": "none",
-              "N5": "none",
-              "N6": "none"
-            },
-            "blank-withheld+text-skipped+error-zero": {
-              "N2": "twin:S2",
-              "N3": "twin:S3",
-              "N4": "twin:S4",
-              "N5": "twin:S5",
-              "N6": "twin:S6"
-            },
-            "blank-zero+text-withheld+error-withheld": {
-              "N2": "none",
-              "N3": "none",
-              "N4": "none",
-              "N5": "none",
-              "N6": "none"
-            },
-            "blank-zero+text-withheld+error-zero": {
-              "N2": "twin:S2",
-              "N3": "twin:S3",
-              "N4": "twin:S4",
-              "N5": "twin:S5",
-              "N6": "twin:S6"
-            },
-            "blank-zero+text-zero+error-withheld": {
-              "N2": "none",
-              "N3": "none",
-              "N4": "none",
-              "N5": "none",
-              "N6": "none"
-            },
-            "blank-zero+text-skipped+error-withheld": {
-              "N2": "none",
-              "N3": "none",
-              "N4": "none",
-              "N5": "none",
-              "N6": "none"
-            },
-            "blank-zero+text-skipped+error-zero": {
-              "N2": "twin:S2",
-              "N3": "twin:S3",
-              "N4": "twin:S4",
-              "N5": "twin:S5",
-              "N6": "twin:S6"
-            },
-            "blank-skipped+text-withheld+error-withheld": {
-              "N2": "none",
-              "N3": "none",
-              "N4": "none",
-              "N5": "none",
-              "N6": "none"
-            },
-            "blank-skipped+text-withheld+error-zero": {
-              "N2": "twin:S2",
-              "N3": "twin:S3",
-              "N4": "twin:S4",
-              "N5": "twin:S5",
-              "N6": "twin:S6"
-            },
-            "blank-skipped+text-zero+error-withheld": {
-              "N2": "none",
-              "N3": "none",
-              "N4": "none",
-              "N5": "none",
-              "N6": "none"
-            },
-            "blank-skipped+text-zero+error-zero": {
-              "N2": "twin:S2",
-              "N3": "twin:S3",
-              "N4": "twin:S4",
-              "N5": "twin:S5",
-              "N6": "twin:S6"
-            },
-            "blank-skipped+text-skipped+error-withheld": {
-              "N2": "none",
-              "N3": "none",
-              "N4": "none",
-              "N5": "none",
-              "N6": "none"
-            },
-            "blank-skipped+text-skipped+error-zero": {
-              "N2": "twin:S2",
-              "N3": "twin:S3",
-              "N4": "twin:S4",
-              "N5": "twin:S5",
-              "N6": "twin:S6"
             }
           },
           "omitted": {
-            "skipped": "skipped error at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-withheld+text-withheld+error-skipped": "skipped error at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-withheld+text-zero+error-skipped": "skipped error at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-withheld+text-skipped+error-skipped": "skipped error at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-zero+text-withheld+error-skipped": "skipped error at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-zero+text-zero+error-skipped": "skipped error at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-zero+text-skipped+error-skipped": "skipped error at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-skipped+text-withheld+error-skipped": "skipped error at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
-            "blank-skipped+text-zero+error-skipped": "skipped error at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations"
+            "skipped": "a midpoint has no positional extreme to skip to, so skipped predicts nothing here (production withholds the rule); decided by the first and last configurations"
           },
           "twinExpect": {
             "S2": "visual",

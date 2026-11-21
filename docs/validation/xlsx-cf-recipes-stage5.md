@@ -147,10 +147,10 @@ npx tsx scripts/cf-refs/audit.ts --stage 5
 
 ### 2d. The non-numeric formula bound, per kind (the cfvo-nonnumeric follow-up, 2026-11-21)
 
-`stage5-cfvo-nonnumeric-v2` owns `formula:cfvo-nonnumeric` (through `CF_STAGE5_OWNERS`, appended last). In `stage5-cfvo-formulas`, Excel painted nothing for a text bound (L) and an error bound (N), and read a blank bound as 0 (M), so no uniform reading matched. The per-kind reading was formed after that capture. Production's per-kind treatment (`cfvoNonNumericTreatment`, 0c572321) is committed before this case is captured and is not registered. A reading may be registered from this capture only because both the hypothesis and the behaviour predate it.
+`stage5-cfvo-nonnumeric-v2` (appended last) measures each kind on its own evidence id: `formula:cfvo-nonnumeric-blank`, `-text`, `-empty-string` and `-error` (pre-capture ruling: a surprise in one kind refuses only that kind). The umbrella `formula:cfvo-nonnumeric` stays with `stage5-cfvo-formulas`, a recorded refusal; its reading is the composition of the per-kind ones, held kind by kind. In `stage5-cfvo-formulas`, Excel painted nothing for a text bound (L) and an error bound (N), and read a blank bound as 0 (M), so no uniform reading matched. The per-kind reading was formed after that capture. Production's per-kind treatment (`cfvoNonNumericTreatmentOf`, 0c572321 and 67c3edb0: a registered per-kind id decides its kind alone, and a kind that is registered but not published stays withheld) is committed before this case is captured and is not registered. A reading may be registered from this capture only because both the hypothesis and the behaviour predate it.
 
 The rules are colour scales only (the measured scope). Each one has a single `type="formula"` bound that is an absolute one-cell reference, so the result kind is the only variable:
-- **Sources:** `$A$1` (absent: blank), `$A$2` (`"abc"`: text), `$A$3` (`=""`, cached empty string: text in production) and `$A$4` (`#N/A`: error).
+- **Sources:** `$A$1` (absent: blank), `$A$2` (`"abc"`: text), `$A$3` (`=""`, cached empty string: its own kind, `-empty-string`, so its failure cannot affect text) and `$A$4` (`#N/A`: error).
 - **Positions:** each source appears three times:
   - as the first point of `[formula, max]`;
   - as the last point of `[min, formula]`;
@@ -160,10 +160,10 @@ The rules are colour scales only (the measured scope). Each one has a single `ty
 - **Literal twins:** P `[num 0, max]`, Q `[min, max]`, R `[min, num 0]`, S `[min, num 0, max]`.
 - **Isolation:** no other rule covers a designated cell, and the base fill is the default.
 
-The pre-registered readings are every combination of one treatment per kind, 27 in all. The uniform `withheld`, `zero` and `skipped` keep their names; the 24 mixed combinations are named `blank-<t>+text-<t>+error-<t>`. Each treatment predicts:
+Each id pre-registers `withheld`, `zero` and `skipped` on its own three configurations. Each treatment predicts:
 - **`withheld`:** the rule paints nothing (`none`).
 - **`zero`:** a 0 bound, the twin with num 0 in the bound's place (P, R or S).
-- **`skipped`:** the positional extreme, twin Q. A midpoint has no extreme, so the middle configurations omit the 9 combinations that skip their kind (`omitted`, with the reason), and production withholds such a rule.
+- **`skipped`:** the positional extreme, twin Q. A midpoint has no extreme, so the middle configurations omit `skipped` (`omitted`, with the reason), and production withholds such a rule.
 
 Every fraction is dyadic. Zero and skipped differ at three cells of each first and last configuration (-8, 8, 16), and withheld differs from both at all five. The sheet is A1:AM6, with 160 expected cells (80 designated, each with its same-content control).
 
@@ -176,11 +176,11 @@ npx tsx scripts/cf-refs/audit.ts --stage 5
 
 - **Expected:**
   - a repair-free open, with Excel keeping the twelve `$A$n` bounds and `A3`'s `=""` (resaved `t="str"` with an empty `<v>`) as authored, and `A1` absent;
-  - `formulaEvaluation['formula:cfvo-nonnumeric']` reports `discriminating`, matching one combination. `stage5-cfvo-formulas` suggests `blank-zero+text-withheld+error-withheld`, which is not registered from it.
+  - `formulaEvaluation` reports each of the four per-kind ids `discriminating`, each matching one treatment. `stage5-cfvo-formulas` suggests blank `zero`, text and error `withheld` (the umbrella `blank-zero+text-withheld+error-withheld`), which is not registered from it.
 - **Stop and record** (never retried, never refitted):
   - a repair, strip or rewritten bound (keep `<id>.rejected.xlsx`), or `A3` resaved as anything but an empty string;
-  - `formula-hypothesis-none`: a kind treated differently by position, or `=""` treated unlike `"abc"`, is a finding;
-  - `non-discriminating` or `formula-replication-shortfall`;
+  - `formula-hypothesis-none` for an id (a kind treated differently by position) is a finding for that kind alone: it stays withheld and the other kinds are judged on their own;
+  - `non-discriminating` or `formula-replication-shortfall` for an id, likewise;
   - a twin that renders nothing.
 
 ## 3. Unresolved shapes (record only)

@@ -19,7 +19,7 @@ import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
 import { createCfService } from '../src/xlsx/cf/service'
 import { CF_LIMITS, createCfMemory } from '../src/xlsx/cf/limits'
 import { injectCfFormulaSelections, withInjectedCfEvidence } from '../src/xlsx/cf/evidence'
-import { CF_FORMULA_PRODUCTION_READINGS } from '../src/xlsx/cf/formulaReadings'
+import { CF_CFVO_NONNUMERIC_KIND_IDS, CF_FORMULA_PRODUCTION_READINGS, injectCfFormulaReadings } from '../src/xlsx/cf/formulaReadings'
 import { cfRulesVersion } from '../src/xlsx/view/pagedSource'
 import { CF_STAGE5_OWNERS, type CfManifest } from '../scripts/cf-refs/cases'
 import { CF_STAGE5_UNCONFIRMABLE, stage5Publication, stage5UnconfirmableScope, auditStage5Manifest, type Stage5AuditReport } from '../scripts/cf-refs/audit'
@@ -293,13 +293,29 @@ describe('every registered formula reading is the reading production implements,
     const registry = CF_FORMULA_PRODUCTION_READINGS
     const { reproduced, unconfirmableChecked, omittedChecked, violations, discriminating } = await productionReadingsCheck()
     expect(violations).toEqual([])
-    // The only omitted registered reading: skipped at the four midpoints of stage5-cfvo-nonnumeric-v2, withheld by production.
-    expect([...omittedChecked].sort()).toEqual(['blank', 'empty-text', 'error', 'text'].map(s => `formula:cfvo-nonnumeric|stage5-cfvo-nonnumeric-v2|nonnum-${s}-middle|skipped`))
+    // No registered reading is omitted anywhere yet (the per-kind cfvo-nonnumeric ids are unregistered: rehearsed below).
+    expect([...omittedChecked]).toEqual([])
     const unreproduced = Object.keys(registry).filter(id => !reproduced.has(id) && !REUSE_ONLY.test(id) && UNREACHABLE[id] === undefined && !unconfirmableChecked.has(id))
     expect([...unconfirmableChecked].sort()).toEqual(Object.keys(CF_STAGE5_UNCONFIRMABLE).sort())
     expect(unreproduced).toEqual([])
     for (const id of Object.keys(UNREACHABLE)) expect(reproduced.has(id), `${id} is now reachable: drop it from UNREACHABLE`).toBe(false)
     expect(discriminating).toBeGreaterThan(30)
+  }, 300_000)
+})
+
+describe('rehearsing the per-kind cfvo-nonnumeric registration (stage5-cfvo-nonnumeric-v2, pre-capture)', () => {
+  it('with every per-kind id registered as the selection withheld | zero | skipped, each reading is production\'s on the case; skipped at a midpoint withholds', async () => {
+    const proposed = Object.fromEntries(Object.values(CF_CFVO_NONNUMERIC_KIND_IDS).map(id => [id, Object.freeze(['withheld', 'zero', 'skipped'])]))
+    injectCfFormulaReadings(proposed)
+    try {
+      const { reproducedAt, omittedChecked, violations } = await readingsCheck({ ...CF_FORMULA_PRODUCTION_READINGS, ...proposed })
+      expect(violations).toEqual([])
+      const kinds = ['blank', 'text', 'empty-text', 'error'] as const
+      const idOf = { blank: 'blank', text: 'text', 'empty-text': 'empty-string', error: 'error' } as const
+      expect([...omittedChecked].sort()).toEqual(kinds.map(s => `formula:cfvo-nonnumeric-${idOf[s]}|stage5-cfvo-nonnumeric-v2|nonnum-${s}-middle|skipped`).sort())
+      // zero and skipped are reproduced in full (withheld paints nothing: every cell withheld, never "reproduced").
+      for (const id of Object.values(CF_CFVO_NONNUMERIC_KIND_IDS)) for (const r of ['zero', 'skipped']) expect(reproducedAt.has(`${id}|stage5-cfvo-nonnumeric-v2|${r}`), `${id} ${r}`).toBe(true)
+    } finally { injectCfFormulaReadings(null) }
   }, 300_000)
 })
 

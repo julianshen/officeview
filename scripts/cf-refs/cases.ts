@@ -7499,42 +7499,34 @@ function cfvoRelativeA1Fixture(): S5Fixture {
  * 2026-11-21): stage5-cfvo-nonnumeric-v2. stage5-cfvo-formulas L/M/N matched none of the uniform readings: Excel painted
  * nothing for a text ($F$3 = "abc") and an error ($F$5 = #N/A) bound and read a blank one ($F$4) as 0. A per-kind reading
  * was formed after that capture, and production's per-kind treatment (service.ts `substitutedBound`,
- * `cfvoNonNumericTreatment`) after it too, so neither may register from it. This case pre-registers every combination of
- * one treatment per result kind: the three uniform readings (`withheld`, `zero`, `skipped`) under their own names and the
- * 24 mixed ones as `blank-<t>+text-<t>+error-<t>`. Each `type="formula"` colour-scale bound is an absolute single-cell
- * reference, so the result kind is the only variable: A1 (absent: blank), A2 "abc" (text), A3 ="" (production reads its
- * cached empty string as text) and A4 #N/A (error), each as the first point of [formula, max], the last of [min, formula]
- * and the middle of a 3-colour [min, formula, max]. `withheld` predicts that the rule paints nothing (`none`: no other
- * rule covers a designated cell and the base fill is the default), `zero` the literal twin with num 0 in the bound's place
- * (P, R, S), `skipped` the min/max twin Q; a midpoint has no extreme, so `skipped` there predicts nothing (`omitted`;
- * production withholds it). Five rows (-32, -8, 8, 16, 32: dyadic fractions only) separate zero from skipped at three
- * cells of every first and last configuration and withheld from both at all five
- * (tests/xlsx-cf-cfvo-nonnumeric-v2-case.test.ts plants every combination and requires it back as the one match).
+ * `cfvoNonNumericTreatmentOf`) after it too, so neither may register from it. Pre-capture ruling: each kind is its own
+ * evidence id (formula:cfvo-nonnumeric-blank, -text, -empty-string, -error), each pre-registering `withheld`, `zero` and
+ * `skipped`, so a surprise in one kind refuses only that kind; the umbrella formula:cfvo-nonnumeric reading is their
+ * composition (`blank-<t>+text-<t>+error-<t>`), held kind by kind. The empty string of ="" is its own id, so its failure
+ * cannot affect text. Each `type="formula"` colour-scale bound is an absolute single-cell reference, so the result kind is
+ * the only variable: A1 (absent: blank), A2 "abc" (text), A3 ="" (its cached empty string) and A4 #N/A (error), each as
+ * the first point of [formula, max], the last of [min, formula] and the middle of a 3-colour [min, formula, max].
+ * `withheld` predicts that the rule paints nothing (`none`: no other rule covers a designated cell and the base fill is the
+ * default), `zero` the literal twin with num 0 in the bound's place (P, R, S), `skipped` the min/max twin Q; a midpoint has
+ * no extreme, so `skipped` there predicts nothing (`omitted`; production withholds it). Five rows (-32, -8, 8, 16, 32:
+ * dyadic fractions only) separate zero from skipped at three cells of every first and last configuration and withheld
+ * from both at all five (tests/xlsx-cf-cfvo-nonnumeric-v2-case.test.ts plants every reading of every id).
  */
 export const NONNUM_V2_TREATMENTS = ['withheld', 'zero', 'skipped'] as const
 export type NonNumV2Treatment = (typeof NONNUM_V2_TREATMENTS)[number]
-/** The reading name of one treatment per kind: the uniform name when all three agree, else `blank-<t>+text-<t>+error-<t>`. */
-export const nonnumV2Reading = (blank: NonNumV2Treatment, text: NonNumV2Treatment, error: NonNumV2Treatment): string =>
-  blank === text && text === error ? blank : `blank-${blank}+text-${text}+error-${error}`
-/** Every combination, uniform ones first, then blank, text, error in treatment order. */
-export const NONNUM_V2_COMBINATIONS: ReadonlyArray<Readonly<{ name: string; blank: NonNumV2Treatment; text: NonNumV2Treatment; error: NonNumV2Treatment }>> = (() => {
-  const all = NONNUM_V2_TREATMENTS.flatMap(b => NONNUM_V2_TREATMENTS.flatMap(t => NONNUM_V2_TREATMENTS.map(e => ({ name: nonnumV2Reading(b, t, e), blank: b, text: t, error: e }))))
-  return [...all.filter(c => !c.name.includes('+')), ...all.filter(c => c.name.includes('+'))]
-})()
 export const NONNUM_V2_VALUES = [-32, -8, 8, 16, 32] as const
-/** Bound sources (absolute references): their cells and the result kind production reads from each. */
+/** Bound sources (absolute references): their cells, the kind production reads from each and that kind's evidence id. */
 export const NONNUM_V2_SOURCES = [
-  { id: 'blank', ref: 'A1', kind: 'blank' },
-  { id: 'text', ref: 'A2', kind: 'text' },
-  { id: 'empty-text', ref: 'A3', kind: 'text' },
-  { id: 'error', ref: 'A4', kind: 'error' },
+  { id: 'blank', ref: 'A1', kind: 'blank', cap: 'formula:cfvo-nonnumeric-blank' },
+  { id: 'text', ref: 'A2', kind: 'text', cap: 'formula:cfvo-nonnumeric-text' },
+  { id: 'empty-text', ref: 'A3', kind: 'empty-string', cap: 'formula:cfvo-nonnumeric-empty-string' },
+  { id: 'error', ref: 'A4', kind: 'error', cap: 'formula:cfvo-nonnumeric-error' },
 ] as const
 export const NONNUM_V2_POSITIONS = ['first', 'last', 'middle'] as const
 /** The literal twins: P [num 0, max], Q [min, max], R [min, num 0], S [min, num 0, max] (3 colours). */
 export const NONNUM_V2_TWINS = { zeroFirst: 'P', skipped: 'Q', zeroLast: 'R', zeroMiddle: 'S' } as const
 
 function cfvoNonNumericV2Fixture(): S5Fixture {
-  const CAP = 'formula:cfvo-nonnumeric'
   const TWIN = 'formula:cfvo-nonnumeric-v2-twin'
   const V = NONNUM_V2_VALUES
   const r0 = 2, r1 = r0 + V.length - 1
@@ -7549,22 +7541,18 @@ function cfvoNonNumericV2Fixture(): S5Fixture {
   let col = 3 // C (colLetter is 1-based)
   for (const src of NONNUM_V2_SOURCES) for (const position of NONNUM_V2_POSITIONS) {
     const c = colLetter(col++)
-    rules.push(position === 'first' ? s5Scale(CAP, sq(c), p++, [f(src.ref), mx])
-      : position === 'last' ? s5Scale(CAP, sq(c), p++, [mn, f(src.ref)])
-        : s5Scale(CAP, sq(c), p++, [mn, f(src.ref), mx], three))
-    const predict = (t: NonNumV2Treatment): ((ref: string) => string) | undefined =>
-      t === 'withheld' ? always(NONE)
-        : t === 'zero' ? twinCol(position === 'first' ? T.zeroFirst : position === 'last' ? T.zeroLast : T.zeroMiddle)
-          : position === 'middle' ? undefined : twinCol(T.skipped)
-    const hyps: Record<string, (ref: string) => string> = {}
-    const omitted: Record<string, string> = {}
-    for (const comb of NONNUM_V2_COMBINATIONS) {
-      const fn = predict(comb[src.kind])
-      if (fn) hyps[comb.name] = fn
-      else omitted[comb.name] = `skipped ${src.kind} at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations`
+    rules.push(position === 'first' ? s5Scale(src.cap, sq(c), p++, [f(src.ref), mx])
+      : position === 'last' ? s5Scale(src.cap, sq(c), p++, [mn, f(src.ref)])
+        : s5Scale(src.cap, sq(c), p++, [mn, f(src.ref), mx], three))
+    const hyps: Record<string, (ref: string) => string> = {
+      withheld: always(NONE),
+      zero: twinCol(position === 'first' ? T.zeroFirst : position === 'last' ? T.zeroLast : T.zeroMiddle),
+      ...(position === 'middle' ? {} : { skipped: twinCol(T.skipped) }),
     }
-    const cfg = s5Cfg(`nonnum-${src.id}-${position}`, CAP, rowsOf(c, r0, r1), hyps)
-    configurations.push(Object.keys(omitted).length > 0 ? { ...cfg, omitted } : cfg)
+    const cfg = s5Cfg(`nonnum-${src.id}-${position}`, src.cap, rowsOf(c, r0, r1), hyps)
+    configurations.push(position === 'middle'
+      ? { ...cfg, omitted: { skipped: 'a midpoint has no positional extreme to skip to, so skipped predicts nothing here (production withholds the rule); decided by the first and last configurations' } }
+      : cfg)
   }
   rules.push(
     s5Scale(TWIN, sq(T.zeroFirst), p++, [zero, mx]),
@@ -7576,7 +7564,7 @@ function cfvoNonNumericV2Fixture(): S5Fixture {
   return s5rect({
     id: 'stage5-cfvo-nonnumeric-v2',
     question:
-      'S5-H (the cfvo-nonnumeric confirmation case): how does a colour-scale type="formula" bound whose result is blank, text or an error resolve, each kind on its own? The bound is $A$1 (absent: blank), $A$2 ("abc"), $A$3 (="": text) or $A$4 (#N/A), as the first point of [formula, max], the last of [min, formula] and the middle of a 3-colour [min, formula, max], over -32, -8, 8, 16, 32. Readings: one treatment per kind among withheld (the rule paints nothing), zero (a 0 bound: twins P [num 0, max], R [min, num 0], S [min, num 0, max]) and skipped (the positional extreme: twin Q [min, max]; a midpoint has none, so skipped predicts nothing there): the uniform withheld, zero, skipped and the 24 mixed blank-<t>+text-<t>+error-<t>.',
+      'S5-H (the cfvo-nonnumeric confirmation case): how does a colour-scale type="formula" bound whose result is blank, text, an empty string or an error resolve, each kind on its own (formula:cfvo-nonnumeric-blank, -text, -empty-string, -error)? The bound is $A$1 (absent: blank), $A$2 ("abc"), $A$3 (="") or $A$4 (#N/A), as the first point of [formula, max], the last of [min, formula] and the middle of a 3-colour [min, formula, max], over -32, -8, 8, 16, 32. Readings per kind: withheld (the rule paints nothing), zero (a 0 bound: twins P [num 0, max], R [min, num 0], S [min, num 0, max]) and skipped (the positional extreme: twin Q [min, max]; a midpoint has none, so skipped predicts nothing there).',
     cells: { A2: 'abc', A3: { f: '""', v: '', t: 'str' }, A4: { err: '#N/A' }, ...Object.assign({}, ...dataCols.map(c => colValues(c, V, r0))) },
     rules,
     configurations,
@@ -7828,7 +7816,7 @@ export const CF_STAGE5_FIXTURES: readonly S5Fixture[] = ([
   cfvoScopeV2Fixture(),
   // Appended last (the cfvo-relative confirmation case); it owns both cfvo scope ids through CF_STAGE5_OWNERS.
   cfvoRelativeA1Fixture(),
-  // Appended last (the cfvo-nonnumeric confirmation case); it owns formula:cfvo-nonnumeric through CF_STAGE5_OWNERS.
+  // Appended last (the cfvo-nonnumeric confirmation case); it alone holds the per-kind ids formula:cfvo-nonnumeric-<kind>.
   cfvoNonNumericV2Fixture(),
 ] as const satisfies readonly S5Fixture[]).map(withEmptyTwins).map(withPositiveControls)
 
@@ -8022,7 +8010,10 @@ export const CF_STAGE5_UNSUPPORTED: Readonly<Record<string, string>> = {
   'formula:cross-sheet-missing':
     'Ruling S5-REPAIR / S5-K: Excel reads =Gone!A1>0 (no such sheet) as an external-workbook reference; opening the workbook prompted to update links (answered Don\'t update), so no capture exists. Production keeps a formula naming an unknown sheet unresolved; its #REF! reading is never registered.',
   'formula:cfvo-nonnumeric':
-    'Finding (S4-MINMAX precedent): no hypothesis (withheld, zero, skipped) matched what Excel showed for a text, blank or error formula bound in stage5-cfvo-formulas L..N; recorded, never fitted. The capture suggests one treatment per kind (blank read as 0, text and error painting nothing), formed after it: production\'s per-kind treatment (cfvoNonNumericTreatment) post-dates it too, so the confirmation case stage5-cfvo-nonnumeric-v2 owns it. Production keeps a non-numeric formula bound unresolved.',
+    'Finding (S4-MINMAX precedent): no hypothesis (withheld, zero, skipped) matched what Excel showed for a text, blank or error formula bound in stage5-cfvo-formulas L..N; recorded, never fitted. The capture suggests one treatment per kind (blank read as 0, text and error painting nothing), formed after it: production\'s per-kind treatment (cfvoNonNumericTreatmentOf) post-dates it too, so the confirmation case stage5-cfvo-nonnumeric-v2 measures each kind on its own id (formula:cfvo-nonnumeric-blank, -text, -empty-string, -error), whose registered readings decide production kind by kind. Production keeps a non-numeric formula bound unresolved.',
+  // The cfvo-nonnumeric confirmation case (pre-capture ruling): one evidence id per kind, recorded refusals until its capture.
+  ...Object.fromEntries((['blank', 'text', 'empty-string', 'error'] as const).map(k => [`formula:cfvo-nonnumeric-${k}`,
+    `Awaiting capture (the cfvo-nonnumeric confirmation case, 2026-11-21): stage5-cfvo-nonnumeric-v2 pre-registers withheld, zero and skipped for a ${k === 'empty-string' ? 'cached empty-string (="")' : k} colour-scale formula bound, built after production\'s per-kind treatment (cfvoNonNumericTreatmentOf), and is not yet captured. Production keeps such a bound unresolved.`])),
 }
 
 /**
@@ -8052,7 +8043,6 @@ export const CF_STAGE5_OWNERS: Readonly<Record<string, string>> = {
   'bar:bounds-formula': 'stage5-bar-bounds-formula',
   'formula:cfvo-scope-multi-range': 'stage5-cfvo-relative-a1',
   'formula:cfvo-relative': 'stage5-cfvo-relative-a1',
-  'formula:cfvo-nonnumeric': 'stage5-cfvo-nonnumeric-v2',
 }
 
 /** Complete capability registry for every Stage 5 marker, configuration and reused capture (one entry per id). */
