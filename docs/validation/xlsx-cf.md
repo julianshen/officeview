@@ -2934,4 +2934,3 @@ Both left `CF_STAGE5_UNSUPPORTED`. The pre-capture rehearsals now check the real
   - non-numeric bounds generally.
 
 **Audits.** Stage 5 `structural=34/34 unsupported=9 pending=5 unverifiedNonDiscriminating=12 stageComplete=true blocked=0`. 3,034 records over 34 cases (20 measured), 903 formula cells, 623 painted as Excel, 307 with justified unresolved slots, 0 disagreeing.
-
