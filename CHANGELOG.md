@@ -12,6 +12,15 @@ in git history.
 
 ### Added
 
+- **Excel colour scales with a formula bound that reads a blank cell.** A colour-scale `type="formula"` bound that evaluates
+  to a blank cell now reads as 0 in any position (first, last, or the midpoint of a 3-colour scale), which is what Excel
+  16.115 does (`formula:cfvo-nonnumeric-blank`, matched reading `zero`; 345 verified capabilities, 51 Stage 5). That
+  includes a relative bound whose A1 window wraps off the sheet onto a blank cell. Still withheld: a bound that evaluates to
+  text, to the empty string of `=""` or to an error (`formula:cfvo-nonnumeric-text`, `-empty-string`, `-error`, matched
+  `withheld`). Excel paints nothing for such a rule, and the viewer keeps the rule unresolved, so the cell keeps its base
+  formatting and is announced as unavailable, and no lower-priority rule paints in its place. Non-numeric bounds of data
+  bars and icon sets, and boolean results, stay withheld too. Evidence: `docs/validation/xlsx-cf.md` §14.z.14.
+
 - **Excel colour scales over several ranges.** A colour scale whose range lists several rectangles (for example
   `B2:B5 D2:D5`) now paints, with its statistics (min, max, percentile midpoint) taken over all of its ranges together,
   which is what Excel 16.115 does (`scale:scope-disjoint`, matched reading `union`; 341 verified capabilities). This also

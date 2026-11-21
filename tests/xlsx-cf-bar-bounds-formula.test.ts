@@ -66,7 +66,7 @@ describe('stage5-bar-bounds-formula: the case', () => {
     expect(CF_STAGE5_OWNERS[CAP]).toBe(ID)
     expect(CF_STAGE5_CAPABILITIES.find(e => e.capabilityId === CAP)!.caseId).toBe(ID)
     // Appended last at the time; only the cfvo-scope follow-up (stage5-cfvo-scope-v2) comes after it.
-    expect(CF_STAGE5_CASES.slice(-3).map(x => x.id)).toEqual([ID, 'stage5-cfvo-scope-v2', 'stage5-cfvo-relative-a1'])
+    expect(CF_STAGE5_CASES.slice(-4).map(x => x.id)).toEqual([ID, 'stage5-cfvo-scope-v2', 'stage5-cfvo-relative-a1', 'stage5-cfvo-nonnumeric-v2'])
     expect(capabilityOwnerCase(CAP, manifest)?.id).toBe(ID)
     expect(CF_STAGE5_CASES.find(x => x.id === 'stage5-cfvo-formulas')!.formulaConfigurations!.some(x => x.id === 'cfvo-bar-formula' && x.capabilityId === CAP)).toBe(true)
     expect(Object.values(CF_STAGE5_GROUPS).flat()).toContain(ID)
