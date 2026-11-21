@@ -5,6 +5,7 @@ import { canNotes, effectivePolicy, type AuthDecision } from '../src/hooks'
 import { hiddenUnits, DocumentHost, RenderRefusal } from '../src/render'
 import { entryHiddenSlideDeck, hiddenSlideDeck } from './fixtures'
 import { Client, disposePool, start } from './harness'
+import { rejectionMessage } from './fixtures/rejection'
 
 afterAll(() => disposePool())
 
@@ -158,7 +159,10 @@ describe('hidden detection failure releases the paintables', () => {
       paintables.dispose = () => { disposed++; dispose() }
       throw new Error('boom')
     }
-    await expect(host.open('d1', await hiddenSlideDeck(), 'full')).rejects.toThrow('boom')
+    // Not `expect(p).rejects`: with a worker pool alive in the process (earlier tests here start one), on Bun 1.4.5
+    // the open stalls while the matcher waits (it advances only when a timer wakes the loop) and settles at the test
+    // timeout; a plain await settles it in ~50 ms (measured on Linux; see fixtures/rejection.ts).
+    expect(await rejectionMessage(host.open('d1', await hiddenSlideDeck(), 'full'))).toContain('boom')
     expect(disposed).toBe(1)
     expect(host.docCount).toBe(0)
     // The default reader then opens the same bytes normally.
