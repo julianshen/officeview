@@ -98507,6 +98507,4022 @@
         "savedSha256": "dcc1d372b94638f92c591c877b47d408c083ab5cdd10b8567c11f78f754bf5b0",
         "openedRepairFree": true
       }
+    },
+    {
+      "id": "stage5-cfvo-nonnumeric-v2",
+      "stage": 5,
+      "question": "S5-H (the cfvo-nonnumeric confirmation case): how does a colour-scale type=\"formula\" bound whose result is blank, text or an error resolve, each kind on its own? The bound is $A$1 (absent: blank), $A$2 (\"abc\"), $A$3 (=\"\": text) or $A$4 (#N/A), as the first point of [formula, max], the last of [min, formula] and the middle of a 3-colour [min, formula, max], over -32, -8, 8, 16, 32. Readings: one treatment per kind among withheld (the rule paints nothing), zero (a 0 bound: twins P [num 0, max], R [min, num 0], S [min, num 0, max]) and skipped (the positional extreme: twin Q [min, max]; a midpoint has none, so skipped predicts nothing there): the uniform withheld, zero, skipped and the 24 mixed blank-<t>+text-<t>+error-<t>.",
+      "input": "tests/fixtures/xlsx-cf/inputs/stage5-cfvo-nonnumeric-v2.xlsx",
+      "saved": "tests/fixtures/xlsx-cf/stage5-cfvo-nonnumeric-v2.xlsx",
+      "sheet": "Sheet1",
+      "range": "A1:AM6",
+      "requiredAppearances": [
+        "screen"
+      ],
+      "markers": [
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "C2:C6",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "ruleType": "colorScale",
+          "priority": 1,
+          "formulas": [
+            "$A$1"
+          ],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "formula",
+                "f": "$A$1"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "C2",
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "D2:D6",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "ruleType": "colorScale",
+          "priority": 2,
+          "formulas": [
+            "$A$1"
+          ],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "formula",
+                "f": "$A$1"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "D2",
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "E2:E6",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "ruleType": "colorScale",
+          "priority": 3,
+          "formulas": [
+            "$A$1"
+          ],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "formula",
+                "f": "$A$1"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FFFFEB84",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "E2",
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "F2:F6",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "ruleType": "colorScale",
+          "priority": 4,
+          "formulas": [
+            "$A$2"
+          ],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "formula",
+                "f": "$A$2"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "F2",
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "G2:G6",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "ruleType": "colorScale",
+          "priority": 5,
+          "formulas": [
+            "$A$2"
+          ],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "formula",
+                "f": "$A$2"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "G2",
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "H2:H6",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "ruleType": "colorScale",
+          "priority": 6,
+          "formulas": [
+            "$A$2"
+          ],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "formula",
+                "f": "$A$2"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FFFFEB84",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "H2",
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "I2:I6",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "ruleType": "colorScale",
+          "priority": 7,
+          "formulas": [
+            "$A$3"
+          ],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "formula",
+                "f": "$A$3"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "I2",
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "J2:J6",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "ruleType": "colorScale",
+          "priority": 8,
+          "formulas": [
+            "$A$3"
+          ],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "formula",
+                "f": "$A$3"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "J2",
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "K2:K6",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "ruleType": "colorScale",
+          "priority": 9,
+          "formulas": [
+            "$A$3"
+          ],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "formula",
+                "f": "$A$3"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FFFFEB84",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "K2",
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "L2:L6",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "ruleType": "colorScale",
+          "priority": 10,
+          "formulas": [
+            "$A$4"
+          ],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "formula",
+                "f": "$A$4"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "L2",
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "M2:M6",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "ruleType": "colorScale",
+          "priority": 11,
+          "formulas": [
+            "$A$4"
+          ],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "formula",
+                "f": "$A$4"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "M2",
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "N2:N6",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "ruleType": "colorScale",
+          "priority": 12,
+          "formulas": [
+            "$A$4"
+          ],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "formula",
+                "f": "$A$4"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FFFFEB84",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          },
+          "formula": {
+            "kind": "cfvo",
+            "anchor": "N2",
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "P2:P6",
+          "capabilityId": "formula:cfvo-nonnumeric-v2-twin",
+          "ruleType": "colorScale",
+          "priority": 13,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "Q2:Q6",
+          "capabilityId": "formula:cfvo-nonnumeric-v2-twin",
+          "ruleType": "colorScale",
+          "priority": 14,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "R2:R6",
+          "capabilityId": "formula:cfvo-nonnumeric-v2-twin",
+          "ruleType": "colorScale",
+          "priority": 15,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "num",
+                "val": "0"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "S2:S6",
+          "capabilityId": "formula:cfvo-nonnumeric-v2-twin",
+          "ruleType": "colorScale",
+          "priority": 16,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FFFFEB84",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        }
+      ],
+      "expected": {
+        "inputSha256": "bf1d8d7dbb1fe65bb462820cdf7553dca115ac26f8dc10c4117b5200cf71707b",
+        "savedSha256": "bf1d8d7dbb1fe65bb462820cdf7553dca115ac26f8dc10c4117b5200cf71707b",
+        "provenance": "seed-hypothesis",
+        "positiveRefs": [],
+        "negativeRefs": [
+          "W2",
+          "W3",
+          "W4",
+          "W5",
+          "W6",
+          "AJ2",
+          "AJ3",
+          "AJ4",
+          "AJ5",
+          "AJ6",
+          "AK2",
+          "AK3",
+          "AK4",
+          "AK5",
+          "AK6",
+          "X2",
+          "X3",
+          "X4",
+          "X5",
+          "X6",
+          "AL2",
+          "AL3",
+          "AL4",
+          "AL5",
+          "AL6",
+          "Y2",
+          "Y3",
+          "Y4",
+          "Y5",
+          "Y6",
+          "AM2",
+          "AM3",
+          "AM4",
+          "AM5",
+          "AM6",
+          "Z2",
+          "Z3",
+          "Z4",
+          "Z5",
+          "Z6",
+          "AA2",
+          "AA3",
+          "AA4",
+          "AA5",
+          "AA6",
+          "AB2",
+          "AB3",
+          "AB4",
+          "AB5",
+          "AB6",
+          "AC2",
+          "AC3",
+          "AC4",
+          "AC5",
+          "AC6",
+          "AD2",
+          "AD3",
+          "AD4",
+          "AD5",
+          "AD6",
+          "AE2",
+          "AE3",
+          "AE4",
+          "AE5",
+          "AE6",
+          "AF2",
+          "AF3",
+          "AF4",
+          "AF5",
+          "AF6",
+          "AG2",
+          "AG3",
+          "AG4",
+          "AG5",
+          "AG6",
+          "AH2",
+          "AH3",
+          "AH4",
+          "AH5",
+          "AH6"
+        ],
+        "cells": [
+          {
+            "ref": "C2",
+            "controlRef": "W2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C3",
+            "controlRef": "W3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C4",
+            "controlRef": "W4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C5",
+            "controlRef": "W5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "C6",
+            "controlRef": "W6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "P2",
+            "controlRef": "AJ2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "P3",
+            "controlRef": "AJ3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "P4",
+            "controlRef": "AJ4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "P5",
+            "controlRef": "AJ5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "P6",
+            "controlRef": "AJ6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q2",
+            "controlRef": "AK2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q3",
+            "controlRef": "AK3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q4",
+            "controlRef": "AK4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q5",
+            "controlRef": "AK5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q6",
+            "controlRef": "AK6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D2",
+            "controlRef": "X2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D3",
+            "controlRef": "X3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D4",
+            "controlRef": "X4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D5",
+            "controlRef": "X5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D6",
+            "controlRef": "X6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R2",
+            "controlRef": "AL2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R3",
+            "controlRef": "AL3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R4",
+            "controlRef": "AL4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R5",
+            "controlRef": "AL5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R6",
+            "controlRef": "AL6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E2",
+            "controlRef": "Y2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E3",
+            "controlRef": "Y3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E4",
+            "controlRef": "Y4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E5",
+            "controlRef": "Y5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "E6",
+            "controlRef": "Y6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "S2",
+            "controlRef": "AM2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "S3",
+            "controlRef": "AM3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "S4",
+            "controlRef": "AM4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "S5",
+            "controlRef": "AM5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "S6",
+            "controlRef": "AM6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F2",
+            "controlRef": "Z2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F3",
+            "controlRef": "Z3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F4",
+            "controlRef": "Z4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F5",
+            "controlRef": "Z5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F6",
+            "controlRef": "Z6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G2",
+            "controlRef": "AA2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G3",
+            "controlRef": "AA3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G4",
+            "controlRef": "AA4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G5",
+            "controlRef": "AA5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "G6",
+            "controlRef": "AA6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H2",
+            "controlRef": "AB2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H3",
+            "controlRef": "AB3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H4",
+            "controlRef": "AB4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H5",
+            "controlRef": "AB5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H6",
+            "controlRef": "AB6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I2",
+            "controlRef": "AC2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I3",
+            "controlRef": "AC3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I4",
+            "controlRef": "AC4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I5",
+            "controlRef": "AC5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "I6",
+            "controlRef": "AC6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "J2",
+            "controlRef": "AD2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "J3",
+            "controlRef": "AD3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "J4",
+            "controlRef": "AD4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "J5",
+            "controlRef": "AD5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "J6",
+            "controlRef": "AD6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "K2",
+            "controlRef": "AE2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "K3",
+            "controlRef": "AE3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "K4",
+            "controlRef": "AE4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "K5",
+            "controlRef": "AE5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "K6",
+            "controlRef": "AE6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L2",
+            "controlRef": "AF2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L3",
+            "controlRef": "AF3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L4",
+            "controlRef": "AF4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L5",
+            "controlRef": "AF5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L6",
+            "controlRef": "AF6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M2",
+            "controlRef": "AG2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M3",
+            "controlRef": "AG3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M4",
+            "controlRef": "AG4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M5",
+            "controlRef": "AG5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M6",
+            "controlRef": "AG6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N2",
+            "controlRef": "AH2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N3",
+            "controlRef": "AH3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N4",
+            "controlRef": "AH4",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N5",
+            "controlRef": "AH5",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N6",
+            "controlRef": "AH6",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "W2",
+            "controlRef": "C2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "W3",
+            "controlRef": "C3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "W4",
+            "controlRef": "C4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "W5",
+            "controlRef": "C5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "W6",
+            "controlRef": "C6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ2",
+            "controlRef": "P2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ3",
+            "controlRef": "P3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ4",
+            "controlRef": "P4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ5",
+            "controlRef": "P5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ6",
+            "controlRef": "P6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK2",
+            "controlRef": "Q2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK3",
+            "controlRef": "Q3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK4",
+            "controlRef": "Q4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK5",
+            "controlRef": "Q5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK6",
+            "controlRef": "Q6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "X2",
+            "controlRef": "D2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "X3",
+            "controlRef": "D3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "X4",
+            "controlRef": "D4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "X5",
+            "controlRef": "D5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "X6",
+            "controlRef": "D6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AL2",
+            "controlRef": "R2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AL3",
+            "controlRef": "R3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AL4",
+            "controlRef": "R4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AL5",
+            "controlRef": "R5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AL6",
+            "controlRef": "R6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Y2",
+            "controlRef": "E2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Y3",
+            "controlRef": "E3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Y4",
+            "controlRef": "E4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Y5",
+            "controlRef": "E5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Y6",
+            "controlRef": "E6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AM2",
+            "controlRef": "S2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AM3",
+            "controlRef": "S3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AM4",
+            "controlRef": "S4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AM5",
+            "controlRef": "S5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AM6",
+            "controlRef": "S6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Z2",
+            "controlRef": "F2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Z3",
+            "controlRef": "F3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Z4",
+            "controlRef": "F4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Z5",
+            "controlRef": "F5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Z6",
+            "controlRef": "F6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AA2",
+            "controlRef": "G2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AA3",
+            "controlRef": "G3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AA4",
+            "controlRef": "G4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AA5",
+            "controlRef": "G5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AA6",
+            "controlRef": "G6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AB2",
+            "controlRef": "H2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AB3",
+            "controlRef": "H3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AB4",
+            "controlRef": "H4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AB5",
+            "controlRef": "H5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AB6",
+            "controlRef": "H6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AC2",
+            "controlRef": "I2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AC3",
+            "controlRef": "I3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AC4",
+            "controlRef": "I4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AC5",
+            "controlRef": "I5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AC6",
+            "controlRef": "I6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AD2",
+            "controlRef": "J2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AD3",
+            "controlRef": "J3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AD4",
+            "controlRef": "J4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AD5",
+            "controlRef": "J5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AD6",
+            "controlRef": "J6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AE2",
+            "controlRef": "K2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AE3",
+            "controlRef": "K3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AE4",
+            "controlRef": "K4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AE5",
+            "controlRef": "K5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AE6",
+            "controlRef": "K6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AF2",
+            "controlRef": "L2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AF3",
+            "controlRef": "L3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AF4",
+            "controlRef": "L4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AF5",
+            "controlRef": "L5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AF6",
+            "controlRef": "L6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AG2",
+            "controlRef": "M2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AG3",
+            "controlRef": "M3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AG4",
+            "controlRef": "M4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AG5",
+            "controlRef": "M5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AG6",
+            "controlRef": "M6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AH2",
+            "controlRef": "N2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AH3",
+            "controlRef": "N3",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AH4",
+            "controlRef": "N4",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AH5",
+            "controlRef": "N5",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AH6",
+            "controlRef": "N6",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          }
+        ]
+      },
+      "formulaConfigurations": [
+        {
+          "id": "nonnum-blank-first",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "observable": "fill",
+          "refs": [
+            "C2",
+            "C3",
+            "C4",
+            "C5",
+            "C6"
+          ],
+          "hypotheses": {
+            "withheld": {
+              "C2": "none",
+              "C3": "none",
+              "C4": "none",
+              "C5": "none",
+              "C6": "none"
+            },
+            "zero": {
+              "C2": "twin:P2",
+              "C3": "twin:P3",
+              "C4": "twin:P4",
+              "C5": "twin:P5",
+              "C6": "twin:P6"
+            },
+            "skipped": {
+              "C2": "twin:Q2",
+              "C3": "twin:Q3",
+              "C4": "twin:Q4",
+              "C5": "twin:Q5",
+              "C6": "twin:Q6"
+            },
+            "blank-withheld+text-withheld+error-zero": {
+              "C2": "none",
+              "C3": "none",
+              "C4": "none",
+              "C5": "none",
+              "C6": "none"
+            },
+            "blank-withheld+text-withheld+error-skipped": {
+              "C2": "none",
+              "C3": "none",
+              "C4": "none",
+              "C5": "none",
+              "C6": "none"
+            },
+            "blank-withheld+text-zero+error-withheld": {
+              "C2": "none",
+              "C3": "none",
+              "C4": "none",
+              "C5": "none",
+              "C6": "none"
+            },
+            "blank-withheld+text-zero+error-zero": {
+              "C2": "none",
+              "C3": "none",
+              "C4": "none",
+              "C5": "none",
+              "C6": "none"
+            },
+            "blank-withheld+text-zero+error-skipped": {
+              "C2": "none",
+              "C3": "none",
+              "C4": "none",
+              "C5": "none",
+              "C6": "none"
+            },
+            "blank-withheld+text-skipped+error-withheld": {
+              "C2": "none",
+              "C3": "none",
+              "C4": "none",
+              "C5": "none",
+              "C6": "none"
+            },
+            "blank-withheld+text-skipped+error-zero": {
+              "C2": "none",
+              "C3": "none",
+              "C4": "none",
+              "C5": "none",
+              "C6": "none"
+            },
+            "blank-withheld+text-skipped+error-skipped": {
+              "C2": "none",
+              "C3": "none",
+              "C4": "none",
+              "C5": "none",
+              "C6": "none"
+            },
+            "blank-zero+text-withheld+error-withheld": {
+              "C2": "twin:P2",
+              "C3": "twin:P3",
+              "C4": "twin:P4",
+              "C5": "twin:P5",
+              "C6": "twin:P6"
+            },
+            "blank-zero+text-withheld+error-zero": {
+              "C2": "twin:P2",
+              "C3": "twin:P3",
+              "C4": "twin:P4",
+              "C5": "twin:P5",
+              "C6": "twin:P6"
+            },
+            "blank-zero+text-withheld+error-skipped": {
+              "C2": "twin:P2",
+              "C3": "twin:P3",
+              "C4": "twin:P4",
+              "C5": "twin:P5",
+              "C6": "twin:P6"
+            },
+            "blank-zero+text-zero+error-withheld": {
+              "C2": "twin:P2",
+              "C3": "twin:P3",
+              "C4": "twin:P4",
+              "C5": "twin:P5",
+              "C6": "twin:P6"
+            },
+            "blank-zero+text-zero+error-skipped": {
+              "C2": "twin:P2",
+              "C3": "twin:P3",
+              "C4": "twin:P4",
+              "C5": "twin:P5",
+              "C6": "twin:P6"
+            },
+            "blank-zero+text-skipped+error-withheld": {
+              "C2": "twin:P2",
+              "C3": "twin:P3",
+              "C4": "twin:P4",
+              "C5": "twin:P5",
+              "C6": "twin:P6"
+            },
+            "blank-zero+text-skipped+error-zero": {
+              "C2": "twin:P2",
+              "C3": "twin:P3",
+              "C4": "twin:P4",
+              "C5": "twin:P5",
+              "C6": "twin:P6"
+            },
+            "blank-zero+text-skipped+error-skipped": {
+              "C2": "twin:P2",
+              "C3": "twin:P3",
+              "C4": "twin:P4",
+              "C5": "twin:P5",
+              "C6": "twin:P6"
+            },
+            "blank-skipped+text-withheld+error-withheld": {
+              "C2": "twin:Q2",
+              "C3": "twin:Q3",
+              "C4": "twin:Q4",
+              "C5": "twin:Q5",
+              "C6": "twin:Q6"
+            },
+            "blank-skipped+text-withheld+error-zero": {
+              "C2": "twin:Q2",
+              "C3": "twin:Q3",
+              "C4": "twin:Q4",
+              "C5": "twin:Q5",
+              "C6": "twin:Q6"
+            },
+            "blank-skipped+text-withheld+error-skipped": {
+              "C2": "twin:Q2",
+              "C3": "twin:Q3",
+              "C4": "twin:Q4",
+              "C5": "twin:Q5",
+              "C6": "twin:Q6"
+            },
+            "blank-skipped+text-zero+error-withheld": {
+              "C2": "twin:Q2",
+              "C3": "twin:Q3",
+              "C4": "twin:Q4",
+              "C5": "twin:Q5",
+              "C6": "twin:Q6"
+            },
+            "blank-skipped+text-zero+error-zero": {
+              "C2": "twin:Q2",
+              "C3": "twin:Q3",
+              "C4": "twin:Q4",
+              "C5": "twin:Q5",
+              "C6": "twin:Q6"
+            },
+            "blank-skipped+text-zero+error-skipped": {
+              "C2": "twin:Q2",
+              "C3": "twin:Q3",
+              "C4": "twin:Q4",
+              "C5": "twin:Q5",
+              "C6": "twin:Q6"
+            },
+            "blank-skipped+text-skipped+error-withheld": {
+              "C2": "twin:Q2",
+              "C3": "twin:Q3",
+              "C4": "twin:Q4",
+              "C5": "twin:Q5",
+              "C6": "twin:Q6"
+            },
+            "blank-skipped+text-skipped+error-zero": {
+              "C2": "twin:Q2",
+              "C3": "twin:Q3",
+              "C4": "twin:Q4",
+              "C5": "twin:Q5",
+              "C6": "twin:Q6"
+            }
+          },
+          "twinExpect": {
+            "P2": "visual",
+            "P3": "visual",
+            "P4": "visual",
+            "P5": "visual",
+            "P6": "visual",
+            "Q2": "visual",
+            "Q3": "visual",
+            "Q4": "visual",
+            "Q5": "visual",
+            "Q6": "visual"
+          }
+        },
+        {
+          "id": "nonnum-blank-last",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "observable": "fill",
+          "refs": [
+            "D2",
+            "D3",
+            "D4",
+            "D5",
+            "D6"
+          ],
+          "hypotheses": {
+            "withheld": {
+              "D2": "none",
+              "D3": "none",
+              "D4": "none",
+              "D5": "none",
+              "D6": "none"
+            },
+            "zero": {
+              "D2": "twin:R2",
+              "D3": "twin:R3",
+              "D4": "twin:R4",
+              "D5": "twin:R5",
+              "D6": "twin:R6"
+            },
+            "skipped": {
+              "D2": "twin:Q2",
+              "D3": "twin:Q3",
+              "D4": "twin:Q4",
+              "D5": "twin:Q5",
+              "D6": "twin:Q6"
+            },
+            "blank-withheld+text-withheld+error-zero": {
+              "D2": "none",
+              "D3": "none",
+              "D4": "none",
+              "D5": "none",
+              "D6": "none"
+            },
+            "blank-withheld+text-withheld+error-skipped": {
+              "D2": "none",
+              "D3": "none",
+              "D4": "none",
+              "D5": "none",
+              "D6": "none"
+            },
+            "blank-withheld+text-zero+error-withheld": {
+              "D2": "none",
+              "D3": "none",
+              "D4": "none",
+              "D5": "none",
+              "D6": "none"
+            },
+            "blank-withheld+text-zero+error-zero": {
+              "D2": "none",
+              "D3": "none",
+              "D4": "none",
+              "D5": "none",
+              "D6": "none"
+            },
+            "blank-withheld+text-zero+error-skipped": {
+              "D2": "none",
+              "D3": "none",
+              "D4": "none",
+              "D5": "none",
+              "D6": "none"
+            },
+            "blank-withheld+text-skipped+error-withheld": {
+              "D2": "none",
+              "D3": "none",
+              "D4": "none",
+              "D5": "none",
+              "D6": "none"
+            },
+            "blank-withheld+text-skipped+error-zero": {
+              "D2": "none",
+              "D3": "none",
+              "D4": "none",
+              "D5": "none",
+              "D6": "none"
+            },
+            "blank-withheld+text-skipped+error-skipped": {
+              "D2": "none",
+              "D3": "none",
+              "D4": "none",
+              "D5": "none",
+              "D6": "none"
+            },
+            "blank-zero+text-withheld+error-withheld": {
+              "D2": "twin:R2",
+              "D3": "twin:R3",
+              "D4": "twin:R4",
+              "D5": "twin:R5",
+              "D6": "twin:R6"
+            },
+            "blank-zero+text-withheld+error-zero": {
+              "D2": "twin:R2",
+              "D3": "twin:R3",
+              "D4": "twin:R4",
+              "D5": "twin:R5",
+              "D6": "twin:R6"
+            },
+            "blank-zero+text-withheld+error-skipped": {
+              "D2": "twin:R2",
+              "D3": "twin:R3",
+              "D4": "twin:R4",
+              "D5": "twin:R5",
+              "D6": "twin:R6"
+            },
+            "blank-zero+text-zero+error-withheld": {
+              "D2": "twin:R2",
+              "D3": "twin:R3",
+              "D4": "twin:R4",
+              "D5": "twin:R5",
+              "D6": "twin:R6"
+            },
+            "blank-zero+text-zero+error-skipped": {
+              "D2": "twin:R2",
+              "D3": "twin:R3",
+              "D4": "twin:R4",
+              "D5": "twin:R5",
+              "D6": "twin:R6"
+            },
+            "blank-zero+text-skipped+error-withheld": {
+              "D2": "twin:R2",
+              "D3": "twin:R3",
+              "D4": "twin:R4",
+              "D5": "twin:R5",
+              "D6": "twin:R6"
+            },
+            "blank-zero+text-skipped+error-zero": {
+              "D2": "twin:R2",
+              "D3": "twin:R3",
+              "D4": "twin:R4",
+              "D5": "twin:R5",
+              "D6": "twin:R6"
+            },
+            "blank-zero+text-skipped+error-skipped": {
+              "D2": "twin:R2",
+              "D3": "twin:R3",
+              "D4": "twin:R4",
+              "D5": "twin:R5",
+              "D6": "twin:R6"
+            },
+            "blank-skipped+text-withheld+error-withheld": {
+              "D2": "twin:Q2",
+              "D3": "twin:Q3",
+              "D4": "twin:Q4",
+              "D5": "twin:Q5",
+              "D6": "twin:Q6"
+            },
+            "blank-skipped+text-withheld+error-zero": {
+              "D2": "twin:Q2",
+              "D3": "twin:Q3",
+              "D4": "twin:Q4",
+              "D5": "twin:Q5",
+              "D6": "twin:Q6"
+            },
+            "blank-skipped+text-withheld+error-skipped": {
+              "D2": "twin:Q2",
+              "D3": "twin:Q3",
+              "D4": "twin:Q4",
+              "D5": "twin:Q5",
+              "D6": "twin:Q6"
+            },
+            "blank-skipped+text-zero+error-withheld": {
+              "D2": "twin:Q2",
+              "D3": "twin:Q3",
+              "D4": "twin:Q4",
+              "D5": "twin:Q5",
+              "D6": "twin:Q6"
+            },
+            "blank-skipped+text-zero+error-zero": {
+              "D2": "twin:Q2",
+              "D3": "twin:Q3",
+              "D4": "twin:Q4",
+              "D5": "twin:Q5",
+              "D6": "twin:Q6"
+            },
+            "blank-skipped+text-zero+error-skipped": {
+              "D2": "twin:Q2",
+              "D3": "twin:Q3",
+              "D4": "twin:Q4",
+              "D5": "twin:Q5",
+              "D6": "twin:Q6"
+            },
+            "blank-skipped+text-skipped+error-withheld": {
+              "D2": "twin:Q2",
+              "D3": "twin:Q3",
+              "D4": "twin:Q4",
+              "D5": "twin:Q5",
+              "D6": "twin:Q6"
+            },
+            "blank-skipped+text-skipped+error-zero": {
+              "D2": "twin:Q2",
+              "D3": "twin:Q3",
+              "D4": "twin:Q4",
+              "D5": "twin:Q5",
+              "D6": "twin:Q6"
+            }
+          },
+          "twinExpect": {
+            "Q2": "visual",
+            "Q3": "visual",
+            "Q4": "visual",
+            "Q5": "visual",
+            "Q6": "visual",
+            "R2": "visual",
+            "R3": "visual",
+            "R4": "visual",
+            "R5": "visual",
+            "R6": "visual"
+          }
+        },
+        {
+          "id": "nonnum-blank-middle",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "observable": "fill",
+          "refs": [
+            "E2",
+            "E3",
+            "E4",
+            "E5",
+            "E6"
+          ],
+          "hypotheses": {
+            "withheld": {
+              "E2": "none",
+              "E3": "none",
+              "E4": "none",
+              "E5": "none",
+              "E6": "none"
+            },
+            "zero": {
+              "E2": "twin:S2",
+              "E3": "twin:S3",
+              "E4": "twin:S4",
+              "E5": "twin:S5",
+              "E6": "twin:S6"
+            },
+            "blank-withheld+text-withheld+error-zero": {
+              "E2": "none",
+              "E3": "none",
+              "E4": "none",
+              "E5": "none",
+              "E6": "none"
+            },
+            "blank-withheld+text-withheld+error-skipped": {
+              "E2": "none",
+              "E3": "none",
+              "E4": "none",
+              "E5": "none",
+              "E6": "none"
+            },
+            "blank-withheld+text-zero+error-withheld": {
+              "E2": "none",
+              "E3": "none",
+              "E4": "none",
+              "E5": "none",
+              "E6": "none"
+            },
+            "blank-withheld+text-zero+error-zero": {
+              "E2": "none",
+              "E3": "none",
+              "E4": "none",
+              "E5": "none",
+              "E6": "none"
+            },
+            "blank-withheld+text-zero+error-skipped": {
+              "E2": "none",
+              "E3": "none",
+              "E4": "none",
+              "E5": "none",
+              "E6": "none"
+            },
+            "blank-withheld+text-skipped+error-withheld": {
+              "E2": "none",
+              "E3": "none",
+              "E4": "none",
+              "E5": "none",
+              "E6": "none"
+            },
+            "blank-withheld+text-skipped+error-zero": {
+              "E2": "none",
+              "E3": "none",
+              "E4": "none",
+              "E5": "none",
+              "E6": "none"
+            },
+            "blank-withheld+text-skipped+error-skipped": {
+              "E2": "none",
+              "E3": "none",
+              "E4": "none",
+              "E5": "none",
+              "E6": "none"
+            },
+            "blank-zero+text-withheld+error-withheld": {
+              "E2": "twin:S2",
+              "E3": "twin:S3",
+              "E4": "twin:S4",
+              "E5": "twin:S5",
+              "E6": "twin:S6"
+            },
+            "blank-zero+text-withheld+error-zero": {
+              "E2": "twin:S2",
+              "E3": "twin:S3",
+              "E4": "twin:S4",
+              "E5": "twin:S5",
+              "E6": "twin:S6"
+            },
+            "blank-zero+text-withheld+error-skipped": {
+              "E2": "twin:S2",
+              "E3": "twin:S3",
+              "E4": "twin:S4",
+              "E5": "twin:S5",
+              "E6": "twin:S6"
+            },
+            "blank-zero+text-zero+error-withheld": {
+              "E2": "twin:S2",
+              "E3": "twin:S3",
+              "E4": "twin:S4",
+              "E5": "twin:S5",
+              "E6": "twin:S6"
+            },
+            "blank-zero+text-zero+error-skipped": {
+              "E2": "twin:S2",
+              "E3": "twin:S3",
+              "E4": "twin:S4",
+              "E5": "twin:S5",
+              "E6": "twin:S6"
+            },
+            "blank-zero+text-skipped+error-withheld": {
+              "E2": "twin:S2",
+              "E3": "twin:S3",
+              "E4": "twin:S4",
+              "E5": "twin:S5",
+              "E6": "twin:S6"
+            },
+            "blank-zero+text-skipped+error-zero": {
+              "E2": "twin:S2",
+              "E3": "twin:S3",
+              "E4": "twin:S4",
+              "E5": "twin:S5",
+              "E6": "twin:S6"
+            },
+            "blank-zero+text-skipped+error-skipped": {
+              "E2": "twin:S2",
+              "E3": "twin:S3",
+              "E4": "twin:S4",
+              "E5": "twin:S5",
+              "E6": "twin:S6"
+            }
+          },
+          "omitted": {
+            "skipped": "skipped blank at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-skipped+text-withheld+error-withheld": "skipped blank at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-skipped+text-withheld+error-zero": "skipped blank at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-skipped+text-withheld+error-skipped": "skipped blank at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-skipped+text-zero+error-withheld": "skipped blank at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-skipped+text-zero+error-zero": "skipped blank at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-skipped+text-zero+error-skipped": "skipped blank at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-skipped+text-skipped+error-withheld": "skipped blank at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-skipped+text-skipped+error-zero": "skipped blank at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations"
+          },
+          "twinExpect": {
+            "S2": "visual",
+            "S3": "visual",
+            "S4": "visual",
+            "S5": "visual",
+            "S6": "visual"
+          }
+        },
+        {
+          "id": "nonnum-text-first",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "observable": "fill",
+          "refs": [
+            "F2",
+            "F3",
+            "F4",
+            "F5",
+            "F6"
+          ],
+          "hypotheses": {
+            "withheld": {
+              "F2": "none",
+              "F3": "none",
+              "F4": "none",
+              "F5": "none",
+              "F6": "none"
+            },
+            "zero": {
+              "F2": "twin:P2",
+              "F3": "twin:P3",
+              "F4": "twin:P4",
+              "F5": "twin:P5",
+              "F6": "twin:P6"
+            },
+            "skipped": {
+              "F2": "twin:Q2",
+              "F3": "twin:Q3",
+              "F4": "twin:Q4",
+              "F5": "twin:Q5",
+              "F6": "twin:Q6"
+            },
+            "blank-withheld+text-withheld+error-zero": {
+              "F2": "none",
+              "F3": "none",
+              "F4": "none",
+              "F5": "none",
+              "F6": "none"
+            },
+            "blank-withheld+text-withheld+error-skipped": {
+              "F2": "none",
+              "F3": "none",
+              "F4": "none",
+              "F5": "none",
+              "F6": "none"
+            },
+            "blank-withheld+text-zero+error-withheld": {
+              "F2": "twin:P2",
+              "F3": "twin:P3",
+              "F4": "twin:P4",
+              "F5": "twin:P5",
+              "F6": "twin:P6"
+            },
+            "blank-withheld+text-zero+error-zero": {
+              "F2": "twin:P2",
+              "F3": "twin:P3",
+              "F4": "twin:P4",
+              "F5": "twin:P5",
+              "F6": "twin:P6"
+            },
+            "blank-withheld+text-zero+error-skipped": {
+              "F2": "twin:P2",
+              "F3": "twin:P3",
+              "F4": "twin:P4",
+              "F5": "twin:P5",
+              "F6": "twin:P6"
+            },
+            "blank-withheld+text-skipped+error-withheld": {
+              "F2": "twin:Q2",
+              "F3": "twin:Q3",
+              "F4": "twin:Q4",
+              "F5": "twin:Q5",
+              "F6": "twin:Q6"
+            },
+            "blank-withheld+text-skipped+error-zero": {
+              "F2": "twin:Q2",
+              "F3": "twin:Q3",
+              "F4": "twin:Q4",
+              "F5": "twin:Q5",
+              "F6": "twin:Q6"
+            },
+            "blank-withheld+text-skipped+error-skipped": {
+              "F2": "twin:Q2",
+              "F3": "twin:Q3",
+              "F4": "twin:Q4",
+              "F5": "twin:Q5",
+              "F6": "twin:Q6"
+            },
+            "blank-zero+text-withheld+error-withheld": {
+              "F2": "none",
+              "F3": "none",
+              "F4": "none",
+              "F5": "none",
+              "F6": "none"
+            },
+            "blank-zero+text-withheld+error-zero": {
+              "F2": "none",
+              "F3": "none",
+              "F4": "none",
+              "F5": "none",
+              "F6": "none"
+            },
+            "blank-zero+text-withheld+error-skipped": {
+              "F2": "none",
+              "F3": "none",
+              "F4": "none",
+              "F5": "none",
+              "F6": "none"
+            },
+            "blank-zero+text-zero+error-withheld": {
+              "F2": "twin:P2",
+              "F3": "twin:P3",
+              "F4": "twin:P4",
+              "F5": "twin:P5",
+              "F6": "twin:P6"
+            },
+            "blank-zero+text-zero+error-skipped": {
+              "F2": "twin:P2",
+              "F3": "twin:P3",
+              "F4": "twin:P4",
+              "F5": "twin:P5",
+              "F6": "twin:P6"
+            },
+            "blank-zero+text-skipped+error-withheld": {
+              "F2": "twin:Q2",
+              "F3": "twin:Q3",
+              "F4": "twin:Q4",
+              "F5": "twin:Q5",
+              "F6": "twin:Q6"
+            },
+            "blank-zero+text-skipped+error-zero": {
+              "F2": "twin:Q2",
+              "F3": "twin:Q3",
+              "F4": "twin:Q4",
+              "F5": "twin:Q5",
+              "F6": "twin:Q6"
+            },
+            "blank-zero+text-skipped+error-skipped": {
+              "F2": "twin:Q2",
+              "F3": "twin:Q3",
+              "F4": "twin:Q4",
+              "F5": "twin:Q5",
+              "F6": "twin:Q6"
+            },
+            "blank-skipped+text-withheld+error-withheld": {
+              "F2": "none",
+              "F3": "none",
+              "F4": "none",
+              "F5": "none",
+              "F6": "none"
+            },
+            "blank-skipped+text-withheld+error-zero": {
+              "F2": "none",
+              "F3": "none",
+              "F4": "none",
+              "F5": "none",
+              "F6": "none"
+            },
+            "blank-skipped+text-withheld+error-skipped": {
+              "F2": "none",
+              "F3": "none",
+              "F4": "none",
+              "F5": "none",
+              "F6": "none"
+            },
+            "blank-skipped+text-zero+error-withheld": {
+              "F2": "twin:P2",
+              "F3": "twin:P3",
+              "F4": "twin:P4",
+              "F5": "twin:P5",
+              "F6": "twin:P6"
+            },
+            "blank-skipped+text-zero+error-zero": {
+              "F2": "twin:P2",
+              "F3": "twin:P3",
+              "F4": "twin:P4",
+              "F5": "twin:P5",
+              "F6": "twin:P6"
+            },
+            "blank-skipped+text-zero+error-skipped": {
+              "F2": "twin:P2",
+              "F3": "twin:P3",
+              "F4": "twin:P4",
+              "F5": "twin:P5",
+              "F6": "twin:P6"
+            },
+            "blank-skipped+text-skipped+error-withheld": {
+              "F2": "twin:Q2",
+              "F3": "twin:Q3",
+              "F4": "twin:Q4",
+              "F5": "twin:Q5",
+              "F6": "twin:Q6"
+            },
+            "blank-skipped+text-skipped+error-zero": {
+              "F2": "twin:Q2",
+              "F3": "twin:Q3",
+              "F4": "twin:Q4",
+              "F5": "twin:Q5",
+              "F6": "twin:Q6"
+            }
+          },
+          "twinExpect": {
+            "P2": "visual",
+            "P3": "visual",
+            "P4": "visual",
+            "P5": "visual",
+            "P6": "visual",
+            "Q2": "visual",
+            "Q3": "visual",
+            "Q4": "visual",
+            "Q5": "visual",
+            "Q6": "visual"
+          }
+        },
+        {
+          "id": "nonnum-text-last",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "observable": "fill",
+          "refs": [
+            "G2",
+            "G3",
+            "G4",
+            "G5",
+            "G6"
+          ],
+          "hypotheses": {
+            "withheld": {
+              "G2": "none",
+              "G3": "none",
+              "G4": "none",
+              "G5": "none",
+              "G6": "none"
+            },
+            "zero": {
+              "G2": "twin:R2",
+              "G3": "twin:R3",
+              "G4": "twin:R4",
+              "G5": "twin:R5",
+              "G6": "twin:R6"
+            },
+            "skipped": {
+              "G2": "twin:Q2",
+              "G3": "twin:Q3",
+              "G4": "twin:Q4",
+              "G5": "twin:Q5",
+              "G6": "twin:Q6"
+            },
+            "blank-withheld+text-withheld+error-zero": {
+              "G2": "none",
+              "G3": "none",
+              "G4": "none",
+              "G5": "none",
+              "G6": "none"
+            },
+            "blank-withheld+text-withheld+error-skipped": {
+              "G2": "none",
+              "G3": "none",
+              "G4": "none",
+              "G5": "none",
+              "G6": "none"
+            },
+            "blank-withheld+text-zero+error-withheld": {
+              "G2": "twin:R2",
+              "G3": "twin:R3",
+              "G4": "twin:R4",
+              "G5": "twin:R5",
+              "G6": "twin:R6"
+            },
+            "blank-withheld+text-zero+error-zero": {
+              "G2": "twin:R2",
+              "G3": "twin:R3",
+              "G4": "twin:R4",
+              "G5": "twin:R5",
+              "G6": "twin:R6"
+            },
+            "blank-withheld+text-zero+error-skipped": {
+              "G2": "twin:R2",
+              "G3": "twin:R3",
+              "G4": "twin:R4",
+              "G5": "twin:R5",
+              "G6": "twin:R6"
+            },
+            "blank-withheld+text-skipped+error-withheld": {
+              "G2": "twin:Q2",
+              "G3": "twin:Q3",
+              "G4": "twin:Q4",
+              "G5": "twin:Q5",
+              "G6": "twin:Q6"
+            },
+            "blank-withheld+text-skipped+error-zero": {
+              "G2": "twin:Q2",
+              "G3": "twin:Q3",
+              "G4": "twin:Q4",
+              "G5": "twin:Q5",
+              "G6": "twin:Q6"
+            },
+            "blank-withheld+text-skipped+error-skipped": {
+              "G2": "twin:Q2",
+              "G3": "twin:Q3",
+              "G4": "twin:Q4",
+              "G5": "twin:Q5",
+              "G6": "twin:Q6"
+            },
+            "blank-zero+text-withheld+error-withheld": {
+              "G2": "none",
+              "G3": "none",
+              "G4": "none",
+              "G5": "none",
+              "G6": "none"
+            },
+            "blank-zero+text-withheld+error-zero": {
+              "G2": "none",
+              "G3": "none",
+              "G4": "none",
+              "G5": "none",
+              "G6": "none"
+            },
+            "blank-zero+text-withheld+error-skipped": {
+              "G2": "none",
+              "G3": "none",
+              "G4": "none",
+              "G5": "none",
+              "G6": "none"
+            },
+            "blank-zero+text-zero+error-withheld": {
+              "G2": "twin:R2",
+              "G3": "twin:R3",
+              "G4": "twin:R4",
+              "G5": "twin:R5",
+              "G6": "twin:R6"
+            },
+            "blank-zero+text-zero+error-skipped": {
+              "G2": "twin:R2",
+              "G3": "twin:R3",
+              "G4": "twin:R4",
+              "G5": "twin:R5",
+              "G6": "twin:R6"
+            },
+            "blank-zero+text-skipped+error-withheld": {
+              "G2": "twin:Q2",
+              "G3": "twin:Q3",
+              "G4": "twin:Q4",
+              "G5": "twin:Q5",
+              "G6": "twin:Q6"
+            },
+            "blank-zero+text-skipped+error-zero": {
+              "G2": "twin:Q2",
+              "G3": "twin:Q3",
+              "G4": "twin:Q4",
+              "G5": "twin:Q5",
+              "G6": "twin:Q6"
+            },
+            "blank-zero+text-skipped+error-skipped": {
+              "G2": "twin:Q2",
+              "G3": "twin:Q3",
+              "G4": "twin:Q4",
+              "G5": "twin:Q5",
+              "G6": "twin:Q6"
+            },
+            "blank-skipped+text-withheld+error-withheld": {
+              "G2": "none",
+              "G3": "none",
+              "G4": "none",
+              "G5": "none",
+              "G6": "none"
+            },
+            "blank-skipped+text-withheld+error-zero": {
+              "G2": "none",
+              "G3": "none",
+              "G4": "none",
+              "G5": "none",
+              "G6": "none"
+            },
+            "blank-skipped+text-withheld+error-skipped": {
+              "G2": "none",
+              "G3": "none",
+              "G4": "none",
+              "G5": "none",
+              "G6": "none"
+            },
+            "blank-skipped+text-zero+error-withheld": {
+              "G2": "twin:R2",
+              "G3": "twin:R3",
+              "G4": "twin:R4",
+              "G5": "twin:R5",
+              "G6": "twin:R6"
+            },
+            "blank-skipped+text-zero+error-zero": {
+              "G2": "twin:R2",
+              "G3": "twin:R3",
+              "G4": "twin:R4",
+              "G5": "twin:R5",
+              "G6": "twin:R6"
+            },
+            "blank-skipped+text-zero+error-skipped": {
+              "G2": "twin:R2",
+              "G3": "twin:R3",
+              "G4": "twin:R4",
+              "G5": "twin:R5",
+              "G6": "twin:R6"
+            },
+            "blank-skipped+text-skipped+error-withheld": {
+              "G2": "twin:Q2",
+              "G3": "twin:Q3",
+              "G4": "twin:Q4",
+              "G5": "twin:Q5",
+              "G6": "twin:Q6"
+            },
+            "blank-skipped+text-skipped+error-zero": {
+              "G2": "twin:Q2",
+              "G3": "twin:Q3",
+              "G4": "twin:Q4",
+              "G5": "twin:Q5",
+              "G6": "twin:Q6"
+            }
+          },
+          "twinExpect": {
+            "Q2": "visual",
+            "Q3": "visual",
+            "Q4": "visual",
+            "Q5": "visual",
+            "Q6": "visual",
+            "R2": "visual",
+            "R3": "visual",
+            "R4": "visual",
+            "R5": "visual",
+            "R6": "visual"
+          }
+        },
+        {
+          "id": "nonnum-text-middle",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "observable": "fill",
+          "refs": [
+            "H2",
+            "H3",
+            "H4",
+            "H5",
+            "H6"
+          ],
+          "hypotheses": {
+            "withheld": {
+              "H2": "none",
+              "H3": "none",
+              "H4": "none",
+              "H5": "none",
+              "H6": "none"
+            },
+            "zero": {
+              "H2": "twin:S2",
+              "H3": "twin:S3",
+              "H4": "twin:S4",
+              "H5": "twin:S5",
+              "H6": "twin:S6"
+            },
+            "blank-withheld+text-withheld+error-zero": {
+              "H2": "none",
+              "H3": "none",
+              "H4": "none",
+              "H5": "none",
+              "H6": "none"
+            },
+            "blank-withheld+text-withheld+error-skipped": {
+              "H2": "none",
+              "H3": "none",
+              "H4": "none",
+              "H5": "none",
+              "H6": "none"
+            },
+            "blank-withheld+text-zero+error-withheld": {
+              "H2": "twin:S2",
+              "H3": "twin:S3",
+              "H4": "twin:S4",
+              "H5": "twin:S5",
+              "H6": "twin:S6"
+            },
+            "blank-withheld+text-zero+error-zero": {
+              "H2": "twin:S2",
+              "H3": "twin:S3",
+              "H4": "twin:S4",
+              "H5": "twin:S5",
+              "H6": "twin:S6"
+            },
+            "blank-withheld+text-zero+error-skipped": {
+              "H2": "twin:S2",
+              "H3": "twin:S3",
+              "H4": "twin:S4",
+              "H5": "twin:S5",
+              "H6": "twin:S6"
+            },
+            "blank-zero+text-withheld+error-withheld": {
+              "H2": "none",
+              "H3": "none",
+              "H4": "none",
+              "H5": "none",
+              "H6": "none"
+            },
+            "blank-zero+text-withheld+error-zero": {
+              "H2": "none",
+              "H3": "none",
+              "H4": "none",
+              "H5": "none",
+              "H6": "none"
+            },
+            "blank-zero+text-withheld+error-skipped": {
+              "H2": "none",
+              "H3": "none",
+              "H4": "none",
+              "H5": "none",
+              "H6": "none"
+            },
+            "blank-zero+text-zero+error-withheld": {
+              "H2": "twin:S2",
+              "H3": "twin:S3",
+              "H4": "twin:S4",
+              "H5": "twin:S5",
+              "H6": "twin:S6"
+            },
+            "blank-zero+text-zero+error-skipped": {
+              "H2": "twin:S2",
+              "H3": "twin:S3",
+              "H4": "twin:S4",
+              "H5": "twin:S5",
+              "H6": "twin:S6"
+            },
+            "blank-skipped+text-withheld+error-withheld": {
+              "H2": "none",
+              "H3": "none",
+              "H4": "none",
+              "H5": "none",
+              "H6": "none"
+            },
+            "blank-skipped+text-withheld+error-zero": {
+              "H2": "none",
+              "H3": "none",
+              "H4": "none",
+              "H5": "none",
+              "H6": "none"
+            },
+            "blank-skipped+text-withheld+error-skipped": {
+              "H2": "none",
+              "H3": "none",
+              "H4": "none",
+              "H5": "none",
+              "H6": "none"
+            },
+            "blank-skipped+text-zero+error-withheld": {
+              "H2": "twin:S2",
+              "H3": "twin:S3",
+              "H4": "twin:S4",
+              "H5": "twin:S5",
+              "H6": "twin:S6"
+            },
+            "blank-skipped+text-zero+error-zero": {
+              "H2": "twin:S2",
+              "H3": "twin:S3",
+              "H4": "twin:S4",
+              "H5": "twin:S5",
+              "H6": "twin:S6"
+            },
+            "blank-skipped+text-zero+error-skipped": {
+              "H2": "twin:S2",
+              "H3": "twin:S3",
+              "H4": "twin:S4",
+              "H5": "twin:S5",
+              "H6": "twin:S6"
+            }
+          },
+          "omitted": {
+            "skipped": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-withheld+text-skipped+error-withheld": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-withheld+text-skipped+error-zero": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-withheld+text-skipped+error-skipped": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-zero+text-skipped+error-withheld": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-zero+text-skipped+error-zero": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-zero+text-skipped+error-skipped": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-skipped+text-skipped+error-withheld": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-skipped+text-skipped+error-zero": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations"
+          },
+          "twinExpect": {
+            "S2": "visual",
+            "S3": "visual",
+            "S4": "visual",
+            "S5": "visual",
+            "S6": "visual"
+          }
+        },
+        {
+          "id": "nonnum-empty-text-first",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "observable": "fill",
+          "refs": [
+            "I2",
+            "I3",
+            "I4",
+            "I5",
+            "I6"
+          ],
+          "hypotheses": {
+            "withheld": {
+              "I2": "none",
+              "I3": "none",
+              "I4": "none",
+              "I5": "none",
+              "I6": "none"
+            },
+            "zero": {
+              "I2": "twin:P2",
+              "I3": "twin:P3",
+              "I4": "twin:P4",
+              "I5": "twin:P5",
+              "I6": "twin:P6"
+            },
+            "skipped": {
+              "I2": "twin:Q2",
+              "I3": "twin:Q3",
+              "I4": "twin:Q4",
+              "I5": "twin:Q5",
+              "I6": "twin:Q6"
+            },
+            "blank-withheld+text-withheld+error-zero": {
+              "I2": "none",
+              "I3": "none",
+              "I4": "none",
+              "I5": "none",
+              "I6": "none"
+            },
+            "blank-withheld+text-withheld+error-skipped": {
+              "I2": "none",
+              "I3": "none",
+              "I4": "none",
+              "I5": "none",
+              "I6": "none"
+            },
+            "blank-withheld+text-zero+error-withheld": {
+              "I2": "twin:P2",
+              "I3": "twin:P3",
+              "I4": "twin:P4",
+              "I5": "twin:P5",
+              "I6": "twin:P6"
+            },
+            "blank-withheld+text-zero+error-zero": {
+              "I2": "twin:P2",
+              "I3": "twin:P3",
+              "I4": "twin:P4",
+              "I5": "twin:P5",
+              "I6": "twin:P6"
+            },
+            "blank-withheld+text-zero+error-skipped": {
+              "I2": "twin:P2",
+              "I3": "twin:P3",
+              "I4": "twin:P4",
+              "I5": "twin:P5",
+              "I6": "twin:P6"
+            },
+            "blank-withheld+text-skipped+error-withheld": {
+              "I2": "twin:Q2",
+              "I3": "twin:Q3",
+              "I4": "twin:Q4",
+              "I5": "twin:Q5",
+              "I6": "twin:Q6"
+            },
+            "blank-withheld+text-skipped+error-zero": {
+              "I2": "twin:Q2",
+              "I3": "twin:Q3",
+              "I4": "twin:Q4",
+              "I5": "twin:Q5",
+              "I6": "twin:Q6"
+            },
+            "blank-withheld+text-skipped+error-skipped": {
+              "I2": "twin:Q2",
+              "I3": "twin:Q3",
+              "I4": "twin:Q4",
+              "I5": "twin:Q5",
+              "I6": "twin:Q6"
+            },
+            "blank-zero+text-withheld+error-withheld": {
+              "I2": "none",
+              "I3": "none",
+              "I4": "none",
+              "I5": "none",
+              "I6": "none"
+            },
+            "blank-zero+text-withheld+error-zero": {
+              "I2": "none",
+              "I3": "none",
+              "I4": "none",
+              "I5": "none",
+              "I6": "none"
+            },
+            "blank-zero+text-withheld+error-skipped": {
+              "I2": "none",
+              "I3": "none",
+              "I4": "none",
+              "I5": "none",
+              "I6": "none"
+            },
+            "blank-zero+text-zero+error-withheld": {
+              "I2": "twin:P2",
+              "I3": "twin:P3",
+              "I4": "twin:P4",
+              "I5": "twin:P5",
+              "I6": "twin:P6"
+            },
+            "blank-zero+text-zero+error-skipped": {
+              "I2": "twin:P2",
+              "I3": "twin:P3",
+              "I4": "twin:P4",
+              "I5": "twin:P5",
+              "I6": "twin:P6"
+            },
+            "blank-zero+text-skipped+error-withheld": {
+              "I2": "twin:Q2",
+              "I3": "twin:Q3",
+              "I4": "twin:Q4",
+              "I5": "twin:Q5",
+              "I6": "twin:Q6"
+            },
+            "blank-zero+text-skipped+error-zero": {
+              "I2": "twin:Q2",
+              "I3": "twin:Q3",
+              "I4": "twin:Q4",
+              "I5": "twin:Q5",
+              "I6": "twin:Q6"
+            },
+            "blank-zero+text-skipped+error-skipped": {
+              "I2": "twin:Q2",
+              "I3": "twin:Q3",
+              "I4": "twin:Q4",
+              "I5": "twin:Q5",
+              "I6": "twin:Q6"
+            },
+            "blank-skipped+text-withheld+error-withheld": {
+              "I2": "none",
+              "I3": "none",
+              "I4": "none",
+              "I5": "none",
+              "I6": "none"
+            },
+            "blank-skipped+text-withheld+error-zero": {
+              "I2": "none",
+              "I3": "none",
+              "I4": "none",
+              "I5": "none",
+              "I6": "none"
+            },
+            "blank-skipped+text-withheld+error-skipped": {
+              "I2": "none",
+              "I3": "none",
+              "I4": "none",
+              "I5": "none",
+              "I6": "none"
+            },
+            "blank-skipped+text-zero+error-withheld": {
+              "I2": "twin:P2",
+              "I3": "twin:P3",
+              "I4": "twin:P4",
+              "I5": "twin:P5",
+              "I6": "twin:P6"
+            },
+            "blank-skipped+text-zero+error-zero": {
+              "I2": "twin:P2",
+              "I3": "twin:P3",
+              "I4": "twin:P4",
+              "I5": "twin:P5",
+              "I6": "twin:P6"
+            },
+            "blank-skipped+text-zero+error-skipped": {
+              "I2": "twin:P2",
+              "I3": "twin:P3",
+              "I4": "twin:P4",
+              "I5": "twin:P5",
+              "I6": "twin:P6"
+            },
+            "blank-skipped+text-skipped+error-withheld": {
+              "I2": "twin:Q2",
+              "I3": "twin:Q3",
+              "I4": "twin:Q4",
+              "I5": "twin:Q5",
+              "I6": "twin:Q6"
+            },
+            "blank-skipped+text-skipped+error-zero": {
+              "I2": "twin:Q2",
+              "I3": "twin:Q3",
+              "I4": "twin:Q4",
+              "I5": "twin:Q5",
+              "I6": "twin:Q6"
+            }
+          },
+          "twinExpect": {
+            "P2": "visual",
+            "P3": "visual",
+            "P4": "visual",
+            "P5": "visual",
+            "P6": "visual",
+            "Q2": "visual",
+            "Q3": "visual",
+            "Q4": "visual",
+            "Q5": "visual",
+            "Q6": "visual"
+          }
+        },
+        {
+          "id": "nonnum-empty-text-last",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "observable": "fill",
+          "refs": [
+            "J2",
+            "J3",
+            "J4",
+            "J5",
+            "J6"
+          ],
+          "hypotheses": {
+            "withheld": {
+              "J2": "none",
+              "J3": "none",
+              "J4": "none",
+              "J5": "none",
+              "J6": "none"
+            },
+            "zero": {
+              "J2": "twin:R2",
+              "J3": "twin:R3",
+              "J4": "twin:R4",
+              "J5": "twin:R5",
+              "J6": "twin:R6"
+            },
+            "skipped": {
+              "J2": "twin:Q2",
+              "J3": "twin:Q3",
+              "J4": "twin:Q4",
+              "J5": "twin:Q5",
+              "J6": "twin:Q6"
+            },
+            "blank-withheld+text-withheld+error-zero": {
+              "J2": "none",
+              "J3": "none",
+              "J4": "none",
+              "J5": "none",
+              "J6": "none"
+            },
+            "blank-withheld+text-withheld+error-skipped": {
+              "J2": "none",
+              "J3": "none",
+              "J4": "none",
+              "J5": "none",
+              "J6": "none"
+            },
+            "blank-withheld+text-zero+error-withheld": {
+              "J2": "twin:R2",
+              "J3": "twin:R3",
+              "J4": "twin:R4",
+              "J5": "twin:R5",
+              "J6": "twin:R6"
+            },
+            "blank-withheld+text-zero+error-zero": {
+              "J2": "twin:R2",
+              "J3": "twin:R3",
+              "J4": "twin:R4",
+              "J5": "twin:R5",
+              "J6": "twin:R6"
+            },
+            "blank-withheld+text-zero+error-skipped": {
+              "J2": "twin:R2",
+              "J3": "twin:R3",
+              "J4": "twin:R4",
+              "J5": "twin:R5",
+              "J6": "twin:R6"
+            },
+            "blank-withheld+text-skipped+error-withheld": {
+              "J2": "twin:Q2",
+              "J3": "twin:Q3",
+              "J4": "twin:Q4",
+              "J5": "twin:Q5",
+              "J6": "twin:Q6"
+            },
+            "blank-withheld+text-skipped+error-zero": {
+              "J2": "twin:Q2",
+              "J3": "twin:Q3",
+              "J4": "twin:Q4",
+              "J5": "twin:Q5",
+              "J6": "twin:Q6"
+            },
+            "blank-withheld+text-skipped+error-skipped": {
+              "J2": "twin:Q2",
+              "J3": "twin:Q3",
+              "J4": "twin:Q4",
+              "J5": "twin:Q5",
+              "J6": "twin:Q6"
+            },
+            "blank-zero+text-withheld+error-withheld": {
+              "J2": "none",
+              "J3": "none",
+              "J4": "none",
+              "J5": "none",
+              "J6": "none"
+            },
+            "blank-zero+text-withheld+error-zero": {
+              "J2": "none",
+              "J3": "none",
+              "J4": "none",
+              "J5": "none",
+              "J6": "none"
+            },
+            "blank-zero+text-withheld+error-skipped": {
+              "J2": "none",
+              "J3": "none",
+              "J4": "none",
+              "J5": "none",
+              "J6": "none"
+            },
+            "blank-zero+text-zero+error-withheld": {
+              "J2": "twin:R2",
+              "J3": "twin:R3",
+              "J4": "twin:R4",
+              "J5": "twin:R5",
+              "J6": "twin:R6"
+            },
+            "blank-zero+text-zero+error-skipped": {
+              "J2": "twin:R2",
+              "J3": "twin:R3",
+              "J4": "twin:R4",
+              "J5": "twin:R5",
+              "J6": "twin:R6"
+            },
+            "blank-zero+text-skipped+error-withheld": {
+              "J2": "twin:Q2",
+              "J3": "twin:Q3",
+              "J4": "twin:Q4",
+              "J5": "twin:Q5",
+              "J6": "twin:Q6"
+            },
+            "blank-zero+text-skipped+error-zero": {
+              "J2": "twin:Q2",
+              "J3": "twin:Q3",
+              "J4": "twin:Q4",
+              "J5": "twin:Q5",
+              "J6": "twin:Q6"
+            },
+            "blank-zero+text-skipped+error-skipped": {
+              "J2": "twin:Q2",
+              "J3": "twin:Q3",
+              "J4": "twin:Q4",
+              "J5": "twin:Q5",
+              "J6": "twin:Q6"
+            },
+            "blank-skipped+text-withheld+error-withheld": {
+              "J2": "none",
+              "J3": "none",
+              "J4": "none",
+              "J5": "none",
+              "J6": "none"
+            },
+            "blank-skipped+text-withheld+error-zero": {
+              "J2": "none",
+              "J3": "none",
+              "J4": "none",
+              "J5": "none",
+              "J6": "none"
+            },
+            "blank-skipped+text-withheld+error-skipped": {
+              "J2": "none",
+              "J3": "none",
+              "J4": "none",
+              "J5": "none",
+              "J6": "none"
+            },
+            "blank-skipped+text-zero+error-withheld": {
+              "J2": "twin:R2",
+              "J3": "twin:R3",
+              "J4": "twin:R4",
+              "J5": "twin:R5",
+              "J6": "twin:R6"
+            },
+            "blank-skipped+text-zero+error-zero": {
+              "J2": "twin:R2",
+              "J3": "twin:R3",
+              "J4": "twin:R4",
+              "J5": "twin:R5",
+              "J6": "twin:R6"
+            },
+            "blank-skipped+text-zero+error-skipped": {
+              "J2": "twin:R2",
+              "J3": "twin:R3",
+              "J4": "twin:R4",
+              "J5": "twin:R5",
+              "J6": "twin:R6"
+            },
+            "blank-skipped+text-skipped+error-withheld": {
+              "J2": "twin:Q2",
+              "J3": "twin:Q3",
+              "J4": "twin:Q4",
+              "J5": "twin:Q5",
+              "J6": "twin:Q6"
+            },
+            "blank-skipped+text-skipped+error-zero": {
+              "J2": "twin:Q2",
+              "J3": "twin:Q3",
+              "J4": "twin:Q4",
+              "J5": "twin:Q5",
+              "J6": "twin:Q6"
+            }
+          },
+          "twinExpect": {
+            "Q2": "visual",
+            "Q3": "visual",
+            "Q4": "visual",
+            "Q5": "visual",
+            "Q6": "visual",
+            "R2": "visual",
+            "R3": "visual",
+            "R4": "visual",
+            "R5": "visual",
+            "R6": "visual"
+          }
+        },
+        {
+          "id": "nonnum-empty-text-middle",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "observable": "fill",
+          "refs": [
+            "K2",
+            "K3",
+            "K4",
+            "K5",
+            "K6"
+          ],
+          "hypotheses": {
+            "withheld": {
+              "K2": "none",
+              "K3": "none",
+              "K4": "none",
+              "K5": "none",
+              "K6": "none"
+            },
+            "zero": {
+              "K2": "twin:S2",
+              "K3": "twin:S3",
+              "K4": "twin:S4",
+              "K5": "twin:S5",
+              "K6": "twin:S6"
+            },
+            "blank-withheld+text-withheld+error-zero": {
+              "K2": "none",
+              "K3": "none",
+              "K4": "none",
+              "K5": "none",
+              "K6": "none"
+            },
+            "blank-withheld+text-withheld+error-skipped": {
+              "K2": "none",
+              "K3": "none",
+              "K4": "none",
+              "K5": "none",
+              "K6": "none"
+            },
+            "blank-withheld+text-zero+error-withheld": {
+              "K2": "twin:S2",
+              "K3": "twin:S3",
+              "K4": "twin:S4",
+              "K5": "twin:S5",
+              "K6": "twin:S6"
+            },
+            "blank-withheld+text-zero+error-zero": {
+              "K2": "twin:S2",
+              "K3": "twin:S3",
+              "K4": "twin:S4",
+              "K5": "twin:S5",
+              "K6": "twin:S6"
+            },
+            "blank-withheld+text-zero+error-skipped": {
+              "K2": "twin:S2",
+              "K3": "twin:S3",
+              "K4": "twin:S4",
+              "K5": "twin:S5",
+              "K6": "twin:S6"
+            },
+            "blank-zero+text-withheld+error-withheld": {
+              "K2": "none",
+              "K3": "none",
+              "K4": "none",
+              "K5": "none",
+              "K6": "none"
+            },
+            "blank-zero+text-withheld+error-zero": {
+              "K2": "none",
+              "K3": "none",
+              "K4": "none",
+              "K5": "none",
+              "K6": "none"
+            },
+            "blank-zero+text-withheld+error-skipped": {
+              "K2": "none",
+              "K3": "none",
+              "K4": "none",
+              "K5": "none",
+              "K6": "none"
+            },
+            "blank-zero+text-zero+error-withheld": {
+              "K2": "twin:S2",
+              "K3": "twin:S3",
+              "K4": "twin:S4",
+              "K5": "twin:S5",
+              "K6": "twin:S6"
+            },
+            "blank-zero+text-zero+error-skipped": {
+              "K2": "twin:S2",
+              "K3": "twin:S3",
+              "K4": "twin:S4",
+              "K5": "twin:S5",
+              "K6": "twin:S6"
+            },
+            "blank-skipped+text-withheld+error-withheld": {
+              "K2": "none",
+              "K3": "none",
+              "K4": "none",
+              "K5": "none",
+              "K6": "none"
+            },
+            "blank-skipped+text-withheld+error-zero": {
+              "K2": "none",
+              "K3": "none",
+              "K4": "none",
+              "K5": "none",
+              "K6": "none"
+            },
+            "blank-skipped+text-withheld+error-skipped": {
+              "K2": "none",
+              "K3": "none",
+              "K4": "none",
+              "K5": "none",
+              "K6": "none"
+            },
+            "blank-skipped+text-zero+error-withheld": {
+              "K2": "twin:S2",
+              "K3": "twin:S3",
+              "K4": "twin:S4",
+              "K5": "twin:S5",
+              "K6": "twin:S6"
+            },
+            "blank-skipped+text-zero+error-zero": {
+              "K2": "twin:S2",
+              "K3": "twin:S3",
+              "K4": "twin:S4",
+              "K5": "twin:S5",
+              "K6": "twin:S6"
+            },
+            "blank-skipped+text-zero+error-skipped": {
+              "K2": "twin:S2",
+              "K3": "twin:S3",
+              "K4": "twin:S4",
+              "K5": "twin:S5",
+              "K6": "twin:S6"
+            }
+          },
+          "omitted": {
+            "skipped": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-withheld+text-skipped+error-withheld": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-withheld+text-skipped+error-zero": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-withheld+text-skipped+error-skipped": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-zero+text-skipped+error-withheld": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-zero+text-skipped+error-zero": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-zero+text-skipped+error-skipped": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-skipped+text-skipped+error-withheld": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-skipped+text-skipped+error-zero": "skipped text at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations"
+          },
+          "twinExpect": {
+            "S2": "visual",
+            "S3": "visual",
+            "S4": "visual",
+            "S5": "visual",
+            "S6": "visual"
+          }
+        },
+        {
+          "id": "nonnum-error-first",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "observable": "fill",
+          "refs": [
+            "L2",
+            "L3",
+            "L4",
+            "L5",
+            "L6"
+          ],
+          "hypotheses": {
+            "withheld": {
+              "L2": "none",
+              "L3": "none",
+              "L4": "none",
+              "L5": "none",
+              "L6": "none"
+            },
+            "zero": {
+              "L2": "twin:P2",
+              "L3": "twin:P3",
+              "L4": "twin:P4",
+              "L5": "twin:P5",
+              "L6": "twin:P6"
+            },
+            "skipped": {
+              "L2": "twin:Q2",
+              "L3": "twin:Q3",
+              "L4": "twin:Q4",
+              "L5": "twin:Q5",
+              "L6": "twin:Q6"
+            },
+            "blank-withheld+text-withheld+error-zero": {
+              "L2": "twin:P2",
+              "L3": "twin:P3",
+              "L4": "twin:P4",
+              "L5": "twin:P5",
+              "L6": "twin:P6"
+            },
+            "blank-withheld+text-withheld+error-skipped": {
+              "L2": "twin:Q2",
+              "L3": "twin:Q3",
+              "L4": "twin:Q4",
+              "L5": "twin:Q5",
+              "L6": "twin:Q6"
+            },
+            "blank-withheld+text-zero+error-withheld": {
+              "L2": "none",
+              "L3": "none",
+              "L4": "none",
+              "L5": "none",
+              "L6": "none"
+            },
+            "blank-withheld+text-zero+error-zero": {
+              "L2": "twin:P2",
+              "L3": "twin:P3",
+              "L4": "twin:P4",
+              "L5": "twin:P5",
+              "L6": "twin:P6"
+            },
+            "blank-withheld+text-zero+error-skipped": {
+              "L2": "twin:Q2",
+              "L3": "twin:Q3",
+              "L4": "twin:Q4",
+              "L5": "twin:Q5",
+              "L6": "twin:Q6"
+            },
+            "blank-withheld+text-skipped+error-withheld": {
+              "L2": "none",
+              "L3": "none",
+              "L4": "none",
+              "L5": "none",
+              "L6": "none"
+            },
+            "blank-withheld+text-skipped+error-zero": {
+              "L2": "twin:P2",
+              "L3": "twin:P3",
+              "L4": "twin:P4",
+              "L5": "twin:P5",
+              "L6": "twin:P6"
+            },
+            "blank-withheld+text-skipped+error-skipped": {
+              "L2": "twin:Q2",
+              "L3": "twin:Q3",
+              "L4": "twin:Q4",
+              "L5": "twin:Q5",
+              "L6": "twin:Q6"
+            },
+            "blank-zero+text-withheld+error-withheld": {
+              "L2": "none",
+              "L3": "none",
+              "L4": "none",
+              "L5": "none",
+              "L6": "none"
+            },
+            "blank-zero+text-withheld+error-zero": {
+              "L2": "twin:P2",
+              "L3": "twin:P3",
+              "L4": "twin:P4",
+              "L5": "twin:P5",
+              "L6": "twin:P6"
+            },
+            "blank-zero+text-withheld+error-skipped": {
+              "L2": "twin:Q2",
+              "L3": "twin:Q3",
+              "L4": "twin:Q4",
+              "L5": "twin:Q5",
+              "L6": "twin:Q6"
+            },
+            "blank-zero+text-zero+error-withheld": {
+              "L2": "none",
+              "L3": "none",
+              "L4": "none",
+              "L5": "none",
+              "L6": "none"
+            },
+            "blank-zero+text-zero+error-skipped": {
+              "L2": "twin:Q2",
+              "L3": "twin:Q3",
+              "L4": "twin:Q4",
+              "L5": "twin:Q5",
+              "L6": "twin:Q6"
+            },
+            "blank-zero+text-skipped+error-withheld": {
+              "L2": "none",
+              "L3": "none",
+              "L4": "none",
+              "L5": "none",
+              "L6": "none"
+            },
+            "blank-zero+text-skipped+error-zero": {
+              "L2": "twin:P2",
+              "L3": "twin:P3",
+              "L4": "twin:P4",
+              "L5": "twin:P5",
+              "L6": "twin:P6"
+            },
+            "blank-zero+text-skipped+error-skipped": {
+              "L2": "twin:Q2",
+              "L3": "twin:Q3",
+              "L4": "twin:Q4",
+              "L5": "twin:Q5",
+              "L6": "twin:Q6"
+            },
+            "blank-skipped+text-withheld+error-withheld": {
+              "L2": "none",
+              "L3": "none",
+              "L4": "none",
+              "L5": "none",
+              "L6": "none"
+            },
+            "blank-skipped+text-withheld+error-zero": {
+              "L2": "twin:P2",
+              "L3": "twin:P3",
+              "L4": "twin:P4",
+              "L5": "twin:P5",
+              "L6": "twin:P6"
+            },
+            "blank-skipped+text-withheld+error-skipped": {
+              "L2": "twin:Q2",
+              "L3": "twin:Q3",
+              "L4": "twin:Q4",
+              "L5": "twin:Q5",
+              "L6": "twin:Q6"
+            },
+            "blank-skipped+text-zero+error-withheld": {
+              "L2": "none",
+              "L3": "none",
+              "L4": "none",
+              "L5": "none",
+              "L6": "none"
+            },
+            "blank-skipped+text-zero+error-zero": {
+              "L2": "twin:P2",
+              "L3": "twin:P3",
+              "L4": "twin:P4",
+              "L5": "twin:P5",
+              "L6": "twin:P6"
+            },
+            "blank-skipped+text-zero+error-skipped": {
+              "L2": "twin:Q2",
+              "L3": "twin:Q3",
+              "L4": "twin:Q4",
+              "L5": "twin:Q5",
+              "L6": "twin:Q6"
+            },
+            "blank-skipped+text-skipped+error-withheld": {
+              "L2": "none",
+              "L3": "none",
+              "L4": "none",
+              "L5": "none",
+              "L6": "none"
+            },
+            "blank-skipped+text-skipped+error-zero": {
+              "L2": "twin:P2",
+              "L3": "twin:P3",
+              "L4": "twin:P4",
+              "L5": "twin:P5",
+              "L6": "twin:P6"
+            }
+          },
+          "twinExpect": {
+            "P2": "visual",
+            "P3": "visual",
+            "P4": "visual",
+            "P5": "visual",
+            "P6": "visual",
+            "Q2": "visual",
+            "Q3": "visual",
+            "Q4": "visual",
+            "Q5": "visual",
+            "Q6": "visual"
+          }
+        },
+        {
+          "id": "nonnum-error-last",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "observable": "fill",
+          "refs": [
+            "M2",
+            "M3",
+            "M4",
+            "M5",
+            "M6"
+          ],
+          "hypotheses": {
+            "withheld": {
+              "M2": "none",
+              "M3": "none",
+              "M4": "none",
+              "M5": "none",
+              "M6": "none"
+            },
+            "zero": {
+              "M2": "twin:R2",
+              "M3": "twin:R3",
+              "M4": "twin:R4",
+              "M5": "twin:R5",
+              "M6": "twin:R6"
+            },
+            "skipped": {
+              "M2": "twin:Q2",
+              "M3": "twin:Q3",
+              "M4": "twin:Q4",
+              "M5": "twin:Q5",
+              "M6": "twin:Q6"
+            },
+            "blank-withheld+text-withheld+error-zero": {
+              "M2": "twin:R2",
+              "M3": "twin:R3",
+              "M4": "twin:R4",
+              "M5": "twin:R5",
+              "M6": "twin:R6"
+            },
+            "blank-withheld+text-withheld+error-skipped": {
+              "M2": "twin:Q2",
+              "M3": "twin:Q3",
+              "M4": "twin:Q4",
+              "M5": "twin:Q5",
+              "M6": "twin:Q6"
+            },
+            "blank-withheld+text-zero+error-withheld": {
+              "M2": "none",
+              "M3": "none",
+              "M4": "none",
+              "M5": "none",
+              "M6": "none"
+            },
+            "blank-withheld+text-zero+error-zero": {
+              "M2": "twin:R2",
+              "M3": "twin:R3",
+              "M4": "twin:R4",
+              "M5": "twin:R5",
+              "M6": "twin:R6"
+            },
+            "blank-withheld+text-zero+error-skipped": {
+              "M2": "twin:Q2",
+              "M3": "twin:Q3",
+              "M4": "twin:Q4",
+              "M5": "twin:Q5",
+              "M6": "twin:Q6"
+            },
+            "blank-withheld+text-skipped+error-withheld": {
+              "M2": "none",
+              "M3": "none",
+              "M4": "none",
+              "M5": "none",
+              "M6": "none"
+            },
+            "blank-withheld+text-skipped+error-zero": {
+              "M2": "twin:R2",
+              "M3": "twin:R3",
+              "M4": "twin:R4",
+              "M5": "twin:R5",
+              "M6": "twin:R6"
+            },
+            "blank-withheld+text-skipped+error-skipped": {
+              "M2": "twin:Q2",
+              "M3": "twin:Q3",
+              "M4": "twin:Q4",
+              "M5": "twin:Q5",
+              "M6": "twin:Q6"
+            },
+            "blank-zero+text-withheld+error-withheld": {
+              "M2": "none",
+              "M3": "none",
+              "M4": "none",
+              "M5": "none",
+              "M6": "none"
+            },
+            "blank-zero+text-withheld+error-zero": {
+              "M2": "twin:R2",
+              "M3": "twin:R3",
+              "M4": "twin:R4",
+              "M5": "twin:R5",
+              "M6": "twin:R6"
+            },
+            "blank-zero+text-withheld+error-skipped": {
+              "M2": "twin:Q2",
+              "M3": "twin:Q3",
+              "M4": "twin:Q4",
+              "M5": "twin:Q5",
+              "M6": "twin:Q6"
+            },
+            "blank-zero+text-zero+error-withheld": {
+              "M2": "none",
+              "M3": "none",
+              "M4": "none",
+              "M5": "none",
+              "M6": "none"
+            },
+            "blank-zero+text-zero+error-skipped": {
+              "M2": "twin:Q2",
+              "M3": "twin:Q3",
+              "M4": "twin:Q4",
+              "M5": "twin:Q5",
+              "M6": "twin:Q6"
+            },
+            "blank-zero+text-skipped+error-withheld": {
+              "M2": "none",
+              "M3": "none",
+              "M4": "none",
+              "M5": "none",
+              "M6": "none"
+            },
+            "blank-zero+text-skipped+error-zero": {
+              "M2": "twin:R2",
+              "M3": "twin:R3",
+              "M4": "twin:R4",
+              "M5": "twin:R5",
+              "M6": "twin:R6"
+            },
+            "blank-zero+text-skipped+error-skipped": {
+              "M2": "twin:Q2",
+              "M3": "twin:Q3",
+              "M4": "twin:Q4",
+              "M5": "twin:Q5",
+              "M6": "twin:Q6"
+            },
+            "blank-skipped+text-withheld+error-withheld": {
+              "M2": "none",
+              "M3": "none",
+              "M4": "none",
+              "M5": "none",
+              "M6": "none"
+            },
+            "blank-skipped+text-withheld+error-zero": {
+              "M2": "twin:R2",
+              "M3": "twin:R3",
+              "M4": "twin:R4",
+              "M5": "twin:R5",
+              "M6": "twin:R6"
+            },
+            "blank-skipped+text-withheld+error-skipped": {
+              "M2": "twin:Q2",
+              "M3": "twin:Q3",
+              "M4": "twin:Q4",
+              "M5": "twin:Q5",
+              "M6": "twin:Q6"
+            },
+            "blank-skipped+text-zero+error-withheld": {
+              "M2": "none",
+              "M3": "none",
+              "M4": "none",
+              "M5": "none",
+              "M6": "none"
+            },
+            "blank-skipped+text-zero+error-zero": {
+              "M2": "twin:R2",
+              "M3": "twin:R3",
+              "M4": "twin:R4",
+              "M5": "twin:R5",
+              "M6": "twin:R6"
+            },
+            "blank-skipped+text-zero+error-skipped": {
+              "M2": "twin:Q2",
+              "M3": "twin:Q3",
+              "M4": "twin:Q4",
+              "M5": "twin:Q5",
+              "M6": "twin:Q6"
+            },
+            "blank-skipped+text-skipped+error-withheld": {
+              "M2": "none",
+              "M3": "none",
+              "M4": "none",
+              "M5": "none",
+              "M6": "none"
+            },
+            "blank-skipped+text-skipped+error-zero": {
+              "M2": "twin:R2",
+              "M3": "twin:R3",
+              "M4": "twin:R4",
+              "M5": "twin:R5",
+              "M6": "twin:R6"
+            }
+          },
+          "twinExpect": {
+            "Q2": "visual",
+            "Q3": "visual",
+            "Q4": "visual",
+            "Q5": "visual",
+            "Q6": "visual",
+            "R2": "visual",
+            "R3": "visual",
+            "R4": "visual",
+            "R5": "visual",
+            "R6": "visual"
+          }
+        },
+        {
+          "id": "nonnum-error-middle",
+          "capabilityId": "formula:cfvo-nonnumeric",
+          "observable": "fill",
+          "refs": [
+            "N2",
+            "N3",
+            "N4",
+            "N5",
+            "N6"
+          ],
+          "hypotheses": {
+            "withheld": {
+              "N2": "none",
+              "N3": "none",
+              "N4": "none",
+              "N5": "none",
+              "N6": "none"
+            },
+            "zero": {
+              "N2": "twin:S2",
+              "N3": "twin:S3",
+              "N4": "twin:S4",
+              "N5": "twin:S5",
+              "N6": "twin:S6"
+            },
+            "blank-withheld+text-withheld+error-zero": {
+              "N2": "twin:S2",
+              "N3": "twin:S3",
+              "N4": "twin:S4",
+              "N5": "twin:S5",
+              "N6": "twin:S6"
+            },
+            "blank-withheld+text-zero+error-withheld": {
+              "N2": "none",
+              "N3": "none",
+              "N4": "none",
+              "N5": "none",
+              "N6": "none"
+            },
+            "blank-withheld+text-zero+error-zero": {
+              "N2": "twin:S2",
+              "N3": "twin:S3",
+              "N4": "twin:S4",
+              "N5": "twin:S5",
+              "N6": "twin:S6"
+            },
+            "blank-withheld+text-skipped+error-withheld": {
+              "N2": "none",
+              "N3": "none",
+              "N4": "none",
+              "N5": "none",
+              "N6": "none"
+            },
+            "blank-withheld+text-skipped+error-zero": {
+              "N2": "twin:S2",
+              "N3": "twin:S3",
+              "N4": "twin:S4",
+              "N5": "twin:S5",
+              "N6": "twin:S6"
+            },
+            "blank-zero+text-withheld+error-withheld": {
+              "N2": "none",
+              "N3": "none",
+              "N4": "none",
+              "N5": "none",
+              "N6": "none"
+            },
+            "blank-zero+text-withheld+error-zero": {
+              "N2": "twin:S2",
+              "N3": "twin:S3",
+              "N4": "twin:S4",
+              "N5": "twin:S5",
+              "N6": "twin:S6"
+            },
+            "blank-zero+text-zero+error-withheld": {
+              "N2": "none",
+              "N3": "none",
+              "N4": "none",
+              "N5": "none",
+              "N6": "none"
+            },
+            "blank-zero+text-skipped+error-withheld": {
+              "N2": "none",
+              "N3": "none",
+              "N4": "none",
+              "N5": "none",
+              "N6": "none"
+            },
+            "blank-zero+text-skipped+error-zero": {
+              "N2": "twin:S2",
+              "N3": "twin:S3",
+              "N4": "twin:S4",
+              "N5": "twin:S5",
+              "N6": "twin:S6"
+            },
+            "blank-skipped+text-withheld+error-withheld": {
+              "N2": "none",
+              "N3": "none",
+              "N4": "none",
+              "N5": "none",
+              "N6": "none"
+            },
+            "blank-skipped+text-withheld+error-zero": {
+              "N2": "twin:S2",
+              "N3": "twin:S3",
+              "N4": "twin:S4",
+              "N5": "twin:S5",
+              "N6": "twin:S6"
+            },
+            "blank-skipped+text-zero+error-withheld": {
+              "N2": "none",
+              "N3": "none",
+              "N4": "none",
+              "N5": "none",
+              "N6": "none"
+            },
+            "blank-skipped+text-zero+error-zero": {
+              "N2": "twin:S2",
+              "N3": "twin:S3",
+              "N4": "twin:S4",
+              "N5": "twin:S5",
+              "N6": "twin:S6"
+            },
+            "blank-skipped+text-skipped+error-withheld": {
+              "N2": "none",
+              "N3": "none",
+              "N4": "none",
+              "N5": "none",
+              "N6": "none"
+            },
+            "blank-skipped+text-skipped+error-zero": {
+              "N2": "twin:S2",
+              "N3": "twin:S3",
+              "N4": "twin:S4",
+              "N5": "twin:S5",
+              "N6": "twin:S6"
+            }
+          },
+          "omitted": {
+            "skipped": "skipped error at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-withheld+text-withheld+error-skipped": "skipped error at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-withheld+text-zero+error-skipped": "skipped error at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-withheld+text-skipped+error-skipped": "skipped error at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-zero+text-withheld+error-skipped": "skipped error at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-zero+text-zero+error-skipped": "skipped error at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-zero+text-skipped+error-skipped": "skipped error at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-skipped+text-withheld+error-skipped": "skipped error at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations",
+            "blank-skipped+text-zero+error-skipped": "skipped error at a midpoint: a midpoint has no positional extreme to skip to, so the reading predicts nothing here (production withholds the rule); decided by the first and last configurations"
+          },
+          "twinExpect": {
+            "S2": "visual",
+            "S3": "visual",
+            "S4": "visual",
+            "S5": "visual",
+            "S6": "visual"
+          }
+        }
+      ],
+      "captures": [
+        {
+          "appearance": "screen",
+          "pngPath": "tests/fixtures/xlsx-cf/refs/stage5-cfvo-nonnumeric-v2.png",
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage5-cfvo-nonnumeric-v2.json"
+        }
+      ],
+      "status": "recipe-pending",
+      "reason": "Preparation only: no Excel capture has been run for this Stage 5 case; every formula:* capability it settles stays unverified and production withholds the formula rule (Ruling S5-A)",
+      "tolerance": {
+        "meanAbs": 0.015,
+        "rowMax": 0.08,
+        "strong": 12
+      },
+      "resavedByExcel": false
     }
   ]
 }
