@@ -109,9 +109,23 @@ export const CF_FORMULA_PRODUCTION_READINGS: Readonly<Record<string, string | re
   'formula:composition-stub-successor-icon': 'recorded',
 })
 
+let proposedReadings: Readonly<Record<string, string | readonly string[]>> | null = null
+/**
+ * Test seam (the cfvo-relative follow-up): rehearse a proposed registration, capability id to a reading or a selection
+ * list, as if it were in CF_FORMULA_PRODUCTION_READINGS, without registering it. Null clears. Production never calls it.
+ */
+export function injectCfFormulaReadings(readings: Readonly<Record<string, string | readonly string[]>> | null): void {
+  proposedReadings = readings ? Object.freeze({ ...readings }) : null
+}
+/** The registry entry of one capability, a proposed one (the test seam) first. */
+export function cfFormulaReadingEntry(capability: string): string | readonly string[] | undefined {
+  if (proposedReadings && Object.prototype.hasOwnProperty.call(proposedReadings, capability)) return proposedReadings[capability]
+  return Object.prototype.hasOwnProperty.call(CF_FORMULA_PRODUCTION_READINGS, capability) ? CF_FORMULA_PRODUCTION_READINGS[capability] : undefined
+}
+
 /** The reading production honours for one capability, or undefined (unregistered, unevidenced, or an unlisted selection). */
 export function cfFormulaReading(capability: string, check: (capability: string) => boolean): string | undefined {
-  const entry = Object.prototype.hasOwnProperty.call(CF_FORMULA_PRODUCTION_READINGS, capability) ? CF_FORMULA_PRODUCTION_READINGS[capability] : undefined
+  const entry = cfFormulaReadingEntry(capability)
   if (entry === undefined) return undefined
   if (typeof entry === 'string') return check(capability) ? entry : undefined
   const selected = formulaSelectionEvidence(capability, check)
