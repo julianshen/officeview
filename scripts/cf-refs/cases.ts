@@ -7117,6 +7117,154 @@ function cfvoScopeV2Fixture(): S5Fixture {
   })
 }
 
+/**
+ * The confirmation case for the A1-anchored relative cfvo bound (the cfvo-relative follow-up, brief 2026-11-21):
+ * stage5-cfvo-relative-a1. stage5-cfvo-scope-v2 (5dc2fe9e) matched `anchor-a1` on several ranges and, in its recorded
+ * single-range control, on one; production's `anchor-a1` (service.ts `cfvoBoundAnchors`) post-dates that capture, so
+ * neither capability may register it from that capture. This case is built and captured after the behaviour is committed
+ * and pre-registers `anchor-a1` with its rivals for both `formula:cfvo-scope-multi-range` (a scale, an icon set and a data
+ * bar on "B..:B.. D..:D..", and an absolute negative control) and `formula:cfvo-relative` (the same three kinds on one
+ * range, F). Every bound is `=MAX(<first range>)` written on its rule's top-left; A1:A4 (max 15) is the window from A1,
+ * the rows below each range are the anchor-cell windows, and the rule's own data is the top-left window. Four rows per
+ * range and canonical literal twins keep it smaller than v2 (tests/xlsx-cf-cfvo-relative-a1-case.test.ts plants each
+ * reading and requires it back as the one match).
+ */
+const REL_A1_N = 4
+const REL_A1_T1 = -20
+const REL_A1_MULTI = ['anchor-a1', 'rule-wide', 'per-range', 'anchor-cell', 'zero', 'ignored'] as const
+const REL_A1_SINGLE = ['anchor-a1', 'anchor-top-left', 'anchor-cell', 'zero', 'ignored'] as const
+/** Twin blocks (four cells each, a copy of one data block's values): from column L, in six bands of rows. */
+const REL_A1_TWIN_COL = 12
+const REL_A1_TWIN_BANDS = [2, 7, 12, 17, 22, 27] as const
+
+/** The bound each reading takes at each cell of a rule `MAX(<cols[0]><r0>:<cols[0]><r0+N-1>)` on `cols` x rows r0.. . */
+function relA1Bounds(cells: Readonly<Record<string, S5Value>>, cols: readonly string[], r0: number, readings: readonly string[]): Record<string, Record<string, number>> {
+  const refs = cols.flatMap(c => rowsOf(c, r0, r0 + REL_A1_N - 1))
+  const maxOf = (col: string, row: number): number => {
+    const vs = Array.from({ length: REL_A1_N }, (_, i) => cells[`${col}${row + i}`])
+    if (!vs.every((v): v is number => typeof v === 'number')) throw new Error(`stage5-cfvo-relative-a1: the window at ${col}${row} is not fully seeded`)
+    return Math.max(...vs)
+  }
+  const at: Record<string, (ref: string) => number> = {
+    'anchor-a1': () => maxOf('A', 1),
+    'rule-wide': () => maxOf(cols[0]!, r0),
+    'anchor-top-left': () => maxOf(cols[0]!, r0),
+    'per-range': ref => maxOf(colOfRef(ref), r0),
+    'anchor-cell': ref => maxOf(colOfRef(ref), rowOfRef(ref)),
+    zero: () => 0,
+    ignored: () => -Infinity,
+  }
+  return Object.fromEntries(readings.map(h => [h, Object.fromEntries(refs.map(r => [r, at[h]!(r)]))]))
+}
+
+function cfvoRelativeA1Fixture(): S5Fixture {
+  const MULTI = 'formula:cfvo-scope-multi-range'
+  const SINGLE = 'formula:cfvo-relative'
+  const TWIN = 'formula:cfvo-relative-a1-twin'
+  const N = REL_A1_N
+  const cells: Record<string, S5Value> = {
+    // anchor-a1: A1:A4 (max 15), the window from A1 for every rule.
+    ...colValues('A', [-35, 15, -30, 5], 1),
+    // The scales (rows 2..5) and their anchor-cell windows (rows 6..8).
+    ...colValues('B', [-40, -10, 8, 30]), ...colValues('D', [-40, -20, 5, 50]), ...colValues('F', [-40, -15, 6, 40]),
+    ...colValues('B', [90, -30, -30], 6), ...colValues('D', [-30, 95, -30], 6), ...colValues('F', [85, -30, -30], 6),
+    // The icon sets (rows 11..14, [percent 0, num -20, formula]) and their anchor-cell windows (rows 15..17).
+    ...colValues('B', [16, 18, 30, 30], 11), ...colValues('D', [-30, -10, 5, 5], 11), ...colValues('F', [-30, -10, 8, 8], 11),
+    ...colValues('B', [90, 90, 90], 15), ...colValues('D', [-30, -30, -30], 15), ...colValues('F', [85, 85, 85], 15),
+    // The data bars (rows 20..23, [min, formula]; every value at or inside every reading's bound) and their windows (24..26).
+    ...colValues('B', [3, 3, 6, 10], 20), ...colValues('D', [3, 7, 10, 10], 20), ...colValues('F', [3, 6, 10, 10], 20),
+    ...colValues('B', [1, 30, 25], 24), ...colValues('D', [25, 25, 20], 24), ...colValues('F', [1, 40, 40], 24),
+    // The absolute negative control ($H$1 = 20) on the scale's values.
+    H1: 20, ...colValues('H', [-40, -10, 8, 30]), ...colValues('J', [-40, -20, 5, 50]),
+  }
+  const num = (v: number): S5Cfvo => ({ type: 'num', val: String(v) })
+  const blocks: Array<{ col: string; r0: number; values: readonly number[]; kind: 'scale' | 'icon' | 'bar'; cfvo: S5Cfvo[] }> = []
+  const slots = new Map<string, { col: string; r0: number }>()
+  const block = (key: string, values: readonly number[], kind: 'scale' | 'icon' | 'bar', cfvo: S5Cfvo[]): { col: string; r0: number } => {
+    const hit = slots.get(key)
+    if (hit) return hit
+    const i = blocks.length
+    const slot = { col: colLetter(REL_A1_TWIN_COL + Math.floor(i / REL_A1_TWIN_BANDS.length)), r0: REL_A1_TWIN_BANDS[i % REL_A1_TWIN_BANDS.length]! }
+    slots.set(key, slot)
+    blocks.push({ ...slot, values, kind, cfvo })
+    return slot
+  }
+  const dataOf = (ref: string, r0: number): readonly number[] => rowsOf(colOfRef(ref), r0, r0 + N - 1).map(r => cells[r] as number)
+  const at = (s: { col: string; r0: number }, ref: string, r0: number): string => `twin:${s.col}${s.r0 + rowOfRef(ref) - r0}`
+  const lowOf = (cols: readonly string[], r0: number): number => Math.min(...cols.flatMap(c => dataOf(`${c}${r0}`, r0)))
+  /** A scale twin: the top colour (both bounds below every value), the bottom colour (both above), or num lo / num b. */
+  const scaleTwin = (ref: string, r0: number, lo: number, b: number): string => {
+    const values = dataOf(ref, r0), v = cells[ref] as number, id = `${colOfRef(ref)}${r0}`
+    const lowest = Math.min(...values), highest = Math.max(...values)
+    return at(v >= b ? block(`scale:${id}:top`, values, 'scale', [num(lowest - 20), num(lowest - 10)])
+      : v <= lo ? block(`scale:${id}:bottom`, values, 'scale', [num(highest + 10), num(highest + 20)])
+        : block(`scale:${id}:${b}`, values, 'scale', [num(lo), num(b)]), ref, r0)
+  }
+  /** An icon twin: the class the Stage 4 threshold rule gives (v >= b: 2; v >= T1: 1; else 0), drawn by a num/num set. */
+  const iconTwin = (ref: string, r0: number, b: number): string => {
+    const v = cells[ref] as number
+    const k = v >= b ? 2 : v >= REL_A1_T1 ? 1 : 0
+    const t = [[-100, -90], [-100, 100], [100, 110]][2 - k]!
+    return at(block(`icon:${colOfRef(ref)}${r0}:${k}`, dataOf(ref, r0), 'icon', [{ type: 'percent', val: '0' }, num(t[0]!), num(t[1]!)]), ref, r0)
+  }
+  /**
+   * A bar twin. A bound below the minimum (zero, ignored) inverts the bar, which Excel draws with its bounds swapped
+   * (stage3-bar-degenerate D), so every value is at or beyond the upper one: a full bar. Canonical twins: no bar at the
+   * minimum; a full bar from the column-maximum twin at the maximum, else from a twin whose bounds lie below every value
+   * (clamped, stage3-bar-degenerate E); otherwise the literal num lo / num b bar on the same values. A window reading never
+   * puts a value beyond its bound (Ruling S3-E: production would refuse the rule).
+   */
+  const barTwin = (ref: string, r0: number, lo: number, b: number): string => {
+    const values = dataOf(ref, r0), v = cells[ref] as number, id = `${colOfRef(ref)}${r0}`
+    const lowest = Math.min(...values), highest = Math.max(...values)
+    if (b > lo && v > b) throw new Error(`stage5-cfvo-relative-a1: ${ref} lies beyond a reading's bound ${b} (Ruling S3-E)`)
+    const full = b <= lo || v >= b
+    return at(full ? (v === highest ? block(`bar:${id}:${highest}`, values, 'bar', [num(lo), num(highest)]) : block(`bar:${id}:full`, values, 'bar', [num(lowest - 20), num(lowest - 10)]))
+      : v <= lo ? block(`bar:${id}:${highest}`, values, 'bar', [num(lo), num(highest)])
+        : block(`bar:${id}:${b}`, values, 'bar', [num(lo), num(b)]), ref, r0)
+  }
+  const multi = ['B', 'D'] as const
+  const refsOf = (cols: readonly string[], r0: number): string[] => cols.flatMap(c => rowsOf(c, r0, r0 + N - 1))
+  const per = (readings: readonly string[], fn: (h: string) => (ref: string) => string) => Object.fromEntries(readings.map(h => [h, fn(h)]))
+  const ms = relA1Bounds(cells, multi, 2, REL_A1_MULTI), mi = relA1Bounds(cells, multi, 11, REL_A1_MULTI), mb = relA1Bounds(cells, multi, 20, REL_A1_MULTI)
+  const ss = relA1Bounds(cells, ['F'], 2, REL_A1_SINGLE), si = relA1Bounds(cells, ['F'], 11, REL_A1_SINGLE), sb = relA1Bounds(cells, ['F'], 20, REL_A1_SINGLE)
+  const lowS = lowOf(multi, 2), lowB = lowOf(multi, 20)
+  const configurations: S5Configuration[] = [
+    { ...s5Cfg('rel-a1-scale', MULTI, refsOf(multi, 2), per(REL_A1_MULTI, h => ref => scaleTwin(ref, 2, lowS, ms[h]![ref]!))), replicateBy: 'column' },
+    { ...s5Cfg('rel-a1-icon', MULTI, refsOf(multi, 11), per(REL_A1_MULTI, h => ref => iconTwin(ref, 11, mi[h]![ref]!)), { observable: 'crop' }), replicateBy: 'column' },
+    { ...s5Cfg('rel-a1-bar', MULTI, refsOf(multi, 20), per(REL_A1_MULTI, h => ref => barTwin(ref, 20, lowB, mb[h]![ref]!)), { observable: 'crop' }), replicateBy: 'column' },
+    {
+      ...s5Cfg('rel-a1-scale-absolute', MULTI, refsOf(['H', 'J'], 2), per(REL_A1_MULTI, () => ref => scaleTwin(ref, 2, lowOf(['H', 'J'], 2), cells.H1 as number)), { note: 'Negative control: an absolute bound ($H$1) reads the same value under every reading' }),
+      role: 'negative-control',
+    },
+    s5Cfg('rel-a1-single-scale', SINGLE, refsOf(['F'], 2), per(REL_A1_SINGLE, h => ref => scaleTwin(ref, 2, lowOf(['F'], 2), ss[h]![ref]!))),
+    s5Cfg('rel-a1-single-icon', SINGLE, refsOf(['F'], 11), per(REL_A1_SINGLE, h => ref => iconTwin(ref, 11, si[h]![ref]!)), { observable: 'crop' }),
+    s5Cfg('rel-a1-single-bar', SINGLE, refsOf(['F'], 20), per(REL_A1_SINGLE, h => ref => barTwin(ref, 20, lowOf(['F'], 20), sb[h]![ref]!)), { observable: 'crop' }),
+  ]
+  for (const b of blocks) Object.assign(cells, colValues(b.col, b.values, b.r0))
+  let p = 1
+  const f = (v: string): S5Cfvo => ({ type: 'formula', val: v })
+  const icon3 = (bound: S5Cfvo): S5Cfvo[] => [{ type: 'percent', val: '0' }, num(REL_A1_T1), bound]
+  const rules: S5Rule[] = [
+    s5Scale(MULTI, 'B2:B5 D2:D5', p++, [{ type: 'min' }, f('MAX(B2:B5)')]),
+    s5Icon(MULTI, 'B11:B14 D11:D14', p++, icon3(f('MAX(B11:B14)'))),
+    s5Bar(MULTI, 'B20:B23 D20:D23', p++, [{ type: 'min' }, f('MAX(B20:B23)')]),
+    s5Scale(MULTI, 'H2:H5 J2:J5', p++, [{ type: 'min' }, f('$H$1')]),
+    s5Scale(SINGLE, 'F2:F5', p++, [{ type: 'min' }, f('MAX(F2:F5)')]),
+    s5Icon(SINGLE, 'F11:F14', p++, icon3(f('MAX(F11:F14)'))),
+    s5Bar(SINGLE, 'F20:F23', p++, [{ type: 'min' }, f('MAX(F20:F23)')]),
+    ...blocks.map(b => (b.kind === 'scale' ? s5Scale : b.kind === 'icon' ? s5Icon : s5Bar)(TWIN, `${b.col}${b.r0}:${b.col}${b.r0 + N - 1}`, p++, b.cfvo)),
+  ]
+  return s5rect({
+    id: 'stage5-cfvo-relative-a1',
+    question:
+      'S5-H (the cfvo-relative confirmation case): is a relative cfvo bound read from A1, on several ranges and on one? A scale [min, =MAX(B2:B5)], an icon set [percent 0, num -20, =MAX(B11:B14)] and a data bar [min, =MAX(B20:B23)] on "B..:B.. D..:D..", the same three on F alone (=MAX(F2:F5), =MAX(F11:F14), =MAX(F20:F23)), and an absolute negative control ($H$1). Readings: anchor-a1 (A1:A4, max 15), rule-wide / anchor-top-left, per-range, anchor-cell, zero and ignored (a bound below the minimum inverts a bar: a full bar). Literal num/num twins on the same values, one per predicted rendering.',
+    cells,
+    rules,
+    configurations,
+  })
+}
+
 function x14ScaleFixture(): S5Fixture {
   const Dv = [5, 15, 30, 45, 60, 75, 90, 100]
   return s5rect({
@@ -7358,8 +7506,10 @@ export const CF_STAGE5_FIXTURES: readonly S5Fixture[] = ([
   ...S5_UNRESOLVED.map(unresolvedFixture),
   // Appended last, like every later case version; it owns bar:bounds-formula through CF_STAGE5_OWNERS.
   barBoundsFormulaFixture(),
-  // Appended last (the cfvo-scope follow-up); it owns formula:cfvo-scope-multi-range through CF_STAGE5_OWNERS.
+  // Appended last (the cfvo-scope follow-up); it owned formula:cfvo-scope-multi-range until stage5-cfvo-relative-a1.
   cfvoScopeV2Fixture(),
+  // Appended last (the cfvo-relative confirmation case); it owns both cfvo scope ids through CF_STAGE5_OWNERS.
+  cfvoRelativeA1Fixture(),
 ] as const satisfies readonly S5Fixture[]).map(withEmptyTwins).map(withPositiveControls)
 
 /** The brief's matrix rows -> the workbooks that answer them ("one workbook each" rows and clock splits have several). */
@@ -7377,7 +7527,7 @@ export const CF_STAGE5_GROUPS: Readonly<Record<string, readonly string[]>> = {
   'stage5-composition': ['stage5-composition'],
   'stage5-cross-sheet': ['stage5-cross-sheet', 'stage5-cross-sheet-missing'],
   'stage5-cfvo-formulas': ['stage5-bar-bounds-formula', 'stage5-cfvo-formulas'],
-  'stage5-cfvo-scope': ['stage5-cfvo-scope', 'stage5-cfvo-scope-v2'],
+  'stage5-cfvo-scope': ['stage5-cfvo-relative-a1', 'stage5-cfvo-scope', 'stage5-cfvo-scope-v2'],
   'stage5-x14-scale': ['stage5-x14-scale'],
   'stage5-active-present': ['stage5-active-present-scale', 'stage5-active-present-bar', 'stage5-active-present-icon'],
   'stage5-unresolved-shapes': S5_UNRESOLVED.map(u => `stage5-unresolved-shapes-${u.id}`),
@@ -7541,6 +7691,8 @@ function s5Ruling(cap: string): string {
  * precedent), or a re-deferral whose capture cannot measure it (Task 39). Production keeps every one unresolved.
  */
 export const CF_STAGE5_UNSUPPORTED: Readonly<Record<string, string>> = {
+  'formula:cfvo-relative':
+    'Contradicted reading (the cfvo-relative follow-up, 2026-11-21): production registers anchor-top-left, but the single-range control of stage5-cfvo-scope-v2 (5dc2fe9e) read the bound from A1 (anchor-a1), which also explains the zero of stage5-cfvo-formulas K. Production\'s anchor-a1 (cfvoBoundAnchors) post-dates that capture: the confirmation case stage5-cfvo-relative-a1 owns it. Production keeps a relative cfvo bound unresolved.',
   'formula:cfvo-scope-multi-range':
     'Measured anchor-a1 (stage5-cfvo-scope-v2, 5dc2fe9e: Excel reads a relative cfvo bound from A1, single-range too), but production\'s anchor-a1 behaviour (service.ts cfvoBoundAnchors, 709b6a7e) post-dates that capture, so the reading is not registered: it awaits a confirmation case captured after the behaviour exists. Production keeps a multi-range formula bound unresolved.',
   'formula:active-present-scale':
@@ -7566,6 +7718,7 @@ export const CF_STAGE5_NONDISCRIMINATING: Readonly<Record<string, string>> = {
   'formula:cfvo-twin': 'Literal twin rules of stage5-cfvo-formulas: comparison references for the formula bounds, never a question themselves.',
   'formula:cfvo-bar-twin': 'Literal twin rules of stage5-bar-bounds-formula: comparison references for the formula bar bounds, never a question themselves.',
   'formula:cfvo-scope-twin': 'Literal twin rules of stage5-cfvo-scope: comparison references for the scope readings, never a question themselves.',
+  'formula:cfvo-relative-a1-twin': 'Literal twin rules of stage5-cfvo-relative-a1 (num/num scales, icon sets and bars, one per predicted rendering): comparison references for the anchor readings, never a question themselves.',
   'formula:cfvo-scope-v2-twin': 'Literal twin rules of stage5-cfvo-scope-v2 (num/num scales and icon sets, one per predicted rendering): comparison references for the scope readings, never a question themselves.',
   'formula:x14-scale-twin': 'The base literal twin of stage5-x14-scale: a comparison reference, never a question itself.',
   'formula:active-present-scale-twin': 'The non-activated twin of stage5-active-present-scale: a comparison reference.',
@@ -7580,7 +7733,8 @@ export const CF_STAGE5_NONDISCRIMINATING: Readonly<Record<string, string>> = {
  */
 export const CF_STAGE5_OWNERS: Readonly<Record<string, string>> = {
   'bar:bounds-formula': 'stage5-bar-bounds-formula',
-  'formula:cfvo-scope-multi-range': 'stage5-cfvo-scope-v2',
+  'formula:cfvo-scope-multi-range': 'stage5-cfvo-relative-a1',
+  'formula:cfvo-relative': 'stage5-cfvo-relative-a1',
 }
 
 /** Complete capability registry for every Stage 5 marker, configuration and reused capture (one entry per id). */

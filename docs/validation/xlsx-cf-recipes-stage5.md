@@ -111,6 +111,39 @@ npx tsx scripts/cf-refs/audit.ts --stage 5
   - The negative control matched its b20 twins.
   - The single-range control I2..I7 = F8696B C28770 9A9F75 76B378 63BE7B 63BE7B. Read by its pre-registered method (the configuration alone, record removed), this is `anchor-a1` too: the window is A1:A6, not I2:I7 (45) and not H1:H6 (20). The A1 anchor is a property of every relative cfvo, not of the multi-range scope. See `docs/validation/xlsx-cf.md` §14.z.11.
 
+### 2c. The A1-anchored relative bound, confirmation case (the cfvo-relative follow-up, 2026-11-21)
+
+`stage5-cfvo-relative-a1` owns both `formula:cfvo-scope-multi-range` and `formula:cfvo-relative` (through `CF_STAGE5_OWNERS`, appended last). It is built and captured **after** production's `anchor-a1` is committed: af80ef77 for one range, `cfvoBoundAnchors` (PR #87) for several. A reading may be registered from this capture only because both the hypothesis and the behaviour predate it.
+
+The case's rules, each bound written on its rule's top-left:
+- **Two ranges:** a scale `[min, =MAX(B2:B5)]` on `B2:B5 D2:D5`, an icon set `3Arrows [percent 0, num -20, =MAX(B11:B14)]` on `B11:B14 D11:D14`, and a data bar `[min, =MAX(B20:B23)]` on `B20:B23 D20:D23`.
+- **One range:** the same three kinds on column F alone.
+- **Negative control:** an absolute `[min, =$H$1]` (H1 = 20) on `H2:H5 J2:J5`.
+
+The pre-registered readings:
+- **Multi-range:** `anchor-a1`, `rule-wide`, `per-range`, `anchor-cell`, `zero`, `ignored`.
+- **Single range:** `anchor-a1`, `anchor-top-left`, `anchor-cell`, `zero`, `ignored`.
+- **Bars** carry only the four window readings: zero or ignored would invert them.
+
+The windows are seeded: A1:A4 (max 15) is the A1 window, and the three rows below each range are the anchor-cell windows. 45 literal num/num twin blocks of four cells sit in columns L..S. The sheet is A1:AM30, 286 designated plus control cells, with 20 pt rows and the default (centred) style.
+
+```
+bun scripts/cf-refs/build.ts   --stage 5 --case stage5-cfvo-relative-a1
+bun scripts/cf-refs/capture.ts --stage 5 --case stage5-cfvo-relative-a1
+bun scripts/cf-refs/capture.ts --stage 5 --verify-only
+npx tsx scripts/cf-refs/audit.ts --stage 5
+```
+
+- **Expected:**
+  - a repair-free open, with Excel keeping the six relative formulas and `$H$1` as authored;
+  - `formulaEvaluation` reports `discriminating` for both ids, each matching one of its readings (stage5-cfvo-scope-v2 predicts `anchor-a1` for both);
+  - the negative control matches its b20 twins.
+- **Stop and record** (never retried, never refitted):
+  - a repair, strip or rewritten formula (keep `<id>.rejected.xlsx`);
+  - `missing-capture`, an unclassifiable icon or an unmeasurable bar crop;
+  - `formula-hypothesis-none`, `non-discriminating` or `formula-replication-shortfall`;
+  - a failed negative control.
+
 ## 3. Unresolved shapes (record only)
 
 ```

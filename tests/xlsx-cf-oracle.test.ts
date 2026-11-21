@@ -5476,8 +5476,9 @@ describe('Stage 5 formula oracle (Task 31)', () => {
       'stage5-calc-manual': ['formula:calc-manual-saved-values', 'formula:calc-manual-today'],
       'stage5-composition': ['formula:composition-stub-successor-dxf', 'formula:composition-stub-successor-scale', 'formula:composition-stub-successor-bar', 'formula:composition-stub-successor-icon'],
       'stage5-cross-sheet': ['formula:cross-sheet-reference', 'formula:cross-sheet-quoted-name', 'formula:cross-sheet-missing', 'formula:cellis-operand-cross-sheet'],
-      'stage5-cfvo-formulas': ['scale:thresholds-formula', 'bar:bounds-formula', 'icon:thresholds-formula', 'formula:cfvo-reference', 'formula:cfvo-expression', 'formula:cfvo-relative', 'formula:cfvo-nonnumeric'],
-      'stage5-cfvo-scope': ['formula:cfvo-scope-multi-range'],
+      'stage5-cfvo-formulas': ['scale:thresholds-formula', 'bar:bounds-formula', 'icon:thresholds-formula', 'formula:cfvo-reference', 'formula:cfvo-expression', 'formula:cfvo-nonnumeric'],
+      // formula:cfvo-relative is owned by the confirmation case stage5-cfvo-relative-a1 (this row) since the cfvo-relative follow-up.
+      'stage5-cfvo-scope': ['formula:cfvo-scope-multi-range', 'formula:cfvo-relative'],
       'stage5-x14-scale': ['scale:dialect-standalone'],
       'stage5-active-present': ['formula:active-present-scale', 'formula:active-present-bar', 'formula:active-present-icon'],
       'stage5-unresolved-shapes': [],
@@ -7233,6 +7234,17 @@ const EXPECTED_DISJOINT_UNBUILT: Readonly<Record<string, readonly string[]>> = {
     'stage5-cfvo-formulas|formula:cfvo-nonnumeric|-|withheld|cfvo-nonnumeric-L',
     'stage5-cfvo-formulas|formula:cfvo-nonnumeric|-|withheld|cfvo-nonnumeric-M',
     'stage5-cfvo-formulas|formula:cfvo-nonnumeric|-|withheld|cfvo-nonnumeric-N',
+    'stage5-cfvo-relative-a1|formula:cfvo-relative|-|anchor-a1|rel-a1-single-bar',
+    'stage5-cfvo-relative-a1|formula:cfvo-relative|-|anchor-cell|rel-a1-single-bar',
+    'stage5-cfvo-relative-a1|formula:cfvo-relative|-|anchor-top-left|rel-a1-single-bar',
+    'stage5-cfvo-relative-a1|formula:cfvo-relative|-|ignored|rel-a1-single-bar',
+    'stage5-cfvo-relative-a1|formula:cfvo-relative|-|zero|rel-a1-single-bar',
+    'stage5-cfvo-relative-a1|formula:cfvo-scope-multi-range|-|anchor-a1|rel-a1-bar',
+    'stage5-cfvo-relative-a1|formula:cfvo-scope-multi-range|-|anchor-cell|rel-a1-bar',
+    'stage5-cfvo-relative-a1|formula:cfvo-scope-multi-range|-|ignored|rel-a1-bar',
+    'stage5-cfvo-relative-a1|formula:cfvo-scope-multi-range|-|per-range|rel-a1-bar',
+    'stage5-cfvo-relative-a1|formula:cfvo-scope-multi-range|-|rule-wide|rel-a1-bar',
+    'stage5-cfvo-relative-a1|formula:cfvo-scope-multi-range|-|zero|rel-a1-bar',
     'stage5-composition|formula:composition-indirect-ahead-bar|-|halts|indirect-bar',
     'stage5-composition|formula:composition-indirect-ahead-icon|-|halts|indirect-icon',
   ],
@@ -7242,23 +7254,27 @@ const EXPECTED_DISJOINT_UNBUILT: Readonly<Record<string, readonly string[]>> = {
   ],
 }
 /** Fix round 7: (configuration, rival, replication group) triples whose refutations cannot be cut below 2, by reason. */
-const EXPECTED_SINGLE_UNBUILT: Readonly<Record<string, number>> = { 'literal-vs-literal': 370, 'twin-expectation-locked': 38, 'strike-on-one-token': 4 }
+// The cfvo-relative confirmation case: its bar configurations' canonical no-bar twins at the minimum lock 16 more triples.
+const EXPECTED_SINGLE_UNBUILT: Readonly<Record<string, number>> = { 'literal-vs-literal': 370, 'twin-expectation-locked': 54, 'strike-on-one-token': 4 }
 // The bar:bounds-formula follow-up adds one crop:bar configuration of three readings (zero unbuilt, as in stage5-cfvo-formulas).
 // The cfvo-scope follow-up (stage5-cfvo-scope-v2) adds twelve readings, every one built (+12 triples), and +12 blank twins
 // and twin controls, +24 disjoint rivals and +608 single refuters, every one refused.
-const EXPECTED_COVERAGE = { triples: 184, built: 179, 'blank-twins': 61, 'required-empty-visuals': 95, 'blank-twin-controls': 61, 'blank-dxf-controls': 126, 'strike-blind': 10, 'tolerance-shift': 6, 'disjoint-rivals': 56, 'single-refuter': 674 }
+// The cfvo-relative confirmation case (stage5-cfvo-relative-a1) adds eleven readings (six multi-range, five single-range),
+// every one built: +11 triples, +11 blank twins and twin controls, +7 required empty visuals, +11 tolerance shifts, +22
+// disjoint rivals and +192 single refuters, every one refused.
+const EXPECTED_COVERAGE = { triples: 195, built: 190, 'blank-twins': 72, 'required-empty-visuals': 102, 'blank-twin-controls': 72, 'blank-dxf-controls': 126, 'strike-blind': 10, 'tolerance-shift': 17, 'disjoint-rivals': 78, 'single-refuter': 866 }
 /** How each corruption refuses (a corruption can also eliminate the winner or leave two readings standing). */
 const EXPECTED_OUTCOMES: Readonly<Record<string, number>> = {
-  'blank-twins -> formula-twin-missing': 61,
+  'blank-twins -> formula-twin-missing': 72,
   'required-empty-visuals -> formula-hypothesis-none': 79,
-  'required-empty-visuals -> formula-unexpected-visual': 16,
-  'blank-twin-controls -> formula-twin-missing': 61,
+  'required-empty-visuals -> formula-unexpected-visual': 23,
+  'blank-twin-controls -> formula-twin-missing': 72,
   'blank-dxf-controls -> formula-positive-control-failed': 126,
   'strike-blind -> formula-positive-control-failed': 10,
-  'tolerance-shift -> formula-replication-shortfall': 3,
+  'tolerance-shift -> formula-replication-shortfall': 14,
   'tolerance-shift -> non-discriminating': 3,
-  'disjoint-rivals -> formula-replication-shortfall': 35,
+  'disjoint-rivals -> formula-replication-shortfall': 57,
   'disjoint-rivals -> non-discriminating': 21,
-  'single-refuter -> formula-replication-shortfall': 672,
+  'single-refuter -> formula-replication-shortfall': 864,
   'single-refuter -> non-discriminating': 2,
 }

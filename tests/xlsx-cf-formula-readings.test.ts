@@ -247,7 +247,10 @@ describe('every registered formula reading is the reading production implements,
                 // Task 37: an icon's token names the icon it draws, so a crop configuration whose readings differ only in the
                 // bucket (stage5-cfvo-scope scope-icon) can discriminate; a twin is still production's own twin cell.
                 const drawn = v !== undefined && (v.iconSet !== undefined || (v.dataBar !== undefined && v.dataBar.endFraction !== v.dataBar.startFraction))
-                out.set(r, { fill: s.fill, strike: s.strike, withheld: s.withheld, drawn, visual: v ? Object.keys(v).sort().map(k => k === 'iconSet' && v.iconSet ? `iconSet:${v.iconSet.set}/${v.iconSet.iconId}` : k).join('&') : '' })
+                // The cfvo-relative confirmation case: a bar's token names its extent too, so a crop configuration whose
+                // readings differ only in bar length (stage5-cfvo-relative-a1 rel-a1-bar) can discriminate.
+                const extent = (b: NonNullable<typeof v>['dataBar']): string => (b ? `dataBar:${b.startFraction.toFixed(4)}-${b.endFraction.toFixed(4)}` : 'dataBar')
+                out.set(r, { fill: s.fill, strike: s.strike, withheld: s.withheld, drawn, visual: v ? Object.keys(v).sort().map(k => k === 'iconSet' && v.iconSet ? `iconSet:${v.iconSet.set}/${v.iconSet.iconId}` : k === 'dataBar' ? extent(v.dataBar) : k).join('&') : '' })
               }
               lease.release(); service.dispose()
               return out
