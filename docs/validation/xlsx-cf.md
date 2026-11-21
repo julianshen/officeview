@@ -2573,10 +2573,10 @@ There are 2,036 rows over 17 cases: 791 formula cells, 542 painted as Excel, 0 d
 | `formula:cfvo-reference` | cfvo-formulas | S5-H | DisplayFormat / PNG measurement | evaluated | published | none |
 | `bar:bounds-formula` | bar-bounds-formula (§14.z.10) | S5-H | PNG measurement (crop against literal twins) | evaluated | published | none (Task 39 re-deferred it on the stage5-cfvo-formulas fixture, which stays recorded as unconfirmable for that case only) |
 | `icon:thresholds-formula` | cfvo-formulas | S5-H | recorded Excel outcome | — | withheld: refused-unsupported | Re-deferred (Task 39): every icon crop of stage5-cfvo-formulas is unclassifiable (icon-class-none). Its cells sit on the default style, which Excel... |
-| `formula:cfvo-relative` | cfvo-formulas | S5-H | DisplayFormat / PNG measurement | zero | withheld: reading-mismatch: Excel matched zero, production implements anchor-top-left | withheld (gate) |
+| `formula:cfvo-relative` | cfvo-relative-a1 (§14.z.12; cfvo-formulas K, which matched zero, is a cross-check) | S5-H | DisplayFormat / PNG measurement | anchor-a1 | published | a window that wraps off the sheet to blank cells withholds (`formula:cfvo-nonnumeric`) |
 | `formula:cfvo-nonnumeric` | cfvo-formulas | S5-H | recorded Excel outcome | — | withheld: refused-unsupported | Finding (S4-MINMAX precedent): no hypothesis (withheld, zero, skipped) matched what Excel showed for a text, blank or error formula bound in stage5... |
 | `formula:cfvo-twin` | cfvo-formulas | S5-H | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
-| `formula:cfvo-scope-multi-range` | cfvo-scope-v2 (§14.z.11; cfvo-scope is a cross-check) | S5-H | DisplayFormat / PNG measurement (crop against literal twins) | anchor-a1 | withheld: refused-unsupported | measured anchor-a1, but production's behaviour post-dates the capture: awaits a confirmation case (§14.z.11) |
+| `formula:cfvo-scope-multi-range` | cfvo-relative-a1 (§14.z.12; cfvo-scope and cfvo-scope-v2 are cross-checks) | S5-H | DisplayFormat / PNG measurement (crop against literal twins) | anchor-a1 | published | multi-range colour scales stay withheld by `scale:scope-disjoint` |
 | `formula:cfvo-scope-twin` | cfvo-scope | S5-H | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
 | `scale:dialect-standalone` | x14-scale | S5-I | DisplayFormat / PNG measurement | standalone-evaluated | published | none |
 | `formula:x14-scale-twin` | x14-scale | S5-A | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
@@ -2888,3 +2888,50 @@ The `scope-disjoint` justification added to `stage5JustifiedRefusals` in 3b67bf3
 **Audits:** Stage 5 `structural=33/33 unsupported=9 pending=5 unverifiedNonDiscriminating=11 stageComplete=true blocked=0`; 2,748 records over 33 cases (19 measured), 0 disagreeing.
 
 **Pinned counts (after fix round 1):** Stage 5 published stays 45; `RECORDED_EXCEL_REFUSALS` keeps `formula:cfvo-scope-multi-range`, whose reason is now the measured anchor-a1 awaiting confirmation.
+
+### 14.z.12 `formula:cfvo-relative` and `formula:cfvo-scope-multi-range` confirmed and published as `anchor-a1` (2026-11-21)
+
+**Why a new case.** §14.z.11 explained the scope finding: Excel reads a relative cfvo bound as if its formula sat in A1, on several ranges and, in v2's recorded control, on one. But production's `anchor-a1` post-dated that capture, so it could not be registered from it. `formula:cfvo-relative`'s registered `anchor-top-left` was contradicted by the same capture.
+
+**Ordering, in git.** The registration rule needs both the hypothesis and production's behaviour committed before the capture:
+1. Behaviour: multi-range `cfvoBoundAnchors` (PR #87, on main) and single range af80ef77 (`formula:cfvo-relative` read through `cfvoBoundAnchors`, tested first).
+2. Hypotheses: `stage5-cfvo-relative-a1` (0c03b846; pre-capture fix round 1, 1df6c149 and cdacdf65).
+3. Capture: f9d5be94.
+
+**The case** (appended last; it owns both ids through `CF_STAGE5_OWNERS`):
+- **Two ranges:** a scale, an icon set and a data bar on `B..:B.. D..:D..`, each bound `=MAX(<first range>)` written on its rule's top-left.
+- **One range:** the same three on F alone.
+- **Negative control:** an absolute bound (`$H$1` = 20).
+- **Readings:** anchor-a1, rule-wide / anchor-top-left, per-range, anchor-cell, zero and ignored.
+- **Bars** predict only the window readings (`omitted` zero and ignored: an inverted bar's twin is refused by production under S3-E).
+- **Windows:** seeded; A1:A4 holds max 15.
+- **Twins:** 42 canonical literal num/num blocks.
+- **Size:** 286 cells, A1:AK30.
+- **Pre-capture fix round 1** (codex review) also added:
+  - the owner-aware readings test;
+  - three recorded justifications that publication would otherwise leave unjustified (the `scale:scope-disjoint` family gate; `stage5-cfvo-formulas` K read from A1 wrapping to the blank XEU1, a non-numeric bound; and v2's superseded single-range record);
+  - rehearsals of the proposed registration.
+
+**The capture** (orchestrator, Excel 16.115, f9d5be94): a repair-free open, every formula kept as authored, 3109 × 601 px.
+- Both `formula:cfvo-scope-multi-range` and `formula:cfvo-relative` are **discriminating, matched `anchor-a1`**, each the sole survivor.
+- The scale B2..B5 = F8696B A79773 76B378 63BE7B and F2..F5 = F8696B B58F72 7CB078 63BE7B, exactly the anchor-a1 (bound 15) predictions.
+- The icons B11..B14 are 3Arrows:2 ×4 and D11..D14 are 0/1/1/1. The bars B20..B23 = none/none/2-21/2-48 and F20..F23 = none/2-21/2-48/2-48.
+- The negative control matched its b20 twins.
+
+**Registered and published.** `CF_FORMULA_PRODUCTION_READINGS`:
+- `formula:cfvo-relative` is now `anchor-a1`, replacing `anchor-top-left`. That reading is no longer registered; an absolute bound reads the same value at either anchor.
+- `formula:cfvo-scope-multi-range` is the selection `['rule-wide', 'per-range', 'anchor-a1']`.
+
+Both left `CF_STAGE5_UNSUPPORTED`. The pre-capture rehearsals now check the real registration and the real capture. The `injectCfFormulaReadings` test seam is removed, since nothing needs it now. `npx tsx scripts/cf-refs/audit.ts --stage 5 --write --publish-stage3 --publish-stage5` ran twice, byte-identical (sha-256 `33f5a739…`): **340 ids, 47 of them Stage 5** (up from 338 / 45). The only diff in `verifiedCapabilities.ts` is the two ids (in the Stage 5 set and the combined set) and the selection `formula:cfvo-scope-multi-range: anchor-a1`. `scale:scope-disjoint` stays withheld.
+
+**Production effect.**
+- **Now painting:**
+  - relative cfvo bounds on one range: colour scales, data bars and icon sets, read from A1;
+  - on several ranges, icon sets and data bars, relative or absolute.
+- **Still withheld:**
+  - every colour scale over several ranges (`scale:scope-disjoint`, unverified under Ruling F-2);
+  - a bound whose A1 window leaves the sheet and wraps to blank cells (`formula:cfvo-nonnumeric` is not held; `stage5-cfvo-formulas` K, where Excel reads 0);
+  - non-numeric bounds generally.
+
+**Audits.** Stage 5 `structural=34/34 unsupported=9 pending=5 unverifiedNonDiscriminating=12 stageComplete=true blocked=0`. 3,034 records over 34 cases (20 measured), 903 formula cells, 623 painted as Excel, 307 with justified unresolved slots, 0 disagreeing.
+

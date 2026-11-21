@@ -143,6 +143,7 @@ npx tsx scripts/cf-refs/audit.ts --stage 5
   - `missing-capture`, an unclassifiable icon or an unmeasurable bar crop;
   - `formula-hypothesis-none`, `non-discriminating` or `formula-replication-shortfall`;
   - a failed negative control.
+- **Run of 2026-11-21 (f9d5be94, Excel 16.115):** a repair-free open with every formula kept, 3109 × 601 px. Both ids are `discriminating`, matched `anchor-a1`, the sole survivor; the negative control matched. Registered and published (§14.z.12).
 
 ## 3. Unresolved shapes (record only)
 

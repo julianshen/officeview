@@ -15,7 +15,7 @@ in git history.
 - **Excel formula conditional formatting rules (view-only).** "Use a formula" rules, `cellIs` rules whose value is a
   reference or a formula, and text, blank and error rules whose formula differs from the one Excel writes are now
   evaluated per cell by a bounded formula evaluator, compose with the other rule kinds, and paint wherever Excel 16.115's
-  own rendering verifies them (45 Stage 5 capabilities): the formula dialects, relative and pinned anchors and the edge
+  own rendering verifies them (47 Stage 5 capabilities): the formula dialects, relative and pinned anchors and the edge
   wrap, number/boolean/blank/error truth, the logical, information, text, math, aggregate, conditional-aggregate, date,
   row/column and `TODAY()` functions, hoisted whole-column aggregates (an error in the column propagates, as Excel shows) and `COUNTIF` frequency, reference, relative,
   expression and blank `cellIs` operands, divergent predicates, saved values under manual calculation, stopIfTrue and
@@ -25,13 +25,15 @@ in git history.
   Excel's reading or withheld. Everything else keeps its base formatting and is announced as unavailable: shapes Excel
   rewrites or refuses (`activePresent` on scales, bars and icon sets; a time-period formula that differs from its
   period; a reference to a missing sheet; a non-numeric formula bound), readings production does not implement (text and
-  range truth, error operands, a relative cfvo bound, a relative formula bound across several ranges), and stopIfTrue ahead of an icon set.
+  range truth, error operands, a colour scale over several ranges), and stopIfTrue ahead of an icon set.
 
-- **Excel formula conditional formatting: how Excel reads a relative cfvo formula (measured, still withheld).** Excel
-  16.115 reads a colour-scale, data-bar or icon-set bound such as `=MAX(B2:B7)`, written on B2, as if it sat in A1, so
-  it reads `MAX(A1:A6)`, on one range or several. The viewer now implements that reading for multi-range rules (single-range rules still read from the range top-left), and it stays withheld until a
-  workbook captured after the implementation confirms it. Viewer output does not change. Evidence:
-  `docs/validation/xlsx-cf.md` §14.z.11.
+- **Excel formula conditional formatting: relative formula bounds of colour scales, data bars and icon sets.** A
+  bound such as `=MAX(B2:B7)` written on a rule's first cell now paints, read the way Excel 16.115 reads it: as if the
+  formula sat in A1, so the example reads `MAX(A1:A6)`. This covers colour scales, data bars and icon sets on one range,
+  and icon sets and data bars on several ranges (relative or absolute bounds) (`formula:cfvo-relative` and
+  `formula:cfvo-scope-multi-range`, reading `anchor-a1`; 47 Stage 5 capabilities, 340 verified in total). Still
+  withheld: colour scales over several ranges (`scale:scope-disjoint` is unverified), and a bound whose shifted window
+  leaves the sheet and reads blank cells (a non-numeric bound). Evidence: `docs/validation/xlsx-cf.md` §14.z.11–§14.z.12.
 
 - **Excel formula conditional formatting: an error in a whole-column aggregate propagates.** A rule such as
   `A2>AVERAGE($A:$A)` or `A2=MAX($A:$A)` over a column that holds an error (`#DIV/0!`) formats no cell, which is what
