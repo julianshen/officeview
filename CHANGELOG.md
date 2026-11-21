@@ -16,11 +16,11 @@ in git history.
   `B2:B5 D2:D5`) now paints, with its statistics (min, max, percentile midpoint) taken over all of its ranges together,
   which is what Excel 16.115 does (`scale:scope-disjoint`, matched reading `union`; 341 verified capabilities). This also
   unlocks the multi-range colour scales with formula bounds, which agree with their Excel captures. Newly withheld: a
-  cell of a 3-colour scale that lies strictly inside a segment bounded by two literal `num` thresholds at a fraction that
-  is not a binary fraction (for example num 0/30/60 at values 40 and 50). Excel drew such cells one unit off from the
-  viewer's interpolation by a rule not yet explained, so they keep their base formatting and are announced as
-  unavailable until a follow-up measurement settles it. Still withheld: colour scales over hidden rows, merged cells,
-  whole columns or duplicated blocks, and overlapping scales. Evidence: `docs/validation/xlsx-cf.md` §14.z.13.
+  cell of a 3-colour scale that lies strictly inside a segment bounded by two literal `num` thresholds where the segment
+  fraction times 2^20 is not a whole number (for example num 0/30/60 at values 40 and 50). Excel drew such cells one unit
+  higher per colour channel than the viewer's interpolation, by a rule not yet explained, so they keep their base
+  formatting and are announced as unavailable until a follow-up measurement settles it. Still withheld: colour
+  scales over hidden rows, merged cells, whole columns or duplicated blocks, and overlapping scales. Evidence: `docs/validation/xlsx-cf.md` §14.z.13.
 
 - **Excel formula conditional formatting rules (view-only).** "Use a formula" rules, `cellIs` rules whose value is a
   reference or a formula, and text, blank and error rules whose formula differs from the one Excel writes are now

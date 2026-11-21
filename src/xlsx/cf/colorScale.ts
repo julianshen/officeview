@@ -441,10 +441,10 @@ export function safeFraction(v: number, lo: number, hi: number): number | undefi
 /**
  * Finding (capture e448d831, stage2-scale-scope-disjoint twins T4 and V3; user ruling "withhold the num shape"): on a
  * 3-colour scale whose segment is bounded by two literal `num` cfvo (a formula bound resolved to a number is not
- * included: no capture shows that shape), a value strictly inside the segment at a non-dyadic fraction (f·2^20 not an
- * integer) rendered one unit less per channel in Excel 16.115 than production's truncating interpolation. Excel's rule is
+ * included: no capture shows that shape), a value strictly inside the segment where f·2^20 is not an integer rendered
+ * in Excel 16.115 one unit HIGHER per RGB channel than production's truncating interpolation (T4: CC/DD/82 against CB/DC/81; V3: 98/CE/7F against 97/CD/7E), i.e. the descending step one unit smaller in magnitude. Excel's rule is
  * unexplained, so the rounding is unchanged and such a cell is withheld (`cf-unmeasured-num-segment-fraction`) until a
- * follow-up case pre-registers the readings. Endpoints and dyadic fractions paint as before.
+ * follow-up case pre-registers the readings. Endpoints and fractions with f·2^20 an integer paint as before.
  */
 export function numSegmentUnmeasured(lo: CfScalePoint, hi: CfScalePoint, value: number, tLo: number, tHi: number, fraction: number): boolean {
   const literalNum = (p: CfScalePoint): boolean => p.bound.type === 'num' && !('resolved' in p.bound && p.bound.resolved !== undefined)

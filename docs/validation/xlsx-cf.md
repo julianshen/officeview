@@ -2973,17 +2973,17 @@ J equals its twin N, and every control is white.
 **Finding: 3-colour num-segment fractions.**
 - Two twin cells of this capture contradict production: T4 and V3.
   - Both sit on a 3-colour scale with literal num bounds 0/30/60, in the upper segment, at f = 1/3 and 2/3.
-  - Excel drew `FFCCDD82` and `FF98CE7F`; production paints `FFCBDC81` and `FF97CD7E`. Excel is one unit less per channel in magnitude.
+  - Excel drew `FFCCDD82` and `FF98CE7F`; production paints `FFCBDC81` and `FF97CD7E`. Excel is one unit HIGHER in each RGB channel (CC/DD/82 against CB/DC/81; 98/CE/7F against 97/CD/7E): on these descending channels the interpolation step is one unit smaller in magnitude.
 - Excel's rule is unexplained.
   - The 1e-11 truncation guard decides nothing there: the products are exact doubles (52, 15, 3; 104, 30, 6).
   - Rescaling the fraction over the full span does not explain both cells either (checked in the coordinator's review).
-  - "A whole-number product" and "a whole-number product at a non-dyadic fraction" would each withhold dozens of cells that other captures confirm production paints exactly (156 and 66 respectively).
-  - No earlier capture holds a 3-colour cell inside a literal-num segment at a non-dyadic fraction.
+  - "A whole-number product" and "a whole-number product where f·2^20 is not an integer" would each withhold dozens of cells that other captures confirm production paints exactly (156 and 66 respectively).
+  - No earlier capture holds a 3-colour cell inside a literal-num segment where f·2^20 is not an integer.
 - **Withheld (user ruling).** The rounding is unchanged. a87121e8 withholds such a cell (`cf-unmeasured-num-segment-fraction`, `numSegmentUnmeasured` in `colorScale.ts`) when all of these hold:
   - the scale has 3 colours;
   - both cfvo bounding the value's segment are literal `num` (a formula bound resolved to a number is not included; no capture shows that shape);
   - the value is strictly inside the segment;
-  - the fraction is non-dyadic (f·2^20 is not an integer).
+  - f·2^20 is not an integer (a finite binary-resolution test: an exact fraction such as 1/2^21 also fails it).
 - **Reach.** Across every measured case this newly withholds 11 cells, all twins of this case: R3 R4 R5 S2 S3 S4 T3 T4 U3 V3 W4. Nine are Excel-equal; T4 and V3 are not. No other case changes.
 - **Follow-up.** A case that pre-registers readings for this shape, with the candidate production behaviour committed before its capture.
 

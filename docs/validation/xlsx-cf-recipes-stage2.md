@@ -272,4 +272,4 @@ The capture cannot be retried and no tolerance is edited after it. A capture no 
 - The capture is 1933 × 181 px.
 - `verifyCfCase`: verified, **discriminating, matched `union`** (sole survivor). Every designated cell equals its union twin (B = L, D = M, F = R, H = S, J = N), and every control is white.
 - Published as `scale:scope-disjoint` (341 ids; `docs/validation/xlsx-cf.md` §14.z.13).
-- **Finding:** twins T4 and V3 (3-colour num 0/30/60, upper segment at f = 1/3 and 2/3) are one unit less per channel than production. Their shape (a literal-num segment at a non-dyadic fraction) is withheld (`cf-unmeasured-num-segment-fraction`) pending a follow-up case.
+- **Finding:** twins T4 and V3 (3-colour num 0/30/60, upper segment at f = 1/3 and 2/3) are one unit HIGHER per RGB channel than production (the descending step one unit smaller). Their shape (a literal-num segment where f·2^20 is not an integer) is withheld (`cf-unmeasured-num-segment-fraction`) pending a follow-up case.

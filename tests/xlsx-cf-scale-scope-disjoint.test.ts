@@ -142,7 +142,7 @@ const excelFills = (c: CfOracleCase): Map<string, string> => {
 }
 /**
  * The withheld shape of the finding (a87121e8, `numSegmentUnmeasured`), recomputed from the twin's marker: a 3-colour scale
- * whose value lies strictly inside a segment bounded by two literal num cfvo, at a non-dyadic fraction.
+ * whose value lies strictly inside a segment bounded by two literal num cfvo, where f*2^20 is not an integer.
  */
 function inNumSegmentShape(c: CfOracleCase, ref: string): boolean {
   const t = twinOf(c, ref)
@@ -188,7 +188,7 @@ describe('the capture (e448d831): union, and production against Excel', () => {
       if (withheld.includes(ref)) expect(fills.get(ref), ref).toBeUndefined()
       else expect(fills.get(ref), ref).toBe(excel.get(ref))
     }
-    // The finding: with the shape painted (the guard-free model production would use), T4 and V3 are one unit off.
+    // The finding: with the shape painted (production's interpolation), T4 and V3 are one unit lower per RGB channel than Excel.
     const planted = plantedFills(c, 'union')
     expect(withheld.filter(ref => planted.get(ref) !== excel.get(ref))).toEqual(['T4', 'V3'])
     expect([excel.get('T4'), planted.get('T4'), excel.get('V3'), planted.get('V3')]).toEqual(['FFCCDD82', 'FFCBDC81', 'FF98CE7F', 'FF97CD7E'])
