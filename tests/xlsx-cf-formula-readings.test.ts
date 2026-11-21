@@ -21,7 +21,7 @@ import { CF_LIMITS, createCfMemory } from '../src/xlsx/cf/limits'
 import { injectCfFormulaSelections, withInjectedCfEvidence } from '../src/xlsx/cf/evidence'
 import { CF_FORMULA_PRODUCTION_READINGS } from '../src/xlsx/cf/formulaReadings'
 import { cfRulesVersion } from '../src/xlsx/view/pagedSource'
-import type { CfManifest } from '../scripts/cf-refs/cases'
+import { CF_STAGE5_OWNERS, type CfManifest } from '../scripts/cf-refs/cases'
 import { CF_STAGE5_UNCONFIRMABLE, stage5Publication, stage5UnconfirmableScope, auditStage5Manifest, type Stage5AuditReport } from '../scripts/cf-refs/audit'
 import { rc, shown } from './helpers/cf-formula-rules'
 
@@ -205,72 +205,106 @@ describe('an unconfirmable capability is never published (fix round 2)', () => {
   })
 })
 
-describe('every registered formula reading is the reading production implements, on the Stage 5 fixtures', () => {
-  it('each designated cell is the registered reading\'s prediction or withheld; each entry is reproduced and discriminating', async () => {
-    const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest
-    const registry = CF_FORMULA_PRODUCTION_READINGS
-    const lists = Object.entries(registry).filter((e): e is [string, readonly string[]] => typeof e[1] !== 'string')
-    const reproduced = new Set<string>(), unconfirmableChecked = new Set<string>(), violations: string[] = []
-    let discriminating = 0
-    for (const c of manifest.cases.filter(x => x.stage === 5)) {
-      for (const cfg of c.formulaConfigurations ?? []) {
-        if (cfg.record || cfg.role) continue
-        const entry = registry[cfg.capabilityId]
-        if (entry === undefined) continue
-        for (const reading of typeof entry === 'string' ? [entry] : entry) {
-          const predicted = cfg.hypotheses[reading] as Readonly<Record<string, string>> | undefined
-          expect(predicted, `${cfg.capabilityId} ${cfg.id}: ${reading} is a hypothesis`).toBeDefined()
-          const refs = cfg.refs.filter(isPaintRef)
-          if (refs.length === 0) continue
-          const selections = Object.fromEntries(lists.map(([k, v]) => [k, v[0]!]))
-          selections[cfg.capabilityId] = reading
-          const got = await withInjectedCfEvidence(Object.keys(registry), async () => {
-            injectCfFormulaSelections(selections)
-            try {
-              // A `pre:` observation is what Excel shows on opening the authored input, before any calculate; the saved file is Excel's resave
-              // (its stale values recomputed), so the input is the workbook production must reproduce it on.
-              const file = cfg.refs.some(r => r.startsWith('pre:')) ? (c as unknown as { input: string }).input : c.saved
-              const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, file)))))
-              const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
-              const cells = cellsOf(cfg)
-              const clock = clockFor(c)
-              const memory = createCfMemory()
-              // The document's other sheets (Task 36): cross-sheet configurations read them through the static workbook seam.
-              const service = createCfService(sheet.conditionalFormatting!, memory, { evidence: cfRuntimeEvidence, evaluation: cfEvaluationContextFor(clock ? { ...cfDocumentEvaluationOf(doc), timeZone: clock.zone } : cfDocumentEvaluationOf(doc), clock ? () => clock.now : Date.now), sheetName: sheet.name, workbook: cfWorkbookOfDocument(doc.sheets, memory, 'engine') })
-              const stamp = { owner: 'readings', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(sheet.conditionalFormatting!), viewGen: 0, structureGen: 0, clockGen: 0 }
-              const lease = await service.prepareCf({ stamp, sourceRects: cells.map(r => { const { row, col } = rc(r); return { firstRow: row, lastRow: row, firstCol: col, lastCol: col } }), signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, residentSource(sheet, stamp, memory, 'engine'))
-              const out = new Map<string, Shown>()
-              for (const r of cells) {
-                const { row, col } = rc(r)
-                const o = lease.value.at(row, col), s = shown(o)
-                const v = o.kind === 'ready' ? o.value.visual : undefined
-                // Task 37: an icon's token names the icon it draws, so a crop configuration whose readings differ only in the
-                // bucket (stage5-cfvo-scope scope-icon) can discriminate; a twin is still production's own twin cell.
-                const drawn = v !== undefined && (v.iconSet !== undefined || (v.dataBar !== undefined && v.dataBar.endFraction !== v.dataBar.startFraction))
-                out.set(r, { fill: s.fill, strike: s.strike, withheld: s.withheld, drawn, visual: v ? Object.keys(v).sort().map(k => k === 'iconSet' && v.iconSet ? `iconSet:${v.iconSet.set}/${v.iconSet.iconId}` : k).join('&') : '' })
-              }
-              lease.release(); service.dispose()
-              return out
-            } finally { injectCfFormulaSelections(null) }
-          })
-          const verdict = configurationVerdict(cfg, reading, got)
-          if (stage5UnconfirmableScope(cfg.capabilityId, c.id)) {
-            // Never reproduced; checked narrowly (only its documented witnesses may fail) and refused publication by the audit.
-            for (const v of unconfirmableViolations(cfg, verdict, got, c.id)) violations.push(`${cfg.capabilityId} ${c.id}/${v}`)
-            unconfirmableChecked.add(cfg.capabilityId)
-            continue
-          }
-          for (const v of verdict.violations) violations.push(`${cfg.capabilityId} ${c.id}/${v}`)
-          if (verdict.reproduced) reproduced.add(cfg.capabilityId)
-          if (verdict.discriminating) discriminating++
+/** Runs every non-record configuration of every Stage 5 case under each reading of `registry`, as production evaluates it. */
+async function readingsCheck(registry: Readonly<Record<string, string | readonly string[]>>) {
+  const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest
+  const lists = Object.entries(registry).filter((e): e is [string, readonly string[]] => typeof e[1] !== 'string')
+  const reproduced = new Set<string>(), reproducedAt = new Set<string>(), unconfirmableChecked = new Set<string>(), violations: string[] = []
+  let discriminating = 0
+  for (const c of manifest.cases.filter(x => x.stage === 5)) {
+    for (const cfg of c.formulaConfigurations ?? []) {
+      if (cfg.record || cfg.role) continue
+      const entry = registry[cfg.capabilityId]
+      if (entry === undefined) continue
+      for (const reading of typeof entry === 'string' ? [entry] : entry) {
+        const predicted = cfg.hypotheses[reading] as Readonly<Record<string, string>> | undefined
+        // Owner-aware (the cfvo-relative follow-up): the case owning the capability (CF_STAGE5_OWNERS) must pre-register
+        // every registered reading; a superseded case keeps the historical verification of the readings it names, and is
+        // never given a hypothesis after its capture.
+        const owner = CF_STAGE5_OWNERS[cfg.capabilityId]
+        if (predicted === undefined && owner !== undefined && owner !== c.id) continue
+        expect(predicted, `${cfg.capabilityId} ${cfg.id}: ${reading} is a hypothesis`).toBeDefined()
+        const refs = cfg.refs.filter(isPaintRef)
+        if (refs.length === 0) continue
+        const selections = Object.fromEntries(lists.map(([k, v]) => [k, v[0]!]))
+        selections[cfg.capabilityId] = reading
+        const got = await withInjectedCfEvidence(Object.keys(registry), async () => {
+          injectCfFormulaSelections(selections)
+          try {
+            // A `pre:` observation is what Excel shows on opening the authored input, before any calculate; the saved file is Excel's resave
+            // (its stale values recomputed), so the input is the workbook production must reproduce it on.
+            const file = cfg.refs.some(r => r.startsWith('pre:')) ? (c as unknown as { input: string }).input : c.saved
+            const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, file)))))
+            const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+            const cells = cellsOf(cfg)
+            const clock = clockFor(c)
+            const memory = createCfMemory()
+            // The document's other sheets (Task 36): cross-sheet configurations read them through the static workbook seam.
+            const service = createCfService(sheet.conditionalFormatting!, memory, { evidence: cfRuntimeEvidence, evaluation: cfEvaluationContextFor(clock ? { ...cfDocumentEvaluationOf(doc), timeZone: clock.zone } : cfDocumentEvaluationOf(doc), clock ? () => clock.now : Date.now), sheetName: sheet.name, workbook: cfWorkbookOfDocument(doc.sheets, memory, 'engine') })
+            const stamp = { owner: 'readings', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(sheet.conditionalFormatting!), viewGen: 0, structureGen: 0, clockGen: 0 }
+            const lease = await service.prepareCf({ stamp, sourceRects: cells.map(r => { const { row, col } = rc(r); return { firstRow: row, lastRow: row, firstCol: col, lastCol: col } }), signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, residentSource(sheet, stamp, memory, 'engine'))
+            const out = new Map<string, Shown>()
+            for (const r of cells) {
+              const { row, col } = rc(r)
+              const o = lease.value.at(row, col), s = shown(o)
+              const v = o.kind === 'ready' ? o.value.visual : undefined
+              // Task 37: an icon's token names the icon it draws, so a crop configuration whose readings differ only in the
+              // bucket (stage5-cfvo-scope scope-icon) can discriminate; a twin is still production's own twin cell.
+              const drawn = v !== undefined && (v.iconSet !== undefined || (v.dataBar !== undefined && v.dataBar.endFraction !== v.dataBar.startFraction))
+              // The cfvo-relative confirmation case: a bar's token names its extent too, so a crop configuration whose
+              // readings differ only in bar length (stage5-cfvo-relative-a1 rel-a1-bar) can discriminate.
+              const extent = (b: NonNullable<typeof v>['dataBar']): string => (b ? `dataBar:${b.startFraction.toFixed(4)}-${b.endFraction.toFixed(4)}` : 'dataBar')
+              out.set(r, { fill: s.fill, strike: s.strike, withheld: s.withheld, drawn, visual: v ? Object.keys(v).sort().map(k => k === 'iconSet' && v.iconSet ? `iconSet:${v.iconSet.set}/${v.iconSet.iconId}` : k === 'dataBar' ? extent(v.dataBar) : k).join('&') : '' })
+            }
+            lease.release(); service.dispose()
+            return out
+          } finally { injectCfFormulaSelections(null) }
+        })
+        const verdict = configurationVerdict(cfg, reading, got)
+        if (stage5UnconfirmableScope(cfg.capabilityId, c.id)) {
+          // Never reproduced; checked narrowly (only its documented witnesses may fail) and refused publication by the audit.
+          for (const v of unconfirmableViolations(cfg, verdict, got, c.id)) violations.push(`${cfg.capabilityId} ${c.id}/${v}`)
+          unconfirmableChecked.add(cfg.capabilityId)
+          continue
         }
+        for (const v of verdict.violations) violations.push(`${cfg.capabilityId} ${c.id}/${v}`)
+        if (verdict.reproduced) { reproduced.add(cfg.capabilityId); reproducedAt.add(`${cfg.capabilityId}|${c.id}|${reading}`) }
+        if (verdict.discriminating) discriminating++
       }
     }
+  }
+  return { reproduced, reproducedAt, unconfirmableChecked, violations, discriminating }
+}
+
+/** One run of the check over production's registry, shared by the assertions below (it walks every Stage 5 fixture). */
+let registryCheck: ReturnType<typeof readingsCheck> | undefined
+const productionReadingsCheck = (): ReturnType<typeof readingsCheck> => (registryCheck ??= readingsCheck(CF_FORMULA_PRODUCTION_READINGS))
+
+describe('every registered formula reading is the reading production implements, on the Stage 5 fixtures', () => {
+  it('each designated cell is the registered reading\'s prediction or withheld; each entry is reproduced and discriminating', async () => {
+    const registry = CF_FORMULA_PRODUCTION_READINGS
+    const { reproduced, unconfirmableChecked, violations, discriminating } = await productionReadingsCheck()
     expect(violations).toEqual([])
     const unreproduced = Object.keys(registry).filter(id => !reproduced.has(id) && !REUSE_ONLY.test(id) && UNREACHABLE[id] === undefined && !unconfirmableChecked.has(id))
     expect([...unconfirmableChecked].sort()).toEqual(Object.keys(CF_STAGE5_UNCONFIRMABLE).sort())
     expect(unreproduced).toEqual([])
     for (const id of Object.keys(UNREACHABLE)) expect(reproduced.has(id), `${id} is now reachable: drop it from UNREACHABLE`).toBe(false)
     expect(discriminating).toBeGreaterThan(30)
+  }, 300_000)
+})
+
+describe('the anchor-a1 registration (stage5-cfvo-relative-a1, f9d5be94)', () => {
+  it('both cfvo scope ids name anchor-a1, reproduced and discriminating on the owner case and only where it was pre-registered', async () => {
+    expect(CF_FORMULA_PRODUCTION_READINGS['formula:cfvo-relative']).toBe('anchor-a1')
+    expect(CF_FORMULA_PRODUCTION_READINGS['formula:cfvo-scope-multi-range']).toEqual(['rule-wide', 'per-range', 'anchor-a1'])
+    const { reproducedAt, violations } = await productionReadingsCheck()
+    expect(violations).toEqual([])
+    // The owner, and stage5-cfvo-scope-v2 (which named anchor-a1 before its capture); stage5-cfvo-formulas K and
+    // stage5-cfvo-scope never did and keep their historical verification.
+    expect([...reproducedAt].filter(k => k.endsWith('|anchor-a1')).sort()).toEqual([
+      'formula:cfvo-relative|stage5-cfvo-relative-a1|anchor-a1',
+      'formula:cfvo-scope-multi-range|stage5-cfvo-relative-a1|anchor-a1',
+      'formula:cfvo-scope-multi-range|stage5-cfvo-scope-v2|anchor-a1',
+    ])
   }, 300_000)
 })

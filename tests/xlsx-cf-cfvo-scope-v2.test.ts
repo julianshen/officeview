@@ -135,20 +135,20 @@ const ICON_R0 = 16
 const T1 = -20
 
 describe('stage5-cfvo-scope-v2: the case', () => {
-  it('owns formula:cfvo-scope-multi-range (appended last); stage5-cfvo-scope keeps its configurations and capture', () => {
+  it('owned formula:cfvo-scope-multi-range until the confirmation case stage5-cfvo-relative-a1; stage5-cfvo-scope keeps its configurations and capture', () => {
     const c = caseOf(ID)
     expect(c.status).toBe('measured')
-    expect(CF_STAGE5_OWNERS[CAP]).toBe(ID)
-    expect(CF_STAGE5_CAPABILITIES.find(e => e.capabilityId === CAP)!.caseId).toBe(ID)
-    expect(CF_STAGE5_CASES.at(-1)!.id).toBe(ID)
-    expect(CF_STAGE5_GROUPS['stage5-cfvo-scope']).toEqual(['stage5-cfvo-scope', ID])
+    expect(CF_STAGE5_OWNERS[CAP]).toBe('stage5-cfvo-relative-a1')
+    expect(CF_STAGE5_CAPABILITIES.find(e => e.capabilityId === CAP)!.caseId).toBe('stage5-cfvo-relative-a1')
+    expect(CF_STAGE5_CASES.slice(-2).map(x => x.id)).toEqual([ID, 'stage5-cfvo-relative-a1'])
+    expect(CF_STAGE5_GROUPS['stage5-cfvo-scope']).toEqual(['stage5-cfvo-relative-a1', 'stage5-cfvo-scope', ID])
     const old = CF_STAGE5_CASES.find(x => x.id === 'stage5-cfvo-scope')!
     expect(old.formulaConfigurations!.map(x => x.id)).toEqual(['scope-scale', 'scope-scale-absolute', 'scope-icon'])
     expect(old.status).toBe('recipe-pending')
     expect(caseOf('stage5-cfvo-scope').status).toBe('measured')
-    // The capture (5dc2fe9e) matched anchor-a1, pre-registered here; production's anchor-a1 post-dates it, so the capability
-    // stays a recorded refusal until a confirmation case captured after the behaviour.
-    expect(CF_STAGE5_UNSUPPORTED[CAP]).toMatch(/Measured anchor-a1 .* awaits a confirmation case/)
+    // The capture (5dc2fe9e) matched anchor-a1, pre-registered here; production's anchor-a1 post-dated it, so it was
+    // registered only after the confirmation case stage5-cfvo-relative-a1 (f9d5be94) matched it: no longer a refusal.
+    expect(CF_STAGE5_UNSUPPORTED[CAP]).toBeUndefined()
     expect(CF_STAGE5_NONDISCRIMINATING[TWIN]).toBeDefined()
   })
 

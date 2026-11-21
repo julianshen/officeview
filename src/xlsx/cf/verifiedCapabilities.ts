@@ -356,6 +356,8 @@ export const VERIFIED_STAGE5_CAPABILITIES: ReadonlySet<string> = new Set([
   'formula:cellis-operand-relative',
   'formula:cfvo-expression',
   'formula:cfvo-reference',
+  'formula:cfvo-relative',
+  'formula:cfvo-scope-multi-range',
   'formula:composition-expression-vs-scale',
   'formula:composition-overlapping',
   'formula:composition-stop-bar',
@@ -394,6 +396,7 @@ export const VERIFIED_STAGE5_CAPABILITIES: ReadonlySet<string> = new Set([
 
 export const VERIFIED_STAGE5_FORMULA_SELECTIONS: Readonly<Record<string, string>> = {
   'formula:cellis-operand-blank': 'blank-zero',
+  'formula:cfvo-scope-multi-range': 'anchor-a1',
   'formula:relative-wrap': 'wrap',
 }
 
@@ -509,6 +512,8 @@ export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set([
   'formula:cellis-operand-relative',
   'formula:cfvo-expression',
   'formula:cfvo-reference',
+  'formula:cfvo-relative',
+  'formula:cfvo-scope-multi-range',
   'formula:composition-expression-vs-scale',
   'formula:composition-overlapping',
   'formula:composition-stop-bar',

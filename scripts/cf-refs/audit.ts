@@ -2309,7 +2309,11 @@ export interface Stage5CaseRecord {
 }
 
 /** The per-case/variant records of every Stage 5 case under production evidence (nothing injected). */
-export async function stage5CaseRecords(manifest: CfManifest, rootDir: string = REPO_ROOT): Promise<Stage5CaseRecord[]> {
+/**
+ * `options.published` (the cfvo-relative follow-up): the published set the justification step reads, for rehearsing a
+ * proposed publication in tests together with injected evidence; the default is the committed published set.
+ */
+export async function stage5CaseRecords(manifest: CfManifest, rootDir: string = REPO_ROOT, options: { published?: (id: string) => boolean } = {}): Promise<Stage5CaseRecord[]> {
   const { OfficePackage } = await import('../../src/core/zip')
   const { parseXlsx } = await import('../../src/xlsx/parse')
   const { createCfService } = await import('../../src/xlsx/cf/service')
@@ -2360,7 +2364,7 @@ export async function stage5CaseRecords(manifest: CfManifest, rootDir: string = 
       evaluation: caseEvaluationOf(c, doc, now), sheetName: sheet.name, workbook: cfWorkbookOfDocument(doc.sheets, memory, 'engine') }) : undefined
     const stamp = { owner: 'audit-records', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cf ? cfRulesVersion(cf) : 0, viewGen: 0, structureGen: 0, clockGen: 0 }
     const source = residentSource(sheet, stamp, memory, 'engine')
-    const truths = await stage5CounterfactualOf({ c, doc, sheet, refs: c.expected.cells.map(e => e.ref), now })
+    const truths = await stage5CounterfactualOf({ c, doc, sheet, refs: c.expected.cells.map(e => e.ref), now, ...(options.published ? { published: options.published } : {}) })
     try {
       for (const exp of c.expected.cells) {
         const k = kindOf(exp.ref)

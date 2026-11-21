@@ -44,9 +44,7 @@ const RECORDED_EXCEL_REFUSALS = [
   'formula:predicate-timeperiod-divergent',
   'formula:cross-sheet-missing',
   'formula:cfvo-nonnumeric',
-  // Explained by stage5-cfvo-scope-v2 (5dc2fe9e matched anchor-a1), but production's anchor-a1 post-dates that capture:
-  // still a recorded refusal, awaiting a confirmation case.
-  'formula:cfvo-scope-multi-range',
+  // formula:cfvo-scope-multi-range left this list once stage5-cfvo-relative-a1 (f9d5be94) confirmed anchor-a1.
 ]
 
 describe('every enabled formula capability has verified evidence', () => {
@@ -87,7 +85,9 @@ describe('every enabled formula capability has verified evidence', () => {
     // Non-vacuous: the gate publishes and withholds for each reason today.
     expect(gate.published.length).toBeGreaterThan(20)
     const reasons = Object.values(gate.withheld)
-    for (const prefix of ['reading-unimplemented: ', 'reading-mismatch: ', 'refused-unsupported', 'unverified-nondiscriminating']) {
+    // `reading-mismatch: ` has no example today: formula:cfvo-relative, its only one, became a recorded refusal awaiting the
+    // confirmation case stage5-cfvo-relative-a1; the mutation test below still exercises it.
+    for (const prefix of ['reading-unimplemented: ', 'refused-unsupported', 'unverified-nondiscriminating']) {
       expect(reasons.some(r => r.startsWith(prefix)), prefix).toBe(true)
     }
   })
@@ -401,7 +401,7 @@ describe('per-case and per-variant Stage 5 audit rows (Task 39; fix round 1, F3)
     const m = manifest()
     const rows = await stage5CaseRecords(m, REPO_ROOT)
     const all = m.cases.filter(c => c.stage === 5)
-    expect(all).toHaveLength(33) // 33 since stage5-cfvo-scope-v2 (the cfvo-scope follow-up)
+    expect(all).toHaveLength(34) // 34 since stage5-cfvo-relative-a1 (the cfvo-relative confirmation case)
     expect(new Set(rows.map(r => r.caseId))).toEqual(new Set(all.map(c => c.id)))
     const measured = all.filter(c => c.status === 'measured')
     expect(rows.filter(r => r.compared).length).toBe(measured.reduce((n, c) => n + c.expected.cells.length, 0))

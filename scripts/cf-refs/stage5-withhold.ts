@@ -22,7 +22,7 @@
  * and the set of unresolved write paths), and compares the resolved components with Excel's capture.
  */
 import { compileCfFormula, formulaRequiredCapabilities, isCfFormulaRefusal, type CfFormulaUse } from '../../src/xlsx/cf/formula'
-import { CF_FORMULA_PRODUCTION_READINGS, cfFormulaReading } from '../../src/xlsx/cf/formulaReadings'
+import { cfFormulaReading, cfFormulaReadingEntry } from '../../src/xlsx/cf/formulaReadings'
 import { createCfMemory } from '../../src/xlsx/cf/limits'
 import { VERIFIED_CAPABILITIES } from '../../src/xlsx/cf/evidence'
 import { createCfService } from '../../src/xlsx/cf/service'
@@ -51,6 +51,8 @@ export interface Stage5Refusal { rule: string; ruleType: string; priority?: numb
 
 /** The family capability a `type="formula"` bound needs (service.ts VISUAL_FORMULA_CAPABILITY, Ruling S5-H). */
 const FORMULA_BOUND_FAMILY: Readonly<Record<string, string>> = { colorScale: 'scale:thresholds-formula', dataBar: 'bar:bounds-formula', iconSet: 'icon:thresholds-formula' }
+/** The family prefix of a visual rule's scope capabilities (service.ts blockScope). */
+const VISUAL_FAMILY: Readonly<Record<string, string>> = { colorScale: 'scale', dataBar: 'bar', iconSet: 'icon' }
 const isLiteralNumber = (v: string | undefined): boolean => v === undefined || /^-?\d+(\.\d+)?$/.test(v.trim())
 
 /**
@@ -61,6 +63,28 @@ export const STAGE5_ENUMERATED_REFUSALS: ReadonlyArray<Readonly<{ caseId: string
   caseId: 'stage5-formula-functions', refs: Array.from({ length: 18 }, (_, i) => `H${i + 2}`), formula: 'COUNTIF($A:$A,A2)>1',
   reason: 'S5-HOIST policy (Task 34; recorded in stage5-formula-hoist hoist-refused-boolean): COUNTIF($A:$A,A2)>1 counts over a range holding a boolean (A6 = TRUE), which the COUNTIF frequency hoist refuses for the whole rule',
 }]
+
+/**
+ * The cfvo-relative follow-up (pre-capture fix round 1): cells a relative cfvo bound read from A1 (`anchor-a1` of
+ * formula:cfvo-relative) leaves without a number. The bound's window shifted to A1 lands off the sheet; under the published
+ * `wrap` edge it reads a blank cell, a non-numeric bound, which production withholds while formula:cfvo-nonnumeric is not
+ * held (Excel read it as 0: stage5-cfvo-formulas K matched `zero`). Each entry applies only when that capability reads
+ * `anchor-a1` and formula:cfvo-nonnumeric is not held. tests/xlsx-cf-cfvo-relative-a1-case.test.ts checks the wrapped
+ * window is blank in the saved workbook.
+ */
+export const STAGE5_A1_BLANK_BOUND_REFUSALS: ReadonlyArray<Readonly<{ caseId: string; sqref: string; formula: string; wrapped: string; reason: string }>> = [{
+  caseId: 'stage5-cfvo-formulas', sqref: 'K2:K9', formula: 'A2', wrapped: 'XEU1',
+  reason: 'anchor-a1: =A2 written on K2, read from A1, lands ten columns left of A; wrapped (formula:relative-wrap) it reads the blank XEU1, a non-numeric bound (formula:cfvo-nonnumeric not held)',
+}]
+
+/**
+ * Records superseded by a later case version: a record configuration names a refusal of its rules only while its
+ * capability is not held. stage5-cfvo-scope-v2's single-range control (recorded, never evidence) is the shape
+ * stage5-cfvo-relative-a1 confirms: once formula:cfvo-relative is held, production paints it like any relative bound.
+ */
+export const STAGE5_SUPERSEDED_RECORDS: ReadonlyArray<Readonly<{ caseId: string; configuration: string; capabilityId: string }>> = [
+  { caseId: 'stage5-cfvo-scope-v2', configuration: 'scope2-single-range', capabilityId: 'formula:cfvo-relative' },
+]
 
 /**
  * Ruling S3-E (the bar:bounds-num/-formula follow-up, 2026-11-19): the Stage 5 data bars whose resolved bounds are
@@ -94,7 +118,7 @@ const a1 = (ref: string): { row: number; col: number } => {
 
 /** Whether production holds `capability` with a reading it implements (a registered formula id) or as published evidence. */
 function held(capability: string, published: (id: string) => boolean): boolean {
-  return Object.prototype.hasOwnProperty.call(CF_FORMULA_PRODUCTION_READINGS, capability) ? cfFormulaReading(capability, published) !== undefined : published(capability)
+  return cfFormulaReadingEntry(capability) !== undefined ? cfFormulaReading(capability, published) !== undefined : published(capability)
 }
 
 const label = (m: Marker): string => `${m.capabilityId}/${m.ruleType}${m.priority !== undefined ? `@p${m.priority}` : ''}`
@@ -153,11 +177,23 @@ export function stage5JustifiedRefusals(c: CaseLike | CfOracleCase, ref: string,
   for (const m of covering) {
     if (m.formula !== undefined) for (const r of formulaMarkerReasons(m, cs.id, published)) add(m, r)
     else if (m.ruleType === 'dataBar' && (m.bar?.cfvo ?? []).some(b => b.type === 'num') && !published('bar:bounds-num')) add(m, { reason: 'bar:bounds-num not held (a literal bar with num bounds)', refused: 'cf-unmeasured-capability' })
+    // A visual over more than one range needs its family's scope-disjoint capability (service.ts blockScope, Rulings S2-H,
+    // S3-H, S4-H). scale:scope-disjoint is unverified (Ruling F-2), so a multi-range colour scale withholds once its formula
+    // capabilities are held (the cfvo-relative follow-up: stage5-cfvo-relative-a1 B2:B5 D2:D5 and H2:H5 J2:J5, and the
+    // older scope cases' multi-range scales).
+    const family = VISUAL_FAMILY[m.ruleType]
+    if (family && m.sqref.trim().split(/\s+/).length > 1 && !published(`${family}:scope-disjoint`)) add(m, { reason: `${family}:scope-disjoint not held (a visual over more than one range)`, refused: 'cf-unmeasured-capability' })
   }
   // A record configuration (fixed before capture: "recorded, never evidence") names a refusal of the rules of its capability.
   for (const cfg of cs.formulaConfigurations ?? []) {
     if (!cfg.record || !cfg.refs.includes(ref)) continue
+    if (STAGE5_SUPERSEDED_RECORDS.some(e => e.caseId === cs.id && e.configuration === cfg.id && held(e.capabilityId, published))) continue
     for (const m of covering.filter(x => x.formula !== undefined && (cfg.capabilityId === undefined || x.capabilityId === cfg.capabilityId))) add(m, { reason: `${cfg.id}: ${cfg.record}`, refused: 'cf-unmeasured-capability' })
+  }
+  for (const e of STAGE5_A1_BLANK_BOUND_REFUSALS) {
+    if (e.caseId !== cs.id || !isCellInSqref(ref, e.sqref)) continue
+    if (cfFormulaReading('formula:cfvo-relative', published) !== 'anchor-a1' || held('formula:cfvo-nonnumeric', published)) continue
+    for (const m of covering.filter(x => x.sqref === e.sqref && x.formula !== undefined && (x.scale?.cfvo ?? x.bar?.cfvo ?? x.icon?.cfvo ?? []).some(b => (b.f ?? b.val) === e.formula))) add(m, { reason: e.reason, refused: 'cf-unmeasured-capability' })
   }
   for (const e of STAGE5_BAR_SCOPE_REFUSALS) {
     if (e.caseId !== cs.id || !isCellInSqref(ref, e.sqref)) continue

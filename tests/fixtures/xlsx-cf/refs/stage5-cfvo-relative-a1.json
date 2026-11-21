@@ -1,0 +1,1603 @@
+{
+  "excelVersion": "16.115",
+  "route": "copy-picture",
+  "appearance": "screen",
+  "scale": 1,
+  "pxPerPt": 1,
+  "width": 3109,
+  "height": 601,
+  "colWidthsPt": [
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84
+  ],
+  "rowHeightsPt": [
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20
+  ],
+  "geometrySource": "excel-measured",
+  "resavedByExcel": true,
+  "resaveSavedSha256": "dcc1d372b94638f92c591c877b47d408c083ab5cdd10b8567c11f78f754bf5b0",
+  "sheet": "Sheet1",
+  "range": "A1:AK30",
+  "hostTimeZone": "Asia/Taipei",
+  "savedSha256": "dcc1d372b94638f92c591c877b47d408c083ab5cdd10b8567c11f78f754bf5b0",
+  "pngSha256": "3e78310e3e28313f012fd8ce4e74ad80955a8d36f73d35d4260cb5457009e71c",
+  "capturedAt": "2026-11-21T04:30:23.265Z",
+  "lockBefore": "unlocked",
+  "lockAfter": "unlocked",
+  "formulaObservations": {
+    "B2": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B3": {
+      "displayFormatFill": "FFA79773",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B4": {
+      "displayFormatFill": "FF76B378",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B5": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D2": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D3": {
+      "displayFormatFill": "FFC28770",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D4": {
+      "displayFormatFill": "FF7FAE78",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D5": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "L2": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "L8": {
+      "displayFormatFill": "FFA79773",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "L9": {
+      "displayFormatFill": "FF76B378",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "L15": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "L17": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "L23": {
+      "displayFormatFill": "FFC28770",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "L24": {
+      "displayFormatFill": "FF7FAE78",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "L30": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "M3": {
+      "displayFormatFill": "FFB98D71",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "M4": {
+      "displayFormatFill": "FF92A375",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "M8": {
+      "displayFormatFill": "FFCE816F",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "M9": {
+      "displayFormatFill": "FF999F75",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "M13": {
+      "displayFormatFill": "FFD77B6E",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "M14": {
+      "displayFormatFill": "FFAE9373",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "M18": {
+      "displayFormatFill": "FFD67C6E",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "M19": {
+      "displayFormatFill": "FFC18870",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "M20": {
+      "displayFormatFill": "FFA89673",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "M24": {
+      "displayFormatFill": "FFC78570",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "M25": {
+      "displayFormatFill": "FF95A175",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "M28": {
+      "displayFormatFill": "FF89A877",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "L14": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "N3": {
+      "displayFormatFill": "FFAE9373",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "L29": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "L12": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "L13": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "L27": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "L28": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B11": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B13": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B14": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D11": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D13": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D14": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "N7": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "N8": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "N9": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "N10": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "N12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "N18": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "N19": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "N20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "N22": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "N23": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "N29": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "N30": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "N24": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "N25": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "N27": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "N28": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B21": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B22": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "B23": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D21": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D22": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "D23": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O9": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O10": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O18": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O19": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O13": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O14": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O15": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O24": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O25": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O28": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O29": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "O30": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "H2": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "H3": {
+      "displayFormatFill": "FFAE9373",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "H4": {
+      "displayFormatFill": "FF81AD77",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "H5": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "J2": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "J3": {
+      "displayFormatFill": "FFC78570",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "J4": {
+      "displayFormatFill": "FF89A877",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "J5": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "P2": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "P8": {
+      "displayFormatFill": "FFAE9373",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "P9": {
+      "displayFormatFill": "FF81AD77",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "P15": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "P17": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "P23": {
+      "displayFormatFill": "FFC78570",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "P24": {
+      "displayFormatFill": "FF89A877",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "P30": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F2": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F3": {
+      "displayFormatFill": "FFB58F72",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F4": {
+      "displayFormatFill": "FF7CB078",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F5": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Q2": {
+      "displayFormatFill": "FFF8696B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Q8": {
+      "displayFormatFill": "FFB58F72",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Q9": {
+      "displayFormatFill": "FF7CB078",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Q15": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Q18": {
+      "displayFormatFill": "FFCA8370",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Q19": {
+      "displayFormatFill": "FFA39974",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Q23": {
+      "displayFormatFill": "FFDB7A6E",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Q24": {
+      "displayFormatFill": "FFC28870",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Q25": {
+      "displayFormatFill": "FF999F75",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Q28": {
+      "displayFormatFill": "FF9B9E75",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Q14": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Q12": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Q13": {
+      "displayFormatFill": "FF63BE7B",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F11": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F13": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F14": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "R2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "R8": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "R9": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "R10": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "R14": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "R15": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "R12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "R13": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F21": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F22": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "F23": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "R17": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "R23": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "R24": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "R25": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "R18": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "R19": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "R20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "R29": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "R30": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE8": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE9": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE15": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE17": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE23": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE24": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE30": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AF3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AF4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AF8": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AF9": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AF13": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AF14": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AF18": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AF19": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AF20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AF24": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AF25": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AF28": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE14": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE29": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE13": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE27": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AE28": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U11": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U13": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U14": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W11": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W13": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W14": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG7": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG8": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG9": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG10": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG18": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG19": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG22": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG23": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG29": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG30": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG24": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG25": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG27": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AG28": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U21": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U22": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "U23": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W21": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W22": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "W23": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AH2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AH3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AH9": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AH10": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AH12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AH18": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AH19": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AH20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AH4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AH5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AH13": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AH14": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AH15": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AH24": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AH25": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AH28": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AH29": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AH30": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AA2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AA3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AA4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AA5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AC2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AC3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AC4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AC5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AI2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AI8": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AI9": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AI15": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AI17": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AI23": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AI24": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AI30": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y3": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y4": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y5": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AJ2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AJ8": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AJ9": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AJ15": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AJ18": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AJ19": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AJ23": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AJ24": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AJ25": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AJ28": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AJ14": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AJ12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AJ13": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y11": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y13": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y14": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AK2": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AK8": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AK9": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AK10": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AK14": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AK15": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AK12": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AK13": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y21": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y22": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "Y23": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AK17": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AK23": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AK24": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AK25": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AK18": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AK19": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AK20": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AK29": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    },
+    "AK30": {
+      "displayFormatFill": "FFFFFFFF",
+      "baseFill": "FFFFFFFF",
+      "strikethrough": false
+    }
+  },
+  "formulaEvaluation": {
+    "formula:cfvo-scope-multi-range": {
+      "status": "discriminating",
+      "reason": "anchor-a1 matches every designated cell; every required visual and empty cell is validated, and each rival is contradicted at >= 2 decisive cells of every replication group (Ruling S5-WITNESS)",
+      "matched": "anchor-a1",
+      "survivors": [
+        "anchor-a1"
+      ],
+      "observed": {
+        "rel-a1-scale": {
+          "B2": "FFF8696B",
+          "B3": "FFA79773",
+          "B4": "FF76B378",
+          "B5": "FF63BE7B",
+          "D2": "FFF8696B",
+          "D3": "FFC28770",
+          "D4": "FF7FAE78",
+          "D5": "FF63BE7B"
+        },
+        "rel-a1-icon": {
+          "B11": "icon:3Arrows:2@2,4|none",
+          "B12": "icon:3Arrows:2@2,4|none",
+          "B13": "icon:3Arrows:2@2,4|none",
+          "B14": "icon:3Arrows:2@2,4|none",
+          "D11": "icon:3Arrows:0@2,4|none",
+          "D12": "icon:3Arrows:1@2,4|none",
+          "D13": "icon:3Arrows:1@2,4|none",
+          "D14": "icon:3Arrows:1@2,4|none"
+        },
+        "rel-a1-bar": {
+          "B20": "none|none",
+          "B21": "none|none",
+          "B22": "bar:2-21|none",
+          "B23": "bar:2-48|none",
+          "D20": "none|none",
+          "D21": "bar:2-28|none",
+          "D22": "bar:2-48|none",
+          "D23": "bar:2-48|none"
+        },
+        "rel-a1-scale-absolute": {
+          "H2": "FFF8696B",
+          "H3": "FFAE9373",
+          "H4": "FF81AD77",
+          "H5": "FF63BE7B",
+          "J2": "FFF8696B",
+          "J3": "FFC78570",
+          "J4": "FF89A877",
+          "J5": "FF63BE7B"
+        }
+      }
+    },
+    "formula:cfvo-relative": {
+      "status": "discriminating",
+      "reason": "anchor-a1 matches every designated cell; every required visual and empty cell is validated, and each rival is contradicted at >= 2 decisive cells of every replication group (Ruling S5-WITNESS)",
+      "matched": "anchor-a1",
+      "survivors": [
+        "anchor-a1"
+      ],
+      "observed": {
+        "rel-a1-single-scale": {
+          "F2": "FFF8696B",
+          "F3": "FFB58F72",
+          "F4": "FF7CB078",
+          "F5": "FF63BE7B"
+        },
+        "rel-a1-single-icon": {
+          "F11": "icon:3Arrows:0@2,4|none",
+          "F12": "icon:3Arrows:1@2,4|none",
+          "F13": "icon:3Arrows:1@2,4|none",
+          "F14": "icon:3Arrows:1@2,4|none"
+        },
+        "rel-a1-single-bar": {
+          "F20": "none|none",
+          "F21": "bar:2-21|none",
+          "F22": "bar:2-48|none",
+          "F23": "bar:2-48|none"
+        }
+      }
+    }
+  }
+}

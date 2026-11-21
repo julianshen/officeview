@@ -83,18 +83,21 @@ export const CF_FORMULA_PRODUCTION_READINGS: Readonly<Record<string, string | re
   'formula:cellis-operand-cross-sheet': 'documented',
   // service.ts visual arm (Task 37, Ruling S5-H): a cfvo formula evaluates once per measured scope, at the scope's anchor,
   // and its number feeds the Stage 2-4 resolvers (`formula`/`num` as a num bound, `percent`/`percentile` as p). A relative
-  // bound is evaluated as written at the anchor. A text, blank or error result follows the selected reading (colour
+  // bound is evaluated at the anchor its reading names (below). A text, blank or error result follows the selected reading (colour
   // scales only: the one family stage5-cfvo-formulas measures); a boolean result has no reading and stays unresolved.
   'scale:thresholds-formula': 'evaluated',
   'bar:bounds-formula': 'evaluated',
   'icon:thresholds-formula': 'evaluated',
   'formula:cfvo-reference': 'evaluated',
   'formula:cfvo-expression': 'evaluated',
-  'formula:cfvo-relative': 'anchor-top-left',
+  // service.ts `cfvoBoundAnchors`: a relative bound is read as if its formula sat in A1 (`anchor-a1`), on one range or
+  // several. Pre-registered in stage5-cfvo-relative-a1 (0c03b846) after the behaviour (PR #87 multi-range, af80ef77 single
+  // range) and before its capture (f9d5be94), which matched it for both ids as the sole survivor. `anchor-top-left` (the
+  // range's own top-left, which stage5-cfvo-scope-v2 contradicted) is no longer registered; it is what an unregistered or
+  // unheld reading still falls back to for an absolute bound.
+  'formula:cfvo-relative': 'anchor-a1',
   'formula:cfvo-nonnumeric': Object.freeze(['withheld', 'zero', 'skipped']),
-  // Not `anchor-a1`, though stage5-cfvo-scope-v2 (5dc2fe9e) matched it: service.ts `cfvoBoundAnchors` implements it, but that
-  // behaviour post-dates the capture (709b6a7e), so it is not registered until a case captured after it confirms it.
-  'formula:cfvo-scope-multi-range': Object.freeze(['rule-wide', 'per-range']),
+  'formula:cfvo-scope-multi-range': Object.freeze(['rule-wide', 'per-range', 'anchor-a1']),
   // parse.ts (Ruling S5-I): a standalone <x14:colorScale> resolves through the Stage 2 point model. Its parse gate is the
   // bare evidence; this entry is what lets the audit publish it only for the reading production implements.
   'scale:dialect-standalone': 'standalone-evaluated',
@@ -109,9 +112,14 @@ export const CF_FORMULA_PRODUCTION_READINGS: Readonly<Record<string, string | re
   'formula:composition-stub-successor-icon': 'recorded',
 })
 
+/** The registry entry of one capability (undefined: unregistered). */
+export function cfFormulaReadingEntry(capability: string): string | readonly string[] | undefined {
+  return Object.prototype.hasOwnProperty.call(CF_FORMULA_PRODUCTION_READINGS, capability) ? CF_FORMULA_PRODUCTION_READINGS[capability] : undefined
+}
+
 /** The reading production honours for one capability, or undefined (unregistered, unevidenced, or an unlisted selection). */
 export function cfFormulaReading(capability: string, check: (capability: string) => boolean): string | undefined {
-  const entry = Object.prototype.hasOwnProperty.call(CF_FORMULA_PRODUCTION_READINGS, capability) ? CF_FORMULA_PRODUCTION_READINGS[capability] : undefined
+  const entry = cfFormulaReadingEntry(capability)
   if (entry === undefined) return undefined
   if (typeof entry === 'string') return check(capability) ? entry : undefined
   const selected = formulaSelectionEvidence(capability, check)

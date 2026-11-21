@@ -5476,8 +5476,9 @@ describe('Stage 5 formula oracle (Task 31)', () => {
       'stage5-calc-manual': ['formula:calc-manual-saved-values', 'formula:calc-manual-today'],
       'stage5-composition': ['formula:composition-stub-successor-dxf', 'formula:composition-stub-successor-scale', 'formula:composition-stub-successor-bar', 'formula:composition-stub-successor-icon'],
       'stage5-cross-sheet': ['formula:cross-sheet-reference', 'formula:cross-sheet-quoted-name', 'formula:cross-sheet-missing', 'formula:cellis-operand-cross-sheet'],
-      'stage5-cfvo-formulas': ['scale:thresholds-formula', 'bar:bounds-formula', 'icon:thresholds-formula', 'formula:cfvo-reference', 'formula:cfvo-expression', 'formula:cfvo-relative', 'formula:cfvo-nonnumeric'],
-      'stage5-cfvo-scope': ['formula:cfvo-scope-multi-range'],
+      'stage5-cfvo-formulas': ['scale:thresholds-formula', 'bar:bounds-formula', 'icon:thresholds-formula', 'formula:cfvo-reference', 'formula:cfvo-expression', 'formula:cfvo-nonnumeric'],
+      // formula:cfvo-relative is owned by the confirmation case stage5-cfvo-relative-a1 (this row) since the cfvo-relative follow-up.
+      'stage5-cfvo-scope': ['formula:cfvo-scope-multi-range', 'formula:cfvo-relative'],
       'stage5-x14-scale': ['scale:dialect-standalone'],
       'stage5-active-present': ['formula:active-present-scale', 'formula:active-present-bar', 'formula:active-present-icon'],
       'stage5-unresolved-shapes': [],
@@ -5526,9 +5527,18 @@ describe('Stage 5 formula oracle (Task 31)', () => {
       for (const [cap, cfgs] of byCap) {
         const live = cfgs.filter(x => x.record === undefined)
         if (live.length === 0) continue
-        const names = Object.keys(live[0]!.hypotheses).sort()
+        // A configuration may omit a reading it cannot predict, with a reason (`omitted`: the bars of stage5-cfvo-relative-a1);
+        // every live configuration of a capability still accounts for the same names.
+        const accounted = (x: S5Configuration): string[] => [...Object.keys(x.hypotheses), ...Object.keys(x.omitted ?? {})].sort()
+        const names = accounted(live[0]!)
         expect(names.length, `${fx.id} ${cap}`).toBeGreaterThanOrEqual(2)
-        for (const cfg of live) expect(Object.keys(cfg.hypotheses).sort(), `${fx.id} ${cfg.id} names`).toEqual(names)
+        for (const cfg of live) {
+          expect(accounted(cfg), `${fx.id} ${cfg.id} names`).toEqual(names)
+          for (const [h, why] of Object.entries(cfg.omitted ?? {})) {
+            expect(cfg.hypotheses[h], `${fx.id} ${cfg.id} omits ${h}`).toBeUndefined()
+            expect(why, `${fx.id} ${cfg.id} omits ${h}: why`).toMatch(/\S/)
+          }
+        }
         for (const cfg of cfgs) {
           for (const preds of Object.values(cfg.hypotheses)) expect(Object.keys(preds).sort(), `${fx.id} ${cfg.id} predicts every ref`).toEqual([...cfg.refs].sort())
         }
@@ -5538,11 +5548,12 @@ describe('Stage 5 formula oracle (Task 31)', () => {
           const keyOf = (ref: string): string => (cfg.replicateBy === 'column' ? /^[A-Z]+/.exec(ref.replace(/^(pre|calc|post):/, ''))![0] : cfg.id)
           const tables = cfg.orderedHypotheses ? Object.values(cfg.orderedHypotheses.tables) : [cfg.hypotheses]
           for (const table of tables) {
-            expect(Object.keys(table).sort(), `${fx.id} ${cfg.id} ordered table names`).toEqual(names)
-            for (let i = 0; i < names.length; i++) for (let j = i + 1; j < names.length; j++) {
-              const diff = cfg.refs.filter(ref => table[names[i]!]![ref] !== table[names[j]!]![ref])
+            const own = Object.keys(cfg.hypotheses).sort()
+            expect(Object.keys(table).sort(), `${fx.id} ${cfg.id} ordered table names`).toEqual(own)
+            for (let i = 0; i < own.length; i++) for (let j = i + 1; j < own.length; j++) {
+              const diff = cfg.refs.filter(ref => table[own[i]!]![ref] !== table[own[j]!]![ref])
               if (cfg.role === 'negative-control') { expect(diff, `${fx.id} ${cfg.id} negative control agrees`).toEqual([]); continue }
-              for (const key of new Set(diff.map(keyOf))) expect(diff.filter(r => keyOf(r) === key).length, `${fx.id} ${cfg.id} ${key}: ${names[i]} vs ${names[j]}`).toBeGreaterThanOrEqual(2)
+              for (const key of new Set(diff.map(keyOf))) expect(diff.filter(r => keyOf(r) === key).length, `${fx.id} ${cfg.id} ${key}: ${own[i]} vs ${own[j]}`).toBeGreaterThanOrEqual(2)
             }
           }
         }
@@ -5550,7 +5561,7 @@ describe('Stage 5 formula oracle (Task 31)', () => {
         // cell, which the capture then decides; S4-REPLICATE).
         for (let i = 0; i < names.length; i++) {
           for (let j = i + 1; j < names.length; j++) {
-            const separated = live.some(cfg => cfg.refs.filter(ref => cfg.hypotheses[names[i]!]![ref] !== cfg.hypotheses[names[j]!]![ref]).length >= 2)
+            const separated = live.some(cfg => cfg.hypotheses[names[i]!] && cfg.hypotheses[names[j]!] && cfg.refs.filter(ref => cfg.hypotheses[names[i]!]![ref] !== cfg.hypotheses[names[j]!]![ref]).length >= 2)
             expect(separated, `${fx.id} ${cap}: ${names[i]} vs ${names[j]} separated at >= 2 cells of one configuration`).toBe(true)
           }
         }
@@ -7246,19 +7257,22 @@ const EXPECTED_SINGLE_UNBUILT: Readonly<Record<string, number>> = { 'literal-vs-
 // The bar:bounds-formula follow-up adds one crop:bar configuration of three readings (zero unbuilt, as in stage5-cfvo-formulas).
 // The cfvo-scope follow-up (stage5-cfvo-scope-v2) adds twelve readings, every one built (+12 triples), and +12 blank twins
 // and twin controls, +24 disjoint rivals and +608 single refuters, every one refused.
-const EXPECTED_COVERAGE = { triples: 184, built: 179, 'blank-twins': 61, 'required-empty-visuals': 95, 'blank-twin-controls': 61, 'blank-dxf-controls': 126, 'strike-blind': 10, 'tolerance-shift': 6, 'disjoint-rivals': 56, 'single-refuter': 674 }
+// The cfvo-relative confirmation case (stage5-cfvo-relative-a1) adds eleven readings (six multi-range, five single-range;
+// its bars omit zero and ignored), every one built: +11 triples, +11 blank twins and twin controls, +7 required empty
+// visuals, +7 tolerance shifts, +29 disjoint rivals and +164 single refuters, every one refused.
+const EXPECTED_COVERAGE = { triples: 195, built: 190, 'blank-twins': 72, 'required-empty-visuals': 102, 'blank-twin-controls': 72, 'blank-dxf-controls': 126, 'strike-blind': 10, 'tolerance-shift': 13, 'disjoint-rivals': 85, 'single-refuter': 838 }
 /** How each corruption refuses (a corruption can also eliminate the winner or leave two readings standing). */
 const EXPECTED_OUTCOMES: Readonly<Record<string, number>> = {
-  'blank-twins -> formula-twin-missing': 61,
+  'blank-twins -> formula-twin-missing': 72,
   'required-empty-visuals -> formula-hypothesis-none': 79,
-  'required-empty-visuals -> formula-unexpected-visual': 16,
-  'blank-twin-controls -> formula-twin-missing': 61,
+  'required-empty-visuals -> formula-unexpected-visual': 23,
+  'blank-twin-controls -> formula-twin-missing': 72,
   'blank-dxf-controls -> formula-positive-control-failed': 126,
   'strike-blind -> formula-positive-control-failed': 10,
-  'tolerance-shift -> formula-replication-shortfall': 3,
+  'tolerance-shift -> formula-replication-shortfall': 10,
   'tolerance-shift -> non-discriminating': 3,
-  'disjoint-rivals -> formula-replication-shortfall': 35,
-  'disjoint-rivals -> non-discriminating': 21,
-  'single-refuter -> formula-replication-shortfall': 672,
+  'disjoint-rivals -> formula-replication-shortfall': 63,
+  'disjoint-rivals -> non-discriminating': 22,
+  'single-refuter -> formula-replication-shortfall': 836,
   'single-refuter -> non-discriminating': 2,
 }
