@@ -9299,6 +9299,1155 @@
       "resavedByExcel": false
     },
     {
+      "id": "stage2-scale-scope-disjoint",
+      "stage": 2,
+      "question": "Ruling S2-H (the scope-disjoint follow-up of Ruling F-2): a colour scale over two non-overlapping rectangles that hold different values. Which statistics does it use: the union of both rectangles, each rectangle its own, the leftmost rectangle's or the rightmost rectangle's? A 2-colour min/max scale on B2:B4 D2:D4 and a 3-colour min / percentile 50 / max scale on F2:F4 H2:H4, each compared by DisplayFormat with literal num twins on the same values, one per predicted rendering; a single-range min/max negative control on J2:J4.",
+      "input": "tests/fixtures/xlsx-cf/inputs/stage2-scale-scope-disjoint.xlsx",
+      "saved": "tests/fixtures/xlsx-cf/stage2-scale-scope-disjoint.xlsx",
+      "sheet": "Sheet1",
+      "range": "A1:W9",
+      "requiredAppearances": [
+        "screen"
+      ],
+      "markers": [
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:scope-disjoint",
+          "sqref": "B2:B4 D2:D4",
+          "ruleType": "colorScale",
+          "priority": 1,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:scope-disjoint",
+          "sqref": "F2:F4 H2:H4",
+          "ruleType": "colorScale",
+          "priority": 2,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "percentile",
+                "val": "50"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FFFFEB84",
+              "FF63BE7B"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:scope-disjoint-control",
+          "sqref": "J2:J4",
+          "ruleType": "colorScale",
+          "priority": 3,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:scope-disjoint-twin",
+          "sqref": "L2:L4",
+          "ruleType": "colorScale",
+          "priority": 4,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "10"
+              },
+              {
+                "type": "num",
+                "val": "70"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:scope-disjoint-twin",
+          "sqref": "M2:M4",
+          "ruleType": "colorScale",
+          "priority": 5,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "10"
+              },
+              {
+                "type": "num",
+                "val": "70"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:scope-disjoint-twin",
+          "sqref": "N2:N4",
+          "ruleType": "colorScale",
+          "priority": 6,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "10"
+              },
+              {
+                "type": "num",
+                "val": "30"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:scope-disjoint-twin",
+          "sqref": "O2:O4",
+          "ruleType": "colorScale",
+          "priority": 7,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "40"
+              },
+              {
+                "type": "num",
+                "val": "70"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:scope-disjoint-twin",
+          "sqref": "P2:P4",
+          "ruleType": "colorScale",
+          "priority": 8,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "10"
+              },
+              {
+                "type": "num",
+                "val": "30"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:scope-disjoint-twin",
+          "sqref": "Q2:Q4",
+          "ruleType": "colorScale",
+          "priority": 9,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "40"
+              },
+              {
+                "type": "num",
+                "val": "70"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:scope-disjoint-twin",
+          "sqref": "R2:R4",
+          "ruleType": "colorScale",
+          "priority": 10,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "40"
+              },
+              {
+                "type": "num",
+                "val": "100"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FFFFEB84",
+              "FF63BE7B"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:scope-disjoint-twin",
+          "sqref": "S2:S4",
+          "ruleType": "colorScale",
+          "priority": 11,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "40"
+              },
+              {
+                "type": "num",
+                "val": "100"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FFFFEB84",
+              "FF63BE7B"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:scope-disjoint-twin",
+          "sqref": "T2:T4",
+          "ruleType": "colorScale",
+          "priority": 12,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "30"
+              },
+              {
+                "type": "num",
+                "val": "60"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FFFFEB84",
+              "FF63BE7B"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:scope-disjoint-twin",
+          "sqref": "U2:U4",
+          "ruleType": "colorScale",
+          "priority": 13,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "20"
+              },
+              {
+                "type": "num",
+                "val": "50"
+              },
+              {
+                "type": "num",
+                "val": "100"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FFFFEB84",
+              "FF63BE7B"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:scope-disjoint-twin",
+          "sqref": "V2:V4",
+          "ruleType": "colorScale",
+          "priority": 14,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "0"
+              },
+              {
+                "type": "num",
+                "val": "30"
+              },
+              {
+                "type": "num",
+                "val": "60"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FFFFEB84",
+              "FF63BE7B"
+            ]
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "scale:scope-disjoint-twin",
+          "sqref": "W2:W4",
+          "ruleType": "colorScale",
+          "priority": 15,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "20"
+              },
+              {
+                "type": "num",
+                "val": "50"
+              },
+              {
+                "type": "num",
+                "val": "100"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FFFFEB84",
+              "FF63BE7B"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "inputSha256": "fe89045d2ded71acc1a766d21ca941a50fe96fd32f3736261221106e61330af6",
+        "savedSha256": "fe89045d2ded71acc1a766d21ca941a50fe96fd32f3736261221106e61330af6",
+        "provenance": "seed-hypothesis",
+        "positiveRefs": [
+          "B2",
+          "B3",
+          "B4",
+          "D2",
+          "D3",
+          "D4",
+          "F2",
+          "F3",
+          "F4",
+          "H2",
+          "H3",
+          "H4",
+          "J2",
+          "J3",
+          "J4",
+          "L2",
+          "L3",
+          "L4",
+          "M2",
+          "M3",
+          "M4",
+          "N2",
+          "N3",
+          "N4",
+          "O2",
+          "O3",
+          "O4",
+          "P2",
+          "P3",
+          "P4",
+          "Q2",
+          "Q3",
+          "Q4",
+          "R2",
+          "R3",
+          "R4",
+          "S2",
+          "S3",
+          "S4",
+          "T2",
+          "T3",
+          "T4",
+          "U2",
+          "U3",
+          "U4",
+          "V2",
+          "V3",
+          "V4",
+          "W2",
+          "W3",
+          "W4"
+        ],
+        "negativeRefs": [
+          "B7",
+          "B8",
+          "B9",
+          "D7",
+          "D8",
+          "D9",
+          "F7",
+          "F8",
+          "F9",
+          "H7",
+          "H8",
+          "H9",
+          "J7",
+          "J8",
+          "J9"
+        ],
+        "cells": [
+          {
+            "ref": "B2",
+            "controlRef": "B7",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B3",
+            "controlRef": "B8",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B4",
+            "controlRef": "B9",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D2",
+            "controlRef": "D7",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D3",
+            "controlRef": "D8",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D4",
+            "controlRef": "D9",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F2",
+            "controlRef": "F7",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F3",
+            "controlRef": "F8",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F4",
+            "controlRef": "F9",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H2",
+            "controlRef": "H7",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H3",
+            "controlRef": "H8",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H4",
+            "controlRef": "H9",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "J2",
+            "controlRef": "J7",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "J3",
+            "controlRef": "J8",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "J4",
+            "controlRef": "J9",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L2",
+            "controlRef": "B7",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L3",
+            "controlRef": "B8",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L4",
+            "controlRef": "B9",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M2",
+            "controlRef": "D7",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M3",
+            "controlRef": "D8",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M4",
+            "controlRef": "D9",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N2",
+            "controlRef": "B7",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N3",
+            "controlRef": "B8",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N4",
+            "controlRef": "B9",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "O2",
+            "controlRef": "D7",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "O3",
+            "controlRef": "D8",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "O4",
+            "controlRef": "D9",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "P2",
+            "controlRef": "D7",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "P3",
+            "controlRef": "D8",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "P4",
+            "controlRef": "D9",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q2",
+            "controlRef": "B7",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q3",
+            "controlRef": "B8",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q4",
+            "controlRef": "B9",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R2",
+            "controlRef": "F7",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R3",
+            "controlRef": "F8",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R4",
+            "controlRef": "F9",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "S2",
+            "controlRef": "H7",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "S3",
+            "controlRef": "H8",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "S4",
+            "controlRef": "H9",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "T2",
+            "controlRef": "F7",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "T3",
+            "controlRef": "F8",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "T4",
+            "controlRef": "F9",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "U2",
+            "controlRef": "H7",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "U3",
+            "controlRef": "H8",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "U4",
+            "controlRef": "H9",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "V2",
+            "controlRef": "H7",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "V3",
+            "controlRef": "H8",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "V4",
+            "controlRef": "H9",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "W2",
+            "controlRef": "F7",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "W3",
+            "controlRef": "F8",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "W4",
+            "controlRef": "F9",
+            "matched": true,
+            "scaleApplied": true,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B7",
+            "controlRef": "B2",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B8",
+            "controlRef": "B3",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "B9",
+            "controlRef": "B4",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D7",
+            "controlRef": "D2",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D8",
+            "controlRef": "D3",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "D9",
+            "controlRef": "D4",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F7",
+            "controlRef": "F2",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F8",
+            "controlRef": "F3",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "F9",
+            "controlRef": "F4",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H7",
+            "controlRef": "H2",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H8",
+            "controlRef": "H3",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "H9",
+            "controlRef": "H4",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "J7",
+            "controlRef": "J2",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "J8",
+            "controlRef": "J3",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "J9",
+            "controlRef": "J4",
+            "matched": false,
+            "scaleApplied": false,
+            "fillSource": "unverified"
+          }
+        ]
+      },
+      "scaleReadings": [
+        {
+          "id": "disjoint-2colour",
+          "capabilityId": "scale:scope-disjoint",
+          "observable": "fill",
+          "refs": [
+            "B2",
+            "B3",
+            "B4",
+            "D2",
+            "D3",
+            "D4"
+          ],
+          "hypotheses": {
+            "union": {
+              "B2": "twin:L2",
+              "B3": "twin:L3",
+              "B4": "twin:L4",
+              "D2": "twin:M2",
+              "D3": "twin:M3",
+              "D4": "twin:M4"
+            },
+            "per-range": {
+              "B2": "twin:N2",
+              "B3": "twin:N3",
+              "B4": "twin:N4",
+              "D2": "twin:O2",
+              "D3": "twin:O3",
+              "D4": "twin:O4"
+            },
+            "leftmost-range": {
+              "B2": "twin:N2",
+              "B3": "twin:N3",
+              "B4": "twin:N4",
+              "D2": "twin:P2",
+              "D3": "twin:P3",
+              "D4": "twin:P4"
+            },
+            "rightmost-range": {
+              "B2": "twin:Q2",
+              "B3": "twin:Q3",
+              "B4": "twin:Q4",
+              "D2": "twin:O2",
+              "D3": "twin:O3",
+              "D4": "twin:O4"
+            }
+          },
+          "replicateBy": "column",
+          "twinExpect": {
+            "L2": "visual",
+            "L3": "visual",
+            "L4": "visual",
+            "M2": "visual",
+            "M3": "visual",
+            "M4": "visual",
+            "N2": "visual",
+            "N3": "visual",
+            "N4": "visual",
+            "O2": "visual",
+            "O3": "visual",
+            "O4": "visual",
+            "P2": "visual",
+            "P3": "visual",
+            "P4": "visual",
+            "Q2": "visual",
+            "Q3": "visual",
+            "Q4": "visual"
+          }
+        },
+        {
+          "id": "disjoint-3colour",
+          "capabilityId": "scale:scope-disjoint",
+          "observable": "fill",
+          "refs": [
+            "F2",
+            "F3",
+            "F4",
+            "H2",
+            "H3",
+            "H4"
+          ],
+          "hypotheses": {
+            "union": {
+              "F2": "twin:R2",
+              "F3": "twin:R3",
+              "F4": "twin:R4",
+              "H2": "twin:S2",
+              "H3": "twin:S3",
+              "H4": "twin:S4"
+            },
+            "per-range": {
+              "F2": "twin:T2",
+              "F3": "twin:T3",
+              "F4": "twin:T4",
+              "H2": "twin:U2",
+              "H3": "twin:U3",
+              "H4": "twin:U4"
+            },
+            "leftmost-range": {
+              "F2": "twin:T2",
+              "F3": "twin:T3",
+              "F4": "twin:T4",
+              "H2": "twin:V2",
+              "H3": "twin:V3",
+              "H4": "twin:V4"
+            },
+            "rightmost-range": {
+              "F2": "twin:W2",
+              "F3": "twin:W3",
+              "F4": "twin:W4",
+              "H2": "twin:U2",
+              "H3": "twin:U3",
+              "H4": "twin:U4"
+            }
+          },
+          "replicateBy": "column",
+          "twinExpect": {
+            "R2": "visual",
+            "R3": "visual",
+            "R4": "visual",
+            "S2": "visual",
+            "S3": "visual",
+            "S4": "visual",
+            "T2": "visual",
+            "T3": "visual",
+            "T4": "visual",
+            "U2": "visual",
+            "U3": "visual",
+            "U4": "visual",
+            "V2": "visual",
+            "V3": "visual",
+            "V4": "visual",
+            "W2": "visual",
+            "W3": "visual",
+            "W4": "visual"
+          }
+        },
+        {
+          "id": "single-range-control",
+          "capabilityId": "scale:scope-disjoint",
+          "observable": "fill",
+          "refs": [
+            "J2",
+            "J3",
+            "J4"
+          ],
+          "hypotheses": {
+            "union": {
+              "J2": "twin:N2",
+              "J3": "twin:N3",
+              "J4": "twin:N4"
+            },
+            "per-range": {
+              "J2": "twin:N2",
+              "J3": "twin:N3",
+              "J4": "twin:N4"
+            },
+            "leftmost-range": {
+              "J2": "twin:N2",
+              "J3": "twin:N3",
+              "J4": "twin:N4"
+            },
+            "rightmost-range": {
+              "J2": "twin:N2",
+              "J3": "twin:N3",
+              "J4": "twin:N4"
+            }
+          },
+          "role": "negative-control",
+          "twinExpect": {
+            "N2": "visual",
+            "N3": "visual",
+            "N4": "visual"
+          },
+          "note": "Negative control: a single-range min/max scale, on which every reading agrees; Excel must match it, never evidence"
+        }
+      ],
+      "captures": [
+        {
+          "appearance": "screen",
+          "pngPath": "tests/fixtures/xlsx-cf/refs/stage2-scale-scope-disjoint.png",
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage2-scale-scope-disjoint.json"
+        }
+      ],
+      "status": "recipe-pending",
+      "reason": "Awaiting host Excel 16.114 execution and verified display-format interior color observations",
+      "tolerance": {
+        "meanAbs": 0.015,
+        "rowMax": 0.08,
+        "strong": 12
+      },
+      "resavedByExcel": false
+    },
+    {
       "id": "stage3-bar-settings-probe",
       "stage": 3,
       "question": "S3-A precondition probe. One bar is authored against every default (axis middle, solid, border 1, x14 minLength 0 / maxLength 100, direction rightToLeft, showValue 0, negative colour distinct from positive); a default-valued control rule sits beside it. Calibration columns of 10, 30 and 60 characters, and one solid DXF-filled cell, give pixel calibration. Gridlines stay on here so gridline-to-gridline widths can be measured.",
