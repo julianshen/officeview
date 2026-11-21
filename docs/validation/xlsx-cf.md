@@ -266,7 +266,7 @@ Every Stage 2 capability corresponds to a single variant in the oracle matrix an
 | `scale:colors-alpha-00` | `stage2-scale-colors` | Endpoints with translucent alpha channel `rgb="00F8696B"` | Ruling S2-F | `verified` | While unmeasured or refused, alpha other than FF is unresolved per Ruling S2-F |
 | `scale:colors-auto` | `stage2-scale-colors` | Endpoints with `auto="1"` | Ruling S2-F | `verified` | While unmeasured or refused, auto color scale is unresolved per Ruling S2-F |
 | `scale:colors-custom-theme` | `stage2-scale-colors` | Endpoints with custom non-Office `theme1.xml` palette (NOT exercised: the fixture keeps the stock Office theme) | Ruling S2-F | `unverified` (non-discriminating, Ruling F-2) | Withheld: any theme-coloured scale whose palette is not the measured Office palette (or has no theme part) is unresolved |
-| `scale:scope-disjoint` | `stage2-scale-scope` | Disjoint range `sqref="B2:B4 D2:D4"` (NOT discriminated: the rule overlaps two others and every one of its compared cells is withheld; both rectangles hold identical values) | Ruling S2-H | `unverified` (non-discriminating, Ruling F-2) | Withheld: a scale over more than one range is unresolved |
+| `scale:scope-disjoint` | `stage2-scale-scope-disjoint` (§14.z.13; `stage2-scale-scope` is a cross-check) | Two non-overlapping disjoint scales over different values (2-colour `B2:B5 D2:D5`, 3-colour `F2:F5 H2:H5`), four pre-registered readings judged against literal num twins | Ruling S2-H | `verified` (matched `union`, e448d831) | A scale over several ranges takes its statistics over all of its ranges (union) |
 | `scale:scope-duplicate-blocks` | `stage2-scale-scope` | Identical scale rule duplicated across two `<conditionalFormatting>` blocks (NOT discriminated: duplicates overlap and every compared cell is withheld under S2-I) | Ruling S2-H | `unverified` (non-discriminating, Ruling F-2) | Withheld: a scale rule duplicated over identical ranges is unresolved |
 | `scale:scope-hidden-row` | `stage2-scale-scope` | Scale scope with hidden row (row 4 hidden) (NOT discriminated: the hidden value 30 is neither the minimum nor the maximum) | Ruling S2-H | `unverified` (non-discriminating, Ruling F-2) | Withheld: a scale scope that intersects a hidden row is unresolved |
 | `scale:scope-autofilter-hidden-row` | `stage2-scale-scope` | Scale scope with autofilter-hidden row (NOT discriminated: the saved workbook has no `<autoFilter>`) | Ruling S2-H | `unverified` (non-discriminating, Ruling F-2) | Withheld with scope-hidden-row (an autofilter writes ordinary hidden-row records) |
@@ -2934,3 +2934,70 @@ Both left `CF_STAGE5_UNSUPPORTED`. The pre-capture rehearsals now check the real
   - non-numeric bounds generally.
 
 **Audits.** Stage 5 `structural=34/34 unsupported=9 pending=5 unverifiedNonDiscriminating=12 stageComplete=true blocked=0`. 3,034 records over 34 cases (20 measured), 903 formula cells, 623 painted as Excel, 307 with justified unresolved slots, 0 disagreeing.
+
+### 14.z.13 `scale:scope-disjoint` confirmed and published as `union`; a 3-colour num-segment finding (2026-11-21)
+
+**Why a new case.** `stage2-scale-scope` cannot discriminate `scale:scope-disjoint` (Ruling F-2). Its `B2:B4 D2:D4` rule overlaps two other scales, so every non-hidden cell is withheld under S2-I. Both of its rectangles also hold the same values, so union and per-range statistics paint alike. `stage2-scale-scope-disjoint` asks the question alone. It owns the id through the new `CF_STAGE2_OWNERS` and is appended last in `CF_STAGE2_CASES`. Recipe: `docs/validation/xlsx-cf-recipes-stage2.md` §7.
+
+**Ordering, in git.** The registration rule needs both the hypothesis and production's behaviour committed before the capture.
+1. **Behaviour:** union statistics predate the branch. `service.ts` prepares a rule's statistics over all of its ranges at once (`prepareStatistics([rule.ranges])`), and only `blockScope` withheld the result. Pinned before capture in `tests/xlsx-cf-scale-scope-disjoint.test.ts`.
+2. **Hypotheses and the reading gate:**
+   - The case and the Stage 2 reading gate: 5a55c202. `CF_STAGE2_PRODUCTION_READINGS` registers `union`.
+   - The four-row revision (pre-capture ruling: 3 decisive cells per pair): b4266c8c.
+   - Codex pre-capture fixes:
+     - 66e50971: the gate is mandatory from the catalogue, not from the manifest field;
+     - 4defe25e: regeneration keeps a committed input whose inflated parts are identical, so `build.ts` under bun leaves the node-generated input intact.
+3. **Capture:** e448d831. The input `af13180a…` stayed byte-identical through the build.
+
+**The case.**
+- **Scales:**
+  - 2-colour min/max on `B2:B5 D2:D5` (B 10..40, D 50..80);
+  - 3-colour min / percentile 50 / max on `F2:F5 H2:H5` (F 0,20,40,60; H 30,50,70,100);
+  - a single-range negative control on `J2:J5`.
+- **Twins:** twelve literal num twin blocks (`L..W`), one per predicted rendering.
+- **Size:** 88 cells, `A1:W10`.
+- **Readings:** `union`, `per-range`, `leftmost-range` and `rightmost-range`, named by position rather than sqref order. They are judged by the Stage 5 configuration evaluator (`evaluateFormulaCapabilities`) over the DisplayFormat fills.
+- **Separation:** every pair of readings that reads different statistics on a rectangle differs at 3 cells of it.
+
+**The capture** (Excel 16.115, e448d831): `verifyCfCase` returns verified, **discriminating, matched `union`**, sole survivor. The twins and the control are non-discriminating by registration, and nothing refused. Every designated cell equals its union twin:
+
+| Cells | Excel colours | Union twin |
+|---|---|---|
+| B2..B5 | F8696B E3756D CE816F B98D71 | L |
+| D2..D5 | A39974 8EA576 79B178 63BE7B | M |
+| F2..F5 | F8696B FBA276 FEDC81 D5DF82 | R |
+| H2..H5 | FCBF7B F1E784 B9D780 63BE7B | S |
+
+J equals its twin N, and every control is white.
+
+**Finding: 3-colour num-segment fractions.**
+- Two twin cells of this capture contradict production: T4 and V3.
+  - Both sit on a 3-colour scale with literal num bounds 0/30/60, in the upper segment, at f = 1/3 and 2/3.
+  - Excel drew `FFCCDD82` and `FF98CE7F`; production paints `FFCBDC81` and `FF97CD7E`. Excel is one unit less per channel in magnitude.
+- Excel's rule is unexplained.
+  - The 1e-11 truncation guard decides nothing there: the products are exact doubles (52, 15, 3; 104, 30, 6).
+  - Rescaling the fraction over the full span does not explain both cells either (checked in the coordinator's review).
+  - "A whole-number product" and "a whole-number product at a non-dyadic fraction" would each withhold dozens of cells that other captures confirm production paints exactly (156 and 66 respectively).
+  - No earlier capture holds a 3-colour cell inside a literal-num segment at a non-dyadic fraction.
+- **Withheld (user ruling).** The rounding is unchanged. a87121e8 withholds such a cell (`cf-unmeasured-num-segment-fraction`, `numSegmentUnmeasured` in `colorScale.ts`) when all of these hold:
+  - the scale has 3 colours;
+  - both cfvo bounding the value's segment are literal `num` (a formula bound resolved to a number is not included; no capture shows that shape);
+  - the value is strictly inside the segment;
+  - the fraction is non-dyadic (f·2^20 is not an integer).
+- **Reach.** Across every measured case this newly withholds 11 cells, all twins of this case: R3 R4 R5 S2 S3 S4 T3 T4 U3 V3 W4. Nine are Excel-equal; T4 and V3 are not. No other case changes.
+- **Follow-up.** A case that pre-registers readings for this shape, with the candidate production behaviour committed before its capture.
+
+**Published.** The `scale:scope-disjoint` entry left `CF_STAGE2_NONDISCRIMINATING`. `npx tsx scripts/cf-refs/audit.ts --stage 5 --write --publish-stage3 --publish-stage5` ran twice, byte-identical (sha-256 `79bf8897…`):
+- **341 ids** (up from 340): 110 S1, 35 S2 (up from 34), 52 S3, 97 S4, 47 S5;
+- the only added id is `scale:scope-disjoint`.
+
+**Production effect.**
+- **Now painting:** colour scales over several ranges, with union statistics. That includes the multi-range scales of `stage5-cfvo-scope`, `stage5-cfvo-scope-v2` and `stage5-cfvo-relative-a1`, which agree with their Excel captures.
+- **Newly withheld:** the 3-colour literal-num segment shape above.
+- **Still withheld:** the other `stage2-scale-scope` shapes (hidden rows, autofilter, merges, whole column, duplicate blocks; Ruling F-2), and overlapping scales (S2-I).
+
+**Audits.**
+- Stage 2: ok, stageComplete, 35 verified.
+- Stage 2 exact-ARGB conformance now covers all 8 measured Stage 2 cases: 486 cells, 441 exact and 45 withheld. Of the withheld, 34 are typed findings and 11 are justified by the num-segment condition, recomputed from the case's own markers.
+- `scripts/cf-compare.ts` (interactive and paged) passes every measured Stage 2 case, with T4 and V3 withheld, not painted.
+- Stage 5 records: 0 disagreeing and 0 unjustified, with the `<family>:scope-disjoint` justification inert now that all three families are published.

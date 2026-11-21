@@ -266,3 +266,10 @@ bun scripts/cf-refs/audit.ts --stage 2
 To regenerate the input (only before a build, never after a capture): `npx tsx scripts/cf-refs/generate.ts --case stage2-scale-scope-disjoint`.
 
 The capture cannot be retried and no tolerance is edited after it. A capture no reading explains is a finding (`formula-hypothesis-none`), recorded, never fitted; a reading other than `union` leaves production withholding every multi-range colour scale.
+
+**Run result** (e448d831, Excel 16.115):
+- The build left the committed input `af13180a…` byte-identical, and the resave opened repair-free.
+- The capture is 1933 × 181 px.
+- `verifyCfCase`: verified, **discriminating, matched `union`** (sole survivor). Every designated cell equals its union twin (B = L, D = M, F = R, H = S, J = N), and every control is white.
+- Published as `scale:scope-disjoint` (341 ids; `docs/validation/xlsx-cf.md` §14.z.13).
+- **Finding:** twins T4 and V3 (3-colour num 0/30/60, upper segment at f = 1/3 and 2/3) are one unit less per channel than production. Their shape (a literal-num segment at a non-dyadic fraction) is withheld (`cf-unmeasured-num-segment-fraction`) pending a follow-up case.
