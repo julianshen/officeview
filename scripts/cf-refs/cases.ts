@@ -2740,6 +2740,243 @@ function stage2ScopeDisjointCase(): CfOracleCase {
   }
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// The num-segment follow-up (brief 2026-11-22): capture e448d831 drew T4 and V3 of stage2-scale-scope-disjoint (3-colour
+// literal num 0/30/60, values 40 and 50) one unit higher per RGB channel than production's truncation. The candidate search
+// (scripts/cf-refs/num-segment-candidates.ts, every captured colour-scale cell) left a family of survivors on 3-colour
+// literal-num segments and one (the percent round trip) on every 3-colour segment; on this case's cells they collapse into
+// five classes, each pre-registered as one reading, plus `truncate` (production's arithmetic, the control e448d831
+// contradicts). Every prediction below comes from an independent model of each reading's closed formula (`s2NumSegmentColour`),
+// never from the viewer; tests/xlsx-cf-scale-num-segment-case.test.ts checks it equals production's implementation.
+// ---------------------------------------------------------------------------------------------------------------------
+
+export const S2_NUM_SEGMENT_ID = 'stage2-scale-num-segment'
+/** A 3-colour segment bounded by two literal num cfvo (production's withheld shape). */
+export const S2_NUM_SEGMENT_CAP = 'scale:num-segment-fraction'
+/** Every other 3-colour segment; measured here on min / percentile 50 / max bounds that resolve to the same thresholds. */
+export const S2_NUM_SEGMENT_STATISTICAL_CAP = 'scale:num-segment-fraction-statistical'
+/** The 2-colour literal num twins: a negative control (every reading is 3-colour only), never a question. */
+export const S2_NUM_SEGMENT_TWO_COLOUR = 'scale:num-segment-fraction-2colour'
+/** The literal-num readings: one per class of surviving candidates on this case's cells, plus production's truncation. */
+export const S2_NUM_SEGMENT_READINGS = ['truncate', 'percent-roundtrip', 'fixed-256', 'fixed-1000', 'fixed-308', 'fixed-700'] as const
+/** The statistical readings: the survivors over every 3-colour segment (the percent round trip) and truncation. */
+export const S2_NUM_SEGMENT_STATISTICAL_READINGS = ['truncate', 'percent-roundtrip'] as const
+export type S2NumSegmentReading = (typeof S2_NUM_SEGMENT_READINGS)[number]
+
+/**
+ * The step a reading takes from the segment's start colour on one channel of span `d` (>= 0) at fraction `f` in [0, 1]:
+ * truncate floor(f·d + 1e-11); percent-roundtrip floor(((f·100)/100)·d); fixed-N floor((floor(f·N)/N)·d).
+ */
+function s2NumSegmentStep(reading: S2NumSegmentReading, f: number, d: number): number {
+  if (reading === 'truncate') return Math.floor(f * d + 1e-11)
+  if (reading === 'percent-roundtrip') return Math.floor(((f * 100) / 100) * d)
+  const n = Number(reading.slice('fixed-'.length))
+  return Math.floor((Math.floor(f * n) / n) * d)
+}
+
+/** The colour a reading predicts between `from` (f = 0) and `to` (ARGB hex), at `f = (v - lo) / (hi - lo)` clamped. */
+export function s2NumSegmentColour(reading: S2NumSegmentReading, from: string, to: string, v: number, lo: number, hi: number): string {
+  const f = Math.max(0, Math.min(1, (v - lo) / (hi - lo)))
+  return [0, 2, 4, 6].map(k => {
+    const c0 = parseInt(from.slice(k, k + 2), 16), c1 = parseInt(to.slice(k, k + 2), 16)
+    const c = c1 >= c0 ? c0 + s2NumSegmentStep(reading, f, c1 - c0) : c0 - s2NumSegmentStep(reading, f, c0 - c1)
+    return c.toString(16).toUpperCase().padStart(2, '0')
+  }).join('')
+}
+
+export interface S2NumSegmentRule {
+  /** Configuration (or comparison) role. */
+  id: string
+  capabilityId: string
+  col: string
+  rows: readonly number[]
+  /** cfvo in authored order (`num` values, or min / percentile 50 / max). */
+  cfvo: ReadonlyArray<{ type: string; val?: string }>
+  colors: readonly string[]
+  /** The thresholds the rule resolves to, ascending (after the midpoint-above-max re-sort). */
+  thresholds: readonly number[]
+  /** The rows of `rows` whose cells are designated (default all): the statistical twin's bound rows are scope, not evidence. */
+  designatedRows?: readonly number[]
+}
+
+/**
+ * The fixture. Colours P (20, 240, 40) and Q (230, 30, 250) differ by 210 on every channel (R and B ascend from P to Q, G
+ * descends), so a third, fifth, sixth, seventh, tenth, fifteenth or twenty-first of a segment is a whole product on all
+ * three channels: a reading lowers such a cell by exactly one unit per channel or not at all. Bounds 7 / 217 / 637 (spans
+ * 210 and 420, a non-zero lower bound); each segment holds the same twelve fractions, the quarter as a decimal value
+ * (59.5, a half product). Rows 2..4 hold the bounds themselves (the statistical twin's minimum, median and maximum).
+ * The layout is packed (A1:I28, every predicted fill shared wherever it recurs): the text scope prices every rule at
+ * every cell of a request, so the whole range must fit one admitted batch (estimateCfPrepareBytes <= scratchBytes);
+ * an earlier 62-rule layout over A1:O32 refused there. Rows 2..4 hold the bounds only in the statistical twin's column.
+ */
+export const S2_NUM_SEGMENT = {
+  P: 'FF14F028',
+  Q: 'FFE61EFA',
+  bounds: [7, 217, 637] as const,
+  fractions: [[1, 3], [2, 3], [1, 6], [5, 6], [1, 5], [1, 10], [3, 10], [1, 7], [6, 7], [1, 2], [1, 4], [1, 15]] as ReadonlyArray<readonly [number, number]>,
+  boundRows: [2, 3, 4] as const,
+  firstLowerRow: 5,
+  controlCol: 'G',
+  replica: { col: 'D', rows: [10, 11, 12, 13] as const, values: [10, 20, 40, 50] as const, controlCol: 'I', controlRows: [22, 23, 24, 25] as const },
+  /** The data rows the midpoint-above-max rule copies (1/3 and 2/3 of each segment), held in D5:D8. */
+  midpointRows: [5, 6, 17, 18] as const,
+  /** Positive-control slots: H2:H28, then I2:I19; I20 is their shared control. */
+  positiveControlSlots: [...Array.from({ length: 27 }, (_, i) => `H${i + 2}`), ...Array.from({ length: 18 }, (_, i) => `I${i + 2}`)] as readonly string[],
+  positiveControlShared: 'I20',
+}
+/** The palette and bounds of e448d831's T4 and V3 (stage2-scale-scope-disjoint twin T: num 0 / 30 / 60). */
+const S2NS_REPLICA_COLOURS = ['FFF8696B', 'FFFFEB84', 'FF63BE7B'] as const
+
+/** Row -> value of the data rows (2..32): the bounds, then the lower segment's fractions, then the upper segment's. */
+export function s2NumSegmentValues(): Map<number, number> {
+  const fx = S2_NUM_SEGMENT
+  const [lo, mid, hi] = fx.bounds
+  const out = new Map<number, number>()
+  fx.boundRows.forEach((r, i) => out.set(r, fx.bounds[i]!))
+  fx.fractions.forEach(([p, q], i) => {
+    out.set(fx.firstLowerRow + i, lo + ((mid - lo) * p) / q)
+    out.set(fx.firstLowerRow + fx.fractions.length + i, mid + ((hi - mid) * p) / q)
+  })
+  return out
+}
+const s2nsSegmentRows = (): number[] => Array.from({ length: 2 * S2_NUM_SEGMENT.fractions.length }, (_, i) => S2_NUM_SEGMENT.firstLowerRow + i)
+const s2nsLastRow = (): number => S2_NUM_SEGMENT.firstLowerRow + 2 * S2_NUM_SEGMENT.fractions.length - 1
+
+/** The colour rules in priority order (positive controls follow them, `s2NumSegmentLayout`). */
+export function s2NumSegmentRules(): S2NumSegmentRule[] {
+  const fx = S2_NUM_SEGMENT
+  const [lo, mid, hi] = fx.bounds
+  const num = (...v: number[]) => v.map(x => ({ type: 'num', val: String(x) }))
+  const segRows = s2nsSegmentRows()
+  const lowerRows = segRows.slice(0, fx.fractions.length), upperRows = segRows.slice(fx.fractions.length)
+  return [
+    { id: 'num-pqp', capabilityId: S2_NUM_SEGMENT_CAP, col: 'B', rows: segRows, cfvo: num(lo, mid, hi), colors: [fx.P, fx.Q, fx.P], thresholds: [lo, mid, hi] },
+    { id: 'num-qpq', capabilityId: S2_NUM_SEGMENT_CAP, col: 'C', rows: segRows, cfvo: num(lo, mid, hi), colors: [fx.Q, fx.P, fx.Q], thresholds: [lo, mid, hi] },
+    // The midpoint above the maximum: num 7 / 637 / 217 re-sorts to 7 / 217 / 637, the colours keeping their order (S2-E).
+    { id: 'num-midpoint-above-max', capabilityId: S2_NUM_SEGMENT_CAP, col: 'D', rows: [...fx.midpointRows].map((_, i) => fx.firstLowerRow + i), cfvo: num(lo, hi, mid), colors: [fx.P, fx.Q, fx.P], thresholds: [lo, mid, hi] },
+    { id: 'num-replica', capabilityId: S2_NUM_SEGMENT_CAP, col: fx.replica.col, rows: [...fx.replica.rows], cfvo: num(0, 30, 60), colors: [...S2NS_REPLICA_COLOURS], thresholds: [0, 30, 60] },
+    { id: 'statistical', capabilityId: S2_NUM_SEGMENT_STATISTICAL_CAP, col: 'E', rows: [...fx.boundRows, ...segRows], cfvo: [{ type: 'min' }, { type: 'percentile', val: '50' }, { type: 'max' }], colors: [fx.P, fx.Q, fx.P], thresholds: [lo, mid, hi], designatedRows: segRows },
+    { id: 'two-colour-lower', capabilityId: S2_NUM_SEGMENT_TWO_COLOUR, col: 'F', rows: lowerRows, cfvo: num(lo, mid), colors: [fx.P, fx.Q], thresholds: [lo, mid] },
+    { id: 'two-colour-upper', capabilityId: S2_NUM_SEGMENT_TWO_COLOUR, col: 'F', rows: upperRows, cfvo: num(mid, hi), colors: [fx.Q, fx.P], thresholds: [mid, hi] },
+  ]
+}
+
+/** The value of a rule's cell: the data rows' value, the replica's own values; the midpoint rule holds 1/3 and 2/3 of each segment. */
+export function s2NumSegmentValueAt(rule: S2NumSegmentRule, row: number): number {
+  const fx = S2_NUM_SEGMENT
+  if (rule.id === 'num-replica') return fx.replica.values[fx.replica.rows.indexOf(row as 10)]!
+  const values = s2NumSegmentValues()
+  if (rule.id === 'num-midpoint-above-max') return values.get(fx.midpointRows[row - fx.firstLowerRow]!)!
+  return values.get(row)!
+}
+/** The control of a rule's cell: the control column's row holding the same value. */
+export function s2NumSegmentControlOf(rule: S2NumSegmentRule, row: number): string {
+  const fx = S2_NUM_SEGMENT
+  if (rule.id === 'num-replica') return `${fx.replica.controlCol}${fx.replica.controlRows[fx.replica.rows.indexOf(row as 10)]!}`
+  if (rule.id === 'num-midpoint-above-max') return `${fx.controlCol}${fx.midpointRows[row - fx.firstLowerRow]!}`
+  return `${fx.controlCol}${row}`
+}
+
+/** What a reading predicts at one cell of a rule (2-colour rules: every reading is 3-colour only, so truncation). */
+export function s2NumSegmentPrediction(rule: S2NumSegmentRule, row: number, reading: S2NumSegmentReading): string {
+  const v = s2NumSegmentValueAt(rule, row)
+  const t = rule.thresholds
+  // The thresholds are ascending and the colours positional (the midpoint-above-max rule's colours keep their order).
+  const seg = t.length === 2 || v <= t[1]! ? 0 : 1
+  const [lo, hi] = [t[seg]!, t[seg + 1]!]
+  const r: S2NumSegmentReading = rule.colors.length === 2 ? 'truncate' : reading
+  return s2NumSegmentColour(r, rule.colors[seg]!, rule.colors[seg + 1]!, v, lo, hi)
+}
+
+/** The configurations, their predictions and the positive controls (one literal cellIs rule per distinct predicted fill). */
+export function s2NumSegmentLayout(): { configurations: S5Configuration[]; positiveControls: Array<{ ref: string; token: string }> } {
+  const fx = S2_NUM_SEGMENT
+  const rules = s2NumSegmentRules()
+  const cfgOf = (id: string, ruleIds: readonly string[], capabilityId: string, readings: readonly S2NumSegmentReading[], role?: 'negative-control') => {
+    const members = rules.filter(r => ruleIds.includes(r.id))
+    const rowsOf = (r: S2NumSegmentRule): readonly number[] => r.designatedRows ?? r.rows
+    const refs = members.flatMap(r => rowsOf(r).map(row => `${r.col}${row}`))
+    const hypotheses = Object.fromEntries(readings.map(h => [h, Object.fromEntries(members.flatMap(r => rowsOf(r).map(row => [`${r.col}${row}`, s2NumSegmentPrediction(r, row, h)])))]))
+    return { id, capabilityId, observable: 'fill' as const, refs, hypotheses, ...(role ? { role } : {}) }
+  }
+  const bare = [
+    cfgOf('num-pqp', ['num-pqp', 'num-midpoint-above-max', 'num-replica'], S2_NUM_SEGMENT_CAP, S2_NUM_SEGMENT_READINGS),
+    cfgOf('num-qpq', ['num-qpq'], S2_NUM_SEGMENT_CAP, S2_NUM_SEGMENT_READINGS),
+    cfgOf('two-colour-control', ['two-colour-lower', 'two-colour-upper'], S2_NUM_SEGMENT_CAP, S2_NUM_SEGMENT_READINGS, 'negative-control'),
+    cfgOf('statistical', ['statistical'], S2_NUM_SEGMENT_STATISTICAL_CAP, S2_NUM_SEGMENT_STATISTICAL_READINGS),
+  ]
+  const tokens = [...new Set(bare.flatMap(c => Object.values(c.hypotheses).flatMap(h => Object.values(h))))].sort()
+  const slots = fx.positiveControlSlots
+  if (tokens.length > slots.length) throw new Error(`${S2_NUM_SEGMENT_ID}: ${tokens.length} positive controls exceed ${slots.length} slots`)
+  const positiveControls = tokens.map((token, i) => ({ ref: slots[i]!, token }))
+  const refOf = new Map(positiveControls.map(p => [p.token, p.ref]))
+  const configurations: S5Configuration[] = bare.map(c => {
+    const mine = [...new Set(Object.values(c.hypotheses).flatMap(h => Object.values(h)))].sort()
+    return {
+      ...c,
+      positiveControls: Object.fromEntries(mine.map(t => [refOf.get(t)!, t])),
+      ...(c.role === 'negative-control' ? { note: 'Negative control: the same values under 2-colour literal num bounds; every reading is 3-colour only, so all predict truncation. Excel must match it, never evidence.' } : {}),
+    }
+  })
+  return { configurations, positiveControls }
+}
+
+function s2NumSegmentMarker(rule: S2NumSegmentRule, priority: number): CfPartMarker {
+  const r0 = rule.rows[0]!, r1 = rule.rows[rule.rows.length - 1]!
+  return { part: 'xl/worksheets/sheet1.xml', extension: 'legacy', capabilityId: rule.capabilityId, sqref: `${rule.col}${r0}:${rule.col}${r1}`, ruleType: 'colorScale', priority, formulas: [], scale: { cfvo: rule.cfvo, colors: [...rule.colors] } }
+}
+
+/** The colour rules' markers in priority order (the positive controls' cellIs rules follow, unmarked as in stage2-scale-composition). */
+export function s2NumSegmentMarkers(): CfPartMarker[] {
+  return s2NumSegmentRules().map((r, i) => s2NumSegmentMarker(r, i + 1))
+}
+
+function stage2NumSegmentCase(): CfOracleCase {
+  const fx = S2_NUM_SEGMENT
+  const rules = s2NumSegmentRules()
+  const { configurations, positiveControls } = s2NumSegmentLayout()
+  const lastCol = positiveControls.length > 27 ? 'I' : 'H'
+  const designated: CfCellExpectation[] = rules.flatMap(r => (r.designatedRows ?? r.rows).map(row => ({ ref: `${r.col}${row}`, controlRef: s2NumSegmentControlOf(r, row), matched: true, scaleApplied: true, fillSource: 'unverified' as const })))
+  const positives: CfCellExpectation[] = positiveControls.map(p => ({ ref: p.ref, controlRef: fx.positiveControlShared, matched: true, scaleApplied: false, fillRgb: p.token, fillSource: 'unverified' as const }))
+  const controls: CfCellExpectation[] = [
+    ...s2nsSegmentRows().map(row => ({ ref: `${fx.controlCol}${row}`, controlRef: `B${row}`, matched: false, scaleApplied: false, fillSource: 'unverified' as const })),
+    ...fx.replica.rows.map((row, i) => ({ ref: `${fx.replica.controlCol}${fx.replica.controlRows[i]!}`, controlRef: `${fx.replica.col}${row}`, matched: false, scaleApplied: false, fillSource: 'unverified' as const })),
+    { ref: fx.positiveControlShared, controlRef: positiveControls[0]!.ref, matched: false, scaleApplied: false, fillSource: 'unverified' as const },
+  ]
+  const cells = [...designated, ...positives, ...controls]
+  return {
+    id: S2_NUM_SEGMENT_ID,
+    stage: 2,
+    question:
+      'The num-segment follow-up of capture e448d831 (T4 and V3 one unit higher per channel than truncation): which arithmetic does Excel use inside a 3-colour segment bounded by two literal num cfvo? Six readings pre-registered (truncate, percent-roundtrip, fixed-256, fixed-1000, fixed-308, fixed-700) on 3-colour num 7/217/637 scales in both colour orders, a midpoint-above-max copy and a replica of T4/V3; the same values under min / percentile 50 / max (truncate or percent-roundtrip) and, as a negative control, under 2-colour literal num bounds. Literal cellIs positive controls for every predicted fill.',
+    input: `tests/fixtures/xlsx-cf/inputs/${S2_NUM_SEGMENT_ID}.xlsx`,
+    saved: `tests/fixtures/xlsx-cf/${S2_NUM_SEGMENT_ID}.xlsx`,
+    sheet: 'Sheet1',
+    range: `A1:${lastCol}${s2nsLastRow()}`,
+    requiredAppearances: ['screen'],
+    markers: s2NumSegmentMarkers(),
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: cells.filter(e => e.matched).map(e => e.ref),
+      negativeRefs: cells.filter(e => !e.matched).map(e => e.ref),
+      cells,
+    },
+    scaleReadings: configurations,
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: `tests/fixtures/xlsx-cf/refs/${S2_NUM_SEGMENT_ID}.png`,
+        sidecarPath: `tests/fixtures/xlsx-cf/refs/${S2_NUM_SEGMENT_ID}.json`,
+      },
+    ],
+    status: 'recipe-pending',
+    reason: 'Awaiting host Excel 16.115 execution and verified display-format interior color observations',
+    tolerance: DEFAULT_TOLERANCE,
+  }
+}
+
 export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
   // 1. stage2-scale-interpolation
   {
@@ -3898,8 +4135,10 @@ export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
     reason: 'Unsupported or invalid colorScale constructs fail closed per Ruling S2-C and S2-K',
     tolerance: DEFAULT_TOLERANCE,
   },
-  // 9. stage2-scale-scope-disjoint (the scope-disjoint follow-up, appended last: earlier inputs stay byte-identical)
+  // 9. stage2-scale-scope-disjoint (the scope-disjoint follow-up: earlier inputs stay byte-identical)
   stage2ScopeDisjointCase(),
+  // 10. stage2-scale-num-segment (the num-segment follow-up, appended last: earlier inputs stay byte-identical)
+  stage2NumSegmentCase(),
 ]
 
 const S2_RULINGS: Record<string, string> = {
@@ -4025,6 +4264,14 @@ export const CF_STAGE2_NONDISCRIMINATING: Readonly<Record<string, string>> = {
     'Literal twin rules of stage2-scale-scope-disjoint (num-bounded single-range scales, one per predicted rendering): comparison references for the scope readings, never a question themselves.',
   'scale:scope-disjoint-control':
     'The single-range min/max negative control of stage2-scale-scope-disjoint: every reading agrees on it by design, so Excel must match it but it never bears evidence.',
+  // The num-segment follow-up: both questions await their first capture (the readings decide them); the 2-colour twins are
+  // a negative control, never a question.
+  'scale:num-segment-fraction':
+    'Pre-capture: stage2-scale-num-segment pre-registers six readings of the arithmetic inside a 3-colour literal-num segment (capture e448d831 contradicts truncation at T4 and V3); the shape stays withheld until one reading is matched and registered.',
+  'scale:num-segment-fraction-statistical':
+    'Pre-capture: stage2-scale-num-segment measures the same values under min / percentile 50 / max bounds (truncate or percent-roundtrip); production paints truncation, the published behaviour.',
+  'scale:num-segment-fraction-2colour':
+    'The 2-colour literal num twins of stage2-scale-num-segment: every reading is 3-colour only, so all predict truncation; Excel must match them but they never bear evidence.',
 }
 
 /**

@@ -8,6 +8,8 @@
  * A finding can never encode a painted (wrong) colour.
  */
 import { isCellInSqref } from './verify'
+import { CF_NUM_SEGMENT_CAP, cfNumSegmentReading } from '../../src/xlsx/cf/colorScale'
+import { hasEvidence } from '../../src/xlsx/cf/evidence'
 
 export type Stage2Finding = { outcome: 'withheld'; reason: string }
 
@@ -70,6 +72,9 @@ type MarkerLike = { ruleType: string; sqref: string; scale?: { cfvo: readonly { 
  */
 export function stage2NumSegmentShape(markers: readonly MarkerLike[], ref: string, value: unknown): boolean {
   if (typeof value !== 'number' || !Number.isFinite(value)) return false
+  // The num-segment follow-up: once a reading of scale:num-segment-fraction is registered (with its evidence) production
+  // paints the shape, so the justification is gone with the withhold it justified (the registration, rehearsed by tests).
+  if (cfNumSegmentReading(CF_NUM_SEGMENT_CAP) !== undefined && hasEvidence(CF_NUM_SEGMENT_CAP)) return false
   return markers.some(m => {
     if (m.ruleType !== 'colorScale' || m.scale?.cfvo.length !== 3 || !isCellInSqref(ref, m.sqref)) return false
     const literal = (x: { type: string; val?: string; f?: string }): number | undefined =>

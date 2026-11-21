@@ -218,8 +218,9 @@ describe('the capture (e448d831): union, and production against Excel', () => {
 })
 
 describe('stage2-scale-scope-disjoint: the case', () => {
-  it('is appended last and owns scale:scope-disjoint; the old case keeps its marker and capture as a cross-check', () => {
-    expect(CF_STAGE2_CASES.at(-1)!.id).toBe(ID)
+  it('is appended after the earlier cases and owns scale:scope-disjoint; the old case keeps its marker and capture as a cross-check', () => {
+    // Appended last at its time; the num-segment follow-up (stage2-scale-num-segment) is appended after it.
+    expect(CF_STAGE2_CASES.map(c => c.id).slice(-2)).toEqual([ID, 'stage2-scale-num-segment'])
     expect(CF_STAGE2_OWNERS[CAP]).toBe(ID)
     expect(CF_STAGE2_CAPABILITIES.filter(e => e.capabilityId === CAP).map(e => e.caseId)).toEqual([ID])
     expect(capabilityOwnerCase(CAP, manifest)!.id).toBe(ID)
@@ -472,7 +473,8 @@ describe('the reading gate is mandatory from the catalogue, never from the manif
 
   it('a gated capability with no readings evidence in the verified result is withheld by the audit (registry-driven gate)', async () => {
     const { CF_STAGE2_PRODUCTION_READINGS } = await import('../scripts/cf-refs/audit')
-    expect(Object.keys(CF_STAGE2_PRODUCTION_READINGS)).toEqual([CAP])
+    // The num-segment follow-up adds its statistical id (truncate, the published behaviour); its literal-num id has none.
+    expect(Object.keys(CF_STAGE2_PRODUCTION_READINGS)).toEqual([CAP, 'scale:num-segment-fraction-statistical'])
     expect(CF_STAGE2_CASES.find(t => t.id === ID)!.scaleReadings!.length).toBeGreaterThan(0)
   })
 })

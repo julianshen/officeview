@@ -21,9 +21,16 @@ import {
   CF_STAGE4_FIXTURES,
   CF_STAGE5_FIXTURES,
   DEFAULT_CLOCK_ANCHOR_DATE,
+  S2_NUM_SEGMENT,
+  S2_NUM_SEGMENT_ID,
   S2_SCOPE_DISJOINT,
   S2_SCOPE_DISJOINT_ID,
   isoDateToExcelSerial,
+  s2NumSegmentLayout,
+  s2NumSegmentMarkers,
+  s2NumSegmentRules,
+  s2NumSegmentValueAt,
+  s2NumSegmentValues,
   s2ScopeDisjointLayout,
   s2ScopeDisjointMarkers,
   s3ControlOffset,
@@ -1158,6 +1165,43 @@ function casePayload(id: string, anchorDateIso = DEFAULT_CLOCK_ANCHOR_DATE): She
           .map(m => `<conditionalFormatting sqref="${m.sqref}"><cfRule type="colorScale" priority="${m.priority}"><colorScale>${m.scale!.cfvo.map(cfvoXml).join('')}${m.scale!.colors.map(c => `<color rgb="${c}"/>`).join('')}</colorScale></cfRule></conditionalFormatting>`)
           .join(''),
         dxfsXml: '<dxfs count="0"/>',
+      }
+    }
+
+    case S2_NUM_SEGMENT_ID: {
+      // The num-segment follow-up: the colour rules (catalogue markers, priority order) then one literal cellIs rule per
+      // predicted fill (value 1 = 1, its own dxf), sharing the unformatted control I20. Column A labels each data row.
+      const fx = S2_NUM_SEGMENT
+      const values = s2NumSegmentValues()
+      const rules = s2NumSegmentRules()
+      const { positiveControls } = s2NumSegmentLayout()
+      const cells: CellSpec[] = [{ ref: 'A1', v: 'Row' }]
+      const frac = (row: number): string => {
+        if (row < fx.firstLowerRow) return ['min', 'mid', 'max'][row - 2]!
+        const i = row - fx.firstLowerRow, n = fx.fractions.length
+        const [p, q] = fx.fractions[i % n]!
+        return `${i < n ? 'L' : 'U'} ${p}/${q}`
+      }
+      for (const row of values.keys()) cells.push({ ref: `A${row}`, v: frac(row) })
+      const header: Record<string, string> = { B: 'num PQP', C: 'num QPQ', D: 'mid>max; T4/V3', E: 'min/P50/max', F: '2-colour num', G: 'Ctrl', H: 'PosCtl', I: 'PosCtl; ctrls' }
+      const usedCols = new Set([...rules.map(r => r.col), fx.controlCol, fx.replica.controlCol, ...positiveControls.map(p => /^[A-Z]+/.exec(p.ref)![0])])
+      for (const col of [...usedCols].sort()) cells.push({ ref: `${col}1`, v: header[col]! })
+      for (const r of rules) for (const row of r.rows) cells.push({ ref: `${r.col}${row}`, v: s2NumSegmentValueAt(r, row) })
+      for (const [row, v] of values) if (row >= fx.firstLowerRow) cells.push({ ref: `${fx.controlCol}${row}`, v })
+      fx.replica.controlRows.forEach((row, i) => cells.push({ ref: `${fx.replica.controlCol}${row}`, v: fx.replica.values[i]! }))
+      cells.push({ ref: fx.positiveControlShared, v: 1 })
+      for (const p of positiveControls) cells.push({ ref: p.ref, v: 1 })
+      const cfvoXml = (v: { type: string; val?: string }): string => `<cfvo type="${v.type}"${v.val !== undefined ? ` val="${v.val}"` : ''}/>`
+      const markers = s2NumSegmentMarkers()
+      const scaleXml = markers.map(m => `<conditionalFormatting sqref="${m.sqref}"><cfRule type="colorScale" priority="${m.priority}"><colorScale>${m.scale!.cfvo.map(cfvoXml).join('')}${m.scale!.colors.map(c => `<color rgb="${c}"/>`).join('')}</colorScale></cfRule></conditionalFormatting>`)
+      const pcXml = positiveControls.map((p, i) => `<conditionalFormatting sqref="${p.ref}"><cfRule type="cellIs" dxfId="${i}" priority="${markers.length + 1 + i}" operator="equal"><formula>1</formula></cfRule></conditionalFormatting>`)
+      const lastRow = Math.max(...values.keys())
+      const lastCol = /^[A-Z]+/.exec(positiveControls.at(-1)!.ref)![0]
+      return {
+        dimension: `A1:${lastCol}${lastRow}`,
+        cells,
+        legacyCfXml: [...scaleXml, ...pcXml].join(''),
+        dxfsXml: `<dxfs count="${positiveControls.length}">${positiveControls.map(p => `<dxf><fill><patternFill patternType="solid"><bgColor rgb="${p.token}"/></patternFill></fill></dxf>`).join('')}</dxfs>`,
       }
     }
 

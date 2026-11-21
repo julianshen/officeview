@@ -28,7 +28,18 @@ import { cfRuntimeEvidence } from '../../src/xlsx/cf/predicates'
 import { injectCfScaleSegmentProbe, interpolateScaleColor, numSegmentUnmeasured, type CfNumSegmentReading, type CfScaleSegment } from '../../src/xlsx/cf/colorScale'
 import type { CfScalePoint } from '../../src/xlsx/cf/model'
 import { caseDocumentEvaluationOf, caseParseOptionsOf } from './case-clock'
-import type { CfManifest, CfOracleCase } from './cases'
+import {
+  S2_NUM_SEGMENT_CAP,
+  S2_NUM_SEGMENT_READINGS,
+  S2_NUM_SEGMENT_STATISTICAL_CAP,
+  S2_NUM_SEGMENT_STATISTICAL_READINGS,
+  s2NumSegmentLayout,
+  s2NumSegmentRules,
+  s2NumSegmentValueAt,
+  type CfManifest,
+  type CfOracleCase,
+  type S2NumSegmentReading,
+} from './cases'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
@@ -294,6 +305,46 @@ export function fractionWindow(c: SegmentCell): { lo: number; hi: number } {
   return { lo, hi }
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// The confirmation case (stage2-scale-num-segment): its cells as segments, and the survivors' classes on them.
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** Each designated cell of the case's evidence configurations, as the segment production evaluates (thresholds ascending). */
+export function caseSegments(capabilityId: string): Array<{ ref: string; segment: CfScaleSegment }> {
+  const rules = new Map(s2NumSegmentRules().map(r => [r.col + ':' + r.rows.join(','), r]))
+  const out: Array<{ ref: string; segment: CfScaleSegment }> = []
+  for (const cfg of s2NumSegmentLayout().configurations.filter(c => c.capabilityId === capabilityId && c.role !== 'negative-control')) {
+    for (const ref of cfg.refs) {
+      const col = /^[A-Z]+/.exec(ref)![0], row = Number(/\d+$/.exec(ref)![0])
+      const rule = [...rules.values()].find(r => r.col === col && r.rows.includes(row))!
+      const v = s2NumSegmentValueAt(rule, row), t = rule.thresholds
+      const seg = v <= t[1]! ? 0 : 1
+      const kind = (x: { type: string }): CfScaleSegment['loKind'] => (x.type === 'num' ? 'num' : (x.type as CfScaleSegment['loKind']))
+      // Bound kinds by threshold position: the midpoint-above-max rule's cfvo 1 and 2 swap with their thresholds.
+      const byPos = rule.cfvo.length === 3 && Number(rule.cfvo[1]!.val) > Number(rule.cfvo[2]!.val) ? [rule.cfvo[0]!, rule.cfvo[2]!, rule.cfvo[1]!] : rule.cfvo
+      out.push({ ref, segment: { value: v, lo: t[seg]!, hi: t[seg + 1]!, fraction: clamp01((v - t[seg]!) / (t[seg + 1]! - t[seg]!)), c0: Number.parseInt(rule.colors[seg]!, 16) >>> 0, c1: Number.parseInt(rule.colors[seg + 1]!, 16) >>> 0, colours: 3, segment: seg as 0 | 1, loKind: kind(byPos[seg]!), hiKind: kind(byPos[seg + 1]!), thresholds: [...t] } })
+    }
+  }
+  return out
+}
+
+/**
+ * The survivors of a scope grouped by their colours on the case's cells of `capabilityId`: each group must coincide with
+ * exactly one pre-registered reading (`unmatched` lists any survivor that does not, which would be a reading missing).
+ */
+export function survivorClassesOnCase(cells: readonly SegmentCell[], scope: string, capabilityId: string, readings: readonly S2NumSegmentReading[]): { classes: Record<string, string[]>; unmatched: string[] } {
+  const results = evaluateCandidates(cells)
+  const survivors = results.filter(r => r.scope === scope && r.mismatches.length === 0).map(r => r.id)
+  const cand = new Map(CANDIDATES.map(c => [c.id, c]))
+  const segs = caseSegments(capabilityId)
+  const sig = (id: string): string => segs.map(s => hex(cand.get(id)!.colour(s.segment))).join(',')
+  const readingSig = new Map(readings.map(r => [sig(NUM_SEGMENT_READING_CANDIDATE[r]), r]))
+  const classes: Record<string, string[]> = Object.fromEntries(readings.map(r => [r, [] as string[]]))
+  const unmatched: string[] = []
+  for (const id of survivors) { const r = readingSig.get(sig(id)); if (r) classes[r]!.push(id); else unmatched.push(id) }
+  return { classes, unmatched }
+}
+
 async function main(): Promise<void> {
   const manifest = JSON.parse(readFileSync(resolve(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest
   const { cells, excluded, faults } = await collectSegmentCells(manifest)
@@ -309,19 +360,20 @@ async function main(): Promise<void> {
   for (const f of faults) console.log(`FAULT ${f}`)
   const interior = (c: SegmentCell): boolean => c.segment.value > c.segment.lo && c.segment.value < c.segment.hi
   const classOf = (c: SegmentCell): string => `${c.segment.colours}-colour ${c.segment.loKind}/${c.segment.hiKind}`
-  const classes = new Map<string, { cells: number; interior: number; whole: number }>()
+  const classes = new Map<string, { cells: number; interior: number; whole: number; lowered: number }>()
   for (const c of cells) {
-    const e = classes.get(classOf(c)) ?? { cells: 0, interior: 0, whole: 0 }
+    const e = classes.get(classOf(c)) ?? { cells: 0, interior: 0, whole: 0, lowered: 0 }
     e.cells++
     if (interior(c)) {
       e.interior++
-      const w = fractionWindow(c)
-      if (w.lo === FRACTIONS.exact!(c.segment)) e.whole++
+      const w = fractionWindow(c), f = FRACTIONS.exact!(c.segment)
+      if (w.lo === f) e.whole++
+      if (f >= w.hi) e.lowered++
     }
     classes.set(classOf(c), e)
   }
-  console.log('\n| Segment class | Cells | Strictly inside | Whole-product cells (constrain a lowered fraction) |\n|---|---|---|---|')
-  for (const [k, e] of [...classes].sort()) console.log(`| ${k} | ${e.cells} | ${e.interior} | ${e.whole} |`)
+  console.log('\n| Segment class | Cells | Strictly inside | Whole product, drawn at truncation (rejects any lowered fraction) | Drawn below truncation |\n|---|---|---|---|---|')
+  for (const [k, e] of [...classes].sort()) console.log(`| ${k} | ${e.cells} | ${e.interior} | ${e.whole} | ${e.lowered} |`)
   console.log('\nWithheld cells (the effective-fraction window Excel\'s fill allows, under step truncation):\n')
   console.log('| Cell | Segment | Value | f | Window | Excel | Production |\n|---|---|---|---|---|---|---|')
   for (const c of cells.filter(x => x.status === 'withheld')) {
@@ -352,6 +404,33 @@ async function main(): Promise<void> {
   for (const r of results.filter(x => x.t4 && x.v3 && x.mismatches.length > 0 && !x.id.startsWith('sweep-')).sort((a, b) => a.mismatches.length - b.mismatches.length).slice(0, 40)) console.log(`| ${r.id} | ${r.scope} | ${r.inScope} | ${r.mismatches.length} | ${r.mismatches[0]} |`)
   const one = results.filter(x => x.t4 !== x.v3)
   console.log(`\nCandidate × scope pairs reproducing exactly one of T4/V3: ${one.length}; neither: ${results.filter(x => !x.t4 && !x.v3).length}; both: ${results.filter(x => x.t4 && x.v3).length}.`)
+
+  console.log('\n## Classes on the case\n')
+  for (const [scope, cap, readings] of [['3-colour-literal-num', S2_NUM_SEGMENT_CAP, S2_NUM_SEGMENT_READINGS], ['3-colour', S2_NUM_SEGMENT_STATISTICAL_CAP, S2_NUM_SEGMENT_STATISTICAL_READINGS]] as const) {
+    const { classes, unmatched } = survivorClassesOnCase(cells, scope, cap, readings)
+    console.log(`${cap} (survivors at scope ${scope}, on ${caseSegments(cap).length} cells): ${unmatched.length} survivors match no reading`)
+    console.log('\n| Reading | Representative | Survivors in its class |\n|---|---|---|')
+    for (const r of readings) {
+      const ids = classes[r]!
+      const fixedN = ids.filter(id => /^sweep-fixed-\d+$/.test(id)).map(id => Number(id.slice('sweep-fixed-'.length)))
+      const other = ids.filter(id => !/^sweep-fixed-\d+$/.test(id))
+      console.log(`| \`${r}\` | ${NUM_SEGMENT_READING_CANDIDATE[r]} | ${ids.length}${fixedN.length ? ` (fixed-point N: ${fixedN.length}, smallest ${fixedN.slice(0, 5).join(', ')}${fixedN.length > 5 ? ', …' : ''})` : ''}${other.length ? `; ${other.slice(0, 6).join(', ')}${other.length > 6 ? `, … (${other.length})` : ''}` : ''} |`)
+    }
+    console.log('')
+  }
+
+  console.log('## Predictions at the decisive cells\n')
+  for (const cfg of s2NumSegmentLayout().configurations) {
+    const hs = Object.keys(cfg.hypotheses)
+    const decisive = cfg.refs.filter(ref => new Set(hs.map(h => cfg.hypotheses[h]![ref])).size > 1)
+    console.log(`\`${cfg.id}\` (${cfg.capabilityId}${cfg.role ? `, ${cfg.role}` : ''}): ${cfg.refs.length} cells, ${decisive.length} decisive\n`)
+    if (decisive.length === 0) { console.log(`Every reading predicts the same fill at every cell.\n`); continue }
+    console.log(`| Cell | ${hs.map(h => `\`${h}\``).join(' | ')} |\n|---|${hs.map(() => '---').join('|')}|`)
+    for (const ref of decisive) console.log(`| ${ref} | ${hs.map(h => cfg.hypotheses[h]![ref]).join(' | ')} |`)
+    const pairs: string[] = []
+    for (let i = 0; i < hs.length; i++) for (let j = i + 1; j < hs.length; j++) pairs.push(`${hs[i]}/${hs[j]} ${cfg.refs.filter(r => cfg.hypotheses[hs[i]!]![r] !== cfg.hypotheses[hs[j]!]![r]).length}`)
+    console.log(`\nCells separating each pair: ${pairs.join('; ')}.\n`)
+  }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

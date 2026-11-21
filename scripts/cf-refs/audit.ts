@@ -85,6 +85,7 @@ import { residentSource } from '../../src/xlsx/cf/render'
 import { createCfStatistics } from '../../src/xlsx/cf/statistics'
 import { computeMetrics } from '../../src/xlsx/render'
 import { CF_ICON_PAINT_READINGS } from '../../src/xlsx/cf/iconPaint'
+import { CF_NUM_SEGMENT_PRODUCTION_READINGS } from '../../src/xlsx/cf/colorScale'
 import { CF_ICON_GLYPH_CLASSES, CF_ICON_GLYPH_WITHHELD } from '../../src/xlsx/cf/iconGlyphs'
 import type { FormatBudget } from '../../src/xlsx/view/formatWorkspace'
 import type { XlsxCell, XlsxSheet } from '../../src/xlsx/types'
@@ -257,10 +258,13 @@ export type Stage2AuditReport = Stage1AuditReport
  * The reading production implements for each Stage 2 capability a case's pre-registered readings decide (`scaleReadings`):
  * service.ts prepares a multi-range rule's statistics over all its ranges at once (`prepareStatistics([rule.ranges])`),
  * one union scope, as for bars and icons (`icon:scope-disjoint` in CF_STAGE4_PRODUCTION_READINGS). Pinned to behaviour in
- * tests/xlsx-cf-scale-scope-disjoint.test.ts. A capability whose matched reading differs, or has no entry, stays withheld.
+ * tests/xlsx-cf-scale-scope-disjoint.test.ts. The num-segment ids spread colorScale.ts's table (`CF_NUM_SEGMENT_PRODUCTION_READINGS`:
+ * `scale:num-segment-fraction` has no reading until one is matched and registered; the statistical id reads `truncate`).
+ * A capability whose matched reading differs, or has no entry, stays withheld.
  */
 export const CF_STAGE2_PRODUCTION_READINGS: Readonly<Record<string, string>> = {
   'scale:scope-disjoint': 'union',
+  ...(CF_NUM_SEGMENT_PRODUCTION_READINGS as Readonly<Record<string, string>>),
 }
 
 export function auditStage2Manifest(
@@ -269,10 +273,13 @@ export function auditStage2Manifest(
     rootDir?: string
     /** Rehearsal seam (the scope-disjoint follow-up): the non-discriminating registry to audit against (default the real one). */
     nonDiscriminating?: Readonly<Record<string, string>>
+    /** Rehearsal seam (the num-segment follow-up): the production readings to gate against (default CF_STAGE2_PRODUCTION_READINGS). */
+    productionReadings?: Readonly<Record<string, string>>
   } = {},
 ): Stage2AuditReport {
   const rootDir = options.rootDir ?? process.cwd()
   const nonDiscriminating = options.nonDiscriminating ?? CF_STAGE2_NONDISCRIMINATING
+  const productionReadings = options.productionReadings ?? CF_STAGE2_PRODUCTION_READINGS
   const stage2ManifestCases = manifest.cases.filter(c => c.stage === 2 || c.id.startsWith('stage2'))
   const catalogIds = CF_STAGE2_CASES.map(c => c.id)
   const manifestIds = new Set(stage2ManifestCases.map(c => c.id))
@@ -297,12 +304,12 @@ export function auditStage2Manifest(
       // The gate is mandatory from trusted data (codex pre-capture P1): a capability with a registered production reading,
       // or named by its owning catalogue case's readings, is gated whatever the manifest entry carries.
       const catalogueOwner = CF_STAGE2_CASES.find(c => c.id === entry.caseId)
-      const gated = Object.prototype.hasOwnProperty.call(CF_STAGE2_PRODUCTION_READINGS, entry.capabilityId) || (catalogueOwner?.scaleReadings ?? []).some(x => x.capabilityId === entry.capabilityId)
+      const gated = Object.prototype.hasOwnProperty.call(productionReadings, entry.capabilityId) || (catalogueOwner?.scaleReadings ?? []).some(x => x.capabilityId === entry.capabilityId)
       if (disposition === 'verified' && gated) {
         const res = evidence.get(entry.caseId)
         const matched = res?.kind === 'verified' ? res.matchedHypotheses?.[entry.capabilityId] : undefined
         if (res?.kind === 'verified' && res.nonDiscriminatingCapabilities?.includes(entry.capabilityId)) disposition = 'unverified-nondiscriminating'
-        else if (res?.kind !== 'verified' || !res.verifiedCapabilities.includes(entry.capabilityId) || matched === undefined || CF_STAGE2_PRODUCTION_READINGS[entry.capabilityId] !== matched) disposition = 'supported-structural'
+        else if (res?.kind !== 'verified' || !res.verifiedCapabilities.includes(entry.capabilityId) || matched === undefined || productionReadings[entry.capabilityId] !== matched) disposition = 'supported-structural'
       }
     }
     return { capabilityId: entry.capabilityId, caseId: entry.caseId, disposition }
