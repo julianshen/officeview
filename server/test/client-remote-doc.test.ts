@@ -1,5 +1,6 @@
 /** 1d Task 3: RemoteOfficeDoc paint paths against the real 1c server (napi backend). */
 import { afterAll, describe, expect, it } from 'bun:test'
+import { rejection } from './fixtures/rejection'
 import { loadImage } from '@napi-rs/canvas'
 import { replayUnit } from '../../src/stream/replay'
 import type { Manifest } from '../../src/stream/manifest'
@@ -97,7 +98,7 @@ describe('RemoteOfficeDoc failure paths', () => {
     const doc = createRemoteDoc(s, { backend })
     doc.close(); doc.close()
     expect(s.closes).toBe(1)
-    await expect(doc.paint(0, 1, 1, backend.createCanvas(4, 4))).rejects.toBeInstanceOf(StreamSessionError)
+    expect(await rejection(doc.paint(0, 1, 1, backend.createCanvas(4, 4)))).toBeInstanceOf(StreamSessionError)
   })
   it('review 5: a terminal end while a paint is decoding commits no pixels', async () => {
     let end!: (e: StreamSessionError) => void

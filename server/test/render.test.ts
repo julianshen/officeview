@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+import { rejectionMessage } from './fixtures/rejection'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { loadImage } from '@napi-rs/canvas'
@@ -85,7 +86,7 @@ describe('render core', () => {
   })
 
   it('refuses ODT/garbage before parsing', async () => {
-    await expect(host.open('x', new Uint8Array([1, 2, 3]), 'visible-only')).rejects.toThrow(/unsupported-format/)
+    expect(await rejectionMessage(host.open('x', new Uint8Array([1, 2, 3]), 'visible-only'))).toMatch(/unsupported-format/)
   })
 })
 

@@ -1,5 +1,6 @@
 /** Piece 5 Task 2: the sandboxed ffmpeg runner (plan D5) and the media temp directory. */
 import { afterAll, describe, expect, it } from 'bun:test'
+import { rejection, rejectionMessage } from '../fixtures/rejection'
 import { spawn } from 'node:child_process'
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, existsSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
@@ -179,7 +180,7 @@ describe('media temp', () => {
     const base = sub('twice')
     const t = await createMediaTemp(base)
     const a = await t.create(new Uint8Array([9]))
-    await expect(createMediaTemp(base)).rejects.toThrow(/already claimed/)
+    expect(await rejectionMessage(createMediaTemp(base))).toMatch(/already claimed/)
     expect([...readFileSync(a.path)]).toEqual([9])
     const b = await t.create(new Uint8Array([8]))
     expect(t.live()).toBe(2)
@@ -215,7 +216,7 @@ describe('media temp', () => {
     const base = join(root, 'plant')
     mkdirSync(join(base, 'target'), { recursive: true })
     symlinkSync(join(base, 'target'), join(base, `ov-media-${process.pid}`))
-    await expect(createMediaTemp(base)).rejects.toThrow()
+    await rejection(createMediaTemp(base))
     expect(lstatSync(join(base, `ov-media-${process.pid}`)).isSymbolicLink()).toBe(true)
   })
 })
