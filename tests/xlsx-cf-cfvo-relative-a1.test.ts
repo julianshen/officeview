@@ -112,7 +112,7 @@ describe('formula:cfvo-relative read as anchor-a1 (registered since stage5-cfvo-
     } finally { relativeReading = undefined }
   })
 
-  it('under anchor-top-left (the registered reading) the same rule still reads its own top-left (MAX(B2:B7) = 35)', async () => {
+  it('under anchor-top-left (a historical hypothesis, reachable only through this test\'s wrapper) the same rule reads its own top-left (MAX(B2:B7) = 35)', async () => {
     relativeReading = 'anchor-top-left'
     try {
       const out = await prepare(sheetOf(parseRules(xml, CAPS), cells), refs, CAPS)

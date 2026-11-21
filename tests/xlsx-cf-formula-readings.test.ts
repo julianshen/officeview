@@ -276,10 +276,14 @@ async function readingsCheck(registry: Readonly<Record<string, string | readonly
   return { reproduced, reproducedAt, unconfirmableChecked, violations, discriminating }
 }
 
+/** One run of the check over production's registry, shared by the assertions below (it walks every Stage 5 fixture). */
+let registryCheck: ReturnType<typeof readingsCheck> | undefined
+const productionReadingsCheck = (): ReturnType<typeof readingsCheck> => (registryCheck ??= readingsCheck(CF_FORMULA_PRODUCTION_READINGS))
+
 describe('every registered formula reading is the reading production implements, on the Stage 5 fixtures', () => {
   it('each designated cell is the registered reading\'s prediction or withheld; each entry is reproduced and discriminating', async () => {
     const registry = CF_FORMULA_PRODUCTION_READINGS
-    const { reproduced, unconfirmableChecked, violations, discriminating } = await readingsCheck(registry)
+    const { reproduced, unconfirmableChecked, violations, discriminating } = await productionReadingsCheck()
     expect(violations).toEqual([])
     const unreproduced = Object.keys(registry).filter(id => !reproduced.has(id) && !REUSE_ONLY.test(id) && UNREACHABLE[id] === undefined && !unconfirmableChecked.has(id))
     expect([...unconfirmableChecked].sort()).toEqual(Object.keys(CF_STAGE5_UNCONFIRMABLE).sort())
@@ -293,7 +297,7 @@ describe('the anchor-a1 registration (stage5-cfvo-relative-a1, f9d5be94)', () =>
   it('both cfvo scope ids name anchor-a1, reproduced and discriminating on the owner case and only where it was pre-registered', async () => {
     expect(CF_FORMULA_PRODUCTION_READINGS['formula:cfvo-relative']).toBe('anchor-a1')
     expect(CF_FORMULA_PRODUCTION_READINGS['formula:cfvo-scope-multi-range']).toEqual(['rule-wide', 'per-range', 'anchor-a1'])
-    const { reproducedAt, violations } = await readingsCheck(CF_FORMULA_PRODUCTION_READINGS)
+    const { reproducedAt, violations } = await productionReadingsCheck()
     expect(violations).toEqual([])
     // The owner, and stage5-cfvo-scope-v2 (which named anchor-a1 before its capture); stage5-cfvo-formulas K and
     // stage5-cfvo-scope never did and keep their historical verification.
