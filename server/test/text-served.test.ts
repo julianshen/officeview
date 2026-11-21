@@ -17,6 +17,7 @@ import { buildDocx, buildXlsx } from '../../src/testdata/ooxml-builders'
 import { corpus, disposePool, pool } from './harness'
 import { renderPages, type PageLayout, type Segment } from '../../src/docx/layout'
 import { rejection } from './fixtures/rejection'
+import { MARKS_FAMILY, STACKING_MARK } from './fixtures/marks-font'
 
 afterAll(() => disposePool())
 const pools: Pool[] = []
@@ -836,12 +837,12 @@ describe('text decorations do not withhold the decorated word (Task 3c)', () => 
   describe('review probe through the real DOCX renderPages: a thick same-scope strike over a word with stacked combining marks', () => {
     const W = 500, H = 600
     const seg = (text: string, pt: number, color: string, deco: 'underline' | 'strike', e: number, f: number, widthPx: number): Segment =>
-      ({ text, run: { text, color, [deco]: true }, style: { fontFamily: 'sans-serif', fontSizePt: pt, bold: false, italic: false }, widthPx, transform: { a: 1, b: 0, c: 0, d: 1, e, f } }) as Segment
+      ({ text, run: { text, color, [deco]: true }, style: { fontFamily: MARKS_FAMILY, fontSizePt: pt, bold: false, italic: false }, widthPx, transform: { a: 1, b: 0, c: 0, d: 1, e, f } }) as Segment
     /** Black underlined 18 pt `word` at (40, 500), then a white struck space at 1000/3 pt whose 20 px strike is centred on y = 490. */
     const probe = (word: string, strike = true) => {
       const canvas = serverBackend().createCanvas(W, H)
       const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
-      ctx.font = '18pt sans-serif'
+      ctx.font = `18pt "${MARKS_FAMILY}"`
       const width = ctx.measureText(word).width
       const segs = [seg(word, 18, '000000', 'underline', 40, 500, width), ...(strike ? [seg(' ', 1000 / 3, 'FFFFFF', 'strike', 20, 590, 150)] : [])]
       const page = { widthPx: W, heightPx: H, tables: [], images: [], lines: [{ yPx: 0, xPx: 0, widthPx: W, align: 'left', isParagraphEnd: true, heightPx: H, contentWidthPx: W, segs }] } as unknown as PageLayout
@@ -851,13 +852,14 @@ describe('text decorations do not withhold the decorated word (Task 3c)', () => 
       const spans = recordSpans(paint, serverBackend().createCanvas(4, 4).getContext('2d') as unknown as CanvasRenderingContext2D)
       const unit = buildServedUnit(spans, o.runDetails(), 1)
       const copy = answerText(copyAll, 1, () => unit) as Extract<TextReply, { op: 'copy'; text: string }>
-      // Non-white pixels in the base word's band (the ink of plain 'secret': y 482..500).
+      // Non-white pixels in the base word's band (the ink of plain 'secret' in the pinned face: y 484..500).
       const px = ctx.getImageData(0, 482, W, 18).data
       let dark = 0
       for (let i = 0; i < px.length; i += 4) if (px[i]! < 250 || px[i + 1]! < 250 || px[i + 2]! < 250) dark++
       return { run: o.runDetails().find((r) => r.text === word)!, copy, dark }
     }
-    const stacked = 'secret' + '̍'.repeat(40)
+    // The pinned face stacks the marks on every platform (fixtures/marks-font); sans-serif did only on macOS.
+    const stacked = 'secret' + STACKING_MARK.repeat(40)
 
     test('the combining marks inflate the ink far past the font size, and the strike erases every base-letter pixel', () => {
       const r = probe(stacked)
