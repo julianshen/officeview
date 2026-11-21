@@ -451,6 +451,49 @@ export function numSegmentUnmeasured(lo: CfScalePoint, hi: CfScalePoint, value: 
   return literalNum(lo) && literalNum(hi) && value > tLo && value < tHi && !Number.isInteger(fraction * 1048576)
 }
 
+/** The kind of the cfvo bounding a segment, as the scale evaluated it: a formula bound resolved to a number is `num:formula`. */
+export type CfScaleSegmentBoundKind = 'min' | 'max' | 'num' | 'num:formula' | 'percent' | 'percent:formula' | 'percentile' | 'percentile:formula'
+
+/**
+ * One colour-scale segment evaluation, everything Excel's arithmetic could read: the value, the segment's thresholds and
+ * colours (after the 2-colour inversion and the midpoint-above-max re-sort, `lo < hi`), production's clamped fraction, the
+ * bounding cfvo kinds and every threshold of the scale (sorted ascending).
+ */
+export interface CfScaleSegment {
+  readonly value: number
+  readonly lo: number
+  readonly hi: number
+  /** `safeFraction(value, lo, hi)`, clamped to [0, 1]. */
+  readonly fraction: number
+  /** ARGB at `lo` and at `hi`. */
+  readonly c0: number
+  readonly c1: number
+  readonly colours: 2 | 3
+  /** 0: the scale's lower (or only) segment; 1: the upper segment of a 3-colour scale. */
+  readonly segment: 0 | 1
+  readonly loKind: CfScaleSegmentBoundKind
+  readonly hiKind: CfScaleSegmentBoundKind
+  /** Every threshold of the scale, ascending. */
+  readonly thresholds: readonly number[]
+}
+
+const segmentBoundKind = (p: CfScalePoint): CfScaleSegmentBoundKind => {
+  const b = p.bound
+  if (b.type === 'min' || b.type === 'max') return b.type
+  if (b.type === 'formula') return 'num:formula'
+  return ('resolved' in b && b.resolved === 'formula' ? `${b.type}:formula` : b.type) as CfScaleSegmentBoundKind
+}
+
+let segmentProbe: ((segment: CfScaleSegment) => CfOutcome<number> | undefined) | null = null
+/**
+ * Test seam (the num-segment follow-up, `scripts/cf-refs/num-segment-candidates.ts`): a probe that sees every segment
+ * evaluation of `scaleColorAt` and may replace its outcome (undefined keeps production's). Null clears. Production never
+ * calls it.
+ */
+export function injectCfScaleSegmentProbe(probe: ((segment: CfScaleSegment) => CfOutcome<number> | undefined) | null): void {
+  segmentProbe = probe
+}
+
 /**
  * Computes the interpolated ARGB colour for a cell value.
  * Pure function: fails closed when evidence is absent or cell value is outside bounds.
@@ -521,6 +564,8 @@ export function scaleColorAt(
       }
       const fraction = safeFraction(numericVal, tLow, tHigh)
       if (fraction === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
+      const probed = segmentProbe?.({ value: numericVal, lo: tLow, hi: tHigh, fraction, c0, c1, colours: 2, segment: 0, loKind: segmentBoundKind(points[1]!), hiKind: segmentBoundKind(points[0]!), thresholds: [tLow, tHigh] })
+      if (probed) return probed
       return { kind: 'ready', value: interpolateScaleColor(c0, c1, fraction, colorSpace, rounding) }
     }
 
@@ -533,6 +578,8 @@ export function scaleColorAt(
 
     const fraction = safeFraction(numericVal, t0, t1)
       if (fraction === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
+    const probed = segmentProbe?.({ value: numericVal, lo: t0, hi: t1, fraction, c0, c1, colours: 2, segment: 0, loKind: segmentBoundKind(points[0]!), hiKind: segmentBoundKind(points[1]!), thresholds: [t0, t1] })
+    if (probed) return probed
     return { kind: 'ready', value: interpolateScaleColor(c0, c1, fraction, colorSpace, rounding) }
   } else {
     // 3-point scale
@@ -570,12 +617,16 @@ export function scaleColorAt(
       if (t0 === t1) return { kind: 'ready', value: c1 }
       const fraction = safeFraction(numericVal, t0, t1)
       if (fraction === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
+      const probed = segmentProbe?.({ value: numericVal, lo: t0, hi: t1, fraction, c0, c1, colours: 3, segment: 0, loKind: segmentBoundKind(points[0]!), hiKind: segmentBoundKind(points[mid]!), thresholds: [t0, t1, t2] })
+      if (probed) return probed
       if (numSegmentUnmeasured(points[0]!, points[mid]!, numericVal, t0, t1, fraction)) return { kind: 'unresolved', reason: 'cf-unmeasured-num-segment-fraction' }
       return { kind: 'ready', value: interpolateScaleColor(c0, c1, fraction, colorSpace, rounding) }
     } else {
       if (t1 === t2) return { kind: 'ready', value: c2 }
       const fraction = safeFraction(numericVal, t1, t2)
       if (fraction === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
+      const probed = segmentProbe?.({ value: numericVal, lo: t1, hi: t2, fraction, c0: c1, c1: c2, colours: 3, segment: 1, loKind: segmentBoundKind(points[mid]!), hiKind: segmentBoundKind(points[top]!), thresholds: [t0, t1, t2] })
+      if (probed) return probed
       if (numSegmentUnmeasured(points[mid]!, points[top]!, numericVal, t1, t2, fraction)) return { kind: 'unresolved', reason: 'cf-unmeasured-num-segment-fraction' }
       return { kind: 'ready', value: interpolateScaleColor(c1, c2, fraction, colorSpace, rounding) }
     }
