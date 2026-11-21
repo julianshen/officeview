@@ -8,7 +8,12 @@
 import type { CfScaleSegment } from './colorScale'
 
 const clamp01 = (f: number): number => Math.max(0, Math.min(1, f))
-const f32 = Math.fround
+/**
+ * Fix round 3: every float32 conversion a formulation makes goes through this helper, which returns exactly
+ * `Math.fround(x)` (the formulas compute the same values) and records a non-finite conversion for `evaluate`.
+ */
+let f32Trapped = false
+const f32 = (x: number): number => { const r = Math.fround(x); if (!Number.isFinite(r)) f32Trapped = true; return r }
 /** The largest double below `x` (0 < x). */
 function nextDown(x: number): number {
   const buf = new Float64Array([x]), bits = new BigInt64Array(buf.buffer)
@@ -38,6 +43,29 @@ export const FRACTIONS: Readonly<Record<string, (s: CfScaleSegment) => number>> 
     [`fixed-round-${N}`, (s: CfScaleSegment) => Math.round(((s.value - s.lo) / (s.hi - s.lo)) * N) / N],
   ])),
 }
+
+/**
+ * Fix round 3 (codex re-review P2): the double-precision intermediates of each fraction formulation (beyond the raw
+ * differences `rawArithmeticSafe` checks), every one of which must be finite for `evaluate` to accept the formulation.
+ * float32 conversions are trapped by `f32`. Products of the clamped fraction with a fixed-point scale, a round-trip K or a
+ * channel span are finite by construction (f in [0, 1]); they are listed with the fraction that feeds them.
+ */
+const fractionIntermediates = (fid: string, s: CfScaleSegment): number[] => {
+  const off = s.value - s.lo, span = s.hi - s.lo, f = off / span
+  if (fid === 'split') return [s.value / span, s.lo / span]
+  if (fid === 'reciprocal') return [1 / span, off * (1 / span)]
+  if (fid === 'complement') return [(s.hi - s.value) / span]
+  if (fid.startsWith('full-span')) {
+    const g = gSpan(s), gv = g(s.value), gl = g(s.lo), gh = g(s.hi)
+    return [gv, gl, gh, gv - gl, gh - gl, 1 / (gh - gl), 1 - gl, gh === 0 ? 0 : gv / gh]
+  }
+  if (fid.startsWith('percent')) return [f, f * 100, off * 100, (off * 100) / span]
+  const m = /^fixed-(floor|round)-(\d+)$/.exec(fid)
+  if (m) return [f, f * Number(m[2])]
+  return [f]
+}
+/** The channel formulations' own intermediates that read the segment (the ratio forms): |d|·(v − lo) at the widest span. */
+const channelIntermediates = (cid: string, s: CfScaleSegment): number[] => (cid.startsWith('ratio-') ? [255 * (s.value - s.lo), (255 * (s.value - s.lo)) / (s.hi - s.lo)] : [])
 
 const GUARD = 1e-11
 const sgn = (d: number): number => (d >= 0 ? 1 : -1)
@@ -133,16 +161,19 @@ function rawArithmeticSafe(s: CfScaleSegment): boolean {
   const diffs = [s.value - s.lo, s.hi - s.lo, s.hi - s.value, tMax - tMin, s.value - tMin, s.lo - tMin, s.hi - tMin]
   return [s.value, s.lo, s.hi, tMin, tMax].every(Number.isFinite) && diffs.every(Number.isFinite) && s.hi - s.lo !== 0
 }
-function makeCandidate(id: string, frac: (s: CfScaleSegment) => number, ch: (c0: number, c1: number, f: number, s: CfScaleSegment) => number): Candidate {
+function makeCandidate(id: string, fid: string, cid: string, frac: (s: CfScaleSegment) => number, ch: (c0: number, c1: number, f: number, s: CfScaleSegment) => number): Candidate {
   return {
     id,
     colour: s => { const f = clamp01(frac(s)); return composeArgb(s, (c0, c1) => ch(c0, c1, f, s)) },
     evaluate: s => {
       if (!rawArithmeticSafe(s)) return undefined
+      if (![...fractionIntermediates(fid, s), ...channelIntermediates(cid, s)].every(Number.isFinite)) return undefined
+      f32Trapped = false
       const raw = frac(s)
-      if (!Number.isFinite(raw)) return undefined
+      if (f32Trapped || !Number.isFinite(raw)) return undefined
       const f = clamp01(raw)
-      return composeChecked(s, (c0, c1) => ch(c0, c1, f, s))
+      const argb = composeChecked(s, (c0, c1) => ch(c0, c1, f, s))
+      return f32Trapped ? undefined : argb
     },
   }
 }
@@ -154,9 +185,9 @@ function buildCandidates(): Candidate[] {
     ...Object.entries(FRACTIONS).flatMap(([fid, frac]) => Object.entries(CHANNELS)
       // The ratio channels read the segment directly (no fraction): only with the exact fraction, once.
       .filter(([cid]) => !cid.startsWith('ratio-') || fid === 'exact')
-      .map(([cid, ch]) => makeCandidate(cid.startsWith('ratio-') ? cid : `${fid}/${cid}`, frac, ch))),
-    ...Object.entries(FIXED).map(([id, ch]) => makeCandidate(id, exact, (c0, c1, f) => ch(c0, c1, f))),
-    ...Object.entries(SWEEPS()).map(([id, step]) => makeCandidate(id, exact, (c0, c1, f) => c0 + sgn(c1 - c0) * step(f, Math.abs(c1 - c0)))),
+      .map(([cid, ch]) => makeCandidate(cid.startsWith('ratio-') ? cid : `${fid}/${cid}`, fid, cid, frac, ch))),
+    ...Object.entries(FIXED).map(([id, ch]) => makeCandidate(id, 'exact', id, exact, (c0, c1, f) => ch(c0, c1, f))),
+    ...Object.entries(SWEEPS()).map(([id, step]) => makeCandidate(id, 'exact', id, exact, (c0, c1, f) => c0 + sgn(c1 - c0) * step(f, Math.abs(c1 - c0)))),
   ]
 }
 let built: Candidate[] | undefined
