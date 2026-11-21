@@ -182,6 +182,10 @@ npx tsx scripts/cf-refs/audit.ts --stage 5
   - `formula-hypothesis-none` for an id (a kind treated differently by position) is a finding for that kind alone: it stays withheld and the other kinds are judged on their own;
   - `non-discriminating` or `formula-replication-shortfall` for an id, likewise;
   - a twin that renders nothing.
+- **Run of 2026-11-21 (16822e70, Excel 16.115):**
+  - The open was repair-free, with every bound and `A3`'s `=""` kept; Excel resaved the empty cache as `<v/>`. The capture is 3277 × 109 px.
+  - Each per-kind id is `discriminating` with a sole survivor: blank `zero`, and `withheld` for text, the empty string and error.
+  - All four ids are registered and published (§14.z.14). The umbrella is superseded and stays a recorded refusal.
 
 ## 3. Unresolved shapes (record only)
 
