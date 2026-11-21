@@ -112,9 +112,38 @@ export const CF_FORMULA_PRODUCTION_READINGS: Readonly<Record<string, string | re
   'formula:composition-stub-successor-icon': 'recorded',
 })
 
-/** The registry entry of one capability (undefined: unregistered). */
+let proposedReadings: Readonly<Record<string, string | readonly string[]>> | null = null
+/**
+ * Test seam (the cfvo-relative follow-up, restored for the cfvo-nonnumeric one): rehearse a proposed registration,
+ * capability id to a reading or a selection list, as if it were in CF_FORMULA_PRODUCTION_READINGS, without registering
+ * it. Null clears. Production never calls it.
+ */
+export function injectCfFormulaReadings(readings: Readonly<Record<string, string | readonly string[]>> | null): void {
+  proposedReadings = readings ? Object.freeze({ ...readings }) : null
+}
+/** The registry entry of one capability (undefined: unregistered), a proposed one (the test seam) first. */
 export function cfFormulaReadingEntry(capability: string): string | readonly string[] | undefined {
+  if (proposedReadings && Object.prototype.hasOwnProperty.call(proposedReadings, capability)) return proposedReadings[capability]
   return Object.prototype.hasOwnProperty.call(CF_FORMULA_PRODUCTION_READINGS, capability) ? CF_FORMULA_PRODUCTION_READINGS[capability] : undefined
+}
+
+/** The result kinds a `formula:cfvo-nonnumeric` reading treats, and the treatments it can give each. */
+export type CfNonNumericKind = 'blank' | 'text' | 'error'
+export type CfNonNumericTreatment = 'withheld' | 'zero' | 'skipped'
+const NONNUMERIC_TREATMENTS: readonly string[] = ['withheld', 'zero', 'skipped']
+const PER_KIND_READING = /^blank-(withheld|zero|skipped)\+text-(withheld|zero|skipped)\+error-(withheld|zero|skipped)$/
+/**
+ * The cfvo-nonnumeric follow-up: the treatment a `formula:cfvo-nonnumeric` reading gives one result kind. A uniform reading
+ * (`withheld`, `zero`, `skipped`) gives every kind its treatment; a per-kind reading `blank-<t>+text-<t>+error-<t>` names
+ * one for each, in that order. An all-equal per-kind name is not a reading (its behaviour is the uniform name's: one name
+ * per behaviour), nor is any other text: undefined, so the bound stays unresolved.
+ */
+export function cfvoNonNumericTreatment(reading: string | undefined, kind: CfNonNumericKind): CfNonNumericTreatment | undefined {
+  if (reading === undefined) return undefined
+  if (NONNUMERIC_TREATMENTS.includes(reading)) return reading as CfNonNumericTreatment
+  const m = PER_KIND_READING.exec(reading)
+  if (!m || (m[1] === m[2] && m[2] === m[3])) return undefined
+  return m[kind === 'blank' ? 1 : kind === 'text' ? 2 : 3] as CfNonNumericTreatment
 }
 
 /** The reading production honours for one capability, or undefined (unregistered, unevidenced, or an unlisted selection). */

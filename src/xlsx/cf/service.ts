@@ -11,7 +11,7 @@ import { CF_BAR_CELL_BYTES, CF_FORMULA_NODE_BYTES, CF_ICON_CELL_BYTES, CF_LIMITS
 import { cfDefinitionFormulas, cfVisualFormulaBounds, isCfFormulaOperand, type CfBarBound, type CfCellState, type CfDefinition, type CfFormula, type CfFormulaBound, type CfIconThreshold, type CfLease, type CfLiteral, type CfOutcome, type CfPrepared, type CfPrepareRequest, type CfRule, type CfScaleBound, type CfSheetRules, type CfValueSource, type SourceRect } from './model'
 import { cfElementToLiteral, cfTruth, formulaRequiredCapabilities, type CfEvaluationContext, type CfResult } from './formula'
 import { cfAdmittedSheetNames, prepareCfFormulaBatch, withCfDependencyGen, type CfFormulaBatch, type CfFormulaTask, type CfWorkbookSource } from './dependencies'
-import { cfEdgeModeOf, cfFormulaReading, cfTruthReadings } from './formulaReadings'
+import { cfEdgeModeOf, cfFormulaReading, cfTruthReadings, cfvoNonNumericTreatment } from './formulaReadings'
 import { cfRuntimeEvidence, evaluateCellIsOperands, evaluatePredicate, type CfEvidenceGate } from './predicates'
 import { measurePayloadBytes } from '../view/payloadBytes'
 import { createCfStatistics, type CfRangeStatistics, type CfStatisticsOptions, type CfStatisticsSession } from './statistics'
@@ -107,8 +107,9 @@ function substitutedShape(d: CfVisualDefinition): unknown {
 /**
  * Ruling S5-H: the number one cfvo formula result feeds its bound, or why it feeds none. A number feeds as written
  * (`formula`/`num` as a num bound, `percent`/`percentile` as p). A text, blank or error result follows the
- * `formula:cfvo-nonnumeric` reading, measured on `type="formula"` colour-scale bounds only: `withheld` is unresolved (slot taint kept), `zero`
- * a 0 bound and `skipped` the bound's positional extreme (the first point `min`, the last `max`; a midpoint has none).
+ * `formula:cfvo-nonnumeric` reading, measured on `type="formula"` colour-scale bounds only, which gives each result kind
+ * (blank, text, error) one treatment: `withheld` is unresolved (slot taint kept), `zero` a 0 bound and `skipped` the bound's
+ * positional extreme (the first point `min`, the last `max`; a midpoint has none, so it stays unresolved).
  * A boolean or range result has no reading.
  */
 function substitutedBound(b: CfFormulaBound, result: CfResult, position: 'first' | 'middle' | 'last', kind: CfVisualDefinition['kind'], check: (capability: string) => boolean): CfOutcome<CfScaleBound> {
@@ -117,13 +118,15 @@ function substitutedBound(b: CfFormulaBound, result: CfResult, position: 'first'
     : { kind: 'unresolved', reason: 'cf-formula-nonfinite' }
   if (result.kind === 'number') return typeof result.value === 'number' ? feed(result.value) : { kind: 'unresolved', reason: 'cf-formula-unsupported' }
   if (result.kind !== 'text' && result.kind !== 'blank' && result.kind !== 'error') return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
-  // Measured only for `type="formula"` bounds on colour scales (stage5-cfvo-formulas L/M/N).
+  // Measured only for `type="formula"` bounds on colour scales (stage5-cfvo-formulas L/M/N). The reading names one
+  // treatment per result kind (uniform, or per kind: `cfvoNonNumericTreatment`).
   const reading = kind === 'colorScale' && b.cfvo === 'formula' ? cfFormulaReading('formula:cfvo-nonnumeric', check) : undefined
+  const treatment = cfvoNonNumericTreatment(reading, result.kind)
   // Fix round 1 (ruling 1): Excel painting nothing for the rule does not show that lower rules may paint the slot, so the
-  // `withheld` reading is unresolved and keeps the rule's slot taint (no composition evidence exists).
-  if (reading === 'withheld') return { kind: 'unresolved', reason: 'cf-formula-nonnumeric-withheld' }
-  if (reading === 'zero') return feed(0)
-  if (reading === 'skipped' && position !== 'middle') return { kind: 'ready', value: { type: position === 'first' ? 'min' : 'max' } }
+  // `withheld` treatment is unresolved and keeps the rule's slot taint (no composition evidence exists).
+  if (treatment === 'withheld') return { kind: 'unresolved', reason: 'cf-formula-nonnumeric-withheld' }
+  if (treatment === 'zero') return feed(0)
+  if (treatment === 'skipped' && position !== 'middle') return { kind: 'ready', value: { type: position === 'first' ? 'min' : 'max' } }
   return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
 }
 
