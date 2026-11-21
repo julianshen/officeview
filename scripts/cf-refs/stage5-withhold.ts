@@ -178,9 +178,8 @@ export function stage5JustifiedRefusals(c: CaseLike | CfOracleCase, ref: string,
     if (m.formula !== undefined) for (const r of formulaMarkerReasons(m, cs.id, published)) add(m, r)
     else if (m.ruleType === 'dataBar' && (m.bar?.cfvo ?? []).some(b => b.type === 'num') && !published('bar:bounds-num')) add(m, { reason: 'bar:bounds-num not held (a literal bar with num bounds)', refused: 'cf-unmeasured-capability' })
     // A visual over more than one range needs its family's scope-disjoint capability (service.ts blockScope, Rulings S2-H,
-    // S3-H, S4-H). scale:scope-disjoint is unverified (Ruling F-2), so a multi-range colour scale withholds once its formula
-    // capabilities are held (the cfvo-relative follow-up: stage5-cfvo-relative-a1 B2:B5 D2:D5 and H2:H5 J2:J5, and the
-    // older scope cases' multi-range scales).
+    // S3-H, S4-H). All three are published (scale:scope-disjoint since stage2-scale-scope-disjoint, union), so this
+    // justification is inert under the published set; it stays as the family gate for a rehearsal or a withdrawal.
     const family = VISUAL_FAMILY[m.ruleType]
     if (family && m.sqref.trim().split(/\s+/).length > 1 && !published(`${family}:scope-disjoint`)) add(m, { reason: `${family}:scope-disjoint not held (a visual over more than one range)`, refused: 'cf-unmeasured-capability' })
   }

@@ -16,7 +16,7 @@ import type { XlsxSheet } from '../src/xlsx/types'
 afterEach(() => injectExactCfEvidence(null))
 
 const NON_DISCRIMINATING = [
-  'scale:colors-custom-theme', 'scale:scope-disjoint', 'scale:scope-hidden-row', 'scale:scope-autofilter-hidden-row', 'scale:scope-merged-cell',
+  'scale:colors-custom-theme', 'scale:scope-hidden-row', 'scale:scope-autofilter-hidden-row', 'scale:scope-merged-cell',
   'scale:scope-whole-column', 'scale:scope-duplicate-blocks',
 ] as const
 
@@ -57,17 +57,22 @@ describe('I5 the non-discriminating capabilities are unverified in production', 
     expect(VERIFIED_CAPABILITIES.has(id)).toBe(false)
   })
   it('capabilities that the fixtures DO discriminate stay verified', () => {
-    for (const id of ['scale:colors-theme-tint', 'scale:colors-indexed', 'scale:participation-error-presence', 'scale:interpolation-color-space']) {
+    // scale:scope-disjoint since stage2-scale-scope-disjoint (e448d831, matched union): no longer non-discriminating.
+    for (const id of ['scale:colors-theme-tint', 'scale:colors-indexed', 'scale:participation-error-presence', 'scale:interpolation-color-space', 'scale:scope-disjoint']) {
       expect(VERIFIED_CAPABILITIES.has(id), id).toBe(true)
     }
   })
 })
 
 describe('I5 src gates withhold the unmeasured scope shapes', () => {
-  it('scale:scope-disjoint: a scale over two disjoint rectangles', async () => {
+  it('scale:scope-disjoint (published since stage2-scale-scope-disjoint, union): a scale over two disjoint rectangles paints with union statistics, and is withheld without the capability', async () => {
     const sheet = () => sheetOf({ ranges: [[0, 2, 0, 0], [0, 2, 2, 2]], values: { A1: 1, A2: 2, A3: 3, C1: 10, C2: 20, C3: 30 } })
     expect(await fillAt(sheet(), ALL, [0, 0])).toBe('FFF8696B')
-    expect(await fillAt(sheet(), PRODUCTION, [0, 0])).toBeUndefined()
+    expect(await fillAt(sheet(), PRODUCTION, [0, 0])).toBe('FFF8696B')
+    // C1 = 10 is the minimum of its own rectangle but not of the union (1..30): not the minimum colour.
+    expect(await fillAt(sheet(), PRODUCTION, [0, 2])).not.toBe('FFF8696B')
+    expect(await fillAt(sheet(), PRODUCTION, [2, 2])).toBe('FF63BE7B')
+    expect(await fillAt(sheet(), { allows: c => c !== 'scale:scope-disjoint' }, [0, 0])).toBeUndefined()
   })
 
   it('scale:scope-hidden-row (and autofilter, indistinguishable): a hidden row inside the scope', async () => {

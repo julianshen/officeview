@@ -4010,8 +4010,6 @@ const S2_RULINGS: Record<string, string> = {
 export const CF_STAGE2_NONDISCRIMINATING: Readonly<Record<string, string>> = {
   'scale:colors-custom-theme':
     'stage2-scale-colors has no custom theme: its saved workbook carries the stock Office theme and the rule uses plain rgb, so no non-Office theme colour is ever resolved. Re-measure with a non-Office theme1.xml and theme-index endpoints.',
-  'scale:scope-disjoint':
-    'The B2:B4 D2:D4 rule overlaps the B2:B6 and D2:D6 rules and its only non-hidden cells are withheld (S2-I overlapping scales); both rectangles also hold identical values, so union and per-rectangle statistics give the same colours. Re-measure with a non-overlapping disjoint rule over different values.',
   'scale:scope-hidden-row':
     'The hidden row holds 30, neither the minimum (10) nor the maximum (50) of the column, so including or excluding it paints identical colours. Re-measure with the hidden row holding the extremum.',
   'scale:scope-autofilter-hidden-row':

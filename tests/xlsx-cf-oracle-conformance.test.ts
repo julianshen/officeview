@@ -232,7 +232,28 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     'stage2-scale-colors',
     'stage2-scale-scope',
     'stage2-scale-composition',
+    'stage2-scale-scope-disjoint',
   ]
+
+  /**
+   * Finding (capture e448d831; a87121e8 `numSegmentUnmeasured`): a 3-colour scale cell strictly inside a segment bounded
+   * by two literal num cfvo, at a non-dyadic fraction (f*2^20 not an integer), is withheld: Excel's rendering there is
+   * unexplained (T4 and V3 of stage2-scale-scope-disjoint). Recomputed from the case's own marker and the cell's value, so
+   * a withheld cell is justified by the condition, never by a cell list.
+   */
+  const numSegmentShape = (c: CfManifest['cases'][number], sheet: XlsxSheet, ref: string): boolean => {
+    const { row, col } = refToRowCol(ref)
+    const v = sheet.rows.find(r => r.index === row)?.cells.find(cl => cl.col === col)?.value
+    if (typeof v !== 'number') return false
+    return c.markers.some(m => {
+      if (m.ruleType !== 'colorScale' || m.scale?.cfvo.length !== 3 || !isCellInSqref(ref, m.sqref)) return false
+      if (!m.scale.cfvo.every(x => x.type === 'num' && x.val !== undefined && /^-?\d+(\.\d+)?$/.test(x.val))) return false
+      const t = m.scale.cfvo.map(x => Number(x.val))
+      const [t0, t1, t2] = t[1]! > t[2]! ? [t[0]!, t[2]!, t[1]!] : [t[0]!, t[1]!, t[2]!]
+      const [lo, hi] = v <= t1 ? [t0, t1] : [t1, t2]
+      return v > lo && v < hi && !Number.isInteger(((v - lo) / (hi - lo)) * 1048576)
+    })
+  }
 
   it('runs production pipeline on all measured cases with zero unexpected mismatches', async () => {
     let checkedCells = 0
@@ -638,16 +659,16 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     }
 
     expect(checkedCount).toBeGreaterThan(0)
-    // 206 + the 68 scale cells (20 designated, 48 twins) of the recipe-pending stage2-scale-scope-disjoint, whose
-    // saved workbook is the generated input until Excel resaves it.
+    // 206 + the 68 scale cells (20 designated, 48 twins) of stage2-scale-scope-disjoint (measured, e448d831).
     expect(checkedCount).toBe(274)
   })
 
-  it('paints exact Excel ARGB for every non-hidden excel-display-format cell of all 7 measured Stage 2 cases under production evidence (Lesson 1 dual gate, T14-A)', async () => {
+  it('paints exact Excel ARGB for every non-hidden excel-display-format cell of all 8 measured Stage 2 cases under production evidence (Lesson 1 dual gate, T14-A)', async () => {
     let grandTotalChecked = 0
     let exactCount = 0
     let withheldCount = 0
     let stubComparedCount = 0
+    let numSegmentWithheld = 0
     const caseCounts: Record<string, number> = {}
 
     for (const caseId of STAGE2_MEASURED_CASES) {
@@ -691,6 +712,11 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
           expect(finding.outcome).toBe('withheld')
           expect(actualFill, `${cellKey} finding: ${finding.reason}`).toBe('FFFFFFFF')
           withheldCount++
+        } else if (numSegmentShape(c, sheet, cell.ref)) {
+          // Withheld by the num-segment finding (never painted, whatever Excel shows).
+          expect(actualFill, `${cellKey}: the 3-colour literal-num segment at a non-dyadic fraction is withheld`).toBe('FFFFFFFF')
+          withheldCount++
+          numSegmentWithheld++
         } else {
           // Exact Excel ARGB match:
           expect(actualFill, `${cellKey} must match exact Excel ARGB`).toBe(cell.fillRgb)
@@ -705,10 +731,13 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     for (const caseId of STAGE2_MEASURED_CASES) {
       expect(caseCounts[caseId], `Case ${caseId} checked cell count`).toBeGreaterThan(0)
     }
-    expect(grandTotalChecked).toBe(398)
+    // 398 + the 88 observed cells of stage2-scale-scope-disjoint (e448d831).
+    expect(grandTotalChecked).toBe(486)
     // Ruling F-2: cells that lost paint moved into typed withheld-only FINDINGS; none is an allowlisted wrong colour.
-    expect(exactCount).toBe(364 + stubComparedCount)
-    expect(withheldCount).toBe(34 - stubComparedCount)
+    // stage2-scale-scope-disjoint: 77 exact, 11 twins withheld by the num-segment finding (T4 and V3 among them).
+    expect(numSegmentWithheld).toBe(11)
+    expect(exactCount).toBe(364 + 77 + stubComparedCount)
+    expect(withheldCount).toBe(34 + 11 - stubComparedCount)
     expect(exactCount + withheldCount).toBe(grandTotalChecked)
   })
 

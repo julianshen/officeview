@@ -271,28 +271,27 @@ describe('stage5-cfvo-relative-a1: each reading of each capability discriminates
 
 /**
  * The registration (Phase 2, after the capture f9d5be94): both ids are published as anchor-a1. What the pre-capture
- * rehearsals checked through test seams is now checked on the real registration and the real capture: the multi-range
- * scales are justified by scale:scope-disjoint alone (still withheld), and every measured Stage 5 case, this one included,
- * agrees with Excel with no unjustified refusal.
+ * rehearsals checked through test seams is now checked on the real registration and the real capture. Since
+ * stage2-scale-scope-disjoint (e448d831, union) published scale:scope-disjoint, the multi-range scales paint too, and every
+ * measured Stage 5 case, this one included, agrees with Excel with no unjustified refusal.
  */
 describe('stage5-cfvo-relative-a1: the registered anchor-a1 against production and the capture', () => {
-  it('both ids are registered and published as anchor-a1; scale:scope-disjoint stays withheld', () => {
+  it('both ids are registered and published as anchor-a1; scale:scope-disjoint is published (union)', () => {
     expect(CF_FORMULA_PRODUCTION_READINGS[SINGLE]).toBe('anchor-a1')
     expect(CF_FORMULA_PRODUCTION_READINGS[MULTI]).toEqual(['rule-wide', 'per-range', 'anchor-a1'])
     expect(VERIFIED_STAGE5_FORMULA_SELECTIONS[MULTI]).toBe('anchor-a1')
     for (const cap of [MULTI, SINGLE]) expect(VERIFIED_CAPABILITIES.has(cap), cap).toBe(true)
-    expect(VERIFIED_CAPABILITIES.has('scale:scope-disjoint')).toBe(false)
+    expect(VERIFIED_CAPABILITIES.has('scale:scope-disjoint')).toBe(true)
   })
 
-  it('the multi-range scales are refused by scale:scope-disjoint alone, a recorded justification; the icon sets and bars are not', async () => {
+  it('no cell of this case is a justified refusal under the published set; without scale:scope-disjoint the multi-range scales would be', async () => {
     const { stage5JustifiedRefusals } = await import('../scripts/cf-refs/stage5-withhold')
     const c = caseOf()
-    const reasons = (ref: string): string[] => stage5JustifiedRefusals(c, ref).map(r => `${r.rule}: ${r.reason}`)
-    expect(reasons('B2')).toEqual([`${MULTI}/colorScale@p1: scale:scope-disjoint not held (a visual over more than one range)`])
-    expect(reasons('H2')).toEqual([`${MULTI}/colorScale@p4: scale:scope-disjoint not held (a visual over more than one range)`])
-    for (const ref of ['B11', 'D20', 'F2', 'F11', 'F20']) expect(reasons(ref), ref).toEqual([])
-    // With scale:scope-disjoint held as well, nothing on this case is a justified refusal.
-    expect(stage5JustifiedRefusals(c, 'B2', id => VERIFIED_CAPABILITIES.has(id) || id === 'scale:scope-disjoint')).toEqual([])
+    const reasons = (ref: string, published?: (id: string) => boolean): string[] => stage5JustifiedRefusals(c, ref, published).map(r => `${r.rule}: ${r.reason}`)
+    for (const ref of ['B2', 'H2', 'B11', 'D20', 'F2', 'F11', 'F20']) expect(reasons(ref), ref).toEqual([])
+    const without = (id: string): boolean => VERIFIED_CAPABILITIES.has(id) && id !== 'scale:scope-disjoint'
+    expect(reasons('B2', without)).toEqual([`${MULTI}/colorScale@p1: scale:scope-disjoint not held (a visual over more than one range)`])
+    expect(reasons('H2', without)).toEqual([`${MULTI}/colorScale@p4: scale:scope-disjoint not held (a visual over more than one range)`])
   })
 
   it('every measured Stage 5 case agrees with Excel under the registration, with no unjustified refusal; this case paints what it unlocks', async () => {
@@ -301,11 +300,10 @@ describe('stage5-cfvo-relative-a1: the registered anchor-a1 against production a
     expect(rows.filter(r => r.compared && !r.agrees).map(r => `${r.caseId}:${r.ref} ${r.disagreement}`)).toEqual([])
     for (const id of [ID, 'stage5-cfvo-scope', 'stage5-cfvo-scope-v2', 'stage5-cfvo-formulas']) expect(rows.some(r => r.caseId === id && r.compared), id).toBe(true)
     const own = (ref: string) => rows.find(r => r.caseId === ID && r.ref === ref)!
-    // The multi-range icon set and bar, and the single-range scale, icon set and bar paint as Excel; the multi-range
-    // scales (and the absolute control) stay withheld behind scale:scope-disjoint.
-    for (const ref of ['B11', 'B12', 'D13', 'D21', 'F3', 'F4', 'F12', 'F21']) expect(own(ref).production.unresolved, ref).toEqual([])
-    for (const ref of ['B3', 'H3']) expect(own(ref).production.unresolved.length, ref).toBeGreaterThan(0)
-    expect(rows.some(r => r.caseId === 'stage5-cfvo-scope-v2' && r.justification.some(j => /scale:scope-disjoint not held/.test(j.reason)))).toBe(true)
+    // Every rule of this case paints as Excel, the multi-range scales (and the absolute control) included since
+    // scale:scope-disjoint is published; no row anywhere is justified by the scope-disjoint gate any more.
+    for (const ref of ['B3', 'D3', 'H3', 'J3', 'B11', 'B12', 'D13', 'D21', 'F3', 'F4', 'F12', 'F21']) expect([own(ref).compared, own(ref).agrees, own(ref).production.unresolved], ref).toEqual([true, true, []])
+    expect(rows.some(r => r.justification.some(j => /scope-disjoint not held/.test(j.reason)))).toBe(false)
     // stage5-cfvo-formulas K (=A2 on K2:K9) read from A1 wraps to a blank cell: a non-numeric bound, recorded.
     expect(rows.filter(r => r.caseId === 'stage5-cfvo-formulas' && /^K/.test(r.ref) && r.justification.some(j => /anchor-a1: =A2/.test(j.reason))).map(r => r.ref)).toEqual(['K2', 'K3', 'K4', 'K5', 'K6', 'K7', 'K8', 'K9'])
     // The superseded single-range record of stage5-cfvo-scope-v2 no longer names a refusal: production paints it.

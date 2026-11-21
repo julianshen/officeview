@@ -59,7 +59,7 @@ import { parseXlsx } from '../src/xlsx/parse'
 import { prepareCfPaint } from '../src/xlsx/cf/render'
 import { prepareCfTextScope } from '../src/xlsx/cf/text'
 import { interpolateScaleColor } from '../src/xlsx/cf/colorScale'
-import { VERIFIED_CAPABILITIES, VERIFIED_STAGE2_CAPABILITIES, withInjectedCfEvidence } from '../src/xlsx/cf/evidence'
+import { VERIFIED_CAPABILITIES, VERIFIED_STAGE2_CAPABILITIES, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import type { XlsxSheet } from '../src/xlsx/types'
 
 const REPO_ROOT = resolve(__dirname, '..')
@@ -134,41 +134,72 @@ async function productionFills(c: CfOracleCase, refs: readonly string[]): Promis
   paint?.dispose()
   return out
 }
-const WITH_DISJOINT = [CAP]
+const WITHOUT_DISJOINT = (): string[] => [...VERIFIED_CAPABILITIES].filter(id => id !== CAP)
+/** The capture's DisplayFormat fills (e448d831). */
+const excelFills = (c: CfOracleCase): Map<string, string> => {
+  const sc = JSON.parse(readFileSync(resolve(REPO_ROOT, c.captures[0]!.sidecarPath), 'utf8')) as { observedCells: Array<{ ref: string; fillRgb: string }> }
+  return new Map(sc.observedCells.map(o => [o.ref, o.fillRgb]))
+}
+/**
+ * The withheld shape of the finding (a87121e8, `numSegmentUnmeasured`), recomputed from the twin's marker: a 3-colour scale
+ * whose value lies strictly inside a segment bounded by two literal num cfvo, at a non-dyadic fraction.
+ */
+function inNumSegmentShape(c: CfOracleCase, ref: string): boolean {
+  const t = twinOf(c, ref)
+  if (!t || t.scale!.colors.length !== 3) return false
+  const [a, b, d] = t.scale!.cfvo.map(x => Number(x.val))
+  const v = valuesOf(c).get(ref)!
+  const [lo, hi] = v <= b! ? [a!, b!] : [b!, d!]
+  return v > lo && v < hi && !Number.isInteger(((v - lo) / (hi - lo)) * 1048576)
+}
 
-describe('production computes union statistics for a multi-range scale (only the gate withholds it)', () => {
-  it('held: every cell of both disjoint scales paints its union twin\'s colour, and differs from the other readings\' twins where they differ', async () => {
+describe('the capture (e448d831): union, and production against Excel', () => {
+  it('measured: verifyCfCase matches union; the twins and the control are never a question; nothing refuses', () => {
     const c = caseOf()
-    const twinRefs = c.expected.cells.filter(e => twinOf(c, e.ref)).map(e => e.ref)
-    const fills = await withInjectedCfEvidence(WITH_DISJOINT, () => productionFills(c, [...c.expected.cells.map(e => e.ref)]))
-    for (const cfg of c.scaleReadings!.filter(x => x.role !== 'negative-control')) {
-      for (const ref of cfg.refs) {
-        const union = cfg.hypotheses.union![ref]!.slice('twin:'.length)
-        expect(fills.get(ref), `${cfg.id} ${ref}`).toBe(fills.get(union))
-        for (const h of READINGS.filter(x => x !== 'union')) {
-          const t = cfg.hypotheses[h]![ref]!.slice('twin:'.length)
-          // Where a rival's twin renders another colour, production is not that rival.
-          if (plantedFills(c, h).get(ref) !== plantedFills(c, 'union').get(ref)) expect(fills.get(ref), `${cfg.id} ${ref} vs ${h} (${t})`).not.toBe(fills.get(t))
-        }
-      }
-    }
-    for (const ref of twinRefs) expect(fills.get(ref), ref).toBeDefined()
-  }, HEAVY)
+    expect(c.status).toBe('measured')
+    const res = verifyCfCase(c, { rootDir: REPO_ROOT })
+    expect(res.kind, res.kind === 'refusal' ? res.reason : '').toBe('verified')
+    if (res.kind !== 'verified') return
+    expect(res.matchedHypotheses).toEqual({ [CAP]: 'union' })
+    expect(res.verifiedCapabilities).toEqual([CAP])
+    expect(res.nonDiscriminatingCapabilities).toEqual([S2_SCOPE_DISJOINT_CONTROL, S2_SCOPE_DISJOINT_TWIN])
+    expect(res.refusedCapabilities).toEqual([])
+  })
 
-  it('the independent model agrees with production on every twin and every union cell (it plants what production paints)', async () => {
+  it('every designated cell (both disjoint scales and the control) paints exactly Excel\'s fill, its union twin\'s', async () => {
     const c = caseOf()
-    const fills = await withInjectedCfEvidence(WITH_DISJOINT, () => productionFills(c, c.expected.cells.map(e => e.ref)))
-    const planted = plantedFills(c, 'union')
-    for (const e of c.expected.cells) expect(fills.get(e.ref) ?? 'FFFFFFFF', e.ref).toBe(planted.get(e.ref))
-  }, HEAVY)
-
-  it('not held (today): the multi-range cells are withheld, announced unavailable; the control and the twins paint', async () => {
-    const c = caseOf()
-    expect(VERIFIED_CAPABILITIES.has(CAP)).toBe(false)
-    const multi = c.scaleReadings!.filter(x => x.role !== 'negative-control').flatMap(x => x.refs)
+    const excel = excelFills(c)
     const fills = await productionFills(c, c.expected.cells.map(e => e.ref))
+    for (const cfg of c.scaleReadings!) for (const ref of cfg.refs) {
+      expect(fills.get(ref), `${cfg.id} ${ref}`).toBe(excel.get(ref))
+      expect(excel.get(ref), `${cfg.id} ${ref} vs its union twin`).toBe(excel.get(cfg.hypotheses.union![ref]!.slice('twin:'.length)))
+    }
+    for (const e of c.expected.cells.filter(x => !x.matched)) expect(fills.get(e.ref), e.ref).toBeUndefined()
+  }, HEAVY)
+
+  it('every twin paints exactly Excel\'s fill, except the num-segment shape, which is withheld (T4 and V3 are where Excel differs)', async () => {
+    const c = caseOf()
+    const excel = excelFills(c)
+    const twins = c.expected.cells.filter(e => twinOf(c, e.ref)).map(e => e.ref)
+    const fills = await productionFills(c, twins)
+    const withheld = twins.filter(ref => inNumSegmentShape(c, ref))
+    expect(withheld).toEqual(['R3', 'R4', 'R5', 'S2', 'S3', 'S4', 'T3', 'T4', 'U3', 'V3', 'W4'])
+    for (const ref of twins) {
+      if (withheld.includes(ref)) expect(fills.get(ref), ref).toBeUndefined()
+      else expect(fills.get(ref), ref).toBe(excel.get(ref))
+    }
+    // The finding: with the shape painted (the guard-free model production would use), T4 and V3 are one unit off.
+    const planted = plantedFills(c, 'union')
+    expect(withheld.filter(ref => planted.get(ref) !== excel.get(ref))).toEqual(['T4', 'V3'])
+    expect([excel.get('T4'), planted.get('T4'), excel.get('V3'), planted.get('V3')]).toEqual(['FFCCDD82', 'FFCBDC81', 'FF98CE7F', 'FF97CD7E'])
+  }, HEAVY)
+
+  it('without scale:scope-disjoint the multi-range cells are withheld, announced unavailable; with it they are not', async () => {
+    const c = caseOf()
+    expect(VERIFIED_CAPABILITIES.has(CAP)).toBe(true)
+    const multi = c.scaleReadings!.filter(x => x.role !== 'negative-control').flatMap(x => x.refs)
+    const fills = await withExactCfEvidence(WITHOUT_DISJOINT(), () => productionFills(c, multi))
     for (const ref of multi) expect(fills.get(ref), ref).toBeUndefined()
-    for (const e of c.expected.cells.filter(x => x.matched && !multi.includes(x.ref))) expect(fills.get(e.ref), e.ref).toBeDefined()
     // The text scope (the announcement path every view shares; pagedSource builds the same service) says so too.
     const sheet = await sheetOf(c)
     const describeAt = async (ref: string): Promise<string | undefined> => {
@@ -177,10 +208,12 @@ describe('production computes union statistics for a multi-range scale (only the
       const scope = await prepareCfTextScope(sheet, { rects: [{ r0: row, r1: row, c0: col, c1: col }], signal: new AbortController().signal, locale: 'en-US', budget: budget as never })
       try { return scope?.describe(row, col)?.text } finally { scope?.dispose() }
     }
-    expect(await describeAt('B3')).toBe('Conditional formatting unavailable')
-    expect(await describeAt('H3')).toBe('Conditional formatting unavailable')
-    expect(await withInjectedCfEvidence(WITH_DISJOINT, () => describeAt('B3'))).not.toBe('Conditional formatting unavailable')
-    expect(await withInjectedCfEvidence(WITH_DISJOINT, () => describeAt('H3'))).not.toBe('Conditional formatting unavailable')
+    expect(await withExactCfEvidence(WITHOUT_DISJOINT(), () => describeAt('B3'))).toBe('Conditional formatting unavailable')
+    expect(await withExactCfEvidence(WITHOUT_DISJOINT(), () => describeAt('H3'))).toBe('Conditional formatting unavailable')
+    expect(await describeAt('B3')).not.toBe('Conditional formatting unavailable')
+    expect(await describeAt('H3')).not.toBe('Conditional formatting unavailable')
+    // A withheld twin of the num-segment shape is announced unavailable too.
+    expect(await describeAt('T4')).toBe('Conditional formatting unavailable')
   }, HEAVY)
 })
 
@@ -197,9 +230,9 @@ describe('stage2-scale-scope-disjoint: the case', () => {
     const ids = CF_STAGE2_CAPABILITIES.map(e => e.capabilityId)
     expect(new Set(ids).size).toBe(ids.length)
     for (const id of [S2_SCOPE_DISJOINT_TWIN, S2_SCOPE_DISJOINT_CONTROL]) expect(CF_STAGE2_NONDISCRIMINATING[id], id).toBeDefined()
-    // Pending until captured: the registry entry stays until the Phase 2 publication removes it.
-    expect(CF_STAGE2_NONDISCRIMINATING[CAP]).toBeDefined()
-    expect(caseOf().status).toBe('recipe-pending')
+    // Measured (e448d831): the registry entry is gone, removed by the publication.
+    expect(CF_STAGE2_NONDISCRIMINATING[CAP]).toBeUndefined()
+    expect(caseOf().status).toBe('measured')
   })
 
   it('the rules: two disjoint scales, a single-range control and num twins; nothing overlaps, nothing is hidden or merged', () => {
@@ -345,15 +378,19 @@ function syntheticRoot(reading: string): { root: string; manifest: CfManifest } 
 }
 
 describe('the audit gate on a synthetic measured capture (real verifyCfCase and auditStage2Manifest)', () => {
-  const withoutEntry = Object.fromEntries(Object.entries(CF_STAGE2_NONDISCRIMINATING).filter(([id]) => id !== CAP))
+  const withoutEntry = CF_STAGE2_NONDISCRIMINATING
+  const withEntry = { ...CF_STAGE2_NONDISCRIMINATING, [CAP]: 'the pre-publication registry entry (rehearsal seam)' }
   const disposition = (r: { perCapability: ReadonlyArray<{ capabilityId: string; disposition: string }> }, id: string) => r.perCapability.find(p => p.capabilityId === id)!.disposition
+  const beforeCap = [...VERIFIED_STAGE2_CAPABILITIES].filter(id => id !== CAP).sort()
 
-  it('today (recipe-pending): scale:scope-disjoint is unverified-nondiscriminating and owned by the new case; nothing else moves', async () => {
+  it('the real capture: scale:scope-disjoint is verified, owned by the new case, and the audit verifies exactly the published Stage 2 set', async () => {
     const { auditStage2Manifest } = await import('../scripts/cf-refs/audit')
     const r = auditStage2Manifest(manifest, { rootDir: REPO_ROOT })
-    expect(r.ok).toBe(true)
-    expect(r.perCapability.find(p => p.capabilityId === CAP)).toEqual({ capabilityId: CAP, caseId: ID, disposition: 'unverified-nondiscriminating' })
+    expect([r.ok, r.stageComplete]).toEqual([true, true])
+    expect(r.perCapability.find(p => p.capabilityId === CAP)).toEqual({ capabilityId: CAP, caseId: ID, disposition: 'verified' })
     expect(r.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()).toEqual([...VERIFIED_STAGE2_CAPABILITIES].sort())
+    // With the pre-publication registry entry put back (the seam), the same capture is withheld.
+    expect(disposition(auditStage2Manifest(manifest, { rootDir: REPO_ROOT, nonDiscriminating: withEntry }), CAP)).toBe('unverified-nondiscriminating')
   }, HEAVY)
 
   it('planted union: the readings discriminate union; the audit verifies it only once the registry entry is gone (the publication, rehearsed)', async () => {
@@ -365,14 +402,14 @@ describe('the audit gate on a synthetic measured capture (real verifyCfCase and 
     expect(res.matchedHypotheses).toEqual({ [CAP]: 'union' })
     expect(res.verifiedCapabilities).toEqual([CAP])
     expect(res.nonDiscriminatingCapabilities).toEqual([S2_SCOPE_DISJOINT_CONTROL, S2_SCOPE_DISJOINT_TWIN])
-    // With the entry still registered: measured, but never verified (the registry is removed only in Phase 2).
-    const kept = auditStage2Manifest(m, { rootDir: root })
+    // With the entry still registered: measured, but never verified (the registry entry is what the publication removed).
+    const kept = auditStage2Manifest(m, { rootDir: root, nonDiscriminating: withEntry })
     expect(kept.ok).toBe(true)
     expect(disposition(kept, CAP)).toBe('unverified-nondiscriminating')
     // The proposed publication: exactly scale:scope-disjoint joins the verified Stage 2 set; the comparison ids never do.
     const published = auditStage2Manifest(m, { rootDir: root, nonDiscriminating: withoutEntry })
     expect(published.ok).toBe(true)
-    expect(published.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()).toEqual([...VERIFIED_STAGE2_CAPABILITIES, CAP].sort())
+    expect(published.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()).toEqual([...beforeCap, CAP].sort())
     expect(disposition(published, S2_SCOPE_DISJOINT_TWIN)).toBe('unverified-nondiscriminating')
     expect(disposition(published, S2_SCOPE_DISJOINT_CONTROL)).toBe('unverified-nondiscriminating')
   }, HEAVY)
@@ -386,7 +423,7 @@ describe('the audit gate on a synthetic measured capture (real verifyCfCase and 
       expect(res.kind === 'verified' ? res.matchedHypotheses : res).toEqual({ [CAP]: h })
       const r = auditStage2Manifest(m, { rootDir: root, nonDiscriminating: withoutEntry })
       expect(disposition(r, CAP)).toBe('supported-structural')
-      expect(r.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()).toEqual([...VERIFIED_STAGE2_CAPABILITIES].sort())
+      expect(r.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()).toEqual(beforeCap)
     }, HEAVY)
   }
 
@@ -401,7 +438,8 @@ describe('the audit gate on a synthetic measured capture (real verifyCfCase and 
 })
 
 describe('the reading gate is mandatory from the catalogue, never from the manifest field (codex pre-capture P1)', () => {
-  const withoutEntry = Object.fromEntries(Object.entries(CF_STAGE2_NONDISCRIMINATING).filter(([id]) => id !== CAP))
+  const withoutEntry = CF_STAGE2_NONDISCRIMINATING
+  const beforeCap = [...VERIFIED_STAGE2_CAPABILITIES].filter(id => id !== CAP).sort()
   const mutate = (m: CfManifest, fn: (c: CfOracleCase) => CfOracleCase): CfManifest => ({ ...m, cases: m.cases.map(x => (x.id === ID ? fn(x) : x)) })
   const dispositionOf = (r: { perCapability: ReadonlyArray<{ capabilityId: string; disposition: string }> }) => r.perCapability.find(p => p.capabilityId === CAP)!.disposition
   const cases: Array<[string, (c: CfOracleCase) => CfOracleCase]> = [
@@ -418,7 +456,7 @@ describe('the reading gate is mandatory from the catalogue, never from the manif
       expect([res.kind, res.kind === 'refusal' ? res.code : undefined]).toEqual(['refusal', 'unobserved-expectation'])
       const r = auditStage2Manifest(bad, { rootDir: root, nonDiscriminating: withoutEntry })
       expect(dispositionOf(r)).not.toBe('verified')
-      expect(r.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()).toEqual([...VERIFIED_STAGE2_CAPABILITIES].sort())
+      expect(r.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()).toEqual(beforeCap)
     }, HEAVY)
   }
 
@@ -462,38 +500,32 @@ describe('a committed input survives regeneration under either runtime (codex pr
   }, HEAVY)
 })
 
-describe('rehearsal of the publication: scale:scope-disjoint held', () => {
-  it('Stages 1-4: every measured case paints exactly as today at every expected cell (no multi-range scale in them changes)', async () => {
+describe('the publication: scale:scope-disjoint held', () => {
+  it('Stages 1-4: every measured case paints exactly as without scale:scope-disjoint, except this case\'s multi-range cells', async () => {
     const changed: string[] = []
     let compared = 0
     for (const c of manifest.cases.filter(x => x.status === 'measured' && x.stage !== 5)) {
       const refs = c.expected.cells.map(e => e.ref)
-      const today = await productionFills(c, refs)
-      const held = await withInjectedCfEvidence(WITH_DISJOINT, () => productionFills(c, refs))
-      for (const ref of refs) { compared++; if (today.get(ref) !== held.get(ref)) changed.push(`${c.id}:${ref} ${today.get(ref)} -> ${held.get(ref)}`) }
+      const without = await withExactCfEvidence(WITHOUT_DISJOINT(), () => productionFills(c, refs))
+      const held = await productionFills(c, refs)
+      for (const ref of refs) { compared++; if (without.get(ref) !== held.get(ref)) changed.push(`${c.id}:${ref}`) }
     }
-    expect(changed).toEqual([])
+    const multi = caseOf().scaleReadings!.filter(x => x.role !== 'negative-control').flatMap(x => x.refs).map(ref => `${ID}:${ref}`)
+    expect(changed.sort()).toEqual(multi.sort())
     expect(compared).toBeGreaterThan(1000)
   }, HEAVY)
 
   it('Stage 2: the old stage2-scale-scope disjoint rule stays withheld by its overlaps and hidden row 4', async () => {
     const c = manifest.cases.find(x => x.id === 'stage2-scale-scope')!
-    const held = await withInjectedCfEvidence(WITH_DISJOINT, () => productionFills(c, ['B2', 'B3', 'D2', 'D3']))
+    const held = await productionFills(c, ['B2', 'B3', 'D2', 'D3'])
     for (const [ref, fill] of held) expect(fill, ref).toBeUndefined()
-  }, HEAVY)
-
-  it('this case: production paints the planted union observation exactly at every expected cell', async () => {
-    const c = caseOf()
-    const planted = plantedFills(c, 'union')
-    const held = await withInjectedCfEvidence(WITH_DISJOINT, () => productionFills(c, c.expected.cells.map(e => e.ref)))
-    expect(c.expected.cells.filter(e => (held.get(e.ref) ?? 'FFFFFFFF') !== planted.get(e.ref)).map(e => e.ref)).toEqual([])
   }, HEAVY)
 
   it('Stage 5: every measured case agrees with Excel with no unjustified refusal; the multi-range scales now paint', async () => {
     const { stage5CaseRecords } = await import('../scripts/cf-refs/audit')
     const { stage5JustifiedRefusals } = await import('../scripts/cf-refs/stage5-withhold')
     const published = (id: string): boolean => VERIFIED_CAPABILITIES.has(id) || id === CAP
-    const rows = await withInjectedCfEvidence(WITH_DISJOINT, () => stage5CaseRecords(manifest, REPO_ROOT, { published }))
+    const rows = await stage5CaseRecords(manifest, REPO_ROOT, { published })
     expect(rows.filter(r => r.compared && !r.agrees).map(r => `${r.caseId}:${r.ref} ${r.disagreement}`)).toEqual([])
     expect(rows.filter(r => r.compared).length).toBeGreaterThan(2000)
     // The multi-range scales of the three cfvo scope cases (real Excel captures) paint, and agree, under union statistics.
