@@ -7246,35 +7246,41 @@ const EXPECTED_DISJOINT_UNBUILT: Readonly<Record<string, readonly string[]>> = {
     'stage5-cfvo-formulas|formula:cfvo-nonnumeric|-|withheld|cfvo-nonnumeric-L',
     'stage5-cfvo-formulas|formula:cfvo-nonnumeric|-|withheld|cfvo-nonnumeric-M',
     'stage5-cfvo-formulas|formula:cfvo-nonnumeric|-|withheld|cfvo-nonnumeric-N',
+    // The cfvo-nonnumeric confirmation case: every (reading, configuration) pair it predicts (27 readings x 12
+    // configurations, less the 36 a midpoint omits), each with a literal `none` rival or winner beside visual twins.
+    ...CF_STAGE5_CASES.find(c => c.id === 'stage5-cfvo-nonnumeric-v2')!.formulaConfigurations!.flatMap(cfg => Object.keys(cfg.hypotheses).map(h => `stage5-cfvo-nonnumeric-v2|formula:cfvo-nonnumeric|-|${h}|${cfg.id}`)),
     'stage5-composition|formula:composition-indirect-ahead-bar|-|halts|indirect-bar',
     'stage5-composition|formula:composition-indirect-ahead-icon|-|halts|indirect-icon',
-  ],
+  ].sort(),
   'strike-on-one-token+twin-expectation-locked': [
     'stage5-composition|formula:composition-indirect-ahead-scale|-|continues|indirect-scale',
     'stage5-composition|formula:composition-indirect-ahead-scale|-|halts|indirect-scale',
   ],
 }
 /** Fix round 7: (configuration, rival, replication group) triples whose refutations cannot be cut below 2, by reason. */
-const EXPECTED_SINGLE_UNBUILT: Readonly<Record<string, number>> = { 'literal-vs-literal': 370, 'twin-expectation-locked': 38, 'strike-on-one-token': 4 }
+const EXPECTED_SINGLE_UNBUILT: Readonly<Record<string, number>> = { 'literal-vs-literal': 370, 'twin-expectation-locked': 3278, 'strike-on-one-token': 4 }
 // The bar:bounds-formula follow-up adds one crop:bar configuration of three readings (zero unbuilt, as in stage5-cfvo-formulas).
 // The cfvo-scope follow-up (stage5-cfvo-scope-v2) adds twelve readings, every one built (+12 triples), and +12 blank twins
 // and twin controls, +24 disjoint rivals and +608 single refuters, every one refused.
 // The cfvo-relative confirmation case (stage5-cfvo-relative-a1) adds eleven readings (six multi-range, five single-range;
 // its bars omit zero and ignored), every one built: +11 triples, +11 blank twins and twin controls, +7 required empty
 // visuals, +7 tolerance shifts, +29 disjoint rivals and +164 single refuters, every one refused.
-const EXPECTED_COVERAGE = { triples: 195, built: 190, 'blank-twins': 72, 'required-empty-visuals': 102, 'blank-twin-controls': 72, 'blank-dxf-controls': 126, 'strike-blind': 10, 'tolerance-shift': 13, 'disjoint-rivals': 85, 'single-refuter': 838 }
+// The cfvo-nonnumeric confirmation case (stage5-cfvo-nonnumeric-v2) adds 27 readings, every one built: +27 triples, +27
+// blank twins and twin controls, +19 required empty visuals, +1296 single refuters (every one refused) and +3240 single
+// refutations that its twin expectations lock; no disjoint-rival corruption can be built on it (all 288 pairs locked).
+const EXPECTED_COVERAGE = { triples: 222, built: 217, 'blank-twins': 99, 'required-empty-visuals': 121, 'blank-twin-controls': 99, 'blank-dxf-controls': 126, 'strike-blind': 10, 'tolerance-shift': 13, 'disjoint-rivals': 85, 'single-refuter': 2134 }
 /** How each corruption refuses (a corruption can also eliminate the winner or leave two readings standing). */
 const EXPECTED_OUTCOMES: Readonly<Record<string, number>> = {
-  'blank-twins -> formula-twin-missing': 72,
-  'required-empty-visuals -> formula-hypothesis-none': 79,
+  'blank-twins -> formula-twin-missing': 99,
+  'required-empty-visuals -> formula-hypothesis-none': 98,
   'required-empty-visuals -> formula-unexpected-visual': 23,
-  'blank-twin-controls -> formula-twin-missing': 72,
+  'blank-twin-controls -> formula-twin-missing': 99,
   'blank-dxf-controls -> formula-positive-control-failed': 126,
   'strike-blind -> formula-positive-control-failed': 10,
   'tolerance-shift -> formula-replication-shortfall': 10,
   'tolerance-shift -> non-discriminating': 3,
   'disjoint-rivals -> formula-replication-shortfall': 63,
   'disjoint-rivals -> non-discriminating': 22,
-  'single-refuter -> formula-replication-shortfall': 836,
+  'single-refuter -> formula-replication-shortfall': 2132,
   'single-refuter -> non-discriminating': 2,
 }

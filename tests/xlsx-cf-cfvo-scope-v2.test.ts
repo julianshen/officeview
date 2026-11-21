@@ -140,7 +140,7 @@ describe('stage5-cfvo-scope-v2: the case', () => {
     expect(c.status).toBe('measured')
     expect(CF_STAGE5_OWNERS[CAP]).toBe('stage5-cfvo-relative-a1')
     expect(CF_STAGE5_CAPABILITIES.find(e => e.capabilityId === CAP)!.caseId).toBe('stage5-cfvo-relative-a1')
-    expect(CF_STAGE5_CASES.slice(-2).map(x => x.id)).toEqual([ID, 'stage5-cfvo-relative-a1'])
+    expect(CF_STAGE5_CASES.slice(-3).map(x => x.id)).toEqual([ID, 'stage5-cfvo-relative-a1', 'stage5-cfvo-nonnumeric-v2'])
     expect(CF_STAGE5_GROUPS['stage5-cfvo-scope']).toEqual(['stage5-cfvo-relative-a1', 'stage5-cfvo-scope', ID])
     const old = CF_STAGE5_CASES.find(x => x.id === 'stage5-cfvo-scope')!
     expect(old.formulaConfigurations!.map(x => x.id)).toEqual(['scope-scale', 'scope-scale-absolute', 'scope-icon'])

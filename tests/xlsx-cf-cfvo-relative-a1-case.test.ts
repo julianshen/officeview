@@ -109,7 +109,8 @@ describe('stage5-cfvo-relative-a1: the case', () => {
       // Registered since its capture (f9d5be94) matched anchor-a1: no longer a recorded refusal.
       expect(CF_STAGE5_UNSUPPORTED[cap], cap).toBeUndefined()
     }
-    expect(CF_STAGE5_CASES.at(-1)!.id).toBe(ID)
+    // Appended last at the time; only the cfvo-nonnumeric confirmation case comes after it.
+    expect(CF_STAGE5_CASES.slice(-2).map(x => x.id)).toEqual([ID, 'stage5-cfvo-nonnumeric-v2'])
     expect(CF_STAGE5_GROUPS['stage5-cfvo-scope']).toContain(ID)
     expect(CF_STAGE5_NONDISCRIMINATING[TWIN]).toBeDefined()
     for (const old of ['stage5-cfvo-scope', 'stage5-cfvo-scope-v2', 'stage5-cfvo-formulas']) expect(manifest.cases.find(x => x.id === old)!.status, old).toBe('measured')

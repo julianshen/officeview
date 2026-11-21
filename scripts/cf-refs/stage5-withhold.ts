@@ -22,7 +22,7 @@
  * and the set of unresolved write paths), and compares the resolved components with Excel's capture.
  */
 import { compileCfFormula, formulaRequiredCapabilities, isCfFormulaRefusal, type CfFormulaUse } from '../../src/xlsx/cf/formula'
-import { cfFormulaReading, cfFormulaReadingEntry } from '../../src/xlsx/cf/formulaReadings'
+import { cfFormulaReading, cfFormulaReadingEntry, cfvoNonNumericTreatment, type CfNonNumericKind } from '../../src/xlsx/cf/formulaReadings'
 import { createCfMemory } from '../../src/xlsx/cf/limits'
 import { VERIFIED_CAPABILITIES } from '../../src/xlsx/cf/evidence'
 import { createCfService } from '../../src/xlsx/cf/service'
@@ -68,14 +68,44 @@ export const STAGE5_ENUMERATED_REFUSALS: ReadonlyArray<Readonly<{ caseId: string
  * The cfvo-relative follow-up (pre-capture fix round 1): cells a relative cfvo bound read from A1 (`anchor-a1` of
  * formula:cfvo-relative) leaves without a number. The bound's window shifted to A1 lands off the sheet; under the published
  * `wrap` edge it reads a blank cell, a non-numeric bound, which production withholds while formula:cfvo-nonnumeric is not
- * held (Excel read it as 0: stage5-cfvo-formulas K matched `zero`). Each entry applies only when that capability reads
- * `anchor-a1` and formula:cfvo-nonnumeric is not held. tests/xlsx-cf-cfvo-relative-a1-case.test.ts checks the wrapped
- * window is blank in the saved workbook.
+ * held, or while its held reading withholds a blank bound at that position (`nonNumericWithholding`; Excel read it as 0:
+ * stage5-cfvo-formulas K matched `zero`). Each entry applies only when formula:cfvo-relative reads `anchor-a1`.
+ * tests/xlsx-cf-cfvo-relative-a1-case.test.ts checks the wrapped window is blank in the saved workbook.
  */
-export const STAGE5_A1_BLANK_BOUND_REFUSALS: ReadonlyArray<Readonly<{ caseId: string; sqref: string; formula: string; wrapped: string; reason: string }>> = [{
-  caseId: 'stage5-cfvo-formulas', sqref: 'K2:K9', formula: 'A2', wrapped: 'XEU1',
-  reason: 'anchor-a1: =A2 written on K2, read from A1, lands ten columns left of A; wrapped (formula:relative-wrap) it reads the blank XEU1, a non-numeric bound (formula:cfvo-nonnumeric not held)',
+export const STAGE5_A1_BLANK_BOUND_REFUSALS: ReadonlyArray<Readonly<{ caseId: string; sqref: string; formula: string; wrapped: string; position: CfvoPosition; reason: string }>> = [{
+  caseId: 'stage5-cfvo-formulas', sqref: 'K2:K9', formula: 'A2', wrapped: 'XEU1', position: 'first',
+  reason: 'anchor-a1: =A2 written on K2, read from A1, lands ten columns left of A; wrapped (formula:relative-wrap) it reads the blank XEU1, a non-numeric bound',
 }]
+
+type CfvoPosition = 'first' | 'last' | 'middle'
+/**
+ * The cfvo-nonnumeric follow-up: the colour-scale `type="formula"` bounds of the Stage 5 cases whose result is not a number,
+ * each with the kind its cell holds (blank: absent; text; error) and its point's position. A held formula:cfvo-nonnumeric
+ * reading that withholds that kind (`withheld`: the rule paints nothing, slot taint kept), or skips it at a midpoint (no
+ * extreme to skip to), leaves the rule unresolved: this record, fixed before any capture of the reading and checked against
+ * each saved workbook (tests/xlsx-cf-cfvo-nonnumeric-v2-case.test.ts), justifies that refusal. While the capability is not
+ * held, the marker's own capability (formula:cfvo-nonnumeric) justifies it instead.
+ */
+export const STAGE5_NONNUMERIC_BOUNDS: ReadonlyArray<Readonly<{ caseId: string; sqref: string; formula: string; kind: CfNonNumericKind; position: CfvoPosition }>> = [
+  { caseId: 'stage5-cfvo-formulas', sqref: 'L2:L9', formula: '$F$3', kind: 'text', position: 'first' },
+  { caseId: 'stage5-cfvo-formulas', sqref: 'M2:M9', formula: '$F$4', kind: 'blank', position: 'first' },
+  { caseId: 'stage5-cfvo-formulas', sqref: 'N2:N9', formula: '$F$5', kind: 'error', position: 'first' },
+  // stage5-cfvo-nonnumeric-v2: C..N, source-major ($A$1 blank, $A$2 "abc", $A$3 ="" (text), $A$4 #N/A), first/last/middle.
+  ...([['$A$1', 'blank'], ['$A$2', 'text'], ['$A$3', 'text'], ['$A$4', 'error']] as const).flatMap(([formula, kind], i) => (['first', 'last', 'middle'] as const).map((position, j) => {
+    const col = String.fromCharCode(67 + i * 3 + j)
+    return { caseId: 'stage5-cfvo-nonnumeric-v2', sqref: `${col}2:${col}6`, formula, kind, position }
+  })),
+]
+
+/** Why the held formula:cfvo-nonnumeric reading leaves a `kind` bound at `position` unresolved, or undefined (not held, or it resolves). */
+function nonNumericWithholding(kind: CfNonNumericKind, position: CfvoPosition, published: (id: string) => boolean): string | undefined {
+  const reading = cfFormulaReading('formula:cfvo-nonnumeric', published)
+  if (reading === undefined) return undefined
+  const treatment = cfvoNonNumericTreatment(reading, kind)
+  if (treatment === 'withheld') return `formula:cfvo-nonnumeric reads withheld for ${kind} (${reading}): the rule paints nothing and keeps its slot taint`
+  if (treatment === 'skipped' && position === 'middle') return `formula:cfvo-nonnumeric reads skipped for ${kind} at a midpoint (${reading}), which has no extreme to skip to: the rule is unresolved`
+  return undefined
+}
 
 /**
  * Records superseded by a later case version: a record configuration names a refusal of its rules only while its
@@ -191,8 +221,16 @@ export function stage5JustifiedRefusals(c: CaseLike | CfOracleCase, ref: string,
   }
   for (const e of STAGE5_A1_BLANK_BOUND_REFUSALS) {
     if (e.caseId !== cs.id || !isCellInSqref(ref, e.sqref)) continue
-    if (cfFormulaReading('formula:cfvo-relative', published) !== 'anchor-a1' || held('formula:cfvo-nonnumeric', published)) continue
-    for (const m of covering.filter(x => x.sqref === e.sqref && x.formula !== undefined && (x.scale?.cfvo ?? x.bar?.cfvo ?? x.icon?.cfvo ?? []).some(b => (b.f ?? b.val) === e.formula))) add(m, { reason: e.reason, refused: 'cf-unmeasured-capability' })
+    if (cfFormulaReading('formula:cfvo-relative', published) !== 'anchor-a1') continue
+    const why = held('formula:cfvo-nonnumeric', published) ? nonNumericWithholding('blank', e.position, published) : 'formula:cfvo-nonnumeric not held'
+    if (why === undefined) continue
+    for (const m of covering.filter(x => x.sqref === e.sqref && x.formula !== undefined && (x.scale?.cfvo ?? x.bar?.cfvo ?? x.icon?.cfvo ?? []).some(b => (b.f ?? b.val) === e.formula))) add(m, { reason: `${e.reason} (${why})`, refused: 'cf-unmeasured-capability' })
+  }
+  for (const e of STAGE5_NONNUMERIC_BOUNDS) {
+    if (e.caseId !== cs.id || !isCellInSqref(ref, e.sqref)) continue
+    const why = nonNumericWithholding(e.kind, e.position, published)
+    if (why === undefined) continue
+    for (const m of covering.filter(x => x.sqref === e.sqref && x.ruleType === 'colorScale' && (x.scale?.cfvo ?? []).some(b => b.type === 'formula' && (b.f ?? b.val) === e.formula))) add(m, { reason: `${e.formula} is ${e.kind === 'error' ? 'an error' : e.kind}: ${why}`, refused: 'cf-unmeasured-capability' })
   }
   for (const e of STAGE5_BAR_SCOPE_REFUSALS) {
     if (e.caseId !== cs.id || !isCellInSqref(ref, e.sqref)) continue
