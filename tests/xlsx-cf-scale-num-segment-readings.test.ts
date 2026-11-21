@@ -11,6 +11,12 @@
  *   (`cf-num-segment-statistical-withheld`), never switching arithmetic.
  */
 import { afterEach, describe, expect, it } from 'vitest'
+import { OfficePackage } from '../src/core/zip'
+import { parseXlsx } from '../src/xlsx/parse'
+import { prepareCfPaint } from '../src/xlsx/cf/render'
+import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
+import { VERIFIED_CAPABILITIES, withExactCfEvidence } from '../src/xlsx/cf/evidence'
+import { xlsxBytes } from './helpers/xlsx-package'
 import {
   CF_NUM_SEGMENT_CAP,
   CF_NUM_SEGMENT_PRODUCTION_READINGS,
@@ -186,5 +192,60 @@ describe('a reading selected through the seam, with its capability\'s evidence (
     expect(scaleColorAt(40, [num(0, RED), num(30, YELLOW), num(60, GREEN)], [0, 30, 60], evidence([CF_NUM_SEGMENT_CAP, CF_NUM_SEGMENT_STATISTICAL_CAP]))).toEqual(WITHHELD)
     const stat: CfScalePoint[] = [{ bound: { type: 'min' }, argb: RED }, { bound: { type: 'percentile', value: 50 }, argb: YELLOW }, { bound: { type: 'max' }, argb: GREEN }]
     expect(scaleColorAt(40, stat, [0, 30, 60], WITH_STAT)).toEqual({ kind: 'ready', value: interpolateScaleColor(YELLOW, GREEN, 1 / 3) })
+  })
+})
+
+describe('fix round 2 (codex re-review P1): unsafe arithmetic fails closed, endpoints keep today\'s path (parse -> prepare)', () => {
+  const LIT = '<cfvo type="num" val="-9e307"/><cfvo type="num" val="9e307"/><cfvo type="num" val="9.5e307"/>'
+  const MIXED = '<cfvo type="num" val="-9e307"/><cfvo type="num" val="9e307"/><cfvo type="max"/>'
+  const COLOURS = '<color rgb="FF14F028"/><color rgb="FFE61EFA"/><color rgb="FF14F028"/>'
+  /** The reviewer's sheet: B2 = 0 (safe fraction 1/2 of an overflowing span), B3 = 9e307 (the exact midpoint), B4 = 9.5e307. */
+  async function paintAt(cfvo: string): Promise<Record<string, string | undefined>> {
+    const bytes = xlsxBytes({
+      sheetData: '<row r="2"><c r="B2"><v>0</v></c></row><row r="3"><c r="B3"><v>9e307</v></c></row><row r="4"><c r="B4"><v>9.5e307</v></c></row>',
+      afterSheetData: `<conditionalFormatting sqref="B2:B4"><cfRule type="colorScale" priority="1"><colorScale>${cfvo}${COLOURS}</colorScale></cfRule></conditionalFormatting>`,
+    })
+    const doc = await parseXlsx(await OfficePackage.load(bytes))
+    const paint = await prepareCfPaint(doc.sheets[0]!, { evidence: cfRuntimeEvidence })
+    const out = Object.fromEntries(['B2', 'B3', 'B4'].map((ref, i) => [ref, paint?.layer.styleAt(i + 1, 1, undefined)?.fillColor?.toUpperCase()]))
+    paint?.dispose()
+    return out
+  }
+  const under = async <T>(readings: Record<string, string>, fn: () => Promise<T>): Promise<T> => {
+    injectCfNumSegmentReadings(readings)
+    try { return await withExactCfEvidence([...VERIFIED_CAPABILITIES, ...Object.keys(readings)], fn) } finally { injectCfNumSegmentReadings(null) }
+  }
+  const TODAY = { B2: 'FF7D8791', B3: 'FFE61EFA', B4: 'FF14F028' }
+
+  it('default production is unchanged: B2 paints the safe half-segment colour, B3 and B4 their configured colours', async () => {
+    expect(await paintAt(LIT)).toEqual(TODAY)
+    expect(await paintAt(MIXED)).toEqual(TODAY)
+  })
+
+  for (const r of ['percent-roundtrip', 'fixed-256', 'fixed-1276']) {
+    it(`${r} registered: B3 (the exact threshold) paints FFE61EFA, B2 is withheld (a member cannot be evaluated safely), B4 its colour`, async () => {
+      expect(CF_NUM_SEGMENT_READINGS).toContain(r)
+      expect(await under({ [CF_NUM_SEGMENT_CAP]: r }, () => paintAt(LIT))).toEqual({ B2: undefined, B3: 'FFE61EFA', B4: 'FF14F028' })
+      // The reason, at the evaluator: cf-non-finite-value (never a packed black).
+      injectCfNumSegmentReadings({ [CF_NUM_SEGMENT_CAP]: r })
+      const pts = [num(-9e307, P), num(9e307, Q), num(9.5e307, P)]
+      expect(scaleColorAt(0, pts, [-9e307, 9e307, 9.5e307], WITH_CAP)).toEqual({ kind: 'unresolved', reason: 'cf-non-finite-value' })
+      expect(scaleColorAt(9e307, pts, [-9e307, 9e307, 9.5e307], WITH_CAP)).toEqual({ kind: 'ready', value: Q })
+      // Every member of the class fails closed there instead of packing a colour.
+      const s = segmentOf(pts, [-9e307, 9e307, 9.5e307], 0)
+      for (const id of CF_NUM_SEGMENT_CLASSES[r]!) expect(numSegmentCandidate(id)!.evaluate(s), id).toBeUndefined()
+      expect(numSegmentConsensusColor(r, s)).toBeUndefined()
+    })
+  }
+
+  it('the statistical percent-roundtrip outcome: the mixed scale\'s B2 is a dyadic fraction (safe 1/2), so B2..B4 paint as today', async () => {
+    expect(await under({ [CF_NUM_SEGMENT_STATISTICAL_CAP]: 'percent-roundtrip' }, () => paintAt(MIXED))).toEqual(TODAY)
+  })
+
+  it('on finite segments evaluate() is colour() (the search\'s results are unchanged)', () => {
+    for (const r of CF_NUM_SEGMENT_READINGS) for (const g of literalGrid()) {
+      const s = segmentOf(g.points, g.thresholds, g.value)
+      for (const id of CF_NUM_SEGMENT_CLASSES[r]!) { const c = numSegmentCandidate(id)!; expect(c.evaluate(s), id).toBe(c.colour(s)) }
+    }
   })
 })

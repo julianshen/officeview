@@ -95,7 +95,19 @@ const SWEEPS = (): Readonly<Record<string, (f: number, d: number) => number>> =>
   ])),
 })
 
-export interface Candidate { id: string; colour: (s: CfScaleSegment) => number }
+export interface Candidate {
+  id: string
+  /** The formulation's colour, unchecked (the search's evaluation over captured, finite cells). */
+  colour: (s: CfScaleSegment) => number
+  /**
+   * Fix round 2 (codex pre-capture re-review P1): the same formula, failing closed before anything is packed into ARGB.
+   * Undefined when the segment's raw arithmetic is unsafe (a non-finite offset, span or full-span difference, or a zero
+   * span: the raw values production's overflow-safe `safeFraction` would replace, so an overflowing span can never yield
+   * a finite zero fraction), when the formulation's fraction is not finite, or when any channel is not a whole number in
+   * 0..255. The formula itself is unchanged.
+   */
+  evaluate: (s: CfScaleSegment) => number | undefined
+}
 
 const channelsOf = (argb: number): number[] => [(argb >>> 24) & 0xff, (argb >> 16) & 0xff, (argb >> 8) & 0xff, argb & 0xff]
 function composeArgb(s: CfScaleSegment, channel: (c0: number, c1: number) => number): number {
@@ -104,16 +116,47 @@ function composeArgb(s: CfScaleSegment, channel: (c0: number, c1: number) => num
   const out = [a[0]!, ...[1, 2, 3].map(i => channel(a[i]!, b[i]!))]
   return ((out[0]! << 24) | (out[1]! << 16) | (out[2]! << 8) | out[3]!) >>> 0
 }
+/** `composeArgb`, undefined when any channel is not a whole number in 0..255 (nothing non-finite is ever packed). */
+function composeChecked(s: CfScaleSegment, channel: (c0: number, c1: number) => number): number | undefined {
+  const a = channelsOf(s.c0), b = channelsOf(s.c1)
+  const out = [a[0]!]
+  for (const i of [1, 2, 3]) {
+    const c = channel(a[i]!, b[i]!)
+    if (!Number.isInteger(c) || c < 0 || c > 255) return undefined
+    out.push(c)
+  }
+  return ((out[0]! << 24) | (out[1]! << 16) | (out[2]! << 8) | out[3]!) >>> 0
+}
+/** Whether every raw difference a formulation reads is finite and the span non-zero (else safeFraction would differ). */
+function rawArithmeticSafe(s: CfScaleSegment): boolean {
+  const tMin = s.thresholds[0]!, tMax = s.thresholds[s.thresholds.length - 1]!
+  const diffs = [s.value - s.lo, s.hi - s.lo, s.hi - s.value, tMax - tMin, s.value - tMin, s.lo - tMin, s.hi - tMin]
+  return [s.value, s.lo, s.hi, tMin, tMax].every(Number.isFinite) && diffs.every(Number.isFinite) && s.hi - s.lo !== 0
+}
+function makeCandidate(id: string, frac: (s: CfScaleSegment) => number, ch: (c0: number, c1: number, f: number, s: CfScaleSegment) => number): Candidate {
+  return {
+    id,
+    colour: s => { const f = clamp01(frac(s)); return composeArgb(s, (c0, c1) => ch(c0, c1, f, s)) },
+    evaluate: s => {
+      if (!rawArithmeticSafe(s)) return undefined
+      const raw = frac(s)
+      if (!Number.isFinite(raw)) return undefined
+      const f = clamp01(raw)
+      return composeChecked(s, (c0, c1) => ch(c0, c1, f, s))
+    },
+  }
+}
 
 /** Every candidate: fraction × channel, plus the fixed-point family over the exact fraction. */
 function buildCandidates(): Candidate[] {
+  const exact = FRACTIONS.exact!
   return [
-  ...Object.entries(FRACTIONS).flatMap(([fid, frac]) => Object.entries(CHANNELS)
-    // The ratio channels read the segment directly (no fraction): only with the exact fraction, once.
-    .filter(([cid]) => !cid.startsWith('ratio-') || fid === 'exact')
-    .map(([cid, ch]) => ({ id: cid.startsWith('ratio-') ? cid : `${fid}/${cid}`, colour: (s: CfScaleSegment) => { const f = clamp01(frac(s)); return composeArgb(s, (c0, c1) => ch(c0, c1, f, s)) } }))),
-  ...Object.entries(FIXED).map(([id, ch]) => ({ id, colour: (s: CfScaleSegment) => { const f = clamp01(FRACTIONS.exact!(s)); return composeArgb(s, (c0, c1) => ch(c0, c1, f)) } })),
-  ...Object.entries(SWEEPS()).map(([id, step]) => ({ id, colour: (s: CfScaleSegment) => { const f = clamp01(FRACTIONS.exact!(s)); return composeArgb(s, (c0, c1) => c0 + sgn(c1 - c0) * step(f, Math.abs(c1 - c0))) } })),
+    ...Object.entries(FRACTIONS).flatMap(([fid, frac]) => Object.entries(CHANNELS)
+      // The ratio channels read the segment directly (no fraction): only with the exact fraction, once.
+      .filter(([cid]) => !cid.startsWith('ratio-') || fid === 'exact')
+      .map(([cid, ch]) => makeCandidate(cid.startsWith('ratio-') ? cid : `${fid}/${cid}`, frac, ch))),
+    ...Object.entries(FIXED).map(([id, ch]) => makeCandidate(id, exact, (c0, c1, f) => ch(c0, c1, f))),
+    ...Object.entries(SWEEPS()).map(([id, step]) => makeCandidate(id, exact, (c0, c1, f) => c0 + sgn(c1 - c0) * step(f, Math.abs(c1 - c0)))),
   ]
 }
 let built: Candidate[] | undefined

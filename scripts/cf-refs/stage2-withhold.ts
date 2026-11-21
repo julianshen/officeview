@@ -74,13 +74,14 @@ type MarkerLike = { ruleType: string; sqref: string; scale?: { cfvo: readonly { 
 export function stage2NumSegmentShape(markers: readonly MarkerLike[], ref: string, value: unknown): boolean {
   if (typeof value !== 'number' || !Number.isFinite(value)) return false
   // Fix round 1 (R1): once a reading of scale:num-segment-fraction is registered (with its evidence) production paints the
-  // shape by class consensus, so the justification narrows to the cells where the class members disagree.
+  // shape by class consensus, so the justification narrows to the cells where the class members disagree or one cannot be
+  // evaluated safely (fix round 2: `cf-num-segment-class-disagreement` or `cf-non-finite-value`).
   const registered = cfNumSegmentReading(CF_NUM_SEGMENT_CAP)
   const consensus = registered !== undefined && hasEvidence(CF_NUM_SEGMENT_CAP)
   return markers.some(m => {
     if (m.ruleType !== 'colorScale' || m.scale?.cfvo.length !== 3 || !isCellInSqref(ref, m.sqref)) return false
     const literal = (x: { type: string; val?: string; f?: string }): number | undefined =>
-      x.type === 'num' && x.f === undefined && x.val !== undefined && /^-?\d+(\.\d+)?$/.test(x.val) ? Number(x.val) : undefined
+      x.type === 'num' && x.f === undefined && x.val !== undefined && /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i.test(x.val) ? Number(x.val) : undefined
     const t = m.scale.cfvo.map(literal)
     // Positional thresholds: the midpoint above the maximum swaps the last two (as production re-sorts them).
     const idx = t[1] !== undefined && t[2] !== undefined && t[1] > t[2] ? [0, 2, 1] : [0, 1, 2]

@@ -570,17 +570,30 @@ const literalNumBound = (p: CfScalePoint): boolean => p.bound.type === 'num' && 
  * (`cf-num-segment-class-disagreement`). Undefined: the members disagree (or the class is unknown).
  */
 export function numSegmentConsensusColor(reading: CfNumSegmentReading, segment: CfScaleSegment): number | undefined {
+  const o = numSegmentConsensus(reading, segment)
+  return o.kind === 'ready' ? o.value : undefined
+}
+
+/**
+ * The consensus outcome. Fix round 2: a member that cannot be evaluated safely (`Candidate.evaluate` undefined: non-finite
+ * raw arithmetic, an overflowing span, a non-finite fraction or channel) withholds the cell as `cf-non-finite-value`,
+ * the reason production already gives a non-finite segment fraction; members that evaluate but disagree withhold as
+ * `cf-num-segment-class-disagreement`. An unknown class is no consensus (disagreement).
+ */
+export function numSegmentConsensus(reading: CfNumSegmentReading, segment: CfScaleSegment): CfOutcome<number> {
   const members = CF_NUM_SEGMENT_CLASSES[reading]
-  if (!members || members.length === 0) return undefined
+  if (!members || members.length === 0) return { kind: 'unresolved', reason: 'cf-num-segment-class-disagreement' }
   let argb: number | undefined
+  let disagree = false
   for (const id of members) {
     const c = numSegmentCandidate(id)
-    if (!c) return undefined
-    const v = c.colour(segment) >>> 0
+    if (!c) return { kind: 'unresolved', reason: 'cf-num-segment-class-disagreement' }
+    const v = c.evaluate(segment)
+    if (v === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
     if (argb === undefined) argb = v
-    else if (v !== argb) return undefined
+    else if (v !== argb) disagree = true
   }
-  return argb
+  return disagree || argb === undefined ? { kind: 'unresolved', reason: 'cf-num-segment-class-disagreement' } : { kind: 'ready', value: argb }
 }
 
 /** A value strictly inside its segment whose fraction is not a binary fraction of resolution 2^-20 (`numSegmentUnmeasured`'s test). */
@@ -599,10 +612,9 @@ function threeColourSegment(lo: CfScalePoint, hi: CfScalePoint, seg: CfScaleSegm
   const variant = colorSpace !== 'sRGB' || rounding !== 'truncate'
   if (literalNumBound(lo) && literalNumBound(hi)) {
     const r = cfNumSegmentReading(CF_NUM_SEGMENT_CAP)
-    if (!variant && r !== undefined && checkEvidence(CF_NUM_SEGMENT_CAP)) {
-      const argb = numSegmentConsensusColor(r, seg)
-      return argb === undefined ? { kind: 'unresolved', reason: 'cf-num-segment-class-disagreement' } : { kind: 'ready', value: argb }
-    }
+    // Fix round 2: candidates and consensus apply only strictly inside the segment (numSegmentUnmeasured's interior test);
+    // an endpoint or exact threshold keeps today's path and paints its configured colour.
+    if (!variant && r !== undefined && checkEvidence(CF_NUM_SEGMENT_CAP) && seg.value > seg.lo && seg.value < seg.hi) return numSegmentConsensus(r, seg)
     if (numSegmentUnmeasured(lo, hi, seg.value, seg.lo, seg.hi, seg.fraction)) return { kind: 'unresolved', reason: 'cf-unmeasured-num-segment-fraction' }
   } else {
     const r = cfNumSegmentReading(CF_NUM_SEGMENT_STATISTICAL_CAP)
