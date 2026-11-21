@@ -292,7 +292,7 @@ vi.mock('officeview', () => ({
 
       <Section id="dev-setup" title="Development setup">
         <p>
-          The repo uses <a href="https://bun.sh">bun</a> (CI pins 1.3.10). Tests render with node-canvas, which needs Cairo and
+          The repo uses <a href="https://bun.sh">bun</a> (CI pins 1.4.5). Tests render with node-canvas, which needs Cairo and
           Pango; on Debian or Ubuntu:
         </p>
         <Code lang="bash">{`sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev   # macOS: brew install pkg-config cairo pango libpng jpeg giflib librsvg
