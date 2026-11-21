@@ -113,8 +113,9 @@ describe('ruling 1: a key is admitted only when its own case fully verifies', ()
     expect(committed.has('icon:thresholds-formula')).toBe(true)
     // 44 since formula:hoist-aggregate-errors registered its error-propagates reading (it was 43 before), 45 since
     // bar:bounds-formula (stage5-bar-bounds-formula), 47 since formula:cfvo-relative and formula:cfvo-scope-multi-range
-    // (anchor-a1, stage5-cfvo-relative-a1; its icon sets are classified against the centred key its placement selects).
-    expect(committed.size).toBe(47)
+    // (anchor-a1, stage5-cfvo-relative-a1; its icon sets are classified against the centred key its placement selects), 51
+    // since the four formula:cfvo-nonnumeric-<kind> ids (stage5-cfvo-nonnumeric-v2, 16822e70).
+    expect(committed.size).toBe(51)
     for (const id of gate.published) expect(committed.has(id), id).toBe(true)
   }, 600_000)
 })

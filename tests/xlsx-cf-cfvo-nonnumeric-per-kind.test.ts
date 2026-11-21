@@ -8,12 +8,13 @@
  * uniform names (one name per behaviour). Pre-capture ruling: each kind is also evidenced on its own id
  * (`CF_CFVO_NONNUMERIC_KIND_IDS`: blank, text, the empty string of ="", error), which, once registered, decides its kind
  * alone (`cfvoNonNumericTreatmentOf`); the umbrella decides an unregistered blank, text or error kind, never the empty
- * string. Production implements it behind the registry: nothing new is registered, so it is honoured only through the
- * test seam `injectCfFormulaReadings`, never in production.
+ * string. The four per-kind ids are registered since stage5-cfvo-nonnumeric-v2 was captured (16822e70: blank zero; text,
+ * the empty string and error withheld); the other combinations here run behind the test seam `injectCfFormulaReadings`.
  * Every expectation is a literal twin production itself resolves, or withheld; nothing here predicts Excel.
  */
 import { describe, expect, it } from 'vitest'
 import { VERIFIED_CAPABILITIES } from '../src/xlsx/cf/evidence'
+import { VERIFIED_STAGE5_FORMULA_SELECTIONS } from '../src/xlsx/cf/verifiedCapabilities'
 import { CF_CFVO_NONNUMERIC_KIND_IDS, CF_FORMULA_PRODUCTION_READINGS, cfvoNonNumericTreatment, injectCfFormulaReadings } from '../src/xlsx/cf/formulaReadings'
 import { parseRules, prepare, sheetOf, shown, type Cell } from './helpers/cf-formula-rules'
 
@@ -83,16 +84,20 @@ const BOUND_KIND = { blank: 'blank', text: 'text', 'empty-text': 'empty-string',
 /**
  * Prepare the fixture under a proposed registration (the test seams): `umbrella` selects a formula:cfvo-nonnumeric reading
  * (registered as the uniform list plus it), `perKind` registers and selects a per-kind id's treatment (held unless listed in
- * `unheld`). `inject: false` runs the committed registry with the selection only.
+ * `unheld`); every other per-kind id is proposed unregistered (the umbrella fallback). `inject: false` runs the committed
+ * registry (the four per-kind ids registered since 16822e70) with the selection only.
  */
 async function run(o: { umbrella?: string; perKind?: Partial<Record<BoundKind, Treatment>>; unheld?: readonly BoundKind[]; inject?: boolean }) {
   const { xml, cells, cols } = fixture()
   const perKind = Object.entries(o.perKind ?? {}) as Array<[BoundKind, Treatment]>
   const ids = perKind.map(([k]) => CF_CFVO_NONNUMERIC_KIND_IDS[k])
-  const caps = [...VERIFIED_CAPABILITIES, ...(o.umbrella !== undefined ? [CAP] : []), ...perKind.filter(([k]) => !(o.unheld ?? []).includes(k)).map(([k]) => CF_CFVO_NONNUMERIC_KIND_IDS[k])]
+  const unheldIds = (o.unheld ?? []).map(k => CF_CFVO_NONNUMERIC_KIND_IDS[k])
+  const caps = [...VERIFIED_CAPABILITIES, ...(o.umbrella !== undefined ? [CAP] : []), ...perKind.map(([k]) => CF_CFVO_NONNUMERIC_KIND_IDS[k])].filter(id => !unheldIds.includes(id))
   const refs = [...Object.keys(cols), 'P', 'Q', 'R', 'S'].flatMap(rowsOf)
   const inject = o.inject !== false
-  if (inject) injectCfFormulaReadings({ ...(o.umbrella !== undefined ? { [CAP]: [...TREATMENTS, o.umbrella] } : {}), ...Object.fromEntries(ids.map(id => [id, TREATMENTS])) })
+  // An unregistered per-kind id is proposed as `undefined` (cfFormulaReadingEntry reads the proposal first).
+  const unregistered = Object.values(CF_CFVO_NONNUMERIC_KIND_IDS).filter(id => !ids.includes(id)).map(id => [id, undefined])
+  if (inject) injectCfFormulaReadings({ ...(o.umbrella !== undefined ? { [CAP]: [...TREATMENTS, o.umbrella] } : {}), ...Object.fromEntries(unregistered), ...Object.fromEntries(ids.map(id => [id, TREATMENTS])) } as Record<string, readonly string[]>)
   const selections = { ...(o.umbrella !== undefined ? { [CAP]: o.umbrella } : {}), ...Object.fromEntries(perKind.map(([k, t]) => [CF_CFVO_NONNUMERIC_KIND_IDS[k], t])) }
   try {
     return { cols, out: await prepare(sheetOf(parseRules(xml, caps), cells), refs, caps, { selections }) }
@@ -117,9 +122,9 @@ function expectTreatments(r: Awaited<ReturnType<typeof run>>, treatmentOf: (sour
 }
 
 describe('substitutedBound: each kind follows its own per-kind id (behind the test seams)', () => {
-  it('the registry is unchanged: the uniform umbrella selection list, no per-kind id', () => {
-    expect(CF_FORMULA_PRODUCTION_READINGS[CAP]).toEqual(['withheld', 'zero', 'skipped'])
-    for (const id of Object.values(CF_CFVO_NONNUMERIC_KIND_IDS)) expect(CF_FORMULA_PRODUCTION_READINGS[id], id).toBeUndefined()
+  it('the registry: no umbrella entry (superseded), and each per-kind id the selection list (registered after 16822e70)', () => {
+    expect(CF_FORMULA_PRODUCTION_READINGS[CAP]).toBeUndefined()
+    for (const id of Object.values(CF_CFVO_NONNUMERIC_KIND_IDS)) expect(CF_FORMULA_PRODUCTION_READINGS[id], id).toEqual(['withheld', 'zero', 'skipped'])
   })
   // Every one of the 81 combinations of one treatment per bound kind (blank, text, the empty string, error).
   const KIND4 = ['blank', 'text', 'empty-string', 'error'] as const
@@ -152,17 +157,17 @@ describe('the umbrella reading alone (no per-kind id registered)', () => {
   }
 })
 
-describe('production is unchanged without the seams', () => {
-  it('a composite umbrella selection is no registered reading: every non-numeric bound withholds', async () => {
-    const r = await run({ umbrella: 'blank-zero+text-withheld+error-withheld', inject: false })
-    expectTreatments(r, () => undefined)
+describe('the committed registry and published selections (no seams)', () => {
+  it('the published selections (blank zero; text, the empty string and error withheld): blank paints as 0, the others withhold', async () => {
+    expect(Object.fromEntries(Object.values(CF_CFVO_NONNUMERIC_KIND_IDS).map(id => [id, VERIFIED_STAGE5_FORMULA_SELECTIONS[id]]))).toEqual({
+      'formula:cfvo-nonnumeric-blank': 'zero', 'formula:cfvo-nonnumeric-text': 'withheld', 'formula:cfvo-nonnumeric-empty-string': 'withheld', 'formula:cfvo-nonnumeric-error': 'withheld',
+    })
+    for (const id of Object.values(CF_CFVO_NONNUMERIC_KIND_IDS)) expect(VERIFIED_CAPABILITIES.has(id), id).toBe(true)
+    expect(VERIFIED_CAPABILITIES.has(CAP)).toBe(false)
+    const r = await run({ perKind: { blank: 'zero', text: 'withheld', 'empty-string': 'withheld', error: 'withheld' }, inject: false })
+    expect(expectTreatments(r, src => (src === 'blank' ? 'zero' : 'withheld'))).toBe(3 * V.length)
   })
-  it('a uniform umbrella selection behaves as before for blank, text and error (zero: every such bound reads 0)', async () => {
-    const r = await run({ umbrella: 'zero', inject: false })
-    expectTreatments(r, src => (src === 'empty-text' ? undefined : 'zero'))
-  })
-  it('a per-kind selection without its registry entry is no reading', async () => {
-    const r = await run({ perKind: { blank: 'zero', text: 'zero', 'empty-string': 'zero', error: 'zero' }, inject: false })
-    expectTreatments(r, () => undefined)
+  it('the umbrella is no reading once the per-kind ids are registered: an umbrella selection alone withholds every bound', async () => {
+    for (const umbrella of ['zero', 'blank-zero+text-withheld+error-withheld']) expectTreatments(await run({ umbrella, inject: false }), () => undefined)
   })
 })

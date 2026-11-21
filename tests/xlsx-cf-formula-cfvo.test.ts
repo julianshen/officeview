@@ -309,29 +309,34 @@ describe('non-numeric or relative cfvo results withhold', () => {
   const cells = { F3: 'abc', F5: { err: '#N/A' }, ...Object.assign({}, ...['L', 'M', 'N', 'Q', 'R', 'V'].map(c => col(c, [5, 15, 30, 45, 60, 75, 90, 100]))) }
   const refsOf = (c: string): string[] => rows(c, 2, 9)
   const all = ['L', 'M', 'N', 'Q', 'R', 'V'].flatMap(refsOf)
-  it('text, blank or error is unresolved until formula:cfvo-nonnumeric', async () => {
+  /** The per-kind ids (stage5-cfvo-nonnumeric-v2, 16822e70), each selected to `t`. */
+  const PER_KIND = ['formula:cfvo-nonnumeric-blank', 'formula:cfvo-nonnumeric-text', 'formula:cfvo-nonnumeric-empty-string', 'formula:cfvo-nonnumeric-error']
+  const every = (t: string): Record<string, string> => Object.fromEntries(PER_KIND.map(id => [id, t]))
+  it('under the published per-kind readings a blank bound reads 0 (twin Q) and a text or error bound withholds; without them every one withholds', async () => {
     const caps = capsWith()
+    for (const id of PER_KIND) expect(caps.includes(id), id).toBe(true)
     const { out } = await prepareSheet(sheetOf(parseRules(xml, caps), cells), all, caps)
-    for (const c of ['L', 'M', 'N']) for (const r of refsOf(c)) expect(visualOf(out.get(r)), r).toMatch(WITHHELD)
-    // Selected but unevidenced: still unresolved.
-    const selected = await prepareSheet(sheetOf(parseRules(xml, caps), cells), all, caps, { selections: { 'formula:cfvo-nonnumeric': 'zero' } })
-    for (const r of refsOf('L')) expect(visualOf(selected.out.get(r)), r).toMatch(WITHHELD)
+    for (const r of refsOf('M')) expect(visualOf(out.get(r)), r).toBe(visualOf(out.get(`Q${r.slice(1)}`)))
+    for (const c of ['L', 'N']) for (const r of refsOf(c)) expect(visualOf(out.get(r)), r).toMatch(WITHHELD)
+    const without = caps.filter(c => !PER_KIND.includes(c))
+    const off = await prepareSheet(sheetOf(parseRules(xml, without), cells), all, without)
+    for (const c of ['L', 'M', 'N']) for (const r of refsOf(c)) expect(visualOf(off.out.get(r)), r).toMatch(WITHHELD)
   })
   it('under the withheld reading the bound is unresolved and keeps its slot taint: a lower matching fill never paints (fix round 1, #1)', async () => {
-    const caps = capsWith('formula:cfvo-nonnumeric')
+    const caps = capsWith()
     const greenBelow = scale('L2:L9', 1, '<cfvo type="formula" val="$F$3"/><cfvo type="max"/>')
       + '<conditionalFormatting sqref="L2:L9"><cfRule type="cellIs" dxfId="1" priority="2" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>'
     const rules = withExactCfEvidence(caps, () => parseCfSheet(parseXml(worksheet(greenBelow)), stylesFor(), createCfMemory(), { sheetRightToLeft: false }).value)
-    const { out } = await prepareSheet(sheetOf(rules, cells), refsOf('L'), caps, { selections: { 'formula:cfvo-nonnumeric': 'withheld' } })
+    const { out } = await prepareSheet(sheetOf(rules, cells), refsOf('L'), caps, { selections: every('withheld') })
     for (const r of refsOf('L')) {
       expect(visualOf(out.get(r)), r).toMatch(WITHHELD)
       expect(shown(out.get(r)).fill, r).not.toBe(GREEN)
     }
   })
   for (const [reading, twin] of [['zero', 'Q'], ['skipped', 'R']] as const) {
-    it(`under the ${reading} reading each non-numeric bound shows twin ${twin}`, async () => {
-      const caps = capsWith('formula:cfvo-nonnumeric')
-      const { out } = await prepareSheet(sheetOf(parseRules(xml, caps), cells), all, caps, { selections: { 'formula:cfvo-nonnumeric': reading } })
+    it(`under the ${reading} reading of every kind each non-numeric bound shows twin ${twin}`, async () => {
+      const caps = capsWith()
+      const { out } = await prepareSheet(sheetOf(parseRules(xml, caps), cells), all, caps, { selections: every(reading) })
       for (const c of ['L', 'M', 'N']) for (const r of refsOf(c)) {
         const want = visualOf(out.get(`${twin}${r.slice(1)}`))
         expect(visualOf(out.get(r)), `${r} (${reading})`).toBe(want)
@@ -340,9 +345,9 @@ describe('non-numeric or relative cfvo results withhold', () => {
   }
   it('a boolean result is unresolved under every reading', async () => {
     const boolXml = scale('L2:L9', 1, '<cfvo type="formula" val="$F$6"/><cfvo type="max"/>')
-    const caps = capsWith('formula:cfvo-nonnumeric')
+    const caps = capsWith()
     for (const reading of ['withheld', 'zero', 'skipped']) {
-      const { out } = await prepareSheet(sheetOf(parseRules(boolXml, caps), { F6: true, ...col('L', [1, 2, 3, 4]) }), ['L2', 'L3'], caps, { selections: { 'formula:cfvo-nonnumeric': reading } })
+      const { out } = await prepareSheet(sheetOf(parseRules(boolXml, caps), { F6: true, ...col('L', [1, 2, 3, 4]) }), ['L2', 'L3'], caps, { selections: every(reading) })
       expect(visualOf(out.get('L3')), reading).toMatch(WITHHELD)
     }
   })
@@ -667,7 +672,7 @@ describe('every cfvo, dialect and activation capability production queries is a 
   const catalog = new Set(CF_STAGE5_CAPABILITIES.map(e => e.capabilityId))
   it('the ids Task 37 gates on are catalog ids', () => {
     const ids = ['scale:thresholds-formula', 'bar:bounds-formula', 'icon:thresholds-formula', 'formula:cfvo-reference', 'formula:cfvo-expression',
-      'formula:cfvo-relative', 'formula:cfvo-nonnumeric', 'formula:cfvo-scope-multi-range', 'scale:dialect-standalone',
+      'formula:cfvo-relative', 'formula:cfvo-nonnumeric-blank', 'formula:cfvo-nonnumeric-text', 'formula:cfvo-nonnumeric-empty-string', 'formula:cfvo-nonnumeric-error', 'formula:cfvo-scope-multi-range', 'scale:dialect-standalone',
       'formula:active-present-scale', 'formula:active-present-bar', 'formula:active-present-icon']
     for (const id of ids) {
       expect(catalog.has(id), id).toBe(true)

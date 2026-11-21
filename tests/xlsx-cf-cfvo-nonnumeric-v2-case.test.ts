@@ -7,10 +7,11 @@
  * a text and an error bound, and read a blank one as 0). Production's per-kind treatment (0c572321, per-kind ids 67c3edb0)
  * post-dates that capture, so this case, built and captured after it, measures each kind on its own id
  * (formula:cfvo-nonnumeric-blank, -text, -empty-string, -error), each pre-registering withheld, zero and skipped: a surprise
- * in one kind refuses only that kind. It has no capture yet: every reading of every id is planted on a synthetic
- * observation by an independent model (the Stage 2 sRGB truncate scale, 2 and 3 colours) and run through the real Stage 5
- * evaluator, and the suggested registration (blank zero; text, the empty string and error withheld) is rehearsed against
- * production on this case and on every measured Stage 5 case. This checks the family, not Excel.
+ * in one kind refuses only that kind. Every reading of every id was planted before the capture on a synthetic observation
+ * by an independent model (the Stage 2 sRGB truncate scale, 2 and 3 colours) and run through the real Stage 5 evaluator,
+ * and those checks stay. The capture (16822e70) matched blank zero and text, the empty string and error withheld, each the
+ * sole survivor; the four ids are registered and published, and the real registration is checked against the capture on
+ * this case and every measured Stage 5 case.
  */
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -23,7 +24,7 @@ import { CF_MANIFEST_PATH } from '../scripts/cf-refs/generate'
 import { evaluateFormulaCapabilities, formulaControlsOf, readZipPartsSync, resolveFormulaConfigurations, type FormulaObservation } from '../scripts/cf-refs/verify'
 import { caseEvaluationOf, caseNowOf, caseParseOptionsOf } from '../scripts/cf-refs/case-clock'
 import { interpolateScaleColor } from '../src/xlsx/cf/colorScale'
-import { VERIFIED_CAPABILITIES, injectCfFormulaSelections, withInjectedCfEvidence } from '../src/xlsx/cf/evidence'
+import { VERIFIED_CAPABILITIES, injectCfFormulaSelections, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import { CF_CFVO_NONNUMERIC_KIND_IDS, CF_FORMULA_PRODUCTION_READINGS, injectCfFormulaReadings } from '../src/xlsx/cf/formulaReadings'
 import { VERIFIED_STAGE5_FORMULA_SELECTIONS } from '../src/xlsx/cf/verifiedCapabilities'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
@@ -44,8 +45,9 @@ type Kind = 'blank' | 'text' | 'empty-string' | 'error'
 const KINDS: readonly Kind[] = ['blank', 'text', 'empty-string', 'error']
 type Position = (typeof NONNUM_V2_POSITIONS)[number]
 type World = Readonly<Record<Kind, Treatment>>
-/** The registration the old capture suggests for blank, text and error (formed after it; never registered from it). */
+/** The registration the old capture suggested (formed after it; never registered from it), which the capture 16822e70 matched. */
 const SUGGESTED: World = { blank: 'zero', text: 'withheld', 'empty-string': 'withheld', error: 'withheld' }
+const CAPTURED: World = SUGGESTED
 const WORLDS: World[] = TREATMENTS.flatMap(b => TREATMENTS.flatMap(t => TREATMENTS.flatMap(s => TREATMENTS.map(e => ({ blank: b, text: t, 'empty-string': s, error: e })))))
 const worldName = (w: World): string => KINDS.map(k => `${k}=${w[k]}`).join(' ')
 
@@ -82,21 +84,24 @@ const CONFIGS = NONNUM_V2_SOURCES.flatMap((src, i) => NONNUM_V2_POSITIONS.map((p
 const ROWS = [2, 3, 4, 5, 6]
 
 describe('stage5-cfvo-nonnumeric-v2: the case', () => {
-  it('holds one evidence id per kind (appended last); the umbrella stays with stage5-cfvo-formulas, a recorded refusal', () => {
+  it('holds one evidence id per kind (appended last), each published with its matched reading; the umbrella stays a recorded refusal', () => {
     const c = caseOf()
-    expect(c.status).toBe('recipe-pending')
+    expect(c.status).toBe('measured')
     for (const k of KINDS) {
       const id = CF_CFVO_NONNUMERIC_KIND_IDS[k]
       expect(NONNUM_V2_SOURCES.find(s => s.kind === k)!.cap).toBe(id)
       expect(CF_STAGE5_CAPABILITIES.find(e => e.capabilityId === id)!.caseId, id).toBe(ID)
-      expect(CF_STAGE5_UNSUPPORTED[id], id).toMatch(/^Awaiting capture/)
-      // Nothing is registered: no per-kind id has an entry.
-      expect(CF_FORMULA_PRODUCTION_READINGS[id], id).toBeUndefined()
+      expect(CF_STAGE5_UNSUPPORTED[id], id).toBeUndefined()
+      // Registered as the selection list after the capture (16822e70) matched one sole survivor per id.
+      expect(CF_FORMULA_PRODUCTION_READINGS[id], id).toEqual(['withheld', 'zero', 'skipped'])
+      expect([VERIFIED_CAPABILITIES.has(id), VERIFIED_STAGE5_FORMULA_SELECTIONS[id]], id).toEqual([true, CAPTURED[k]])
     }
+    // The umbrella is superseded by the per-kind ids: no longer registered, never published.
+    expect(VERIFIED_CAPABILITIES.has(UMBRELLA)).toBe(false)
     expect(CF_STAGE5_OWNERS[UMBRELLA]).toBeUndefined()
     expect(CF_STAGE5_CAPABILITIES.find(e => e.capabilityId === UMBRELLA)!.caseId).toBe('stage5-cfvo-formulas')
-    expect(CF_STAGE5_UNSUPPORTED[UMBRELLA]).toMatch(/stage5-cfvo-nonnumeric-v2 measures each kind on its own id/)
-    expect(CF_FORMULA_PRODUCTION_READINGS[UMBRELLA]).toEqual(['withheld', 'zero', 'skipped'])
+    expect(CF_STAGE5_UNSUPPORTED[UMBRELLA]).toMatch(/Superseded per kind/)
+    expect(CF_FORMULA_PRODUCTION_READINGS[UMBRELLA]).toBeUndefined()
     expect(CF_STAGE5_CASES.at(-1)!.id).toBe(ID)
     expect(CF_STAGE5_GROUPS['stage5-cfvo-formulas']).toContain(ID)
     expect(CF_STAGE5_NONDISCRIMINATING[TWIN]).toBeDefined()
@@ -218,10 +223,11 @@ describe('stage5-cfvo-nonnumeric-v2: each kind discriminates on its own, on a sy
  * (the test seams) and held; every other per-kind id is registered but not held (a kind whose evidence failed).
  */
 async function withProposed<T>(w: World, held: readonly Kind[], fn: (published: (id: string) => boolean) => Promise<T>): Promise<T> {
-  const set = new Set([...VERIFIED_CAPABILITIES, ...held.map(k => CF_CFVO_NONNUMERIC_KIND_IDS[k])])
+  const ids = held.map(k => CF_CFVO_NONNUMERIC_KIND_IDS[k])
+  const set = new Set([...[...VERIFIED_CAPABILITIES].filter(id => !Object.values(CF_CFVO_NONNUMERIC_KIND_IDS).includes(id)), ...ids])
   injectCfFormulaReadings(Object.fromEntries(KINDS.map(k => [CF_CFVO_NONNUMERIC_KIND_IDS[k], TREATMENTS])))
   injectCfFormulaSelections({ ...VERIFIED_STAGE5_FORMULA_SELECTIONS, ...Object.fromEntries(held.map(k => [CF_CFVO_NONNUMERIC_KIND_IDS[k], w[k]])) })
-  try { return await withInjectedCfEvidence([...set], () => fn(id => set.has(id))) } finally { injectCfFormulaReadings(null); injectCfFormulaSelections(null) }
+  try { return await withExactCfEvidence([...set], () => fn(id => set.has(id))) } finally { injectCfFormulaReadings(null); injectCfFormulaSelections(null) }
 }
 
 /** The production counterfactual over this case on the planted world `w`: disagreements, unjustified refusals, painted cells. */
@@ -257,8 +263,8 @@ async function rehearse(w: World, held: readonly Kind[] = KINDS) {
 }
 const resolves = (t: Treatment | undefined, position: Position): boolean => t === 'zero' || (t === 'skipped' && position !== 'middle')
 
-describe('stage5-cfvo-nonnumeric-v2: rehearsing a proposed registration against production', () => {
-  it('the suggested registration: no unjustified refusal, no disagreement; blank paints, text, ="" and error withhold', async () => {
+describe('stage5-cfvo-nonnumeric-v2: the per-kind registration against production on planted worlds (every reading of every id)', () => {
+  it('the registered and captured world: no unjustified refusal, no disagreement; blank paints, text, ="" and error withhold', async () => {
     const { disagree, unjustified, painted, withheld } = await rehearse(SUGGESTED)
     expect(disagree).toEqual([])
     expect(unjustified).toEqual([])
@@ -285,10 +291,24 @@ describe('stage5-cfvo-nonnumeric-v2: rehearsing a proposed registration against 
   }, 300_000)
 })
 
-describe('rehearsing the suggested registration on every measured Stage 5 case', () => {
-  it('no measured cell disagrees with Excel or is withheld without a recorded justification; stage5-cfvo-formulas K, M paint as Excel, L, N withhold', async () => {
+describe('the registration against the capture: every measured Stage 5 case', () => {
+  it('the capture matched one sole survivor per id: blank zero; text, the empty string and error withheld', () => {
+    const sidecar = JSON.parse(readFileSync(resolve(REPO_ROOT, caseOf().captures[0]!.sidecarPath!), 'utf8')) as { formulaEvaluation: Record<string, { status: string; matched?: string; survivors?: string[] }> }
+    for (const k of KINDS) {
+      const e = sidecar.formulaEvaluation[CF_CFVO_NONNUMERIC_KIND_IDS[k]]!
+      expect([e.status, e.matched, e.survivors], k).toEqual(['discriminating', CAPTURED[k], [CAPTURED[k]]])
+    }
+  })
+
+  it('no measured cell disagrees with Excel or is withheld without a recorded justification; this case and stage5-cfvo-formulas K, M paint as Excel, L, N withhold', async () => {
     const { stage5CaseRecords } = await import('../scripts/cf-refs/audit')
-    const rows = await withProposed(SUGGESTED, KINDS, published => stage5CaseRecords(manifest, REPO_ROOT, { published }))
+    const rows = await stage5CaseRecords(manifest, REPO_ROOT)
+    // This case, compared with its capture: blank bounds paint (agreeing), the others withhold with their justification.
+    for (const x of CONFIGS) for (const r of ROWS) {
+      const row = rows.find(y => y.caseId === ID && y.ref === `${x.col}${r}`)!
+      expect([row.compared, row.agrees, row.production.unresolved.length > 0], `${x.id} ${r}`).toEqual([true, true, x.kind !== 'blank'])
+      if (x.kind !== 'blank') expect(row.justification.map(j => j.reason).join('; '), `${x.id} ${r}`).toContain(`${CF_CFVO_NONNUMERIC_KIND_IDS[x.kind]} = withheld withholds ${x.kind}`)
+    }
     expect(rows.filter(r => r.compared && !r.agrees).map(r => `${r.caseId}:${r.ref} ${r.disagreement}`)).toEqual([])
     const old = (ref: string) => rows.find(r => r.caseId === 'stage5-cfvo-formulas' && r.ref === ref)!
     for (const col of ['K', 'M']) for (let r = 2; r <= 9; r++) expect([old(`${col}${r}`).compared, old(`${col}${r}`).agrees, old(`${col}${r}`).production.unresolved], `${col}${r}`).toEqual([true, true, []])
@@ -315,7 +335,7 @@ describe('the recorded non-numeric bounds are checked against the workbooks', ()
       const at = new RegExp(`<c r="${cell[1]}${cell[2]}"[^>]*?(?:/>|>.*?</c>)`).exec(xml)?.[0]
       if (e.kind === 'blank') expect(at, `${e.caseId} ${e.formula}`).toBeUndefined()
       else if (e.kind === 'error') expect(at, `${e.caseId} ${e.formula}`).toMatch(/ t="e"/)
-      else if (e.kind === 'empty-string') expect(at, `${e.caseId} ${e.formula}`).toMatch(/ t="str"><f>[^<]*<\/f><v><\/v>/)
+      else if (e.kind === 'empty-string') expect(at, `${e.caseId} ${e.formula}`).toMatch(/ t="str"><f>[^<]*<\/f><v(?:\/>|><\/v>)/)
       else expect(at, `${e.caseId} ${e.formula}`).toMatch(/ t="(s|str|inlineStr)"[^>]*>(?!.*<v><\/v>)/)
     }
     // Complete: every umbrella or per-kind marker of a Stage 5 case is listed.
@@ -339,8 +359,11 @@ describe('the recorded non-numeric bounds are checked against the workbooks', ()
     expect(await reasons(ID, 'C4', skipped)).toEqual([])
     // A failed kind (registered, not published): its rules are justified by its unheld id.
     expect(await reasons(ID, 'I4', SUGGESTED, ['blank', 'text', 'error'])).toEqual(['formula:cfvo-nonnumeric-empty-string not held'])
-    // Nothing registered: the marker's own id justifies it, as before.
-    expect(stage5WithholdJustification(caseOf('stage5-cfvo-formulas'), 'L3')).toEqual([`${UMBRELLA}/colorScale@p9: ${UMBRELLA} not held`])
-    expect(stage5WithholdJustification(caseOf(), 'I4')).toEqual(['formula:cfvo-nonnumeric-empty-string/colorScale@p7: formula:cfvo-nonnumeric-empty-string not held'])
+    // The committed published set: text and the empty string are justified by their published withheld readings; nothing
+    // registered at all would leave the marker's own id as the justification (`<id> not held`).
+    expect(stage5WithholdJustification(caseOf('stage5-cfvo-formulas'), 'L3')).toEqual([`${UMBRELLA}/colorScale@p9: $F$3 is text: formula:cfvo-nonnumeric-text = withheld withholds text: the rule paints nothing and keeps its slot taint`])
+    expect(stage5WithholdJustification(caseOf(), 'I4')).toEqual(['formula:cfvo-nonnumeric-empty-string/colorScale@p7: $A$3 is the empty string: formula:cfvo-nonnumeric-empty-string = withheld withholds empty-string: the rule paints nothing and keeps its slot taint'])
+    expect(stage5WithholdJustification(caseOf(), 'C4')).toEqual([])
+    expect(stage5WithholdJustification(caseOf(), 'I4', id => VERIFIED_CAPABILITIES.has(id) && id !== CF_CFVO_NONNUMERIC_KIND_IDS['empty-string'])).toEqual(['formula:cfvo-nonnumeric-empty-string/colorScale@p7: formula:cfvo-nonnumeric-empty-string not held'])
   }, 300_000)
 })

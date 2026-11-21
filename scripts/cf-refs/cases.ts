@@ -8010,10 +8010,7 @@ export const CF_STAGE5_UNSUPPORTED: Readonly<Record<string, string>> = {
   'formula:cross-sheet-missing':
     'Ruling S5-REPAIR / S5-K: Excel reads =Gone!A1>0 (no such sheet) as an external-workbook reference; opening the workbook prompted to update links (answered Don\'t update), so no capture exists. Production keeps a formula naming an unknown sheet unresolved; its #REF! reading is never registered.',
   'formula:cfvo-nonnumeric':
-    'Finding (S4-MINMAX precedent): no hypothesis (withheld, zero, skipped) matched what Excel showed for a text, blank or error formula bound in stage5-cfvo-formulas L..N; recorded, never fitted. The capture suggests one treatment per kind (blank read as 0, text and error painting nothing), formed after it: production\'s per-kind treatment (cfvoNonNumericTreatmentOf) post-dates it too, so the confirmation case stage5-cfvo-nonnumeric-v2 measures each kind on its own id (formula:cfvo-nonnumeric-blank, -text, -empty-string, -error), whose registered readings decide production kind by kind. Production keeps a non-numeric formula bound unresolved.',
-  // The cfvo-nonnumeric confirmation case (pre-capture ruling): one evidence id per kind, recorded refusals until its capture.
-  ...Object.fromEntries((['blank', 'text', 'empty-string', 'error'] as const).map(k => [`formula:cfvo-nonnumeric-${k}`,
-    `Awaiting capture (the cfvo-nonnumeric confirmation case, 2026-11-21): stage5-cfvo-nonnumeric-v2 pre-registers withheld, zero and skipped for a ${k === 'empty-string' ? 'cached empty-string (="")' : k} colour-scale formula bound, built after production\'s per-kind treatment (cfvoNonNumericTreatmentOf), and is not yet captured. Production keeps such a bound unresolved.`])),
+    'Finding (S4-MINMAX precedent): no uniform hypothesis (withheld, zero, skipped) matched what Excel showed for a text, blank or error formula bound in stage5-cfvo-formulas L..N; recorded, never fitted. Superseded per kind (the cfvo-nonnumeric confirmation case, 16822e70): stage5-cfvo-nonnumeric-v2 measured formula:cfvo-nonnumeric-blank (zero), -text, -empty-string and -error (withheld), which are published and decide production kind by kind (cfvoNonNumericTreatmentOf); the umbrella itself is never published.',
 }
 
 /**

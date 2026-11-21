@@ -96,7 +96,17 @@ export const CF_FORMULA_PRODUCTION_READINGS: Readonly<Record<string, string | re
   // range's own top-left, which stage5-cfvo-scope-v2 contradicted) is no longer registered; it is what an unregistered or
   // unheld reading still falls back to for an absolute bound.
   'formula:cfvo-relative': 'anchor-a1',
-  'formula:cfvo-nonnumeric': Object.freeze(['withheld', 'zero', 'skipped']),
+  // `formula:cfvo-nonnumeric` (the umbrella) is no longer registered: the per-kind ids below supersede it for every kind
+  // (`cfvoNonNumericTreatmentOf` reads a registered per-kind id and never falls back), and its own case
+  // (stage5-cfvo-formulas, where no uniform reading matched) stays a recorded refusal.
+  // service.ts `cfvoNonNumericTreatmentOf` (the cfvo-nonnumeric follow-up): one treatment per kind of a colour-scale
+  // type="formula" bound. Pre-registered in stage5-cfvo-nonnumeric-v2 (359b9b4b) after the behaviour (0c572321, 67c3edb0)
+  // and before its capture (16822e70), which matched one sole survivor per id: blank `zero`; text, the empty string of =""
+  // and error `withheld` (the rule paints nothing: production keeps it unresolved, slot taint kept).
+  'formula:cfvo-nonnumeric-blank': Object.freeze(['withheld', 'zero', 'skipped']),
+  'formula:cfvo-nonnumeric-text': Object.freeze(['withheld', 'zero', 'skipped']),
+  'formula:cfvo-nonnumeric-empty-string': Object.freeze(['withheld', 'zero', 'skipped']),
+  'formula:cfvo-nonnumeric-error': Object.freeze(['withheld', 'zero', 'skipped']),
   'formula:cfvo-scope-multi-range': Object.freeze(['rule-wide', 'per-range', 'anchor-a1']),
   // parse.ts (Ruling S5-I): a standalone <x14:colorScale> resolves through the Stage 2 point model. Its parse gate is the
   // bare evidence; this entry is what lets the audit publish it only for the reading production implements.

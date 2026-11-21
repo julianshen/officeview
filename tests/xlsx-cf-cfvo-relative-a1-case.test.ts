@@ -305,8 +305,10 @@ describe('stage5-cfvo-relative-a1: the registered anchor-a1 against production a
     // scale:scope-disjoint is published; no row anywhere is justified by the scope-disjoint gate any more.
     for (const ref of ['B3', 'D3', 'H3', 'J3', 'B11', 'B12', 'D13', 'D21', 'F3', 'F4', 'F12', 'F21']) expect([own(ref).compared, own(ref).agrees, own(ref).production.unresolved], ref).toEqual([true, true, []])
     expect(rows.some(r => r.justification.some(j => /scope-disjoint not held/.test(j.reason)))).toBe(false)
-    // stage5-cfvo-formulas K (=A2 on K2:K9) read from A1 wraps to a blank cell: a non-numeric bound, recorded.
-    expect(rows.filter(r => r.caseId === 'stage5-cfvo-formulas' && /^K/.test(r.ref) && r.justification.some(j => /anchor-a1: =A2/.test(j.reason))).map(r => r.ref)).toEqual(['K2', 'K3', 'K4', 'K5', 'K6', 'K7', 'K8', 'K9'])
+    // stage5-cfvo-formulas K (=A2 on K2:K9) read from A1 wraps to a blank cell: since formula:cfvo-nonnumeric-blank is
+    // published as zero (stage5-cfvo-nonnumeric-v2, 16822e70) it paints, as Excel did; the blank-wrap record no longer fires.
+    for (let r = 2; r <= 9; r++) { const k = rows.find(x => x.caseId === 'stage5-cfvo-formulas' && x.ref === `K${r}`)!; expect([k.compared, k.agrees, k.production.unresolved], `K${r}`).toEqual([true, true, []]) }
+    expect(rows.some(r => r.justification.some(j => /anchor-a1: =A2/.test(j.reason)))).toBe(false)
     // The superseded single-range record of stage5-cfvo-scope-v2 no longer names a refusal: production paints it.
     expect(rows.filter(r => r.caseId === 'stage5-cfvo-scope-v2' && /^I[2-7]$/.test(r.ref)).every(r => r.production.unresolved.length === 0 && r.production.fill !== 'none')).toBe(true)
   }, 600_000)
