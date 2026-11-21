@@ -92892,11 +92892,11 @@
     {
       "id": "stage5-cfvo-relative-a1",
       "stage": 5,
-      "question": "S5-H (the cfvo-relative confirmation case): is a relative cfvo bound read from A1, on several ranges and on one? A scale [min, =MAX(B2:B5)], an icon set [percent 0, num -20, =MAX(B11:B14)] and a data bar [min, =MAX(B20:B23)] on \"B..:B.. D..:D..\", the same three on F alone (=MAX(F2:F5), =MAX(F11:F14), =MAX(F20:F23)), and an absolute negative control ($H$1). Readings: anchor-a1 (A1:A4, max 15), rule-wide / anchor-top-left, per-range, anchor-cell, zero and ignored (a bound below the minimum inverts a bar: a full bar). Literal num/num twins on the same values, one per predicted rendering.",
+      "question": "S5-H (the cfvo-relative confirmation case): is a relative cfvo bound read from A1, on several ranges and on one? A scale [min, =MAX(B2:B5)], an icon set [percent 0, num -20, =MAX(B11:B14)] and a data bar [min, =MAX(B20:B23)] on \"B..:B.. D..:D..\", the same three on F alone (=MAX(F2:F5), =MAX(F11:F14), =MAX(F20:F23)), and an absolute negative control ($H$1). Readings: anchor-a1 (A1:A4, max 15), rule-wide / anchor-top-left, per-range, anchor-cell, zero and ignored (bars: the window readings only; zero and ignored would invert them). Literal num/num twins on the same values, one per predicted rendering.",
       "input": "tests/fixtures/xlsx-cf/inputs/stage5-cfvo-relative-a1.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage5-cfvo-relative-a1.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:AM30",
+      "range": "A1:AK30",
       "requiredAppearances": [
         "screen"
       ],
@@ -94010,120 +94010,8 @@
           "extension": "legacy",
           "sqref": "P2:P5",
           "capabilityId": "formula:cfvo-relative-a1-twin",
-          "ruleType": "dataBar",
-          "priority": 32,
-          "formulas": [],
-          "bar": {
-            "pairing": "paired",
-            "cfvo": [
-              {
-                "type": "num",
-                "val": "-17"
-              },
-              {
-                "type": "num",
-                "val": "-7"
-              }
-            ],
-            "attrs": {},
-            "colors": {
-              "fill": "FF0000FF"
-            }
-          }
-        },
-        {
-          "part": "xl/worksheets/sheet1.xml",
-          "sqref": "P2:P5",
-          "extension": "x14",
-          "capabilityId": "formula:cfvo-relative-a1-twin",
-          "ruleType": "dataBar",
-          "formulas": [],
-          "bar": {
-            "pairing": "paired",
-            "cfvo": [
-              {
-                "type": "num",
-                "f": "-17"
-              },
-              {
-                "type": "num",
-                "f": "-7"
-              }
-            ],
-            "attrs": {
-              "minLength": "0",
-              "maxLength": "100",
-              "gradient": "0"
-            },
-            "colors": {
-              "negativeFill": "FFFF0000",
-              "axis": "FF000000"
-            }
-          }
-        },
-        {
-          "part": "xl/worksheets/sheet1.xml",
-          "extension": "legacy",
-          "sqref": "P7:P10",
-          "capabilityId": "formula:cfvo-relative-a1-twin",
-          "ruleType": "dataBar",
-          "priority": 33,
-          "formulas": [],
-          "bar": {
-            "pairing": "paired",
-            "cfvo": [
-              {
-                "type": "num",
-                "val": "-17"
-              },
-              {
-                "type": "num",
-                "val": "-7"
-              }
-            ],
-            "attrs": {},
-            "colors": {
-              "fill": "FF0000FF"
-            }
-          }
-        },
-        {
-          "part": "xl/worksheets/sheet1.xml",
-          "sqref": "P7:P10",
-          "extension": "x14",
-          "capabilityId": "formula:cfvo-relative-a1-twin",
-          "ruleType": "dataBar",
-          "formulas": [],
-          "bar": {
-            "pairing": "paired",
-            "cfvo": [
-              {
-                "type": "num",
-                "f": "-17"
-              },
-              {
-                "type": "num",
-                "f": "-7"
-              }
-            ],
-            "attrs": {
-              "minLength": "0",
-              "maxLength": "100",
-              "gradient": "0"
-            },
-            "colors": {
-              "negativeFill": "FFFF0000",
-              "axis": "FF000000"
-            }
-          }
-        },
-        {
-          "part": "xl/worksheets/sheet1.xml",
-          "extension": "legacy",
-          "sqref": "P12:P15",
-          "capabilityId": "formula:cfvo-relative-a1-twin",
           "ruleType": "colorScale",
-          "priority": 34,
+          "priority": 32,
           "formulas": [],
           "scale": {
             "cfvo": [
@@ -94146,10 +94034,10 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "P17:P20",
+          "sqref": "P7:P10",
           "capabilityId": "formula:cfvo-relative-a1-twin",
           "ruleType": "colorScale",
-          "priority": 35,
+          "priority": 33,
           "formulas": [],
           "scale": {
             "cfvo": [
@@ -94172,10 +94060,10 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "P22:P25",
+          "sqref": "P12:P15",
           "capabilityId": "formula:cfvo-relative-a1-twin",
           "ruleType": "colorScale",
-          "priority": 36,
+          "priority": 34,
           "formulas": [],
           "scale": {
             "cfvo": [
@@ -94198,10 +94086,10 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "P27:P30",
+          "sqref": "P17:P20",
           "capabilityId": "formula:cfvo-relative-a1-twin",
           "ruleType": "colorScale",
-          "priority": 37,
+          "priority": 35,
           "formulas": [],
           "scale": {
             "cfvo": [
@@ -94224,10 +94112,10 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "Q2:Q5",
+          "sqref": "P22:P25",
           "capabilityId": "formula:cfvo-relative-a1-twin",
           "ruleType": "colorScale",
-          "priority": 38,
+          "priority": 36,
           "formulas": [],
           "scale": {
             "cfvo": [
@@ -94250,10 +94138,10 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "Q7:Q10",
+          "sqref": "P27:P30",
           "capabilityId": "formula:cfvo-relative-a1-twin",
           "ruleType": "colorScale",
-          "priority": 39,
+          "priority": 37,
           "formulas": [],
           "scale": {
             "cfvo": [
@@ -94276,10 +94164,10 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "Q12:Q15",
+          "sqref": "Q2:Q5",
           "capabilityId": "formula:cfvo-relative-a1-twin",
           "ruleType": "colorScale",
-          "priority": 40,
+          "priority": 38,
           "formulas": [],
           "scale": {
             "cfvo": [
@@ -94290,6 +94178,58 @@
               {
                 "type": "num",
                 "val": "60"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "Q7:Q10",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 39,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-40"
+              },
+              {
+                "type": "num",
+                "val": "15"
+              }
+            ],
+            "colors": [
+              "FFF8696B",
+              "FF63BE7B"
+            ],
+            "dialect": "base"
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "sqref": "Q12:Q15",
+          "capabilityId": "formula:cfvo-relative-a1-twin",
+          "ruleType": "colorScale",
+          "priority": 40,
+          "formulas": [],
+          "scale": {
+            "cfvo": [
+              {
+                "type": "num",
+                "val": "-60"
+              },
+              {
+                "type": "num",
+                "val": "-50"
               }
             ],
             "colors": [
@@ -94315,7 +94255,7 @@
               },
               {
                 "type": "num",
-                "val": "15"
+                "val": "40"
               }
             ],
             "colors": [
@@ -94337,11 +94277,11 @@
             "cfvo": [
               {
                 "type": "num",
-                "val": "-60"
+                "val": "-40"
               },
               {
                 "type": "num",
-                "val": "-50"
+                "val": "85"
               }
             ],
             "colors": [
@@ -94367,7 +94307,7 @@
               },
               {
                 "type": "num",
-                "val": "40"
+                "val": "0"
               }
             ],
             "colors": [
@@ -94382,60 +94322,8 @@
           "extension": "legacy",
           "sqref": "R2:R5",
           "capabilityId": "formula:cfvo-relative-a1-twin",
-          "ruleType": "colorScale",
-          "priority": 44,
-          "formulas": [],
-          "scale": {
-            "cfvo": [
-              {
-                "type": "num",
-                "val": "-40"
-              },
-              {
-                "type": "num",
-                "val": "85"
-              }
-            ],
-            "colors": [
-              "FFF8696B",
-              "FF63BE7B"
-            ],
-            "dialect": "base"
-          }
-        },
-        {
-          "part": "xl/worksheets/sheet1.xml",
-          "extension": "legacy",
-          "sqref": "R7:R10",
-          "capabilityId": "formula:cfvo-relative-a1-twin",
-          "ruleType": "colorScale",
-          "priority": 45,
-          "formulas": [],
-          "scale": {
-            "cfvo": [
-              {
-                "type": "num",
-                "val": "-40"
-              },
-              {
-                "type": "num",
-                "val": "0"
-              }
-            ],
-            "colors": [
-              "FFF8696B",
-              "FF63BE7B"
-            ],
-            "dialect": "base"
-          }
-        },
-        {
-          "part": "xl/worksheets/sheet1.xml",
-          "extension": "legacy",
-          "sqref": "R12:R15",
-          "capabilityId": "formula:cfvo-relative-a1-twin",
           "ruleType": "iconSet",
-          "priority": 46,
+          "priority": 44,
           "formulas": [],
           "icon": {
             "dialect": "base",
@@ -94460,10 +94348,10 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "R17:R20",
+          "sqref": "R7:R10",
           "capabilityId": "formula:cfvo-relative-a1-twin",
           "ruleType": "iconSet",
-          "priority": 47,
+          "priority": 45,
           "formulas": [],
           "icon": {
             "dialect": "base",
@@ -94488,10 +94376,10 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "R22:R25",
+          "sqref": "R12:R15",
           "capabilityId": "formula:cfvo-relative-a1-twin",
           "ruleType": "iconSet",
-          "priority": 48,
+          "priority": 46,
           "formulas": [],
           "icon": {
             "dialect": "base",
@@ -94516,10 +94404,10 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "R27:R30",
+          "sqref": "R17:R20",
           "capabilityId": "formula:cfvo-relative-a1-twin",
           "ruleType": "dataBar",
-          "priority": 49,
+          "priority": 47,
           "formulas": [],
           "bar": {
             "pairing": "paired",
@@ -94541,7 +94429,7 @@
         },
         {
           "part": "xl/worksheets/sheet1.xml",
-          "sqref": "R27:R30",
+          "sqref": "R17:R20",
           "extension": "x14",
           "capabilityId": "formula:cfvo-relative-a1-twin",
           "ruleType": "dataBar",
@@ -94572,10 +94460,10 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "S2:S5",
+          "sqref": "R22:R25",
           "capabilityId": "formula:cfvo-relative-a1-twin",
           "ruleType": "dataBar",
-          "priority": 50,
+          "priority": 48,
           "formulas": [],
           "bar": {
             "pairing": "paired",
@@ -94597,7 +94485,7 @@
         },
         {
           "part": "xl/worksheets/sheet1.xml",
-          "sqref": "S2:S5",
+          "sqref": "R22:R25",
           "extension": "x14",
           "capabilityId": "formula:cfvo-relative-a1-twin",
           "ruleType": "dataBar",
@@ -94628,10 +94516,10 @@
         {
           "part": "xl/worksheets/sheet1.xml",
           "extension": "legacy",
-          "sqref": "S7:S10",
+          "sqref": "R27:R30",
           "capabilityId": "formula:cfvo-relative-a1-twin",
           "ruleType": "dataBar",
-          "priority": 51,
+          "priority": 49,
           "formulas": [],
           "bar": {
             "pairing": "paired",
@@ -94653,7 +94541,7 @@
         },
         {
           "part": "xl/worksheets/sheet1.xml",
-          "sqref": "S7:S10",
+          "sqref": "R27:R30",
           "extension": "x14",
           "capabilityId": "formula:cfvo-relative-a1-twin",
           "ruleType": "dataBar",
@@ -94680,2168 +94568,2014 @@
               "axis": "FF000000"
             }
           }
-        },
-        {
-          "part": "xl/worksheets/sheet1.xml",
-          "extension": "legacy",
-          "sqref": "S12:S15",
-          "capabilityId": "formula:cfvo-relative-a1-twin",
-          "ruleType": "dataBar",
-          "priority": 52,
-          "formulas": [],
-          "bar": {
-            "pairing": "paired",
-            "cfvo": [
-              {
-                "type": "num",
-                "val": "-17"
-              },
-              {
-                "type": "num",
-                "val": "-7"
-              }
-            ],
-            "attrs": {},
-            "colors": {
-              "fill": "FF0000FF"
-            }
-          }
-        },
-        {
-          "part": "xl/worksheets/sheet1.xml",
-          "sqref": "S12:S15",
-          "extension": "x14",
-          "capabilityId": "formula:cfvo-relative-a1-twin",
-          "ruleType": "dataBar",
-          "formulas": [],
-          "bar": {
-            "pairing": "paired",
-            "cfvo": [
-              {
-                "type": "num",
-                "f": "-17"
-              },
-              {
-                "type": "num",
-                "f": "-7"
-              }
-            ],
-            "attrs": {
-              "minLength": "0",
-              "maxLength": "100",
-              "gradient": "0"
-            },
-            "colors": {
-              "negativeFill": "FFFF0000",
-              "axis": "FF000000"
-            }
-          }
         }
       ],
       "expected": {
-        "inputSha256": "abd5daafec86f950c707b693c71076a3dbd56496266c0c83f7044be753310be9",
-        "savedSha256": "abd5daafec86f950c707b693c71076a3dbd56496266c0c83f7044be753310be9",
+        "inputSha256": "0f3551d7896e7f43d20288940d9db3bc93d5b5ecb878f27f36b5d8a25de67e66",
+        "savedSha256": "0f3551d7896e7f43d20288940d9db3bc93d5b5ecb878f27f36b5d8a25de67e66",
         "provenance": "seed-hypothesis",
         "positiveRefs": [],
         "negativeRefs": [
-          "V2",
-          "V3",
-          "V4",
-          "V5",
-          "X2",
-          "X3",
-          "X4",
-          "X5",
-          "AF2",
+          "U2",
+          "U3",
+          "U4",
+          "U5",
+          "W2",
+          "W3",
+          "W4",
+          "W5",
+          "AE2",
+          "AE8",
+          "AE9",
+          "AE15",
+          "AE17",
+          "AE23",
+          "AE24",
+          "AE30",
+          "AF3",
+          "AF4",
           "AF8",
           "AF9",
-          "AF15",
-          "AF17",
-          "AF23",
+          "AF13",
+          "AF14",
+          "AF18",
+          "AF19",
+          "AF20",
           "AF24",
-          "AF30",
+          "AF25",
+          "AF28",
+          "AE14",
           "AG3",
-          "AG4",
+          "AE29",
+          "AE12",
+          "AE13",
+          "AE27",
+          "AE28",
+          "U11",
+          "U12",
+          "U13",
+          "U14",
+          "W11",
+          "W12",
+          "W13",
+          "W14",
+          "AG7",
           "AG8",
           "AG9",
-          "AG13",
-          "AG14",
+          "AG10",
+          "AG12",
           "AG18",
           "AG19",
           "AG20",
+          "AG22",
+          "AG23",
+          "AG29",
+          "AG30",
           "AG24",
           "AG25",
+          "AG27",
           "AG28",
-          "AF14",
+          "U20",
+          "U21",
+          "U22",
+          "U23",
+          "W20",
+          "W21",
+          "W22",
+          "W23",
+          "AH2",
           "AH3",
-          "AF29",
-          "AF12",
-          "AF13",
-          "AF27",
-          "AF28",
-          "V11",
-          "V12",
-          "V13",
-          "V14",
-          "X11",
-          "X12",
-          "X13",
-          "X14",
-          "AH7",
-          "AH8",
           "AH9",
           "AH10",
           "AH12",
           "AH18",
           "AH19",
           "AH20",
-          "AH22",
-          "AH23",
-          "AH29",
-          "AH30",
+          "AH4",
+          "AH5",
+          "AH13",
+          "AH14",
+          "AH15",
           "AH24",
           "AH25",
-          "AH27",
           "AH28",
-          "V20",
-          "V21",
-          "V22",
-          "V23",
-          "X20",
-          "X21",
-          "X22",
-          "X23",
+          "AH29",
+          "AH30",
+          "AA2",
+          "AA3",
+          "AA4",
+          "AA5",
+          "AC2",
+          "AC3",
+          "AC4",
+          "AC5",
           "AI2",
-          "AI3",
+          "AI8",
           "AI9",
-          "AI10",
-          "AI12",
-          "AI18",
-          "AI19",
-          "AI20",
-          "AI4",
-          "AI5",
-          "AI13",
-          "AI14",
           "AI15",
+          "AI17",
+          "AI23",
           "AI24",
-          "AI25",
-          "AI28",
-          "AI29",
           "AI30",
+          "Y2",
+          "Y3",
+          "Y4",
+          "Y5",
           "AJ2",
-          "AJ3",
-          "AJ4",
-          "AJ7",
           "AJ8",
-          "AB2",
-          "AB3",
-          "AB4",
-          "AB5",
-          "AD2",
-          "AD3",
-          "AD4",
-          "AD5",
-          "AJ12",
+          "AJ9",
+          "AJ15",
           "AJ18",
           "AJ19",
+          "AJ23",
+          "AJ24",
           "AJ25",
-          "AJ27",
-          "AK3",
-          "AK4",
+          "AJ28",
+          "AJ14",
+          "AJ12",
+          "AJ13",
+          "Y11",
+          "Y12",
+          "Y13",
+          "Y14",
+          "AK2",
+          "AK8",
+          "AK9",
           "AK10",
-          "Z2",
-          "Z3",
-          "Z4",
-          "Z5",
+          "AK14",
+          "AK15",
           "AK12",
+          "AK13",
+          "Y20",
+          "Y21",
+          "Y22",
+          "Y23",
+          "AK17",
+          "AK23",
+          "AK24",
+          "AK25",
           "AK18",
           "AK19",
-          "AK25",
-          "AK28",
+          "AK20",
           "AK29",
-          "AL3",
-          "AL4",
-          "AL5",
-          "AL8",
-          "AK24",
-          "AK22",
-          "AK23",
-          "Z11",
-          "Z12",
-          "Z13",
-          "Z14",
-          "AL12",
-          "AL18",
-          "AL19",
-          "AL20",
-          "AL24",
-          "AL25",
-          "AL22",
-          "AL23",
-          "Z20",
-          "Z21",
-          "Z22",
-          "Z23",
-          "AL27",
-          "AM3",
-          "AM4",
-          "AM5",
-          "AL28",
-          "AL29",
-          "AL30",
-          "AM9",
-          "AM10",
-          "AM12",
-          "AM13"
+          "AK30"
         ],
         "cells": [
           {
             "ref": "B2",
-            "controlRef": "V2",
+            "controlRef": "U2",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "B3",
-            "controlRef": "V3",
+            "controlRef": "U3",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "B4",
-            "controlRef": "V4",
+            "controlRef": "U4",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "B5",
-            "controlRef": "V5",
+            "controlRef": "U5",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "D2",
-            "controlRef": "X2",
+            "controlRef": "W2",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "D3",
-            "controlRef": "X3",
+            "controlRef": "W3",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "D4",
-            "controlRef": "X4",
+            "controlRef": "W4",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "D5",
-            "controlRef": "X5",
+            "controlRef": "W5",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "L2",
-            "controlRef": "AF2",
+            "controlRef": "AE2",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "L8",
-            "controlRef": "AF8",
+            "controlRef": "AE8",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "L9",
-            "controlRef": "AF9",
+            "controlRef": "AE9",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "L15",
-            "controlRef": "AF15",
+            "controlRef": "AE15",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "L17",
-            "controlRef": "AF17",
+            "controlRef": "AE17",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "L23",
-            "controlRef": "AF23",
+            "controlRef": "AE23",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "L24",
-            "controlRef": "AF24",
+            "controlRef": "AE24",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "L30",
-            "controlRef": "AF30",
+            "controlRef": "AE30",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "M3",
-            "controlRef": "AG3",
+            "controlRef": "AF3",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "M4",
-            "controlRef": "AG4",
+            "controlRef": "AF4",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "M8",
-            "controlRef": "AG8",
+            "controlRef": "AF8",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "M9",
-            "controlRef": "AG9",
+            "controlRef": "AF9",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "M13",
-            "controlRef": "AG13",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "M14",
-            "controlRef": "AG14",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "M18",
-            "controlRef": "AG18",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "M19",
-            "controlRef": "AG19",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "M20",
-            "controlRef": "AG20",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "M24",
-            "controlRef": "AG24",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "M25",
-            "controlRef": "AG25",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "M28",
-            "controlRef": "AG28",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "L14",
-            "controlRef": "AF14",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "N3",
-            "controlRef": "AH3",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "L29",
-            "controlRef": "AF29",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "L12",
-            "controlRef": "AF12",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "L13",
             "controlRef": "AF13",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "L27",
-            "controlRef": "AF27",
+            "ref": "M14",
+            "controlRef": "AF14",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "L28",
+            "ref": "M18",
+            "controlRef": "AF18",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M19",
+            "controlRef": "AF19",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M20",
+            "controlRef": "AF20",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M24",
+            "controlRef": "AF24",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M25",
+            "controlRef": "AF25",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "M28",
             "controlRef": "AF28",
             "matched": false,
             "fillSource": "unverified"
           },
           {
+            "ref": "L14",
+            "controlRef": "AE14",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "N3",
+            "controlRef": "AG3",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L29",
+            "controlRef": "AE29",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L12",
+            "controlRef": "AE12",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L13",
+            "controlRef": "AE13",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L27",
+            "controlRef": "AE27",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "L28",
+            "controlRef": "AE28",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
             "ref": "B11",
-            "controlRef": "V11",
+            "controlRef": "U11",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "B12",
-            "controlRef": "V12",
+            "controlRef": "U12",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "B13",
-            "controlRef": "V13",
+            "controlRef": "U13",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "B14",
-            "controlRef": "V14",
+            "controlRef": "U14",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "D11",
-            "controlRef": "X11",
+            "controlRef": "W11",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "D12",
-            "controlRef": "X12",
+            "controlRef": "W12",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "D13",
-            "controlRef": "X13",
+            "controlRef": "W13",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "D14",
-            "controlRef": "X14",
+            "controlRef": "W14",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "N7",
-            "controlRef": "AH7",
+            "controlRef": "AG7",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "N8",
-            "controlRef": "AH8",
+            "controlRef": "AG8",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "N9",
-            "controlRef": "AH9",
+            "controlRef": "AG9",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "N10",
-            "controlRef": "AH10",
+            "controlRef": "AG10",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "N12",
-            "controlRef": "AH12",
+            "controlRef": "AG12",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "N18",
-            "controlRef": "AH18",
+            "controlRef": "AG18",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "N19",
-            "controlRef": "AH19",
+            "controlRef": "AG19",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "N20",
-            "controlRef": "AH20",
+            "controlRef": "AG20",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "N22",
-            "controlRef": "AH22",
+            "controlRef": "AG22",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "N23",
-            "controlRef": "AH23",
+            "controlRef": "AG23",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "N29",
-            "controlRef": "AH29",
+            "controlRef": "AG29",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "N30",
-            "controlRef": "AH30",
+            "controlRef": "AG30",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "N24",
-            "controlRef": "AH24",
+            "controlRef": "AG24",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "N25",
-            "controlRef": "AH25",
+            "controlRef": "AG25",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "N27",
-            "controlRef": "AH27",
+            "controlRef": "AG27",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "N28",
-            "controlRef": "AH28",
+            "controlRef": "AG28",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "B20",
-            "controlRef": "V20",
+            "controlRef": "U20",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "B21",
-            "controlRef": "V21",
+            "controlRef": "U21",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "B22",
-            "controlRef": "V22",
+            "controlRef": "U22",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "B23",
-            "controlRef": "V23",
+            "controlRef": "U23",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "D20",
-            "controlRef": "X20",
+            "controlRef": "W20",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "D21",
-            "controlRef": "X21",
+            "controlRef": "W21",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "D22",
-            "controlRef": "X22",
+            "controlRef": "W22",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "D23",
-            "controlRef": "X23",
+            "controlRef": "W23",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "O2",
-            "controlRef": "AI2",
+            "controlRef": "AH2",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "O3",
-            "controlRef": "AI3",
+            "controlRef": "AH3",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "O9",
-            "controlRef": "AI9",
+            "controlRef": "AH9",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "O10",
-            "controlRef": "AI10",
+            "controlRef": "AH10",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "O12",
-            "controlRef": "AI12",
+            "controlRef": "AH12",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "O18",
-            "controlRef": "AI18",
+            "controlRef": "AH18",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "O19",
-            "controlRef": "AI19",
+            "controlRef": "AH19",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "O20",
-            "controlRef": "AI20",
+            "controlRef": "AH20",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "O4",
-            "controlRef": "AI4",
+            "controlRef": "AH4",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "O5",
-            "controlRef": "AI5",
+            "controlRef": "AH5",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "O13",
-            "controlRef": "AI13",
+            "controlRef": "AH13",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "O14",
-            "controlRef": "AI14",
+            "controlRef": "AH14",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "O15",
-            "controlRef": "AI15",
+            "controlRef": "AH15",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "O24",
-            "controlRef": "AI24",
+            "controlRef": "AH24",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "O25",
-            "controlRef": "AI25",
+            "controlRef": "AH25",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "O28",
-            "controlRef": "AI28",
+            "controlRef": "AH28",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "O29",
-            "controlRef": "AI29",
+            "controlRef": "AH29",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "O30",
-            "controlRef": "AI30",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "P2",
-            "controlRef": "AJ2",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "P3",
-            "controlRef": "AJ3",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "P4",
-            "controlRef": "AJ4",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "P7",
-            "controlRef": "AJ7",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "P8",
-            "controlRef": "AJ8",
+            "controlRef": "AH30",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "H2",
-            "controlRef": "AB2",
+            "controlRef": "AA2",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "H3",
-            "controlRef": "AB3",
+            "controlRef": "AA3",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "H4",
-            "controlRef": "AB4",
+            "controlRef": "AA4",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "H5",
-            "controlRef": "AB5",
+            "controlRef": "AA5",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "J2",
-            "controlRef": "AD2",
+            "controlRef": "AC2",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "J3",
-            "controlRef": "AD3",
+            "controlRef": "AC3",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "J4",
-            "controlRef": "AD4",
+            "controlRef": "AC4",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "J5",
-            "controlRef": "AD5",
+            "controlRef": "AC5",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "P12",
-            "controlRef": "AJ12",
+            "ref": "P2",
+            "controlRef": "AI2",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "P18",
-            "controlRef": "AJ18",
+            "ref": "P8",
+            "controlRef": "AI8",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "P19",
-            "controlRef": "AJ19",
+            "ref": "P9",
+            "controlRef": "AI9",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "P25",
-            "controlRef": "AJ25",
+            "ref": "P15",
+            "controlRef": "AI15",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "P27",
-            "controlRef": "AJ27",
+            "ref": "P17",
+            "controlRef": "AI17",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "Q3",
-            "controlRef": "AK3",
+            "ref": "P23",
+            "controlRef": "AI23",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "Q4",
-            "controlRef": "AK4",
+            "ref": "P24",
+            "controlRef": "AI24",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "Q10",
-            "controlRef": "AK10",
+            "ref": "P30",
+            "controlRef": "AI30",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "F2",
-            "controlRef": "Z2",
+            "controlRef": "Y2",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "F3",
-            "controlRef": "Z3",
+            "controlRef": "Y3",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "F4",
-            "controlRef": "Z4",
+            "controlRef": "Y4",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "F5",
-            "controlRef": "Z5",
+            "controlRef": "Y5",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "Q12",
-            "controlRef": "AK12",
+            "ref": "Q2",
+            "controlRef": "AJ2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q8",
+            "controlRef": "AJ8",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q9",
+            "controlRef": "AJ9",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q15",
+            "controlRef": "AJ15",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "Q18",
-            "controlRef": "AK18",
+            "controlRef": "AJ18",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "Q19",
-            "controlRef": "AK19",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "Q25",
-            "controlRef": "AK25",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "Q28",
-            "controlRef": "AK28",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "Q29",
-            "controlRef": "AK29",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "R3",
-            "controlRef": "AL3",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "R4",
-            "controlRef": "AL4",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "R5",
-            "controlRef": "AL5",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "R8",
-            "controlRef": "AL8",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "Q24",
-            "controlRef": "AK24",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "Q22",
-            "controlRef": "AK22",
+            "controlRef": "AJ19",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "Q23",
-            "controlRef": "AK23",
+            "controlRef": "AJ23",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q24",
+            "controlRef": "AJ24",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q25",
+            "controlRef": "AJ25",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q28",
+            "controlRef": "AJ28",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q14",
+            "controlRef": "AJ14",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q12",
+            "controlRef": "AJ12",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "Q13",
+            "controlRef": "AJ13",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "F11",
-            "controlRef": "Z11",
+            "controlRef": "Y11",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "F12",
-            "controlRef": "Z12",
+            "controlRef": "Y12",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "F13",
-            "controlRef": "Z13",
+            "controlRef": "Y13",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "F14",
-            "controlRef": "Z14",
+            "controlRef": "Y14",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R2",
+            "controlRef": "AK2",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R8",
+            "controlRef": "AK8",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R9",
+            "controlRef": "AK9",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R10",
+            "controlRef": "AK10",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R14",
+            "controlRef": "AK14",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R15",
+            "controlRef": "AK15",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "R12",
-            "controlRef": "AL12",
+            "controlRef": "AK12",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "R18",
-            "controlRef": "AL18",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "R19",
-            "controlRef": "AL19",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "R20",
-            "controlRef": "AL20",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "R24",
-            "controlRef": "AL24",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "R25",
-            "controlRef": "AL25",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "R22",
-            "controlRef": "AL22",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "R23",
-            "controlRef": "AL23",
+            "ref": "R13",
+            "controlRef": "AK13",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "F20",
-            "controlRef": "Z20",
+            "controlRef": "Y20",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "F21",
-            "controlRef": "Z21",
+            "controlRef": "Y21",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "F22",
-            "controlRef": "Z22",
+            "controlRef": "Y22",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "F23",
-            "controlRef": "Z23",
+            "controlRef": "Y23",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "R27",
-            "controlRef": "AL27",
+            "ref": "R17",
+            "controlRef": "AK17",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "S3",
-            "controlRef": "AM3",
+            "ref": "R23",
+            "controlRef": "AK23",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "S4",
-            "controlRef": "AM4",
+            "ref": "R24",
+            "controlRef": "AK24",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "S5",
-            "controlRef": "AM5",
+            "ref": "R25",
+            "controlRef": "AK25",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "R28",
-            "controlRef": "AL28",
+            "ref": "R18",
+            "controlRef": "AK18",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R19",
+            "controlRef": "AK19",
+            "matched": false,
+            "fillSource": "unverified"
+          },
+          {
+            "ref": "R20",
+            "controlRef": "AK20",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "R29",
-            "controlRef": "AL29",
+            "controlRef": "AK29",
             "matched": false,
             "fillSource": "unverified"
           },
           {
             "ref": "R30",
-            "controlRef": "AL30",
+            "controlRef": "AK30",
             "matched": false,
             "fillSource": "unverified"
           },
           {
-            "ref": "S9",
-            "controlRef": "AM9",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "S10",
-            "controlRef": "AM10",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "S12",
-            "controlRef": "AM12",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "S13",
-            "controlRef": "AM13",
-            "matched": false,
-            "fillSource": "unverified"
-          },
-          {
-            "ref": "V2",
+            "ref": "U2",
             "controlRef": "B2",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "V3",
+            "ref": "U3",
             "controlRef": "B3",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "V4",
+            "ref": "U4",
             "controlRef": "B4",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "V5",
+            "ref": "U5",
             "controlRef": "B5",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "X2",
+            "ref": "W2",
             "controlRef": "D2",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "X3",
+            "ref": "W3",
             "controlRef": "D3",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "X4",
+            "ref": "W4",
             "controlRef": "D4",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "X5",
+            "ref": "W5",
             "controlRef": "D5",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AF2",
+            "ref": "AE2",
             "controlRef": "L2",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AF8",
+            "ref": "AE8",
             "controlRef": "L8",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AF9",
+            "ref": "AE9",
             "controlRef": "L9",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AF15",
+            "ref": "AE15",
             "controlRef": "L15",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AF17",
+            "ref": "AE17",
             "controlRef": "L17",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AF23",
+            "ref": "AE23",
             "controlRef": "L23",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AF24",
+            "ref": "AE24",
             "controlRef": "L24",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AF30",
+            "ref": "AE30",
             "controlRef": "L30",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AG3",
+            "ref": "AF3",
             "controlRef": "M3",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AG4",
+            "ref": "AF4",
             "controlRef": "M4",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AG8",
+            "ref": "AF8",
             "controlRef": "M8",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AG9",
+            "ref": "AF9",
             "controlRef": "M9",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AG13",
+            "ref": "AF13",
             "controlRef": "M13",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AG14",
+            "ref": "AF14",
             "controlRef": "M14",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AG18",
+            "ref": "AF18",
             "controlRef": "M18",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AG19",
+            "ref": "AF19",
             "controlRef": "M19",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AG20",
+            "ref": "AF20",
             "controlRef": "M20",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AG24",
+            "ref": "AF24",
             "controlRef": "M24",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AG25",
+            "ref": "AF25",
             "controlRef": "M25",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AG28",
+            "ref": "AF28",
             "controlRef": "M28",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AF14",
+            "ref": "AE14",
             "controlRef": "L14",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AH3",
+            "ref": "AG3",
             "controlRef": "N3",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AF29",
+            "ref": "AE29",
             "controlRef": "L29",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AF12",
+            "ref": "AE12",
             "controlRef": "L12",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AF13",
+            "ref": "AE13",
             "controlRef": "L13",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AF27",
+            "ref": "AE27",
             "controlRef": "L27",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AF28",
+            "ref": "AE28",
             "controlRef": "L28",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "V11",
+            "ref": "U11",
             "controlRef": "B11",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "V12",
+            "ref": "U12",
             "controlRef": "B12",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "V13",
+            "ref": "U13",
             "controlRef": "B13",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "V14",
+            "ref": "U14",
             "controlRef": "B14",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "X11",
+            "ref": "W11",
             "controlRef": "D11",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "X12",
+            "ref": "W12",
             "controlRef": "D12",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "X13",
+            "ref": "W13",
             "controlRef": "D13",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "X14",
+            "ref": "W14",
             "controlRef": "D14",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AH7",
+            "ref": "AG7",
             "controlRef": "N7",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AH8",
+            "ref": "AG8",
             "controlRef": "N8",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AH9",
+            "ref": "AG9",
             "controlRef": "N9",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AH10",
+            "ref": "AG10",
             "controlRef": "N10",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AH12",
+            "ref": "AG12",
             "controlRef": "N12",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AH18",
+            "ref": "AG18",
             "controlRef": "N18",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AH19",
+            "ref": "AG19",
             "controlRef": "N19",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AH20",
+            "ref": "AG20",
             "controlRef": "N20",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AH22",
+            "ref": "AG22",
             "controlRef": "N22",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AH23",
+            "ref": "AG23",
             "controlRef": "N23",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AH29",
+            "ref": "AG29",
             "controlRef": "N29",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AH30",
+            "ref": "AG30",
             "controlRef": "N30",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AH24",
+            "ref": "AG24",
             "controlRef": "N24",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AH25",
+            "ref": "AG25",
             "controlRef": "N25",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AH27",
+            "ref": "AG27",
             "controlRef": "N27",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AH28",
+            "ref": "AG28",
             "controlRef": "N28",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "V20",
+            "ref": "U20",
             "controlRef": "B20",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "V21",
+            "ref": "U21",
             "controlRef": "B21",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "V22",
+            "ref": "U22",
             "controlRef": "B22",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "V23",
+            "ref": "U23",
             "controlRef": "B23",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "X20",
+            "ref": "W20",
             "controlRef": "D20",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "X21",
+            "ref": "W21",
             "controlRef": "D21",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "X22",
+            "ref": "W22",
             "controlRef": "D22",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "X23",
+            "ref": "W23",
             "controlRef": "D23",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AI2",
+            "ref": "AH2",
             "controlRef": "O2",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AI3",
+            "ref": "AH3",
             "controlRef": "O3",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AI9",
+            "ref": "AH9",
             "controlRef": "O9",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AI10",
+            "ref": "AH10",
             "controlRef": "O10",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AI12",
+            "ref": "AH12",
             "controlRef": "O12",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AI18",
+            "ref": "AH18",
             "controlRef": "O18",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AI19",
+            "ref": "AH19",
             "controlRef": "O19",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AI20",
+            "ref": "AH20",
             "controlRef": "O20",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AI4",
+            "ref": "AH4",
             "controlRef": "O4",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AI5",
+            "ref": "AH5",
             "controlRef": "O5",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AI13",
+            "ref": "AH13",
             "controlRef": "O13",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AI14",
+            "ref": "AH14",
             "controlRef": "O14",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AI15",
+            "ref": "AH15",
             "controlRef": "O15",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AI24",
+            "ref": "AH24",
             "controlRef": "O24",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AI25",
+            "ref": "AH25",
             "controlRef": "O25",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AI28",
+            "ref": "AH28",
             "controlRef": "O28",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AI29",
+            "ref": "AH29",
             "controlRef": "O29",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AI30",
+            "ref": "AH30",
             "controlRef": "O30",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AJ2",
-            "controlRef": "P2",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "AJ3",
-            "controlRef": "P3",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "AJ4",
-            "controlRef": "P4",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "AJ7",
-            "controlRef": "P7",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "AJ8",
-            "controlRef": "P8",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "AB2",
+            "ref": "AA2",
             "controlRef": "H2",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AB3",
+            "ref": "AA3",
             "controlRef": "H3",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AB4",
+            "ref": "AA4",
             "controlRef": "H4",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AB5",
+            "ref": "AA5",
             "controlRef": "H5",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AD2",
+            "ref": "AC2",
             "controlRef": "J2",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AD3",
+            "ref": "AC3",
             "controlRef": "J3",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AD4",
+            "ref": "AC4",
             "controlRef": "J4",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AD5",
+            "ref": "AC5",
             "controlRef": "J5",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AJ12",
-            "controlRef": "P12",
+            "ref": "AI2",
+            "controlRef": "P2",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AJ18",
-            "controlRef": "P18",
+            "ref": "AI8",
+            "controlRef": "P8",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AJ19",
-            "controlRef": "P19",
+            "ref": "AI9",
+            "controlRef": "P9",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AJ25",
-            "controlRef": "P25",
+            "ref": "AI15",
+            "controlRef": "P15",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AJ27",
-            "controlRef": "P27",
+            "ref": "AI17",
+            "controlRef": "P17",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AK3",
-            "controlRef": "Q3",
+            "ref": "AI23",
+            "controlRef": "P23",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AK4",
-            "controlRef": "Q4",
+            "ref": "AI24",
+            "controlRef": "P24",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AK10",
-            "controlRef": "Q10",
+            "ref": "AI30",
+            "controlRef": "P30",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "Z2",
+            "ref": "Y2",
             "controlRef": "F2",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "Z3",
+            "ref": "Y3",
             "controlRef": "F3",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "Z4",
+            "ref": "Y4",
             "controlRef": "F4",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "Z5",
+            "ref": "Y5",
             "controlRef": "F5",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AK12",
-            "controlRef": "Q12",
+            "ref": "AJ2",
+            "controlRef": "Q2",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AK18",
+            "ref": "AJ8",
+            "controlRef": "Q8",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ9",
+            "controlRef": "Q9",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ15",
+            "controlRef": "Q15",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ18",
             "controlRef": "Q18",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AK19",
+            "ref": "AJ19",
             "controlRef": "Q19",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AK25",
-            "controlRef": "Q25",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "AK28",
-            "controlRef": "Q28",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "AK29",
-            "controlRef": "Q29",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "AL3",
-            "controlRef": "R3",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "AL4",
-            "controlRef": "R4",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "AL5",
-            "controlRef": "R5",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "AL8",
-            "controlRef": "R8",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "AK24",
-            "controlRef": "Q24",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "AK22",
-            "controlRef": "Q22",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "AK23",
+            "ref": "AJ23",
             "controlRef": "Q23",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "Z11",
+            "ref": "AJ24",
+            "controlRef": "Q24",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ25",
+            "controlRef": "Q25",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ28",
+            "controlRef": "Q28",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ14",
+            "controlRef": "Q14",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ12",
+            "controlRef": "Q12",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AJ13",
+            "controlRef": "Q13",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "Y11",
             "controlRef": "F11",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "Z12",
+            "ref": "Y12",
             "controlRef": "F12",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "Z13",
+            "ref": "Y13",
             "controlRef": "F13",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "Z14",
+            "ref": "Y14",
             "controlRef": "F14",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AL12",
+            "ref": "AK2",
+            "controlRef": "R2",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK8",
+            "controlRef": "R8",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK9",
+            "controlRef": "R9",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK10",
+            "controlRef": "R10",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK14",
+            "controlRef": "R14",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK15",
+            "controlRef": "R15",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK12",
             "controlRef": "R12",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AL18",
-            "controlRef": "R18",
+            "ref": "AK13",
+            "controlRef": "R13",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AL19",
-            "controlRef": "R19",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "AL20",
-            "controlRef": "R20",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "AL24",
-            "controlRef": "R24",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "AL25",
-            "controlRef": "R25",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "AL22",
-            "controlRef": "R22",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "AL23",
-            "controlRef": "R23",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "Z20",
+            "ref": "Y20",
             "controlRef": "F20",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "Z21",
+            "ref": "Y21",
             "controlRef": "F21",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "Z22",
+            "ref": "Y22",
             "controlRef": "F22",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "Z23",
+            "ref": "Y23",
             "controlRef": "F23",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AL27",
-            "controlRef": "R27",
+            "ref": "AK17",
+            "controlRef": "R17",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AM3",
-            "controlRef": "S3",
+            "ref": "AK23",
+            "controlRef": "R23",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AM4",
-            "controlRef": "S4",
+            "ref": "AK24",
+            "controlRef": "R24",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AM5",
-            "controlRef": "S5",
+            "ref": "AK25",
+            "controlRef": "R25",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AL28",
-            "controlRef": "R28",
+            "ref": "AK18",
+            "controlRef": "R18",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AL29",
+            "ref": "AK19",
+            "controlRef": "R19",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK20",
+            "controlRef": "R20",
+            "matched": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "AK29",
             "controlRef": "R29",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
           },
           {
-            "ref": "AL30",
+            "ref": "AK30",
             "controlRef": "R30",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "AM9",
-            "controlRef": "S9",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "AM10",
-            "controlRef": "S10",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "AM12",
-            "controlRef": "S12",
-            "matched": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "AM13",
-            "controlRef": "S13",
             "matched": false,
             "fillSource": "unverified",
             "note": "same-content unformatted control"
@@ -97106,29 +96840,13 @@
               "D21": "twin:O28",
               "D22": "twin:O29",
               "D23": "twin:O30"
-            },
-            "zero": {
-              "B20": "twin:P2",
-              "B21": "twin:P3",
-              "B22": "twin:P4",
-              "B23": "twin:O5",
-              "D20": "twin:P7",
-              "D21": "twin:P8",
-              "D22": "twin:O14",
-              "D23": "twin:O15"
-            },
-            "ignored": {
-              "B20": "twin:P2",
-              "B21": "twin:P3",
-              "B22": "twin:P4",
-              "B23": "twin:O5",
-              "D20": "twin:P7",
-              "D21": "twin:P8",
-              "D22": "twin:O14",
-              "D23": "twin:O15"
             }
           },
           "replicateBy": "column",
+          "omitted": {
+            "zero": "a bound of 0 lies below every bar value (an inverted bar, whose literal twin production refuses under Ruling S3-E): decided by the scale and icon set",
+            "ignored": "an ignored bound would invert the bar likewise: decided by the scale and icon set"
+          },
           "twinExpect": {
             "O10": "visual",
             "O12": "empty",
@@ -97147,12 +96865,7 @@
             "O30": "visual",
             "O4": "visual",
             "O5": "visual",
-            "O9": "visual",
-            "P2": "visual",
-            "P3": "visual",
-            "P4": "visual",
-            "P7": "visual",
-            "P8": "visual"
+            "O9": "visual"
           }
         },
         {
@@ -97171,77 +96884,77 @@
           ],
           "hypotheses": {
             "anchor-a1": {
-              "H2": "twin:P12",
-              "H3": "twin:P18",
-              "H4": "twin:P19",
-              "H5": "twin:P25",
-              "J2": "twin:P27",
-              "J3": "twin:Q3",
-              "J4": "twin:Q4",
-              "J5": "twin:Q10"
+              "H2": "twin:P2",
+              "H3": "twin:P8",
+              "H4": "twin:P9",
+              "H5": "twin:P15",
+              "J2": "twin:P17",
+              "J3": "twin:P23",
+              "J4": "twin:P24",
+              "J5": "twin:P30"
             },
             "rule-wide": {
-              "H2": "twin:P12",
-              "H3": "twin:P18",
-              "H4": "twin:P19",
-              "H5": "twin:P25",
-              "J2": "twin:P27",
-              "J3": "twin:Q3",
-              "J4": "twin:Q4",
-              "J5": "twin:Q10"
+              "H2": "twin:P2",
+              "H3": "twin:P8",
+              "H4": "twin:P9",
+              "H5": "twin:P15",
+              "J2": "twin:P17",
+              "J3": "twin:P23",
+              "J4": "twin:P24",
+              "J5": "twin:P30"
             },
             "per-range": {
-              "H2": "twin:P12",
-              "H3": "twin:P18",
-              "H4": "twin:P19",
-              "H5": "twin:P25",
-              "J2": "twin:P27",
-              "J3": "twin:Q3",
-              "J4": "twin:Q4",
-              "J5": "twin:Q10"
+              "H2": "twin:P2",
+              "H3": "twin:P8",
+              "H4": "twin:P9",
+              "H5": "twin:P15",
+              "J2": "twin:P17",
+              "J3": "twin:P23",
+              "J4": "twin:P24",
+              "J5": "twin:P30"
             },
             "anchor-cell": {
-              "H2": "twin:P12",
-              "H3": "twin:P18",
-              "H4": "twin:P19",
-              "H5": "twin:P25",
-              "J2": "twin:P27",
-              "J3": "twin:Q3",
-              "J4": "twin:Q4",
-              "J5": "twin:Q10"
+              "H2": "twin:P2",
+              "H3": "twin:P8",
+              "H4": "twin:P9",
+              "H5": "twin:P15",
+              "J2": "twin:P17",
+              "J3": "twin:P23",
+              "J4": "twin:P24",
+              "J5": "twin:P30"
             },
             "zero": {
-              "H2": "twin:P12",
-              "H3": "twin:P18",
-              "H4": "twin:P19",
-              "H5": "twin:P25",
-              "J2": "twin:P27",
-              "J3": "twin:Q3",
-              "J4": "twin:Q4",
-              "J5": "twin:Q10"
+              "H2": "twin:P2",
+              "H3": "twin:P8",
+              "H4": "twin:P9",
+              "H5": "twin:P15",
+              "J2": "twin:P17",
+              "J3": "twin:P23",
+              "J4": "twin:P24",
+              "J5": "twin:P30"
             },
             "ignored": {
-              "H2": "twin:P12",
-              "H3": "twin:P18",
-              "H4": "twin:P19",
-              "H5": "twin:P25",
-              "J2": "twin:P27",
-              "J3": "twin:Q3",
-              "J4": "twin:Q4",
-              "J5": "twin:Q10"
+              "H2": "twin:P2",
+              "H3": "twin:P8",
+              "H4": "twin:P9",
+              "H5": "twin:P15",
+              "J2": "twin:P17",
+              "J3": "twin:P23",
+              "J4": "twin:P24",
+              "J5": "twin:P30"
             }
           },
           "note": "Negative control: an absolute bound ($H$1) reads the same value under every reading",
           "role": "negative-control",
           "twinExpect": {
-            "P12": "visual",
-            "P18": "visual",
-            "P19": "visual",
-            "P25": "visual",
-            "P27": "visual",
-            "Q10": "visual",
-            "Q3": "visual",
-            "Q4": "visual"
+            "P15": "visual",
+            "P17": "visual",
+            "P2": "visual",
+            "P23": "visual",
+            "P24": "visual",
+            "P30": "visual",
+            "P8": "visual",
+            "P9": "visual"
           }
         },
         {
@@ -97256,50 +96969,50 @@
           ],
           "hypotheses": {
             "anchor-a1": {
-              "F2": "twin:Q12",
-              "F3": "twin:Q18",
-              "F4": "twin:Q19",
-              "F5": "twin:Q25"
+              "F2": "twin:Q2",
+              "F3": "twin:Q8",
+              "F4": "twin:Q9",
+              "F5": "twin:Q15"
             },
             "anchor-top-left": {
-              "F2": "twin:Q12",
-              "F3": "twin:Q28",
-              "F4": "twin:Q29",
-              "F5": "twin:Q25"
+              "F2": "twin:Q2",
+              "F3": "twin:Q18",
+              "F4": "twin:Q19",
+              "F5": "twin:Q15"
             },
             "anchor-cell": {
-              "F2": "twin:Q12",
-              "F3": "twin:R3",
-              "F4": "twin:R4",
-              "F5": "twin:R5"
-            },
-            "zero": {
-              "F2": "twin:Q12",
-              "F3": "twin:R8",
-              "F4": "twin:Q24",
-              "F5": "twin:Q25"
-            },
-            "ignored": {
-              "F2": "twin:Q22",
+              "F2": "twin:Q2",
               "F3": "twin:Q23",
               "F4": "twin:Q24",
               "F5": "twin:Q25"
+            },
+            "zero": {
+              "F2": "twin:Q2",
+              "F3": "twin:Q28",
+              "F4": "twin:Q14",
+              "F5": "twin:Q15"
+            },
+            "ignored": {
+              "F2": "twin:Q12",
+              "F3": "twin:Q13",
+              "F4": "twin:Q14",
+              "F5": "twin:Q15"
             }
           },
           "twinExpect": {
             "Q12": "visual",
+            "Q13": "visual",
+            "Q14": "visual",
+            "Q15": "visual",
             "Q18": "visual",
             "Q19": "visual",
-            "Q22": "visual",
+            "Q2": "visual",
             "Q23": "visual",
             "Q24": "visual",
             "Q25": "visual",
             "Q28": "visual",
-            "Q29": "visual",
-            "R3": "visual",
-            "R4": "visual",
-            "R5": "visual",
-            "R8": "visual"
+            "Q8": "visual",
+            "Q9": "visual"
           }
         },
         {
@@ -97314,45 +97027,45 @@
           ],
           "hypotheses": {
             "anchor-a1": {
-              "F11": "twin:R12",
-              "F12": "twin:R18",
-              "F13": "twin:R19",
-              "F14": "twin:R20"
+              "F11": "twin:R2",
+              "F12": "twin:R8",
+              "F13": "twin:R9",
+              "F14": "twin:R10"
             },
             "anchor-top-left": {
-              "F11": "twin:R12",
-              "F12": "twin:R18",
-              "F13": "twin:R24",
-              "F14": "twin:R25"
+              "F11": "twin:R2",
+              "F12": "twin:R8",
+              "F13": "twin:R14",
+              "F14": "twin:R15"
             },
             "anchor-cell": {
-              "F11": "twin:R12",
-              "F12": "twin:R18",
-              "F13": "twin:R19",
-              "F14": "twin:R20"
+              "F11": "twin:R2",
+              "F12": "twin:R8",
+              "F13": "twin:R9",
+              "F14": "twin:R10"
             },
             "zero": {
-              "F11": "twin:R12",
-              "F12": "twin:R18",
-              "F13": "twin:R24",
-              "F14": "twin:R25"
+              "F11": "twin:R2",
+              "F12": "twin:R8",
+              "F13": "twin:R14",
+              "F14": "twin:R15"
             },
             "ignored": {
-              "F11": "twin:R22",
-              "F12": "twin:R23",
-              "F13": "twin:R24",
-              "F14": "twin:R25"
+              "F11": "twin:R12",
+              "F12": "twin:R13",
+              "F13": "twin:R14",
+              "F14": "twin:R15"
             }
           },
           "twinExpect": {
+            "R10": "visual",
             "R12": "visual",
-            "R18": "visual",
-            "R19": "visual",
-            "R20": "visual",
-            "R22": "visual",
-            "R23": "visual",
-            "R24": "visual",
-            "R25": "visual"
+            "R13": "visual",
+            "R14": "visual",
+            "R15": "visual",
+            "R2": "visual",
+            "R8": "visual",
+            "R9": "visual"
           }
         },
         {
@@ -97367,48 +97080,38 @@
           ],
           "hypotheses": {
             "anchor-a1": {
-              "F20": "twin:R27",
-              "F21": "twin:S3",
-              "F22": "twin:S4",
-              "F23": "twin:S5"
+              "F20": "twin:R17",
+              "F21": "twin:R23",
+              "F22": "twin:R24",
+              "F23": "twin:R25"
             },
             "anchor-top-left": {
-              "F20": "twin:R27",
-              "F21": "twin:R28",
-              "F22": "twin:R29",
-              "F23": "twin:R30"
+              "F20": "twin:R17",
+              "F21": "twin:R18",
+              "F22": "twin:R19",
+              "F23": "twin:R20"
             },
             "anchor-cell": {
-              "F20": "twin:R27",
-              "F21": "twin:R28",
-              "F22": "twin:S9",
-              "F23": "twin:S10"
-            },
-            "zero": {
-              "F20": "twin:S12",
-              "F21": "twin:S13",
-              "F22": "twin:R29",
-              "F23": "twin:R30"
-            },
-            "ignored": {
-              "F20": "twin:S12",
-              "F21": "twin:S13",
+              "F20": "twin:R17",
+              "F21": "twin:R18",
               "F22": "twin:R29",
               "F23": "twin:R30"
             }
           },
+          "omitted": {
+            "zero": "a bound of 0 lies below every bar value (an inverted bar, whose literal twin production refuses under Ruling S3-E): decided by the scale and icon set",
+            "ignored": "an ignored bound would invert the bar likewise: decided by the scale and icon set"
+          },
           "twinExpect": {
-            "R27": "empty",
-            "R28": "visual",
+            "R17": "empty",
+            "R18": "visual",
+            "R19": "visual",
+            "R20": "visual",
+            "R23": "visual",
+            "R24": "visual",
+            "R25": "visual",
             "R29": "visual",
-            "R30": "visual",
-            "S10": "visual",
-            "S12": "visual",
-            "S13": "visual",
-            "S3": "visual",
-            "S4": "visual",
-            "S5": "visual",
-            "S9": "visual"
+            "R30": "visual"
           }
         }
       ],
