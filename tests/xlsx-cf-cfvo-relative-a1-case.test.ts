@@ -17,17 +17,9 @@ import { CF_STAGE5_CAPABILITIES, CF_STAGE5_CASES, CF_STAGE5_GROUPS, CF_STAGE5_NO
 import { CF_MANIFEST_PATH } from '../scripts/cf-refs/generate'
 import { evaluateFormulaCapabilities, formulaControlsOf, readZipPartsSync, resolveFormulaConfigurations, visualKindOf, type FormulaObservation, type S5Visual } from '../scripts/cf-refs/verify'
 import { interpolateScaleColor } from '../src/xlsx/cf/colorScale'
-import { VERIFIED_CAPABILITIES, injectCfFormulaSelections, withInjectedCfEvidence } from '../src/xlsx/cf/evidence'
-import { injectCfFormulaReadings } from '../src/xlsx/cf/formulaReadings'
+import { VERIFIED_CAPABILITIES } from '../src/xlsx/cf/evidence'
+import { CF_FORMULA_PRODUCTION_READINGS } from '../src/xlsx/cf/formulaReadings'
 import { VERIFIED_STAGE5_FORMULA_SELECTIONS } from '../src/xlsx/cf/verifiedCapabilities'
-import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
-import { createCfService } from '../src/xlsx/cf/service'
-import { CF_LIMITS, createCfMemory } from '../src/xlsx/cf/limits'
-import { residentSource } from '../src/xlsx/cf/render'
-import { cfRulesVersion } from '../src/xlsx/view/pagedSource'
-import { OfficePackage } from '../src/core/zip'
-import { parseXlsx } from '../src/xlsx/parse'
-import { caseEvaluationOf, caseNowOf, caseParseOptionsOf } from '../scripts/cf-refs/case-clock'
 
 const REPO_ROOT = resolve(__dirname, '..')
 const ID = 'stage5-cfvo-relative-a1'
@@ -110,12 +102,12 @@ const BLOCKS = [
 describe('stage5-cfvo-relative-a1: the case', () => {
   it('owns both cfvo scope ids (appended last); the older versions keep their configurations and captures', () => {
     const c = caseOf()
-    expect(c.status).toBe('recipe-pending')
+    expect(c.status).toBe('measured')
     for (const cap of [MULTI, SINGLE]) {
       expect(CF_STAGE5_OWNERS[cap], cap).toBe(ID)
       expect(CF_STAGE5_CAPABILITIES.find(e => e.capabilityId === cap)!.caseId, cap).toBe(ID)
-      // Withheld until this case is captured and a reading registered (nothing is registered or published here).
-      expect(CF_STAGE5_UNSUPPORTED[cap], cap).toBeDefined()
+      // Registered since its capture (f9d5be94) matched anchor-a1: no longer a recorded refusal.
+      expect(CF_STAGE5_UNSUPPORTED[cap], cap).toBeUndefined()
     }
     expect(CF_STAGE5_CASES.at(-1)!.id).toBe(ID)
     expect(CF_STAGE5_GROUPS['stage5-cfvo-scope']).toContain(ID)
@@ -278,93 +270,46 @@ describe('stage5-cfvo-relative-a1: each reading of each capability discriminates
 })
 
 /**
- * Pre-capture fix round 1 (codex P1b): a rehearsal of the proposed registration. With both formula capabilities held and
- * read as anchor-a1 (the test seams: a proposed registry entry and a selection), and every other capability as published
- * today, the production counterfactual over this case, on the planted anchor-a1 observation, must hold no unjustified
- * refusal and agree with that observation at every designated and control cell. scale:scope-disjoint stays withheld.
+ * The registration (Phase 2, after the capture f9d5be94): both ids are published as anchor-a1. What the pre-capture
+ * rehearsals checked through test seams is now checked on the real registration and the real capture: the multi-range
+ * scales are justified by scale:scope-disjoint alone (still withheld), and every measured Stage 5 case, this one included,
+ * agrees with Excel with no unjustified refusal.
  */
-describe('stage5-cfvo-relative-a1: rehearsing the proposed anchor-a1 registration against production', () => {
-  const PROPOSED = { [SINGLE]: 'anchor-a1', [MULTI]: ['rule-wide', 'per-range', 'anchor-a1'] } as const
+describe('stage5-cfvo-relative-a1: the registered anchor-a1 against production and the capture', () => {
+  it('both ids are registered and published as anchor-a1; scale:scope-disjoint stays withheld', () => {
+    expect(CF_FORMULA_PRODUCTION_READINGS[SINGLE]).toBe('anchor-a1')
+    expect(CF_FORMULA_PRODUCTION_READINGS[MULTI]).toEqual(['rule-wide', 'per-range', 'anchor-a1'])
+    expect(VERIFIED_STAGE5_FORMULA_SELECTIONS[MULTI]).toBe('anchor-a1')
+    for (const cap of [MULTI, SINGLE]) expect(VERIFIED_CAPABILITIES.has(cap), cap).toBe(true)
+    expect(VERIFIED_CAPABILITIES.has('scale:scope-disjoint')).toBe(false)
+  })
+
   it('the multi-range scales are refused by scale:scope-disjoint alone, a recorded justification; the icon sets and bars are not', async () => {
     const { stage5JustifiedRefusals } = await import('../scripts/cf-refs/stage5-withhold')
     const c = caseOf()
-    const held = new Set([...VERIFIED_CAPABILITIES, MULTI, SINGLE])
-    expect(held.has('scale:scope-disjoint')).toBe(false)
-    injectCfFormulaReadings(PROPOSED)
-    injectCfFormulaSelections({ ...VERIFIED_STAGE5_FORMULA_SELECTIONS, [MULTI]: 'anchor-a1' })
-    try {
-      const reasons = (ref: string): string[] => stage5JustifiedRefusals(c, ref, id => held.has(id)).map(r => `${r.rule}: ${r.reason}`)
-      expect(reasons('B2')).toEqual([`${MULTI}/colorScale@p1: scale:scope-disjoint not held (a visual over more than one range)`])
-      expect(reasons('H2')).toEqual([`${MULTI}/colorScale@p4: scale:scope-disjoint not held (a visual over more than one range)`])
-      for (const ref of ['B11', 'D20', 'F2', 'F11', 'F20']) expect(reasons(ref), ref).toEqual([])
-      // With scale:scope-disjoint held as well, nothing on this case is a justified refusal.
-      expect(stage5JustifiedRefusals(c, 'B2', id => held.has(id) || id === 'scale:scope-disjoint')).toEqual([])
-    } finally { injectCfFormulaReadings(null); injectCfFormulaSelections(null) }
+    const reasons = (ref: string): string[] => stage5JustifiedRefusals(c, ref).map(r => `${r.rule}: ${r.reason}`)
+    expect(reasons('B2')).toEqual([`${MULTI}/colorScale@p1: scale:scope-disjoint not held (a visual over more than one range)`])
+    expect(reasons('H2')).toEqual([`${MULTI}/colorScale@p4: scale:scope-disjoint not held (a visual over more than one range)`])
+    for (const ref of ['B11', 'D20', 'F2', 'F11', 'F20']) expect(reasons(ref), ref).toEqual([])
+    // With scale:scope-disjoint held as well, nothing on this case is a justified refusal.
+    expect(stage5JustifiedRefusals(c, 'B2', id => VERIFIED_CAPABILITIES.has(id) || id === 'scale:scope-disjoint')).toEqual([])
   })
 
-  it('the production counterfactual over the planted anchor-a1 world: no unjustified refusal, no disagreement, and the icon sets, bars and single-range scale paint', async () => {
-    const { stage5CounterfactualOf, stage5CellAgreement, stage5TokenOf } = await import('../scripts/cf-refs/stage5-withhold')
-    const c = caseOf()
-    const values = valuesOf(c)
-    const held = [...VERIFIED_CAPABILITIES, MULTI, SINGLE]
-    const obs = plant(c, values, { [MULTI]: 'anchor-a1', [SINGLE]: 'anchor-a1' })
-    injectCfFormulaReadings(PROPOSED)
-    injectCfFormulaSelections({ ...VERIFIED_STAGE5_FORMULA_SELECTIONS, [MULTI]: 'anchor-a1' })
-    try {
-      await withInjectedCfEvidence(held, async () => {
-        const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(resolve(REPO_ROOT, c.saved)))), caseParseOptionsOf(c))
-        const sheet = doc.sheets[0]!
-        const refs = c.expected.cells.map(e => e.ref)
-        const truths = await stage5CounterfactualOf({ c, doc, sheet, refs, now: caseNowOf(c), published: id => held.includes(id) })
-        const memory = createCfMemory()
-        const service = createCfService(sheet.conditionalFormatting!, memory, { evidence: cfRuntimeEvidence, evaluation: caseEvaluationOf(c, doc, caseNowOf(c)), sheetName: sheet.name })
-        const stamp = { owner: 'rehearsal', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(sheet.conditionalFormatting!), viewGen: 0, structureGen: 0, clockGen: 0 }
-        const source = residentSource(sheet, stamp, memory, 'engine')
-        const disagree: string[] = []
-        const painted = new Set<string>()
-        try {
-          for (const ref of refs) {
-            const covering = c.markers.filter(m => m.sqref.split(' ').some(t => { const [a, z] = t.split(':'); return colOf(a!) === colOf(ref) && rowOf(ref) >= rowOf(a!) && rowOf(ref) <= rowOf(z ?? a!) }))
-            const kind = covering.some(m => m.ruleType === 'iconSet') ? 'icon' : covering.some(m => m.ruleType === 'dataBar') ? 'bar' : undefined
-            const f = obs.fill(ref)!
-            const v = kind ? obs.visual!(ref, kind) : undefined
-            const excel = { fill: f.fill, strike: f.strike, ...(v ? { visual: v.kind === 'none' ? 'none' : v.kind === 'bar' ? 'bar' : `icon:${(v as { cls: string }).cls}` } : {}) }
-            const { row, col } = (() => { const m = /^([A-Z]+)(\d+)$/.exec(ref)!; return { row: Number(m[2]) - 1, col: [...m[1]!].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1 } })()
-            const lease = await service.prepareCf({ stamp, sourceRects: [{ firstRow: row, lastRow: row, firstCol: col, lastCol: col }], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, source)
-            const production = stage5TokenOf(lease.value.at(row, col))
-            lease.release()
-            const verdict = stage5CellAgreement(production, excel, truths.get(ref))
-            if (!verdict.agrees) disagree.push(`${ref}: ${verdict.disagreement}`)
-            if (production.unresolved.length === 0 && (production.fill !== 'none' || production.visual !== 'none')) painted.add(ref)
-          }
-        } finally { service.dispose() }
-        expect(disagree).toEqual([])
-        expect([...truths.values()].flatMap(t => t.unjustified)).toEqual([])
-        // Non-vacuous: production paints the configurations the proposed readings unlock (scales over several ranges stay withheld).
-        for (const ref of ['B11', 'B12', 'D13', 'D21', 'F3', 'F4', 'F12', 'F21']) expect(painted.has(ref), ref).toBe(true)
-        for (const ref of ['B3', 'H3']) expect(painted.has(ref), ref).toBe(false)
-      })
-    } finally { injectCfFormulaReadings(null); injectCfFormulaSelections(null) }
-  }, 300_000)
-})
-
-describe('rehearsing the proposed anchor-a1 registration on every measured Stage 5 case', () => {
-  it('no measured cell would disagree with Excel or be withheld without a recorded justification (the older scope cases included)', async () => {
+  it('every measured Stage 5 case agrees with Excel under the registration, with no unjustified refusal; this case paints what it unlocks', async () => {
     const { stage5CaseRecords } = await import('../scripts/cf-refs/audit')
-    const held = new Set([...VERIFIED_CAPABILITIES, MULTI, SINGLE])
-    injectCfFormulaReadings({ [SINGLE]: 'anchor-a1', [MULTI]: ['rule-wide', 'per-range', 'anchor-a1'] })
-    injectCfFormulaSelections({ ...VERIFIED_STAGE5_FORMULA_SELECTIONS, [MULTI]: 'anchor-a1' })
-    try {
-      const rows = await withInjectedCfEvidence(held, () => stage5CaseRecords(manifest, REPO_ROOT, { published: id => held.has(id) }))
-      expect(rows.filter(r => r.compared && !r.agrees).map(r => `${r.caseId}:${r.ref} ${r.disagreement}`)).toEqual([])
-      // The older scope cases are compared under it: their multi-range scales are justified by scale:scope-disjoint.
-      for (const id of ['stage5-cfvo-scope', 'stage5-cfvo-scope-v2', 'stage5-cfvo-formulas']) expect(rows.some(r => r.caseId === id && r.compared), id).toBe(true)
-      expect(rows.some(r => r.caseId === 'stage5-cfvo-scope-v2' && r.justification.some(j => /scale:scope-disjoint not held/.test(j.reason)))).toBe(true)
-      // stage5-cfvo-formulas K (=A2 on K2:K9) read from A1 wraps to a blank cell: a non-numeric bound, recorded.
-      expect(rows.filter(r => r.caseId === 'stage5-cfvo-formulas' && /^K/.test(r.ref) && r.justification.some(j => /anchor-a1: =A2/.test(j.reason))).map(r => r.ref)).toEqual(['K2', 'K3', 'K4', 'K5', 'K6', 'K7', 'K8', 'K9'])
-      // The superseded single-range record of stage5-cfvo-scope-v2 no longer names a refusal: production paints it.
-      expect(rows.filter(r => r.caseId === 'stage5-cfvo-scope-v2' && /^I[2-7]$/.test(r.ref)).every(r => r.production.unresolved.length === 0 && r.production.fill !== 'none')).toBe(true)
-    } finally { injectCfFormulaReadings(null); injectCfFormulaSelections(null) }
+    const rows = await stage5CaseRecords(manifest, REPO_ROOT)
+    expect(rows.filter(r => r.compared && !r.agrees).map(r => `${r.caseId}:${r.ref} ${r.disagreement}`)).toEqual([])
+    for (const id of [ID, 'stage5-cfvo-scope', 'stage5-cfvo-scope-v2', 'stage5-cfvo-formulas']) expect(rows.some(r => r.caseId === id && r.compared), id).toBe(true)
+    const own = (ref: string) => rows.find(r => r.caseId === ID && r.ref === ref)!
+    // The multi-range icon set and bar, and the single-range scale, icon set and bar paint as Excel; the multi-range
+    // scales (and the absolute control) stay withheld behind scale:scope-disjoint.
+    for (const ref of ['B11', 'B12', 'D13', 'D21', 'F3', 'F4', 'F12', 'F21']) expect(own(ref).production.unresolved, ref).toEqual([])
+    for (const ref of ['B3', 'H3']) expect(own(ref).production.unresolved.length, ref).toBeGreaterThan(0)
+    expect(rows.some(r => r.caseId === 'stage5-cfvo-scope-v2' && r.justification.some(j => /scale:scope-disjoint not held/.test(j.reason)))).toBe(true)
+    // stage5-cfvo-formulas K (=A2 on K2:K9) read from A1 wraps to a blank cell: a non-numeric bound, recorded.
+    expect(rows.filter(r => r.caseId === 'stage5-cfvo-formulas' && /^K/.test(r.ref) && r.justification.some(j => /anchor-a1: =A2/.test(j.reason))).map(r => r.ref)).toEqual(['K2', 'K3', 'K4', 'K5', 'K6', 'K7', 'K8', 'K9'])
+    // The superseded single-range record of stage5-cfvo-scope-v2 no longer names a refusal: production paints it.
+    expect(rows.filter(r => r.caseId === 'stage5-cfvo-scope-v2' && /^I[2-7]$/.test(r.ref)).every(r => r.production.unresolved.length === 0 && r.production.fill !== 'none')).toBe(true)
   }, 600_000)
 })
 

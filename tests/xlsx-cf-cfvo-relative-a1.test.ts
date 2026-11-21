@@ -4,7 +4,7 @@
  *
  * stage5-cfvo-scope-v2 (5dc2fe9e) showed that Excel evaluates a relative cfvo bound as if its formula sat in A1, on one range
  * as on several. Production implements that as the reading `anchor-a1` of `formula:cfvo-relative`: `cfvoBoundAnchors` puts
- * a single range's bound at A1. Nothing registers it (CF_FORMULA_PRODUCTION_READINGS keeps `anchor-top-left`), so these
+ * a single range's bound at A1. Written before its registration (stage5-cfvo-relative-a1 confirmed it, f9d5be94), these
  * tests stand in for the registry: `cfFormulaReading` is wrapped to return a chosen reading for `formula:cfvo-relative`.
  * Every expectation is a literal twin rule production itself resolves; nothing here records or predicts an Excel capture.
  */
@@ -92,10 +92,10 @@ describe('cfvoBoundAnchors on one range', () => {
   })
 })
 
-describe('formula:cfvo-relative read as anchor-a1 (implemented, not registered)', () => {
-  it('the registry still holds anchor-top-left: no reading of production selects anchor-a1', () => {
-    expect(CF_FORMULA_PRODUCTION_READINGS['formula:cfvo-relative']).toBe('anchor-top-left')
-    expect(VERIFIED_CAPABILITIES.has('formula:cfvo-relative')).toBe(false)
+describe('formula:cfvo-relative read as anchor-a1 (registered since stage5-cfvo-relative-a1, f9d5be94)', () => {
+  it('the registry holds anchor-a1 and the capability is published (anchor-top-left stays reachable only through this test\'s wrapper)', () => {
+    expect(CF_FORMULA_PRODUCTION_READINGS['formula:cfvo-relative']).toBe('anchor-a1')
+    expect(VERIFIED_CAPABILITIES.has('formula:cfvo-relative')).toBe(true)
   })
 
   const xml = scale('B2:B7', 1, '<cfvo type="min"/><cfvo type="formula" val="MAX(B2:B7)"/>')

@@ -7694,10 +7694,6 @@ function s5Ruling(cap: string): string {
  * precedent), or a re-deferral whose capture cannot measure it (Task 39). Production keeps every one unresolved.
  */
 export const CF_STAGE5_UNSUPPORTED: Readonly<Record<string, string>> = {
-  'formula:cfvo-relative':
-    'Contradicted reading (the cfvo-relative follow-up, 2026-11-21): production registers anchor-top-left, but the single-range control of stage5-cfvo-scope-v2 (5dc2fe9e) read the bound from A1 (anchor-a1), which also explains the zero of stage5-cfvo-formulas K. Production\'s anchor-a1 (cfvoBoundAnchors) post-dates that capture: the confirmation case stage5-cfvo-relative-a1 owns it. Production keeps a relative cfvo bound unresolved.',
-  'formula:cfvo-scope-multi-range':
-    'Measured anchor-a1 (stage5-cfvo-scope-v2, 5dc2fe9e: Excel reads a relative cfvo bound from A1, single-range too), but production\'s anchor-a1 behaviour (service.ts cfvoBoundAnchors, 709b6a7e) post-dates that capture, so the reading is not registered: it awaits a confirmation case captured after the behaviour exists. Production keeps a multi-range formula bound unresolved.',
   'formula:active-present-scale':
     'Ruling S5-J / OD-16: Excel 16.115 rewrote the standalone x14 colour scale on resave (stage5-active-present-scale.rejected.xlsx): activePresent dropped and the rule moved to the base dialect with its activation as a <formula> child. Permanent recorded refusal; production keeps cf-unsupported-rule.',
   'formula:active-present-bar':

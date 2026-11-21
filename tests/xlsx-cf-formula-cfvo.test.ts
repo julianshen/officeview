@@ -193,7 +193,8 @@ describe('a formula bound resolves once per measured scope (S5-H, round-1 #10)',
   })
 
   it('a rect that excludes the anchor resolves the same thresholds as one that includes it', async () => {
-    const xml = scale('B2:B12', 1, '<cfvo type="formula" val="A2"/><cfvo type="max"/>') + scale('C2:C12', 2, '<cfvo type="num" val="7"/><cfvo type="max"/>')
+    // =B3 written on B2 is read from A1 (anchor-a1, the registered reading of formula:cfvo-relative): A2 = 7.
+    const xml = scale('B2:B12', 1, '<cfvo type="formula" val="B3"/><cfvo type="max"/>') + scale('C2:C12', 2, '<cfvo type="num" val="7"/><cfvo type="max"/>')
     const caps = capsWith('formula:cfvo-relative')
     const sheet = sheetOf(parseRules(xml, caps), { A2: 7, A3: 99, ...col('B', DATA), ...col('C', DATA) })
     const far = await prepareSheet(sheet, ['B10', 'C10'], caps)
@@ -211,7 +212,8 @@ describe('a formula bound resolves once per measured scope (S5-H, round-1 #10)',
     }
     const scaleTwins = ['P', 'Q', 'R', 'S', 'T'].flatMap(c => rows(c, 2, 5))
     it('is unresolved without formula:cfvo-scope-multi-range', async () => {
-      const caps = capsWith('formula:cfvo-relative', 'scale:scope-disjoint')
+      // Published since stage5-cfvo-relative-a1 (anchor-a1): removed here to test its gate.
+      const caps = capsWith('formula:cfvo-relative', 'scale:scope-disjoint').filter(c => c !== 'formula:cfvo-scope-multi-range')
       const doc = await loadFixture('stage5-cfvo-scope', caps)
       expect(doc.sheets[0]!.conditionalFormatting!.rules.find(r => r.priority === 1)!.definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
       // Parsed with it, but the service lacks it: still unresolved.
@@ -232,11 +234,10 @@ describe('a formula bound resolves once per measured scope (S5-H, round-1 #10)',
       })
     }
 
-    // The cfvo-scope follow-up: stage5-cfvo-scope-v2 (5dc2fe9e) matched `anchor-a1` (pre-registered in fdae467d): Excel reads a
-    // relative bound written on the first range's top-left as if evaluated at A1, so =MAX(B2:B7) reads A1:A6. Production
-    // implements it (cfvoBoundAnchors, 709b6a7e) but the behaviour post-dates the capture, so it is not a registered reading:
-    // the evaluation is tested here, and the publication gate withholds every cell that would paint through it.
-    describe('anchor-a1: implemented, not registered (stage5-cfvo-scope-v2)', () => {
+    // The cfvo-scope follow-ups: Excel reads a relative bound written on the first range's top-left as if evaluated at A1,
+    // so =MAX(B2:B7) reads A1:A6 (stage5-cfvo-scope-v2, 5dc2fe9e). Production implements it (cfvoBoundAnchors) and registers
+    // it since the confirmation case stage5-cfvo-relative-a1 (f9d5be94) matched it: the expectations are literal twins.
+    describe('anchor-a1 (registered: stage5-cfvo-relative-a1)', () => {
       const v2 = (JSON.parse(readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest).cases.find(c => c.id === 'stage5-cfvo-scope-v2')!
       it('cfvoBoundAnchors: anchor-a1 is the one scope at A1; rule-wide and per-range are unchanged', () => {
         const ranges = [{ firstRow: 1, lastRow: 6, firstCol: 1, lastCol: 1 }, { firstRow: 1, lastRow: 6, firstCol: 3, lastCol: 3 }]
@@ -264,29 +265,30 @@ describe('a formula bound resolves once per measured scope (S5-H, round-1 #10)',
         expect((await at('MAX(A2:A7)', undefined))[0]).toMatchObject({ kind: 'unresolved' })
         expect((await at('MAX(A2:A7)', 'ref-error'))[0]).toMatchObject({ kind: 'ready', value: { kind: 'error' } })
       })
-      it('the publication gate withholds it: no reading selects anchor-a1, and the v2 fixture paints nothing through it', async () => {
-        expect(CF_FORMULA_PRODUCTION_READINGS['formula:cfvo-scope-multi-range']).toEqual(['rule-wide', 'per-range'])
-        expect(VERIFIED_CAPABILITIES.has('formula:cfvo-scope-multi-range')).toBe(false)
-        expect(CF_STAGE5_UNSUPPORTED['formula:cfvo-scope-multi-range']).toMatch(/post-dates that capture/)
-        const caps = capsWith('formula:cfvo-scope-multi-range', 'formula:cfvo-relative', 'scale:scope-disjoint')
-        expect(cfFormulaReading('formula:cfvo-scope-multi-range', c => caps.includes(c))).toBeUndefined()
-        const cfgs = v2.formulaConfigurations!.filter(x => x.capabilityId === 'formula:cfvo-scope-multi-range')
-        const refs = cfgs.flatMap(x => x.refs)
-        // Production's own evidence: the rules do not even compile. Every capability held and anchor-a1 selected: still withheld.
-        for (const [evidence, selections] of [[[...VERIFIED_CAPABILITIES], undefined], [caps, { 'formula:cfvo-scope-multi-range': 'anchor-a1' }]] as const) {
-          const doc = await loadFixture('stage5-cfvo-scope-v2', evidence)
-          const { out } = await prepareSheet(doc.sheets[0]!, refs, evidence, selections ? { selections } : {})
-          for (const r of refs) expect(visualOf(out.get(r)), r).toMatch(WITHHELD)
-        }
+      it('production selects anchor-a1 with its own evidence: the v2 icon set follows its anchor-a1 twins; its multi-range scales stay withheld (scale:scope-disjoint)', async () => {
+        expect(CF_FORMULA_PRODUCTION_READINGS['formula:cfvo-scope-multi-range']).toEqual(['rule-wide', 'per-range', 'anchor-a1'])
+        const caps = [...VERIFIED_CAPABILITIES]
+        expect(caps.includes('scale:scope-disjoint')).toBe(false)
+        expect(cfFormulaReading('formula:cfvo-scope-multi-range', c => caps.includes(c))).toBe('anchor-a1')
+        expect(cfFormulaReading('formula:cfvo-relative', c => caps.includes(c))).toBe('anchor-a1')
+        const cfgOf = (id: string) => v2.formulaConfigurations!.find(x => x.id === id)!
+        const icon = cfgOf('scope2-icon')
+        const pairs = icon.refs.map(r => [r, icon.hypotheses['anchor-a1']![r]!.replace('twin:', '')] as const)
+        const scaleRefs = cfgOf('scope2-scale').refs
+        const doc = await loadFixture('stage5-cfvo-scope-v2', caps)
+        const { out } = await prepareSheet(doc.sheets[0]!, [...pairs.flat(), ...scaleRefs], caps)
+        twinsAgree(out, pairs)
+        for (const r of scaleRefs) expect(visualOf(out.get(r)), r).toMatch(WITHHELD)
       })
-      it('a multi-range icon set with an absolute formula threshold is withheld again under production\'s evidence (as before 709b6a7e)', async () => {
+      it('a multi-range icon set with an absolute formula threshold paints like its literal twin under production\'s evidence', async () => {
         const caps = [...VERIFIED_CAPABILITIES]
         const xml = icon('B2:B4 D2:D4', 1, '<cfvo type="percent" val="0"/><cfvo type="formula" val="$F$1"/><cfvo type="num" val="50"/>')
+          + icon('H2:H4 J2:J4', 2, '<cfvo type="percent" val="0"/><cfvo type="num" val="20"/><cfvo type="num" val="50"/>')
         const values = [10, 30, 60]
-        const sheet = sheetOf(parseRules(xml, caps), { F1: 20, ...col('B', values), ...col('D', values) })
+        const sheet = sheetOf(parseRules(xml, caps), { F1: 20, ...col('B', values), ...col('D', values), ...col('H', values), ...col('J', values) })
         const refs = [...rows('B', 2, 4), ...rows('D', 2, 4)]
-        const { out } = await prepareSheet(sheet, refs, caps)
-        for (const r of refs) expect(visualOf(out.get(r)), r).toMatch(WITHHELD)
+        const { out } = await prepareSheet(sheet, [...refs, ...rows('H', 2, 4), ...rows('J', 2, 4)], caps)
+        twinsAgree(out, refs.map(r => [r, `${r[0] === 'B' ? 'H' : 'J'}${r.slice(1)}`] as const))
       })
     })
   })
@@ -340,10 +342,11 @@ describe('non-numeric or relative cfvo results withhold', () => {
       expect(visualOf(out.get('L3')), reading).toMatch(WITHHELD)
     }
   })
-  it('a relative =A2 cfvo is unresolved until formula:cfvo-relative, and then evaluates at the anchor', async () => {
-    const relXml = scale('K2:K9', 1, '<cfvo type="formula" val="A2"/><cfvo type="max"/>') + scale('U2:U9', 2, '<cfvo type="num" val="10"/><cfvo type="max"/>')
+  it('a relative =K3 cfvo is unresolved until formula:cfvo-relative, and then evaluates read from A1 (A2 = 10)', async () => {
+    const relXml = scale('K2:K9', 1, '<cfvo type="formula" val="K3"/><cfvo type="max"/>') + scale('U2:U9', 2, '<cfvo type="num" val="10"/><cfvo type="max"/>')
     const relCells = { ...col('A', [10, 15, 30, 45, 60, 75, 90, 100]), ...col('K', [5, 15, 30, 45, 60, 75, 90, 100]), ...col('U', [5, 15, 30, 45, 60, 75, 90, 100]) }
-    const without = capsWith()
+    // Published since stage5-cfvo-relative-a1: removed here to test its gate.
+    const without = capsWith().filter(c => c !== 'formula:cfvo-relative')
     const off = await prepareSheet(sheetOf(parseRules(relXml, without), relCells), rows('K', 2, 9), without)
     for (const r of rows('K', 2, 9)) expect(visualOf(off.out.get(r)), r).toMatch(WITHHELD)
     const caps = capsWith('formula:cfvo-relative')

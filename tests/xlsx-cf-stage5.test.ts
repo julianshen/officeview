@@ -44,9 +44,7 @@ const RECORDED_EXCEL_REFUSALS = [
   'formula:predicate-timeperiod-divergent',
   'formula:cross-sheet-missing',
   'formula:cfvo-nonnumeric',
-  // Explained by stage5-cfvo-scope-v2 (5dc2fe9e matched anchor-a1), but production's anchor-a1 post-dates that capture:
-  // still a recorded refusal, awaiting a confirmation case.
-  'formula:cfvo-scope-multi-range',
+  // formula:cfvo-scope-multi-range left this list once stage5-cfvo-relative-a1 (f9d5be94) confirmed anchor-a1.
 ]
 
 describe('every enabled formula capability has verified evidence', () => {

@@ -19,7 +19,7 @@ import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
 import { createCfService } from '../src/xlsx/cf/service'
 import { CF_LIMITS, createCfMemory } from '../src/xlsx/cf/limits'
 import { injectCfFormulaSelections, withInjectedCfEvidence } from '../src/xlsx/cf/evidence'
-import { CF_FORMULA_PRODUCTION_READINGS, injectCfFormulaReadings } from '../src/xlsx/cf/formulaReadings'
+import { CF_FORMULA_PRODUCTION_READINGS } from '../src/xlsx/cf/formulaReadings'
 import { cfRulesVersion } from '../src/xlsx/view/pagedSource'
 import { CF_STAGE5_OWNERS, type CfManifest } from '../scripts/cf-refs/cases'
 import { CF_STAGE5_UNCONFIRMABLE, stage5Publication, stage5UnconfirmableScope, auditStage5Manifest, type Stage5AuditReport } from '../scripts/cf-refs/audit'
@@ -205,11 +205,8 @@ describe('an unconfirmable capability is never published (fix round 2)', () => {
   })
 })
 
-/**
- * Runs every non-record configuration of every Stage 5 case under each reading of `registry` (production's own, or a
- * proposed registration rehearsed through the `injectCfFormulaReadings` seam), as production evaluates it.
- */
-async function readingsCheck(registry: Readonly<Record<string, string | readonly string[]>>, proposed?: Readonly<Record<string, string | readonly string[]>>) {
+/** Runs every non-record configuration of every Stage 5 case under each reading of `registry`, as production evaluates it. */
+async function readingsCheck(registry: Readonly<Record<string, string | readonly string[]>>) {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest
   const lists = Object.entries(registry).filter((e): e is [string, readonly string[]] => typeof e[1] !== 'string')
   const reproduced = new Set<string>(), reproducedAt = new Set<string>(), unconfirmableChecked = new Set<string>(), violations: string[] = []
@@ -233,7 +230,6 @@ async function readingsCheck(registry: Readonly<Record<string, string | readonly
         selections[cfg.capabilityId] = reading
         const got = await withInjectedCfEvidence(Object.keys(registry), async () => {
           injectCfFormulaSelections(selections)
-          injectCfFormulaReadings(proposed ?? null)
           try {
             // A `pre:` observation is what Excel shows on opening the authored input, before any calculate; the saved file is Excel's resave
             // (its stale values recomputed), so the input is the workbook production must reproduce it on.
@@ -262,7 +258,7 @@ async function readingsCheck(registry: Readonly<Record<string, string | readonly
             }
             lease.release(); service.dispose()
             return out
-          } finally { injectCfFormulaSelections(null); injectCfFormulaReadings(null) }
+          } finally { injectCfFormulaSelections(null) }
         })
         const verdict = configurationVerdict(cfg, reading, got)
         if (stage5UnconfirmableScope(cfg.capabilityId, c.id)) {
@@ -293,15 +289,14 @@ describe('every registered formula reading is the reading production implements,
   }, 300_000)
 })
 
-describe('rehearsing the proposed anchor-a1 registration (stage5-cfvo-relative-a1, not registered)', () => {
-  it('with anchor-a1 added for both cfvo scope ids, every cell is the reading\'s prediction or withheld, and the owner case reproduces and discriminates it', async () => {
-    const PROPOSED = { 'formula:cfvo-relative': 'anchor-a1', 'formula:cfvo-scope-multi-range': ['rule-wide', 'per-range', 'anchor-a1'] } as const
-    expect(CF_FORMULA_PRODUCTION_READINGS['formula:cfvo-relative']).toBe('anchor-top-left')
-    const { reproducedAt, violations } = await readingsCheck({ ...CF_FORMULA_PRODUCTION_READINGS, ...PROPOSED }, PROPOSED)
+describe('the anchor-a1 registration (stage5-cfvo-relative-a1, f9d5be94)', () => {
+  it('both cfvo scope ids name anchor-a1, reproduced and discriminating on the owner case and only where it was pre-registered', async () => {
+    expect(CF_FORMULA_PRODUCTION_READINGS['formula:cfvo-relative']).toBe('anchor-a1')
+    expect(CF_FORMULA_PRODUCTION_READINGS['formula:cfvo-scope-multi-range']).toEqual(['rule-wide', 'per-range', 'anchor-a1'])
+    const { reproducedAt, violations } = await readingsCheck(CF_FORMULA_PRODUCTION_READINGS)
     expect(violations).toEqual([])
-    for (const cap of Object.keys(PROPOSED)) expect(reproducedAt.has(`${cap}|stage5-cfvo-relative-a1|anchor-a1`), `${cap}: ${[...reproducedAt].filter(k => k.startsWith(cap)).join(', ')}`).toBe(true)
-    // Only cases that pre-registered anchor-a1 are asked for it: the owner, and stage5-cfvo-scope-v2 (which named it before
-    // its capture); stage5-cfvo-formulas K and stage5-cfvo-scope never did and keep their historical verification.
+    // The owner, and stage5-cfvo-scope-v2 (which named anchor-a1 before its capture); stage5-cfvo-formulas K and
+    // stage5-cfvo-scope never did and keep their historical verification.
     expect([...reproducedAt].filter(k => k.endsWith('|anchor-a1')).sort()).toEqual([
       'formula:cfvo-relative|stage5-cfvo-relative-a1|anchor-a1',
       'formula:cfvo-scope-multi-range|stage5-cfvo-relative-a1|anchor-a1',
