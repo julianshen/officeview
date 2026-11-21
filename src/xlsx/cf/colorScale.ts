@@ -447,8 +447,7 @@ export function safeFraction(v: number, lo: number, hi: number): number | undefi
  * follow-up case pre-registers the readings. Endpoints and fractions with f·2^20 an integer paint as before.
  */
 export function numSegmentUnmeasured(lo: CfScalePoint, hi: CfScalePoint, value: number, tLo: number, tHi: number, fraction: number): boolean {
-  const literalNum = (p: CfScalePoint): boolean => p.bound.type === 'num' && !('resolved' in p.bound && p.bound.resolved !== undefined)
-  return literalNum(lo) && literalNum(hi) && value > tLo && value < tHi && !Number.isInteger(fraction * 1048576)
+  return literalNumBound(lo) && literalNumBound(hi) && value > tLo && value < tHi && !Number.isInteger(fraction * 1048576)
 }
 
 /** The kind of the cfvo bounding a segment, as the scale evaluated it: a formula bound resolved to a number is `num:formula`. */
@@ -492,6 +491,78 @@ let segmentProbe: ((segment: CfScaleSegment) => CfOutcome<number> | undefined) |
  */
 export function injectCfScaleSegmentProbe(probe: ((segment: CfScaleSegment) => CfOutcome<number> | undefined) | null): void {
   segmentProbe = probe
+}
+
+/**
+ * The num-segment follow-up (Phase 1 task 2): the readings of Excel's arithmetic inside a 3-colour segment that the candidate
+ * search (scripts/cf-refs/num-segment-candidates.ts) left standing, one representative per class of survivors that the
+ * confirmation case stage2-scale-num-segment can tell apart, plus `truncate` (production's interpolation, the control
+ * e448d831 contradicts). Each names the step taken from the segment's start colour per channel, |d| the channel's span:
+ * - `truncate`: floor(f·|d| + 1e-11);
+ * - `percent-roundtrip`: floor(((f·100)/100)·|d|), unguarded;
+ * - `fixed-N` (N = 256, 1000, 308, 700): floor((floor(f·N)/N)·|d|), unguarded (the fraction quantised to 1/N).
+ */
+export const CF_NUM_SEGMENT_READINGS = ['truncate', 'percent-roundtrip', 'fixed-256', 'fixed-1000', 'fixed-308', 'fixed-700'] as const
+export type CfNumSegmentReading = (typeof CF_NUM_SEGMENT_READINGS)[number]
+/** A 3-colour segment bounded by two literal num cfvo (the withheld shape, `numSegmentUnmeasured`). */
+export const CF_NUM_SEGMENT_CAP = 'scale:num-segment-fraction'
+/** Every other 3-colour segment (a min/max/percent/percentile or formula bound on either side). */
+export const CF_NUM_SEGMENT_STATISTICAL_CAP = 'scale:num-segment-fraction-statistical'
+/**
+ * The reading production implements per id. `scale:num-segment-fraction` has none (unregistered): the shape stays withheld.
+ * `scale:num-segment-fraction-statistical` reads `truncate`, the published behaviour. A reading other than `truncate` is
+ * honoured only with its id's evidence; the audit's CF_STAGE2_PRODUCTION_READINGS spreads this table.
+ */
+export const CF_NUM_SEGMENT_PRODUCTION_READINGS: Readonly<Partial<Record<string, CfNumSegmentReading>>> = Object.freeze({
+  [CF_NUM_SEGMENT_STATISTICAL_CAP]: 'truncate',
+})
+let proposedNumSegmentReadings: Readonly<Partial<Record<string, CfNumSegmentReading>>> | null = null
+/** Test seam: rehearse a proposed registration (id to reading) as if it were in the table above. Null clears. Production never calls it. */
+export function injectCfNumSegmentReadings(readings: Readonly<Partial<Record<string, CfNumSegmentReading>>> | null): void {
+  proposedNumSegmentReadings = readings ? Object.freeze({ ...readings }) : null
+}
+/** The reading of one id (undefined: unregistered, or not a reading), a proposed one (the test seam) first. */
+export function cfNumSegmentReading(capability: string): CfNumSegmentReading | undefined {
+  const r = proposedNumSegmentReadings && Object.prototype.hasOwnProperty.call(proposedNumSegmentReadings, capability) ? proposedNumSegmentReadings[capability] : CF_NUM_SEGMENT_PRODUCTION_READINGS[capability]
+  return r !== undefined && (CF_NUM_SEGMENT_READINGS as readonly string[]).includes(r) ? r : undefined
+}
+
+function numSegmentStep(reading: CfNumSegmentReading, f: number, d: number): number {
+  if (reading === 'truncate') return Math.floor(f * d + 1e-11)
+  if (reading === 'percent-roundtrip') return Math.floor(((f * 100) / 100) * d)
+  const n = Number(reading.slice('fixed-'.length))
+  return Math.floor((Math.floor(f * n) / n) * d)
+}
+
+/** One reading's colour between `argb0` (at f = 0) and `argb1`, per channel from the start colour (f clamped to [0, 1]). */
+export function numSegmentReadingColor(reading: CfNumSegmentReading, argb0: number, argb1: number, fraction: number): number {
+  const f = Math.max(0, Math.min(1, fraction))
+  const channel = (shift: number): number => {
+    const c0 = (argb0 >>> shift) & 0xff, c1 = (argb1 >>> shift) & 0xff
+    return c1 >= c0 ? c0 + numSegmentStep(reading, f, c1 - c0) : c0 - numSegmentStep(reading, f, c0 - c1)
+  }
+  return ((channel(24) << 24) | (channel(16) << 16) | (channel(8) << 8) | channel(0)) >>> 0
+}
+
+const literalNumBound = (p: CfScalePoint): boolean => p.bound.type === 'num' && !('resolved' in p.bound && p.bound.resolved !== undefined)
+
+/**
+ * A 3-colour segment's outcome: the literal-num shape follows its id's registered reading (with evidence), else is withheld
+ * where `numSegmentUnmeasured`; every other segment follows the statistical id's reading (`truncate` unless a proposed one
+ * has evidence). A non-default colour space or rounding keeps the variant interpolation.
+ */
+function threeColourSegment(lo: CfScalePoint, hi: CfScalePoint, value: number, tLo: number, tHi: number, fraction: number, argb0: number, argb1: number,
+  checkEvidence: (cap: string) => boolean, colorSpace: CfColorSpaceVariant, rounding: CfRoundingVariant): CfOutcome<number> {
+  const variant = colorSpace !== 'sRGB' || rounding !== 'truncate'
+  if (literalNumBound(lo) && literalNumBound(hi)) {
+    const r = cfNumSegmentReading(CF_NUM_SEGMENT_CAP)
+    if (!variant && r !== undefined && checkEvidence(CF_NUM_SEGMENT_CAP)) return { kind: 'ready', value: numSegmentReadingColor(r, argb0, argb1, fraction) }
+    if (numSegmentUnmeasured(lo, hi, value, tLo, tHi, fraction)) return { kind: 'unresolved', reason: 'cf-unmeasured-num-segment-fraction' }
+  } else {
+    const r = cfNumSegmentReading(CF_NUM_SEGMENT_STATISTICAL_CAP)
+    if (!variant && r !== undefined && r !== 'truncate' && checkEvidence(CF_NUM_SEGMENT_STATISTICAL_CAP)) return { kind: 'ready', value: numSegmentReadingColor(r, argb0, argb1, fraction) }
+  }
+  return { kind: 'ready', value: interpolateScaleColor(argb0, argb1, fraction, colorSpace, rounding) }
 }
 
 /**
@@ -619,16 +690,14 @@ export function scaleColorAt(
       if (fraction === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
       const probed = segmentProbe?.({ value: numericVal, lo: t0, hi: t1, fraction, c0, c1, colours: 3, segment: 0, loKind: segmentBoundKind(points[0]!), hiKind: segmentBoundKind(points[mid]!), thresholds: [t0, t1, t2] })
       if (probed) return probed
-      if (numSegmentUnmeasured(points[0]!, points[mid]!, numericVal, t0, t1, fraction)) return { kind: 'unresolved', reason: 'cf-unmeasured-num-segment-fraction' }
-      return { kind: 'ready', value: interpolateScaleColor(c0, c1, fraction, colorSpace, rounding) }
+      return threeColourSegment(points[0]!, points[mid]!, numericVal, t0, t1, fraction, c0, c1, checkEvidence, colorSpace, rounding)
     } else {
       if (t1 === t2) return { kind: 'ready', value: c2 }
       const fraction = safeFraction(numericVal, t1, t2)
       if (fraction === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
       const probed = segmentProbe?.({ value: numericVal, lo: t1, hi: t2, fraction, c0: c1, c1: c2, colours: 3, segment: 1, loKind: segmentBoundKind(points[mid]!), hiKind: segmentBoundKind(points[top]!), thresholds: [t0, t1, t2] })
       if (probed) return probed
-      if (numSegmentUnmeasured(points[mid]!, points[top]!, numericVal, t1, t2, fraction)) return { kind: 'unresolved', reason: 'cf-unmeasured-num-segment-fraction' }
-      return { kind: 'ready', value: interpolateScaleColor(c1, c2, fraction, colorSpace, rounding) }
+      return threeColourSegment(points[mid]!, points[top]!, numericVal, t1, t2, fraction, c1, c2, checkEvidence, colorSpace, rounding)
     }
   }
 }

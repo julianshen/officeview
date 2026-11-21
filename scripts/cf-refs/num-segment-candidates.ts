@@ -25,7 +25,7 @@ import { OfficePackage } from '../../src/core/zip'
 import { parseXlsx } from '../../src/xlsx/parse'
 import { cfDocumentEvaluationOf, prepareCfPaint } from '../../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../../src/xlsx/cf/predicates'
-import { injectCfScaleSegmentProbe, interpolateScaleColor, numSegmentUnmeasured, type CfScaleSegment } from '../../src/xlsx/cf/colorScale'
+import { injectCfScaleSegmentProbe, interpolateScaleColor, numSegmentUnmeasured, type CfNumSegmentReading, type CfScaleSegment } from '../../src/xlsx/cf/colorScale'
 import type { CfScalePoint } from '../../src/xlsx/cf/model'
 import { caseDocumentEvaluationOf, caseParseOptionsOf } from './case-clock'
 import type { CfManifest, CfOracleCase } from './cases'
@@ -243,6 +243,15 @@ export const CANDIDATES: readonly Candidate[] = [
   ...Object.entries(SWEEPS).map(([id, step]) => ({ id, colour: (s: CfScaleSegment) => { const f = clamp01(FRACTIONS.exact!(s)); return composeArgb(s, (c0, c1) => c0 + sgn(c1 - c0) * step(f, Math.abs(c1 - c0))) } })),
 ]
 export const BASELINE_ID = 'exact/step-truncate'
+/** The candidate each production reading (`CF_NUM_SEGMENT_READINGS`, colorScale.ts) implements: its class's representative. */
+export const NUM_SEGMENT_READING_CANDIDATE: Readonly<Record<CfNumSegmentReading, string>> = {
+  truncate: BASELINE_ID,
+  'percent-roundtrip': 'percent-roundtrip/step-truncate-unguarded',
+  'fixed-256': 'sweep-fixed-256',
+  'fixed-1000': 'sweep-fixed-1000',
+  'fixed-308': 'sweep-fixed-308',
+  'fixed-700': 'sweep-fixed-700',
+}
 
 /** Where a candidate replaces production's arithmetic; outside it, production's (already Excel-equal) colour stands. */
 export const SCOPES: Readonly<Record<string, (s: CfScaleSegment) => boolean>> = {
