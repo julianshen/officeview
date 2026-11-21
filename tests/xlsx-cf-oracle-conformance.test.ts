@@ -33,6 +33,7 @@ import { cfRulesVersion } from '../src/xlsx/view/pagedSource'
 import { decodePngSync, ICON_NO_ICON_MEMBER, iconTwinSetClass, iconTwinSetMembers, isCellInSqref, loadBarScreenCapture, observedIconClass, sampleBarGradients, verifyCfCase, type CfObservedIcon, type DecodedPng } from '../scripts/cf-refs/verify'
 import { CF_ICON_GLYPH_CLASSES } from '../src/xlsx/cf/iconGlyphs'
 import { CF_CASES, CF_STAGE4_CAPABILITIES, type CfManifest } from '../scripts/cf-refs/cases'
+import { STAGE2_WITHHELD_FINDINGS, stage2NumSegmentShape } from '../scripts/cf-refs/stage2-withhold'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const MANIFEST_PATH = join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json')
@@ -172,53 +173,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
 
   // Documented findings for cells where engine behavior diverges from Excel oracle:
   // Only withheld outcomes are allowed; a finding can never encode a painted wrong colour.
-  const FINDINGS: Record<string, Finding> = {
-    // Finding F2: Overlapping scales withheld under Task 15 ruling S2-I (base fill FFFFFFFF)
-    'stage2-scale-scope:B2': { outcome: 'withheld', reason: 'Overlapping scale ranges B2:B4 and B2:B6 withhold fill under S2-I' },
-    'stage2-scale-scope:B3': { outcome: 'withheld', reason: 'Overlapping scale ranges B2:B4 and B2:B6 withhold fill under S2-I' },
-    'stage2-scale-scope:B5': { outcome: 'withheld', reason: 'Overlapping scale ranges B2:B6 and B2:B6 withhold fill under S2-I' },
-    'stage2-scale-scope:B6': { outcome: 'withheld', reason: 'Overlapping scale ranges B2:B6 and B2:B6 withhold fill under S2-I' },
-    'stage2-scale-scope:D2': { outcome: 'withheld', reason: 'Overlapping scale ranges D2:D4 and D2:D6 withhold fill under S2-I' },
-    'stage2-scale-scope:D3': { outcome: 'withheld', reason: 'Overlapping scale ranges D2:D4 and D2:D6 withhold fill under S2-I' },
-
-    // Finding F6 (final review I5 / Ruling F-2): the scope fixture cannot discriminate hidden-row, autofilter,
-    // merged-cell or disjoint participation, so scale:scope-hidden-row, scale:scope-autofilter-hidden-row,
-    // scale:scope-merged-cell and scale:scope-disjoint are unverified and these scales are WITHHELD until re-measured.
-    'stage2-scale-scope:C2': { outcome: 'withheld', reason: 'Hidden row 4 inside C2:C6: scale:scope-hidden-row is non-discriminating (hidden value 30 is not extremal) and unverified' },
-    'stage2-scale-scope:C3': { outcome: 'withheld', reason: 'Hidden row 4 inside C2:C6: scale:scope-hidden-row is non-discriminating and unverified' },
-    'stage2-scale-scope:C5': { outcome: 'withheld', reason: 'Hidden row 4 inside C2:C6: scale:scope-hidden-row is non-discriminating and unverified' },
-    'stage2-scale-scope:C6': { outcome: 'withheld', reason: 'Hidden row 4 inside C2:C6: scale:scope-hidden-row is non-discriminating and unverified' },
-    'stage2-scale-scope:D5': { outcome: 'withheld', reason: 'Hidden row 4 inside D2:D6 (the saved file has no autoFilter): scale:scope-autofilter-hidden-row is non-discriminating and unverified' },
-    'stage2-scale-scope:D6': { outcome: 'withheld', reason: 'Hidden row 4 inside D2:D6: scale:scope-autofilter-hidden-row is non-discriminating and unverified' },
-    'stage2-scale-scope:F2': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4 (F4 populated): hidden-row scope shapes are unverified' },
-    'stage2-scale-scope:F3': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
-    'stage2-scale-scope:F5': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
-    'stage2-scale-scope:F6': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
-    'stage2-scale-scope:F13': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
-    'stage2-scale-scope:F14': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
-    'stage2-scale-scope:F15': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
-    'stage2-scale-scope:F16': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
-    'stage2-scale-scope:F17': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
-    'stage2-scale-scope:B8': { outcome: 'withheld', reason: 'Merged B8:C9 inside the scope: scale:scope-merged-cell is non-discriminating (every merged value is 100) and unverified' },
-    'stage2-scale-scope:C8': { outcome: 'withheld', reason: 'Merged B8:C9 inside the scope: scale:scope-merged-cell is non-discriminating and unverified' },
-    'stage2-scale-scope:B9': { outcome: 'withheld', reason: 'Merged B8:C9 inside the scope: scale:scope-merged-cell is non-discriminating and unverified' },
-    'stage2-scale-scope:C9': { outcome: 'withheld', reason: 'Merged B8:C9 inside the scope: scale:scope-merged-cell is non-discriminating and unverified' },
-
-    // Finding F3: Overlapping scales on I2:I5 withheld under Task 15 ruling S2-I
-    'stage2-scale-composition:I2': { outcome: 'withheld', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
-    'stage2-scale-composition:I3': { outcome: 'withheld', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
-    'stage2-scale-composition:I4': { outcome: 'withheld', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
-    'stage2-scale-composition:I5': { outcome: 'withheld', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
-
-    // Finding F4: Text cell J2 in scale range
-    'stage2-scale-composition:J2': { outcome: 'withheld', reason: 'Text cell J2 lower dxf fill unmeasured in Stage 2' },
-
-    // Finding F5: Expression rule 19 with stopIfTrue="1" withholds lower scale 20 under S2-J
-    'stage2-scale-composition:L2': { outcome: 'withheld', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
-    'stage2-scale-composition:L3': { outcome: 'withheld', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
-    'stage2-scale-composition:L4': { outcome: 'withheld', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
-    'stage2-scale-composition:L5': { outcome: 'withheld', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
-  }
+  const FINDINGS: Readonly<Record<string, Finding>> = STAGE2_WITHHELD_FINDINGS
 
   // Stage 3 bar cells whose NON-bar rule production withholds although Excel paints its fill (withheld-only).
   const STAGE3_NONBAR_WITHHELD: Record<string, Finding> = Object.fromEntries(['I2', 'I3', 'I4'].map(ref => [`stage3-bar-composition:${ref}`,
@@ -232,7 +187,14 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     'stage2-scale-colors',
     'stage2-scale-scope',
     'stage2-scale-composition',
+    'stage2-scale-scope-disjoint',
   ]
+
+  // The num-segment finding (scripts/cf-refs/stage2-withhold.ts): recomputed from the case's marker and the cell's value.
+  const numSegmentShape = (c: CfManifest['cases'][number], sheet: XlsxSheet, ref: string): boolean => {
+    const { row, col } = refToRowCol(ref)
+    return stage2NumSegmentShape(c.markers, ref, sheet.rows.find(r => r.index === row)?.cells.find(cl => cl.col === col)?.value)
+  }
 
   it('runs production pipeline on all measured cases with zero unexpected mismatches', async () => {
     let checkedCells = 0
@@ -638,14 +600,16 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     }
 
     expect(checkedCount).toBeGreaterThan(0)
-    expect(checkedCount).toBe(206)
+    // 206 + the 68 scale cells (20 designated, 48 twins) of stage2-scale-scope-disjoint (measured, e448d831).
+    expect(checkedCount).toBe(274)
   })
 
-  it('paints exact Excel ARGB for every non-hidden excel-display-format cell of all 7 measured Stage 2 cases under production evidence (Lesson 1 dual gate, T14-A)', async () => {
+  it('paints exact Excel ARGB for every non-hidden excel-display-format cell of all 8 measured Stage 2 cases under production evidence (Lesson 1 dual gate, T14-A)', async () => {
     let grandTotalChecked = 0
     let exactCount = 0
     let withheldCount = 0
     let stubComparedCount = 0
+    let numSegmentWithheld = 0
     const caseCounts: Record<string, number> = {}
 
     for (const caseId of STAGE2_MEASURED_CASES) {
@@ -689,6 +653,11 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
           expect(finding.outcome).toBe('withheld')
           expect(actualFill, `${cellKey} finding: ${finding.reason}`).toBe('FFFFFFFF')
           withheldCount++
+        } else if (numSegmentShape(c, sheet, cell.ref)) {
+          // Withheld by the num-segment finding (never painted, whatever Excel shows).
+          expect(actualFill, `${cellKey}: the 3-colour literal-num segment with f*2^20 not an integer is withheld`).toBe('FFFFFFFF')
+          withheldCount++
+          numSegmentWithheld++
         } else {
           // Exact Excel ARGB match:
           expect(actualFill, `${cellKey} must match exact Excel ARGB`).toBe(cell.fillRgb)
@@ -703,10 +672,13 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     for (const caseId of STAGE2_MEASURED_CASES) {
       expect(caseCounts[caseId], `Case ${caseId} checked cell count`).toBeGreaterThan(0)
     }
-    expect(grandTotalChecked).toBe(398)
+    // 398 + the 88 observed cells of stage2-scale-scope-disjoint (e448d831).
+    expect(grandTotalChecked).toBe(486)
     // Ruling F-2: cells that lost paint moved into typed withheld-only FINDINGS; none is an allowlisted wrong colour.
-    expect(exactCount).toBe(364 + stubComparedCount)
-    expect(withheldCount).toBe(34 - stubComparedCount)
+    // stage2-scale-scope-disjoint: 77 exact, 11 twins withheld by the num-segment finding (T4 and V3 among them).
+    expect(numSegmentWithheld).toBe(11)
+    expect(exactCount).toBe(364 + 77 + stubComparedCount)
+    expect(withheldCount).toBe(34 + 11 - stubComparedCount)
     expect(exactCount + withheldCount).toBe(grandTotalChecked)
   })
 

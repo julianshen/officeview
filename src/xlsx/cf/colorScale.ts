@@ -439,6 +439,19 @@ export function safeFraction(v: number, lo: number, hi: number): number | undefi
 }
 
 /**
+ * Finding (capture e448d831, stage2-scale-scope-disjoint twins T4 and V3; user ruling "withhold the num shape"): on a
+ * 3-colour scale whose segment is bounded by two literal `num` cfvo (a formula bound resolved to a number is not
+ * included: no capture shows that shape), a value strictly inside the segment where f·2^20 is not an integer rendered
+ * in Excel 16.115 one unit HIGHER per RGB channel than production's truncating interpolation (T4: CC/DD/82 against CB/DC/81; V3: 98/CE/7F against 97/CD/7E), i.e. the descending step one unit smaller in magnitude. Excel's rule is
+ * unexplained, so the rounding is unchanged and such a cell is withheld (`cf-unmeasured-num-segment-fraction`) until a
+ * follow-up case pre-registers the readings. Endpoints and fractions with f·2^20 an integer paint as before.
+ */
+export function numSegmentUnmeasured(lo: CfScalePoint, hi: CfScalePoint, value: number, tLo: number, tHi: number, fraction: number): boolean {
+  const literalNum = (p: CfScalePoint): boolean => p.bound.type === 'num' && !('resolved' in p.bound && p.bound.resolved !== undefined)
+  return literalNum(lo) && literalNum(hi) && value > tLo && value < tHi && !Number.isInteger(fraction * 1048576)
+}
+
+/**
  * Computes the interpolated ARGB colour for a cell value.
  * Pure function: fails closed when evidence is absent or cell value is outside bounds.
  */
@@ -535,11 +548,14 @@ export function scaleColorAt(
       return { kind: 'unresolved', reason: 'cf-inverted-thresholds' }
     }
 
+    // The cfvo whose thresholds bound each segment (re-sorted with the thresholds below).
+    let mid = 1, top = 2
     if (t1 > t2) {
       // Midpoint above max (e.g. 10, 200, 100):
       // Excel sorts thresholds to 10, 100, 200 while associating c0 with 10, c1 with 100, c2 with 200
       t1 = thresholds[2]!
       t2 = thresholds[1]!
+      mid = 2; top = 1
     }
 
     const tMin = Math.min(t0, t1, t2)
@@ -554,11 +570,13 @@ export function scaleColorAt(
       if (t0 === t1) return { kind: 'ready', value: c1 }
       const fraction = safeFraction(numericVal, t0, t1)
       if (fraction === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
+      if (numSegmentUnmeasured(points[0]!, points[mid]!, numericVal, t0, t1, fraction)) return { kind: 'unresolved', reason: 'cf-unmeasured-num-segment-fraction' }
       return { kind: 'ready', value: interpolateScaleColor(c0, c1, fraction, colorSpace, rounding) }
     } else {
       if (t1 === t2) return { kind: 'ready', value: c2 }
       const fraction = safeFraction(numericVal, t1, t2)
       if (fraction === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
+      if (numSegmentUnmeasured(points[mid]!, points[top]!, numericVal, t1, t2, fraction)) return { kind: 'unresolved', reason: 'cf-unmeasured-num-segment-fraction' }
       return { kind: 'ready', value: interpolateScaleColor(c1, c2, fraction, colorSpace, rounding) }
     }
   }

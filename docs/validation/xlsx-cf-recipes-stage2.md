@@ -1,6 +1,6 @@
 # XLSX Conditional Formatting — Stage 2 Colour Scale Oracle Capture Recipes
 
-This document provides the reproducible recipes for completing Microsoft Excel for Mac `16.114` (`zh-TW`) resave, display format interior color probing, and clipboard appearance captures (`copy picture`) for all 8 Stage 2 colour scale conditional formatting oracle cases once the macOS display is awake and unlocked (`CGSSessionScreenIsLocked = false`).
+This document provides the reproducible recipes for completing Microsoft Excel for Mac `16.114` (`zh-TW`) resave, display format interior color probing, and clipboard appearance captures (`copy picture`) for all 9 Stage 2 colour scale conditional formatting oracle cases once the macOS display is awake and unlocked (`CGSSessionScreenIsLocked = false`).
 
 ---
 
@@ -199,3 +199,77 @@ For `stage2-scale-thresholds`, dynamic refresh behaviour (re-evaluating scale th
 | `stage2-scale-scope` | `Sheet1!A1:F20` | `screen` | Rows `2..9` (CF) vs. Rows `13..20` (Controls) | Disjoint `B2:B4 D2:D4` (`B2:D4`, S2-H); duplicate `<conditionalFormatting>` blocks (`B2:B6`, S2-H); hidden row 4 (`C2:C6`, S2-H); autofilter-hidden row 4 (`D2:D6`, S2-H); merged `B8:C9` inside scope (`B8:C9`, S2-H); canonical whole-column `F1:F1048576` with 5 populated rows (`F1:F1048576`, S2-H). |
 | `stage2-scale-composition` | `Sheet1!A1:L10` | `screen` | Rows `2..5` (CF) vs. Rows `7..10` (Controls) | DXF fill p1 + scale p2 (`B2:B5`, S2-I); scale p1 + DXF fill p2 (`C2:C5`, S2-I); equal-priority tie-break (`D2:D5`, S2-I); scale with font-only DXF merge (`E2:E5`, S2-I); matching DXF `stopIfTrue` ahead (`F2:F5`, S2-I); non-matching DXF `stopIfTrue` ahead (`G2:G5`, S2-I); scale `stopIfTrue="1"` ahead of DXF fill (`H2:H5`, S2-J, OD-1); two overlapping scales (`I2:I5`, S2-I); text cell in scale range with lower DXF (`J2:J5`, S2-I); own fill + table base under scale (`K2:K5`, S2-I); unresolved expression stub at p1 (`L2:L5`, S2-I). |
 | `stage2-scale-unresolved-shapes` | `Sheet1!A1:F12` | None (`status: unsupported`) | Rows `2..6` vs. Rows `8..12` | Malformed/unsupported scale shapes (S2-C, S2-K, OD-3): 2 cfvo with 3 colors (`B2:B6`); cfvo without `type` (`C2:C6`); formula cfvo (`D2:D6`); `activePresent="1"` (`E2:E6`); standalone `x14:colorScale` with literal/reference `xm:f` (`F2:F6`). Status is `unsupported`; viewer fails closed. |
+| `stage2-scale-scope-disjoint` | `Sheet1!A1:W10` | `screen` | Rows `2..5` (CF and twins) vs. Rows `7..10` (Controls of the data columns B, D, F, H, J; twins share the control of the column they copy) | The scope-disjoint follow-up (Ruling F-2, S2-H; §7): 2-colour min/max on `B2:B5 D2:D5`, 3-colour min / percentile 50 / max on `F2:F5 H2:H5`, single-range negative control on `J2:J5`, twelve literal num twins on `L2:W5`. Owns `scale:scope-disjoint` (`CF_STAGE2_OWNERS`); readings pre-registered in `scaleReadings`. |
+
+---
+
+## 7. The scope-disjoint follow-up (`stage2-scale-scope-disjoint`)
+
+`stage2-scale-scope` cannot discriminate `scale:scope-disjoint` (`CF_STAGE2_NONDISCRIMINATING`): its `B2:B4 D2:D4` rule overlaps the `B2:B6` and `D2:D6` rules, so every non-hidden cell is withheld (S2-I), and both rectangles hold the same values, so union and per-rectangle statistics paint alike. This case version asks the question alone. It owns `scale:scope-disjoint` through `CF_STAGE2_OWNERS`; the old case keeps its marker and capture as a cross-check. It is appended last in `CF_STAGE2_CASES`, so every earlier input stays byte-identical.
+
+**Isolation.** No rule overlaps another, and no hidden row, merge, autofilter, error or whole-column rule sits in scope. The only gate production applies to the two disjoint scales is `scale:scope-disjoint` (`service.ts` `blockScope`).
+
+**Rules** (priority order; colours `FFF8696B` / [`FFFFEB84`] / `FF63BE7B`):
+
+| Priority | sqref | Shape | Values (row 2..5) | Capability |
+|---|---|---|---|---|
+| 1 | `B2:B5 D2:D5` | 2-colour min / max | B `10, 20, 30, 40`; D `50, 60, 70, 80` | `scale:scope-disjoint` |
+| 2 | `F2:F5 H2:H5` | 3-colour min / percentile 50 / max | F `0, 20, 40, 60`; H `30, 50, 70, 100` | `scale:scope-disjoint` |
+| 3 | `J2:J5` | 2-colour min / max (single range) | `10, 20, 30, 40` | `scale:scope-disjoint-control` |
+| 4..15 | `L2:L5` .. `W2:W5` | num-bounded twins, one per predicted rendering | a copy of one data column | `scale:scope-disjoint-twin` |
+
+**Pre-registered readings** (`scaleReadings`, fixed before capture, Lesson 14). The single-range readings are named by position, not by sqref order, since Excel may reorder a multi-range sqref on resave.
+
+| Reading | Statistics for a cell of either rectangle | 2-colour bounds (B / D) | 3-colour bounds (F / H) |
+|---|---|---|---|
+| `union` | both rectangles together | 10/80 / 10/80 | 0/45/100 / 0/45/100 |
+| `per-range` | the cell's own rectangle | 10/40 / 50/80 | 0/30/60 / 30/60/100 |
+| `leftmost-range` | the left rectangle's, for every cell | 10/40 / 10/40 | 0/30/60 / 0/30/60 |
+| `rightmost-range` | the right rectangle's, for every cell | 50/80 / 50/80 | 30/60/100 / 30/60/100 |
+
+A designated cell under a reading renders as its twin: the same values under num bounds equal to that reading's statistics (PERCENTILE.INC for the midpoint, S2-L; values beyond a bound clamp, `scale:degenerate-values-beyond-bounds`). The twin columns:
+
+| Twin | Copies | num bounds | Predicts |
+|---|---|---|---|
+| `L` | B | 10 / 80 | B under `union` |
+| `M` | D | 10 / 80 | D under `union` |
+| `N` | B (and J) | 10 / 40 | B under `per-range`, `leftmost-range`; J under every reading |
+| `O` | D | 50 / 80 | D under `per-range`, `rightmost-range` |
+| `P` | D | 10 / 40 | D under `leftmost-range` (every value above the bound) |
+| `Q` | B | 50 / 80 | B under `rightmost-range` (every value below the bound) |
+| `R` | F | 0 / 45 / 100 | F under `union` |
+| `S` | H | 0 / 45 / 100 | H under `union` |
+| `T` | F | 0 / 30 / 60 | F under `per-range`, `leftmost-range` |
+| `U` | H | 30 / 60 / 100 | H under `per-range`, `rightmost-range` |
+| `V` | H | 0 / 30 / 60 | H under `leftmost-range` |
+| `W` | F | 30 / 60 / 100 | F under `rightmost-range` |
+
+**Decisive cells.** Both configurations replicate per rectangle (`replicateBy: 'column'`): every rival a rectangle separates must be contradicted at >= 2 decisive cells of that rectangle (S4-REPLICATE); this case gives 3 (pre-capture ruling: a capture cannot be retried). Row 2 of B and F and row 5 of D and H render the same colour under every reading (each is an extreme of every reading's statistics); rows 3..5 of B and F, and rows 2..4 of D and H, decide. Every pair of readings that reads different statistics on a rectangle puts all three of its deciding cells on distinct colours (`tests/xlsx-cf-scale-scope-disjoint.test.ts` checks this robust to 0.1 of a unit of interpolation error per channel; the smallest separation is 21 channel units, B3 union vs rightmost-range). The readings classifier compares exact DisplayFormat fills with the twins'; the 12-unit DisplayFormat-to-pixel consistency check is separate. Every designated cell and every named twin must be observed: three deciding cells add separation, not permission to omit an observation. `J2:J5` is the negative control: every reading predicts twin `N`, so Excel must match it but it is never evidence.
+
+**Verification.** `verifyCfCase` judges the readings with `evaluateFormulaCapabilities` over the screen sidecar's `observedCells` DisplayFormat fills (`stage2ReadingsObservationOf`; `none` where the fill equals `baseFillRgb`, else white). `auditStage2Manifest` verifies `scale:scope-disjoint` only when the readings discriminate one reading and it is production's (`CF_STAGE2_PRODUCTION_READINGS`: `union`, the statistics `service.ts` prepares over all of a rule's ranges at once). While the case is `recipe-pending` the capability stays `unverified-nondiscriminating`; the registry entry is removed only at the Phase 2 publication. The twin and control ids are registered non-discriminating and never publish.
+
+**Size.** 88 expected cells: 20 designated, 48 twin cells, 20 controls. Capture range `A1:W10` (23 columns of 14 characters, 10 rows of 18 pt).
+
+**Run** (from the worktree root):
+
+```sh
+# The input is committed (node zlib's deflate). Do not regenerate it: build.ts runs generateAllStage1 before opening
+# Excel, which keeps a committed input whose inflated parts are identical (keepCommittedArchive), so bun's different
+# deflate never rewrites it. Check before the build that the input hash is still the committed one:
+shasum -a 256 tests/fixtures/xlsx-cf/inputs/stage2-scale-scope-disjoint.xlsx   # af13180a6454b57bae583cef286eea1a672a24c6095cb59a3fbed1cec5d533c5
+bun scripts/cf-refs/build.ts --stage 2 --case stage2-scale-scope-disjoint
+bun scripts/cf-refs/capture.ts --stage 2 --case stage2-scale-scope-disjoint
+npx vitest run tests/xlsx-cf-scale-scope-disjoint.test.ts
+bun scripts/cf-refs/audit.ts --stage 2
+```
+
+To regenerate the input (only before a build, never after a capture): `npx tsx scripts/cf-refs/generate.ts --case stage2-scale-scope-disjoint`.
+
+The capture cannot be retried and no tolerance is edited after it. A capture no reading explains is a finding (`formula-hypothesis-none`), recorded, never fitted; a reading other than `union` leaves production withholding every multi-range colour scale.
+
+**Run result** (e448d831, Excel 16.115):
+- The build left the committed input `af13180a…` byte-identical, and the resave opened repair-free.
+- The capture is 1933 × 181 px.
+- `verifyCfCase`: verified, **discriminating, matched `union`** (sole survivor). Every designated cell equals its union twin (B = L, D = M, F = R, H = S, J = N), and every control is white.
+- Published as `scale:scope-disjoint` (341 ids; `docs/validation/xlsx-cf.md` §14.z.13).
+- **Finding:** twins T4 and V3 (3-colour num 0/30/60, upper segment at f = 1/3 and 2/3) are one unit HIGHER per RGB channel than production (the descending step one unit smaller). Their shape (a literal-num segment where f·2^20 is not an integer) is withheld (`cf-unmeasured-num-segment-fraction`) pending a follow-up case.

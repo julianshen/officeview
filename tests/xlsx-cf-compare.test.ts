@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto'
 import { resolve, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { compareCfCase } from '../scripts/cf-compare'
-import type { CfManifest } from '../scripts/cf-refs/cases'
+import type { CfManifest, CfOracleCase } from '../scripts/cf-refs/cases'
 import { readFileSync } from 'node:fs'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -213,11 +213,73 @@ describe('Stage 2 cf-compare refuses to pass having compared nothing (I4)', () =
     expect(verifyCaseCells(c, root, everyCellPainted)).toContain('no trusted')
   })
 
-  it('a product that withholds every cell compared zero cells and refuses', async () => {
+  it('a product that withholds every cell refuses: unjustified withholding where Excel paints, and zero cells compared where every withheld cell is excused', async () => {
     const { verifyCaseCells } = await import('../scripts/cf-compare')
     const c = loadManifest().cases.find(entry => entry.id === 'stage2-scale-interpolation')!
-    const reason = verifyCaseCells(c, REPO_ROOT, everyCellWithheld)
-    expect(reason).toContain('compared zero cells')
+    expect(verifyCaseCells(c, REPO_ROOT, everyCellWithheld)).toContain('no recorded justification')
+    // Excel shows no fill anywhere: withholding renders the same base, so no cell needs justifying, and nothing was compared.
+    const blank = await scratchRoot(sidecar => { for (const cell of sidecar.observedCells) cell.fillRgb = 'FFFFFFFF' })
+    expect(verifyCaseCells(blank.c, blank.root, everyCellWithheld)).toContain('compared zero cells')
+  })
+
+  describe('a withheld Stage 2 cell is justified or refused (codex final review P2)', () => {
+    const ID = 'stage2-scale-scope-disjoint'
+    /** Every cell as Excel observed it (painted with its fill, controls unpainted), with `override` at named refs. */
+    const excelLike = (c: CfOracleCase, override: Record<string, ReturnType<typeof everyCellWithheld> | { applied: boolean; unresolved?: boolean; unresolvedSlots?: string[]; style?: { fillColor: string } }>) => {
+      const sc = JSON.parse(readFileSync(resolve(REPO_ROOT, c.captures[0]!.sidecarPath), 'utf8')) as { observedCells: Array<{ ref: string; fillRgb: string }> }
+      const fills = new Map(sc.observedCells.map(o => [o.ref, o.fillRgb]))
+      const refOf = (row: number, col: number): string => `${String.fromCharCode(65 + col)}${row + 1}`
+      return (row: number, col: number) => {
+        const ref = refOf(row, col)
+        if (override[ref]) return override[ref]!
+        const f = fills.get(ref)
+        return f && f !== 'FFFFFFFF' ? { applied: true, style: { fillColor: f } } : { applied: false }
+      }
+    }
+    // The real production outcome of the num-segment cells is withheld; every other cell Excel's colour.
+    const numSegment = ['R3', 'R4', 'R5', 'S2', 'S3', 'S4', 'T3', 'T4', 'U3', 'V3', 'W4']
+    const realLike = (_c: CfOracleCase) => Object.fromEntries(numSegment.map(r => [r, { applied: false, unresolved: true }]))
+
+    it('the num-segment cells withheld (no fill) pass; it is the condition, recomputed from the marker, that excuses them', async () => {
+      const { verifyCaseCells } = await import('../scripts/cf-compare')
+      const c = loadManifest().cases.find(entry => entry.id === ID)!
+      expect(verifyCaseCells(c, REPO_ROOT, excelLike(c, realLike(c)))).toBeUndefined()
+    })
+
+    it('mutant: T4 reported unresolved but painting a wrong fill is rejected', async () => {
+      const { verifyCaseCells } = await import('../scripts/cf-compare')
+      const c = loadManifest().cases.find(entry => entry.id === ID)!
+      const bad = excelLike(c, { ...realLike(c), T4: { applied: true, unresolved: true, unresolvedSlots: ['fill'], style: { fillColor: 'FF0000FF' } } })
+      expect(verifyCaseCells(c, REPO_ROOT, bad)).toContain('T4 is reported withheld but paints fill FF0000FF')
+    })
+
+    it('mutant: B3 (outside the shape) reported unresolved, with or without a fill, is rejected', async () => {
+      const { verifyCaseCells } = await import('../scripts/cf-compare')
+      const c = loadManifest().cases.find(entry => entry.id === ID)!
+      expect(verifyCaseCells(c, REPO_ROOT, excelLike(c, { ...realLike(c), B3: { applied: false, unresolved: true } }))).toContain('B3 is withheld with no recorded justification')
+      expect(verifyCaseCells(c, REPO_ROOT, excelLike(c, { ...realLike(c), B3: { applied: true, unresolved: true, unresolvedSlots: ['fill'], style: { fillColor: 'FF0000FF' } } }))).toContain('B3 is reported withheld but paints fill FF0000FF')
+    })
+
+    it('the typed findings still excuse their cells (stage2-scale-scope C3, hidden row), and only without a fill', async () => {
+      const { verifyCaseCells } = await import('../scripts/cf-compare')
+      const c = loadManifest().cases.find(entry => entry.id === 'stage2-scale-scope')!
+      const res = await compareCfCase(c, 'interactive', { rootDir: REPO_ROOT })
+      expect(res.outcome, res.reason).toBe('pass')
+      const sc = JSON.parse(readFileSync(resolve(REPO_ROOT, c.captures[0]!.sidecarPath), 'utf8')) as { observedCells: Array<{ ref: string; fillRgb: string; hidden?: boolean }> }
+      const fills = new Map(sc.observedCells.filter(o => !o.hidden).map(o => [o.ref, o.fillRgb]))
+      const hidden = new Set(sc.observedCells.filter(o => o.hidden).map(o => o.ref))
+      const { STAGE2_WITHHELD_FINDINGS } = await import('../scripts/cf-refs/stage2-withhold')
+      const findingRefs = new Set(Object.keys(STAGE2_WITHHELD_FINDINGS).filter(k => k.startsWith('stage2-scale-scope:')).map(k => k.split(':')[1]!))
+      const actual = (painted: boolean) => (row: number, col: number) => {
+        const ref = `${String.fromCharCode(65 + col)}${row + 1}`
+        if (findingRefs.has(ref)) return painted ? { applied: true, unresolved: true, unresolvedSlots: ['fill'], style: { fillColor: 'FF0000FF' } } : { applied: false, unresolved: true }
+        if (hidden.has(ref)) return { applied: false, unresolved: true }
+        const f = fills.get(ref)
+        return f && f !== 'FFFFFFFF' ? { applied: true, style: { fillColor: f } } : { applied: false }
+      }
+      expect(verifyCaseCells(c, REPO_ROOT, actual(false))).toBeUndefined()
+      expect(verifyCaseCells(c, REPO_ROOT, actual(true))).toMatch(/is reported withheld but paints fill FF0000FF/)
+    })
   })
 
   it('control: the real measured run still passes on both adapters (the wrong-fill mutant is covered above)', async () => {

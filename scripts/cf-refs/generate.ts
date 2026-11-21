@@ -21,7 +21,11 @@ import {
   CF_STAGE4_FIXTURES,
   CF_STAGE5_FIXTURES,
   DEFAULT_CLOCK_ANCHOR_DATE,
+  S2_SCOPE_DISJOINT,
+  S2_SCOPE_DISJOINT_ID,
   isoDateToExcelSerial,
+  s2ScopeDisjointLayout,
+  s2ScopeDisjointMarkers,
   s3ControlOffset,
   s3ControlRef,
   s3Range,
@@ -1128,6 +1132,35 @@ function casePayload(id: string, anchorDateIso = DEFAULT_CLOCK_ANCHOR_DATE): She
       }
     }
 
+    case S2_SCOPE_DISJOINT_ID: {
+      // The scope-disjoint follow-up: data rectangles and twin blocks in rows 2..4, the data columns' controls in rows 7..9
+      // (header row 6). The rules are the catalogue's markers, written in priority order.
+      const fx = S2_SCOPE_DISJOINT
+      const { twins } = s2ScopeDisjointLayout()
+      const cells: CellSpec[] = [{ ref: 'A1', v: 'Val' }, { ref: `A${1 + fx.controlOffset}`, v: 'Controls' }]
+      const put = (col: string, header: string, values: readonly number[], control: boolean): void => {
+        cells.push({ ref: `${col}1`, v: header })
+        if (control) cells.push({ ref: `${col}${1 + fx.controlOffset}`, v: `${header}_Ctrl` })
+        fx.rows.forEach((r, i) => {
+          cells.push({ ref: `${col}${r}`, v: values[i]! })
+          if (control) cells.push({ ref: `${col}${r + fx.controlOffset}`, v: values[i]! })
+        })
+      }
+      fx.rows.forEach(r => { cells.push({ ref: `A${r}`, v: `r${r}` }, { ref: `A${r + fx.controlOffset}`, v: `r${r}_ctrl` }) })
+      for (const sc of fx.scales) sc.cols.forEach((col, i) => put(col, `${sc.colours}c-${i === 0 ? 'L' : 'R'}`, sc.values[i], true))
+      put(fx.control.col, 'Single', fx.control.values, true)
+      for (const t of twins) put(t.col, `T${t.bounds.join('/')}`, t.values, false)
+      const cfvoXml = (v: { type: string; val?: string }): string => `<cfvo type="${v.type}"${v.val !== undefined ? ` val="${v.val}"` : ''}/>`
+      return {
+        dimension: `A1:${twins.at(-1)!.col}${fx.rows[fx.rows.length - 1] + fx.controlOffset}`,
+        cells,
+        legacyCfXml: s2ScopeDisjointMarkers()
+          .map(m => `<conditionalFormatting sqref="${m.sqref}"><cfRule type="colorScale" priority="${m.priority}"><colorScale>${m.scale!.cfvo.map(cfvoXml).join('')}${m.scale!.colors.map(c => `<color rgb="${c}"/>`).join('')}</colorScale></cfRule></conditionalFormatting>`)
+          .join(''),
+        dxfsXml: '<dxfs count="0"/>',
+      }
+    }
+
     case 'stage2-scale-unresolved-shapes': {
       const headers = ['Val', '2cfvo3colors', 'CfvoNoType', 'FormulaCfvo', 'ActivePresent', 'X14Standalone']
       const rows = [
@@ -2041,6 +2074,23 @@ export interface GenerateStage1Options {
   force?: boolean
 }
 
+/**
+ * The archive to write for a regenerated case: the committed one when it holds exactly the same parts (names and inflated
+ * bytes), else the regenerated one. ZIP bytes depend on the runtime's deflate (bun 1.4 and node zlib differ for the
+ * same parts), so this keeps a committed input stable whichever runtime runs generate.ts or build.ts.
+ */
+export function keepCommittedArchive(committed: Uint8Array | undefined, generated: Uint8Array): Uint8Array {
+  if (!committed) return generated
+  const a = readZipPartsSync(committed)
+  const b = readZipPartsSync(generated)
+  if (!a || !b || a.size !== b.size) return generated
+  for (const [name, bytes] of b) {
+    const other = a.get(name)
+    if (!other || other.length !== bytes.length || !other.every((x, i) => x === bytes[i])) return generated
+  }
+  return committed
+}
+
 export async function generateAllStage1(options: GenerateStage1Options | string = {}): Promise<CfManifest> {
   const opts: GenerateStage1Options = typeof options === 'string' ? { rootDir: options } : options
   const rootDir = opts.rootDir ?? REPO_ROOT
@@ -2081,7 +2131,8 @@ export async function generateAllStage1(options: GenerateStage1Options | string 
     if (prev?.status === 'measured' && !opts.force) {
       // A measured case holds committed Excel evidence (captures, observed expectations, the resave receipt). It is
       // never reset by regeneration, even when it no longer verifies: only an explicit --force clobbers it.
-      const regenerated = sha256Hex(await generateCaseArchive(template.id, prev.clockRequirement?.anchorLocalDate ?? anchorDateIso))
+      const committed = existsSync(resolve(rootDir, template.input)) ? new Uint8Array(readFileSync(resolve(rootDir, template.input))) : undefined
+      const regenerated = sha256Hex(keepCommittedArchive(committed, await generateCaseArchive(template.id, prev.clockRequirement?.anchorLocalDate ?? anchorDateIso)))
       if (regenerated !== prev.expected.inputSha256) {
         console.warn(`[cf-refs/generate] ${template.id} is measured: kept as is although its template now generates a different input (pass --force to regenerate and drop its evidence)`)
       }
@@ -2094,9 +2145,11 @@ export async function generateAllStage1(options: GenerateStage1Options | string 
         ? anchorDateIso
         : prev?.clockRequirement?.anchorLocalDate ?? template.clockRequirement?.anchorLocalDate ?? anchorDateIso
 
-    const zipBytes = await generateCaseArchive(template.id, effectiveAnchorDate)
     const inputAbs = resolve(rootDir, template.input)
     const savedAbs = resolve(rootDir, template.saved)
+    // A committed input whose inflated parts equal the regenerated ones is kept byte for byte (codex pre-capture P2):
+    // runtimes deflate differently (bun 1.4 vs node zlib), and build.ts regenerates before opening Excel.
+    const zipBytes = keepCommittedArchive(existsSync(inputAbs) ? new Uint8Array(readFileSync(inputAbs)) : undefined, await generateCaseArchive(template.id, effectiveAnchorDate))
     writeFileSync(inputAbs, zipBytes)
     const inputSha256 = sha256Hex(zipBytes)
 

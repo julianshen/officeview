@@ -28,7 +28,8 @@ import { parseRangeA1, parseA1, type CfObservedBar, type CfObservedIcon } from '
 import { stage5CellAgreement, stage5Conflicts, stage5CounterfactualOf, stage5ScaleToken, stage5VisualDetail, stage5VisualToken, type Stage5Production, type Stage5Truth } from './cf-refs/stage5-withhold'
 import type { CfManifest, CfOracleCase } from './cf-refs/cases'
 import { CF_MANIFEST_PATH } from './cf-refs/generate'
-import { ICON_NO_ICON_MEMBER, iconTwinSetMembers, isCellInSqref, observedIconClass, verifyCfCase } from './cf-refs/verify'
+import { ICON_NO_ICON_MEMBER, iconTwinSetMembers, isCellInSqref, observedIconClass, readZipPartsSync, verifyCfCase } from './cf-refs/verify'
+import { STAGE2_WITHHELD_FINDINGS, stage2NumSegmentShape } from './cf-refs/stage2-withhold'
 import { CF_ICON_SET_NAMES } from '../src/xlsx/cf/model'
 import { caseDocumentEvaluationOf, caseNowOf, caseParseOptionsOf, withCaseZone } from './cf-refs/case-clock'
 import {
@@ -175,8 +176,12 @@ export function verifyCellExpectations(
       if (!styled) continue
     }
     if (exp.matched) {
-      // Task 39 (fix rounds 1-5): a Stage 5 unresolved cell was checked against the counterfactual above.
-      if (actual.unresolved) continue
+      // Task 39 (fix rounds 1-5): a Stage 5 unresolved cell was checked against the counterfactual above. A Stage 2 one is
+      // justified against Excel's observation in verifyCaseCells, and may never carry a painted fill (codex final P2).
+      if (actual.unresolved) {
+        if (c.stage === 2 && actual.style?.fillColor) return `Cell ${exp.ref} is reported withheld but paints fill ${String(actual.style.fillColor).toUpperCase()}`
+        continue
+      }
       if (!actual.applied) {
         return `Cell ${exp.ref} expected matched: true, but no CF formatting applied`
       }
@@ -227,6 +232,23 @@ export function verifyCellExpectations(
  * cases are verified against it exactly: an unpainted cell must observe FFFFFFFF.
  * Cells the product withholds (unresolved) are reported, never counted as matches.
  */
+/** The numeric cell values of a Stage 2 case's saved worksheet (plain `<v>` numbers; text, booleans and errors omitted). */
+export function stage2SavedNumbers(c: CfOracleCase, rootDir: string): Map<string, number> {
+  const out = new Map<string, number>()
+  // No saved workbook: no value, so the num-segment condition excuses nothing (fail closed).
+  if (!existsSync(resolve(rootDir, c.saved))) return out
+  const parts = readZipPartsSync(new Uint8Array(readFileSync(resolve(rootDir, c.saved))))
+  const xml = parts?.get('xl/worksheets/sheet1.xml')
+  if (!xml) return out
+  for (const m of new TextDecoder().decode(xml).matchAll(/<c r="([A-Z]+\d+)"((?:\s+[a-z]+="[^"]*")*)\s*>(?:<f[^>]*>[^<]*<\/f>|<f[^>]*\/>)?<v>([^<]*)<\/v>/g)) {
+    const t = /\st="([^"]*)"/.exec(m[2] ?? '')?.[1]
+    if (t !== undefined && t !== 'n') continue
+    const v = Number(m[3])
+    if (Number.isFinite(v)) out.set(m[1]!, v)
+  }
+  return out
+}
+
 export function stage2ObservedFills(c: CfOracleCase, rootDir: string): Map<string, string> | undefined {
   if (c.stage !== 2) return undefined
   const cap = c.captures.find(x => x.appearance === 'screen') ?? c.captures[0]
@@ -405,11 +427,24 @@ export function verifyCaseCells(
     }
     return compared === 0 ? `Stage 5 case ${c.id}: no observed cell was compared` : undefined
   }
+  // Codex final review P2: a withheld Stage 2 cell is accepted only when it paints no fill and, where Excel shows a fill,
+  // its withholding is justified: a typed finding (STAGE2_WITHHELD_FINDINGS) or the num-segment condition, recomputed from
+  // the case's own marker and the saved cell value. Any other unresolved cell is a failure, never a silent skip.
+  const values = c.stage === 2 ? stage2SavedNumbers(c, rootDir) : undefined
   for (const [ref, want] of observed) {
     const pos = parseA1(ref)
     if (!pos) return `Invalid observed cell reference: ${ref}`
     const actual = actualAt(pos.row, pos.col)
-    if (actual.unresolved) continue
+    if (actual.unresolved) {
+      if (c.stage === 2) {
+        if (actual.style?.fillColor) return `Cell ${ref} is reported withheld but paints fill ${String(actual.style.fillColor).toUpperCase()}`
+        // Where Excel shows no fill the withheld cell renders the same base, so nothing needs justifying there.
+        if (want !== 'FFFFFFFF' && STAGE2_WITHHELD_FINDINGS[`${c.id}:${ref}`] === undefined && !stage2NumSegmentShape(c.markers, ref, values?.get(ref))) {
+          return `Cell ${ref} is withheld with no recorded justification (Excel fill ${want}): neither a typed Stage 2 finding nor the num-segment condition`
+        }
+      }
+      continue
+    }
     compared++
     const got = (actual.applied && actual.style?.fillColor ? String(actual.style.fillColor) : 'FFFFFFFF').toUpperCase()
     if (got !== want) return `Cell ${ref} observed Excel fill ${want}, got ${got}`

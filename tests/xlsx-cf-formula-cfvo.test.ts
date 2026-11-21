@@ -265,10 +265,10 @@ describe('a formula bound resolves once per measured scope (S5-H, round-1 #10)',
         expect((await at('MAX(A2:A7)', undefined))[0]).toMatchObject({ kind: 'unresolved' })
         expect((await at('MAX(A2:A7)', 'ref-error'))[0]).toMatchObject({ kind: 'ready', value: { kind: 'error' } })
       })
-      it('production selects anchor-a1 with its own evidence: the v2 icon set follows its anchor-a1 twins; its multi-range scales stay withheld (scale:scope-disjoint)', async () => {
+      it('production selects anchor-a1 with its own evidence: the v2 icon set follows its anchor-a1 twins; its multi-range scales paint (scale:scope-disjoint published)', async () => {
         expect(CF_FORMULA_PRODUCTION_READINGS['formula:cfvo-scope-multi-range']).toEqual(['rule-wide', 'per-range', 'anchor-a1'])
         const caps = [...VERIFIED_CAPABILITIES]
-        expect(caps.includes('scale:scope-disjoint')).toBe(false)
+        expect(caps.includes('scale:scope-disjoint')).toBe(true)
         expect(cfFormulaReading('formula:cfvo-scope-multi-range', c => caps.includes(c))).toBe('anchor-a1')
         expect(cfFormulaReading('formula:cfvo-relative', c => caps.includes(c))).toBe('anchor-a1')
         const cfgOf = (id: string) => v2.formulaConfigurations!.find(x => x.id === id)!
@@ -278,7 +278,11 @@ describe('a formula bound resolves once per measured scope (S5-H, round-1 #10)',
         const doc = await loadFixture('stage5-cfvo-scope-v2', caps)
         const { out } = await prepareSheet(doc.sheets[0]!, [...pairs.flat(), ...scaleRefs], caps)
         twinsAgree(out, pairs)
-        for (const r of scaleRefs) expect(visualOf(out.get(r)), r).toMatch(WITHHELD)
+        // Since stage2-scale-scope-disjoint (union) the multi-range scales paint; they follow their anchor-a1 twins.
+        const scale = cfgOf('scope2-scale')
+        const { out: scaleOut } = await prepareSheet(doc.sheets[0]!, [...scale.refs, ...scale.refs.map(r => scale.hypotheses['anchor-a1']![r]!.replace('twin:', ''))], caps)
+        for (const r of scaleRefs) expect(visualOf(scaleOut.get(r)), r).not.toMatch(WITHHELD)
+        twinsAgree(scaleOut, scale.refs.map(r => [r, scale.hypotheses['anchor-a1']![r]!.replace('twin:', '')] as const))
       })
       it('a multi-range icon set with an absolute formula threshold paints like its literal twin under production\'s evidence', async () => {
         const caps = [...VERIFIED_CAPABILITIES]
