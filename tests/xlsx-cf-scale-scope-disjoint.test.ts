@@ -400,6 +400,68 @@ describe('the audit gate on a synthetic measured capture (real verifyCfCase and 
   })
 })
 
+describe('the reading gate is mandatory from the catalogue, never from the manifest field (codex pre-capture P1)', () => {
+  const withoutEntry = Object.fromEntries(Object.entries(CF_STAGE2_NONDISCRIMINATING).filter(([id]) => id !== CAP))
+  const mutate = (m: CfManifest, fn: (c: CfOracleCase) => CfOracleCase): CfManifest => ({ ...m, cases: m.cases.map(x => (x.id === ID ? fn(x) : x)) })
+  const dispositionOf = (r: { perCapability: ReadonlyArray<{ capabilityId: string; disposition: string }> }) => r.perCapability.find(p => p.capabilityId === CAP)!.disposition
+  const cases: Array<[string, (c: CfOracleCase) => CfOracleCase]> = [
+    ['scaleReadings deleted', c => { const { scaleReadings: _r, ...rest } = c; return rest as CfOracleCase }],
+    ['scaleReadings empty', c => ({ ...c, scaleReadings: [] })],
+    ['scaleReadings edited (per-range relabelled union)', c => ({ ...c, scaleReadings: c.scaleReadings!.map(x => ({ ...x, hypotheses: { ...x.hypotheses, union: x.hypotheses['per-range']!, 'per-range': x.hypotheses.union! } })) })],
+  ]
+  for (const [name, fn] of cases) {
+    it(`synthetic per-range capture, ${name}: the case refuses and scale:scope-disjoint never verifies, even without the registry entry`, async () => {
+      const { auditStage2Manifest } = await import('../scripts/cf-refs/audit')
+      const { root, manifest: m } = syntheticRoot('per-range')
+      const bad = mutate(m, fn)
+      const res = verifyCfCase(bad.cases.find(x => x.id === ID)!, { rootDir: root })
+      expect([res.kind, res.kind === 'refusal' ? res.code : undefined]).toEqual(['refusal', 'unobserved-expectation'])
+      const r = auditStage2Manifest(bad, { rootDir: root, nonDiscriminating: withoutEntry })
+      expect(dispositionOf(r)).not.toBe('verified')
+      expect(r.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()).toEqual([...VERIFIED_STAGE2_CAPABILITIES].sort())
+    }, HEAVY)
+  }
+
+  it('the same mutations on the synthetic union capture refuse too; the unmutated union capture still verifies', async () => {
+    const { auditStage2Manifest } = await import('../scripts/cf-refs/audit')
+    const { root, manifest: m } = syntheticRoot('union')
+    for (const [name, fn] of cases) {
+      const res = verifyCfCase(mutate(m, fn).cases.find(x => x.id === ID)!, { rootDir: root })
+      expect(res.kind, name).toBe('refusal')
+    }
+    expect(dispositionOf(auditStage2Manifest(m, { rootDir: root, nonDiscriminating: withoutEntry }))).toBe('verified')
+  }, HEAVY)
+
+  it('a gated capability with no readings evidence in the verified result is withheld by the audit (registry-driven gate)', async () => {
+    const { CF_STAGE2_PRODUCTION_READINGS } = await import('../scripts/cf-refs/audit')
+    expect(Object.keys(CF_STAGE2_PRODUCTION_READINGS)).toEqual([CAP])
+    expect(CF_STAGE2_CASES.find(t => t.id === ID)!.scaleReadings!.length).toBeGreaterThan(0)
+  })
+})
+
+describe('a committed input survives regeneration under either runtime (codex pre-capture P2)', () => {
+  it('keepCommittedArchive keeps the committed bytes when the inflated parts match, and only then', async () => {
+    const { keepCommittedArchive, generateCaseArchive } = await import('../scripts/cf-refs/generate')
+    const committed = new Uint8Array(readFileSync(resolve(REPO_ROOT, caseOf().input)))
+    const generated = await generateCaseArchive(ID)
+    expect(keepCommittedArchive(committed, generated)).toBe(committed)
+    expect(keepCommittedArchive(undefined, generated)).toBe(generated)
+    const other = await generateCaseArchive('stage2-scale-scope')
+    expect(keepCommittedArchive(committed, other)).toBe(other)
+  }, HEAVY)
+
+  it('generateAllStage1 under bun (the build.ts path) leaves the node-generated input, saved file and manifest byte-identical', async () => {
+    const { spawnSync } = await import('node:child_process')
+    const root = mkdtempSync(join(tmpdir(), 'cf-s2-bun-'))
+    const c = caseOf()
+    for (const rel of ['tests/fixtures/xlsx-cf/manifest.json', c.input, c.saved]) { mkdirSync(dirname(join(root, rel)), { recursive: true }); copyFileSync(resolve(REPO_ROOT, rel), join(root, rel)) }
+    const script = `const { generateAllStage1 } = await import(${JSON.stringify(resolve(REPO_ROOT, 'scripts/cf-refs/generate.ts'))}); await generateAllStage1({ rootDir: ${JSON.stringify(root)}, stage: 2, onlyCaseId: ${JSON.stringify(ID)} })`
+    const run = spawnSync('bun', ['-e', script], { cwd: REPO_ROOT, encoding: 'utf8' })
+    expect(run.status, run.stdout + run.stderr).toBe(0)
+    for (const rel of ['tests/fixtures/xlsx-cf/manifest.json', c.input, c.saved]) expect(sha(new Uint8Array(readFileSync(join(root, rel)))), rel).toBe(sha(new Uint8Array(readFileSync(resolve(REPO_ROOT, rel)))))
+  }, HEAVY)
+})
+
 describe('rehearsal of the publication: scale:scope-disjoint held', () => {
   it('Stages 1-4: every measured case paints exactly as today at every expected cell (no multi-range scale in them changes)', async () => {
     const changed: string[] = []

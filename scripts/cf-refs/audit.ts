@@ -294,8 +294,11 @@ export function auditStage2Manifest(
       if (nonDiscriminating[entry.capabilityId] !== undefined && owning.status === 'recipe-pending') disposition = 'unverified-nondiscriminating'
       // Pre-registered readings decide the capabilities they name: verified only on a discriminating match whose
       // reading production implements (CF_STAGE2_PRODUCTION_READINGS); a non-discriminating evaluation is reported so.
-      const owner = manifest.cases.find(c => c.id === entry.caseId)
-      if (disposition === 'verified' && (owner?.scaleReadings ?? []).some(x => x.capabilityId === entry.capabilityId)) {
+      // The gate is mandatory from trusted data (codex pre-capture P1): a capability with a registered production reading,
+      // or named by its owning catalogue case's readings, is gated whatever the manifest entry carries.
+      const catalogueOwner = CF_STAGE2_CASES.find(c => c.id === entry.caseId)
+      const gated = Object.prototype.hasOwnProperty.call(CF_STAGE2_PRODUCTION_READINGS, entry.capabilityId) || (catalogueOwner?.scaleReadings ?? []).some(x => x.capabilityId === entry.capabilityId)
+      if (disposition === 'verified' && gated) {
         const res = evidence.get(entry.caseId)
         const matched = res?.kind === 'verified' ? res.matchedHypotheses?.[entry.capabilityId] : undefined
         if (res?.kind === 'verified' && res.nonDiscriminatingCapabilities?.includes(entry.capabilityId)) disposition = 'unverified-nondiscriminating'

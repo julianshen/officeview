@@ -7347,16 +7347,18 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
 
   // Stage 2 pre-registered readings (the scope-disjoint follow-up): a capability they name verifies only when its
   // configurations discriminate one reading on the screen capture's DisplayFormat fills; the audit then requires that
-  // reading to be production's (CF_STAGE2_PRODUCTION_READINGS). The registries' comparison ids never verify.
-  if (c.stage === 2 && c.scaleReadings !== undefined) {
-    const template = CF_STAGE2_CASES.find(t => t.id === c.id)
-    if (JSON.stringify(template?.scaleReadings ?? null) !== JSON.stringify(c.scaleReadings)) {
-      return { kind: 'refusal', id: c.id, status: c.status, code: 'unobserved-expectation', reason: `Case ${c.id}'s readings differ from the catalogue's: hypotheses are fixed before capture (Lesson 14)`, structuralValid: true }
+  // reading to be production's (CF_STAGE2_PRODUCTION_READINGS). The registries' comparison ids never verify. Whether a
+  // case has readings is the CATALOGUE's decision (codex pre-capture P1): a manifest entry that omits them, empties them
+  // or edits them refuses, and the catalogue's readings are the ones judged.
+  const catalogueReadings = c.stage === 2 ? CF_STAGE2_CASES.find(t => t.id === c.id)?.scaleReadings : undefined
+  if (c.stage === 2 && (catalogueReadings !== undefined || c.scaleReadings !== undefined)) {
+    if (catalogueReadings === undefined || catalogueReadings.length === 0 || JSON.stringify(catalogueReadings) !== JSON.stringify(c.scaleReadings ?? null)) {
+      return { kind: 'refusal', id: c.id, status: c.status, code: 'unobserved-expectation', reason: `Case ${c.id}'s readings differ from the catalogue's (missing, empty or edited): hypotheses are fixed before capture (Lesson 14)`, structuralValid: true }
     }
     const screen = c.captures.find(x => x.appearance === 'screen')
     const sidecar = screen ? (JSON.parse(readFileSync(resolve(rootDir, screen.sidecarPath), 'utf8')) as Record<string, unknown>) : {}
-    const evaluation = evaluateFormulaCapabilities(c.scaleReadings, formulaControlsOf(c), stage2ReadingsObservationOf(sidecar))
-    const named = new Set(c.scaleReadings.map(x => x.capabilityId))
+    const evaluation = evaluateFormulaCapabilities(catalogueReadings, formulaControlsOf(c), stage2ReadingsObservationOf(sidecar))
+    const named = new Set(catalogueReadings.map(x => x.capabilityId))
     const nonDiscriminating: string[] = []
     const refused: Array<{ capabilityId: string; code: CfRefusalCode; reason: string }> = []
     const notes: Record<string, string> = {}
