@@ -16,6 +16,7 @@ import { augmentedFixtures } from './fixtures'
 import { buildDocx, buildXlsx } from '../../src/testdata/ooxml-builders'
 import { corpus, disposePool, pool } from './harness'
 import { renderPages, type PageLayout, type Segment } from '../../src/docx/layout'
+import { rejection } from './fixtures/rejection'
 
 afterAll(() => disposePool())
 const pools: Pool[] = []
@@ -383,8 +384,8 @@ describe('fix round 1: prepare admission and recycle on refusal', () => {
     const { w, h } = (await probe.open('p', deck, 'visible-only')).units[0]!
     const p = new Pool({ workers: 1, caps: { ...DEFAULT_CAPS, sessionTransientBytes: TEXT_JOB_BYTES + prepareWorkspace(w, h) - 1 } }); pools.push(p)
     const d = await opened(deck, 'visible-only', p)
-    await expect(d.text(copyAll)).rejects.toBeInstanceOf(AdmissionRefused)
-    await expect(d.text({ op: 'prepare', unit: 0 })).rejects.toBeInstanceOf(AdmissionRefused)
+    expect(await rejection(d.text(copyAll))).toBeInstanceOf(AdmissionRefused)
+    expect(await rejection(d.text({ op: 'prepare', unit: 0 }))).toBeInstanceOf(AdmissionRefused)
     expect(p.stats().workers[0]!.pages).toBe(0)
     expect(p.stats()).toMatchObject({ reserved: 0, running: 0, queued: 0 })
     const ok = new Pool({ workers: 1, caps: { ...DEFAULT_CAPS, sessionTransientBytes: TEXT_JOB_BYTES + prepareWorkspace(w, h) } }); pools.push(ok)
