@@ -96,9 +96,10 @@ describe('every enabled scale capability has verified evidence', () => {
     const report: Stage2AuditReport = auditStage2Manifest(manifest, { rootDir: REPO_ROOT })
     expect(report.ok).toBe(true)
     expect(report.stageComplete).toBe(true)
-    // 41 measured scale capabilities; 5 are measured but NON-DISCRIMINATING (Ruling F-2) and are reported unverified.
+    // 41 measured scale capabilities; 7 are measured but NON-DISCRIMINATING (Ruling F-2) and are reported unverified;
+    // stage2-scale-scope-disjoint adds its twin and control ids (never a question) while it awaits its capture.
     expect(report.summary.verifiedCapabilities).toBe(34)
-    expect(report.summary.unverifiedCapabilities).toBe(7)
+    expect(report.summary.unverifiedCapabilities).toBe(9)
     expect(report.blockedCapabilities.length).toBe(0)
   })
 
