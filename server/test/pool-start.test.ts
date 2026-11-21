@@ -5,6 +5,7 @@
  * `RenderFailed`, posting nothing and keeping no pending entry.
  */
 import { afterEach, describe, expect, it } from 'bun:test'
+import { rejection, rejectionMessage } from './fixtures/rejection'
 import { DEFAULT_CAPS } from '../src/admission'
 import { Pool, RenderFailed, type EncodeJob, type PoolOptions } from '../src/pool'
 import { FakeWorker, fakeFactory } from './fixtures/fake-worker'
@@ -30,7 +31,7 @@ describe('pool worker startup (start gate)', () => {
   it('a worker that dies while loading, then a replacement that dies too: RenderFailed, nothing posted, no pending entry (R3)', async () => {
     FakeWorker.scripts = [{ die: true }, { die: true }]
     const p = mk()
-    await expect(p.encode('s', job, 16)).rejects.toBeInstanceOf(RenderFailed)
+    expect(await rejection(p.encode('s', job, 16))).toBeInstanceOf(RenderFailed)
     expect(FakeWorker.all).toHaveLength(2)
     expect(FakeWorker.all.map(jobsSent)).toEqual([0, 0])
     expect(pending(p)).toBe(0)
@@ -46,7 +47,7 @@ describe('pool worker startup (start gate)', () => {
     const fresh = FakeWorker.all[1]!
     expect(fresh.terminateCalls).toBe(0) // still loading: deferred
     fresh.ack()
-    await expect(r).rejects.toThrow('pool disposed')
+    expect(await rejectionMessage(r)).toContain('pool disposed')
     await until(() => fresh.closed)
     expect(fresh).toMatchObject({ terminateCalls: 1, terminatedUnacked: false })
     expect(jobsSent(fresh)).toBe(0)
@@ -56,8 +57,8 @@ describe('pool worker startup (start gate)', () => {
   it('a start that passes the load bound fails its jobs with RenderFailed and is never terminated while loading; once it answers, the slot works (R1)', async () => {
     FakeWorker.scripts = [{ init: 'manual' }]
     const p = mk({ workerLoadBoundMsForTests: 80 })
-    await expect(p.encode('s', job, 16)).rejects.toThrow(/worker start timed out/)
-    await expect(p.encode('s', job, 16)).rejects.toThrow(/worker start timed out/) // at once, not another bound
+    expect(await rejectionMessage(p.encode('s', job, 16))).toMatch(/worker start timed out/)
+    expect(await rejectionMessage(p.encode('s', job, 16))).toMatch(/worker start timed out/) // at once, not another bound
     const w = FakeWorker.all[0]!
     expect(w).toMatchObject({ acked: false, closed: false, terminateCalls: 0 })
     expect(jobsSent(w)).toBe(0)

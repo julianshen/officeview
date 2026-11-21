@@ -96,7 +96,17 @@ export const CF_FORMULA_PRODUCTION_READINGS: Readonly<Record<string, string | re
   // range's own top-left, which stage5-cfvo-scope-v2 contradicted) is no longer registered; it is what an unregistered or
   // unheld reading still falls back to for an absolute bound.
   'formula:cfvo-relative': 'anchor-a1',
-  'formula:cfvo-nonnumeric': Object.freeze(['withheld', 'zero', 'skipped']),
+  // `formula:cfvo-nonnumeric` (the umbrella) is no longer registered: the per-kind ids below supersede it for every kind
+  // (`cfvoNonNumericTreatmentOf` reads a registered per-kind id and never falls back), and its own case
+  // (stage5-cfvo-formulas, where no uniform reading matched) stays a recorded refusal.
+  // service.ts `cfvoNonNumericTreatmentOf` (the cfvo-nonnumeric follow-up): one treatment per kind of a colour-scale
+  // type="formula" bound. Pre-registered in stage5-cfvo-nonnumeric-v2 (359b9b4b) after the behaviour (0c572321, 67c3edb0)
+  // and before its capture (16822e70), which matched one sole survivor per id: blank `zero`; text, the empty string of =""
+  // and error `withheld` (the rule paints nothing: production keeps it unresolved, slot taint kept).
+  'formula:cfvo-nonnumeric-blank': Object.freeze(['withheld', 'zero', 'skipped']),
+  'formula:cfvo-nonnumeric-text': Object.freeze(['withheld', 'zero', 'skipped']),
+  'formula:cfvo-nonnumeric-empty-string': Object.freeze(['withheld', 'zero', 'skipped']),
+  'formula:cfvo-nonnumeric-error': Object.freeze(['withheld', 'zero', 'skipped']),
   'formula:cfvo-scope-multi-range': Object.freeze(['rule-wide', 'per-range', 'anchor-a1']),
   // parse.ts (Ruling S5-I): a standalone <x14:colorScale> resolves through the Stage 2 point model. Its parse gate is the
   // bare evidence; this entry is what lets the audit publish it only for the reading production implements.
@@ -112,9 +122,67 @@ export const CF_FORMULA_PRODUCTION_READINGS: Readonly<Record<string, string | re
   'formula:composition-stub-successor-icon': 'recorded',
 })
 
-/** The registry entry of one capability (undefined: unregistered). */
+let proposedReadings: Readonly<Record<string, string | readonly string[]>> | null = null
+/**
+ * Test seam (the cfvo-relative follow-up, restored for the cfvo-nonnumeric one): rehearse a proposed registration,
+ * capability id to a reading or a selection list, as if it were in CF_FORMULA_PRODUCTION_READINGS, without registering
+ * it. Null clears. Production never calls it.
+ */
+export function injectCfFormulaReadings(readings: Readonly<Record<string, string | readonly string[]>> | null): void {
+  proposedReadings = readings ? Object.freeze({ ...readings }) : null
+}
+/** The registry entry of one capability (undefined: unregistered), a proposed one (the test seam) first. */
 export function cfFormulaReadingEntry(capability: string): string | readonly string[] | undefined {
+  if (proposedReadings && Object.prototype.hasOwnProperty.call(proposedReadings, capability)) return proposedReadings[capability]
   return Object.prototype.hasOwnProperty.call(CF_FORMULA_PRODUCTION_READINGS, capability) ? CF_FORMULA_PRODUCTION_READINGS[capability] : undefined
+}
+
+/** The result kinds a `formula:cfvo-nonnumeric` reading treats, and the treatments it can give each. */
+export type CfNonNumericKind = 'blank' | 'text' | 'error'
+export type CfNonNumericTreatment = 'withheld' | 'zero' | 'skipped'
+const NONNUMERIC_TREATMENTS: readonly string[] = ['withheld', 'zero', 'skipped']
+const PER_KIND_READING = /^blank-(withheld|zero|skipped)\+text-(withheld|zero|skipped)\+error-(withheld|zero|skipped)$/
+/**
+ * The cfvo-nonnumeric follow-up: the treatment a `formula:cfvo-nonnumeric` reading gives one result kind. A uniform reading
+ * (`withheld`, `zero`, `skipped`) gives every kind its treatment; a per-kind reading `blank-<t>+text-<t>+error-<t>` names
+ * one for each, in that order. An all-equal per-kind name is not a reading (its behaviour is the uniform name's: one name
+ * per behaviour), nor is any other text: undefined, so the bound stays unresolved.
+ */
+export function cfvoNonNumericTreatment(reading: string | undefined, kind: CfNonNumericKind): CfNonNumericTreatment | undefined {
+  if (reading === undefined) return undefined
+  if (NONNUMERIC_TREATMENTS.includes(reading)) return reading as CfNonNumericTreatment
+  const m = PER_KIND_READING.exec(reading)
+  if (!m || (m[1] === m[2] && m[2] === m[3])) return undefined
+  return m[kind === 'blank' ? 1 : kind === 'text' ? 2 : 3] as CfNonNumericTreatment
+}
+
+/** A non-numeric bound's kind as the per-kind ids measure it: an empty text (`=""`) is its own kind, apart from text. */
+export type CfNonNumericBoundKind = CfNonNumericKind | 'empty-string'
+/**
+ * The per-kind evidence ids (pre-capture ruling on the cfvo-nonnumeric case): each kind is evaluated, registered and
+ * published on its own, so a surprise in one kind refuses only that kind. Their composition is the umbrella reading
+ * `blank-<t>+text-<t>+error-<t>` of formula:cfvo-nonnumeric, held kind by kind.
+ */
+export const CF_CFVO_NONNUMERIC_KIND_IDS: Readonly<Record<CfNonNumericBoundKind, string>> = Object.freeze({
+  blank: 'formula:cfvo-nonnumeric-blank',
+  text: 'formula:cfvo-nonnumeric-text',
+  'empty-string': 'formula:cfvo-nonnumeric-empty-string',
+  error: 'formula:cfvo-nonnumeric-error',
+})
+/**
+ * The treatment production gives one non-numeric bound kind, or undefined (unresolved). A registered per-kind id decides
+ * its kind alone: its held reading, or nothing when it is not held (a kind whose evidence failed stays withheld). Until a
+ * kind's id is registered, the umbrella formula:cfvo-nonnumeric reading decides blank, text and error as before
+ * (`cfvoNonNumericTreatment`); an empty string is never decided by the umbrella.
+ */
+export function cfvoNonNumericTreatmentOf(kind: CfNonNumericBoundKind, check: (capability: string) => boolean): CfNonNumericTreatment | undefined {
+  const id = CF_CFVO_NONNUMERIC_KIND_IDS[kind]
+  if (cfFormulaReadingEntry(id) !== undefined) {
+    const reading = cfFormulaReading(id, check)
+    return reading !== undefined && NONNUMERIC_TREATMENTS.includes(reading) ? (reading as CfNonNumericTreatment) : undefined
+  }
+  if (kind === 'empty-string') return undefined
+  return cfvoNonNumericTreatment(cfFormulaReading('formula:cfvo-nonnumeric', check), kind)
 }
 
 /** The reading production honours for one capability, or undefined (unregistered, unevidenced, or an unlisted selection). */

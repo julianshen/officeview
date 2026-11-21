@@ -19,7 +19,7 @@ import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
 import { createCfService } from '../src/xlsx/cf/service'
 import { CF_LIMITS, createCfMemory } from '../src/xlsx/cf/limits'
 import { injectCfFormulaSelections, withInjectedCfEvidence } from '../src/xlsx/cf/evidence'
-import { CF_FORMULA_PRODUCTION_READINGS } from '../src/xlsx/cf/formulaReadings'
+import { CF_CFVO_NONNUMERIC_KIND_IDS, CF_FORMULA_PRODUCTION_READINGS } from '../src/xlsx/cf/formulaReadings'
 import { cfRulesVersion } from '../src/xlsx/view/pagedSource'
 import { CF_STAGE5_OWNERS, type CfManifest } from '../scripts/cf-refs/cases'
 import { CF_STAGE5_UNCONFIRMABLE, stage5Publication, stage5UnconfirmableScope, auditStage5Manifest, type Stage5AuditReport } from '../scripts/cf-refs/audit'
@@ -209,7 +209,7 @@ describe('an unconfirmable capability is never published (fix round 2)', () => {
 async function readingsCheck(registry: Readonly<Record<string, string | readonly string[]>>) {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest
   const lists = Object.entries(registry).filter((e): e is [string, readonly string[]] => typeof e[1] !== 'string')
-  const reproduced = new Set<string>(), reproducedAt = new Set<string>(), unconfirmableChecked = new Set<string>(), violations: string[] = []
+  const reproduced = new Set<string>(), reproducedAt = new Set<string>(), unconfirmableChecked = new Set<string>(), omittedChecked = new Set<string>(), violations: string[] = []
   let discriminating = 0
   for (const c of manifest.cases.filter(x => x.stage === 5)) {
     for (const cfg of c.formulaConfigurations ?? []) {
@@ -223,7 +223,10 @@ async function readingsCheck(registry: Readonly<Record<string, string | readonly
         // never given a hypothesis after its capture.
         const owner = CF_STAGE5_OWNERS[cfg.capabilityId]
         if (predicted === undefined && owner !== undefined && owner !== c.id) continue
-        expect(predicted, `${cfg.capabilityId} ${cfg.id}: ${reading} is a hypothesis`).toBeDefined()
+        // The cfvo-nonnumeric follow-up: a reading the configuration omits (with its reason, fixed before capture) predicts
+        // nothing there, and production must withhold every designated cell under it (skipped at a midpoint).
+        const omitted = predicted === undefined && (cfg as { omitted?: Readonly<Record<string, string>> }).omitted?.[reading] !== undefined
+        if (!omitted) expect(predicted, `${cfg.capabilityId} ${cfg.id}: ${reading} is a hypothesis`).toBeDefined()
         const refs = cfg.refs.filter(isPaintRef)
         if (refs.length === 0) continue
         const selections = Object.fromEntries(lists.map(([k, v]) => [k, v[0]!]))
@@ -260,6 +263,11 @@ async function readingsCheck(registry: Readonly<Record<string, string | readonly
             return out
           } finally { injectCfFormulaSelections(null) }
         })
+        if (omitted) {
+          omittedChecked.add(`${cfg.capabilityId}|${c.id}|${cfg.id}|${reading}`)
+          for (const r of refs) if (tokenOf(cfg, got.get(cellOfRef(r))) !== 'withheld') violations.push(`${cfg.capabilityId} ${c.id}/${cfg.id} ${reading} ${r}: omitted here, but production shows ${tokenOf(cfg, got.get(cellOfRef(r)))}`)
+          continue
+        }
         const verdict = configurationVerdict(cfg, reading, got)
         if (stage5UnconfirmableScope(cfg.capabilityId, c.id)) {
           // Never reproduced; checked narrowly (only its documented witnesses may fail) and refused publication by the audit.
@@ -273,7 +281,7 @@ async function readingsCheck(registry: Readonly<Record<string, string | readonly
       }
     }
   }
-  return { reproduced, reproducedAt, unconfirmableChecked, violations, discriminating }
+  return { reproduced, reproducedAt, unconfirmableChecked, omittedChecked, violations, discriminating }
 }
 
 /** One run of the check over production's registry, shared by the assertions below (it walks every Stage 5 fixture). */
@@ -283,13 +291,28 @@ const productionReadingsCheck = (): ReturnType<typeof readingsCheck> => (registr
 describe('every registered formula reading is the reading production implements, on the Stage 5 fixtures', () => {
   it('each designated cell is the registered reading\'s prediction or withheld; each entry is reproduced and discriminating', async () => {
     const registry = CF_FORMULA_PRODUCTION_READINGS
-    const { reproduced, unconfirmableChecked, violations, discriminating } = await productionReadingsCheck()
+    const { reproduced, unconfirmableChecked, omittedChecked, violations, discriminating } = await productionReadingsCheck()
     expect(violations).toEqual([])
+    // The only omitted registered reading: skipped at the four midpoints of stage5-cfvo-nonnumeric-v2, withheld by production.
+    const idOf = { blank: 'blank', text: 'text', 'empty-text': 'empty-string', error: 'error' } as const
+    expect([...omittedChecked].sort()).toEqual((Object.keys(idOf) as Array<keyof typeof idOf>).map(s => `formula:cfvo-nonnumeric-${idOf[s]}|stage5-cfvo-nonnumeric-v2|nonnum-${s}-middle|skipped`).sort())
     const unreproduced = Object.keys(registry).filter(id => !reproduced.has(id) && !REUSE_ONLY.test(id) && UNREACHABLE[id] === undefined && !unconfirmableChecked.has(id))
     expect([...unconfirmableChecked].sort()).toEqual(Object.keys(CF_STAGE5_UNCONFIRMABLE).sort())
     expect(unreproduced).toEqual([])
     for (const id of Object.keys(UNREACHABLE)) expect(reproduced.has(id), `${id} is now reachable: drop it from UNREACHABLE`).toBe(false)
     expect(discriminating).toBeGreaterThan(30)
+  }, 300_000)
+})
+
+describe('the per-kind cfvo-nonnumeric registration (stage5-cfvo-nonnumeric-v2, 16822e70)', () => {
+  it('each per-kind id is the selection withheld | zero | skipped, each reading production\'s on its owner case', async () => {
+    const { reproducedAt, violations } = await productionReadingsCheck()
+    expect(violations).toEqual([])
+    for (const id of Object.values(CF_CFVO_NONNUMERIC_KIND_IDS)) {
+      expect(CF_FORMULA_PRODUCTION_READINGS[id], id).toEqual(['withheld', 'zero', 'skipped'])
+      // zero and skipped are reproduced in full (withheld paints nothing: every cell withheld, never "reproduced").
+      for (const r of ['zero', 'skipped']) expect(reproducedAt.has(`${id}|stage5-cfvo-nonnumeric-v2|${r}`), `${id} ${r}`).toBe(true)
+    }
   }, 300_000)
 })
 

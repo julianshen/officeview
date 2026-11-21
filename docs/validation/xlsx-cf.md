@@ -2573,8 +2573,12 @@ There are 2,036 rows over 17 cases: 791 formula cells, 542 painted as Excel, 0 d
 | `formula:cfvo-reference` | cfvo-formulas | S5-H | DisplayFormat / PNG measurement | evaluated | published | none |
 | `bar:bounds-formula` | bar-bounds-formula (§14.z.10) | S5-H | PNG measurement (crop against literal twins) | evaluated | published | none (Task 39 re-deferred it on the stage5-cfvo-formulas fixture, which stays recorded as unconfirmable for that case only) |
 | `icon:thresholds-formula` | cfvo-formulas | S5-H | recorded Excel outcome | — | withheld: refused-unsupported | Re-deferred (Task 39): every icon crop of stage5-cfvo-formulas is unclassifiable (icon-class-none). Its cells sit on the default style, which Excel... |
-| `formula:cfvo-relative` | cfvo-relative-a1 (§14.z.12; cfvo-formulas K, which matched zero, is a cross-check) | S5-H | DisplayFormat / PNG measurement | anchor-a1 | published | a window that wraps off the sheet to blank cells withholds (`formula:cfvo-nonnumeric`) |
-| `formula:cfvo-nonnumeric` | cfvo-formulas | S5-H | recorded Excel outcome | — | withheld: refused-unsupported | Finding (S4-MINMAX precedent): no hypothesis (withheld, zero, skipped) matched what Excel showed for a text, blank or error formula bound in stage5... |
+| `formula:cfvo-relative` | cfvo-relative-a1 (§14.z.12; cfvo-formulas K, which matched zero, is a cross-check) | S5-H | DisplayFormat / PNG measurement | anchor-a1 | published | a window that wraps off the sheet to a blank cell reads 0 (`formula:cfvo-nonnumeric-blank`, §14.z.14) |
+| `formula:cfvo-nonnumeric` | cfvo-formulas | S5-H | recorded Excel outcome | — | withheld: refused-unsupported | Finding (S4-MINMAX precedent): no uniform reading matched; superseded per kind by the four ids below (§14.z.14); no longer registered |
+| `formula:cfvo-nonnumeric-blank` | cfvo-nonnumeric-v2 (§14.z.14) | S5-H | DisplayFormat measurement (against literal twins) | zero | published | colour-scale formula bounds only |
+| `formula:cfvo-nonnumeric-text` | cfvo-nonnumeric-v2 (§14.z.14) | S5-H | DisplayFormat measurement (against literal twins) | withheld | published | the rule stays unresolved (Excel paints nothing) |
+| `formula:cfvo-nonnumeric-empty-string` | cfvo-nonnumeric-v2 (§14.z.14) | S5-H | DisplayFormat measurement (against literal twins) | withheld | published | the rule stays unresolved (Excel paints nothing) |
+| `formula:cfvo-nonnumeric-error` | cfvo-nonnumeric-v2 (§14.z.14) | S5-H | DisplayFormat measurement (against literal twins) | withheld | published | the rule stays unresolved (Excel paints nothing) |
 | `formula:cfvo-twin` | cfvo-formulas | S5-H | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
 | `formula:cfvo-scope-multi-range` | cfvo-relative-a1 (§14.z.12; cfvo-scope and cfvo-scope-v2 are cross-checks) | S5-H | DisplayFormat / PNG measurement (crop against literal twins) | anchor-a1 | published | multi-range colour scales stay withheld by `scale:scope-disjoint` |
 | `formula:cfvo-scope-twin` | cfvo-scope | S5-H | twin / non-discriminating | — | withheld: unverified-nondiscriminating | never evidence (twin/control) |
@@ -3001,3 +3005,71 @@ J equals its twin N, and every control is white.
 - Stage 2 exact-ARGB conformance now covers all 8 measured Stage 2 cases: 486 cells, 441 exact and 45 withheld. Of the withheld, 34 are typed findings and 11 are justified by the num-segment condition, recomputed from the case's own markers.
 - `scripts/cf-compare.ts` (interactive and paged) passes every measured Stage 2 case, with T4 and V3 withheld, not painted.
 - Stage 5 records: 0 disagreeing and 0 unjustified, with the `<family>:scope-disjoint` justification inert now that all three families are published.
+
+### 14.z.14 `formula:cfvo-nonnumeric` confirmed per kind: blank `zero`; text, `=""` and error `withheld` (2026-11-21)
+
+**Why a new case.** In `stage5-cfvo-formulas` L/M/N, none of the uniform readings of `formula:cfvo-nonnumeric` (`withheld`, `zero`, `skipped`) matched:
+- Excel painted nothing for a text bound (L, `$F$3 = "abc"`) and an error bound (N, `#N/A`);
+- it read a blank bound (M, `$F$4`) as 0.
+
+A per-kind reading was formed after that capture, so it could not be registered from it. `stage5-cfvo-nonnumeric-v2` asks the question again, one kind at a time. It is appended last. Recipe: `docs/validation/xlsx-cf-recipes-stage5.md` §2d.
+
+**One id per kind (pre-capture ruling).** Each kind is its own evidence id, so a surprise in one kind refuses only that kind:
+- `formula:cfvo-nonnumeric-blank`;
+- `formula:cfvo-nonnumeric-text`;
+- `formula:cfvo-nonnumeric-empty-string`, for the cached `""` of a `=""` formula, so its failure cannot affect text;
+- `formula:cfvo-nonnumeric-error`.
+
+Production reads a registered per-kind id for its kind alone (`cfvoNonNumericTreatmentOf`). The umbrella `formula:cfvo-nonnumeric` is no longer registered. It stays a recorded refusal for its old case: its reading would be the composition `blank-zero+text-withheld+error-withheld`, but the per-kind ids already hold that kind by kind, and publishing the umbrella would add nothing production reads.
+
+**Ordering, in git.** The registration rule needs both the hypotheses and production's behaviour committed before the capture.
+1. **Behaviour:**
+   - 0c572321: per-kind treatment in `substitutedBound`, through the umbrella's composite names;
+   - 67c3edb0: the per-kind ids, with the empty string as its own kind. Neither was registered.
+2. **Hypotheses:**
+   - 32a3e81a: the first version of the case;
+   - 359b9b4b: the case split into one id per kind, each pre-registering `withheld`, `zero` and `skipped`.
+3. **Capture:** 16822e70. The input (sha-256 `bf1d8d7d…`) stayed byte-identical through the build.
+
+**The case.**
+- **Bounds:** colour-scale `type="formula"` bounds only. Each is an absolute one-cell reference:
+  - `$A$1`: absent, so blank;
+  - `$A$2`: `"abc"`;
+  - `$A$3`: `=""`;
+  - `$A$4`: `#N/A`.
+- **Positions:** each source sits in three positions, giving 12 rules in C..N over -32, -8, 8, 16, 32:
+  - the first point of `[formula, max]`;
+  - the last point of `[min, formula]`;
+  - the middle point of a 3-colour `[min, formula, max]`.
+- **Twins:** P `[num 0, max]`, Q `[min, max]`, R `[min, num 0]`, S `[min, num 0, max]`.
+- **Predictions:** `withheld` predicts `none`. `zero` predicts the twin with num 0 at the bound's position. `skipped` predicts Q; a midpoint omits it.
+- **Separation:** at least 3 decisive cells per pair and configuration, all at dyadic fractions.
+- **Size:** 160 cells, `A1:AM6`.
+
+**The capture** (Excel 16.115, 16822e70, 3277 × 109 px): `formulaEvaluation` reports each id **discriminating**, each with a sole survivor:
+
+| Id | Matched | Excel |
+|---|---|---|
+| `formula:cfvo-nonnumeric-blank` | `zero` | C = P (`F8696B F8696B D37E6F AE9373 63BE7B`), D = R, E = S |
+| `formula:cfvo-nonnumeric-text` | `withheld` | F, G, H paint nothing |
+| `formula:cfvo-nonnumeric-empty-string` | `withheld` | I, J, K paint nothing |
+| `formula:cfvo-nonnumeric-error` | `withheld` | L, M, N paint nothing |
+
+The twins render as their literal rules, and every control is white. Both findings of `stage5-cfvo-formulas` are confirmed, with M and K read as 0 and L and N painting nothing, and each now holds at every position.
+
+**Published.** All four ids are registered as the selection `withheld | zero | skipped` and left `CF_STAGE5_UNSUPPORTED`. The umbrella's text now says it is superseded per kind. `npx tsx scripts/cf-refs/audit.ts --stage 5 --write --publish-stage3 --publish-stage5` ran twice, byte-identical (sha-256 `788a4d1e…`):
+- **345 ids** (up from 341): 110 S1, 35 S2, 52 S3, 97 S4, and 51 S5 (up from 47);
+- the added ids are `formula:cfvo-nonnumeric-blank`, `-empty-string`, `-error` and `-text`;
+- the published selections are blank `zero`, and `withheld` for text, empty string and error.
+
+**Withholding justified from the treatment.** `STAGE5_NONNUMERIC_BOUNDS` in `scripts/cf-refs/stage5-withhold.ts` records every non-numeric colour-scale formula bound: `stage5-cfvo-formulas` L/M/N and the twelve bounds of this case. Each entry is checked against its saved workbook. A recorded rule's refusal is justified from its kind's treatment, exactly as production reads it, in three cases: no held treatment, `withheld`, or `skipped` at a midpoint. The K blank-wrap record (`STAGE5_A1_BLANK_BOUND_REFUSALS`) follows the blank kind the same way, so it no longer fires.
+
+**Production effect.**
+- **Now painting:** a colour-scale formula bound that evaluates to a blank cell reads as a 0 bound in any position. This includes a relative bound whose A1 window wraps off the sheet to a blank cell (`stage5-cfvo-formulas` K and M, which agree with Excel).
+- **Still withheld:**
+  - **Text, empty-string and error bounds.** Excel paints nothing for such a rule. Production keeps the rule unresolved and keeps its slot taint (ruling 1), so a lower rule never paints there.
+  - **Non-numeric bounds of data bars and icon sets.** They are unmeasured.
+  - **Boolean results.**
+  - **A `skipped` treatment at a midpoint.** No published kind reads `skipped`, so this does not arise today.
+
+**Audits.** Stage 5: `structural=35/35 unsupported=9 pending=5 unverifiedNonDiscriminating=13 stageComplete=true blocked=0`. 3,194 records over 35 cases (21 measured): 963 formula cells, of which 730 paint as Excel and 260 have justified unresolved slots, and 0 disagree.

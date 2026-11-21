@@ -1,5 +1,6 @@
 /** Piece 5 Task 7: the sandboxed, metadata-free AAC/M4A transcoder (plan D5, D7, D8, D23; pre-flight X4, X29 R8). */
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
+import { rejection } from '../fixtures/rejection'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -212,7 +213,7 @@ describe('transcode before any spawn (no ffmpeg needed)', () => {
     const ac = new AbortController()
     const reason = new Error('aborted before the spawn')
     ac.abort(reason)
-    await expect(transcode(fakeInfo, { entry: entry(true), src: src.path, out: out.path }, ac.signal)).rejects.toBe(reason)
+    expect(await rejection(transcode(fakeInfo, { entry: entry(true), src: src.path, out: out.path }, ac.signal))).toBe(reason)
     expect(existsSync(out.path)).toBe(false)
     expect(existsSync(marker)).toBe(false)
     await src.dispose(); await out.dispose()
@@ -419,7 +420,7 @@ describe.skipIf(!info)('transcode (sandboxed ffmpeg)', () => {
       const ac = new AbortController()
       const p = transcode(info!, { entry: s.entry, src: s.file.path, out: out.path }, ac.signal)
       setTimeout(() => ac.abort(), 100)
-      await expect(p).rejects.toThrow()
+      await rejection(p)
       expect(existsSync(out.path)).toBe(false)
       expect(processesNaming(out.path)).toBe('')
       await out.dispose()

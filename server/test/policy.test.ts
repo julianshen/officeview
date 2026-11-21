@@ -3,6 +3,7 @@ import JSZip from 'jszip'
 import { OfficePackage } from '../../src/core/zip'
 import { admit, projectPackage } from '../src/policy'
 import { hiddenFixtures } from '../../scripts/stream-s0/hidden-fixtures'
+import { rejectionMessage } from './fixtures/rejection'
 
 async function packed(parts: Record<string,string>) { const zip=new JSZip();for(const [p,s] of Object.entries(parts))zip.file(p,s);return zip.generateAsync({type:'uint8array'}) }
 test('admission refuses non-OOXML inputs on original bytes', async()=>{
@@ -21,7 +22,7 @@ test.each(['hidden="maybe"','xmlns:a14="urn:extension" a14:visibility="hidden"']
 })
 test('unparseable XML fails the whole projection including unused parts',async()=>{
  const f=(await hiddenFixtures())[0],zip=await JSZip.loadAsync(f.withHidden);zip.file('customXml/broken.xml','<root><wrong></root>')
- const pkg=await OfficePackage.load(await zip.generateAsync({type:'uint8array'}));await expect(projectPackage(pkg,'xlsx','visible-only')).rejects.toThrow('unsupported-format')
+ const pkg=await OfficePackage.load(await zip.generateAsync({type:'uint8array'}));expect(await rejectionMessage(projectPackage(pkg,'xlsx','visible-only'))).toContain('unsupported-format')
 })
 test('namespace prefixes, mixed content and unknown visible extensions survive rewriting',async()=>{
  const f=(await hiddenFixtures()).find(f=>f.kind==='docx')!,zip=await JSZip.loadAsync(f.withHidden)

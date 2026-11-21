@@ -356,6 +356,10 @@ export const VERIFIED_STAGE5_CAPABILITIES: ReadonlySet<string> = new Set([
   'formula:cellis-operand-reference',
   'formula:cellis-operand-relative',
   'formula:cfvo-expression',
+  'formula:cfvo-nonnumeric-blank',
+  'formula:cfvo-nonnumeric-empty-string',
+  'formula:cfvo-nonnumeric-error',
+  'formula:cfvo-nonnumeric-text',
   'formula:cfvo-reference',
   'formula:cfvo-relative',
   'formula:cfvo-scope-multi-range',
@@ -397,6 +401,10 @@ export const VERIFIED_STAGE5_CAPABILITIES: ReadonlySet<string> = new Set([
 
 export const VERIFIED_STAGE5_FORMULA_SELECTIONS: Readonly<Record<string, string>> = {
   'formula:cellis-operand-blank': 'blank-zero',
+  'formula:cfvo-nonnumeric-blank': 'zero',
+  'formula:cfvo-nonnumeric-empty-string': 'withheld',
+  'formula:cfvo-nonnumeric-error': 'withheld',
+  'formula:cfvo-nonnumeric-text': 'withheld',
   'formula:cfvo-scope-multi-range': 'anchor-a1',
   'formula:relative-wrap': 'wrap',
 }
@@ -512,6 +520,10 @@ export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set([
   'formula:cellis-operand-reference',
   'formula:cellis-operand-relative',
   'formula:cfvo-expression',
+  'formula:cfvo-nonnumeric-blank',
+  'formula:cfvo-nonnumeric-empty-string',
+  'formula:cfvo-nonnumeric-error',
+  'formula:cfvo-nonnumeric-text',
   'formula:cfvo-reference',
   'formula:cfvo-relative',
   'formula:cfvo-scope-multi-range',

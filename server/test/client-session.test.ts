@@ -1,5 +1,6 @@
 /** 1d Task 2: the browser StreamSession against the real 1c server. */
 import { afterAll, describe, expect, it } from 'bun:test'
+import { rejection } from './fixtures/rejection'
 import { pngChunkTypes } from '../../src/stream/raster'
 import { StreamSession, type StreamNotice } from '../../src/stream/remote/session'
 import { StreamSessionError } from '../../src/stream/remote/errors'
@@ -80,7 +81,7 @@ describe('StreamSession against the 1c server', () => {
     f.sockets[0]!.terminate!()
     await settle(1500)
     expect(closedWith?.code).toBe('auth-failed')
-    await expect(s.unit(0, 1)).rejects.toBeInstanceOf(StreamSessionError)
+    expect(await rejection(s.unit(0, 1))).toBeInstanceOf(StreamSessionError)
     h.stop()
   })
 })

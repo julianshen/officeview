@@ -145,6 +145,48 @@ npx tsx scripts/cf-refs/audit.ts --stage 5
   - a failed negative control.
 - **Run of 2026-11-21 (f9d5be94, Excel 16.115):** a repair-free open with every formula kept, 3109 × 601 px. Both ids are `discriminating`, matched `anchor-a1`, the sole survivor; the negative control matched. Registered and published (§14.z.12).
 
+### 2d. The non-numeric formula bound, per kind (the cfvo-nonnumeric follow-up, 2026-11-21)
+
+`stage5-cfvo-nonnumeric-v2` (appended last) measures each kind on its own evidence id: `formula:cfvo-nonnumeric-blank`, `-text`, `-empty-string` and `-error` (pre-capture ruling: a surprise in one kind refuses only that kind). The umbrella `formula:cfvo-nonnumeric` stays with `stage5-cfvo-formulas`, a recorded refusal; its reading is the composition of the per-kind ones, held kind by kind. In `stage5-cfvo-formulas`, Excel painted nothing for a text bound (L) and an error bound (N), and read a blank bound as 0 (M), so no uniform reading matched. The per-kind reading was formed after that capture. Production's per-kind treatment (`cfvoNonNumericTreatmentOf`, 0c572321 and 67c3edb0: a registered per-kind id decides its kind alone, and a kind that is registered but not published stays withheld) is committed before this case is captured and is not registered. A reading may be registered from this capture only because both the hypothesis and the behaviour predate it.
+
+The rules are colour scales only (the measured scope). Each one has a single `type="formula"` bound that is an absolute one-cell reference, so the result kind is the only variable:
+- **Sources:** `$A$1` (absent: blank), `$A$2` (`"abc"`: text), `$A$3` (`=""`, cached empty string: its own kind, `-empty-string`, so its failure cannot affect text) and `$A$4` (`#N/A`: error).
+- **Positions:** each source appears three times:
+  - as the first point of `[formula, max]`;
+  - as the last point of `[min, formula]`;
+  - as the middle point of a 3-colour `[min, formula, max]` (red, yellow FFFFEB84, green).
+
+  That makes twelve rules in C..N, each over `-32, -8, 8, 16, 32` in rows 2..6.
+- **Literal twins:** P `[num 0, max]`, Q `[min, max]`, R `[min, num 0]`, S `[min, num 0, max]`.
+- **Isolation:** no other rule covers a designated cell, and the base fill is the default.
+
+Each id pre-registers `withheld`, `zero` and `skipped` on its own three configurations. Each treatment predicts:
+- **`withheld`:** the rule paints nothing (`none`).
+- **`zero`:** a 0 bound, the twin with num 0 in the bound's place (P, R or S).
+- **`skipped`:** the positional extreme, twin Q. A midpoint has no extreme, so the middle configurations omit `skipped` (`omitted`, with the reason), and production withholds such a rule.
+
+Every fraction is dyadic. Zero and skipped differ at three cells of each first and last configuration (-8, 8, 16), and withheld differs from both at all five. The sheet is A1:AM6, with 160 expected cells (80 designated, each with its same-content control).
+
+```
+bun scripts/cf-refs/build.ts   --stage 5 --case stage5-cfvo-nonnumeric-v2
+bun scripts/cf-refs/capture.ts --stage 5 --case stage5-cfvo-nonnumeric-v2
+bun scripts/cf-refs/capture.ts --stage 5 --verify-only
+npx tsx scripts/cf-refs/audit.ts --stage 5
+```
+
+- **Expected:**
+  - a repair-free open, with Excel keeping the twelve `$A$n` bounds and `A3`'s `=""` (resaved `t="str"` with an empty `<v>`) as authored, and `A1` absent;
+  - `formulaEvaluation` reports each of the four per-kind ids `discriminating`, each matching one treatment. `stage5-cfvo-formulas` suggests blank `zero`, text and error `withheld` (the umbrella `blank-zero+text-withheld+error-withheld`), which is not registered from it.
+- **Stop and record** (never retried, never refitted):
+  - a repair, strip or rewritten bound (keep `<id>.rejected.xlsx`), or `A3` resaved as anything but an empty string;
+  - `formula-hypothesis-none` for an id (a kind treated differently by position) is a finding for that kind alone: it stays withheld and the other kinds are judged on their own;
+  - `non-discriminating` or `formula-replication-shortfall` for an id, likewise;
+  - a twin that renders nothing.
+- **Run of 2026-11-21 (16822e70, Excel 16.115):**
+  - The open was repair-free, with every bound and `A3`'s `=""` kept; Excel resaved the empty cache as `<v/>`. The capture is 3277 × 109 px.
+  - Each per-kind id is `discriminating` with a sole survivor: blank `zero`, and `withheld` for text, the empty string and error.
+  - All four ids are registered and published (§14.z.14). The umbrella is superseded and stays a recorded refusal.
+
 ## 3. Unresolved shapes (record only)
 
 ```
