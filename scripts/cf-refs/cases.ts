@@ -303,6 +303,13 @@ export interface CfOracleCase {
   /** Stage 5: the semantic configurations and their hypotheses, fixed before capture (Lessons 3, 14). */
   formulaConfigurations?: readonly S5Configuration[]
   /**
+   * Stage 2 (the scope-disjoint follow-up): readings pre-registered before capture (Lesson 14) in the Stage 5 configuration
+   * form (fill observable, `twin:` tokens), judged by `evaluateFormulaCapabilities` over the capture's DisplayFormat fills
+   * (`stage2ReadingsObservationOf`). A capability they name verifies only on a discriminating match whose reading is the
+   * one production implements (`CF_STAGE2_PRODUCTION_READINGS`, audit.ts).
+   */
+  scaleReadings?: readonly S5Configuration[]
+  /**
    * Stage 5 (round-1 #4): observe before any calculation. Build runs `buildManualObservationScript` on the input first,
    * then one explicit calculation observation, and the resave carries no `calculate`; the capture's clock probe skips it.
    */
@@ -2539,6 +2546,199 @@ export const CF_STAGE1_CAPABILITIES: readonly CfCapabilityEntry[] = CF_STAGE1_CA
   })),
 )
 
+// ---------------------------------------------------------------------------------------------------------------------
+// The scope-disjoint follow-up (brief 2026-11-21, Ruling F-2): stage2-scale-scope cannot discriminate scale:scope-disjoint
+// (its disjoint rule overlaps two others and both rectangles hold the same values). This case version asks the question
+// alone: non-overlapping disjoint colour scales whose rectangles hold different values, nothing else in scope (no hidden
+// row, merge, error, whole column or overlap). Its readings are pre-registered here, before any capture (Lesson 14), as
+// literal num twins compared by Excel's DisplayFormat fill (the Stage 5 configuration machinery,
+// `evaluateFormulaCapabilities`): a cell under a reading renders exactly as a single-range scale with num bounds equal to
+// that reading's statistics, on the same values.
+// ---------------------------------------------------------------------------------------------------------------------
+
+export const S2_SCOPE_DISJOINT_ID = 'stage2-scale-scope-disjoint'
+/**
+ * The statistics a rule over two rectangles may use: the union of both (`union`), each rectangle its own (`per-range`),
+ * or one rectangle's for every cell: the leftmost (`leftmost-range`) or the rightmost (`rightmost-range`). The single-range
+ * readings are named by position, not by sqref order, since Excel may reorder a multi-range sqref on resave.
+ */
+export const S2_SCOPE_DISJOINT_READINGS = ['union', 'per-range', 'leftmost-range', 'rightmost-range'] as const
+export const S2_SCOPE_DISJOINT_CAP = 'scale:scope-disjoint'
+export const S2_SCOPE_DISJOINT_TWIN = 'scale:scope-disjoint-twin'
+export const S2_SCOPE_DISJOINT_CONTROL = 'scale:scope-disjoint-control'
+const S2SD_COLOURS: Readonly<Record<2 | 3, readonly string[]>> = { 2: ['FFF8696B', 'FF63BE7B'], 3: ['FFF8696B', 'FFFFEB84', 'FF63BE7B'] }
+
+export interface S2DisjointScale {
+  /** Configuration id. */
+  id: string
+  /** The two rectangles' columns, left to right (rows `S2_SCOPE_DISJOINT.rows`). */
+  cols: readonly [string, string]
+  values: readonly [readonly number[], readonly number[]]
+  /** 2: min / max; 3: min / percentile 50 / max. */
+  colours: 2 | 3
+}
+
+/**
+ * The fixture: a 2-colour min/max scale on B2:B4 D2:D4 and a 3-colour min / percentile 50 / max scale on F2:F4 H2:H4, each
+ * rectangle holding other values, so every pair of readings puts >= 2 cells of each rectangle on distinct colours (checked
+ * in tests/xlsx-cf-scale-scope-disjoint.test.ts); the negative control J2:J4 is a single-range min/max scale, on which
+ * every reading agrees. Twin blocks (from column L) copy a data rectangle's values under num bounds, one per distinct
+ * (values, bounds) pair a reading predicts; the control block (rows 7..9) repeats the data columns with no rule.
+ */
+export const S2_SCOPE_DISJOINT = {
+  rows: [2, 3, 4] as const,
+  controlOffset: 5,
+  twinFirstCol: 'L',
+  scales: [
+    { id: 'disjoint-2colour', cols: ['B', 'D'], values: [[10, 20, 30], [40, 55, 70]], colours: 2 },
+    { id: 'disjoint-3colour', cols: ['F', 'H'], values: [[0, 30, 60], [20, 50, 100]], colours: 3 },
+  ] as readonly S2DisjointScale[],
+  control: { id: 'single-range-control', col: 'J', values: [10, 20, 30] as readonly number[], colours: 2 as const },
+}
+
+/** PERCENTILE.INC (spec §5.8, Ruling S2-L) on the values. */
+function s2PercentileInc(values: readonly number[], p: number): number {
+  const s = [...values].sort((a, b) => a - b)
+  const rank = (p / 100) * (s.length - 1)
+  const lo = Math.floor(rank)
+  return lo + 1 < s.length ? s[lo]! + (rank - lo) * (s[lo + 1]! - s[lo]!) : s[lo]!
+}
+
+/** The num bounds a scale's statistics give over `values`: [min, max] or [min, P50, max]. */
+export function s2ScopeDisjointBounds(values: readonly number[], colours: 2 | 3): number[] {
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  return colours === 2 ? [min, max] : [min, s2PercentileInc(values, 50), max]
+}
+
+/** The values whose statistics a reading uses for a cell of rectangle `i`. */
+export function s2ScopeDisjointStatValues(sc: S2DisjointScale, reading: string, i: 0 | 1): readonly number[] {
+  if (reading === 'union') return [...sc.values[0], ...sc.values[1]]
+  if (reading === 'per-range') return sc.values[i]
+  if (reading === 'leftmost-range') return sc.values[0]
+  if (reading === 'rightmost-range') return sc.values[1]
+  throw new Error(`${S2_SCOPE_DISJOINT_ID}: unknown reading ${reading}`)
+}
+
+const s2sdColOf = (n: number): string => {
+  let s = ''
+  for (let c = n; c > 0; c = Math.floor((c - 1) / 26)) s = String.fromCharCode(65 + ((c - 1) % 26)) + s
+  return s
+}
+const s2sdColNum = (col: string): number => [...col].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0)
+
+export interface S2DisjointTwin {
+  col: string
+  /** The data column whose values the block copies (its controls serve the twins too). */
+  source: string
+  values: readonly number[]
+  bounds: readonly number[]
+  colours: 2 | 3
+}
+
+/** The twin blocks and each configuration's hypotheses (`twin:<ref>` per designated ref), derived from the fixture. */
+export function s2ScopeDisjointLayout(): { twins: S2DisjointTwin[]; configurations: S5Configuration[] } {
+  const fx = S2_SCOPE_DISJOINT
+  const twins: S2DisjointTwin[] = []
+  const blockFor = (source: string, values: readonly number[], bounds: readonly number[], colours: 2 | 3): S2DisjointTwin => {
+    const key = `${values.join(',')}|${bounds.join('/')}|${colours}`
+    const hit = twins.find(t => `${t.values.join(',')}|${t.bounds.join('/')}|${t.colours}` === key)
+    if (hit) return hit
+    const t = { col: s2sdColOf(s2sdColNum(fx.twinFirstCol) + twins.length), source, values, bounds, colours }
+    twins.push(t)
+    return t
+  }
+  const refsOf = (col: string): string[] => fx.rows.map(r => `${col}${r}`)
+  const configurations: S5Configuration[] = []
+  const expectOf = (hyps: Record<string, Record<string, string>>): Record<string, 'visual'> =>
+    Object.fromEntries([...new Set(Object.values(hyps).flatMap(h => Object.values(h).map(t => t.slice('twin:'.length))))].sort().map(t => [t, 'visual' as const]))
+  for (const sc of fx.scales) {
+    const hyps: Record<string, Record<string, string>> = {}
+    for (const h of S2_SCOPE_DISJOINT_READINGS) {
+      hyps[h] = {}
+      for (const i of [0, 1] as const) {
+        const t = blockFor(sc.cols[i], sc.values[i], s2ScopeDisjointBounds(s2ScopeDisjointStatValues(sc, h, i), sc.colours), sc.colours)
+        fx.rows.forEach(r => { hyps[h]![`${sc.cols[i]}${r}`] = `twin:${t.col}${r}` })
+      }
+    }
+    configurations.push({ id: sc.id, capabilityId: S2_SCOPE_DISJOINT_CAP, observable: 'fill', refs: [...refsOf(sc.cols[0]), ...refsOf(sc.cols[1])], hypotheses: hyps, replicateBy: 'column', twinExpect: expectOf(hyps) })
+  }
+  const ctl = fx.control
+  const own = blockFor(ctl.col, ctl.values, s2ScopeDisjointBounds(ctl.values, ctl.colours), ctl.colours)
+  const ctlHyps = Object.fromEntries(S2_SCOPE_DISJOINT_READINGS.map(h => [h, Object.fromEntries(fx.rows.map(r => [`${ctl.col}${r}`, `twin:${own.col}${r}`]))]))
+  configurations.push({
+    id: ctl.id, capabilityId: S2_SCOPE_DISJOINT_CAP, observable: 'fill', refs: refsOf(ctl.col), hypotheses: ctlHyps, role: 'negative-control', twinExpect: expectOf(ctlHyps),
+    note: 'Negative control: a single-range min/max scale, on which every reading agrees; Excel must match it, never evidence',
+  })
+  return { twins, configurations }
+}
+
+function s2ScaleMarker(capabilityId: string, sqref: string, priority: number, cfvo: NonNullable<CfPartMarker['scale']>['cfvo'], colours: 2 | 3): CfPartMarker {
+  return { part: 'xl/worksheets/sheet1.xml', extension: 'legacy', capabilityId, sqref, ruleType: 'colorScale', priority, formulas: [], scale: { cfvo, colors: [...S2SD_COLOURS[colours]] } }
+}
+
+/** The num cfvo of a bounds list (integers or exact decimals, written as JavaScript prints them). */
+const s2NumCfvo = (bounds: readonly number[]): Array<{ type: string; val: string }> => bounds.map(b => ({ type: 'num', val: String(b) }))
+
+/** The rules of the scope-disjoint case in priority order: the two disjoint scales, the control, then the twins. */
+export function s2ScopeDisjointMarkers(): CfPartMarker[] {
+  const fx = S2_SCOPE_DISJOINT
+  const [r0, r1] = [fx.rows[0], fx.rows[fx.rows.length - 1]]
+  const rect = (col: string): string => `${col}${r0}:${col}${r1}`
+  const statCfvo = (colours: 2 | 3) => (colours === 2 ? [{ type: 'min' }, { type: 'max' }] : [{ type: 'min' }, { type: 'percentile', val: '50' }, { type: 'max' }])
+  let p = 1
+  return [
+    ...fx.scales.map(sc => s2ScaleMarker(S2_SCOPE_DISJOINT_CAP, `${rect(sc.cols[0])} ${rect(sc.cols[1])}`, p++, statCfvo(sc.colours), sc.colours)),
+    s2ScaleMarker(S2_SCOPE_DISJOINT_CONTROL, rect(fx.control.col), p++, statCfvo(fx.control.colours), fx.control.colours),
+    ...s2ScopeDisjointLayout().twins.map(t => s2ScaleMarker(S2_SCOPE_DISJOINT_TWIN, rect(t.col), p++, s2NumCfvo(t.bounds), t.colours)),
+  ]
+}
+
+function stage2ScopeDisjointCase(): CfOracleCase {
+  const fx = S2_SCOPE_DISJOINT
+  const { twins, configurations } = s2ScopeDisjointLayout()
+  const dataCols = [...fx.scales.flatMap(sc => sc.cols), fx.control.col]
+  const ctrl = (col: string, r: number): string => `${col}${r + fx.controlOffset}`
+  const positive = [...dataCols, ...twins.map(t => t.col)]
+  const sourceOf = (col: string): string => twins.find(t => t.col === col)?.source ?? col
+  const lastCol = twins.at(-1)!.col
+  const cells: CfCellExpectation[] = [
+    ...positive.flatMap(col => fx.rows.map(r => ({ ref: `${col}${r}`, controlRef: ctrl(sourceOf(col), r), matched: true, scaleApplied: true, fillSource: 'unverified' as const }))),
+    ...dataCols.flatMap(col => fx.rows.map(r => ({ ref: ctrl(col, r), controlRef: `${col}${r}`, matched: false, scaleApplied: false, fillSource: 'unverified' as const }))),
+  ]
+  return {
+    id: S2_SCOPE_DISJOINT_ID,
+    stage: 2,
+    question:
+      'Ruling S2-H (the scope-disjoint follow-up of Ruling F-2): a colour scale over two non-overlapping rectangles that hold different values. Which statistics does it use: the union of both rectangles, each rectangle its own, the leftmost rectangle\'s or the rightmost rectangle\'s? A 2-colour min/max scale on B2:B4 D2:D4 and a 3-colour min / percentile 50 / max scale on F2:F4 H2:H4, each compared by DisplayFormat with literal num twins on the same values, one per predicted rendering; a single-range min/max negative control on J2:J4.',
+    input: `tests/fixtures/xlsx-cf/inputs/${S2_SCOPE_DISJOINT_ID}.xlsx`,
+    saved: `tests/fixtures/xlsx-cf/${S2_SCOPE_DISJOINT_ID}.xlsx`,
+    sheet: 'Sheet1',
+    range: `A1:${lastCol}${fx.rows[fx.rows.length - 1] + fx.controlOffset}`,
+    requiredAppearances: ['screen'],
+    markers: s2ScopeDisjointMarkers(),
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: cells.filter(e => e.matched).map(e => e.ref),
+      negativeRefs: cells.filter(e => !e.matched).map(e => e.ref),
+      cells,
+    },
+    scaleReadings: configurations,
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: `tests/fixtures/xlsx-cf/refs/${S2_SCOPE_DISJOINT_ID}.png`,
+        sidecarPath: `tests/fixtures/xlsx-cf/refs/${S2_SCOPE_DISJOINT_ID}.json`,
+      },
+    ],
+    status: 'recipe-pending',
+    reason: 'Awaiting host Excel 16.114 execution and verified display-format interior color observations',
+    tolerance: DEFAULT_TOLERANCE,
+  }
+}
+
 export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
   // 1. stage2-scale-interpolation
   {
@@ -3697,6 +3897,8 @@ export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
     reason: 'Unsupported or invalid colorScale constructs fail closed per Ruling S2-C and S2-K',
     tolerance: DEFAULT_TOLERANCE,
   },
+  // 9. stage2-scale-scope-disjoint (the scope-disjoint follow-up, appended last: earlier inputs stay byte-identical)
+  stage2ScopeDisjointCase(),
 ]
 
 const S2_RULINGS: Record<string, string> = {
@@ -3760,6 +3962,10 @@ const S2_RULINGS: Record<string, string> = {
     'While unmeasured or refused, merged cells in scale scope are unresolved per Ruling S2-H',
   'scale:scope-whole-column':
     'While unmeasured or refused, whole-column scale scope is unresolved per Ruling S2-H',
+  'scale:scope-disjoint-twin':
+    'Literal twin rules of stage2-scale-scope-disjoint: comparison references for the scope readings, never a question themselves',
+  'scale:scope-disjoint-control':
+    'The single-range negative control of stage2-scale-scope-disjoint: every reading agrees on it, so it is never evidence',
   'scale:composition-dxf-p1-scale-p2':
     'While unmeasured or refused, fill composition is unresolved per Ruling S2-I',
   'scale:composition-scale-p1-dxf-p2':
@@ -3815,11 +4021,30 @@ export const CF_STAGE2_NONDISCRIMINATING: Readonly<Record<string, string>> = {
     'Every compared F:F cell sits in a scope containing hidden row 4, so it is withheld by the hidden-row gate: no painted conformance cell backs the whole-column shape. Re-measure with no hidden row in the column.',
   'scale:scope-duplicate-blocks':
     'Duplicate identical scales overlap, so every compared cell is withheld (S2-I overlapping scales) and identical rules give identical min/max statistics either way. Re-measure with a duplicate whose result differs from a single rule.',
+  // The scope-disjoint follow-up: its comparison rules are never a question themselves (as Stage 5's twin registries).
+  'scale:scope-disjoint-twin':
+    'Literal twin rules of stage2-scale-scope-disjoint (num-bounded single-range scales, one per predicted rendering): comparison references for the scope readings, never a question themselves.',
+  'scale:scope-disjoint-control':
+    'The single-range min/max negative control of stage2-scale-scope-disjoint: every reading agrees on it by design, so Excel must match it but it never bears evidence.',
 }
 
-/** Complete capability-to-evidence registry for all Stage 2 markers. */
+/**
+ * Capabilities owned by a later case version rather than by the first case carrying their marker (the scope-disjoint
+ * follow-up, as CF_STAGE3_OWNERS). The new case is appended last to keep every earlier input byte-identical; the old case
+ * keeps its marker and capture as a cross-check. A registered non-discriminating id stays so while its owner awaits its
+ * first capture (auditStage2Manifest).
+ */
+export const CF_STAGE2_OWNERS: Readonly<Record<string, string>> = {
+  'scale:scope-disjoint': 'stage2-scale-scope-disjoint',
+}
+
+/** Complete capability-to-evidence registry for all Stage 2 markers (one entry per distinct id, owned per CF_STAGE2_OWNERS). */
 export const CF_STAGE2_CAPABILITIES: readonly CfCapabilityEntry[] = CF_STAGE2_CASES.flatMap(c =>
-  c.markers.map((m): CfCapabilityEntry => ({
+  c.markers.filter((m, i) => c.markers.findIndex(x => x.capabilityId === m.capabilityId) === i).filter(m => {
+    const owner = CF_STAGE2_OWNERS[m.capabilityId]
+    if (owner !== undefined) return owner === c.id
+    return CF_STAGE2_CASES.find(x => x.markers.some(y => y.capabilityId === m.capabilityId)) === c
+  }).map((m): CfCapabilityEntry => ({
     capabilityId: m.capabilityId,
     caseId: c.id,
     category: m.ruleType,

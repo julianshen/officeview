@@ -253,15 +253,34 @@ export type Stage2CaseAudit = Stage1CaseAudit
 export type Stage2CapabilityAudit = Stage1CapabilityAudit
 export type Stage2AuditReport = Stage1AuditReport
 
-export function auditStage2Manifest(manifest: CfManifest, options: { rootDir?: string } = {}): Stage2AuditReport {
+/**
+ * The reading production implements for each Stage 2 capability a case's pre-registered readings decide (`scaleReadings`):
+ * service.ts prepares a multi-range rule's statistics over all its ranges at once (`prepareStatistics([rule.ranges])`),
+ * one union scope, as for bars and icons (`icon:scope-disjoint` in CF_STAGE4_PRODUCTION_READINGS). Pinned to behaviour in
+ * tests/xlsx-cf-scale-scope-disjoint.test.ts. A capability whose matched reading differs, or has no entry, stays withheld.
+ */
+export const CF_STAGE2_PRODUCTION_READINGS: Readonly<Record<string, string>> = {
+  'scale:scope-disjoint': 'union',
+}
+
+export function auditStage2Manifest(
+  manifest: CfManifest,
+  options: {
+    rootDir?: string
+    /** Rehearsal seam (the scope-disjoint follow-up): the non-discriminating registry to audit against (default the real one). */
+    nonDiscriminating?: Readonly<Record<string, string>>
+  } = {},
+): Stage2AuditReport {
   const rootDir = options.rootDir ?? process.cwd()
+  const nonDiscriminating = options.nonDiscriminating ?? CF_STAGE2_NONDISCRIMINATING
   const stage2ManifestCases = manifest.cases.filter(c => c.stage === 2 || c.id.startsWith('stage2'))
   const catalogIds = CF_STAGE2_CASES.map(c => c.id)
   const manifestIds = new Set(stage2ManifestCases.map(c => c.id))
   const missingCases = catalogIds.filter(id => !manifestIds.has(id))
   const catalogSet = new Set(catalogIds)
   const extraCases = stage2ManifestCases.map(c => c.id).filter(id => !catalogSet.has(id))
-  const perCase = stage2ManifestCases.map(c => auditCase(c, rootDir))
+  const evidence = new Map(stage2ManifestCases.map(c => [c.id, verifyCfCase(c, { rootDir })] as const))
+  const perCase = stage2ManifestCases.map(c => auditCase(c, rootDir, evidence.get(c.id)))
   const perCapability: Stage2CapabilityAudit[] = CF_STAGE2_CAPABILITIES.map(entry => {
     const owning = perCase.find(p => p.id === entry.caseId)
     let disposition: Stage2CapabilityAudit['disposition'] = 'unaccounted'
@@ -269,12 +288,24 @@ export function auditStage2Manifest(manifest: CfManifest, options: { rootDir?: s
       disposition = owning.status === 'unsupported' ? 'refused-unsupported' : owning.code === undefined || owning.status === 'measured' ? 'verified' : 'supported-structural'
       if (owning.status === 'measured' && owning.code !== undefined) disposition = 'supported-structural'
       // A measured but non-discriminating capability is never reported verified (Ruling F-2).
-      if (disposition === 'verified' && CF_STAGE2_NONDISCRIMINATING[entry.capabilityId] !== undefined) disposition = 'unverified-nondiscriminating'
+      if (disposition === 'verified' && nonDiscriminating[entry.capabilityId] !== undefined) disposition = 'unverified-nondiscriminating'
+      // A registered non-discriminating capability stays so while its owning case awaits its first capture (the
+      // scope-disjoint follow-up case owns scale:scope-disjoint before Excel has run), as in Stage 3.
+      if (nonDiscriminating[entry.capabilityId] !== undefined && owning.status === 'recipe-pending') disposition = 'unverified-nondiscriminating'
+      // Pre-registered readings decide the capabilities they name: verified only on a discriminating match whose
+      // reading production implements (CF_STAGE2_PRODUCTION_READINGS); a non-discriminating evaluation is reported so.
+      const owner = manifest.cases.find(c => c.id === entry.caseId)
+      if (disposition === 'verified' && (owner?.scaleReadings ?? []).some(x => x.capabilityId === entry.capabilityId)) {
+        const res = evidence.get(entry.caseId)
+        const matched = res?.kind === 'verified' ? res.matchedHypotheses?.[entry.capabilityId] : undefined
+        if (res?.kind === 'verified' && res.nonDiscriminatingCapabilities?.includes(entry.capabilityId)) disposition = 'unverified-nondiscriminating'
+        else if (res?.kind !== 'verified' || !res.verifiedCapabilities.includes(entry.capabilityId) || matched === undefined || CF_STAGE2_PRODUCTION_READINGS[entry.capabilityId] !== matched) disposition = 'supported-structural'
+      }
     }
     return { capabilityId: entry.capabilityId, caseId: entry.caseId, disposition }
   })
   const stage2Ids = new Set(CF_STAGE2_CAPABILITIES.map(entry => entry.capabilityId))
-  const unknownNonDiscriminating = Object.keys(CF_STAGE2_NONDISCRIMINATING).filter(id => !stage2Ids.has(id) || !CF_STAGE2_NONDISCRIMINATING[id]!.trim())
+  const unknownNonDiscriminating = Object.keys(nonDiscriminating).filter(id => !stage2Ids.has(id) || !nonDiscriminating[id]!.trim())
   const caseOk = (p: Stage2CaseAudit): boolean => {
     if (p.status === 'measured') return p.structuralValid && p.code === undefined
     return p.structuralValid

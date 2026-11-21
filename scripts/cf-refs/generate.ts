@@ -21,7 +21,11 @@ import {
   CF_STAGE4_FIXTURES,
   CF_STAGE5_FIXTURES,
   DEFAULT_CLOCK_ANCHOR_DATE,
+  S2_SCOPE_DISJOINT,
+  S2_SCOPE_DISJOINT_ID,
   isoDateToExcelSerial,
+  s2ScopeDisjointLayout,
+  s2ScopeDisjointMarkers,
   s3ControlOffset,
   s3ControlRef,
   s3Range,
@@ -1125,6 +1129,35 @@ function casePayload(id: string, anchorDateIso = DEFAULT_CLOCK_ANCHOR_DATE): She
           '<dxf><font><b/><color rgb="FF006100"/></font></dxf>',
           '</dxfs>',
         ].join(''),
+      }
+    }
+
+    case S2_SCOPE_DISJOINT_ID: {
+      // The scope-disjoint follow-up: data rectangles and twin blocks in rows 2..4, the data columns' controls in rows 7..9
+      // (header row 6). The rules are the catalogue's markers, written in priority order.
+      const fx = S2_SCOPE_DISJOINT
+      const { twins } = s2ScopeDisjointLayout()
+      const cells: CellSpec[] = [{ ref: 'A1', v: 'Val' }, { ref: `A${1 + fx.controlOffset}`, v: 'Controls' }]
+      const put = (col: string, header: string, values: readonly number[], control: boolean): void => {
+        cells.push({ ref: `${col}1`, v: header })
+        if (control) cells.push({ ref: `${col}${1 + fx.controlOffset}`, v: `${header}_Ctrl` })
+        fx.rows.forEach((r, i) => {
+          cells.push({ ref: `${col}${r}`, v: values[i]! })
+          if (control) cells.push({ ref: `${col}${r + fx.controlOffset}`, v: values[i]! })
+        })
+      }
+      fx.rows.forEach(r => { cells.push({ ref: `A${r}`, v: `r${r}` }, { ref: `A${r + fx.controlOffset}`, v: `r${r}_ctrl` }) })
+      for (const sc of fx.scales) sc.cols.forEach((col, i) => put(col, `${sc.colours}c-${i === 0 ? 'L' : 'R'}`, sc.values[i], true))
+      put(fx.control.col, 'Single', fx.control.values, true)
+      for (const t of twins) put(t.col, `T${t.bounds.join('/')}`, t.values, false)
+      const cfvoXml = (v: { type: string; val?: string }): string => `<cfvo type="${v.type}"${v.val !== undefined ? ` val="${v.val}"` : ''}/>`
+      return {
+        dimension: `A1:${twins.at(-1)!.col}${fx.rows[fx.rows.length - 1] + fx.controlOffset}`,
+        cells,
+        legacyCfXml: s2ScopeDisjointMarkers()
+          .map(m => `<conditionalFormatting sqref="${m.sqref}"><cfRule type="colorScale" priority="${m.priority}"><colorScale>${m.scale!.cfvo.map(cfvoXml).join('')}${m.scale!.colors.map(c => `<color rgb="${c}"/>`).join('')}</colorScale></cfRule></conditionalFormatting>`)
+          .join(''),
+        dxfsXml: '<dxfs count="0"/>',
       }
     }
 

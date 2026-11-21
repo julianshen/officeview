@@ -8,7 +8,7 @@ import { resolve } from 'node:path'
 import { inflateRawSync, inflateSync } from 'node:zlib'
 import { parseXml } from '../../src/core/xml'
 import { columnWidthPx, maxDigitWidthPx } from '../../src/xlsx/columnWidth'
-import { CF_ICON_KEY_CASES, CF_STAGE3_NONDISCRIMINATING, CF_STAGE3_OWNERS, CF_STAGE3_UNSUPPORTED, CF_STAGE4_CAPABILITIES, CF_STAGE4_NONDISCRIMINATING, CF_STAGE4_UNSUPPORTED, CF_STAGE5_CAPABILITIES, CF_STAGE5_CASES, CF_STAGE5_NONDISCRIMINATING, CF_STAGE5_UNSUPPORTED, barCapabilityKind, iconCapabilityKind } from './cases'
+import { CF_ICON_KEY_CASES, CF_STAGE2_CASES, CF_STAGE2_NONDISCRIMINATING, CF_STAGE2_OWNERS, CF_STAGE3_NONDISCRIMINATING, CF_STAGE3_OWNERS, CF_STAGE3_UNSUPPORTED, CF_STAGE4_CAPABILITIES, CF_STAGE4_NONDISCRIMINATING, CF_STAGE4_UNSUPPORTED, CF_STAGE5_CAPABILITIES, CF_STAGE5_CASES, CF_STAGE5_NONDISCRIMINATING, CF_STAGE5_UNSUPPORTED, barCapabilityKind, iconCapabilityKind } from './cases'
 import type {
   CfDxfExpectation,
   CfManifest,
@@ -5892,6 +5892,25 @@ export function formulaObservationOf(
 }
 
 /**
+ * The observation source of a Stage 2 case's pre-registered readings (the scope-disjoint follow-up): the screen sidecar's
+ * `observedCells` DisplayFormat fills, `none` where the fill equals the cell's base fill (`baseFillRgb`, white when the
+ * capture recorded none). A cell without a DisplayFormat fill is unobserved (fail closed).
+ */
+export function stage2ReadingsObservationOf(sidecar: Record<string, unknown>): FormulaObservation {
+  const cells = new Map<string, { fillSource?: unknown; fillRgb?: unknown; baseFillRgb?: unknown }>()
+  for (const o of (Array.isArray(sidecar.observedCells) ? sidecar.observedCells : []) as Array<Record<string, unknown>>) cells.set(String(o.ref).toUpperCase(), o)
+  return {
+    fill(ref) {
+      const o = cells.get(ref.toUpperCase())
+      if (!o || o.fillSource !== 'excel-display-format' || typeof o.fillRgb !== 'string') return undefined
+      const fill = o.fillRgb.toUpperCase()
+      const base = typeof o.baseFillRgb === 'string' ? o.baseFillRgb.toUpperCase() : 'FFFFFFFF'
+      return { fill: fill === base ? 'none' : fill, strike: false }
+    },
+  }
+}
+
+/**
  * Fix round 2: what a bar or icon cell shows, measured by the Stage 3/4 machinery, never a raw pixel delta. A bar is the
  * Stage 3 column scan (`measureBarGeometry`: three scanlines that agree, the control's text masked) whose box is at least
  * half filled with ink; an icon is a Stage 4 glyph-key class (`classifyIconCrop` on the left `ICON_CROP_WIDTH_PX` px, twin
@@ -7326,6 +7345,49 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     }
   }
 
+  // Stage 2 pre-registered readings (the scope-disjoint follow-up): a capability they name verifies only when its
+  // configurations discriminate one reading on the screen capture's DisplayFormat fills; the audit then requires that
+  // reading to be production's (CF_STAGE2_PRODUCTION_READINGS). The registries' comparison ids never verify.
+  if (c.stage === 2 && c.scaleReadings !== undefined) {
+    const template = CF_STAGE2_CASES.find(t => t.id === c.id)
+    if (JSON.stringify(template?.scaleReadings ?? null) !== JSON.stringify(c.scaleReadings)) {
+      return { kind: 'refusal', id: c.id, status: c.status, code: 'unobserved-expectation', reason: `Case ${c.id}'s readings differ from the catalogue's: hypotheses are fixed before capture (Lesson 14)`, structuralValid: true }
+    }
+    const screen = c.captures.find(x => x.appearance === 'screen')
+    const sidecar = screen ? (JSON.parse(readFileSync(resolve(rootDir, screen.sidecarPath), 'utf8')) as Record<string, unknown>) : {}
+    const evaluation = evaluateFormulaCapabilities(c.scaleReadings, formulaControlsOf(c), stage2ReadingsObservationOf(sidecar))
+    const named = new Set(c.scaleReadings.map(x => x.capabilityId))
+    const nonDiscriminating: string[] = []
+    const refused: Array<{ capabilityId: string; code: CfRefusalCode; reason: string }> = []
+    const notes: Record<string, string> = {}
+    const matched: Record<string, string> = {}
+    for (const [cap, rec] of Object.entries(evaluation)) {
+      if (rec.status === 'discriminating' && rec.matched) matched[cap] = rec.matched
+      else if (rec.status === 'non-discriminating') nonDiscriminating.push(cap)
+      else if (rec.status === 'refused') refused.push({ capabilityId: cap, code: rec.code ?? 'formula-hypothesis-none', reason: rec.reason })
+      else notes[cap] = `${rec.status}: ${rec.reason}`
+    }
+    // The registry's comparison ids (twins, the control) never verify; a capability the readings name is decided by them
+    // here and by the audit's registry and production-reading gates.
+    const blocked = (id: string): boolean => CF_STAGE2_NONDISCRIMINATING[id] !== undefined && !named.has(id)
+    return {
+      kind: 'verified',
+      id: c.id,
+      status: 'measured',
+      savedSha256,
+      inputSha256,
+      captureHashes,
+      positiveContrastMaxDelta,
+      minPositiveContrastDelta,
+      matchedRules: c.markers.length,
+      verifiedCapabilities: [...new Set(verifiedCapabilities)].filter(id => !blocked(id) && (!named.has(id) || matched[id] !== undefined)),
+      nonDiscriminatingCapabilities: [...new Set([...nonDiscriminating, ...verifiedCapabilities.filter(blocked)])].sort(),
+      refusedCapabilities: refused,
+      capabilityNotes: notes,
+      matchedHypotheses: matched,
+    }
+  }
+
   return {
     kind: 'verified',
     id: c.id,
@@ -7351,13 +7413,13 @@ export function primeVerifiedCases(manifest: CfManifest, options: VerifyCfOption
 
 /**
  * The case whose capture decides a capability: the Stage 5 registry's case (a configuration capability may carry no
- * marker of its own), a later Stage 3 case version named by `CF_STAGE3_OWNERS`, else the first case carrying its marker,
+ * marker of its own), a later Stage 2 or 3 case version named by `CF_STAGE2_OWNERS` / `CF_STAGE3_OWNERS`, else the first case carrying its marker,
  * else the Stage 4 registry's case (icon:glyph-key carries no marker).
  */
 export function capabilityOwnerCase(capabilityId: string, manifest: CfManifest): CfOracleCase | undefined {
   const registryCase = CF_STAGE4_CAPABILITIES.find(e => e.capabilityId === capabilityId)?.caseId
   const stage5Registry = CF_STAGE5_CAPABILITIES.find(e => e.capabilityId === capabilityId)
-  const stage3Owner = CF_STAGE3_OWNERS[capabilityId]
+  const stage3Owner = CF_STAGE3_OWNERS[capabilityId] ?? CF_STAGE2_OWNERS[capabilityId]
   const named = stage5Registry?.caseId ?? stage3Owner
   return (named !== undefined ? manifest.cases.find(c => c.id === named) : undefined) ?? manifest.cases.find(c => c.markers.some(m => m.capabilityId === capabilityId)) ?? (registryCase ? manifest.cases.find(c => c.id === registryCase) : undefined)
 }
