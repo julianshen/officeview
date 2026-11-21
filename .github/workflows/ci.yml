@@ -48,7 +48,7 @@ jobs:
       - name: Set up bun (pinned, do not float)
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.10
+          bun-version: 1.4.5
 
       - name: Restore bun dependency cache
         uses: actions/cache@v4
@@ -117,7 +117,7 @@ jobs:
       - name: Set up bun (pinned, do not float)
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.10
+          bun-version: 1.4.5
 
       - name: Restore bun dependency cache
         uses: actions/cache@v4
