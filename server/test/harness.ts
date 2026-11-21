@@ -41,18 +41,31 @@ export async function start(o: { policy?: AuthDecision['policy']; viewerId?: str
     if (!o.pool) ownPool = new Pool({ workers: 1, ...(media.info ? { media: { info: media.info, dir: media.temp.dir } } : {}) })
     streamMedia = { enabled, ...(media.info ? { info: media.info } : {}), services: media }
   }
+  // The shared pool outlives this server, which (unlike production: one server per pool) is not the only one using
+  // it. After stop() the server's late teardowns (sockets it dropped detach, and are reaped after the grace) must
+  // not `forget` a document a later server registered under the same docRef: scoped, forget is a no-op once stopped.
+  let stopped = false
+  const base = ownPool ?? o.pool ?? pool()
+  const scoped = new Proxy(base, {
+    get(target, key) {
+      if (key === 'forget') return (docRef: string) => { if (!stopped) target.forget(docRef) }
+      const v = Reflect.get(target, key, target)
+      return typeof v === 'function' ? v.bind(target) : v
+    },
+  })
   const stream = createStreamServer({
-    keys, originAllowlist: [ORIGIN], pool: o.pool ?? ownPool ?? pool(),
+    keys, originAllowlist: [ORIGIN],
     authorize: o.authorize ?? (async () => ({ viewerId: o.viewerId ?? 'alice', policy: o.policy ?? {} })),
     resolveDocument: o.resolveDocument ?? (async () => (doc ? { bytes: doc, name: 'doc' } : null)),
     ...o,
-    ...(ownPool ? { pool: ownPool } : {}),
+    pool: scoped,
     media: streamMedia,
   })
   const srv = Bun.serve({ port: 0, fetch: stream.fetch as never, websocket: stream.websocket as never })
   return {
     url: `ws://localhost:${srv.port}/stream`, stream, ...(media ? { media } : {}),
     async stop() {
+      stopped = true
       srv.stop(true)
       ownPool?.dispose()
       await media?.close()

@@ -87,6 +87,13 @@ describe('show admission: request charge at request time, the grant at slot time
     try {
       await pool.open('a', await flyInDeck(), 'full')
       await pool.open('b', await flyInDeck(), 'full')
+      // Warm each worker's first plan (its cold cost: ~0.7–1.1 s measured locally; ~1.85 s implied by the 3351 ms of a
+      // failing ubuntu-latest run, with both jobs still in parallel) one at a time, outside
+      // the timed window, so the window holds the two 1500 ms holds alone: ~1.5 s in parallel, ≥ 3 s in series.
+      // One at a time, so the peak below is reached only by the timed pair.
+      await pool.showPlan('w1', { docRef: 'a', ...job }, grant)
+      await pool.showPlan('w2', { docRef: 'b', ...job }, grant)
+      expect(pool.stats().prep.peak).toBe(grant)
       const t0 = performance.now()
       await Promise.all([
         pool.showPlan('s1', { docRef: 'a', ...job, hangMs: 1500 }, grant),

@@ -12,6 +12,7 @@ import { createMediaTemp } from '../../src/media/temp'
 import { Pool } from '../../src/pool'
 import { SHOW_BUILD_BYTES } from '../../src/show/build'
 import { ffmpegForTests } from './ffmpeg-gate'
+import { rejectionMessage } from '../fixtures/rejection'
 
 const info = await ffmpegForTests()
 const root = mkdtempSync(join(tmpdir(), 'ov-deadline-'))
@@ -53,8 +54,8 @@ describe.skipIf(!info)('show jobs and the media probe deadline (Task 3 carry)', 
       expect('refused' in r2 && r2.refused).toBe('show-plan-timeout')
       expect(pool.stats().retired).toBe(retired + 1)
       // The track and morph jobs time out the same way, and are not remembered either.
-      await expect(pool.showTrack('s3', { ...job, step: 0 }, SHOW_BUILD_BYTES)).rejects.toThrow(/deadline/)
-      await expect(pool.showTrack('s3', { ...job, step: 0 }, SHOW_BUILD_BYTES)).rejects.toThrow(/deadline/)
+      expect(await rejectionMessage(pool.showTrack('s3', { ...job, step: 0 }, SHOW_BUILD_BYTES))).toMatch(/deadline/)
+      expect(await rejectionMessage(pool.showTrack('s3', { ...job, step: 0 }, SHOW_BUILD_BYTES))).toMatch(/deadline/)
       expect(pool.stats().retired).toBe(retired + 3)
     } finally { pool.dispose() }
   }, 30_000)
