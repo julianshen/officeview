@@ -30,12 +30,10 @@ concurrency:
 
 jobs:
   check:
-    name: typecheck, test, build, corpus
+    name: typecheck, media, build, corpus
     runs-on: ubuntu-latest
-    # The suite outgrew 30 min (PR #85: the test step alone ran 29 min); the CF oracle and Stage 5 audit
-    # suites verify full Excel captures, which takes minutes on this runner. Piece 5 adds the ffmpeg
-    # install and the sandboxed server media tests (~3 min) ahead of it (PR #83).
-    timeout-minutes: 45
+    # The vitest suite runs in the sharded `test` job below; this job keeps everything else (~8 min).
+    timeout-minutes: 25
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
@@ -87,14 +85,59 @@ jobs:
       - name: Stream server media tests (sandboxed ffmpeg, required)
         run: cd server && OV_MEDIA_REQUIRED=1 bun test test/media
 
-      - name: Run the test suite (pixel-golden suites excluded — see note above)
-        run: bunx vitest run --exclude 'tests/golden*.test.ts'
-
       - name: Build the library
         run: bun run build
 
       - name: Corpus report (fails on degraded or unexpected failures)
         run: bun scripts/corpus-report.ts
+
+  # The vitest suite, split across three runners (PR #89: one runner took 30 min of a 45-min job, about
+  # 2670 s of per-file time; the CF oracle file alone is ~330 s). `--shard` splits by file, so each
+  # shard runs roughly a third of the files. Pixel-golden suites stay excluded (see the note above).
+  test:
+    name: test (shard ${{ matrix.shard }}/3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install system libraries for node-canvas
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+
+      # tests/slideshow-capture-export.test.ts runs its ffmpeg integration test only when ffmpeg + libx264
+      # are present; the single-job suite ran after the ffmpeg install, so every shard keeps it.
+      - name: Install ffmpeg
+        run: sudo apt-get install -y ffmpeg
+
+      - name: Set up bun (pinned, do not float)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.5
+
+      - name: Restore bun dependency cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      # corpus-regressions.test.ts runs instead of skipping only when the corpus is present.
+      - name: Fetch the real-file corpus
+        run: bun scripts/fetch-corpus.ts
+
+      - name: Run the test suite shard (pixel-golden suites excluded — see note above)
+        run: bunx vitest run --exclude 'tests/golden*.test.ts' --shard=${{ matrix.shard }}/3
 
   # Slideshow plan S1-2 (blocking): the `slideshow` Playwright project only,
   # never the whole browser suite. It proves headless Chromium creates a
