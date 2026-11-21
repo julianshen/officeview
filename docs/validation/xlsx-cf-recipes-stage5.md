@@ -123,9 +123,9 @@ The case's rules, each bound written on its rule's top-left:
 The pre-registered readings:
 - **Multi-range:** `anchor-a1`, `rule-wide`, `per-range`, `anchor-cell`, `zero`, `ignored`.
 - **Single range:** `anchor-a1`, `anchor-top-left`, `anchor-cell`, `zero`, `ignored`.
-- **Bars** carry only the four window readings: zero or ignored would invert them.
+- **Bars** carry only the window readings (four multi-range, three single-range). Zero and ignored would invert a bar, and production refuses an inverted or beyond-bounds twin (Ruling S3-E), so the bar configurations omit them (`omitted`, with the reason) and the scale and icon set decide them.
 
-The windows are seeded: A1:A4 (max 15) is the A1 window, and the three rows below each range are the anchor-cell windows. 45 literal num/num twin blocks of four cells sit in columns L..S. The sheet is A1:AM30, 286 designated plus control cells, with 20 pt rows and the default (centred) style.
+The windows are seeded: A1:A4 (max 15) is the A1 window, and the three rows below each range are the anchor-cell windows. 42 literal num/num twin blocks of four cells sit in columns L..R, none beyond its own bounds. The sheet is A1:AK30, with 286 expected cells (143 designated, each with its same-content control), with 20 pt rows and the default (centred) style.
 
 ```
 bun scripts/cf-refs/build.ts   --stage 5 --case stage5-cfvo-relative-a1

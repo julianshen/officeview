@@ -5738,6 +5738,12 @@ export interface S5Configuration {
   hypotheses: Readonly<Record<string, Readonly<Record<string, string>>>>
   /** Recorded only (a refused shape): evaluated and kept in the sidecar, never evidence for or against a capability. */
   record?: string
+  /**
+   * Readings of the capability this configuration does not predict, each with why (the cfvo-relative follow-up: zero and
+   * ignored would invert a data bar, whose twins production refuses under Ruling S3-E). The evaluator treats an omitted
+   * reading as neither supported nor contradicted here; the capability's other configurations decide it.
+   */
+  omitted?: Readonly<Record<string, string>>
   /** A negative control: its hypotheses agree by design; Excel must match them, but it is never evidence (fix round 1 #3). */
   role?: 'negative-control'
   /** Replication is checked per column inside the configuration too (each range of a multi-range rule, fix round 1 #3). */
@@ -7208,38 +7214,35 @@ function cfvoRelativeA1Fixture(): S5Fixture {
     return at(block(`icon:${colOfRef(ref)}${r0}:${k}`, dataOf(ref, r0), 'icon', [{ type: 'percent', val: '0' }, num(t[0]!), num(t[1]!)]), ref, r0)
   }
   /**
-   * A bar twin. A bound below the minimum (zero, ignored) inverts the bar, which Excel draws with its bounds swapped
-   * (stage3-bar-degenerate D), so every value is at or beyond the upper one: a full bar. Canonical twins: no bar at the
-   * minimum; a full bar from the column-maximum twin at the maximum, else from a twin whose bounds lie below every value
-   * (clamped, stage3-bar-degenerate E); otherwise the literal num lo / num b bar on the same values. A window reading never
-   * puts a value beyond its bound (Ruling S3-E: production would refuse the rule).
+   * A bar twin: no bar at the minimum (the canonical column-maximum twin), otherwise the literal num lo / num b bar on the
+   * same values. Only the window readings are predicted on bars, and none puts a value beyond its bound (Ruling S3-E:
+   * production would refuse the rule, twins included).
    */
   const barTwin = (ref: string, r0: number, lo: number, b: number): string => {
     const values = dataOf(ref, r0), v = cells[ref] as number, id = `${colOfRef(ref)}${r0}`
-    const lowest = Math.min(...values), highest = Math.max(...values)
-    if (b > lo && v > b) throw new Error(`stage5-cfvo-relative-a1: ${ref} lies beyond a reading's bound ${b} (Ruling S3-E)`)
-    const full = b <= lo || v >= b
-    return at(full ? (v === highest ? block(`bar:${id}:${highest}`, values, 'bar', [num(lo), num(highest)]) : block(`bar:${id}:full`, values, 'bar', [num(lowest - 20), num(lowest - 10)]))
-      : v <= lo ? block(`bar:${id}:${highest}`, values, 'bar', [num(lo), num(highest)])
-        : block(`bar:${id}:${b}`, values, 'bar', [num(lo), num(b)]), ref, r0)
+    const highest = Math.max(...values)
+    if (!(b > lo) || v > b) throw new Error(`stage5-cfvo-relative-a1: ${ref} is not inside a reading's bounds ${lo}..${b} (Ruling S3-E)`)
+    return at(v <= lo ? block(`bar:${id}:${highest}`, values, 'bar', [num(lo), num(highest)]) : block(`bar:${id}:${b}`, values, 'bar', [num(lo), num(b)]), ref, r0)
   }
+  const BAR_OMITTED = { zero: 'a bound of 0 lies below every bar value (an inverted bar, whose literal twin production refuses under Ruling S3-E): decided by the scale and icon set', ignored: 'an ignored bound would invert the bar likewise: decided by the scale and icon set' }
+  const windowsOnly = (rs: readonly string[]): string[] => rs.filter(h => h !== 'zero' && h !== 'ignored')
   const multi = ['B', 'D'] as const
   const refsOf = (cols: readonly string[], r0: number): string[] => cols.flatMap(c => rowsOf(c, r0, r0 + N - 1))
   const per = (readings: readonly string[], fn: (h: string) => (ref: string) => string) => Object.fromEntries(readings.map(h => [h, fn(h)]))
-  const ms = relA1Bounds(cells, multi, 2, REL_A1_MULTI), mi = relA1Bounds(cells, multi, 11, REL_A1_MULTI), mb = relA1Bounds(cells, multi, 20, REL_A1_MULTI)
-  const ss = relA1Bounds(cells, ['F'], 2, REL_A1_SINGLE), si = relA1Bounds(cells, ['F'], 11, REL_A1_SINGLE), sb = relA1Bounds(cells, ['F'], 20, REL_A1_SINGLE)
+  const ms = relA1Bounds(cells, multi, 2, REL_A1_MULTI), mi = relA1Bounds(cells, multi, 11, REL_A1_MULTI), mb = relA1Bounds(cells, multi, 20, windowsOnly(REL_A1_MULTI))
+  const ss = relA1Bounds(cells, ['F'], 2, REL_A1_SINGLE), si = relA1Bounds(cells, ['F'], 11, REL_A1_SINGLE), sb = relA1Bounds(cells, ['F'], 20, windowsOnly(REL_A1_SINGLE))
   const lowS = lowOf(multi, 2), lowB = lowOf(multi, 20)
   const configurations: S5Configuration[] = [
     { ...s5Cfg('rel-a1-scale', MULTI, refsOf(multi, 2), per(REL_A1_MULTI, h => ref => scaleTwin(ref, 2, lowS, ms[h]![ref]!))), replicateBy: 'column' },
     { ...s5Cfg('rel-a1-icon', MULTI, refsOf(multi, 11), per(REL_A1_MULTI, h => ref => iconTwin(ref, 11, mi[h]![ref]!)), { observable: 'crop' }), replicateBy: 'column' },
-    { ...s5Cfg('rel-a1-bar', MULTI, refsOf(multi, 20), per(REL_A1_MULTI, h => ref => barTwin(ref, 20, lowB, mb[h]![ref]!)), { observable: 'crop' }), replicateBy: 'column' },
+    { ...s5Cfg('rel-a1-bar', MULTI, refsOf(multi, 20), per(windowsOnly(REL_A1_MULTI), h => ref => barTwin(ref, 20, lowB, mb[h]![ref]!)), { observable: 'crop' }), replicateBy: 'column', omitted: BAR_OMITTED },
     {
       ...s5Cfg('rel-a1-scale-absolute', MULTI, refsOf(['H', 'J'], 2), per(REL_A1_MULTI, () => ref => scaleTwin(ref, 2, lowOf(['H', 'J'], 2), cells.H1 as number)), { note: 'Negative control: an absolute bound ($H$1) reads the same value under every reading' }),
       role: 'negative-control',
     },
     s5Cfg('rel-a1-single-scale', SINGLE, refsOf(['F'], 2), per(REL_A1_SINGLE, h => ref => scaleTwin(ref, 2, lowOf(['F'], 2), ss[h]![ref]!))),
     s5Cfg('rel-a1-single-icon', SINGLE, refsOf(['F'], 11), per(REL_A1_SINGLE, h => ref => iconTwin(ref, 11, si[h]![ref]!)), { observable: 'crop' }),
-    s5Cfg('rel-a1-single-bar', SINGLE, refsOf(['F'], 20), per(REL_A1_SINGLE, h => ref => barTwin(ref, 20, lowOf(['F'], 20), sb[h]![ref]!)), { observable: 'crop' }),
+    { ...s5Cfg('rel-a1-single-bar', SINGLE, refsOf(['F'], 20), per(windowsOnly(REL_A1_SINGLE), h => ref => barTwin(ref, 20, lowOf(['F'], 20), sb[h]![ref]!)), { observable: 'crop' }), omitted: BAR_OMITTED },
   ]
   for (const b of blocks) Object.assign(cells, colValues(b.col, b.values, b.r0))
   let p = 1
@@ -7258,7 +7261,7 @@ function cfvoRelativeA1Fixture(): S5Fixture {
   return s5rect({
     id: 'stage5-cfvo-relative-a1',
     question:
-      'S5-H (the cfvo-relative confirmation case): is a relative cfvo bound read from A1, on several ranges and on one? A scale [min, =MAX(B2:B5)], an icon set [percent 0, num -20, =MAX(B11:B14)] and a data bar [min, =MAX(B20:B23)] on "B..:B.. D..:D..", the same three on F alone (=MAX(F2:F5), =MAX(F11:F14), =MAX(F20:F23)), and an absolute negative control ($H$1). Readings: anchor-a1 (A1:A4, max 15), rule-wide / anchor-top-left, per-range, anchor-cell, zero and ignored (a bound below the minimum inverts a bar: a full bar). Literal num/num twins on the same values, one per predicted rendering.',
+      'S5-H (the cfvo-relative confirmation case): is a relative cfvo bound read from A1, on several ranges and on one? A scale [min, =MAX(B2:B5)], an icon set [percent 0, num -20, =MAX(B11:B14)] and a data bar [min, =MAX(B20:B23)] on "B..:B.. D..:D..", the same three on F alone (=MAX(F2:F5), =MAX(F11:F14), =MAX(F20:F23)), and an absolute negative control ($H$1). Readings: anchor-a1 (A1:A4, max 15), rule-wide / anchor-top-left, per-range, anchor-cell, zero and ignored (bars: the window readings only; zero and ignored would invert them). Literal num/num twins on the same values, one per predicted rendering.',
     cells,
     rules,
     configurations,
