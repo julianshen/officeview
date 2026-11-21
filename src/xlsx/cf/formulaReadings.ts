@@ -146,6 +146,35 @@ export function cfvoNonNumericTreatment(reading: string | undefined, kind: CfNon
   return m[kind === 'blank' ? 1 : kind === 'text' ? 2 : 3] as CfNonNumericTreatment
 }
 
+/** A non-numeric bound's kind as the per-kind ids measure it: an empty text (`=""`) is its own kind, apart from text. */
+export type CfNonNumericBoundKind = CfNonNumericKind | 'empty-string'
+/**
+ * The per-kind evidence ids (pre-capture ruling on the cfvo-nonnumeric case): each kind is evaluated, registered and
+ * published on its own, so a surprise in one kind refuses only that kind. Their composition is the umbrella reading
+ * `blank-<t>+text-<t>+error-<t>` of formula:cfvo-nonnumeric, held kind by kind.
+ */
+export const CF_CFVO_NONNUMERIC_KIND_IDS: Readonly<Record<CfNonNumericBoundKind, string>> = Object.freeze({
+  blank: 'formula:cfvo-nonnumeric-blank',
+  text: 'formula:cfvo-nonnumeric-text',
+  'empty-string': 'formula:cfvo-nonnumeric-empty-string',
+  error: 'formula:cfvo-nonnumeric-error',
+})
+/**
+ * The treatment production gives one non-numeric bound kind, or undefined (unresolved). A registered per-kind id decides
+ * its kind alone: its held reading, or nothing when it is not held (a kind whose evidence failed stays withheld). Until a
+ * kind's id is registered, the umbrella formula:cfvo-nonnumeric reading decides blank, text and error as before
+ * (`cfvoNonNumericTreatment`); an empty string is never decided by the umbrella.
+ */
+export function cfvoNonNumericTreatmentOf(kind: CfNonNumericBoundKind, check: (capability: string) => boolean): CfNonNumericTreatment | undefined {
+  const id = CF_CFVO_NONNUMERIC_KIND_IDS[kind]
+  if (cfFormulaReadingEntry(id) !== undefined) {
+    const reading = cfFormulaReading(id, check)
+    return reading !== undefined && NONNUMERIC_TREATMENTS.includes(reading) ? (reading as CfNonNumericTreatment) : undefined
+  }
+  if (kind === 'empty-string') return undefined
+  return cfvoNonNumericTreatment(cfFormulaReading('formula:cfvo-nonnumeric', check), kind)
+}
+
 /** The reading production honours for one capability, or undefined (unregistered, unevidenced, or an unlisted selection). */
 export function cfFormulaReading(capability: string, check: (capability: string) => boolean): string | undefined {
   const entry = cfFormulaReadingEntry(capability)
