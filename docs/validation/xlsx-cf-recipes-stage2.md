@@ -200,7 +200,7 @@ For `stage2-scale-thresholds`, dynamic refresh behaviour (re-evaluating scale th
 | `stage2-scale-composition` | `Sheet1!A1:L10` | `screen` | Rows `2..5` (CF) vs. Rows `7..10` (Controls) | DXF fill p1 + scale p2 (`B2:B5`, S2-I); scale p1 + DXF fill p2 (`C2:C5`, S2-I); equal-priority tie-break (`D2:D5`, S2-I); scale with font-only DXF merge (`E2:E5`, S2-I); matching DXF `stopIfTrue` ahead (`F2:F5`, S2-I); non-matching DXF `stopIfTrue` ahead (`G2:G5`, S2-I); scale `stopIfTrue="1"` ahead of DXF fill (`H2:H5`, S2-J, OD-1); two overlapping scales (`I2:I5`, S2-I); text cell in scale range with lower DXF (`J2:J5`, S2-I); own fill + table base under scale (`K2:K5`, S2-I); unresolved expression stub at p1 (`L2:L5`, S2-I). |
 | `stage2-scale-unresolved-shapes` | `Sheet1!A1:F12` | None (`status: unsupported`) | Rows `2..6` vs. Rows `8..12` | Malformed/unsupported scale shapes (S2-C, S2-K, OD-3): 2 cfvo with 3 colors (`B2:B6`); cfvo without `type` (`C2:C6`); formula cfvo (`D2:D6`); `activePresent="1"` (`E2:E6`); standalone `x14:colorScale` with literal/reference `xm:f` (`F2:F6`). Status is `unsupported`; viewer fails closed. |
 | `stage2-scale-scope-disjoint` | `Sheet1!A1:W10` | `screen` | Rows `2..5` (CF and twins) vs. Rows `7..10` (Controls of the data columns B, D, F, H, J; twins share the control of the column they copy) | The scope-disjoint follow-up (Ruling F-2, S2-H; §7): 2-colour min/max on `B2:B5 D2:D5`, 3-colour min / percentile 50 / max on `F2:F5 H2:H5`, single-range negative control on `J2:J5`, twelve literal num twins on `L2:W5`. Owns `scale:scope-disjoint` (`CF_STAGE2_OWNERS`); readings pre-registered in `scaleReadings`. |
-| `stage2-scale-num-segment` | `Sheet1!A1:I28` | `screen` | Rows `5..28`; controls `G5:G28` (data rows), `I22:I25` (replica), `I20` (positive controls) | The num-segment follow-up (§8): 3-colour literal num 7/217/637 in both colour orders (`B5:B28`, `C5:C28`), a midpoint-above-max copy (`D5:D8`), the T4/V3 replica (`D10:D13`), min / percentile 50 / max twin (`E2:E28`), 2-colour negative control (`F5:F28`), 43 cellIs positive controls (`H2:H28`, `I2:I17`). Owns `scale:num-segment-fraction` and `scale:num-segment-fraction-statistical`; readings pre-registered in `scaleReadings`. |
+| `stage2-scale-num-segment` | `Sheet1!A1:N30` | `screen` | Rows `5..30`; controls `G5:G28` (data rows), `J5:J30` (separators), `N14:N17` (replica), `N12` (positive controls), `N19` (twins) | The num-segment follow-up (§8): 3-colour literal num 7/217/637 in both colour orders (`B5:B28`, `C5:C28`), 13 separators (`H5:I30`), a midpoint-above-max copy (`D5:D8`), the T4/V3 replica (`D10:D13`), min / percentile 50 / max twin (`E2:E28`), 2-colour negative control (`F5:F28`), the twin line (`K2:M4`), 8 cellIs positive controls (`N2:N9`). Owns `scale:num-segment-fraction` (126 class readings, consensus) and `scale:num-segment-fraction-statistical`; readings pre-registered in `scaleReadings`. |
 
 ---
 
@@ -287,8 +287,12 @@ The capture cannot be retried and no tolerance is edited after it. A capture no 
 
 **Cells.** Production's own paint runs on every measured case twice. The second run uses the test seam `injectCfScaleSegmentProbe`, which returns a unique sentinel colour per segment evaluation, so each captured cell maps to the exact segment production evaluated: value, thresholds, colours and cfvo kinds, after the 2-colour inversion and the midpoint-above-max re-sort. No statistics are re-derived.
 - 725 captured colour-scale cells: 714 that production paints at Excel's fill, and the 11 it withholds as the num-segment shape (all twins of `stage2-scale-scope-disjoint`).
-- 144 captured cells under a scale are excluded: withheld before interpolation by another gate (overlap, hidden row, stub, non-numeric bound), painted without a segment evaluation (an equal-threshold endpoint), or in a bar/icon sidecar with no DisplayFormat fill.
+- 144 captured cells under a scale are excluded, in two groups (fix round 1, R3):
+  - **(a) 112 inapplicable:** no DisplayFormat fill observation (3 bar/icon sidecars), Excel shows no fill (91, including the 45 `stage5-cfvo-nonnumeric-v2` text/error-bound cells), a non-numeric value (1), or a fill painted without a segment evaluation (17: equal-threshold endpoints or another rule's fill);
+  - **(b) 32 numeric cells Excel fills, dropped only because a production gate blocks them:** 25 in `stage2-scale-scope` (overlap and hidden-row scopes), 4 in `stage2-scale-composition` and 3 in `stage5-composition`. Every one sits under 2-colour scales only. Their rules' scope and statistics semantics are exactly what those gates leave unmeasured (S2-I overlaps, hidden-row participation), so they are not evaluated. They lie outside every proposed changed scope: both questions here, and both withholds below, are 3-colour only.
 - 0 harness faults. The baseline (production's truncation) misses exactly T4 and V3, at every scope.
+
+**The survivor claim, precisely:** a survivor reproduces Excel's DisplayFormat fill at every one of the 725 captured colour-scale cells production evaluates today, whether it paints them or withholds them as the num-segment shape, within the survivor's scope. The 32 group-(b) cells constrain nothing, and no proposed change reaches them.
 
 **What the captures constrain.** Only a whole product can show a lowered fraction: a step of f·|d| with f·|d| a whole number. In the 3-colour literal-num class, three cells inform: T4 and V3 (lowered) and U4 (f = 1/4, a whole product drawn at truncation). E4 and E5 of `stage2-scale-thresholds` (3-colour percentile / max, f = 0.8/7.8 and 1.8/7.8) are the only cells that keep the quantisation family out of the wider 3-colour scope. E4's raw product is 15.999999999999996 and Excel drew 16: production gets it through the 1e-11 guard, the percent round trip by moving f up one ulp. The table counts, per segment class, the strictly-inside cells, the whole products drawn at truncation (each rejects any lowered fraction there), and the cells drawn below truncation.
 
@@ -335,46 +339,110 @@ The 11 withheld cells, with the window of effective fraction Excel's fill allows
 
 The 2-colour cells (294 num/num, 136 min/max, …) contradict every survivor outside the 3-colour scopes. Truncation is never a survivor, since T4 and V3 contradict it. No candidate was dropped for plausibility; the full ranked list is the script's output.
 
-### 8.2 Readings (Phase 1 task 2)
+### 8.2 Readings and the registration rule (Phase 1 task 2, fix round 1)
 
-On this case's literal-num cells the 857 survivors fall into exactly five classes, each pre-registered as one reading, plus `truncate`. A class is a set of candidates that predict the same fill at every one of the case's cells. Every survivor is in one class (`survivorClassesOnCase`, 0 unmatched).
+**R1: consensus.** A reading wins as its whole class, a finite, enumerated list of candidates.
+- **The class:** the candidates that survive every earlier capture (the 857 of §8.1) and predict the same fills on every literal-num cell of this case (the B, C, D and separator columns, 108 cells).
+- **The data:** the membership is committed in `src/xlsx/cf/numSegmentClasses.ts`, generated by `npx tsx scripts/cf-refs/num-segment-candidates.ts --write-classes`. The reading names are committed in `scripts/cf-refs/num-segment-readings.ts`. A test pins both to the search.
+- **The rule:** once a reading is registered (with its evidence), production paints a cell of a 3-colour segment bounded by two literal num cfvo only where every member of the class gives the same ARGB (`numSegmentConsensusColor`). Anywhere else it withholds (`cf-num-segment-class-disagreement`). The members' formulas are the search's own (`src/xlsx/cf/numSegmentCandidates.ts`).
+- **The bounds of the open family:** the fixed-point grid is open-ended in N. Its committed members are the swept N, every value from 2 to 5000 plus 2^13 … 2^40, that survive. The search sweeps no N between 5000 and 8192, and none above 2^40. A grid of such an N would not be a class member, so registration never paints from it.
+- **Justification:** N ≤ 5000 covers every N whose grid step (1/N) is coarser than about 2.4 × 10⁻⁴ of a segment. That is the regime that can lower a whole product of a ≤ 255 span visibly. Above 2^13 only powers of two are swept, the binary resolutions a double-based implementation would plausibly use. A grid finer than 2^40 coincides with exact arithmetic at every case and captured cell.
+- **Selection:** selectable and unregistered (`injectCfNumSegmentReadings` with the id's evidence).
 
-scale:num-segment-fraction (survivors at scope 3-colour-literal-num, on 56 cells): 0 survivors match no reading
+**Classes.** 126 readings: `truncate`, plus 125 classes of the 857 survivors. Class sizes run from 408 down to 1 (78 singletons). On a test domain of 2832 literal-num cells (`consensusDomain`: eight bound sets including 0/1000/2000 and 0/8/16, P/Q in both orders and the stock palette, 59 values per segment), consensus withholds:
+- 0.22% of the domain, weighted by class size;
+- 0% for 113 classes;
+- at most 4.94% (`fixed-262144`, the powers of two from 2^18).
 
-| Reading | Representative | Survivors in its class |
-|---|---|---|
-| `truncate` | exact/step-truncate | 0 |
-| `percent-roundtrip` | percent-roundtrip/step-truncate-unguarded | 5; percent-roundtrip/step-truncate-unguarded, sweep-roundtrip-reciprocal-7, sweep-roundtrip-after-7, sweep-roundtrip-100, sweep-roundtrip-after-100 |
-| `fixed-256` | sweep-fixed-256 | 596 (fixed-point N: 551, smallest 232, 244, 256, 332, 344, …); fixed-floor-256/step-truncate, fixed-floor-256/step-truncate-unguarded, fixed-floor-256/value-toward-start, fixed-floor-256/convex-toward-start, fixed-floor-256/other-end-toward-start, fixed-floor-256/other-end-step-truncate, … (45) |
-| `fixed-1000` | sweep-fixed-1000 | 147 (fixed-point N: 130, smallest 320, 400, 440, 500, 520, …); fixed-floor-1000/step-truncate, fixed-floor-1000/step-truncate-unguarded, fixed-floor-1000/value-toward-start, fixed-floor-1000/convex-toward-start, fixed-floor-1000/other-end-toward-start, fixed-floor-1000/other-end-step-truncate, … (17) |
-| `fixed-308` | sweep-fixed-308 | 88 (fixed-point N: 88, smallest 308, 364, 476, 532, 616, …) |
-| `fixed-700` | sweep-fixed-700 | 21 (fixed-point N: 21, smallest 700, 980, 1120, 1400, 1540, …) |
+The largest classes:
 
-scale:num-segment-fraction-statistical (survivors at scope 3-colour, on 24 cells): 0 survivors match no reading
+| Reading | Members | Domain withheld | Members (first six) |
+|---|---|---|---|
+| `fixed-1276` | 408 | 0.00% | fixed-floor-4096/step-truncate, fixed-floor-4096/step-truncate-unguarded, fixed-floor-4096/value-toward-start, fixed-floor-4096/convex-toward-start, fixed-floor-4096/other-end-toward-start, fixed-floor-4096/other-end-step-truncate, … |
+| `stage5-cfvo-scope-v2` | 210 | 0 |
+| `stage5-cfvo-formulas` | 112 | 0 |
+| `fixed-1480` | 87 | 0.18% | sweep-fixed-1480, sweep-fixed-1580, sweep-fixed-1700, sweep-fixed-1720, sweep-fixed-1760, sweep-fixed-1780, … |
+| `stage5-cfvo-relative-a1` | 68 | 0 |
+| `fixed-1288` | 68 | 0.00% | sweep-fixed-1288, sweep-fixed-1456, sweep-fixed-1484, sweep-fixed-1568, sweep-fixed-1652, sweep-fixed-1708, … |
+| `stage2-scale-scope-disjoint` | 57 | 11 |
+| `stage5-cfvo-scope` | 56 | 0 |
 
-| Reading | Representative | Survivors in its class |
-|---|---|---|
-| `truncate` | exact/step-truncate | 0 |
-| `percent-roundtrip` | percent-roundtrip/step-truncate-unguarded | 2; percent-roundtrip/step-truncate-unguarded, sweep-roundtrip-100 |
+Every class that withholds anything on the domain:
 
-Each reading is implemented in `colorScale.ts` (`numSegmentReadingColor`, equal to its representative at every grid cell; a test). The step taken from the segment's start colour, per channel of span |d|:
-- `truncate`: floor(f·|d| + 1e-11);
-- `percent-roundtrip`: floor(((f·100)/100)·|d|);
-- `fixed-N`: floor((floor(f·N)/N)·|d|).
+| Reading | Members | Domain withheld | Members (first six) |
+|---|---|---|---|
+| `stage2-scale-interpolation` | 27 | 0 |
+| `stage2-scale-thresholds` | 30 | 0 |
+| `stage2-scale-degenerate` | 15 | 0 |
+| `stage2-scale-participation` | 13 | 0 |
+| `stage2-scale-colors` | 20 | 0 |
+| `stage2-scale-composition` | 32 | 0 |
+| `stage2-scale-scope-disjoint` | 57 | 11 |
+| `stage5-formula-authored` | 2 | 0 |
+| `stage5-composition` | 21 | 0 |
+| `stage5-cfvo-formulas` | 112 | 0 |
+| `stage5-cfvo-scope` | 56 | 0 |
+| `stage5-x14-scale` | 16 | 0 |
+| `stage5-cfvo-scope-v2` | 210 | 0 |
+| `stage5-cfvo-relative-a1` | 68 | 0 |
+| `stage5-cfvo-nonnumeric-v2` | 35 | 0 |
+| `percent-roundtrip` | 4 | 2.15% | percent-roundtrip/step-truncate-unguarded, sweep-roundtrip-after-7, sweep-roundtrip-100, sweep-roundtrip-after-100 |
+| `fixed-16384` | 13 | 2.90% | fixed-floor-65536/step-truncate, fixed-floor-65536/step-truncate-unguarded, fixed-floor-65536/value-toward-start, fixed-floor-65536/convex-toward-start, fixed-floor-65536/other-end-toward-start, fixed-floor-65536/other-end-step-truncate, … |
+| `fixed-616` | 2 | 1.69% | sweep-fixed-616, sweep-fixed-784 |
+| `fixed-628` | 2 | 1.69% | sweep-fixed-628, sweep-fixed-796 |
+| `fixed-704` | 3 | 0.56% | sweep-fixed-704, sweep-fixed-752, sweep-fixed-1124 |
+| `fixed-716` | 3 | 0.56% | sweep-fixed-716, sweep-fixed-764, sweep-fixed-1136 |
+| `fixed-740` | 2 | 0.39% | sweep-fixed-740, sweep-fixed-1160 |
+| `fixed-1240` | 2 | 0.18% | sweep-fixed-1240, sweep-fixed-1660 |
+| `fixed-1280` | 3 | 0.18% | sweep-fixed-1280, sweep-fixed-1520, sweep-fixed-1600 |
+| `fixed-1480` | 87 | 0.18% | sweep-fixed-1480, sweep-fixed-1580, sweep-fixed-1700, sweep-fixed-1720, sweep-fixed-1760, sweep-fixed-1780, … |
+| `fixed-1540` | 15 | 0.18% | sweep-fixed-1540, sweep-fixed-1820, sweep-fixed-1960, sweep-fixed-2240, sweep-fixed-2380, sweep-fixed-3080, … |
+| `fixed-262144` | 23 | 4.94% | sweep-fixed-262144, sweep-fixed-524288, sweep-fixed-1048576, sweep-fixed-2097152, sweep-fixed-4194304, sweep-fixed-8388608, … |
 
-Selection is keyed by id:
-- `scale:num-segment-fraction`: the 3-colour literal-num shape. It has no production reading, so the shape stays withheld.
-- `scale:num-segment-fraction-statistical`: every other 3-colour segment. It reads `truncate`, the published behaviour, which is also what `CF_STAGE2_PRODUCTION_READINGS` names.
+**Representatives.** A reading is named by one member, its representative:
+- the percent round trip, if the class holds it;
+- else the fixed-point grid at its smallest N (`fixed-N`);
+- else a round trip (`roundtrip-reciprocal-7`);
+- else its first grid formulation (`fixed-floor-1000/convex-toward-start`, `fixed-floor-10000/step-truncate`, `fixed-floor-10000/convex-toward-start`).
 
-A reading applies only through `injectCfNumSegmentReadings` and with its id's evidence: the rehearsal of a registration. The default is unchanged.
+The representative only names the class and gives the case's independent model its formula. Production never paints from it alone.
+
+**R2: the statistical outcome.** `scale:num-segment-fraction-statistical` covers every 3-colour segment not bounded by two literal num cfvo: min, max, percent, percentile, mixed or formula-resolved bounds. Its readings are `truncate` (production today, published) and `percent-roundtrip`, the survivor over every 3-colour segment.
+- If the capture selects `truncate`, production is unchanged.
+- If it selects `percent-roundtrip`, production does **not** switch arithmetic. Registering that reading (with its evidence) **withholds** every such cell strictly inside its segment where f·2^20 is not an integer (`cf-num-segment-statistical-withheld`). Dyadic fractions, endpoints and beyond-bound cells paint as today.
+- The justification `stage2StatisticalSegmentShape` recomputes this from the marker and the saved numbers, for the conformance pass and `cf-compare`.
+- **Cost on already-published cells:** 15 confirmed-exact cells of the committed Stage 2 captures would no longer paint. No Stage 5 cell changes: the 3-colour Stage 5 cells are dyadic.
 
 ### 8.3 The case
 
-Appended last in `CF_STAGE2_CASES`, so every earlier input stays byte-identical. It owns the two questions and the 2-colour comparison id. All three are registered in `CF_STAGE2_NONDISCRIMINATING` until the capture.
+Appended last in `CF_STAGE2_CASES`, so every earlier input stays byte-identical. It owns the two questions, the 2-colour comparison id and the twin-line id. All four are registered in `CF_STAGE2_NONDISCRIMINATING` until the capture.
 
-**Colours.** P `FF14F028` (20, 240, 40) and Q `FFE61EFA` (230, 30, 250) differ by 210 on every channel: R and B ascend from P to Q, and G descends. A third, fifth, sixth, seventh, tenth, fifteenth or twenty-first of a segment is therefore a whole product on all three channels, and a reading either lowers such a cell by exactly one unit per channel or leaves it. Each segment thus has an ascending and a descending channel. The two colour orders put each direction in both segment positions.
+**Colours.** P `FF14F028` (20, 240, 40) and Q `FFE61EFA` (230, 30, 250) differ by 210 on every channel: R and B ascend from P to Q, and G descends.
+- Every interior colour of a P/Q segment is P + k·(1, −1, 1) for a whole k.
+- One 2-colour twin line (num 0 / 210, P → Q, a cell of value k per predicted step) therefore shows each predicted P/Q fill as a `twin:` token.
+- The 8 fills off the line (the replica's palette) are literal tokens, each vouched by a literal cellIs positive control.
 
-**Values.** Bounds 7 / 217 / 637: a non-zero lower bound, spans 210 and 420. Each segment holds the same 12 fractions in rows 5..16 (lower) and 17..28 (upper): 1/3, 2/3, 1/6, 5/6, 1/5, 1/10, 3/10, 1/7, 6/7, the dyadic controls 1/2 and 1/4 (the quarter is the decimal value 59.5, a half product), and 1/15. The set is the smallest one found that separates every pair of readings by at least 4 cells per configuration. Operation-order candidates (split, reciprocal, complement, full-span, float32) are already contradicted by the captures (§8.1), so no cells are spent separating them.
+**Values.** Bounds 7 / 217 / 637. B and C hold 12 fractions per segment, in rows 5..16 (lower) and 17..28 (upper): 1/3, 2/3, 1/6, 5/6, 1/5, 1/10, 3/10, 1/7, 6/7, the dyadic 1/2 and 1/4 (59.5, a half product), and 1/15.
+
+**Separators (fix round 1, R1).** H and I hold 13 lower values v in rows 5..17, with their upper twins 217 + 2·(v − 7) in rows 18..30, in both colour orders:
+- 33.25 (f = 1/8, forced first: the dyadic eighth where `fixed-308` departs from today's production);
+- then 147.12, 147.008, 77.12, 59.12, 32.375, 8.25, 154, 8.001, 41.12, 33.12, 12.12, 15.25.
+
+They were chosen by `chooseSeparators` (`--choose-separators`), a greedy search:
+- **Objective:** the class-size-weighted share of the test domain that consensus would withhold.
+- **Constraint:** every pair of classes differs at 0 or at least 3 cells of each configuration.
+
+Growth by round:
+
+| After | Classes | Weighted withheld | Worst class |
+|---|---|---|---|
+| no separator | 5 | 37.4% | — |
+| 1/8 alone | 7 | 32.9% | — |
+| + 4 rounds | 31 | 1.85% | 35.0% |
+| + 8 rounds | 54 | 0.57% | 16.9% |
+| all 13 | 125 | 0.22% | 4.9% |
+
+The review's inputs (0/1000/2000 at values 6, 10 and 700; 0/8/16 at value 1) split the classes it named: each pair now falls in separate classes, or its shared class withholds there (a test).
 
 | Priority | sqref | Rule | Id | Role |
 |---|---|---|---|---|
@@ -382,121 +450,71 @@ Appended last in `CF_STAGE2_CASES`, so every earlier input stays byte-identical.
 | 2 | `C5:C28` | 3-colour num 7 / 217 / 637, Q / P / Q | `scale:num-segment-fraction` | configuration `num-qpq` |
 | 3 | `D5:D8` | 3-colour num 7 / 637 / 217 (midpoint above the maximum, re-sorted), P / Q / P; values 77, 147, 357, 497 | `scale:num-segment-fraction` | in `num-pqp` |
 | 4 | `D10:D13` | the replica of e448d831's twin T: 3-colour num 0 / 30 / 60, `FFF8696B` / `FFFFEB84` / `FF63BE7B`; values 10, 20, 40, 50 | `scale:num-segment-fraction` | in `num-pqp` |
-| 5 | `E2:E28` | 3-colour min / percentile 50 / max, P / Q / P, on rows 2..4 (7, 217, 637, scope only, not designated) and the B values: resolves to 7 / 217 / 637 bit for bit | `scale:num-segment-fraction-statistical` | configuration `statistical` (`truncate`, `percent-roundtrip`) |
-| 6, 7 | `F5:F16`, `F17:F28` | 2-colour num 7 / 217 (P → Q) and 217 / 637 (Q → P), the B values | `scale:num-segment-fraction-2colour` | negative control in `scale:num-segment-fraction`: every reading is 3-colour only, so all predict truncation |
-| 8..50 | one cell each in `H2:H28`, `I2:I17` | cellIs `= 1`, one dxf fill per distinct predicted fill (43) | (unmarked, as `stage2-scale-composition`'s dxf rules) | literal positive controls |
+| 5 | `E2:E28` | 3-colour min / percentile 50 / max, P / Q / P, on rows 2..4 (7, 217, 637, scope only) and the B values: resolves to 7 / 217 / 637 bit for bit | `scale:num-segment-fraction-statistical` | configuration `statistical` |
+| 6, 7 | `F5:F16`, `F17:F28` | 2-colour num 7 / 217 (P → Q) and 217 / 637 (Q → P), the B values | `scale:num-segment-fraction-2colour` | negative control in `num-…`: every reading is 3-colour only, so all predict truncation |
+| 8, 9 | `H5:H30`, `I5:I30` | 3-colour num 7 / 217 / 637, P / Q / P and Q / P / Q, the separators | `scale:num-segment-fraction` | configuration `num-separators` |
+| 10..12 | `K2:K30`, `L2:L30`, `M2:M4` | 2-colour num 0 / 210, P → Q, value k: the twin line (61 steps) | `scale:num-segment-fraction-twin` | comparison references |
+| 13..20 | `N2:N9` | cellIs `= 1`, one dxf fill per off-line predicted fill (8) | (unmarked) | literal positive controls |
 
-Controls: `G5:G28` hold the data rows' values (the control of every B, C, D5:D8, E and F cell holding the same value), `I22:I25` the replica's, and `I20` (value 1) is shared by the positive controls. In all, 176 cells: 104 designated, 43 positive controls and 29 controls. The capture range is `A1:I28`.
+**Controls.**
+- `G5:G28` hold the data rows' values (for B, C, D5:D8, E and F) and `J5:J30` the separators'.
+- `N14:N17` hold the replica's values.
+- `N12` (value 1) is shared by the positive controls.
+- `N19` (value 0) is shared by the twins. The evaluator reads a twin's own fill, never its control.
 
-**Packing.** The text scope prices every rule at every cell of a request (`estimateCfPrepareBytes`), so the whole range must fit one admitted batch. An earlier layout (62 rules over `A1:O32`, 14 fractions) refused there in the interactive comparison. This layout (50 rules over 252 cells) fits, and the interactive and paged comparisons pass on a synthetic measured capture.
+In all, 281 cells: 156 designated, 61 twins, 8 positive controls and 56 controls. The capture range is `A1:N30`, which fits the text scope's admitted batch, and the interactive and paged comparisons verify every one of the 281 cells.
 
-**Decisive cells.** The readings classifier compares exact DisplayFormat fills with the literal predictions (`stage2ReadingsObservationOf`). Each configuration is one replication group. Every pair of readings that differs in a configuration differs there at 4 cells or more; the smallest separations are `percent-roundtrip`/`fixed-700`, `fixed-256`/`fixed-308` and `fixed-1000`/`fixed-700`, at 4 cells in both literal-num configurations. Every predicted fill has a literal positive control. The D12 and D13 replica cells re-observe the finding: `truncate` predicts production's colours and every other reading predicts e448d831's. The predicted fill of every decisive cell under every reading (`tests/xlsx-cf-scale-num-segment-case.test.ts` checks these equal production's implementation through the whole paint pipeline):
+**Decisive cells.**
+- Every pair of readings that differs in a configuration differs there at 4 cells or more, in `num-pqp`, `num-qpq` and `num-separators` alike. Every pair differs somewhere.
+- `statistical` separates truncate / percent-roundtrip at 6 cells.
+- Every member of every class predicts its reading's fill at every literal-num cell (a test).
+- The D12 and D13 replica cells re-observe the finding: `truncate` predicts production's colours and every other reading predicts e448d831's.
+- The prediction of every reading at every designated cell is in [xlsx-cf-num-segment-predictions.md](xlsx-cf-num-segment-predictions.md), generated by `--write-predictions` from the catalogue. `tests/xlsx-cf-scale-num-segment-case.test.ts` checks that production, with each reading registered, paints exactly those fills through the whole pipeline.
 
-`num-pqp` (scale:num-segment-fraction): 32 cells, 26 decisive
+### 8.4 Rehearsal (Phase 1 task 4, fix round 1)
 
-| Cell | `truncate` | `percent-roundtrip` | `fixed-256` | `fixed-1000` | `fixed-308` | `fixed-700` |
-|---|---|---|---|---|---|---|
-| B5 | FF5AAA6E | FF59AB6D | FF59AB6D | FF59AB6D | FF59AB6D | FF59AB6D |
-| B6 | FFA064B4 | FF9F65B3 | FF9F65B3 | FF9F65B3 | FF9F65B3 | FF9F65B3 |
-| B7 | FF37CD4B | FF36CE4A | FF36CE4A | FF36CE4A | FF36CE4A | FF36CE4A |
-| B8 | FFC341D7 | FFC341D7 | FFC242D6 | FFC242D6 | FFC242D6 | FFC242D6 |
-| B9 | FF3EC652 | FF3EC652 | FF3DC751 | FF3EC652 | FF3DC751 | FF3EC652 |
-| B10 | FF29DB3D | FF29DB3D | FF28DC3C | FF29DB3D | FF28DC3C | FF29DB3D |
-| B11 | FF53B167 | FF53B167 | FF52B266 | FF53B167 | FF52B266 | FF53B167 |
-| B12 | FF32D246 | FF32D246 | FF31D345 | FF31D345 | FF32D246 | FF32D246 |
-| B13 | FFC83CDC | FFC83CDC | FFC73DDB | FFC73DDB | FFC83CDC | FFC83CDC |
-| B16 | FF22E236 | FF22E236 | FF21E335 | FF21E335 | FF21E335 | FF21E335 |
-| B17 | FFA064B4 | FFA163B5 | FFA163B5 | FFA163B5 | FFA163B5 | FFA163B5 |
-| B18 | FF5AAA6E | FF5BA96F | FF5BA96F | FF5BA96F | FF5BA96F | FF5BA96F |
-| B19 | FFC341D7 | FFC440D8 | FFC440D8 | FFC440D8 | FFC440D8 | FFC440D8 |
-| B20 | FF37CD4B | FF37CD4B | FF38CC4C | FF38CC4C | FF38CC4C | FF38CC4C |
-| B21 | FFBC48D0 | FFBC48D0 | FFBD47D1 | FFBC48D0 | FFBD47D1 | FFBC48D0 |
-| B22 | FFD133E5 | FFD133E5 | FFD232E6 | FFD133E5 | FFD232E6 | FFD133E5 |
-| B23 | FFA75DBB | FFA75DBB | FFA85CBC | FFA75DBB | FFA85CBC | FFA75DBB |
-| B24 | FFC83CDC | FFC83CDC | FFC93BDD | FFC93BDD | FFC83CDC | FFC83CDC |
-| B25 | FF32D246 | FF32D246 | FF33D147 | FF33D147 | FF32D246 | FF32D246 |
-| B28 | FFD82CEC | FFD82CEC | FFD92BED | FFD92BED | FFD92BED | FFD92BED |
-| D5 | FF5AAA6E | FF59AB6D | FF59AB6D | FF59AB6D | FF59AB6D | FF59AB6D |
-| D6 | FFA064B4 | FF9F65B3 | FF9F65B3 | FF9F65B3 | FF9F65B3 | FF9F65B3 |
-| D7 | FFA064B4 | FFA163B5 | FFA163B5 | FFA163B5 | FFA163B5 | FFA163B5 |
-| D8 | FF5AAA6E | FF5BA96F | FF5BA96F | FF5BA96F | FF5BA96F | FF5BA96F |
-| D12 | FFCBDC81 | FFCCDD82 | FFCCDD82 | FFCCDD82 | FFCCDD82 | FFCCDD82 |
-| D13 | FF97CD7E | FF98CE7F | FF98CE7F | FF98CE7F | FF98CE7F | FF98CE7F |
+**Discrimination.** Every one of the 126 readings, planted on a synthetic observation, comes back as the one match. A planted statistical `percent-roundtrip` is matched as such. The evaluator fails closed on:
+- a formatted control;
+- a missing or wrong positive control;
+- a twin that renders nothing;
+- a 2-colour control off truncation;
+- a mixed world (`formula-hypothesis-none`).
 
-Cells separating each pair: truncate/percent-roundtrip 12; truncate/fixed-256 26; truncate/fixed-1000 20; truncate/fixed-308 22; truncate/fixed-700 16; percent-roundtrip/fixed-256 14; percent-roundtrip/fixed-1000 8; percent-roundtrip/fixed-308 10; percent-roundtrip/fixed-700 4; fixed-256/fixed-1000 6; fixed-256/fixed-308 4; fixed-256/fixed-700 10; fixed-1000/fixed-308 10; fixed-1000/fixed-700 4; fixed-308/fixed-700 6.
+**Audit gate.** Six readings were rehearsed through the real `verifyCfCase` and `auditStage2Manifest` on a synthetic measured capture: `truncate`, `percent-roundtrip`, the largest class, two fixed-point classes and the last class. In each case:
+- registry entries kept: the case is measured, but the ids stay unverified;
+- entries removed, no reading registered: `scale:num-segment-fraction` is withheld by the production-reading gate;
+- the proposed registration: exactly the two ids join the verified set;
+- a different reading registered: withheld.
 
-`num-qpq` (scale:num-segment-fraction): 24 cells, 20 decisive
+A planted statistical `percent-roundtrip` verifies only with that reading registered as production's, meaning the withhold.
 
-| Cell | `truncate` | `percent-roundtrip` | `fixed-256` | `fixed-1000` | `fixed-308` | `fixed-700` |
-|---|---|---|---|---|---|---|
-| C5 | FFA064B4 | FFA163B5 | FFA163B5 | FFA163B5 | FFA163B5 | FFA163B5 |
-| C6 | FF5AAA6E | FF5BA96F | FF5BA96F | FF5BA96F | FF5BA96F | FF5BA96F |
-| C7 | FFC341D7 | FFC440D8 | FFC440D8 | FFC440D8 | FFC440D8 | FFC440D8 |
-| C8 | FF37CD4B | FF37CD4B | FF38CC4C | FF38CC4C | FF38CC4C | FF38CC4C |
-| C9 | FFBC48D0 | FFBC48D0 | FFBD47D1 | FFBC48D0 | FFBD47D1 | FFBC48D0 |
-| C10 | FFD133E5 | FFD133E5 | FFD232E6 | FFD133E5 | FFD232E6 | FFD133E5 |
-| C11 | FFA75DBB | FFA75DBB | FFA85CBC | FFA75DBB | FFA85CBC | FFA75DBB |
-| C12 | FFC83CDC | FFC83CDC | FFC93BDD | FFC93BDD | FFC83CDC | FFC83CDC |
-| C13 | FF32D246 | FF32D246 | FF33D147 | FF33D147 | FF32D246 | FF32D246 |
-| C16 | FFD82CEC | FFD82CEC | FFD92BED | FFD92BED | FFD92BED | FFD92BED |
-| C17 | FF5AAA6E | FF59AB6D | FF59AB6D | FF59AB6D | FF59AB6D | FF59AB6D |
-| C18 | FFA064B4 | FF9F65B3 | FF9F65B3 | FF9F65B3 | FF9F65B3 | FF9F65B3 |
-| C19 | FF37CD4B | FF36CE4A | FF36CE4A | FF36CE4A | FF36CE4A | FF36CE4A |
-| C20 | FFC341D7 | FFC341D7 | FFC242D6 | FFC242D6 | FFC242D6 | FFC242D6 |
-| C21 | FF3EC652 | FF3EC652 | FF3DC751 | FF3EC652 | FF3DC751 | FF3EC652 |
-| C22 | FF29DB3D | FF29DB3D | FF28DC3C | FF29DB3D | FF28DC3C | FF29DB3D |
-| C23 | FF53B167 | FF53B167 | FF52B266 | FF53B167 | FF52B266 | FF53B167 |
-| C24 | FF32D246 | FF32D246 | FF31D345 | FF31D345 | FF32D246 | FF32D246 |
-| C25 | FFC83CDC | FFC83CDC | FFC73DDB | FFC73DDB | FFC83CDC | FFC83CDC |
-| C28 | FF22E236 | FF22E236 | FF21E335 | FF21E335 | FF21E335 | FF21E335 |
+**This case on a synthetic capture** (the real `compareCfCase`, interactive and paged):
+- every rehearsed literal reading passes, both unregistered (the withheld shape is justified) and registered (painted by consensus);
+- a statistical truncate world passes unchanged;
+- the review's planted world `{literal, statistical: percent-roundtrip}` fails at E5 while production paints truncation there. Production paints `FF5AAA6E`, the world shows `FF59AB6D`. With the withhold registered, it passes (E5 withheld, justified).
 
-Cells separating each pair: truncate/percent-roundtrip 6; truncate/fixed-256 20; truncate/fixed-1000 14; truncate/fixed-308 16; truncate/fixed-700 10; percent-roundtrip/fixed-256 14; percent-roundtrip/fixed-1000 8; percent-roundtrip/fixed-308 10; percent-roundtrip/fixed-700 4; fixed-256/fixed-1000 6; fixed-256/fixed-308 4; fixed-256/fixed-700 10; fixed-1000/fixed-308 10; fixed-1000/fixed-700 4; fixed-308/fixed-700 6.
-
-`two-colour-control` (scale:num-segment-fraction, negative-control): 24 cells, 0 decisive
-
-Every reading predicts the same fill at every cell.
-
-`statistical` (scale:num-segment-fraction-statistical): 24 cells, 6 decisive
-
-| Cell | `truncate` | `percent-roundtrip` |
-|---|---|---|
-| E5 | FF5AAA6E | FF59AB6D |
-| E6 | FFA064B4 | FF9F65B3 |
-| E7 | FF37CD4B | FF36CE4A |
-| E17 | FFA064B4 | FFA163B5 |
-| E18 | FF5AAA6E | FF5BA96F |
-| E19 | FFC341D7 | FFC440D8 |
-
-Cells separating each pair: truncate/percent-roundtrip 6.
-
-### 8.4 Rehearsal (Phase 1 task 4)
-
-Each reading was planted on a synthetic observation and comes back as the one match. It was also rehearsed through the real `verifyCfCase` and `auditStage2Manifest` on a synthetic measured capture:
-- **Registry entries kept:** the case is measured, but the ids stay unverified.
-- **Entries removed, no reading registered:** `scale:num-segment-fraction` is still withheld by the production-reading gate (`supported-structural`).
-- **The proposed registration** (`productionReadings` seam): exactly the two ids join the verified Stage 2 set. If a different reading were registered than the one matched, the literal-num id would stay withheld.
-
-With each reading registered (`injectCfNumSegmentReadings` plus the id's evidence), the withhold is gone, and so is its justification (`stage2NumSegmentShape` returns false while a reading is registered):
-- **Stage 2 exact ARGB (every measured case):**
-  - before: 445 exact, 41 withheld (30 findings, 11 num-segment);
-  - with any non-truncate reading: 456 exact, 30 withheld, no disagreement, and T4 and V3 painted at Excel's fill;
-  - with `truncate`: exactly T4 and V3 disagree. It is the control e448d831 contradicts and is never published.
-- **Interactive and paged comparisons:** every measured Stage 2 case passes under each non-truncate reading. This case's comparisons pass on a synthetic measured capture, both today (the withheld shape is justified) and under each registration.
-- **Stage 5:** every measured case agrees with Excel, and the records are unchanged. No Stage 5 cell is in the literal-num shape, and the statistical `percent-roundtrip` survives every 3-colour capture.
+**Every committed capture.**
+- **Every reading:** on every one of the 24 captured 3-colour literal-num cells, the class consensus is Excel's fill (no class disagrees on any captured cell).
+- **The shared Stage 2 conformance pass and cf-compare**, which are the conformance test's own logic (`tests/helpers/cf-stage2-conformance.ts`):
+  - nothing registered: no violation, 11 num-segment cells withheld;
+  - each rehearsed non-truncate reading: no violation, nothing withheld by the shape, and the interactive and paged comparisons pass for every measured Stage 2 case;
+  - `truncate`: exactly T4 and V3 violate, so it can never be published;
+  - the statistical withhold: no violation, with 15 confirmed-exact cells withheld (above), and every comparison passes.
+- **Stage 5:** every measured case agrees, and the records are unchanged under the literal and statistical registrations.
 
 ### 8.5 Run
 
 ```sh
-shasum -a 256 tests/fixtures/xlsx-cf/inputs/stage2-scale-num-segment.xlsx   # 794107e8141c3a0ced4707f089d248e58d6fac026bb4ac63c4114b47dbafc5c9
+shasum -a 256 tests/fixtures/xlsx-cf/inputs/stage2-scale-num-segment.xlsx   # 2dae7315c0e34a508343ec1dd12f293971de5dfce6c5128b0fd6d99c7b69e556
 bun scripts/cf-refs/build.ts --stage 2 --case stage2-scale-num-segment
 bun scripts/cf-refs/capture.ts --stage 2 --case stage2-scale-num-segment
 npx vitest run tests/xlsx-cf-scale-num-segment-case.test.ts
 bun scripts/cf-refs/audit.ts --stage 2
 ```
 
-The input is committed (node zlib's deflate). To regenerate it, only before a build and never after a capture, run `npx tsx scripts/cf-refs/generate.ts --case stage2-scale-num-segment`.
+The input is committed (node zlib's deflate). To regenerate it, only before a build and never after a capture, run `npx tsx scripts/cf-refs/generate.ts --case stage2-scale-num-segment`. A bare `generate.ts` rewrites unrelated cases on this worktree.
 
-The capture cannot be retried, and no prediction is edited after it.
-- **Exactly one literal-num reading matches:** register it, together with the statistical reading the capture matches. The class's other members agree with the representative on every case cell, but not necessarily elsewhere (§8.2).
+The capture cannot be retried, and no prediction, class or separator is edited after it.
+- **Exactly one literal-num reading matches:** register it. Production then paints by its class's consensus and withholds where the members disagree.
+- **The statistical twin shows `percent-roundtrip`:** register that reading, which is the withhold of §8.2; production does not switch arithmetic. If it shows `truncate`, nothing changes.
 - **No reading matches:** a finding (`formula-hypothesis-none`), recorded and never fitted. The shape stays withheld.
-- **The statistical twin shows `percent-roundtrip`:** production mispaints a published shape today. That calls for a decision; it is not a silent change.

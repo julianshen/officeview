@@ -3261,8 +3261,8 @@ describe('CF oracle verifier', () => {
     // Stage 1 and 2 catalogs and capability ids are exactly what Stage 2 shipped.
     expect(CF_STAGE1_CAPABILITIES).toHaveLength(115)
     // + the scope-disjoint follow-up's twin and control ids (stage2-scale-scope-disjoint), and the num-segment follow-up's
-    // two questions and 2-colour comparison id (stage2-scale-num-segment, appended last).
-    expect(CF_STAGE2_CAPABILITIES).toHaveLength(51)
+    // two questions, 2-colour comparison and twin-line ids (stage2-scale-num-segment, appended last).
+    expect(CF_STAGE2_CAPABILITIES).toHaveLength(52)
     expect(CF_STAGE1_CASES).toHaveLength(13)
     expect(CF_STAGE2_CASES).toHaveLength(10)
     // Stage 4 (Task 24) appends its own registry after Stage 3's.
@@ -4146,8 +4146,8 @@ describe('Stage 4 icon oracle (Task 24)', () => {
     // Stage 1-3 catalogues and capability ids are exactly what Stage 3 shipped.
     expect(CF_STAGE1_CAPABILITIES).toHaveLength(115)
     // + the scope-disjoint follow-up's twin and control ids (stage2-scale-scope-disjoint), and the num-segment follow-up's
-    // two questions and 2-colour comparison id (stage2-scale-num-segment, appended last).
-    expect(CF_STAGE2_CAPABILITIES).toHaveLength(51)
+    // two questions, 2-colour comparison and twin-line ids (stage2-scale-num-segment, appended last).
+    expect(CF_STAGE2_CAPABILITIES).toHaveLength(52)
     expect(CF_STAGE3_CAPABILITIES).toHaveLength(73)
     expect(CF_STAGE1_CASES).toHaveLength(13)
     expect(CF_STAGE2_CASES).toHaveLength(10)
@@ -5459,7 +5459,7 @@ describe('Stage 5 formula oracle (Task 31)', () => {
     const manifest = loadManifest()
     expect(manifest.cases.map(c => c.id)).toEqual(CF_CASES.map(c => c.id))
     // Stage 1-4 catalogues and capability ids are exactly what Stage 4 shipped.
-    expect([CF_STAGE1_CAPABILITIES.length, CF_STAGE2_CAPABILITIES.length, CF_STAGE3_CAPABILITIES.length, CF_STAGE4_CAPABILITIES.length]).toEqual([115, 51, 73, 145])
+    expect([CF_STAGE1_CAPABILITIES.length, CF_STAGE2_CAPABILITIES.length, CF_STAGE3_CAPABILITIES.length, CF_STAGE4_CAPABILITIES.length]).toEqual([115, 52, 73, 145])
     expect([CF_STAGE1_CASES.length, CF_STAGE2_CASES.length, CF_STAGE3_CASES.length, CF_STAGE4_CASES.length]).toEqual([13, 10, 16, 20])
     expect(CF_CASES.slice(0, 59).map(c => c.id)).toEqual([...CF_STAGE1_CASES, ...CF_STAGE2_CASES, ...CF_STAGE3_CASES, ...CF_STAGE4_CASES].map(c => c.id))
     expect(CF_CASES.slice(59).map(c => c.id)).toEqual(CF_STAGE5_CASES.map(c => c.id))
