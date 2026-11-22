@@ -266,7 +266,7 @@ describe.skipIf(!info)('a plan-refused use is never delivered (Task 11b fix roun
       expect(reason(await c.mediaRequest(id, { unit: 1, ms: 60_000 }))).toBe('media-unavailable')
       expect((await c.showPlan(1, 1, 'full')).end).toBeUndefined()
       expect(reason(await c.mediaRequest(id, { unit: 1, ms: 60_000 }))).toBe('delivered')
-    } finally { c.close(); h.stop(); real.dispose(); await svc.close() }
+    } finally { c.close(); await h.stop(); await real.dispose(); await svc.close() }
   }, 120_000)
 
   it('fix round 1 (Important 4): encode-ahead waits for each unit\'s plan and never encodes a use it refuses', async () => {

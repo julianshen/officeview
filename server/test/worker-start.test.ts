@@ -127,11 +127,13 @@ describe('worker start gate (Bun 1.3.10: no concurrent loads, no terminate mid-l
     const before = workerStartStats()
     const pool = new Pool({ workers: 3 })
     await Bun.sleep(0) // the first worker has started loading
-    pool.dispose()
+    // Not awaited here: the gate's counters are read while the terminate is still deferred; awaited below.
+    const closed = pool.dispose()
     await until(() => workerStartStats().loading === 0, 15_000)
     const s = workerStartStats()
     expect(s.started - before.started).toBe(1)
     expect(s.cancelled - before.cancelled).toBe(2)
     expect(s.maxLoading).toBe(1)
+    await closed
   }, 20_000)
 })

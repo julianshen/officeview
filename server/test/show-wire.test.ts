@@ -377,7 +377,7 @@ describe('show job refusal cache (controller ruling)', () => {
       await pool.open('fly', await flyInDeck(), 'full')
       expect(await timedOut(pool.showTrack('s1', { docRef: 'fly', contentPolicy: 'full', ...job, unitIndex: 0, step: 0, hangMs: 1500 }, 1024))).toBe(true)
       expect(pool.stats().retired).toBe(3)
-    } finally { pool.dispose() }
+    } finally { await pool.dispose() }
   }, 60_000)
 
   test('a timed-out Morph pair is answered from the pool cache; morph-fallback is cached too; forget clears both', async () => {
@@ -396,7 +396,7 @@ describe('show job refusal cache (controller ruling)', () => {
       await pool.open('m', await morphDeck(), 'full')
       expect(await timedOut(pool.showMorph('s1', { ...pair, hangMs: 1500 }, 1024))).toBe(true)
       expect(pool.stats().retired).toBe(2)
-    } finally { pool.dispose() }
+    } finally { await pool.dispose() }
     const roomy = new Pool({ workers: 1 })
     try {
       await roomy.open('many', await manyObjectsMorphDeck(257), 'full')
@@ -407,6 +407,6 @@ describe('show job refusal cache (controller ruling)', () => {
       expect(await roomy.showMorph('s1', many, SHOW_BUILD_BYTES)).toEqual({ refused: 'morph-fallback' })
       expect(performance.now() - t1).toBeLessThan(100)
       expect(roomy.stats().workers[0]!.pages).toBe(pages)
-    } finally { roomy.dispose() }
+    } finally { await roomy.dispose() }
   }, 120_000)
 })

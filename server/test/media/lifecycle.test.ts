@@ -318,7 +318,7 @@ describe.skipIf(!info)('a render worker terminated mid-job (Task 3 carry; fix ro
     const temp = await createMediaTemp(root)
     const pool = new Pool({ workers: 1, media: { info: { ...info!, ffprobe: sleeper('ffprobe') }, dir: temp.dir }, testHooks: true, mediaDeadlineMs: deadlineMs, ...o })
     await pool.open('hung', await narrationDeck(), 'visible-only')
-    return { pool, temp, done: async () => { pool.dispose(); await temp.remove(); rmSync(root, { recursive: true, force: true }) } }
+    return { pool, temp, done: async () => { await pool.dispose(); await temp.remove(); rmSync(root, { recursive: true, force: true }) } }
   }
   /** The probe's group, once all three are up: our direct child whose input is a staged file in the media dir. */
   async function probeGroup(dir: string) {
@@ -531,6 +531,6 @@ describe.skipIf(!info)('a render worker terminated mid-job (Task 3 carry; fix ro
       expect(pool.stats().retired).toBe(1)
       expect(readdirSync(temp.dir)).toEqual([])
       expect(childPids()).toEqual([])
-    } finally { pool.dispose(); await temp.remove(); rmSync(root, { recursive: true, force: true }) }
+    } finally { await pool.dispose(); await temp.remove(); rmSync(root, { recursive: true, force: true }) }
   }, 30_000)
 })

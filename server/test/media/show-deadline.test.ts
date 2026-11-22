@@ -37,7 +37,7 @@ describe.skipIf(!info)('show jobs and the media probe deadline (Task 3 carry)', 
       const again = await pool.showPlan('s2', job, SHOW_BUILD_BYTES)
       expect('refused' in again ? again.refused : 'built').toBe('refused' in r ? r.refused : 'built')
       expect(pool.stats().workers[0]!.probes).toBe(4) // one table per document: probed once
-    } finally { pool.dispose() }
+    } finally { await pool.dispose() }
   }, 30_000)
 
   it('a warm-up past the media deadline answers that request show-plan-timeout and is never remembered', async () => {
@@ -57,6 +57,6 @@ describe.skipIf(!info)('show jobs and the media probe deadline (Task 3 carry)', 
       expect(await rejectionMessage(pool.showTrack('s3', { ...job, step: 0 }, SHOW_BUILD_BYTES))).toMatch(/deadline/)
       expect(await rejectionMessage(pool.showTrack('s3', { ...job, step: 0 }, SHOW_BUILD_BYTES))).toMatch(/deadline/)
       expect(pool.stats().retired).toBe(retired + 3)
-    } finally { pool.dispose() }
+    } finally { await pool.dispose() }
   }, 30_000)
 })

@@ -101,7 +101,7 @@ describe('forensic serving path', () => {
     for (const r of [10, 11, 12]) await s.c.unitMessages(r)
     expect(pool.stats().encodes - base).toBe(3)
     expect(h.stream.stats().forensic.leased).toBe(0)
-    s.c.close(); h.stop(); pool.dispose()
+    s.c.close(); await h.stop(); await pool.dispose()
   }, 30_000)
 
   it('closing mid-encode: no frame, lease back to 0, charge refunded only after the worker replies', async () => {
@@ -118,6 +118,6 @@ describe('forensic serving path', () => {
     expect(pool.stats().reserved).toBe(0)
     expect(h.stream.stats().forensic.leased).toBe(0)
     expect(s.c.msgs.filter((m) => 'binary' in m && m.binary.reqId === 10)).toEqual([])
-    h.stop(); pool.dispose()
+    await h.stop(); await pool.dispose()
   }, 30_000)
 })

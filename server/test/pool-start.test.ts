@@ -44,7 +44,8 @@ describe('pool worker startup (start gate)', () => {
     const p = mk()
     const r = p.encode('s', job, 16)
     await until(() => FakeWorker.all.length === 2)
-    p.dispose()
+    // Not awaited here: the replacement is still loading (the terminate is deferred until its ack); awaited below.
+    const closed = p.dispose()
     const fresh = FakeWorker.all[1]!
     expect(fresh.terminateCalls).toBe(0) // still loading: deferred
     fresh.ack()
@@ -53,6 +54,7 @@ describe('pool worker startup (start gate)', () => {
     expect(fresh).toMatchObject({ terminateCalls: 1, terminatedUnacked: false })
     expect(jobsSent(fresh)).toBe(0)
     expect(pending(p)).toBe(0)
+    await closed
   })
 
   it('a start that passes the load bound fails its jobs with RenderFailed and is never terminated while loading; once it answers, the slot works (R1)', async () => {

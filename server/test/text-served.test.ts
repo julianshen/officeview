@@ -464,7 +464,7 @@ describe('fix round 2: running text-work limits and size metadata lifecycle', ()
       p.forget(`cycle-${i}`)
       expect(p.stats().unitSizes).toBe(base)
     }
-    p.dispose()
+    await p.dispose()
     expect(p.stats().unitSizes).toBe(0)
   }, 60_000)
 })

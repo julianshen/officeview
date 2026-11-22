@@ -140,7 +140,7 @@ describe.skipIf(!info)('the sandboxed probe (D7, D21)', () => {
       const e = probed(r.refs[0]!.entry)
       expect(e).toMatchObject({ kind: 'audio', hasAudio: true, durationMs: 2000, demuxer: 'mov', sourceHash: createHash('sha256').update(fx('a.m4a')).digest('hex') })
       expect(pool.stats().workers[0]!.probes).toBe(1)
-    } finally { pool.dispose() }
+    } finally { await pool.dispose() }
     expect(temp.live()).toBe(0)
   })
 
@@ -336,7 +336,7 @@ describe.skipIf(!info)('the sandboxed probe (D7, D21)', () => {
       expect(pool.stats().workers.reduce((n, w) => n + w.probes, 0)).toBe(2)
       await pool.mediaRefs('s3', 'once', 'visible-only', 0)
       expect(pool.stats().workers.reduce((n, w) => n + w.probes, 0)).toBe(2)
-    } finally { pool.dispose() }
+    } finally { await pool.dispose() }
   })
 
   it('load(unit) probes in k order up to the unit\'s highest k; peek is sync; digest(unit) is unchanged by probing a later slide', async () => {
@@ -378,7 +378,7 @@ describe.skipIf(!info)('the sandboxed probe (D7, D21)', () => {
       expect(await rejection(pool.mediaPart('s1', 'part', 'visible-only', 'ppt/media/absent.wav', temp.dir))).toMatchObject({ refusal: 'media-part' })
       expect(await rejection(pool.mediaPart('s1', 'part', 'visible-only', 'ppt/slides/slide1.xml', temp.dir))).toBeInstanceOf(RenderFailed)
       expect(await rejection(pool.mediaPart('s1', 'part', 'visible-only', partPath, root))).toMatchObject({ refusal: 'media-part' })
-    } finally { pool.dispose() }
+    } finally { await pool.dispose() }
   })
 
   it('a part over 512 MiB → media-too-large unread', async () => {
@@ -429,7 +429,7 @@ describe('the show-plan keys carry media (D21)', () => {
       expect('refused' in on ? on.refused : 'built').toBe('built')
       const again = await pool.showPlan('s1', { ...job, media: false }, grant)
       expect('refused' in again && again.refused).toBe('show-plan-timeout')
-    } finally { pool.dispose() }
+    } finally { await pool.dispose() }
   }, 20_000)
 })
 

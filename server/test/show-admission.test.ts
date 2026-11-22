@@ -30,7 +30,7 @@ describe('show admission: request charge at request time, the grant at slot time
       await Promise.all([a, b, c])
       expect(pool.stats().prep.reserved).toBe(0)
       expect(pool.stats().reserved).toBe(0)
-    } finally { pool.dispose() }
+    } finally { await pool.dispose() }
   }, 60_000)
 
   it('preparation reserved never passes workers × SHOW_BUILD_BYTES, and each worker holds one grant at a time', async () => {
@@ -45,7 +45,7 @@ describe('show admission: request charge at request time, the grant at slot time
       expect(st.prep.peak).toBeLessThanOrEqual(st.prep.bound)
       expect(st.prep.peakPerWorker).toBeLessThanOrEqual(SHOW_BUILD_BYTES)
       expect(st.prep.reserved).toBe(0)
-    } finally { pool.dispose() }
+    } finally { await pool.dispose() }
   }, 120_000)
 
   it("a holding-style flood (40 plan requests, one session, scale-2 16:9 grants) queues within the session aggregate: none refused", async () => {
@@ -60,7 +60,7 @@ describe('show admission: request charge at request time, the grant at slot time
       expect(out.filter(x => x !== 'ok')).toEqual([])
       expect(pool.admission.peakSessionReserved).toBeLessThanOrEqual(DEFAULT_CAPS.sessionTransientBytes)
       expect(pool.admission.peakSessionQueued).toBeLessThanOrEqual(DEFAULT_CAPS.perSessionQueue)
-    } finally { pool.dispose() }
+    } finally { await pool.dispose() }
   }, 120_000)
 
   it('one session, two documents on two workers: one show job runs at a time, so the session holds one grant at most', async () => {
@@ -79,7 +79,7 @@ describe('show admission: request charge at request time, the grant at slot time
       expect(st.prep.peak).toBe(grant)
       expect(performance.now() - t0).toBeGreaterThan(1600)
       expect(st.prep.reserved).toBe(0)
-    } finally { pool.dispose() }
+    } finally { await pool.dispose() }
   }, 60_000)
 
   it('two sessions still prepare in parallel on different workers', async () => {
@@ -101,7 +101,7 @@ describe('show admission: request charge at request time, the grant at slot time
       ])
       expect(performance.now() - t0).toBeLessThan(2900)
       expect(pool.stats().prep).toMatchObject({ peak: 2 * grant, peakPerSession: grant, reserved: 0 })
-    } finally { pool.dispose() }
+    } finally { await pool.dispose() }
   }, 60_000)
 
   it("a job waiting for its session's running show job is cancelled cleanly when its socket closes", async () => {
@@ -125,7 +125,7 @@ describe('show admission: request charge at request time, the grant at slot time
       expect(pool.stats()).toMatchObject({ reserved: 0, running: 0, queued: 0, prep: { reserved: 0 } })
       // The session's slot is free again.
       expect('refused' in await pool.showPlan('s1', { docRef: 'b', ...job }, grant)).toBe(false)
-    } finally { pool.dispose() }
+    } finally { await pool.dispose() }
   }, 60_000)
 
   it("round 13d: show jobs waiting for the session's show slot hold no running place, so the session's unit renders still run", async () => {
@@ -147,7 +147,7 @@ describe('show admission: request charge at request time, the grant at slot time
       ac.abort()
       await Promise.all([first, ...waiting])
       expect(pool.stats()).toMatchObject({ reserved: 0, running: 0, queued: 0, prep: { reserved: 0 } })
-    } finally { pool.dispose() }
+    } finally { await pool.dispose() }
   }, 60_000)
 
   it("round 13d: the session's show queue is bounded (8 running places + 32 queued, less the running job); past it a request is refused session-queue, and cancelling the queue releases it", async () => {
@@ -166,6 +166,6 @@ describe('show admission: request charge at request time, the grant at slot time
       expect(new Set(await Promise.all(queued))).toEqual(new Set(['ShowCancelled']))
       await Promise.all([first, other])
       expect(pool.stats()).toMatchObject({ reserved: 0, running: 0, queued: 0, prep: { reserved: 0 } })
-    } finally { pool.dispose() }
+    } finally { await pool.dispose() }
   }, 60_000)
 })

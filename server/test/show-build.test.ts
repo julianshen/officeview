@@ -494,7 +494,7 @@ describe('pool show jobs', () => {
       expect('carriers' in m && m.carriers).toBeGreaterThan(0)
       expect(pool.stats()).toMatchObject({ reserved: 0, running: 0 })
     } finally {
-      pool.dispose()
+      await pool.dispose()
     }
   }, 60_000)
 
@@ -515,7 +515,7 @@ describe('pool show jobs', () => {
       await pool.showPlan('s1', { docRef: 'fly', contentPolicy: 'full', ...job(), hangMs: 1500 }, 1024)
       expect(pool.stats().retired).toBe(2)
     } finally {
-      pool.dispose()
+      await pool.dispose()
     }
   }, 60_000)
 
@@ -530,7 +530,7 @@ describe('pool show jobs', () => {
       expect('refused' in r).toBe(false)
       expect(pool.stats().retired).toBe(0)
     } finally {
-      pool.dispose()
+      await pool.dispose()
     }
   }, 60_000)
 })
@@ -609,7 +609,7 @@ describe('the preparation ledger (PR #78 round 13: bounded before every raster)'
       const ok = await pool.showPlan('s1', { docRef: 'fly', contentPolicy: 'full', ...job({ scale: 2 }) }, grant2)
       expect('refused' in ok).toBe(false)
     } finally {
-      pool.dispose()
+      await pool.dispose()
     }
   }, 60_000)
 
